@@ -109,7 +109,7 @@ Keyboard focus (Ghostty-style):
 ```swift
 // SwiftUI intercepts keyboard events before AppKit views.
 // Solution: TerminalFocusManager + NSEvent monitors.
-// See docs/solution-terminal-keyboard.md for full details.
+// See docs/development/solution-terminal-keyboard.md for full details.
 ```
 
 ### 3. SwiftData for Persistence
@@ -232,7 +232,7 @@ protocol WorkspaceBackend: Actor {
 - `Sources/Controllers/TerminalWindowController.swift` - Focus manager
 - `Sources/Views/Components/TerminalView.swift` - Event monitors
 
-**Documentation**: `docs/solution-terminal-keyboard.md`
+**Documentation**: `docs/development/solution-terminal-keyboard.md`
 
 ---
 

@@ -29,9 +29,10 @@ Added Swift Testing tests for core services:
 
 | File | Tests | Coverage |
 |------|-------|----------|
-| `Tests/GitServiceTests.swift` | 11 | Status parsing, branches, file tree |
-| `Tests/WorkspaceServiceTests.swift` | 8 | Lifecycle scripts, filename sanitization |
-| `Tests/ModelsTests.swift` | 17 | FileChange, GitStatus, WorkspaceStatus, FileNode |
+| `Tests/GitServiceTests.swift` | 16 | Status parsing, branches, file tree, remotes |
+| `Tests/WorkspaceServiceTests.swift` | 21 | Lifecycle scripts, filename sanitization, create/delete/archive |
+| `Tests/ModelsTests.swift` | 7 | FileChange, GitStatus, WorkspaceStatus, FileNode |
+| `Tests/LocalBackendTests.swift` | 8 | Process execution, environment variables, command resolution |
 
 ---
 
@@ -53,15 +54,15 @@ See `docs/development/solution-terminal-keyboard.md` for details.
 
 | Task | Status | Notes |
 |------|--------|-------|
-| Task 10: Error Handling | Pending | Multiple TODOs in SidebarView for user-facing alerts |
+| Task 10: Error Handling | ✅ Done | Alerts in SidebarView for invalid repos, failed creates, failed deletes |
 | Task 11: Build & Distribution | Pending | Requires Apple Developer account |
 
 ### Tech Debt (Optional)
 
 | Item | Status | Notes |
 |------|--------|-------|
-| Async Process Execution | Pending | Replace `waitUntilExit()` with terminationHandler |
-| Code Hygiene | Pending | Unused properties, import ordering |
+| Async Process Execution | ✅ Done | Migrated to `terminationHandler` with continuations |
+| Code Hygiene | ✅ Done | Lint passes, imports clean, dead code removed |
 | Keyboard Shortcuts | Pending | Cmd+0 to toggle pane not implemented |
 
 ---
@@ -80,7 +81,7 @@ See `docs/development/solution-terminal-keyboard.md` for details.
 | 8. Git Status | ✅ |
 | 9. Tab Switching | ✅ |
 | 9.5. Settings | ✅ |
-| 10. Error Handling | ⏳ |
+| 10. Error Handling | ✅ |
 | 11. Distribution | ⏳ |
 
 ---
