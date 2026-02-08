@@ -779,3 +779,18 @@ Start with Phase 1.2 (SwiftTerm integration) to validate the core experience wor
 **Remaining MVP work**:
 - Task 10: Error Handling (TODOs in SidebarView for user-facing alerts)
 - Task 11: Build & Distribution (requires Apple Developer account)
+
+### 2026-02-08 — Build health validation (post-monorepo extraction)
+
+**Context**: Validated standalone repo after extracting from services monorepo.
+
+**Results**: Clean bill of health — debug build, release build, 52 tests, lint all pass. No monorepo remnants.
+
+**Fixes applied**:
+- Updated stale test counts (36 → 52) and task statuses (async migration, error handling already done)
+- Fixed ARCHITECTURE.md doc path references
+- Removed unused `NSColor(hex:)` extension
+- Added release build to CI, `mask run` command
+- Removed TASKS.md (GitHub issues is source of truth) and progress.md (stale, replaced by roadmap learnings)
+
+**What worked**: Parallel exploration agents for fast codebase audit. The extraction was clean — zero issues blocking development.
