@@ -1,0 +1,25 @@
+# Swift Package Manager
+.build/
+.swiftpm/
+DerivedData/
+
+# Xcode
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+
+# Build artifacts
+build/
+*.app
+*.dmg
+*.pkg
+
+# Signing credentials (NEVER commit these)
+scripts/signing-config.sh
+
+# Session artifacts (ephemeral, agent-specific)
+.context/
+
+# macOS
+.DS_Store
+*.swp

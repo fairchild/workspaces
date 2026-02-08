@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+    PrivacyInfo.xcprivacy - Privacy Manifest for WorkspaceManager
+
+    This manifest documents what user data and system resources the app accesses.
+    Required by Apple since iOS 17 / macOS 14 for notarization.
+
+    Documentation: https://developer.apple.com/documentation/bundleresources/privacy_manifest_files
+-->
+<plist version="1.0">
+<dict>
+    <!-- ============================================================
+         PRIVACY TRACKING
+         Declares whether the app engages in tracking (as defined by
+         Apple's App Tracking Transparency framework)
+         ============================================================ -->
+    <key>NSPrivacyTracking</key>
+    <false/>
+
+    <!-- No tracking domains since we don't track users -->
+    <key>NSPrivacyTrackingDomains</key>
+    <array/>
+
+    <!-- ============================================================
+         PRIVACY NUTRITION LABEL DATA
+         Declares what data types are collected and how they're used.
+         This information appears on the App Store privacy label.
+
+         Since this is a developer tool distributed outside the App Store,
+         we still document our practices for transparency.
+         ============================================================ -->
+    <key>NSPrivacyCollectedDataTypes</key>
+    <array>
+        <!-- We don't collect any user data for transmission -->
+    </array>
+
+    <!-- ============================================================
+         PRIVACY ACCESSED API TYPES
+         Required API declarations for APIs that Apple considers
+         privacy-sensitive and requires justification for use.
+
+         Workspaces accesses:
+         - File system (for workspace management)
+         - Process APIs (for terminal/shell execution)
+         - System boot time (for session management)
+         ============================================================ -->
+    <key>NSPrivacyAccessedAPITypes</key>
+    <array>
+        <!--
+            FILE TIMESTAMP APIS
+            Used to: Display file modification times in the file browser,
+            detect changes in git repositories
+        -->
+        <dict>
+            <key>NSPrivacyAccessedAPIType</key>
+            <string>NSPrivacyAccessedAPICategoryFileTimestamp</string>
+            <key>NSPrivacyAccessedAPITypeReasons</key>
+            <array>
+                <!-- C617.1: Access file timestamps for app functionality -->
+                <string>C617.1</string>
+            </array>
+        </dict>
+
+        <!--
+            SYSTEM BOOT TIME APIS
+            Used to: Generate unique session identifiers, calculate
+            relative timestamps for workspace sessions
+        -->
+        <dict>
+            <key>NSPrivacyAccessedAPIType</key>
+            <string>NSPrivacyAccessedAPICategorySystemBootTime</string>
+            <key>NSPrivacyAccessedAPITypeReasons</key>
+            <array>
+                <!-- 35F9.1: Calculate elapsed time without accessing date/time -->
+                <string>35F9.1</string>
+            </array>
+        </dict>
+
+        <!--
+            DISK SPACE APIS
+            Used to: Check available disk space before creating workspaces,
+            display storage information to users
+        -->
+        <dict>
+            <key>NSPrivacyAccessedAPIType</key>
+            <string>NSPrivacyAccessedAPICategoryDiskSpace</string>
+            <key>NSPrivacyAccessedAPITypeReasons</key>
+            <array>
+                <!-- E174.1: Display disk space to the user -->
+                <string>E174.1</string>
+            </array>
+        </dict>
+
+        <!--
+            USER DEFAULTS APIS
+            Used to: Store user preferences (workspace root path, settings)
+        -->
+        <dict>
+            <key>NSPrivacyAccessedAPIType</key>
+            <string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+            <key>NSPrivacyAccessedAPITypeReasons</key>
+            <array>
+                <!-- CA92.1: Access UserDefaults for app functionality -->
+                <string>CA92.1</string>
+            </array>
+        </dict>
+    </array>
+</dict>
+</plist>

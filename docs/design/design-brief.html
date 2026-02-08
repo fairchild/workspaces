@@ -1,0 +1,688 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Workspaces Design Brief</title>
+  <style>
+    :root {
+      --bg-primary: #ffffff;
+      --bg-secondary: #f8fafc;
+      --bg-tertiary: #f1f5f9;
+      --text-primary: #0f172a;
+      --text-secondary: #334155;
+      --text-muted: #64748b;
+      --accent-blue: #3b82f6;
+      --accent-blue-light: #dbeafe;
+      --accent-cyan: #0ea5e9;
+      --accent-green: #10b981;
+      --accent-orange: #f59e0b;
+      --accent-red: #ef4444;
+      --border-color: #e2e8f0;
+      --shadow: rgba(0,0,0,0.08);
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg-primary: #0f172a;
+        --bg-secondary: #1e293b;
+        --bg-tertiary: #334155;
+        --text-primary: #f1f5f9;
+        --text-secondary: #cbd5e1;
+        --text-muted: #94a3b8;
+        --accent-blue: #60a5fa;
+        --accent-blue-light: #1e3a5f;
+        --border-color: #334155;
+        --shadow: rgba(0,0,0,0.3);
+      }
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg-primary);
+      color: var(--text-secondary);
+      line-height: 1.6;
+    }
+
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 2rem;
+    }
+
+    /* Hero Section */
+    .hero {
+      position: relative;
+      border-radius: 16px;
+      overflow: hidden;
+      margin-bottom: 3rem;
+      box-shadow: 0 4px 20px var(--shadow);
+      background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+      min-height: 300px;
+      display: flex;
+      align-items: flex-end;
+    }
+
+    .hero-placeholder {
+      width: 100%;
+      padding: 4rem 2rem 2rem;
+      background: linear-gradient(transparent, rgba(0,0,0,0.8));
+      color: white;
+    }
+
+    .hero-placeholder h1 {
+      font-size: 2.5rem;
+      font-weight: 700;
+      margin-bottom: 0.5rem;
+    }
+
+    .hero-placeholder .tagline {
+      font-size: 1.25rem;
+      opacity: 0.9;
+    }
+
+    .hero-note {
+      font-size: 0.875rem;
+      opacity: 0.6;
+      margin-top: 1rem;
+      font-style: italic;
+    }
+
+    /* Navigation */
+    .nav-links {
+      display: flex;
+      gap: 1rem;
+      margin-bottom: 3rem;
+      flex-wrap: wrap;
+    }
+
+    .nav-links a {
+      padding: 0.5rem 1rem;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      color: var(--text-muted);
+      text-decoration: none;
+      font-size: 0.875rem;
+      transition: all 0.2s;
+    }
+
+    .nav-links a:hover {
+      border-color: var(--accent-blue);
+      color: var(--accent-blue);
+    }
+
+    /* Sections */
+    section {
+      margin-bottom: 4rem;
+    }
+
+    h2 {
+      color: var(--text-primary);
+      font-size: 1.75rem;
+      margin-bottom: 1.5rem;
+      padding-bottom: 0.75rem;
+      border-bottom: 2px solid var(--border-color);
+    }
+
+    h3 {
+      color: var(--text-primary);
+      font-size: 1.25rem;
+      margin: 1.5rem 0 1rem;
+    }
+
+    p {
+      margin-bottom: 1rem;
+    }
+
+    /* Executive Summary */
+    .summary-grid {
+      display: grid;
+      grid-template-columns: 100px 1fr;
+      gap: 1.5rem;
+      align-items: start;
+      margin-bottom: 2rem;
+    }
+
+    .app-icon {
+      width: 100px;
+      height: 100px;
+      border-radius: 22px;
+      box-shadow: 0 4px 12px var(--shadow);
+      background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 3rem;
+    }
+
+    .summary-content h3 {
+      margin-top: 0;
+    }
+
+    /* Key Stats */
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 1rem;
+      margin: 2rem 0;
+    }
+
+    .stat {
+      background: var(--bg-secondary);
+      padding: 1.25rem;
+      border-radius: 12px;
+      text-align: center;
+      border: 1px solid var(--border-color);
+    }
+
+    .stat-value {
+      font-size: 2rem;
+      font-weight: 700;
+      color: var(--accent-blue);
+    }
+
+    .stat-label {
+      font-size: 0.875rem;
+      color: var(--text-muted);
+      margin-top: 0.25rem;
+    }
+
+    /* Problem/Solution */
+    .problem-solution {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1.5rem;
+    }
+
+    .problem, .solution {
+      padding: 1.5rem;
+      border-radius: 12px;
+    }
+
+    .problem {
+      background: #fef2f2;
+      border-left: 4px solid var(--accent-red);
+    }
+
+    .solution {
+      background: #f0fdf4;
+      border-left: 4px solid var(--accent-green);
+    }
+
+    @media (prefers-color-scheme: dark) {
+      .problem { background: #2d1f1f; }
+      .solution { background: #1f2d1f; }
+    }
+
+    .problem h4, .solution h4 {
+      font-size: 0.875rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 0.75rem;
+    }
+
+    .problem h4 { color: var(--accent-red); }
+    .solution h4 { color: var(--accent-green); }
+
+    /* User Personas */
+    .persona {
+      display: flex;
+      gap: 1.5rem;
+      background: var(--bg-secondary);
+      padding: 1.5rem;
+      border-radius: 12px;
+      margin-bottom: 1rem;
+      border: 1px solid var(--border-color);
+    }
+
+    .persona-icon {
+      width: 80px;
+      height: 80px;
+      border-radius: 50%;
+      background: var(--bg-tertiary);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 2.5rem;
+      flex-shrink: 0;
+    }
+
+    .persona-info h4 {
+      color: var(--text-primary);
+      margin-bottom: 0.25rem;
+    }
+
+    .persona-role {
+      color: var(--accent-orange);
+      font-weight: 600;
+      font-size: 0.875rem;
+      margin-bottom: 0.75rem;
+    }
+
+    .persona-needs {
+      list-style: none;
+      padding: 0;
+    }
+
+    .persona-needs li {
+      padding: 0.25rem 0;
+      padding-left: 1.25rem;
+      position: relative;
+      font-size: 0.9rem;
+    }
+
+    .persona-needs li::before {
+      content: '\2022';
+      color: var(--accent-blue);
+      position: absolute;
+      left: 0;
+      font-weight: bold;
+    }
+
+    /* Design Principles */
+    .principles {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 1rem;
+    }
+
+    .principle {
+      background: var(--bg-secondary);
+      padding: 1.25rem;
+      border-radius: 12px;
+      border: 1px solid var(--border-color);
+    }
+
+    .principle-icon {
+      font-size: 1.5rem;
+      margin-bottom: 0.5rem;
+    }
+
+    .principle h4 {
+      color: var(--text-primary);
+      font-size: 1rem;
+      margin-bottom: 0.5rem;
+    }
+
+    .principle p {
+      font-size: 0.875rem;
+      color: var(--text-muted);
+      margin: 0;
+    }
+
+    /* Key Flows */
+    .flow-card {
+      background: var(--bg-secondary);
+      border-radius: 12px;
+      overflow: hidden;
+      margin-bottom: 1.5rem;
+      border: 1px solid var(--border-color);
+      box-shadow: 0 2px 8px var(--shadow);
+    }
+
+    .flow-placeholder {
+      background: var(--bg-tertiary);
+      padding: 3rem;
+      text-align: center;
+      color: var(--text-muted);
+      font-style: italic;
+    }
+
+    .flow-content {
+      padding: 1.25rem;
+    }
+
+    .flow-content h4 {
+      color: var(--text-primary);
+      margin-bottom: 0.5rem;
+    }
+
+    .flow-content p {
+      font-size: 0.9rem;
+      color: var(--text-muted);
+      margin: 0;
+    }
+
+    .flow-link {
+      display: inline-block;
+      margin-top: 0.75rem;
+      color: var(--accent-blue);
+      text-decoration: none;
+      font-size: 0.875rem;
+      font-weight: 500;
+    }
+
+    .flow-link:hover {
+      text-decoration: underline;
+    }
+
+    /* Visual Direction */
+    .visual-note {
+      background: var(--bg-secondary);
+      padding: 2rem;
+      border-radius: 12px;
+      border: 1px solid var(--border-color);
+      text-align: center;
+      color: var(--text-muted);
+    }
+
+    /* Color Palette */
+    .colors {
+      display: flex;
+      gap: 1rem;
+      margin: 1.5rem 0;
+    }
+
+    .color-swatch {
+      flex: 1;
+      text-align: center;
+    }
+
+    .swatch {
+      height: 60px;
+      border-radius: 8px;
+      margin-bottom: 0.5rem;
+    }
+
+    .color-name {
+      font-size: 0.875rem;
+      font-weight: 500;
+      color: var(--text-primary);
+    }
+
+    .color-value {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      font-family: monospace;
+    }
+
+    /* Links Section */
+    .resources {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 1rem;
+    }
+
+    .resource {
+      padding: 1.25rem;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      text-decoration: none;
+      transition: all 0.2s;
+    }
+
+    .resource:hover {
+      border-color: var(--accent-blue);
+      transform: translateY(-2px);
+    }
+
+    .resource-title {
+      color: var(--text-primary);
+      font-weight: 600;
+      margin-bottom: 0.25rem;
+    }
+
+    .resource-desc {
+      font-size: 0.875rem;
+      color: var(--text-muted);
+    }
+
+    /* Footer */
+    footer {
+      margin-top: 4rem;
+      padding-top: 2rem;
+      border-top: 1px solid var(--border-color);
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 0.875rem;
+    }
+
+    @media (max-width: 768px) {
+      .container { padding: 1rem; }
+      .hero-placeholder h1 { font-size: 1.75rem; }
+      .problem-solution { grid-template-columns: 1fr; }
+      .persona { flex-direction: column; text-align: center; }
+      .summary-grid { grid-template-columns: 1fr; text-align: center; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <!-- Hero -->
+    <div class="hero">
+      <img src="brief/hero.jpg" alt="Workspaces - Isolated AI coding sessions for Mac" style="width: 100%; display: block;">
+      <div class="hero-overlay" style="position: absolute; bottom: 0; left: 0; right: 0; padding: 2rem; background: linear-gradient(transparent, rgba(0,0,0,0.8)); color: white;">
+        <h1 style="font-size: 2.5rem; font-weight: 700; margin-bottom: 0.5rem;">Workspaces</h1>
+        <p class="tagline" style="font-size: 1.25rem; opacity: 0.9;">Isolated AI coding sessions for Mac</p>
+      </div>
+    </div>
+
+    <!-- Navigation -->
+    <nav class="nav-links">
+      <a href="stories/index.html">Story Flows</a>
+      <a href="brainstorm/index.html">Screen Exploration</a>
+      <a href="../user-stories.md">User Stories</a>
+      <a href="../product_overview.md">Product Overview</a>
+    </nav>
+
+    <!-- Executive Summary -->
+    <section>
+      <h2>Executive Summary</h2>
+      <div class="summary-grid">
+        <img src="brief/app-icon.png" alt="Workspaces App Icon" class="app-icon">
+        <div class="summary-content">
+          <h3>What is Workspaces?</h3>
+          <p>A Mac-native app for managing isolated AI coding sessions. Users add git repositories, fork them into independent workspaces, and run Claude Code or similar AI tools in an embedded terminal.</p>
+          <p><strong>The key differentiator:</strong> Terminal-first design with automatic lifecycle hooks (setup.sh/archive.sh) that eliminate repetitive project setup.</p>
+        </div>
+      </div>
+
+      <div class="stats">
+        <div class="stat">
+          <div class="stat-value">3</div>
+          <div class="stat-label">Column Layout</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value">2</div>
+          <div class="stat-label">Lifecycle Hooks</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value">1</div>
+          <div class="stat-label">Terminal Focus</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value">0</div>
+          <div class="stat-label">External Deps</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Problem / Solution -->
+    <section>
+      <h2>Problem & Solution</h2>
+      <div class="problem-solution">
+        <div class="problem">
+          <h4>The Problem</h4>
+          <p>Developers using AI coding assistants face friction when managing concurrent work: <strong>context pollution</strong> from mixed changes, <strong>setup repetition</strong> for each new session, <strong>no isolation</strong> between experiments, and <strong>terminal juggling</strong> across windows.</p>
+        </div>
+        <div class="solution">
+          <h4>Our Solution</h4>
+          <p>Workspaces creates <strong>isolated copies of repos with embedded terminal support</strong>. Each workspace runs setup.sh automatically, giving you a clean slate for every AI coding session. Think of it as <strong>git worktrees with a terminal-first UI</strong>.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Target Users -->
+    <section>
+      <h2>Target Users</h2>
+      <div class="persona">
+        <div class="persona-icon">👩‍💻</div>
+        <div class="persona-info">
+          <h4>AI-Augmented Developer</h4>
+          <p class="persona-role">Primary User</p>
+          <ul class="persona-needs">
+            <li>Uses Claude Code, Cursor, or Copilot regularly</li>
+            <li>Works on multiple features/experiments concurrently</li>
+            <li>Values clean separation between work streams</li>
+            <li>Prefers terminal-based workflows over heavy IDEs</li>
+          </ul>
+        </div>
+      </div>
+      <div class="persona">
+        <div class="persona-icon">🧑‍💼</div>
+        <div class="persona-info">
+          <h4>Freelancer / Consultant</h4>
+          <p class="persona-role">Secondary User</p>
+          <ul class="persona-needs">
+            <li>Juggles multiple client projects</li>
+            <li>Needs quick context switching between codebases</li>
+            <li>Values easy project cleanup when work completes</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- Design Principles -->
+    <section>
+      <h2>Design Principles</h2>
+      <div class="principles">
+        <div class="principle">
+          <div class="principle-icon">⌨️</div>
+          <h4>Terminal-First</h4>
+          <p>The embedded terminal IS the experience. Not a code editor — use your preferred external editor alongside.</p>
+        </div>
+        <div class="principle">
+          <div class="principle-icon">🍎</div>
+          <h4>Native Mac Feel</h4>
+          <p>SwiftUI + AppKit patterns. Three-column layout like Finder/Mail. Familiar keyboard shortcuts.</p>
+        </div>
+        <div class="principle">
+          <div class="principle-icon">🛡️</div>
+          <h4>Non-Destructive</h4>
+          <p>Source repos are never modified. Workspaces are copies. Deleting a workspace doesn't touch the original.</p>
+        </div>
+        <div class="principle">
+          <div class="principle-icon">📐</div>
+          <h4>Minimal Chrome</h4>
+          <p>Terminal gets maximum screen real estate. Right pane collapses. Sidebar can hide.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Key Flows -->
+    <section>
+      <h2>Key User Flows</h2>
+
+      <div class="flow-card">
+        <img src="wireflows/flow-1-add-repo.jpg" alt="First-Time Setup Flow" class="flow-image" style="width: 100%; display: block; cursor: pointer;" onclick="openLightbox(this.src)">
+        <div class="flow-content">
+          <h4>1. First-Time Setup</h4>
+          <p>Add a repository from Finder, create your first workspace, watch setup.sh run automatically, start coding in the terminal.</p>
+          <a href="stories/index.html#story-1" class="flow-link">View detailed flow &rarr;</a>
+        </div>
+      </div>
+
+      <div class="flow-card">
+        <img src="wireflows/flow-2-switch.jpg" alt="Switching Workspaces Flow" class="flow-image" style="width: 100%; display: block; cursor: pointer;" onclick="openLightbox(this.src)">
+        <div class="flow-content">
+          <h4>2. Switching Workspaces</h4>
+          <p>Click a workspace in the sidebar, terminal switches to that directory, right pane refreshes with new file tree and git status.</p>
+          <a href="stories/index.html#story-2" class="flow-link">View detailed flow &rarr;</a>
+        </div>
+      </div>
+
+      <div class="flow-card">
+        <img src="wireflows/flow-3-parallel.jpg" alt="Parallel Experiments Flow" class="flow-image" style="width: 100%; display: block; cursor: pointer;" onclick="openLightbox(this.src)">
+        <div class="flow-content">
+          <h4>3. Parallel Experiments</h4>
+          <p>Create multiple workspaces from the same repo to explore different approaches without conflicts.</p>
+          <a href="stories/index.html#story-3" class="flow-link">View detailed flow &rarr;</a>
+        </div>
+      </div>
+    </section>
+
+    <!-- Visual Direction -->
+    <section>
+      <h2>Visual Direction</h2>
+      <p>Workspaces follows macOS design language: clean lines, subtle shadows, native controls. The terminal uses a dark theme by default (matching developer preferences) while the chrome can follow system appearance.</p>
+
+      <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem;">
+        <img src="brainstorm/main-window-02.jpg" alt="Main Window with Nested Sidebar" style="width: 100%; border-radius: 8px; box-shadow: 0 2px 8px var(--shadow); cursor: pointer;" onclick="openLightbox(this.src)">
+        <img src="brainstorm/sidebar-nested-01.png" alt="Sidebar Detail" style="width: 100%; border-radius: 8px; box-shadow: 0 2px 8px var(--shadow); cursor: pointer;" onclick="openLightbox(this.src)">
+        <img src="brainstorm/empty-state-02.jpg" alt="Empty State" style="width: 100%; border-radius: 8px; box-shadow: 0 2px 8px var(--shadow); cursor: pointer;" onclick="openLightbox(this.src)">
+      </div>
+
+      <h3>Color Palette</h3>
+      <div class="colors">
+        <div class="color-swatch">
+          <div class="swatch" style="background: #3b82f6;"></div>
+          <div class="color-name">Primary</div>
+          <div class="color-value">#3b82f6</div>
+        </div>
+        <div class="color-swatch">
+          <div class="swatch" style="background: #0ea5e9;"></div>
+          <div class="color-name">Accent</div>
+          <div class="color-value">#0ea5e9</div>
+        </div>
+        <div class="color-swatch">
+          <div class="swatch" style="background: #10b981;"></div>
+          <div class="color-name">Success</div>
+          <div class="color-value">#10b981</div>
+        </div>
+        <div class="color-swatch">
+          <div class="swatch" style="background: #f59e0b;"></div>
+          <div class="color-name">Warning</div>
+          <div class="color-value">#f59e0b</div>
+        </div>
+        <div class="color-swatch">
+          <div class="swatch" style="background: #1e293b;"></div>
+          <div class="color-name">Terminal BG</div>
+          <div class="color-value">#1e293b</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Resources -->
+    <section>
+      <h2>Supporting Documentation</h2>
+      <div class="resources">
+        <a href="stories/index.html" class="resource">
+          <div class="resource-title">Story Flows</div>
+          <div class="resource-desc">Visual walkthroughs with AI-generated screen mockups</div>
+        </a>
+        <a href="brainstorm/index.html" class="resource">
+          <div class="resource-title">Screen Exploration</div>
+          <div class="resource-desc">Individual mockups with rating and feedback tools</div>
+        </a>
+        <a href="../user-stories.md" class="resource">
+          <div class="resource-title">User Stories</div>
+          <div class="resource-desc">Text-based user stories with Mermaid diagrams</div>
+        </a>
+        <a href="../product_overview.md" class="resource">
+          <div class="resource-title">Product Overview</div>
+          <div class="resource-desc">Complete product definition and requirements</div>
+        </a>
+      </div>
+    </section>
+
+    <!-- Next Steps -->
+    <section>
+      <h2>Next Steps</h2>
+      <ol style="padding-left: 1.5rem; color: var(--text-secondary);">
+        <li style="margin-bottom: 0.75rem;"><strong>Generate mockups:</strong> Use /image-gen to create screen mockups for brainstorm gallery</li>
+        <li style="margin-bottom: 0.75rem;"><strong>Create story flows:</strong> Generate sequential screens for each user story</li>
+        <li style="margin-bottom: 0.75rem;"><strong>Review & iterate:</strong> Rate mockups, add feedback, refine direction</li>
+        <li><strong>Finalize brief:</strong> Add hero image, wireflows, and polish documentation</li>
+      </ol>
+    </section>
+
+    <footer>
+      <p>Workspaces Design Brief v1 &bull; Generated with Claude Code &bull; January 2026</p>
+    </footer>
+  </div>
+</body>
+</html>
