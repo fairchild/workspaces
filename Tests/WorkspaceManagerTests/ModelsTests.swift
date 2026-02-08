@@ -5,8 +5,9 @@
 //  Tests for model behavior: identity, equality, serialization contracts
 //
 
-import Testing
 import Foundation
+import Testing
+
 @testable import WorkspaceManagerCore
 
 @Suite("Models")

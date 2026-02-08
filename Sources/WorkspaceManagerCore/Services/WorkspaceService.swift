@@ -21,7 +21,8 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
 
     public var workspacesRoot: URL {
         if let customPath = UserDefaults.standard.string(forKey: "workspacesRoot"),
-           !customPath.isEmpty {
+            !customPath.isEmpty
+        {
             return URL(fileURLWithPath: customPath)
         }
         return Self.defaultWorkspacesRoot
@@ -118,7 +119,8 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
 
             let parentDir = workspaceURL.deletingLastPathComponent()
             if let contents = try? FileManager.default.contentsOfDirectory(atPath: parentDir.path),
-               contents.isEmpty {
+                contents.isEmpty
+            {
                 try? FileManager.default.removeItem(at: parentDir)
             }
         }
@@ -149,7 +151,8 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
 
         // Ensure script is executable
         if let attributes = try? FileManager.default.attributesOfItem(atPath: scriptPath.path),
-           let permissions = attributes[.posixPermissions] as? NSNumber {
+            let permissions = attributes[.posixPermissions] as? NSNumber
+        {
             let mode = permissions.uint16Value
             if mode & 0o111 == 0 {
                 try? FileManager.default.setAttributes(
@@ -175,19 +178,22 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
             process.standardError = stderrPipe
 
             process.terminationHandler = { _ in
-                let stdout = String(
-                    data: stdoutPipe.fileHandleForReading.readDataToEndOfFile(),
-                    encoding: .utf8
-                ) ?? ""
-                let stderr = String(
-                    data: stderrPipe.fileHandleForReading.readDataToEndOfFile(),
-                    encoding: .utf8
-                ) ?? ""
-                continuation.resume(returning: ScriptResult(
-                    exitCode: process.terminationStatus,
-                    stdout: stdout,
-                    stderr: stderr
-                ))
+                let stdout =
+                    String(
+                        data: stdoutPipe.fileHandleForReading.readDataToEndOfFile(),
+                        encoding: .utf8
+                    ) ?? ""
+                let stderr =
+                    String(
+                        data: stderrPipe.fileHandleForReading.readDataToEndOfFile(),
+                        encoding: .utf8
+                    ) ?? ""
+                continuation.resume(
+                    returning: ScriptResult(
+                        exitCode: process.terminationStatus,
+                        stdout: stdout,
+                        stderr: stderr
+                    ))
             }
 
             do {
@@ -204,11 +210,13 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
         let resourceKeys: Set<URLResourceKey> = [.fileSizeKey, .isDirectoryKey]
 
         let fileURLs: [URL] = {
-            guard let enumerator = FileManager.default.enumerator(
-                at: workspaceURL,
-                includingPropertiesForKeys: Array(resourceKeys),
-                options: [.skipsHiddenFiles]
-            ) else {
+            guard
+                let enumerator = FileManager.default.enumerator(
+                    at: workspaceURL,
+                    includingPropertiesForKeys: Array(resourceKeys),
+                    options: [.skipsHiddenFiles]
+                )
+            else {
                 return []
             }
             return enumerator.compactMap { $0 as? URL }
@@ -217,9 +225,10 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
         var totalSize: Int64 = 0
         for fileURL in fileURLs {
             guard let resourceValues = try? fileURL.resourceValues(forKeys: resourceKeys),
-                  let isDirectory = resourceValues.isDirectory,
-                  !isDirectory,
-                  let fileSize = resourceValues.fileSize else {
+                let isDirectory = resourceValues.isDirectory,
+                !isDirectory,
+                let fileSize = resourceValues.fileSize
+            else {
                 continue
             }
             totalSize += Int64(fileSize)
@@ -232,12 +241,14 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
 
     public func sanitizeFilename(_ name: String) -> String {
         let invalidCharacters = CharacterSet(charactersIn: ":/\\?*\"<>|")
-        let sanitized = name
+        let sanitized =
+            name
             .components(separatedBy: invalidCharacters)
             .joined(separator: "-")
             .trimmingCharacters(in: .whitespaces)
 
-        return sanitized
+        return
+            sanitized
             .replacingOccurrences(of: " ", with: "-")
             .lowercased()
     }
@@ -268,10 +279,11 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
 
             process.terminationHandler = { _ in
                 if process.terminationStatus != 0 {
-                    let stderr = String(
-                        data: stderrPipe.fileHandleForReading.readDataToEndOfFile(),
-                        encoding: .utf8
-                    ) ?? "Unknown error"
+                    let stderr =
+                        String(
+                            data: stderrPipe.fileHandleForReading.readDataToEndOfFile(),
+                            encoding: .utf8
+                        ) ?? "Unknown error"
                     continuation.resume(throwing: errorMapper(stderr))
                 } else {
                     continuation.resume()

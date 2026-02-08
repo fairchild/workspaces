@@ -7,7 +7,10 @@
 ## The Options at a Glance
 
 | Strategy | Isolation Level | Startup | Overhead | Requirements | Best For |
-|----------|-----------------|---------|----------|--------------|----------|
+|---
+
+> **GitHub Issue**: https://github.com/fairchild/workspaces/issues/1
+-------|-----------------|---------|----------|--------------|----------|
 | **Local Directory** | None | Instant | Zero | None | MVP, trust user |
 | **Apple Container** | VM-per-container | ~300ms | Low | macOS 26+, Apple Silicon | Production on Mac |
 | **Docker** | Shared kernel | ~1-2s | Medium | Docker Desktop | Cross-platform |

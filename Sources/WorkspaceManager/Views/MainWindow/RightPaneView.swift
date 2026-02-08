@@ -17,11 +17,11 @@ struct RightPaneView: View {
     @State private var changedFiles: [FileChange] = []
     @State private var isLoading = false
     @State private var lastRefresh = Date()
-    
+
     enum Tab: String, CaseIterable {
         case files = "Files"
         case changes = "Changes"
-        
+
         var icon: String {
             switch self {
             case .files: return "folder"
@@ -29,7 +29,7 @@ struct RightPaneView: View {
             }
         }
     }
-    
+
     var body: some View {
         VStack(spacing: 0) {
             // Tab bar
@@ -48,9 +48,9 @@ struct RightPaneView: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
             .background(Color(nsColor: .controlBackgroundColor))
-            
+
             Divider()
-            
+
             // Tab content
             ZStack {
                 switch selectedTab {
@@ -61,9 +61,9 @@ struct RightPaneView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            
+
             Divider()
-            
+
             // Footer with refresh
             HStack {
                 if isLoading {
@@ -77,9 +77,9 @@ struct RightPaneView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-                
+
                 Spacer()
-                
+
                 Button {
                     Task { await refresh() }
                 } label: {
@@ -96,21 +96,21 @@ struct RightPaneView: View {
             await refresh()
         }
     }
-    
+
     @MainActor
     private func refresh() async {
         isLoading = true
-        defer { 
+        defer {
             isLoading = false
             lastRefresh = Date()
         }
-        
+
         async let treeTask = loadFileTree()
         async let statusTask = loadGitStatus()
-        
+
         (fileTree, changedFiles) = await (treeTask, statusTask)
     }
-    
+
     private func loadFileTree() async -> FileNode? {
         do {
             return try await gitService.getFileTree(at: workspace.workspaceURL)
@@ -119,7 +119,7 @@ struct RightPaneView: View {
             return nil
         }
     }
-    
+
     private func loadGitStatus() async -> [FileChange] {
         do {
             return try await gitService.getStatus(at: workspace.workspaceURL)
@@ -138,16 +138,16 @@ struct TabButton: View {
     let isSelected: Bool
     var badge: Int?
     let action: () -> Void
-    
+
     var body: some View {
         Button(action: action) {
             HStack(spacing: 4) {
                 Image(systemName: icon)
                     .font(.caption)
-                
+
                 Text(title)
                     .font(.caption)
-                
+
                 if let badge, badge > 0 {
                     Text("\(badge)")
                         .font(.caption2)
@@ -173,7 +173,7 @@ struct TabButton: View {
 struct FileTreeTabView: View {
     let root: FileNode?
     let isLoading: Bool
-    
+
     var body: some View {
         if let root {
             List {
@@ -196,9 +196,9 @@ struct FileTreeTabView: View {
 struct FileNodeView: View {
     let node: FileNode
     let level: Int
-    
+
     @State private var isExpanded = false
-    
+
     var body: some View {
         if node.isDirectory {
             DisclosureGroup(isExpanded: $isExpanded) {
@@ -221,7 +221,7 @@ struct FileNodeView: View {
 struct ChangedFilesTabView: View {
     let changes: [FileChange]
     let isLoading: Bool
-    
+
     var body: some View {
         if changes.isEmpty && !isLoading {
             ContentUnavailableView(
@@ -235,12 +235,12 @@ struct ChangedFilesTabView: View {
                     Image(systemName: change.status.icon)
                         .foregroundStyle(change.status.color)
                         .frame(width: 16)
-                    
+
                     Text(change.path)
                         .font(.system(.body, design: .monospaced))
                         .lineLimit(1)
                         .truncationMode(.middle)
-                    
+
                     Spacer()
                 }
                 .padding(.vertical, 2)

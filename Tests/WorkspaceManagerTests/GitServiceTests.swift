@@ -5,8 +5,9 @@
 //  Tests for GitService: status parsing, branch operations, file tree
 //
 
-import Testing
 import Foundation
+import Testing
+
 @testable import WorkspaceManagerCore
 
 @Suite("GitService")
@@ -151,7 +152,7 @@ struct GitServiceTests {
         let childNames = tree.children?.map(\.name) ?? []
         #expect(childNames.contains("src"))
         #expect(childNames.contains("README.md"))
-        #expect(!childNames.contains(".git")) // Hidden files excluded
+        #expect(!childNames.contains(".git"))  // Hidden files excluded
     }
 
     @Test("Ignores node_modules directory")
@@ -216,7 +217,8 @@ struct GitServiceTests {
         let firstFile = children.first { !$0.isDirectory }
 
         guard let dirIndex = children.firstIndex(where: { $0.isDirectory }),
-              let fileIndex = children.firstIndex(where: { !$0.isDirectory }) else {
+            let fileIndex = children.firstIndex(where: { !$0.isDirectory })
+        else {
             Issue.record("Expected both directories and files")
             return
         }

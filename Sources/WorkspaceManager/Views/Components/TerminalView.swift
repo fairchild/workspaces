@@ -5,8 +5,8 @@
 //  Pure AppKit terminal via NSViewControllerRepresentable
 //
 
-import SwiftUI
 import SwiftTerm
+import SwiftUI
 import WorkspaceManagerCore
 
 // MARK: - Terminal Container (SwiftUI wrapper)
@@ -163,16 +163,18 @@ class TerminalViewController: NSViewController, LocalProcessTerminalViewDelegate
     private func handleLocalEvent(_ event: NSEvent) -> NSEvent? {
         // Log ALL events for debugging
         if event.type == .keyDown {
-            NSLog("[TerminalVC %@] LOCAL EVENT keyDown: '%@' - isActive:%@ isKey:%@ FR:%@",
-                  String(viewId),
-                  event.characters ?? "?",
-                  NSApp.isActive ? "YES" : "NO",
-                  terminalView.window?.isKeyWindow == true ? "YES" : "NO",
-                  String(describing: type(of: terminalView.window?.firstResponder ?? NSObject())))
+            NSLog(
+                "[TerminalVC %@] LOCAL EVENT keyDown: '%@' - isActive:%@ isKey:%@ FR:%@",
+                String(viewId),
+                event.characters ?? "?",
+                NSApp.isActive ? "YES" : "NO",
+                terminalView.window?.isKeyWindow == true ? "YES" : "NO",
+                String(describing: type(of: terminalView.window?.firstResponder ?? NSObject())))
         }
 
         guard let window = terminalView.window,
-              window.isKeyWindow else {
+            window.isKeyWindow
+        else {
             return event
         }
 
@@ -186,14 +188,15 @@ class TerminalViewController: NSViewController, LocalProcessTerminalViewDelegate
                     TerminalFocusManager.shared.requestFocus(for: terminalView)
                 }
             }
-            return event // Don't consume - let normal click handling proceed
+            return event  // Don't consume - let normal click handling proceed
 
         case .keyDown:
             // Forward keyDown to terminal if it's the focused terminal
             if window.firstResponder === terminalView,
-               TerminalFocusManager.shared.focusedTerminal === terminalView {
+                TerminalFocusManager.shared.focusedTerminal === terminalView
+            {
                 terminalView.keyDown(with: event)
-                return nil // Consume - don't let SwiftUI handle it
+                return nil  // Consume - don't let SwiftUI handle it
             }
             return event
 
@@ -261,7 +264,7 @@ class TerminalViewController: NSViewController, LocalProcessTerminalViewDelegate
                 "/usr/local/bin",
                 "/usr/bin",
                 "/bin",
-                path
+                path,
             ].joined(separator: ":")
         }
 
@@ -307,4 +310,3 @@ class TerminalViewController: NSViewController, LocalProcessTerminalViewDelegate
         removeEventMonitor()
     }
 }
-

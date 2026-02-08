@@ -84,16 +84,18 @@ final class TerminalFocusManager: NSObject {
 
             // Activate app and make window key
             NSLog("[FocusManager] Activating app and making window key")
-            NSLog("[FocusManager] BEFORE - isActive:%@ isKey:%@",
-                  NSApp.isActive ? "YES" : "NO",
-                  window.isKeyWindow ? "YES" : "NO")
+            NSLog(
+                "[FocusManager] BEFORE - isActive:%@ isKey:%@",
+                NSApp.isActive ? "YES" : "NO",
+                window.isKeyWindow ? "YES" : "NO")
 
             NSApp.activate(ignoringOtherApps: true)
             window.makeKeyAndOrderFront(nil)
 
-            NSLog("[FocusManager] AFTER - isActive:%@ isKey:%@",
-                  NSApp.isActive ? "YES" : "NO",
-                  window.isKeyWindow ? "YES" : "NO")
+            NSLog(
+                "[FocusManager] AFTER - isActive:%@ isKey:%@",
+                NSApp.isActive ? "YES" : "NO",
+                window.isKeyWindow ? "YES" : "NO")
 
             // Explicitly resign old focus (callback sometimes doesn't fire - per Ghostty)
             if let oldFocused = self.focusedTerminal, oldFocused !== terminal {
@@ -132,9 +134,10 @@ final class TerminalFocusManager: NSObject {
         // Notify the focused terminal of its focus state
         if let terminal = focusedTerminal {
             let isFocused = isKeyWindow && firstResponder === terminal
-            NSLog("[FocusManager] syncFocusState - isKeyWindow: %@, terminalFocused: %@",
-                  isKeyWindow ? "YES" : "NO",
-                  isFocused ? "YES" : "NO")
+            NSLog(
+                "[FocusManager] syncFocusState - isKeyWindow: %@, terminalFocused: %@",
+                isKeyWindow ? "YES" : "NO",
+                isFocused ? "YES" : "NO")
         }
     }
 

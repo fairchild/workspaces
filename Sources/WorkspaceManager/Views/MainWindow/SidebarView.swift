@@ -5,8 +5,8 @@
 //  Left sidebar showing repositories and workspaces
 //
 
-import SwiftUI
 import SwiftData
+import SwiftUI
 import WorkspaceManagerCore
 
 struct SidebarView: View {
@@ -27,11 +27,11 @@ struct SidebarView: View {
     // Delete confirmation state
     @State private var workspaceToDelete: Workspace?
     @State private var showingDeleteConfirmation = false
-    
+
     var allWorkspaces: [Workspace] {
         repos.flatMap(\.workspaces).sorted { $0.lastAccessedAt > $1.lastAccessedAt }
     }
-    
+
     var body: some View {
         List(selection: $selectedWorkspace) {
             // Repositories Section
@@ -47,15 +47,15 @@ struct SidebarView: View {
                                 Button("New Workspace...") {
                                     repoForNewWorkspace = repo
                                 }
-                                
+
                                 Divider()
-                                
+
                                 Button("Reveal in Finder") {
                                     NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: repo.localPath)
                                 }
-                                
+
                                 Divider()
-                                
+
                                 Button("Remove from List", role: .destructive) {
                                     removeRepo(repo)
                                 }
@@ -63,7 +63,7 @@ struct SidebarView: View {
                     }
                 }
             }
-            
+
             // Workspaces Section
             Section("Workspaces") {
                 if allWorkspaces.isEmpty {
@@ -83,9 +83,9 @@ struct SidebarView: View {
                                 Button("Reveal in Finder") {
                                     NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: workspace.path)
                                 }
-                                
+
                                 Divider()
-                                
+
                                 if workspace.status == .active {
                                     Button("Archive") {
                                         workspace.status = .archived
@@ -95,9 +95,9 @@ struct SidebarView: View {
                                         workspace.status = .active
                                     }
                                 }
-                                
+
                                 Divider()
-                                
+
                                 Button("Delete Workspace", role: .destructive) {
                                     deleteWorkspace(workspace)
                                 }
@@ -110,7 +110,7 @@ struct SidebarView: View {
         .safeAreaInset(edge: .bottom) {
             VStack(spacing: 8) {
                 Divider()
-                
+
                 Button {
                     isAddingRepo = true
                 } label: {
@@ -141,7 +141,7 @@ struct SidebarView: View {
             }
         }
         .alert("Error", isPresented: $showingError) {
-            Button("OK", role: .cancel) { }
+            Button("OK", role: .cancel) {}
         } message: {
             Text(errorMessage ?? "An unknown error occurred")
         }
@@ -163,9 +163,9 @@ struct SidebarView: View {
             Text("Are you sure you want to delete '\(workspace.name)'?")
         }
     }
-    
+
     // MARK: - Actions
-    
+
     private func addRepo(from url: URL) async {
         // Security-scoped access (returns false in non-sandboxed builds, which is fine)
         let hasSecurityAccess = url.startAccessingSecurityScopedResource()
@@ -198,12 +198,12 @@ struct SidebarView: View {
         modelContext.insert(repo)
         try? modelContext.save()
     }
-    
+
     private func removeRepo(_ repo: Repo) {
         modelContext.delete(repo)
         try? modelContext.save()
     }
-    
+
     private func createWorkspace(from repo: Repo, name: String) async {
         // Extract value types before crossing actor boundary
         let repoName = repo.name
@@ -236,7 +236,7 @@ struct SidebarView: View {
             }
         }
     }
-    
+
     private func deleteWorkspace(_ workspace: Workspace) {
         workspaceToDelete = workspace
         showingDeleteConfirmation = true

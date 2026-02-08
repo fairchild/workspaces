@@ -5,8 +5,9 @@
 //  Tests for LocalBackend actor
 //
 
-import Testing
 import Foundation
+import Testing
+
 @testable import WorkspaceManagerCore
 
 @Suite("LocalBackend")
