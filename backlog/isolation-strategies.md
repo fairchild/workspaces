@@ -1,5 +1,7 @@
 # Workspace Isolation Strategies
 
+> **GitHub Issue**: https://github.com/fairchild/workspaces/issues/1
+
 **TL;DR**: Apple just shipped a native Swift containerization framework (WWDC 2025) that's perfect for this use case. For MVP, abstract behind a protocol and start with the simplest option (local directory), then add Apple Container, Docker, and remote VMs as backends.
 
 ---
@@ -7,10 +9,7 @@
 ## The Options at a Glance
 
 | Strategy | Isolation Level | Startup | Overhead | Requirements | Best For |
-|---
-
-> **GitHub Issue**: https://github.com/fairchild/workspaces/issues/1
--------|-----------------|---------|----------|--------------|----------|
+|-------|-----------------|---------|----------|--------------|----------|
 | **Local Directory** | None | Instant | Zero | None | MVP, trust user |
 | **Apple Container** | VM-per-container | ~300ms | Low | macOS 26+, Apple Silicon | Production on Mac |
 | **Docker** | Shared kernel | ~1-2s | Medium | Docker Desktop | Cross-platform |
