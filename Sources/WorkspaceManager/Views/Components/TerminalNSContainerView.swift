@@ -31,18 +31,21 @@ class TerminalNSContainerView: NSView {
 
         clickMonitor = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
             guard let self = self,
-                  let window = self.window,
-                  let terminal = self.terminalView else {
+                let window = self.window,
+                let terminal = self.terminalView
+            else {
                 NSLog("[TerminalContainer] Global click - but no window/terminal")
                 return
             }
 
-            NSLog("[TerminalContainer] Global click detected - windowNumber:%d eventWindow:%d",
-                  window.windowNumber,
-                  event.windowNumber)
+            NSLog(
+                "[TerminalContainer] Global click detected - windowNumber:%d eventWindow:%d",
+                window.windowNumber,
+                event.windowNumber)
 
             if let clickedWindow = NSApp.window(withWindowNumber: event.windowNumber),
-               clickedWindow === window {
+                clickedWindow === window
+            {
                 NSLog("[TerminalContainer] Click IS in our window - activating app")
                 NSApp.activate(ignoringOtherApps: true)
                 window.makeKeyAndOrderFront(nil)

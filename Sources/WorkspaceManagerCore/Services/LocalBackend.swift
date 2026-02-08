@@ -88,11 +88,14 @@ public actor LocalBackend {
             process.standardError = stderrPipe
 
             process.terminationHandler = { _ in
-                continuation.resume(returning: ProcessResult(
-                    exitCode: process.terminationStatus,
-                    stdout: String(data: stdoutPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? "",
-                    stderr: String(data: stderrPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-                ))
+                continuation.resume(
+                    returning: ProcessResult(
+                        exitCode: process.terminationStatus,
+                        stdout: String(data: stdoutPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)
+                            ?? "",
+                        stderr: String(data: stderrPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)
+                            ?? ""
+                    ))
             }
 
             do {

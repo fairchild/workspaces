@@ -10,38 +10,38 @@ import SwiftUI
 struct SettingsView: View {
     // Workspace root path stored in UserDefaults
     @AppStorage("workspacesRoot") private var workspacesRootPath: String = ""
-    
+
     // File picker state
     @State private var showFolderPicker = false
-    
+
     // Default path for display
     private var defaultPath: String {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("workspaces")
             .path
     }
-    
+
     // Display path (shows default if custom not set)
     private var displayPath: String {
         workspacesRootPath.isEmpty ? defaultPath : workspacesRootPath
     }
-    
+
     var body: some View {
         Form {
             Section {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Workspaces Location")
                         .font(.headline)
-                    
+
                     HStack {
                         Text(displayPath)
                             .font(.system(.body, design: .monospaced))
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                             .truncationMode(.middle)
-                        
+
                         Spacer()
-                        
+
                         Button("Choose...") {
                             showFolderPicker = true
                         }
@@ -49,14 +49,14 @@ struct SettingsView: View {
                     .padding(8)
                     .background(Color(nsColor: .textBackgroundColor))
                     .clipShape(RoundedRectangle(cornerRadius: 6))
-                    
+
                     HStack {
                         Text("Where new workspaces are created.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        
+
                         Spacer()
-                        
+
                         if !workspacesRootPath.isEmpty {
                             Button("Reset to Default") {
                                 workspacesRootPath = ""
@@ -68,12 +68,12 @@ struct SettingsView: View {
             } header: {
                 Text("General")
             }
-            
+
             Section {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Lifecycle Scripts")
                         .font(.headline)
-                    
+
                     VStack(alignment: .leading, spacing: 4) {
                         Label {
                             Text("setup.sh")
@@ -84,7 +84,7 @@ struct SettingsView: View {
                             Image(systemName: "play.circle")
                                 .foregroundStyle(.green)
                         }
-                        
+
                         Label {
                             Text("archive.sh")
                                 .font(.system(.body, design: .monospaced))
@@ -96,7 +96,7 @@ struct SettingsView: View {
                         }
                     }
                     .font(.callout)
-                    
+
                     Text("Add these scripts to your repository to automate workspace setup and cleanup.")
                         .font(.caption)
                         .foregroundStyle(.secondary)

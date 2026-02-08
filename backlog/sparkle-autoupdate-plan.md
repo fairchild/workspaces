@@ -8,6 +8,9 @@ retro_summary: null
 completed: null
 ---
 
+> **GitHub Issue**: https://github.com/fairchild/workspaces/issues/2
+
+
 # Sparkle Auto-Update Integration
 
 ## Problem Statement

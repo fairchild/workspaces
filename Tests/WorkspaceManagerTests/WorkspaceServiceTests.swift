@@ -5,8 +5,9 @@
 //  Tests for WorkspaceService: workspace lifecycle, scripts, sanitization
 //
 
-import Testing
 import Foundation
+import Testing
+
 @testable import WorkspaceManagerCore
 
 @Suite("WorkspaceService", .serialized)
@@ -218,7 +219,8 @@ struct WorkspaceServiceTests {
         let originalRoot = setWorkspacesRoot(wsRoot)
         defer { restoreWorkspacesRoot(originalRoot) }
 
-        let wsDir = wsRoot
+        let wsDir =
+            wsRoot
             .appendingPathComponent("test-repo")
             .appendingPathComponent("existing-ws")
         try FileManager.default.createDirectory(at: wsDir, withIntermediateDirectories: true)

@@ -7,7 +7,7 @@
 
 import Foundation
 import SwiftData
-import SwiftUI // For Color in GitStatus
+import SwiftUI  // For Color in GitStatus
 
 @Model
 public final class Repo {

@@ -5,28 +5,28 @@
 //  Main entry point - SwiftUI lifecycle with AppKit hooks for window management
 //
 
-import SwiftUI
 import SwiftData
+import SwiftUI
 import WorkspaceManagerCore
 
 @main
 struct WorkspaceManagerApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
-    
+
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([Repo.self, Workspace.self])
         let modelConfiguration = ModelConfiguration(
             schema: schema,
             isStoredInMemoryOnly: false
         )
-        
+
         do {
             return try ModelContainer(for: schema, configurations: [modelConfiguration])
         } catch {
             fatalError("Could not create ModelContainer: \(error)")
         }
     }()
-    
+
     var body: some Scene {
         WindowGroup {
             ContentView()
@@ -89,7 +89,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        return true // Change to false for background operation
+        return true  // Change to false for background operation
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {

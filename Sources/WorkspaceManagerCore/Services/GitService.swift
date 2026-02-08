@@ -17,7 +17,8 @@ public actor GitService: GitServiceProtocol {
     public func getStatus(at path: URL) async throws -> [FileChange] {
         let output = try await runGit(["status", "--porcelain=v1"], at: path)
 
-        return output
+        return
+            output
             .split(separator: "\n")
             .compactMap { line -> FileChange? in
                 let line = String(line)
@@ -76,11 +77,13 @@ public actor GitService: GitServiceProtocol {
         depth: Int,
         maxDepth: Int
     ) async throws -> FileNode {
-        let currentURL = relativePath.isEmpty
+        let currentURL =
+            relativePath.isEmpty
             ? baseURL
             : baseURL.appendingPathComponent(relativePath)
 
-        let name = relativePath.isEmpty
+        let name =
+            relativePath.isEmpty
             ? baseURL.lastPathComponent
             : (relativePath as NSString).lastPathComponent
 
@@ -103,7 +106,9 @@ public actor GitService: GitServiceProtocol {
             options: [.skipsHiddenFiles]
         )
 
-        let ignoredDirs = Set(["node_modules", ".git", ".build", "build", "DerivedData", ".swiftpm", "__pycache__", ".venv", "venv"])
+        let ignoredDirs = Set([
+            "node_modules", ".git", ".build", "build", "DerivedData", ".swiftpm", "__pycache__", ".venv", "venv",
+        ])
 
         let children = try await withThrowingTaskGroup(of: FileNode?.self) { group in
             for itemURL in contents {
@@ -114,7 +119,8 @@ public actor GitService: GitServiceProtocol {
                 }
 
                 group.addTask {
-                    let childPath = relativePath.isEmpty
+                    let childPath =
+                        relativePath.isEmpty
                         ? itemName
                         : (relativePath as NSString).appendingPathComponent(itemName)
 

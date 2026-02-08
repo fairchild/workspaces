@@ -6,6 +6,7 @@
 //
 
 import Foundation
+
 @testable import WorkspaceManagerCore
 
 final class MockGitService: GitServiceProtocol, @unchecked Sendable {

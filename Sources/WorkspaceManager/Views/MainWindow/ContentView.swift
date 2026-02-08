@@ -5,18 +5,18 @@
 //  Main three-column layout: Sidebar | Terminal | Right Pane
 //
 
-import SwiftUI
 import SwiftData
+import SwiftUI
 import WorkspaceManagerCore
 
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \Repo.addedAt, order: .reverse) private var repos: [Repo]
-    
+
     @State private var selectedWorkspace: Workspace?
     @State private var isRightPaneVisible = true
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
-    
+
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             SidebarView(
@@ -58,13 +58,13 @@ struct ContentView: View {
 struct WorkspaceDetailView: View {
     let workspace: Workspace
     @Binding var isRightPaneVisible: Bool
-    
+
     var body: some View {
         HSplitView {
             // Main terminal panel
             TerminalContainerView(workspace: workspace)
                 .frame(minWidth: 400)
-            
+
             // Collapsible right pane
             if isRightPaneVisible {
                 RightPaneView(workspace: workspace)
@@ -84,16 +84,16 @@ struct EmptyStateView: View {
             Image(systemName: "folder.badge.gearshape")
                 .font(.system(size: 48))
                 .foregroundStyle(.secondary)
-            
+
             Text("No Workspace Selected")
                 .font(.title2)
                 .fontWeight(.medium)
-            
+
             Text("Add a repository and create a workspace to get started.")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
-            
+
             VStack(alignment: .leading, spacing: 8) {
                 Label("Add a git repository from your Mac", systemImage: "1.circle.fill")
                 Label("Fork it to create an isolated workspace", systemImage: "2.circle.fill")
