@@ -45,41 +45,32 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
 
     // MARK: - Create Workspace
 
-    public func createWorkspace(from repo: Repo, name: String) async throws -> Workspace {
-        // Sanitize name for filesystem
+    public func createWorkspace(repoName: String, repoLocalURL: URL, name: String) async throws -> NewWorkspaceInfo {
         let sanitizedName = sanitizeFilename(name)
 
-        // Create workspace directory path: {workspacesRoot}/{repo-name}/{workspace-name}
-        let repoDir = workspacesRoot.appendingPathComponent(repo.name, isDirectory: true)
+        let repoDir = workspacesRoot.appendingPathComponent(repoName, isDirectory: true)
         let workspaceDir = repoDir.appendingPathComponent(sanitizedName, isDirectory: true)
 
-        // Check if workspace already exists
         if FileManager.default.fileExists(atPath: workspaceDir.path) {
             throw WorkspaceError.alreadyExists(name: sanitizedName)
         }
 
-        // Create parent directory if needed
         try FileManager.default.createDirectory(
             at: repoDir,
             withIntermediateDirectories: true
         )
 
-        // Copy repository to workspace
-        try await copyRepository(from: repo.localURL, to: workspaceDir)
+        try await copyRepository(from: repoLocalURL, to: workspaceDir)
 
-        // Create a new branch for this workspace
         let branchName = "workspace/\(sanitizedName)"
         do {
             try await gitService.createBranch(branchName, at: workspaceDir)
         } catch {
-            // Branch creation failed, but workspace was created - continue
             print("Warning: Could not create branch '\(branchName)': \(error)")
         }
 
-        // Get actual branch name
         let currentBranch = try? await gitService.getCurrentBranch(at: workspaceDir)
 
-        // Run setup.sh if it exists
         let setupResult = try await runLifecycleScript("setup.sh", in: workspaceDir)
         if !setupResult.stdout.isEmpty {
             print("setup.sh output:\n\(setupResult.stdout)")
@@ -88,10 +79,9 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
             print("setup.sh warning (exit \(setupResult.exitCode)):\n\(setupResult.stderr)")
         }
 
-        return Workspace(
+        return NewWorkspaceInfo(
             name: name,
             path: workspaceDir,
-            sourceRepo: repo,
             gitBranch: currentBranch ?? branchName
         )
     }
@@ -99,64 +89,39 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
     // MARK: - Copy Repository
 
     private func copyRepository(from source: URL, to destination: URL) async throws {
-        // Use ditto for efficient copy (preserves resource forks, permissions, etc.)
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
-        process.arguments = [
-            "--rsrc",           // Preserve resource forks
-            source.path,
-            destination.path
-        ]
-
-        let stderrPipe = Pipe()
-        process.standardError = stderrPipe
-
-        try process.run()
-        process.waitUntilExit()
-
-        if process.terminationStatus != 0 {
-            let stderr = String(
-                data: stderrPipe.fileHandleForReading.readDataToEndOfFile(),
-                encoding: .utf8
-            ) ?? "Unknown error"
-            throw WorkspaceError.copyFailed(reason: stderr)
-        }
+        try await runProcess(
+            executable: "/usr/bin/ditto",
+            arguments: ["--rsrc", source.path, destination.path],
+            errorMapper: { stderr in WorkspaceError.copyFailed(reason: stderr) }
+        )
     }
 
     // MARK: - Archive Workspace
 
-    /// Archive a workspace (runs archive.sh, caller updates status)
-    public func archiveWorkspace(_ workspace: Workspace) async throws {
-        // Run archive.sh if it exists
-        let archiveResult = try await runLifecycleScript("archive.sh", in: workspace.workspaceURL)
+    public func archiveWorkspace(at workspaceURL: URL) async throws {
+        let archiveResult = try await runLifecycleScript("archive.sh", in: workspaceURL)
         if !archiveResult.stdout.isEmpty {
             print("archive.sh output:\n\(archiveResult.stdout)")
         }
         if archiveResult.exitCode != 0 {
             print("archive.sh warning (exit \(archiveResult.exitCode)):\n\(archiveResult.stderr)")
         }
-
-        // Status update to .archived happens in caller (SwiftData context)
     }
 
     // MARK: - Delete Workspace
 
-    public func deleteWorkspace(_ workspace: Workspace, deleteFiles: Bool) async throws {
-        // Run archive.sh before deletion (cleanup)
-        _ = try await runLifecycleScript("archive.sh", in: workspace.workspaceURL)
+    public func deleteWorkspace(at workspaceURL: URL, deleteFiles: Bool) async throws {
+        _ = try await runLifecycleScript("archive.sh", in: workspaceURL)
 
         if deleteFiles {
-            try FileManager.default.removeItem(at: workspace.workspaceURL)
+            try FileManager.default.removeItem(at: workspaceURL)
 
-            // Clean up empty parent directory
-            let parentDir = workspace.workspaceURL.deletingLastPathComponent()
+            let parentDir = workspaceURL.deletingLastPathComponent()
             if let contents = try? FileManager.default.contentsOfDirectory(atPath: parentDir.path),
                contents.isEmpty {
                 try? FileManager.default.removeItem(at: parentDir)
             }
         }
-
-        // SwiftData deletion happens in caller
     }
 
     // MARK: - Lifecycle Scripts
@@ -175,15 +140,9 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
         }
     }
 
-    /// Run a lifecycle script (setup.sh or archive.sh) in the workspace directory
-    /// - Parameters:
-    ///   - scriptName: Name of the script file
-    ///   - directory: Directory to run the script in
-    /// - Returns: Script execution result (success if script doesn't exist)
     public func runLifecycleScript(_ scriptName: String, in directory: URL) async throws -> ScriptResult {
         let scriptPath = directory.appendingPathComponent(scriptName)
 
-        // Check if script exists - silently skip if not
         guard FileManager.default.fileExists(atPath: scriptPath.path) else {
             return ScriptResult(exitCode: 0, stdout: "", stderr: "")
         }
@@ -193,7 +152,6 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
            let permissions = attributes[.posixPermissions] as? NSNumber {
             let mode = permissions.uint16Value
             if mode & 0o111 == 0 {
-                // Not executable, add execute permission
                 try? FileManager.default.setAttributes(
                     [.posixPermissions: NSNumber(value: mode | 0o755)],
                     ofItemAtPath: scriptPath.path
@@ -201,49 +159,50 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
             }
         }
 
-        // Run script with bash
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/bash")
-        process.arguments = [scriptPath.path]
-        process.currentDirectoryURL = directory
-
-        // Inherit user's environment with augmented PATH
         var env = ProcessInfo.processInfo.environment
         env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:" + (env["PATH"] ?? "")
-        process.environment = env
 
-        let stdoutPipe = Pipe()
-        let stderrPipe = Pipe()
-        process.standardOutput = stdoutPipe
-        process.standardError = stderrPipe
+        return try await withCheckedThrowingContinuation { continuation in
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/bin/bash")
+            process.arguments = [scriptPath.path]
+            process.currentDirectoryURL = directory
+            process.environment = env
 
-        try process.run()
-        process.waitUntilExit()
+            let stdoutPipe = Pipe()
+            let stderrPipe = Pipe()
+            process.standardOutput = stdoutPipe
+            process.standardError = stderrPipe
 
-        let stdout = String(
-            data: stdoutPipe.fileHandleForReading.readDataToEndOfFile(),
-            encoding: .utf8
-        ) ?? ""
+            process.terminationHandler = { _ in
+                let stdout = String(
+                    data: stdoutPipe.fileHandleForReading.readDataToEndOfFile(),
+                    encoding: .utf8
+                ) ?? ""
+                let stderr = String(
+                    data: stderrPipe.fileHandleForReading.readDataToEndOfFile(),
+                    encoding: .utf8
+                ) ?? ""
+                continuation.resume(returning: ScriptResult(
+                    exitCode: process.terminationStatus,
+                    stdout: stdout,
+                    stderr: stderr
+                ))
+            }
 
-        let stderr = String(
-            data: stderrPipe.fileHandleForReading.readDataToEndOfFile(),
-            encoding: .utf8
-        ) ?? ""
-
-        return ScriptResult(
-            exitCode: process.terminationStatus,
-            stdout: stdout,
-            stderr: stderr
-        )
+            do {
+                try process.run()
+            } catch {
+                continuation.resume(throwing: error)
+            }
+        }
     }
 
     // MARK: - Workspace Stats
 
-    public func getWorkspaceSize(_ workspace: Workspace) async throws -> Int64 {
-        let workspaceURL = workspace.workspaceURL
+    public func getWorkspaceSize(at workspaceURL: URL) async throws -> Int64 {
         let resourceKeys: Set<URLResourceKey> = [.fileSizeKey, .isDirectoryKey]
 
-        // Collect file URLs synchronously to avoid Swift 6 iterator isolation warning
         let fileURLs: [URL] = {
             guard let enumerator = FileManager.default.enumerator(
                 at: workspaceURL,
@@ -272,23 +231,59 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
     // MARK: - Helpers
 
     public func sanitizeFilename(_ name: String) -> String {
-        // Remove or replace invalid filename characters
         let invalidCharacters = CharacterSet(charactersIn: ":/\\?*\"<>|")
         let sanitized = name
             .components(separatedBy: invalidCharacters)
             .joined(separator: "-")
             .trimmingCharacters(in: .whitespaces)
 
-        // Replace spaces with hyphens and lowercase
         return sanitized
             .replacingOccurrences(of: " ", with: "-")
             .lowercased()
     }
 
-    // MARK: - Get Workspaces Root (for display)
-
     public var root: URL {
         workspacesRoot
+    }
+
+    // MARK: - Async Process Execution
+
+    /// Run a process asynchronously using terminationHandler instead of blocking waitUntilExit().
+    private func runProcess(
+        executable: String,
+        arguments: [String],
+        currentDirectory: URL? = nil,
+        errorMapper: @Sendable @escaping (String) -> Error
+    ) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: executable)
+            process.arguments = arguments
+            if let dir = currentDirectory {
+                process.currentDirectoryURL = dir
+            }
+
+            let stderrPipe = Pipe()
+            process.standardError = stderrPipe
+
+            process.terminationHandler = { _ in
+                if process.terminationStatus != 0 {
+                    let stderr = String(
+                        data: stderrPipe.fileHandleForReading.readDataToEndOfFile(),
+                        encoding: .utf8
+                    ) ?? "Unknown error"
+                    continuation.resume(throwing: errorMapper(stderr))
+                } else {
+                    continuation.resume()
+                }
+            }
+
+            do {
+                try process.run()
+            } catch {
+                continuation.resume(throwing: error)
+            }
+        }
     }
 }
 

@@ -35,7 +35,7 @@ sleep 1
 
 # Build
 log "Building app..."
-cd /Users/fairchild/code/services/workspaces/WorkspaceManager
+cd "$(dirname "$0")/.." # repo root
 if ! swift build 2>&1 | tee -a "$LOG_FILE" | grep -q "Build complete"; then
     log "ERROR: Build failed"
     exit 1

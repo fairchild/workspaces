@@ -54,56 +54,53 @@ public actor LocalBackend {
             throw BackendError.executionFailed("Empty command")
         }
 
-        let process = Process()
-
         // Find executable
+        let executableURL: URL
         if command[0].hasPrefix("/") {
-            process.executableURL = URL(fileURLWithPath: command[0])
+            executableURL = URL(fileURLWithPath: command[0])
         } else {
-            let whichProcess = Process()
-            whichProcess.executableURL = URL(fileURLWithPath: "/usr/bin/which")
-            whichProcess.arguments = [command[0]]
-            let pipe = Pipe()
-            whichProcess.standardOutput = pipe
-            try whichProcess.run()
-            whichProcess.waitUntilExit()
-
-            let path = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-
-            guard let execPath = path, !execPath.isEmpty else {
-                throw BackendError.commandNotFound(command[0])
-            }
-            process.executableURL = URL(fileURLWithPath: execPath)
+            let resolvedPath = try await resolveExecutable(command[0])
+            executableURL = URL(fileURLWithPath: resolvedPath)
         }
 
-        process.arguments = Array(command.dropFirst())
-
-        if let workDir = workingDirectory {
-            process.currentDirectoryURL = workspace.workspaceURL.appendingPathComponent(workDir)
+        let workDir: URL
+        if let dir = workingDirectory {
+            workDir = workspace.workspaceURL.appendingPathComponent(dir)
         } else {
-            process.currentDirectoryURL = workspace.workspaceURL
+            workDir = workspace.workspaceURL
         }
 
         var env = ProcessInfo.processInfo.environment
         for (key, value) in environment {
             env[key] = value
         }
-        process.environment = env
 
-        let stdoutPipe = Pipe()
-        let stderrPipe = Pipe()
-        process.standardOutput = stdoutPipe
-        process.standardError = stderrPipe
+        return try await withCheckedThrowingContinuation { continuation in
+            let process = Process()
+            process.executableURL = executableURL
+            process.arguments = Array(command.dropFirst())
+            process.currentDirectoryURL = workDir
+            process.environment = env
 
-        try process.run()
-        process.waitUntilExit()
+            let stdoutPipe = Pipe()
+            let stderrPipe = Pipe()
+            process.standardOutput = stdoutPipe
+            process.standardError = stderrPipe
 
-        return ProcessResult(
-            exitCode: process.terminationStatus,
-            stdout: String(data: stdoutPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? "",
-            stderr: String(data: stderrPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-        )
+            process.terminationHandler = { _ in
+                continuation.resume(returning: ProcessResult(
+                    exitCode: process.terminationStatus,
+                    stdout: String(data: stdoutPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? "",
+                    stderr: String(data: stderrPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+                ))
+            }
+
+            do {
+                try process.run()
+            } catch {
+                continuation.resume(throwing: error)
+            }
+        }
     }
 
     public func createTerminal(for workspace: Workspace) async throws -> LocalTerminal {
@@ -114,5 +111,34 @@ public actor LocalBackend {
 
     public func hostPath(for workspace: Workspace) -> URL? {
         workspace.workspaceURL
+    }
+
+    // MARK: - Private
+
+    private func resolveExecutable(_ name: String) async throws -> String {
+        try await withCheckedThrowingContinuation { continuation in
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/which")
+            process.arguments = [name]
+            let pipe = Pipe()
+            process.standardOutput = pipe
+
+            process.terminationHandler = { _ in
+                let path = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+
+                if let execPath = path, !execPath.isEmpty {
+                    continuation.resume(returning: execPath)
+                } else {
+                    continuation.resume(throwing: BackendError.commandNotFound(name))
+                }
+            }
+
+            do {
+                try process.run()
+            } catch {
+                continuation.resume(throwing: error)
+            }
+        }
     }
 }

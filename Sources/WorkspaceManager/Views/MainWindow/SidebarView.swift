@@ -205,12 +205,27 @@ struct SidebarView: View {
     }
     
     private func createWorkspace(from repo: Repo, name: String) async {
+        // Extract value types before crossing actor boundary
+        let repoName = repo.name
+        let repoLocalURL = repo.localURL
+
         do {
-            let workspace = try await workspaceService.createWorkspace(from: repo, name: name)
+            let info = try await workspaceService.createWorkspace(
+                repoName: repoName,
+                repoLocalURL: repoLocalURL,
+                name: name
+            )
+
+            // Create model on main actor side from Sendable info
+            let workspace = Workspace(
+                name: info.name,
+                path: info.path,
+                sourceRepo: repo,
+                gitBranch: info.gitBranch
+            )
             modelContext.insert(workspace)
             try? modelContext.save()
 
-            // Select the new workspace
             await MainActor.run {
                 selectedWorkspace = workspace
             }
@@ -228,9 +243,12 @@ struct SidebarView: View {
     }
 
     private func performDelete(_ workspace: Workspace, deleteFiles: Bool) {
+        // Extract value type before crossing actor boundary
+        let workspaceURL = workspace.workspaceURL
+
         Task {
             do {
-                try await workspaceService.deleteWorkspace(workspace, deleteFiles: deleteFiles)
+                try await workspaceService.deleteWorkspace(at: workspaceURL, deleteFiles: deleteFiles)
             } catch {
                 await MainActor.run {
                     errorMessage = "Failed to delete workspace: \(error.localizedDescription)"
@@ -253,4 +271,3 @@ struct SidebarView: View {
         // Multi-window support not yet implemented
     }
 }
-

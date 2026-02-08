@@ -11,7 +11,7 @@ sleep 1
 
 # Build first
 echo "1. Building..."
-cd /Users/fairchild/code/services/workspaces/WorkspaceManager
+cd "$(dirname "$0")/.." # repo root
 swift build 2>&1 | grep -E "(error|Build complete)" || true
 
 # Launch app in background, capture output
