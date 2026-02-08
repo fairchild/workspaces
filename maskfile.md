@@ -11,6 +11,14 @@ that uses markdown. Install with `brew install mask`, then run `mask <task>`.
 swift build
 ```
 
+## run
+
+> Build and launch the app
+
+```bash
+swift run
+```
+
 ## test
 
 > Run all tests
