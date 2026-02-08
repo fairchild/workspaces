@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- ============================================================
+         BUNDLE IDENTITY
+         These keys uniquely identify the app to macOS and Apple services
+         ============================================================ -->
+
+    <!-- Unique identifier for the app (reverse-DNS format) -->
+    <key>CFBundleIdentifier</key>
+    <string>com.cloudcompute.workspaces</string>
+
+    <!-- Internal bundle name (used in code) -->
+    <key>CFBundleName</key>
+    <string>Workspaces</string>
+
+    <!-- User-visible name (shown in Finder, Dock, menus) -->
+    <key>CFBundleDisplayName</key>
+    <string>Workspaces</string>
+
+    <!-- ============================================================
+         VERSIONING
+         Follows semantic versioning: MAJOR.MINOR.PATCH
+         CFBundleVersion is the build number, incremented on each build
+         ============================================================ -->
+
+    <!-- Marketing version shown to users (semantic version) -->
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+
+    <!-- Build number (increment on each build, used for updates) -->
+    <key>CFBundleVersion</key>
+    <string>1</string>
+
+    <!-- ============================================================
+         BUNDLE CONFIGURATION
+         Defines the type and structure of the bundle
+         ============================================================ -->
+
+    <!-- Bundle type: APPL = Application, FMWK = Framework, BNDL = Bundle -->
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+
+    <!-- Name of the executable file (must match target name) -->
+    <key>CFBundleExecutable</key>
+    <string>WorkspaceManager</string>
+
+    <!-- Info.plist format version (always 6.0 for modern apps) -->
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+
+    <!-- ============================================================
+         SYSTEM REQUIREMENTS
+         ============================================================ -->
+
+    <!-- Minimum macOS version required (14.0 = Sonoma) -->
+    <key>LSMinimumSystemVersion</key>
+    <string>14.0</string>
+
+    <!-- Supported architectures (modern apps support both) -->
+    <key>LSArchitecturePriority</key>
+    <array>
+        <string>arm64</string>
+        <string>x86_64</string>
+    </array>
+
+    <!-- ============================================================
+         APP STORE & CATEGORIZATION
+         ============================================================ -->
+
+    <!-- Category for App Store and Launchpad organization -->
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.developer-tools</string>
+
+    <!-- Copyright notice -->
+    <key>NSHumanReadableCopyright</key>
+    <string>Copyright 2026 Michael Fairchild. All rights reserved.</string>
+
+    <!-- ============================================================
+         UI CONFIGURATION
+         ============================================================ -->
+
+    <!-- Allow high-resolution (Retina) display support -->
+    <key>NSHighResolutionCapable</key>
+    <true/>
+
+    <!-- Use storyboard for main interface (empty = use SwiftUI App) -->
+    <key>NSMainStoryboardFile</key>
+    <string></string>
+
+    <!-- Principal class for AppKit integration -->
+    <key>NSPrincipalClass</key>
+    <string>NSApplication</string>
+
+    <!-- Support Secure Coding for state restoration -->
+    <key>NSSupportsSecureStateCoding</key>
+    <true/>
+
+    <!-- ============================================================
+         PRIVACY DESCRIPTIONS
+         Required for accessing protected resources (shown in dialogs)
+         ============================================================ -->
+
+    <!-- Automation (AppleScript/Apple Events) - for scripting other apps -->
+    <key>NSAppleEventsUsageDescription</key>
+    <string>Workspaces uses automation to integrate with other development tools.</string>
+</dict>
+</plist>
