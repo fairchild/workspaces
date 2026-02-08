@@ -1,11 +1,22 @@
 # WorkspaceManager
 
+This is a [maskfile](https://github.com/jacobdeichert/mask) — a task runner
+that uses markdown. Install with `brew install mask`, then run `mask <task>`.
+
 ## build
 
 > Build the project in debug mode
 
 ```bash
 swift build
+```
+
+## run
+
+> Build and launch the app
+
+```bash
+swift run
 ```
 
 ## test
