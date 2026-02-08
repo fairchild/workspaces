@@ -90,4 +90,3 @@ See `docs/development/solution-terminal-keyboard.md` for details.
 
 - [Terminal Keyboard Solution](../docs/development/solution-terminal-keyboard.md)
 - [Code Review Followup](workspaces-code-review-followup.md)
-- [TASKS.md](../TASKS.md)
