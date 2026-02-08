@@ -84,7 +84,6 @@ public actor GitService: GitServiceProtocol {
             ? baseURL.lastPathComponent
             : (relativePath as NSString).lastPathComponent
 
-        // Check if it's a directory
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: currentURL.path, isDirectory: &isDirectory) else {
             return FileNode(name: name, path: relativePath, isDirectory: false, children: nil)
@@ -94,26 +93,22 @@ public actor GitService: GitServiceProtocol {
             return FileNode(name: name, path: relativePath, isDirectory: false, children: nil)
         }
 
-        // Don't recurse beyond max depth
         guard depth < maxDepth else {
             return FileNode(name: name, path: relativePath, isDirectory: true, children: nil)
         }
 
-        // Get directory contents
         let contents = try FileManager.default.contentsOfDirectory(
             at: currentURL,
             includingPropertiesForKeys: [.isDirectoryKey, .isHiddenKey],
             options: [.skipsHiddenFiles]
         )
 
-        // Filter out unwanted directories
         let ignoredDirs = Set(["node_modules", ".git", ".build", "build", "DerivedData", ".swiftpm", "__pycache__", ".venv", "venv"])
 
         let children = try await withThrowingTaskGroup(of: FileNode?.self) { group in
             for itemURL in contents {
                 let itemName = itemURL.lastPathComponent
 
-                // Skip ignored directories
                 if ignoredDirs.contains(itemName) {
                     continue
                 }
@@ -141,7 +136,6 @@ public actor GitService: GitServiceProtocol {
             return results
         }
 
-        // Sort: directories first, then alphabetically
         let sortedChildren = children.sorted { a, b in
             if a.isDirectory != b.isDirectory {
                 return a.isDirectory
@@ -160,28 +154,35 @@ public actor GitService: GitServiceProtocol {
     // MARK: - Run Git Command
 
     private func runGit(_ args: [String], at path: URL) async throws -> String {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
-        process.arguments = args
-        process.currentDirectoryURL = path
+        try await withCheckedThrowingContinuation { continuation in
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+            process.arguments = args
+            process.currentDirectoryURL = path
 
-        let stdoutPipe = Pipe()
-        let stderrPipe = Pipe()
-        process.standardOutput = stdoutPipe
-        process.standardError = stderrPipe
+            let stdoutPipe = Pipe()
+            let stderrPipe = Pipe()
+            process.standardOutput = stdoutPipe
+            process.standardError = stderrPipe
 
-        try process.run()
-        process.waitUntilExit()
+            process.terminationHandler = { _ in
+                let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+                let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
 
-        let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-        let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+                if process.terminationStatus != 0 {
+                    let stderr = String(data: stderrData, encoding: .utf8) ?? "Unknown error"
+                    continuation.resume(throwing: GitError.commandFailed(args: args, stderr: stderr))
+                } else {
+                    continuation.resume(returning: String(data: stdoutData, encoding: .utf8) ?? "")
+                }
+            }
 
-        if process.terminationStatus != 0 {
-            let stderr = String(data: stderrData, encoding: .utf8) ?? "Unknown error"
-            throw GitError.commandFailed(args: args, stderr: stderr)
+            do {
+                try process.run()
+            } catch {
+                continuation.resume(throwing: error)
+            }
         }
-
-        return String(data: stdoutData, encoding: .utf8) ?? ""
     }
 }
 

@@ -64,7 +64,7 @@ Sparkle is the de-facto standard for macOS app auto-updates, used by VS Code, Su
 ### Phase 1: Add Sparkle Dependency
 
 **Files to modify:**
-- `WorkspaceManager/Package.swift` - Add Sparkle package dependency
+- `Package.swift` - Add Sparkle package dependency
 
 ```swift
 dependencies: [
@@ -113,7 +113,7 @@ targets: [
 ### Phase 3: Configure Info.plist
 
 **Files to modify:**
-- `WorkspaceManager/Resources/Info.plist` - Add Sparkle configuration
+- `Sources/WorkspaceManager/Resources/Info.plist` - Add Sparkle configuration
 
 Required keys:
 ```xml
@@ -260,7 +260,7 @@ Appcast template:
 ### Phase 6: Release Signing Script
 
 **Files to modify:**
-- `WorkspaceManager/scripts/notarize.sh` - Add Sparkle signing step
+- `scripts/notarize.sh` - Add Sparkle signing step
 
 Add after DMG creation:
 ```bash
@@ -308,5 +308,5 @@ Users on broken version can manually download from GitHub Releases.
 - [Sparkle Documentation](https://sparkle-project.org/documentation/)
 - [Sparkle 2 Migration Guide](https://sparkle-project.org/documentation/upgrading/)
 - [Sparkle SPM Integration](https://github.com/sparkle-project/Sparkle#swift-package-manager)
-- `WorkspaceManager/Package.swift:1-29` - Current package configuration
-- `WorkspaceManager/scripts/notarize.sh` - Current release script
+- `Package.swift:1-29` - Current package configuration
+- `scripts/notarize.sh` - Current release script

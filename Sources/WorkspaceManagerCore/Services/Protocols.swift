@@ -7,6 +7,21 @@
 
 import Foundation
 
+// MARK: - Value types for crossing isolation boundaries
+
+/// Sendable data needed to create a Workspace model after actor-isolated work completes.
+public struct NewWorkspaceInfo: Sendable {
+    public let name: String
+    public let path: URL
+    public let gitBranch: String
+
+    public init(name: String, path: URL, gitBranch: String) {
+        self.name = name
+        self.path = path
+        self.gitBranch = gitBranch
+    }
+}
+
 public protocol GitServiceProtocol: Sendable {
     func getStatus(at path: URL) async throws -> [FileChange]
     func getRemoteURL(at path: URL) async throws -> String?
@@ -24,10 +39,10 @@ extension GitServiceProtocol {
 
 public protocol WorkspaceServiceProtocol: Sendable {
     var workspacesRoot: URL { get async }
-    func createWorkspace(from repo: Repo, name: String) async throws -> Workspace
-    func archiveWorkspace(_ workspace: Workspace) async throws
-    func deleteWorkspace(_ workspace: Workspace, deleteFiles: Bool) async throws
+    func createWorkspace(repoName: String, repoLocalURL: URL, name: String) async throws -> NewWorkspaceInfo
+    func archiveWorkspace(at workspaceURL: URL) async throws
+    func deleteWorkspace(at workspaceURL: URL, deleteFiles: Bool) async throws
     func runLifecycleScript(_ scriptName: String, in directory: URL) async throws -> WorkspaceService.ScriptResult
-    func getWorkspaceSize(_ workspace: Workspace) async throws -> Int64
+    func getWorkspaceSize(at workspaceURL: URL) async throws -> Int64
     func sanitizeFilename(_ name: String) async -> String
 }

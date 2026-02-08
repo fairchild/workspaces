@@ -15,8 +15,8 @@ struct WorkspaceServiceTests {
     // MARK: - Helpers
 
     /// Creates a temp directory with a fake repo and a separate workspaces root.
-    /// Returns (testRoot, repo, wsRoot) — caller must defer cleanup of testRoot.
-    private func makeWorkspaceFixture() throws -> (testRoot: URL, repo: Repo, wsRoot: URL) {
+    /// Returns (testRoot, repoDir, wsRoot) — caller must defer cleanup of testRoot.
+    private func makeWorkspaceFixture() throws -> (testRoot: URL, repoDir: URL, wsRoot: URL) {
         let testRoot = FileManager.default.temporaryDirectory
             .appendingPathComponent("WSTest-\(UUID().uuidString)")
         let repoDir = testRoot.appendingPathComponent("repos/test-repo")
@@ -27,8 +27,7 @@ struct WorkspaceServiceTests {
             at: repoDir.appendingPathComponent(".git"),
             withIntermediateDirectories: true
         )
-        let repo = Repo(name: "test-repo", localPath: repoDir)
-        return (testRoot, repo, wsRoot)
+        return (testRoot, repoDir, wsRoot)
     }
 
     /// Sets UserDefaults workspacesRoot, returns the previous value for restore.
@@ -185,12 +184,12 @@ struct WorkspaceServiceTests {
     func createWorkspaceCallsCreateBranch() async throws {
         let mockGit = MockGitService()
         let service = WorkspaceService(gitService: mockGit)
-        let (testRoot, repo, wsRoot) = try makeWorkspaceFixture()
+        let (testRoot, repoDir, wsRoot) = try makeWorkspaceFixture()
         defer { try? FileManager.default.removeItem(at: testRoot) }
         let originalRoot = setWorkspacesRoot(wsRoot)
         defer { restoreWorkspacesRoot(originalRoot) }
 
-        _ = try await service.createWorkspace(from: repo, name: "my-feature")
+        _ = try await service.createWorkspace(repoName: "test-repo", repoLocalURL: repoDir, name: "my-feature")
 
         #expect(mockGit.createBranchCalls.count == 1)
         #expect(mockGit.createBranchCalls[0].name == "workspace/my-feature")
@@ -201,13 +200,13 @@ struct WorkspaceServiceTests {
         let mockGit = MockGitService()
         mockGit.createBranchError = GitError.commandFailed(args: ["checkout", "-b"], stderr: "already exists")
         let service = WorkspaceService(gitService: mockGit)
-        let (testRoot, repo, wsRoot) = try makeWorkspaceFixture()
+        let (testRoot, repoDir, wsRoot) = try makeWorkspaceFixture()
         defer { try? FileManager.default.removeItem(at: testRoot) }
         let originalRoot = setWorkspacesRoot(wsRoot)
         defer { restoreWorkspacesRoot(originalRoot) }
 
-        let workspace = try await service.createWorkspace(from: repo, name: "test-ws")
-        #expect(workspace.name == "test-ws")
+        let info = try await service.createWorkspace(repoName: "test-repo", repoLocalURL: repoDir, name: "test-ws")
+        #expect(info.name == "test-ws")
     }
 
     @Test("createWorkspace throws when directory already exists")
@@ -219,14 +218,13 @@ struct WorkspaceServiceTests {
         let originalRoot = setWorkspacesRoot(wsRoot)
         defer { restoreWorkspacesRoot(originalRoot) }
 
-        let repo = Repo(name: "test-repo", localPath: wsRoot)
         let wsDir = wsRoot
             .appendingPathComponent("test-repo")
             .appendingPathComponent("existing-ws")
         try FileManager.default.createDirectory(at: wsDir, withIntermediateDirectories: true)
 
         await #expect(throws: WorkspaceError.self) {
-            _ = try await service.createWorkspace(from: repo, name: "existing-ws")
+            _ = try await service.createWorkspace(repoName: "test-repo", repoLocalURL: wsRoot, name: "existing-ws")
         }
     }
 
@@ -239,15 +237,11 @@ struct WorkspaceServiceTests {
         let tempDir = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: tempDir) }
 
-        let repoDir = tempDir.appendingPathComponent("test-repo")
-        let wsDir = repoDir.appendingPathComponent("ws1")
+        let wsDir = tempDir.appendingPathComponent("test-repo/ws1")
         try FileManager.default.createDirectory(at: wsDir, withIntermediateDirectories: true)
         try "content".write(to: wsDir.appendingPathComponent("file.txt"), atomically: true, encoding: .utf8)
 
-        let repo = Repo(name: "test-repo", localPath: repoDir)
-        let workspace = Workspace(name: "ws1", path: wsDir, sourceRepo: repo)
-
-        try await service.deleteWorkspace(workspace, deleteFiles: true)
+        try await service.deleteWorkspace(at: wsDir, deleteFiles: true)
 
         #expect(!FileManager.default.fileExists(atPath: wsDir.path))
     }
@@ -259,15 +253,11 @@ struct WorkspaceServiceTests {
         let tempDir = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: tempDir) }
 
-        let repoDir = tempDir.appendingPathComponent("test-repo")
-        let wsDir = repoDir.appendingPathComponent("ws1")
+        let wsDir = tempDir.appendingPathComponent("test-repo/ws1")
         try FileManager.default.createDirectory(at: wsDir, withIntermediateDirectories: true)
         try "content".write(to: wsDir.appendingPathComponent("file.txt"), atomically: true, encoding: .utf8)
 
-        let repo = Repo(name: "test-repo", localPath: repoDir)
-        let workspace = Workspace(name: "ws1", path: wsDir, sourceRepo: repo)
-
-        try await service.deleteWorkspace(workspace, deleteFiles: false)
+        try await service.deleteWorkspace(at: wsDir, deleteFiles: false)
 
         #expect(FileManager.default.fileExists(atPath: wsDir.path))
     }
@@ -283,10 +273,7 @@ struct WorkspaceServiceTests {
         let wsDir = parentDir.appendingPathComponent("only-workspace")
         try FileManager.default.createDirectory(at: wsDir, withIntermediateDirectories: true)
 
-        let repo = Repo(name: "test-repo", localPath: parentDir)
-        let workspace = Workspace(name: "only-workspace", path: wsDir, sourceRepo: repo)
-
-        try await service.deleteWorkspace(workspace, deleteFiles: true)
+        try await service.deleteWorkspace(at: wsDir, deleteFiles: true)
 
         #expect(!FileManager.default.fileExists(atPath: wsDir.path))
         #expect(!FileManager.default.fileExists(atPath: parentDir.path))
@@ -305,10 +292,7 @@ struct WorkspaceServiceTests {
         try FileManager.default.createDirectory(at: wsDir, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: siblingDir, withIntermediateDirectories: true)
 
-        let repo = Repo(name: "test-repo", localPath: parentDir)
-        let workspace = Workspace(name: "ws-to-delete", path: wsDir, sourceRepo: repo)
-
-        try await service.deleteWorkspace(workspace, deleteFiles: true)
+        try await service.deleteWorkspace(at: wsDir, deleteFiles: true)
 
         #expect(!FileManager.default.fileExists(atPath: wsDir.path))
         #expect(FileManager.default.fileExists(atPath: parentDir.path))
@@ -323,10 +307,7 @@ struct WorkspaceServiceTests {
         let tempDir = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: tempDir) }
 
-        let repo = Repo(name: "test-repo", localPath: tempDir)
-        let workspace = Workspace(name: "ws1", path: tempDir, sourceRepo: repo)
-
-        try await service.archiveWorkspace(workspace)
+        try await service.archiveWorkspace(at: tempDir)
     }
 
     @Test("archiveWorkspace runs archive.sh")
@@ -341,10 +322,7 @@ struct WorkspaceServiceTests {
         touch "\(tempDir.path)/archived.marker"
         """.write(to: tempDir.appendingPathComponent("archive.sh"), atomically: true, encoding: .utf8)
 
-        let repo = Repo(name: "test-repo", localPath: tempDir)
-        let workspace = Workspace(name: "ws1", path: tempDir, sourceRepo: repo)
-
-        try await service.archiveWorkspace(workspace)
+        try await service.archiveWorkspace(at: tempDir)
 
         #expect(FileManager.default.fileExists(atPath: tempDir.appendingPathComponent("archived.marker").path))
     }
@@ -362,10 +340,7 @@ struct WorkspaceServiceTests {
         try content.write(to: tempDir.appendingPathComponent("file1.txt"), atomically: true, encoding: .utf8)
         try content.write(to: tempDir.appendingPathComponent("file2.txt"), atomically: true, encoding: .utf8)
 
-        let repo = Repo(name: "test-repo", localPath: tempDir)
-        let workspace = Workspace(name: "ws1", path: tempDir, sourceRepo: repo)
-
-        let size = try await service.getWorkspaceSize(workspace)
+        let size = try await service.getWorkspaceSize(at: tempDir)
 
         #expect(size >= 2000)
     }
@@ -377,10 +352,7 @@ struct WorkspaceServiceTests {
         let tempDir = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: tempDir) }
 
-        let repo = Repo(name: "test-repo", localPath: tempDir)
-        let workspace = Workspace(name: "ws1", path: tempDir, sourceRepo: repo)
-
-        let size = try await service.getWorkspaceSize(workspace)
+        let size = try await service.getWorkspaceSize(at: tempDir)
         #expect(size == 0)
     }
 }

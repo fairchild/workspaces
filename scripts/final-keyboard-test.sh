@@ -17,7 +17,7 @@ log "=== Final Keyboard Test ==="
 pkill -f "WorkspaceManager" 2>/dev/null || true
 sleep 1
 
-cd /Users/fairchild/code/services/workspaces/WorkspaceManager
+cd "$(dirname "$0")/.." # repo root
 swift build 2>&1 | grep -E "(error|Build complete)" || true
 
 log "Launching..."

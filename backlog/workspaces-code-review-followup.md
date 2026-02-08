@@ -29,9 +29,9 @@ During code review of the terminal keyboard fix (PR #378), several improvements 
 **Problem**: `Process.waitUntilExit()` blocks the actor's executor thread.
 
 **Files to modify:**
-- `WorkspaceManager/Sources/Services/GitService.swift:23-37` - `runGit()` method
-- `WorkspaceManager/Sources/Services/WorkspaceService.swift` - any Process usage
-- `WorkspaceManager/Sources/Services/WorkspaceBackend.swift` - any Process usage
+- `Sources/WorkspaceManagerCore/Services/GitService.swift:23-37` - `runGit()` method
+- `Sources/WorkspaceManagerCore/Services/WorkspaceService.swift` - any Process usage
+- `Sources/WorkspaceManagerCore/Services/WorkspaceBackend.swift` - any Process usage
 
 **Pattern to use:**
 ```swift
@@ -61,7 +61,7 @@ func runGit(_ args: [String], at directory: URL) async throws -> String {
 **Problem**: TODO comments indicate missing error display to users.
 
 **Files to modify:**
-- `WorkspaceManager/Sources/Views/MainWindow/SidebarView.swift` - Search for "TODO"
+- `Sources/WorkspaceManager/Views/MainWindow/SidebarView.swift` - Search for "TODO"
 
 **Pattern to use:**
 ```swift
@@ -81,18 +81,18 @@ func runGit(_ args: [String], at directory: URL) async throws -> String {
 
 **Files to modify:**
 
-1. `WorkspaceManager/Sources/Views/Components/TerminalView.swift`
+1. `Sources/WorkspaceManager/Views/Components/TerminalView.swift`
    - `TerminalTheme.colors` property is defined but never used
    - Either use it for ANSI color mapping or remove it
 
-2. `WorkspaceManager/Sources/Models/Models.swift`
+2. `Sources/WorkspaceManagerCore/Models/Models.swift`
    - Move `import SwiftUI` from end of file to top with other imports
 
-3. `WorkspaceManager/Sources/Views/MainWindow/SidebarView.swift`
+3. `Sources/WorkspaceManager/Views/MainWindow/SidebarView.swift`
    - Remove redundant `extension Repo: Identifiable {}` (Repo already conforms via SwiftData @Model)
    - Remove redundant `extension Workspace: Identifiable {}` (same reason)
 
-4. `WorkspaceManager/Sources/Views/MainWindow/RightPaneView.swift`
+4. `Sources/WorkspaceManager/Views/MainWindow/RightPaneView.swift`
    - `FileNode` uses path-only equality but has UUID id
    - Consider if this could cause issues in SwiftUI diffing
    - Either use id in equality or document why path-only is correct
@@ -108,9 +108,9 @@ func runGit(_ args: [String], at directory: URL) async throws -> String {
 **Problem**: No unit tests exist for core services.
 
 **Files created:**
-- `WorkspaceManager/Tests/GitServiceTests.swift` (11 tests)
-- `WorkspaceManager/Tests/WorkspaceServiceTests.swift` (8 tests)
-- `WorkspaceManager/Tests/ModelsTests.swift` (17 tests)
+- `Tests/WorkspaceManagerTests/GitServiceTests.swift` (11 tests)
+- `Tests/WorkspaceManagerTests/WorkspaceServiceTests.swift` (8 tests)
+- `Tests/WorkspaceManagerTests/ModelsTests.swift` (17 tests)
 
 **Test coverage:**
 - GitService: Status parsing, branch detection, file tree building, error handling
@@ -125,7 +125,7 @@ func runGit(_ args: [String], at directory: URL) async throws -> String {
 ## Verification Commands
 
 ```bash
-cd /Users/fairchild/code/services/workspaces/WorkspaceManager
+cd ~/code/workspaces
 
 # Build
 swift build
