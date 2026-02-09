@@ -161,9 +161,7 @@ struct SidebarView: View {
         } message: { workspace in
             Text("Are you sure you want to delete '\(workspace.name)'?")
         }
-        .onReceive(NotificationCenter.default.publisher(for: .newWorkspaceRequested)) { _ in
-            handleNewWorkspaceShortcut()
-        }
+        .focusedSceneValue(\.newWorkspaceAction, handleNewWorkspaceShortcut)
     }
 
     // MARK: - Actions
@@ -232,13 +230,20 @@ struct SidebarView: View {
                 sourceRepo: repo,
                 gitBranch: info.gitBranch
             )
+
+            var didPersist = false
             await MainActor.run {
                 modelContext.insert(workspace)
                 if saveModelContext(action: "save workspace") {
+                    didPersist = true
                     selectedWorkspace = workspace
                 } else {
                     modelContext.rollback()
                 }
+            }
+
+            if !didPersist {
+                cleanupWorkspaceDirectoryAfterFailedPersistence(info.path)
             }
         } catch {
             await MainActor.run {
@@ -271,11 +276,12 @@ struct SidebarView: View {
             }
 
             await MainActor.run {
-                if selectedWorkspace == workspace {
-                    selectedWorkspace = nil
-                }
                 modelContext.delete(workspace)
-                if !saveModelContext(action: "update workspace list") {
+                if saveModelContext(action: "update workspace list") {
+                    if selectedWorkspace == workspace {
+                        selectedWorkspace = nil
+                    }
+                } else {
                     modelContext.rollback()
                 }
                 workspaceToDelete = nil
@@ -309,6 +315,17 @@ struct SidebarView: View {
             errorMessage = "Failed to \(action): \(error.localizedDescription)"
             showingError = true
             return false
+        }
+    }
+
+    private func cleanupWorkspaceDirectoryAfterFailedPersistence(_ workspaceURL: URL) {
+        try? FileManager.default.removeItem(at: workspaceURL)
+
+        let parentDir = workspaceURL.deletingLastPathComponent()
+        if let contents = try? FileManager.default.contentsOfDirectory(atPath: parentDir.path),
+            contents.isEmpty
+        {
+            try? FileManager.default.removeItem(at: parentDir)
         }
     }
 

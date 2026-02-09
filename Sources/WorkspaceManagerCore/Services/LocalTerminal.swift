@@ -68,6 +68,9 @@ public class LocalTerminal {
         do {
             try process.run()
         } catch {
+            readSource?.cancel()
+            readSource = nil
+            isClosed = true
             Darwin.close(master)
             Darwin.close(slave)
             throw BackendError.initializationFailed("Failed to launch shell: \(error.localizedDescription)")
