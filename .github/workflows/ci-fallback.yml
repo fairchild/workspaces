@@ -33,8 +33,13 @@ jobs:
         if: ${{ github.event_name == 'workflow_dispatch' }}
         uses: actions/checkout@v4
 
-      - name: Install swift-format
-        run: brew install swift-format
+      - name: Ensure swift-format
+        run: |
+          if command -v swift-format >/dev/null 2>&1; then
+            swift-format --version
+          else
+            brew install swift-format
+          fi
 
       - name: Lint
         run: swift-format lint --strict --recursive Sources/ Tests/
