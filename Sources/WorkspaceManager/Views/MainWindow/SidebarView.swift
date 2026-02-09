@@ -18,7 +18,6 @@ struct SidebarView: View {
 
     @State private var isAddingRepo = false
     @State private var repoForNewWorkspace: Repo?
-    @State private var newWorkspaceName = ""
 
     // Error alert state
     @State private var errorMessage: String?
@@ -162,6 +161,9 @@ struct SidebarView: View {
         } message: { workspace in
             Text("Are you sure you want to delete '\(workspace.name)'?")
         }
+        .onReceive(NotificationCenter.default.publisher(for: .newWorkspaceRequested)) { _ in
+            handleNewWorkspaceShortcut()
+        }
     }
 
     // MARK: - Actions
@@ -195,13 +197,20 @@ struct SidebarView: View {
             repo.remoteURL = remote
         }
 
-        modelContext.insert(repo)
-        try? modelContext.save()
+        await MainActor.run {
+            modelContext.insert(repo)
+            if !saveModelContext(action: "save repository") {
+                modelContext.rollback()
+            }
+        }
     }
 
+    @MainActor
     private func removeRepo(_ repo: Repo) {
         modelContext.delete(repo)
-        try? modelContext.save()
+        if !saveModelContext(action: "remove repository") {
+            modelContext.rollback()
+        }
     }
 
     private func createWorkspace(from repo: Repo, name: String) async {
@@ -223,11 +232,13 @@ struct SidebarView: View {
                 sourceRepo: repo,
                 gitBranch: info.gitBranch
             )
-            modelContext.insert(workspace)
-            try? modelContext.save()
-
             await MainActor.run {
-                selectedWorkspace = workspace
+                modelContext.insert(workspace)
+                if saveModelContext(action: "save workspace") {
+                    selectedWorkspace = workspace
+                } else {
+                    modelContext.rollback()
+                }
             }
         } catch {
             await MainActor.run {
@@ -237,6 +248,7 @@ struct SidebarView: View {
         }
     }
 
+    @MainActor
     private func deleteWorkspace(_ workspace: Workspace) {
         workspaceToDelete = workspace
         showingDeleteConfirmation = true
@@ -253,7 +265,9 @@ struct SidebarView: View {
                 await MainActor.run {
                     errorMessage = "Failed to delete workspace: \(error.localizedDescription)"
                     showingError = true
+                    workspaceToDelete = nil
                 }
+                return
             }
 
             await MainActor.run {
@@ -261,13 +275,41 @@ struct SidebarView: View {
                     selectedWorkspace = nil
                 }
                 modelContext.delete(workspace)
-                try? modelContext.save()
+                if !saveModelContext(action: "update workspace list") {
+                    modelContext.rollback()
+                }
                 workspaceToDelete = nil
             }
         }
     }
 
+    @MainActor
     private func openInNewWindow(_ workspace: Workspace) {
         // Multi-window support not yet implemented
     }
+
+    @MainActor
+    private func handleNewWorkspaceShortcut() {
+        if let preferredRepo = selectedWorkspace?.sourceRepo ?? repos.first {
+            repoForNewWorkspace = preferredRepo
+            return
+        }
+
+        errorMessage = "Add a repository first, then create a workspace."
+        showingError = true
+    }
+
+    @MainActor
+    @discardableResult
+    private func saveModelContext(action: String) -> Bool {
+        do {
+            try modelContext.save()
+            return true
+        } catch {
+            errorMessage = "Failed to \(action): \(error.localizedDescription)"
+            showingError = true
+            return false
+        }
+    }
+
 }

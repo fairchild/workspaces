@@ -1,11 +1,11 @@
 ---
-status: pending
+status: done
 category: followup
 pr: 378
 branch: feat/terminal-keyboard-investigation
 score: null
 retro_summary: null
-completed: null
+completed: 2026-02-08
 ---
 
 # WorkspaceManager Code Review Follow-ups

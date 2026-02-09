@@ -10,7 +10,6 @@ import SwiftUI
 import WorkspaceManagerCore
 
 struct ContentView: View {
-    @Environment(\.modelContext) private var modelContext
     @Query(sort: \Repo.addedAt, order: .reverse) private var repos: [Repo]
 
     @State private var selectedWorkspace: Workspace?
@@ -46,9 +45,6 @@ struct ContentView: View {
                 .help(isRightPaneVisible ? "Hide Inspector" : "Show Inspector")
                 .disabled(selectedWorkspace == nil)
             }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .newWorkspaceRequested)) { _ in
-            // Handle new workspace shortcut
         }
     }
 }

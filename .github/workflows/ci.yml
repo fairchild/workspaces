@@ -17,11 +17,7 @@ on:
 
 jobs:
   build-and-test:
-<<<<<<< Updated upstream
-    runs-on: macos-15
-=======
     runs-on: ${{ inputs.runner || vars.PREFERRED_RUNNER || 'macos-14' }}
->>>>>>> Stashed changes
     steps:
       - uses: actions/checkout@v4
 

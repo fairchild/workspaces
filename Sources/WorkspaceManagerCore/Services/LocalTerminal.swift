@@ -11,11 +11,12 @@ public class LocalTerminal {
     private let process: Process
     private let masterFd: Int32
     private var readSource: DispatchSourceRead?
+    private var isClosed = false
 
     public var onData: ((Data) -> Void)?
     public var onExit: ((Int32) -> Void)?
 
-    public init(workingDirectory: URL) {
+    public init(workingDirectory: URL) throws {
         self.process = Process()
 
         // Create PTY
@@ -24,7 +25,7 @@ public class LocalTerminal {
 
         var windowSize = winsize(ws_row: 24, ws_col: 80, ws_xpixel: 0, ws_ypixel: 0)
         guard openpty(&master, &slave, nil, nil, &windowSize) == 0 else {
-            fatalError("Failed to create PTY")
+            throw BackendError.initializationFailed("Failed to create PTY")
         }
 
         self.masterFd = master
@@ -64,13 +65,21 @@ public class LocalTerminal {
             self?.onExit?(process.terminationStatus)
         }
 
-        try? process.run()
+        do {
+            try process.run()
+        } catch {
+            Darwin.close(master)
+            Darwin.close(slave)
+            throw BackendError.initializationFailed("Failed to launch shell: \(error.localizedDescription)")
+        }
         Darwin.close(slave)  // Close slave in parent
     }
 
     public func write(_ data: Data) {
+        guard !isClosed else { return }
         data.withUnsafeBytes { buffer in
-            _ = Foundation.write(masterFd, buffer.baseAddress!, buffer.count)
+            guard let baseAddress = buffer.baseAddress else { return }
+            _ = Foundation.write(masterFd, baseAddress, buffer.count)
         }
     }
 
@@ -85,9 +94,13 @@ public class LocalTerminal {
     }
 
     public func close() {
+        guard !isClosed else { return }
+        isClosed = true
         readSource?.cancel()
         readSource = nil
-        process.terminate()
+        if process.isRunning {
+            process.terminate()
+        }
         Darwin.close(masterFd)
     }
 

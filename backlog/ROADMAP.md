@@ -1,3 +1,13 @@
+---
+status: in-progress
+category: plan
+pr: null
+branch: null
+score: null
+retro_summary: null
+completed: null
+---
+
 # AI Coding Workspace Manager — MVP Roadmap
 
 **Vision**: A Mac-native app for managing AI coding sessions. Add repos, fork them into isolated workspaces, run Claude Code (or similar) in an embedded terminal, and track file changes—all without context-switching to Finder or a separate terminal.
@@ -100,11 +110,11 @@ struct FileChange: Identifiable {
 
 ### 1.1 Project Setup
 
-- [ ] Create new Xcode project (macOS App, SwiftUI lifecycle initially)
-- [ ] Add SwiftTerm via SPM: `https://github.com/migueldeicaza/SwiftTerm`
-- [ ] Set minimum deployment: macOS 14.0
-- [ ] Configure entitlements (non-sandboxed)
-- [ ] Set up basic app structure:
+- [x] Create new Xcode project (macOS App, SwiftUI lifecycle initially)
+- [x] Add SwiftTerm via SPM: `https://github.com/migueldeicaza/SwiftTerm`
+- [x] Set minimum deployment: macOS 14.0
+- [x] Configure entitlements (non-sandboxed)
+- [x] Set up basic app structure:
 
 ```
 Sources/
@@ -225,10 +235,10 @@ struct ContentView: View {
 
 ### 1.4 Deliverables
 
-- [ ] App launches with three-column layout
-- [ ] Terminal runs zsh in a hardcoded directory
-- [ ] Can type commands, see output
-- [ ] Sidebar shows placeholder repos/workspaces
+- [x] App launches with three-column layout
+- [x] Terminal runs zsh in a hardcoded directory
+- [x] Can type commands, see output
+- [x] Sidebar shows placeholder repos/workspaces
 
 ---
 
@@ -384,11 +394,11 @@ struct SidebarView: View {
 
 ### 2.3 Deliverables
 
-- [ ] "Add Repository" opens folder picker
-- [ ] Repos persist across app launches
-- [ ] Right-click repo → "New Workspace" creates copy
-- [ ] Workspaces appear in sidebar, clickable
-- [ ] Selecting workspace switches terminal to that directory
+- [x] "Add Repository" opens folder picker
+- [x] Repos persist across app launches
+- [x] Right-click repo → "New Workspace" creates copy
+- [x] Workspaces appear in sidebar, clickable
+- [x] Selecting workspace switches terminal to that directory
 
 ---
 
@@ -581,10 +591,10 @@ class FileWatcher: ObservableObject {
 
 ### 3.4 Deliverables
 
-- [ ] Right pane has "Files" and "Changes" tabs
-- [ ] Files tab shows directory tree (collapsible)
-- [ ] Changes tab shows git status with status icons
-- [ ] Refresh button / pull-to-refresh updates both
+- [x] Right pane has "Files" and "Changes" tabs
+- [x] Files tab shows directory tree (collapsible)
+- [x] Changes tab shows git status with status icons
+- [x] Refresh button / pull-to-refresh updates both
 - [ ] File watching triggers auto-refresh (stretch)
 
 ---
@@ -683,11 +693,11 @@ echo "✅ Done: $DMG_PATH"
 ### 4.4 Deliverables
 
 - [ ] Double-click workspace opens new window
-- [ ] Cmd+T creates new workspace
+- [x] Cmd+T creates new workspace
 - [ ] Cmd+0 toggles right pane
 - [ ] App is signed and notarized
 - [ ] DMG for distribution
-- [ ] Basic README with install instructions
+- [x] Basic README with install instructions
 
 ---
 
@@ -777,8 +787,8 @@ Start with Phase 1.2 (SwiftTerm integration) to validate the core experience wor
 **What worked**: Code review revealed actual state vs documented state.
 
 **Remaining MVP work**:
-- Task 10: Error Handling (TODOs in SidebarView for user-facing alerts)
 - Task 11: Build & Distribution (requires Apple Developer account)
+- Stretch items: file watching auto-refresh and multi-window workspace sessions
 
 ### 2026-02-08 — Build health validation (post-monorepo extraction)
 

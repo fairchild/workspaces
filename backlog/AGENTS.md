@@ -4,7 +4,7 @@ Deferred work items for future sessions. Each file represents work identified as
 
 ## Frontmatter Schema
 
-Every file must start with YAML frontmatter:
+Every backlog work-item file (all markdown files except `AGENTS.md`) must start with YAML frontmatter:
 
 ```yaml
 ---
