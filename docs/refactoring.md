@@ -1,5 +1,11 @@
 # Refactoring Log
 
+> [!WARNING]
+> Historical note: this document describes a pre-libghostty refactor phase and
+> includes SwiftTerm-era file names. Current terminal architecture uses
+> GhosttyKit and is documented in:
+> `docs/development/libghostty-integration.md`
+
 What we changed, why we changed it, and what it teaches about Swift and macOS
 development.
 

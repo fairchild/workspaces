@@ -170,7 +170,7 @@ Wrapper around terminal with header bar.
 │ 🖥️  /path/to/workspace        [↻]     │  ← Header bar
 ├────────────────────────────────────────┤
 │                                        │
-│  TerminalView                          │  ← SwiftTerm
+│  GhosttyTerminalRepresentable          │  ← GhosttyKit surface
 │                                        │
 └────────────────────────────────────────┘
 ```
@@ -186,26 +186,29 @@ Wrapper around terminal with header bar.
 
 ### TerminalView
 
-NSViewRepresentable wrapper for SwiftTerm.
+NSViewRepresentable wrapper for `GhosttySurfaceView`.
 
 **Configuration**:
-- Font: System monospace, 13pt
-- Theme: Dark (configurable later)
-- Shell: User's default shell (`$SHELL`)
+- Font size: 13pt (surface config)
+- Shell: User's default shell (`$SHELL`) with `--login`
 - Working directory: Workspace path
+- Runtime owner: `GhosttyAppManager` singleton (`ghostty_app_t`)
 
 **Environment Variables**:
 ```
 TERM=xterm-256color
 COLORTERM=truecolor
 LANG=en_US.UTF-8
-PATH=/opt/homebrew/bin:/usr/local/bin:$PATH
+PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH
 ```
 
 **Lifecycle**:
 - Created when workspace selected
 - Destroyed when workspace changes (use `.id(workspace.id)`)
-- Process termination callback (optional handling)
+- Process termination callback routed from Ghostty close-surface callback
+- Focus and app activation synced via `TerminalFocusManager` + `GhosttyAppManager`
+
+Reference: `docs/development/libghostty-integration.md`
 
 ### RightPaneView
 
