@@ -35,6 +35,35 @@ swift test
 ./scripts/build-release.sh
 ```
 
+## install
+
+> Install app to /Applications and open it
+> Builds an unsigned app first if `build/WorkspaceManager.app` is missing.
+
+```bash
+set -euo pipefail
+
+APP_SRC="build/WorkspaceManager.app"
+APP_DST="/Applications/WorkspaceManager.app"
+
+if [[ ! -d "$APP_SRC" ]]; then
+  echo "==> App bundle not found at $APP_SRC; building unsigned bundle first"
+  ./scripts/build-release.sh --no-sign
+fi
+
+echo "==> Installing to $APP_DST"
+if [[ -w "/Applications" ]]; then
+  rm -rf "$APP_DST"
+  ditto "$APP_SRC" "$APP_DST"
+else
+  sudo rm -rf "$APP_DST"
+  sudo ditto "$APP_SRC" "$APP_DST"
+fi
+
+echo "==> Opening app"
+open "$APP_DST"
+```
+
 ## notarize
 
 > Notarize and create DMG for distribution
