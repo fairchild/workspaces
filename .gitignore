@@ -13,6 +13,7 @@ build/
 *.app
 *.dmg
 *.pkg
+Frameworks/
 
 # Signing credentials (NEVER commit these)
 scripts/signing-config.sh

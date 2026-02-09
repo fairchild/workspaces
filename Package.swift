@@ -32,9 +32,7 @@ let package = Package(
     products: [
         .executable(name: "WorkspaceManager", targets: ["WorkspaceManager"])
     ],
-    dependencies: [
-        .package(url: "https://github.com/migueldeicaza/SwiftTerm", from: "1.2.0")
-    ],
+    dependencies: [],
     targets: [
         // ====================================================================
         // Core Library
@@ -47,13 +45,21 @@ let package = Package(
         ),
 
         // ====================================================================
+        // Ghostty Binary
+        // ====================================================================
+        .binaryTarget(
+            name: "GhosttyKit",
+            path: "Frameworks/GhosttyKit.xcframework"
+        ),
+
+        // ====================================================================
         // Main Application
         // ====================================================================
         // SwiftUI app with AppKit integration for terminal windows.
         // Resources are bundled for the .app bundle creation.
         .executableTarget(
             name: "WorkspaceManager",
-            dependencies: ["WorkspaceManagerCore", "SwiftTerm"],
+            dependencies: ["WorkspaceManagerCore", "GhosttyKit"],
             // Exclude Info.plist from automatic resource discovery
             // (SPM forbids Info.plist as a bundled resource; it's copied by build-release.sh)
             exclude: ["Resources/Info.plist"],
@@ -64,7 +70,16 @@ let package = Package(
                 // App icons and assets
                 .process("Resources/Assets.xcassets")
             ],
-            swiftSettings: [.enableUpcomingFeature("BareSlashRegexLiterals")]
+            swiftSettings: [.enableUpcomingFeature("BareSlashRegexLiterals")],
+            linkerSettings: [
+                .linkedLibrary("c++"),
+                .linkedFramework("Carbon"),
+                .linkedFramework("CoreText"),
+                .linkedFramework("Metal"),
+                .linkedFramework("QuartzCore"),
+                .linkedFramework("UniformTypeIdentifiers"),
+                .linkedFramework("UserNotifications")
+            ]
         ),
 
         // ====================================================================

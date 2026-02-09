@@ -20,7 +20,7 @@ Think of it as **git worktrees with a terminal-first UI and lifecycle automation
 - **Repository Management**: Add git repos from your Mac, track them in sidebar
 - **Workspace Creation**: Click `+` on any repo to create an isolated workspace copy
 - **Lifecycle Hooks**: `setup.sh` runs after creation, `archive.sh` runs on close
-- **Embedded Terminal**: Full SwiftTerm terminal as the primary interface
+- **Embedded Terminal**: GhosttyKit (`libghostty`) terminal as the primary interface
 - **File/Changes Pane**: Collapsible right pane showing file tree and git status
 - **Configurable Location**: Choose where workspaces are stored (default: `~/workspaces`)
 

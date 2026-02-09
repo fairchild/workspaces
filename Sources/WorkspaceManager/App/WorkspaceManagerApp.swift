@@ -64,6 +64,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSLog("[AppDelegate] applicationDidFinishLaunching")
 
+        GhosttyAppManager.shared.initializeIfNeeded()
+
         // CRITICAL: Ensure app can be activated and brought to front
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
@@ -92,10 +94,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidBecomeActive(_ notification: Notification) {
         NSLog("[AppDelegate] applicationDidBecomeActive")
+        GhosttyAppManager.shared.setFocus(true)
         // When app becomes active, ensure focused terminal gets focus restored
         if let terminal = TerminalFocusManager.shared.focusedTerminal {
             TerminalFocusManager.shared.requestFocus(for: terminal)
         }
+    }
+
+    func applicationDidResignActive(_ notification: Notification) {
+        NSLog("[AppDelegate] applicationDidResignActive")
+        GhosttyAppManager.shared.setFocus(false)
     }
 }
 

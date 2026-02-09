@@ -481,9 +481,12 @@ Sources/
         NewWorkspaceSheet.swift  # Modal sheet
         RightPaneView.swift      # File tree + changes
       Components/
-        TerminalView.swift       # SwiftUI-AppKit bridge
-        TerminalNSContainerView.swift  # Click routing
-        TerminalTheme.swift      # Colors
+        TerminalView.swift       # SwiftUI bridge for terminal container
+      Terminal/
+        GhosttyAppManager.swift  # ghostty_app lifecycle + callbacks
+        GhosttySurfaceView.swift # NSView terminal surface + input
+        GhosttyInput.swift       # NSEvent -> ghostty input mapping
+        GhosttyTerminalConfig.swift # Surface config/env assembly
 ```
 
 **Why two targets?** `WorkspaceManagerCore` has no UI imports. It can be tested
@@ -507,47 +510,45 @@ SwiftUI is declarative and covers ~90% of UI needs. For the remaining 10%
 older, imperative UI framework.
 
 ```swift
-struct TerminalViewControllerRepresentable: NSViewControllerRepresentable {
-    func makeNSViewController(context: Context) -> TerminalViewController {
-        // Create and return an AppKit view controller
+struct GhosttyTerminalRepresentable: NSViewRepresentable {
+    func makeNSView(context: Context) -> GhosttySurfaceView {
+        GhosttySurfaceView(workingDirectory: workingDirectory)
     }
-    func updateNSViewController(_ vc: TerminalViewController, context: Context) {
-        // React to SwiftUI state changes
-    }
+    func updateNSView(_ view: GhosttySurfaceView, context: Context) {}
 }
 ```
 
 **React equivalent:** Like using `useRef` + `useEffect` to integrate a
 vanilla JS library (CodeMirror, xterm.js). The bridge protocol
-(`NSViewControllerRepresentable`) is similar to writing a React wrapper
+(`NSViewRepresentable`) is similar to writing a React wrapper
 around an imperative DOM API.
 
-We keep AppKit code isolated in dedicated files (`TerminalView.swift`,
-`TerminalNSContainerView.swift`) so the rest of the app stays purely SwiftUI.
+We keep AppKit code isolated in dedicated files under `Sources/WorkspaceManager/Terminal/`
+so the rest of the app stays purely SwiftUI.
 
 ```mermaid
 graph LR
     subgraph "SwiftUI World"
         TCV[TerminalContainerView<br/><i>SwiftUI View</i>]
-        TVR[TerminalViewControllerRepresentable<br/><i>NSViewControllerRepresentable</i>]
+        TVR[GhosttyTerminalRepresentable<br/><i>NSViewRepresentable</i>]
         TCV --> TVR
     end
 
     subgraph "AppKit World"
-        TVC[TerminalViewController<br/><i>NSViewController</i>]
-        TNCV[TerminalNSContainerView<br/><i>NSView - click routing</i>]
-        LPTV["LocalProcessTerminalView<br/><i>SwiftTerm library</i>"]
-        TVC --> TNCV
-        TNCV --> LPTV
+        GSV[GhosttySurfaceView<br/><i>NSView</i>]
+        GAM[GhosttyAppManager<br/><i>ghostty runtime owner</i>]
+        LG["libghostty (GhosttyKit)<br/><i>C API</i>"]
+        GSV --> LG
+        GAM --> LG
     end
 
-    TVR -->|"makeNSViewController()"| TVC
+    TVR -->|"makeNSView()"| GSV
 
     style TCV fill:#2196F3,color:#fff
     style TVR fill:#9C27B0,color:#fff
-    style TVC fill:#FF9800,color:#fff
-    style TNCV fill:#FF9800,color:#fff
-    style LPTV fill:#F44336,color:#fff
+    style GSV fill:#FF9800,color:#fff
+    style GAM fill:#FF9800,color:#fff
+    style LG fill:#F44336,color:#fff
 ```
 
 The purple box is the **bridge** — it speaks both SwiftUI and AppKit. Everything
