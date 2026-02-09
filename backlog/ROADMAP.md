@@ -693,7 +693,7 @@ echo "✅ Done: $DMG_PATH"
 ### 4.4 Deliverables
 
 - [ ] Double-click workspace opens new window
-- [x] Cmd+T creates new workspace
+- [x] Cmd+Shift+T creates new workspace
 - [ ] Cmd+0 toggles right pane
 - [ ] App is signed and notarized
 - [ ] DMG for distribution

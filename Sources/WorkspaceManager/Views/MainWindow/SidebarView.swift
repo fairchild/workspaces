@@ -223,23 +223,21 @@ struct SidebarView: View {
                 name: name
             )
 
-            // Create model on main actor side from Sendable info
-            let workspace = Workspace(
-                name: info.name,
-                path: info.path,
-                sourceRepo: repo,
-                gitBranch: info.gitBranch
-            )
-
-            var didPersist = false
-            await MainActor.run {
+            let didPersist = await MainActor.run { () -> Bool in
+                // Keep SwiftData model creation and relationship writes on MainActor.
+                let workspace = Workspace(
+                    name: info.name,
+                    path: info.path,
+                    sourceRepo: repo,
+                    gitBranch: info.gitBranch
+                )
                 modelContext.insert(workspace)
                 if saveModelContext(action: "save workspace") {
-                    didPersist = true
                     selectedWorkspace = workspace
-                } else {
-                    modelContext.rollback()
+                    return true
                 }
+                modelContext.rollback()
+                return false
             }
 
             if !didPersist {
