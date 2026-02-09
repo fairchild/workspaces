@@ -98,12 +98,13 @@ final class GhosttySurfaceView: NSView, NSTextInputClient {
             removeTrackingArea(trackingArea)
         }
 
-        addTrackingArea(NSTrackingArea(
-            rect: .zero,
-            options: [.mouseEnteredAndExited, .mouseMoved, .activeAlways, .inVisibleRect],
-            owner: self,
-            userInfo: nil
-        ))
+        addTrackingArea(
+            NSTrackingArea(
+                rect: .zero,
+                options: [.mouseEnteredAndExited, .mouseMoved, .activeAlways, .inVisibleRect],
+                owner: self,
+                userInfo: nil
+            ))
     }
 
     // MARK: - Runtime updates
@@ -141,8 +142,8 @@ final class GhosttySurfaceView: NSView, NSTextInputClient {
 
     private func handleLocalEvent(_ event: NSEvent) -> NSEvent? {
         guard let window,
-              event.window != nil,
-              window == event.window
+            event.window != nil,
+            window == event.window
         else {
             return event
         }
@@ -316,18 +317,19 @@ final class GhosttySurfaceView: NSView, NSTextInputClient {
         if translationMods == event.modifierFlags {
             translationEvent = event
         } else {
-            translationEvent = NSEvent.keyEvent(
-                with: event.type,
-                location: event.locationInWindow,
-                modifierFlags: translationMods,
-                timestamp: event.timestamp,
-                windowNumber: event.windowNumber,
-                context: nil,
-                characters: event.characters(byApplyingModifiers: translationMods) ?? "",
-                charactersIgnoringModifiers: event.charactersIgnoringModifiers ?? "",
-                isARepeat: event.isARepeat,
-                keyCode: event.keyCode
-            ) ?? event
+            translationEvent =
+                NSEvent.keyEvent(
+                    with: event.type,
+                    location: event.locationInWindow,
+                    modifierFlags: translationMods,
+                    timestamp: event.timestamp,
+                    windowNumber: event.windowNumber,
+                    context: nil,
+                    characters: event.characters(byApplyingModifiers: translationMods) ?? "",
+                    charactersIgnoringModifiers: event.charactersIgnoringModifiers ?? "",
+                    isARepeat: event.isARepeat,
+                    keyCode: event.keyCode
+                ) ?? event
         }
 
         keyTextAccumulator = []
@@ -373,7 +375,8 @@ final class GhosttySurfaceView: NSView, NSTextInputClient {
         }
 
         let mods = GhosttyInput.mods(from: event.modifierFlags)
-        let action: ghostty_input_action_e = (mods.rawValue & modMask) != 0 ? GHOSTTY_ACTION_PRESS : GHOSTTY_ACTION_RELEASE
+        let action: ghostty_input_action_e =
+            (mods.rawValue & modMask) != 0 ? GHOSTTY_ACTION_PRESS : GHOSTTY_ACTION_RELEASE
         _ = keyAction(action, event: event)
     }
 
@@ -394,9 +397,9 @@ final class GhosttySurfaceView: NSView, NSTextInputClient {
         keyEvent.composing = composing
 
         if let text,
-           !text.isEmpty,
-           let codepoint = text.utf8.first,
-           codepoint >= 0x20
+            !text.isEmpty,
+            let codepoint = text.utf8.first,
+            codepoint >= 0x20
         {
             return text.withCString { pointer in
                 keyEvent.text = pointer

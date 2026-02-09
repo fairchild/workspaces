@@ -115,8 +115,8 @@ final class GhosttyAppManager: NSObject {
 
     private static func surfaceView(from target: ghostty_target_s) -> GhosttySurfaceView? {
         guard target.tag == GHOSTTY_TARGET_SURFACE,
-              let surface = target.target.surface,
-              let userdata = ghostty_surface_userdata(surface)
+            let surface = target.target.surface,
+            let userdata = ghostty_surface_userdata(surface)
         else {
             return nil
         }
@@ -162,17 +162,18 @@ final class GhosttyAppManager: NSObject {
         state: UnsafeMutableRawPointer?
     ) {
         guard let surfaceView = surfaceView(from: userdata),
-              let surface = surfaceView.surface
+            let surface = surfaceView.surface
         else {
             return
         }
 
-        let pasteboard: NSPasteboard = switch location {
-        case GHOSTTY_CLIPBOARD_STANDARD:
-            .general
-        default:
-            .general
-        }
+        let pasteboard: NSPasteboard =
+            switch location {
+            case GHOSTTY_CLIPBOARD_STANDARD:
+                .general
+            default:
+                .general
+            }
 
         let value = pasteboard.string(forType: .string) ?? ""
         value.withCString { pointer in
@@ -182,7 +183,7 @@ final class GhosttyAppManager: NSObject {
 
     private static func confirmReadClipboard(_ userdata: UnsafeMutableRawPointer?, state: UnsafeMutableRawPointer?) {
         guard let surfaceView = surfaceView(from: userdata),
-              let surface = surfaceView.surface
+            let surface = surfaceView.surface
         else {
             return
         }
@@ -198,10 +199,10 @@ final class GhosttyAppManager: NSObject {
         content: UnsafePointer<ghostty_clipboard_content_s>?,
         len: Int
     ) {
-        guard let _ = surfaceView(from: userdata),
-              location == GHOSTTY_CLIPBOARD_STANDARD,
-              let content,
-              len > 0
+        guard surfaceView(from: userdata) != nil,
+            location == GHOSTTY_CLIPBOARD_STANDARD,
+            let content,
+            len > 0
         else {
             return
         }
@@ -219,7 +220,7 @@ final class GhosttyAppManager: NSObject {
             }
 
             if let mimePointer = item.mime,
-               String(cString: mimePointer) == "text/plain"
+                String(cString: mimePointer) == "text/plain"
             {
                 preferredText = data
                 break

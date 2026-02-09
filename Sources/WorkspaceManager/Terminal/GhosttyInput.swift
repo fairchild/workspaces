@@ -55,7 +55,7 @@ enum GhosttyInput {
 
         if event.type == .keyDown || event.type == .keyUp {
             if let chars = event.characters(byApplyingModifiers: []),
-               let scalar = chars.unicodeScalars.first
+                let scalar = chars.unicodeScalars.first
             {
                 keyEvent.unshifted_codepoint = scalar.value
             } else {
@@ -70,7 +70,7 @@ enum GhosttyInput {
         guard let characters = event.characters else { return nil }
 
         if characters.count == 1,
-           let scalar = characters.unicodeScalars.first
+            let scalar = characters.unicodeScalars.first
         {
             if scalar.value < 0x20 {
                 return event.characters(byApplyingModifiers: event.modifierFlags.subtracting(.control))

@@ -41,9 +41,10 @@ struct GhosttyTerminalConfig {
         var config = ghostty_surface_config_new()
         config.userdata = Unmanaged.passUnretained(view).toOpaque()
         config.platform_tag = GHOSTTY_PLATFORM_MACOS
-        config.platform = ghostty_platform_u(macos: ghostty_platform_macos_s(
-            nsview: Unmanaged.passUnretained(view).toOpaque()
-        ))
+        config.platform = ghostty_platform_u(
+            macos: ghostty_platform_macos_s(
+                nsview: Unmanaged.passUnretained(view).toOpaque()
+            ))
 
         let scale = view.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
         config.scale_factor = scale
@@ -67,10 +68,11 @@ struct GhosttyTerminalConfig {
 
                         let count = min(keyPointers.count, valuePointers.count)
                         for index in 0..<count {
-                            envVars.append(ghostty_env_var_s(
-                                key: keyPointers[index],
-                                value: valuePointers[index]
-                            ))
+                            envVars.append(
+                                ghostty_env_var_s(
+                                    key: keyPointers[index],
+                                    value: valuePointers[index]
+                                ))
                         }
 
                         return try envVars.withUnsafeMutableBufferPointer { buffer in
@@ -85,8 +87,8 @@ struct GhosttyTerminalConfig {
     }
 }
 
-private extension Optional where Wrapped == String {
-    func withCString<T>(_ body: (UnsafePointer<CChar>?) throws -> T) rethrows -> T {
+extension Optional where Wrapped == String {
+    fileprivate func withCString<T>(_ body: (UnsafePointer<CChar>?) throws -> T) rethrows -> T {
         if let value = self {
             return try value.withCString(body)
         }
@@ -94,8 +96,8 @@ private extension Optional where Wrapped == String {
     }
 }
 
-private extension Array where Element == String {
-    func withCStrings<T>(_ body: ([UnsafePointer<CChar>?]) throws -> T) rethrows -> T {
+extension Array where Element == String {
+    fileprivate func withCStrings<T>(_ body: ([UnsafePointer<CChar>?]) throws -> T) rethrows -> T {
         if isEmpty {
             return try body([])
         }
