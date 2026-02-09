@@ -33,6 +33,17 @@ jobs:
         if: ${{ github.event_name == 'workflow_dispatch' }}
         uses: actions/checkout@v4
 
+      - name: Ensure mise
+        run: |
+          if command -v mise >/dev/null 2>&1; then
+            mise --version
+          else
+            brew install mise
+          fi
+
+      - name: Build GhosttyKit
+        run: ./scripts/build-ghosttykit.sh
+
       - name: Ensure swift-format
         run: |
           if command -v swift-format >/dev/null 2>&1; then

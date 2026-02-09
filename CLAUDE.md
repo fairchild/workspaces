@@ -5,6 +5,7 @@ Mac-native app for managing AI coding sessions with embedded terminal.
 ## Quick Commands
 
 ```bash
+./scripts/build-ghosttykit.sh  # Build GhosttyKit.xcframework (required once/after pin changes)
 swift build   # Build
 swift test    # Test
 swift run     # Run
@@ -72,7 +73,7 @@ Tests use **Swift Testing** (`@Suite`, `@Test`, `#expect`), not XCTest. Test beh
 ## Tech Stack
 
 - **UI**: SwiftUI + AppKit hybrid
-- **Terminal**: SwiftTerm 1.5.1
+- **Terminal**: GhosttyKit (`libghostty`) binary target
 - **Persistence**: SwiftData
 - **Target**: macOS 14.0+
 - **Distribution**: Direct (non-sandboxed, App Store sandbox blocks shell execution)

@@ -25,7 +25,7 @@
 │  ┌────────┐  │  ┌────────────────────────┐  │  ┌─────────────────┐  │
 │  │ Repos  │  │  │                        │  │  │ [Files][Changes]│  │
 │  │ ------─│  │  │    TerminalView        │  │  ├─────────────────┤  │
-│  │ repo1  │  │  │   (SwiftTerm PTY)      │  │  │                 │  │
+│  │ repo1  │  │  │ (GhosttyKit surface)   │  │  │                 │  │
 │  │ repo2  │  │  │                        │  │  │  FileTreeView   │  │
 │  ├────────┤  │  │  $ claude              │  │  │       or        │  │
 │  │Workspcs│  │  │  > Working...          │  │  │ ChangedFilesView│  │
@@ -68,7 +68,7 @@
 **Rationale**:
 - SwiftUI's `NavigationSplitView` works well for three-column layouts
 - AppKit gives better control over window management
-- SwiftTerm provides `LocalProcessTerminalView` (NSView), wrapped via `NSViewRepresentable`
+- GhosttyKit provides `ghostty_surface_t` embedded in a custom `NSView`
 
 **Pattern**:
 ```swift
@@ -80,20 +80,20 @@ struct WorkspaceManagerApp: App {
 }
 
 // Terminal wrapped for SwiftUI
-struct TerminalView: NSViewRepresentable {
-    func makeNSView(context: Context) -> LocalProcessTerminalView { ... }
+struct GhosttyTerminalRepresentable: NSViewRepresentable {
+    func makeNSView(context: Context) -> GhosttySurfaceView { ... }
 }
 ```
 
-### 2. SwiftTerm for Terminal
+### 2. GhosttyKit for Terminal
 
-**Decision**: Use SwiftTerm's `LocalProcessTerminalView` for embedded terminal.
+**Decision**: Use GhosttyKit (`libghostty`) for embedded terminal rendering and input.
 
 **Rationale**:
-- Production-proven (used by La Terminal, Secure Shellfish)
-- Handles PTY correctly (don't roll your own)
-- Provides complete VT100/xterm emulation
-- Active maintenance by Miguel de Icaza
+- Production-proven terminal core from Ghostty
+- GPU-backed renderer and high-performance parser
+- C embedding API allows direct AppKit integration in `GhosttySurfaceView`
+- Single terminal engine across app/runtime callbacks and surface lifecycle
 
 **Key Implementation Details**:
 
@@ -215,16 +215,12 @@ protocol WorkspaceBackend: Actor {
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                   TerminalViewController                        │
+│                     GhosttySurfaceView                          │
 ├─────────────────────────────────────────────────────────────────┤
-│  Local Event Monitor:                                           │
-│  • Intercepts keyDown/keyUp/flagsChanged                        │
-│  • Forwards to terminal, returns nil to consume                 │
-│  • Prevents SwiftUI from handling keyboard                      │
-├─────────────────────────────────────────────────────────────────┤
-│  Global Click Monitor:                                          │
-│  • Catches clicks when app is not active                        │
-│  • Activates app + window when clicked from other apps          │
+│  NSView overrides: key/mouse/scroll/focus                       │
+│  • Sends input directly to ghostty_surface_* APIs               │
+│  • Updates scale + framebuffer size for backing changes         │
+│  • Uses minimal local monitor (.keyUp, .leftMouseDown)          │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -321,7 +317,7 @@ User clicks workspace in sidebar
     TerminalView.id changes → View recreated
          │
          ▼
-    New LocalProcessTerminalView starts in workspace.workspaceURL
+    New GhosttySurfaceView starts in workspace.workspaceURL
          │
          ▼
     RightPaneView refreshes file tree and git status
@@ -409,7 +405,7 @@ echo "Workspace archived"
 | SwiftData writes | Main | modelContext.insert() |
 | Git operations | Background | Actor isolation |
 | File operations | Background | Actor isolation |
-| Terminal I/O | SwiftTerm managed | PTY + dispatch |
+| Terminal I/O | GhosttyKit managed | Surface + runtime callbacks |
 
 **Rule**: All `GitService` and `WorkspaceService` calls use `await`.
 

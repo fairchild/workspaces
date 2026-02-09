@@ -15,6 +15,7 @@ Or build from source (see below).
 
 For development:
 - Xcode 15.0+ or Swift 5.10+
+- [mise](https://mise.jdx.dev/) (for Zig toolchain management)
 
 ## Installation
 
@@ -28,6 +29,7 @@ For development:
 
 ```bash
 # From the repo root
+./scripts/build-ghosttykit.sh
 swift build -c release
 ./scripts/build-release.sh --no-sign
 open build/WorkspaceManager.app
@@ -38,7 +40,7 @@ open build/WorkspaceManager.app
 - **Three-column layout**: Sidebar, terminal, and detail pane
 - **Repository management**: Add existing git repositories
 - **Workspace creation**: Create isolated copies with separate branches
-- **Integrated terminal**: SwiftTerm-based terminal emulator
+- **Integrated terminal**: GhosttyKit (`libghostty`) terminal surface
 - **File browser**: View files and git changes
 - **Lifecycle hooks**: Runs `setup.sh` on creation, `archive.sh` on deletion
 
@@ -93,6 +95,7 @@ See [RELEASING.md](./RELEASING.md) for the complete release process.
 
 Quick local build:
 ```bash
+./scripts/build-ghosttykit.sh       # Build local GhosttyKit.xcframework
 ./scripts/build-release.sh --no-sign  # Build without signing
 ./scripts/build-release.sh            # Build with signing (requires setup)
 ```
