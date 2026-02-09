@@ -5,6 +5,8 @@
 Keyboard/focus handling is now implemented directly in `GhosttySurfaceView` using
 AppKit responder APIs plus a small local event monitor.
 
+See `docs/development/libghostty-integration.md` for full runtime/build details.
+
 ## Current Architecture
 
 - Focus coordinator: `Sources/WorkspaceManager/Controllers/TerminalWindowController.swift`

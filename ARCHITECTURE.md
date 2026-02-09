@@ -229,6 +229,7 @@ protocol WorkspaceBackend: Actor {
 - `Sources/WorkspaceManager/Views/Components/TerminalView.swift` - Event monitors
 
 **Documentation**: `docs/development/solution-terminal-keyboard.md`
+and `docs/development/libghostty-integration.md`
 
 ---
 

@@ -18,6 +18,7 @@ swift run     # Run
 | Understand the app | README.md | SPECS.md, backlog/ |
 | Architectural decisions | ARCHITECTURE.md | backlog/ |
 | Implement a component | SPECS.md (find relevant section) | Read whole file |
+| libghostty internals | docs/development/libghostty-integration.md | - |
 | Debug an issue | docs/development/troubleshooting.md | - |
 | Terminal keyboard focus | docs/development/solution-terminal-keyboard.md | - |
 | Roadmap/planning | backlog/ROADMAP.md, backlog/progress.md | - |

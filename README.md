@@ -89,6 +89,13 @@ workspaces/
   scripts/                   # Build and release scripts
 ```
 
+### Terminal Integration Notes
+
+For low-level GhosttyKit details (pinning, callbacks, focus/input flow, and safe
+upgrade procedure), see:
+
+- `docs/development/libghostty-integration.md`
+
 ### Building for Release
 
 See [RELEASING.md](./RELEASING.md) for the complete release process.

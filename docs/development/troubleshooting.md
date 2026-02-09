@@ -4,6 +4,9 @@
 
 WorkspaceManager now embeds Ghostty via `GhosttyKit.xcframework`.
 
+For integration internals and upgrade steps, see:
+`docs/development/libghostty-integration.md`.
+
 - Runtime glue: `Sources/WorkspaceManager/Terminal/GhosttyAppManager.swift`
 - Surface view: `Sources/WorkspaceManager/Terminal/GhosttySurfaceView.swift`
 - Input mapping: `Sources/WorkspaceManager/Terminal/GhosttyInput.swift`
