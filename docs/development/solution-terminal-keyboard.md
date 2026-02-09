@@ -23,7 +23,7 @@ The solution combines three components, inspired by [Ghostty](https://ghostty.or
 
 ### 1. Centralized Focus Manager (`TerminalFocusManager`)
 
-Located in `Sources/Controllers/TerminalWindowController.swift`:
+Located in `Sources/WorkspaceManager/Controllers/TerminalWindowController.swift`:
 
 ```swift
 final class TerminalFocusManager: NSObject {

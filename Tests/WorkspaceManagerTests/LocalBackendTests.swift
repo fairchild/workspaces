@@ -132,4 +132,30 @@ struct LocalBackendTests {
         let path = await backend.hostPath(for: workspace)
         #expect(path == workspace.workspaceURL)
     }
+
+    @Test("createTerminal succeeds for an existing workspace directory")
+    func createTerminalSucceedsForExistingWorkspace() async throws {
+        let (workspace, _, tempDir) = try makeTempWorkspace()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let backend = LocalBackend()
+        let terminal = try await backend.createTerminal(for: workspace)
+        terminal.close()
+    }
+
+    @Test("createTerminal throws initializationFailed for a missing workspace directory")
+    func createTerminalThrowsForMissingWorkspaceDirectory() async throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("LocalBackendMissingDir-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let missingWSDir = tempDir.appendingPathComponent("ws-missing")
+        let repo = Repo(name: "test-repo", localPath: tempDir)
+        let workspace = Workspace(name: "test-ws", path: missingWSDir, sourceRepo: repo)
+
+        let backend = LocalBackend()
+        await #expect(throws: BackendError.self) {
+            _ = try await backend.createTerminal(for: workspace)
+        }
+    }
 }

@@ -1,3 +1,13 @@
+---
+status: pending
+category: plan
+pr: null
+branch: null
+score: null
+retro_summary: null
+completed: null
+---
+
 # Workspace Isolation Strategies
 
 > **GitHub Issue**: https://github.com/fairchild/workspaces/issues/1

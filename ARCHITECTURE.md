@@ -229,8 +229,8 @@ protocol WorkspaceBackend: Actor {
 ```
 
 **Files**:
-- `Sources/Controllers/TerminalWindowController.swift` - Focus manager
-- `Sources/Views/Components/TerminalView.swift` - Event monitors
+- `Sources/WorkspaceManager/Controllers/TerminalWindowController.swift` - Focus manager
+- `Sources/WorkspaceManager/Views/Components/TerminalView.swift` - Event monitors
 
 **Documentation**: `docs/development/solution-terminal-keyboard.md`
 
