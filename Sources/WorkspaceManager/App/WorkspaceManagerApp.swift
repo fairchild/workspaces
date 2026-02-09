@@ -12,6 +12,7 @@ import WorkspaceManagerCore
 @main
 struct WorkspaceManagerApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+    @FocusedValue(\.newWorkspaceAction) private var newWorkspaceAction
 
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([Repo.self, Workspace.self])
@@ -40,10 +41,7 @@ struct WorkspaceManagerApp: App {
         .commands {
             CommandGroup(after: .newItem) {
                 Button("New Workspace...") {
-                    NotificationCenter.default.post(
-                        name: .newWorkspaceRequested,
-                        object: nil
-                    )
+                    newWorkspaceAction?()
                 }
                 .keyboardShortcut("t", modifiers: [.command, .shift])
             }
@@ -123,8 +121,15 @@ extension EnvironmentValues {
     }
 }
 
-// MARK: - Notification Names
+// MARK: - Focused Scene Values
 
-extension Notification.Name {
-    static let newWorkspaceRequested = Notification.Name("newWorkspaceRequested")
+private struct NewWorkspaceActionKey: FocusedValueKey {
+    typealias Value = @MainActor () -> Void
+}
+
+extension FocusedValues {
+    var newWorkspaceAction: (@MainActor () -> Void)? {
+        get { self[NewWorkspaceActionKey.self] }
+        set { self[NewWorkspaceActionKey.self] = newValue }
+    }
 }

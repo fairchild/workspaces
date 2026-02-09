@@ -107,7 +107,7 @@ public actor LocalBackend {
     }
 
     public func createTerminal(for workspace: Workspace) async throws -> LocalTerminal {
-        let terminal = LocalTerminal(workingDirectory: workspace.workspaceURL)
+        let terminal = try LocalTerminal(workingDirectory: workspace.workspaceURL)
         terminals[workspace.id] = terminal
         return terminal
     }

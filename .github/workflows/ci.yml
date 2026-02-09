@@ -6,27 +6,25 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
-    inputs:
-      runner:
-        description: 'Runner to use'
-        type: choice
-        options:
-          - self-hosted
-          - macos-14
-        default: self-hosted
+
+concurrency:
+  group: ci-self-hosted-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build-and-test:
-<<<<<<< Updated upstream
-    runs-on: macos-15
-=======
-    runs-on: ${{ inputs.runner || vars.PREFERRED_RUNNER || 'macos-14' }}
->>>>>>> Stashed changes
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork && 'macos-17' || 'self-hosted' }}
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install swift-format
-        run: brew install swift-format
+      - name: Ensure swift-format
+        run: |
+          if command -v swift-format >/dev/null 2>&1; then
+            swift-format --version
+          else
+            brew install swift-format
+          fi
 
       - name: Lint
         run: swift-format lint --strict --recursive Sources/ Tests/
