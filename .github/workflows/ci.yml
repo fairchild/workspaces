@@ -6,18 +6,15 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
-    inputs:
-      runner:
-        description: 'Runner to use'
-        type: choice
-        options:
-          - self-hosted
-          - macos-14
-        default: self-hosted
+
+concurrency:
+  group: ci-self-hosted-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build-and-test:
-    runs-on: ${{ inputs.runner || vars.PREFERRED_RUNNER || 'macos-14' }}
+    runs-on: self-hosted
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 
