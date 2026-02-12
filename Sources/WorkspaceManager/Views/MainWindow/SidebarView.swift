@@ -162,6 +162,9 @@ struct SidebarView: View {
             Text("Are you sure you want to delete '\(workspace.name)'?")
         }
         .focusedSceneValue(\.newWorkspaceAction, handleNewWorkspaceShortcut)
+        .onChange(of: selectedWorkspace?.id) { _, _ in
+            updateLastAccessedTimestamp()
+        }
     }
 
     // MARK: - Actions
@@ -301,6 +304,16 @@ struct SidebarView: View {
 
         errorMessage = "Add a repository first, then create a workspace."
         showingError = true
+    }
+
+    @MainActor
+    private func updateLastAccessedTimestamp() {
+        guard let selectedWorkspace else { return }
+
+        selectedWorkspace.lastAccessedAt = Date()
+        if !saveModelContext(action: "update workspace access time") {
+            modelContext.rollback()
+        }
     }
 
     @MainActor

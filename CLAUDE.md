@@ -21,7 +21,7 @@ swift run     # Run
 | libghostty internals | docs/development/libghostty-integration.md | - |
 | Debug an issue | docs/development/troubleshooting.md | - |
 | Terminal keyboard focus | docs/development/solution-terminal-keyboard.md | - |
-| Roadmap/planning | backlog/ROADMAP.md, backlog/progress.md | - |
+| Roadmap/planning | backlog/ROADMAP.md | - |
 | Deferred work items | backlog/*.md | - |
 
 ## Code Navigation
