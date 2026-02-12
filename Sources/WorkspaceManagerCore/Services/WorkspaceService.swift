@@ -90,11 +90,15 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
     // MARK: - Copy Repository
 
     private func copyRepository(from source: URL, to destination: URL) async throws {
-        try await runProcess(
+        let result = try await ProcessRunner.run(
             executable: "/usr/bin/ditto",
-            arguments: ["--rsrc", source.path, destination.path],
-            errorMapper: { stderr in WorkspaceError.copyFailed(reason: stderr) }
+            arguments: ["--rsrc", source.path, destination.path]
         )
+
+        guard result.success else {
+            let reason = result.stderr.isEmpty ? "Unknown error" : result.stderr
+            throw WorkspaceError.copyFailed(reason: reason)
+        }
     }
 
     // MARK: - Archive Workspace
@@ -165,43 +169,18 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
         var env = ProcessInfo.processInfo.environment
         env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:" + (env["PATH"] ?? "")
 
-        return try await withCheckedThrowingContinuation { continuation in
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/bin/bash")
-            process.arguments = [scriptPath.path]
-            process.currentDirectoryURL = directory
-            process.environment = env
+        let result = try await ProcessRunner.run(
+            executable: "/bin/bash",
+            arguments: [scriptPath.path],
+            currentDirectory: directory,
+            environment: env
+        )
 
-            let stdoutPipe = Pipe()
-            let stderrPipe = Pipe()
-            process.standardOutput = stdoutPipe
-            process.standardError = stderrPipe
-
-            process.terminationHandler = { _ in
-                let stdout =
-                    String(
-                        data: stdoutPipe.fileHandleForReading.readDataToEndOfFile(),
-                        encoding: .utf8
-                    ) ?? ""
-                let stderr =
-                    String(
-                        data: stderrPipe.fileHandleForReading.readDataToEndOfFile(),
-                        encoding: .utf8
-                    ) ?? ""
-                continuation.resume(
-                    returning: ScriptResult(
-                        exitCode: process.terminationStatus,
-                        stdout: stdout,
-                        stderr: stderr
-                    ))
-            }
-
-            do {
-                try process.run()
-            } catch {
-                continuation.resume(throwing: error)
-            }
-        }
+        return ScriptResult(
+            exitCode: result.exitCode,
+            stdout: result.stdout,
+            stderr: result.stderr
+        )
     }
 
     // MARK: - Workspace Stats
@@ -255,47 +234,6 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
 
     public var root: URL {
         workspacesRoot
-    }
-
-    // MARK: - Async Process Execution
-
-    /// Run a process asynchronously using terminationHandler instead of blocking waitUntilExit().
-    private func runProcess(
-        executable: String,
-        arguments: [String],
-        currentDirectory: URL? = nil,
-        errorMapper: @Sendable @escaping (String) -> Error
-    ) async throws {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: executable)
-            process.arguments = arguments
-            if let dir = currentDirectory {
-                process.currentDirectoryURL = dir
-            }
-
-            let stderrPipe = Pipe()
-            process.standardError = stderrPipe
-
-            process.terminationHandler = { _ in
-                if process.terminationStatus != 0 {
-                    let stderr =
-                        String(
-                            data: stderrPipe.fileHandleForReading.readDataToEndOfFile(),
-                            encoding: .utf8
-                        ) ?? "Unknown error"
-                    continuation.resume(throwing: errorMapper(stderr))
-                } else {
-                    continuation.resume()
-                }
-            }
-
-            do {
-                try process.run()
-            } catch {
-                continuation.resume(throwing: error)
-            }
-        }
     }
 }
 

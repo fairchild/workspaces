@@ -8,7 +8,11 @@ import WorkspaceManagerCore
 
 struct TerminalContainerView: View {
     let workspace: Workspace
-    @State private var terminalKey = UUID()
+    @State private var restartGeneration = 0
+
+    private var terminalIdentity: TerminalIdentity {
+        TerminalIdentity(workspaceID: workspace.id, restartGeneration: restartGeneration)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -25,7 +29,7 @@ struct TerminalContainerView: View {
                 Spacer()
 
                 Button {
-                    terminalKey = UUID()
+                    restartGeneration &+= 1
                 } label: {
                     Image(systemName: "arrow.counterclockwise")
                 }
@@ -44,9 +48,14 @@ struct TerminalContainerView: View {
                     NSLog("[GhosttyTerminal] Process exited for workspace: %@", workspace.name)
                 }
             )
-            .id(terminalKey)
+            .id(terminalIdentity)
         }
     }
+}
+
+private struct TerminalIdentity: Hashable {
+    let workspaceID: UUID
+    let restartGeneration: Int
 }
 
 struct GhosttyTerminalRepresentable: NSViewRepresentable {

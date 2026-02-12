@@ -75,35 +75,12 @@ public actor LocalBackend {
             env[key] = value
         }
 
-        return try await withCheckedThrowingContinuation { continuation in
-            let process = Process()
-            process.executableURL = executableURL
-            process.arguments = Array(command.dropFirst())
-            process.currentDirectoryURL = workDir
-            process.environment = env
-
-            let stdoutPipe = Pipe()
-            let stderrPipe = Pipe()
-            process.standardOutput = stdoutPipe
-            process.standardError = stderrPipe
-
-            process.terminationHandler = { _ in
-                continuation.resume(
-                    returning: ProcessResult(
-                        exitCode: process.terminationStatus,
-                        stdout: String(data: stdoutPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)
-                            ?? "",
-                        stderr: String(data: stderrPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)
-                            ?? ""
-                    ))
-            }
-
-            do {
-                try process.run()
-            } catch {
-                continuation.resume(throwing: error)
-            }
-        }
+        return try await ProcessRunner.run(
+            executable: executableURL.path,
+            arguments: Array(command.dropFirst()),
+            currentDirectory: workDir,
+            environment: env
+        )
     }
 
     public func createTerminal(for workspace: Workspace) async throws -> LocalTerminal {
@@ -119,29 +96,26 @@ public actor LocalBackend {
     // MARK: - Private
 
     private func resolveExecutable(_ name: String) async throws -> String {
-        try await withCheckedThrowingContinuation { continuation in
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/which")
-            process.arguments = [name]
-            let pipe = Pipe()
-            process.standardOutput = pipe
+        let result = try await ProcessRunner.run(
+            executable: "/usr/bin/which",
+            arguments: [name]
+        )
 
-            process.terminationHandler = { _ in
-                let path = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
+        let path = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        if result.success, !path.isEmpty {
+            return path
+        }
 
-                if let execPath = path, !execPath.isEmpty {
-                    continuation.resume(returning: execPath)
-                } else {
-                    continuation.resume(throwing: BackendError.commandNotFound(name))
-                }
-            }
-
-            do {
-                try process.run()
-            } catch {
-                continuation.resume(throwing: error)
+        let fallbackPath =
+            ProcessInfo.processInfo.environment["PATH"]
+            ?? "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        for dir in fallbackPath.split(separator: ":") {
+            let candidate = URL(fileURLWithPath: String(dir)).appendingPathComponent(name).path
+            if FileManager.default.isExecutableFile(atPath: candidate) {
+                return candidate
             }
         }
+
+        throw BackendError.commandNotFound(name)
     }
 }

@@ -71,6 +71,17 @@ swift test
 
 ## Development
 
+### Daily-Driver Local Checks
+
+Run this sequence before/after larger changes:
+
+```bash
+./scripts/build-ghosttykit.sh
+swift-format lint --strict --recursive Sources/ Tests/
+swift test
+swift build
+```
+
 ### Project Structure
 
 ```

@@ -718,12 +718,16 @@ echo "✅ Done: $DMG_PATH"
 
 ## Dependencies Summary
 
-**Swift Packages**:
+This section was updated after the terminal migration from SwiftTerm to GhosttyKit.
+
+**Current package/runtime dependencies**:
 ```swift
-// Package.swift dependencies
-dependencies: [
-    .package(url: "https://github.com/migueldeicaza/SwiftTerm", from: "1.2.0"),
-]
+// Package.swift
+dependencies: []
+binaryTarget(
+    name: "GhosttyKit",
+    path: "Frameworks/GhosttyKit.xcframework"
+)
 ```
 
 **Entitlements** (non-sandboxed):
@@ -747,28 +751,30 @@ dependencies: [
 
 ---
 
-## Quick Reference: Key Files to Create First
+## Quick Reference: Current Project Layout
 
-```
-WorkspaceManager/
-├── WorkspaceManager.xcodeproj
-├── WorkspaceManager/
-│   ├── WorkspaceManagerApp.swift      ← Entry point
-│   ├── ContentView.swift              ← Main NavigationSplitView
-│   ├── Models/
-│   │   └── Repo.swift                 ← @Model classes
-│   ├── Views/
-│   │   ├── SidebarView.swift
-│   │   ├── TerminalView.swift         ← NSViewRepresentable
-│   │   └── RightPaneView.swift
-│   ├── Services/
-│   │   └── GitService.swift
-│   └── WorkspaceManager.entitlements
+```text
+workspaces/
+├── Package.swift
+├── Sources/
+│   ├── WorkspaceManager/
+│   │   ├── App/WorkspaceManagerApp.swift
+│   │   ├── Views/MainWindow/ContentView.swift
+│   │   ├── Views/Components/TerminalView.swift
+│   │   ├── Terminal/GhosttySurfaceView.swift
+│   │   └── Resources/
+│   └── WorkspaceManagerCore/
+│       ├── Models/Models.swift
+│       └── Services/
+├── Tests/WorkspaceManagerTests/
 └── scripts/
+    ├── build-ghosttykit.sh
+    ├── build-release.sh
     └── notarize.sh
 ```
 
-Start with Phase 1.2 (SwiftTerm integration) to validate the core experience works before building the rest.
+> Historical note: earlier roadmap drafts referenced SwiftTerm and an Xcode project layout.
+> The current source of truth is GhosttyKit + Swift Package Manager as shown above.
 
 ---
 

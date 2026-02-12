@@ -59,6 +59,7 @@ struct WorkspaceDetailView: View {
         HSplitView {
             // Main terminal panel
             TerminalContainerView(workspace: workspace)
+                .id(workspace.id)
                 .frame(minWidth: 400)
 
             // Collapsible right pane

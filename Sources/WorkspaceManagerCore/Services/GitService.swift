@@ -160,35 +160,18 @@ public actor GitService: GitServiceProtocol {
     // MARK: - Run Git Command
 
     private func runGit(_ args: [String], at path: URL) async throws -> String {
-        try await withCheckedThrowingContinuation { continuation in
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
-            process.arguments = args
-            process.currentDirectoryURL = path
+        let result = try await ProcessRunner.run(
+            executable: "/usr/bin/git",
+            arguments: args,
+            currentDirectory: path
+        )
 
-            let stdoutPipe = Pipe()
-            let stderrPipe = Pipe()
-            process.standardOutput = stdoutPipe
-            process.standardError = stderrPipe
-
-            process.terminationHandler = { _ in
-                let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-                let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
-
-                if process.terminationStatus != 0 {
-                    let stderr = String(data: stderrData, encoding: .utf8) ?? "Unknown error"
-                    continuation.resume(throwing: GitError.commandFailed(args: args, stderr: stderr))
-                } else {
-                    continuation.resume(returning: String(data: stdoutData, encoding: .utf8) ?? "")
-                }
-            }
-
-            do {
-                try process.run()
-            } catch {
-                continuation.resume(throwing: error)
-            }
+        if result.exitCode != 0 {
+            let stderr = result.stderr.isEmpty ? "Unknown error" : result.stderr
+            throw GitError.commandFailed(args: args, stderr: stderr)
         }
+
+        return result.stdout
     }
 }
 
