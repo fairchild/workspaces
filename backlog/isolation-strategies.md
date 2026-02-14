@@ -11,6 +11,8 @@ completed: null
 # Workspace Isolation Strategies
 
 > **GitHub Issue**: https://github.com/fairchild/workspaces/issues/1
+>
+> **Execution Note**: Implementation should follow `/Users/fairchild/code/workspaces/backlog/vz-tahoe-execution-brief-plan.md` as the decision-locked execution plan. This file remains the long-form options and research reference.
 
 **TL;DR**: Apple just shipped a native Swift containerization framework (WWDC 2025) that's perfect for this use case. For MVP, abstract behind a protocol and start with the simplest option (local directory), then add Apple Container, Docker, and remote VMs as backends.
 
