@@ -13,6 +13,7 @@ struct ContentView: View {
     @Query(sort: \Repo.addedAt, order: .reverse) private var repos: [Repo]
 
     @State private var selectedWorkspace: Workspace?
+    @State private var hostTerminalDirectory = HostTerminalDefaults.defaultWorkingDirectory()
     @State private var isRightPaneVisible = true
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
 
@@ -24,14 +25,11 @@ struct ContentView: View {
             )
             .navigationSplitViewColumnWidth(min: 200, ideal: 260, max: 350)
         } detail: {
-            if let workspace = selectedWorkspace {
-                WorkspaceDetailView(
-                    workspace: workspace,
-                    isRightPaneVisible: $isRightPaneVisible
-                )
-            } else {
-                EmptyStateView()
-            }
+            MainTerminalDetailView(
+                selectedWorkspace: selectedWorkspace,
+                hostTerminalDirectory: hostTerminalDirectory,
+                isRightPaneVisible: $isRightPaneVisible
+            )
         }
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
@@ -49,59 +47,28 @@ struct ContentView: View {
     }
 }
 
-// MARK: - Workspace Detail (Terminal + Right Pane)
+// MARK: - Main Terminal (Host-pinned)
 
-struct WorkspaceDetailView: View {
-    let workspace: Workspace
+struct MainTerminalDetailView: View {
+    let selectedWorkspace: Workspace?
+    let hostTerminalDirectory: URL
     @Binding var isRightPaneVisible: Bool
 
     var body: some View {
         HSplitView {
             // Main terminal panel
-            TerminalContainerView(workspace: workspace)
-                .id(workspace.id)
+            TerminalContainerView(hostDirectory: hostTerminalDirectory)
+                .id(hostTerminalDirectory.path)
                 .frame(minWidth: 400)
 
             // Collapsible right pane
-            if isRightPaneVisible {
-                RightPaneView(workspace: workspace)
+            if isRightPaneVisible, let selectedWorkspace {
+                RightPaneView(workspace: selectedWorkspace)
                     .frame(minWidth: 220, idealWidth: 280, maxWidth: 400)
             }
         }
-        .navigationTitle(workspace.name)
-        .navigationSubtitle(workspace.sourceRepo?.name ?? "")
-    }
-}
-
-// MARK: - Empty State
-
-struct EmptyStateView: View {
-    var body: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "folder.badge.gearshape")
-                .font(.system(size: 48))
-                .foregroundStyle(.secondary)
-
-            Text("No Workspace Selected")
-                .font(.title2)
-                .fontWeight(.medium)
-
-            Text("Add a repository and create a workspace to get started.")
-                .font(.body)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-
-            VStack(alignment: .leading, spacing: 8) {
-                Label("Add a git repository from your Mac", systemImage: "1.circle.fill")
-                Label("Fork it to create an isolated workspace", systemImage: "2.circle.fill")
-                Label("Run Claude Code in the embedded terminal", systemImage: "3.circle.fill")
-            }
-            .font(.callout)
-            .foregroundStyle(.secondary)
-            .padding(.top, 8)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .navigationTitle(selectedWorkspace?.name ?? "Host")
+        .navigationSubtitle(selectedWorkspace?.sourceRepo?.name ?? hostTerminalDirectory.path)
     }
 }
 
