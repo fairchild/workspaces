@@ -14,6 +14,58 @@ completed: null
 
 ---
 
+## Current Locked Direction (2026-02-14)
+
+This roadmap now follows `/Users/fairchild/code/workspaces/backlog/vz-tahoe-execution-brief-plan.md` as the execution source of truth.
+
+### Product Defaults
+
+- App launch opens a live host terminal in `~/code` by default (fallback to `$HOME/code`, then `$HOME`).
+- Main terminal stays host-pinned by default.
+- Selecting a workspace does not auto-retarget the main terminal.
+- Users can spawn additional regular host terminals from the host context.
+
+### VM Lifecycle Scope
+
+- No VM creation or startup at app launch.
+- VM creation/start is triggered when creating a new workspace configured for `vzLinuxTahoe`.
+- Existing tracked workspaces remain `local` (no auto-migration).
+
+### Backend + Platform Scope
+
+- Native `Virtualization.framework` backend first (`vzLinuxTahoe`).
+- VZ backend support target: macOS 26+ (Tahoe), Apple Silicon only.
+- New workspaces default to VZ backend only on supported hosts; fallback remains local backend.
+
+### Execution Routing Defaults
+
+- VZ workspaces: run commands in VM by default.
+- Host build/test routing in `auto` mode for:
+  - `xcodebuild`
+  - `swift build`
+  - `swift test`
+- Explicit overrides:
+  - `--host` forces host execution.
+  - `--vm` forces VM execution.
+
+### Security Defaults
+
+- Workspace mount in VM is RW virtiofs.
+- Per-workspace vmnet logical network with NAT default.
+- Outbound egress is unrestricted in phase 1.
+- Any non-workspace extra mounts require an external allowlist outside the repo/workspace.
+
+### Best Implementation Order
+
+1. Host-terminal-first app behavior (launch directory, pinned host terminal, no auto-retarget on selection).
+2. Backend abstraction/registry in core while preserving `LocalBackend`.
+3. `VZTahoeBackend` implementation (runtime checks, VM lifecycle, vmnet, SSH executor, allowlist).
+4. New-workspace flow integration to create/start VM only for VZ workspaces.
+5. CLI backend-aware routing (`auto`, `--host`, `--vm`) plus VM lifecycle commands.
+6. Tests, docs, fallback hardening, and validation.
+
+---
+
 ## Architecture Overview
 
 ```
@@ -398,7 +450,7 @@ struct SidebarView: View {
 - [x] Repos persist across app launches
 - [x] Right-click repo → "New Workspace" creates copy
 - [x] Workspaces appear in sidebar, clickable
-- [x] Selecting workspace switches terminal to that directory
+- [x] Selecting workspace updates context panels; main terminal remains host by default
 
 ---
 
