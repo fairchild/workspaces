@@ -30,7 +30,8 @@ let package = Package(
     name: "WorkspaceManager",
     platforms: [.macOS(.v14)],
     products: [
-        .executable(name: "WorkspaceManager", targets: ["WorkspaceManager"])
+        .executable(name: "WorkspaceManager", targets: ["WorkspaceManager"]),
+        .executable(name: "WorkspaceManagerCLI", targets: ["WorkspaceManagerCLI"]),
     ],
     dependencies: [],
     targets: [
@@ -80,6 +81,16 @@ let package = Package(
                 .linkedFramework("UniformTypeIdentifiers"),
                 .linkedFramework("UserNotifications")
             ]
+        ),
+
+        // ====================================================================
+        // CLI Application
+        // ====================================================================
+        // Lightweight terminal-first interface for daily workspace workflows.
+        .executableTarget(
+            name: "WorkspaceManagerCLI",
+            dependencies: ["WorkspaceManagerCore"],
+            swiftSettings: [.enableUpcomingFeature("BareSlashRegexLiterals")]
         ),
 
         // ====================================================================

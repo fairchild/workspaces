@@ -1,0 +1,795 @@
+//
+//  main.swift
+//  WorkspaceManagerCLI
+//
+
+import Darwin
+import Foundation
+import WorkspaceManagerCore
+
+@main
+struct WorkspaceManagerCLI {
+    static func main() async {
+        let app = CLIApp()
+        do {
+            let exitCode = try await app.run(arguments: Array(CommandLine.arguments.dropFirst()))
+            Darwin.exit(exitCode)
+        } catch {
+            writeStderr("error: \(error.localizedDescription)")
+            Darwin.exit(1)
+        }
+    }
+}
+
+private final class CLIApp {
+    private let stateStore = CLIStateStore()
+    private let workspaceService: WorkspaceService = .shared
+    private let gitService: GitService = .shared
+
+    func run(arguments: [String]) async throws -> Int32 {
+        guard let command = arguments.first else {
+            printHelp()
+            return 0
+        }
+
+        var state = try stateStore.load()
+        let tail = Array(arguments.dropFirst())
+
+        switch command {
+        case "help", "--help", "-h":
+            printHelp()
+            return 0
+        case "repo":
+            return try await runRepo(arguments: tail, state: &state)
+        case "ws":
+            return try await runWorkspace(arguments: tail, state: &state)
+        case "open":
+            return try await runOpen(arguments: tail, state: &state)
+        case "run":
+            return try await runRun(arguments: tail, state: &state)
+        case "resume":
+            return try await runResume(state: &state)
+        case "status":
+            return try await runStatus(arguments: tail, state: &state)
+        case "recent":
+            return runRecent(state: state)
+        case "doctor":
+            return try await runDoctor(state: state)
+        default:
+            throw CLIError("Unknown command '\(command)'. Run 'workspaces help'.")
+        }
+    }
+
+    private func runRepo(arguments: [String], state: inout CLIState) async throws -> Int32 {
+        guard let subcommand = arguments.first else {
+            throw CLIError("Missing repo subcommand. Expected: add, list")
+        }
+
+        switch subcommand {
+        case "add":
+            guard arguments.count >= 2 else {
+                throw CLIError("Usage: workspaces repo add <path>")
+            }
+            let repoURL = normalizePath(arguments[1])
+            try validateGitRepository(at: repoURL)
+
+            if let existingIndex = state.repos.firstIndex(where: { $0.path == repoURL.path }) {
+                let existing = state.repos[existingIndex]
+                print("Repository already tracked: \(existing.name) (\(existing.path))")
+                return 0
+            }
+
+            let repo = RepoRecord(
+                id: UUID(),
+                name: repoURL.lastPathComponent,
+                path: repoURL.path,
+                addedAt: Date()
+            )
+            state.repos.append(repo)
+            try stateStore.save(state)
+            print("Added repository: \(repo.name)")
+            print(repo.path)
+            return 0
+
+        case "list":
+            if state.repos.isEmpty {
+                print("No repositories tracked.")
+                return 0
+            }
+
+            for repo in state.repos.sorted(by: { $0.addedAt > $1.addedAt }) {
+                print("\(repo.name)\t\(repo.path)")
+            }
+            return 0
+
+        default:
+            throw CLIError("Unknown repo subcommand '\(subcommand)'. Expected: add, list")
+        }
+    }
+
+    private func runWorkspace(arguments: [String], state: inout CLIState) async throws -> Int32 {
+        guard let subcommand = arguments.first else {
+            throw CLIError("Missing ws subcommand. Expected: new, list, path")
+        }
+
+        switch subcommand {
+        case "new":
+            guard arguments.count >= 3 else {
+                throw CLIError("Usage: workspaces ws new <repo> <name>")
+            }
+
+            let repoToken = arguments[1]
+            let workspaceName = arguments.dropFirst(2).joined(separator: " ").trimmingCharacters(
+                in: .whitespacesAndNewlines
+            )
+            guard !workspaceName.isEmpty else {
+                throw CLIError("Workspace name cannot be empty.")
+            }
+
+            guard let repo = resolveRepo(token: repoToken, state: state) else {
+                throw CLIError("Repository not found: \(repoToken)")
+            }
+
+            let info = try await workspaceService.createWorkspace(
+                repoName: repo.name,
+                repoLocalURL: URL(fileURLWithPath: repo.path),
+                name: workspaceName
+            )
+
+            let localConfig = loadWorkspaceLocalConfig(at: info.path)
+            let workspace = WorkspaceRecord(
+                id: UUID(),
+                name: info.name,
+                repoName: repo.name,
+                repoPath: repo.path,
+                path: info.path.path,
+                gitBranch: info.gitBranch,
+                createdAt: Date(),
+                lastAccessedAt: Date(),
+                defaultCommand: localConfig.defaultCommand
+            )
+
+            state.workspaces.removeAll { $0.path == workspace.path }
+            state.workspaces.append(workspace)
+            try stateStore.save(state)
+
+            print("Created workspace: \(workspaceDisplayName(workspace))")
+            print("Path: \(workspace.path)")
+            print("Branch: \(workspace.gitBranch)")
+            return 0
+
+        case "list":
+            if state.workspaces.isEmpty {
+                print("No workspaces tracked.")
+                return 0
+            }
+
+            for workspace in state.workspaces.sorted(by: { $0.lastAccessedAt > $1.lastAccessedAt }) {
+                print("\(workspaceDisplayName(workspace))\t\(workspace.path)")
+            }
+            return 0
+
+        case "path":
+            guard arguments.count >= 2 else {
+                throw CLIError("Usage: workspaces ws path <workspace>")
+            }
+            let workspace = try resolveWorkspace(token: arguments[1], state: state)
+            print(workspace.path)
+            return 0
+
+        default:
+            throw CLIError("Unknown ws subcommand '\(subcommand)'. Expected: new, list, path")
+        }
+    }
+
+    private func runOpen(arguments: [String], state: inout CLIState) async throws -> Int32 {
+        guard !arguments.isEmpty else {
+            throw CLIError("Usage: workspaces open <workspace> [--cmd \"command\"]")
+        }
+
+        var workspaceToken: String?
+        var commandOverride: String?
+
+        var index = 0
+        while index < arguments.count {
+            let token = arguments[index]
+            if token == "--cmd" {
+                index += 1
+                guard index < arguments.count else {
+                    throw CLIError("Missing value for --cmd")
+                }
+                commandOverride = arguments[index]
+            } else if workspaceToken == nil {
+                workspaceToken = token
+            } else {
+                throw CLIError("Unexpected argument: \(token)")
+            }
+            index += 1
+        }
+
+        guard let workspaceToken else {
+            throw CLIError("Usage: workspaces open <workspace> [--cmd \"command\"]")
+        }
+
+        var workspace = try resolveWorkspace(token: workspaceToken, state: state)
+        let workspaceURL = URL(fileURLWithPath: workspace.path)
+        let config = loadWorkspaceLocalConfig(at: workspaceURL)
+        let command = commandOverride ?? workspace.defaultCommand ?? config.defaultCommand
+
+        if workspace.defaultCommand == nil, let defaultCommand = config.defaultCommand {
+            workspace.defaultCommand = defaultCommand
+            updateWorkspace(workspace, state: &state)
+        }
+
+        markWorkspaceAccess(workspaceID: workspace.id, command: command, state: &state)
+        try stateStore.save(state)
+
+        return try runInteractiveSession(in: workspaceURL, command: command)
+    }
+
+    private func runRun(arguments: [String], state: inout CLIState) async throws -> Int32 {
+        guard arguments.count >= 3 else {
+            throw CLIError("Usage: workspaces run <workspace> -- <command...>")
+        }
+
+        let workspaceToken = arguments[0]
+        let workspace = try resolveWorkspace(token: workspaceToken, state: state)
+        let workspaceURL = URL(fileURLWithPath: workspace.path)
+
+        let commandString: String
+        let execution: ProcessExecutionResult
+
+        if arguments.count >= 3, arguments[1] == "--cmd" {
+            let shellCommand = arguments.dropFirst(2).joined(separator: " ").trimmingCharacters(in: .whitespaces)
+            guard !shellCommand.isEmpty else {
+                throw CLIError("Missing command for --cmd")
+            }
+            commandString = shellCommand
+            execution = try runCapturedCommand(
+                executable: "/bin/zsh",
+                arguments: ["-lc", shellCommand],
+                currentDirectory: workspaceURL
+            )
+        } else {
+            guard let separator = arguments.firstIndex(of: "--") else {
+                throw CLIError("Usage: workspaces run <workspace> -- <command...>")
+            }
+            let commandParts = Array(arguments.dropFirst(separator + 1))
+            guard !commandParts.isEmpty else {
+                throw CLIError("Missing command after '--'")
+            }
+
+            let executable = try resolveExecutable(commandParts[0])
+            let executableArgs = Array(commandParts.dropFirst())
+            commandString = commandParts.joined(separator: " ")
+
+            execution = try runCapturedCommand(
+                executable: executable,
+                arguments: executableArgs,
+                currentDirectory: workspaceURL
+            )
+        }
+
+        if !execution.stdout.isEmpty {
+            print(execution.stdout, terminator: execution.stdout.hasSuffix("\n") ? "" : "\n")
+        }
+        if !execution.stderr.isEmpty {
+            writeStderr(execution.stderr, appendNewlineIfNeeded: true)
+        }
+
+        markWorkspaceAccess(workspaceID: workspace.id, command: commandString, state: &state)
+        try stateStore.save(state)
+        return execution.exitCode
+    }
+
+    private func runResume(state: inout CLIState) async throws -> Int32 {
+        guard let lastSession = state.lastSession else {
+            throw CLIError("No previous session found. Use 'workspaces open <workspace>' first.")
+        }
+
+        guard var workspace = state.workspaces.first(where: { $0.id == lastSession.workspaceID }) else {
+            throw CLIError("Last workspace is no longer tracked. Use 'workspaces ws list'.")
+        }
+
+        let workspaceURL = URL(fileURLWithPath: workspace.path)
+        let config = loadWorkspaceLocalConfig(at: workspaceURL)
+        let command = lastSession.command ?? workspace.defaultCommand ?? config.defaultCommand
+
+        if workspace.defaultCommand == nil, let defaultCommand = config.defaultCommand {
+            workspace.defaultCommand = defaultCommand
+            updateWorkspace(workspace, state: &state)
+        }
+
+        markWorkspaceAccess(workspaceID: workspace.id, command: command, state: &state)
+        try stateStore.save(state)
+
+        return try runInteractiveSession(in: workspaceURL, command: command)
+    }
+
+    private func runStatus(arguments: [String], state: inout CLIState) async throws -> Int32 {
+        guard !arguments.isEmpty else {
+            throw CLIError("Usage: workspaces status <workspace> [--watch] [--interval <seconds>]")
+        }
+
+        var workspaceToken: String?
+        var watch = false
+        var intervalSeconds = 2.0
+
+        var index = 0
+        while index < arguments.count {
+            let token = arguments[index]
+            switch token {
+            case "--watch":
+                watch = true
+            case "--interval":
+                index += 1
+                guard index < arguments.count else {
+                    throw CLIError("Missing value for --interval")
+                }
+                guard let parsed = Double(arguments[index]), parsed > 0 else {
+                    throw CLIError("Invalid interval: \(arguments[index])")
+                }
+                intervalSeconds = parsed
+            default:
+                if workspaceToken == nil {
+                    workspaceToken = token
+                } else {
+                    throw CLIError("Unexpected argument: \(token)")
+                }
+            }
+            index += 1
+        }
+
+        guard let workspaceToken else {
+            throw CLIError("Usage: workspaces status <workspace> [--watch] [--interval <seconds>]")
+        }
+
+        let workspace = try resolveWorkspace(token: workspaceToken, state: state)
+        let workspaceURL = URL(fileURLWithPath: workspace.path)
+
+        repeat {
+            try await printGitStatus(for: workspace, workspaceURL: workspaceURL)
+            if !watch { break }
+            try await Task.sleep(nanoseconds: UInt64(intervalSeconds * 1_000_000_000))
+            print("")
+        } while true
+
+        return 0
+    }
+
+    private func runRecent(state: CLIState) -> Int32 {
+        guard !state.recents.isEmpty else {
+            print("No recent sessions.")
+            return 0
+        }
+
+        let formatter = ISO8601DateFormatter()
+        for item in state.recents {
+            guard let workspace = state.workspaces.first(where: { $0.id == item.workspaceID }) else {
+                continue
+            }
+            let commandText = item.command ?? "(interactive shell)"
+            print("\(formatter.string(from: item.openedAt))\t\(workspaceDisplayName(workspace))\t\(commandText)")
+        }
+        return 0
+    }
+
+    private func runDoctor(state: CLIState) async throws -> Int32 {
+        var failures = 0
+
+        func report(_ name: String, _ ok: Bool, _ details: String) {
+            let marker = ok ? "OK" : "FAIL"
+            print("[\(marker)] \(name): \(details)")
+            if !ok {
+                failures += 1
+            }
+        }
+
+        do {
+            let gitPath = try resolveExecutable("git")
+            report("git", true, gitPath)
+        } catch {
+            report("git", false, "not found on PATH")
+        }
+
+        let shellPath = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
+        report(
+            "shell",
+            FileManager.default.isExecutableFile(atPath: shellPath),
+            shellPath
+        )
+
+        let stateDirectory = CLIPaths.configDirectory
+        do {
+            try FileManager.default.createDirectory(at: stateDirectory, withIntermediateDirectories: true)
+            let probe = stateDirectory.appendingPathComponent(".write-test-\(UUID().uuidString)")
+            try Data("ok".utf8).write(to: probe)
+            try FileManager.default.removeItem(at: probe)
+            report("state-dir", true, stateDirectory.path)
+        } catch {
+            report("state-dir", false, "not writable: \(stateDirectory.path)")
+        }
+
+        let root = await workspaceService.workspacesRoot
+        var isDirectory: ObjCBool = false
+        let exists = FileManager.default.fileExists(atPath: root.path, isDirectory: &isDirectory)
+        report("workspaces-root", exists && isDirectory.boolValue, root.path)
+
+        print("[INFO] tracked repos: \(state.repos.count)")
+        print("[INFO] tracked workspaces: \(state.workspaces.count)")
+        return failures == 0 ? 0 : 1
+    }
+
+    private func printGitStatus(for workspace: WorkspaceRecord, workspaceURL: URL) async throws {
+        print("Workspace: \(workspaceDisplayName(workspace))")
+        let changes = try await gitService.getStatus(at: workspaceURL)
+        if changes.isEmpty {
+            print("clean")
+            return
+        }
+
+        for change in changes.sorted(by: { $0.path < $1.path }) {
+            print("\(change.status.rawValue)\t\(change.path)")
+        }
+    }
+
+    private func markWorkspaceAccess(workspaceID: UUID, command: String?, state: inout CLIState) {
+        let now = Date()
+
+        if let index = state.workspaces.firstIndex(where: { $0.id == workspaceID }) {
+            state.workspaces[index].lastAccessedAt = now
+        }
+
+        state.recents.removeAll { $0.workspaceID == workspaceID }
+        state.recents.insert(
+            RecentSession(workspaceID: workspaceID, command: command, openedAt: now),
+            at: 0
+        )
+        if state.recents.count > 20 {
+            state.recents = Array(state.recents.prefix(20))
+        }
+
+        state.lastSession = LastSession(workspaceID: workspaceID, command: command, openedAt: now)
+    }
+
+    private func updateWorkspace(_ workspace: WorkspaceRecord, state: inout CLIState) {
+        guard let index = state.workspaces.firstIndex(where: { $0.id == workspace.id }) else {
+            return
+        }
+        state.workspaces[index] = workspace
+    }
+
+    private func resolveRepo(token: String, state: CLIState) -> RepoRecord? {
+        if let byName = state.repos.first(where: { $0.name == token }) {
+            return byName
+        }
+
+        let normalizedTokenPath = normalizePath(token).path
+        return state.repos.first(where: { $0.path == normalizedTokenPath })
+    }
+
+    private func resolveWorkspace(token: String, state: CLIState) throws -> WorkspaceRecord {
+        if let uuid = UUID(uuidString: token),
+            let byID = state.workspaces.first(where: { $0.id == uuid })
+        {
+            return byID
+        }
+
+        if token.contains("/") {
+            let parts = token.split(separator: "/", maxSplits: 1).map(String.init)
+            if parts.count == 2,
+                let exact = state.workspaces.first(where: { $0.repoName == parts[0] && $0.name == parts[1] })
+            {
+                return exact
+            }
+        }
+
+        let matches = state.workspaces.filter { $0.name == token }
+        if matches.count == 1, let workspace = matches.first {
+            return workspace
+        }
+        if matches.count > 1 {
+            let candidates = matches.map(workspaceDisplayName).joined(separator: ", ")
+            throw CLIError("Workspace name is ambiguous: \(token). Candidates: \(candidates)")
+        }
+
+        throw CLIError("Workspace not found: \(token)")
+    }
+
+    private func runInteractiveSession(in directory: URL, command: String?) throws -> Int32 {
+        let process = Process()
+        process.currentDirectoryURL = directory
+        process.standardInput = FileHandle.standardInput
+        process.standardOutput = FileHandle.standardOutput
+        process.standardError = FileHandle.standardError
+
+        if let command {
+            process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+            process.arguments = ["-lc", command]
+        } else {
+            let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
+            process.executableURL = URL(fileURLWithPath: shell)
+            process.arguments = ["--login"]
+        }
+
+        try process.run()
+        process.waitUntilExit()
+        return process.terminationStatus
+    }
+
+    private func runCapturedCommand(
+        executable: String,
+        arguments: [String],
+        currentDirectory: URL
+    ) throws -> ProcessExecutionResult {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = arguments
+        process.currentDirectoryURL = currentDirectory
+
+        let stdoutPipe = Pipe()
+        let stderrPipe = Pipe()
+        process.standardOutput = stdoutPipe
+        process.standardError = stderrPipe
+
+        let stdoutHandle = stdoutPipe.fileHandleForReading
+        let stderrHandle = stderrPipe.fileHandleForReading
+
+        var stdoutData = Data()
+        var stderrData = Data()
+        let group = DispatchGroup()
+        group.enter()
+        group.enter()
+
+        DispatchQueue.global(qos: .utility).async {
+            stdoutData = stdoutHandle.readDataToEndOfFile()
+            group.leave()
+        }
+
+        DispatchQueue.global(qos: .utility).async {
+            stderrData = stderrHandle.readDataToEndOfFile()
+            group.leave()
+        }
+
+        try process.run()
+        process.waitUntilExit()
+        group.wait()
+
+        return ProcessExecutionResult(
+            exitCode: process.terminationStatus,
+            stdout: String(data: stdoutData, encoding: .utf8) ?? "",
+            stderr: String(data: stderrData, encoding: .utf8) ?? ""
+        )
+    }
+}
+
+// MARK: - State
+
+private struct CLIStateStore {
+    func load() throws -> CLIState {
+        let stateURL = CLIPaths.stateFile
+        guard FileManager.default.fileExists(atPath: stateURL.path) else {
+            return CLIState()
+        }
+
+        let data = try Data(contentsOf: stateURL)
+        return try JSONDecoder().decode(CLIState.self, from: data)
+    }
+
+    func save(_ state: CLIState) throws {
+        try FileManager.default.createDirectory(
+            at: CLIPaths.configDirectory,
+            withIntermediateDirectories: true
+        )
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(state)
+        try data.write(to: CLIPaths.stateFile, options: [.atomic])
+    }
+}
+
+private enum CLIPaths {
+    static var configDirectory: URL {
+        if let xdg = ProcessInfo.processInfo.environment["XDG_CONFIG_HOME"], !xdg.isEmpty {
+            return URL(fileURLWithPath: xdg).appendingPathComponent("workspaces-cli")
+        }
+        return FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".config")
+            .appendingPathComponent("workspaces-cli")
+    }
+
+    static var stateFile: URL {
+        configDirectory.appendingPathComponent("state.json")
+    }
+}
+
+private struct CLIState: Codable {
+    var version = 1
+    var repos: [RepoRecord] = []
+    var workspaces: [WorkspaceRecord] = []
+    var recents: [RecentSession] = []
+    var lastSession: LastSession?
+}
+
+private struct RepoRecord: Codable {
+    var id: UUID
+    var name: String
+    var path: String
+    var addedAt: Date
+}
+
+private struct WorkspaceRecord: Codable {
+    var id: UUID
+    var name: String
+    var repoName: String
+    var repoPath: String
+    var path: String
+    var gitBranch: String
+    var createdAt: Date
+    var lastAccessedAt: Date
+    var defaultCommand: String?
+}
+
+private struct RecentSession: Codable {
+    var workspaceID: UUID
+    var command: String?
+    var openedAt: Date
+}
+
+private struct LastSession: Codable {
+    var workspaceID: UUID
+    var command: String?
+    var openedAt: Date
+}
+
+private struct ProcessExecutionResult {
+    var exitCode: Int32
+    var stdout: String
+    var stderr: String
+}
+
+private struct WorkspaceLocalConfig {
+    var defaultCommand: String?
+    var setupHook: String?
+    var archiveHook: String?
+}
+
+// MARK: - Helpers
+
+private struct CLIError: LocalizedError {
+    let message: String
+    init(_ message: String) { self.message = message }
+    var errorDescription: String? { message }
+}
+
+private func normalizePath(_ path: String) -> URL {
+    let expanded = NSString(string: path).expandingTildeInPath
+    return URL(fileURLWithPath: expanded).standardizedFileURL.resolvingSymlinksInPath()
+}
+
+private func validateGitRepository(at url: URL) throws {
+    var isDirectory: ObjCBool = false
+    guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), isDirectory.boolValue else {
+        throw CLIError("Not a directory: \(url.path)")
+    }
+
+    let gitDir = url.appendingPathComponent(".git").path
+    guard FileManager.default.fileExists(atPath: gitDir) else {
+        throw CLIError("Not a git repository: \(url.path)")
+    }
+}
+
+private func resolveExecutable(_ name: String) throws -> String {
+    if name.contains("/") {
+        let absolute = normalizePath(name).path
+        guard FileManager.default.isExecutableFile(atPath: absolute) else {
+            throw CLIError("Command not executable: \(absolute)")
+        }
+        return absolute
+    }
+
+    let pathValue =
+        ProcessInfo.processInfo.environment["PATH"]
+        ?? "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+    for directory in pathValue.split(separator: ":") {
+        let candidate = URL(fileURLWithPath: String(directory)).appendingPathComponent(name).path
+        if FileManager.default.isExecutableFile(atPath: candidate) {
+            return candidate
+        }
+    }
+
+    throw CLIError("Command not found: \(name)")
+}
+
+private func workspaceDisplayName(_ workspace: WorkspaceRecord) -> String {
+    "\(workspace.repoName)/\(workspace.name)"
+}
+
+private func loadWorkspaceLocalConfig(at directory: URL) -> WorkspaceLocalConfig {
+    let configURL = directory.appendingPathComponent(".workspaces.toml")
+    guard let content = try? String(contentsOf: configURL, encoding: .utf8) else {
+        return WorkspaceLocalConfig()
+    }
+
+    var config = WorkspaceLocalConfig()
+    for rawLine in content.split(separator: "\n", omittingEmptySubsequences: false) {
+        let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+        if line.isEmpty || line.hasPrefix("#") || line.hasPrefix("[") {
+            continue
+        }
+        guard let separator = line.firstIndex(of: "=") else { continue }
+
+        let key = line[..<separator].trimmingCharacters(in: .whitespacesAndNewlines)
+        let value = parseTomlString(line[line.index(after: separator)...])
+
+        switch key {
+        case "default_command":
+            config.defaultCommand = value
+        case "setup_hook":
+            config.setupHook = value
+        case "archive_hook":
+            config.archiveHook = value
+        default:
+            continue
+        }
+    }
+
+    return config
+}
+
+private func parseTomlString<S: StringProtocol>(_ rawValue: S) -> String {
+    let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+    if trimmed.hasPrefix("\""), trimmed.hasSuffix("\""), trimmed.count >= 2 {
+        let inner = trimmed.dropFirst().dropLast()
+        return
+            inner
+            .replacingOccurrences(of: "\\\"", with: "\"")
+            .replacingOccurrences(of: "\\n", with: "\n")
+    }
+    if trimmed.hasPrefix("'"), trimmed.hasSuffix("'"), trimmed.count >= 2 {
+        return String(trimmed.dropFirst().dropLast())
+    }
+    return trimmed
+}
+
+private func writeStderr(_ message: String, appendNewlineIfNeeded: Bool = false) {
+    var final = message
+    if appendNewlineIfNeeded, !final.hasSuffix("\n") {
+        final += "\n"
+    }
+    if !appendNewlineIfNeeded {
+        final += "\n"
+    }
+    if let data = final.data(using: .utf8) {
+        FileHandle.standardError.write(data)
+    }
+}
+
+private func printHelp() {
+    print(
+        """
+        WorkspaceManager CLI
+
+        Usage:
+          workspaces repo add <path>
+          workspaces repo list
+          workspaces ws new <repo> <name>
+          workspaces ws list
+          workspaces ws path <workspace>
+          workspaces open <workspace> [--cmd "command"]
+          workspaces run <workspace> -- <command...>
+          workspaces run <workspace> --cmd "command"
+          workspaces resume
+          workspaces status <workspace> [--watch] [--interval <seconds>]
+          workspaces recent
+          workspaces doctor
+          workspaces help
+
+        Workspace selectors:
+          - UUID
+          - <repo>/<workspace>
+          - workspace name (if unique)
+        """
+    )
+}

@@ -52,6 +52,22 @@ open build/WorkspaceManager.app
 4. Select the workspace to open a terminal in that directory
 5. Use the right pane to browse files and view git status
 
+### CLI Usage
+
+Build and run the CLI target:
+
+```bash
+swift run WorkspaceManagerCLI help
+```
+
+Common workflow:
+
+```bash
+swift run WorkspaceManagerCLI repo add ~/code/my-repo
+swift run WorkspaceManagerCLI ws new my-repo feature-auth
+swift run WorkspaceManagerCLI open my-repo/feature-auth --cmd "claude"
+```
+
 ## Configuration
 
 Open Settings (`Cmd+,`) to configure:
@@ -96,6 +112,7 @@ workspaces/
     WorkspaceManagerCore/    # Core library (models + services)
       Models/                # SwiftData models
       Services/              # Business logic
+    WorkspaceManagerCLI/     # CLI entrypoint and command routing
   Tests/                     # Unit tests
   scripts/                   # Build and release scripts
 ```
