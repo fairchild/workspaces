@@ -30,7 +30,7 @@ struct WorkspaceManagerApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            MainWindowRootView()
                 .frame(minWidth: 1000, minHeight: 700)
         }
         .modelContainer(sharedModelContainer)
@@ -51,6 +51,25 @@ struct WorkspaceManagerApp: App {
 
         Settings {
             SettingsView()
+        }
+    }
+}
+
+private struct MainWindowRootView: View {
+    @State private var deepLinkState = WorkspaceDeepLinkState()
+    @StateObject private var hostTerminalState = HostTerminalStateStore()
+
+    var body: some View {
+        ContentView(
+            deepLinkState: $deepLinkState,
+            hostTerminalState: hostTerminalState
+        )
+        .onOpenURL { url in
+            if deepLinkState.enqueue(url: url) {
+                NSLog("[DeepLink] Received request: %@", url.absoluteString)
+            } else {
+                NSLog("[DeepLink] Ignored unsupported URL: %@", url.absoluteString)
+            }
         }
     }
 }

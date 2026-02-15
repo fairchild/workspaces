@@ -8,22 +8,98 @@
 import SwiftUI
 import WorkspaceManagerCore
 
-struct RepoRow: View {
-    let repo: Repo
+private struct LiveSessionBadge: View {
+    let isActiveSession: Bool
 
     var body: some View {
-        Label {
+        HStack(spacing: 4) {
+            Image(systemName: isActiveSession ? "terminal.fill" : "terminal")
+                .font(.caption2)
+
+            if isActiveSession {
+                Text("LIVE")
+                    .font(.caption2)
+                    .fontWeight(.semibold)
+            }
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 3)
+        .foregroundStyle(isActiveSession ? .green : .secondary)
+        .background(
+            Capsule()
+                .fill(isActiveSession ? Color.green.opacity(0.18) : Color.secondary.opacity(0.15))
+        )
+        .accessibilityLabel(isActiveSession ? "Active live terminal session" : "Live terminal session")
+    }
+}
+
+struct HostTerminalRow: View {
+    let defaultHostPath: String
+    let hasLiveSession: Bool
+    let isActiveSession: Bool
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: isActiveSession ? "house.fill" : "house")
+                .foregroundStyle(.orange)
+
             VStack(alignment: .leading, spacing: 2) {
-                Text(repo.name)
+                Text("Host Portfolio")
                     .lineLimit(1)
 
-                Text("\(repo.workspaces.count) workspace\(repo.workspaces.count == 1 ? "" : "s")")
+                Text(defaultHostPath)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
             }
-        } icon: {
+
+            Spacer(minLength: 8)
+
+            if hasLiveSession {
+                LiveSessionBadge(isActiveSession: isActiveSession)
+                    .help(isActiveSession ? "Active live terminal session" : "Live terminal session")
+            }
+        }
+        .accessibilityLabel("Host portfolio terminal")
+    }
+}
+
+struct RepoRow: View {
+    let repo: Repo
+    let hasLiveSession: Bool
+    let isActiveSession: Bool
+
+    var body: some View {
+        HStack(spacing: 10) {
             Image(systemName: "folder.fill")
                 .foregroundStyle(.blue)
+
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(repo.name)
+                        .lineLimit(1)
+
+                    if hasLiveSession {
+                        LiveSessionBadge(isActiveSession: isActiveSession)
+                            .help(isActiveSession ? "Active live terminal session" : "Live terminal session")
+                    }
+
+                    Spacer(minLength: 0)
+                }
+
+                HStack(spacing: 6) {
+                    Text("\(repo.workspaces.count) workspace\(repo.workspaces.count == 1 ? "" : "s")")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    if hasLiveSession {
+                        Text(isActiveSession ? "active terminal" : "live terminal")
+                            .font(.caption2)
+                            .foregroundStyle(isActiveSession ? .green : .secondary)
+                    }
+                }
+            }
         }
     }
 }

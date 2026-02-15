@@ -68,7 +68,7 @@ base64 -i Developer_ID_Application.p12 | pbcopy
 
 ## Release Methods
 
-### Method 1: Automated Release (GitHub Actions)
+### Method 1: Automated Release on Merge to `main` (GitHub Actions)
 
 The recommended method for production releases.
 
@@ -80,21 +80,32 @@ The recommended method for production releases.
    <string>0.2.0</string>  <!-- New version -->
    ```
 
-2. **Create and Push Tag**
+2. **Merge PR to `main`**
 
    ```bash
    git add .
    git commit -m "chore: bump version to 0.2.0"
-   git tag workspaces-v0.2.0
-   git push origin main --tags
+   git push origin <your-branch>
+   # Open PR and merge after CI is green
    ```
 
-3. **Review and Publish**
+3. **Release Workflow Runs Automatically**
 
-   - GitHub Actions will build, sign, and notarize
-   - A draft release will be created
-   - Review the release notes
-   - Publish when ready
+   - Workflow: `.github/workflows/release.yml`
+   - Trigger: every push to `main` (including merged PRs)
+   - Actions performed:
+     - Build GhosttyKit
+     - Import signing certificate from secrets
+     - Build signed `.app`
+     - Notarize and staple `.dmg`
+     - Publish a GitHub release with artifacts
+
+4. **Release Tag and Assets**
+
+   - Tag format: `workspaces-v<version>-main.<run_number>`
+   - Assets:
+     - `WorkspaceManager-<version>.dmg`
+     - `WorkspaceManager-latest.dmg`
 
 ### Method 2: Manual Release (Local)
 

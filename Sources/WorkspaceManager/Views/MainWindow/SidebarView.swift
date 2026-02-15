@@ -15,6 +15,13 @@ struct SidebarView: View {
     @Environment(\.workspaceService) private var workspaceService
     let repos: [Repo]
     @Binding var selectedWorkspace: Workspace?
+    let defaultHostPath: String
+    let hasDefaultHostSession: Bool
+    let isDefaultHostSessionActive: Bool
+    let liveRepoPaths: Set<String>
+    let activeRepoPath: String?
+    let onDefaultHostSelected: () -> Void
+    let onRepoSelected: (Repo) -> Void
 
     @State private var isAddingRepo = false
     @State private var repoForNewWorkspace: Repo?
@@ -27,6 +34,8 @@ struct SidebarView: View {
     @State private var workspaceToDelete: Workspace?
     @State private var showingDeleteConfirmation = false
 
+    @State private var didAttemptDefaultRepoImport = false
+
     var allWorkspaces: [Workspace] {
         repos.flatMap(\.workspaces).sorted { $0.lastAccessedAt > $1.lastAccessedAt }
     }
@@ -35,30 +44,55 @@ struct SidebarView: View {
         List(selection: $selectedWorkspace) {
             // Repositories Section
             Section("Repositories") {
+                Button {
+                    onDefaultHostSelected()
+                } label: {
+                    HostTerminalRow(
+                        defaultHostPath: defaultHostPath,
+                        hasLiveSession: hasDefaultHostSession,
+                        isActiveSession: isDefaultHostSessionActive
+                    )
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+
                 if repos.isEmpty {
                     Text("No repositories")
                         .foregroundStyle(.secondary)
                         .font(.callout)
                 } else {
                     ForEach(repos) { repo in
-                        RepoRow(repo: repo)
-                            .contextMenu {
-                                Button("New Workspace...") {
-                                    repoForNewWorkspace = repo
-                                }
-
-                                Divider()
-
-                                Button("Reveal in Finder") {
-                                    NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: repo.localPath)
-                                }
-
-                                Divider()
-
-                                Button("Remove from List", role: .destructive) {
-                                    removeRepo(repo)
-                                }
+                        let normalizedRepoPath = normalizePath(repo.localURL)
+                        Button {
+                            onRepoSelected(repo)
+                        } label: {
+                            RepoRow(
+                                repo: repo,
+                                hasLiveSession: liveRepoPaths.contains(normalizedRepoPath),
+                                isActiveSession: activeRepoPath == normalizedRepoPath
+                            )
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .contextMenu {
+                            Button("New Workspace...") {
+                                repoForNewWorkspace = repo
                             }
+
+                            Divider()
+
+                            Button("Reveal in Finder") {
+                                NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: repo.localPath)
+                            }
+
+                            Divider()
+
+                            Button("Remove from List", role: .destructive) {
+                                removeRepo(repo)
+                            }
+                        }
                     }
                 }
             }
@@ -165,6 +199,13 @@ struct SidebarView: View {
         .onChange(of: selectedWorkspace?.id) { _, _ in
             updateLastAccessedTimestamp()
         }
+        .onAppear {
+            guard !didAttemptDefaultRepoImport else { return }
+            didAttemptDefaultRepoImport = true
+            Task {
+                await autoImportReposFromCodeHome()
+            }
+        }
     }
 
     // MARK: - Actions
@@ -176,6 +217,12 @@ struct SidebarView: View {
             if hasSecurityAccess {
                 url.stopAccessingSecurityScopedResource()
             }
+        }
+
+        // Avoid duplicate repo entries by canonical path.
+        let normalizedURLPath = normalizePath(url)
+        guard !repos.contains(where: { normalizePath($0.localURL) == normalizedURLPath }) else {
+            return
         }
 
         // Validate it's a git repo
@@ -199,6 +246,11 @@ struct SidebarView: View {
         }
 
         await MainActor.run {
+            // Re-check against latest model state to avoid async races creating duplicates.
+            guard !repos.contains(where: { normalizePath($0.localURL) == normalizedURLPath }) else {
+                return
+            }
+
             modelContext.insert(repo)
             if !saveModelContext(action: "save repository") {
                 modelContext.rollback()
@@ -338,6 +390,48 @@ struct SidebarView: View {
         {
             try? FileManager.default.removeItem(at: parentDir)
         }
+    }
+
+    private func autoImportReposFromCodeHome() async {
+        let codeHome = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("code", isDirectory: true)
+        let discovered = RepositoryDiscovery.discoverGitRepositories(in: codeHome)
+        guard !discovered.isEmpty else { return }
+
+        let existingPaths = Set(repos.map { normalizePath($0.localURL) })
+        let newRepoDirectories = discovered.filter { !existingPaths.contains(normalizePath($0)) }
+        guard !newRepoDirectories.isEmpty else { return }
+
+        var importedRepos: [Repo] = []
+        importedRepos.reserveCapacity(newRepoDirectories.count)
+
+        // Defer remote metadata lookup to keep launch-time repo hydration fast.
+        for directory in newRepoDirectories {
+            let repo = Repo(name: directory.lastPathComponent, localPath: directory)
+            importedRepos.append(repo)
+        }
+
+        await MainActor.run {
+            var currentPaths = Set(repos.map { normalizePath($0.localURL) })
+            var insertedAny = false
+
+            for repo in importedRepos {
+                let repoPath = normalizePath(repo.localURL)
+                guard !currentPaths.contains(repoPath) else { continue }
+                modelContext.insert(repo)
+                currentPaths.insert(repoPath)
+                insertedAny = true
+            }
+
+            guard insertedAny else { return }
+
+            if !saveModelContext(action: "auto-import repositories from ~/code") {
+                modelContext.rollback()
+            }
+        }
+    }
+
+    private func normalizePath(_ url: URL) -> String {
+        url.standardizedFileURL.resolvingSymlinksInPath().path
     }
 
 }
