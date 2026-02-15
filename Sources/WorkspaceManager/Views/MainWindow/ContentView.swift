@@ -296,22 +296,17 @@ struct HostTerminalSessionStack: View {
     let activeSessionID: UUID?
     let surfaceStore: HostTerminalSurfaceStore
 
-    private var resolvedActiveSessionID: UUID? {
-        activeSessionID ?? sessions.last?.id
+    private var activeSession: HostTerminalSession? {
+        guard let activeSessionID else { return sessions.last }
+        return sessions.first(where: { $0.id == activeSessionID }) ?? sessions.last
     }
 
     var body: some View {
-        ZStack {
-            ForEach(sessions) { session in
-                let isActive = session.id == resolvedActiveSessionID
-                PersistentHostTerminalContainerView(
-                    session: session,
-                    surfaceStore: surfaceStore
-                )
-                    .opacity(isActive ? 1 : 0)
-                    .allowsHitTesting(isActive)
-                    .accessibilityHidden(!isActive)
-            }
+        if let activeSession {
+            PersistentHostTerminalContainerView(
+                session: activeSession,
+                surfaceStore: surfaceStore
+            )
         }
     }
 }
