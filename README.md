@@ -98,6 +98,22 @@ swift test
 swift build
 ```
 
+### Local Install Workflow
+
+Build the latest app and replace your installed copy in `/Applications`:
+
+```bash
+./scripts/install-local.sh
+```
+
+Useful options:
+
+```bash
+./scripts/install-local.sh --no-build --no-open   # Reinstall existing build without relaunch
+./scripts/install-local.sh --signed               # Build with signing config before install
+./scripts/install-local.sh --dest ~/Applications/WorkspaceManager.app
+```
+
 ### Project Structure
 
 ```

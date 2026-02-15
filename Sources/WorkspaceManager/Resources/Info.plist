@@ -19,6 +19,19 @@
     <key>CFBundleDisplayName</key>
     <string>Workspaces</string>
 
+    <!-- Custom URL scheme for focusing an existing workspace -->
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>com.cloudcompute.workspaces</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>workspaces</string>
+            </array>
+        </dict>
+    </array>
+
     <!-- ============================================================
          VERSIONING
          Follows semantic versioning: MAJOR.MINOR.PATCH
