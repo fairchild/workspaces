@@ -63,12 +63,6 @@ Developers who regularly use Claude Code, Cursor, or similar AI coding tools. Th
 - Prefer terminal-based workflows over heavy IDEs
 - Want quick setup without manual repetition
 
-### Secondary: Solo Developer / Freelancer
-Developers juggling multiple client projects who need:
-- Quick context switching between codebases
-- Isolated environments for each client
-- Easy project cleanup when work completes
-
 ## Design Principles
 
 1. **Terminal-First**: The embedded terminal IS the experience. This is not a code editor — use your preferred external editor alongside.
@@ -84,6 +78,6 @@ Developers juggling multiple client projects who need:
 ## What This Is NOT
 
 - **Not an IDE**: No syntax highlighting, code navigation, or LSP
-- **Not VM-first yet**: VM-backed execution is planned, but host terminal workflows are the current default
+- **Not VM-based yet**: Host-local isolation (filesystem copy) is the default. VM-backed workspaces via macOS 26 Virtualization.framework are the next planned phase
 - **Not a git client**: Basic status display only; use terminal for git operations
 - **Not multi-platform**: Mac-only, uses macOS-specific frameworks

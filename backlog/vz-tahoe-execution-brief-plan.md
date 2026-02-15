@@ -112,12 +112,16 @@ This is the default app behavior, independent of VM backends.
 - `README.md`
 - `ARCHITECTURE.md`
 
+## Status
+
+M1 complete (host-terminal-first defaults shipped 2026-02-15). M2-M6 pending refinement gate.
+
 ## Milestones
 
-### M1: Host terminal default foundation
-- Add host terminal default directory resolution.
-- Pin main terminal to host mode on launch and selection changes.
-- Add explicit commands/actions to run against workspace context (instead of implicit terminal retargeting).
+### M1: Host terminal default foundation [x]
+- [x] Add host terminal default directory resolution.
+- [x] Pin main terminal to host mode on launch and selection changes.
+- [x] Add explicit commands/actions to run against workspace context (instead of implicit terminal retargeting).
 
 ### M2: Backend abstraction + local conformance
 - Land protocol/registry/routing in core.

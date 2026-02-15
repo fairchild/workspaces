@@ -313,6 +313,53 @@ sequenceDiagram
 **I want to** get back to my `~/code` portfolio terminal in one click
 **So that** I can quickly return to broad host-level work
 
+### Flow Diagram
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant Sidebar
+    participant SessionCoord as Session Coordinator
+    participant Terminal
+
+    User->>Sidebar: Works in repo/workspace sessions
+    Note over Sidebar: Live indicators show active sessions
+    User->>Sidebar: Clicks "Host Portfolio" row
+    Sidebar->>SessionCoord: Request .defaultHome session
+    SessionCoord->>SessionCoord: Finds existing host session
+    SessionCoord->>Terminal: Activates host portfolio surface
+    Terminal-->>User: Prior prompt/history restored
+```
+
+### ASCII Wireframe
+
+```
+┌─────────────────────┐
+│ Host Portfolio  ◀── │ ← User clicks here to return
+│                     │
+│ [repo] my-api LIVE  │ ← Live indicator (has active session)
+│ [repo] frontend     │
+│ [repo] services LIVE│
+│                     │
+│ Workspaces          │
+│   feature-auth      │
+│   bugfix-nav        │
+├─────────────────────┤
+│ [+] Add repo        │
+└─────────────────────┘
+        │
+        ▼  (after clicking Host Portfolio)
+┌─────────────────────────────────────────┐
+│ ~/code $                                │
+│ git log --oneline -5                    │
+│ a1b2c3d feat: add session indicators    │
+│ d4e5f6g fix: terminal focus on switch   │
+│ _                                       │
+│                                         │
+│ (prior prompt/history intact)           │
+└─────────────────────────────────────────┘
+```
+
 ### Steps
 
 1. **Work in repo/workspace sessions** — User clicks around and accumulates live sessions.
