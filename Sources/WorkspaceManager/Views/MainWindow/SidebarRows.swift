@@ -32,41 +32,28 @@ private struct LiveSessionBadge: View {
     }
 }
 
-struct RepositoriesSectionHeaderView: View {
+struct HostTerminalRow: View {
     let defaultHostPath: String
     let hasLiveSession: Bool
     let isActiveSession: Bool
-    let onActivateHost: () -> Void
 
     var body: some View {
         HStack(spacing: 10) {
-            Text("Repositories")
-                .font(.headline)
-                .foregroundStyle(.secondary)
+            Image(systemName: isActiveSession ? "house.fill" : "house")
+                .foregroundStyle(.orange)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Host Portfolio")
+                    .lineLimit(1)
+
+                Text(defaultHostPath)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
 
             Spacer(minLength: 8)
-
-            Button(action: onActivateHost) {
-                HStack(spacing: 6) {
-                    Image(systemName: isActiveSession ? "house.fill" : "house")
-                    Text("Host")
-                        .fontWeight(.semibold)
-
-                    if hasLiveSession {
-                        Image(systemName: isActiveSession ? "terminal.fill" : "terminal")
-                            .foregroundStyle(isActiveSession ? .green : .secondary)
-                    }
-                }
-                .font(.caption)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(
-                    Capsule()
-                        .fill(Color.secondary.opacity(0.15))
-                )
-            }
-            .buttonStyle(.plain)
-            .help("Open host terminal at \(defaultHostPath)")
 
             if hasLiveSession {
                 LiveSessionBadge(isActiveSession: isActiveSession)
@@ -87,19 +74,29 @@ struct RepoRow: View {
                 .foregroundStyle(.blue)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(repo.name)
-                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    Text(repo.name)
+                        .lineLimit(1)
 
-                Text("\(repo.workspaces.count) workspace\(repo.workspaces.count == 1 ? "" : "s")")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+                    if hasLiveSession {
+                        LiveSessionBadge(isActiveSession: isActiveSession)
+                            .help(isActiveSession ? "Active live terminal session" : "Live terminal session")
+                    }
 
-            Spacer(minLength: 8)
+                    Spacer(minLength: 0)
+                }
 
-            if hasLiveSession {
-                LiveSessionBadge(isActiveSession: isActiveSession)
-                    .help(isActiveSession ? "Active live terminal session" : "Live terminal session")
+                HStack(spacing: 6) {
+                    Text("\(repo.workspaces.count) workspace\(repo.workspaces.count == 1 ? "" : "s")")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    if hasLiveSession {
+                        Text(isActiveSession ? "active terminal" : "live terminal")
+                            .font(.caption2)
+                            .foregroundStyle(isActiveSession ? .green : .secondary)
+                    }
+                }
             }
         }
     }
