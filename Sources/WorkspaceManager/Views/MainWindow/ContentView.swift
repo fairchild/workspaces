@@ -59,6 +59,9 @@ struct ContentView: View {
         .onChange(of: repos.count) { _, _ in
             processPendingDeepLink()
         }
+        .onChange(of: repos.map { normalizePath($0.localPath) }) { _, paths in
+            hostTerminalState.pruneRepoSessions(validRepoPaths: Set(paths))
+        }
     }
 
     private func processPendingDeepLink() {
@@ -91,72 +94,54 @@ struct ContentView: View {
         let repoDirectory = repo.localURL.standardizedFileURL.resolvingSymlinksInPath()
 
         selectedWorkspace = nil
-        activateHostSession(
+        let session = activateHostSession(
             key: .repoPath(repoDirectory.path),
             directory: repoDirectory
         )
         columnVisibility = .all
 
-        requestMainTerminalFocus(targetPath: repoDirectory.path)
+        requestMainTerminalFocus(targetPath: session.directoryPath)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
             Task { @MainActor in
-                requestMainTerminalFocus(targetPath: repoDirectory.path)
+                requestMainTerminalFocus(targetPath: session.directoryPath)
             }
         }
     }
 
     @MainActor
     private func ensureInitialHostSession() {
-        guard hostTerminalState.sessions.isEmpty else { return }
-        activateHostSession(
+        guard !hostTerminalState.hasSessions else { return }
+        _ = activateHostSession(
             key: .defaultHome,
             directory: HostTerminalDefaults.defaultWorkingDirectory()
         )
     }
 
+    @discardableResult
     @MainActor
-    private func activateHostSession(key: HostTerminalSessionKey, directory: URL) {
-        let normalizedDirectory = directory.standardizedFileURL.resolvingSymlinksInPath()
-        let normalizedPath = normalizedDirectory.path
-
-        if let existing = hostTerminalState.sessions.first(where: { $0.key == key }) {
-            hostTerminalState.activeSessionID = existing.id
+    private func activateHostSession(key: HostTerminalSessionKey, directory: URL) -> HostTerminalSession {
+        let result = hostTerminalState.activateSession(
+            key: key,
+            directory: directory
+        )
+        if result.created {
+            NSLog(
+                "[HostSession] Created session %@ key=%@ path=%@ (total sessions=%ld)",
+                result.session.id.uuidString,
+                key.debugDescription,
+                result.session.directoryPath,
+                hostTerminalState.sessions.count
+            )
+        } else {
             NSLog(
                 "[HostSession] Reusing session %@ key=%@ path=%@",
-                existing.id.uuidString,
+                result.session.id.uuidString,
                 key.debugDescription,
-                existing.path
+                result.session.directoryPath
             )
-            return
         }
 
-        if let existing = hostTerminalState.sessions.first(where: { $0.path == normalizedPath }) {
-            hostTerminalState.activeSessionID = existing.id
-            NSLog(
-                "[HostSession] Reusing session by path %@ key=%@ path=%@",
-                existing.id.uuidString,
-                key.debugDescription,
-                existing.path
-            )
-            return
-        }
-
-        let session = HostTerminalSession(
-            id: UUID(),
-            key: key,
-            directory: normalizedDirectory,
-            path: normalizedPath
-        )
-
-        hostTerminalState.sessions.append(session)
-        hostTerminalState.activeSessionID = session.id
-        NSLog(
-            "[HostSession] Created session %@ key=%@ path=%@ (total sessions=%ld)",
-            session.id.uuidString,
-            key.debugDescription,
-            normalizedPath,
-            hostTerminalState.sessions.count
-        )
+        return result.session
     }
 
     private func bestWorkspaceMatch(for cwd: String) -> Workspace? {
@@ -245,7 +230,7 @@ struct ContentView: View {
 
     private func normalizePath(_ rawPath: String) -> String {
         let expanded = NSString(string: rawPath).expandingTildeInPath
-        return URL(fileURLWithPath: expanded).standardizedFileURL.path
+        return URL(fileURLWithPath: expanded).standardizedFileURL.resolvingSymlinksInPath().path
     }
 }
 
@@ -280,7 +265,7 @@ struct MainTerminalDetailView: View {
             }
         }
         .navigationTitle(selectedWorkspace?.name ?? "Host")
-        .navigationSubtitle(selectedWorkspace?.sourceRepo?.name ?? (activeHostSession?.directory.path ?? ""))
+        .navigationSubtitle(selectedWorkspace?.sourceRepo?.name ?? (activeHostSession?.directoryPath ?? ""))
     }
 }
 
@@ -309,33 +294,42 @@ struct HostTerminalSessionStack: View {
     }
 }
 
-struct HostTerminalSession: Identifiable, Hashable {
-    let id: UUID
-    let key: HostTerminalSessionKey
-    let directory: URL
-    let path: String
-}
-
 @MainActor
 final class HostTerminalStateStore: ObservableObject {
-    static let shared = HostTerminalStateStore()
+    @Published private(set) var sessions: [HostTerminalSession] = []
+    @Published private(set) var activeSessionID: UUID?
 
-    @Published var sessions: [HostTerminalSession] = []
-    @Published var activeSessionID: UUID?
     let surfaceStore = HostTerminalSurfaceStore()
-}
+    private var coordinator = HostTerminalSessionCoordinator()
 
-enum HostTerminalSessionKey: Hashable, CustomDebugStringConvertible {
-    case defaultHome
-    case repoPath(String)
+    var hasSessions: Bool {
+        !sessions.isEmpty
+    }
 
-    var debugDescription: String {
-        switch self {
-        case .defaultHome:
-            return "defaultHome"
-        case .repoPath(let path):
-            return "repoPath(\(path))"
+    @discardableResult
+    func activateSession(
+        key: HostTerminalSessionKey,
+        directory: URL
+    ) -> HostTerminalSessionActivationResult {
+        let result = coordinator.activate(key: key, directory: directory)
+        publishSnapshot()
+        return result
+    }
+
+    func pruneRepoSessions(validRepoPaths: Set<String>) {
+        let removedSessionIDs = coordinator.pruneRepoSessions(validRepoPaths: validRepoPaths)
+        guard !removedSessionIDs.isEmpty else { return }
+
+        for removedSessionID in removedSessionIDs {
+            surfaceStore.invalidate(sessionID: removedSessionID)
         }
+
+        publishSnapshot()
+    }
+
+    private func publishSnapshot() {
+        sessions = coordinator.sessions
+        activeSessionID = coordinator.activeSessionID
     }
 }
 
@@ -346,7 +340,7 @@ enum HostTerminalSessionKey: Hashable, CustomDebugStringConvertible {
 
 private struct ContentViewPreviewHost: View {
     @State private var deepLinkState = WorkspaceDeepLinkState()
-    @StateObject private var hostTerminalState = HostTerminalStateStore.shared
+    @StateObject private var hostTerminalState = HostTerminalStateStore()
 
     var body: some View {
         ContentView(

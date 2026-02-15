@@ -13,8 +13,6 @@ import WorkspaceManagerCore
 struct WorkspaceManagerApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @FocusedValue(\.newWorkspaceAction) private var newWorkspaceAction
-    @State private var deepLinkState = WorkspaceDeepLinkState()
-    private let hostTerminalState = HostTerminalStateStore.shared
 
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([Repo.self, Workspace.self])
@@ -32,18 +30,8 @@ struct WorkspaceManagerApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView(
-                deepLinkState: $deepLinkState,
-                hostTerminalState: hostTerminalState
-            )
+            MainWindowRootView()
                 .frame(minWidth: 1000, minHeight: 700)
-                .onOpenURL { url in
-                    if deepLinkState.enqueue(url: url) {
-                        NSLog("[DeepLink] Received request: %@", url.absoluteString)
-                    } else {
-                        NSLog("[DeepLink] Ignored unsupported URL: %@", url.absoluteString)
-                    }
-                }
         }
         .modelContainer(sharedModelContainer)
         .defaultSize(width: 1400, height: 900)
@@ -63,6 +51,25 @@ struct WorkspaceManagerApp: App {
 
         Settings {
             SettingsView()
+        }
+    }
+}
+
+private struct MainWindowRootView: View {
+    @State private var deepLinkState = WorkspaceDeepLinkState()
+    @StateObject private var hostTerminalState = HostTerminalStateStore()
+
+    var body: some View {
+        ContentView(
+            deepLinkState: $deepLinkState,
+            hostTerminalState: hostTerminalState
+        )
+        .onOpenURL { url in
+            if deepLinkState.enqueue(url: url) {
+                NSLog("[DeepLink] Received request: %@", url.absoluteString)
+            } else {
+                NSLog("[DeepLink] Ignored unsupported URL: %@", url.absoluteString)
+            }
         }
     }
 }
