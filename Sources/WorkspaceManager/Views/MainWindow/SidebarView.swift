@@ -15,6 +15,8 @@ struct SidebarView: View {
     @Environment(\.workspaceService) private var workspaceService
     let repos: [Repo]
     @Binding var selectedWorkspace: Workspace?
+    let liveRepoPaths: Set<String>
+    let activeRepoPath: String?
     let onRepoSelected: (Repo) -> Void
 
     @State private var isAddingRepo = false
@@ -44,10 +46,15 @@ struct SidebarView: View {
                         .font(.callout)
                 } else {
                     ForEach(repos) { repo in
+                        let normalizedRepoPath = normalizePath(repo.localURL)
                         Button {
                             onRepoSelected(repo)
                         } label: {
-                            RepoRow(repo: repo)
+                            RepoRow(
+                                repo: repo,
+                                hasLiveSession: liveRepoPaths.contains(normalizedRepoPath),
+                                isActiveSession: activeRepoPath == normalizedRepoPath
+                            )
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
                         .buttonStyle(.plain)
