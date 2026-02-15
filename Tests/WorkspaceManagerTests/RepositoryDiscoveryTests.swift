@@ -28,7 +28,8 @@ struct RepositoryDiscoveryTests {
         let repoB = root.appendingPathComponent("repo-b", isDirectory: true)
         let nonRepo = root.appendingPathComponent("notes", isDirectory: true)
 
-        try FileManager.default.createDirectory(at: repoA.appendingPathComponent(".git", isDirectory: true), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: repoA.appendingPathComponent(".git", isDirectory: true), withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: repoB, withIntermediateDirectories: true)
         try Data("gitdir: /tmp/fake\n".utf8).write(to: repoB.appendingPathComponent(".git"))
         try FileManager.default.createDirectory(at: nonRepo, withIntermediateDirectories: true)
@@ -45,7 +46,8 @@ struct RepositoryDiscoveryTests {
         defer { try? FileManager.default.removeItem(at: root) }
 
         let hiddenRepo = root.appendingPathComponent(".hidden", isDirectory: true)
-        try FileManager.default.createDirectory(at: hiddenRepo.appendingPathComponent(".git", isDirectory: true), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: hiddenRepo.appendingPathComponent(".git", isDirectory: true), withIntermediateDirectories: true)
 
         let discovered = RepositoryDiscovery.discoverGitRepositories(in: root)
         #expect(discovered.isEmpty)

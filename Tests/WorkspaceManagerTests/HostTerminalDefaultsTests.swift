@@ -27,8 +27,10 @@ struct HostTerminalDefaultsTests {
         let tildeHome = root.appendingPathComponent("tilde-home", isDirectory: true)
         let envHome = root.appendingPathComponent("env-home", isDirectory: true)
 
-        try FileManager.default.createDirectory(at: tildeHome.appendingPathComponent("code", isDirectory: true), withIntermediateDirectories: true)
-        try FileManager.default.createDirectory(at: envHome.appendingPathComponent("code", isDirectory: true), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: tildeHome.appendingPathComponent("code", isDirectory: true), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: envHome.appendingPathComponent("code", isDirectory: true), withIntermediateDirectories: true)
 
         let resolved = HostTerminalDefaults.resolveDefaultWorkingDirectory(
             tildeHomeDirectory: tildeHome,
@@ -47,7 +49,8 @@ struct HostTerminalDefaultsTests {
         let envHome = root.appendingPathComponent("env-home", isDirectory: true)
 
         try FileManager.default.createDirectory(at: tildeHome, withIntermediateDirectories: true)
-        try FileManager.default.createDirectory(at: envHome.appendingPathComponent("code", isDirectory: true), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: envHome.appendingPathComponent("code", isDirectory: true), withIntermediateDirectories: true)
 
         let resolved = HostTerminalDefaults.resolveDefaultWorkingDirectory(
             tildeHomeDirectory: tildeHome,

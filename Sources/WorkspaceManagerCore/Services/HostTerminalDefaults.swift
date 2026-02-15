@@ -47,8 +47,8 @@ public enum HostTerminalDefaults {
     }
 }
 
-private extension FileManager {
-    func directoryExists(at url: URL) -> Bool {
+extension FileManager {
+    fileprivate func directoryExists(at url: URL) -> Bool {
         var isDirectory = ObjCBool(false)
         let exists = fileExists(atPath: url.path, isDirectory: &isDirectory)
         return exists && isDirectory.boolValue
