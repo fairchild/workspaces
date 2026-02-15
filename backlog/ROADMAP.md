@@ -16,14 +16,22 @@ completed: null
 
 ## Current Locked Direction (2026-02-14)
 
-This roadmap now follows `/Users/fairchild/code/workspaces/backlog/vz-tahoe-execution-brief-plan.md` as the execution source of truth.
+For the VZ/Tahoe implementation track (`M2`-`M6`), `/Users/fairchild/code/workspaces/backlog/vz-tahoe-execution-brief-plan.md` is the source of truth.
+
+Execution priority is:
+
+1. Complete the **Refinement Gate (Before M2)** in this roadmap.
+2. Resume the execution brief milestones starting at `M2`.
 
 ### Product Defaults
 
 - App launch opens a live host terminal in `~/code` by default (fallback to `$HOME/code`, then `$HOME`).
 - Main terminal stays host-pinned by default.
-- Selecting a workspace does not auto-retarget the main terminal.
+- Sidebar clicks are explicit terminal actions:
+  - Host Portfolio row returns to the default host session.
+  - Repo/workspace rows open or resume persistent host sessions in those directories.
 - Users can spawn additional regular host terminals from the host context.
+- Sidebar shows live session indicators for repos with active terminals.
 
 ### VM Lifecycle Scope
 
@@ -57,12 +65,13 @@ This roadmap now follows `/Users/fairchild/code/workspaces/backlog/vz-tahoe-exec
 
 ### Best Implementation Order
 
-1. Host-terminal-first app behavior (launch directory, pinned host terminal, no auto-retarget on selection).
-2. Backend abstraction/registry in core while preserving `LocalBackend`.
-3. `VZTahoeBackend` implementation (runtime checks, VM lifecycle, vmnet, SSH executor, allowlist).
-4. New-workspace flow integration to create/start VM only for VZ workspaces.
-5. CLI backend-aware routing (`auto`, `--host`, `--vm`) plus VM lifecycle commands.
-6. Tests, docs, fallback hardening, and validation.
+1. [x] Host-terminal-first foundation and persistent session UX.
+2. [ ] Refinement gate: quality hardening and performance baselining for current feature set.
+3. [ ] Backend abstraction/registry in core while preserving `LocalBackend`.
+4. [ ] `VZTahoeBackend` implementation (runtime checks, VM lifecycle, vmnet, SSH executor, allowlist).
+5. [ ] New-workspace flow integration to create/start VM only for VZ workspaces.
+6. [ ] CLI backend-aware routing (`auto`, `--host`, `--vm`) plus VM lifecycle commands.
+7. [ ] Tests, docs, fallback hardening, and validation.
 
 ### Performance Backlog (Fast-Path Follow-ups)
 
@@ -73,14 +82,49 @@ This roadmap now follows `/Users/fairchild/code/workspaces/backlog/vz-tahoe-exec
 
 ---
 
+## Refinement Gate (Before M2)
+
+The next cycle prioritizes implementation quality for shipped behavior before expanding the feature set.
+
+### Objectives
+
+- Make session behavior deterministic under fast click-switching between repos and workspaces.
+- Keep launch and interaction latency consistently fast on real `~/code` portfolios.
+- Ensure release workflow reliability stays boring and repeatable.
+- Align product docs and stories with the behavior users are actually testing.
+
+### Exit Criteria
+
+- [ ] `swift test` remains green with added regression coverage for session focus and reuse semantics.
+- [ ] A short perf report is checked in with baseline numbers for:
+  - launch-to-first-prompt
+  - repo hydration
+  - repo-click-to-focused-terminal
+- [ ] No open crash/repro defects around workspace selection and session switching.
+- [ ] Release workflow passes end-to-end from `main` (signed + notarized DMG published).
+- [ ] Product docs (`docs/product_overview.md`, `docs/user-stories.md`) reflect implemented UX.
+
+### Planned Work Items
+
+- [ ] Add instrumentation signposts around launch, sidebar selection handling, and terminal focus handoff.
+- [ ] Add focused regression tests for session reuse + focus restoration behavior.
+- [ ] Add a lightweight memory guardrail decision: either cap inactive surfaces (LRU) or document why unbounded is acceptable today.
+- [ ] Tighten release docs/scripts around Apple credential troubleshooting and idempotent setup.
+- [ ] Capture usage findings and feed them into post-refinement prioritization for M2.
+
+---
+
+> Note: detailed "Phase 1-4" sections below are retained as historical implementation context.
+> Current execution priority is defined by the locked direction above plus the refinement gate.
+
 ## Architecture Overview
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│  App Window                                                              │
+│  App Window                                                             │
 ├────────────┬────────────────────────────────────────────┬───────────────┤
 │            │                                            │               │
-│  Sidebar   │         Main Terminal Panel               │  Right Pane   │
+│  Sidebar   │         Main Terminal Panel                │  Right Pane   │
 │            │         (SwiftTerm)                        │  (collapsible)│
 │  ┌──────┐  │                                            │               │
 │  │Repos │  │  $ claude                                  │  ┌─────────┐  │
@@ -106,7 +150,7 @@ This roadmap now follows `/Users/fairchild/code/workspaces/backlog/vz-tahoe-exec
 | App lifecycle | AppKit (`NSApplication`) | Window management, multiple workspaces |
 | Layout shell | SwiftUI `NavigationSplitView` | Modern, works well for this layout |
 | Sidebar | SwiftUI `List` with sections | Simple hierarchy, not 10k+ items |
-| Terminal | **SwiftTerm** `LocalProcessTerminalView` | Production PTY handling |
+| Terminal | **GhosttyKit** `GhosttySurfaceView` | Fast, native terminal surfaces with persistent session support |
 | File tree | SwiftUI `List` + `DisclosureGroup` | Adequate for browsing (not editing) |
 | Changed files | SwiftUI `List` + git status parsing | Simple list |
 | Persistence | SwiftData (or JSON file for MVP) | Native, simple |

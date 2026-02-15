@@ -4,9 +4,16 @@
 
 Workspaces is a Mac app for managing isolated AI coding sessions. Users add git repos, fork them into workspaces, and run AI coding tools (Claude Code, Cursor) in an embedded terminal. Each workspace is a clean copy with automatic setup.
 
+### Current Behavior Snapshot (2026-02-15)
+
+- App launch defaults to a host terminal rooted at `~/code` (`$HOME/code`, then `$HOME` fallback).
+- Repositories are auto-discovered from `~/code` (non-recursive) on first load, and can still be managed manually.
+- Sidebar repo/workspace clicks open or resume persistent host terminal sessions for those directories.
+- Sidebar shows live-session state so users can see which repos already have an active terminal.
+
 ---
 
-## Story 1: First-Time Setup
+## Story 1: First-Time Setup (Portfolio-First)
 
 **As a** developer new to Workspaces
 **I want to** add my first repository and create a workspace
@@ -22,19 +29,17 @@ sequenceDiagram
     participant Terminal
 
     User->>App: Launches app
-    App-->>User: Shows empty state with "Add Repository" button
-    User->>App: Clicks "Add Repository"
-    App->>Finder: Opens folder picker
-    User->>Finder: Selects project folder
-    Finder-->>App: Returns path
-    App->>App: Validates .git exists
-    App-->>User: Repo appears in sidebar
-    User->>App: Right-clicks repo → "New Workspace..."
+    App->>App: Resolves host default directory
+    App->>App: Auto-discovers repos in ~/code
+    App-->>User: Shows host terminal + repos
+    User->>App: Clicks a repo row
+    App->>Terminal: Opens/resumes repo host session
+    User->>App: Opens "New Workspace..." for that repo
     App-->>User: Shows name input sheet
     User->>App: Enters "feature-auth" → Create
     App->>App: Copies repo to ~/workspaces/my-project/feature-auth
     App->>App: Runs setup.sh (if exists)
-    App-->>User: Workspace selected, terminal opens
+    App-->>User: Workspace selected, session available
     User->>Terminal: Types "claude" to start AI session
 ```
 
@@ -61,19 +66,19 @@ sequenceDiagram
 ```
 
 **Sidebar structure:**
-- Repos as parent rows with letter avatar, name, `⋯` menu, `+` button
-- Workspaces nested under their repo with branch icon (↳)
-- Workspace shows: name, branch, time since last activity
-- Selected workspace highlighted
-- "Add repository" at bottom
+- Repositories section includes a one-click "Host Portfolio" row plus repo rows.
+- Workspaces are listed in a dedicated section (not nested under each repo row).
+- Repo rows can show a live terminal indicator and active-session highlight.
+- Selected workspace controls right-pane file/changes context.
+- "Add repository" remains available at the bottom.
 
 ### Steps
 
-1. **Launch app** — User sees empty state encouraging them to add a repository
-2. **Add repository** — Folder picker opens, user selects a git project
-3. **Repo validated** — App confirms .git exists, extracts repo name
-4. **Create workspace** — Context menu offers "New Workspace...", user names it
-5. **Workspace initialized** — Repo copied, setup.sh runs, terminal opens in workspace
+1. **Launch app** — Host terminal opens in default code directory.
+2. **Repos hydrate** — App auto-loads top-level git repos from `~/code`.
+3. **Select repo** — Clicking repo opens/resumes a host terminal session in that repo.
+4. **Create workspace** — User runs "New Workspace..." and enters a name.
+5. **Workspace initialized** — Repo copy is created, setup hook runs, workspace appears in sidebar.
 
 ---
 
@@ -94,9 +99,9 @@ sequenceDiagram
 
     User->>Sidebar: Clicks different workspace
     Sidebar-->>Terminal: Workspace changed signal
-    Terminal->>Terminal: Terminates current shell
-    Terminal->>Terminal: Spawns new shell in workspace dir
-    Terminal-->>User: Fresh terminal in new workspace
+    Terminal->>Terminal: Reuses existing session if present
+    Terminal->>Terminal: Otherwise creates new session in workspace dir
+    Terminal-->>User: Prior prompt/history restored when reusing
     RightPane->>RightPane: Refreshes file tree
     RightPane->>RightPane: Refreshes git status
     RightPane-->>User: Shows new workspace files
@@ -125,7 +130,7 @@ sequenceDiagram
 
 1. **View workspaces** — Sidebar shows all workspaces, current one highlighted
 2. **Click different workspace** — User clicks another workspace name
-3. **Terminal switches** — Old terminal terminates, new one spawns in new directory
+3. **Terminal switches** — Existing session is restored when available; otherwise a new one is created
 4. **Right pane updates** — File tree and git status refresh for new workspace
 
 ---
@@ -208,8 +213,8 @@ sequenceDiagram
     App-->>User: Context menu
     User->>App: Clicks "Delete Workspace"
     App-->>User: Confirmation dialog
-    Note over User,App: "Also delete files from disk?" checkbox
-    User->>App: Confirms with checkbox checked
+    Note over User,App: Explicit choice: keep files or remove files
+    User->>App: Confirms desired delete mode
     App->>FS: Run archive.sh (if exists)
     FS-->>App: Archive output
     App->>FS: Delete workspace directory
@@ -238,7 +243,7 @@ sequenceDiagram
 
 1. **Right-click workspace** — Context menu shows Archive and Delete options
 2. **Click Delete** — Confirmation dialog appears
-3. **Choose file handling** — Checkbox controls whether files are deleted from disk
+3. **Choose file handling** — User picks "Delete (Keep Files)" or "Delete and Remove Files"
 4. **archive.sh runs** — If present, cleanup script runs first
 5. **Workspace removed** — Deleted from list (and optionally from disk)
 
@@ -299,3 +304,18 @@ sequenceDiagram
 3. **Click Choose** — Folder picker opens
 4. **Select new location** — User picks preferred directory
 5. **Setting saved** — All new workspaces will be created in new location
+
+---
+
+## Story 6: Returning to Host Portfolio Context
+
+**As a** developer switching between many repos and workspaces
+**I want to** get back to my `~/code` portfolio terminal in one click
+**So that** I can quickly return to broad host-level work
+
+### Steps
+
+1. **Work in repo/workspace sessions** — User clicks around and accumulates live sessions.
+2. **Review session indicators** — Sidebar shows which repos have live terminals.
+3. **Click Host Portfolio** — Main terminal switches back to the default host portfolio session.
+4. **Resume prior context** — Existing host prompt/history is still there, ready for input.
