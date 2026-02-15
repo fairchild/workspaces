@@ -122,7 +122,7 @@ jobs:
         run: ./scripts/build-release.sh
 
       - name: Notarize and package DMG
-        run: ./scripts/notarize.sh
+        run: bash ./scripts/notarize.sh
 
       - name: Read release metadata
         id: meta
