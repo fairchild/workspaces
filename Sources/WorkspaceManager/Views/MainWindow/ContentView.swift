@@ -5,33 +5,49 @@
 //  Main three-column layout: Sidebar | Terminal | Right Pane
 //
 
+import AppKit
 import SwiftData
 import SwiftUI
 import WorkspaceManagerCore
 
 struct ContentView: View {
+    @Binding var deepLinkState: WorkspaceDeepLinkState
+    @ObservedObject var hostTerminalState: HostTerminalStateStore
     @Query(sort: \Repo.addedAt, order: .reverse) private var repos: [Repo]
 
     @State private var selectedWorkspace: Workspace?
     @State private var isRightPaneVisible = true
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
+    private let resolvedDefaultHostDirectory = HostTerminalDefaults.defaultWorkingDirectory()
+        .standardizedFileURL
+        .resolvingSymlinksInPath()
+
+    private var sessionPresentation: HostTerminalSessionPresentation {
+        hostTerminalState.sessionPresentation
+    }
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             SidebarView(
                 repos: repos,
-                selectedWorkspace: $selectedWorkspace
+                selectedWorkspace: $selectedWorkspace,
+                defaultHostPath: resolvedDefaultHostDirectory.path,
+                hasDefaultHostSession: sessionPresentation.hasDefaultHomeSession,
+                isDefaultHostSessionActive: sessionPresentation.isDefaultHomeSessionActive,
+                liveRepoPaths: sessionPresentation.liveRepoPaths,
+                activeRepoPath: sessionPresentation.activeRepoPath,
+                onDefaultHostSelected: handleDefaultHostSelection,
+                onRepoSelected: handleRepoSelection
             )
             .navigationSplitViewColumnWidth(min: 200, ideal: 260, max: 350)
         } detail: {
-            if let workspace = selectedWorkspace {
-                WorkspaceDetailView(
-                    workspace: workspace,
-                    isRightPaneVisible: $isRightPaneVisible
-                )
-            } else {
-                EmptyStateView()
-            }
+            MainTerminalDetailView(
+                selectedWorkspace: selectedWorkspace,
+                hostTerminalSessions: hostTerminalState.sessions,
+                activeHostTerminalSessionID: hostTerminalState.activeSessionID,
+                hostSurfaceStore: hostTerminalState.surfaceStore,
+                isRightPaneVisible: $isRightPaneVisible
+            )
         }
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
@@ -46,66 +62,320 @@ struct ContentView: View {
                 .disabled(selectedWorkspace == nil)
             }
         }
+        .onAppear {
+            ensureInitialHostSession()
+            processPendingDeepLink()
+        }
+        .onChange(of: deepLinkState.pendingRequest) { _, _ in
+            processPendingDeepLink()
+        }
+        .onChange(of: repos.count) { _, _ in
+            processPendingDeepLink()
+        }
+        .onChange(of: repos.map { normalizePath($0.localPath) }) { _, paths in
+            hostTerminalState.pruneRepoSessions(validRepoPaths: Set(paths))
+        }
+        .onChange(of: selectedWorkspace?.id) { _, _ in
+            guard let selectedWorkspace else { return }
+            handleWorkspaceSelection(selectedWorkspace)
+        }
+    }
+
+    private func processPendingDeepLink() {
+        guard let request = deepLinkState.pendingRequest else { return }
+
+        guard let workspace = bestWorkspaceMatch(for: request.cwd) else {
+            // On cold launch, wait for SwiftData to load before deciding this is a no-match.
+            if repos.isEmpty { return }
+            NSLog("[DeepLink] No workspace match for cwd: %@", request.cwd)
+            deepLinkState.clearPendingRequest()
+            return
+        }
+
+        NSLog(
+            "[DeepLink] Matched workspace '%@' for cwd '%@' (session_id=%@ source=%@)",
+            workspace.name,
+            request.cwd,
+            request.sessionID ?? "",
+            request.source ?? ""
+        )
+
+        selectedWorkspace = workspace
+        columnVisibility = .all
+        deepLinkState.clearPendingRequest()
+        focusWorkspaceWindow()
+    }
+
+    @MainActor
+    private func handleRepoSelection(_ repo: Repo) {
+        let repoDirectory = repo.localURL.standardizedFileURL.resolvingSymlinksInPath()
+
+        selectedWorkspace = nil
+        let session = activateHostSession(
+            key: .repoPath(repoDirectory.path),
+            directory: repoDirectory
+        )
+        columnVisibility = .all
+
+        requestMainTerminalFocus(targetSessionID: session.id)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            Task { @MainActor in
+                requestMainTerminalFocus(targetSessionID: session.id)
+            }
+        }
+    }
+
+    @MainActor
+    private func handleDefaultHostSelection() {
+        selectedWorkspace = nil
+        let session = activateHostSession(
+            key: .defaultHome,
+            directory: resolvedDefaultHostDirectory
+        )
+        columnVisibility = .all
+
+        requestMainTerminalFocus(targetSessionID: session.id)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            Task { @MainActor in
+                requestMainTerminalFocus(targetSessionID: session.id)
+            }
+        }
+    }
+
+    @MainActor
+    private func handleWorkspaceSelection(_ workspace: Workspace) {
+        let workspaceDirectory = workspace.workspaceURL.standardizedFileURL.resolvingSymlinksInPath()
+        let session = activateHostSession(
+            key: .hostPath(workspaceDirectory.path),
+            directory: workspaceDirectory
+        )
+        columnVisibility = .all
+
+        requestMainTerminalFocus(targetSessionID: session.id)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            Task { @MainActor in
+                requestMainTerminalFocus(targetSessionID: session.id)
+            }
+        }
+    }
+
+    @MainActor
+    private func ensureInitialHostSession() {
+        guard !hostTerminalState.hasSessions else { return }
+        _ = activateHostSession(
+            key: .defaultHome,
+            directory: resolvedDefaultHostDirectory
+        )
+    }
+
+    @discardableResult
+    @MainActor
+    private func activateHostSession(key: HostTerminalSessionKey, directory: URL) -> HostTerminalSession {
+        let result = hostTerminalState.activateSession(
+            key: key,
+            directory: directory
+        )
+        if result.created {
+            NSLog(
+                "[HostSession] Created session %@ key=%@ path=%@ (total sessions=%ld)",
+                result.session.id.uuidString,
+                key.debugDescription,
+                result.session.directoryPath,
+                hostTerminalState.sessions.count
+            )
+        } else {
+            NSLog(
+                "[HostSession] Reusing session %@ key=%@ path=%@",
+                result.session.id.uuidString,
+                key.debugDescription,
+                result.session.directoryPath
+            )
+        }
+
+        return result.session
+    }
+
+    private func bestWorkspaceMatch(for cwd: String) -> Workspace? {
+        let normalizedCWD = normalizePath(cwd)
+        let allWorkspaces = repos.flatMap(\.workspaces)
+
+        let matches = allWorkspaces.compactMap { workspace -> (workspace: Workspace, matchLength: Int)? in
+            let workspacePath = normalizePath(workspace.path)
+            guard path(normalizedCWD, isInside: workspacePath) else { return nil }
+            return (workspace, workspacePath.count)
+        }
+
+        let bestMatch = matches.sorted { lhs, rhs in
+            if lhs.matchLength == rhs.matchLength {
+                return lhs.workspace.lastAccessedAt > rhs.workspace.lastAccessedAt
+            }
+            return lhs.matchLength > rhs.matchLength
+        }.first
+
+        guard let bestMatch else {
+            return nil
+        }
+
+        return bestMatch.workspace
+    }
+
+    private func focusWorkspaceWindow() {
+        NSApp.activate(ignoringOtherApps: true)
+        let window = NSApp.windows.first(where: \.isVisible) ?? NSApp.windows.first
+        window?.makeKeyAndOrderFront(nil)
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            guard let terminal = TerminalFocusManager.shared.focusedTerminal else { return }
+            TerminalFocusManager.shared.requestFocus(for: terminal)
+        }
+    }
+
+    @MainActor
+    private func requestMainTerminalFocus(targetSessionID: UUID? = nil) {
+        NSApp.activate(ignoringOtherApps: true)
+        let window = NSApp.windows.first(where: \.isVisible) ?? NSApp.windows.first
+        window?.makeKeyAndOrderFront(nil)
+
+        if let targetSessionID,
+            let terminal = hostTerminalState.surfaceStore.terminal(for: targetSessionID)
+        {
+            TerminalFocusManager.shared.requestFocus(for: terminal)
+            return
+        }
+
+        if let activeSessionID = hostTerminalState.activeSessionID,
+            let terminal = hostTerminalState.surfaceStore.terminal(for: activeSessionID)
+        {
+            TerminalFocusManager.shared.requestFocus(for: terminal)
+            return
+        }
+
+        if let terminal = TerminalFocusManager.shared.focusedTerminal {
+            TerminalFocusManager.shared.requestFocus(for: terminal)
+        }
+    }
+
+    private func path(_ path: String, isInside root: String) -> Bool {
+        if path == root { return true }
+        guard root != "/" else { return true }
+        return path.hasPrefix(root + "/")
+    }
+
+    private func normalizePath(_ rawPath: String) -> String {
+        let expanded = NSString(string: rawPath).expandingTildeInPath
+        return URL(fileURLWithPath: expanded).standardizedFileURL.resolvingSymlinksInPath().path
     }
 }
 
-// MARK: - Workspace Detail (Terminal + Right Pane)
+// MARK: - Main Terminal (Host-pinned)
 
-struct WorkspaceDetailView: View {
-    let workspace: Workspace
+struct MainTerminalDetailView: View {
+    let selectedWorkspace: Workspace?
+    let hostTerminalSessions: [HostTerminalSession]
+    let activeHostTerminalSessionID: UUID?
+    let hostSurfaceStore: HostTerminalSurfaceStore
     @Binding var isRightPaneVisible: Bool
+
+    private var activeHostSession: HostTerminalSession? {
+        guard let activeHostTerminalSessionID else { return hostTerminalSessions.last }
+        return hostTerminalSessions.first(where: { $0.id == activeHostTerminalSessionID }) ?? hostTerminalSessions.last
+    }
 
     var body: some View {
         HSplitView {
             // Main terminal panel
-            TerminalContainerView(workspace: workspace)
-                .id(workspace.id)
-                .frame(minWidth: 400)
+            HostTerminalSessionStack(
+                sessions: hostTerminalSessions,
+                activeSessionID: activeHostTerminalSessionID,
+                surfaceStore: hostSurfaceStore
+            )
+            .frame(minWidth: 400)
 
             // Collapsible right pane
-            if isRightPaneVisible {
-                RightPaneView(workspace: workspace)
+            if isRightPaneVisible, let selectedWorkspace {
+                RightPaneView(workspace: selectedWorkspace)
                     .frame(minWidth: 220, idealWidth: 280, maxWidth: 400)
             }
         }
-        .navigationTitle(workspace.name)
-        .navigationSubtitle(workspace.sourceRepo?.name ?? "")
+        .navigationTitle(selectedWorkspace?.name ?? "Host")
+        .navigationSubtitle(selectedWorkspace?.sourceRepo?.name ?? (activeHostSession?.directoryPath ?? ""))
     }
 }
 
-// MARK: - Empty State
+struct HostTerminalSessionStack: View {
+    let sessions: [HostTerminalSession]
+    let activeSessionID: UUID?
+    let surfaceStore: HostTerminalSurfaceStore
 
-struct EmptyStateView: View {
+    private var activeSession: HostTerminalSession? {
+        guard let activeSessionID else { return sessions.last }
+        return sessions.first(where: { $0.id == activeSessionID }) ?? sessions.last
+    }
+
     var body: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "folder.badge.gearshape")
-                .font(.system(size: 48))
-                .foregroundStyle(.secondary)
-
-            Text("No Workspace Selected")
-                .font(.title2)
-                .fontWeight(.medium)
-
-            Text("Add a repository and create a workspace to get started.")
-                .font(.body)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-
-            VStack(alignment: .leading, spacing: 8) {
-                Label("Add a git repository from your Mac", systemImage: "1.circle.fill")
-                Label("Fork it to create an isolated workspace", systemImage: "2.circle.fill")
-                Label("Run Claude Code in the embedded terminal", systemImage: "3.circle.fill")
-            }
-            .font(.callout)
-            .foregroundStyle(.secondary)
-            .padding(.top, 8)
+        if let activeSession {
+            PersistentHostTerminalContainerView(
+                session: activeSession,
+                surfaceStore: surfaceStore
+            )
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(nsColor: .windowBackgroundColor))
+    }
+}
+
+@MainActor
+final class HostTerminalStateStore: ObservableObject {
+    @Published private(set) var sessions: [HostTerminalSession] = []
+    @Published private(set) var activeSessionID: UUID?
+    @Published private(set) var sessionPresentation = HostTerminalSessionPresentation()
+
+    let surfaceStore = HostTerminalSurfaceStore()
+    private var coordinator = HostTerminalSessionCoordinator()
+
+    var hasSessions: Bool {
+        !sessions.isEmpty
+    }
+
+    @discardableResult
+    func activateSession(
+        key: HostTerminalSessionKey,
+        directory: URL
+    ) -> HostTerminalSessionActivationResult {
+        let result = coordinator.activate(key: key, directory: directory)
+        publishSnapshot()
+        return result
+    }
+
+    func pruneRepoSessions(validRepoPaths: Set<String>) {
+        let removedSessionIDs = coordinator.pruneRepoSessions(validRepoPaths: validRepoPaths)
+        guard !removedSessionIDs.isEmpty else { return }
+
+        for removedSessionID in removedSessionIDs {
+            surfaceStore.invalidate(sessionID: removedSessionID)
+        }
+
+        publishSnapshot()
+    }
+
+    private func publishSnapshot() {
+        sessions = coordinator.sessions
+        activeSessionID = coordinator.activeSessionID
+        sessionPresentation = coordinator.presentation
     }
 }
 
 #Preview {
-    ContentView()
+    ContentViewPreviewHost()
         .modelContainer(for: [Repo.self, Workspace.self], inMemory: true)
+}
+
+private struct ContentViewPreviewHost: View {
+    @State private var deepLinkState = WorkspaceDeepLinkState()
+    @StateObject private var hostTerminalState = HostTerminalStateStore()
+
+    var body: some View {
+        ContentView(
+            deepLinkState: $deepLinkState,
+            hostTerminalState: hostTerminalState
+        )
+    }
 }

@@ -1,0 +1,164 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  build-sign-notarize-release:
+    runs-on: macos-15
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate release secrets
+        env:
+          APPLE_DEVELOPER_ID_CERT_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_CERT_BASE64 }}
+          APPLE_DEVELOPER_ID_CERT_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_CERT_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          missing=()
+
+          [[ -n "$APPLE_DEVELOPER_ID_CERT_BASE64" ]] || missing+=("APPLE_DEVELOPER_ID_CERT_BASE64")
+          [[ -n "$APPLE_DEVELOPER_ID_CERT_PASSWORD" ]] || missing+=("APPLE_DEVELOPER_ID_CERT_PASSWORD")
+          [[ -n "$APPLE_ID" ]] || missing+=("APPLE_ID")
+          [[ -n "$APPLE_APP_PASSWORD" ]] || missing+=("APPLE_APP_PASSWORD")
+          [[ -n "$APPLE_TEAM_ID" ]] || missing+=("APPLE_TEAM_ID")
+
+          if (( ${#missing[@]} > 0 )); then
+            echo "::error::Missing required repository secrets: ${missing[*]}"
+            exit 1
+          fi
+
+      - name: Ensure mise
+        run: |
+          if command -v mise >/dev/null 2>&1; then
+            mise --version
+          else
+            brew install mise
+          fi
+
+      - name: Build GhosttyKit
+        run: ./scripts/build-ghosttykit.sh
+
+      - name: Import signing certificate
+        env:
+          APPLE_DEVELOPER_ID_CERT_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_CERT_BASE64 }}
+          APPLE_DEVELOPER_ID_CERT_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_CERT_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          CERT_PATH="$RUNNER_TEMP/developer-id-application.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/workspaces-release.keychain-db"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+
+          if ! (echo "$APPLE_DEVELOPER_ID_CERT_BASE64" | base64 --decode > "$CERT_PATH" 2>/dev/null); then
+            echo "$APPLE_DEVELOPER_ID_CERT_BASE64" | base64 -D > "$CERT_PATH"
+          fi
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" \
+            -k "$KEYCHAIN_PATH" \
+            -P "$APPLE_DEVELOPER_ID_CERT_PASSWORD" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/security \
+            -T /usr/bin/xcrun
+
+          security list-keychains -d user -s "$KEYCHAIN_PATH" ~/Library/Keychains/login.keychain-db
+          security default-keychain -d user -s "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          SIGNING_IDENTITY="$(
+            security find-identity -v -p codesigning "$KEYCHAIN_PATH" \
+            | sed -n 's/.*"\(Developer ID Application:.*\)".*/\1/p' \
+            | head -n 1
+          )"
+
+          if [[ -z "$SIGNING_IDENTITY" ]]; then
+            echo "::error::No Developer ID Application certificate was found after import"
+            security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+            exit 1
+          fi
+
+          echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
+          echo "KEYCHAIN_PASSWORD=$KEYCHAIN_PASSWORD" >> "$GITHUB_ENV"
+          echo "SIGNING_IDENTITY=$SIGNING_IDENTITY" >> "$GITHUB_ENV"
+
+      - name: Generate signing config
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          SIGNING_IDENTITY: ${{ env.SIGNING_IDENTITY }}
+        run: |
+          set -euo pipefail
+
+          cat > scripts/signing-config.sh <<EOF
+          #!/bin/bash
+          export TEAM_ID="$APPLE_TEAM_ID"
+          export BUNDLE_ID="com.cloudcompute.workspaces"
+          export SIGNING_IDENTITY="$SIGNING_IDENTITY"
+          export APPLE_ID="$APPLE_ID"
+          export APP_PASSWORD="$APPLE_APP_PASSWORD"
+          EOF
+
+          chmod 700 scripts/signing-config.sh
+
+      - name: Build signed app
+        run: ./scripts/build-release.sh
+
+      - name: Notarize and package DMG
+        run: ./scripts/notarize.sh
+
+      - name: Read release metadata
+        id: meta
+        run: |
+          set -euo pipefail
+
+          VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" build/WorkspaceManager.app/Contents/Info.plist)
+          BUILD=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" build/WorkspaceManager.app/Contents/Info.plist)
+          TAG="workspaces-v${VERSION}-main.${GITHUB_RUN_NUMBER}"
+          DMG_PATH="build/WorkspaceManager-${VERSION}.dmg"
+
+          if [[ ! -f "$DMG_PATH" ]]; then
+            echo "::error::Expected DMG not found at $DMG_PATH"
+            exit 1
+          fi
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "build=$BUILD" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "dmg_path=$DMG_PATH" >> "$GITHUB_OUTPUT"
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: Workspaces v${{ steps.meta.outputs.version }} (main.${{ github.run_number }})
+          target_commitish: ${{ github.sha }}
+          files: |
+            ${{ steps.meta.outputs.dmg_path }}
+            build/WorkspaceManager-latest.dmg
+          generate_release_notes: true
+          prerelease: false
+
+      - name: Cleanup keychain
+        if: always()
+        run: |
+          set -euo pipefail
+          if [[ -n "${KEYCHAIN_PATH:-}" ]] && [[ -f "${KEYCHAIN_PATH}" ]]; then
+            security delete-keychain "$KEYCHAIN_PATH" || true
+          fi
