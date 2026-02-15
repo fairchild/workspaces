@@ -75,6 +75,10 @@ struct ContentView: View {
         .onChange(of: repos.map { normalizePath($0.localPath) }) { _, paths in
             hostTerminalState.pruneRepoSessions(validRepoPaths: Set(paths))
         }
+        .onChange(of: selectedWorkspace?.id) { _, _ in
+            guard let selectedWorkspace else { return }
+            handleWorkspaceSelection(selectedWorkspace)
+        }
     }
 
     private func processPendingDeepLink() {
@@ -127,6 +131,23 @@ struct ContentView: View {
         let session = activateHostSession(
             key: .defaultHome,
             directory: resolvedDefaultHostDirectory
+        )
+        columnVisibility = .all
+
+        requestMainTerminalFocus(targetSessionID: session.id)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            Task { @MainActor in
+                requestMainTerminalFocus(targetSessionID: session.id)
+            }
+        }
+    }
+
+    @MainActor
+    private func handleWorkspaceSelection(_ workspace: Workspace) {
+        let workspaceDirectory = workspace.workspaceURL.standardizedFileURL.resolvingSymlinksInPath()
+        let session = activateHostSession(
+            key: .hostPath(workspaceDirectory.path),
+            directory: workspaceDirectory
         )
         columnVisibility = .all
 
