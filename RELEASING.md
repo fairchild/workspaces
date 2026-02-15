@@ -46,14 +46,19 @@ You need an Apple Developer Program membership ($99/year) for:
 
 ### GitHub Actions Setup (for CI/CD)
 
-Add these secrets to your GitHub repository (Settings > Secrets > Actions):
+Add these **secrets** to your GitHub repository (Settings > Secrets and variables > Actions > Secrets):
 
 | Secret | Description |
 |--------|-------------|
 | `APPLE_DEVELOPER_ID_CERT_BASE64` | Base64-encoded .p12 certificate |
 | `APPLE_DEVELOPER_ID_CERT_PASSWORD` | Password for the .p12 file |
-| `APPLE_ID` | Your Apple ID email |
 | `APPLE_APP_PASSWORD` | App-specific password |
+
+Add these **variables** to your GitHub repository (Settings > Secrets and variables > Actions > Variables):
+
+| Variable | Description |
+|--------|-------------|
+| `APPLE_ID` | Your Apple ID email |
 | `APPLE_TEAM_ID` | 10-character Team ID |
 
 To export and encode your certificate:

@@ -14,7 +14,8 @@ permissions:
 
 jobs:
   build-sign-notarize-release:
-    runs-on: macos-15
+    # Use the same runner class as CI to avoid GhosttyKit regressions on hosted images.
+    runs-on: ${{ vars.PREFERRED_RUNNER != '' && vars.PREFERRED_RUNNER || 'self-hosted' }}
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
@@ -23,9 +24,9 @@ jobs:
         env:
           APPLE_DEVELOPER_ID_CERT_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_CERT_BASE64 }}
           APPLE_DEVELOPER_ID_CERT_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_CERT_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_ID: ${{ vars.APPLE_ID != '' && vars.APPLE_ID || secrets.APPLE_ID }}
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID != '' && vars.APPLE_TEAM_ID || secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
           missing=()
@@ -37,7 +38,7 @@ jobs:
           [[ -n "$APPLE_TEAM_ID" ]] || missing+=("APPLE_TEAM_ID")
 
           if (( ${#missing[@]} > 0 )); then
-            echo "::error::Missing required repository secrets: ${missing[*]}"
+            echo "::error::Missing required repository release config: ${missing[*]}"
             exit 1
           fi
 
@@ -99,9 +100,9 @@ jobs:
 
       - name: Generate signing config
         env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_ID: ${{ vars.APPLE_ID != '' && vars.APPLE_ID || secrets.APPLE_ID }}
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID != '' && vars.APPLE_TEAM_ID || secrets.APPLE_TEAM_ID }}
           SIGNING_IDENTITY: ${{ env.SIGNING_IDENTITY }}
         run: |
           set -euo pipefail
