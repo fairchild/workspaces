@@ -8,6 +8,30 @@
 import SwiftUI
 import WorkspaceManagerCore
 
+private struct LiveSessionBadge: View {
+    let isActiveSession: Bool
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: isActiveSession ? "terminal.fill" : "terminal")
+                .font(.caption2)
+
+            if isActiveSession {
+                Text("LIVE")
+                    .font(.caption2)
+                    .fontWeight(.semibold)
+            }
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 3)
+        .foregroundStyle(isActiveSession ? .green : .secondary)
+        .background(
+            Capsule()
+                .fill(isActiveSession ? Color.green.opacity(0.18) : Color.secondary.opacity(0.15))
+        )
+    }
+}
+
 struct HostTerminalRow: View {
     let defaultHostPath: String
     let hasLiveSession: Bool
@@ -32,9 +56,7 @@ struct HostTerminalRow: View {
             Spacer(minLength: 8)
 
             if hasLiveSession {
-                Image(systemName: isActiveSession ? "terminal.fill" : "terminal")
-                    .font(.caption)
-                    .foregroundStyle(isActiveSession ? .green : .secondary)
+                LiveSessionBadge(isActiveSession: isActiveSession)
                     .help(isActiveSession ? "Active live terminal session" : "Live terminal session")
             }
         }
@@ -63,9 +85,7 @@ struct RepoRow: View {
             Spacer(minLength: 8)
 
             if hasLiveSession {
-                Image(systemName: isActiveSession ? "terminal.fill" : "terminal")
-                    .font(.caption)
-                    .foregroundStyle(isActiveSession ? .green : .secondary)
+                LiveSessionBadge(isActiveSession: isActiveSession)
                     .help(isActiveSession ? "Active live terminal session" : "Live terminal session")
             }
         }
