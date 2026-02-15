@@ -32,28 +32,41 @@ private struct LiveSessionBadge: View {
     }
 }
 
-struct HostTerminalRow: View {
+struct RepositoriesSectionHeaderView: View {
     let defaultHostPath: String
     let hasLiveSession: Bool
     let isActiveSession: Bool
+    let onActivateHost: () -> Void
 
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: "house.fill")
-                .foregroundStyle(.orange)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Host")
-                    .lineLimit(1)
-
-                Text(defaultHostPath)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
+            Text("Repositories")
+                .font(.headline)
+                .foregroundStyle(.secondary)
 
             Spacer(minLength: 8)
+
+            Button(action: onActivateHost) {
+                HStack(spacing: 6) {
+                    Image(systemName: isActiveSession ? "house.fill" : "house")
+                    Text("Host")
+                        .fontWeight(.semibold)
+
+                    if hasLiveSession {
+                        Image(systemName: isActiveSession ? "terminal.fill" : "terminal")
+                            .foregroundStyle(isActiveSession ? .green : .secondary)
+                    }
+                }
+                .font(.caption)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(
+                    Capsule()
+                        .fill(Color.secondary.opacity(0.15))
+                )
+            }
+            .buttonStyle(.plain)
+            .help("Open host terminal at \(defaultHostPath)")
 
             if hasLiveSession {
                 LiveSessionBadge(isActiveSession: isActiveSession)

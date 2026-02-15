@@ -43,19 +43,7 @@ struct SidebarView: View {
     var body: some View {
         List(selection: $selectedWorkspace) {
             // Repositories Section
-            Section("Repositories") {
-                Button {
-                    onDefaultHostSelected()
-                } label: {
-                    HostTerminalRow(
-                        defaultHostPath: defaultHostPath,
-                        hasLiveSession: hasDefaultHostSession,
-                        isActiveSession: isDefaultHostSessionActive
-                    )
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .buttonStyle(.plain)
-
+            Section {
                 if repos.isEmpty {
                     Text("No repositories")
                         .foregroundStyle(.secondary)
@@ -93,6 +81,14 @@ struct SidebarView: View {
                         }
                     }
                 }
+            } header: {
+                RepositoriesSectionHeaderView(
+                    defaultHostPath: defaultHostPath,
+                    hasLiveSession: hasDefaultHostSession,
+                    isActiveSession: isDefaultHostSessionActive,
+                    onActivateHost: onDefaultHostSelected
+                )
+                .textCase(nil)
             }
 
             // Workspaces Section
