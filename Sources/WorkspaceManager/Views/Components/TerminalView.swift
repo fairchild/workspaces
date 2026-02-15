@@ -6,6 +6,28 @@
 import SwiftUI
 import WorkspaceManagerCore
 
+@MainActor
+final class HostTerminalSurfaceStore {
+    private var surfaces: [UUID: GhosttySurfaceView] = [:]
+
+    func view(for session: HostTerminalSession, onProcessExit: (() -> Void)? = nil) -> GhosttySurfaceView {
+        if let existing = surfaces[session.id] {
+            return existing
+        }
+
+        let created = GhosttySurfaceView(
+            workingDirectory: session.directory,
+            onProcessExit: onProcessExit
+        )
+        surfaces[session.id] = created
+        return created
+    }
+
+    func invalidate(sessionID: UUID) {
+        surfaces.removeValue(forKey: sessionID)
+    }
+}
+
 struct TerminalContainerView: View {
     let modeLabel: String
     let workingDirectory: URL
@@ -95,6 +117,77 @@ struct GhosttyTerminalRepresentable: NSViewRepresentable {
             workingDirectory: workingDirectory,
             onProcessExit: onProcessExit
         )
+    }
+
+    func updateNSView(_ nsView: GhosttySurfaceView, context: Context) {
+        _ = context
+        _ = nsView
+    }
+}
+
+struct PersistentHostTerminalContainerView: View {
+    let session: HostTerminalSession
+    let surfaceStore: HostTerminalSurfaceStore
+    @State private var restartGeneration = 0
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Image(systemName: "terminal.fill")
+                    .foregroundStyle(.secondary)
+
+                Text("Host")
+                    .font(.caption)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(.secondary)
+
+                Text(session.directory.path)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.head)
+
+                Spacer()
+
+                Button {
+                    surfaceStore.invalidate(sessionID: session.id)
+                    restartGeneration &+= 1
+                } label: {
+                    Image(systemName: "arrow.counterclockwise")
+                }
+                .buttonStyle(.borderless)
+                .help("Restart Terminal")
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(Color(nsColor: .controlBackgroundColor))
+
+            Divider()
+
+            PersistentHostGhosttyRepresentable(
+                session: session,
+                surfaceStore: surfaceStore,
+                onProcessExit: {
+                    NSLog("[GhosttyTerminal] Process exited for host session %@", session.id.uuidString)
+                }
+            )
+            .id(PersistentHostTerminalIdentity(sessionID: session.id, restartGeneration: restartGeneration))
+        }
+    }
+}
+
+private struct PersistentHostTerminalIdentity: Hashable {
+    let sessionID: UUID
+    let restartGeneration: Int
+}
+
+private struct PersistentHostGhosttyRepresentable: NSViewRepresentable {
+    let session: HostTerminalSession
+    let surfaceStore: HostTerminalSurfaceStore
+    var onProcessExit: (() -> Void)?
+
+    func makeNSView(context: Context) -> GhosttySurfaceView {
+        surfaceStore.view(for: session, onProcessExit: onProcessExit)
     }
 
     func updateNSView(_ nsView: GhosttySurfaceView, context: Context) {

@@ -15,6 +15,7 @@ struct SidebarView: View {
     @Environment(\.workspaceService) private var workspaceService
     let repos: [Repo]
     @Binding var selectedWorkspace: Workspace?
+    let onRepoSelected: (Repo) -> Void
 
     @State private var isAddingRepo = false
     @State private var repoForNewWorkspace: Repo?
@@ -26,6 +27,8 @@ struct SidebarView: View {
     // Delete confirmation state
     @State private var workspaceToDelete: Workspace?
     @State private var showingDeleteConfirmation = false
+
+    @State private var didAttemptDefaultRepoImport = false
 
     var allWorkspaces: [Workspace] {
         repos.flatMap(\.workspaces).sorted { $0.lastAccessedAt > $1.lastAccessedAt }
@@ -41,24 +44,34 @@ struct SidebarView: View {
                         .font(.callout)
                 } else {
                     ForEach(repos) { repo in
-                        RepoRow(repo: repo)
-                            .contextMenu {
-                                Button("New Workspace...") {
-                                    repoForNewWorkspace = repo
-                                }
-
-                                Divider()
-
-                                Button("Reveal in Finder") {
-                                    NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: repo.localPath)
-                                }
-
-                                Divider()
-
-                                Button("Remove from List", role: .destructive) {
-                                    removeRepo(repo)
-                                }
+                        Button {
+                            onRepoSelected(repo)
+                        } label: {
+                            RepoRow(repo: repo)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .buttonStyle(.plain)
+                        .contextMenu {
+                            Button("New Workspace...") {
+                                repoForNewWorkspace = repo
                             }
+
+                            Divider()
+
+                            Button("Reveal in Finder") {
+                                NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: repo.localPath)
+                            }
+
+                            Divider()
+
+                            Button("Remove from List", role: .destructive) {
+                                removeRepo(repo)
+                            }
+                        }
+                        .onTapGesture(count: 2) {
+                            // Keep repo double-click equivalent to single-click for quick open/focus.
+                            onRepoSelected(repo)
+                        }
                     }
                 }
             }
@@ -165,6 +178,13 @@ struct SidebarView: View {
         .onChange(of: selectedWorkspace?.id) { _, _ in
             updateLastAccessedTimestamp()
         }
+        .onAppear {
+            guard !didAttemptDefaultRepoImport else { return }
+            didAttemptDefaultRepoImport = true
+            Task {
+                await autoImportReposFromCodeHome()
+            }
+        }
     }
 
     // MARK: - Actions
@@ -176,6 +196,12 @@ struct SidebarView: View {
             if hasSecurityAccess {
                 url.stopAccessingSecurityScopedResource()
             }
+        }
+
+        // Avoid duplicate repo entries by canonical path.
+        let normalizedURLPath = normalizePath(url)
+        guard !repos.contains(where: { normalizePath($0.localURL) == normalizedURLPath }) else {
+            return
         }
 
         // Validate it's a git repo
@@ -338,6 +364,41 @@ struct SidebarView: View {
         {
             try? FileManager.default.removeItem(at: parentDir)
         }
+    }
+
+    private func autoImportReposFromCodeHome() async {
+        let codeHome = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("code", isDirectory: true)
+        let discovered = RepositoryDiscovery.discoverGitRepositories(in: codeHome)
+        guard !discovered.isEmpty else { return }
+
+        let existingPaths = Set(repos.map { normalizePath($0.localURL) })
+        let newRepoDirectories = discovered.filter { !existingPaths.contains(normalizePath($0)) }
+        guard !newRepoDirectories.isEmpty else { return }
+
+        var importedRepos: [Repo] = []
+        importedRepos.reserveCapacity(newRepoDirectories.count)
+
+        for directory in newRepoDirectories {
+            let repo = Repo(name: directory.lastPathComponent, localPath: directory)
+            if let remote = try? await gitService.getRemoteURL(at: directory) {
+                repo.remoteURL = remote
+            }
+            importedRepos.append(repo)
+        }
+
+        await MainActor.run {
+            for repo in importedRepos {
+                modelContext.insert(repo)
+            }
+
+            if !saveModelContext(action: "auto-import repositories from ~/code") {
+                modelContext.rollback()
+            }
+        }
+    }
+
+    private func normalizePath(_ url: URL) -> String {
+        url.standardizedFileURL.resolvingSymlinksInPath().path
     }
 
 }
