@@ -8,6 +8,39 @@
 import SwiftUI
 import WorkspaceManagerCore
 
+struct HostTerminalRow: View {
+    let defaultHostPath: String
+    let hasLiveSession: Bool
+    let isActiveSession: Bool
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "house.fill")
+                .foregroundStyle(.orange)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Host")
+                    .lineLimit(1)
+
+                Text(defaultHostPath)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+
+            Spacer(minLength: 8)
+
+            if hasLiveSession {
+                Image(systemName: isActiveSession ? "terminal.fill" : "terminal")
+                    .font(.caption)
+                    .foregroundStyle(isActiveSession ? .green : .secondary)
+                    .help(isActiveSession ? "Active live terminal session" : "Live terminal session")
+            }
+        }
+    }
+}
+
 struct RepoRow: View {
     let repo: Repo
     let hasLiveSession: Bool
