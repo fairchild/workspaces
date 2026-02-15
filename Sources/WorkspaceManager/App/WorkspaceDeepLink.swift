@@ -7,15 +7,15 @@ struct WorkspaceDeepLink: Equatable {
 
     init?(url: URL) {
         guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
-              components.scheme?.lowercased() == "workspaces",
-              components.host?.lowercased() == "focus"
+            components.scheme?.lowercased() == "workspaces",
+            components.host?.lowercased() == "focus"
         else {
             return nil
         }
 
         let queryItems = components.queryItems ?? []
         guard let rawCWD = queryItems.first(where: { $0.name == "cwd" })?.value,
-              !rawCWD.isEmpty
+            !rawCWD.isEmpty
         else {
             return nil
         }

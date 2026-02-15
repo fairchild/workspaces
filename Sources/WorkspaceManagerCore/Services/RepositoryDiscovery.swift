@@ -13,7 +13,8 @@ public enum RepositoryDiscovery {
         fileManager: FileManager = .default
     ) -> [URL] {
         var isDirectory = ObjCBool(false)
-        guard fileManager.fileExists(atPath: rootDirectory.path, isDirectory: &isDirectory), isDirectory.boolValue else {
+        guard fileManager.fileExists(atPath: rootDirectory.path, isDirectory: &isDirectory), isDirectory.boolValue
+        else {
             return []
         }
 
@@ -28,7 +29,8 @@ public enum RepositoryDiscovery {
             return []
         }
 
-        return contents
+        return
+            contents
             .filter { candidate in
                 guard directoryExists(at: candidate, fileManager: fileManager) else {
                     return false
