@@ -386,11 +386,9 @@ struct SidebarView: View {
         var importedRepos: [Repo] = []
         importedRepos.reserveCapacity(newRepoDirectories.count)
 
+        // Defer remote metadata lookup to keep launch-time repo hydration fast.
         for directory in newRepoDirectories {
             let repo = Repo(name: directory.lastPathComponent, localPath: directory)
-            if let remote = try? await gitService.getRemoteURL(at: directory) {
-                repo.remoteURL = remote
-            }
             importedRepos.append(repo)
         }
 
