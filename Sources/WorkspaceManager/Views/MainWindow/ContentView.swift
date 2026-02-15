@@ -19,11 +19,33 @@ struct ContentView: View {
     @State private var isRightPaneVisible = true
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
 
+    private var liveRepoPaths: Set<String> {
+        Set(
+            hostTerminalState.sessions.compactMap { session in
+                guard case .repoPath(let path) = session.key else { return nil }
+                return path
+            }
+        )
+    }
+
+    private var activeRepoPath: String? {
+        guard let activeSessionID = hostTerminalState.activeSessionID,
+            let session = hostTerminalState.sessions.first(where: { $0.id == activeSessionID }),
+            case .repoPath(let path) = session.key
+        else {
+            return nil
+        }
+
+        return path
+    }
+
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             SidebarView(
                 repos: repos,
                 selectedWorkspace: $selectedWorkspace,
+                liveRepoPaths: liveRepoPaths,
+                activeRepoPath: activeRepoPath,
                 onRepoSelected: handleRepoSelection
             )
             .navigationSplitViewColumnWidth(min: 200, ideal: 260, max: 350)

@@ -10,9 +10,14 @@ import WorkspaceManagerCore
 
 struct RepoRow: View {
     let repo: Repo
+    let hasLiveSession: Bool
+    let isActiveSession: Bool
 
     var body: some View {
-        Label {
+        HStack(spacing: 10) {
+            Image(systemName: "folder.fill")
+                .foregroundStyle(.blue)
+
             VStack(alignment: .leading, spacing: 2) {
                 Text(repo.name)
                     .lineLimit(1)
@@ -21,9 +26,15 @@ struct RepoRow: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-        } icon: {
-            Image(systemName: "folder.fill")
-                .foregroundStyle(.blue)
+
+            Spacer(minLength: 8)
+
+            if hasLiveSession {
+                Image(systemName: isActiveSession ? "terminal.fill" : "terminal")
+                    .font(.caption)
+                    .foregroundStyle(isActiveSession ? .green : .secondary)
+                    .help(isActiveSession ? "Active live terminal session" : "Live terminal session")
+            }
         }
     }
 }
