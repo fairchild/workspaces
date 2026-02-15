@@ -29,6 +29,7 @@ private struct LiveSessionBadge: View {
             Capsule()
                 .fill(isActiveSession ? Color.green.opacity(0.18) : Color.secondary.opacity(0.15))
         )
+        .accessibilityLabel(isActiveSession ? "Active live terminal session" : "Live terminal session")
     }
 }
 
@@ -60,6 +61,7 @@ struct HostTerminalRow: View {
                     .help(isActiveSession ? "Active live terminal session" : "Live terminal session")
             }
         }
+        .accessibilityLabel("Host portfolio terminal")
     }
 }
 

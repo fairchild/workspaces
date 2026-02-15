@@ -18,42 +18,12 @@ struct ContentView: View {
     @State private var selectedWorkspace: Workspace?
     @State private var isRightPaneVisible = true
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
-    @State private var resolvedDefaultHostDirectory = HostTerminalDefaults.defaultWorkingDirectory()
+    private let resolvedDefaultHostDirectory = HostTerminalDefaults.defaultWorkingDirectory()
         .standardizedFileURL
         .resolvingSymlinksInPath()
 
-    private var liveRepoPaths: Set<String> {
-        Set(
-            hostTerminalState.sessions.compactMap { session in
-                guard case .repoPath(let path) = session.key else { return nil }
-                return path
-            }
-        )
-    }
-
-    private var activeRepoPath: String? {
-        guard let activeSessionID = hostTerminalState.activeSessionID,
-            let session = hostTerminalState.sessions.first(where: { $0.id == activeSessionID }),
-            case .repoPath(let path) = session.key
-        else {
-            return nil
-        }
-
-        return path
-    }
-
-    private var hasDefaultHostSession: Bool {
-        hostTerminalState.sessions.contains(where: { $0.key == .defaultHome })
-    }
-
-    private var isDefaultHostSessionActive: Bool {
-        guard let activeSessionID = hostTerminalState.activeSessionID,
-            let session = hostTerminalState.sessions.first(where: { $0.id == activeSessionID })
-        else {
-            return false
-        }
-
-        return session.key == .defaultHome
+    private var sessionPresentation: HostTerminalSessionPresentation {
+        hostTerminalState.sessionPresentation
     }
 
     var body: some View {
@@ -62,10 +32,10 @@ struct ContentView: View {
                 repos: repos,
                 selectedWorkspace: $selectedWorkspace,
                 defaultHostPath: resolvedDefaultHostDirectory.path,
-                hasDefaultHostSession: hasDefaultHostSession,
-                isDefaultHostSessionActive: isDefaultHostSessionActive,
-                liveRepoPaths: liveRepoPaths,
-                activeRepoPath: activeRepoPath,
+                hasDefaultHostSession: sessionPresentation.hasDefaultHomeSession,
+                isDefaultHostSessionActive: sessionPresentation.isDefaultHomeSessionActive,
+                liveRepoPaths: sessionPresentation.liveRepoPaths,
+                activeRepoPath: sessionPresentation.activeRepoPath,
                 onDefaultHostSelected: handleDefaultHostSelection,
                 onRepoSelected: handleRepoSelection
             )
@@ -206,24 +176,26 @@ struct ContentView: View {
 
     private func bestWorkspaceMatch(for cwd: String) -> Workspace? {
         let normalizedCWD = normalizePath(cwd)
+        let allWorkspaces = repos.flatMap(\.workspaces)
 
-        let matches = repos
-            .flatMap(\.workspaces)
-            .compactMap { workspace -> (workspace: Workspace, matchLength: Int)? in
-                let workspacePath = normalizePath(workspace.path)
-                guard path(normalizedCWD, isInside: workspacePath) else { return nil }
-                return (workspace, workspacePath.count)
-            }
+        let matches = allWorkspaces.compactMap { workspace -> (workspace: Workspace, matchLength: Int)? in
+            let workspacePath = normalizePath(workspace.path)
+            guard path(normalizedCWD, isInside: workspacePath) else { return nil }
+            return (workspace, workspacePath.count)
+        }
 
-        return matches
-            .sorted { lhs, rhs in
-                if lhs.matchLength == rhs.matchLength {
-                    return lhs.workspace.lastAccessedAt > rhs.workspace.lastAccessedAt
-                }
-                return lhs.matchLength > rhs.matchLength
+        let bestMatch = matches.sorted { lhs, rhs in
+            if lhs.matchLength == rhs.matchLength {
+                return lhs.workspace.lastAccessedAt > rhs.workspace.lastAccessedAt
             }
-            .first?
-            .workspace
+            return lhs.matchLength > rhs.matchLength
+        }.first
+
+        guard let bestMatch else {
+            return nil
+        }
+
+        return bestMatch.workspace
     }
 
     private func focusWorkspaceWindow() {
@@ -333,6 +305,7 @@ struct HostTerminalSessionStack: View {
 final class HostTerminalStateStore: ObservableObject {
     @Published private(set) var sessions: [HostTerminalSession] = []
     @Published private(set) var activeSessionID: UUID?
+    @Published private(set) var sessionPresentation = HostTerminalSessionPresentation()
 
     let surfaceStore = HostTerminalSurfaceStore()
     private var coordinator = HostTerminalSessionCoordinator()
@@ -365,6 +338,7 @@ final class HostTerminalStateStore: ObservableObject {
     private func publishSnapshot() {
         sessions = coordinator.sessions
         activeSessionID = coordinator.activeSessionID
+        sessionPresentation = coordinator.presentation
     }
 }
 

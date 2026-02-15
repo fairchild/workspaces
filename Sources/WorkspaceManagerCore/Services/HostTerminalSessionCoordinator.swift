@@ -67,6 +67,25 @@ public struct HostTerminalSessionActivationResult: Sendable {
     public let created: Bool
 }
 
+public struct HostTerminalSessionPresentation: Sendable, Equatable {
+    public let liveRepoPaths: Set<String>
+    public let activeRepoPath: String?
+    public let hasDefaultHomeSession: Bool
+    public let isDefaultHomeSessionActive: Bool
+
+    public init(
+        liveRepoPaths: Set<String> = [],
+        activeRepoPath: String? = nil,
+        hasDefaultHomeSession: Bool = false,
+        isDefaultHomeSessionActive: Bool = false
+    ) {
+        self.liveRepoPaths = liveRepoPaths
+        self.activeRepoPath = activeRepoPath
+        self.hasDefaultHomeSession = hasDefaultHomeSession
+        self.isDefaultHomeSessionActive = isDefaultHomeSessionActive
+    }
+}
+
 public struct HostTerminalSessionCoordinator: Sendable {
     public private(set) var sessions: [HostTerminalSession]
     public private(set) var activeSessionID: UUID?
@@ -132,5 +151,35 @@ public struct HostTerminalSessionCoordinator: Sendable {
         }
 
         return removedIDs
+    }
+
+    public var presentation: HostTerminalSessionPresentation {
+        let liveRepoPaths = Set<String>(
+            sessions.compactMap { session in
+                guard case .repoPath(let path) = session.key else { return nil }
+                return path
+            }
+        )
+
+        let activeSession = activeSessionID.flatMap { id in
+            sessions.first(where: { $0.id == id })
+        }
+
+        let activeRepoPath: String?
+        if let activeSession, case .repoPath(let path) = activeSession.key {
+            activeRepoPath = path
+        } else {
+            activeRepoPath = nil
+        }
+
+        let hasDefaultHomeSession = sessions.contains(where: { $0.key == .defaultHome })
+        let isDefaultHomeSessionActive = activeSession?.key == .defaultHome
+
+        return HostTerminalSessionPresentation(
+            liveRepoPaths: liveRepoPaths,
+            activeRepoPath: activeRepoPath,
+            hasDefaultHomeSession: hasDefaultHomeSession,
+            isDefaultHomeSessionActive: isDefaultHomeSessionActive
+        )
     }
 }

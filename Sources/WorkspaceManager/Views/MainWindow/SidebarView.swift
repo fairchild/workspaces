@@ -53,6 +53,7 @@ struct SidebarView: View {
                         isActiveSession: isDefaultHostSessionActive
                     )
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
 
@@ -71,7 +72,8 @@ struct SidebarView: View {
                                 hasLiveSession: liveRepoPaths.contains(normalizedRepoPath),
                                 isActiveSession: activeRepoPath == normalizedRepoPath
                             )
-                                .frame(maxWidth: .infinity, alignment: .leading)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
                         .contextMenu {
