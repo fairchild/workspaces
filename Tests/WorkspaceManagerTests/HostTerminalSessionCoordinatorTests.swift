@@ -82,4 +82,45 @@ struct HostTerminalSessionCoordinatorTests {
         #expect(!coordinator.sessions.contains(where: { $0.id == removeRepoSession.id }))
         #expect(coordinator.activeSessionID == keepRepoSession.id)
     }
+
+    @Test("Presentation reports live repo paths and active repo")
+    func presentationReportsLiveRepoState() {
+        var coordinator = HostTerminalSessionCoordinator()
+        _ = coordinator.activate(
+            key: .defaultHome,
+            directory: URL(fileURLWithPath: "/Users/test/code")
+        )
+        let activeRepo = coordinator.activate(
+            key: .repoPath("/Users/test/code/repo-a"),
+            directory: URL(fileURLWithPath: "/Users/test/code/repo-a")
+        ).session
+        _ = coordinator.activate(
+            key: .repoPath("/Users/test/code/repo-b"),
+            directory: URL(fileURLWithPath: "/Users/test/code/repo-b")
+        )
+        _ = coordinator.activate(
+            key: .repoPath("/Users/test/code/repo-a"),
+            directory: URL(fileURLWithPath: "/Users/test/code/repo-a")
+        )
+
+        let presentation = coordinator.presentation
+        #expect(presentation.liveRepoPaths == Set(["/Users/test/code/repo-a", "/Users/test/code/repo-b"]))
+        #expect(presentation.activeRepoPath == activeRepo.directoryPath)
+        #expect(presentation.hasDefaultHomeSession)
+        #expect(!presentation.isDefaultHomeSessionActive)
+    }
+
+    @Test("Presentation reports default home active when selected")
+    func presentationReportsDefaultHomeActive() {
+        var coordinator = HostTerminalSessionCoordinator()
+        _ = coordinator.activate(
+            key: .defaultHome,
+            directory: URL(fileURLWithPath: "/Users/test/code")
+        )
+
+        let presentation = coordinator.presentation
+        #expect(presentation.hasDefaultHomeSession)
+        #expect(presentation.isDefaultHomeSessionActive)
+        #expect(presentation.activeRepoPath == nil)
+    }
 }
