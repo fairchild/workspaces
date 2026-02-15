@@ -64,6 +64,13 @@ This roadmap now follows `/Users/fairchild/code/workspaces/backlog/vz-tahoe-exec
 5. CLI backend-aware routing (`auto`, `--host`, `--vm`) plus VM lifecycle commands.
 6. Tests, docs, fallback hardening, and validation.
 
+### Performance Backlog (Fast-Path Follow-ups)
+
+- [ ] Add production signposts around launch, repo hydration, and repo-click-to-focus latency.
+- [ ] Run Instruments baselines (Time Profiler + SwiftUI + Hangs) and check in a short perf report.
+- [ ] Add optional session/surface cap policy (LRU for inactive repo sessions) if memory pressure appears.
+- [ ] Re-introduce remote URL metadata in a background/idle pipeline (not launch-critical path).
+
 ---
 
 ## Architecture Overview

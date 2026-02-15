@@ -23,6 +23,10 @@ final class HostTerminalSurfaceStore {
         return created
     }
 
+    func terminal(for sessionID: UUID) -> GhosttySurfaceView? {
+        surfaces[sessionID]
+    }
+
     func invalidate(sessionID: UUID) {
         surfaces.removeValue(forKey: sessionID)
     }

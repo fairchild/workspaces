@@ -15,8 +15,12 @@ struct SidebarView: View {
     @Environment(\.workspaceService) private var workspaceService
     let repos: [Repo]
     @Binding var selectedWorkspace: Workspace?
+    let defaultHostPath: String
+    let hasDefaultHostSession: Bool
+    let isDefaultHostSessionActive: Bool
     let liveRepoPaths: Set<String>
     let activeRepoPath: String?
+    let onDefaultHostSelected: () -> Void
     let onRepoSelected: (Repo) -> Void
 
     @State private var isAddingRepo = false
@@ -40,6 +44,18 @@ struct SidebarView: View {
         List(selection: $selectedWorkspace) {
             // Repositories Section
             Section("Repositories") {
+                Button {
+                    onDefaultHostSelected()
+                } label: {
+                    HostTerminalRow(
+                        defaultHostPath: defaultHostPath,
+                        hasLiveSession: hasDefaultHostSession,
+                        isActiveSession: isDefaultHostSessionActive
+                    )
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.plain)
+
                 if repos.isEmpty {
                     Text("No repositories")
                         .foregroundStyle(.secondary)

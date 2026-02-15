@@ -18,6 +18,9 @@ struct ContentView: View {
     @State private var selectedWorkspace: Workspace?
     @State private var isRightPaneVisible = true
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
+    @State private var resolvedDefaultHostDirectory = HostTerminalDefaults.defaultWorkingDirectory()
+        .standardizedFileURL
+        .resolvingSymlinksInPath()
 
     private var liveRepoPaths: Set<String> {
         Set(
@@ -39,13 +42,31 @@ struct ContentView: View {
         return path
     }
 
+    private var hasDefaultHostSession: Bool {
+        hostTerminalState.sessions.contains(where: { $0.key == .defaultHome })
+    }
+
+    private var isDefaultHostSessionActive: Bool {
+        guard let activeSessionID = hostTerminalState.activeSessionID,
+            let session = hostTerminalState.sessions.first(where: { $0.id == activeSessionID })
+        else {
+            return false
+        }
+
+        return session.key == .defaultHome
+    }
+
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             SidebarView(
                 repos: repos,
                 selectedWorkspace: $selectedWorkspace,
+                defaultHostPath: resolvedDefaultHostDirectory.path,
+                hasDefaultHostSession: hasDefaultHostSession,
+                isDefaultHostSessionActive: isDefaultHostSessionActive,
                 liveRepoPaths: liveRepoPaths,
                 activeRepoPath: activeRepoPath,
+                onDefaultHostSelected: handleDefaultHostSelection,
                 onRepoSelected: handleRepoSelection
             )
             .navigationSplitViewColumnWidth(min: 200, ideal: 260, max: 350)
@@ -122,10 +143,27 @@ struct ContentView: View {
         )
         columnVisibility = .all
 
-        requestMainTerminalFocus(targetPath: session.directoryPath)
+        requestMainTerminalFocus(targetSessionID: session.id)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
             Task { @MainActor in
-                requestMainTerminalFocus(targetPath: session.directoryPath)
+                requestMainTerminalFocus(targetSessionID: session.id)
+            }
+        }
+    }
+
+    @MainActor
+    private func handleDefaultHostSelection() {
+        selectedWorkspace = nil
+        let session = activateHostSession(
+            key: .defaultHome,
+            directory: resolvedDefaultHostDirectory
+        )
+        columnVisibility = .all
+
+        requestMainTerminalFocus(targetSessionID: session.id)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            Task { @MainActor in
+                requestMainTerminalFocus(targetSessionID: session.id)
             }
         }
     }
@@ -135,7 +173,7 @@ struct ContentView: View {
         guard !hostTerminalState.hasSessions else { return }
         _ = activateHostSession(
             key: .defaultHome,
-            directory: HostTerminalDefaults.defaultWorkingDirectory()
+            directory: resolvedDefaultHostDirectory
         )
     }
 
@@ -200,48 +238,28 @@ struct ContentView: View {
     }
 
     @MainActor
-    private func requestMainTerminalFocus(targetPath: String? = nil) {
+    private func requestMainTerminalFocus(targetSessionID: UUID? = nil) {
         NSApp.activate(ignoringOtherApps: true)
         let window = NSApp.windows.first(where: \.isVisible) ?? NSApp.windows.first
         window?.makeKeyAndOrderFront(nil)
 
-        if let rootView = window?.contentView {
-            if let targetPath,
-                let terminal = findTerminalView(in: rootView, targetPath: targetPath)
-            {
-                TerminalFocusManager.shared.requestFocus(for: terminal)
-                return
-            }
+        if let targetSessionID,
+            let terminal = hostTerminalState.surfaceStore.terminal(for: targetSessionID)
+        {
+            TerminalFocusManager.shared.requestFocus(for: terminal)
+            return
+        }
 
-            if let terminal = findTerminalView(in: rootView, targetPath: nil) {
-                TerminalFocusManager.shared.requestFocus(for: terminal)
-                return
-            }
+        if let activeSessionID = hostTerminalState.activeSessionID,
+            let terminal = hostTerminalState.surfaceStore.terminal(for: activeSessionID)
+        {
+            TerminalFocusManager.shared.requestFocus(for: terminal)
+            return
         }
 
         if let terminal = TerminalFocusManager.shared.focusedTerminal {
             TerminalFocusManager.shared.requestFocus(for: terminal)
         }
-    }
-
-    private func findTerminalView(in view: NSView, targetPath: String?) -> NSView? {
-        if let terminal = view as? GhosttySurfaceView {
-            if let targetPath {
-                if terminal.workingDirectoryPath == targetPath {
-                    return terminal
-                }
-            } else {
-                return terminal
-            }
-        }
-
-        for child in view.subviews {
-            if let terminal = findTerminalView(in: child, targetPath: targetPath) {
-                return terminal
-            }
-        }
-
-        return nil
     }
 
     private func path(_ path: String, isInside root: String) -> Bool {
