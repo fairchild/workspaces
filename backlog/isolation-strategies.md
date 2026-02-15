@@ -42,7 +42,7 @@ completed: null
 - Open source: https://github.com/apple/containerization
 
 **Requirements**:
-- macOS 26 (Tahoe) — currently in beta
+- macOS 26 (Tahoe) — shipped
 - Apple Silicon only
 - Xcode 26+
 
@@ -109,7 +109,7 @@ container exec my-workspace claude
 **Cons**:
 - Requires macOS 26 (ships Fall 2025)
 - Apple Silicon only
-- Still maturing (v0.6.0)
+- Maturing framework
 
 ---
 

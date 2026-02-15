@@ -1,21 +1,15 @@
 # WorkspaceManager
 
-A native macOS app for managing development workspaces. Create isolated copies of git repositories for parallel feature work with AI coding assistants.
+A native macOS app for managing development workspaces and terminal-first AI coding sessions.
 
 ## Download
 
 **[Download Latest Release](https://github.com/fairchild/workspaces/releases/latest)** (macOS 14.0+)
 
-Or build from source (see below).
-
 ## Requirements
 
 - macOS 14.0 (Sonoma) or later
 - Apple Silicon or Intel Mac
-
-For development:
-- Xcode 15.0+ or Swift 5.10+
-- [mise](https://mise.jdx.dev/) (for Zig toolchain management)
 
 ## Installation
 
@@ -25,36 +19,24 @@ For development:
 2. Open the DMG and drag **Workspaces** to Applications
 3. Launch from Applications (first time: right-click > Open)
 
-### From Source
-
-```bash
-# From the repo root
-./scripts/build-ghosttykit.sh
-swift build -c release
-./scripts/build-release.sh --no-sign
-open build/WorkspaceManager.app
-```
-
 ## Features
 
-- **Three-column layout**: Sidebar, terminal, and detail pane
-- **Repository management**: Add existing git repositories
-- **Workspace creation**: Create isolated copies with separate branches
-- **Integrated terminal**: GhosttyKit (`libghostty`) terminal surface
-- **File browser**: View files and git changes
-- **Lifecycle hooks**: Runs `setup.sh` on creation, `archive.sh` on deletion
+- Three-column layout: sidebar, terminal, and detail pane
+- Host-terminal-first launch behavior with repo/workspace session switching
+- Repository management and workspace creation
+- Integrated GhosttyKit terminal surface
+- File browser and git status view
+- Lifecycle hooks (`setup.sh` / `archive.sh`)
 
 ## Usage
 
-1. Click "Add Repository" to add a git repository
-2. Right-click a repo and select "New Workspace..."
-3. Enter a name - a copy is created in `~/workspaces/{repo}/{name}`
-4. Select the workspace to open a terminal in that directory
-5. Use the right pane to browse files and view git status
+1. Launch app and review repositories in the sidebar
+2. Add repositories manually if needed
+3. Create workspaces from repo actions
+4. Click repo/workspace rows to switch terminal context
+5. Use the right pane for files and git changes
 
 ### CLI Usage
-
-Build and run the CLI target:
 
 ```bash
 swift run WorkspaceManagerCLI help
@@ -70,92 +52,17 @@ swift run WorkspaceManagerCLI open my-repo/feature-auth --cmd "claude"
 
 ## Configuration
 
-Open Settings (`Cmd+,`) to configure:
+Open Settings (`Cmd+,`) to configure workspace root location.
 
-- **Workspaces Root**: Where workspace copies are created (default: `~/workspaces`)
+## Developer Setup and Contributing
 
-## Architecture
+For all development setup, local build/test workflows, contribution guidelines, and project structure, see:
 
-- **WorkspaceManagerCore**: SwiftData models and services (Repo, Workspace, GitService, WorkspaceService)
-- **WorkspaceManager**: SwiftUI views and terminal integration
+- [CONTRIBUTING.md](./CONTRIBUTING.md)
 
-## Tests
+For release/signing/notarization details, see:
 
-```bash
-swift test
-```
-
-## Development
-
-### Daily-Driver Local Checks
-
-Run this sequence before/after larger changes:
-
-```bash
-./scripts/build-ghosttykit.sh
-swift-format lint --strict --recursive Sources/ Tests/
-swift test
-swift build
-```
-
-### Local Install Workflow
-
-Build the latest app and replace your installed copy in `/Applications`:
-
-```bash
-./scripts/install-local.sh
-```
-
-Useful options:
-
-```bash
-./scripts/install-local.sh --no-build --no-open   # Reinstall existing build without relaunch
-./scripts/install-local.sh --signed               # Build with signing config before install
-./scripts/install-local.sh --dest ~/Applications/WorkspaceManager.app
-```
-
-### Project Structure
-
-```
-workspaces/
-  Package.swift              # SPM manifest
-  Sources/
-    WorkspaceManager/        # Main app (SwiftUI + AppKit)
-      App/                   # App entry point
-      Views/                 # SwiftUI views
-      Controllers/           # AppKit controllers
-      Resources/             # Info.plist, assets, privacy manifest
-    WorkspaceManagerCore/    # Core library (models + services)
-      Models/                # SwiftData models
-      Services/              # Business logic
-    WorkspaceManagerCLI/     # CLI entrypoint and command routing
-  Tests/                     # Unit tests
-  scripts/                   # Build and release scripts
-```
-
-### Terminal Integration Notes
-
-For low-level GhosttyKit details (pinning, callbacks, focus/input flow, and safe
-upgrade procedure), see:
-
-- `docs/development/libghostty-integration.md`
-
-### Building for Release
-
-See [RELEASING.md](./RELEASING.md) for the complete release process.
-
-Quick local build:
-```bash
-./scripts/build-ghosttykit.sh       # Build local GhosttyKit.xcframework
-./scripts/build-release.sh --no-sign  # Build without signing
-./scripts/build-release.sh            # Build with signing (requires setup)
-```
-
-### Code Signing Setup
-
-1. Copy `scripts/signing-config.sh.template` to `scripts/signing-config.sh`
-2. Fill in your Apple Developer credentials
-3. Run `./scripts/build-release.sh` to build and sign
+- [RELEASING.md](./RELEASING.md)
 
 ## License
 
