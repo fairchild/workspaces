@@ -68,10 +68,6 @@ struct SidebarView: View {
                                 removeRepo(repo)
                             }
                         }
-                        .onTapGesture(count: 2) {
-                            // Keep repo double-click equivalent to single-click for quick open/focus.
-                            onRepoSelected(repo)
-                        }
                     }
                 }
             }
@@ -225,6 +221,11 @@ struct SidebarView: View {
         }
 
         await MainActor.run {
+            // Re-check against latest model state to avoid async races creating duplicates.
+            guard !repos.contains(where: { normalizePath($0.localURL) == normalizedURLPath }) else {
+                return
+            }
+
             modelContext.insert(repo)
             if !saveModelContext(action: "save repository") {
                 modelContext.rollback()
@@ -387,9 +388,18 @@ struct SidebarView: View {
         }
 
         await MainActor.run {
+            var currentPaths = Set(repos.map { normalizePath($0.localURL) })
+            var insertedAny = false
+
             for repo in importedRepos {
+                let repoPath = normalizePath(repo.localURL)
+                guard !currentPaths.contains(repoPath) else { continue }
                 modelContext.insert(repo)
+                currentPaths.insert(repoPath)
+                insertedAny = true
             }
+
+            guard insertedAny else { return }
 
             if !saveModelContext(action: "auto-import repositories from ~/code") {
                 modelContext.rollback()

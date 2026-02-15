@@ -16,7 +16,7 @@ final class HostTerminalSurfaceStore {
         }
 
         let created = GhosttySurfaceView(
-            workingDirectory: session.directory,
+            workingDirectory: session.directoryURL,
             onProcessExit: onProcessExit
         )
         surfaces[session.id] = created
@@ -141,7 +141,7 @@ struct PersistentHostTerminalContainerView: View {
                     .fontWeight(.semibold)
                     .foregroundStyle(.secondary)
 
-                Text(session.directory.path)
+                Text(session.directoryPath)
                     .font(.system(.caption, design: .monospaced))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
