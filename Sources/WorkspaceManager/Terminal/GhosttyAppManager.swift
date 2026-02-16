@@ -8,7 +8,34 @@ import Foundation
 import GhosttyKit
 
 final class GhosttyAppManager: NSObject {
+    enum SplitActionKind: String {
+        case newSplit = "new_split"
+        case gotoSplit = "goto_split"
+    }
+
+    enum SplitFocusDirection: Int {
+        case previous = 0
+        case next = 1
+        case up = 2
+        case left = 3
+        case down = 4
+        case right = 5
+    }
+
+    struct SplitActionRequest {
+        let kind: SplitActionKind
+        let directionRawValue: Int?
+
+        var focusDirection: SplitFocusDirection? {
+            guard let directionRawValue else { return nil }
+            return SplitFocusDirection(rawValue: directionRawValue)
+        }
+    }
+
     static let shared = GhosttyAppManager()
+    static let splitActionNotification = Notification.Name("WorkspaceManager.Ghostty.SplitActionRequested")
+    static let splitActionKindUserInfoKey = "kind"
+    static let splitActionDirectionUserInfoKey = "directionRawValue"
 
     private(set) var app: ghostty_app_t?
     private var config: ghostty_config_t?
@@ -138,33 +165,32 @@ final class GhosttyAppManager: NSObject {
 
         switch action.tag {
         case GHOSTTY_ACTION_NEW_SPLIT:
-            DispatchQueue.main.async {
-                guard let surface = surfaceView.surface else { return }
-                ghostty_surface_split(surface, action.action.new_split)
-            }
+            let directionRawValue = Int(action.action.new_split.rawValue)
+            postSplitAction(
+                kind: .newSplit,
+                directionRawValue: directionRawValue,
+                sourceSurfaceView: surfaceView
+            )
+            NSLog("[GhosttyAppManager] action=new_split direction=%d", directionRawValue)
             return true
 
         case GHOSTTY_ACTION_GOTO_SPLIT:
-            DispatchQueue.main.async {
-                guard let surface = surfaceView.surface else { return }
-                ghostty_surface_split_focus(surface, action.action.goto_split)
-            }
+            let directionRawValue = Int(action.action.goto_split.rawValue)
+            postSplitAction(
+                kind: .gotoSplit,
+                directionRawValue: directionRawValue,
+                sourceSurfaceView: surfaceView
+            )
+            NSLog("[GhosttyAppManager] action=goto_split direction=%d", directionRawValue)
             return true
 
         case GHOSTTY_ACTION_RESIZE_SPLIT:
-            DispatchQueue.main.async {
-                guard let surface = surfaceView.surface else { return }
-                let resize = action.action.resize_split
-                ghostty_surface_split_resize(surface, resize.direction, resize.amount)
-            }
-            return true
+            NSLog("[GhosttyAppManager] action=resize_split (defer)")
+            return false
 
         case GHOSTTY_ACTION_EQUALIZE_SPLITS:
-            DispatchQueue.main.async {
-                guard let surface = surfaceView.surface else { return }
-                ghostty_surface_split_equalize(surface)
-            }
-            return true
+            NSLog("[GhosttyAppManager] action=equalize_splits (defer)")
+            return false
 
         case GHOSTTY_ACTION_SET_TITLE:
             let title = action.action.set_title.title.flatMap { String(cString: $0) } ?? ""
@@ -182,6 +208,42 @@ final class GhosttyAppManager: NSObject {
 
         default:
             return false
+        }
+    }
+
+    static func splitActionRequest(from notification: Notification) -> SplitActionRequest? {
+        guard let userInfo = notification.userInfo,
+            let kindRawValue = userInfo[splitActionKindUserInfoKey] as? String,
+            let kind = SplitActionKind(rawValue: kindRawValue)
+        else {
+            return nil
+        }
+
+        let directionRawValue = userInfo[splitActionDirectionUserInfoKey] as? Int
+        return SplitActionRequest(
+            kind: kind,
+            directionRawValue: directionRawValue
+        )
+    }
+
+    private static func postSplitAction(
+        kind: SplitActionKind,
+        directionRawValue: Int?,
+        sourceSurfaceView: GhosttySurfaceView
+    ) {
+        DispatchQueue.main.async {
+            var userInfo: [String: Any] = [
+                splitActionKindUserInfoKey: kind.rawValue
+            ]
+            if let directionRawValue {
+                userInfo[splitActionDirectionUserInfoKey] = directionRawValue
+            }
+
+            NotificationCenter.default.post(
+                name: GhosttyAppManager.splitActionNotification,
+                object: sourceSurfaceView,
+                userInfo: userInfo
+            )
         }
     }
 

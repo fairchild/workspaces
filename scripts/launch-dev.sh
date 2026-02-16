@@ -162,6 +162,7 @@ stop_existing_if_requested() {
     log "Stopping any running WorkspaceManager instances..."
     osascript -e 'tell application id "com.cloudcompute.workspaces" to quit' >/dev/null 2>&1 || true
     osascript -e 'tell application "WorkspaceManager" to quit' >/dev/null 2>&1 || true
+    pkill -x "$APP_NAME" >/dev/null 2>&1 || true
     pkill -f "/Applications/WorkspaceManager.app/Contents/MacOS/WorkspaceManager" >/dev/null 2>&1 || true
     pkill -f "$REPO_ROOT/build/WorkspaceManager.app/Contents/MacOS/WorkspaceManager" >/dev/null 2>&1 || true
     pkill -f "$DEBUG_BINARY" >/dev/null 2>&1 || true
@@ -238,6 +239,24 @@ verify_background_process() {
     if ! kill -0 "$APP_PID" 2>/dev/null; then
         dump_recent_log_and_fail "Launch failed during warmup. Last log lines:"
     fi
+
+    local app_command
+    app_command="$(ps -p "$APP_PID" -o command= | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]].*$//')"
+    if [[ "$app_command" != "$DEBUG_BINARY" ]]; then
+        log "Unexpected executable for pid=$APP_PID: $app_command"
+        fail "Launch verification failed: running process is not debug binary"
+    fi
+
+    # Guardrail against stale app confusion: surface any other WorkspaceManager
+    # processes that are not our expected debug binary.
+    local other_instances
+    other_instances="$(ps -axo pid=,comm= | awk -v expected="$DEBUG_BINARY" '$2 ~ /WorkspaceManager$/ && $2 != expected { print $1 " " $2 }')"
+    if [[ -n "$other_instances" ]]; then
+        log "Warning: additional WorkspaceManager processes detected:"
+        while IFS= read -r line; do
+            [[ -n "$line" ]] && log "  - $line"
+        done <<< "$other_instances"
+    fi
 }
 
 launch_background() {
@@ -248,6 +267,7 @@ launch_background() {
 
     verify_background_process
     log "WorkspaceManager running (pid=$APP_PID)"
+    log "Verified executable path: $DEBUG_BINARY"
     log "Log file: $LOG_PATH"
 }
 

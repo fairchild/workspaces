@@ -52,7 +52,7 @@ Behavior:
 
 Registered callbacks in `ghostty_runtime_config_s`:
 - `wakeup_cb`: schedules `ghostty_app_tick` on main queue
-- `action_cb`: currently handles terminal title and pwd updates
+- `action_cb`: handles terminal title/pwd updates and forwards split requests to SwiftUI state
 - `read_clipboard_cb` / `write_clipboard_cb`
 - `confirm_read_clipboard_cb`
 - `close_surface_cb`
@@ -66,6 +66,35 @@ Registered callbacks in `ghostty_runtime_config_s`:
 - maintains NSTextInputClient path for IME/dead key compatibility
 - updates content scale + framebuffer size on backing/frame changes
 - installs minimal local monitor for `.leftMouseDown` and command `.keyUp`
+
+### Shortcut + split contract (required behavior)
+
+This project depends on the following keyboard behavior:
+
+- `Cmd+B`: toggles the left sidebar visibility.
+- `Cmd+D`: when a terminal surface is focused, creates a split to the right.
+
+The `Cmd+D` path is runtime-action-driven:
+
+1. `GhosttySurfaceView` routes non-app-owned shortcuts to Ghostty binding handling.
+2. `libghostty` dispatches `GHOSTTY_ACTION_NEW_SPLIT` through `ghostty_runtime_action_cb`.
+3. `GhosttyAppManager.action(...)` posts a split action notification and returns `true`.
+4. The app then materializes the split in UI state (`ContentView` / `HostTerminalStateStore`).
+
+Important: returning `false` for `GHOSTTY_ACTION_NEW_SPLIT` means "not performed" and
+no split will appear even if the key event reached Ghostty.
+
+`performKeyEquivalent` integration rule:
+- For key-equivalent checks, call `ghostty_surface_key_is_binding(...)` with event text populated (`keyEvent.text`).
+- Preserve AppKit replay semantics (`performKeyEquivalent` + `doCommand`) so command/control shortcuts that don't map to app menus can still flow to Ghostty encoding paths.
+- Apply app-vs-terminal ownership via policy (`ShortcutRoutingPolicy`) rather than per-shortcut conditionals.
+
+Current parity gap:
+- `GHOSTTY_ACTION_NEW_SPLIT` is routed.
+- `GHOSTTY_ACTION_GOTO_SPLIT` is routed for the current two-pane horizontal split model.
+- `resize_split` and `equalize_splits` are not yet mapped to app-owned split tree behavior.
+
+See `/Users/fairchild/code/workspaces/docs/development/shortcut-routing.md` for the full routing model.
 
 ### Focus model
 
@@ -115,6 +144,8 @@ Treat both as watch items for future Ghostty pin updates.
    - terminal appears for selected workspace
    - typing, enter, backspace, arrows
    - option/command combinations
+   - `Cmd+B` toggles sidebar
+   - `Cmd+D` creates visible right split
    - copy/paste
    - restart button recreates terminal
    - click away/back restores focus
@@ -130,3 +161,23 @@ Both workflows build GhosttyKit before lint/build/test:
 
 If CI fails in Ghostty build step, debug `scripts/build-ghosttykit.sh` first.
 
+## Agent self-verification runbook
+
+Use this exact loop in future sessions to avoid stale-build confusion:
+
+1. Rebuild pinned GhosttyKit:
+   - `./scripts/build-ghosttykit.sh`
+2. Build app:
+   - `swift build`
+3. Launch debug app (never `/Applications` during verification):
+   - `./scripts/launch-dev.sh --no-build`
+4. Verify process path points to `.build/.../WorkspaceManager`:
+   - `ps aux | rg '/Users/fairchild/code/workspaces/.build/arm64-apple-macosx/debug/WorkspaceManager'`
+5. Exercise shortcuts:
+   - `Cmd+B` collapse/restore sidebar
+   - `Cmd+D` create split pane
+6. Verify split runtime path in logs:
+   - `tail -n 80 .dev-data/logs/launch-dev-*.log`
+   - Expect `"[GhosttyAppManager] action=new_split direction="`
+
+If shortcut behavior regresses, first confirm step 4 before changing code.
