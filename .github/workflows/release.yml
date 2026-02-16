@@ -2,6 +2,9 @@ name: Release
 
 on:
   workflow_dispatch:
+  push:
+    tags:
+      - "workspaces-v*"
 
 concurrency:
   group: release-${{ github.ref }}
@@ -17,6 +20,26 @@ jobs:
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Enforce release source branch policy
+        run: |
+          set -euo pipefail
+          git fetch origin main --no-tags
+
+          # For manual runs, only allow the workflow to execute from main.
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]] && [[ "${GITHUB_REF_NAME}" != "main" ]]; then
+            echo "::error::Manual releases must be started from main (current: ${GITHUB_REF_NAME})"
+            exit 1
+          fi
+
+          # For both manual and tag-triggered runs, require the target commit to
+          # be reachable from origin/main.
+          if ! git merge-base --is-ancestor "${GITHUB_SHA}" "origin/main"; then
+            echo "::error::Release commit ${GITHUB_SHA} is not on main branch history"
+            exit 1
+          fi
 
       - name: Validate release secrets
         env:
@@ -61,6 +84,11 @@ jobs:
           CERT_PATH="$RUNNER_TEMP/developer-id-application.p12"
           KEYCHAIN_PATH="$RUNNER_TEMP/workspaces-release.keychain-db"
           KEYCHAIN_PASSWORD="$(uuidgen)"
+          ORIGINAL_DEFAULT_KEYCHAIN="$(security default-keychain -d user | tr -d '"')"
+          ORIGINAL_KEYCHAIN_LIST="$(
+            security list-keychains -d user \
+            | sed -E 's/^[[:space:]]*"//; s/"$//'
+          )"
 
           if ! (echo "$APPLE_DEVELOPER_ID_CERT_BASE64" | base64 --decode > "$CERT_PATH" 2>/dev/null); then
             echo "$APPLE_DEVELOPER_ID_CERT_BASE64" | base64 -D > "$CERT_PATH"
@@ -76,8 +104,6 @@ jobs:
             -T /usr/bin/security \
             -T /usr/bin/xcrun
 
-          security list-keychains -d user -s "$KEYCHAIN_PATH" ~/Library/Keychains/login.keychain-db
-          security default-keychain -d user -s "$KEYCHAIN_PATH"
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 
           SIGNING_IDENTITY="$(
@@ -95,26 +121,25 @@ jobs:
           echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
           echo "KEYCHAIN_PASSWORD=$KEYCHAIN_PASSWORD" >> "$GITHUB_ENV"
           echo "SIGNING_IDENTITY=$SIGNING_IDENTITY" >> "$GITHUB_ENV"
+          echo "CODESIGN_KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
+          echo "ORIGINAL_DEFAULT_KEYCHAIN=$ORIGINAL_DEFAULT_KEYCHAIN" >> "$GITHUB_ENV"
+          {
+            echo "ORIGINAL_KEYCHAIN_LIST<<EOF"
+            echo "$ORIGINAL_KEYCHAIN_LIST"
+            echo "EOF"
+          } >> "$GITHUB_ENV"
 
-      - name: Generate signing config
+      - name: Export signing environment
         env:
           APPLE_ID: ${{ vars.APPLE_ID != '' && vars.APPLE_ID || secrets.APPLE_ID }}
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
           APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID != '' && vars.APPLE_TEAM_ID || secrets.APPLE_TEAM_ID }}
-          SIGNING_IDENTITY: ${{ env.SIGNING_IDENTITY }}
         run: |
           set -euo pipefail
-
-          cat > scripts/signing-config.sh <<EOF
-          #!/bin/bash
-          export TEAM_ID="$APPLE_TEAM_ID"
-          export BUNDLE_ID="com.cloudcompute.workspaces"
-          export SIGNING_IDENTITY="$SIGNING_IDENTITY"
-          export APPLE_ID="$APPLE_ID"
-          export APP_PASSWORD="$APPLE_APP_PASSWORD"
-          EOF
-
-          chmod 700 scripts/signing-config.sh
+          echo "TEAM_ID=$APPLE_TEAM_ID" >> "$GITHUB_ENV"
+          echo "APPLE_ID=$APPLE_ID" >> "$GITHUB_ENV"
+          echo "APP_PASSWORD=$APPLE_APP_PASSWORD" >> "$GITHUB_ENV"
+          echo "BUNDLE_ID=com.cloudcompute.workspaces" >> "$GITHUB_ENV"
 
       - name: Build signed app
         run: ./scripts/build-release.sh
@@ -129,7 +154,11 @@ jobs:
 
           VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" build/WorkspaceManager.app/Contents/Info.plist)
           BUILD=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" build/WorkspaceManager.app/Contents/Info.plist)
-          TAG="workspaces-v${VERSION}-main.${GITHUB_RUN_NUMBER}"
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            TAG="${GITHUB_REF_NAME}"
+          else
+            TAG="workspaces-v${VERSION}-main.${GITHUB_RUN_NUMBER}"
+          fi
           DMG_PATH="build/WorkspaceManager-${VERSION}.dmg"
 
           if [[ ! -f "$DMG_PATH" ]]; then
@@ -146,7 +175,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
-          name: Workspaces v${{ steps.meta.outputs.version }} (main.${{ github.run_number }})
+          name: Workspaces v${{ steps.meta.outputs.version }} (${{ steps.meta.outputs.tag }})
           target_commitish: ${{ github.sha }}
           files: |
             ${{ steps.meta.outputs.dmg_path }}
@@ -158,6 +187,16 @@ jobs:
         if: always()
         run: |
           set -euo pipefail
+          # Restore prior keychain search/default state on shared self-hosted machines.
+          if [[ -n "${ORIGINAL_KEYCHAIN_LIST:-}" ]]; then
+            mapfile -t keychains < <(printf '%s\n' "${ORIGINAL_KEYCHAIN_LIST}" | sed '/^[[:space:]]*$/d')
+            if (( ${#keychains[@]} > 0 )); then
+              security list-keychains -d user -s "${keychains[@]}" || true
+            fi
+          fi
+          if [[ -n "${ORIGINAL_DEFAULT_KEYCHAIN:-}" ]]; then
+            security default-keychain -d user -s "${ORIGINAL_DEFAULT_KEYCHAIN}" || true
+          fi
           if [[ -n "${KEYCHAIN_PATH:-}" ]] && [[ -f "${KEYCHAIN_PATH}" ]]; then
             security delete-keychain "$KEYCHAIN_PATH" || true
           fi

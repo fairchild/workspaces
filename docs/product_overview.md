@@ -23,6 +23,7 @@ Think of it as **a terminal session manager for your code portfolio, with worksp
 - **Workspace Creation**: Create isolated workspace copies per repo
 - **Lifecycle Hooks**: `setup.sh` runs after creation, `archive.sh` runs on close
 - **Embedded Terminal**: GhosttyKit (`libghostty`) terminal as the primary interface
+- **Ghostty-First Shortcut Routing**: Terminal keybindings should default to Ghostty behavior; app-level shortcuts are for non-overlapping chrome actions
 - **File/Changes Pane**: Collapsible right pane showing file tree and git status
 - **Configurable Location**: Choose where workspaces are stored (default: `~/workspaces`)
 
@@ -67,13 +68,25 @@ Developers who regularly use Claude Code, Cursor, or similar AI coding tools. Th
 
 1. **Terminal-First**: The embedded terminal IS the experience. This is not a code editor — use your preferred external editor alongside.
 
-2. **Native Mac Feel**: SwiftUI + AppKit patterns. Three-column layout like Finder/Mail. Keyboard shortcuts that feel familiar.
+2. **Ghostty-First Input Model**: Workspaces wraps a fully functional embedded Ghostty experience. Shortcut handling defaults to Ghostty unless a shortcut is explicitly reserved for app chrome.
 
-3. **Non-Destructive**: Source repos are never modified. Workspaces are copies. Deleting a workspace doesn't touch the original.
+3. **Native Mac Feel**: SwiftUI + AppKit patterns. Three-column layout like Finder/Mail. Keyboard shortcuts that feel familiar.
 
-4. **Offline-First**: Works without internet. Git remotes are optional. All operations are local.
+4. **Minimal Wrapper Chrome**: The app adds portfolio/session management and observability around the terminal without redefining terminal semantics.
 
-5. **Minimal Chrome**: The terminal gets maximum screen real estate. Right pane collapses. Sidebar can hide.
+5. **Non-Destructive**: Source repos are never modified. Workspaces are copies. Deleting a workspace doesn't touch the original.
+
+6. **Offline-First**: Works without internet. Git remotes are optional. All operations are local.
+
+7. **Minimal Chrome**: The terminal gets maximum screen real estate. Right pane collapses. Sidebar can hide.
+
+## Shortcut Routing Policy (Product Requirement)
+
+- Default route: deliver terminal shortcuts to embedded Ghostty.
+- App route: only non-overlapping app chrome controls (for example `Cmd+B` sidebar toggle).
+- Conflict handling: if both app and Ghostty claim a shortcut, expose an explicit user override so the user chooses the route.
+- Future settings requirement: per-shortcut routing control (`App` vs `Ghostty`) in preferences.
+- Implementation guardrail: avoid one-off per-key hardcoding in terminal event handlers; route by policy and binding detection.
 
 ## What This Is NOT
 

@@ -10,6 +10,7 @@ Workspaces is a Mac app for managing isolated AI coding sessions. Users add git 
 - Repositories are auto-discovered from `~/code` (non-recursive) on first load, and can still be managed manually.
 - Sidebar repo/workspace clicks open or resume persistent host terminal sessions for those directories.
 - Sidebar shows live-session state so users can see which repos already have an active terminal.
+- Shortcut policy direction: Ghostty bindings should flow through by default; app-specific shortcuts should be limited to wrapper chrome.
 
 ---
 
@@ -49,7 +50,7 @@ sequenceDiagram
 ┌──────────────────────────────────────────────────────────────────────────┐
 │  Workspaces                                              [−] [□] [×]     │
 ├────────────────┬─────────────────────────────────────────┬───────────────┤
-│                │                                         │ [Files][∆ 3] │
+│                │                                         │ [Files][∆ 3]  │
 │ M my-api    ⋯ +│  $ claude                               │───────────────│
 │   ↳ feature-auth│  > Analyzing codebase...               │ 📁 src/       │
 │     main · 2m  │  > Found 47 files                       │   📄 index.ts │
@@ -366,3 +367,62 @@ sequenceDiagram
 2. **Review session indicators** — Sidebar shows which repos have live terminals.
 3. **Click Host Portfolio** — Main terminal switches back to the default host portfolio session.
 4. **Resume prior context** — Existing host prompt/history is still there, ready for input.
+
+---
+
+## Story 7: Ghostty Shortcut Parity With App Chrome Routing
+
+**As a** terminal-first developer already fluent in Ghostty
+**I want to** keep expected Ghostty keybindings inside embedded terminals
+**So that** Workspaces feels like Ghostty with management chrome, not a different terminal
+
+### Flow Diagram
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant Keyboard
+    participant Router as Shortcut Router
+    participant AppChrome as Workspaces Chrome
+    participant Ghostty as Embedded Ghostty
+
+    User->>Keyboard: Presses shortcut
+    Keyboard->>Router: Key event
+    alt Shortcut reserved for app chrome (non-overlapping)
+        Router->>AppChrome: Execute app action (example: Cmd+B)
+        AppChrome-->>User: Sidebar toggles
+    else Ghostty shortcut or terminal binding
+        Router->>Ghostty: Pass through key event
+        Ghostty-->>User: Expected Ghostty behavior
+    end
+```
+
+### ASCII Wireframe
+
+```
+┌───────────────────────────────────────────────────────┐
+│ Wrapper Chrome                                        │
+│  Cmd+B → Toggle Sidebar (app-owned)                   │
+├───────────────────────────────────────────────────────┤
+│ Embedded Ghostty Surface                              │
+│  Cmd+D / split bindings / navigation / copy modes     │
+│  should behave the same as Ghostty users expect       │
+│                                                       │
+│  $ _                                                  │
+└───────────────────────────────────────────────────────┘
+```
+
+### Steps
+
+1. **User presses a shortcut** — input is evaluated by routing policy.
+2. **Non-overlapping app shortcut** — app chrome action executes (for example, `Cmd+B`).
+3. **Terminal shortcut** — event passes to Ghostty without app reinterpretation.
+4. **Result matches expectation** — Ghostty users get familiar behavior in embedded terminal.
+
+### Acceptance Criteria
+
+1. Workspaces defines and documents a default-first routing policy: Ghostty gets terminal shortcuts by default.
+2. App-level shortcuts are explicitly scoped to wrapper chrome behaviors only.
+3. Shortcut collisions are treated as policy decisions, not hardcoded one-off exceptions.
+4. Product backlog includes user-configurable routing overrides (`App` vs `Ghostty`) for conflicting shortcuts.
+5. Terminal shortcut handling avoids single-shortcut special cases (for example explicit `Cmd+D` intercepts) in favor of binding-based routing.

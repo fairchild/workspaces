@@ -39,8 +39,10 @@ BUILD_DIR="$PROJECT_DIR/build"
 APP_NAME="WorkspaceManager"
 APP_BUNDLE="$BUILD_DIR/$APP_NAME.app"
 
-# Source signing config if it exists
-SIGNING_CONFIG="$SCRIPT_DIR/signing-config.sh"
+# Source signing config if it exists. Allow callers (CI) to override this path.
+SIGNING_CONFIG="${SIGNING_CONFIG:-$SCRIPT_DIR/signing-config.sh}"
+# Optional: explicit keychain for codesign lookup (useful on self-hosted runners).
+CODESIGN_KEYCHAIN_PATH="${CODESIGN_KEYCHAIN_PATH:-}"
 SIGN_APP=true
 
 # ============================================================================
@@ -84,6 +86,30 @@ log_error() {
     echo -e "${RED}✗${NC} $1"
 }
 
+codesign_with_identity() {
+    local target="$1"
+    shift
+
+    local -a cmd=(
+        codesign
+        --sign "$SIGNING_IDENTITY"
+        --options runtime
+        --timestamp
+        --force
+    )
+
+    if [[ -n "$CODESIGN_KEYCHAIN_PATH" ]]; then
+        cmd+=(--keychain "$CODESIGN_KEYCHAIN_PATH")
+    fi
+
+    if (( $# > 0 )); then
+        cmd+=("$@")
+    fi
+
+    cmd+=("$target")
+    "${cmd[@]}"
+}
+
 # ============================================================================
 # Pre-flight Checks
 # ============================================================================
@@ -101,7 +127,9 @@ log_success "Package.swift found"
 if [[ "$SIGN_APP" == true ]]; then
     if [[ -f "$SIGNING_CONFIG" ]]; then
         source "$SIGNING_CONFIG"
-        log_success "Loaded signing configuration"
+        log_success "Loaded signing configuration from $SIGNING_CONFIG"
+    elif [[ -n "${SIGNING_IDENTITY:-}" ]]; then
+        log_success "Using SIGNING_IDENTITY from environment"
     else
         log_warning "signing-config.sh not found - building without code signing"
         log_warning "Copy signing-config.sh.template and fill in your credentials to enable signing"
@@ -216,11 +244,7 @@ if [[ "$SIGN_APP" == true ]] && [[ -n "$SIGNING_IDENTITY" ]]; then
     # Sign embedded frameworks first (if any)
     if [[ -d "$APP_BUNDLE/Contents/Frameworks" ]]; then
         for framework in "$APP_BUNDLE/Contents/Frameworks"/*; do
-            codesign --sign "$SIGNING_IDENTITY" \
-                     --options runtime \
-                     --timestamp \
-                     --force \
-                     "$framework"
+            codesign_with_identity "$framework"
         done
         log_success "Signed embedded frameworks"
     fi
@@ -228,19 +252,10 @@ if [[ "$SIGN_APP" == true ]] && [[ -n "$SIGNING_IDENTITY" ]]; then
     # Sign the main app bundle with entitlements
     ENTITLEMENTS="$PROJECT_DIR/WorkspaceManager.entitlements"
     if [[ -f "$ENTITLEMENTS" ]]; then
-        codesign --sign "$SIGNING_IDENTITY" \
-                 --options runtime \
-                 --timestamp \
-                 --force \
-                 --entitlements "$ENTITLEMENTS" \
-                 "$APP_BUNDLE"
+        codesign_with_identity "$APP_BUNDLE" --entitlements "$ENTITLEMENTS"
         log_success "Signed app bundle with entitlements"
     else
-        codesign --sign "$SIGNING_IDENTITY" \
-                 --options runtime \
-                 --timestamp \
-                 --force \
-                 "$APP_BUNDLE"
+        codesign_with_identity "$APP_BUNDLE"
         log_success "Signed app bundle"
     fi
 
