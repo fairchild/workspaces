@@ -8,9 +8,34 @@ import Foundation
 import GhosttyKit
 
 final class GhosttyAppManager: NSObject {
+    enum SplitActionKind: String {
+        case newSplit = "new_split"
+        case gotoSplit = "goto_split"
+    }
+
+    enum SplitFocusDirection: Int {
+        case previous = 0
+        case next = 1
+        case up = 2
+        case left = 3
+        case down = 4
+        case right = 5
+    }
+
+    struct SplitActionRequest {
+        let kind: SplitActionKind
+        let directionRawValue: Int?
+
+        var focusDirection: SplitFocusDirection? {
+            guard let directionRawValue else { return nil }
+            return SplitFocusDirection(rawValue: directionRawValue)
+        }
+    }
+
     static let shared = GhosttyAppManager()
-    static let splitRequestNotification = Notification.Name("WorkspaceManager.Ghostty.NewSplitRequested")
-    static let splitRequestDirectionUserInfoKey = "directionRawValue"
+    static let splitActionNotification = Notification.Name("WorkspaceManager.Ghostty.SplitActionRequested")
+    static let splitActionKindUserInfoKey = "kind"
+    static let splitActionDirectionUserInfoKey = "directionRawValue"
 
     private(set) var app: ghostty_app_t?
     private var config: ghostty_config_t?
@@ -141,19 +166,23 @@ final class GhosttyAppManager: NSObject {
         switch action.tag {
         case GHOSTTY_ACTION_NEW_SPLIT:
             let directionRawValue = Int(action.action.new_split.rawValue)
-            DispatchQueue.main.async {
-                NotificationCenter.default.post(
-                    name: GhosttyAppManager.splitRequestNotification,
-                    object: surfaceView,
-                    userInfo: [GhosttyAppManager.splitRequestDirectionUserInfoKey: directionRawValue]
-                )
-            }
+            postSplitAction(
+                kind: .newSplit,
+                directionRawValue: directionRawValue,
+                sourceSurfaceView: surfaceView
+            )
             NSLog("[GhosttyAppManager] action=new_split direction=%d", directionRawValue)
             return true
 
         case GHOSTTY_ACTION_GOTO_SPLIT:
-            NSLog("[GhosttyAppManager] action=goto_split (defer)")
-            return false
+            let directionRawValue = Int(action.action.goto_split.rawValue)
+            postSplitAction(
+                kind: .gotoSplit,
+                directionRawValue: directionRawValue,
+                sourceSurfaceView: surfaceView
+            )
+            NSLog("[GhosttyAppManager] action=goto_split direction=%d", directionRawValue)
+            return true
 
         case GHOSTTY_ACTION_RESIZE_SPLIT:
             NSLog("[GhosttyAppManager] action=resize_split (defer)")
@@ -179,6 +208,42 @@ final class GhosttyAppManager: NSObject {
 
         default:
             return false
+        }
+    }
+
+    static func splitActionRequest(from notification: Notification) -> SplitActionRequest? {
+        guard let userInfo = notification.userInfo,
+            let kindRawValue = userInfo[splitActionKindUserInfoKey] as? String,
+            let kind = SplitActionKind(rawValue: kindRawValue)
+        else {
+            return nil
+        }
+
+        let directionRawValue = userInfo[splitActionDirectionUserInfoKey] as? Int
+        return SplitActionRequest(
+            kind: kind,
+            directionRawValue: directionRawValue
+        )
+    }
+
+    private static func postSplitAction(
+        kind: SplitActionKind,
+        directionRawValue: Int?,
+        sourceSurfaceView: GhosttySurfaceView
+    ) {
+        DispatchQueue.main.async {
+            var userInfo: [String: Any] = [
+                splitActionKindUserInfoKey: kind.rawValue
+            ]
+            if let directionRawValue {
+                userInfo[splitActionDirectionUserInfoKey] = directionRawValue
+            }
+
+            NotificationCenter.default.post(
+                name: GhosttyAppManager.splitActionNotification,
+                object: sourceSurfaceView,
+                userInfo: userInfo
+            )
         }
     }
 

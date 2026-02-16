@@ -19,6 +19,7 @@ When changing terminal/keyboard/sidebar behavior, use this loop so future sessio
 
 Canonical reference:
 - `/Users/fairchild/code/workspaces/docs/development/libghostty-integration.md` ("Shortcut + split contract" and "Agent self-verification runbook")
+- `/Users/fairchild/code/workspaces/docs/development/shortcut-routing.md` ("Shortcut Routing Architecture")
 
 ## Commit Hygiene
 
