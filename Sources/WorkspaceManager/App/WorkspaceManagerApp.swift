@@ -15,6 +15,7 @@ struct WorkspaceManagerApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @FocusedValue(\.newWorkspaceAction) private var newWorkspaceAction
     @FocusedValue(\.toggleSidebarAction) private var toggleSidebarAction
+    @FocusedValue(\.splitTerminalAction) private var splitTerminalAction
 
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([Repo.self, Workspace.self])
@@ -59,6 +60,11 @@ struct WorkspaceManagerApp: App {
                     toggleSidebarAction?()
                 }
                 .keyboardShortcut("b", modifiers: [.command])
+
+                Button("Split Terminal") {
+                    splitTerminalAction?()
+                }
+                .keyboardShortcut("d", modifiers: [.command])
             }
 
             SidebarCommands()
@@ -318,6 +324,10 @@ private struct ToggleSidebarActionKey: FocusedValueKey {
     typealias Value = @MainActor () -> Void
 }
 
+private struct SplitTerminalActionKey: FocusedValueKey {
+    typealias Value = @MainActor () -> Void
+}
+
 extension FocusedValues {
     var newWorkspaceAction: (@MainActor () -> Void)? {
         get { self[NewWorkspaceActionKey.self] }
@@ -327,5 +337,10 @@ extension FocusedValues {
     var toggleSidebarAction: (@MainActor () -> Void)? {
         get { self[ToggleSidebarActionKey.self] }
         set { self[ToggleSidebarActionKey.self] = newValue }
+    }
+
+    var splitTerminalAction: (@MainActor () -> Void)? {
+        get { self[SplitTerminalActionKey.self] }
+        set { self[SplitTerminalActionKey.self] = newValue }
     }
 }

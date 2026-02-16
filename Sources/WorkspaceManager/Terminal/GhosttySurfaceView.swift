@@ -124,12 +124,35 @@ final class GhosttySurfaceView: NSView, NSTextInputClient {
         }
     }
 
+    @MainActor
+    func splitRight() {
+        guard let surface else { return }
+        let splitAction = "new_split:right"
+        let dispatched = splitAction.withCString { pointer in
+            ghostty_surface_binding_action(surface, pointer, UInt(splitAction.utf8.count))
+        }
+
+        if !dispatched {
+            ghostty_surface_split(surface, GHOSTTY_SPLIT_DIRECTION_RIGHT)
+        }
+
+        ghostty_surface_refresh(surface)
+        if let app = GhosttyAppManager.shared.app {
+            ghostty_app_tick(app)
+        }
+
+        NSLog(
+            "[GhosttySurfaceView] splitRight dispatched=%@",
+            dispatched ? "binding_action" : "surface_split"
+        )
+    }
+
     // MARK: - Local event monitor
 
     private func setupEventMonitor() {
         guard eventMonitor == nil else { return }
 
-        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyUp, .leftMouseDown]) { [weak self] event in
+        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp, .leftMouseDown]) { [weak self] event in
             self?.handleLocalEvent(event)
         }
     }
@@ -158,6 +181,17 @@ final class GhosttySurfaceView: NSView, NSTextInputClient {
                 window.makeFirstResponder(self)
             }
             return event
+
+        case .keyDown:
+            guard focused else { return event }
+
+            let normalizedFlags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            let isCommandD = normalizedFlags == [.command]
+                && event.charactersIgnoringModifiers?.lowercased() == "d"
+            guard isCommandD else { return event }
+
+            splitRight()
+            return nil
 
         case .keyUp:
             guard focused, event.modifierFlags.contains(.command) else {
@@ -291,6 +325,34 @@ final class GhosttySurfaceView: NSView, NSTextInputClient {
     }
 
     // MARK: - Keyboard input
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        // Ensure Cmd+D always reaches the terminal split action when the
+        // Ghostty surface is focused, even if AppKit key-equivalent routing
+        // would otherwise consume it first.
+        guard focused || window?.firstResponder === self else {
+            return super.performKeyEquivalent(with: event)
+        }
+
+        guard event.type == .keyDown else {
+            return super.performKeyEquivalent(with: event)
+        }
+
+        let normalizedFlags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        let isCommandD = normalizedFlags == [.command]
+            && event.charactersIgnoringModifiers?.lowercased() == "d"
+
+        guard isCommandD else {
+            return super.performKeyEquivalent(with: event)
+        }
+
+        guard let surface else {
+            return false
+        }
+
+        ghostty_surface_split(surface, GHOSTTY_SPLIT_DIRECTION_RIGHT)
+        return true
+    }
 
     override func keyDown(with event: NSEvent) {
         guard let surface else {
