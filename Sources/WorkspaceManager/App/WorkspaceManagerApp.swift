@@ -5,6 +5,7 @@
 //  Main entry point - SwiftUI lifecycle with AppKit hooks for window management
 //
 
+import Foundation
 import SwiftData
 import SwiftUI
 import WorkspaceManagerCore
@@ -13,14 +14,15 @@ import WorkspaceManagerCore
 struct WorkspaceManagerApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @FocusedValue(\.newWorkspaceAction) private var newWorkspaceAction
+    @FocusedValue(\.toggleSidebarAction) private var toggleSidebarAction
 
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([Repo.self, Workspace.self])
         let launchEnvironment = ProcessInfo.processInfo.environment
         let shouldUseInMemoryStore = launchEnvironment["WORKSPACES_UI_FIXTURE"] == "1"
-        let modelConfiguration = ModelConfiguration(
+        let modelConfiguration = resolvedModelConfiguration(
             schema: schema,
-            isStoredInMemoryOnly: shouldUseInMemoryStore
+            launchEnvironment: launchEnvironment
         )
 
         do {
@@ -52,6 +54,11 @@ struct WorkspaceManagerApp: App {
                     newWorkspaceAction?()
                 }
                 .keyboardShortcut("t", modifiers: [.command, .shift])
+
+                Button("Toggle Sidebar") {
+                    toggleSidebarAction?()
+                }
+                .keyboardShortcut("b", modifiers: [.command])
             }
 
             SidebarCommands()
@@ -61,6 +68,103 @@ struct WorkspaceManagerApp: App {
             SettingsView()
         }
     }
+}
+
+private func resolvedModelConfiguration(
+    schema: Schema,
+    launchEnvironment: [String: String]
+) -> ModelConfiguration {
+    let shouldUseInMemoryStore = launchEnvironment["WORKSPACES_UI_FIXTURE"] == "1"
+    if shouldUseInMemoryStore {
+        return ModelConfiguration(
+            schema: schema,
+            isStoredInMemoryOnly: true
+        )
+    }
+
+    if let requestedDataDirectory = launchEnvironment["WORKSPACES_DATA_DIR"]?
+        .trimmingCharacters(in: .whitespacesAndNewlines),
+        !requestedDataDirectory.isEmpty
+    {
+        let expandedPath = (requestedDataDirectory as NSString).expandingTildeInPath
+        let requestedURL = URL(fileURLWithPath: expandedPath, isDirectory: true)
+        do {
+            return try persistentModelConfiguration(schema: schema, storeDirectory: requestedURL)
+        } catch {
+            NSLog(
+                "[ModelStore] Failed to use WORKSPACES_DATA_DIR '%@': %@",
+                requestedURL.path,
+                String(describing: error)
+            )
+        }
+    }
+
+    do {
+        let appSupportDirectory = try defaultModelStoreDirectory()
+        return try persistentModelConfiguration(schema: schema, storeDirectory: appSupportDirectory)
+    } catch {
+        let fallbackDirectory = URL(
+            fileURLWithPath: FileManager.default.currentDirectoryPath,
+            isDirectory: true
+        )
+        .appendingPathComponent(".workspacemanager-data", isDirectory: true)
+        NSLog(
+            "[ModelStore] Falling back to workspace-local store (%@): %@",
+            fallbackDirectory.path,
+            String(describing: error)
+        )
+
+        do {
+            return try persistentModelConfiguration(schema: schema, storeDirectory: fallbackDirectory)
+        } catch {
+            NSLog(
+                "[ModelStore] Falling back to in-memory store: %@",
+                String(describing: error)
+            )
+            return ModelConfiguration(
+                schema: schema,
+                isStoredInMemoryOnly: true
+            )
+        }
+    }
+}
+
+private func defaultModelStoreDirectory() throws -> URL {
+    let appSupportDirectory = try FileManager.default.url(
+        for: .applicationSupportDirectory,
+        in: .userDomainMask,
+        appropriateFor: nil,
+        create: true
+    )
+    let modelDirectory = appSupportDirectory.appendingPathComponent("WorkspaceManager", isDirectory: true)
+    try ensureWritableDirectory(at: modelDirectory)
+    return modelDirectory
+}
+
+private func persistentModelConfiguration(
+    schema: Schema,
+    storeDirectory: URL
+) throws -> ModelConfiguration {
+    try ensureWritableDirectory(at: storeDirectory)
+    let storeURL = storeDirectory.appendingPathComponent("default.store", isDirectory: false)
+    return ModelConfiguration(
+        schema: schema,
+        url: storeURL
+    )
+}
+
+private func ensureWritableDirectory(at directory: URL) throws {
+    try FileManager.default.createDirectory(
+        at: directory,
+        withIntermediateDirectories: true
+    )
+
+    let probeURL = directory.appendingPathComponent(
+        ".write-probe-\(UUID().uuidString)",
+        isDirectory: false
+    )
+    try Data("ok".utf8).write(to: probeURL, options: .atomic)
+    try FileManager.default.removeItem(at: probeURL)
 }
 
 private func seedUIFixtureDataIfNeeded(in context: ModelContext) {
@@ -210,9 +314,18 @@ private struct NewWorkspaceActionKey: FocusedValueKey {
     typealias Value = @MainActor () -> Void
 }
 
+private struct ToggleSidebarActionKey: FocusedValueKey {
+    typealias Value = @MainActor () -> Void
+}
+
 extension FocusedValues {
     var newWorkspaceAction: (@MainActor () -> Void)? {
         get { self[NewWorkspaceActionKey.self] }
         set { self[NewWorkspaceActionKey.self] = newValue }
+    }
+
+    var toggleSidebarAction: (@MainActor () -> Void)? {
+        get { self[ToggleSidebarActionKey.self] }
+        set { self[ToggleSidebarActionKey.self] = newValue }
     }
 }

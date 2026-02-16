@@ -83,6 +83,7 @@ struct ContentView: View {
             guard let selectedWorkspace else { return }
             handleWorkspaceSelection(selectedWorkspace)
         }
+        .focusedSceneValue(\.toggleSidebarAction, toggleSidebarVisibility)
     }
 
     private func processPendingDeepLink() {
@@ -207,6 +208,20 @@ struct ContentView: View {
             key: .defaultHome,
             directory: resolvedDefaultHostDirectory
         )
+    }
+
+    @MainActor
+    private func toggleSidebarVisibility() {
+        withAnimation(.easeInOut(duration: 0.16)) {
+            switch columnVisibility {
+            case .detailOnly:
+                columnVisibility = .all
+            case .all:
+                columnVisibility = .detailOnly
+            default:
+                columnVisibility = .detailOnly
+            }
+        }
     }
 
     @discardableResult

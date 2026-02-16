@@ -6,17 +6,25 @@ This directory contains build/release helpers plus UI test utilities.
 
 Use these scripts for day-to-day UI verification:
 
-1. `./scripts/ui-smoke.sh`
+1. `./scripts/launch-dev.sh`
+- Canonical local launch for active development.
+- Always launches latest debug binary (`.build/.../WorkspaceManager`) to avoid stale app bundle confusion.
+- Uses explicit runtime data-root isolation by default:
+  - `WORKSPACES_DATA_DIR=./.dev-data/workspacemanager`
+- Includes inline educational notes about isolation boundaries and dogfooding strategy.
+- See `backlog/isolation-strategies.md` for long-form architecture context.
+
+2. `./scripts/ui-smoke.sh`
 - Fast interaction smoke test.
 - Validates launch, focus, typing, and Enter behavior.
 - Writes artifacts to `/tmp/workspaces-ui-smoke-<timestamp>/`.
 
-2. `./scripts/ui-capture.sh`
+3. `./scripts/ui-capture.sh`
 - Screenshot-focused flow capture.
 - Same core interaction path plus screenshot artifacts.
 - Writes artifacts to `/tmp/workspaces-ui-capture-<timestamp>/`.
 
-3. `./scripts/sidebar-capture.sh`
+4. `./scripts/sidebar-capture.sh`
 - Fast deterministic sidebar-only capture loop for visual polish work.
 - Launches app in `WORKSPACES_UI_FIXTURE=1` mode (in-memory sample data).
 - Captures the WorkspaceManager window and writes:
@@ -24,10 +32,11 @@ Use these scripts for day-to-day UI verification:
   - timestamped snapshots: `./output/sidebar/sidebar-<timestamp>.png`
 - Also preserves raw run artifacts under `/tmp/workspaces-sidebar-capture-<timestamp>/`.
 
-All scripts:
+UI automation scripts (`ui-smoke.sh`, `ui-capture.sh`, `sidebar-capture.sh`):
 - fail fast on missing permissions
 - print artifact directory path at the end
 - use explicit app target launch (`swift run WorkspaceManager`)
+- run with `WORKSPACES_DATA_DIR` pointed at a workspace-local writable folder
 
 ## Legacy UI Scripts
 
