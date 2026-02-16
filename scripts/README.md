@@ -38,6 +38,22 @@ UI automation scripts (`ui-smoke.sh`, `ui-capture.sh`, `sidebar-capture.sh`):
 - use explicit app target launch (`swift run WorkspaceManager`)
 - run with `WORKSPACES_DATA_DIR` pointed at a workspace-local writable folder
 
+## Shortcut Verification Loop (dev contract)
+
+For keyboard/split/sidebar changes, always verify with the debug launcher:
+
+1. `./scripts/build-ghosttykit.sh`
+2. `swift build`
+3. `./scripts/launch-dev.sh --no-build`
+4. Confirm debug process path:
+   - `ps aux | rg '/Users/fairchild/code/workspaces/.build/arm64-apple-macosx/debug/WorkspaceManager'`
+5. Manually verify:
+   - `Cmd+B` toggles sidebar
+   - `Cmd+D` creates a visible right split
+
+Full contract and troubleshooting details:
+- `docs/development/libghostty-integration.md`
+
 ## Legacy UI Scripts
 
 Older exploratory UI scripts are archived under:

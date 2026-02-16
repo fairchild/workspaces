@@ -67,6 +67,23 @@ Registered callbacks in `ghostty_runtime_config_s`:
 - updates content scale + framebuffer size on backing/frame changes
 - installs minimal local monitor for `.leftMouseDown` and command `.keyUp`
 
+### Shortcut + split contract (required behavior)
+
+This project depends on the following keyboard behavior:
+
+- `Cmd+B`: toggles the left sidebar visibility.
+- `Cmd+D`: when a terminal surface is focused, creates a split to the right.
+
+The `Cmd+D` path is runtime-action-driven:
+
+1. `GhosttySurfaceView` issues a split action (`new_split:right` and/or `ghostty_surface_split`).
+2. `libghostty` dispatches `GHOSTTY_ACTION_NEW_SPLIT` through `ghostty_runtime_action_cb`.
+3. `GhosttyAppManager.action(...)` must treat this action as handled and return `true`.
+4. The app then materializes the split in UI state (`ContentView` / `HostTerminalStateStore`).
+
+Important: returning `false` for `GHOSTTY_ACTION_NEW_SPLIT` means "not performed" and
+no split will appear even if the key event reached Ghostty.
+
 ### Focus model
 
 - Window-level focus coordinator remains
@@ -115,6 +132,8 @@ Treat both as watch items for future Ghostty pin updates.
    - terminal appears for selected workspace
    - typing, enter, backspace, arrows
    - option/command combinations
+   - `Cmd+B` toggles sidebar
+   - `Cmd+D` creates visible right split
    - copy/paste
    - restart button recreates terminal
    - click away/back restores focus
@@ -130,3 +149,23 @@ Both workflows build GhosttyKit before lint/build/test:
 
 If CI fails in Ghostty build step, debug `scripts/build-ghosttykit.sh` first.
 
+## Agent self-verification runbook
+
+Use this exact loop in future sessions to avoid stale-build confusion:
+
+1. Rebuild pinned GhosttyKit:
+   - `./scripts/build-ghosttykit.sh`
+2. Build app:
+   - `swift build`
+3. Launch debug app (never `/Applications` during verification):
+   - `./scripts/launch-dev.sh --no-build`
+4. Verify process path points to `.build/.../WorkspaceManager`:
+   - `ps aux | rg '/Users/fairchild/code/workspaces/.build/arm64-apple-macosx/debug/WorkspaceManager'`
+5. Exercise shortcuts:
+   - `Cmd+B` collapse/restore sidebar
+   - `Cmd+D` create split pane
+6. Verify split runtime path in logs:
+   - `tail -n 80 .dev-data/logs/launch-dev-*.log`
+   - Expect `"[GhosttyAppManager] action=new_split direction="`
+
+If shortcut behavior regresses, first confirm step 4 before changing code.

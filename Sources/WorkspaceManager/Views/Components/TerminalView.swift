@@ -14,9 +14,11 @@ final class HostTerminalSurfaceStore {
     private let revisitThreshold = 24
     private var didEmitRevisitLog = false
     private var surfaces: [UUID: GhosttySurfaceView] = [:]
+    private var sessionIDsBySurfaceIdentity: [ObjectIdentifier: UUID] = [:]
 
     func view(for session: HostTerminalSession, onProcessExit: (() -> Void)? = nil) -> GhosttySurfaceView {
         if let existing = surfaces[session.id] {
+            sessionIDsBySurfaceIdentity[ObjectIdentifier(existing)] = session.id
             return existing
         }
 
@@ -25,6 +27,7 @@ final class HostTerminalSurfaceStore {
             onProcessExit: onProcessExit
         )
         surfaces[session.id] = created
+        sessionIDsBySurfaceIdentity[ObjectIdentifier(created)] = session.id
 
         if surfaces.count >= revisitThreshold, !didEmitRevisitLog {
             didEmitRevisitLog = true
@@ -41,8 +44,14 @@ final class HostTerminalSurfaceStore {
         surfaces[sessionID]
     }
 
+    func sessionID(for terminal: GhosttySurfaceView) -> UUID? {
+        sessionIDsBySurfaceIdentity[ObjectIdentifier(terminal)]
+    }
+
     func invalidate(sessionID: UUID) {
-        surfaces.removeValue(forKey: sessionID)
+        if let removed = surfaces.removeValue(forKey: sessionID) {
+            sessionIDsBySurfaceIdentity.removeValue(forKey: ObjectIdentifier(removed))
+        }
     }
 }
 

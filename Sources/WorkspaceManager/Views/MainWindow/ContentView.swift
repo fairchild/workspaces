@@ -47,6 +47,7 @@ struct ContentView: View {
                 selectedWorkspace: selectedWorkspace,
                 hostTerminalSessions: hostTerminalState.sessions,
                 activeHostTerminalSessionID: hostTerminalState.activeSessionID,
+                activeSplitHostSession: hostTerminalState.splitSession(for: hostTerminalState.activeSessionID),
                 hostSurfaceStore: hostTerminalState.surfaceStore,
                 isRightPaneVisible: $isRightPaneVisible
             )
@@ -83,7 +84,13 @@ struct ContentView: View {
             guard let selectedWorkspace else { return }
             handleWorkspaceSelection(selectedWorkspace)
         }
+        .onReceive(NotificationCenter.default.publisher(for: GhosttyAppManager.splitRequestNotification)) { notification in
+            Task { @MainActor in
+                handleGhosttySplitRequest(notification)
+            }
+        }
         .focusedSceneValue(\.toggleSidebarAction, toggleSidebarVisibility)
+        .focusedSceneValue(\.splitTerminalAction, splitFocusedTerminal)
     }
 
     private func processPendingDeepLink() {
@@ -220,6 +227,36 @@ struct ContentView: View {
                 columnVisibility = .detailOnly
             default:
                 columnVisibility = .detailOnly
+            }
+        }
+    }
+
+    @MainActor
+    private func splitFocusedTerminal() {
+        createAndFocusSplitForActiveSession()
+    }
+
+    @MainActor
+    private func handleGhosttySplitRequest(_ notification: Notification) {
+        if let sourceTerminal = notification.object as? GhosttySurfaceView,
+            let sourceSessionID = hostTerminalState.surfaceStore.sessionID(for: sourceTerminal)
+        {
+            _ = hostTerminalState.activateExistingSession(sessionID: sourceSessionID)
+        }
+
+        createAndFocusSplitForActiveSession()
+    }
+
+    @MainActor
+    private func createAndFocusSplitForActiveSession() {
+        guard let splitSession = hostTerminalState.ensureSplitForActiveSession() else {
+            return
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+            Task { @MainActor in
+                guard let splitTerminal = hostTerminalState.surfaceStore.terminal(for: splitSession.id) else { return }
+                TerminalFocusManager.shared.requestFocus(for: splitTerminal)
             }
         }
     }
@@ -373,6 +410,7 @@ struct MainTerminalDetailView: View {
     let selectedWorkspace: Workspace?
     let hostTerminalSessions: [HostTerminalSession]
     let activeHostTerminalSessionID: UUID?
+    let activeSplitHostSession: HostTerminalSession?
     let hostSurfaceStore: HostTerminalSurfaceStore
     @Binding var isRightPaneVisible: Bool
 
@@ -387,6 +425,7 @@ struct MainTerminalDetailView: View {
             HostTerminalSessionStack(
                 sessions: hostTerminalSessions,
                 activeSessionID: activeHostTerminalSessionID,
+                splitSession: activeSplitHostSession,
                 surfaceStore: hostSurfaceStore
             )
             .frame(minWidth: 400)
@@ -405,6 +444,7 @@ struct MainTerminalDetailView: View {
 struct HostTerminalSessionStack: View {
     let sessions: [HostTerminalSession]
     let activeSessionID: UUID?
+    let splitSession: HostTerminalSession?
     let surfaceStore: HostTerminalSurfaceStore
 
     private var activeSession: HostTerminalSession? {
@@ -414,10 +454,26 @@ struct HostTerminalSessionStack: View {
 
     var body: some View {
         if let activeSession {
-            PersistentHostTerminalContainerView(
-                session: activeSession,
-                surfaceStore: surfaceStore
-            )
+            if let splitSession {
+                HSplitView {
+                    PersistentHostTerminalContainerView(
+                        session: activeSession,
+                        surfaceStore: surfaceStore
+                    )
+                    .frame(minWidth: 240)
+
+                    PersistentHostTerminalContainerView(
+                        session: splitSession,
+                        surfaceStore: surfaceStore
+                    )
+                    .frame(minWidth: 240)
+                }
+            } else {
+                PersistentHostTerminalContainerView(
+                    session: activeSession,
+                    surfaceStore: surfaceStore
+                )
+            }
         }
     }
 }
@@ -426,6 +482,7 @@ struct HostTerminalSessionStack: View {
 final class HostTerminalStateStore: ObservableObject {
     @Published private(set) var sessions: [HostTerminalSession] = []
     @Published private(set) var activeSessionID: UUID?
+    @Published private(set) var splitSessionsByPrimaryID: [UUID: HostTerminalSession] = [:]
     @Published private(set) var sessionPresentation = HostTerminalSessionPresentation()
 
     let surfaceStore = HostTerminalSurfaceStore()
@@ -445,21 +502,69 @@ final class HostTerminalStateStore: ObservableObject {
         return result
     }
 
+    @discardableResult
+    func activateExistingSession(sessionID: UUID) -> Bool {
+        guard let session = coordinator.sessions.first(where: { $0.id == sessionID }) else {
+            return false
+        }
+
+        _ = coordinator.activate(key: session.key, directory: session.directoryURL)
+        publishSnapshot()
+        return true
+    }
+
     func pruneRepoSessions(validRepoPaths: Set<String>) {
         let removedSessionIDs = coordinator.pruneRepoSessions(validRepoPaths: validRepoPaths)
         guard !removedSessionIDs.isEmpty else { return }
 
         for removedSessionID in removedSessionIDs {
             surfaceStore.invalidate(sessionID: removedSessionID)
+            if let splitSession = splitSessionsByPrimaryID.removeValue(forKey: removedSessionID) {
+                surfaceStore.invalidate(sessionID: splitSession.id)
+            }
         }
 
         publishSnapshot()
+    }
+
+    func splitSession(for primarySessionID: UUID?) -> HostTerminalSession? {
+        guard let primarySessionID else { return nil }
+        return splitSessionsByPrimaryID[primarySessionID]
+    }
+
+    @discardableResult
+    func ensureSplitForActiveSession() -> HostTerminalSession? {
+        guard let activeSessionID,
+            let primarySession = sessions.first(where: { $0.id == activeSessionID })
+        else {
+            return nil
+        }
+
+        if let existing = splitSessionsByPrimaryID[activeSessionID] {
+            return existing
+        }
+
+        let splitSession = HostTerminalSession(
+            key: primarySession.key,
+            directory: primarySession.directoryURL
+        )
+        splitSessionsByPrimaryID[activeSessionID] = splitSession
+        objectWillChange.send()
+        return splitSession
     }
 
     private func publishSnapshot() {
         sessions = coordinator.sessions
         activeSessionID = coordinator.activeSessionID
         sessionPresentation = coordinator.presentation
+
+        let validPrimaryIDs = Set(sessions.map(\.id))
+        let stalePrimaryIDs = splitSessionsByPrimaryID.keys.filter { !validPrimaryIDs.contains($0) }
+        for primaryID in stalePrimaryIDs {
+            if let splitSession = splitSessionsByPrimaryID.removeValue(forKey: primaryID) {
+                surfaceStore.invalidate(sessionID: splitSession.id)
+            }
+        }
     }
 }
 

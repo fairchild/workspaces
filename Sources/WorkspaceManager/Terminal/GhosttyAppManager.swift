@@ -9,6 +9,8 @@ import GhosttyKit
 
 final class GhosttyAppManager: NSObject {
     static let shared = GhosttyAppManager()
+    static let splitRequestNotification = Notification.Name("WorkspaceManager.Ghostty.NewSplitRequested")
+    static let splitRequestDirectionUserInfoKey = "directionRawValue"
 
     private(set) var app: ghostty_app_t?
     private var config: ghostty_config_t?
@@ -138,33 +140,28 @@ final class GhosttyAppManager: NSObject {
 
         switch action.tag {
         case GHOSTTY_ACTION_NEW_SPLIT:
+            let directionRawValue = Int(action.action.new_split.rawValue)
             DispatchQueue.main.async {
-                guard let surface = surfaceView.surface else { return }
-                ghostty_surface_split(surface, action.action.new_split)
+                NotificationCenter.default.post(
+                    name: GhosttyAppManager.splitRequestNotification,
+                    object: surfaceView,
+                    userInfo: [GhosttyAppManager.splitRequestDirectionUserInfoKey: directionRawValue]
+                )
             }
+            NSLog("[GhosttyAppManager] action=new_split direction=%d", directionRawValue)
             return true
 
         case GHOSTTY_ACTION_GOTO_SPLIT:
-            DispatchQueue.main.async {
-                guard let surface = surfaceView.surface else { return }
-                ghostty_surface_split_focus(surface, action.action.goto_split)
-            }
-            return true
+            NSLog("[GhosttyAppManager] action=goto_split (defer)")
+            return false
 
         case GHOSTTY_ACTION_RESIZE_SPLIT:
-            DispatchQueue.main.async {
-                guard let surface = surfaceView.surface else { return }
-                let resize = action.action.resize_split
-                ghostty_surface_split_resize(surface, resize.direction, resize.amount)
-            }
-            return true
+            NSLog("[GhosttyAppManager] action=resize_split (defer)")
+            return false
 
         case GHOSTTY_ACTION_EQUALIZE_SPLITS:
-            DispatchQueue.main.async {
-                guard let surface = surfaceView.surface else { return }
-                ghostty_surface_split_equalize(surface)
-            }
-            return true
+            NSLog("[GhosttyAppManager] action=equalize_splits (defer)")
+            return false
 
         case GHOSTTY_ACTION_SET_TITLE:
             let title = action.action.set_title.title.flatMap { String(cString: $0) } ?? ""
