@@ -394,7 +394,18 @@ struct SidebarView: View {
 
     private func autoImportReposFromCodeHome() async {
         let codeHome = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("code", isDirectory: true)
+        var discoveredCount = 0
+        var importedCount = 0
+        PerformanceSignposts.beginRepoHydration(rootPath: codeHome.path)
+        defer {
+            PerformanceSignposts.endRepoHydrationIfNeeded(
+                discoveredCount: discoveredCount,
+                importedCount: importedCount
+            )
+        }
+
         let discovered = RepositoryDiscovery.discoverGitRepositories(in: codeHome)
+        discoveredCount = discovered.count
         guard !discovered.isEmpty else { return }
 
         let existingPaths = Set(repos.map { normalizePath($0.localURL) })
@@ -410,23 +421,26 @@ struct SidebarView: View {
             importedRepos.append(repo)
         }
 
-        await MainActor.run {
+        importedCount = await MainActor.run { () -> Int in
             var currentPaths = Set(repos.map { normalizePath($0.localURL) })
-            var insertedAny = false
+            var insertedCount = 0
 
             for repo in importedRepos {
                 let repoPath = normalizePath(repo.localURL)
                 guard !currentPaths.contains(repoPath) else { continue }
                 modelContext.insert(repo)
                 currentPaths.insert(repoPath)
-                insertedAny = true
+                insertedCount += 1
             }
 
-            guard insertedAny else { return }
+            guard insertedCount > 0 else { return 0 }
 
             if !saveModelContext(action: "auto-import repositories from ~/code") {
                 modelContext.rollback()
+                return 0
             }
+
+            return insertedCount
         }
     }
 

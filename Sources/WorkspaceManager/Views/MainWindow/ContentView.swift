@@ -18,6 +18,8 @@ struct ContentView: View {
     @State private var selectedWorkspace: Workspace?
     @State private var isRightPaneVisible = true
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
+    @State private var pendingRepoFocusMeasurementSessionID: UUID?
+    @State private var didRunPerfAutoSelection = false
     private let resolvedDefaultHostDirectory = HostTerminalDefaults.defaultWorkingDirectory()
         .standardizedFileURL
         .resolvingSymlinksInPath()
@@ -65,12 +67,14 @@ struct ContentView: View {
         .onAppear {
             ensureInitialHostSession()
             processPendingDeepLink()
+            maybeAutoSelectRepoForPerf()
         }
         .onChange(of: deepLinkState.pendingRequest) { _, _ in
             processPendingDeepLink()
         }
         .onChange(of: repos.count) { _, _ in
             processPendingDeepLink()
+            maybeAutoSelectRepoForPerf()
         }
         .onChange(of: repos.map { normalizePath($0.localPath) }) { _, paths in
             hostTerminalState.pruneRepoSessions(validRepoPaths: Set(paths))
@@ -107,6 +111,21 @@ struct ContentView: View {
     }
 
     @MainActor
+    private func maybeAutoSelectRepoForPerf() {
+        guard ProcessInfo.processInfo.environment["WORKSPACES_PERF_AUTO_SELECT_FIRST_REPO"] == "1" else { return }
+        guard !didRunPerfAutoSelection else { return }
+        guard deepLinkState.pendingRequest == nil else { return }
+        guard let firstRepo = repos.first else { return }
+
+        didRunPerfAutoSelection = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            Task { @MainActor in
+                handleRepoSelection(firstRepo)
+            }
+        }
+    }
+
+    @MainActor
     private func handleRepoSelection(_ repo: Repo) {
         let repoDirectory = repo.localURL.standardizedFileURL.resolvingSymlinksInPath()
 
@@ -115,18 +134,39 @@ struct ContentView: View {
             key: .repoPath(repoDirectory.path),
             directory: repoDirectory
         )
+        beginRepoClickMeasurement(
+            sessionID: session.id,
+            repoPath: repoDirectory.path
+        )
         columnVisibility = .all
 
-        requestMainTerminalFocus(targetSessionID: session.id)
+        requestMainTerminalFocus(
+            targetSessionID: session.id,
+            onTargetFocused: {
+                completeRepoClickMeasurement(
+                    sessionID: session.id,
+                    outcome: "focused"
+                )
+            }
+        )
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
             Task { @MainActor in
-                requestMainTerminalFocus(targetSessionID: session.id)
+                requestMainTerminalFocus(
+                    targetSessionID: session.id,
+                    onTargetFocused: {
+                        completeRepoClickMeasurement(
+                            sessionID: session.id,
+                            outcome: "focused_retry"
+                        )
+                    }
+                )
             }
         }
     }
 
     @MainActor
     private func handleDefaultHostSelection() {
+        cancelPendingRepoClickMeasurement(reason: "default_host_selected")
         selectedWorkspace = nil
         let session = activateHostSession(
             key: .defaultHome,
@@ -144,6 +184,7 @@ struct ContentView: View {
 
     @MainActor
     private func handleWorkspaceSelection(_ workspace: Workspace) {
+        cancelPendingRepoClickMeasurement(reason: "workspace_selected")
         let workspaceDirectory = workspace.workspaceURL.standardizedFileURL.resolvingSymlinksInPath()
         let session = activateHostSession(
             key: .hostPath(workspaceDirectory.path),
@@ -231,7 +272,10 @@ struct ContentView: View {
     }
 
     @MainActor
-    private func requestMainTerminalFocus(targetSessionID: UUID? = nil) {
+    private func requestMainTerminalFocus(
+        targetSessionID: UUID? = nil,
+        onTargetFocused: (() -> Void)? = nil
+    ) {
         NSApp.activate(ignoringOtherApps: true)
         let window = NSApp.windows.first(where: \.isVisible) ?? NSApp.windows.first
         window?.makeKeyAndOrderFront(nil)
@@ -239,7 +283,10 @@ struct ContentView: View {
         if let targetSessionID,
             let terminal = hostTerminalState.surfaceStore.terminal(for: targetSessionID)
         {
-            TerminalFocusManager.shared.requestFocus(for: terminal)
+            TerminalFocusManager.shared.requestFocus(
+                for: terminal,
+                onFocused: onTargetFocused
+            )
             return
         }
 
@@ -253,6 +300,44 @@ struct ContentView: View {
         if let terminal = TerminalFocusManager.shared.focusedTerminal {
             TerminalFocusManager.shared.requestFocus(for: terminal)
         }
+    }
+
+    @MainActor
+    private func beginRepoClickMeasurement(sessionID: UUID, repoPath: String) {
+        if let pendingSessionID = pendingRepoFocusMeasurementSessionID,
+            pendingSessionID != sessionID
+        {
+            PerformanceSignposts.cancelRepoClickToFocusedInputIfNeeded(
+                sessionID: pendingSessionID,
+                reason: "replaced_by_new_repo_click"
+            )
+        }
+
+        pendingRepoFocusMeasurementSessionID = sessionID
+        PerformanceSignposts.beginRepoClickToFocusedInput(
+            sessionID: sessionID,
+            repoPath: repoPath
+        )
+    }
+
+    @MainActor
+    private func completeRepoClickMeasurement(sessionID: UUID, outcome: String) {
+        guard pendingRepoFocusMeasurementSessionID == sessionID else { return }
+        pendingRepoFocusMeasurementSessionID = nil
+        PerformanceSignposts.endRepoClickToFocusedInputIfNeeded(
+            sessionID: sessionID,
+            outcome: outcome
+        )
+    }
+
+    @MainActor
+    private func cancelPendingRepoClickMeasurement(reason: String) {
+        guard let sessionID = pendingRepoFocusMeasurementSessionID else { return }
+        pendingRepoFocusMeasurementSessionID = nil
+        PerformanceSignposts.cancelRepoClickToFocusedInputIfNeeded(
+            sessionID: sessionID,
+            reason: reason
+        )
     }
 
     private func path(_ path: String, isInside root: String) -> Bool {

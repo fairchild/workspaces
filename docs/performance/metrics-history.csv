@@ -1,0 +1,5 @@
+timestamp,runs_requested,sleep_seconds,os_version,os_build,arch,model,discovered_repos_median,imported_repos_median,launch_to_first_prompt_median_ms,repo_hydration_median_ms,repo_click_to_focus_median_ms,launch_to_first_prompt_mean_ms,repo_hydration_mean_ms,repo_click_to_focus_mean_ms
+2026-02-15T15:23:45-0800,2,6,26.2,25C56,arm64,"Mac16,13",14,0,229.95999999999998,2.58,158.85,229.95999999999998,2.58,158.85
+2026-02-15T15:24:28-0800,3,6,26.2,25C56,arm64,"Mac16,13",14,0,143.23,1.07,159.91,154.43333333333334,1.0766666666666667,159.74333333333334
+2026-02-15T15:24:58-0800,2,5,26.2,25C56,arm64,"Mac16,13",14,0,167.025,1.125,163.95499999999998,167.025,1.125,163.95499999999998
+2026-02-15T15:29:36-0800,1,5,26.2,25C56,arm64,"Mac16,13",14,0,249.61,2.59,167.02,249.61,2.59,167.02

@@ -231,6 +231,20 @@ protocol WorkspaceBackend: Actor {
 **Documentation**: `docs/development/solution-terminal-keyboard.md`
 and `docs/development/libghostty-integration.md`
 
+### 8. Host Terminal Surface Memory Policy (Refinement Gate)
+
+**Decision**: Keep terminal surfaces unbounded for now (no inactive-surface LRU cap yet).
+
+**Rationale**:
+- Preserves deterministic session restore semantics (prompt/history stays instantly reusable).
+- Current usage scale is small enough that forcing surface eviction is more likely to regress UX than prevent real memory issues.
+- The implementation now logs when live surfaces reach a revisit threshold, so pressure can be detected early.
+
+**Revisit triggers**:
+- Sustained usage reaches `>= 24` live host surfaces (warning log emitted).
+- Instruments sessions show memory pressure, hang risk, or unacceptable launch/switch regressions attributable to retained surfaces.
+- User-reported slowdowns tied to large numbers of inactive sessions.
+
 ---
 
 ## Data Flow

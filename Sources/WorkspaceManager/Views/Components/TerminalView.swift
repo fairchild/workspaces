@@ -8,6 +8,11 @@ import WorkspaceManagerCore
 
 @MainActor
 final class HostTerminalSurfaceStore {
+    // Current refinement-gate policy: keep surfaces unbounded for deterministic
+    // session restore. Revisit with an inactive-surface LRU if sustained usage
+    // exceeds the threshold below or memory pressure is observed in profiling.
+    private let revisitThreshold = 24
+    private var didEmitRevisitLog = false
     private var surfaces: [UUID: GhosttySurfaceView] = [:]
 
     func view(for session: HostTerminalSession, onProcessExit: (() -> Void)? = nil) -> GhosttySurfaceView {
@@ -20,6 +25,15 @@ final class HostTerminalSurfaceStore {
             onProcessExit: onProcessExit
         )
         surfaces[session.id] = created
+
+        if surfaces.count >= revisitThreshold, !didEmitRevisitLog {
+            didEmitRevisitLog = true
+            NSLog(
+                "[HostSurfaceStore] Unbounded policy threshold reached (surfaces=%ld). Consider inactive LRU cap if memory pressure appears.",
+                surfaces.count
+            )
+        }
+
         return created
     }
 

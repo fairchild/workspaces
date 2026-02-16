@@ -64,6 +64,11 @@ For release/signing/notarization details, see:
 
 - [RELEASING.md](./RELEASING.md)
 
+For performance testing and benchmarking workflows, see:
+
+- [docs/performance-testing.md](./docs/performance-testing.md)
+- [docs/performance/dashboard.md](./docs/performance/dashboard.md)
+
 ## License
 
 MIT
