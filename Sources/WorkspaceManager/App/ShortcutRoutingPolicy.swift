@@ -58,7 +58,7 @@ final class ShortcutRoutingPolicy {
 
     /// Current app-owned shortcut set. Keep this intentionally small.
     private let appOwnedDefaults: Set<ShortcutChord> = [
-        ShortcutChord(key: "b", modifiers: [.command]),
+        ShortcutChord(key: "b", modifiers: [.command])
     ]
 
     /// Future user-configurable routing overrides (`App` vs `Ghostty`).

@@ -180,7 +180,8 @@ struct HostTerminalSessionCoordinatorTests {
         try fileManager.createDirectory(at: aliasDirectory, withIntermediateDirectories: true)
         try fileManager.createSymbolicLink(at: symlinkRepo, withDestinationURL: canonicalRepo)
 
-        let dotDotPath = canonicalRepo
+        let dotDotPath =
+            canonicalRepo
             .deletingLastPathComponent()
             .appendingPathComponent("repo")
             .path + "/../repo"

@@ -379,18 +379,20 @@ final class GhosttySurfaceView: NSView, NSTextInputClient {
             return false
         }
 
-        guard let replayEvent = NSEvent.keyEvent(
-            with: .keyDown,
-            location: event.locationInWindow,
-            modifierFlags: event.modifierFlags,
-            timestamp: event.timestamp,
-            windowNumber: event.windowNumber,
-            context: nil,
-            characters: equivalent,
-            charactersIgnoringModifiers: equivalent,
-            isARepeat: event.isARepeat,
-            keyCode: event.keyCode
-        ) else {
+        guard
+            let replayEvent = NSEvent.keyEvent(
+                with: .keyDown,
+                location: event.locationInWindow,
+                modifierFlags: event.modifierFlags,
+                timestamp: event.timestamp,
+                windowNumber: event.windowNumber,
+                context: nil,
+                characters: equivalent,
+                charactersIgnoringModifiers: equivalent,
+                isARepeat: event.isARepeat,
+                keyCode: event.keyCode
+            )
+        else {
             return false
         }
 
