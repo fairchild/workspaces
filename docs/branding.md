@@ -29,7 +29,7 @@ This directly maps to the core user story: **a portfolio of code repositories wi
 
 | File | Size | Purpose |
 |------|------|---------|
-| `icon-concepts/concept-7-dark-grid-final.png` | 1024x1024 | Master source file |
+| `icon-concepts/icon-master-1024.png` | 1024x1024 | Master source file |
 | `icon-concepts/favicon.ico` | Multi (16-256) | Web favicon |
 | `icon-concepts/AppIcon.icns` | Multi (16-1024) | macOS app bundle icon |
 | `Sources/.../AppIcon.appiconset/` | 10 PNGs | Xcode asset catalog (built into app) |
@@ -55,7 +55,7 @@ From the master 1024px PNG:
 
 ```bash
 # Resize all asset catalog PNGs
-SRC="icon-concepts/concept-7-dark-grid-final.png"
+SRC="icon-concepts/icon-master-1024.png"
 DEST="Sources/WorkspaceManager/Resources/Assets.xcassets/AppIcon.appiconset"
 for size in 16 32 64 128 256 512 1024; do
   sips -z $size $size --out "$DEST/icon_${size}.png" "$SRC"
@@ -107,4 +107,4 @@ Concept 7 is the refined final version of the portfolio grid direction. All expl
 - The icon works on both light and dark macOS backgrounds (the dark rounded rect provides its own container)
 - For web/GitHub, use `favicon.ico` or the 128px PNG
 - For README badges or documentation, use `icon_256x256.png`
-- The master file for any future re-generation is `concept-7-dark-grid-final.png` (1024px)
+- The master file for any future re-generation is `icon-concepts/icon-master-1024.png`
