@@ -17,21 +17,21 @@ private struct WorkspaceCountBadge: View {
             .font(.caption.monospacedDigit())
             .fontWeight(.semibold)
             .foregroundStyle(Color.primary.opacity(isCollapsed ? 0.96 : 0.9))
-        .padding(.horizontal, 9)
-        .padding(.vertical, 4)
-        .background(
-            Capsule()
-                .fill(
-                    isCollapsed
-                        ? Color.accentColor.opacity(0.26)
-                        : Color.secondary.opacity(0.18)
-                )
-        )
-        .overlay(
-            Capsule()
-                .stroke(Color.white.opacity(isCollapsed ? 0.12 : 0.08), lineWidth: 0.5)
-        )
-        .accessibilityLabel("\(count) workspace\(count == 1 ? "" : "s")")
+            .padding(.horizontal, 9)
+            .padding(.vertical, 4)
+            .background(
+                Capsule()
+                    .fill(
+                        isCollapsed
+                            ? Color.accentColor.opacity(0.26)
+                            : Color.secondary.opacity(0.18)
+                    )
+            )
+            .overlay(
+                Capsule()
+                    .stroke(Color.white.opacity(isCollapsed ? 0.12 : 0.08), lineWidth: 0.5)
+            )
+            .accessibilityLabel("\(count) workspace\(count == 1 ? "" : "s")")
     }
 }
 

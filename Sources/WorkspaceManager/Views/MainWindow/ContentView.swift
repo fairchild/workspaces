@@ -84,7 +84,8 @@ struct ContentView: View {
             guard let selectedWorkspace else { return }
             handleWorkspaceSelection(selectedWorkspace)
         }
-        .onReceive(NotificationCenter.default.publisher(for: GhosttyAppManager.splitActionNotification)) { notification in
+        .onReceive(NotificationCenter.default.publisher(for: GhosttyAppManager.splitActionNotification)) {
+            notification in
             Task { @MainActor in
                 handleGhosttySplitAction(notification)
             }
@@ -263,7 +264,9 @@ struct ContentView: View {
             NSLog("[SplitRouting] new_split ignored: no active/primary session")
             return
         }
-        NSLog("[SplitRouting] new_split source=%@ primary=%@", sourceSessionID?.uuidString ?? "nil", primarySessionID.uuidString)
+        NSLog(
+            "[SplitRouting] new_split source=%@ primary=%@", sourceSessionID?.uuidString ?? "nil",
+            primarySessionID.uuidString)
         createAndFocusSplit(primarySessionID: primarySessionID)
     }
 
@@ -279,10 +282,12 @@ struct ContentView: View {
             return
         }
 
-        guard let targetSessionID = hostTerminalState.splitFocusTarget(
-            from: sourceSessionID,
-            direction: direction
-        ) else {
+        guard
+            let targetSessionID = hostTerminalState.splitFocusTarget(
+                from: sourceSessionID,
+                direction: direction
+            )
+        else {
             NSLog(
                 "[SplitRouting] goto_split no-op source=%@ direction=%@",
                 sourceSessionID.uuidString,
