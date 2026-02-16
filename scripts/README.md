@@ -23,5 +23,9 @@ Both scripts:
 
 ## Legacy UI Scripts
 
-Other `*test*.sh` files are older exploratory scripts kept for reference and targeted debugging.
-Prefer `ui-smoke.sh` and `ui-capture.sh` unless you specifically need one of the legacy flows.
+Older exploratory UI scripts are archived under:
+
+- `./scripts/legacy-ui/`
+
+Use those only for targeted debugging or historical reference.
+For normal UI validation, prefer `ui-smoke.sh` and `ui-capture.sh`.

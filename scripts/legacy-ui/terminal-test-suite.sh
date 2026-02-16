@@ -35,7 +35,7 @@ sleep 1
 
 # Build
 log "Building app..."
-cd "$(dirname "$0")/.." # repo root
+cd "20 20 12 61 79 80 81 701 33 98 100 204 250 395 398 399 400dirname "-e")/../.." # repo root
 if ! swift build 2>&1 | tee -a "$LOG_FILE" | grep -q "Build complete"; then
     log "ERROR: Build failed"
     exit 1

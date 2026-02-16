@@ -48,3 +48,54 @@ jobs:
 
       - name: Test
         run: swift test
+
+  perf-validation:
+    if: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork) }}
+    needs: build-and-test
+    runs-on: self-hosted
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ensure mise
+        run: |
+          if command -v mise >/dev/null 2>&1; then
+            mise --version
+          else
+            brew install mise
+          fi
+
+      - name: Build GhosttyKit
+        run: ./scripts/build-ghosttykit.sh
+
+      - name: Build (debug)
+        run: swift build
+
+      - name: Test
+        run: swift test
+
+      - name: Capture perf baseline
+        run: ./scripts/perf-baseline.sh 3 6 --record
+
+      - name: Collect perf artifacts
+        if: always()
+        run: |
+          set -euo pipefail
+          mkdir -p perf-artifacts
+          latest_dir="$(ls -td /tmp/workspaces-perf-baseline-* 2>/dev/null | head -n 1 || true)"
+
+          if [[ -n "$latest_dir" ]]; then
+            cp -R "$latest_dir" perf-artifacts/raw-baseline
+          fi
+
+          cp docs/performance/dashboard.md perf-artifacts/dashboard.md || true
+          cp docs/performance/metrics-history.csv perf-artifacts/metrics-history.csv || true
+          cp docs/performance/latest-summary.json perf-artifacts/latest-summary.json || true
+
+      - name: Upload perf artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-dashboard-${{ github.run_id }}
+          path: perf-artifacts
+          if-no-files-found: warn
