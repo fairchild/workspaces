@@ -191,7 +191,10 @@ jobs:
           set -euo pipefail
           # Restore prior keychain search/default state on shared self-hosted machines.
           if [[ -n "${ORIGINAL_KEYCHAIN_LIST:-}" ]]; then
-            mapfile -t keychains < <(printf '%s\n' "${ORIGINAL_KEYCHAIN_LIST}" | sed '/^[[:space:]]*$/d')
+            keychains=()
+            while IFS= read -r line; do
+              [[ -n "$line" ]] && keychains+=("$line")
+            done <<< "${ORIGINAL_KEYCHAIN_LIST}"
             if (( ${#keychains[@]} > 0 )); then
               security list-keychains -d user -s "${keychains[@]}" || true
             fi
