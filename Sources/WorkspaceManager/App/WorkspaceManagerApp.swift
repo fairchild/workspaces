@@ -16,13 +16,21 @@ struct WorkspaceManagerApp: App {
 
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([Repo.self, Workspace.self])
+        let launchEnvironment = ProcessInfo.processInfo.environment
+        let shouldUseInMemoryStore = launchEnvironment["WORKSPACES_UI_FIXTURE"] == "1"
         let modelConfiguration = ModelConfiguration(
             schema: schema,
-            isStoredInMemoryOnly: false
+            isStoredInMemoryOnly: shouldUseInMemoryStore
         )
 
         do {
-            return try ModelContainer(for: schema, configurations: [modelConfiguration])
+            let container = try ModelContainer(for: schema, configurations: [modelConfiguration])
+
+            if shouldUseInMemoryStore {
+                seedUIFixtureDataIfNeeded(in: container.mainContext)
+            }
+
+            return container
         } catch {
             fatalError("Could not create ModelContainer: \(error)")
         }
@@ -52,6 +60,53 @@ struct WorkspaceManagerApp: App {
         Settings {
             SettingsView()
         }
+    }
+}
+
+private func seedUIFixtureDataIfNeeded(in context: ModelContext) {
+    do {
+        let repoCount = try context.fetchCount(FetchDescriptor<Repo>())
+        guard repoCount == 0 else { return }
+    } catch {
+        // If readback fails, continue and try to seed once.
+    }
+
+    let codeRoot = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("code", isDirectory: true)
+
+    let skillsRepo = Repo(
+        name: "skills",
+        localPath: codeRoot.appendingPathComponent("skills", isDirectory: true)
+    )
+    let servicesRepo = Repo(
+        name: "services",
+        localPath: codeRoot.appendingPathComponent("services", isDirectory: true)
+    )
+    let superpowersRepo = Repo(
+        name: "superpowers",
+        localPath: codeRoot.appendingPathComponent("superpowers", isDirectory: true)
+    )
+    let workspacesRepo = Repo(
+        name: "workspaces",
+        localPath: codeRoot.appendingPathComponent("workspaces", isDirectory: true)
+    )
+
+    context.insert(skillsRepo)
+    context.insert(servicesRepo)
+    context.insert(superpowersRepo)
+    context.insert(workspacesRepo)
+
+    let skillsWorkspace = Workspace(
+        name: "skills-v13",
+        path: codeRoot.appendingPathComponent("workspaces/skills/skills-v13", isDirectory: true),
+        sourceRepo: skillsRepo,
+        gitBranch: "workspace/skills-v13"
+    )
+    context.insert(skillsWorkspace)
+
+    do {
+        try context.save()
+    } catch {
+        NSLog("[UIFixture] Failed to seed fixture data: %@", String(describing: error))
     }
 }
 

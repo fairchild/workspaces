@@ -13,6 +13,7 @@ WIN_X=""
 WIN_Y=""
 WIN_W=""
 WIN_H=""
+WIN_ID=""
 TERMINAL_X=""
 TERMINAL_Y=""
 SIDEBAR_X=""
@@ -201,6 +202,42 @@ ws_take_screenshot() {
         ws_log "ERROR: screenshot capture failed ($path)"
         ws_permissions_hint
         return 1
+    fi
+}
+
+ws_get_window_id() {
+    WIN_ID="$(osascript -e '
+tell application "System Events"
+    tell process "WorkspaceManager"
+        return id of window 1
+    end tell
+end tell
+')" || {
+        ws_log "ERROR: unable to read WorkspaceManager window id."
+        ws_permissions_hint
+        return 1
+    }
+
+    if [[ ! "$WIN_ID" =~ ^[0-9]+$ ]]; then
+        ws_log "ERROR: invalid window id output: '$WIN_ID'"
+        return 1
+    fi
+}
+
+ws_take_window_screenshot() {
+    local name="$1"
+    local path="$ARTIFACT_DIR/${name}.png"
+
+    if ! ws_get_window_id; then
+        ws_log "WARN: falling back to full-screen capture."
+        ws_take_screenshot "$name"
+        return
+    fi
+
+    if ! screencapture -x -l "$WIN_ID" "$path"; then
+        ws_log "ERROR: window screenshot capture failed ($path)"
+        ws_log "WARN: falling back to full-screen capture."
+        ws_take_screenshot "$name"
     fi
 }
 
