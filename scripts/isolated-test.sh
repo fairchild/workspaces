@@ -41,7 +41,7 @@ cd "$(dirname "$0")/.." # repo root
 swift build 2>&1 | grep -E "(error|Build complete)" || true
 
 log "Launching..."
-swift run > "$SCREENSHOT_DIR/app.log" 2>&1 &
+swift run WorkspaceManager > "$SCREENSHOT_DIR/app.log" 2>&1 &
 APP_PID=$!
 sleep 4
 

@@ -44,7 +44,7 @@ log "Build successful"
 
 # Launch app
 log "Launching app..."
-swift run 2>&1 >> "$LOG_FILE" &
+swift run WorkspaceManager 2>&1 >> "$LOG_FILE" &
 APP_PID=$!
 sleep 4
 

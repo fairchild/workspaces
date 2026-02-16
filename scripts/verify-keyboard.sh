@@ -22,7 +22,7 @@ swift build 2>&1 | grep -E "(error|Build complete)" || true
 
 echo ""
 echo "Launching WorkspaceManager..."
-swift run 2>&1 | grep -E "\[Terminal" &
+swift run WorkspaceManager 2>&1 | grep -E "\[Terminal" &
 
 echo ""
 echo "App launched. Please:"
