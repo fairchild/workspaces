@@ -31,7 +31,7 @@ swift build 2>&1 | grep -E "(error|Build complete)" || true
 
 # Launch with log capture
 log "Launching app..."
-swift run 2>&1 &
+swift run WorkspaceManager 2>&1 &
 APP_PID=$!
 sleep 4
 

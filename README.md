@@ -69,6 +69,10 @@ For performance testing and benchmarking workflows, see:
 - [docs/performance-testing.md](./docs/performance-testing.md)
 - [docs/performance/dashboard.md](./docs/performance/dashboard.md)
 
+For UI smoke/capture script entry points, see:
+
+- [scripts/README.md](./scripts/README.md)
+
 ## License
 
 MIT

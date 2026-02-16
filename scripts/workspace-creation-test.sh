@@ -37,7 +37,7 @@ swift build 2>&1 | grep -E "(error|Build complete)" || true
 
 # Launch app WITH output capture
 log "Launching app (capturing stdout/stderr)..."
-swift run 2>&1 | tee "$SCREENSHOT_DIR/app-output.log" &
+swift run WorkspaceManager 2>&1 | tee "$SCREENSHOT_DIR/app-output.log" &
 APP_PID=$!
 sleep 4
 
