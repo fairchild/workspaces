@@ -813,7 +813,7 @@ class WorkspaceManager: ObservableObject {
 2. **Add `DockerBackend`** as optional — familiar to users, works on macOS 12+
 3. **Design the protocol** so you can add more backends later
 
-### For Production (Fall 2025)
+### For Production (Next)
 1. **Add `AppleContainerBackend`** when macOS 26 ships
 2. **Make it the default** for new workspaces on compatible systems
 3. **Keep Docker as fallback** for Intel Macs
