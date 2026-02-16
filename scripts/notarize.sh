@@ -40,8 +40,10 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 BUILD_DIR="$PROJECT_DIR/build"
 APP_NAME="WorkspaceManager"
 APP_BUNDLE="$BUILD_DIR/$APP_NAME.app"
+SIGNING_CONFIG="${SIGNING_CONFIG:-$SCRIPT_DIR/signing-config.sh}"
+CODESIGN_KEYCHAIN_PATH="${CODESIGN_KEYCHAIN_PATH:-}"
 
-# Default bundle ID (can be overridden by signing-config.sh)
+# Default bundle ID (can be overridden by signing-config.sh or env)
 BUNDLE_ID="${BUNDLE_ID:-com.cloudcompute.workspaces}"
 
 # Flags
@@ -104,34 +106,32 @@ get_build() {
 
 log_step "Pre-flight checks"
 
-# Check for signing config
-SIGNING_CONFIG="$SCRIPT_DIR/signing-config.sh"
-if [[ ! -f "$SIGNING_CONFIG" ]]; then
-    log_error "signing-config.sh not found"
-    echo ""
-    echo "To set up signing:"
-    echo "  1. cp scripts/signing-config.sh.template scripts/signing-config.sh"
-    echo "  2. Edit signing-config.sh with your Apple Developer credentials"
-    exit 1
+# Load signing config when present, otherwise rely on environment variables.
+if [[ -f "$SIGNING_CONFIG" ]]; then
+    source "$SIGNING_CONFIG"
+    log_success "Loaded signing configuration from $SIGNING_CONFIG"
+else
+    log_warning "signing-config.sh not found - using environment variables"
 fi
-
-# Source signing config
-source "$SIGNING_CONFIG"
-log_success "Loaded signing configuration"
 
 # Validate required variables
 if [[ -z "$TEAM_ID" ]] || [[ "$TEAM_ID" == "XXXXXXXXXX" ]]; then
-    log_error "TEAM_ID not configured in signing-config.sh"
+    log_error "TEAM_ID not configured (set in signing-config.sh or environment)"
     exit 1
 fi
 
 if [[ -z "$APPLE_ID" ]] || [[ "$APPLE_ID" == *"example.com" ]]; then
-    log_error "APPLE_ID not configured in signing-config.sh"
+    log_error "APPLE_ID not configured (set in signing-config.sh or environment)"
     exit 1
 fi
 
 if [[ -z "$APP_PASSWORD" ]] || [[ "$APP_PASSWORD" == "xxxx-xxxx-xxxx-xxxx" ]]; then
-    log_error "APP_PASSWORD not configured in signing-config.sh"
+    log_error "APP_PASSWORD not configured (set in signing-config.sh or environment)"
+    exit 1
+fi
+
+if [[ -z "$SIGNING_IDENTITY" ]] || [[ "$SIGNING_IDENTITY" == *"Your Name"* ]]; then
+    log_error "SIGNING_IDENTITY not configured (set in signing-config.sh or environment)"
     exit 1
 fi
 
@@ -203,10 +203,15 @@ log_success "Created DMG: $(du -h "$DMG_PATH" | cut -f1)"
 
 # Sign the DMG
 log_step "Signing DMG"
-codesign --sign "$SIGNING_IDENTITY" \
-         --timestamp \
-         --force \
-         "$DMG_PATH"
+codesign_args=(
+    --sign "$SIGNING_IDENTITY"
+    --timestamp
+    --force
+)
+if [[ -n "$CODESIGN_KEYCHAIN_PATH" ]]; then
+    codesign_args+=(--keychain "$CODESIGN_KEYCHAIN_PATH")
+fi
+codesign "${codesign_args[@]}" "$DMG_PATH"
 log_success "DMG signed"
 
 # ============================================================================

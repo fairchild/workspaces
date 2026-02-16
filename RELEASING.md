@@ -94,12 +94,16 @@ The recommended method for production releases.
    # Open PR and merge after CI is green
    ```
 
-3. **Run Release Workflow Manually**
+3. **Run Release Workflow Manually (from `main`)**
 
    - Workflow: `.github/workflows/release.yml`
-   - Trigger: `workflow_dispatch` only (manual run)
+   - Trigger: `workflow_dispatch`
    - In GitHub: Actions > `Release` > `Run workflow`
    - Branch to release from: `main`
+   - Guardrails:
+     - Manual releases fail if started from a non-`main` branch.
+     - Release commit must be reachable from `origin/main`.
+     - Temporary signing keychain is cleaned up and prior keychain defaults are restored on self-hosted runners.
    - Actions performed:
      - Build GhosttyKit
      - Import signing certificate from secrets
@@ -113,6 +117,21 @@ The recommended method for production releases.
    - Assets:
      - `WorkspaceManager-<version>.dmg`
      - `WorkspaceManager-latest.dmg`
+
+### Method 1B: Tag-Driven Release (Main Commit Only)
+
+If you prefer to cut the tag yourself first, you can push a release tag from a `main` commit:
+
+```bash
+git checkout main
+git pull --ff-only origin main
+git tag workspaces-v0.2.0-main.1
+git push origin workspaces-v0.2.0-main.1
+```
+
+- The `Release` workflow also triggers on `workspaces-v*` tags.
+- Guardrail still applies: the tagged commit must be on `origin/main` history.
+- The pushed tag is used as the release tag directly.
 
 ### Method 2: Manual Local Release
 
@@ -144,7 +163,7 @@ For testing or when CI isn't available.
 
    ```bash
    # Create release with GitHub CLI
-   gh release create workspaces-v0.2.0 \
+   gh release create workspaces-v0.2.0-main.local1 \
        --title "Workspaces v0.2.0" \
        --notes "Release notes here" \
        build/WorkspaceManager-0.2.0.dmg

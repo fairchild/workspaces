@@ -557,8 +557,8 @@
         </div>
         <div class="principle">
           <div class="principle-icon">🍎</div>
-          <h4>Native Mac Feel</h4>
-          <p>SwiftUI + AppKit patterns. Three-column layout like Finder/Mail. Familiar keyboard shortcuts.</p>
+          <h4>Ghostty-First Input</h4>
+          <p>Embedded terminal shortcuts should default to Ghostty behavior. App-level shortcuts are reserved for non-overlapping wrapper chrome actions.</p>
         </div>
         <div class="principle">
           <div class="principle-icon">🛡️</div>
@@ -571,6 +571,15 @@
           <p>Terminal gets maximum screen real estate. Right pane collapses. Sidebar can hide.</p>
         </div>
       </div>
+    </section>
+
+    <section>
+      <h2>Shortcut Routing Policy</h2>
+      <ul>
+        <li>Default route: terminal shortcuts pass through to embedded Ghostty.</li>
+        <li>App route: only non-overlapping chrome controls (for example, Cmd+B sidebar toggle).</li>
+        <li>Conflict policy: when app and Ghostty overlap, users should be able to choose routing.</li>
+      </ul>
     </section>
 
     <!-- Key Flows -->

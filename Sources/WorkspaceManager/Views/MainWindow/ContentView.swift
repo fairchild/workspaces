@@ -84,13 +84,12 @@ struct ContentView: View {
             guard let selectedWorkspace else { return }
             handleWorkspaceSelection(selectedWorkspace)
         }
-        .onReceive(NotificationCenter.default.publisher(for: GhosttyAppManager.splitRequestNotification)) { notification in
+        .onReceive(NotificationCenter.default.publisher(for: GhosttyAppManager.splitActionNotification)) { notification in
             Task { @MainActor in
-                handleGhosttySplitRequest(notification)
+                handleGhosttySplitAction(notification)
             }
         }
         .focusedSceneValue(\.toggleSidebarAction, toggleSidebarVisibility)
-        .focusedSceneValue(\.splitTerminalAction, splitFocusedTerminal)
     }
 
     private func processPendingDeepLink() {
@@ -232,33 +231,95 @@ struct ContentView: View {
     }
 
     @MainActor
-    private func splitFocusedTerminal() {
-        createAndFocusSplitForActiveSession()
-    }
-
-    @MainActor
-    private func handleGhosttySplitRequest(_ notification: Notification) {
-        if let sourceTerminal = notification.object as? GhosttySurfaceView,
-            let sourceSessionID = hostTerminalState.surfaceStore.sessionID(for: sourceTerminal)
-        {
-            _ = hostTerminalState.activateExistingSession(sessionID: sourceSessionID)
+    private func handleGhosttySplitAction(_ notification: Notification) {
+        guard let request = GhosttyAppManager.splitActionRequest(from: notification) else {
+            NSLog("[SplitRouting] Ignored split action notification with invalid payload")
+            return
         }
 
-        createAndFocusSplitForActiveSession()
+        let sourceSessionID =
+            (notification.object as? GhosttySurfaceView)
+            .flatMap { hostTerminalState.surfaceStore.sessionID(for: $0) }
+
+        switch request.kind {
+        case .newSplit:
+            handleGhosttyNewSplitRequest(sourceSessionID: sourceSessionID)
+
+        case .gotoSplit:
+            handleGhosttyGotoSplitRequest(
+                sourceSessionID: sourceSessionID,
+                direction: request.focusDirection
+            )
+        }
     }
 
     @MainActor
-    private func createAndFocusSplitForActiveSession() {
-        guard let splitSession = hostTerminalState.ensureSplitForActiveSession() else {
+    private func handleGhosttyNewSplitRequest(sourceSessionID: UUID?) {
+        let primarySessionID =
+            sourceSessionID.flatMap { hostTerminalState.activatePrimarySession(containing: $0) }
+            ?? hostTerminalState.activeSessionID
+
+        guard let primarySessionID else {
+            NSLog("[SplitRouting] new_split ignored: no active/primary session")
+            return
+        }
+        NSLog("[SplitRouting] new_split source=%@ primary=%@", sourceSessionID?.uuidString ?? "nil", primarySessionID.uuidString)
+        createAndFocusSplit(primarySessionID: primarySessionID)
+    }
+
+    @MainActor
+    private func handleGhosttyGotoSplitRequest(
+        sourceSessionID: UUID?,
+        direction: GhosttyAppManager.SplitFocusDirection?
+    ) {
+        guard let sourceSessionID,
+            let direction
+        else {
+            NSLog("[SplitRouting] goto_split ignored: missing source or direction")
+            return
+        }
+
+        guard let targetSessionID = hostTerminalState.splitFocusTarget(
+            from: sourceSessionID,
+            direction: direction
+        ) else {
+            NSLog(
+                "[SplitRouting] goto_split no-op source=%@ direction=%@",
+                sourceSessionID.uuidString,
+                String(describing: direction)
+            )
+            return
+        }
+
+        NSLog(
+            "[SplitRouting] goto_split source=%@ target=%@ direction=%@",
+            sourceSessionID.uuidString,
+            targetSessionID.uuidString,
+            String(describing: direction)
+        )
+        focusTerminal(sessionID: targetSessionID)
+    }
+
+    @MainActor
+    private func createAndFocusSplit(primarySessionID: UUID) {
+        guard let splitSession = hostTerminalState.ensureSplit(forPrimarySessionID: primarySessionID) else {
             return
         }
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
             Task { @MainActor in
-                guard let splitTerminal = hostTerminalState.surfaceStore.terminal(for: splitSession.id) else { return }
-                TerminalFocusManager.shared.requestFocus(for: splitTerminal)
+                focusTerminal(sessionID: splitSession.id)
             }
         }
+    }
+
+    @MainActor
+    private func focusTerminal(sessionID: UUID) {
+        guard let terminal = hostTerminalState.surfaceStore.terminal(for: sessionID) else {
+            NSLog("[SplitRouting] focus skipped: no terminal for session %@", sessionID.uuidString)
+            return
+        }
+        TerminalFocusManager.shared.requestFocus(for: terminal)
     }
 
     @discardableResult
@@ -513,6 +574,23 @@ final class HostTerminalStateStore: ObservableObject {
         return true
     }
 
+    /// Ensures the primary (non-split) session that contains `sessionID` is active.
+    /// If `sessionID` already refers to a primary session, it becomes active directly.
+    @discardableResult
+    func activatePrimarySession(containing sessionID: UUID) -> UUID? {
+        if coordinator.sessions.contains(where: { $0.id == sessionID }) {
+            guard activateExistingSession(sessionID: sessionID) else { return nil }
+            return sessionID
+        }
+
+        guard let primarySessionID = splitSessionsByPrimaryID.first(where: { $0.value.id == sessionID })?.key else {
+            return nil
+        }
+
+        guard activateExistingSession(sessionID: primarySessionID) else { return nil }
+        return primarySessionID
+    }
+
     func pruneRepoSessions(validRepoPaths: Set<String>) {
         let removedSessionIDs = coordinator.pruneRepoSessions(validRepoPaths: validRepoPaths)
         guard !removedSessionIDs.isEmpty else { return }
@@ -534,13 +612,17 @@ final class HostTerminalStateStore: ObservableObject {
 
     @discardableResult
     func ensureSplitForActiveSession() -> HostTerminalSession? {
-        guard let activeSessionID,
-            let primarySession = sessions.first(where: { $0.id == activeSessionID })
-        else {
+        guard let activeSessionID else { return nil }
+        return ensureSplit(forPrimarySessionID: activeSessionID)
+    }
+
+    @discardableResult
+    func ensureSplit(forPrimarySessionID primarySessionID: UUID) -> HostTerminalSession? {
+        guard let primarySession = sessions.first(where: { $0.id == primarySessionID }) else {
             return nil
         }
 
-        if let existing = splitSessionsByPrimaryID[activeSessionID] {
+        if let existing = splitSessionsByPrimaryID[primarySessionID] {
             return existing
         }
 
@@ -548,9 +630,39 @@ final class HostTerminalStateStore: ObservableObject {
             key: primarySession.key,
             directory: primarySession.directoryURL
         )
-        splitSessionsByPrimaryID[activeSessionID] = splitSession
+        splitSessionsByPrimaryID[primarySessionID] = splitSession
         objectWillChange.send()
         return splitSession
+    }
+
+    /// Computes the target session for split focus navigation in our current
+    /// two-pane split model (primary + optional right split).
+    func splitFocusTarget(
+        from sourceSessionID: UUID,
+        direction: GhosttyAppManager.SplitFocusDirection
+    ) -> UUID? {
+        guard let primarySessionID = activatePrimarySession(containing: sourceSessionID),
+            let splitSession = splitSessionsByPrimaryID[primarySessionID]
+        else {
+            return nil
+        }
+
+        let sourceIsSplit = splitSession.id == sourceSessionID
+
+        switch direction {
+        case .previous, .next:
+            return sourceIsSplit ? primarySessionID : splitSession.id
+
+        case .left:
+            return sourceIsSplit ? primarySessionID : nil
+
+        case .right:
+            return sourceIsSplit ? nil : splitSession.id
+
+        case .up, .down:
+            // Current UI only supports horizontal splits.
+            return nil
+        }
     }
 
     private func publishSnapshot() {

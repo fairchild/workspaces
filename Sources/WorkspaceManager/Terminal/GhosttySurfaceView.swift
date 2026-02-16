@@ -16,6 +16,7 @@ final class GhosttySurfaceView: NSView, NSTextInputClient {
     private var keyTextAccumulator: [String]?
     private var markedText = NSMutableAttributedString()
     private var focused = false
+    private var lastPerformKeyEvent: TimeInterval?
 
     private(set) var surface: ghostty_surface_t?
     private(set) var terminalTitle: String = ""
@@ -124,35 +125,12 @@ final class GhosttySurfaceView: NSView, NSTextInputClient {
         }
     }
 
-    @MainActor
-    func splitRight() {
-        guard let surface else { return }
-        let splitAction = "new_split:right"
-        let dispatched = splitAction.withCString { pointer in
-            ghostty_surface_binding_action(surface, pointer, UInt(splitAction.utf8.count))
-        }
-
-        if !dispatched {
-            ghostty_surface_split(surface, GHOSTTY_SPLIT_DIRECTION_RIGHT)
-        }
-
-        ghostty_surface_refresh(surface)
-        if let app = GhosttyAppManager.shared.app {
-            ghostty_app_tick(app)
-        }
-
-        NSLog(
-            "[GhosttySurfaceView] splitRight dispatched=%@",
-            dispatched ? "binding_action" : "surface_split"
-        )
-    }
-
     // MARK: - Local event monitor
 
     private func setupEventMonitor() {
         guard eventMonitor == nil else { return }
 
-        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp, .leftMouseDown]) { [weak self] event in
+        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyUp, .leftMouseDown]) { [weak self] event in
             self?.handleLocalEvent(event)
         }
     }
@@ -181,17 +159,6 @@ final class GhosttySurfaceView: NSView, NSTextInputClient {
                 window.makeFirstResponder(self)
             }
             return event
-
-        case .keyDown:
-            guard focused else { return event }
-
-            let normalizedFlags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-            let isCommandD = normalizedFlags == [.command]
-                && event.charactersIgnoringModifiers?.lowercased() == "d"
-            guard isCommandD else { return event }
-
-            splitRight()
-            return nil
 
         case .keyUp:
             guard focused, event.modifierFlags.contains(.command) else {
@@ -327,30 +294,107 @@ final class GhosttySurfaceView: NSView, NSTextInputClient {
     // MARK: - Keyboard input
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        // Ensure Cmd+D always reaches the terminal split action when the
-        // Ghostty surface is focused, even if AppKit key-equivalent routing
-        // would otherwise consume it first.
         guard focused || window?.firstResponder === self else {
             return super.performKeyEquivalent(with: event)
         }
 
         guard event.type == .keyDown else {
-            return super.performKeyEquivalent(with: event)
+            return false
         }
 
-        let normalizedFlags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        let isCommandD = normalizedFlags == [.command]
-            && event.charactersIgnoringModifiers?.lowercased() == "d"
-
-        guard isCommandD else {
-            return super.performKeyEquivalent(with: event)
+        // Respect explicit app-owned shortcuts (for example, Cmd+B sidebar toggle)
+        // and let AppKit command routing handle them.
+        if ShortcutRoutingPolicy.shared.route(for: event) == .appChrome {
+            return false
         }
 
         guard let surface else {
             return false
         }
 
-        ghostty_surface_split(surface, GHOSTTY_SPLIT_DIRECTION_RIGHT)
+        let translationMods = translationModifiers(for: event, surface: surface)
+        let keyEvent = GhosttyInput.keyEvent(
+            from: event,
+            action: GHOSTTY_ACTION_PRESS,
+            translationMods: translationMods
+        )
+        var bindingFlags = ghostty_binding_flags_e(rawValue: 0)
+        let isGhosttyBinding = (event.characters ?? "").withCString { pointer in
+            var keyEventWithText = keyEvent
+            keyEventWithText.text = pointer
+            return ghostty_surface_key_is_binding(surface, keyEventWithText, &bindingFlags)
+        }
+
+        if isGhosttyBinding {
+            let isConsumed = bindingFlags.rawValue & GHOSTTY_BINDING_FLAGS_CONSUMED.rawValue != 0
+            let isAll = bindingFlags.rawValue & GHOSTTY_BINDING_FLAGS_ALL.rawValue != 0
+            let isPerformable = bindingFlags.rawValue & GHOSTTY_BINDING_FLAGS_PERFORMABLE.rawValue != 0
+
+            if isConsumed, !isAll, !isPerformable,
+                let menu = NSApp.mainMenu,
+                menu.performKeyEquivalent(with: event)
+            {
+                return true
+            }
+
+            keyDown(with: event)
+            return true
+        }
+
+        let equivalent: String
+        switch event.charactersIgnoringModifiers {
+        case "\r":
+            guard event.modifierFlags.contains(.control) else {
+                return false
+            }
+            equivalent = "\r"
+
+        case "/":
+            guard event.modifierFlags.contains(.control),
+                event.modifierFlags.isDisjoint(with: [.shift, .command, .option])
+            else {
+                return false
+            }
+            equivalent = "_"
+
+        default:
+            guard event.timestamp != 0 else {
+                return false
+            }
+
+            guard event.modifierFlags.contains(.command) || event.modifierFlags.contains(.control) else {
+                lastPerformKeyEvent = nil
+                return false
+            }
+
+            if let lastPerformKeyEvent {
+                self.lastPerformKeyEvent = nil
+                if lastPerformKeyEvent == event.timestamp {
+                    equivalent = event.characters ?? ""
+                    break
+                }
+            }
+
+            lastPerformKeyEvent = event.timestamp
+            return false
+        }
+
+        guard let replayEvent = NSEvent.keyEvent(
+            with: .keyDown,
+            location: event.locationInWindow,
+            modifierFlags: event.modifierFlags,
+            timestamp: event.timestamp,
+            windowNumber: event.windowNumber,
+            context: nil,
+            characters: equivalent,
+            charactersIgnoringModifiers: equivalent,
+            isARepeat: event.isARepeat,
+            keyCode: event.keyCode
+        ) else {
+            return false
+        }
+
+        keyDown(with: replayEvent)
         return true
     }
 
@@ -360,21 +404,7 @@ final class GhosttySurfaceView: NSView, NSTextInputClient {
             return
         }
 
-        let translatedMods = GhosttyInput.eventModifierFlags(
-            mods: ghostty_surface_key_translation_mods(
-                surface,
-                GhosttyInput.mods(from: event.modifierFlags)
-            )
-        )
-
-        var translationMods = event.modifierFlags
-        for modifier in [NSEvent.ModifierFlags.shift, .control, .option, .command] {
-            if translatedMods.contains(modifier) {
-                translationMods.insert(modifier)
-            } else {
-                translationMods.remove(modifier)
-            }
-        }
+        let translationMods = translationModifiers(for: event, surface: surface)
 
         let translationEvent: NSEvent
         if translationMods == event.modifierFlags {
@@ -497,7 +527,26 @@ final class GhosttySurfaceView: NSView, NSTextInputClient {
     }
 
     override func doCommand(by selector: Selector) {
-        _ = selector
+        if let lastPerformKeyEvent,
+            let currentEvent = NSApp.currentEvent,
+            lastPerformKeyEvent == currentEvent.timestamp
+        {
+            NSApp.sendEvent(currentEvent)
+            return
+        }
+
+        guard let surface else { return }
+
+        switch selector {
+        case #selector(moveToBeginningOfDocument(_:)):
+            _ = performBindingAction("scroll_to_top", surface: surface)
+
+        case #selector(moveToEndOfDocument(_:)):
+            _ = performBindingAction("scroll_to_bottom", surface: surface)
+
+        default:
+            break
+        }
     }
 
     func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
@@ -584,6 +633,35 @@ final class GhosttySurfaceView: NSView, NSTextInputClient {
 
         if clearIfNeeded {
             ghostty_surface_preedit(surface, nil, 0)
+        }
+    }
+
+    private func translationModifiers(
+        for event: NSEvent,
+        surface: ghostty_surface_t
+    ) -> NSEvent.ModifierFlags {
+        let translatedMods = GhosttyInput.eventModifierFlags(
+            mods: ghostty_surface_key_translation_mods(
+                surface,
+                GhosttyInput.mods(from: event.modifierFlags)
+            )
+        )
+
+        var translationMods = event.modifierFlags
+        for modifier in [NSEvent.ModifierFlags.shift, .control, .option, .command] {
+            if translatedMods.contains(modifier) {
+                translationMods.insert(modifier)
+            } else {
+                translationMods.remove(modifier)
+            }
+        }
+
+        return translationMods
+    }
+
+    private func performBindingAction(_ action: String, surface: ghostty_surface_t) -> Bool {
+        action.withCString { pointer in
+            ghostty_surface_binding_action(surface, pointer, UInt(action.utf8.count))
         }
     }
 }
