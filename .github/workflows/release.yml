@@ -84,10 +84,12 @@ jobs:
           CERT_PATH="$RUNNER_TEMP/developer-id-application.p12"
           KEYCHAIN_PATH="$RUNNER_TEMP/workspaces-release.keychain-db"
           KEYCHAIN_PASSWORD="$(uuidgen)"
-          ORIGINAL_DEFAULT_KEYCHAIN="$(security default-keychain -d user | tr -d '"')"
+          ORIGINAL_DEFAULT_KEYCHAIN="$(
+            security default-keychain -d user 2>/dev/null | tr -d '"' || true
+          )"
           ORIGINAL_KEYCHAIN_LIST="$(
-            security list-keychains -d user \
-            | sed -E 's/^[[:space:]]*"//; s/"$//'
+            security list-keychains -d user 2>/dev/null \
+            | sed -E 's/^[[:space:]]*"//; s/"$//' || true
           )"
 
           if ! (echo "$APPLE_DEVELOPER_ID_CERT_BASE64" | base64 --decode > "$CERT_PATH" 2>/dev/null); then
