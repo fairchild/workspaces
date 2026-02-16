@@ -73,7 +73,7 @@ base64 -i Developer_ID_Application.p12 | pbcopy
 
 ## Release Methods
 
-### Method 1: Automated Release on Merge to `main` (GitHub Actions)
+### Method 1: Manual Release via GitHub Actions (Recommended)
 
 The recommended method for production releases.
 
@@ -85,7 +85,7 @@ The recommended method for production releases.
    <string>0.2.0</string>  <!-- New version -->
    ```
 
-2. **Merge PR to `main`**
+2. **Merge Version Changes to `main`**
 
    ```bash
    git add .
@@ -94,10 +94,12 @@ The recommended method for production releases.
    # Open PR and merge after CI is green
    ```
 
-3. **Release Workflow Runs Automatically**
+3. **Run Release Workflow Manually**
 
    - Workflow: `.github/workflows/release.yml`
-   - Trigger: every push to `main` (including merged PRs)
+   - Trigger: `workflow_dispatch` only (manual run)
+   - In GitHub: Actions > `Release` > `Run workflow`
+   - Branch to release from: `main`
    - Actions performed:
      - Build GhosttyKit
      - Import signing certificate from secrets
@@ -112,7 +114,7 @@ The recommended method for production releases.
      - `WorkspaceManager-<version>.dmg`
      - `WorkspaceManager-latest.dmg`
 
-### Method 2: Manual Release (Local)
+### Method 2: Manual Local Release
 
 For testing or when CI isn't available.
 
