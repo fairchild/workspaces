@@ -73,6 +73,22 @@ For UI smoke/capture script entry points, see:
 
 - [scripts/README.md](./scripts/README.md)
 
+### Sandbox-Safe Local Launch
+
+If your shell environment restricts writes to `~/Library/Application Support`, launch with a writable local data directory:
+
+```bash
+WORKSPACES_DATA_DIR="$PWD/.workspacemanager-data" swift run WorkspaceManager
+```
+
+Preferred dev launcher (recommended):
+
+```bash
+./scripts/launch-dev.sh
+```
+
+`launch-dev.sh` always runs the latest debug binary from `.build/` and defaults to an isolated local data root, which helps us dogfood and validate isolation patterns described in `backlog/isolation-strategies.md`.
+
 ## License
 
 MIT

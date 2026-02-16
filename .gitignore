@@ -20,6 +20,8 @@ scripts/signing-config.sh
 
 # Session artifacts (ephemeral, agent-specific)
 .context/
+.dev-data/
+.sandbox-data/
 
 # macOS
 .DS_Store

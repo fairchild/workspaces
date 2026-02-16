@@ -137,6 +137,35 @@ final class GhosttyAppManager: NSObject {
         guard let surfaceView = surfaceView(from: target) else { return false }
 
         switch action.tag {
+        case GHOSTTY_ACTION_NEW_SPLIT:
+            DispatchQueue.main.async {
+                guard let surface = surfaceView.surface else { return }
+                ghostty_surface_split(surface, action.action.new_split)
+            }
+            return true
+
+        case GHOSTTY_ACTION_GOTO_SPLIT:
+            DispatchQueue.main.async {
+                guard let surface = surfaceView.surface else { return }
+                ghostty_surface_split_focus(surface, action.action.goto_split)
+            }
+            return true
+
+        case GHOSTTY_ACTION_RESIZE_SPLIT:
+            DispatchQueue.main.async {
+                guard let surface = surfaceView.surface else { return }
+                let resize = action.action.resize_split
+                ghostty_surface_split_resize(surface, resize.direction, resize.amount)
+            }
+            return true
+
+        case GHOSTTY_ACTION_EQUALIZE_SPLITS:
+            DispatchQueue.main.async {
+                guard let surface = surfaceView.surface else { return }
+                ghostty_surface_split_equalize(surface)
+            }
+            return true
+
         case GHOSTTY_ACTION_SET_TITLE:
             let title = action.action.set_title.title.flatMap { String(cString: $0) } ?? ""
             DispatchQueue.main.async {

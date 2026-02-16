@@ -86,10 +86,13 @@ ws_build_app() {
 
 ws_launch_app() {
     local wait_seconds="${1:-5}"
+    local data_dir="${WORKSPACES_DATA_DIR:-$REPO_ROOT/.sandbox-data}"
+
+    mkdir -p "$data_dir"
     ws_log "Launching app..."
     (
         cd "$REPO_ROOT"
-        swift run WorkspaceManager > "$APP_LOG" 2>&1
+        WORKSPACES_DATA_DIR="$data_dir" swift run WorkspaceManager > "$APP_LOG" 2>&1
     ) &
     APP_PID=$!
     sleep "$wait_seconds"
