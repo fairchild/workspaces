@@ -1,29 +1,29 @@
 {
   "launch_to_first_prompt": {
-    "n": 1,
-    "min": 249.61,
-    "max": 249.61,
-    "median": 249.61,
-    "mean": 249.61
+    "n": 5,
+    "min": 99.66,
+    "max": 174.27,
+    "median": 159.01,
+    "mean": 151.912
   },
   "repo_hydration": {
-    "n": 1,
-    "min": 2.59,
-    "max": 2.59,
-    "median": 2.59,
-    "mean": 2.59
+    "n": 5,
+    "min": 1.07,
+    "max": 1.22,
+    "median": 1.12,
+    "mean": 1.1440000000000001
   },
   "repo_click_to_focus": {
-    "n": 1,
-    "min": 167.02,
-    "max": 167.02,
-    "median": 167.02,
-    "mean": 167.02
+    "n": 5,
+    "min": 158.57,
+    "max": 160.24,
+    "median": 159.2,
+    "mean": 159.196
   },
   "metadata": {
-    "timestamp": "2026-02-15T15:29:36-0800",
-    "runs_requested": 1,
-    "sleep_seconds": 5,
+    "timestamp": "2026-02-15T18:24:45-0800",
+    "runs_requested": 5,
+    "sleep_seconds": 8,
     "os_version": "26.2",
     "os_build": "25C56",
     "arch": "arm64",
