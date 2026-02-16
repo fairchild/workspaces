@@ -35,13 +35,20 @@ struct SidebarView: View {
     @State private var showingDeleteConfirmation = false
 
     @State private var didAttemptDefaultRepoImport = false
+    @State private var expandedRepoIDs: Set<UUID> = []
+    @State private var didInitializeRepoExpansion = false
 
-    var allWorkspaces: [Workspace] {
-        repos.flatMap(\.workspaces).sorted { $0.lastAccessedAt > $1.lastAccessedAt }
+    private var isUIFixtureMode: Bool {
+        ProcessInfo.processInfo.environment["WORKSPACES_UI_FIXTURE"] == "1"
+    }
+
+    private var isRepoAutoImportDisabled: Bool {
+        let environment = ProcessInfo.processInfo.environment
+        return isUIFixtureMode || environment["WORKSPACES_DISABLE_AUTO_IMPORT"] == "1"
     }
 
     var body: some View {
-        List(selection: $selectedWorkspace) {
+        List {
             // Repositories Section
             Section("Repositories") {
                 Button {
@@ -64,18 +71,23 @@ struct SidebarView: View {
                 } else {
                     ForEach(repos) { repo in
                         let normalizedRepoPath = normalizePath(repo.localURL)
-                        Button {
-                            onRepoSelected(repo)
-                        } label: {
-                            RepoRow(
-                                repo: repo,
-                                hasLiveSession: liveRepoPaths.contains(normalizedRepoPath),
-                                isActiveSession: activeRepoPath == normalizedRepoPath
-                            )
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
+                        RepoRow(
+                            repo: repo,
+                            hasLiveSession: liveRepoPaths.contains(normalizedRepoPath),
+                            isActiveSession: activeRepoPath == normalizedRepoPath,
+                            isExpanded: isRepoExpanded(repo),
+                            onToggleExpansion: {
+                                toggleRepoExpansion(repo)
+                            },
+                            onSelectRepo: {
+                                if !repo.workspaces.isEmpty, !isRepoExpanded(repo) {
+                                    expandedRepoIDs.insert(repo.id)
+                                }
+                                onRepoSelected(repo)
+                            }
+                        )
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
                         .contextMenu {
                             Button("New Workspace...") {
                                 repoForNewWorkspace = repo
@@ -93,53 +105,66 @@ struct SidebarView: View {
                                 removeRepo(repo)
                             }
                         }
-                    }
-                }
-            }
 
-            // Workspaces Section
-            Section("Workspaces") {
-                if allWorkspaces.isEmpty {
-                    Text("No workspaces")
-                        .foregroundStyle(.secondary)
-                        .font(.callout)
-                } else {
-                    ForEach(allWorkspaces) { workspace in
-                        WorkspaceRow(workspace: workspace)
-                            .tag(workspace)
-                            .contextMenu {
-                                Button("Open in New Window") {
-                                    openInNewWindow(workspace)
-                                }
-                                .disabled(true)
+                        if isRepoExpanded(repo) {
+                            let repoWorkspaces = sortedWorkspaces(for: repo)
 
-                                Button("Reveal in Finder") {
-                                    NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: workspace.path)
-                                }
-
-                                Divider()
-
-                                if workspace.status == .active {
-                                    Button("Archive") {
-                                        workspace.status = .archived
+                            if repoWorkspaces.isEmpty {
+                                Text("No workspaces")
+                                    .foregroundStyle(.secondary)
+                                    .font(.caption)
+                                    .padding(.leading, 28)
+                            } else {
+                                ForEach(repoWorkspaces) { workspace in
+                                    Button {
+                                        selectedWorkspace = workspace
+                                    } label: {
+                                        WorkspaceRow(
+                                            workspace: workspace,
+                                            isSelected: selectedWorkspace?.id == workspace.id,
+                                            isNested: true
+                                        )
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .contentShape(Rectangle())
                                     }
-                                } else {
-                                    Button("Unarchive") {
-                                        workspace.status = .active
+                                    .buttonStyle(.plain)
+                                    .contextMenu {
+                                        Button("Open in New Window") {
+                                            openInNewWindow(workspace)
+                                        }
+                                        .disabled(true)
+
+                                        Button("Reveal in Finder") {
+                                            NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: workspace.path)
+                                        }
+
+                                        Divider()
+
+                                        if workspace.status == .active {
+                                            Button("Archive") {
+                                                workspace.status = .archived
+                                            }
+                                        } else {
+                                            Button("Unarchive") {
+                                                workspace.status = .active
+                                            }
+                                        }
+
+                                        Divider()
+
+                                        Button("Delete Workspace", role: .destructive) {
+                                            deleteWorkspace(workspace)
+                                        }
                                     }
-                                }
-
-                                Divider()
-
-                                Button("Delete Workspace", role: .destructive) {
-                                    deleteWorkspace(workspace)
                                 }
                             }
+                        }
                     }
                 }
             }
         }
         .listStyle(.sidebar)
+        .environment(\.defaultMinListRowHeight, 30)
         .safeAreaInset(edge: .bottom) {
             VStack(spacing: 8) {
                 Divider()
@@ -198,8 +223,14 @@ struct SidebarView: View {
         .focusedSceneValue(\.newWorkspaceAction, handleNewWorkspaceShortcut)
         .onChange(of: selectedWorkspace?.id) { _, _ in
             updateLastAccessedTimestamp()
+            expandRepoForSelectedWorkspace()
+        }
+        .onChange(of: repos.map(\.id)) { _, _ in
+            pruneExpandedRepos()
         }
         .onAppear {
+            initializeExpandedReposIfNeeded()
+            guard !isRepoAutoImportDisabled else { return }
             guard !didAttemptDefaultRepoImport else { return }
             didAttemptDefaultRepoImport = true
             Task {
@@ -446,6 +477,49 @@ struct SidebarView: View {
 
     private func normalizePath(_ url: URL) -> String {
         url.standardizedFileURL.resolvingSymlinksInPath().path
+    }
+
+    private func sortedWorkspaces(for repo: Repo) -> [Workspace] {
+        repo.workspaces.sorted { lhs, rhs in
+            lhs.lastAccessedAt > rhs.lastAccessedAt
+        }
+    }
+
+    private func isRepoExpanded(_ repo: Repo) -> Bool {
+        expandedRepoIDs.contains(repo.id)
+    }
+
+    private func toggleRepoExpansion(_ repo: Repo) {
+        guard !repo.workspaces.isEmpty else { return }
+
+        if expandedRepoIDs.contains(repo.id) {
+            expandedRepoIDs.remove(repo.id)
+        } else {
+            expandedRepoIDs.insert(repo.id)
+        }
+    }
+
+    private func initializeExpandedReposIfNeeded() {
+        guard !didInitializeRepoExpansion else { return }
+        didInitializeRepoExpansion = true
+
+        if isUIFixtureMode {
+            expandedRepoIDs = Set(repos.filter { !$0.workspaces.isEmpty }.map(\.id))
+            return
+        }
+
+        guard let selectedRepoID = selectedWorkspace?.sourceRepo?.id else { return }
+        expandedRepoIDs.insert(selectedRepoID)
+    }
+
+    private func expandRepoForSelectedWorkspace() {
+        guard let selectedRepoID = selectedWorkspace?.sourceRepo?.id else { return }
+        expandedRepoIDs.insert(selectedRepoID)
+    }
+
+    private func pruneExpandedRepos() {
+        let currentRepoIDs = Set(repos.map(\.id))
+        expandedRepoIDs.formIntersection(currentRepoIDs)
     }
 
 }
