@@ -87,6 +87,20 @@ Seven concepts were generated during the 2026-02-15 design session. The explorat
 
 Concept 7 is the refined final version of the portfolio grid direction. All exploration artifacts are preserved in `icon-concepts/`.
 
+### Generation Details
+
+**Model**: OpenAI `gpt-image-1` via `generate_openai.py` (quality: high, size: 1024x1024)
+
+**Prompt** (concept 7, the final icon):
+
+> A macOS app icon on a SOLID BLACK background. The icon is a dark charcoal rounded square with slightly lighter charcoal edges. Inside: a perfectly centered 2x2 grid made of thin subtle gray lines. Three grid cells are dark and empty. The bottom-right cell contains a bright mint-green terminal chevron cursor (>) glowing softly. The green chevron is the ONLY bright element in the entire icon — everything else is dark grays and blacks. This icon represents a developer workspace manager: a portfolio grid of code repositories where one is actively running a terminal session. Style: ultra-minimalist, flat, geometric, no gradients, no 3D, no text. Must be instantly recognizable at 16x16 as a grid with one bright element. Professional, understated, macOS-native feel.
+
+**Iteration notes**: The prompt evolved through 7 rounds. Key learnings:
+- Explicitly requesting "SOLID BLACK background" was necessary — the API defaults to light backgrounds
+- Referencing specific hex colors helped but wasn't always followed
+- Describing the metaphor ("portfolio of repositories where one is active") produced better composition than purely visual descriptions
+- Asking for "no text, no letters" was essential to prevent the model from adding labels
+
 ## Usage Guidelines
 
 - Always use the provided assets; do not recreate or modify the icon
