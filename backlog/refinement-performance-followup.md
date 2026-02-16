@@ -1,11 +1,11 @@
 ---
-status: pending
+status: done
 category: followup
 pr: null
-branch: null
+branch: main
 score: null
-retro_summary: null
-completed: null
+retro_summary: "Added production latency signposts, expanded session regression coverage, and documented unbounded surface policy with guardrails."
+completed: 2026-02-15
 ---
 
 # Refinement and Performance Hardening
@@ -56,11 +56,11 @@ Deliver a refinement-first hardening pass before M2 so current behavior is fast,
 
 ## Acceptance Criteria
 
-- [ ] Signposts present for launch, hydration, and click-to-focus paths.
-- [ ] Baseline report checked in with measured timings and environment notes.
-- [ ] Regression tests added and passing for session reuse/focus behavior.
-- [ ] Memory policy decision implemented or explicitly documented with rationale.
-- [ ] `swift test` passes after changes.
+- [x] Signposts present for launch, hydration, and click-to-focus paths.
+- [x] Baseline report checked in with measured timings and environment notes.
+- [x] Regression tests added and passing for session reuse/focus behavior.
+- [x] Memory policy decision implemented or explicitly documented with rationale.
+- [x] `swift test` passes after changes.
 
 ## Verification
 
@@ -69,6 +69,38 @@ Deliver a refinement-first hardening pass before M2 so current behavior is fast,
   - launch -> host prompt responsiveness
   - repo click -> focused ready-to-type terminal
   - repeated switching restores prior live sessions
+
+## Completed Work (2026-02-15)
+
+1. Signposts + baseline capture
+- Added production signposts in `PerformanceSignposts` for:
+  - `LaunchToFirstPrompt`
+  - `RepoHydration`
+  - `RepoClickToFocusedInput`
+- Wired signpost lifecycle into launch, auto-hydration, and terminal focus handoff code paths.
+- Added reproducible baseline script: `/Users/fairchild/code/workspaces/scripts/perf-baseline.sh`.
+- Checked in baseline report:
+  - `/Users/fairchild/code/workspaces/docs/performance/refinement-baseline-2026-02-15.md`
+
+2. Session/focus regression coverage
+- Expanded `HostTerminalSessionCoordinator` tests for:
+  - rapid repeated switching + active-session restoration
+  - canonical-path-equivalent no-duplication (symlink + `..` path forms)
+
+3. Session surface memory policy
+- Decision: keep surfaces unbounded for now.
+- Implemented explicit guardrail logging in `HostTerminalSurfaceStore` with revisit threshold (`>= 24` surfaces).
+- Documented rationale + revisit triggers in:
+  - `/Users/fairchild/code/workspaces/ARCHITECTURE.md`
+
+## Verification Results
+
+- `swift test`: pass (71 tests)
+- `swift build`: pass
+- Perf baseline capture:
+  - `./scripts/perf-baseline.sh 5 8`
+  - report and metrics committed in docs/performance report above
+  - attempted `xctrace` captures (`Time Profiler`, `SwiftUI`) reported local ktrace session errors; documented in report
 
 ## References
 

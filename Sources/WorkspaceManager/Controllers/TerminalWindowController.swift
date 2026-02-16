@@ -53,7 +53,11 @@ final class TerminalFocusManager: NSObject {
 
     /// Request focus for a terminal with retry logic.
     /// Retries with exponential backoff starting at 50ms, capped at 500ms.
-    func requestFocus(for terminal: NSView, delay: TimeInterval? = nil) {
+    func requestFocus(
+        for terminal: NSView,
+        delay: TimeInterval? = nil,
+        onFocused: (() -> Void)? = nil
+    ) {
         pendingFocusWork?.cancel()
 
         let nextDelay: TimeInterval
@@ -68,7 +72,7 @@ final class TerminalFocusManager: NSObject {
 
             guard let window = terminal.window else {
                 if nextDelay <= 0.5 {
-                    self.requestFocus(for: terminal, delay: nextDelay)
+                    self.requestFocus(for: terminal, delay: nextDelay, onFocused: onFocused)
                 }
                 return
             }
@@ -83,8 +87,10 @@ final class TerminalFocusManager: NSObject {
             let success = window.makeFirstResponder(terminal)
             if success {
                 self.focusedTerminal = terminal
+                PerformanceSignposts.endLaunchToFirstPromptIfNeeded(trigger: "terminal_focus")
+                onFocused?()
             } else if nextDelay <= 0.5 {
-                self.requestFocus(for: terminal, delay: nextDelay)
+                self.requestFocus(for: terminal, delay: nextDelay, onFocused: onFocused)
             }
         }
 

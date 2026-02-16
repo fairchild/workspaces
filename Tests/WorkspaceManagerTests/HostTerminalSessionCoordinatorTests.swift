@@ -123,4 +123,87 @@ struct HostTerminalSessionCoordinatorTests {
         #expect(presentation.isDefaultHomeSessionActive)
         #expect(presentation.activeRepoPath == nil)
     }
+
+    @Test("Rapid switching reuses sessions and restores active target")
+    func rapidSwitchingReusesSessionsAndRestoresActiveTarget() {
+        var coordinator = HostTerminalSessionCoordinator()
+
+        let repoA = URL(fileURLWithPath: "/Users/test/code/repo-a")
+        let repoB = URL(fileURLWithPath: "/Users/test/code/repo-b")
+        let workspaceA = URL(fileURLWithPath: "/Users/test/workspaces/repo-a/feature-auth")
+
+        let repoASession = coordinator.activate(
+            key: .repoPath(repoA.path),
+            directory: repoA
+        ).session
+        let repoBSession = coordinator.activate(
+            key: .repoPath(repoB.path),
+            directory: repoB
+        ).session
+        let workspaceSession = coordinator.activate(
+            key: .hostPath(workspaceA.path),
+            directory: workspaceA
+        ).session
+
+        let switches: [(HostTerminalSessionKey, URL, UUID)] = [
+            (.repoPath(repoA.path), repoA, repoASession.id),
+            (.repoPath(repoB.path), repoB, repoBSession.id),
+            (.hostPath(workspaceA.path), workspaceA, workspaceSession.id),
+            (.repoPath(repoA.path), repoA, repoASession.id),
+            (.repoPath(repoB.path), repoB, repoBSession.id),
+            (.hostPath(workspaceA.path), workspaceA, workspaceSession.id),
+        ]
+
+        for (key, directory, expectedID) in switches {
+            let activation = coordinator.activate(key: key, directory: directory)
+            #expect(activation.session.id == expectedID)
+            #expect(coordinator.activeSessionID == expectedID)
+        }
+
+        #expect(coordinator.sessions.count == 3)
+        #expect(coordinator.activeSessionID == workspaceSession.id)
+    }
+
+    @Test("Canonical-path-equivalent selections do not duplicate sessions")
+    func canonicalEquivalentSelectionsDoNotDuplicateSessions() throws {
+        var coordinator = HostTerminalSessionCoordinator()
+        let fileManager = FileManager.default
+        let root = fileManager.temporaryDirectory
+            .appendingPathComponent("HostTerminalSessionCoordinator-\(UUID().uuidString)")
+        defer { try? fileManager.removeItem(at: root) }
+
+        let canonicalRepo = root.appendingPathComponent("repo", isDirectory: true)
+        let aliasDirectory = root.appendingPathComponent("aliases", isDirectory: true)
+        let symlinkRepo = aliasDirectory.appendingPathComponent("repo-link", isDirectory: true)
+
+        try fileManager.createDirectory(at: canonicalRepo, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: aliasDirectory, withIntermediateDirectories: true)
+        try fileManager.createSymbolicLink(at: symlinkRepo, withDestinationURL: canonicalRepo)
+
+        let dotDotPath = canonicalRepo
+            .deletingLastPathComponent()
+            .appendingPathComponent("repo")
+            .path + "/../repo"
+        let dotDotDirectory = URL(fileURLWithPath: dotDotPath)
+
+        let first = coordinator.activate(
+            key: .repoPath(canonicalRepo.path),
+            directory: canonicalRepo
+        )
+        let second = coordinator.activate(
+            key: .repoPath(symlinkRepo.path),
+            directory: symlinkRepo
+        )
+        let third = coordinator.activate(
+            key: .hostPath(dotDotDirectory.path),
+            directory: dotDotDirectory
+        )
+
+        #expect(first.created)
+        #expect(!second.created)
+        #expect(!third.created)
+        #expect(first.session.id == second.session.id)
+        #expect(first.session.id == third.session.id)
+        #expect(coordinator.sessions.count == 1)
+    }
 }

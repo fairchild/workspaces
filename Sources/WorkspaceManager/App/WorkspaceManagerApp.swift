@@ -82,6 +82,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSLog("[AppDelegate] applicationDidFinishLaunching")
+        PerformanceSignposts.beginLaunchToFirstPromptIfNeeded()
 
         GhosttyAppManager.shared.initializeIfNeeded()
 
