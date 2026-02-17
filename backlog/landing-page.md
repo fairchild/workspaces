@@ -80,7 +80,7 @@ Output to `docs/screenshots/` and commit these assets so they are published with
 - Single `index.html` with inlined CSS
 - Dark theme: charcoal `#1e1e2a`, mint green `#4ade80`, subtle gray `#3a3a4a`
 - Responsive (looks good on mobile even though the app is macOS-only)
-- App icon from `icon-concepts/icon-master-1024.png` as favicon
+- App icon from `docs/assets/icon-concepts/icon-master-1024.png` as favicon
 
 ## Design Reference
 
