@@ -5,6 +5,7 @@
 //  Main entry point - SwiftUI lifecycle with AppKit hooks for window management
 //
 
+import AppKit
 import Foundation
 import SwiftData
 import SwiftUI
@@ -258,6 +259,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 Self.noActivateOnLaunchEnvKey
             )
         }
+        // Applying after activation-policy setup avoids Dock showing the generic executable icon.
+        applyApplicationIconIfAvailable()
 
         // Register existing windows with focus manager
         for window in NSApp.windows {
@@ -289,12 +292,48 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private func applyApplicationIconIfAvailable() {
+        if let bundledIcon = NSImage(named: NSImage.Name("AppIcon")) {
+            NSApp.applicationIconImage = bundledIcon
+            NSApp.dockTile.display()
+            return
+        }
+
+        // SwiftPM debug launches run the raw binary directly; load icon PNG from module resources.
+        let fallbackIconNames = [
+            "icon_512x512@2x",
+            "icon_512x512",
+            "icon_256x256@2x",
+            "icon_256x256"
+        ]
+        let appIconSubdirectory = "Assets.xcassets/AppIcon.appiconset"
+
+        for iconName in fallbackIconNames {
+            guard let iconURL = Bundle.module.url(
+                forResource: iconName,
+                withExtension: "png",
+                subdirectory: appIconSubdirectory
+            ) else {
+                continue
+            }
+
+            guard let fallbackIcon = NSImage(contentsOf: iconURL) else {
+                continue
+            }
+
+            NSApp.applicationIconImage = fallbackIcon
+            NSApp.dockTile.display()
+            return
+        }
+    }
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         return true  // Change to false for background operation
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
         NSLog("[AppDelegate] applicationDidBecomeActive")
+        applyApplicationIconIfAvailable()
         GhosttyAppManager.shared.setFocus(true)
         // When app becomes active, ensure focused terminal gets focus restored
         if let terminal = TerminalFocusManager.shared.focusedTerminal {
