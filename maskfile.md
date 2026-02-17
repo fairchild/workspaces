@@ -11,6 +11,14 @@ that uses markdown. Install with `brew install mask`, then run `mask <task>`.
 ./scripts/build-ghosttykit.sh
 ```
 
+## hooks-install
+
+> Install repo-managed git hooks (enables pre-commit lint check)
+
+```bash
+./scripts/install-git-hooks.sh
+```
+
 ## build
 
 > Build the project in debug mode
