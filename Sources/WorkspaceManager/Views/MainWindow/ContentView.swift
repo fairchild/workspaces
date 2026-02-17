@@ -39,7 +39,8 @@ struct ContentView: View {
                 liveRepoPaths: sessionPresentation.liveRepoPaths,
                 activeRepoPath: sessionPresentation.activeRepoPath,
                 onDefaultHostSelected: handleDefaultHostSelection,
-                onRepoSelected: handleRepoSelection
+                onRepoSelected: handleRepoSelection,
+                onWorkspaceCreated: handleWorkspaceCreated
             )
             .navigationSplitViewColumnWidth(min: 200, ideal: 260, max: 350)
         } detail: {
@@ -206,6 +207,12 @@ struct ContentView: View {
                 requestMainTerminalFocus(targetSessionID: session.id)
             }
         }
+    }
+
+    @MainActor
+    private func handleWorkspaceCreated() {
+        guard selectedWorkspace == nil else { return }
+        isRightPaneVisible = false
     }
 
     @MainActor
