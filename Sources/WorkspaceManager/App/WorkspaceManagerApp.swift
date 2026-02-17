@@ -54,12 +54,18 @@ struct WorkspaceManagerApp: App {
                 Button("New Workspace...") {
                     newWorkspaceAction?()
                 }
-                .keyboardShortcut("t", modifiers: [.command, .shift])
+                .keyboardShortcut(
+                    AppChromeShortcut.newWorkspace.keyEquivalent,
+                    modifiers: AppChromeShortcut.newWorkspace.eventModifiers
+                )
 
                 Button("Toggle Sidebar") {
                     toggleSidebarAction?()
                 }
-                .keyboardShortcut("b", modifiers: [.command])
+                .keyboardShortcut(
+                    AppChromeShortcut.toggleSidebar.keyEquivalent,
+                    modifiers: AppChromeShortcut.toggleSidebar.eventModifiers
+                )
             }
 
             SidebarCommands()

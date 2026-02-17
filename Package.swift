@@ -99,6 +99,10 @@ let package = Package(
         .testTarget(
             name: "WorkspaceManagerTests",
             dependencies: ["WorkspaceManagerCore"]
+        ),
+        .testTarget(
+            name: "WorkspaceManagerAppTests",
+            dependencies: ["WorkspaceManager"]
         )
     ]
 )

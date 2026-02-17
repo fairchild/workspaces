@@ -19,7 +19,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 APP_NAME="WorkspaceManager"
-APP_BUNDLE_ID="com.cloudcompute.workspaces"
+INSTALLED_APP_BINARY="/Applications/$APP_NAME.app/Contents/MacOS/$APP_NAME"
 DEFAULT_OUTPUT_DIR="$REPO_ROOT/output/window"
 OUTPUT_PATH=""
 ACTIVATE_APP=false
@@ -47,6 +47,7 @@ Notes:
 - Default mode avoids app activation to reduce focus contention on shared desktops.
 - Requires Screen Recording permission for this terminal.
 - Uses CoreGraphics window enumeration for window-id lookup (no Accessibility dependency).
+- `--activate` uses System Events to focus a running process and never launches by bundle id.
 USAGE
 }
 
@@ -77,6 +78,9 @@ ensure_dependencies() {
     command -v swift >/dev/null 2>&1 || fail "swift is required"
     command -v screencapture >/dev/null 2>&1 || fail "screencapture is required"
     pgrep -x "$APP_NAME" >/dev/null 2>&1 || fail "$APP_NAME is not running"
+    if pgrep -f "$INSTALLED_APP_BINARY" >/dev/null 2>&1; then
+        fail "Installed app process detected at $INSTALLED_APP_BINARY; quit it before capture"
+    fi
     if [[ "$ACTIVATE_APP" == true ]]; then
         command -v osascript >/dev/null 2>&1 || fail "osascript is required for --activate"
     fi
@@ -84,7 +88,7 @@ ensure_dependencies() {
 
 activate_if_requested() {
     if [[ "$ACTIVATE_APP" == true ]]; then
-        osascript -e "tell application id \"$APP_BUNDLE_ID\" to activate" >/dev/null 2>&1 \
+        osascript -e 'tell application "System Events" to set frontmost of process "WorkspaceManager" to true' >/dev/null 2>&1 \
             || fail "could not activate $APP_NAME"
         sleep 0.2
     fi

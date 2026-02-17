@@ -51,6 +51,14 @@ swift test
 ./scripts/launch-dev.sh --no-build --no-activate
 ```
 
+## inspect
+
+> Launch latest debug build in foreground so the app stays open for manual inspection
+
+```bash
+./scripts/launch-dev.sh --no-build --foreground
+```
+
 ## verify-dev
 
 > Run the debug verification loop (build, pinned launch, process-path check, capture)
@@ -59,7 +67,15 @@ swift test
 set -euo pipefail
 ./scripts/build-ghosttykit.sh
 swift build
+if pgrep -f '/Applications/WorkspaceManager.app/Contents/MacOS/WorkspaceManager' >/dev/null 2>&1; then
+  echo "ERROR: /Applications/WorkspaceManager.app is running; quit it before verify-dev"
+  exit 1
+fi
 ./scripts/launch-dev.sh --no-build --no-activate
+if pgrep -f '/Applications/WorkspaceManager.app/Contents/MacOS/WorkspaceManager' >/dev/null 2>&1; then
+  echo "ERROR: /Applications/WorkspaceManager.app started unexpectedly during verify-dev"
+  exit 1
+fi
 ps aux | rg '.build/arm64-apple-macosx/debug/WorkspaceManager'
 ./scripts/capture-window.sh
 echo "Manual checks:"

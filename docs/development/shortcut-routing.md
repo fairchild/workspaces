@@ -19,6 +19,7 @@ The design goal is **Ghostty-first behavior** with a minimal, explicit app-owned
 Current app-owned default shortcuts:
 
 - `Cmd+B`: toggle left sidebar
+- `Cmd+Shift+T`: new workspace sheet/action
 
 Everything else routes to Ghostty unless an override is added.
 
