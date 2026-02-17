@@ -35,6 +35,30 @@ swift test
 ./scripts/launch-dev.sh
 ```
 
+## dev-shared
+
+> Launch debug app without stealing focus (shared-desktop safe)
+
+```bash
+./scripts/launch-dev.sh --no-build --no-activate
+```
+
+## verify-dev
+
+> Run the debug verification loop (build, pinned launch, process-path check, capture)
+
+```bash
+set -euo pipefail
+./scripts/build-ghosttykit.sh
+swift build
+./scripts/launch-dev.sh --no-build --no-activate
+ps aux | rg '.build/arm64-apple-macosx/debug/WorkspaceManager'
+./scripts/capture-window.sh
+echo "Manual checks:"
+echo "  Cmd+B toggles left sidebar"
+echo "  Cmd+D creates a visible right split"
+```
+
 ## run
 
 > Build and launch the app (quick, no isolation)
