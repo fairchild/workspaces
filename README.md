@@ -2,7 +2,7 @@
 
 **Terminal-first workspace manager for AI coding sessions on macOS.**
 
-Workspaces gives you a native app for organizing repositories, spinning up isolated worktrees, and dropping into embedded terminal sessions — built for developers who pair with AI agents daily.
+Workspaces gives you a native app for organizing repositories, spinning up isolated worktrees, and dropping into embedded terminal sessions. It works with any terminal-based coding agent — Claude Code, Aider, Codex CLI, or whatever you run in a shell.
 
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
@@ -12,9 +12,10 @@ Workspaces gives you a native app for organizing repositories, spinning up isola
 
 Workspaces is an **agent-first codebase** — a modern baseline for building macOS developer tools with AI in the loop.
 
+- **Any terminal agent**: The core design is an embedded terminal with workspace management chrome around it. Anything that runs in a shell works — Claude Code, Aider, Codex CLI, Copilot CLI, or a plain `bash` session.
 - **Fork-friendly**: No backwards-compatibility baggage. Take what works, change what doesn't.
 - **Opinionated defaults**: Three-column layout, terminal-first launch, lifecycle hooks. Sensible out of the box, fully customizable.
-- **Pairs with [dotclaude](https://github.com/fairchild/dotclaude)**: Together, the two repos demonstrate a complete AI-augmented development setup — the app (Workspaces) and the agent configuration (dotclaude).
+- **Pairs with [dotclaude](https://github.com/fairchild/dotclaude)**: The author uses Claude Code as a daily driver. Together, the two repos demonstrate a complete AI-augmented development setup — but Workspaces itself is agent-agnostic.
 
 ## Download
 

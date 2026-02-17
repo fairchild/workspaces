@@ -2,7 +2,7 @@
 
 ## Product Context
 
-Workspaces is a Mac app for managing isolated AI coding sessions. Users add git repos, fork them into workspaces, and run AI coding tools (Claude Code, Cursor) in an embedded terminal. Each workspace is a clean copy with automatic setup.
+Workspaces is a Mac app for managing isolated AI coding sessions. Users add git repos, fork them into workspaces, and run terminal-based coding agents (Claude Code, Aider, Codex CLI, or any shell command) in an embedded terminal. Each workspace is a clean copy with automatic setup.
 
 ### Current Behavior Snapshot (2026-02-15)
 
