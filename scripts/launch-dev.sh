@@ -47,6 +47,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 APP_NAME="WorkspaceManager"
 DEBUG_BINARY="$REPO_ROOT/.build/arm64-apple-macosx/debug/$APP_NAME"
+INSTALLED_APP_BINARY="/Applications/$APP_NAME.app/Contents/MacOS/$APP_NAME"
 DEFAULT_DATA_DIR="$REPO_ROOT/.dev-data/workspacemanager"
 LOG_DIR="$REPO_ROOT/.dev-data/logs"
 
@@ -163,16 +164,31 @@ verify_debug_binary() {
     fi
 }
 
+list_instances_for_binary() {
+    local binary_path="$1"
+    ps -axo pid=,command= | awk -v target="$binary_path" '$2 == target { print $1 " " $2 }'
+}
+
+ensure_no_installed_app_instance() {
+    local installed_instances
+    installed_instances="$(list_instances_for_binary "$INSTALLED_APP_BINARY")"
+    if [[ -n "$installed_instances" ]]; then
+        log "Unexpected installed app instance detected:"
+        while IFS= read -r line; do
+            [[ -n "$line" ]] && log "  - $line"
+        done <<< "$installed_instances"
+        fail "Stale install process detected at $INSTALLED_APP_BINARY"
+    fi
+}
+
 stop_existing_if_requested() {
     if [[ "$KILL_EXISTING" != true ]]; then
         return
     fi
 
     log "Stopping any running WorkspaceManager instances..."
-    osascript -e 'tell application id "com.cloudcompute.workspaces" to quit' >/dev/null 2>&1 || true
-    osascript -e 'tell application "WorkspaceManager" to quit' >/dev/null 2>&1 || true
     pkill -x "$APP_NAME" >/dev/null 2>&1 || true
-    pkill -f "/Applications/WorkspaceManager.app/Contents/MacOS/WorkspaceManager" >/dev/null 2>&1 || true
+    pkill -f "$INSTALLED_APP_BINARY" >/dev/null 2>&1 || true
     pkill -f "$REPO_ROOT/build/WorkspaceManager.app/Contents/MacOS/WorkspaceManager" >/dev/null 2>&1 || true
     pkill -f "$DEBUG_BINARY" >/dev/null 2>&1 || true
     sleep 1
@@ -262,10 +278,12 @@ verify_background_process() {
         fail "Launch verification failed: running process is not debug binary"
     fi
 
+    ensure_no_installed_app_instance
+
     # Guardrail against stale app confusion: surface any other WorkspaceManager
     # processes that are not our expected debug binary.
     local other_instances
-    other_instances="$(ps -axo pid=,comm= | awk -v expected="$DEBUG_BINARY" '$2 ~ /WorkspaceManager$/ && $2 != expected { print $1 " " $2 }')"
+    other_instances="$(ps -axo pid=,command= | awk -v expected="$DEBUG_BINARY" '$2 ~ /WorkspaceManager$/ && $2 != expected { print $1 " " $2 }')"
     if [[ -n "$other_instances" ]]; then
         log "Warning: additional WorkspaceManager processes detected:"
         while IFS= read -r line; do
@@ -288,6 +306,7 @@ launch_background() {
 
 launch_foreground() {
     log "Foreground mode. Logs will stream in this terminal."
+    ensure_no_installed_app_instance
     (
         cd "$REPO_ROOT"
         exec env "${ENV_VARS[@]}" "$DEBUG_BINARY"

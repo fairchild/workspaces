@@ -72,6 +72,7 @@ Registered callbacks in `ghostty_runtime_config_s`:
 This project depends on the following keyboard behavior:
 
 - `Cmd+B`: toggles the left sidebar visibility.
+- `Cmd+Shift+T`: triggers the app-level new workspace action.
 - `Cmd+D`: when a terminal surface is focused, creates a split to the right.
 
 The `Cmd+D` path is runtime-action-driven:

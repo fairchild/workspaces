@@ -57,19 +57,13 @@ final class ShortcutRoutingPolicy {
     private let defaultRoute: ShortcutRouteTarget = .ghostty
 
     /// Current app-owned shortcut set. Keep this intentionally small.
-    private let appOwnedDefaults: Set<ShortcutChord> = [
-        ShortcutChord(key: "b", modifiers: [.command])
-    ]
+    private let appOwnedDefaults: Set<ShortcutChord> = AppChromeShortcutCatalog.appOwnedDefaultChords
 
     /// Future user-configurable routing overrides (`App` vs `Ghostty`).
     /// Empty for now, but shape is in place to avoid ad-hoc key handling.
     private var overrides: [ShortcutChord: ShortcutRouteTarget] = [:]
 
-    func route(for event: NSEvent) -> ShortcutRouteTarget {
-        guard let chord = ShortcutChord(event: event) else {
-            return defaultRoute
-        }
-
+    func route(for chord: ShortcutChord) -> ShortcutRouteTarget {
         if let override = overrides[chord] {
             return override
         }
@@ -81,11 +75,22 @@ final class ShortcutRoutingPolicy {
         return defaultRoute
     }
 
+    func route(for event: NSEvent) -> ShortcutRouteTarget {
+        guard let chord = ShortcutChord(event: event) else {
+            return defaultRoute
+        }
+        return route(for: chord)
+    }
+
     func setOverride(_ route: ShortcutRouteTarget?, for chord: ShortcutChord) {
         if let route {
             overrides[chord] = route
         } else {
             overrides.removeValue(forKey: chord)
         }
+    }
+
+    func clearOverrides() {
+        overrides.removeAll()
     }
 }
