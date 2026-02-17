@@ -1,6 +1,20 @@
-# WorkspaceManager
+# Workspaces
 
-A native macOS app for managing development workspaces and terminal-first AI coding sessions.
+**Terminal-first workspace manager for AI coding sessions on macOS.**
+
+Workspaces gives you a native app for organizing repositories, spinning up isolated worktrees, and dropping into embedded terminal sessions — built for developers who pair with AI agents daily.
+
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+
+<!-- TODO: Add screenshot or demo gif -->
+
+## Philosophy
+
+Workspaces is an **agent-first codebase** — a modern baseline for building macOS developer tools with AI in the loop.
+
+- **Fork-friendly**: No backwards-compatibility baggage. Take what works, change what doesn't.
+- **Opinionated defaults**: Three-column layout, terminal-first launch, lifecycle hooks. Sensible out of the box, fully customizable.
+- **Pairs with [dotclaude](https://github.com/fairchild/dotclaude)**: Together, the two repos demonstrate a complete AI-augmented development setup — the app (Workspaces) and the agent configuration (dotclaude).
 
 ## Download
 
@@ -22,7 +36,7 @@ A native macOS app for managing development workspaces and terminal-first AI cod
 ## Features
 
 - Three-column layout: sidebar, terminal, and detail pane
-- Host-terminal-first launch behavior with repo/workspace session switching
+- Opens straight to a terminal — switch repos and the session follows
 - Repository management and workspace creation
 - Integrated GhosttyKit terminal surface
 - File browser and git status view
@@ -53,6 +67,17 @@ swift run WorkspaceManagerCLI open my-repo/feature-auth --cmd "claude"
 ## Configuration
 
 Open Settings (`Cmd+,`) to configure workspace root location.
+
+## Fork & Customize
+
+Workspaces is designed to be forked. There's no plugin system or extension API — instead, the codebase itself is the API. Common customizations:
+
+- **Change the layout**: Edit `ContentView.swift` to rearrange panes
+- **Add lifecycle hooks**: Drop scripts into workspace directories (`setup.sh`, `archive.sh`)
+- **Swap the terminal**: The `TerminalView` wrapper abstracts the terminal backend
+- **Adjust keyboard shortcuts**: See `ShortcutRoutingPolicy.swift`
+
+If you build something interesting on top of Workspaces, open an issue — we'd love to hear about it.
 
 ## Developer Setup and Contributing
 
@@ -89,6 +114,12 @@ Preferred dev launcher (recommended):
 
 `launch-dev.sh` always runs the latest debug binary from `.build/` and defaults to an isolated local data root, which helps us dogfood and validate isolation patterns described in `backlog/isolation-strategies.md`.
 
+Shared-desktop safe launch (do not steal foreground focus):
+
+```bash
+./scripts/launch-dev.sh --no-activate
+```
+
 ## License
 
-MIT
+[Apache-2.0](LICENSE) — Copyright 2026 Michael Fairchild

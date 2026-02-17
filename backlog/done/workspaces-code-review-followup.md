@@ -149,5 +149,4 @@ These are all additive improvements. If any cause issues:
 ## References
 
 - PR #378: Terminal keyboard fix (merged baseline)
-- `docs/solution-terminal-keyboard.md`: Documents the focus management approach
-- `docs/progress.md`: Investigation history
+- `docs/development/solution-terminal-keyboard.md`: Documents the focus management approach

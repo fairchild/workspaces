@@ -7,34 +7,39 @@ Thanks for contributing to WorkspaceManager.
 - macOS 14.0+ (Sonoma or newer)
 - Xcode 15.0+ or Swift 5.10+
 - [mise](https://mise.jdx.dev/) (toolchain management)
+- Optional: [mask](https://github.com/jacobdeichert/mask) (`brew install mask`) — a markdown-based task runner. If installed, you can use `mask <task>` as a shorthand for the commands below. See [maskfile.md](./maskfile.md) for all available tasks.
 
 ## Local Setup
 
 From repo root:
 
 ```bash
-./scripts/build-ghosttykit.sh
+./scripts/build-ghosttykit.sh  # one-time: build terminal framework
 swift build
 swift test
 ```
 
-To run the app from source:
+Or with mask: `mask setup && mask build && mask test`
+
+To run the app in dev mode (isolated data directory):
 
 ```bash
-./scripts/build-release.sh --no-sign
-open build/WorkspaceManager.app
+./scripts/launch-dev.sh
 ```
+
+Or with mask: `mask dev`
 
 ## Daily Development Checks
 
 Run before and after non-trivial changes:
 
 ```bash
-./scripts/build-ghosttykit.sh
 swift-format lint --strict --recursive Sources/ Tests/
-swift test
 swift build
+swift test
 ```
+
+Or with mask: `mask ci`
 
 ## Local Install Workflow
 
