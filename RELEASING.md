@@ -176,7 +176,10 @@ The recommended method for production releases.
 
 4. **Release Tag and Assets**
 
-   - Tag format: `workspaces-v<version>-main.<run_number>`
+   - Manual workflow-dispatch run from `main`:
+     - If `v<version>` already exists, release assets are published to that tag
+     - Otherwise tag format is `workspaces-v<version>-main.<run_number>`
+   - Tag-push run: supports both `v<version>` and `workspaces-v*`
    - Assets:
      - `WorkspaceManager-<version>.dmg`
      - `WorkspaceManager-latest.dmg`
@@ -188,11 +191,11 @@ If you prefer to cut the tag yourself first, you can push a release tag from a `
 ```bash
 git checkout main
 git pull --ff-only origin main
-git tag workspaces-v0.2.0-main.1
-git push origin workspaces-v0.2.0-main.1
+git tag v0.2.0
+git push origin v0.2.0
 ```
 
-- The `Release` workflow also triggers on `workspaces-v*` tags.
+- The `Release` workflow triggers on both `v*` and `workspaces-v*` tags.
 - Guardrail still applies: the tagged commit must be on `origin/main` history.
 - The pushed tag is used as the release tag directly.
 
@@ -234,7 +237,7 @@ For testing or when CI isn't available.
 
    ```bash
    # Create release with GitHub CLI
-   gh release create workspaces-v0.2.0-main.local1 \
+   gh release create v0.2.0 \
        --title "Workspaces v0.2.0" \
        --notes "Release notes here" \
        build/WorkspaceManager-0.2.0.dmg

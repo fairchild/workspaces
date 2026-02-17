@@ -4,6 +4,7 @@ on:
   workflow_dispatch:
   push:
     tags:
+      - "v*"
       - "workspaces-v*"
 
 concurrency:
@@ -28,10 +29,20 @@ jobs:
           set -euo pipefail
           git fetch origin main --no-tags
 
-          # For manual runs, only allow the workflow to execute from main.
-          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]] && [[ "${GITHUB_REF_NAME}" != "main" ]]; then
-            echo "::error::Manual releases must be started from main (current: ${GITHUB_REF_NAME})"
-            exit 1
+          # For manual runs, allow:
+          # - main branch
+          # - explicit release tag refs (v* or workspaces-v*)
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            case "${GITHUB_REF}" in
+              refs/heads/main)
+                ;;
+              refs/tags/v*|refs/tags/workspaces-v*)
+                ;;
+              *)
+                echo "::error::Manual releases must target main or a release tag ref (current: ${GITHUB_REF})"
+                exit 1
+                ;;
+            esac
           fi
 
           # For both manual and tag-triggered runs, require the target commit to
@@ -159,7 +170,11 @@ jobs:
           if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
             TAG="${GITHUB_REF_NAME}"
           else
-            TAG="workspaces-v${VERSION}-main.${GITHUB_RUN_NUMBER}"
+            if git rev-parse -q --verify "refs/tags/v${VERSION}" >/dev/null 2>&1; then
+              TAG="v${VERSION}"
+            else
+              TAG="workspaces-v${VERSION}-main.${GITHUB_RUN_NUMBER}"
+            fi
           fi
           DMG_PATH="build/WorkspaceManager-${VERSION}.dmg"
 
