@@ -1,5 +1,55 @@
 # Changelog
 
+## [0.1.0] - 2026-02-17
+
+### Added
+- refresh icon assets and branding guide
+- route shortcuts via policy and harden release workflow
+- add dev launcher and sandbox-aware shortcut updates
+- polish sidebar UI and add deterministic sidebar capture
+- add app icon and branding
+- ui: show live terminal indicators for repo sessions
+- host: preload ~/code repos and persist repo-click terminal sessions
+- m1: pin main terminal to host defaults on launch
+- cli: add workspace manager daily-driver commands
+- add self-hosted runner support
+- extract WorkspaceManager from services monorepo
+
+### Changed
+- harden host terminal session presentation flow
+- ui: direct session focus and add one-click host navigation
+- ui: reduce host session render cost and speed repo preload
+- host: harden session lifecycle and window scoping
+- value-type protocol boundaries, async process execution, repo setup
+
+### Fixed
+- keep inspector closed when creating workspace
+- recenter and increase app icon frame occupancy
+- apply app icon in dev and bundle builds
+- make release cleanup compatible with bash 3
+- tolerate missing default keychain in release workflow
+- release: harden secret setup and align runner behavior
+- terminal: switch main view to selected workspace session
+- ui: restore host row and strengthen live session visibility
+- harden process execution and workspace terminal lifecycle
+- address review findings and add workspace progress follow-up (#9)
+- repair broken markdown table in isolation-strategies.md
+
+### Other
+- Harden Ghostty shortcut pass-through and add smoke verification
+- Unify shortcut routing and harden debug launch against stale app
+- clarify and refactor build-ghosttykit
+- fix terminal split shortcut and document verification loop
+- Rename production heading to Next
+- Update release workflow to manual
+- Add perf CI validation and archive legacy UI scripts
+- Streamline UI test scripts and add shared smoke/capture entrypoints
+- Add performance instrumentation, benchmarks, and dashboard docs
+- Document release and plan refinments
+- sidebar: make repositories header clickable for host terminal
+- sidebar: make live-session indicators explicit
+- Adopt GhosttyKit terminal stack (#10)
+
 All notable changes to this project will be documented in this file.
 
 ## [0.1.0] - 2026-02-16
