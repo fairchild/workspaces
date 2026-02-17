@@ -59,6 +59,14 @@
     <key>CFBundleExecutable</key>
     <string>WorkspaceManager</string>
 
+    <!-- Primary app icon set name (matches AppIcon.appiconset) -->
+    <key>CFBundleIconName</key>
+    <string>AppIcon</string>
+
+    <!-- Legacy icon file fallback (without extension) -->
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+
     <!-- Info.plist format version (always 6.0 for modern apps) -->
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>

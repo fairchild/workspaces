@@ -86,6 +86,32 @@ log_error() {
     echo -e "${RED}✗${NC} $1"
 }
 
+merge_icon_metadata() {
+    local asset_info_plist="$1"
+    local app_info_plist="$2"
+
+    if [[ ! -f "$asset_info_plist" ]] || [[ ! -f "$app_info_plist" ]]; then
+        return
+    fi
+
+    local icon_file
+    local icon_name
+    icon_file="$(/usr/libexec/PlistBuddy -c "Print :CFBundleIconFile" "$asset_info_plist" 2>/dev/null || true)"
+    icon_name="$(/usr/libexec/PlistBuddy -c "Print :CFBundleIconName" "$asset_info_plist" 2>/dev/null || true)"
+
+    if [[ -n "$icon_file" ]]; then
+        plutil -replace CFBundleIconFile -string "$icon_file" "$app_info_plist"
+    fi
+
+    if [[ -n "$icon_name" ]]; then
+        plutil -replace CFBundleIconName -string "$icon_name" "$app_info_plist"
+    fi
+
+    if [[ -n "$icon_file" ]] || [[ -n "$icon_name" ]]; then
+        log_success "Merged icon metadata into Info.plist"
+    fi
+}
+
 codesign_with_identity() {
     local target="$1"
     shift
@@ -216,18 +242,22 @@ fi
 ASSETS_DIR="Sources/WorkspaceManager/Resources/Assets.xcassets"
 if [[ -d "$ASSETS_DIR" ]] && command -v actool &> /dev/null; then
     log_step "Compiling asset catalog"
+    ASSET_INFO_PLIST="$BUILD_DIR/AssetInfo.plist"
+    rm -f "$ASSET_INFO_PLIST"
 
     # actool compiles .xcassets into Assets.car
     actool --compile "$APP_BUNDLE/Contents/Resources" \
            --platform macosx \
            --minimum-deployment-target 14.0 \
            --app-icon AppIcon \
-           --output-partial-info-plist "$BUILD_DIR/AssetInfo.plist" \
+           --output-partial-info-plist "$ASSET_INFO_PLIST" \
            "$ASSETS_DIR" 2>/dev/null || log_warning "Asset compilation had warnings"
 
     if [[ -f "$APP_BUNDLE/Contents/Resources/Assets.car" ]]; then
         log_success "Compiled Assets.car"
     fi
+
+    merge_icon_metadata "$ASSET_INFO_PLIST" "$APP_BUNDLE/Contents/Info.plist"
 fi
 
 # Create PkgInfo (standard for Mac apps)
