@@ -11,7 +11,7 @@ Current refinement-gate latency metrics:
 3. `repo_click_to_focus`
 
 These are emitted from production code via `PerformanceSignposts`:
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Diagnostics/PerformanceSignposts.swift`
+- `Sources/WorkspaceManager/Diagnostics/PerformanceSignposts.swift`
 
 ## Quick health checks (always run first)
 
@@ -61,10 +61,10 @@ Output location:
 
 When `--record` is used, repo docs are updated:
 
-- `/Users/fairchild/code/workspaces/docs/performance/metrics-history.csv`
-- `/Users/fairchild/code/workspaces/docs/performance/latest-summary.json`
-- `/Users/fairchild/code/workspaces/docs/performance/dashboard.md`
-- `/Users/fairchild/code/workspaces/docs/performance/metrics-reference.md`
+- `docs/performance/metrics-history.csv`
+- `docs/performance/latest-summary.json`
+- `docs/performance/dashboard.md`
+- `docs/performance/metrics-reference.md`
 
 ## Why `WORKSPACES_PERF_AUTO_SELECT_FIRST_REPO=1` is used
 
@@ -111,7 +111,7 @@ xcrun xctrace record \
   --template "Time Profiler" \
   --time-limit 8s \
   --output /tmp/workspaces-time-profiler.trace \
-  --launch -- /bin/zsh -lc 'cd /Users/fairchild/code/workspaces && WORKSPACES_PERF_AUTO_SELECT_FIRST_REPO=1 swift run WorkspaceManager'
+  --launch -- /bin/zsh -lc 'cd "$(git rev-parse --show-toplevel)" && WORKSPACES_PERF_AUTO_SELECT_FIRST_REPO=1 swift run WorkspaceManager'
 ```
 
 Notes:
@@ -135,8 +135,8 @@ Each benchmark report should include:
 5. Known caveats (permissions, xctrace errors, template gaps)
 
 Reference example:
-- `/Users/fairchild/code/workspaces/docs/performance/refinement-baseline-2026-02-15.md`
-- `/Users/fairchild/code/workspaces/docs/performance/metrics-reference.md` (definitions + sequence diagrams)
+- `docs/performance/refinement-baseline-2026-02-15.md`
+- `docs/performance/metrics-reference.md` (definitions + sequence diagrams)
 
 ## Suggested regression thresholds
 

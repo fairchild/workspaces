@@ -73,7 +73,7 @@ Before building the page, capture the four screenshots:
 
 Capture at 2x resolution for Retina. Use the app's actual dark theme — no mocking needed, real screenshots sell better.
 
-Output to `docs/screenshots/` (add to `.gitignore` or commit — decide based on size).
+Output to `docs/screenshots/` and commit these assets so they are published with the docs site. Keep files web-friendly (compressed, consistent dimensions).
 
 ## Tech
 

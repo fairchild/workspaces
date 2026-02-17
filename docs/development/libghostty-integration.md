@@ -13,10 +13,10 @@ integration contract in this repo so future sessions can upgrade safely.
 
 ### Build + pinning
 
-- Build script: `/Users/fairchild/code/workspaces/scripts/build-ghosttykit.sh`
-- Output path consumed by SPM: `/Users/fairchild/code/workspaces/Frameworks/GhosttyKit.xcframework`
+- Build script: `scripts/build-ghosttykit.sh`
+- Output path consumed by SPM: `Frameworks/GhosttyKit.xcframework`
 - Pin source of truth: `GHOSTTY_COMMIT` inside the build script
-- Toolchain source of truth: `/Users/fairchild/code/workspaces/.mise.toml` (`zig = "0.15.2"`)
+- Toolchain source of truth: `.mise.toml` (`zig = "0.15.2"`)
 
 Behavior:
 - If `GHOSTTY_DIR` is set, script verifies that checkout is exactly at pinned commit.
@@ -25,7 +25,7 @@ Behavior:
 
 ### Package wiring
 
-`/Users/fairchild/code/workspaces/Package.swift`:
+`Package.swift`:
 - Uses `.binaryTarget(name: "GhosttyKit", path: "Frameworks/GhosttyKit.xcframework")`
 - App target depends on `GhosttyKit`
 - App target links extra libs/frameworks required by Ghostty static archive:
@@ -36,11 +36,11 @@ Behavior:
 
 ### Files
 
-- App/runtime owner: `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Terminal/GhosttyAppManager.swift`
-- Terminal view: `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Terminal/GhosttySurfaceView.swift`
-- Input mapping helpers: `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Terminal/GhosttyInput.swift`
-- Surface config builder: `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Terminal/GhosttyTerminalConfig.swift`
-- SwiftUI bridge: `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Views/Components/TerminalView.swift`
+- App/runtime owner: `Sources/WorkspaceManager/Terminal/GhosttyAppManager.swift`
+- Terminal view: `Sources/WorkspaceManager/Terminal/GhosttySurfaceView.swift`
+- Input mapping helpers: `Sources/WorkspaceManager/Terminal/GhosttyInput.swift`
+- Surface config builder: `Sources/WorkspaceManager/Terminal/GhosttyTerminalConfig.swift`
+- SwiftUI bridge: `Sources/WorkspaceManager/Views/Components/TerminalView.swift`
 
 ### App manager responsibilities
 
@@ -94,14 +94,14 @@ Current parity gap:
 - `GHOSTTY_ACTION_GOTO_SPLIT` is routed for the current two-pane horizontal split model.
 - `resize_split` and `equalize_splits` are not yet mapped to app-owned split tree behavior.
 
-See `/Users/fairchild/code/workspaces/docs/development/shortcut-routing.md` for the full routing model.
+See `docs/development/shortcut-routing.md` for the full routing model.
 
 ### Focus model
 
 - Window-level focus coordinator remains
-  `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Controllers/TerminalWindowController.swift`
+  `Sources/WorkspaceManager/Controllers/TerminalWindowController.swift`
 - App active/inactive hooks are wired in
-  `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/App/WorkspaceManagerApp.swift`
+  `Sources/WorkspaceManager/App/WorkspaceManagerApp.swift`
 - Retry loop currently starts at 50ms, doubles, caps at 500ms.
 
 ## Configuration Scope (intentional constraints)
@@ -134,7 +134,7 @@ Treat both as watch items for future Ghostty pin updates.
 
 ## Upgrade Procedure (when bumping Ghostty)
 
-1. Edit `GHOSTTY_COMMIT` in `/Users/fairchild/code/workspaces/scripts/build-ghosttykit.sh`.
+1. Edit `GHOSTTY_COMMIT` in `scripts/build-ghosttykit.sh`.
 2. Rebuild framework:
    `./scripts/build-ghosttykit.sh`
 3. Run validation:
@@ -156,8 +156,8 @@ Treat both as watch items for future Ghostty pin updates.
 ## CI Contract
 
 Both workflows build GhosttyKit before lint/build/test:
-- `/Users/fairchild/code/workspaces/.github/workflows/ci.yml`
-- `/Users/fairchild/code/workspaces/.github/workflows/ci-fallback.yml`
+- `.github/workflows/ci.yml`
+- `.github/workflows/ci-fallback.yml`
 
 If CI fails in Ghostty build step, debug `scripts/build-ghosttykit.sh` first.
 
@@ -172,7 +172,7 @@ Use this exact loop in future sessions to avoid stale-build confusion:
 3. Launch debug app (never `/Applications` during verification):
    - `./scripts/launch-dev.sh --no-build`
 4. Verify process path points to `.build/.../WorkspaceManager`:
-   - `ps aux | rg '/Users/fairchild/code/workspaces/.build/arm64-apple-macosx/debug/WorkspaceManager'`
+   - `ps aux | rg '.build/arm64-apple-macosx/debug/WorkspaceManager'`
 5. Exercise shortcuts:
    - `Cmd+B` collapse/restore sidebar
    - `Cmd+D` create split pane

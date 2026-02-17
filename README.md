@@ -6,8 +6,6 @@ Workspaces gives you a native app for organizing repositories, spinning up isola
 
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
-<!-- TODO: Add screenshot or demo gif -->
-
 ## Philosophy
 
 Workspaces is an **agent-first codebase** — a modern baseline for building macOS developer tools with AI in the loop.

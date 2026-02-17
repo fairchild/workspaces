@@ -10,7 +10,7 @@ Baseline latencies captured for refinement-gate metrics:
 ## Instrumentation
 
 Production signposts and perf log metrics were added in:
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Diagnostics/PerformanceSignposts.swift`
+- `Sources/WorkspaceManager/Diagnostics/PerformanceSignposts.swift`
 
 Intervals:
 - `LaunchToFirstPrompt`
@@ -28,7 +28,7 @@ Intervals:
 ## Method
 
 1. Added reproducible runner:
-   - `/Users/fairchild/code/workspaces/scripts/perf-baseline.sh`
+   - `scripts/perf-baseline.sh`
 2. Executed:
    - `./scripts/perf-baseline.sh 5 8`
 3. Script launches app with:
