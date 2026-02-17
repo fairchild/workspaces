@@ -22,6 +22,7 @@ struct SidebarView: View {
     let activeRepoPath: String?
     let onDefaultHostSelected: () -> Void
     let onRepoSelected: (Repo) -> Void
+    let onWorkspaceCreated: () -> Void
 
     @State private var isAddingRepo = false
     @State private var repoForNewWorkspace: Repo?
@@ -319,6 +320,7 @@ struct SidebarView: View {
                 )
                 modelContext.insert(workspace)
                 if saveModelContext(action: "save workspace") {
+                    onWorkspaceCreated()
                     selectedWorkspace = workspace
                     return true
                 }
