@@ -304,16 +304,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             "icon_512x512@2x",
             "icon_512x512",
             "icon_256x256@2x",
-            "icon_256x256"
+            "icon_256x256",
         ]
         let appIconSubdirectory = "Assets.xcassets/AppIcon.appiconset"
 
         for iconName in fallbackIconNames {
-            guard let iconURL = Bundle.module.url(
-                forResource: iconName,
-                withExtension: "png",
-                subdirectory: appIconSubdirectory
-            ) else {
+            guard
+                let iconURL = Bundle.module.url(
+                    forResource: iconName,
+                    withExtension: "png",
+                    subdirectory: appIconSubdirectory
+                )
+            else {
                 continue
             }
 
