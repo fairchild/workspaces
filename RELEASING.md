@@ -222,6 +222,14 @@ For testing or when CI isn't available.
    ./scripts/notarize.sh
    ```
 
+   For local production-equivalent validation where Gatekeeper offline behavior is not required, use:
+
+   ```bash
+   ./scripts/notarize.sh --no-staple
+   # or via mask:
+   mask release near-prod
+   ```
+
 4. **Upload to GitHub**
 
    ```bash
