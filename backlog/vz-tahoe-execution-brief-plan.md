@@ -15,7 +15,7 @@ completed: null
 This file is the execution-ready plan with locked decisions and implementation order.
 
 ## Decision Lock
-- Target codebase only: `/Users/fairchild/code/workspaces`
+- Target codebase only: repository root (`.`)
 - Runtime path: native `Virtualization.framework` backend first (`vzLinuxTahoe`)
 - Host requirements for VZ backend: macOS 26+ (Tahoe), Apple Silicon only
 - Rollout: VZ is default for new workspaces on supported hosts; existing workspaces remain `local`
@@ -151,6 +151,5 @@ M1 complete (host-terminal-first defaults shipped 2026-02-15). M2-M6 pending ref
 - Unsupported hosts cleanly fall back to local backend.
 
 ## Repo Baseline Capture (When Starting Implementation)
-- `git -C /Users/fairchild/code/workspaces rev-parse HEAD`
+- `git rev-parse HEAD`
 - Record output in implementation notes/PR description.
-

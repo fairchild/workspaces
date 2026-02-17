@@ -25,12 +25,12 @@ Everything else routes to Ghostty unless an override is added.
 ## Code Map
 
 - Policy definition:
-  - `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/App/ShortcutRoutingPolicy.swift`
+  - `Sources/WorkspaceManager/App/ShortcutRoutingPolicy.swift`
 - Key-equivalent handling:
-  - `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Terminal/GhosttySurfaceView.swift`
+  - `Sources/WorkspaceManager/Terminal/GhosttySurfaceView.swift`
 - Runtime action bridge from Ghostty to SwiftUI state:
-  - `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Terminal/GhosttyAppManager.swift`
-  - `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Views/MainWindow/ContentView.swift`
+  - `Sources/WorkspaceManager/Terminal/GhosttyAppManager.swift`
+  - `Sources/WorkspaceManager/Views/MainWindow/ContentView.swift`
 
 ## Event Flow
 

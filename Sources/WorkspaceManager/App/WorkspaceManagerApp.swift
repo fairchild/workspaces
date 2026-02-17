@@ -238,6 +238,7 @@ private struct MainWindowRootView: View {
 class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var windowObserver: Any?
+    private static let noActivateOnLaunchEnvKey = "WORKSPACES_NO_ACTIVATE_ON_LAUNCH"
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSLog("[AppDelegate] applicationDidFinishLaunching")
@@ -245,10 +246,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         GhosttyAppManager.shared.initializeIfNeeded()
 
-        // CRITICAL: Ensure app can be activated and brought to front
+        // Keep regular app activation policy so it appears in the dock/menu bar.
+        // Foreground activation is optional for shared-desktop workflows.
         NSApp.setActivationPolicy(.regular)
-        NSApp.activate(ignoringOtherApps: true)
-        NSLog("[AppDelegate] Set activation policy to .regular and activated")
+        if shouldActivateOnLaunch() {
+            NSApp.activate(ignoringOtherApps: true)
+            NSLog("[AppDelegate] Set activation policy to .regular and activated")
+        } else {
+            NSLog(
+                "[AppDelegate] Set activation policy to .regular (launch activation disabled via %@)",
+                Self.noActivateOnLaunchEnvKey
+            )
+        }
 
         // Register existing windows with focus manager
         for window in NSApp.windows {
@@ -264,6 +273,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             if let window = notification.object as? NSWindow {
                 TerminalFocusManager.shared.registerWindow(window)
             }
+        }
+    }
+
+    private func shouldActivateOnLaunch() -> Bool {
+        guard let rawValue = ProcessInfo.processInfo.environment[Self.noActivateOnLaunchEnvKey] else {
+            return true
+        }
+
+        switch rawValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "1", "true", "yes", "on":
+            return false
+        default:
+            return true
         }
     }
 

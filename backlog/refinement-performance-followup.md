@@ -78,9 +78,9 @@ Deliver a refinement-first hardening pass before M2 so current behavior is fast,
   - `RepoHydration`
   - `RepoClickToFocusedInput`
 - Wired signpost lifecycle into launch, auto-hydration, and terminal focus handoff code paths.
-- Added reproducible baseline script: `/Users/fairchild/code/workspaces/scripts/perf-baseline.sh`.
+- Added reproducible baseline script: `scripts/perf-baseline.sh`.
 - Checked in baseline report:
-  - `/Users/fairchild/code/workspaces/docs/performance/refinement-baseline-2026-02-15.md`
+  - `docs/performance/refinement-baseline-2026-02-15.md`
 
 2. Session/focus regression coverage
 - Expanded `HostTerminalSessionCoordinator` tests for:
@@ -91,7 +91,7 @@ Deliver a refinement-first hardening pass before M2 so current behavior is fast,
 - Decision: keep surfaces unbounded for now.
 - Implemented explicit guardrail logging in `HostTerminalSurfaceStore` with revisit threshold (`>= 24` surfaces).
 - Documented rationale + revisit triggers in:
-  - `/Users/fairchild/code/workspaces/ARCHITECTURE.md`
+  - `ARCHITECTURE.md`
 
 ## Verification Results
 
@@ -104,5 +104,5 @@ Deliver a refinement-first hardening pass before M2 so current behavior is fast,
 
 ## References
 
-- `/Users/fairchild/code/workspaces/backlog/ROADMAP.md` (Refinement Gate)
-- `/Users/fairchild/code/workspaces/backlog/vz-tahoe-execution-brief-plan.md` (M2+ follow-on)
+- `backlog/ROADMAP.md` (Refinement Gate)
+- `backlog/vz-tahoe-execution-brief-plan.md` (M2+ follow-on)

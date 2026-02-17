@@ -35,6 +35,9 @@
 # - UI fixture mode for deterministic screenshots:
 #     ./scripts/launch-dev.sh --fixture --clean-data
 #
+# - Shared-desktop mode (do not steal foreground focus at launch):
+#     ./scripts/launch-dev.sh --no-activate
+#
 # ==========================================================================
 
 set -euo pipefail
@@ -53,6 +56,7 @@ RUN_IN_BACKGROUND=true
 USE_APP_SUPPORT=false
 FIXTURE_MODE=false
 CLEAN_DATA=false
+NO_ACTIVATE_ON_LAUNCH=false
 DATA_DIR="$DEFAULT_DATA_DIR"
 LOG_PATH=""
 APP_PID=""
@@ -69,6 +73,7 @@ Options:
   --use-app-support    Do not set WORKSPACES_DATA_DIR (use platform defaults)
   --data-dir <path>    Override isolated data root (default: ./.dev-data/workspacemanager)
   --fixture            Enable deterministic UI fixture mode
+  --no-activate        Do not call NSApp.activate on startup (shared-desktop safe)
   --clean-data         Remove selected data dir before launch
   --help, -h           Show this help
 
@@ -115,6 +120,10 @@ parse_args() {
                 ;;
             --fixture)
                 FIXTURE_MODE=true
+                shift
+                ;;
+            --no-activate)
+                NO_ACTIVATE_ON_LAUNCH=true
                 shift
                 ;;
             --clean-data)
@@ -205,6 +214,12 @@ configure_fixture_mode() {
     fi
 }
 
+configure_launch_behavior() {
+    if [[ "$NO_ACTIVATE_ON_LAUNCH" == true ]]; then
+        ENV_VARS+=("WORKSPACES_NO_ACTIVATE_ON_LAUNCH=1")
+    fi
+}
+
 prepare_log_path() {
     mkdir -p "$LOG_DIR"
     LOG_PATH="$LOG_DIR/launch-dev-$(date +%Y%m%d-%H%M%S).log"
@@ -287,6 +302,7 @@ main() {
     stop_existing_if_requested
     configure_data_root
     configure_fixture_mode
+    configure_launch_behavior
     prepare_log_path
     print_launch_plan
 
