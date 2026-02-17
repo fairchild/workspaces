@@ -164,6 +164,9 @@ final class GhosttySurfaceView: NSView, NSTextInputClient {
             guard focused, event.modifierFlags.contains(.command) else {
                 return event
             }
+            if ShortcutRoutingPolicy.shared.route(for: event) == .appChrome {
+                return event
+            }
             keyUp(with: event)
             return nil
 
@@ -326,17 +329,6 @@ final class GhosttySurfaceView: NSView, NSTextInputClient {
         }
 
         if isGhosttyBinding {
-            let isConsumed = bindingFlags.rawValue & GHOSTTY_BINDING_FLAGS_CONSUMED.rawValue != 0
-            let isAll = bindingFlags.rawValue & GHOSTTY_BINDING_FLAGS_ALL.rawValue != 0
-            let isPerformable = bindingFlags.rawValue & GHOSTTY_BINDING_FLAGS_PERFORMABLE.rawValue != 0
-
-            if isConsumed, !isAll, !isPerformable,
-                let menu = NSApp.mainMenu,
-                menu.performKeyEquivalent(with: event)
-            {
-                return true
-            }
-
             keyDown(with: event)
             return true
         }

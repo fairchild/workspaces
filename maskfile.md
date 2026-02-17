@@ -83,6 +83,14 @@ echo "  Cmd+B toggles left sidebar"
 echo "  Cmd+D creates a visible right split"
 ```
 
+## verify-shortcuts
+
+> Smoke-test Ghostty shortcut pass-through (Cmd+D, Cmd+[ and Cmd+]) with log evidence
+
+```bash
+./scripts/shortcut-pass-through-smoke.sh "$@"
+```
+
 ## run
 
 > Build and launch the app (quick, no isolation)
