@@ -24,7 +24,7 @@ struct ShortcutChord: Hashable {
     }
 
     init?(event: NSEvent) {
-        guard (event.type == .keyDown || event.type == .keyUp),
+        guard event.type == .keyDown || event.type == .keyUp,
             let key = event.charactersIgnoringModifiers?.lowercased(),
             !key.isEmpty
         else {
