@@ -9,6 +9,7 @@
 # Usage:
 #   ./scripts/notarize.sh              # Build, sign, notarize, create DMG
 #   ./scripts/notarize.sh --dmg-only   # Skip notarization (for testing)
+#   ./scripts/notarize.sh --no-staple  # Notarize but skip stapling (local near-prod)
 #   ./scripts/notarize.sh --help       # Show this help
 #
 # Prerequisites:
@@ -48,6 +49,7 @@ BUNDLE_ID="${BUNDLE_ID:-com.cloudcompute.workspaces}"
 
 # Flags
 DMG_ONLY=false
+NO_STAPLE=false
 
 # ============================================================================
 # Parse Arguments
@@ -57,6 +59,10 @@ for arg in "$@"; do
     case $arg in
         --dmg-only)
             DMG_ONLY=true
+            shift
+            ;;
+        --no-staple)
+            NO_STAPLE=true
             shift
             ;;
         --help|-h)
@@ -244,15 +250,23 @@ else
 
     log_success "Notarization complete"
 
-    # Staple the ticket
-    log_step "Stapling notarization ticket"
-    xcrun stapler staple "$DMG_PATH"
-    log_success "Ticket stapled"
+    if [[ "$NO_STAPLE" == true ]]; then
+        log_warning "Skipping stapling (--no-staple flag)"
+        log_step "Verifying notarized DMG (network assessment)"
+        spctl --assess --type open --context context:primary-signature --verbose "$DMG_PATH" || \
+            log_warning "Assessment failed; stapling improves offline reliability"
+        log_success "Notarized DMG generated without stapling"
+    else
+        # Staple the ticket
+        log_step "Stapling notarization ticket"
+        xcrun stapler staple "$DMG_PATH"
+        log_success "Ticket stapled"
 
-    # Verify final result
-    log_step "Verifying notarized DMG"
-    spctl --assess --type open --context context:primary-signature --verbose "$DMG_PATH"
-    log_success "DMG verified"
+        # Verify final result
+        log_step "Verifying notarized DMG"
+        spctl --assess --type open --context context:primary-signature --verbose "$DMG_PATH"
+        log_success "DMG verified"
+    fi
 fi
 
 # ============================================================================
@@ -267,6 +281,13 @@ echo ""
 echo "Version:  $VERSION (build $BUILD_NUM)"
 echo "Output:   $DMG_PATH"
 echo "Size:     $(du -h "$DMG_PATH" | cut -f1)"
+if [[ "$DMG_ONLY" == true ]]; then
+    echo "Notary:   skipped (--dmg-only)"
+elif [[ "$NO_STAPLE" == true ]]; then
+    echo "Notary:   completed (not stapled)"
+else
+    echo "Notary:   completed + stapled"
+fi
 echo ""
 echo "Distribution checklist:"
 echo "  [ ] Upload to GitHub Releases"

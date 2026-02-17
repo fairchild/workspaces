@@ -85,15 +85,47 @@ swift run WorkspaceManager
 
 ## release
 
-> Build a signed .app bundle for distribution
+> Release workflows (default: build a signed .app bundle)
 
 ```bash
-./scripts/build-release.sh
+./scripts/build-release.sh "$@"
+```
+
+### unsigned
+
+> Build an unsigned .app release bundle (fast local production-like check)
+
+```bash
+./scripts/build-release.sh --no-sign "$@"
+```
+
+### near-prod
+
+> Build/sign DMG, notarize it, but skip stapling (local production-equivalent testing)
+
+```bash
+./scripts/notarize.sh --no-staple "$@"
+```
+
+### prod
+
+> Full production package: build/sign, notarize, and staple DMG
+
+```bash
+./scripts/notarize.sh "$@"
+```
+
+### dmg-only
+
+> Build/sign app and DMG, but skip notarization (packaging smoke test)
+
+```bash
+./scripts/notarize.sh --dmg-only "$@"
 ```
 
 ## notarize
 
-> Notarize and create DMG for distribution
+> Advanced passthrough to notarize script
 
 ```bash
 ./scripts/notarize.sh "$@"
