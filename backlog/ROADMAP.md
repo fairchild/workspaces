@@ -75,9 +75,9 @@ Execution priority is:
 
 ### Performance Backlog (Fast-Path Follow-ups)
 
-- [ ] Add production signposts around launch, repo hydration, and repo-click-to-focus latency.
-- [ ] Run Instruments baselines (Time Profiler + SwiftUI + Hangs) and check in a short perf report.
-- [ ] Add optional session/surface cap policy (LRU for inactive repo sessions) if memory pressure appears.
+- [x] Add production signposts around launch, repo hydration, and repo-click-to-focus latency.
+- [x] Run baseline captures and check in a short perf report (including documented `xctrace` limitations on local runs).
+- [x] Add optional session/surface cap policy (LRU for inactive repo sessions) if memory pressure appears. (Decision: keep unbounded for now with guardrail logging + revisit threshold.)
 - [ ] Re-introduce remote URL metadata in a background/idle pipeline (not launch-critical path).
 
 ---
@@ -95,8 +95,8 @@ The next cycle prioritizes implementation quality for shipped behavior before ex
 
 ### Exit Criteria
 
-- [ ] `swift test` remains green with added regression coverage for session focus and reuse semantics.
-- [ ] A short perf report is checked in with baseline numbers for:
+- [x] `swift test` remains green with added regression coverage for session focus and reuse semantics.
+- [x] A short perf report is checked in with baseline numbers for:
   - launch-to-first-prompt
   - repo hydration
   - repo-click-to-focused-terminal
@@ -106,9 +106,9 @@ The next cycle prioritizes implementation quality for shipped behavior before ex
 
 ### Planned Work Items
 
-- [ ] Add instrumentation signposts around launch, sidebar selection handling, and terminal focus handoff.
-- [ ] Add focused regression tests for session reuse + focus restoration behavior.
-- [ ] Add a lightweight memory guardrail decision: either cap inactive surfaces (LRU) or document why unbounded is acceptable today.
+- [x] Add instrumentation signposts around launch, sidebar selection handling, and terminal focus handoff.
+- [x] Add focused regression tests for session reuse + focus restoration behavior.
+- [x] Add a lightweight memory guardrail decision: either cap inactive surfaces (LRU) or document why unbounded is acceptable today.
 - [ ] Tighten release docs/scripts around Apple credential troubleshooting and idempotent setup.
 - [ ] Capture usage findings and feed them into post-refinement prioritization for M2.
 
@@ -121,6 +121,7 @@ The next cycle prioritizes implementation quality for shipped behavior before ex
 - **Terminal migration**: SwiftTerm replaced with GhosttyKit (`libghostty`) for persistent session support
 - **Host-terminal-first UX**: Auto-discovery from `~/code`, persistent per-repo host sessions, live session indicators
 - **Session coordinator**: Manages terminal surface lifecycle, reuse, and focus restoration
+- **Refinement/performance hardening (2026-02-15)**: Signposts, perf baseline report, session regression tests, and memory-policy guardrails (`backlog/refinement-performance-followup.md`)
 - **52 tests** passing (GitService, WorkspaceService, Models, session behavior)
 - **Monorepo extraction**: Clean standalone repo, SPM-only build (no Xcode project)
 
@@ -171,7 +172,7 @@ Summary: backend abstraction/registry, VZTahoeBackend implementation (VM lifecyc
 |------|----------|---------|
 | Isolation strategy options | Research | `backlog/isolation-strategies.md` |
 | VZ Tahoe execution brief | Plan | `backlog/vz-tahoe-execution-brief-plan.md` |
-| Refinement & performance follow-ups | Quality | `backlog/refinement-performance-followup.md` |
+| Workspace creation progress indicator | UX | `backlog/workspace-create-progress-followup.md` |
 
 ---
 
