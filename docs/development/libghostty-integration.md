@@ -177,6 +177,7 @@ Use this exact loop in future sessions to avoid stale-build confusion:
 5. Exercise shortcuts:
    - `Cmd+B` collapse/restore sidebar
    - `Cmd+D` create split pane
+   - Optional scripted smoke: `mask verify-shortcuts`
 6. Verify split runtime path in logs:
    - `tail -n 80 .dev-data/logs/launch-dev-*.log`
    - Expect `"[GhosttyAppManager] action=new_split direction="`

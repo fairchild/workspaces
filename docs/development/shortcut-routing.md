@@ -64,6 +64,7 @@ Current split UI model is two-pane horizontal:
    - `Cmd+B` toggles sidebar
    - `Cmd+D` creates split
    - `Cmd+]` / `Cmd+[` move focus across split when both panes exist
+   - or run `mask verify-shortcuts` for scripted smoke evidence
 4. Confirm logs include:
    - `[GhosttyAppManager] action=new_split ...`
    - `[GhosttyAppManager] action=goto_split ...`

@@ -109,6 +109,7 @@ The next cycle prioritizes implementation quality for shipped behavior before ex
 - [x] Add instrumentation signposts around launch, sidebar selection handling, and terminal focus handoff.
 - [x] Add focused regression tests for session reuse + focus restoration behavior.
 - [x] Add a lightweight memory guardrail decision: either cap inactive surfaces (LRU) or document why unbounded is acceptable today.
+- [ ] Complete Ghostty shortcut pass-through parity for split actions (`resize_split`, `equalize_splits`) and keep `mask verify-shortcuts` green.
 - [ ] Tighten release docs/scripts around Apple credential troubleshooting and idempotent setup.
 - [ ] Capture usage findings and feed them into post-refinement prioritization for M2.
 
