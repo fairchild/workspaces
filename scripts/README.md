@@ -32,6 +32,13 @@ Use these scripts for day-to-day UI verification:
   - timestamped snapshots: `./output/sidebar/sidebar-<timestamp>.png`
 - Also preserves raw run artifacts under `/tmp/workspaces-sidebar-capture-<timestamp>/`.
 
+5. `./scripts/capture-window.sh`
+- One-shot window-only capture for shared-desktop workflows.
+- Captures by window id (`screencapture -l`) and **does not activate the app by default**.
+- Default output:
+  - timestamped: `./output/window/window-<timestamp>.png`
+  - latest copy: `./output/window/latest.png`
+
 UI automation scripts (`ui-smoke.sh`, `ui-capture.sh`, `sidebar-capture.sh`):
 - fail fast on missing permissions
 - print artifact directory path at the end
@@ -45,11 +52,14 @@ For keyboard/split/sidebar changes, always verify with the debug launcher:
 1. `./scripts/build-ghosttykit.sh`
 2. `swift build`
 3. `./scripts/launch-dev.sh --no-build`
+   - shared-desktop safe mode: `./scripts/launch-dev.sh --no-build --no-activate`
 4. Confirm debug process path:
-   - `ps aux | rg '/Users/fairchild/code/workspaces/.build/arm64-apple-macosx/debug/WorkspaceManager'`
+   - `ps aux | rg '.build/arm64-apple-macosx/debug/WorkspaceManager'`
 5. Manually verify:
    - `Cmd+B` toggles sidebar
    - `Cmd+D` creates a visible right split
+6. Capture evidence without focus steal:
+   - `./scripts/capture-window.sh`
 
 Full contract and troubleshooting details:
 - `docs/development/libghostty-integration.md`

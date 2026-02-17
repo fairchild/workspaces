@@ -23,6 +23,16 @@ scripts/signing-config.sh
 .dev-data/
 .sandbox-data/
 
+# Script/capture output
+output/
+
+# Secrets (safety net)
+.env
+.env.*
+*.pem
+*.key
+*.p12
+
 # macOS
 .DS_Store
 *.swp

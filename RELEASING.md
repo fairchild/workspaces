@@ -24,25 +24,84 @@ You need an Apple Developer Program membership ($99/year) for:
 
 ### Local Development Setup
 
-1. **Install Developer ID Certificate**
+#### Step 1: Create a Developer ID Application Certificate
 
-   Export your Developer ID Application certificate from the Apple Developer portal and import it into Keychain Access:
+You need a **Developer ID Application** certificate — this is the specific certificate type Apple requires for distributing macOS apps outside the App Store. Other certificate types (Mac App Distribution, Apple Development) won't work for notarization.
 
-   ```bash
-   # The certificate should appear when you run:
-   security find-identity -v -p codesigning
-   ```
+**Option A: Via Xcode (easiest)**
 
-2. **Create App-Specific Password**
+1. Open Xcode > Settings > Accounts
+2. Select your Apple ID, then your team
+3. Click "Manage Certificates..."
+4. Click **+** and choose "Developer ID Application"
+5. Xcode creates the private key, submits the CSR, and installs the certificate automatically
 
-   For notarization, create an app-specific password at [appleid.apple.com](https://appleid.apple.com) under Security > App-Specific Passwords.
+**Option B: Via Apple Developer Portal (manual)**
 
-3. **Configure Signing Credentials**
+1. Open Keychain Access > Certificate Assistant > Request a Certificate From a Certificate Authority
+2. Enter your email, leave CA Email blank, select "Saved to disk"
+3. Save the `.certSigningRequest` file
+4. Go to [developer.apple.com/account/resources/certificates](https://developer.apple.com/account/resources/certificates)
+5. Click **+**, select "Developer ID Application", click Continue
+6. Upload your `.certSigningRequest` file
+7. Download the generated `.cer` file
+8. Double-click the `.cer` to install it into Keychain Access
 
-   ```bash
-   cp scripts/signing-config.sh.template scripts/signing-config.sh
-   # Edit signing-config.sh with your credentials
-   ```
+**Verify it worked:**
+
+```bash
+security find-identity -v -p codesigning
+# Look for: "Developer ID Application: Your Name (TEAM_ID)"
+```
+
+If nothing shows up, check that both the certificate *and* its private key are in your login keychain (Keychain Access > login > My Certificates).
+
+#### Step 2: Find Your Team ID
+
+Your 10-character Team ID is at [developer.apple.com/account](https://developer.apple.com/account) under Membership Details. It's also shown in the parentheses of your signing identity from Step 1.
+
+#### Step 3: Create an App-Specific Password
+
+Notarization requires an app-specific password (your regular Apple ID password won't work).
+
+1. Go to [account.apple.com](https://account.apple.com) > Sign-In and Security > App-Specific Passwords
+2. Click "Generate an app-specific password"
+3. Name it something like "workspaces-notarytool"
+4. Copy the generated `xxxx-xxxx-xxxx-xxxx` password
+
+You can optionally store this in Keychain instead of a file:
+
+```bash
+xcrun notarytool store-credentials "workspaces-notarize" \
+    --apple-id your@email.com \
+    --team-id XXXXXXXXXX \
+    --password xxxx-xxxx-xxxx-xxxx
+```
+
+#### Step 4: Configure Local Signing
+
+```bash
+cp scripts/signing-config.sh.template scripts/signing-config.sh
+```
+
+Edit `scripts/signing-config.sh` with your credentials. The template has inline comments explaining each field. This file is gitignored — never commit it.
+
+#### Step 5: Verify the Full Pipeline
+
+Run a local unsigned build first to confirm the toolchain works:
+
+```bash
+./scripts/build-release.sh --no-sign
+open build/WorkspaceManager.app
+```
+
+Then test signing:
+
+```bash
+./scripts/build-release.sh
+codesign -dv --verbose=4 build/WorkspaceManager.app
+# Should show your Developer ID Application identity
+```
 
 ### GitHub Actions Setup (for CI/CD)
 
@@ -61,10 +120,14 @@ Add these **variables** to your GitHub repository (Settings > Secrets and variab
 | `APPLE_ID` | Your Apple ID email |
 | `APPLE_TEAM_ID` | 10-character Team ID |
 
-To export and encode your certificate:
+To export your certificate for CI:
+
+1. Open Keychain Access > login > My Certificates
+2. Right-click your "Developer ID Application" certificate > Export Items...
+3. Choose .p12 format, set a strong password (this becomes `APPLE_DEVELOPER_ID_CERT_PASSWORD`)
+4. Base64-encode and copy to clipboard:
 
 ```bash
-# Export from Keychain Access as .p12, then:
 base64 -i Developer_ID_Application.p12 | pbcopy
 # Paste as APPLE_DEVELOPER_ID_CERT_BASE64 secret
 ```
