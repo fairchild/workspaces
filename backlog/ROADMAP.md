@@ -10,13 +10,13 @@ completed: null
 
 # AI Coding Workspace Manager — MVP Roadmap
 
-**Vision**: A Mac-native app for managing AI coding sessions. Add repos, fork them into isolated workspaces, run Claude Code (or similar) in an embedded terminal, and track file changes—all without context-switching to Finder or a separate terminal.
+**Vision**: A Mac-native app for managing AI coding sessions. Add repos, fork them into isolated workspaces, run any terminal-based coding agent in an embedded terminal, and track file changes—all without context-switching to Finder or a separate terminal.
 
 ---
 
 ## Current Locked Direction (2026-02-14)
 
-For the VZ/Tahoe implementation track (`M2`-`M6`), `/Users/fairchild/code/workspaces/backlog/vz-tahoe-execution-brief-plan.md` is the source of truth.
+For the VZ/Tahoe implementation track (`M2`-`M6`), `backlog/vz-tahoe-execution-brief-plan.md` is the source of truth.
 
 Execution priority is:
 

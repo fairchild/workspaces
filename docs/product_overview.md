@@ -2,7 +2,7 @@
 
 ## Problem Statement
 
-Developers using AI coding assistants (Claude Code, Cursor, Copilot) face friction when managing concurrent work:
+Developers using terminal-based coding agents (Claude Code, Aider, Codex CLI, Copilot CLI) face friction when managing concurrent work:
 
 - **Context pollution**: Working on multiple features in the same repo leads to mixed changes
 - **Setup repetition**: Each new session requires re-running install scripts, setting up env files
@@ -58,7 +58,7 @@ The sidebar is split into **Repositories** and **Workspaces** sections with expl
 ## Target Users
 
 ### Primary: AI-Augmented Developer
-Developers who regularly use Claude Code, Cursor, or similar AI coding tools. They:
+Developers who regularly use terminal-based coding agents (Claude Code, Aider, Codex CLI, or similar). They:
 - Work on multiple features/experiments concurrently
 - Value clean separation between work streams
 - Prefer terminal-based workflows over heavy IDEs
