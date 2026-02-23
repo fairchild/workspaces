@@ -53,6 +53,32 @@ require_cmd() {
   fi
 }
 
+rewrite_modulemap() {
+  local modulemap_path="$1"
+
+  {
+    echo "// This makes Ghostty available to the XCode build for the macOS app."
+    echo "// We append \"Kit\" to it not to be cute, but because targets have to have"
+    echo "// unique names and we use Ghostty for other things."
+    echo "module GhosttyKit {"
+    echo "    header \"ghostty.h\""
+    echo "    export *"
+    echo "}"
+  } > "$modulemap_path"
+}
+
+postprocess_xcframework() {
+  local framework_dir="$1"
+
+  while IFS= read -r modulemap; do
+    rewrite_modulemap "$modulemap"
+  done < <(find "$framework_dir" -type f -name module.modulemap)
+
+  while IFS= read -r archive; do
+    xcrun strip -S -x "$archive"
+  done < <(find "$framework_dir" -type f -name "libghostty-fat.a")
+}
+
 resolve_ghostty_dir() {
   if [[ -n "$EXPLICIT_GHOSTTY_DIR" ]]; then
     GHOSTTY_DIR="$EXPLICIT_GHOSTTY_DIR"
@@ -132,6 +158,7 @@ install_xcframework() {
 main() {
   require_cmd mise "https://mise.jdx.dev/"
   require_cmd git
+  require_cmd xcrun
 
   resolve_ghostty_dir
   ensure_ghostty_checkout
@@ -144,6 +171,7 @@ main() {
   fi
 
   install_xcframework "$xcframework_src"
+  postprocess_xcframework "$OUT_DIR/GhosttyKit.xcframework"
   echo "Built GhosttyKit.xcframework -> $OUT_DIR/GhosttyKit.xcframework"
 }
 

@@ -8,17 +8,46 @@
 import SwiftUI
 import WorkspaceManagerCore
 
+@MainActor
+final class RightPaneSessionState: ObservableObject {
+    @Published var selectedTab: RightPaneView.Tab = .files
+    @Published var fileTree: FileNode?
+    @Published var changedFiles: [FileChange] = []
+    @Published var isLoading = false
+    @Published var lastRefresh = Date()
+    @Published var expandedDirectoryPaths: Set<String> = []
+    @Published var hasLoadedOnce = false
+}
+
+@MainActor
+final class RightPaneStateStore: ObservableObject {
+    private var states: [String: RightPaneSessionState] = [:]
+
+    func state(for targetID: String) -> RightPaneSessionState {
+        if let existing = states[targetID] {
+            return existing
+        }
+        let created = RightPaneSessionState()
+        states[targetID] = created
+        return created
+    }
+
+    func state(for workspace: Workspace) -> RightPaneSessionState {
+        state(for: "workspace-\(workspace.id.uuidString)")
+    }
+
+    func state(for repo: Repo) -> RightPaneSessionState {
+        state(for: "repo-\(repo.id.uuidString)")
+    }
+}
+
 struct RightPaneView: View {
     let targetID: String
     let directoryURL: URL
     let onFileSelected: (CodePreviewSelection) -> Void
 
     @Environment(\.gitService) private var gitService
-    @State private var selectedTab: Tab = .files
-    @State private var fileTree: FileNode?
-    @State private var changedFiles: [FileChange] = []
-    @State private var isLoading = false
-    @State private var lastRefresh = Date()
+    @ObservedObject private var state: RightPaneSessionState
 
     enum Tab: String, CaseIterable {
         case files = "Files"
@@ -34,19 +63,23 @@ struct RightPaneView: View {
 
     init(
         workspace: Workspace,
+        state: RightPaneSessionState,
         onFileSelected: @escaping (CodePreviewSelection) -> Void = { _ in }
     ) {
         self.targetID = "workspace-\(workspace.id.uuidString)"
         self.directoryURL = workspace.workspaceURL
+        self.state = state
         self.onFileSelected = onFileSelected
     }
 
     init(
         repo: Repo,
+        state: RightPaneSessionState,
         onFileSelected: @escaping (CodePreviewSelection) -> Void = { _ in }
     ) {
         self.targetID = "repo-\(repo.id.uuidString)"
         self.directoryURL = repo.localURL
+        self.state = state
         self.onFileSelected = onFileSelected
     }
 
@@ -58,10 +91,10 @@ struct RightPaneView: View {
                     TabButton(
                         title: tab.rawValue,
                         icon: tab.icon,
-                        isSelected: selectedTab == tab,
-                        badge: tab == .changes ? changedFiles.count : nil
+                        isSelected: state.selectedTab == tab,
+                        badge: tab == .changes ? state.changedFiles.count : nil
                     ) {
-                        selectedTab = tab
+                        state.selectedTab = tab
                     }
                 }
             }
@@ -73,11 +106,20 @@ struct RightPaneView: View {
 
             // Tab content
             ZStack {
-                switch selectedTab {
+                switch state.selectedTab {
                 case .files:
-                    FileTreeTabView(root: fileTree, isLoading: isLoading, onFileSelected: selectFile)
+                    FileTreeTabView(
+                        root: state.fileTree,
+                        isLoading: state.isLoading,
+                        expandedDirectoryPaths: $state.expandedDirectoryPaths,
+                        onFileSelected: selectFile
+                    )
                 case .changes:
-                    ChangedFilesTabView(changes: changedFiles, isLoading: isLoading, onFileSelected: selectFile)
+                    ChangedFilesTabView(
+                        changes: state.changedFiles,
+                        isLoading: state.isLoading,
+                        onFileSelected: selectFile
+                    )
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -86,14 +128,14 @@ struct RightPaneView: View {
 
             // Footer with refresh
             HStack {
-                if isLoading {
+                if state.isLoading {
                     ProgressView()
                         .controlSize(.small)
                     Text("Refreshing...")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 } else {
-                    Text("Updated \(lastRefresh.formatted(.relative(presentation: .named)))")
+                    Text("Updated \(state.lastRefresh.formatted(.relative(presentation: .named)))")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -106,29 +148,34 @@ struct RightPaneView: View {
                     Image(systemName: "arrow.clockwise")
                 }
                 .buttonStyle(.borderless)
-                .disabled(isLoading)
+                .disabled(state.isLoading)
                 .help("Refresh")
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
         }
         .task(id: targetID) {
-            await refresh()
+            if !state.hasLoadedOnce || state.fileTree == nil {
+                await refresh()
+            }
         }
     }
 
     @MainActor
     private func refresh() async {
-        isLoading = true
+        state.isLoading = true
         defer {
-            isLoading = false
-            lastRefresh = Date()
+            state.isLoading = false
+            state.lastRefresh = Date()
+            state.hasLoadedOnce = true
         }
 
         async let treeTask = loadFileTree()
         async let statusTask = loadGitStatus()
 
-        (fileTree, changedFiles) = await (treeTask, statusTask)
+        let (fileTree, changedFiles) = await (treeTask, statusTask)
+        state.fileTree = fileTree
+        state.changedFiles = changedFiles
     }
 
     private func loadFileTree() async -> FileNode? {
@@ -203,13 +250,18 @@ struct TabButton: View {
 struct FileTreeTabView: View {
     let root: FileNode?
     let isLoading: Bool
+    @Binding var expandedDirectoryPaths: Set<String>
     let onFileSelected: (String) -> Void
 
     var body: some View {
         if let root {
             List {
-                ForEach(root.children ?? []) { child in
-                    FileNodeView(node: child, onFileSelected: onFileSelected)
+                ForEach(root.children ?? [], id: \.path) { child in
+                    FileNodeView(
+                        node: child,
+                        expandedDirectoryPaths: $expandedDirectoryPaths,
+                        onFileSelected: onFileSelected
+                    )
                 }
             }
             .listStyle(.plain)
@@ -228,15 +280,31 @@ struct FileTreeTabView: View {
 
 struct FileNodeView: View {
     let node: FileNode
+    @Binding var expandedDirectoryPaths: Set<String>
     let onFileSelected: (String) -> Void
 
-    @State private var isExpanded = false
+    private var isExpandedBinding: Binding<Bool> {
+        Binding(
+            get: { expandedDirectoryPaths.contains(node.path) },
+            set: { shouldExpand in
+                if shouldExpand {
+                    expandedDirectoryPaths.insert(node.path)
+                } else {
+                    expandedDirectoryPaths.remove(node.path)
+                }
+            }
+        )
+    }
 
     var body: some View {
         if node.isDirectory {
-            DisclosureGroup(isExpanded: $isExpanded) {
-                ForEach(node.children ?? []) { child in
-                    FileNodeView(node: child, onFileSelected: onFileSelected)
+            DisclosureGroup(isExpanded: isExpandedBinding) {
+                ForEach(node.children ?? [], id: \.path) { child in
+                    FileNodeView(
+                        node: child,
+                        expandedDirectoryPaths: $expandedDirectoryPaths,
+                        onFileSelected: onFileSelected
+                    )
                 }
             } label: {
                 Label(node.name, systemImage: "folder.fill")
