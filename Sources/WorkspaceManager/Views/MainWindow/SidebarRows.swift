@@ -121,23 +121,9 @@ struct RepoRow: View {
 
             Button(action: onSelectRepo) {
                 HStack(spacing: 10) {
-                    ZStack(alignment: .bottomTrailing) {
-                        Image(systemName: "folder.fill")
-                            .foregroundStyle(.blue)
-
-                        if hasLiveSession {
-                            Circle()
-                                .fill(isActiveSession ? Color.green.opacity(0.78) : Color.secondary.opacity(0.55))
-                                .frame(width: 6, height: 6)
-                                .overlay(
-                                    Circle()
-                                        .stroke(Color.black.opacity(0.28), lineWidth: 1)
-                                )
-                                .offset(x: 2, y: 1)
-                                .accessibilityHidden(true)
-                        }
-                    }
-                    .frame(width: 18, alignment: .leading)
+                    Image(systemName: "folder.fill")
+                        .foregroundStyle(.blue)
+                        .frame(width: 18, alignment: .leading)
 
                     Text(repo.name)
                         .font(.system(size: 16, weight: .semibold))
@@ -150,6 +136,11 @@ struct RepoRow: View {
                             count: workspaceCount,
                             isCollapsed: !isExpanded
                         )
+                    }
+
+                    if hasLiveSession {
+                        LiveSessionBadge(isActiveSession: isActiveSession)
+                            .help(isActiveSession ? "Active live terminal session" : "Live terminal session")
                     }
                 }
                 .contentShape(Rectangle())

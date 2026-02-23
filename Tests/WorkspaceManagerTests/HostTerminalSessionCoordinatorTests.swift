@@ -83,6 +83,44 @@ struct HostTerminalSessionCoordinatorTests {
         #expect(coordinator.activeSessionID == keepRepoSession.id)
     }
 
+    @Test("Removing a split-target session updates active session fallback")
+    func removeSessionUpdatesActiveFallback() {
+        var coordinator = HostTerminalSessionCoordinator()
+
+        let firstSession = coordinator.activate(
+            key: .defaultHome,
+            directory: URL(fileURLWithPath: "/Users/test/code")
+        ).session
+        let secondSession = coordinator.activate(
+            key: .repoPath("/Users/test/code/repo-a"),
+            directory: URL(fileURLWithPath: "/Users/test/code/repo-a")
+        ).session
+
+        #expect(coordinator.activeSessionID == secondSession.id)
+
+        let removed = coordinator.remove(sessionID: secondSession.id)
+        #expect(removed?.id == secondSession.id)
+        #expect(coordinator.sessions.count == 1)
+        #expect(coordinator.activeSessionID == firstSession.id)
+    }
+
+    @Test("Removing a missing session is a no-op")
+    func removeMissingSessionIsNoOp() {
+        var coordinator = HostTerminalSessionCoordinator()
+        _ = coordinator.activate(
+            key: .defaultHome,
+            directory: URL(fileURLWithPath: "/Users/test/code")
+        )
+        let initialSessions = coordinator.sessions
+        let initialActiveID = coordinator.activeSessionID
+
+        let removed = coordinator.remove(sessionID: UUID())
+
+        #expect(removed == nil)
+        #expect(coordinator.sessions == initialSessions)
+        #expect(coordinator.activeSessionID == initialActiveID)
+    }
+
     @Test("Presentation reports live repo paths and active repo")
     func presentationReportsLiveRepoState() {
         var coordinator = HostTerminalSessionCoordinator()

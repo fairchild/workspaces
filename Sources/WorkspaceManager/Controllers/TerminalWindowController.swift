@@ -56,6 +56,7 @@ final class TerminalFocusManager: NSObject {
     func requestFocus(
         for terminal: NSView,
         delay: TimeInterval? = nil,
+        activateApp: Bool = false,
         onFocused: (() -> Void)? = nil
     ) {
         pendingFocusWork?.cancel()
@@ -72,13 +73,26 @@ final class TerminalFocusManager: NSObject {
 
             guard let window = terminal.window else {
                 if nextDelay <= 0.5 {
-                    self.requestFocus(for: terminal, delay: nextDelay, onFocused: onFocused)
+                    self.requestFocus(
+                        for: terminal,
+                        delay: nextDelay,
+                        activateApp: activateApp,
+                        onFocused: onFocused
+                    )
                 }
                 return
             }
 
-            NSApp.activate(ignoringOtherApps: true)
-            window.makeKeyAndOrderFront(nil)
+            if activateApp {
+                NSApp.activate(ignoringOtherApps: true)
+                window.makeKeyAndOrderFront(nil)
+            } else {
+                // Keep focus intent without stealing foreground when app is inactive.
+                if !NSApp.isActive || !window.isKeyWindow {
+                    self.focusedTerminal = terminal
+                    return
+                }
+            }
 
             if let oldFocused = self.focusedTerminal, oldFocused !== terminal {
                 _ = oldFocused.resignFirstResponder()
@@ -90,7 +104,12 @@ final class TerminalFocusManager: NSObject {
                 PerformanceSignposts.endLaunchToFirstPromptIfNeeded(trigger: "terminal_focus")
                 onFocused?()
             } else if nextDelay <= 0.5 {
-                self.requestFocus(for: terminal, delay: nextDelay, onFocused: onFocused)
+                self.requestFocus(
+                    for: terminal,
+                    delay: nextDelay,
+                    activateApp: activateApp,
+                    onFocused: onFocused
+                )
             }
         }
 
@@ -123,7 +142,7 @@ final class TerminalFocusManager: NSObject {
 
         if window.firstResponder === window, let terminal = focusedTerminal {
             DispatchQueue.main.async {
-                self.requestFocus(for: terminal)
+                self.requestFocus(for: terminal, activateApp: false)
             }
         }
 

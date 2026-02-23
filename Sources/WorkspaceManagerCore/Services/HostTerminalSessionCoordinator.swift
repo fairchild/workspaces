@@ -153,6 +153,20 @@ public struct HostTerminalSessionCoordinator: Sendable {
         return removedIDs
     }
 
+    @discardableResult
+    public mutating func remove(sessionID: UUID) -> HostTerminalSession? {
+        guard let index = sessions.firstIndex(where: { $0.id == sessionID }) else {
+            return nil
+        }
+
+        let removed = sessions.remove(at: index)
+        if activeSessionID == sessionID {
+            activeSessionID = sessions.last?.id
+        }
+
+        return removed
+    }
+
     public var presentation: HostTerminalSessionPresentation {
         let liveRepoPaths = Set<String>(
             sessions.compactMap { session in

@@ -49,7 +49,10 @@ struct GhosttyTerminalConfig {
         let scale = view.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
         config.scale_factor = scale
         config.font_size = fontSize
-        config.context = GHOSTTY_SURFACE_CONTEXT_WINDOW
+        config.wait_after_command = false
+        // Embedded terminals should behave like panes, not standalone windows.
+        // This prevents shell exit from propagating window-close semantics.
+        config.context = GHOSTTY_SURFACE_CONTEXT_SPLIT
 
         return try workingDirectory.withCString { workingDirectoryPtr in
             config.working_directory = workingDirectoryPtr

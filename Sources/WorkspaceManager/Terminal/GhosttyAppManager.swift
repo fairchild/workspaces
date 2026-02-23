@@ -13,6 +13,13 @@ final class GhosttyAppManager: NSObject {
         case gotoSplit = "goto_split"
     }
 
+    enum SplitDirection: Int {
+        case right = 0
+        case down = 1
+        case left = 2
+        case up = 3
+    }
+
     enum SplitFocusDirection: Int {
         case previous = 0
         case next = 1
@@ -25,6 +32,11 @@ final class GhosttyAppManager: NSObject {
     struct SplitActionRequest {
         let kind: SplitActionKind
         let directionRawValue: Int?
+
+        var splitDirection: SplitDirection? {
+            guard let directionRawValue else { return nil }
+            return SplitDirection(rawValue: directionRawValue)
+        }
 
         var focusDirection: SplitFocusDirection? {
             guard let directionRawValue else { return nil }
