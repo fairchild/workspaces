@@ -11,6 +11,7 @@ import SwiftUI
 enum AppChromeShortcut: CaseIterable {
     case toggleSidebar
     case toggleInspector
+    case toggleTerminalPanel
     case newWorkspace
 
     var keyCharacter: Character {
@@ -19,6 +20,8 @@ enum AppChromeShortcut: CaseIterable {
             return "b"
         case .toggleInspector:
             return "b"
+        case .toggleTerminalPanel:
+            return "j"
         case .newWorkspace:
             return "t"
         }
@@ -30,6 +33,8 @@ enum AppChromeShortcut: CaseIterable {
             return [.command]
         case .toggleInspector:
             return [.command, .shift]
+        case .toggleTerminalPanel:
+            return [.command]
         case .newWorkspace:
             return [.command, .shift]
         }
@@ -41,6 +46,8 @@ enum AppChromeShortcut: CaseIterable {
             return [.command]
         case .toggleInspector:
             return [.command, .shift]
+        case .toggleTerminalPanel:
+            return [.command]
         case .newWorkspace:
             return [.command, .shift]
         }

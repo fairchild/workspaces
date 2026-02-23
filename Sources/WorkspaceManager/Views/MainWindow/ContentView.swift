@@ -16,6 +16,8 @@ struct ContentView: View {
     @Query(sort: \Repo.addedAt, order: .reverse) private var repos: [Repo]
 
     @State private var selectedWorkspace: Workspace?
+    @State private var selectedCodePreview: CodePreviewSelection?
+    @State private var isTerminalPanelVisible = true
     @State private var isRightPaneVisible = false
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var pendingRepoFocusMeasurementSessionID: UUID?
@@ -68,6 +70,9 @@ struct ContentView: View {
                 activeSplitLayout: hostTerminalState.splitLayout(for: hostTerminalState.activeSessionID),
                 hostSurfaceStore: hostTerminalState.surfaceStore,
                 onTerminalProcessExit: handleTerminalProcessExit(sessionID:),
+                selectedCodePreview: $selectedCodePreview,
+                isTerminalPanelVisible: $isTerminalPanelVisible,
+                onFileSelected: handleCodePreviewSelection,
                 isRightPaneVisible: $isRightPaneVisible
             )
         }
@@ -111,8 +116,10 @@ struct ContentView: View {
         }
         .focusedSceneValue(\.toggleSidebarAction, toggleSidebarVisibility)
         .focusedSceneValue(\.toggleInspectorAction, toggleInspectorVisibility)
+        .focusedSceneValue(\.toggleTerminalPanelAction, toggleTerminalPanelVisibility)
     }
 
+    @MainActor
     private func processPendingDeepLink() {
         guard let request = deepLinkState.pendingRequest else { return }
 
@@ -133,6 +140,7 @@ struct ContentView: View {
         )
 
         selectedWorkspace = workspace
+        clearCodePreview()
         columnVisibility = .all
         deepLinkState.clearPendingRequest()
         focusWorkspaceWindow()
@@ -158,6 +166,7 @@ struct ContentView: View {
         let repoDirectory = repo.localURL.standardizedFileURL.resolvingSymlinksInPath()
 
         selectedWorkspace = nil
+        clearCodePreview()
         let session = activateHostSession(
             key: .repoPath(repoDirectory.path),
             directory: repoDirectory
@@ -196,6 +205,7 @@ struct ContentView: View {
     private func handleDefaultHostSelection() {
         cancelPendingRepoClickMeasurement(reason: "default_host_selected")
         selectedWorkspace = nil
+        clearCodePreview()
         let session = activateHostSession(
             key: .defaultHome,
             directory: resolvedDefaultHostDirectory
@@ -213,6 +223,7 @@ struct ContentView: View {
     @MainActor
     private func handleWorkspaceSelection(_ workspace: Workspace) {
         cancelPendingRepoClickMeasurement(reason: "workspace_selected")
+        clearCodePreview()
         let workspaceDirectory = workspace.workspaceURL.standardizedFileURL.resolvingSymlinksInPath()
         let session = activateHostSession(
             key: .hostPath(workspaceDirectory.path),
@@ -288,6 +299,24 @@ struct ContentView: View {
         withAnimation(.easeInOut(duration: 0.2)) {
             isRightPaneVisible.toggle()
         }
+    }
+
+    @MainActor
+    private func toggleTerminalPanelVisibility() {
+        guard selectedCodePreview != nil else { return }
+        withAnimation(.easeInOut(duration: 0.2)) {
+            isTerminalPanelVisible.toggle()
+        }
+    }
+
+    private func handleCodePreviewSelection(_ selection: CodePreviewSelection) {
+        selectedCodePreview = selection
+        isTerminalPanelVisible = true
+    }
+
+    private func clearCodePreview() {
+        selectedCodePreview = nil
+        isTerminalPanelVisible = true
     }
 
     @MainActor
@@ -598,6 +627,9 @@ struct MainTerminalDetailView: View {
     let activeSplitLayout: HostTerminalStateStore.SplitPaneLayout?
     let hostSurfaceStore: HostTerminalSurfaceStore
     var onTerminalProcessExit: ((UUID) -> Void)?
+    @Binding var selectedCodePreview: CodePreviewSelection?
+    @Binding var isTerminalPanelVisible: Bool
+    let onFileSelected: (CodePreviewSelection) -> Void
     @Binding var isRightPaneVisible: Bool
 
     private var activeHostSession: HostTerminalSession? {
@@ -607,30 +639,64 @@ struct MainTerminalDetailView: View {
 
     var body: some View {
         HSplitView {
-            // Main terminal panel
-            HostTerminalSessionStack(
-                sessions: hostTerminalSessions,
-                activeSessionID: activeHostTerminalSessionID,
-                splitSession: activeSplitHostSession,
-                splitLayout: activeSplitLayout,
-                surfaceStore: hostSurfaceStore,
-                onTerminalProcessExit: onTerminalProcessExit
-            )
+            previewAndTerminalPanel
             .frame(minWidth: 400)
 
             // Collapsible right pane
             if isRightPaneVisible {
                 if let selectedWorkspace {
-                    RightPaneView(workspace: selectedWorkspace)
+                    RightPaneView(
+                        workspace: selectedWorkspace,
+                        onFileSelected: onFileSelected
+                    )
                         .frame(minWidth: 220, idealWidth: 280, maxWidth: 400)
                 } else if let selectedRepo {
-                    RightPaneView(repo: selectedRepo)
+                    RightPaneView(
+                        repo: selectedRepo,
+                        onFileSelected: onFileSelected
+                    )
                         .frame(minWidth: 220, idealWidth: 280, maxWidth: 400)
                 }
             }
         }
         .navigationTitle(selectedWorkspace?.name ?? "Host")
         .navigationSubtitle(selectedWorkspace?.sourceRepo?.name ?? (activeHostSession?.directoryPath ?? ""))
+    }
+
+    @ViewBuilder
+    private var previewAndTerminalPanel: some View {
+        if let selectedCodePreview {
+            if isTerminalPanelVisible {
+                VSplitView {
+                    CodeFilePreviewView(selection: selectedCodePreview) {
+                        self.selectedCodePreview = nil
+                        self.isTerminalPanelVisible = true
+                    }
+                    .frame(minHeight: 220)
+
+                    hostTerminalPanel
+                        .frame(minHeight: 160)
+                }
+            } else {
+                CodeFilePreviewView(selection: selectedCodePreview) {
+                    self.selectedCodePreview = nil
+                    self.isTerminalPanelVisible = true
+                }
+            }
+        } else {
+            hostTerminalPanel
+        }
+    }
+
+    private var hostTerminalPanel: some View {
+        HostTerminalSessionStack(
+            sessions: hostTerminalSessions,
+            activeSessionID: activeHostTerminalSessionID,
+            splitSession: activeSplitHostSession,
+            splitLayout: activeSplitLayout,
+            surfaceStore: hostSurfaceStore,
+            onTerminalProcessExit: onTerminalProcessExit
+        )
     }
 }
 
