@@ -16,7 +16,7 @@ struct ContentView: View {
     @Query(sort: \Repo.addedAt, order: .reverse) private var repos: [Repo]
 
     @State private var selectedWorkspace: Workspace?
-    @State private var isRightPaneVisible = true
+    @State private var isRightPaneVisible = false
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var pendingRepoFocusMeasurementSessionID: UUID?
     @State private var didRunPerfAutoSelection = false
@@ -26,6 +26,21 @@ struct ContentView: View {
 
     private var sessionPresentation: HostTerminalSessionPresentation {
         hostTerminalState.sessionPresentation
+    }
+
+    private var selectedRepoForInspector: Repo? {
+        guard selectedWorkspace == nil,
+            let activeRepoPath = sessionPresentation.activeRepoPath
+        else {
+            return nil
+        }
+
+        let normalizedActiveRepoPath = normalizePath(activeRepoPath)
+        return repos.first { normalizePath($0.localPath) == normalizedActiveRepoPath }
+    }
+
+    private var hasInspectorTarget: Bool {
+        selectedWorkspace != nil || selectedRepoForInspector != nil
     }
 
     var body: some View {
@@ -46,6 +61,7 @@ struct ContentView: View {
         } detail: {
             MainTerminalDetailView(
                 selectedWorkspace: selectedWorkspace,
+                selectedRepo: selectedRepoForInspector,
                 hostTerminalSessions: hostTerminalState.sessions,
                 activeHostTerminalSessionID: hostTerminalState.activeSessionID,
                 activeSplitHostSession: hostTerminalState.splitSession(for: hostTerminalState.activeSessionID),
@@ -65,7 +81,7 @@ struct ContentView: View {
                     Image(systemName: "sidebar.trailing")
                 }
                 .help(isRightPaneVisible ? "Hide Inspector" : "Show Inspector")
-                .disabled(selectedWorkspace == nil)
+                .disabled(!hasInspectorTarget)
             }
         }
         .onAppear {
@@ -94,6 +110,7 @@ struct ContentView: View {
             }
         }
         .focusedSceneValue(\.toggleSidebarAction, toggleSidebarVisibility)
+        .focusedSceneValue(\.toggleInspectorAction, toggleInspectorVisibility)
     }
 
     private func processPendingDeepLink() {
@@ -262,6 +279,14 @@ struct ContentView: View {
             default:
                 columnVisibility = .detailOnly
             }
+        }
+    }
+
+    @MainActor
+    private func toggleInspectorVisibility() {
+        guard hasInspectorTarget else { return }
+        withAnimation(.easeInOut(duration: 0.2)) {
+            isRightPaneVisible.toggle()
         }
     }
 
@@ -566,6 +591,7 @@ struct ContentView: View {
 
 struct MainTerminalDetailView: View {
     let selectedWorkspace: Workspace?
+    let selectedRepo: Repo?
     let hostTerminalSessions: [HostTerminalSession]
     let activeHostTerminalSessionID: UUID?
     let activeSplitHostSession: HostTerminalSession?
@@ -593,9 +619,14 @@ struct MainTerminalDetailView: View {
             .frame(minWidth: 400)
 
             // Collapsible right pane
-            if isRightPaneVisible, let selectedWorkspace {
-                RightPaneView(workspace: selectedWorkspace)
-                    .frame(minWidth: 220, idealWidth: 280, maxWidth: 400)
+            if isRightPaneVisible {
+                if let selectedWorkspace {
+                    RightPaneView(workspace: selectedWorkspace)
+                        .frame(minWidth: 220, idealWidth: 280, maxWidth: 400)
+                } else if let selectedRepo {
+                    RightPaneView(repo: selectedRepo)
+                        .frame(minWidth: 220, idealWidth: 280, maxWidth: 400)
+                }
             }
         }
         .navigationTitle(selectedWorkspace?.name ?? "Host")
