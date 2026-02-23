@@ -11,6 +11,7 @@ import WorkspaceManagerCore
 struct RightPaneView: View {
     let targetID: String
     let directoryURL: URL
+    let onFileSelected: (CodePreviewSelection) -> Void
 
     @Environment(\.gitService) private var gitService
     @State private var selectedTab: Tab = .files
@@ -31,14 +32,22 @@ struct RightPaneView: View {
         }
     }
 
-    init(workspace: Workspace) {
+    init(
+        workspace: Workspace,
+        onFileSelected: @escaping (CodePreviewSelection) -> Void = { _ in }
+    ) {
         self.targetID = "workspace-\(workspace.id.uuidString)"
         self.directoryURL = workspace.workspaceURL
+        self.onFileSelected = onFileSelected
     }
 
-    init(repo: Repo) {
+    init(
+        repo: Repo,
+        onFileSelected: @escaping (CodePreviewSelection) -> Void = { _ in }
+    ) {
         self.targetID = "repo-\(repo.id.uuidString)"
         self.directoryURL = repo.localURL
+        self.onFileSelected = onFileSelected
     }
 
     var body: some View {
@@ -66,9 +75,9 @@ struct RightPaneView: View {
             ZStack {
                 switch selectedTab {
                 case .files:
-                    FileTreeTabView(root: fileTree, isLoading: isLoading)
+                    FileTreeTabView(root: fileTree, isLoading: isLoading, onFileSelected: selectFile)
                 case .changes:
-                    ChangedFilesTabView(changes: changedFiles, isLoading: isLoading)
+                    ChangedFilesTabView(changes: changedFiles, isLoading: isLoading, onFileSelected: selectFile)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -139,6 +148,16 @@ struct RightPaneView: View {
             return []
         }
     }
+
+    private func selectFile(relativePath: String) {
+        guard !relativePath.isEmpty else { return }
+        onFileSelected(
+            CodePreviewSelection(
+                rootURL: directoryURL,
+                relativePath: relativePath
+            )
+        )
+    }
 }
 
 // MARK: - Tab Button
@@ -184,11 +203,14 @@ struct TabButton: View {
 struct FileTreeTabView: View {
     let root: FileNode?
     let isLoading: Bool
+    let onFileSelected: (String) -> Void
 
     var body: some View {
         if let root {
             List {
-                FileNodeView(node: root, level: 0)
+                ForEach(root.children ?? []) { child in
+                    FileNodeView(node: child, onFileSelected: onFileSelected)
+                }
             }
             .listStyle(.plain)
         } else if isLoading {
@@ -206,7 +228,7 @@ struct FileTreeTabView: View {
 
 struct FileNodeView: View {
     let node: FileNode
-    let level: Int
+    let onFileSelected: (String) -> Void
 
     @State private var isExpanded = false
 
@@ -214,15 +236,20 @@ struct FileNodeView: View {
         if node.isDirectory {
             DisclosureGroup(isExpanded: $isExpanded) {
                 ForEach(node.children ?? []) { child in
-                    FileNodeView(node: child, level: level + 1)
+                    FileNodeView(node: child, onFileSelected: onFileSelected)
                 }
             } label: {
                 Label(node.name, systemImage: "folder.fill")
                     .foregroundStyle(.primary)
             }
         } else {
-            Label(node.name, systemImage: node.icon)
-                .foregroundStyle(.primary)
+            Button {
+                onFileSelected(node.path)
+            } label: {
+                Label(node.name, systemImage: node.icon)
+                    .foregroundStyle(.primary)
+            }
+            .buttonStyle(.plain)
         }
     }
 }
@@ -232,6 +259,7 @@ struct FileNodeView: View {
 struct ChangedFilesTabView: View {
     let changes: [FileChange]
     let isLoading: Bool
+    let onFileSelected: (String) -> Void
 
     var body: some View {
         if changes.isEmpty && !isLoading {
@@ -242,19 +270,24 @@ struct ChangedFilesTabView: View {
             )
         } else {
             List(changes) { change in
-                HStack(spacing: 8) {
-                    Image(systemName: change.status.icon)
-                        .foregroundStyle(change.status.color)
-                        .frame(width: 16)
+                Button {
+                    onFileSelected(change.path)
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: change.status.icon)
+                            .foregroundStyle(change.status.color)
+                            .frame(width: 16)
 
-                    Text(change.path)
-                        .font(.system(.body, design: .monospaced))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+                        Text(change.path)
+                            .font(.system(.body, design: .monospaced))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
 
-                    Spacer()
+                        Spacer()
+                    }
+                    .padding(.vertical, 2)
                 }
-                .padding(.vertical, 2)
+                .buttonStyle(.plain)
             }
             .listStyle(.plain)
         }
