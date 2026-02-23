@@ -130,7 +130,8 @@ final class GhosttySurfaceView: NSView, NSTextInputClient {
     private func setupEventMonitor() {
         guard eventMonitor == nil else { return }
 
-        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyUp, .leftMouseDown]) { [weak self] event in
+        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp, .leftMouseDown]) {
+            [weak self] event in
             self?.handleLocalEvent(event)
         }
     }
@@ -160,10 +161,35 @@ final class GhosttySurfaceView: NSView, NSTextInputClient {
             }
             return event
 
-        case .keyUp:
-            guard focused, event.modifierFlags.contains(.command) else {
+        case .keyDown:
+            guard focused else {
                 return event
             }
+
+            let commandOrControlModifiers = event.modifierFlags.intersection([.command, .control])
+            guard !commandOrControlModifiers.isEmpty else {
+                return event
+            }
+
+            if ShortcutRoutingPolicy.shared.route(for: event) == .appChrome {
+                return event
+            }
+
+            if performKeyEquivalent(with: event) {
+                return nil
+            }
+            return event
+
+        case .keyUp:
+            guard focused else {
+                return event
+            }
+
+            let commandOrControlModifiers = event.modifierFlags.intersection([.command, .control])
+            guard !commandOrControlModifiers.isEmpty else {
+                return event
+            }
+
             if ShortcutRoutingPolicy.shared.route(for: event) == .appChrome {
                 return event
             }
@@ -322,10 +348,19 @@ final class GhosttySurfaceView: NSView, NSTextInputClient {
             translationMods: translationMods
         )
         var bindingFlags = ghostty_binding_flags_e(rawValue: 0)
-        let isGhosttyBinding = (event.characters ?? "").withCString { pointer in
-            var keyEventWithText = keyEvent
-            keyEventWithText.text = pointer
-            return ghostty_surface_key_is_binding(surface, keyEventWithText, &bindingFlags)
+
+        let bindingText = GhosttyInput.ghosttyCharacters(from: event)
+            ?? event.charactersIgnoringModifiers
+        var keyEventWithText = keyEvent
+        let isGhosttyBinding: Bool
+        if let bindingText, !bindingText.isEmpty {
+            isGhosttyBinding = bindingText.withCString { pointer in
+                keyEventWithText.text = pointer
+                return ghostty_surface_key_is_binding(surface, keyEventWithText, &bindingFlags)
+            }
+        } else {
+            keyEventWithText.text = nil
+            isGhosttyBinding = ghostty_surface_key_is_binding(surface, keyEventWithText, &bindingFlags)
         }
 
         if isGhosttyBinding {

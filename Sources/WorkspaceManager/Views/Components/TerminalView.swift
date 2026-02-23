@@ -155,6 +155,7 @@ struct GhosttyTerminalRepresentable: NSViewRepresentable {
 struct PersistentHostTerminalContainerView: View {
     let session: HostTerminalSession
     let surfaceStore: HostTerminalSurfaceStore
+    var onProcessExit: (() -> Void)?
     @State private var restartGeneration = 0
 
     var body: some View {
@@ -196,6 +197,7 @@ struct PersistentHostTerminalContainerView: View {
                 surfaceStore: surfaceStore,
                 onProcessExit: {
                     NSLog("[GhosttyTerminal] Process exited for host session %@", session.id.uuidString)
+                    onProcessExit?()
                 }
             )
             .id(PersistentHostTerminalIdentity(sessionID: session.id, restartGeneration: restartGeneration))

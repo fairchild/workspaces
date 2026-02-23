@@ -49,7 +49,9 @@ struct ContentView: View {
                 hostTerminalSessions: hostTerminalState.sessions,
                 activeHostTerminalSessionID: hostTerminalState.activeSessionID,
                 activeSplitHostSession: hostTerminalState.splitSession(for: hostTerminalState.activeSessionID),
+                activeSplitLayout: hostTerminalState.splitLayout(for: hostTerminalState.activeSessionID),
                 hostSurfaceStore: hostTerminalState.surfaceStore,
+                onTerminalProcessExit: handleTerminalProcessExit(sessionID:),
                 isRightPaneVisible: $isRightPaneVisible
             )
         }
@@ -216,6 +218,31 @@ struct ContentView: View {
     }
 
     @MainActor
+    private func handleTerminalProcessExit(sessionID: UUID) {
+        NSLog("[HostSession] Process exit detected for session %@", sessionID.uuidString)
+        guard hostTerminalState.handleProcessExit(for: sessionID) else {
+            return
+        }
+
+        if hostTerminalState.sessions.isEmpty {
+            let replacementSession = activateHostSession(
+                key: .defaultHome,
+                directory: resolvedDefaultHostDirectory
+            )
+            requestMainTerminalFocus(
+                targetSessionID: replacementSession.id,
+                activateApp: false
+            )
+            return
+        }
+
+        requestMainTerminalFocus(
+            targetSessionID: hostTerminalState.activeSessionID,
+            activateApp: false
+        )
+    }
+
+    @MainActor
     private func ensureInitialHostSession() {
         guard !hostTerminalState.hasSessions else { return }
         _ = activateHostSession(
@@ -251,7 +278,10 @@ struct ContentView: View {
 
         switch request.kind {
         case .newSplit:
-            handleGhosttyNewSplitRequest(sourceSessionID: sourceSessionID)
+            handleGhosttyNewSplitRequest(
+                sourceSessionID: sourceSessionID,
+                direction: request.splitDirection
+            )
 
         case .gotoSplit:
             handleGhosttyGotoSplitRequest(
@@ -262,7 +292,10 @@ struct ContentView: View {
     }
 
     @MainActor
-    private func handleGhosttyNewSplitRequest(sourceSessionID: UUID?) {
+    private func handleGhosttyNewSplitRequest(
+        sourceSessionID: UUID?,
+        direction: GhosttyAppManager.SplitDirection?
+    ) {
         let primarySessionID =
             sourceSessionID.flatMap { hostTerminalState.activatePrimarySession(containing: $0) }
             ?? hostTerminalState.activeSessionID
@@ -274,7 +307,41 @@ struct ContentView: View {
         NSLog(
             "[SplitRouting] new_split source=%@ primary=%@", sourceSessionID?.uuidString ?? "nil",
             primarySessionID.uuidString)
-        createAndFocusSplit(primarySessionID: primarySessionID)
+        let preferredLayout = splitLayout(for: direction)
+        NSLog(
+            "[SplitRouting] new_split layout axis=%@ splitBeforePrimary=%@ direction=%@",
+            preferredLayout.axis == .topBottom ? "topBottom" : "leadingTrailing",
+            preferredLayout.splitBeforePrimary ? "true" : "false",
+            String(describing: direction)
+        )
+        createAndFocusSplit(
+            primarySessionID: primarySessionID,
+            preferredLayout: preferredLayout
+        )
+    }
+
+    private func splitLayout(
+        for direction: GhosttyAppManager.SplitDirection?
+    ) -> HostTerminalStateStore.SplitPaneLayout {
+        switch direction {
+        case .left:
+            return HostTerminalStateStore.SplitPaneLayout(
+                axis: .leadingTrailing,
+                splitBeforePrimary: true
+            )
+        case .up:
+            return HostTerminalStateStore.SplitPaneLayout(
+                axis: .topBottom,
+                splitBeforePrimary: true
+            )
+        case .down:
+            return HostTerminalStateStore.SplitPaneLayout(
+                axis: .topBottom,
+                splitBeforePrimary: false
+            )
+        case .right, .none:
+            return .defaultTrailing
+        }
     }
 
     @MainActor
@@ -313,8 +380,16 @@ struct ContentView: View {
     }
 
     @MainActor
-    private func createAndFocusSplit(primarySessionID: UUID) {
-        guard let splitSession = hostTerminalState.ensureSplit(forPrimarySessionID: primarySessionID) else {
+    private func createAndFocusSplit(
+        primarySessionID: UUID,
+        preferredLayout: HostTerminalStateStore.SplitPaneLayout
+    ) {
+        guard
+            let splitSession = hostTerminalState.ensureSplit(
+                forPrimarySessionID: primarySessionID,
+                preferredLayout: preferredLayout
+            )
+        else {
             return
         }
 
@@ -399,17 +474,21 @@ struct ContentView: View {
     @MainActor
     private func requestMainTerminalFocus(
         targetSessionID: UUID? = nil,
+        activateApp: Bool = true,
         onTargetFocused: (() -> Void)? = nil
     ) {
-        NSApp.activate(ignoringOtherApps: true)
-        let window = NSApp.windows.first(where: \.isVisible) ?? NSApp.windows.first
-        window?.makeKeyAndOrderFront(nil)
+        if activateApp {
+            NSApp.activate(ignoringOtherApps: true)
+            let window = NSApp.windows.first(where: \.isVisible) ?? NSApp.windows.first
+            window?.makeKeyAndOrderFront(nil)
+        }
 
         if let targetSessionID,
             let terminal = hostTerminalState.surfaceStore.terminal(for: targetSessionID)
         {
             TerminalFocusManager.shared.requestFocus(
                 for: terminal,
+                activateApp: activateApp,
                 onFocused: onTargetFocused
             )
             return
@@ -418,12 +497,18 @@ struct ContentView: View {
         if let activeSessionID = hostTerminalState.activeSessionID,
             let terminal = hostTerminalState.surfaceStore.terminal(for: activeSessionID)
         {
-            TerminalFocusManager.shared.requestFocus(for: terminal)
+            TerminalFocusManager.shared.requestFocus(
+                for: terminal,
+                activateApp: activateApp
+            )
             return
         }
 
         if let terminal = TerminalFocusManager.shared.focusedTerminal {
-            TerminalFocusManager.shared.requestFocus(for: terminal)
+            TerminalFocusManager.shared.requestFocus(
+                for: terminal,
+                activateApp: activateApp
+            )
         }
     }
 
@@ -484,7 +569,9 @@ struct MainTerminalDetailView: View {
     let hostTerminalSessions: [HostTerminalSession]
     let activeHostTerminalSessionID: UUID?
     let activeSplitHostSession: HostTerminalSession?
+    let activeSplitLayout: HostTerminalStateStore.SplitPaneLayout?
     let hostSurfaceStore: HostTerminalSurfaceStore
+    var onTerminalProcessExit: ((UUID) -> Void)?
     @Binding var isRightPaneVisible: Bool
 
     private var activeHostSession: HostTerminalSession? {
@@ -499,7 +586,9 @@ struct MainTerminalDetailView: View {
                 sessions: hostTerminalSessions,
                 activeSessionID: activeHostTerminalSessionID,
                 splitSession: activeSplitHostSession,
-                surfaceStore: hostSurfaceStore
+                splitLayout: activeSplitLayout,
+                surfaceStore: hostSurfaceStore,
+                onTerminalProcessExit: onTerminalProcessExit
             )
             .frame(minWidth: 400)
 
@@ -518,34 +607,63 @@ struct HostTerminalSessionStack: View {
     let sessions: [HostTerminalSession]
     let activeSessionID: UUID?
     let splitSession: HostTerminalSession?
+    let splitLayout: HostTerminalStateStore.SplitPaneLayout?
     let surfaceStore: HostTerminalSurfaceStore
+    var onTerminalProcessExit: ((UUID) -> Void)?
 
     private var activeSession: HostTerminalSession? {
         guard let activeSessionID else { return sessions.last }
         return sessions.first(where: { $0.id == activeSessionID }) ?? sessions.last
     }
 
+    private var resolvedSplitLayout: HostTerminalStateStore.SplitPaneLayout {
+        splitLayout ?? .defaultTrailing
+    }
+
+    @ViewBuilder
+    private func paneView(
+        for session: HostTerminalSession,
+        axis: HostTerminalStateStore.SplitPaneLayout.Axis
+    ) -> some View {
+        PersistentHostTerminalContainerView(
+            session: session,
+            surfaceStore: surfaceStore,
+            onProcessExit: {
+                onTerminalProcessExit?(session.id)
+            }
+        )
+        .frame(
+            minWidth: axis == .leadingTrailing ? 240 : nil,
+            minHeight: axis == .topBottom ? 160 : nil
+        )
+    }
+
     var body: some View {
         if let activeSession {
             if let splitSession {
-                HSplitView {
-                    PersistentHostTerminalContainerView(
-                        session: activeSession,
-                        surfaceStore: surfaceStore
-                    )
-                    .frame(minWidth: 240)
-
-                    PersistentHostTerminalContainerView(
-                        session: splitSession,
-                        surfaceStore: surfaceStore
-                    )
-                    .frame(minWidth: 240)
+                if resolvedSplitLayout.axis == .topBottom {
+                    VSplitView {
+                        if resolvedSplitLayout.splitBeforePrimary {
+                            paneView(for: splitSession, axis: .topBottom)
+                            paneView(for: activeSession, axis: .topBottom)
+                        } else {
+                            paneView(for: activeSession, axis: .topBottom)
+                            paneView(for: splitSession, axis: .topBottom)
+                        }
+                    }
+                } else {
+                    HSplitView {
+                        if resolvedSplitLayout.splitBeforePrimary {
+                            paneView(for: splitSession, axis: .leadingTrailing)
+                            paneView(for: activeSession, axis: .leadingTrailing)
+                        } else {
+                            paneView(for: activeSession, axis: .leadingTrailing)
+                            paneView(for: splitSession, axis: .leadingTrailing)
+                        }
+                    }
                 }
             } else {
-                PersistentHostTerminalContainerView(
-                    session: activeSession,
-                    surfaceStore: surfaceStore
-                )
+                paneView(for: activeSession, axis: .leadingTrailing)
             }
         }
     }
@@ -553,9 +671,25 @@ struct HostTerminalSessionStack: View {
 
 @MainActor
 final class HostTerminalStateStore: ObservableObject {
+    struct SplitPaneLayout: Equatable {
+        enum Axis: Equatable {
+            case leadingTrailing
+            case topBottom
+        }
+
+        let axis: Axis
+        let splitBeforePrimary: Bool
+
+        static let defaultTrailing = SplitPaneLayout(
+            axis: .leadingTrailing,
+            splitBeforePrimary: false
+        )
+    }
+
     @Published private(set) var sessions: [HostTerminalSession] = []
     @Published private(set) var activeSessionID: UUID?
     @Published private(set) var splitSessionsByPrimaryID: [UUID: HostTerminalSession] = [:]
+    @Published private(set) var splitLayoutsByPrimaryID: [UUID: SplitPaneLayout] = [:]
     @Published private(set) var sessionPresentation = HostTerminalSessionPresentation()
 
     let surfaceStore = HostTerminalSurfaceStore()
@@ -612,9 +746,39 @@ final class HostTerminalStateStore: ObservableObject {
             if let splitSession = splitSessionsByPrimaryID.removeValue(forKey: removedSessionID) {
                 surfaceStore.invalidate(sessionID: splitSession.id)
             }
+            splitLayoutsByPrimaryID.removeValue(forKey: removedSessionID)
         }
 
         publishSnapshot()
+    }
+
+    @discardableResult
+    func handleProcessExit(for sessionID: UUID) -> Bool {
+        var removed = false
+
+        if let primarySessionID = splitSessionsByPrimaryID.first(where: { $0.value.id == sessionID })?.key {
+            if let splitSession = splitSessionsByPrimaryID.removeValue(forKey: primarySessionID) {
+                surfaceStore.invalidate(sessionID: splitSession.id)
+                splitLayoutsByPrimaryID.removeValue(forKey: primarySessionID)
+                removed = true
+            }
+        }
+
+        if coordinator.remove(sessionID: sessionID) != nil {
+            surfaceStore.invalidate(sessionID: sessionID)
+
+            if let splitSession = splitSessionsByPrimaryID.removeValue(forKey: sessionID) {
+                surfaceStore.invalidate(sessionID: splitSession.id)
+            }
+            splitLayoutsByPrimaryID.removeValue(forKey: sessionID)
+            removed = true
+        }
+
+        if removed {
+            publishSnapshot()
+        }
+
+        return removed
     }
 
     func splitSession(for primarySessionID: UUID?) -> HostTerminalSession? {
@@ -622,19 +786,36 @@ final class HostTerminalStateStore: ObservableObject {
         return splitSessionsByPrimaryID[primarySessionID]
     }
 
-    @discardableResult
-    func ensureSplitForActiveSession() -> HostTerminalSession? {
-        guard let activeSessionID else { return nil }
-        return ensureSplit(forPrimarySessionID: activeSessionID)
+    func splitLayout(for primarySessionID: UUID?) -> SplitPaneLayout? {
+        guard let primarySessionID else { return nil }
+        return splitLayoutsByPrimaryID[primarySessionID]
     }
 
     @discardableResult
-    func ensureSplit(forPrimarySessionID primarySessionID: UUID) -> HostTerminalSession? {
+    func ensureSplitForActiveSession(
+        preferredLayout: SplitPaneLayout = .defaultTrailing
+    ) -> HostTerminalSession? {
+        guard let activeSessionID else { return nil }
+        return ensureSplit(
+            forPrimarySessionID: activeSessionID,
+            preferredLayout: preferredLayout
+        )
+    }
+
+    @discardableResult
+    func ensureSplit(
+        forPrimarySessionID primarySessionID: UUID,
+        preferredLayout: SplitPaneLayout = .defaultTrailing
+    ) -> HostTerminalSession? {
         guard let primarySession = sessions.first(where: { $0.id == primarySessionID }) else {
             return nil
         }
 
         if let existing = splitSessionsByPrimaryID[primarySessionID] {
+            if splitLayoutsByPrimaryID[primarySessionID] != preferredLayout {
+                splitLayoutsByPrimaryID[primarySessionID] = preferredLayout
+                objectWillChange.send()
+            }
             return existing
         }
 
@@ -643,12 +824,13 @@ final class HostTerminalStateStore: ObservableObject {
             directory: primarySession.directoryURL
         )
         splitSessionsByPrimaryID[primarySessionID] = splitSession
+        splitLayoutsByPrimaryID[primarySessionID] = preferredLayout
         objectWillChange.send()
         return splitSession
     }
 
     /// Computes the target session for split focus navigation in our current
-    /// two-pane split model (primary + optional right split).
+    /// two-pane split model (primary + optional split with direction-aware layout).
     func splitFocusTarget(
         from sourceSessionID: UUID,
         direction: GhosttyAppManager.SplitFocusDirection
@@ -659,6 +841,7 @@ final class HostTerminalStateStore: ObservableObject {
             return nil
         }
 
+        let layout = splitLayoutsByPrimaryID[primarySessionID] ?? .defaultTrailing
         let sourceIsSplit = splitSession.id == sourceSessionID
 
         switch direction {
@@ -666,14 +849,32 @@ final class HostTerminalStateStore: ObservableObject {
             return sourceIsSplit ? primarySessionID : splitSession.id
 
         case .left:
+            guard layout.axis == .leadingTrailing else { return nil }
+            if layout.splitBeforePrimary {
+                return sourceIsSplit ? nil : splitSession.id
+            }
             return sourceIsSplit ? primarySessionID : nil
 
         case .right:
+            guard layout.axis == .leadingTrailing else { return nil }
+            if layout.splitBeforePrimary {
+                return sourceIsSplit ? primarySessionID : nil
+            }
             return sourceIsSplit ? nil : splitSession.id
 
-        case .up, .down:
-            // Current UI only supports horizontal splits.
-            return nil
+        case .up:
+            guard layout.axis == .topBottom else { return nil }
+            if layout.splitBeforePrimary {
+                return sourceIsSplit ? nil : splitSession.id
+            }
+            return sourceIsSplit ? primarySessionID : nil
+
+        case .down:
+            guard layout.axis == .topBottom else { return nil }
+            if layout.splitBeforePrimary {
+                return sourceIsSplit ? primarySessionID : nil
+            }
+            return sourceIsSplit ? nil : splitSession.id
         }
     }
 
@@ -688,6 +889,7 @@ final class HostTerminalStateStore: ObservableObject {
             if let splitSession = splitSessionsByPrimaryID.removeValue(forKey: primaryID) {
                 surfaceStore.invalidate(sessionID: splitSession.id)
             }
+            splitLayoutsByPrimaryID.removeValue(forKey: primaryID)
         }
     }
 }
