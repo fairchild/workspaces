@@ -73,6 +73,14 @@ struct ContentView: View {
         selectedWorkspace != nil || selectedRepoForInspector != nil
     }
 
+    private var inspectorTargetIDsSnapshot: [String] {
+        let repoTargetIDs = repos.map { "repo-\($0.id.uuidString)" }
+        let workspaceTargetIDs = repos.flatMap { repo in
+            repo.workspaces.map { "workspace-\($0.id.uuidString)" }
+        }
+        return (repoTargetIDs + workspaceTargetIDs).sorted()
+    }
+
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             SidebarView(
@@ -122,6 +130,7 @@ struct ContentView: View {
             ensureInitialHostSession()
             processPendingDeepLink()
             maybeAutoSelectRepoForPerf()
+            pruneRightPaneState()
         }
         .onChange(of: deepLinkState.pendingRequest) { _, _ in
             processPendingDeepLink()
@@ -132,6 +141,9 @@ struct ContentView: View {
         }
         .onChange(of: repos.map { normalizePath($0.localPath) }) { _, paths in
             hostTerminalState.pruneRepoSessions(validRepoPaths: Set(paths))
+        }
+        .onChange(of: inspectorTargetIDsSnapshot) { _, _ in
+            pruneRightPaneState()
         }
         .onChange(of: selectedWorkspace?.id) { _, _ in
             guard let selectedWorkspace else { return }
@@ -346,6 +358,11 @@ struct ContentView: View {
     private func clearCodePreview() {
         selectedCodePreview = nil
         isTerminalPanelVisible = true
+    }
+
+    @MainActor
+    private func pruneRightPaneState() {
+        rightPaneStateStore.prune(keeping: Set(inspectorTargetIDsSnapshot))
     }
 
     @MainActor
