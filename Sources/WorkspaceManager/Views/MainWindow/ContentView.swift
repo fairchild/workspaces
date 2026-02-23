@@ -22,6 +22,7 @@ struct ContentView: View {
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var pendingRepoFocusMeasurementSessionID: UUID?
     @State private var didRunPerfAutoSelection = false
+    @StateObject private var rightPaneStateStore = RightPaneStateStore()
     private let resolvedDefaultHostDirectory = HostTerminalDefaults.defaultWorkingDirectory()
         .standardizedFileURL
         .resolvingSymlinksInPath()
@@ -30,15 +31,42 @@ struct ContentView: View {
         hostTerminalState.sessionPresentation
     }
 
+    private var activeHostSession: HostTerminalSession? {
+        guard let activeSessionID = hostTerminalState.activeSessionID else {
+            return hostTerminalState.sessions.last
+        }
+        return hostTerminalState.sessions.first(where: { $0.id == activeSessionID }) ?? hostTerminalState.sessions.last
+    }
+
     private var selectedRepoForInspector: Repo? {
-        guard selectedWorkspace == nil,
-            let activeRepoPath = sessionPresentation.activeRepoPath
-        else {
+        guard selectedWorkspace == nil else {
             return nil
         }
 
-        let normalizedActiveRepoPath = normalizePath(activeRepoPath)
-        return repos.first { normalizePath($0.localPath) == normalizedActiveRepoPath }
+        if let activeRepoPath = sessionPresentation.activeRepoPath {
+            let normalizedActiveRepoPath = normalizePath(activeRepoPath)
+            if let matchedRepo = repos.first(where: { normalizePath($0.localPath) == normalizedActiveRepoPath }) {
+                return matchedRepo
+            }
+        }
+
+        guard let activeHostSession else {
+            return nil
+        }
+
+        let normalizedActiveSessionPath = normalizePath(activeHostSession.directoryPath)
+        return repos.first { normalizePath($0.localPath) == normalizedActiveSessionPath }
+    }
+
+    private var activeRepoPathForSidebar: String? {
+        if let selectedRepoForInspector {
+            return normalizePath(selectedRepoForInspector.localPath)
+        }
+
+        guard let activeRepoPath = sessionPresentation.activeRepoPath else {
+            return nil
+        }
+        return normalizePath(activeRepoPath)
     }
 
     private var hasInspectorTarget: Bool {
@@ -54,7 +82,7 @@ struct ContentView: View {
                 hasDefaultHostSession: sessionPresentation.hasDefaultHomeSession,
                 isDefaultHostSessionActive: sessionPresentation.isDefaultHomeSessionActive,
                 liveRepoPaths: sessionPresentation.liveRepoPaths,
-                activeRepoPath: sessionPresentation.activeRepoPath,
+                activeRepoPath: activeRepoPathForSidebar,
                 onDefaultHostSelected: handleDefaultHostSelection,
                 onRepoSelected: handleRepoSelection,
                 onWorkspaceCreated: handleWorkspaceCreated
@@ -73,6 +101,7 @@ struct ContentView: View {
                 selectedCodePreview: $selectedCodePreview,
                 isTerminalPanelVisible: $isTerminalPanelVisible,
                 onFileSelected: handleCodePreviewSelection,
+                rightPaneStateStore: rightPaneStateStore,
                 isRightPaneVisible: $isRightPaneVisible
             )
         }
@@ -630,6 +659,7 @@ struct MainTerminalDetailView: View {
     @Binding var selectedCodePreview: CodePreviewSelection?
     @Binding var isTerminalPanelVisible: Bool
     let onFileSelected: (CodePreviewSelection) -> Void
+    let rightPaneStateStore: RightPaneStateStore
     @Binding var isRightPaneVisible: Bool
 
     private var activeHostSession: HostTerminalSession? {
@@ -647,12 +677,14 @@ struct MainTerminalDetailView: View {
                 if let selectedWorkspace {
                     RightPaneView(
                         workspace: selectedWorkspace,
+                        state: rightPaneStateStore.state(for: selectedWorkspace),
                         onFileSelected: onFileSelected
                     )
                         .frame(minWidth: 220, idealWidth: 280, maxWidth: 400)
                 } else if let selectedRepo {
                     RightPaneView(
                         repo: selectedRepo,
+                        state: rightPaneStateStore.state(for: selectedRepo),
                         onFileSelected: onFileSelected
                     )
                         .frame(minWidth: 220, idealWidth: 280, maxWidth: 400)
