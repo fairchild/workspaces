@@ -354,7 +354,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        return true  // Change to false for background operation
+        // Keep the app alive after the last window closes. This avoids
+        // unexpected app termination when a user closes a terminal/window.
+        return false
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
