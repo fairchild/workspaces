@@ -39,6 +39,11 @@ final class RightPaneStateStore: ObservableObject {
     func state(for repo: Repo) -> RightPaneSessionState {
         state(for: "repo-\(repo.id.uuidString)")
     }
+
+    func prune(keeping validTargetIDs: Set<String>) {
+        guard !states.isEmpty else { return }
+        states = states.filter { validTargetIDs.contains($0.key) }
+    }
 }
 
 struct RightPaneView: View {
