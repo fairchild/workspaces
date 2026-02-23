@@ -9,7 +9,8 @@ import SwiftUI
 import WorkspaceManagerCore
 
 struct RightPaneView: View {
-    let workspace: Workspace
+    let targetID: String
+    let directoryURL: URL
 
     @Environment(\.gitService) private var gitService
     @State private var selectedTab: Tab = .files
@@ -28,6 +29,16 @@ struct RightPaneView: View {
             case .changes: return "arrow.triangle.2.circlepath"
             }
         }
+    }
+
+    init(workspace: Workspace) {
+        self.targetID = "workspace-\(workspace.id.uuidString)"
+        self.directoryURL = workspace.workspaceURL
+    }
+
+    init(repo: Repo) {
+        self.targetID = "repo-\(repo.id.uuidString)"
+        self.directoryURL = repo.localURL
     }
 
     var body: some View {
@@ -92,7 +103,7 @@ struct RightPaneView: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
         }
-        .task(id: workspace.id) {
+        .task(id: targetID) {
             await refresh()
         }
     }
@@ -113,7 +124,7 @@ struct RightPaneView: View {
 
     private func loadFileTree() async -> FileNode? {
         do {
-            return try await gitService.getFileTree(at: workspace.workspaceURL)
+            return try await gitService.getFileTree(at: directoryURL)
         } catch {
             print("Failed to load file tree: \(error)")
             return nil
@@ -122,7 +133,7 @@ struct RightPaneView: View {
 
     private func loadGitStatus() async -> [FileChange] {
         do {
-            return try await gitService.getStatus(at: workspace.workspaceURL)
+            return try await gitService.getStatus(at: directoryURL)
         } catch {
             print("Failed to load git status: \(error)")
             return []

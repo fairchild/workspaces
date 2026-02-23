@@ -16,6 +16,7 @@ struct WorkspaceManagerApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @FocusedValue(\.newWorkspaceAction) private var newWorkspaceAction
     @FocusedValue(\.toggleSidebarAction) private var toggleSidebarAction
+    @FocusedValue(\.toggleInspectorAction) private var toggleInspectorAction
 
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([Repo.self, Workspace.self])
@@ -65,6 +66,14 @@ struct WorkspaceManagerApp: App {
                 .keyboardShortcut(
                     AppChromeShortcut.toggleSidebar.keyEquivalent,
                     modifiers: AppChromeShortcut.toggleSidebar.eventModifiers
+                )
+
+                Button("Toggle Inspector") {
+                    toggleInspectorAction?()
+                }
+                .keyboardShortcut(
+                    AppChromeShortcut.toggleInspector.keyEquivalent,
+                    modifiers: AppChromeShortcut.toggleInspector.eventModifiers
                 )
             }
 
@@ -387,6 +396,10 @@ private struct ToggleSidebarActionKey: FocusedValueKey {
     typealias Value = @MainActor () -> Void
 }
 
+private struct ToggleInspectorActionKey: FocusedValueKey {
+    typealias Value = @MainActor () -> Void
+}
+
 extension FocusedValues {
     var newWorkspaceAction: (@MainActor () -> Void)? {
         get { self[NewWorkspaceActionKey.self] }
@@ -396,5 +409,10 @@ extension FocusedValues {
     var toggleSidebarAction: (@MainActor () -> Void)? {
         get { self[ToggleSidebarActionKey.self] }
         set { self[ToggleSidebarActionKey.self] = newValue }
+    }
+
+    var toggleInspectorAction: (@MainActor () -> Void)? {
+        get { self[ToggleInspectorActionKey.self] }
+        set { self[ToggleInspectorActionKey.self] = newValue }
     }
 }

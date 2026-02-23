@@ -43,6 +43,7 @@ struct ShortcutRoutingPolicyTests {
         policy.clearOverrides()
 
         #expect(policy.route(for: AppChromeShortcut.toggleSidebar.chord) == .appChrome)
+        #expect(policy.route(for: AppChromeShortcut.toggleInspector.chord) == .appChrome)
         #expect(policy.route(for: AppChromeShortcut.newWorkspace.chord) == .appChrome)
     }
 
@@ -72,10 +73,14 @@ struct ShortcutRoutingPolicyTests {
 
         let sidebarDown = keyEvent(type: .keyDown, key: "b", modifiers: [.command])
         let sidebarUp = keyEvent(type: .keyUp, key: "b", modifiers: [.command])
+        let inspectorDown = keyEvent(type: .keyDown, key: "B", modifiers: [.command, .shift])
+        let inspectorUp = keyEvent(type: .keyUp, key: "B", modifiers: [.command, .shift])
         let splitUp = keyEvent(type: .keyUp, key: "d", modifiers: [.command])
 
         #expect(policy.route(for: sidebarDown) == .appChrome)
         #expect(policy.route(for: sidebarUp) == .appChrome)
+        #expect(policy.route(for: inspectorDown) == .appChrome)
+        #expect(policy.route(for: inspectorUp) == .appChrome)
         #expect(policy.route(for: splitUp) == .ghostty)
     }
 }
