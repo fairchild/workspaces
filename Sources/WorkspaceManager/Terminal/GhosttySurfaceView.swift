@@ -17,6 +17,7 @@ final class GhosttySurfaceView: NSView, NSTextInputClient {
     private var markedText = NSMutableAttributedString()
     private var focused = false
     private var lastPerformKeyEvent: TimeInterval?
+    private var currentColorScheme: ghostty_color_scheme_e?
 
     private(set) var surface: ghostty_surface_t?
     private(set) var terminalTitle: String = ""
@@ -54,10 +55,16 @@ final class GhosttySurfaceView: NSView, NSTextInputClient {
             TerminalFocusManager.shared.registerWindow(window)
             setupEventMonitor()
             updateScaleAndSize()
+            applySystemColorSchemeIfNeeded(force: true)
             TerminalFocusManager.shared.requestFocus(for: self)
         } else {
             removeEventMonitor()
         }
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        applySystemColorSchemeIfNeeded(force: true)
     }
 
     override func becomeFirstResponder() -> Bool {
@@ -223,6 +230,7 @@ final class GhosttySurfaceView: NSView, NSTextInputClient {
 
         surface = createdSurface
         updateScaleAndSize()
+        applySystemColorSchemeIfNeeded(force: true)
     }
 
     private func updateScaleAndSize() {
@@ -693,5 +701,23 @@ final class GhosttySurfaceView: NSView, NSTextInputClient {
         action.withCString { pointer in
             ghostty_surface_binding_action(surface, pointer, UInt(action.utf8.count))
         }
+    }
+
+    private func applySystemColorSchemeIfNeeded(force: Bool = false) {
+        let appearance = window?.effectiveAppearance ?? effectiveAppearance
+        let resolvedColorScheme = GhosttyAppearanceSync.colorScheme(for: appearance)
+
+        if !force,
+            let currentColorScheme,
+            GhosttyAppearanceSync.isEqual(currentColorScheme, resolvedColorScheme)
+        {
+            return
+        }
+
+        if let surface {
+            ghostty_surface_set_color_scheme(surface, resolvedColorScheme)
+        }
+        GhosttyAppManager.shared.applyColorScheme(resolvedColorScheme)
+        currentColorScheme = resolvedColorScheme
     }
 }
