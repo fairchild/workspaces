@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.1.1] - 2026-02-24
+
+### Other
+- Keep app alive after last window closes
+- Preserve inspector state and prune stale pane cache
+- Fix repo inspector targeting and GhosttyKit build warnings
+- Fix code preview rendering and integrate preview/terminal controls
+- Make inspector opt-in and add Cmd+Shift+B toggle
+- fix terminal split exit handling and live session indicators
+
 ## [0.1.0] - 2026-02-17
 
 ### Added
