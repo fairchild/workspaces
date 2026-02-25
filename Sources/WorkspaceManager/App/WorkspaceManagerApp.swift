@@ -18,6 +18,7 @@ struct WorkspaceManagerApp: App {
     @FocusedValue(\.toggleSidebarAction) private var toggleSidebarAction
     @FocusedValue(\.toggleInspectorAction) private var toggleInspectorAction
     @FocusedValue(\.toggleTerminalPanelAction) private var toggleTerminalPanelAction
+    @FocusedValue(\.openInEditorAction) private var openInEditorAction
 
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([Repo.self, Workspace.self])
@@ -60,6 +61,15 @@ struct WorkspaceManagerApp: App {
                     AppChromeShortcut.newWorkspace.keyEquivalent,
                     modifiers: AppChromeShortcut.newWorkspace.eventModifiers
                 )
+
+                Button("Open in...") {
+                    openInEditorAction?()
+                }
+                .keyboardShortcut(
+                    AppChromeShortcut.openInEditor.keyEquivalent,
+                    modifiers: AppChromeShortcut.openInEditor.eventModifiers
+                )
+                .disabled(openInEditorAction == nil)
 
                 Button("Toggle Sidebar") {
                     toggleSidebarAction?()
@@ -385,6 +395,10 @@ private struct WorkspaceServiceKey: EnvironmentKey {
     static let defaultValue: any WorkspaceServiceProtocol = WorkspaceService.shared
 }
 
+private struct ExternalEditorServiceKey: EnvironmentKey {
+    static let defaultValue: any ExternalEditorServiceProtocol = ExternalEditorService.shared
+}
+
 extension EnvironmentValues {
     var gitService: any GitServiceProtocol {
         get { self[GitServiceKey.self] }
@@ -394,6 +408,11 @@ extension EnvironmentValues {
     var workspaceService: any WorkspaceServiceProtocol {
         get { self[WorkspaceServiceKey.self] }
         set { self[WorkspaceServiceKey.self] = newValue }
+    }
+
+    var externalEditorService: any ExternalEditorServiceProtocol {
+        get { self[ExternalEditorServiceKey.self] }
+        set { self[ExternalEditorServiceKey.self] = newValue }
     }
 }
 
@@ -412,6 +431,10 @@ private struct ToggleInspectorActionKey: FocusedValueKey {
 }
 
 private struct ToggleTerminalPanelActionKey: FocusedValueKey {
+    typealias Value = @MainActor () -> Void
+}
+
+private struct OpenInEditorActionKey: FocusedValueKey {
     typealias Value = @MainActor () -> Void
 }
 
@@ -434,5 +457,10 @@ extension FocusedValues {
     var toggleTerminalPanelAction: (@MainActor () -> Void)? {
         get { self[ToggleTerminalPanelActionKey.self] }
         set { self[ToggleTerminalPanelActionKey.self] = newValue }
+    }
+
+    var openInEditorAction: (@MainActor () -> Void)? {
+        get { self[OpenInEditorActionKey.self] }
+        set { self[OpenInEditorActionKey.self] = newValue }
     }
 }
