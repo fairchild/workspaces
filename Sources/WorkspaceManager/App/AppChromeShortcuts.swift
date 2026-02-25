@@ -13,6 +13,7 @@ enum AppChromeShortcut: CaseIterable {
     case toggleInspector
     case toggleTerminalPanel
     case newWorkspace
+    case openInEditor
 
     var keyCharacter: Character {
         switch self {
@@ -24,6 +25,8 @@ enum AppChromeShortcut: CaseIterable {
             return "j"
         case .newWorkspace:
             return "t"
+        case .openInEditor:
+            return "o"
         }
     }
 
@@ -37,6 +40,8 @@ enum AppChromeShortcut: CaseIterable {
             return [.command]
         case .newWorkspace:
             return [.command, .shift]
+        case .openInEditor:
+            return [.command, .shift]
         }
     }
 
@@ -49,6 +54,8 @@ enum AppChromeShortcut: CaseIterable {
         case .toggleTerminalPanel:
             return [.command]
         case .newWorkspace:
+            return [.command, .shift]
+        case .openInEditor:
             return [.command, .shift]
         }
     }
@@ -66,5 +73,14 @@ enum AppChromeShortcut: CaseIterable {
 }
 
 enum AppChromeShortcutCatalog {
-    static let appOwnedDefaultChords: Set<ShortcutChord> = Set(AppChromeShortcut.allCases.map(\.chord))
+    // Keep this list intentionally narrow; context-dependent shortcuts can be
+    // routed via ShortcutRoutingPolicy overrides.
+    static let appOwnedDefaults: [AppChromeShortcut] = [
+        .toggleSidebar,
+        .toggleInspector,
+        .toggleTerminalPanel,
+        .newWorkspace,
+    ]
+
+    static let appOwnedDefaultChords: Set<ShortcutChord> = Set(appOwnedDefaults.map(\.chord))
 }

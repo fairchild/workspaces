@@ -11,9 +11,22 @@ import SwiftUI
 import WorkspaceManagerCore
 
 struct ContentView: View {
+    private enum OpenInEditorTarget {
+        case project(rootURL: URL)
+        case projectAndFile(rootURL: URL, fileURL: URL)
+    }
+
+    private enum OpenInEditorContextKey: Equatable {
+        case none
+        case file(String)
+        case workspace(UUID)
+        case repo(UUID)
+    }
+
     @Binding var deepLinkState: WorkspaceDeepLinkState
     @ObservedObject var hostTerminalState: HostTerminalStateStore
     @Query(sort: \Repo.addedAt, order: .reverse) private var repos: [Repo]
+    @Environment(\.externalEditorService) private var externalEditorService
 
     @State private var selectedWorkspace: Workspace?
     @State private var selectedCodePreview: CodePreviewSelection?
@@ -22,6 +35,7 @@ struct ContentView: View {
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var pendingRepoFocusMeasurementSessionID: UUID?
     @State private var didRunPerfAutoSelection = false
+    @State private var openInEditorErrorMessage: String?
     @StateObject private var rightPaneStateStore = RightPaneStateStore()
     private let resolvedDefaultHostDirectory = HostTerminalDefaults.defaultWorkingDirectory()
         .standardizedFileURL
@@ -73,15 +87,98 @@ struct ContentView: View {
         selectedWorkspace != nil || selectedRepoForInspector != nil
     }
 
-    private var inspectorTargetIDsSnapshot: [String] {
-        let repoTargetIDs = repos.map { "repo-\($0.id.uuidString)" }
-        let workspaceTargetIDs = repos.flatMap { repo in
-            repo.workspaces.map { "workspace-\($0.id.uuidString)" }
+    private var inspectorTargetIDSet: Set<String> {
+        var ids = Set<String>()
+        ids.reserveCapacity(repos.count * 2)
+
+        for repo in repos {
+            ids.insert("repo-\(repo.id.uuidString)")
+            for workspace in repo.workspaces {
+                ids.insert("workspace-\(workspace.id.uuidString)")
+            }
         }
-        return (repoTargetIDs + workspaceTargetIDs).sorted()
+
+        return ids
     }
 
-    var body: some View {
+    private var availableEditors: [ExternalEditorDescriptor] {
+        externalEditorService.availableEditors
+    }
+
+    private var defaultEditorDescriptor: ExternalEditorDescriptor? {
+        let defaultEditor = externalEditorService.defaultEditor
+        return availableEditors.first(where: { $0.id == defaultEditor }) ?? availableEditors.first
+    }
+
+    private var openInEditorTarget: OpenInEditorTarget? {
+        if let selectedCodePreview {
+            return .projectAndFile(
+                rootURL: selectedCodePreview.rootURL,
+                fileURL: selectedCodePreview.fileURL
+            )
+        }
+        if let selectedWorkspace {
+            return .project(rootURL: selectedWorkspace.workspaceURL)
+        }
+        if let selectedRepoForInspector {
+            return .project(rootURL: selectedRepoForInspector.localURL)
+        }
+        return nil
+    }
+
+    private var openInEditorContextKey: OpenInEditorContextKey {
+        if let selectedCodePreview {
+            return .file(selectedCodePreview.id)
+        }
+        if let selectedWorkspace {
+            return .workspace(selectedWorkspace.id)
+        }
+        if let selectedRepoForInspector {
+            return .repo(selectedRepoForInspector.id)
+        }
+        return .none
+    }
+
+    private var openInEditorFocusedAction: (@MainActor () -> Void)? {
+        guard openInEditorTarget != nil else { return nil }
+        return openInDefaultEditor
+    }
+
+    private var isShowingOpenInEditorError: Binding<Bool> {
+        Binding(
+            get: { openInEditorErrorMessage != nil },
+            set: { isPresented in
+                if !isPresented {
+                    openInEditorErrorMessage = nil
+                }
+            }
+        )
+    }
+
+    @ViewBuilder
+    private var terminalDetailContent: some View {
+        MainTerminalDetailView(
+            selectedWorkspace: selectedWorkspace,
+            selectedRepo: selectedRepoForInspector,
+            hostTerminalSessions: hostTerminalState.sessions,
+            activeHostTerminalSessionID: hostTerminalState.activeSessionID,
+            activeSplitHostSession: hostTerminalState.splitSession(for: hostTerminalState.activeSessionID),
+            activeSplitLayout: hostTerminalState.splitLayout(for: hostTerminalState.activeSessionID),
+            hostSurfaceStore: hostTerminalState.surfaceStore,
+            onTerminalProcessExit: handleTerminalProcessExit(sessionID:),
+            selectedCodePreview: $selectedCodePreview,
+            isTerminalPanelVisible: $isTerminalPanelVisible,
+            onFileSelected: handleCodePreviewSelection,
+            availableEditors: availableEditors,
+            defaultEditor: defaultEditorDescriptor,
+            onOpenInDefaultEditor: openInDefaultEditor,
+            onOpenInEditor: openInSelectedEditor,
+            rightPaneStateStore: rightPaneStateStore,
+            isRightPaneVisible: $isRightPaneVisible
+        )
+    }
+
+    private var baseSplitView: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             SidebarView(
                 repos: repos,
@@ -97,22 +194,12 @@ struct ContentView: View {
             )
             .navigationSplitViewColumnWidth(min: 200, ideal: 260, max: 350)
         } detail: {
-            MainTerminalDetailView(
-                selectedWorkspace: selectedWorkspace,
-                selectedRepo: selectedRepoForInspector,
-                hostTerminalSessions: hostTerminalState.sessions,
-                activeHostTerminalSessionID: hostTerminalState.activeSessionID,
-                activeSplitHostSession: hostTerminalState.splitSession(for: hostTerminalState.activeSessionID),
-                activeSplitLayout: hostTerminalState.splitLayout(for: hostTerminalState.activeSessionID),
-                hostSurfaceStore: hostTerminalState.surfaceStore,
-                onTerminalProcessExit: handleTerminalProcessExit(sessionID:),
-                selectedCodePreview: $selectedCodePreview,
-                isTerminalPanelVisible: $isTerminalPanelVisible,
-                onFileSelected: handleCodePreviewSelection,
-                rightPaneStateStore: rightPaneStateStore,
-                isRightPaneVisible: $isRightPaneVisible
-            )
+            terminalDetailContent
         }
+    }
+
+    private var splitViewWithToolbar: some View {
+        baseSplitView
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 Button {
@@ -126,11 +213,19 @@ struct ContentView: View {
                 .disabled(!hasInspectorTarget)
             }
         }
+    }
+
+    private var splitViewWithLifecycleHandlers: some View {
+        splitViewWithToolbar
         .onAppear {
             ensureInitialHostSession()
             processPendingDeepLink()
             maybeAutoSelectRepoForPerf()
             pruneRightPaneState()
+            syncOpenInEditorShortcutRouting()
+        }
+        .onDisappear {
+            ShortcutRoutingPolicy.shared.setOverride(nil, for: AppChromeShortcut.openInEditor.chord)
         }
         .onChange(of: deepLinkState.pendingRequest) { _, _ in
             processPendingDeepLink()
@@ -142,12 +237,15 @@ struct ContentView: View {
         .onChange(of: repos.map { normalizePath($0.localPath) }) { _, paths in
             hostTerminalState.pruneRepoSessions(validRepoPaths: Set(paths))
         }
-        .onChange(of: inspectorTargetIDsSnapshot) { _, _ in
+        .onChange(of: inspectorTargetIDSet) { _, _ in
             pruneRightPaneState()
         }
         .onChange(of: selectedWorkspace?.id) { _, _ in
             guard let selectedWorkspace else { return }
             handleWorkspaceSelection(selectedWorkspace)
+        }
+        .onChange(of: openInEditorContextKey) { _, _ in
+            syncOpenInEditorShortcutRouting()
         }
         .onReceive(NotificationCenter.default.publisher(for: GhosttyAppManager.splitActionNotification)) {
             notification in
@@ -155,9 +253,28 @@ struct ContentView: View {
                 handleGhosttySplitAction(notification)
             }
         }
+    }
+
+    private var splitViewWithFocusAndAlerts: some View {
+        splitViewWithLifecycleHandlers
         .focusedSceneValue(\.toggleSidebarAction, toggleSidebarVisibility)
         .focusedSceneValue(\.toggleInspectorAction, toggleInspectorVisibility)
         .focusedSceneValue(\.toggleTerminalPanelAction, toggleTerminalPanelVisibility)
+        .focusedSceneValue(\.openInEditorAction, openInEditorFocusedAction)
+        .alert(
+            "Could Not Open Editor",
+            isPresented: isShowingOpenInEditorError
+        ) {
+            Button("OK", role: .cancel) {
+                openInEditorErrorMessage = nil
+            }
+        } message: {
+            Text(openInEditorErrorMessage ?? "Unknown error.")
+        }
+    }
+
+    var body: some View {
+        splitViewWithFocusAndAlerts
     }
 
     @MainActor
@@ -350,6 +467,39 @@ struct ContentView: View {
         }
     }
 
+    @MainActor
+    private func openInDefaultEditor() {
+        performOpenInEditor(editorID: nil)
+    }
+
+    @MainActor
+    private func openInSelectedEditor(_ editorID: ExternalEditorID) {
+        performOpenInEditor(editorID: editorID)
+    }
+
+    @MainActor
+    private func performOpenInEditor(editorID: ExternalEditorID?) {
+        guard let target = openInEditorTarget else { return }
+
+        do {
+            switch target {
+            case .projectAndFile(let rootURL, let fileURL):
+                try externalEditorService.open(
+                    projectRootURL: rootURL,
+                    fileURL: fileURL,
+                    editor: editorID
+                )
+            case .project(let rootURL):
+                try externalEditorService.open(
+                    projectRootURL: rootURL,
+                    editor: editorID
+                )
+            }
+        } catch {
+            presentOpenInEditorError(error)
+        }
+    }
+
     private func handleCodePreviewSelection(_ selection: CodePreviewSelection) {
         selectedCodePreview = selection
         isTerminalPanelVisible = true
@@ -361,8 +511,32 @@ struct ContentView: View {
     }
 
     @MainActor
+    private func syncOpenInEditorShortcutRouting() {
+        if openInEditorTarget != nil {
+            ShortcutRoutingPolicy.shared.setOverride(
+                .appChrome,
+                for: AppChromeShortcut.openInEditor.chord
+            )
+        } else {
+            ShortcutRoutingPolicy.shared.setOverride(
+                nil,
+                for: AppChromeShortcut.openInEditor.chord
+            )
+        }
+    }
+
+    @MainActor
+    private func presentOpenInEditorError(_ error: Error) {
+        if let externalEditorError = error as? ExternalEditorError {
+            openInEditorErrorMessage = externalEditorError.errorDescription ?? "Could not open the selected file."
+        } else {
+            openInEditorErrorMessage = error.localizedDescription
+        }
+    }
+
+    @MainActor
     private func pruneRightPaneState() {
-        rightPaneStateStore.prune(keeping: Set(inspectorTargetIDsSnapshot))
+        rightPaneStateStore.prune(keeping: inspectorTargetIDSet)
     }
 
     @MainActor
@@ -676,6 +850,10 @@ struct MainTerminalDetailView: View {
     @Binding var selectedCodePreview: CodePreviewSelection?
     @Binding var isTerminalPanelVisible: Bool
     let onFileSelected: (CodePreviewSelection) -> Void
+    let availableEditors: [ExternalEditorDescriptor]
+    let defaultEditor: ExternalEditorDescriptor?
+    let onOpenInDefaultEditor: () -> Void
+    let onOpenInEditor: (ExternalEditorID) -> Void
     let rightPaneStateStore: RightPaneStateStore
     @Binding var isRightPaneVisible: Bool
 
@@ -717,7 +895,13 @@ struct MainTerminalDetailView: View {
         if let selectedCodePreview {
             if isTerminalPanelVisible {
                 VSplitView {
-                    CodeFilePreviewView(selection: selectedCodePreview) {
+                    CodeFilePreviewView(
+                        selection: selectedCodePreview,
+                        editorOptions: availableEditors,
+                        defaultEditor: defaultEditor,
+                        onOpenInDefaultEditor: onOpenInDefaultEditor,
+                        onOpenInEditor: onOpenInEditor
+                    ) {
                         self.selectedCodePreview = nil
                         self.isTerminalPanelVisible = true
                     }
@@ -727,7 +911,13 @@ struct MainTerminalDetailView: View {
                         .frame(minHeight: 160)
                 }
             } else {
-                CodeFilePreviewView(selection: selectedCodePreview) {
+                CodeFilePreviewView(
+                    selection: selectedCodePreview,
+                    editorOptions: availableEditors,
+                    defaultEditor: defaultEditor,
+                    onOpenInDefaultEditor: onOpenInDefaultEditor,
+                    onOpenInEditor: onOpenInEditor
+                ) {
                     self.selectedCodePreview = nil
                     self.isTerminalPanelVisible = true
                 }
