@@ -38,6 +38,8 @@ Use these scripts for day-to-day UI verification:
   - `WORKSPACES_UI_FIXTURE_OPEN_PREVIEW=1`
   - `WORKSPACES_UI_FIXTURE_PREVIEW_REPO` (default: `skills`)
   - `WORKSPACES_UI_FIXTURE_PREVIEW_PATH` (default: `README.md`)
+- Uses `capture-window.sh` first (window-id capture), then full-screen fallback.
+- Rejects effectively black captures and exits with guidance when Screen Recording permission is missing.
 - Captures the WorkspaceManager window and writes:
   - latest: `./output/preview-open/latest.png`
   - timestamped snapshots: `./output/preview-open/preview-open-<timestamp>.png`
