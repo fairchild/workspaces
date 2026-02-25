@@ -35,6 +35,7 @@ struct ContentView: View {
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var pendingRepoFocusMeasurementSessionID: UUID?
     @State private var didRunPerfAutoSelection = false
+    @State private var didApplyFixturePreviewBootstrap = false
     @State private var openInEditorErrorMessage: String?
     @StateObject private var rightPaneStateStore = RightPaneStateStore()
     private let resolvedDefaultHostDirectory = HostTerminalDefaults.defaultWorkingDirectory()
@@ -126,6 +127,10 @@ struct ContentView: View {
     private var defaultEditorDescriptor: ExternalEditorDescriptor? {
         let defaultEditor = externalEditorService.defaultEditor
         return availableEditors.first(where: { $0.id == defaultEditor }) ?? availableEditors.first
+    }
+
+    private var fixturePreviewBootstrapConfiguration: UIFixturePreviewBootstrapConfiguration? {
+        UIFixturePreviewBootstrapConfiguration.from(environment: ProcessInfo.processInfo.environment)
     }
 
     private var openInEditorTarget: OpenInEditorTarget? {
@@ -239,6 +244,7 @@ struct ContentView: View {
             ensureInitialHostSession()
             processPendingDeepLink()
             maybeAutoSelectRepoForPerf()
+            maybeApplyFixturePreviewBootstrap()
             pruneRightPaneState()
             syncOpenInEditorShortcutRouting()
         }
@@ -251,6 +257,7 @@ struct ContentView: View {
         .onChange(of: repos.count) { _, _ in
             processPendingDeepLink()
             maybeAutoSelectRepoForPerf()
+            maybeApplyFixturePreviewBootstrap()
         }
         .onChange(of: normalizedRepoPathSnapshot) { _, paths in
             hostTerminalState.pruneRepoSessions(validRepoPaths: Set(paths))
@@ -335,6 +342,41 @@ struct ContentView: View {
                 handleRepoSelection(firstRepo)
             }
         }
+    }
+
+    @MainActor
+    private func maybeApplyFixturePreviewBootstrap() {
+        guard !didApplyFixturePreviewBootstrap else { return }
+        guard deepLinkState.pendingRequest == nil else { return }
+        guard let configuration = fixturePreviewBootstrapConfiguration else { return }
+
+        guard !repos.isEmpty else { return }
+        didApplyFixturePreviewBootstrap = true
+
+        guard
+            let resolved = UIFixturePreviewBootstrap.resolveSelection(
+                configuration: configuration,
+                repos: repos
+            )
+        else {
+            NSLog(
+                "[UIFixture] Preview bootstrap skipped (repo=%@ path=%@)",
+                configuration.repoName,
+                configuration.relativePath
+            )
+            return
+        }
+
+        handleRepoSelection(resolved.repo)
+        selectedCodePreview = resolved.selection
+        isTerminalPanelVisible = true
+        isRightPaneVisible = true
+
+        NSLog(
+            "[UIFixture] Preview bootstrap applied (repo=%@ file=%@)",
+            resolved.repo.name,
+            resolved.selection.relativePath
+        )
     }
 
     @MainActor
