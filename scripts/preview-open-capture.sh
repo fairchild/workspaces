@@ -12,13 +12,54 @@ OUTPUT_PATH="$OUTPUT_DIR/preview-open-${TIMESTAMP}.png"
 
 PREVIEW_REPO="${WORKSPACES_UI_FIXTURE_PREVIEW_REPO:-skills}"
 PREVIEW_PATH="${WORKSPACES_UI_FIXTURE_PREVIEW_PATH:-README.md}"
-APP_PROCESS_NAMES=("WorkspaceManager" "Workspaces")
+CAPTURE_SCRIPT="$REPO_ROOT/scripts/capture-window.sh"
 
 log() {
     echo "[$(date +%H:%M:%S)] $*"
 }
 
+is_non_black_capture() {
+    local image_path="$1"
+    swift - "$image_path" <<'SWIFT'
+import AppKit
+import Foundation
+
+let imagePath = CommandLine.arguments[1]
+guard
+    let image = NSImage(contentsOfFile: imagePath),
+    let tiff = image.tiffRepresentation,
+    let rep = NSBitmapImageRep(data: tiff)
+else {
+    exit(2)
+}
+
+let width = rep.pixelsWide
+let height = rep.pixelsHigh
+let stride = max(1, min(width, height) / 200)
+var sampledPixels = 0
+var visiblePixels = 0
+
+for y in Swift.stride(from: 0, to: height, by: stride) {
+    for x in Swift.stride(from: 0, to: width, by: stride) {
+        guard let color = rep.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
+        sampledPixels += 1
+        if color.redComponent > 0.03 || color.greenComponent > 0.03 || color.blueComponent > 0.03 {
+            visiblePixels += 1
+        }
+    }
+}
+
+let visibleRatio = sampledPixels > 0 ? Double(visiblePixels) / Double(sampledPixels) : 0
+exit(visibleRatio >= 0.01 ? 0 : 1)
+SWIFT
+}
+
 mkdir -p "$OUTPUT_DIR"
+
+if [[ ! -x "$CAPTURE_SCRIPT" ]]; then
+    echo "ERROR: capture helper not found or not executable: $CAPTURE_SCRIPT" >&2
+    exit 1
+fi
 
 log "Launching fixture app with preview bootstrap (repo=$PREVIEW_REPO path=$PREVIEW_PATH)..."
 LAUNCH_OUTPUT="$(
@@ -44,55 +85,30 @@ if [[ -n "$LOG_PATH" && -f "$LOG_PATH" ]]; then
     fi
 fi
 
-log "Activating app window..."
-activated=false
-for process_name in "${APP_PROCESS_NAMES[@]}"; do
-    if osascript -e "tell application \"System Events\" to set frontmost of process \"$process_name\" to true" >/dev/null 2>&1; then
-        activated=true
+log "Capturing app window..."
+captured=false
+for attempt in $(seq 1 10); do
+    if "$CAPTURE_SCRIPT" --activate --output "$OUTPUT_PATH"; then
+        captured=true
         break
     fi
-done
-
-if [[ "$activated" != true ]]; then
-    echo "ERROR: failed to activate WorkspaceManager window" >&2
-    exit 1
-fi
-
-log "Capturing window..."
-WIN_ID=""
-for attempt in $(seq 1 8); do
-    for process_name in "${APP_PROCESS_NAMES[@]}"; do
-        WIN_ID="$(osascript \
-            -e 'with timeout of 1 seconds' \
-            -e "tell application \"System Events\" to tell process \"$process_name\" to return id of window 1" \
-            -e 'end timeout' \
-            2>/dev/null || true)"
-        if [[ "$WIN_ID" =~ ^[0-9]+$ ]]; then
-            break
-        fi
-    done
-    if [[ "$WIN_ID" =~ ^[0-9]+$ ]]; then break; fi
-    WIN_ID=""
     sleep 0.25
 done
 
-if [[ ! "$WIN_ID" =~ ^[0-9]+$ ]]; then
-    log "WARN: could not resolve app window id; falling back to full-screen capture"
+if [[ "$captured" != true ]]; then
+    log "WARN: window capture failed after retries; attempting full-screen fallback"
     if ! screencapture -x "$OUTPUT_PATH"; then
-        echo "ERROR: failed to capture preview window" >&2
+        echo "ERROR: failed to capture WorkspaceManager window and full-screen fallback" >&2
         exit 1
-    fi
-else
-    if ! screencapture -x -l "$WIN_ID" "$OUTPUT_PATH"; then
-        log "WARN: window-specific capture failed; falling back to full-screen capture"
-        if ! screencapture -x "$OUTPUT_PATH"; then
-            echo "ERROR: failed to capture preview window" >&2
-            exit 1
-        fi
     fi
 fi
 
-cp "$OUTPUT_PATH" "$OUTPUT_DIR/latest.png"
+if ! is_non_black_capture "$OUTPUT_PATH"; then
+    echo "ERROR: screenshot appears fully black (check macOS Screen Recording permission for Terminal/Codex)" >&2
+    exit 1
+fi
+
+cp "$OUTPUT_PATH" "$OUTPUT_DIR/latest.png" >/dev/null 2>&1 || true
 
 log "Capture complete"
 log "Screenshot: $OUTPUT_PATH"
