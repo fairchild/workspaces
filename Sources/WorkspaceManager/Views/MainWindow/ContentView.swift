@@ -52,6 +52,24 @@ struct ContentView: View {
         return hostTerminalState.sessions.first(where: { $0.id == activeSessionID }) ?? hostTerminalState.sessions.last
     }
 
+    private var repoByNormalizedPath: [String: Repo] {
+        var index: [String: Repo] = [:]
+        index.reserveCapacity(repos.count)
+
+        for repo in repos {
+            let normalizedPath = normalizePath(repo.localPath)
+            if index[normalizedPath] == nil {
+                index[normalizedPath] = repo
+            }
+        }
+
+        return index
+    }
+
+    private var normalizedRepoPathSnapshot: [String] {
+        repos.map { normalizePath($0.localPath) }
+    }
+
     private var selectedRepoForInspector: Repo? {
         guard selectedWorkspace == nil else {
             return nil
@@ -59,7 +77,7 @@ struct ContentView: View {
 
         if let activeRepoPath = sessionPresentation.activeRepoPath {
             let normalizedActiveRepoPath = normalizePath(activeRepoPath)
-            if let matchedRepo = repos.first(where: { normalizePath($0.localPath) == normalizedActiveRepoPath }) {
+            if let matchedRepo = repoByNormalizedPath[normalizedActiveRepoPath] {
                 return matchedRepo
             }
         }
@@ -69,7 +87,7 @@ struct ContentView: View {
         }
 
         let normalizedActiveSessionPath = normalizePath(activeHostSession.directoryPath)
-        return repos.first { normalizePath($0.localPath) == normalizedActiveSessionPath }
+        return repoByNormalizedPath[normalizedActiveSessionPath]
     }
 
     private var activeRepoPathForSidebar: String? {
@@ -234,7 +252,7 @@ struct ContentView: View {
             processPendingDeepLink()
             maybeAutoSelectRepoForPerf()
         }
-        .onChange(of: repos.map { normalizePath($0.localPath) }) { _, paths in
+        .onChange(of: normalizedRepoPathSnapshot) { _, paths in
             hostTerminalState.pruneRepoSessions(validRepoPaths: Set(paths))
         }
         .onChange(of: inspectorTargetIDSet) { _, _ in

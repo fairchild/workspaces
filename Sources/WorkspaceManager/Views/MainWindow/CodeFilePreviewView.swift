@@ -192,8 +192,12 @@ private struct OpenInEditorSplitButton: View {
 
     var body: some View {
         ControlGroup {
-            Button("Open") {
+            Button {
                 onOpenInDefaultEditor()
+            } label: {
+                Text("Open")
+                    .font(.system(size: 12, weight: .semibold))
+                    .frame(minWidth: 44)
             }
 
             Menu {
@@ -215,9 +219,10 @@ private struct OpenInEditorSplitButton: View {
             } label: {
                 Image(systemName: "chevron.down")
                     .font(.system(size: 10, weight: .semibold))
+                    .frame(width: 10, height: 10, alignment: .center)
             }
             .menuIndicator(.hidden)
-            .frame(width: 18)
+            .frame(width: 20)
             .accessibilityLabel("Choose editor")
             .help("Choose editor")
         }
