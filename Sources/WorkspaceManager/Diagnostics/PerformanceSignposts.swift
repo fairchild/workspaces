@@ -26,6 +26,9 @@ enum PerformanceSignposts {
     private static var launchCompleted = false
     private static var repoHydrationInterval: ActiveInterval?
     private static var repoClickIntervals: [UUID: ActiveInterval] = [:]
+    private static var webViewInitializationInterval: ActiveInterval?
+    private static var webFirstLoadInterval: ActiveInterval?
+    private static var webFirstLoadSourceID: UUID?
 
     static func beginLaunchToFirstPromptIfNeeded() {
         lock.lock()
@@ -137,6 +140,76 @@ enum PerformanceSignposts {
 
     static func cancelRepoClickToFocusedInputIfNeeded(sessionID: UUID, reason: String) {
         endRepoClickToFocusedInputIfNeeded(sessionID: sessionID, outcome: reason)
+    }
+
+    static func beginWebViewInitializationIfNeeded() {
+        lock.lock()
+        defer { lock.unlock() }
+
+        guard webViewInitializationInterval == nil else { return }
+        let state = signposter.beginInterval("WebViewInitialization")
+        webViewInitializationInterval = ActiveInterval(state: state, startedAt: clock.now)
+    }
+
+    static func endWebViewInitializationIfNeeded(outcome: String) {
+        let interval: ActiveInterval?
+
+        lock.lock()
+        interval = webViewInitializationInterval
+        webViewInitializationInterval = nil
+        lock.unlock()
+
+        guard let interval else { return }
+
+        signposter.endInterval("WebViewInitialization", interval.state)
+        let durationMs = milliseconds(since: interval.startedAt)
+        NSLog(
+            "[Perf] metric=webview_initialization duration_ms=%.2f outcome=%@",
+            durationMs,
+            outcome
+        )
+    }
+
+    static func beginWebFirstLoadIfNeeded(sourceID: UUID) {
+        lock.lock()
+        defer { lock.unlock() }
+
+        if let existing = webFirstLoadInterval {
+            signposter.endInterval("WebFirstLoad", existing.state)
+            let durationMs = milliseconds(since: existing.startedAt)
+            NSLog(
+                "[Perf] metric=web_first_load duration_ms=%.2f source=%@ outcome=superseded",
+                durationMs,
+                webFirstLoadSourceID?.uuidString ?? "unknown"
+            )
+        }
+
+        let state = signposter.beginInterval("WebFirstLoad")
+        webFirstLoadInterval = ActiveInterval(state: state, startedAt: clock.now)
+        webFirstLoadSourceID = sourceID
+    }
+
+    static func endWebFirstLoadIfNeeded(outcome: String) {
+        let interval: ActiveInterval?
+        let sourceID: UUID?
+
+        lock.lock()
+        interval = webFirstLoadInterval
+        sourceID = webFirstLoadSourceID
+        webFirstLoadInterval = nil
+        webFirstLoadSourceID = nil
+        lock.unlock()
+
+        guard let interval else { return }
+
+        signposter.endInterval("WebFirstLoad", interval.state)
+        let durationMs = milliseconds(since: interval.startedAt)
+        NSLog(
+            "[Perf] metric=web_first_load duration_ms=%.2f source=%@ outcome=%@",
+            durationMs,
+            sourceID?.uuidString ?? "unknown",
+            outcome
+        )
     }
 
     private static func milliseconds(since start: ContinuousClock.Instant) -> Double {

@@ -11,11 +11,6 @@ import SwiftUI
 import WorkspaceManagerCore
 
 struct ContentView: View {
-    private enum OpenInEditorTarget {
-        case project(rootURL: URL)
-        case projectAndFile(rootURL: URL, fileURL: URL)
-    }
-
     private enum OpenInEditorContextKey: Equatable {
         case none
         case file(String)
@@ -26,9 +21,13 @@ struct ContentView: View {
     @Binding var deepLinkState: WorkspaceDeepLinkState
     @ObservedObject var hostTerminalState: HostTerminalStateStore
     @Query(sort: \Repo.addedAt, order: .reverse) private var repos: [Repo]
+    @Query(sort: \WebSource.addedAt, order: .reverse) private var webSources: [WebSource]
+    @AppStorage(TerminalMultiplexingMode.storageKey)
+    private var terminalMultiplexingModeRawValue: String = TerminalMultiplexingMode.defaultValue.rawValue
     @Environment(\.externalEditorService) private var externalEditorService
 
     @State private var selectedWorkspace: Workspace?
+    @State private var selectedWebSource: WebSource?
     @State private var selectedCodePreview: CodePreviewSelection?
     @State private var isTerminalPanelVisible = true
     @State private var isRightPaneVisible = false
@@ -38,12 +37,17 @@ struct ContentView: View {
     @State private var didApplyFixturePreviewBootstrap = false
     @State private var openInEditorErrorMessage: String?
     @StateObject private var rightPaneStateStore = RightPaneStateStore()
+    @StateObject private var webSurfaceStore = WebSurfaceStore()
     private let resolvedDefaultHostDirectory = HostTerminalDefaults.defaultWorkingDirectory()
         .standardizedFileURL
         .resolvingSymlinksInPath()
 
     private var sessionPresentation: HostTerminalSessionPresentation {
         hostTerminalState.sessionPresentation
+    }
+
+    private var terminalMultiplexingMode: TerminalMultiplexingMode {
+        TerminalMultiplexingMode(rawValue: terminalMultiplexingModeRawValue) ?? .defaultValue
     }
 
     private var activeHostSession: HostTerminalSession? {
@@ -72,7 +76,7 @@ struct ContentView: View {
     }
 
     private var selectedRepoForInspector: Repo? {
-        guard selectedWorkspace == nil else {
+        guard selectedWorkspace == nil, selectedWebSource == nil else {
             return nil
         }
 
@@ -201,11 +205,25 @@ struct ContentView: View {
         )
     }
 
+    @ViewBuilder
+    private var detailContent: some View {
+        if let selectedWebSource {
+            WebSourceDetailView(
+                source: selectedWebSource,
+                surfaceStore: webSurfaceStore
+            )
+        } else {
+            terminalDetailContent
+        }
+    }
+
     private var baseSplitView: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             SidebarView(
                 repos: repos,
+                webSources: webSources,
                 selectedWorkspace: $selectedWorkspace,
+                selectedWebSource: $selectedWebSource,
                 defaultHostPath: resolvedDefaultHostDirectory.path,
                 hasDefaultHostSession: sessionPresentation.hasDefaultHomeSession,
                 isDefaultHostSessionActive: sessionPresentation.isDefaultHomeSessionActive,
@@ -213,11 +231,12 @@ struct ContentView: View {
                 activeRepoPath: activeRepoPathForSidebar,
                 onDefaultHostSelected: handleDefaultHostSelection,
                 onRepoSelected: handleRepoSelection,
+                onWebSourceSelected: handleWebSourceSelection,
                 onWorkspaceCreated: handleWorkspaceCreated
             )
             .navigationSplitViewColumnWidth(min: 200, ideal: 260, max: 350)
         } detail: {
-            terminalDetailContent
+            detailContent
         }
     }
 
@@ -261,6 +280,13 @@ struct ContentView: View {
             }
             .onChange(of: normalizedRepoPathSnapshot) { _, paths in
                 hostTerminalState.pruneRepoSessions(validRepoPaths: Set(paths))
+            }
+            .onChange(of: webSources.map(\.id)) { _, sourceIDs in
+                let validIDs = Set(sourceIDs)
+                if let selectedWebSource, !validIDs.contains(selectedWebSource.id) {
+                    self.selectedWebSource = nil
+                    webSurfaceStore.releaseInactiveSurface()
+                }
             }
             .onChange(of: inspectorTargetIDSet) { _, _ in
                 pruneRightPaneState()
@@ -322,6 +348,7 @@ struct ContentView: View {
             request.source ?? ""
         )
 
+        selectedWebSource = nil
         selectedWorkspace = workspace
         clearCodePreview()
         columnVisibility = .all
@@ -383,6 +410,7 @@ struct ContentView: View {
     private func handleRepoSelection(_ repo: Repo) {
         let repoDirectory = repo.localURL.standardizedFileURL.resolvingSymlinksInPath()
 
+        selectedWebSource = nil
         selectedWorkspace = nil
         clearCodePreview()
         let session = activateHostSession(
@@ -422,6 +450,7 @@ struct ContentView: View {
     @MainActor
     private func handleDefaultHostSelection() {
         cancelPendingRepoClickMeasurement(reason: "default_host_selected")
+        selectedWebSource = nil
         selectedWorkspace = nil
         clearCodePreview()
         let session = activateHostSession(
@@ -441,6 +470,7 @@ struct ContentView: View {
     @MainActor
     private func handleWorkspaceSelection(_ workspace: Workspace) {
         cancelPendingRepoClickMeasurement(reason: "workspace_selected")
+        selectedWebSource = nil
         clearCodePreview()
         let workspaceDirectory = workspace.workspaceURL.standardizedFileURL.resolvingSymlinksInPath()
         let session = activateHostSession(
@@ -455,6 +485,17 @@ struct ContentView: View {
                 requestMainTerminalFocus(targetSessionID: session.id)
             }
         }
+    }
+
+    @MainActor
+    private func handleWebSourceSelection(_ source: WebSource) {
+        cancelPendingRepoClickMeasurement(reason: "web_source_selected")
+        selectedWorkspace = nil
+        clearCodePreview()
+        isRightPaneVisible = false
+        selectedWebSource = source
+        columnVisibility = .all
+        webSurfaceStore.cancelPendingRelease()
     }
 
     @MainActor
@@ -539,22 +580,12 @@ struct ContentView: View {
 
     @MainActor
     private func performOpenInEditor(editorID: ExternalEditorID?) {
-        guard let target = openInEditorTarget else { return }
-
         do {
-            switch target {
-            case .projectAndFile(let rootURL, let fileURL):
-                try externalEditorService.open(
-                    projectRootURL: rootURL,
-                    fileURL: fileURL,
-                    editor: editorID
-                )
-            case .project(let rootURL):
-                try externalEditorService.open(
-                    projectRootURL: rootURL,
-                    editor: editorID
-                )
-            }
+            try OpenInEditorShortcutFlow.perform(
+                target: openInEditorTarget,
+                editorID: editorID,
+                externalEditorService: externalEditorService
+            )
         } catch {
             presentOpenInEditorError(error)
         }
@@ -572,17 +603,7 @@ struct ContentView: View {
 
     @MainActor
     private func syncOpenInEditorShortcutRouting() {
-        if openInEditorTarget != nil {
-            ShortcutRoutingPolicy.shared.setOverride(
-                .appChrome,
-                for: AppChromeShortcut.openInEditor.chord
-            )
-        } else {
-            ShortcutRoutingPolicy.shared.setOverride(
-                nil,
-                for: AppChromeShortcut.openInEditor.chord
-            )
-        }
+        OpenInEditorShortcutFlow.syncRouting(for: openInEditorTarget)
     }
 
     @MainActor
@@ -601,6 +622,14 @@ struct ContentView: View {
 
     @MainActor
     private func handleGhosttySplitAction(_ notification: Notification) {
+        guard terminalMultiplexingMode == .ghosttyManagedSplits else {
+            NSLog(
+                "[SplitRouting] Ignored split action while terminal mode=%@",
+                terminalMultiplexingMode.rawValue
+            )
+            return
+        }
+
         guard let request = GhosttyAppManager.splitActionRequest(from: notification) else {
             NSLog("[SplitRouting] Ignored split action notification with invalid payload")
             return
@@ -1292,7 +1321,7 @@ final class HostTerminalStateStore: ObservableObject {
 
 #Preview {
     ContentViewPreviewHost()
-        .modelContainer(for: [Repo.self, Workspace.self], inMemory: true)
+        .modelContainer(for: [Repo.self, Workspace.self, WebSource.self], inMemory: true)
 }
 
 private struct ContentViewPreviewHost: View {

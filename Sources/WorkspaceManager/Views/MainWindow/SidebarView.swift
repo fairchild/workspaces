@@ -14,7 +14,9 @@ struct SidebarView: View {
     @Environment(\.gitService) private var gitService
     @Environment(\.workspaceService) private var workspaceService
     let repos: [Repo]
+    let webSources: [WebSource]
     @Binding var selectedWorkspace: Workspace?
+    @Binding var selectedWebSource: WebSource?
     let defaultHostPath: String
     let hasDefaultHostSession: Bool
     let isDefaultHostSessionActive: Bool
@@ -22,9 +24,11 @@ struct SidebarView: View {
     let activeRepoPath: String?
     let onDefaultHostSelected: () -> Void
     let onRepoSelected: (Repo) -> Void
+    let onWebSourceSelected: (WebSource) -> Void
     let onWorkspaceCreated: () -> Void
 
     @State private var isAddingRepo = false
+    @State private var isAddingWebSource = false
     @State private var repoForNewWorkspace: Repo?
 
     // Error alert state
@@ -53,6 +57,7 @@ struct SidebarView: View {
             // Repositories Section
             Section("Repositories") {
                 Button {
+                    selectedWebSource = nil
                     onDefaultHostSelected()
                 } label: {
                     HostTerminalRow(
@@ -84,6 +89,7 @@ struct SidebarView: View {
                                 if !repo.workspaces.isEmpty, !isRepoExpanded(repo) {
                                     expandedRepoIDs.insert(repo.id)
                                 }
+                                selectedWebSource = nil
                                 onRepoSelected(repo)
                             }
                         )
@@ -119,6 +125,7 @@ struct SidebarView: View {
                                 ForEach(repoWorkspaces) { workspace in
                                     Button {
                                         selectedWorkspace = workspace
+                                        selectedWebSource = nil
                                     } label: {
                                         WorkspaceRow(
                                             workspace: workspace,
@@ -163,6 +170,45 @@ struct SidebarView: View {
                     }
                 }
             }
+
+            Section("Web") {
+                if webSources.isEmpty {
+                    Text("No URL sources")
+                        .foregroundStyle(.secondary)
+                        .font(.callout)
+                } else {
+                    ForEach(webSources) { source in
+                        Button {
+                            selectedWorkspace = nil
+                            selectedWebSource = source
+                            source.lastAccessedAt = Date()
+                            if !saveModelContext(action: "update URL source access time") {
+                                modelContext.rollback()
+                            }
+                            onWebSourceSelected(source)
+                        } label: {
+                            WebSourceRow(
+                                source: source,
+                                isSelected: selectedWebSource?.id == source.id
+                            )
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .contextMenu {
+                            Button("Open in Browser") {
+                                openWebSourceExternally(source)
+                            }
+
+                            Divider()
+
+                            Button("Remove from List", role: .destructive) {
+                                removeWebSource(source)
+                            }
+                        }
+                    }
+                }
+            }
         }
         .listStyle(.sidebar)
         .environment(\.defaultMinListRowHeight, 30)
@@ -170,13 +216,23 @@ struct SidebarView: View {
             VStack(spacing: 8) {
                 Divider()
 
-                Button {
-                    isAddingRepo = true
-                } label: {
-                    Label("Add Repository", systemImage: "plus.circle.fill")
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                VStack(spacing: 6) {
+                    Button {
+                        isAddingRepo = true
+                    } label: {
+                        Label("Add Repository", systemImage: "plus.circle.fill")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .buttonStyle(.borderless)
+
+                    Button {
+                        isAddingWebSource = true
+                    } label: {
+                        Label("Add URL Source", systemImage: "globe")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .buttonStyle(.borderless)
                 }
-                .buttonStyle(.borderless)
                 .padding(.horizontal, 12)
                 .padding(.bottom, 8)
             }
@@ -197,6 +253,11 @@ struct SidebarView: View {
                 Task {
                     await createWorkspace(from: repo, name: name)
                 }
+            }
+        }
+        .sheet(isPresented: $isAddingWebSource) {
+            NewWebSourceSheet { rawURL, displayName in
+                addWebSource(rawURL: rawURL, displayName: displayName)
             }
         }
         .alert("Error", isPresented: $showingError) {
@@ -296,6 +357,64 @@ struct SidebarView: View {
         if !saveModelContext(action: "remove repository") {
             modelContext.rollback()
         }
+    }
+
+    @MainActor
+    private func addWebSource(rawURL: String, displayName: String) {
+        do {
+            let normalized = try WebSourceValidation.normalizeBaseURL(rawURL)
+            let normalizedURLString = normalized.baseURL.absoluteString
+
+            if webSources.contains(where: { normalizeWebURLString($0.baseURLString) == normalizedURLString }) {
+                errorMessage = "That URL source is already in the list."
+                showingError = true
+                return
+            }
+
+            let source = WebSource(
+                name: WebSourceValidation.normalizedDisplayName(
+                    explicitName: displayName,
+                    baseURL: normalized.baseURL
+                ),
+                baseURLString: normalizedURLString,
+                allowedHost: normalized.allowedHost
+            )
+
+            modelContext.insert(source)
+            if saveModelContext(action: "save URL source") {
+                selectedWorkspace = nil
+                selectedWebSource = source
+                onWebSourceSelected(source)
+            } else {
+                modelContext.rollback()
+            }
+        } catch {
+            if let validationError = error as? WebSourceValidationError {
+                errorMessage = validationError.errorDescription
+            } else {
+                errorMessage = "Failed to add URL source: \(error.localizedDescription)"
+            }
+            showingError = true
+        }
+    }
+
+    @MainActor
+    private func removeWebSource(_ source: WebSource) {
+        let removedWasSelected = selectedWebSource?.id == source.id
+        modelContext.delete(source)
+        if saveModelContext(action: "remove URL source") {
+            if removedWasSelected {
+                selectedWebSource = nil
+                onDefaultHostSelected()
+            }
+        } else {
+            modelContext.rollback()
+        }
+    }
+
+    private func openWebSourceExternally(_ source: WebSource) {
+        guard let url = source.baseURL else { return }
+        NSWorkspace.shared.open(url)
     }
 
     private func createWorkspace(from repo: Repo, name: String) async {
@@ -479,6 +598,13 @@ struct SidebarView: View {
 
     private func normalizePath(_ url: URL) -> String {
         url.standardizedFileURL.resolvingSymlinksInPath().path
+    }
+
+    private func normalizeWebURLString(_ rawURL: String) -> String {
+        if let normalized = try? WebSourceValidation.normalizeBaseURL(rawURL) {
+            return normalized.baseURL.absoluteString
+        }
+        return rawURL.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func sortedWorkspaces(for repo: Repo) -> [Workspace] {
