@@ -54,6 +54,7 @@ struct ShortcutRoutingPolicyTests {
 
         let splitChord = chord("d", modifiers: [.command])
         #expect(policy.route(for: splitChord) == .ghostty)
+        #expect(policy.route(for: AppChromeShortcut.openInEditor.chord) == .ghostty)
     }
 
     @Test("Overrides are applied and removable")
@@ -66,6 +67,20 @@ struct ShortcutRoutingPolicyTests {
 
         policy.setOverride(nil, for: splitChord)
         #expect(policy.route(for: splitChord) == .ghostty)
+    }
+
+    @Test("Open-in-editor chord can be promoted to app chrome via override")
+    func openInEditorChordCanBeOverriddenToAppChrome() {
+        policy.clearOverrides()
+        let openChord = AppChromeShortcut.openInEditor.chord
+
+        #expect(policy.route(for: openChord) == .ghostty)
+
+        policy.setOverride(.appChrome, for: openChord)
+        #expect(policy.route(for: openChord) == .appChrome)
+
+        policy.setOverride(nil, for: openChord)
+        #expect(policy.route(for: openChord) == .ghostty)
     }
 
     @Test("Event routing treats key-up same as key-down for ownership decisions")
