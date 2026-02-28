@@ -40,10 +40,12 @@ struct GhosttyTerminalConfig {
 
         let shell = environment["SHELL"] ?? "/bin/zsh"
         let mode = terminalMultiplexingMode ?? TerminalMultiplexingMode.resolve()
-        let tmuxAvailable = isTmuxAvailableOverride ?? Self.isExecutableAvailable(
-            "tmux",
-            inPath: environment["PATH"]
-        )
+        let tmuxAvailable =
+            isTmuxAvailableOverride
+            ?? Self.isExecutableAvailable(
+                "tmux",
+                inPath: environment["PATH"]
+            )
 
         if mode == .tmuxPerSession, tmuxAvailable {
             let tmuxSessionName = Self.tmuxSessionName(for: workingDirectory)
@@ -102,10 +104,10 @@ struct GhosttyTerminalConfig {
     }
 
     private static func fnv1a64(_ value: String) -> UInt64 {
-        var hash: UInt64 = 0xcbf29ce484222325
+        var hash: UInt64 = 0xcbf2_9ce4_8422_2325
         for byte in value.utf8 {
             hash ^= UInt64(byte)
-            hash &*= 0x100000001b3
+            hash &*= 0x0100_0000_01b3
         }
         return hash
     }
