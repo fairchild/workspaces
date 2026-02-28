@@ -32,14 +32,26 @@ Use these scripts for day-to-day UI verification:
   - timestamped snapshots: `./output/sidebar/sidebar-<timestamp>.png`
 - Also preserves raw run artifacts under `/tmp/workspaces-sidebar-capture-<timestamp>/`.
 
-5. `./scripts/capture-window.sh`
+5. `./scripts/preview-open-capture.sh`
+- Deterministic preview-open capture for `Open` header polish.
+- Launches with fixture bootstrap variables so a repo and target file open automatically:
+  - `WORKSPACES_UI_FIXTURE_OPEN_PREVIEW=1`
+  - `WORKSPACES_UI_FIXTURE_PREVIEW_REPO` (default: `skills`)
+  - `WORKSPACES_UI_FIXTURE_PREVIEW_PATH` (default: `README.md`)
+- Uses `capture-window.sh` first (window-id capture), then full-screen fallback.
+- Rejects effectively black captures and exits with guidance when Screen Recording permission is missing.
+- Captures the WorkspaceManager window and writes:
+  - latest: `./output/preview-open/latest.png`
+  - timestamped snapshots: `./output/preview-open/preview-open-<timestamp>.png`
+
+6. `./scripts/capture-window.sh`
 - One-shot window-only capture for shared-desktop workflows.
 - Captures by window id (`screencapture -l`) and **does not activate the app by default**.
 - Default output:
   - timestamped: `./output/window/window-<timestamp>.png`
   - latest copy: `./output/window/latest.png`
 
-UI automation scripts (`ui-smoke.sh`, `ui-capture.sh`, `sidebar-capture.sh`):
+UI automation scripts (`ui-smoke.sh`, `ui-capture.sh`, `sidebar-capture.sh`, `preview-open-capture.sh`):
 - fail fast on missing permissions
 - print artifact directory path at the end
 - use explicit app target launch (`swift run WorkspaceManager`)

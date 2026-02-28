@@ -27,6 +27,10 @@ struct CodePreviewSelection: Identifiable, Hashable {
 
 struct CodeFilePreviewView: View {
     let selection: CodePreviewSelection
+    let editorOptions: [ExternalEditorDescriptor]
+    let defaultEditor: ExternalEditorDescriptor?
+    let onOpenInDefaultEditor: () -> Void
+    let onOpenInEditor: (ExternalEditorID) -> Void
     let onClose: () -> Void
 
     @State private var state: LoadState = .loading
@@ -60,6 +64,15 @@ struct CodeFilePreviewView: View {
                     }
                 }
 
+                if let defaultEditor {
+                    OpenInEditorSplitButton(
+                        editorOptions: editorOptions,
+                        defaultEditor: defaultEditor,
+                        onOpenInDefaultEditor: onOpenInDefaultEditor,
+                        onOpenInEditor: onOpenInEditor
+                    )
+                }
+
                 Button {
                     onClose()
                 } label: {
@@ -68,6 +81,7 @@ struct CodeFilePreviewView: View {
                 }
                 .buttonStyle(.plain)
                 .help("Close Preview")
+                .accessibilityLabel("Close Preview")
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
@@ -167,6 +181,56 @@ struct CodeFilePreviewView: View {
         case .loading, .failed:
             return nil
         }
+    }
+}
+
+private struct OpenInEditorSplitButton: View {
+    let editorOptions: [ExternalEditorDescriptor]
+    let defaultEditor: ExternalEditorDescriptor
+    let onOpenInDefaultEditor: () -> Void
+    let onOpenInEditor: (ExternalEditorID) -> Void
+
+    var body: some View {
+        ControlGroup {
+            Button {
+                onOpenInDefaultEditor()
+            } label: {
+                Text("Open")
+                    .font(.system(size: 12, weight: .semibold))
+                    .frame(minWidth: 44)
+            }
+
+            Menu {
+                Button("Open in...") {
+                    onOpenInDefaultEditor()
+                }
+                .keyboardShortcut(
+                    AppChromeShortcut.openInEditor.keyEquivalent,
+                    modifiers: AppChromeShortcut.openInEditor.eventModifiers
+                )
+
+                Divider()
+
+                ForEach(editorOptions) { editor in
+                    Button(editor.displayName) {
+                        onOpenInEditor(editor.id)
+                    }
+                }
+            } label: {
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 10, weight: .semibold))
+                    .frame(width: 10, height: 10, alignment: .center)
+            }
+            .menuIndicator(.hidden)
+            .frame(width: 20)
+            .accessibilityLabel("Choose editor")
+            .help("Choose editor")
+        }
+        .controlGroupStyle(.navigation)
+        .controlSize(.small)
+        .fixedSize(horizontal: true, vertical: false)
+        .help("Open in \(defaultEditor.displayName) (Cmd+Shift+O)")
+        .accessibilityLabel("Open in \(defaultEditor.displayName)")
     }
 }
 
