@@ -70,7 +70,9 @@ struct UIFixturePreviewBootstrapTests {
 
         #expect(resolved?.repo.id == servicesRepo.id)
         #expect(resolved?.selection.relativePath == "docs/guide.md")
-        #expect(resolved?.selection.rootURL.path == servicesRepo.localURL.standardizedFileURL.resolvingSymlinksInPath().path)
+        #expect(
+            resolved?.selection.rootURL.path == servicesRepo.localURL.standardizedFileURL.resolvingSymlinksInPath().path
+        )
     }
 
     @Test("Resolve selection falls back to first repo when requested repo missing")
