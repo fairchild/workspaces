@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.1.2] - 2026-02-28
+
+### Other
+- Sync Ghostty theme with system appearance
+- Fix swift-format lint violations
+- Harden preview capture against black screenshots
+- Add deterministic fixture preview bootstrap and capture script
+- Refine open-control styling and optimize repo path lookups
+- Polish open-in-editor UX and harden editor launch flow
+
 ## [0.1.1] - 2026-02-24
 
 ### Other
