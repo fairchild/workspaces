@@ -42,7 +42,8 @@ enum UIFixturePreviewBootstrap {
             .standardizedFileURL
             .resolvingSymlinksInPath()
 
-        let fileURL = rootURL
+        let fileURL =
+            rootURL
             .appendingPathComponent(configuration.relativePath)
             .standardizedFileURL
             .resolvingSymlinksInPath()

@@ -223,79 +223,79 @@ struct ContentView: View {
 
     private var splitViewWithToolbar: some View {
         baseSplitView
-        .toolbar {
-            ToolbarItemGroup(placement: .primaryAction) {
-                Button {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        isRightPaneVisible.toggle()
+            .toolbar {
+                ToolbarItemGroup(placement: .primaryAction) {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            isRightPaneVisible.toggle()
+                        }
+                    } label: {
+                        Image(systemName: "sidebar.trailing")
                     }
-                } label: {
-                    Image(systemName: "sidebar.trailing")
+                    .help(isRightPaneVisible ? "Hide Inspector" : "Show Inspector")
+                    .disabled(!hasInspectorTarget)
                 }
-                .help(isRightPaneVisible ? "Hide Inspector" : "Show Inspector")
-                .disabled(!hasInspectorTarget)
             }
-        }
     }
 
     private var splitViewWithLifecycleHandlers: some View {
         splitViewWithToolbar
-        .onAppear {
-            ensureInitialHostSession()
-            processPendingDeepLink()
-            maybeAutoSelectRepoForPerf()
-            maybeApplyFixturePreviewBootstrap()
-            pruneRightPaneState()
-            syncOpenInEditorShortcutRouting()
-        }
-        .onDisappear {
-            ShortcutRoutingPolicy.shared.setOverride(nil, for: AppChromeShortcut.openInEditor.chord)
-        }
-        .onChange(of: deepLinkState.pendingRequest) { _, _ in
-            processPendingDeepLink()
-        }
-        .onChange(of: repos.count) { _, _ in
-            processPendingDeepLink()
-            maybeAutoSelectRepoForPerf()
-            maybeApplyFixturePreviewBootstrap()
-        }
-        .onChange(of: normalizedRepoPathSnapshot) { _, paths in
-            hostTerminalState.pruneRepoSessions(validRepoPaths: Set(paths))
-        }
-        .onChange(of: inspectorTargetIDSet) { _, _ in
-            pruneRightPaneState()
-        }
-        .onChange(of: selectedWorkspace?.id) { _, _ in
-            guard let selectedWorkspace else { return }
-            handleWorkspaceSelection(selectedWorkspace)
-        }
-        .onChange(of: openInEditorContextKey) { _, _ in
-            syncOpenInEditorShortcutRouting()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: GhosttyAppManager.splitActionNotification)) {
-            notification in
-            Task { @MainActor in
-                handleGhosttySplitAction(notification)
+            .onAppear {
+                ensureInitialHostSession()
+                processPendingDeepLink()
+                maybeAutoSelectRepoForPerf()
+                maybeApplyFixturePreviewBootstrap()
+                pruneRightPaneState()
+                syncOpenInEditorShortcutRouting()
             }
-        }
+            .onDisappear {
+                ShortcutRoutingPolicy.shared.setOverride(nil, for: AppChromeShortcut.openInEditor.chord)
+            }
+            .onChange(of: deepLinkState.pendingRequest) { _, _ in
+                processPendingDeepLink()
+            }
+            .onChange(of: repos.count) { _, _ in
+                processPendingDeepLink()
+                maybeAutoSelectRepoForPerf()
+                maybeApplyFixturePreviewBootstrap()
+            }
+            .onChange(of: normalizedRepoPathSnapshot) { _, paths in
+                hostTerminalState.pruneRepoSessions(validRepoPaths: Set(paths))
+            }
+            .onChange(of: inspectorTargetIDSet) { _, _ in
+                pruneRightPaneState()
+            }
+            .onChange(of: selectedWorkspace?.id) { _, _ in
+                guard let selectedWorkspace else { return }
+                handleWorkspaceSelection(selectedWorkspace)
+            }
+            .onChange(of: openInEditorContextKey) { _, _ in
+                syncOpenInEditorShortcutRouting()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: GhosttyAppManager.splitActionNotification)) {
+                notification in
+                Task { @MainActor in
+                    handleGhosttySplitAction(notification)
+                }
+            }
     }
 
     private var splitViewWithFocusAndAlerts: some View {
         splitViewWithLifecycleHandlers
-        .focusedSceneValue(\.toggleSidebarAction, toggleSidebarVisibility)
-        .focusedSceneValue(\.toggleInspectorAction, toggleInspectorVisibility)
-        .focusedSceneValue(\.toggleTerminalPanelAction, toggleTerminalPanelVisibility)
-        .focusedSceneValue(\.openInEditorAction, openInEditorFocusedAction)
-        .alert(
-            "Could Not Open Editor",
-            isPresented: isShowingOpenInEditorError
-        ) {
-            Button("OK", role: .cancel) {
-                openInEditorErrorMessage = nil
+            .focusedSceneValue(\.toggleSidebarAction, toggleSidebarVisibility)
+            .focusedSceneValue(\.toggleInspectorAction, toggleInspectorVisibility)
+            .focusedSceneValue(\.toggleTerminalPanelAction, toggleTerminalPanelVisibility)
+            .focusedSceneValue(\.openInEditorAction, openInEditorFocusedAction)
+            .alert(
+                "Could Not Open Editor",
+                isPresented: isShowingOpenInEditorError
+            ) {
+                Button("OK", role: .cancel) {
+                    openInEditorErrorMessage = nil
+                }
+            } message: {
+                Text(openInEditorErrorMessage ?? "Unknown error.")
             }
-        } message: {
-            Text(openInEditorErrorMessage ?? "Unknown error.")
-        }
     }
 
     var body: some View {
@@ -925,7 +925,7 @@ struct MainTerminalDetailView: View {
     var body: some View {
         HSplitView {
             previewAndTerminalPanel
-            .frame(minWidth: 400)
+                .frame(minWidth: 400)
 
             // Collapsible right pane
             if isRightPaneVisible {
@@ -935,14 +935,14 @@ struct MainTerminalDetailView: View {
                         state: rightPaneStateStore.state(for: selectedWorkspace),
                         onFileSelected: onFileSelected
                     )
-                        .frame(minWidth: 220, idealWidth: 280, maxWidth: 400)
+                    .frame(minWidth: 220, idealWidth: 280, maxWidth: 400)
                 } else if let selectedRepo {
                     RightPaneView(
                         repo: selectedRepo,
                         state: rightPaneStateStore.state(for: selectedRepo),
                         onFileSelected: onFileSelected
                     )
-                        .frame(minWidth: 220, idealWidth: 280, maxWidth: 400)
+                    .frame(minWidth: 220, idealWidth: 280, maxWidth: 400)
                 }
             }
         }

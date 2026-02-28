@@ -131,7 +131,8 @@ final class ExternalEditorService: ExternalEditorServiceProtocol {
             throw ExternalEditorError.editorNotInstalled(.zed)
         }
 
-        let cliURL = appURL
+        let cliURL =
+            appURL
             .appendingPathComponent("Contents", isDirectory: true)
             .appendingPathComponent("MacOS", isDirectory: true)
             .appendingPathComponent("cli", isDirectory: false)
@@ -167,8 +168,8 @@ final class ExternalEditorService: ExternalEditorServiceProtocol {
     }
 }
 
-private extension ExternalEditorID {
-    var displayName: String {
+extension ExternalEditorID {
+    fileprivate var displayName: String {
         switch self {
         case .zed:
             return "Zed"

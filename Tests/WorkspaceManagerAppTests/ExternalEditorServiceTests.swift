@@ -232,7 +232,9 @@ struct ExternalEditorServiceTests {
         }
     }
 
-    private func makeFixture(fileManager: FileManager) throws -> (
+    private func makeFixture(
+        fileManager: FileManager
+    ) throws -> (
         root: URL,
         projectRootURL: URL,
         fileURL: URL,
@@ -252,7 +254,8 @@ struct ExternalEditorServiceTests {
         try Data("print(\"hello\")\n".utf8).write(to: fileURL)
 
         let zedAppURL = root.appendingPathComponent("Zed.app", isDirectory: true)
-        let cliDirectory = zedAppURL
+        let cliDirectory =
+            zedAppURL
             .appendingPathComponent("Contents", isDirectory: true)
             .appendingPathComponent("MacOS", isDirectory: true)
         try fileManager.createDirectory(at: cliDirectory, withIntermediateDirectories: true)

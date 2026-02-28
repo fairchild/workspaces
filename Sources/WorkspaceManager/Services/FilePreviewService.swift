@@ -41,7 +41,8 @@ enum CodePreviewLoader {
             let previewData = isTruncated ? data.prefix(maxPreviewBytes) : data[...]
             let previewBytes = Data(previewData)
 
-            let text = String(data: previewBytes, encoding: .utf8)
+            let text =
+                String(data: previewBytes, encoding: .utf8)
                 ?? String(decoding: previewData, as: UTF8.self)
             let language = CodeSyntaxLanguage(fileExtension: fileURL.pathExtension)
             let spans = CodeSyntaxHighlighter.highlightSpans(

@@ -349,7 +349,8 @@ final class GhosttySurfaceView: NSView, NSTextInputClient {
         )
         var bindingFlags = ghostty_binding_flags_e(rawValue: 0)
 
-        let bindingText = GhosttyInput.ghosttyCharacters(from: event)
+        let bindingText =
+            GhosttyInput.ghosttyCharacters(from: event)
             ?? event.charactersIgnoringModifiers
         var keyEventWithText = keyEvent
         let isGhosttyBinding: Bool
