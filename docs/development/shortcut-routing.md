@@ -63,8 +63,10 @@ Current split UI model is two-pane horizontal:
 3. Verify:
    - `Cmd+B` toggles sidebar
    - `Cmd+D` creates split
+   - `Cmd+Shift+O` opens selected repo/file in editor when target is available
    - `Cmd+]` / `Cmd+[` move focus across split when both panes exist
    - or run `mask verify-shortcuts` for scripted smoke evidence
+   - and run `mask verify-open-shortcut` for Open-in-Editor shortcut coverage
 4. Confirm logs include:
    - `[GhosttyAppManager] action=new_split ...`
    - `[GhosttyAppManager] action=goto_split ...`

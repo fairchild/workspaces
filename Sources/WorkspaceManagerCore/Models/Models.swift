@@ -40,6 +40,36 @@ public final class Repo {
 }
 
 @Model
+public final class WebSource {
+    public var id: UUID
+    public var name: String
+    public var baseURLString: String
+    public var allowedHost: String
+    public var addedAt: Date
+    public var lastAccessedAt: Date
+
+    public var baseURL: URL? {
+        URL(string: baseURLString)
+    }
+
+    public init(
+        id: UUID = UUID(),
+        name: String,
+        baseURLString: String,
+        allowedHost: String,
+        addedAt: Date = Date(),
+        lastAccessedAt: Date = Date()
+    ) {
+        self.id = id
+        self.name = name
+        self.baseURLString = baseURLString
+        self.allowedHost = allowedHost.lowercased()
+        self.addedAt = addedAt
+        self.lastAccessedAt = lastAccessedAt
+    }
+}
+
+@Model
 public final class Workspace {
     public var id: UUID
     public var name: String

@@ -51,6 +51,13 @@ Use these scripts for day-to-day UI verification:
   - timestamped: `./output/window/window-<timestamp>.png`
   - latest copy: `./output/window/latest.png`
 
+7. `./scripts/open-in-editor-shortcut-smoke.sh`
+- End-to-end regression smoke for `Cmd+Shift+O` editor launch.
+- Covers both target paths:
+  - repo selected, no file preview -> open project root only
+  - file preview selected -> open project root + active file
+- Uses fixture mode and a fake Zed CLI shim to verify launched arguments.
+
 UI automation scripts (`ui-smoke.sh`, `ui-capture.sh`, `sidebar-capture.sh`, `preview-open-capture.sh`):
 - fail fast on missing permissions
 - print artifact directory path at the end

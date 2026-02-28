@@ -10,6 +10,8 @@ import SwiftUI
 struct SettingsView: View {
     // Workspace root path stored in UserDefaults
     @AppStorage("workspacesRoot") private var workspacesRootPath: String = ""
+    @AppStorage(TerminalMultiplexingMode.storageKey)
+    private var terminalMultiplexingModeRawValue: String = TerminalMultiplexingMode.defaultValue.rawValue
 
     // File picker state
     @State private var showFolderPicker = false
@@ -24,6 +26,11 @@ struct SettingsView: View {
     // Display path (shows default if custom not set)
     private var displayPath: String {
         workspacesRootPath.isEmpty ? defaultPath : workspacesRootPath
+    }
+
+    private var terminalMultiplexingMode: TerminalMultiplexingMode {
+        get { TerminalMultiplexingMode(rawValue: terminalMultiplexingModeRawValue) ?? .defaultValue }
+        nonmutating set { terminalMultiplexingModeRawValue = newValue.rawValue }
     }
 
     var body: some View {
@@ -103,6 +110,30 @@ struct SettingsView: View {
                 }
             } header: {
                 Text("Automation")
+            }
+
+            Section {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Terminal Session Mode")
+                        .font(.headline)
+
+                    Picker("Terminal Session Mode", selection: Binding(
+                        get: { terminalMultiplexingMode },
+                        set: { terminalMultiplexingMode = $0 }
+                    )) {
+                        ForEach(TerminalMultiplexingMode.allCases) { mode in
+                            Text(mode.title)
+                                .tag(mode)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+
+                    Text(terminalMultiplexingMode.summary)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } header: {
+                Text("Terminal")
             }
         }
         .formStyle(.grouped)
