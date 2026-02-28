@@ -192,7 +192,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
-          name: Workspaces v${{ steps.meta.outputs.version }} (${{ steps.meta.outputs.tag }})
+          name: Workspaces ${{ steps.meta.outputs.tag }}
           target_commitish: ${{ github.sha }}
           files: |
             ${{ steps.meta.outputs.dmg_path }}
