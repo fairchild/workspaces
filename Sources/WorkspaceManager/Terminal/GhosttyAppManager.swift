@@ -52,6 +52,7 @@ final class GhosttyAppManager: NSObject {
     private(set) var app: ghostty_app_t?
     private var config: ghostty_config_t?
     private var initialized = false
+    private var currentColorScheme: ghostty_color_scheme_e?
 
     private override init() {
         super.init()
@@ -130,6 +131,16 @@ final class GhosttyAppManager: NSObject {
     func setFocus(_ focused: Bool) {
         guard let app else { return }
         ghostty_app_set_focus(app, focused)
+    }
+
+    func applyColorScheme(_ colorScheme: ghostty_color_scheme_e) {
+        guard let app else { return }
+        if let currentColorScheme, GhosttyAppearanceSync.isEqual(currentColorScheme, colorScheme) {
+            return
+        }
+
+        ghostty_app_set_color_scheme(app, colorScheme)
+        currentColorScheme = colorScheme
     }
 
     @objc private func keyboardSelectionDidChange(_ notification: Notification) {
