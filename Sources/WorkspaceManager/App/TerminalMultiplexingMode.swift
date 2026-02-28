@@ -28,7 +28,8 @@ enum TerminalMultiplexingMode: String, CaseIterable, Identifiable {
         case .ghosttyManagedSplits:
             return "Use the app's embedded Ghostty split model (Cmd+D, Cmd+[ / Cmd+])."
         case .tmuxPerSession:
-            return "Launch each repo/workspace in a deterministic tmux session. Use tmux keybindings inside the terminal."
+            return "Launch each repo/workspace in a deterministic tmux session. "
+                + "Use tmux keybindings inside the terminal."
         }
     }
 

@@ -5,9 +5,9 @@
 //  Verifies Zed-first "open project + active file" launch behavior.
 //
 
+import Darwin
 import Foundation
 import Testing
-import Darwin
 
 @testable import WorkspaceManager
 

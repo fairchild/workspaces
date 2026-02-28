@@ -117,10 +117,13 @@ struct SettingsView: View {
                     Text("Terminal Session Mode")
                         .font(.headline)
 
-                    Picker("Terminal Session Mode", selection: Binding(
-                        get: { terminalMultiplexingMode },
-                        set: { terminalMultiplexingMode = $0 }
-                    )) {
+                    Picker(
+                        "Terminal Session Mode",
+                        selection: Binding(
+                            get: { terminalMultiplexingMode },
+                            set: { terminalMultiplexingMode = $0 }
+                        )
+                    ) {
                         ForEach(TerminalMultiplexingMode.allCases) { mode in
                             Text(mode.title)
                                 .tag(mode)
