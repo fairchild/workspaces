@@ -95,6 +95,18 @@ Optional flags:
 - `--open-vnc` opens a live VNC viewer on the host while recording.
   - default is headless (`--no-open-vnc`).
 
+9. `./scripts/tart-webview-memory-benchmark.sh`
+- Runs a repeatable memory benchmark inside an isolated Tart VM.
+- For each run, it launches the app twice and samples memory in two states:
+  - fixture idle launch (no web bootstrap)
+  - fixture web launch (`WORKSPACES_UI_FIXTURE_SELECT_WEB_SOURCE=1`)
+- Emits JSON artifacts under:
+  - `./output/tart-webview-benchmark/live/<timestamp>/benchmark.json`
+- Headless by default. Add `--open-vnc` only when you want to observe.
+- Typical usage:
+  1. `swift build -c release`
+  2. `./scripts/tart-webview-memory-benchmark.sh --base-vm sequoia-base --runs 5 --binary release`
+
 UI automation scripts (`ui-smoke.sh`, `ui-capture.sh`, `sidebar-capture.sh`, `preview-open-capture.sh`):
 - fail fast on missing permissions
 - print artifact directory path at the end

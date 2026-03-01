@@ -35,6 +35,7 @@ struct ContentView: View {
     @State private var pendingRepoFocusMeasurementSessionID: UUID?
     @State private var didRunPerfAutoSelection = false
     @State private var didApplyFixturePreviewBootstrap = false
+    @State private var didApplyFixtureWebBootstrap = false
     @State private var openInEditorErrorMessage: String?
     @StateObject private var rightPaneStateStore = RightPaneStateStore()
     @StateObject private var webSurfaceStore = WebSurfaceStore()
@@ -135,6 +136,10 @@ struct ContentView: View {
 
     private var fixturePreviewBootstrapConfiguration: UIFixturePreviewBootstrapConfiguration? {
         UIFixturePreviewBootstrapConfiguration.from(environment: ProcessInfo.processInfo.environment)
+    }
+
+    private var fixtureWebBootstrapConfiguration: UIFixtureWebBootstrapConfiguration? {
+        UIFixtureWebBootstrapConfiguration.from(environment: ProcessInfo.processInfo.environment)
     }
 
     private var openInEditorTarget: OpenInEditorTarget? {
@@ -264,6 +269,7 @@ struct ContentView: View {
                 processPendingDeepLink()
                 maybeAutoSelectRepoForPerf()
                 maybeApplyFixturePreviewBootstrap()
+                maybeApplyFixtureWebBootstrap()
                 pruneRightPaneState()
                 syncOpenInEditorShortcutRouting()
             }
@@ -277,6 +283,7 @@ struct ContentView: View {
                 processPendingDeepLink()
                 maybeAutoSelectRepoForPerf()
                 maybeApplyFixturePreviewBootstrap()
+                maybeApplyFixtureWebBootstrap()
             }
             .onChange(of: normalizedRepoPathSnapshot) { _, paths in
                 hostTerminalState.pruneRepoSessions(validRepoPaths: Set(paths))
@@ -287,6 +294,7 @@ struct ContentView: View {
                     self.selectedWebSource = nil
                     webSurfaceStore.releaseInactiveSurface()
                 }
+                maybeApplyFixtureWebBootstrap()
             }
             .onChange(of: inspectorTargetIDSet) { _, _ in
                 pruneRightPaneState()
@@ -403,6 +411,33 @@ struct ContentView: View {
             "[UIFixture] Preview bootstrap applied (repo=%@ file=%@)",
             resolved.repo.name,
             resolved.selection.relativePath
+        )
+    }
+
+    @MainActor
+    private func maybeApplyFixtureWebBootstrap() {
+        guard !didApplyFixtureWebBootstrap else { return }
+        guard deepLinkState.pendingRequest == nil else { return }
+        guard let configuration = fixtureWebBootstrapConfiguration else { return }
+        guard !webSources.isEmpty else { return }
+        didApplyFixtureWebBootstrap = true
+
+        let targetName = configuration.webSourceName
+        let selectedSource =
+            webSources.first(where: { $0.name.caseInsensitiveCompare(targetName) == .orderedSame })
+            ?? webSources.first(where: { $0.name.localizedCaseInsensitiveContains(targetName) })
+            ?? webSources.first
+
+        guard let selectedSource else {
+            NSLog("[UIFixture] Web bootstrap skipped (target=%@)", targetName)
+            return
+        }
+
+        handleWebSourceSelection(selectedSource)
+        NSLog(
+            "[UIFixture] Web bootstrap applied (target=%@ selected=%@)",
+            targetName,
+            selectedSource.name
         )
     }
 
