@@ -40,6 +40,19 @@ swift test    # Test
 swift run     # Run
 ```
 
+## Python Script Preference
+
+- Prefer single-file UV scripts for new standalone Python utilities.
+- Make scripts directly executable with shebang:
+  - `#!/usr/bin/env -S uv run --script`
+- Include PEP 723 metadata block at the top of each script:
+  - `# /// script`
+  - `# requires-python = ">=3.11"`
+  - `# dependencies = [...]` (use `[]` when stdlib-only)
+  - `# ///`
+- Prefer `uv run --script <path>` in docs/examples; direct execution is acceptable for executable files.
+- Only use non-UV Python layout when explicitly requested or when project tooling requires package/module structure.
+
 ## Doc Navigation
 
 | Task | Primary Doc | Skip |
