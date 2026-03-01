@@ -12,6 +12,16 @@ completed: null
 
 **Vision**: A Mac-native app for managing AI coding sessions. Add repos, fork them into isolated workspaces, run any terminal-based coding agent in an embedded terminal, and track file changes—all without context-switching to Finder or a separate terminal.
 
+## Status Snapshot (2026-02-28)
+
+- Latest shipped release: `v0.1.2` (GitHub release + DMG workflow path healthy).
+- Test baseline: `swift test` is green at 97 tests across 17 suites.
+- Daily-driver reliability fixes have landed:
+  - shared non-blocking process execution (`ProcessRunner`) adopted across git/workspace/backend services
+  - terminal identity hardening on workspace switch and restart generation
+  - workspace recency ordering now updates on selection
+- Active implementation focus (current branch): web sources + embedded web view (`backlog/repo-webview-plan.md`) and shortcut/terminal multiplexing polish.
+
 ---
 
 ## Current Locked Direction (2026-02-14)
@@ -66,7 +76,7 @@ Execution priority is:
 ### Best Implementation Order
 
 1. [x] Host-terminal-first foundation and persistent session UX.
-2. [ ] Refinement gate: quality hardening and performance baselining for current feature set.
+2. [ ] Refinement gate: quality hardening and performance baselining for current feature set (in progress; reliability fixes landed, docs parity + shortcut parity pending).
 3. [ ] Backend abstraction/registry in core while preserving `LocalBackend`.
 4. [ ] `VZTahoeBackend` implementation (runtime checks, VM lifecycle, vmnet, SSH executor, allowlist).
 5. [ ] New-workspace flow integration to create/start VM only for VZ workspaces.
@@ -101,7 +111,7 @@ The next cycle prioritizes implementation quality for shipped behavior before ex
   - repo hydration
   - repo-click-to-focused-terminal
 - [ ] No open crash/repro defects around workspace selection and session switching.
-- [ ] Release workflow passes end-to-end from `main` (signed + notarized DMG published).
+- [x] Release workflow passes end-to-end from the mainline release flow (signed + notarized DMG published).
 - [ ] Product docs (`docs/product_overview.md`, `docs/user-stories.md`) reflect implemented UX.
 
 ### Planned Work Items
@@ -109,8 +119,9 @@ The next cycle prioritizes implementation quality for shipped behavior before ex
 - [x] Add instrumentation signposts around launch, sidebar selection handling, and terminal focus handoff.
 - [x] Add focused regression tests for session reuse + focus restoration behavior.
 - [x] Add a lightweight memory guardrail decision: either cap inactive surfaces (LRU) or document why unbounded is acceptable today.
+- [x] Land daily-driver reliability fixes: deadlock-safe process execution, terminal identity reset on workspace switch, and recency updates.
 - [ ] Complete Ghostty shortcut pass-through parity for split actions (`resize_split`, `equalize_splits`) and keep `mask verify-shortcuts` green.
-- [ ] Tighten release docs/scripts around Apple credential troubleshooting and idempotent setup.
+- [ ] Tighten release docs/scripts around Apple credential troubleshooting and idempotent setup (metadata consistency now fixed in workflow title/version flow).
 - [ ] Capture usage findings and feed them into post-refinement prioritization for M2.
 
 ---
@@ -118,26 +129,28 @@ The next cycle prioritizes implementation quality for shipped behavior before ex
 ## Completed Work
 
 - **Phases 1-3 complete**: Three-column layout, SwiftData persistence, repo/workspace CRUD, file tree, git status pane
-- **Phase 4 partial**: Keyboard shortcuts, signed + notarized DMG release (v0.1.0), GitHub Actions CI
+- **Phase 4 partial**: Keyboard shortcuts, signed + notarized DMG releases through `v0.1.2`, GitHub Actions CI
 - **Terminal migration**: SwiftTerm replaced with GhosttyKit (`libghostty`) for persistent session support
 - **Host-terminal-first UX**: Auto-discovery from `~/code`, persistent per-repo host sessions, live session indicators
 - **Session coordinator**: Manages terminal surface lifecycle, reuse, and focus restoration
 - **Refinement/performance hardening (2026-02-15)**: Signposts, perf baseline report, session regression tests, and memory-policy guardrails (`backlog/refinement-performance-followup.md`)
-- **52 tests** passing (GitService, WorkspaceService, Models, session behavior)
+- **Daily-driver reliability hardening (2026-02-26 to 2026-02-28)**: non-blocking process runner, terminal/workspace identity fixes, recency sort correctness, and release metadata consistency
+- **97 tests** passing across 17 suites (services, models, session behavior, process runner, app-level routing/UX behaviors)
 - **Monorepo extraction**: Clean standalone repo, SPM-only build (no Xcode project)
 
 ---
 
-## Active Phase: Polish & Daily Use
+## Active Phase: Daily-Driver Polish + Web Sources (MPP)
 
-After the refinement gate completes, focus shifts to daily-driver quality and small high-value additions.
+Current focus is to finish daily-driver quality gates while shipping the web-source MPP without regressing terminal-first workflows.
 
 ### Tier 1: Quick Wins
 
 | Item | Effort | Impact | Notes |
 |------|--------|--------|-------|
-| Quick switcher (Cmd+P) | Low | High | Filtered overlay to jump repos/workspaces. Session coordinator has the data. |
-| Auto-launch claude in workspace | Low | High | Option to run `claude` on workspace creation. The primary use case. |
+| Web sources + embedded web view MPP | Medium | High | Domain-locked sidebar web sources and detail rendering. See `backlog/repo-webview-plan.md`. |
+| Open-in-editor shortcut flow polish | Low | High | Make editor-launch path deterministic and documented for daily use. |
+| Quick switcher (Cmd+P) | Low | Medium | Filtered overlay to jump repos/workspaces. Session coordinator has the data. |
 | Workspace creation progress UI | Medium | Medium | Existing backlog item. Eliminates "frozen" feel on large repos. |
 
 ### Tier 2: Defer
@@ -173,11 +186,37 @@ Summary: backend abstraction/registry, VZTahoeBackend implementation (VM lifecyc
 |------|----------|---------|
 | Isolation strategy options | Research | `backlog/isolation-strategies.md` |
 | VZ Tahoe execution brief | Plan | `backlog/vz-tahoe-execution-brief-plan.md` |
+| URL sources + embedded web view | Plan | `backlog/repo-webview-plan.md` |
+| Main window composition + inspector tests | Tech Debt | `backlog/main-window-composition-and-inspector-tests_task-list.md` |
+| Shared desktop focus contention hardening | Follow-up | `backlog/shared-desktop-focus-contention-followup.md` |
 | Workspace creation progress indicator | UX | `backlog/workspace-create-progress-followup.md` |
+| Sparkle auto-update decision record | Plan | `backlog/sparkle-autoupdate-plan.md` |
 
 ---
 
 ## Learnings
+
+### 2026-02-28 — Release metadata consistency pass
+
+**Context**: After cutting `v0.1.2`, release naming drifted because workflow title formatting depended on both plist version and tag.
+
+**Results**:
+- Updated workflow release name to derive from tag consistently.
+- Bumped app bundle version metadata to match `v0.1.2`.
+- Verified `swift test` remains green (97 tests) and remote mainline stayed in sync.
+
+**What this changes for planning**: Release hardening is now mostly about documentation and credential/idempotency ergonomics, not core workflow correctness.
+
+### 2026-02-26 — Daily-driver reliability hardening
+
+**Context**: Daily use surfaced reliability gaps: process output deadlock risk, terminal/workspace mismatch on selection changes, and stale recency ordering.
+
+**Results**:
+- Added shared process runner with concurrent stdout/stderr draining and adopted it in core services.
+- Hardened terminal identity lifecycle for workspace switches/restarts.
+- Updated workspace selection flow to persist `lastAccessedAt` on selection for correct recency sorting.
+
+**What worked**: Prioritizing correctness-first fixes before feature expansion improved day-to-day confidence without adding product complexity.
 
 ### 2026-01-30 — Documentation audit
 
