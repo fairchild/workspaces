@@ -92,6 +92,8 @@ Optional flags:
 - `--build-in-guest` builds inside the VM before launch.
 - `--keep-vm` keeps the cloned run VM after completion.
 - `--keep-running` leaves the run VM powered on after completion.
+- `--open-vnc` opens a live VNC viewer on the host while recording.
+  - default is headless (`--no-open-vnc`).
 
 UI automation scripts (`ui-smoke.sh`, `ui-capture.sh`, `sidebar-capture.sh`, `preview-open-capture.sh`):
 - fail fast on missing permissions
