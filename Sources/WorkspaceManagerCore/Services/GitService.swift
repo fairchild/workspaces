@@ -16,7 +16,8 @@ public actor GitService: GitServiceProtocol {
 
     public func getStatus(at path: URL) async throws -> [FileChange] {
         let output = try await runGit(["status", "--porcelain=v1", "-z"], at: path)
-        let records = output
+        let records =
+            output
             .split(separator: "\0", omittingEmptySubsequences: true)
             .map(String.init)
 
