@@ -50,14 +50,14 @@ struct WebSourceBehaviorTests {
 
     @Test("Web surface store is lazy until first URL source selection")
     func webSurfaceStoreStartsLazy() {
-        let store = WebSurfaceStore()
+        let store = WebSurfaceStore(autoLoadInitialURL: false)
         #expect(!store.hasInstantiatedSurface)
         #expect(!store.hasActiveSurface)
     }
 
     @Test("Web surface store creates once and reuses surface for same source")
     func webSurfaceStoreReusesForSameSource() {
-        let store = WebSurfaceStore()
+        let store = WebSurfaceStore(autoLoadInitialURL: false)
         let source = WebSource(
             name: "Docs",
             baseURLString: "https://docs.example.com/",
@@ -74,7 +74,7 @@ struct WebSourceBehaviorTests {
 
     @Test("Web surface store reuses single webview across source switches and updates policy host")
     func webSurfaceStoreSwitchesSourceWithSingleSurface() {
-        let store = WebSurfaceStore()
+        let store = WebSurfaceStore(autoLoadInitialURL: false)
         let firstSource = WebSource(
             name: "Docs",
             baseURLString: "https://docs.example.com/",
@@ -96,7 +96,7 @@ struct WebSourceBehaviorTests {
 
     @Test("Web surface release tears down active surface and allows recreation")
     func webSurfaceReleaseAndRecreate() {
-        let store = WebSurfaceStore()
+        let store = WebSurfaceStore(autoLoadInitialURL: false)
         let source = WebSource(
             name: "Docs",
             baseURLString: "https://docs.example.com/",
@@ -116,7 +116,7 @@ struct WebSourceBehaviorTests {
 
     @Test("Scheduled release removes inactive surface")
     func scheduledReleaseRemovesSurface() async throws {
-        let store = WebSurfaceStore()
+        let store = WebSurfaceStore(autoLoadInitialURL: false)
         let source = WebSource(
             name: "Docs",
             baseURLString: "https://docs.example.com/",

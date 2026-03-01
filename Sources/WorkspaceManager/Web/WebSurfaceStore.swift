@@ -21,6 +21,11 @@ final class WebSurfaceStore: ObservableObject {
 
     private var activeSurface: ActiveSurface?
     private var scheduledRelease: DispatchWorkItem?
+    private let autoLoadInitialURL: Bool
+
+    init(autoLoadInitialURL: Bool = true) {
+        self.autoLoadInitialURL = autoLoadInitialURL
+    }
 
     var hasActiveSurface: Bool {
         activeSurface != nil
@@ -61,7 +66,7 @@ final class WebSurfaceStore: ObservableObject {
             sourceID: source.id
         )
 
-        if switchedSource || webView.url == nil {
+        if autoLoadInitialURL, switchedSource || webView.url == nil {
             loadInitialURL(for: source, in: webView)
         }
 
