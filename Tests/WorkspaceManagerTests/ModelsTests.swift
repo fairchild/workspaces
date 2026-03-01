@@ -98,4 +98,67 @@ struct ModelsTests {
             #expect(set.count == 1)
         }
     }
+
+    // MARK: - WebSourceValidation Tests
+
+    @Suite("WebSourceValidation")
+    struct WebSourceValidationTests {
+        @Test("Normalizes bare domain into https root URL")
+        func normalizeBareDomain() throws {
+            let normalized = try WebSourceValidation.normalizeBaseURL("docs.example.com")
+            #expect(normalized.baseURL.absoluteString == "https://docs.example.com/")
+            #expect(normalized.allowedHost == "docs.example.com")
+        }
+
+        @Test("Drops path and query to enforce domain-root base URL")
+        func normalizeDropsPathAndQuery() throws {
+            let normalized = try WebSourceValidation.normalizeBaseURL(
+                "https://app.example.com/products?id=42"
+            )
+            #expect(normalized.baseURL.absoluteString == "https://app.example.com/")
+            #expect(normalized.allowedHost == "app.example.com")
+        }
+
+        @Test("Rejects unsupported URL schemes")
+        func rejectsUnsupportedSchemes() {
+            #expect(throws: WebSourceValidationError.unsupportedScheme("ftp")) {
+                try WebSourceValidation.normalizeBaseURL("ftp://example.com")
+            }
+        }
+
+        @Test("Falls back to host when explicit display name is empty")
+        func displayNameFallbacksToHost() throws {
+            let normalized = try WebSourceValidation.normalizeBaseURL("https://docs.swift.org")
+            let name = WebSourceValidation.normalizedDisplayName(
+                explicitName: "   ",
+                baseURL: normalized.baseURL
+            )
+            #expect(name == "docs.swift.org")
+        }
+
+        @Test("Host policy allows exact host and subdomains")
+        func hostPolicyAllowsSubdomains() {
+            #expect(
+                WebSourceValidation.host(
+                    "docs.example.com",
+                    isAllowedFor: "example.com",
+                    allowsSubdomains: true
+                )
+            )
+            #expect(
+                WebSourceValidation.host(
+                    "example.com",
+                    isAllowedFor: "example.com",
+                    allowsSubdomains: true
+                )
+            )
+            #expect(
+                !WebSourceValidation.host(
+                    "example.net",
+                    isAllowedFor: "example.com",
+                    allowsSubdomains: true
+                )
+            )
+        }
+    }
 }

@@ -5,13 +5,39 @@
 //  Verifies Zed-first "open project + active file" launch behavior.
 //
 
+import Darwin
 import Foundation
 import Testing
 
 @testable import WorkspaceManager
 
-@Suite("ExternalEditorService")
+@Suite("ExternalEditorService", .serialized)
 struct ExternalEditorServiceTests {
+    @Test("Environment override for Zed app path is honored")
+    func environmentOverrideForZedAppPathIsHonored() throws {
+        let fileManager = FileManager.default
+        let fixture = try makeFixture(fileManager: fileManager)
+        defer { try? fileManager.removeItem(at: fixture.root) }
+
+        let environmentKey = "WORKSPACES_EDITOR_ZED_APP_PATH"
+        let previousValue = ProcessInfo.processInfo.environment[environmentKey]
+        setEnvironmentValue(fixture.zedAppURL.path, key: environmentKey)
+        defer { setEnvironmentValue(previousValue, key: environmentKey) }
+
+        var launchedExecutable: String?
+
+        let service = ExternalEditorService(
+            fileManager: fileManager,
+            launchProcess: { executable, _ in
+                launchedExecutable = executable
+            }
+        )
+
+        try service.open(projectRootURL: fixture.projectRootURL, editor: .zed)
+
+        #expect(launchedExecutable == fixture.cliURL.path)
+    }
+
     @Test("Opening in Zed launches project root and file path")
     func openingInZedLaunchesProjectAndFile() throws {
         let fileManager = FileManager.default
@@ -276,5 +302,13 @@ struct ExternalEditorServiceTests {
         let reason: String
 
         var errorDescription: String? { reason }
+    }
+
+    private func setEnvironmentValue(_ value: String?, key: String) {
+        if let value {
+            setenv(key, value, 1)
+        } else {
+            unsetenv(key)
+        }
     }
 }

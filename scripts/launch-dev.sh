@@ -272,8 +272,8 @@ verify_background_process() {
     fi
 
     local app_command
-    app_command="$(ps -p "$APP_PID" -o command= | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]].*$//')"
-    if [[ "$app_command" != "$DEBUG_BINARY" ]]; then
+    app_command="$(ps -p "$APP_PID" -o command= | sed -e 's/^[[:space:]]*//')"
+    if [[ "$app_command" != "$DEBUG_BINARY" && "$app_command" != "$DEBUG_BINARY "* ]]; then
         log "Unexpected executable for pid=$APP_PID: $app_command"
         fail "Launch verification failed: running process is not debug binary"
     fi

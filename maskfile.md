@@ -91,6 +91,14 @@ echo "  Cmd+D creates a visible right split"
 ./scripts/shortcut-pass-through-smoke.sh "$@"
 ```
 
+## verify-open-shortcut
+
+> Smoke-test Cmd+Shift+O editor launch shortcut flows (repo-only + file-selected)
+
+```bash
+./scripts/open-in-editor-shortcut-smoke.sh "$@"
+```
+
 ## run
 
 > Build and launch the app (quick, no isolation)

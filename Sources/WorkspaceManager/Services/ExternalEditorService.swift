@@ -48,6 +48,8 @@ protocol ExternalEditorServiceProtocol {
 
 final class ExternalEditorService: ExternalEditorServiceProtocol {
     static let shared = ExternalEditorService()
+    private static let zedBundleIdentifier = "dev.zed.Zed"
+    private static let zedAppPathOverrideEnvKey = "WORKSPACES_EDITOR_ZED_APP_PATH"
 
     typealias ResolveApplicationURL = (_ bundleIdentifier: String) -> URL?
     typealias LaunchProcess = (_ executable: String, _ arguments: [String]) throws -> Void
@@ -59,7 +61,7 @@ final class ExternalEditorService: ExternalEditorServiceProtocol {
     init(
         fileManager: FileManager = .default,
         resolveApplicationURL: @escaping ResolveApplicationURL = { bundleIdentifier in
-            NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier)
+            ExternalEditorService.defaultResolveApplicationURL(bundleIdentifier: bundleIdentifier)
         },
         launchProcess: @escaping LaunchProcess = ExternalEditorService.defaultLaunchProcess
     ) {
@@ -125,7 +127,7 @@ final class ExternalEditorService: ExternalEditorServiceProtocol {
     }
 
     private func openInZed(projectRootURL: URL, fileURL: URL?) throws {
-        let bundleIdentifier = "dev.zed.Zed"
+        let bundleIdentifier = Self.zedBundleIdentifier
 
         guard let appURL = resolveApplicationURL(bundleIdentifier) else {
             throw ExternalEditorError.editorNotInstalled(.zed)
@@ -159,6 +161,33 @@ final class ExternalEditorService: ExternalEditorServiceProtocol {
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
         try process.run()
+    }
+
+    private static func defaultResolveApplicationURL(bundleIdentifier: String) -> URL? {
+        if bundleIdentifier == zedBundleIdentifier,
+            let overridePath = ProcessInfo.processInfo.environment[zedAppPathOverrideEnvKey]?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+            !overridePath.isEmpty
+        {
+            let expandedPath = (overridePath as NSString).expandingTildeInPath
+            let overrideURL = URL(fileURLWithPath: expandedPath, isDirectory: true)
+                .standardizedFileURL
+                .resolvingSymlinksInPath()
+            var isDirectory = ObjCBool(false)
+            if FileManager.default.fileExists(atPath: overrideURL.path, isDirectory: &isDirectory),
+                isDirectory.boolValue
+            {
+                return overrideURL
+            }
+
+            NSLog(
+                "[ExternalEditor] Ignoring %@ override; directory missing at %@",
+                zedAppPathOverrideEnvKey,
+                overrideURL.path
+            )
+        }
+
+        return NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier)
     }
 
     private func path(_ path: String, isInside root: String) -> Bool {

@@ -13,11 +13,17 @@ struct GhosttyTerminalConfig {
     let command: String?
     let environmentVariables: [String: String]
 
-    init(workingDirectory: URL, fontSize: Float32 = 13) {
+    init(
+        workingDirectory: URL,
+        fontSize: Float32 = 13,
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        terminalMultiplexingMode: TerminalMultiplexingMode? = nil,
+        isTmuxAvailableOverride: Bool? = nil
+    ) {
         self.fontSize = fontSize
         self.workingDirectory = workingDirectory.path
 
-        var environment = ProcessInfo.processInfo.environment
+        var environment = environment
         environment["TERM"] = "xterm-256color"
         environment["COLORTERM"] = "truecolor"
         environment["LANG"] = "en_US.UTF-8"
@@ -33,8 +39,82 @@ struct GhosttyTerminalConfig {
         }
 
         let shell = environment["SHELL"] ?? "/bin/zsh"
-        self.command = "\(shell) --login"
+        let mode = terminalMultiplexingMode ?? TerminalMultiplexingMode.resolve()
+        let tmuxAvailable =
+            isTmuxAvailableOverride
+            ?? Self.isExecutableAvailable(
+                "tmux",
+                inPath: environment["PATH"]
+            )
+
+        if mode == .tmuxPerSession, tmuxAvailable {
+            let tmuxSessionName = Self.tmuxSessionName(for: workingDirectory)
+            let quotedSession = Self.singleQuoted(tmuxSessionName)
+            let quotedWorkingDirectory = Self.singleQuoted(workingDirectory.path)
+            let tmuxScript = "exec tmux -L workspaces new-session -A -s \(quotedSession) -c \(quotedWorkingDirectory)"
+            self.command = "\(shell) --login -c \(Self.singleQuoted(tmuxScript))"
+        } else {
+            self.command = "\(shell) --login"
+        }
         self.environmentVariables = environment
+    }
+
+    private static func isExecutableAvailable(_ executable: String, inPath path: String?) -> Bool {
+        guard let path else { return false }
+        for directory in path.split(separator: ":") {
+            let candidate = URL(fileURLWithPath: String(directory), isDirectory: true)
+                .appendingPathComponent(executable)
+            if FileManager.default.isExecutableFile(atPath: candidate.path) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private static func tmuxSessionName(for directory: URL) -> String {
+        let normalizedPath = directory
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+            .path
+
+        let baseComponent = directory.lastPathComponent.isEmpty ? "session" : directory.lastPathComponent
+        let sanitizedBase = sanitizeSessionComponent(baseComponent)
+        let hash = fnv1a64(normalizedPath)
+        let hashPrefix = String(format: "%016llx", hash).prefix(8)
+        return "wm-\(sanitizedBase)-\(hashPrefix)"
+    }
+
+    private static func sanitizeSessionComponent(_ value: String) -> String {
+        let transformed = value.lowercased().map { character -> Character in
+            if character.isASCII, character.isLetter || character.isNumber {
+                return character
+            }
+            return "-"
+        }
+
+        let collapsed = String(transformed)
+            .replacingOccurrences(of: "-+", with: "-", options: .regularExpression)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+
+        if collapsed.isEmpty {
+            return "session"
+        }
+
+        return String(collapsed.prefix(20))
+    }
+
+    private static func fnv1a64(_ value: String) -> UInt64 {
+        var hash: UInt64 = 0xcbf2_9ce4_8422_2325
+        for byte in value.utf8 {
+            hash ^= UInt64(byte)
+            hash &*= 0x0100_0000_01b3
+        }
+        return hash
+    }
+
+    private static func singleQuoted(_ value: String) -> String {
+        let escaped = value.replacingOccurrences(of: "'", with: "'\"'\"'")
+        return "'\(escaped)'"
     }
 
     func withCValue<T>(view: NSView, _ body: (inout ghostty_surface_config_s) throws -> T) rethrows -> T {

@@ -21,7 +21,7 @@ struct WorkspaceManagerApp: App {
     @FocusedValue(\.openInEditorAction) private var openInEditorAction
 
     var sharedModelContainer: ModelContainer = {
-        let schema = Schema([Repo.self, Workspace.self])
+        let schema = Schema([Repo.self, Workspace.self, WebSource.self])
         let launchEnvironment = ProcessInfo.processInfo.environment
         let shouldUseInMemoryStore = launchEnvironment["WORKSPACES_UI_FIXTURE"] == "1"
         let modelConfiguration = resolvedModelConfiguration(
@@ -228,11 +228,17 @@ private func seedUIFixtureDataIfNeeded(in context: ModelContext) {
         name: "workspaces",
         localPath: codeRoot.appendingPathComponent("workspaces", isDirectory: true)
     )
+    let swiftDocs = WebSource(
+        name: "Swift Docs",
+        baseURLString: "https://docs.swift.org/",
+        allowedHost: "docs.swift.org"
+    )
 
     context.insert(skillsRepo)
     context.insert(servicesRepo)
     context.insert(superpowersRepo)
     context.insert(workspacesRepo)
+    context.insert(swiftDocs)
 
     let skillsWorkspace = Workspace(
         name: "skills-v13",
