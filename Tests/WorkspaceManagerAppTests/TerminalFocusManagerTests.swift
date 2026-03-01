@@ -23,7 +23,9 @@ struct TerminalFocusManagerTests {
         #expect(!TerminalFocusManager.shouldRetry(after: 1.0))
     }
 
-    private func isApproximatelyEqual(_ lhs: TimeInterval, _ rhs: TimeInterval, epsilon: TimeInterval = 0.000_001)
+    private func isApproximatelyEqual(
+        _ lhs: TimeInterval, _ rhs: TimeInterval, epsilon: TimeInterval = 0.000_001
+    )
         -> Bool
     {
         abs(lhs - rhs) < epsilon
