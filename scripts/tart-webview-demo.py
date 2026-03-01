@@ -175,6 +175,12 @@ def parse_args(repo_root: Path) -> argparse.Namespace:
         default=str(repo_root / "output" / "tart-webview-demo" / "live"),
         help="host artifact root directory",
     )
+    parser.add_argument(
+        "--open-vnc",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="open a local VNC viewer for live observation (default: headless)",
+    )
     return parser.parse_args()
 
 
@@ -493,6 +499,10 @@ def main() -> int:
         vnc_password = parsed.password or ""
         if not vnc_password:
             raise fail(f"could not parse VNC password from URL: {vnc_url}")
+
+        if args.open_vnc:
+            run(["open", vnc_url], check=False, capture_output=True)
+            log("Opened local VNC viewer")
 
         if not ssh_host:
             log("Discovering guest SSH host")
