@@ -48,9 +48,18 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
 
     public func createWorkspace(repoName: String, repoLocalURL: URL, name: String) async throws -> NewWorkspaceInfo {
         let sanitizedName = sanitizeFilename(name)
+        guard isValidWorkspaceNameComponent(sanitizedName) else {
+            throw WorkspaceError.invalidName(name: name)
+        }
 
         let repoDir = workspacesRoot.appendingPathComponent(repoName, isDirectory: true)
         let workspaceDir = repoDir.appendingPathComponent(sanitizedName, isDirectory: true)
+        let normalizedRepoDir = repoDir.standardizedFileURL.resolvingSymlinksInPath()
+        let normalizedWorkspaceDir = workspaceDir.standardizedFileURL.resolvingSymlinksInPath()
+
+        guard path(normalizedWorkspaceDir.path, isInside: normalizedRepoDir.path) else {
+            throw WorkspaceError.invalidName(name: name)
+        }
 
         if FileManager.default.fileExists(atPath: workspaceDir.path) {
             throw WorkspaceError.alreadyExists(name: sanitizedName)
@@ -160,7 +169,7 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
             let mode = permissions.uint16Value
             if mode & 0o111 == 0 {
                 try? FileManager.default.setAttributes(
-                    [.posixPermissions: NSNumber(value: mode | 0o755)],
+                    [.posixPermissions: NSNumber(value: mode | 0o111)],
                     ofItemAtPath: scriptPath.path
                 )
             }
@@ -232,6 +241,19 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
             .lowercased()
     }
 
+    private func isValidWorkspaceNameComponent(_ component: String) -> Bool {
+        guard !component.isEmpty else { return false }
+        guard component != ".", component != ".." else { return false }
+        guard !component.contains("/"), !component.contains("\\") else { return false }
+        return true
+    }
+
+    private func path(_ path: String, isInside root: String) -> Bool {
+        if path == root { return true }
+        guard root != "/" else { return true }
+        return path.hasPrefix(root + "/")
+    }
+
     public var root: URL {
         workspacesRoot
     }
@@ -242,6 +264,7 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
 public enum WorkspaceError: LocalizedError {
     case notAGitRepo
     case alreadyExists(name: String)
+    case invalidName(name: String)
     case copyFailed(reason: String)
     case deletionFailed(reason: String)
 
@@ -251,6 +274,8 @@ public enum WorkspaceError: LocalizedError {
             return "The selected folder is not a git repository"
         case .alreadyExists(let name):
             return "A workspace named '\(name)' already exists"
+        case .invalidName(let name):
+            return "Workspace name '\(name)' is not valid"
         case .copyFailed(let reason):
             return "Failed to copy repository: \(reason)"
         case .deletionFailed(let reason):

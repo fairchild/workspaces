@@ -15,30 +15,41 @@ public actor GitService: GitServiceProtocol {
     // MARK: - Git Status
 
     public func getStatus(at path: URL) async throws -> [FileChange] {
-        let output = try await runGit(["status", "--porcelain=v1"], at: path)
-
-        return
+        let output = try await runGit(["status", "--porcelain=v1", "-z"], at: path)
+        let records =
             output
-            .split(separator: "\n")
-            .compactMap { line -> FileChange? in
-                let line = String(line)
-                guard line.count >= 3 else { return nil }
+            .split(separator: "\0", omittingEmptySubsequences: true)
+            .map(String.init)
 
-                let statusCode = String(line.prefix(2)).trimmingCharacters(in: .whitespaces)
-                let filePath = String(line.dropFirst(3))
+        var changes: [FileChange] = []
+        changes.reserveCapacity(records.count)
 
-                let status: GitStatus
-                switch statusCode {
-                case "M", "MM", "AM": status = .modified
-                case "A": status = .added
-                case "D": status = .deleted
-                case "??": status = .untracked
-                case "R", "RM": status = .renamed
-                default: status = .modified
-                }
-
-                return FileChange(path: filePath, status: status)
+        var index = 0
+        while index < records.count {
+            let record = records[index]
+            guard record.count >= 3 else {
+                index += 1
+                continue
             }
+
+            let statusCode = String(record.prefix(2))
+            let filePath = String(record.dropFirst(3))
+            guard !filePath.isEmpty else {
+                index += 1
+                continue
+            }
+
+            let status = mapStatus(from: statusCode)
+            changes.append(FileChange(path: filePath, status: status))
+
+            if statusCode.contains("R") || statusCode.contains("C") {
+                index += 1  // Skip source path record for rename/copy entries.
+            }
+
+            index += 1
+        }
+
+        return changes
     }
 
     // MARK: - Remote URL
@@ -172,6 +183,25 @@ public actor GitService: GitServiceProtocol {
         }
 
         return result.stdout
+    }
+
+    private func mapStatus(from porcelainCode: String) -> GitStatus {
+        if porcelainCode == "??" {
+            return .untracked
+        }
+        if porcelainCode == "A " {
+            return .added
+        }
+        if porcelainCode.contains("R") || porcelainCode.contains("C") {
+            return .renamed
+        }
+        if porcelainCode.contains("D") {
+            return .deleted
+        }
+        if porcelainCode.contains("M") || porcelainCode.contains("A") {
+            return .modified
+        }
+        return .modified
     }
 }
 
