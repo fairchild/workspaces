@@ -62,7 +62,8 @@ struct WebSourceBehaviorTests {
 
         let didOpen = policy.handleBlockedNavigation(
             url: blockedURL,
-            targetFrameIsMainFrame: true
+            targetFrameIsMainFrame: true,
+            navigationType: .linkActivated
         )
 
         #expect(didOpen)
@@ -84,12 +85,76 @@ struct WebSourceBehaviorTests {
 
         let didOpen = policy.handleBlockedNavigation(
             url: blockedURL,
-            targetFrameIsMainFrame: false
+            targetFrameIsMainFrame: false,
+            navigationType: .linkActivated
         )
 
         #expect(!didOpen)
         #expect(openedURLs.isEmpty)
         #expect(callbackURLs.isEmpty)
+    }
+
+    @Test("Blocked automatic navigation does not open external browser")
+    func blockedAutomaticNavigationDoesNotOpenExternally() {
+        let blockedURL = URL(string: "https://example.net/path")!
+        var openedURLs: [URL] = []
+        var callbackURLs: [URL] = []
+
+        let policy = WebNavigationPolicy(
+            allowedHost: "example.com",
+            openURL: { openedURLs.append($0) },
+            onBlockedNavigation: { callbackURLs.append($0) }
+        )
+
+        let didOpen = policy.handleBlockedNavigation(
+            url: blockedURL,
+            targetFrameIsMainFrame: true,
+            navigationType: .other
+        )
+
+        #expect(!didOpen)
+        #expect(openedURLs.isEmpty)
+        #expect(callbackURLs.isEmpty)
+    }
+
+    @Test("Related top-level navigation is kept in-app by adopting host")
+    func relatedTopLevelNavigationAdoptsHost() {
+        let policy = WebNavigationPolicy(allowedHost: "docs.swift.org")
+
+        let didAdopt = policy.adoptAllowedHostForRelatedNavigationIfNeeded(
+            candidateURL: URL(string: "https://swift.org/documentation")!,
+            targetFrameIsMainFrame: true
+        )
+
+        #expect(didAdopt)
+        #expect(policy.activeAllowedHost == "swift.org")
+        #expect(policy.shouldAllow(url: URL(string: "https://www.swift.org/download/")!))
+    }
+
+    @Test("Unrelated top-level navigation does not adopt host")
+    func unrelatedTopLevelNavigationDoesNotAdoptHost() {
+        let policy = WebNavigationPolicy(allowedHost: "docs.swift.org")
+
+        let didAdopt = policy.adoptAllowedHostForRelatedNavigationIfNeeded(
+            candidateURL: URL(string: "https://example.net/")!,
+            targetFrameIsMainFrame: true
+        )
+
+        #expect(!didAdopt)
+        #expect(policy.activeAllowedHost == "docs.swift.org")
+    }
+
+    @Test("Host adoption does not occur for subframe navigation")
+    func subframeNavigationPreventsHostAdoption() {
+        let policy = WebNavigationPolicy(allowedHost: "docs.swift.org")
+
+        let didAdopt = policy.adoptAllowedHostForRelatedNavigationIfNeeded(
+            candidateURL: URL(string: "https://swift.org/documentation")!,
+            targetFrameIsMainFrame: false
+        )
+
+        #expect(!didAdopt)
+        #expect(policy.activeAllowedHost == "docs.swift.org")
     }
 
     @Test("Web surface store is lazy until first URL source selection")
