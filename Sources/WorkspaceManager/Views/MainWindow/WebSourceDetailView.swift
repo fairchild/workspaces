@@ -59,6 +59,9 @@ struct WebSourceDetailView: View {
         .onAppear {
             surfaceStore.cancelPendingRelease()
         }
+        .onChange(of: source.id) { _, _ in
+            lastBlockedURL = nil
+        }
         .onDisappear {
             surfaceStore.scheduleInactiveRelease()
         }
