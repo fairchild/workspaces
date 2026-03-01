@@ -58,6 +58,41 @@ Use these scripts for day-to-day UI verification:
   - file preview selected -> open project root + active file
 - Uses fixture mode and a fake Zed CLI shim to verify launched arguments.
 
+8. `./scripts/tart-webview-demo.sh`
+- Runs the repo/webview transition flow inside an isolated Tart VM.
+- Clones a prepared base VM, boots it with this repo mounted, drives the guest
+  UI over SSH + VNC, and outputs capture artifacts under:
+  - `./output/tart-webview-demo/live/<timestamp>/frames/`
+  - `./output/tart-webview-demo/live/<timestamp>/webview-demo.mp4`
+- This is the recommended path when shared-desktop focus contention makes local
+  UI automation unreliable.
+
+### Tart VM Setup (One-Time)
+
+Before using `tart-webview-demo.sh`, prepare a base VM:
+
+1. Create/pull a macOS VM image.
+2. Ensure the guest has Remote Login enabled.
+3. Install required guest tools:
+   - `swift`
+   - `cliclick`
+4. In guest macOS privacy settings, grant:
+   - Accessibility
+5. Set base VM default:
+   - `export WORKSPACES_TART_BASE_VM=<your-base-vm-name>`
+
+Run example:
+
+```bash
+./scripts/tart-webview-demo.sh --base-vm "$WORKSPACES_TART_BASE_VM"
+```
+
+Optional flags:
+- `--ssh-host <ip>` bypasses SSH auto-discovery if your bridged network is noisy.
+- `--build-in-guest` builds inside the VM before launch.
+- `--keep-vm` keeps the cloned run VM after completion.
+- `--keep-running` leaves the run VM powered on after completion.
+
 UI automation scripts (`ui-smoke.sh`, `ui-capture.sh`, `sidebar-capture.sh`, `preview-open-capture.sh`):
 - fail fast on missing permissions
 - print artifact directory path at the end
