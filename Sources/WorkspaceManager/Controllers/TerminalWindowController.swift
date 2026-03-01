@@ -61,18 +61,14 @@ final class TerminalFocusManager: NSObject {
     ) {
         pendingFocusWork?.cancel()
 
-        let nextDelay: TimeInterval
-        if let delay {
-            nextDelay = min(delay * 2, 0.5)
-        } else {
-            nextDelay = 0.05
-        }
+        let nextDelay = Self.nextRetryDelay(after: delay)
+        let shouldRetry = Self.shouldRetry(after: delay)
 
         let work = DispatchWorkItem { [weak self, weak terminal] in
             guard let self, let terminal else { return }
 
             guard let window = terminal.window else {
-                if nextDelay <= 0.5 {
+                if shouldRetry {
                     self.requestFocus(
                         for: terminal,
                         delay: nextDelay,
@@ -103,7 +99,7 @@ final class TerminalFocusManager: NSObject {
                 self.focusedTerminal = terminal
                 PerformanceSignposts.endLaunchToFirstPromptIfNeeded(trigger: "terminal_focus")
                 onFocused?()
-            } else if nextDelay <= 0.5 {
+            } else if shouldRetry {
                 self.requestFocus(
                     for: terminal,
                     delay: nextDelay,
@@ -120,6 +116,17 @@ final class TerminalFocusManager: NSObject {
         } else {
             DispatchQueue.main.async(execute: work)
         }
+    }
+
+    static func nextRetryDelay(after delay: TimeInterval?) -> TimeInterval {
+        if let delay {
+            return min(delay * 2, 0.5)
+        }
+        return 0.05
+    }
+
+    static func shouldRetry(after delay: TimeInterval?) -> Bool {
+        (delay ?? 0) < 0.5
     }
 
     // MARK: - Focus State Synchronization

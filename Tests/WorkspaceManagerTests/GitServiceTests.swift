@@ -102,6 +102,27 @@ struct GitServiceTests {
         #expect(changes[0].status == .added)
     }
 
+    @Test("Detects renamed file and reports destination path")
+    func detectsRenamedFileDestinationPath() async throws {
+        let repo = try TestGitRepository.create()
+        defer { repo.cleanup() }
+
+        try repo.createFile("old name.txt", content: "rename me")
+        try repo.commit(message: "Initial commit")
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        process.arguments = ["mv", "old name.txt", "new name.txt"]
+        process.currentDirectoryURL = repo.url
+        try process.run()
+        process.waitUntilExit()
+
+        let changes = try await GitService.shared.getStatus(at: repo.url)
+        #expect(changes.count == 1)
+        #expect(changes[0].status == .renamed)
+        #expect(changes[0].path == "new name.txt")
+    }
+
     // MARK: - getCurrentBranch Tests
 
     @Test("Returns current branch name")

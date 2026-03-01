@@ -230,6 +230,34 @@ struct WorkspaceServiceTests {
         }
     }
 
+    @Test("createWorkspace rejects path traversal names")
+    func createWorkspaceRejectsPathTraversalName() async throws {
+        let mockGit = MockGitService()
+        let service = WorkspaceService(gitService: mockGit)
+        let (testRoot, repoDir, wsRoot) = try makeWorkspaceFixture()
+        defer { try? FileManager.default.removeItem(at: testRoot) }
+        let originalRoot = setWorkspacesRoot(wsRoot)
+        defer { restoreWorkspacesRoot(originalRoot) }
+
+        await #expect(throws: WorkspaceError.self) {
+            _ = try await service.createWorkspace(repoName: "test-repo", repoLocalURL: repoDir, name: "..")
+        }
+    }
+
+    @Test("createWorkspace rejects empty names after sanitization")
+    func createWorkspaceRejectsEmptySanitizedName() async throws {
+        let mockGit = MockGitService()
+        let service = WorkspaceService(gitService: mockGit)
+        let (testRoot, repoDir, wsRoot) = try makeWorkspaceFixture()
+        defer { try? FileManager.default.removeItem(at: testRoot) }
+        let originalRoot = setWorkspacesRoot(wsRoot)
+        defer { restoreWorkspacesRoot(originalRoot) }
+
+        await #expect(throws: WorkspaceError.self) {
+            _ = try await service.createWorkspace(repoName: "test-repo", repoLocalURL: repoDir, name: "   ")
+        }
+    }
+
     // MARK: - deleteWorkspace Tests
 
     @Test("deleteWorkspace removes files when deleteFiles is true")
