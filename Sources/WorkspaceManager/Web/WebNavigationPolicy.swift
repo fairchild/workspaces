@@ -14,15 +14,20 @@ import WorkspaceManagerCore
 final class WebNavigationPolicy: NSObject, WKNavigationDelegate {
     let allowedHost: String
     let allowsSubdomains: Bool
+    private let openURL: (URL) -> Void
     var onBlockedNavigation: ((URL) -> Void)?
 
     init(
         allowedHost: String,
         allowsSubdomains: Bool = true,
+        openURL: @escaping (URL) -> Void = { url in
+            NSWorkspace.shared.open(url)
+        },
         onBlockedNavigation: ((URL) -> Void)? = nil
     ) {
         self.allowedHost = allowedHost
         self.allowsSubdomains = allowsSubdomains
+        self.openURL = openURL
         self.onBlockedNavigation = onBlockedNavigation
     }
 
@@ -41,8 +46,10 @@ final class WebNavigationPolicy: NSObject, WKNavigationDelegate {
             return
         }
 
-        NSWorkspace.shared.open(url)
-        onBlockedNavigation?(url)
+        handleBlockedNavigation(
+            url: url,
+            targetFrameIsMainFrame: navigationAction.targetFrame?.isMainFrame
+        )
         decisionHandler(.cancel)
     }
 
@@ -88,5 +95,29 @@ final class WebNavigationPolicy: NSObject, WKNavigationDelegate {
             isAllowedFor: allowedHost,
             allowsSubdomains: allowsSubdomains
         )
+    }
+
+    func shouldOpenOutsideAppForBlockedNavigation(targetFrameIsMainFrame: Bool?) -> Bool {
+        // Ignore blocked iframe/subframe hops; only top-level/new-window attempts
+        // should open externally.
+        targetFrameIsMainFrame != false
+    }
+
+    @discardableResult
+    func handleBlockedNavigation(
+        url: URL,
+        targetFrameIsMainFrame: Bool?
+    ) -> Bool {
+        guard
+            shouldOpenOutsideAppForBlockedNavigation(
+                targetFrameIsMainFrame: targetFrameIsMainFrame
+            )
+        else {
+            return false
+        }
+
+        openURL(url)
+        onBlockedNavigation?(url)
+        return true
     }
 }

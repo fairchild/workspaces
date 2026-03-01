@@ -48,6 +48,50 @@ struct WebSourceBehaviorTests {
         #expect(policy.shouldAllow(url: URL(string: "about:blank")!))
     }
 
+    @Test("Blocked main-frame navigation opens externally and records callback")
+    func blockedMainFrameNavigationOpensExternally() {
+        let blockedURL = URL(string: "https://example.net/path")!
+        var openedURLs: [URL] = []
+        var callbackURLs: [URL] = []
+
+        let policy = WebNavigationPolicy(
+            allowedHost: "example.com",
+            openURL: { openedURLs.append($0) },
+            onBlockedNavigation: { callbackURLs.append($0) }
+        )
+
+        let didOpen = policy.handleBlockedNavigation(
+            url: blockedURL,
+            targetFrameIsMainFrame: true
+        )
+
+        #expect(didOpen)
+        #expect(openedURLs == [blockedURL])
+        #expect(callbackURLs == [blockedURL])
+    }
+
+    @Test("Blocked subframe navigation is canceled without external open")
+    func blockedSubframeNavigationDoesNotOpenExternally() {
+        let blockedURL = URL(string: "https://example.net/path")!
+        var openedURLs: [URL] = []
+        var callbackURLs: [URL] = []
+
+        let policy = WebNavigationPolicy(
+            allowedHost: "example.com",
+            openURL: { openedURLs.append($0) },
+            onBlockedNavigation: { callbackURLs.append($0) }
+        )
+
+        let didOpen = policy.handleBlockedNavigation(
+            url: blockedURL,
+            targetFrameIsMainFrame: false
+        )
+
+        #expect(!didOpen)
+        #expect(openedURLs.isEmpty)
+        #expect(callbackURLs.isEmpty)
+    }
+
     @Test("Web surface store is lazy until first URL source selection")
     func webSurfaceStoreStartsLazy() {
         let store = WebSurfaceStore(autoLoadInitialURL: false)
