@@ -8,11 +8,12 @@
 import SwiftUI
 
 struct NewWebSourceSheet: View {
-    let onCreate: (String, String) -> Void
+    let onCreate: (String, String, String) -> Void
 
     @Environment(\.dismiss) private var dismiss
     @State private var name = ""
     @State private var url = ""
+    @State private var additionalAllowedDomains = ""
     @State private var isCreating = false
 
     private var isValid: Bool {
@@ -46,7 +47,19 @@ struct NewWebSourceSheet: View {
                 TextField("URL (e.g. docs.example.com)", text: $url)
                     .textFieldStyle(.roundedBorder)
 
+                TextField(
+                    "Additional Allowlisted Domains (Optional, comma/newline separated)",
+                    text: $additionalAllowedDomains,
+                    axis: .vertical
+                )
+                .lineLimit(2...4)
+                .textFieldStyle(.roundedBorder)
+
                 Text("Only http/https URLs are supported. Navigation is restricted to the configured domain.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Text("Use *.example.com to allow that domain and all subdomains.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -67,7 +80,8 @@ struct NewWebSourceSheet: View {
                     isCreating = true
                     onCreate(
                         url.trimmingCharacters(in: .whitespacesAndNewlines),
-                        name.trimmingCharacters(in: .whitespacesAndNewlines)
+                        name.trimmingCharacters(in: .whitespacesAndNewlines),
+                        additionalAllowedDomains.trimmingCharacters(in: .whitespacesAndNewlines)
                     )
                     dismiss()
                 }

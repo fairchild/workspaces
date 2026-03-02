@@ -289,8 +289,12 @@ struct SidebarView: View {
             }
         }
         .sheet(isPresented: $isAddingWebSource) {
-            NewWebSourceSheet { rawURL, displayName in
-                addWebSource(rawURL: rawURL, displayName: displayName)
+            NewWebSourceSheet { rawURL, displayName, additionalAllowedDomainsRaw in
+                addWebSource(
+                    rawURL: rawURL,
+                    displayName: displayName,
+                    additionalAllowedDomainsRaw: additionalAllowedDomainsRaw
+                )
             }
         }
         .alert("Error", isPresented: $showingError) {
@@ -396,10 +400,21 @@ struct SidebarView: View {
     }
 
     @MainActor
-    private func addWebSource(rawURL: String, displayName: String) {
+    private func addWebSource(
+        rawURL: String,
+        displayName: String,
+        additionalAllowedDomainsRaw: String
+    ) {
         do {
             let normalized = try WebSourceValidation.normalizeBaseURL(rawURL)
             let normalizedURLString = normalized.baseURL.absoluteString
+            let parsedAdditionalDomains = try WebSourceValidation.normalizeAdditionalAllowedDomains(
+                additionalAllowedDomainsRaw
+            )
+            let additionalAllowedDomains = parsedAdditionalDomains.filter { domain in
+                domain != normalized.allowedHost
+                    && domain != "*.\(normalized.allowedHost)"
+            }
 
             if webSources.contains(where: { normalizeWebURLString($0.baseURLString) == normalizedURLString }) {
                 errorMessage = "That URL source is already in the list."
@@ -413,7 +428,8 @@ struct SidebarView: View {
                     baseURL: normalized.baseURL
                 ),
                 baseURLString: normalizedURLString,
-                allowedHost: normalized.allowedHost
+                allowedHost: normalized.allowedHost,
+                additionalAllowedDomains: additionalAllowedDomains
             )
 
             modelContext.insert(source)

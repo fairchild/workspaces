@@ -13,6 +13,7 @@ import WorkspaceManagerCore
 @MainActor
 final class WebNavigationPolicy: NSObject, WKNavigationDelegate {
     let allowedHost: String
+    let additionalAllowedDomains: [String]
     private(set) var activeAllowedHost: String
     let allowsSubdomains: Bool
     private let openURL: (URL) -> Void
@@ -20,6 +21,7 @@ final class WebNavigationPolicy: NSObject, WKNavigationDelegate {
 
     init(
         allowedHost: String,
+        additionalAllowedDomains: [String] = [],
         allowsSubdomains: Bool = true,
         openURL: @escaping (URL) -> Void = { url in
             NSWorkspace.shared.open(url)
@@ -28,6 +30,7 @@ final class WebNavigationPolicy: NSObject, WKNavigationDelegate {
     ) {
         let normalizedAllowedHost = allowedHost.lowercased()
         self.allowedHost = normalizedAllowedHost
+        self.additionalAllowedDomains = additionalAllowedDomains.map { $0.lowercased() }
         self.activeAllowedHost = normalizedAllowedHost
         self.allowsSubdomains = allowsSubdomains
         self.openURL = openURL
@@ -102,11 +105,17 @@ final class WebNavigationPolicy: NSObject, WKNavigationDelegate {
             return false
         }
 
-        return WebSourceValidation.host(
+        if WebSourceValidation.host(
             host,
             isAllowedFor: activeAllowedHost,
             allowsSubdomains: allowsSubdomains
-        )
+        ) {
+            return true
+        }
+
+        return additionalAllowedDomains.contains {
+            WebSourceValidation.host(host, matchesAllowlistDomain: $0)
+        }
     }
 
     @discardableResult

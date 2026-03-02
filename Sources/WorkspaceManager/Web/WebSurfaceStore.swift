@@ -56,6 +56,7 @@ final class WebSurfaceStore: ObservableObject {
 
         let policy = WebNavigationPolicy(
             allowedHost: source.allowedHost,
+            additionalAllowedDomains: source.additionalAllowedDomains,
             allowsSubdomains: true,
             onBlockedNavigation: onBlockedNavigation
         )
