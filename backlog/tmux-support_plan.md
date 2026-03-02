@@ -87,7 +87,7 @@ tmux manages pane/window multiplexing internally
 
 ### Current app-owned shortcuts in Workspaces
 
-Source: `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/App/AppChromeShortcuts.swift`.
+Source: `Sources/WorkspaceManager/App/AppChromeShortcuts.swift`.
 
 | Shortcut | Owner | Behavior |
 |----------|-------|----------|
@@ -100,8 +100,8 @@ Source: `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/App/AppChrome
 ### Ghostty split/navigation shortcuts used by current app flow
 
 Sources:
-- `/Users/fairchild/code/workspaces/docs/development/libghostty-integration.md`
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/App/TerminalMultiplexingMode.swift`
+- `docs/development/libghostty-integration.md`
+- `Sources/WorkspaceManager/App/TerminalMultiplexingMode.swift`
 
 | Shortcut | Expected behavior in Ghostty mode |
 |----------|------------------------------------|
@@ -132,29 +132,29 @@ Source command: `MANWIDTH=140 man tmux | col -bx` (DEFAULT KEY BINDINGS section)
 
 ## Current Code Findings (Research Artifact)
 
-- tmux mode enum and settings storage exist: `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/App/TerminalMultiplexingMode.swift:8`
-- Settings picker already exposes both modes: `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Views/SettingsView.swift:115`
-- tmux command bootstrap already exists: `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Terminal/GhosttyTerminalConfig.swift:50`
-- Ghostty split actions are ignored outside Ghostty mode: `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Views/MainWindow/ContentView.swift:725`
-- Current app-owned default routing includes four chrome shortcuts: `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/App/AppChromeShortcuts.swift:75`
-- Shortcut routing doc currently lists only a subset of app-owned defaults: `/Users/fairchild/code/workspaces/docs/development/shortcut-routing.md:19`
+- tmux mode enum and settings storage exist: `Sources/WorkspaceManager/App/TerminalMultiplexingMode.swift:8`
+- Settings picker already exposes both modes: `Sources/WorkspaceManager/Views/SettingsView.swift:115`
+- tmux command bootstrap already exists: `Sources/WorkspaceManager/Terminal/GhosttyTerminalConfig.swift:50`
+- Ghostty split actions are ignored outside Ghostty mode: `Sources/WorkspaceManager/Views/MainWindow/ContentView.swift:725`
+- Current app-owned default routing includes four chrome shortcuts: `Sources/WorkspaceManager/App/AppChromeShortcuts.swift:75`
+- Shortcut routing doc currently lists only a subset of app-owned defaults: `docs/development/shortcut-routing.md:19`
 
 ## Implementation Phases
 
 ### Phase 1: Product Contract and Docs Alignment
 
 **Files to modify:**
-- `/Users/fairchild/code/workspaces/docs/product_overview.md`
+- `docs/product_overview.md`
   Clarify tmux mode behavior as an alternative terminal multiplexing path and its ownership boundary.
-- `/Users/fairchild/code/workspaces/docs/user-stories.md`
+- `docs/user-stories.md`
   Add/extend story coverage for tmux-per-worktree workflow.
-- `/Users/fairchild/code/workspaces/docs/development/shortcut-routing.md`
+- `docs/development/shortcut-routing.md`
   Update app-owned default shortcut list and add tmux-mode routing notes.
-- `/Users/fairchild/code/workspaces/docs/development/libghostty-integration.md`
+- `docs/development/libghostty-integration.md`
   Document mode-specific split behavior (Ghostty mode vs tmux mode).
 
 **Files to create:**
-- `/Users/fairchild/code/workspaces/docs/development/tmux-mode.md`
+- `docs/development/tmux-mode.md`
   Canonical tmux-mode reference: lifecycle, shortcuts, troubleshooting, and expected behavior.
 
 **Acceptance criteria:**
@@ -165,15 +165,15 @@ Source command: `MANWIDTH=140 man tmux | col -bx` (DEFAULT KEY BINDINGS section)
 ### Phase 2: Mode Transition Lifecycle Hardening
 
 **Files to modify:**
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Views/MainWindow/ContentView.swift`
+- `Sources/WorkspaceManager/Views/MainWindow/ContentView.swift`
   Observe terminal mode changes and trigger deterministic transition flow.
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Views/Components/TerminalView.swift`
+- `Sources/WorkspaceManager/Views/Components/TerminalView.swift`
   Add surface invalidation hooks for mode changes.
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Views/MainWindow/ContentView.swift` (HostTerminalStateStore section)
+- `Sources/WorkspaceManager/Views/MainWindow/ContentView.swift` (HostTerminalStateStore section)
   Add explicit APIs to collapse/clear app split sessions when entering tmux mode.
 
 **Files to create:**
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Terminal/TerminalModeTransitionCoordinator.swift`
+- `Sources/WorkspaceManager/Terminal/TerminalModeTransitionCoordinator.swift`
   Centralize transition actions (restart behavior, split normalization, logging).
 
 **Acceptance criteria:**
@@ -184,15 +184,15 @@ Source command: `MANWIDTH=140 man tmux | col -bx` (DEFAULT KEY BINDINGS section)
 ### Phase 3: tmux Bootstrap and Availability UX
 
 **Files to modify:**
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Terminal/GhosttyTerminalConfig.swift`
+- `Sources/WorkspaceManager/Terminal/GhosttyTerminalConfig.swift`
   Extract tmux command composition and availability checks into testable helpers.
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Views/SettingsView.swift`
+- `Sources/WorkspaceManager/Views/SettingsView.swift`
   Show tmux availability status and explicit fallback messaging.
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/App/TerminalMultiplexingMode.swift`
+- `Sources/WorkspaceManager/App/TerminalMultiplexingMode.swift`
   Improve mode summaries with concrete shortcut expectations.
 
 **Files to create:**
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Terminal/TmuxRuntimeSupport.swift`
+- `Sources/WorkspaceManager/Terminal/TmuxRuntimeSupport.swift`
   tmux path detection, session-name utilities, diagnostics helpers.
 
 **Acceptance criteria:**
@@ -203,15 +203,15 @@ Source command: `MANWIDTH=140 man tmux | col -bx` (DEFAULT KEY BINDINGS section)
 ### Phase 4: Shortcut and Routing Policy Refinements for Dual Mode
 
 **Files to modify:**
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/App/ShortcutRoutingPolicy.swift`
+- `Sources/WorkspaceManager/App/ShortcutRoutingPolicy.swift`
   Ensure routing policy remains explicit and mode-aware where needed.
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/App/AppChromeShortcuts.swift`
+- `Sources/WorkspaceManager/App/AppChromeShortcuts.swift`
   Keep app-owned set minimal and synchronized with docs.
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Terminal/GhosttySurfaceView.swift`
+- `Sources/WorkspaceManager/Terminal/GhosttySurfaceView.swift`
   Add explicit handling comments/guards for mode-specific key flow assumptions.
 
 **Files to create:**
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/App/ShortcutProfiles.swift`
+- `Sources/WorkspaceManager/App/ShortcutProfiles.swift`
   Optional mode profiles documenting expected terminal vs app ownership.
 
 **Acceptance criteria:**
@@ -222,17 +222,17 @@ Source command: `MANWIDTH=140 man tmux | col -bx` (DEFAULT KEY BINDINGS section)
 ### Phase 5: Test Coverage and Smoke Verification
 
 **Files to modify:**
-- `/Users/fairchild/code/workspaces/Tests/WorkspaceManagerAppTests/GhosttyTerminalConfigTests.swift`
+- `Tests/WorkspaceManagerAppTests/GhosttyTerminalConfigTests.swift`
   Expand tmux tests for mode transitions and fallback surfaces.
-- `/Users/fairchild/code/workspaces/Tests/WorkspaceManagerAppTests/ShortcutRoutingPolicyTests.swift`
+- `Tests/WorkspaceManagerAppTests/ShortcutRoutingPolicyTests.swift`
   Add cases for dual-mode routing expectations.
-- `/Users/fairchild/code/workspaces/Tests/WorkspaceManagerAppTests/HostTerminalStateStoreTests.swift`
+- `Tests/WorkspaceManagerAppTests/HostTerminalStateStoreTests.swift`
   Add split-normalization tests when tmux mode is active.
-- `/Users/fairchild/code/workspaces/scripts/shortcut-pass-through-smoke.sh`
+- `scripts/shortcut-pass-through-smoke.sh`
   Keep Ghostty-mode smoke as-is and make mode explicit.
 
 **Files to create:**
-- `/Users/fairchild/code/workspaces/scripts/tmux-mode-smoke.sh`
+- `scripts/tmux-mode-smoke.sh`
   Verify tmux mode attach-or-create behavior and no app split side effects.
 
 **Acceptance criteria:**
@@ -244,7 +244,7 @@ Source command: `MANWIDTH=140 man tmux | col -bx` (DEFAULT KEY BINDINGS section)
 
 ```bash
 # Build + tests
-cd /Users/fairchild/code/workspaces
+cd .
 ./scripts/build-ghosttykit.sh
 swift build
 swift test
@@ -268,27 +268,27 @@ tmux -L workspaces ls
 
 ## Rollback Plan
 
-1. Force default mode to `ghostty_managed_splits` in `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/App/TerminalMultiplexingMode.swift`.
+1. Force default mode to `ghostty_managed_splits` in `Sources/WorkspaceManager/App/TerminalMultiplexingMode.swift`.
 2. Remove tmux availability UI from settings and keep mode hidden behind an internal flag.
-3. Disable tmux bootstrap path in `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Terminal/GhosttyTerminalConfig.swift` (fallback to login shell only).
+3. Disable tmux bootstrap path in `Sources/WorkspaceManager/Terminal/GhosttyTerminalConfig.swift` (fallback to login shell only).
 4. Retain doc notes in changelog/backlog for future reintroduction.
 5. Re-run `swift test` and shortcut smoke checks to confirm Ghostty path remains stable.
 
 ## References
 
-- `/Users/fairchild/code/workspaces/docs/product_overview.md:18`
-- `/Users/fairchild/code/workspaces/docs/product_overview.md:83`
-- `/Users/fairchild/code/workspaces/docs/user-stories.md:373`
-- `/Users/fairchild/code/workspaces/docs/development/libghostty-integration.md:70`
-- `/Users/fairchild/code/workspaces/docs/development/shortcut-routing.md:17`
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/App/TerminalMultiplexingMode.swift:8`
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Views/SettingsView.swift:115`
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Terminal/GhosttyTerminalConfig.swift:50`
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Terminal/GhosttySurfaceView.swift:333`
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Terminal/GhosttyAppManager.swift:190`
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/App/AppChromeShortcuts.swift:11`
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/App/ShortcutRoutingPolicy.swift:51`
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Views/MainWindow/ContentView.swift:725`
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Views/MainWindow/ContentView.swift:1199`
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManagerCore/Services/HostTerminalSessionCoordinator.swift:89`
+- `docs/product_overview.md:18`
+- `docs/product_overview.md:83`
+- `docs/user-stories.md:373`
+- `docs/development/libghostty-integration.md:70`
+- `docs/development/shortcut-routing.md:17`
+- `Sources/WorkspaceManager/App/TerminalMultiplexingMode.swift:8`
+- `Sources/WorkspaceManager/Views/SettingsView.swift:115`
+- `Sources/WorkspaceManager/Terminal/GhosttyTerminalConfig.swift:50`
+- `Sources/WorkspaceManager/Terminal/GhosttySurfaceView.swift:333`
+- `Sources/WorkspaceManager/Terminal/GhosttyAppManager.swift:190`
+- `Sources/WorkspaceManager/App/AppChromeShortcuts.swift:11`
+- `Sources/WorkspaceManager/App/ShortcutRoutingPolicy.swift:51`
+- `Sources/WorkspaceManager/Views/MainWindow/ContentView.swift:725`
+- `Sources/WorkspaceManager/Views/MainWindow/ContentView.swift:1199`
+- `Sources/WorkspaceManagerCore/Services/HostTerminalSessionCoordinator.swift:89`
 - `man tmux` (tmux 3.6a, DEFAULT KEY BINDINGS section; captured via `MANWIDTH=140 man tmux | col -bx`)

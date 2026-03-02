@@ -33,6 +33,11 @@ output/
 *.key
 *.p12
 
+# Directories that should never be committed
+.aws/
+.ssh/
+secrets/
+
 # macOS
 .DS_Store
 *.swp

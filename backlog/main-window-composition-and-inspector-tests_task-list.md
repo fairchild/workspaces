@@ -26,9 +26,9 @@ Both items were explored during release hardening, but deferred to keep scope co
 
 ## What We Learned
 
-- `ContentView` has become the main integration point for unrelated behaviors (`/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Views/MainWindow/ContentView.swift:13`).
-- Inspector persistence now relies on `RightPaneStateStore` and pruning via target snapshots (`/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Views/MainWindow/RightPaneView.swift:23`, `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Views/MainWindow/ContentView.swift:76`).
-- Existing shortcut routing tests are good examples of deterministic input-policy tests we can mirror for inspector state behavior (`/Users/fairchild/code/workspaces/Tests/WorkspaceManagerAppTests/ShortcutRoutingPolicyTests.swift:41`).
+- `ContentView` has become the main integration point for unrelated behaviors (`Sources/WorkspaceManager/Views/MainWindow/ContentView.swift:13`).
+- Inspector persistence now relies on `RightPaneStateStore` and pruning via target snapshots (`Sources/WorkspaceManager/Views/MainWindow/RightPaneView.swift:23`, `Sources/WorkspaceManager/Views/MainWindow/ContentView.swift:76`).
+- Existing shortcut routing tests are good examples of deterministic input-policy tests we can mirror for inspector state behavior (`Tests/WorkspaceManagerAppTests/ShortcutRoutingPolicyTests.swift:41`).
 
 ## Key Decisions
 
@@ -62,13 +62,13 @@ After:
 ### Phase 1: Decompose `ContentView` Responsibilities
 
 **Files to modify:**
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Views/MainWindow/ContentView.swift` - remove orchestration-heavy private methods and delegate to extracted components.
+- `Sources/WorkspaceManager/Views/MainWindow/ContentView.swift` - remove orchestration-heavy private methods and delegate to extracted components.
 
 **Files to create:**
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Views/MainWindow/MainSelectionCoordinator.swift` - own repo/workspace/default-host selection behavior.
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Views/MainWindow/TerminalFocusCoordinator.swift` - own terminal focus activation/retry behavior.
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Views/MainWindow/SplitRoutingController.swift` - own Ghostty split action handling and layout mapping.
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Views/MainWindow/InspectorStateController.swift` - own inspector visibility + prune lifecycle hooks.
+- `Sources/WorkspaceManager/Views/MainWindow/MainSelectionCoordinator.swift` - own repo/workspace/default-host selection behavior.
+- `Sources/WorkspaceManager/Views/MainWindow/TerminalFocusCoordinator.swift` - own terminal focus activation/retry behavior.
+- `Sources/WorkspaceManager/Views/MainWindow/SplitRoutingController.swift` - own Ghostty split action handling and layout mapping.
+- `Sources/WorkspaceManager/Views/MainWindow/InspectorStateController.swift` - own inspector visibility + prune lifecycle hooks.
 
 **Acceptance criteria:**
 - [ ] `ContentView` is materially smaller and primarily declarative.
@@ -78,11 +78,11 @@ After:
 ### Phase 2: Add Inspector State + Pruning Tests
 
 **Files to create:**
-- `/Users/fairchild/code/workspaces/Tests/WorkspaceManagerAppTests/InspectorStateControllerTests.swift` - verifies visibility toggling, guard behavior with no target, and target-pruning behavior.
-- `/Users/fairchild/code/workspaces/Tests/WorkspaceManagerAppTests/RightPaneStateStoreTests.swift` - verifies per-target persistence and stale-state pruning.
+- `Tests/WorkspaceManagerAppTests/InspectorStateControllerTests.swift` - verifies visibility toggling, guard behavior with no target, and target-pruning behavior.
+- `Tests/WorkspaceManagerAppTests/RightPaneStateStoreTests.swift` - verifies per-target persistence and stale-state pruning.
 
 **Files to modify:**
-- `/Users/fairchild/code/workspaces/Tests/WorkspaceManagerAppTests/ShortcutRoutingPolicyTests.swift` - optionally add focused assertions ensuring inspector shortcut remains app-owned after refactor.
+- `Tests/WorkspaceManagerAppTests/ShortcutRoutingPolicyTests.swift` - optionally add focused assertions ensuring inspector shortcut remains app-owned after refactor.
 
 **Acceptance criteria:**
 - [ ] Tests assert hide/show preserves expanded directory state for same target.
@@ -92,8 +92,8 @@ After:
 ### Phase 3: Stabilization and Polish
 
 **Files to modify:**
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Views/MainWindow/ContentView.swift` - tighten comments and remove duplicate path normalization where possible.
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Views/MainWindow/RightPaneView.swift` - keep state container minimal and well-documented.
+- `Sources/WorkspaceManager/Views/MainWindow/ContentView.swift` - tighten comments and remove duplicate path normalization where possible.
+- `Sources/WorkspaceManager/Views/MainWindow/RightPaneView.swift` - keep state container minimal and well-documented.
 
 **Acceptance criteria:**
 - [ ] No new warnings in build output.
@@ -136,9 +136,9 @@ func prune(keeping validTargetIDs: Set<String>) {
 
 ## References
 
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Views/MainWindow/ContentView.swift:13`
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Views/MainWindow/ContentView.swift:76`
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Views/MainWindow/ContentView.swift:145`
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Views/MainWindow/RightPaneView.swift:23`
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Views/MainWindow/RightPaneView.swift:43`
-- `/Users/fairchild/code/workspaces/Tests/WorkspaceManagerAppTests/ShortcutRoutingPolicyTests.swift:41`
+- `Sources/WorkspaceManager/Views/MainWindow/ContentView.swift:13`
+- `Sources/WorkspaceManager/Views/MainWindow/ContentView.swift:76`
+- `Sources/WorkspaceManager/Views/MainWindow/ContentView.swift:145`
+- `Sources/WorkspaceManager/Views/MainWindow/RightPaneView.swift:23`
+- `Sources/WorkspaceManager/Views/MainWindow/RightPaneView.swift:43`
+- `Tests/WorkspaceManagerAppTests/ShortcutRoutingPolicyTests.swift:41`

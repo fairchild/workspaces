@@ -70,18 +70,18 @@ WebSourceDetailView
 
 ## Current Code Findings
 
-- Repo model has no web config fields yet: `/Users/fairchild/code/workspaces/Sources/WorkspaceManagerCore/Models/Models.swift:13`
-- Repo selection and host session activation happen in `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Views/MainWindow/ContentView.swift:137`
-- Main detail pane is terminal-only today: `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Views/MainWindow/ContentView.swift:482`
-- Repo row currently has one action surface (select terminal) and no secondary icon: `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Views/MainWindow/SidebarRows.swift:100`
-- Repo context menu has no "web config" entry yet: `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Views/MainWindow/SidebarView.swift:92`
+- Repo model has no web config fields yet: `Sources/WorkspaceManagerCore/Models/Models.swift:13`
+- Repo selection and host session activation happen in `Sources/WorkspaceManager/Views/MainWindow/ContentView.swift:137`
+- Main detail pane is terminal-only today: `Sources/WorkspaceManager/Views/MainWindow/ContentView.swift:482`
+- Repo row currently has one action surface (select terminal) and no secondary icon: `Sources/WorkspaceManager/Views/MainWindow/SidebarRows.swift:100`
+- Repo context menu has no "web config" entry yet: `Sources/WorkspaceManager/Views/MainWindow/SidebarView.swift:92`
 
 ## Implementation Phases
 
 ### Phase 1: Add URL Source Data Model + Persistence
 
 **Files to modify:**
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManagerCore/Models/Models.swift`
+- `Sources/WorkspaceManagerCore/Models/Models.swift`
   Add `WebSource` model:
   - `id: UUID`
   - `name: String`
@@ -90,11 +90,11 @@ WebSourceDetailView
   - `addedAt: Date`
   - `lastAccessedAt: Date`
   Also add URL/host normalization helpers.
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/App/WorkspaceManagerApp.swift`
+- `Sources/WorkspaceManager/App/WorkspaceManagerApp.swift`
   Include `WebSource` in `Schema([...])`.
 
 **Files to create:**
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManagerCore/Models/WebSourceValidation.swift`
+- `Sources/WorkspaceManagerCore/Models/WebSourceValidation.swift`
   URL parsing + host extraction utility for strict validation.
 
 **Acceptance criteria:**
@@ -105,15 +105,15 @@ WebSourceDetailView
 ### Phase 2: Sidebar UX for URL Sources (Add + Select)
 
 **Files to create:**
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Views/MainWindow/NewWebSourceSheet.swift`
+- `Sources/WorkspaceManager/Views/MainWindow/NewWebSourceSheet.swift`
   UI to enter URL and optional display name.
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Views/MainWindow/WebSourceRow.swift`
+- `Sources/WorkspaceManager/Views/MainWindow/WebSourceRow.swift`
   Globe + domain row view.
 
 **Files to modify:**
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Views/MainWindow/SidebarView.swift`
+- `Sources/WorkspaceManager/Views/MainWindow/SidebarView.swift`
   Add `Web` section and add/remove actions.
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Views/MainWindow/SidebarRows.swift`
+- `Sources/WorkspaceManager/Views/MainWindow/SidebarRows.swift`
   Keep repo rows unchanged; add web row usage where needed.
 
 **Acceptance criteria:**
@@ -124,21 +124,21 @@ WebSourceDetailView
 ### Phase 3: Detail Routing + Embedded Browser
 
 **Files to create:**
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Views/Components/WebSourceView.swift`
+- `Sources/WorkspaceManager/Views/Components/WebSourceView.swift`
   `NSViewRepresentable` wrapper for `WKWebView`.
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Web/WebNavigationPolicy.swift`
+- `Sources/WorkspaceManager/Web/WebNavigationPolicy.swift`
   Domain-restriction delegate and external-open fallback.
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Web/WebSurfaceStore.swift`
+- `Sources/WorkspaceManager/Web/WebSurfaceStore.swift`
   Creates/retains web surfaces lazily and exposes lightweight lifecycle controls.
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Views/MainWindow/WebSourceDetailView.swift`
+- `Sources/WorkspaceManager/Views/MainWindow/WebSourceDetailView.swift`
   Loading/error chrome for web mode.
 
 **Files to modify:**
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Views/MainWindow/ContentView.swift`
+- `Sources/WorkspaceManager/Views/MainWindow/ContentView.swift`
   Introduce primary selection enum and branch detail view:
   - terminal path (existing)
   - web path (new)
-- `/Users/fairchild/code/workspaces/Package.swift`
+- `Package.swift`
   Link `WebKit`.
 
 **Acceptance criteria:**
@@ -150,13 +150,13 @@ WebSourceDetailView
 ### Phase 4: Performance and Memory Hardening (MPP Gate)
 
 **Files to modify:**
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Diagnostics/PerformanceSignposts.swift`
+- `Sources/WorkspaceManager/Diagnostics/PerformanceSignposts.swift`
   Add optional web signposts (`webViewInit`, `webFirstLoad`) for profiling.
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Web/WebSurfaceStore.swift`
+- `Sources/WorkspaceManager/Web/WebSurfaceStore.swift`
   Add explicit `releaseInactiveSurface()` path.
-- `/Users/fairchild/code/workspaces/Tests/WorkspaceManagerTests/ModelsTests.swift`
+- `Tests/WorkspaceManagerTests/ModelsTests.swift`
   Validate URL parsing/normalization behavior.
-- `/Users/fairchild/code/workspaces/Tests/WorkspaceManagerAppTests/ShortcutRoutingPolicyTests.swift`
+- `Tests/WorkspaceManagerAppTests/ShortcutRoutingPolicyTests.swift`
   Ensure app/terminal shortcut behavior is unchanged.
 
 **Acceptance criteria:**
@@ -228,11 +228,11 @@ After MPP release, create a follow-up plan for:
 
 ## References
 
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManagerCore/Models/Models.swift:13`
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/App/WorkspaceManagerApp.swift:15`
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Views/MainWindow/SidebarView.swift:73`
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Views/MainWindow/SidebarRows.swift:100`
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Views/MainWindow/ContentView.swift:137`
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Views/MainWindow/ContentView.swift:482`
-- `/Users/fairchild/code/workspaces/docs/development/libghostty-integration.md`
-- `/Users/fairchild/code/workspaces/docs/development/shortcut-routing.md`
+- `Sources/WorkspaceManagerCore/Models/Models.swift:13`
+- `Sources/WorkspaceManager/App/WorkspaceManagerApp.swift:15`
+- `Sources/WorkspaceManager/Views/MainWindow/SidebarView.swift:73`
+- `Sources/WorkspaceManager/Views/MainWindow/SidebarRows.swift:100`
+- `Sources/WorkspaceManager/Views/MainWindow/ContentView.swift:137`
+- `Sources/WorkspaceManager/Views/MainWindow/ContentView.swift:482`
+- `docs/development/libghostty-integration.md`
+- `docs/development/shortcut-routing.md`

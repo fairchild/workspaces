@@ -31,14 +31,14 @@ The product direction is now explicit: the main terminal panel should behave lik
 ## What We Learned
 
 - Current split state is map-based and constrained:
-  - `splitSessionsByPrimaryID` + `splitLayoutsByPrimaryID` in `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Views/MainWindow/ContentView.swift`.
+  - `splitSessionsByPrimaryID` + `splitLayoutsByPrimaryID` in `Sources/WorkspaceManager/Views/MainWindow/ContentView.swift`.
 - Render path is still "single pane or one split pair", not recursive pane composition.
 - Ghostty action bridge is in place and should remain:
-  - `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Terminal/GhosttyAppManager.swift`
+  - `Sources/WorkspaceManager/Terminal/GhosttyAppManager.swift`
 - `resize_split` and `equalize_splits` are currently deferred, confirming current model mismatch:
-  - `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Terminal/GhosttyAppManager.swift`
+  - `Sources/WorkspaceManager/Terminal/GhosttyAppManager.swift`
 - Surface retention policy is currently unbounded and keyed by session UUID:
-  - `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Views/Components/TerminalView.swift`
+  - `Sources/WorkspaceManager/Views/Components/TerminalView.swift`
   - This needs deterministic pane-leaf synchronization in the new model to avoid latent memory growth.
 
 ## Key Decisions
@@ -112,7 +112,7 @@ PaneTreeState
 @Published private(set) var splitLayoutsByPrimaryID: [UUID: SplitPaneLayout] = [:]
 ```
 
-Location: `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Views/MainWindow/ContentView.swift`
+Location: `Sources/WorkspaceManager/Views/MainWindow/ContentView.swift`
 
 ### Current deferred Ghostty actions
 
@@ -126,7 +126,7 @@ case GHOSTTY_ACTION_EQUALIZE_SPLITS:
     return false
 ```
 
-Location: `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Terminal/GhosttyAppManager.swift`
+Location: `Sources/WorkspaceManager/Terminal/GhosttyAppManager.swift`
 
 ### Current surface-retention risk point
 
@@ -134,20 +134,20 @@ Location: `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Terminal/Gh
 private var surfaces: [UUID: GhosttySurfaceView] = [:]
 ```
 
-Location: `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Views/Components/TerminalView.swift`
+Location: `Sources/WorkspaceManager/Views/Components/TerminalView.swift`
 
 ## Implementation Phases
 
 ### Phase 0: Design Lock and Contracts
 
 **Files to create:**
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManagerCore/Services/PaneTree/PaneTreeTypes.swift` - node/state/action definitions
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManagerCore/Services/PaneTree/PaneTreeInvariants.swift` - invariant validation helpers
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManagerCore/Services/PaneTree/PaneTreeReducer.swift` - pure reducer
+- `Sources/WorkspaceManagerCore/Services/PaneTree/PaneTreeTypes.swift` - node/state/action definitions
+- `Sources/WorkspaceManagerCore/Services/PaneTree/PaneTreeInvariants.swift` - invariant validation helpers
+- `Sources/WorkspaceManagerCore/Services/PaneTree/PaneTreeReducer.swift` - pure reducer
 
 **Files to modify:**
-- `/Users/fairchild/code/workspaces/docs/development/shortcut-routing.md` - update split model section to reference pane-tree
-- `/Users/fairchild/code/workspaces/docs/development/libghostty-integration.md` - update split contract scope
+- `docs/development/shortcut-routing.md` - update split model section to reference pane-tree
+- `docs/development/libghostty-integration.md` - update split contract scope
 
 **Acceptance criteria:**
 - [ ] Pane-tree contracts and invariants are documented and agreed.
@@ -156,11 +156,11 @@ Location: `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Views/Compo
 ### Phase 1: Core PaneTree Reducer + Tests
 
 **Files to create:**
-- `/Users/fairchild/code/workspaces/Tests/WorkspaceManagerTests/PaneTreeReducerTests.swift`
-- `/Users/fairchild/code/workspaces/Tests/WorkspaceManagerTests/PaneTreePropertyTests.swift`
+- `Tests/WorkspaceManagerTests/PaneTreeReducerTests.swift`
+- `Tests/WorkspaceManagerTests/PaneTreePropertyTests.swift`
 
 **Files to modify:**
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManagerCore/Services/HostTerminalSessionCoordinator.swift` - add pane-root session bootstrapping helpers if needed
+- `Sources/WorkspaceManagerCore/Services/HostTerminalSessionCoordinator.swift` - add pane-root session bootstrapping helpers if needed
 
 **Acceptance criteria:**
 - [ ] Reducer supports: split, close pane, directional focus, resize, equalize, zoom toggle.
@@ -170,12 +170,12 @@ Location: `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Views/Compo
 ### Phase 2: App State Integration (Compatibility Layer)
 
 **Files to modify:**
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Views/MainWindow/ContentView.swift` - replace split maps with pane-tree snapshot projection
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Terminal/GhosttyAppManager.swift` - map all split actions to pane-tree actions
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Views/Components/TerminalView.swift` - add `sync(activeLeafIDs:)` for surface lifecycle control
+- `Sources/WorkspaceManager/Views/MainWindow/ContentView.swift` - replace split maps with pane-tree snapshot projection
+- `Sources/WorkspaceManager/Terminal/GhosttyAppManager.swift` - map all split actions to pane-tree actions
+- `Sources/WorkspaceManager/Views/Components/TerminalView.swift` - add `sync(activeLeafIDs:)` for surface lifecycle control
 
 **Files to create:**
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Terminal/PaneActionMapper.swift` - Ghostty action -> reducer action mapping
+- `Sources/WorkspaceManager/Terminal/PaneActionMapper.swift` - Ghostty action -> reducer action mapping
 
 **Acceptance criteria:**
 - [ ] App no longer depends on `splitSessionsByPrimaryID` / `splitLayoutsByPrimaryID`.
@@ -185,10 +185,10 @@ Location: `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Views/Compo
 ### Phase 3: Recursive Pane Rendering
 
 **Files to modify:**
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Views/MainWindow/ContentView.swift` - introduce recursive pane renderer view
+- `Sources/WorkspaceManager/Views/MainWindow/ContentView.swift` - introduce recursive pane renderer view
 
 **Files to create:**
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Views/MainWindow/PaneTreeView.swift` - recursive split-node renderer
+- `Sources/WorkspaceManager/Views/MainWindow/PaneTreeView.swift` - recursive split-node renderer
 
 **Acceptance criteria:**
 - [ ] Repeated vertical splits (`Cmd+D`) create 3+ columns as expected.
@@ -198,12 +198,12 @@ Location: `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Views/Compo
 ### Phase 4: Lifecycle + Memory Hardening
 
 **Files to modify:**
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Views/Components/TerminalView.swift`
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Terminal/GhosttySurfaceView.swift`
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Views/MainWindow/ContentView.swift`
+- `Sources/WorkspaceManager/Views/Components/TerminalView.swift`
+- `Sources/WorkspaceManager/Terminal/GhosttySurfaceView.swift`
+- `Sources/WorkspaceManager/Views/MainWindow/ContentView.swift`
 
 **Files to create:**
-- `/Users/fairchild/code/workspaces/Tests/WorkspaceManagerAppTests/PaneLifecycleIntegrationTests.swift`
+- `Tests/WorkspaceManagerAppTests/PaneLifecycleIntegrationTests.swift`
 
 **Acceptance criteria:**
 - [ ] Closing/exiting a pane rebalances tree and preserves focus invariants.
@@ -213,8 +213,8 @@ Location: `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Views/Compo
 ### Phase 5: Verification and Rollout
 
 **Files to modify:**
-- `/Users/fairchild/code/workspaces/scripts/shortcut-pass-through-smoke.sh` - include deeper split sequences
-- `/Users/fairchild/code/workspaces/maskfile.md` - add pane-tree verification task(s)
+- `scripts/shortcut-pass-through-smoke.sh` - include deeper split sequences
+- `maskfile.md` - add pane-tree verification task(s)
 
 **Acceptance criteria:**
 - [ ] Required verification loop is documented and green.
@@ -224,7 +224,7 @@ Location: `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Views/Compo
 ## Verification Commands
 
 ```bash
-cd /Users/fairchild/code/workspaces
+cd .
 
 # Core build/test loop
 ./scripts/build-ghosttykit.sh
@@ -255,11 +255,11 @@ mask verify-pane-tree
 
 ## References
 
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Views/MainWindow/ContentView.swift`
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Views/Components/TerminalView.swift`
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Terminal/GhosttyAppManager.swift`
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Terminal/GhosttySurfaceView.swift`
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManagerCore/Services/HostTerminalSessionCoordinator.swift`
-- `/Users/fairchild/code/workspaces/docs/development/shortcut-routing.md`
-- `/Users/fairchild/code/workspaces/docs/development/libghostty-integration.md`
-- `/Users/fairchild/code/workspaces/ARCHITECTURE.md`
+- `Sources/WorkspaceManager/Views/MainWindow/ContentView.swift`
+- `Sources/WorkspaceManager/Views/Components/TerminalView.swift`
+- `Sources/WorkspaceManager/Terminal/GhosttyAppManager.swift`
+- `Sources/WorkspaceManager/Terminal/GhosttySurfaceView.swift`
+- `Sources/WorkspaceManagerCore/Services/HostTerminalSessionCoordinator.swift`
+- `docs/development/shortcut-routing.md`
+- `docs/development/libghostty-integration.md`
+- `ARCHITECTURE.md`

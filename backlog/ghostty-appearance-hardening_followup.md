@@ -44,25 +44,25 @@ Recent hardening overlays:
 
 - PR #18 and PR #19 do not remove or replace appearance sync logic.
 - Appearance sync codepaths remain intact:
-  - `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Terminal/GhosttyAppearanceSync.swift`
-  - `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Terminal/GhosttySurfaceView.swift`
-  - `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Terminal/GhosttyAppManager.swift`
+  - `Sources/WorkspaceManager/Terminal/GhosttyAppearanceSync.swift`
+  - `Sources/WorkspaceManager/Terminal/GhosttySurfaceView.swift`
+  - `Sources/WorkspaceManager/Terminal/GhosttyAppManager.swift`
 - `ContentView` now gates split-action handling by multiplexing mode:
-  - `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Views/MainWindow/ContentView.swift:726`
+  - `Sources/WorkspaceManager/Views/MainWindow/ContentView.swift:726`
 - Open-in-editor shortcut routing is now centralized and dynamic:
-  - `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Views/MainWindow/OpenInEditorShortcutFlow.swift`
-  - `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Views/MainWindow/ContentView.swift:707`
+  - `Sources/WorkspaceManager/Views/MainWindow/OpenInEditorShortcutFlow.swift`
+  - `Sources/WorkspaceManager/Views/MainWindow/ContentView.swift:707`
 - Existing appearance mapping tests still pass:
-  - `/Users/fairchild/code/workspaces/Tests/WorkspaceManagerAppTests/GhosttyAppearanceSyncTests.swift`
+  - `Tests/WorkspaceManagerAppTests/GhosttyAppearanceSyncTests.swift`
 
 ## Implementation Phases
 
 ### Phase 1: Roadmap Positioning + Docs Parity
 
 **Files to modify:**
-- `/Users/fairchild/code/workspaces/backlog/ROADMAP.md` - Add an explicit line item for appearance-sync interaction hardening in active refinement work.
-- `/Users/fairchild/code/workspaces/docs/development/libghostty-integration.md` - Document color-scheme sync behavior and expected verification.
-- `/Users/fairchild/code/workspaces/docs/development/shortcut-routing.md` - Clarify open-in-editor override interplay and multiplexing-mode implications for terminal verification.
+- `backlog/ROADMAP.md` - Add an explicit line item for appearance-sync interaction hardening in active refinement work.
+- `docs/development/libghostty-integration.md` - Document color-scheme sync behavior and expected verification.
+- `docs/development/shortcut-routing.md` - Clarify open-in-editor override interplay and multiplexing-mode implications for terminal verification.
 
 **Acceptance criteria:**
 - [ ] Roadmap explicitly positions this follow-up among recent hardening items.
@@ -72,12 +72,12 @@ Recent hardening overlays:
 ### Phase 2: Interaction Test Coverage
 
 **Files to modify:**
-- `/Users/fairchild/code/workspaces/Tests/WorkspaceManagerAppTests/GhosttyAppearanceSyncTests.swift` - Keep mapper tests; add edge-case expectation coverage if needed.
-- `/Users/fairchild/code/workspaces/Tests/WorkspaceManagerAppTests/ShortcutRoutingPolicyTests.swift` - Add assertions to protect open-in-editor route behavior while appearance sync is active.
-- `/Users/fairchild/code/workspaces/Tests/WorkspaceManagerAppTests/HostTerminalStateStoreTests.swift` - Add/adjust assertions ensuring split-mode paths remain deterministic with current mode gating.
+- `Tests/WorkspaceManagerAppTests/GhosttyAppearanceSyncTests.swift` - Keep mapper tests; add edge-case expectation coverage if needed.
+- `Tests/WorkspaceManagerAppTests/ShortcutRoutingPolicyTests.swift` - Add assertions to protect open-in-editor route behavior while appearance sync is active.
+- `Tests/WorkspaceManagerAppTests/HostTerminalStateStoreTests.swift` - Add/adjust assertions ensuring split-mode paths remain deterministic with current mode gating.
 
 **Files to create:**
-- `/Users/fairchild/code/workspaces/Tests/WorkspaceManagerAppTests/GhosttyAppearanceIntegrationTests.swift` - Integration-focused test coverage for surface/app scheme application decisions (dedupe semantics).
+- `Tests/WorkspaceManagerAppTests/GhosttyAppearanceIntegrationTests.swift` - Integration-focused test coverage for surface/app scheme application decisions (dedupe semantics).
 
 **Acceptance criteria:**
 - [ ] New tests fail when scheme application or route interactions regress.
@@ -87,8 +87,8 @@ Recent hardening overlays:
 ### Phase 3: Smoke + Verification Hardening
 
 **Files to modify:**
-- `/Users/fairchild/code/workspaces/scripts/shortcut-pass-through-smoke.sh` - Add explicit precondition/assertion for current multiplexing mode before split checks.
-- `/Users/fairchild/code/workspaces/scripts/README.md` - Document smoke semantics and expected logs when mode is tmux vs ghostty-managed.
+- `scripts/shortcut-pass-through-smoke.sh` - Add explicit precondition/assertion for current multiplexing mode before split checks.
+- `scripts/README.md` - Document smoke semantics and expected logs when mode is tmux vs ghostty-managed.
 
 **Acceptance criteria:**
 - [ ] Smoke script outputs actionable failure reason if mode preconditions are not met.
@@ -127,10 +127,10 @@ ps aux | rg '.build/arm64-apple-macosx/debug/WorkspaceManager'
 - PR #14 merge commit: `b965d4a60f600aa4ab1c954d70f110b3332cde7e`
 - PR #18 merge commit: `b3cc00da35fbdf648afae062bbc266d65da7959a`
 - PR #19 merge commit: `4cd0ceb9dc3080c8c49e23c7dff42da3e9e9eff2`
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Terminal/GhosttyAppearanceSync.swift`
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Terminal/GhosttySurfaceView.swift`
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Terminal/GhosttyAppManager.swift`
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Views/MainWindow/OpenInEditorShortcutFlow.swift`
-- `/Users/fairchild/code/workspaces/Sources/WorkspaceManager/Views/MainWindow/ContentView.swift`
-- `/Users/fairchild/code/workspaces/docs/development/libghostty-integration.md`
-- `/Users/fairchild/code/workspaces/docs/development/shortcut-routing.md`
+- `Sources/WorkspaceManager/Terminal/GhosttyAppearanceSync.swift`
+- `Sources/WorkspaceManager/Terminal/GhosttySurfaceView.swift`
+- `Sources/WorkspaceManager/Terminal/GhosttyAppManager.swift`
+- `Sources/WorkspaceManager/Views/MainWindow/OpenInEditorShortcutFlow.swift`
+- `Sources/WorkspaceManager/Views/MainWindow/ContentView.swift`
+- `docs/development/libghostty-integration.md`
+- `docs/development/shortcut-routing.md`
