@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.2.0] - 2026-03-02
+
+### Added
+- Daytona remote sandbox integration — cloud workspaces with SSH (#21)
+- add open-in-editor launch guardrails and metrics
+- harden tart-gui-automation + context attachments UX (#19)
+- add URL sources webview mode and terminal UX refinements
+
+### Fixed
+- use fixture home in open-in-editor smoke assertions
+- harden webview blocked navigation behavior
+
+### Other
+- Streamline web chrome and add wildcard web allowlist domains (#22)
+- Refine sidebar session-state UX and add coverage (#20)
+- Add open-in-editor launch guardrails and performance metrics (#18)
+- Fix swift-format AddLines lint failures
+- Fix review findings in workspace safety, git parsing, and focus retries
+- Add deterministic Tart WebView memory benchmark and report
+- Add reusable Tart GUI automation skill
+- Update agent python guidance and launch-dev process check
+- Keep web source navigation in-app for related domains
+- Add optional live VNC viewer flag for Tart demo
+- Add Tart-based webview demo recorder
+
 ## [0.1.2] - 2026-02-28
 
 ### Other
