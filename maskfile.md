@@ -5,9 +5,10 @@ that uses markdown. Install with `brew install mask`, then run `mask <task>`.
 
 ## setup
 
-> One-time setup: build GhosttyKit framework (required before build/test)
+> One-time setup: install repo hooks + build GhosttyKit (required before build/test)
 
 ```bash
+./scripts/install-git-hooks.sh
 ./scripts/build-ghosttykit.sh
 ```
 

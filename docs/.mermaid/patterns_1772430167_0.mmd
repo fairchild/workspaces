@@ -1,0 +1,22 @@
+graph TD
+    subgraph "Production (default)"
+        A1[App] -->|".modelContainer()"| W1[WindowGroup]
+        W1 --> C1[ContentView]
+        C1 --> S1["SidebarView<br/>@Environment(\.gitService)"]
+        C1 --> R1["RightPaneView<br/>@Environment(\.gitService)"]
+        ENV1["Environment<br/>gitService = GitService.shared<br/>(defaultValue — no override needed)"]
+        ENV1 -.->|"provides"| S1
+        ENV1 -.->|"provides"| R1
+    end
+
+    subgraph "Testing / Preview"
+        A2[Test Host] -->|".environment(\.gitService, mock)"| C2[ContentView]
+        C2 --> S2["SidebarView<br/>@Environment(\.gitService)"]
+        C2 --> R2["RightPaneView<br/>@Environment(\.gitService)"]
+        ENV2["Environment<br/>gitService = MockGitService()"]
+        ENV2 -.->|"provides"| S2
+        ENV2 -.->|"provides"| R2
+    end
+
+    style ENV1 fill:#2196F3,color:#fff
+    style ENV2 fill:#4CAF50,color:#fff

@@ -10,7 +10,7 @@ import OSLog
 
 enum PerformanceSignposts {
     #if DEBUG
-    typealias OpenInEditorMetricObserver = (_ phase: String, _ fields: [String: String]) -> Void
+        typealias OpenInEditorMetricObserver = (_ phase: String, _ fields: [String: String]) -> Void
     #endif
 
     private struct ActiveInterval {
@@ -35,7 +35,7 @@ enum PerformanceSignposts {
     private static var webFirstLoadSourceID: UUID?
     private static var openInEditorIntervals: [UUID: ActiveInterval] = [:]
     #if DEBUG
-    private static var openInEditorMetricObserver: OpenInEditorMetricObserver?
+        private static var openInEditorMetricObserver: OpenInEditorMetricObserver?
     #endif
 
     static func beginLaunchToFirstPromptIfNeeded() {
@@ -312,11 +312,11 @@ enum PerformanceSignposts {
     }
 
     #if DEBUG
-    static func setOpenInEditorMetricObserver(_ observer: OpenInEditorMetricObserver?) {
-        lock.lock()
-        openInEditorMetricObserver = observer
-        lock.unlock()
-    }
+        static func setOpenInEditorMetricObserver(_ observer: OpenInEditorMetricObserver?) {
+            lock.lock()
+            openInEditorMetricObserver = observer
+            lock.unlock()
+        }
     #endif
 
     private static func emitPerfLog(_ format: StaticString, _ args: CVarArg...) {
@@ -327,14 +327,14 @@ enum PerformanceSignposts {
 
     private static func emitOpenInEditorMetricEvent(phase: String, fields: [String: String]) {
         #if DEBUG
-        let observer: OpenInEditorMetricObserver?
-        lock.lock()
-        observer = openInEditorMetricObserver
-        lock.unlock()
-        observer?(phase, fields)
+            let observer: OpenInEditorMetricObserver?
+            lock.lock()
+            observer = openInEditorMetricObserver
+            lock.unlock()
+            observer?(phase, fields)
         #else
-        _ = phase
-        _ = fields
+            _ = phase
+            _ = fields
         #endif
     }
 

@@ -1,0 +1,22 @@
+graph LR
+    subgraph "SwiftUI World"
+        TCV[TerminalContainerView<br/><i>SwiftUI View</i>]
+        TVR[GhosttyTerminalRepresentable<br/><i>NSViewRepresentable</i>]
+        TCV --> TVR
+    end
+
+    subgraph "AppKit World"
+        GSV[GhosttySurfaceView<br/><i>NSView</i>]
+        GAM[GhosttyAppManager<br/><i>ghostty runtime owner</i>]
+        LG["libghostty (GhosttyKit)<br/><i>C API</i>"]
+        GSV --> LG
+        GAM --> LG
+    end
+
+    TVR -->|"makeNSView()"| GSV
+
+    style TCV fill:#2196F3,color:#fff
+    style TVR fill:#9C27B0,color:#fff
+    style GSV fill:#FF9800,color:#fff
+    style GAM fill:#FF9800,color:#fff
+    style LG fill:#F44336,color:#fff

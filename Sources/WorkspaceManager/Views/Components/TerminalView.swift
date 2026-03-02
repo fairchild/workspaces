@@ -6,13 +6,22 @@
 import SwiftUI
 import WorkspaceManagerCore
 
+enum TerminalPaneChromePolicy: Equatable, Sendable {
+    case minimal
+
+    static let current: Self = .minimal
+
+    var showsPaneHeader: Bool {
+        false
+    }
+
+    var showsManualRestartControl: Bool {
+        false
+    }
+}
+
 @MainActor
 final class HostTerminalSurfaceStore {
-    // Current refinement-gate policy: keep surfaces unbounded for deterministic
-    // session restore. Revisit with an inactive-surface LRU if sustained usage
-    // exceeds the threshold below or memory pressure is observed in profiling.
-    private let revisitThreshold = 24
-    private var didEmitRevisitLog = false
     private var surfaces: [UUID: GhosttySurfaceView] = [:]
     private var sessionIDsBySurfaceIdentity: [ObjectIdentifier: UUID] = [:]
 
@@ -22,20 +31,18 @@ final class HostTerminalSurfaceStore {
             return existing
         }
 
+        let sessionID = session.id
         let created = GhosttySurfaceView(
             workingDirectory: session.directoryURL,
-            onProcessExit: onProcessExit
+            onProcessExit: { [weak self] in
+                Task { @MainActor in
+                    self?.invalidate(sessionID: sessionID)
+                    onProcessExit?()
+                }
+            }
         )
         surfaces[session.id] = created
         sessionIDsBySurfaceIdentity[ObjectIdentifier(created)] = session.id
-
-        if surfaces.count >= revisitThreshold, !didEmitRevisitLog {
-            didEmitRevisitLog = true
-            NSLog(
-                "[HostSurfaceStore] Unbounded policy threshold reached (surfaces=%ld). Consider inactive LRU cap if memory pressure appears.",
-                surfaces.count
-            )
-        }
 
         return created
     }
@@ -56,66 +63,36 @@ final class HostTerminalSurfaceStore {
 }
 
 struct TerminalContainerView: View {
-    let modeLabel: String
     let workingDirectory: URL
     let processExitContext: String
-    @State private var restartGeneration = 0
+    let chromePolicy: TerminalPaneChromePolicy = .current
 
-    private var terminalIdentity: TerminalIdentity {
-        TerminalIdentity(
-            workingDirectoryPath: workingDirectory.path,
-            restartGeneration: restartGeneration
-        )
+    static func identityToken(for workingDirectory: URL) -> String {
+        workingDirectory.path
     }
 
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Image(systemName: "terminal.fill")
-                    .foregroundStyle(.secondary)
-
-                Text(modeLabel)
-                    .font(.caption)
-                    .fontWeight(.semibold)
-                    .foregroundStyle(.secondary)
-
-                Text(workingDirectory.path)
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.head)
-
-                Spacer()
-
-                Button {
-                    restartGeneration &+= 1
-                } label: {
-                    Image(systemName: "arrow.counterclockwise")
-                }
-                .buttonStyle(.borderless)
-                .help("Restart Terminal")
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(Color(nsColor: .controlBackgroundColor))
-
-            Divider()
-
+    @ViewBuilder
+    private var terminalSurface: some View {
+        switch chromePolicy {
+        case .minimal:
             GhosttyTerminalRepresentable(
                 workingDirectory: workingDirectory,
                 onProcessExit: {
                     NSLog("[GhosttyTerminal] Process exited for %@", processExitContext)
                 }
             )
-            .id(terminalIdentity)
         }
+    }
+
+    var body: some View {
+        terminalSurface
+            .id(Self.identityToken(for: workingDirectory))
     }
 }
 
 extension TerminalContainerView {
     init(workspace: Workspace) {
         self.init(
-            modeLabel: "Workspace",
             workingDirectory: workspace.workspaceURL,
             processExitContext: "workspace '\(workspace.name)'"
         )
@@ -123,16 +100,10 @@ extension TerminalContainerView {
 
     init(hostDirectory: URL) {
         self.init(
-            modeLabel: "Host",
             workingDirectory: hostDirectory,
             processExitContext: "host terminal"
         )
     }
-}
-
-private struct TerminalIdentity: Hashable {
-    let workingDirectoryPath: String
-    let restartGeneration: Int
 }
 
 struct GhosttyTerminalRepresentable: NSViewRepresentable {
@@ -156,42 +127,16 @@ struct PersistentHostTerminalContainerView: View {
     let session: HostTerminalSession
     let surfaceStore: HostTerminalSurfaceStore
     var onProcessExit: (() -> Void)?
-    @State private var restartGeneration = 0
+    let chromePolicy: TerminalPaneChromePolicy = .current
 
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Image(systemName: "terminal.fill")
-                    .foregroundStyle(.secondary)
+    static func identityToken(for sessionID: UUID) -> UUID {
+        sessionID
+    }
 
-                Text("Host")
-                    .font(.caption)
-                    .fontWeight(.semibold)
-                    .foregroundStyle(.secondary)
-
-                Text(session.directoryPath)
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.head)
-
-                Spacer()
-
-                Button {
-                    surfaceStore.invalidate(sessionID: session.id)
-                    restartGeneration &+= 1
-                } label: {
-                    Image(systemName: "arrow.counterclockwise")
-                }
-                .buttonStyle(.borderless)
-                .help("Restart Terminal")
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(Color(nsColor: .controlBackgroundColor))
-
-            Divider()
-
+    @ViewBuilder
+    private var terminalSurface: some View {
+        switch chromePolicy {
+        case .minimal:
             PersistentHostGhosttyRepresentable(
                 session: session,
                 surfaceStore: surfaceStore,
@@ -200,14 +145,13 @@ struct PersistentHostTerminalContainerView: View {
                     onProcessExit?()
                 }
             )
-            .id(PersistentHostTerminalIdentity(sessionID: session.id, restartGeneration: restartGeneration))
         }
     }
-}
 
-private struct PersistentHostTerminalIdentity: Hashable {
-    let sessionID: UUID
-    let restartGeneration: Int
+    var body: some View {
+        terminalSurface
+            .id(Self.identityToken(for: session.id))
+    }
 }
 
 private struct PersistentHostGhosttyRepresentable: NSViewRepresentable {

@@ -18,10 +18,8 @@ struct SidebarView: View {
     @Binding var selectedWorkspace: Workspace?
     @Binding var selectedWebSource: WebSource?
     let defaultHostPath: String
-    let hasDefaultHostSession: Bool
-    let isDefaultHostSessionActive: Bool
-    let liveRepoPaths: Set<String>
-    let activeRepoPath: String?
+    let paneCountBySessionKey: [HostTerminalSessionKey: Int]
+    let activeSessionKey: HostTerminalSessionKey?
     let onDefaultHostSelected: () -> Void
     let onRepoSelected: (Repo) -> Void
     let onWebSourceSelected: (WebSource) -> Void
@@ -62,8 +60,8 @@ struct SidebarView: View {
                 } label: {
                     HostTerminalRow(
                         defaultHostPath: defaultHostPath,
-                        hasLiveSession: hasDefaultHostSession,
-                        isActiveSession: isDefaultHostSessionActive
+                        sessionActivity: sessionActivity(for: .defaultHome),
+                        paneCount: paneCount(for: .defaultHome)
                     )
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(Rectangle())
@@ -77,10 +75,11 @@ struct SidebarView: View {
                 } else {
                     ForEach(repos) { repo in
                         let normalizedRepoPath = normalizePath(repo.localURL)
+                        let repoSessionKey = HostTerminalSessionKey.repoPath(normalizedRepoPath)
                         RepoRow(
                             repo: repo,
-                            hasLiveSession: liveRepoPaths.contains(normalizedRepoPath),
-                            isActiveSession: activeRepoPath == normalizedRepoPath,
+                            sessionActivity: sessionActivity(for: repoSessionKey),
+                            paneCount: paneCount(for: repoSessionKey),
                             isExpanded: isRepoExpanded(repo),
                             onToggleExpansion: {
                                 toggleRepoExpansion(repo)
@@ -123,13 +122,17 @@ struct SidebarView: View {
                                     .padding(.leading, 28)
                             } else {
                                 ForEach(repoWorkspaces) { workspace in
+                                    let workspaceSessionKey = HostTerminalSessionKey.hostPath(
+                                        normalizePath(workspace.workspaceURL)
+                                    )
                                     Button {
-                                        selectedWorkspace = workspace
-                                        selectedWebSource = nil
+                                        selectWorkspace(workspace)
                                     } label: {
                                         WorkspaceRow(
                                             workspace: workspace,
                                             isSelected: selectedWorkspace?.id == workspace.id,
+                                            sessionActivity: sessionActivity(for: workspaceSessionKey),
+                                            paneCount: paneCount(for: workspaceSessionKey),
                                             isNested: true
                                         )
                                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -521,6 +524,17 @@ struct SidebarView: View {
     }
 
     @MainActor
+    private func selectWorkspace(_ workspace: Workspace) {
+        // Force a value transition when re-selecting the same workspace so the
+        // host session activation path in ContentView runs again.
+        if selectedWorkspace?.id == workspace.id {
+            selectedWorkspace = nil
+        }
+        selectedWorkspace = workspace
+        selectedWebSource = nil
+    }
+
+    @MainActor
     @discardableResult
     private func saveModelContext(action: String) -> Bool {
         do {
@@ -598,6 +612,17 @@ struct SidebarView: View {
 
     private func normalizePath(_ url: URL) -> String {
         url.standardizedFileURL.resolvingSymlinksInPath().path
+    }
+
+    private func paneCount(for key: HostTerminalSessionKey) -> Int {
+        paneCountBySessionKey[key] ?? 0
+    }
+
+    private func sessionActivity(for key: HostTerminalSessionKey) -> SidebarSessionActivity {
+        SidebarSessionActivity(
+            hasLiveSession: paneCount(for: key) > 0,
+            isActiveSession: activeSessionKey == key
+        )
     }
 
     private func normalizeWebURLString(_ rawURL: String) -> String {
