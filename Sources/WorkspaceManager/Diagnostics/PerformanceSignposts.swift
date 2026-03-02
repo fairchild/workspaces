@@ -9,6 +9,10 @@ import Foundation
 import OSLog
 
 enum PerformanceSignposts {
+    #if DEBUG
+        typealias OpenInEditorMetricObserver = (_ phase: String, _ fields: [String: String]) -> Void
+    #endif
+
     private struct ActiveInterval {
         let state: OSSignpostIntervalState
         let startedAt: ContinuousClock.Instant
@@ -29,6 +33,10 @@ enum PerformanceSignposts {
     private static var webViewInitializationInterval: ActiveInterval?
     private static var webFirstLoadInterval: ActiveInterval?
     private static var webFirstLoadSourceID: UUID?
+    private static var openInEditorIntervals: [UUID: ActiveInterval] = [:]
+    #if DEBUG
+        private static var openInEditorMetricObserver: OpenInEditorMetricObserver?
+    #endif
 
     static func beginLaunchToFirstPromptIfNeeded() {
         lock.lock()
@@ -210,6 +218,124 @@ enum PerformanceSignposts {
             sourceID?.uuidString ?? "unknown",
             outcome
         )
+    }
+
+    static func beginOpenInEditorLaunch(
+        attemptID: UUID,
+        trigger: String,
+        editorID: String,
+        targetKind: String
+    ) {
+        lock.lock()
+
+        if let existing = openInEditorIntervals.removeValue(forKey: attemptID) {
+            signposter.endInterval("OpenInEditorLaunch", existing.state)
+        }
+
+        let state = signposter.beginInterval("OpenInEditorLaunch")
+        openInEditorIntervals[attemptID] = ActiveInterval(state: state, startedAt: clock.now)
+        lock.unlock()
+
+        let fields = [
+            "metric": "open_in_editor_launch",
+            "status": "started",
+            "attempt": attemptID.uuidString,
+            "trigger": trigger,
+            "editor": editorID,
+            "target": targetKind,
+        ]
+        emitPerfLog(
+            "[Perf] metric=open_in_editor_launch status=started attempt=%@ trigger=%@ editor=%@ target=%@",
+            attemptID.uuidString,
+            trigger,
+            editorID,
+            targetKind
+        )
+        emitOpenInEditorMetricEvent(phase: "started", fields: fields)
+    }
+
+    static func endOpenInEditorLaunchIfNeeded(
+        attemptID: UUID,
+        trigger: String,
+        editorID: String,
+        targetKind: String,
+        outcome: String,
+        failureReason: String?
+    ) {
+        let interval: ActiveInterval?
+
+        lock.lock()
+        interval = openInEditorIntervals.removeValue(forKey: attemptID)
+        lock.unlock()
+
+        guard let interval else { return }
+
+        signposter.endInterval("OpenInEditorLaunch", interval.state)
+        let durationMs = milliseconds(since: interval.startedAt)
+
+        var fields = [
+            "metric": "open_in_editor_launch",
+            "status": "completed",
+            "attempt": attemptID.uuidString,
+            "trigger": trigger,
+            "editor": editorID,
+            "target": targetKind,
+            "outcome": outcome,
+            "duration_ms": String(format: "%.2f", durationMs),
+        ]
+
+        if let failureReason {
+            fields["failure_reason"] = failureReason
+            emitPerfLog(
+                "[Perf] metric=open_in_editor_launch duration_ms=%.2f attempt=%@ trigger=%@ editor=%@ target=%@ outcome=%@ failure_reason=%@",
+                durationMs,
+                attemptID.uuidString,
+                trigger,
+                editorID,
+                targetKind,
+                outcome,
+                failureReason
+            )
+        } else {
+            emitPerfLog(
+                "[Perf] metric=open_in_editor_launch duration_ms=%.2f attempt=%@ trigger=%@ editor=%@ target=%@ outcome=%@",
+                durationMs,
+                attemptID.uuidString,
+                trigger,
+                editorID,
+                targetKind,
+                outcome
+            )
+        }
+
+        emitOpenInEditorMetricEvent(phase: "completed", fields: fields)
+    }
+
+    #if DEBUG
+        static func setOpenInEditorMetricObserver(_ observer: OpenInEditorMetricObserver?) {
+            lock.lock()
+            openInEditorMetricObserver = observer
+            lock.unlock()
+        }
+    #endif
+
+    private static func emitPerfLog(_ format: StaticString, _ args: CVarArg...) {
+        withVaList(args) { pointer in
+            NSLogv(String(describing: format), pointer)
+        }
+    }
+
+    private static func emitOpenInEditorMetricEvent(phase: String, fields: [String: String]) {
+        #if DEBUG
+            let observer: OpenInEditorMetricObserver?
+            lock.lock()
+            observer = openInEditorMetricObserver
+            lock.unlock()
+            observer?(phase, fields)
+        #else
+            _ = phase
+            _ = fields
+        #endif
     }
 
     private static func milliseconds(since start: ContinuousClock.Instant) -> Double {

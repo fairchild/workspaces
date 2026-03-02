@@ -621,21 +621,31 @@ struct ContentView: View {
 
     @MainActor
     private func openInDefaultEditor() {
-        performOpenInEditor(editorID: nil)
+        performOpenInEditor(
+            editorID: nil,
+            trigger: inferOpenInEditorTriggerFromCurrentEvent()
+        )
     }
 
     @MainActor
     private func openInSelectedEditor(_ editorID: ExternalEditorID) {
-        performOpenInEditor(editorID: editorID)
+        performOpenInEditor(
+            editorID: editorID,
+            trigger: .uiMenuSelection
+        )
     }
 
     @MainActor
-    private func performOpenInEditor(editorID: ExternalEditorID?) {
+    private func performOpenInEditor(
+        editorID: ExternalEditorID?,
+        trigger: OpenInEditorLaunchTrigger
+    ) {
         do {
             try OpenInEditorShortcutFlow.perform(
                 target: openInEditorTarget,
                 editorID: editorID,
-                externalEditorService: externalEditorService
+                externalEditorService: externalEditorService,
+                trigger: trigger
             )
         } catch {
             presentOpenInEditorError(error)
@@ -658,11 +668,28 @@ struct ContentView: View {
         guard let target = openInEditorTarget else { return }
         let path: String
         switch target {
-        case .project(let rootURL): path = rootURL.path
-        case .projectAndFile(_, let fileURL): path = fileURL.path
+        case .project(let rootURL):
+            path = rootURL.path
+        case .projectAndFile(_, let fileURL):
+            path = fileURL.path
         }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(path, forType: .string)
+    }
+
+    @MainActor
+    private func inferOpenInEditorTriggerFromCurrentEvent() -> OpenInEditorLaunchTrigger {
+        guard let event = NSApp.currentEvent else {
+            return .unknown
+        }
+
+        if let chord = ShortcutChord(event: event),
+            chord == AppChromeShortcut.openInEditor.chord
+        {
+            return .shortcut
+        }
+
+        return .uiPrimaryAction
     }
 
     private func handleCodePreviewSelection(_ selection: CodePreviewSelection) {
