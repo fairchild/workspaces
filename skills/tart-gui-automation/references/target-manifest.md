@@ -81,7 +81,7 @@ The `--target` flag defaults to `.tart/target.yaml`. Override with `--target pat
 
 ## Flow Recipe Schema
 
-Flow files are **agent-readable recipes**, not harness-executable scripts. The agent reads the steps, resolves landmark names from `target.yaml`, and issues harness commands.
+Flow files are **agent-readable recipes**, not harness-executable scripts. The agent reads the steps, resolves landmark names from `target.yaml`, and issues harness commands. Note: flow YAML uses `send_keys` (underscore) while the batch JSON command uses `send-keys` (hyphen) — the agent translates between formats.
 
 ```yaml
 name: <string>                 # flow identifier

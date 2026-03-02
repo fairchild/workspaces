@@ -21,9 +21,9 @@ landmarks:
   toolbar_zed:        { x: 1790, y: 125 }
   toolbar_open_menu:  { x: 1870, y: 125 }
 
-  # Sidebar
-  sidebar_first_repo: { x: 55,   y: 68 }
-  sidebar_first_ws:   { x: 55,   y: 92 }
+  # Sidebar (uncalibrated — recalibrate with capture+measure)
+  sidebar_first_repo: { x: 55,   y: 250 }
+  sidebar_first_ws:   { x: 55,   y: 280 }
 
   # Dock
   dock_icon:          { x: 1650, y: 1490 }

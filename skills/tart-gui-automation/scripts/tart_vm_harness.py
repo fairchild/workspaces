@@ -698,7 +698,7 @@ def command_double_click(args: argparse.Namespace) -> int:
     session = load_session(Path(args.session_file).resolve())
     x, y = resolve_click_coords(args, session)
     button = BUTTON_MAP.get(getattr(args, "button", "left"), 1)
-    log(f"VNC double-click at ({x}, {y})")
+    log(f"VNC double-click at ({x}, {y}) button={button}")
     client = None
     try:
         client = api.connect(
