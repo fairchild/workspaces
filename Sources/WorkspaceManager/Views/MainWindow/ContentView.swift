@@ -18,6 +18,7 @@ struct ContentView: View {
         case repo(UUID)
     }
 
+    @Environment(\.modelContext) private var modelContext
     @Binding var deepLinkState: WorkspaceDeepLinkState
     @ObservedObject var hostTerminalState: HostTerminalStateStore
     @Query(sort: \Repo.addedAt, order: .reverse) private var repos: [Repo]
@@ -38,6 +39,8 @@ struct ContentView: View {
     @State private var didApplyFixturePreviewBootstrap = false
     @State private var didApplyFixtureWebBootstrap = false
     @State private var openInEditorErrorMessage: String?
+    @State private var daytonaErrorMessage: String?
+    @State private var connectingSandboxId: String?
     @StateObject private var rightPaneStateStore = RightPaneStateStore()
     @StateObject private var webSurfaceStore = WebSurfaceStore()
     private let resolvedDefaultHostDirectory = HostTerminalDefaults.defaultWorkingDirectory()
@@ -240,7 +243,12 @@ struct ContentView: View {
                 surfaceStore: webSurfaceStore
             )
         } else {
-            terminalDetailContent
+            ZStack {
+                terminalDetailContent
+                if connectingSandboxId != nil {
+                    SandboxConnectingOverlay(workspaceName: selectedWorkspace?.name)
+                }
+            }
         }
     }
 
@@ -254,6 +262,7 @@ struct ContentView: View {
                 defaultHostPath: resolvedDefaultHostDirectory.path,
                 paneCountBySessionKey: paneCountBySessionKeyForSidebar,
                 activeSessionKey: activeSessionKeyForSidebar,
+                connectingSandboxId: connectingSandboxId,
                 onDefaultHostSelected: handleDefaultHostSelection,
                 onRepoSelected: handleRepoSelection,
                 onWebSourceSelected: handleWebSourceSelection,
@@ -308,6 +317,9 @@ struct ContentView: View {
                 maybeApplyFixtureWebBootstrap()
                 pruneRightPaneState()
                 syncOpenInEditorShortcutRouting()
+            }
+            .task {
+                await syncCloudWorkspaceStatuses()
             }
             .onDisappear {
                 ShortcutRoutingPolicy.shared.setOverride(nil, for: AppChromeShortcut.openInEditor.chord)
@@ -365,6 +377,17 @@ struct ContentView: View {
                 }
             } message: {
                 Text(openInEditorErrorMessage ?? "Unknown error.")
+            }
+            .alert(
+                "Could Not Connect to Sandbox",
+                isPresented: Binding(
+                    get: { daytonaErrorMessage != nil },
+                    set: { if !$0 { daytonaErrorMessage = nil } }
+                )
+            ) {
+                Button("OK", role: .cancel) { daytonaErrorMessage = nil }
+            } message: {
+                Text(daytonaErrorMessage ?? "Unknown error.")
             }
     }
 
@@ -569,19 +592,42 @@ struct ContentView: View {
         let placeholderDir = FileManager.default.temporaryDirectory
 
         // Reuse existing session for this specific sandbox
-        if let existing = hostTerminalState.sessions.first(where: { $0.key == sessionKey }) {
+        if workspace.status == .active,
+            let existing = hostTerminalState.sessions.first(where: { $0.key == sessionKey })
+        {
             hostTerminalState.activateExistingSession(sessionID: existing.id)
             columnVisibility = .all
             requestMainTerminalFocus(targetSessionID: existing.id)
             return
         }
 
-        // Fetch SSH command in the background and create session
+        // Prevent concurrent connection attempts
+        guard connectingSandboxId == nil else {
+            NSLog("[Daytona] Ignoring selection — already connecting to %@", connectingSandboxId ?? "")
+            return
+        }
+
         let backend = daytonaBackend
+        let needsStart = workspace.status == .stopped || workspace.status == .archived
+        connectingSandboxId = sandboxId
+
         Task {
             do {
-                let info = try await backend.getSSHCommand(sandboxId: sandboxId)
+                let info: DaytonaSandboxInfo
+                if needsStart {
+                    NSLog("[Daytona] Starting sandbox %@ (was %@)", sandboxId, workspace.status.rawValue)
+                    info = try await backend.startSandbox(sandboxId: sandboxId)
+                    await MainActor.run {
+                        workspace.status = .active
+                    }
+                } else {
+                    info = try await backend.getSSHCommand(sandboxId: sandboxId)
+                }
+
                 await MainActor.run {
+                    // Stale completion — user clicked something else while we were connecting
+                    guard connectingSandboxId == sandboxId else { return }
+                    connectingSandboxId = nil
                     let session = activateHostSession(
                         key: sessionKey,
                         directory: placeholderDir,
@@ -592,7 +638,12 @@ struct ContentView: View {
                     NSLog("[Daytona] SSH session created for sandbox %@", sandboxId)
                 }
             } catch {
-                NSLog("[Daytona] Failed to get SSH command for sandbox %@: %@", sandboxId, error.localizedDescription)
+                NSLog("[Daytona] Failed to connect to sandbox %@: %@", sandboxId, error.localizedDescription)
+                await MainActor.run {
+                    guard connectingSandboxId == sandboxId else { return }
+                    connectingSandboxId = nil
+                    daytonaErrorMessage = error.localizedDescription
+                }
             }
         }
     }
@@ -625,10 +676,82 @@ struct ContentView: View {
         else {
             return
         }
+
+        // Sync sidebar selection to match the new active session.
+        syncSidebarSelectionToActiveSession()
+
         requestMainTerminalFocus(
             targetSessionID: focusSessionID,
             activateApp: false
         )
+    }
+
+    @MainActor
+    private func syncSidebarSelectionToActiveSession() {
+        guard let activeSession = activeHostSession else {
+            selectedWorkspace = nil
+            return
+        }
+
+        switch activeSession.key {
+        case .remoteSandbox(let sandboxId):
+            let match = repos.flatMap(\.workspaces).first { $0.sandboxId == sandboxId }
+            selectedWorkspace = match
+        case .hostPath(let path):
+            let normalizedPath = normalizePath(path)
+            let match = repos.flatMap(\.workspaces).first { normalizePath($0.path) == normalizedPath }
+            selectedWorkspace = match
+        case .repoPath, .defaultHome:
+            selectedWorkspace = nil
+        }
+    }
+
+    private func syncCloudWorkspaceStatuses() async {
+        let cloudWorkspaces = repos.flatMap(\.workspaces).filter { $0.sandboxId != nil }
+        guard !cloudWorkspaces.isEmpty else { return }
+
+        let backend = daytonaBackend
+        let statuses: [DaytonaSandboxStatus]
+        do {
+            statuses = try await backend.listSandboxes()
+        } catch {
+            NSLog("[Daytona] Failed to sync sandbox statuses: %@", error.localizedDescription)
+            return
+        }
+
+        let stateById = Dictionary(uniqueKeysWithValues: statuses.map { ($0.sandboxId, $0.state) })
+        var changed = false
+
+        for workspace in cloudWorkspaces {
+            guard let sandboxId = workspace.sandboxId else { continue }
+            let newStatus: WorkspaceStatus
+            if let state = stateById[sandboxId] {
+                switch state {
+                case "started", "starting":
+                    newStatus = .active
+                case "stopped", "stopping":
+                    newStatus = .stopped
+                case "archived", "archiving":
+                    newStatus = .archived
+                default:
+                    continue
+                }
+            } else {
+                // Sandbox no longer exists on Daytona — mark archived
+                newStatus = .archived
+            }
+
+            if workspace.status != newStatus {
+                NSLog("[Daytona] Syncing workspace '%@' status: %@ → %@",
+                      workspace.name, workspace.status.rawValue, newStatus.rawValue)
+                workspace.status = newStatus
+                changed = true
+            }
+        }
+
+        if changed {
+            try? modelContext.save()
+        }
     }
 
     @MainActor
@@ -1172,6 +1295,25 @@ struct MainTerminalDetailView: View {
             surfaceStore: hostSurfaceStore,
             onTerminalProcessExit: onTerminalProcessExit
         )
+    }
+}
+
+struct SandboxConnectingOverlay: View {
+    let workspaceName: String?
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.5)
+            VStack(spacing: 12) {
+                ProgressView()
+                    .controlSize(.large)
+                Text("Connecting to \(workspaceName ?? "sandbox")...")
+                    .font(.headline)
+                    .foregroundStyle(.white)
+            }
+            .padding(24)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+        }
     }
 }
 

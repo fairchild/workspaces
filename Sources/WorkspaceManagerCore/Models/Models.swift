@@ -91,7 +91,7 @@ public final class Workspace {
     }
 
     public var isRemote: Bool {
-        backendIdentifier == DaytonaBackend.identifier
+        backendIdentifier != "local"
     }
 
     public var status: WorkspaceStatus {
@@ -126,11 +126,13 @@ public final class Workspace {
 
 public enum WorkspaceStatus: String, Codable, CaseIterable, Sendable {
     case active
+    case stopped
     case archived
 
     public var label: String {
         switch self {
         case .active: return "Active"
+        case .stopped: return "Stopped"
         case .archived: return "Archived"
         }
     }

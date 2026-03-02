@@ -59,7 +59,7 @@ struct NewWorkspaceSheet: View {
         case .local:
             return "A copy of the repository will be created in a new directory."
         case .remoteVM:
-            return "A Daytona sandbox will be created with the repo cloned via SSH."
+            return "A remote Linux sandbox will be created via Daytona."
         }
     }
 

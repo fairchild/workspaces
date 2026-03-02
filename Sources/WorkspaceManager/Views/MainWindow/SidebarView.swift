@@ -9,6 +9,11 @@ import SwiftData
 import SwiftUI
 import WorkspaceManagerCore
 
+struct SandboxActionState {
+    let sandboxId: String
+    let message: String
+}
+
 struct SidebarView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.gitService) private var gitService
@@ -21,6 +26,7 @@ struct SidebarView: View {
     let defaultHostPath: String
     let paneCountBySessionKey: [HostTerminalSessionKey: Int]
     let activeSessionKey: HostTerminalSessionKey?
+    let connectingSandboxId: String?
     let onDefaultHostSelected: () -> Void
     let onRepoSelected: (Repo) -> Void
     let onWebSourceSelected: (WebSource) -> Void
@@ -42,6 +48,8 @@ struct SidebarView: View {
     @State private var didAttemptDefaultRepoImport = false
     @State private var expandedRepoIDs: Set<UUID> = []
     @State private var didInitializeRepoExpansion = false
+    @State private var sandboxAction: SandboxActionState?
+    @State private var creatingForRepoId: UUID?
 
     private var isUIFixtureMode: Bool {
         ProcessInfo.processInfo.environment["WORKSPACES_UI_FIXTURE"] == "1"
@@ -117,22 +125,26 @@ struct SidebarView: View {
                         if isRepoExpanded(repo) {
                             let repoWorkspaces = sortedWorkspaces(for: repo)
 
-                            if repoWorkspaces.isEmpty {
+                            if repoWorkspaces.isEmpty, creatingForRepoId != repo.id {
                                 Text("No workspaces")
                                     .foregroundStyle(.secondary)
                                     .font(.caption)
                                     .padding(.leading, 28)
                             } else {
                                 ForEach(repoWorkspaces) { workspace in
-                                    let workspaceSessionKey = HostTerminalSessionKey.hostPath(
-                                        normalizePath(workspace.workspaceURL)
-                                    )
+                                    let workspaceSessionKey: HostTerminalSessionKey = {
+                                        if let sandboxId = workspace.sandboxId {
+                                            return .remoteSandbox(sandboxId)
+                                        }
+                                        return .hostPath(normalizePath(workspace.workspaceURL))
+                                    }()
                                     Button {
                                         selectWorkspace(workspace)
                                     } label: {
                                         WorkspaceRow(
                                             workspace: workspace,
                                             isSelected: selectedWorkspace?.id == workspace.id,
+                                            statusMessage: workspaceStatusMessage(workspace),
                                             sessionActivity: sessionActivity(for: workspaceSessionKey),
                                             paneCount: paneCount(for: workspaceSessionKey),
                                             isNested: true
@@ -147,20 +159,18 @@ struct SidebarView: View {
                                         }
                                         .disabled(true)
 
-                                        Button("Reveal in Finder") {
-                                            NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: workspace.path)
+                                        if !workspace.isRemote {
+                                            Button("Reveal in Finder") {
+                                                NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: workspace.path)
+                                            }
                                         }
 
                                         Divider()
 
-                                        if workspace.status == .active {
-                                            Button("Archive") {
-                                                workspace.status = .archived
-                                            }
+                                        if workspace.isRemote {
+                                            remoteWorkspaceActions(workspace)
                                         } else {
-                                            Button("Unarchive") {
-                                                workspace.status = .active
-                                            }
+                                            localWorkspaceActions(workspace)
                                         }
 
                                         Divider()
@@ -170,6 +180,18 @@ struct SidebarView: View {
                                         }
                                     }
                                 }
+                            }
+
+                            if creatingForRepoId == repo.id {
+                                HStack(spacing: 8) {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                        .frame(width: 16, height: 16)
+                                    Text("Creating cloud workspace...")
+                                        .font(.callout)
+                                        .foregroundStyle(.secondary)
+                                }
+                                .padding(.leading, 28)
                             }
                         }
                     }
@@ -472,13 +494,20 @@ struct SidebarView: View {
     }
 
     private func createRemoteWorkspace(from repo: Repo, name: String) async {
+        let repoId = repo.id
         let cloneURL = repo.remoteURL
         let backend = daytonaBackend
+
+        await MainActor.run {
+            creatingForRepoId = repoId
+            expandedRepoIDs.insert(repoId)
+        }
 
         do {
             let info = try await backend.createSandbox(name: name, cloneURL: cloneURL)
 
             await MainActor.run {
+                creatingForRepoId = nil
                 let workspace = Workspace(
                     name: name,
                     path: FileManager.default.temporaryDirectory,
@@ -496,6 +525,7 @@ struct SidebarView: View {
             }
         } catch {
             await MainActor.run {
+                creatingForRepoId = nil
                 errorMessage = "Failed to create remote workspace: \(error.localizedDescription)"
                 showingError = true
             }
@@ -509,19 +539,29 @@ struct SidebarView: View {
     }
 
     private func performDelete(_ workspace: Workspace, deleteFiles: Bool) {
-        // Extract value type before crossing actor boundary
         let workspaceURL = workspace.workspaceURL
+        let sandboxId = workspace.sandboxId
+        let isRemote = workspace.isRemote
+        let backend = daytonaBackend
 
         Task {
-            do {
-                try await workspaceService.deleteWorkspace(at: workspaceURL, deleteFiles: deleteFiles)
-            } catch {
-                await MainActor.run {
-                    errorMessage = "Failed to delete workspace: \(error.localizedDescription)"
-                    showingError = true
-                    workspaceToDelete = nil
+            if isRemote, let sandboxId {
+                do {
+                    try await backend.deleteSandbox(sandboxId: sandboxId)
+                } catch {
+                    NSLog("[Daytona] Failed to delete sandbox %@: %@", sandboxId, error.localizedDescription)
                 }
-                return
+            } else {
+                do {
+                    try await workspaceService.deleteWorkspace(at: workspaceURL, deleteFiles: deleteFiles)
+                } catch {
+                    await MainActor.run {
+                        errorMessage = "Failed to delete workspace: \(error.localizedDescription)"
+                        showingError = true
+                        workspaceToDelete = nil
+                    }
+                    return
+                }
             }
 
             await MainActor.run {
@@ -534,6 +574,113 @@ struct SidebarView: View {
                     modelContext.rollback()
                 }
                 workspaceToDelete = nil
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func remoteWorkspaceActions(_ workspace: Workspace) -> some View {
+        switch workspace.status {
+        case .active:
+            Button("Stop") {
+                performStop(workspace)
+            }
+            Button("Archive") {
+                performArchive(workspace)
+            }
+        case .stopped:
+            Button("Start") {
+                performStart(workspace)
+            }
+            Button("Archive") {
+                performArchive(workspace)
+            }
+        case .archived:
+            Button("Start") {
+                performStart(workspace)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func localWorkspaceActions(_ workspace: Workspace) -> some View {
+        if workspace.status == .active {
+            Button("Archive") {
+                workspace.status = .archived
+            }
+        } else {
+            Button("Unarchive") {
+                workspace.status = .active
+            }
+        }
+    }
+
+    private func performStop(_ workspace: Workspace) {
+        guard let sandboxId = workspace.sandboxId else { return }
+        let backend = daytonaBackend
+        sandboxAction = SandboxActionState(sandboxId: sandboxId, message: "Stopping...")
+
+        Task {
+            do {
+                try await backend.stopSandbox(sandboxId: sandboxId)
+                await MainActor.run {
+                    sandboxAction = nil
+                    workspace.status = .stopped
+                    _ = saveModelContext(action: "stop sandbox")
+                }
+            } catch {
+                await MainActor.run {
+                    sandboxAction = nil
+                    errorMessage = "Failed to stop sandbox: \(error.localizedDescription)"
+                    showingError = true
+                }
+            }
+        }
+    }
+
+    private func performStart(_ workspace: Workspace) {
+        guard let sandboxId = workspace.sandboxId else { return }
+        let backend = daytonaBackend
+        sandboxAction = SandboxActionState(sandboxId: sandboxId, message: "Starting...")
+
+        Task {
+            do {
+                _ = try await backend.startSandbox(sandboxId: sandboxId)
+                await MainActor.run {
+                    sandboxAction = nil
+                    workspace.status = .active
+                    _ = saveModelContext(action: "start sandbox")
+                    selectedWorkspace = workspace
+                }
+            } catch {
+                await MainActor.run {
+                    sandboxAction = nil
+                    errorMessage = "Failed to start sandbox: \(error.localizedDescription)"
+                    showingError = true
+                }
+            }
+        }
+    }
+
+    private func performArchive(_ workspace: Workspace) {
+        guard let sandboxId = workspace.sandboxId else { return }
+        let backend = daytonaBackend
+        sandboxAction = SandboxActionState(sandboxId: sandboxId, message: "Archiving...")
+
+        Task {
+            do {
+                try await backend.archiveSandbox(sandboxId: sandboxId)
+                await MainActor.run {
+                    sandboxAction = nil
+                    workspace.status = .archived
+                    _ = saveModelContext(action: "archive sandbox")
+                }
+            } catch {
+                await MainActor.run {
+                    sandboxAction = nil
+                    errorMessage = "Failed to archive sandbox: \(error.localizedDescription)"
+                    showingError = true
+                }
             }
         }
     }
@@ -664,6 +811,13 @@ struct SidebarView: View {
             hasLiveSession: paneCount(for: key) > 0,
             isActiveSession: activeSessionKey == key
         )
+    }
+
+    private func workspaceStatusMessage(_ workspace: Workspace) -> String? {
+        guard let sandboxId = workspace.sandboxId else { return nil }
+        if connectingSandboxId == sandboxId { return "Connecting..." }
+        if let action = sandboxAction, action.sandboxId == sandboxId { return action.message }
+        return nil
     }
 
     private func normalizeWebURLString(_ rawURL: String) -> String {

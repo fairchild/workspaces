@@ -50,5 +50,9 @@ public protocol WorkspaceServiceProtocol: Sendable {
 public protocol DaytonaBackendProtocol: Sendable {
     func createSandbox(name: String, cloneURL: String?) async throws -> DaytonaSandboxInfo
     func getSSHCommand(sandboxId: String) async throws -> DaytonaSandboxInfo
+    func stopSandbox(sandboxId: String) async throws
+    func startSandbox(sandboxId: String) async throws -> DaytonaSandboxInfo
+    func archiveSandbox(sandboxId: String) async throws
     func deleteSandbox(sandboxId: String) async throws
+    func listSandboxes() async throws -> [DaytonaSandboxStatus]
 }

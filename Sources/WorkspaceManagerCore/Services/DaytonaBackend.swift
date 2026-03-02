@@ -7,29 +7,23 @@
 
 import Foundation
 
-public struct DaytonaSandboxInfo: Codable, Sendable {
+public struct DaytonaSandboxInfo: Decodable, Sendable {
     public let sandboxId: String
     public let sshCommand: String
-    public let sshToken: String
-    public let expiresAt: String
-    public let homeDir: String?
-    public let workDir: String?
-    public let state: String
 
-    enum CodingKeys: String, CodingKey {
-        case sandboxId = "sandbox_id"
-        case sshCommand = "ssh_command"
-        case sshToken = "ssh_token"
-        case expiresAt = "expires_at"
-        case homeDir = "home_dir"
-        case workDir = "work_dir"
-        case state
+    public init(sandboxId: String, sshCommand: String) {
+        self.sandboxId = sandboxId
+        self.sshCommand = sshCommand
     }
+}
+
+public struct DaytonaSandboxStatus: Decodable, Sendable {
+    public let sandboxId: String
+    public let state: String
 }
 
 public actor DaytonaBackend: DaytonaBackendProtocol {
     public static let identifier = "daytona"
-    public static let displayName = "Remote VM (Daytona)"
     public static let shared = DaytonaBackend()
 
     private let scriptPath: String
@@ -55,21 +49,7 @@ public actor DaytonaBackend: DaytonaBackendProtocol {
     }
 
     public static func isAvailable() async -> Bool {
-        let candidates = [
-            "/opt/homebrew/bin/uv",
-            "/usr/local/bin/uv",
-        ]
-        for path in candidates {
-            if FileManager.default.isExecutableFile(atPath: path) {
-                return true
-            }
-        }
-        // Fallback to which (works in terminal-launched builds)
-        let result = try? await ProcessRunner.run(
-            executable: "/usr/bin/which",
-            arguments: ["uv"]
-        )
-        return result?.success ?? false
+        (try? await shared.resolveUV()) != nil
     }
 
     // MARK: - Sandbox Lifecycle
@@ -86,8 +66,24 @@ public actor DaytonaBackend: DaytonaBackendProtocol {
         try await runCommand(["ssh-command", "--sandbox-id", sandboxId])
     }
 
+    public func stopSandbox(sandboxId: String) async throws {
+        let _: StopResponse = try await runCommand(["stop", "--sandbox-id", sandboxId])
+    }
+
+    public func startSandbox(sandboxId: String) async throws -> DaytonaSandboxInfo {
+        try await runCommand(["start", "--sandbox-id", sandboxId])
+    }
+
+    public func archiveSandbox(sandboxId: String) async throws {
+        let _: ArchiveResponse = try await runCommand(["archive", "--sandbox-id", sandboxId])
+    }
+
     public func deleteSandbox(sandboxId: String) async throws {
         let _: DeleteResponse = try await runCommand(["delete", "--sandbox-id", sandboxId])
+    }
+
+    public func listSandboxes() async throws -> [DaytonaSandboxStatus] {
+        try await runCommand(["list"])
     }
 
     // MARK: - Private
@@ -97,7 +93,7 @@ public actor DaytonaBackend: DaytonaBackendProtocol {
 
         let result = try await ProcessRunner.run(
             executable: uvPath,
-            arguments: ["run", "--with", "daytona", scriptPath] + args,
+            arguments: ["run", "--script", scriptPath] + args,
             environment: ProcessInfo.processInfo.environment
         )
 
@@ -111,7 +107,9 @@ public actor DaytonaBackend: DaytonaBackendProtocol {
             throw DaytonaError.invalidResponse("Empty response")
         }
 
-        return try JSONDecoder().decode(T.self, from: data)
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        return try decoder.decode(T.self, from: data)
     }
 
     private func resolveUV() async throws -> String {
@@ -140,14 +138,16 @@ public actor DaytonaBackend: DaytonaBackendProtocol {
 
 // MARK: - Internal Response Types
 
+private struct StopResponse: Decodable {
+    let stopped: Bool
+}
+
+private struct ArchiveResponse: Decodable {
+    let archived: Bool
+}
+
 private struct DeleteResponse: Decodable {
     let deleted: Bool
-    let sandboxId: String
-
-    enum CodingKeys: String, CodingKey {
-        case deleted
-        case sandboxId = "sandbox_id"
-    }
 }
 
 // MARK: - Errors
@@ -156,7 +156,6 @@ public enum DaytonaError: LocalizedError {
     case uvNotFound
     case commandFailed(String)
     case invalidResponse(String)
-    case sandboxNotFound(String)
 
     public var errorDescription: String? {
         switch self {
@@ -166,8 +165,6 @@ public enum DaytonaError: LocalizedError {
             return "Daytona command failed: \(reason)"
         case .invalidResponse(let reason):
             return "Invalid response from Daytona: \(reason)"
-        case .sandboxNotFound(let id):
-            return "Sandbox not found: \(id)"
         }
     }
 }

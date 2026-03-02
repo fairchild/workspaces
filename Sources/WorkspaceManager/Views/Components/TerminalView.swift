@@ -32,7 +32,7 @@ final class HostTerminalSurfaceStore {
         }
 
         let sessionID = session.id
-        let wrappedOnProcessExit = { [weak self] in
+        let wrappedOnProcessExit: () -> Void = { [weak self] in
             Task { @MainActor in
                 self?.invalidate(sessionID: sessionID)
                 onProcessExit?()

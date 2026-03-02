@@ -1,9 +1,16 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["daytona"]
+# ///
 """Daytona sandbox manager — CLI for WorkspaceManager Swift app.
 
 Usage:
     daytona-sandbox-manager.py create --name <name> [--clone-url <url>]
     daytona-sandbox-manager.py ssh-command --sandbox-id <id>
+    daytona-sandbox-manager.py stop --sandbox-id <id>
+    daytona-sandbox-manager.py start --sandbox-id <id>
+    daytona-sandbox-manager.py archive --sandbox-id <id>
     daytona-sandbox-manager.py delete --sandbox-id <id>
     daytona-sandbox-manager.py list
 
@@ -56,7 +63,7 @@ def cmd_create(args):
                 "expires_at": ssh.expires_at.isoformat(),
                 "home_dir": sandbox.get_user_home_dir(),
                 "work_dir": sandbox.get_work_dir(),
-                "state": str(sandbox.state),
+                "state": sandbox.state.value,
             }
         )
     )
@@ -73,10 +80,44 @@ def cmd_ssh_command(args):
                 "ssh_command": ssh.ssh_command,
                 "ssh_token": ssh.token,
                 "expires_at": ssh.expires_at.isoformat(),
-                "state": str(sandbox.state),
+                "state": sandbox.state.value,
             }
         )
     )
+
+
+def cmd_stop(args):
+    daytona = get_client()
+    sandbox = daytona.get(args.sandbox_id)
+    sandbox.stop(timeout=180)
+    print(json.dumps({"stopped": True, "sandbox_id": args.sandbox_id}))
+
+
+def cmd_start(args):
+    daytona = get_client()
+    sandbox = daytona.get(args.sandbox_id)
+    sandbox.start(timeout=180)
+    ssh = sandbox.create_ssh_access(expires_in_minutes=480)
+    print(
+        json.dumps(
+            {
+                "sandbox_id": sandbox.id,
+                "ssh_command": ssh.ssh_command,
+                "state": sandbox.state.value,
+            }
+        )
+    )
+
+
+def cmd_archive(args):
+    from daytona import SandboxState
+
+    daytona = get_client()
+    sandbox = daytona.get(args.sandbox_id)
+    if sandbox.state == SandboxState.STARTED:
+        sandbox.stop(timeout=180)
+    sandbox.archive()
+    print(json.dumps({"archived": True, "sandbox_id": args.sandbox_id}))
 
 
 def cmd_delete(args):
@@ -88,13 +129,13 @@ def cmd_delete(args):
 
 def cmd_list(_args):
     daytona = get_client()
-    sandboxes = daytona.list()
+    page = daytona.list()
     result = []
-    for sb in sandboxes:
+    for sb in page.items:
         result.append(
             {
                 "sandbox_id": sb.id,
-                "state": str(sb.state),
+                "state": sb.state.value,
             }
         )
     print(json.dumps(result))
@@ -111,6 +152,15 @@ def main():
     ssh_p = sub.add_parser("ssh-command")
     ssh_p.add_argument("--sandbox-id", required=True)
 
+    stop_p = sub.add_parser("stop")
+    stop_p.add_argument("--sandbox-id", required=True)
+
+    start_p = sub.add_parser("start")
+    start_p.add_argument("--sandbox-id", required=True)
+
+    archive_p = sub.add_parser("archive")
+    archive_p.add_argument("--sandbox-id", required=True)
+
     del_p = sub.add_parser("delete")
     del_p.add_argument("--sandbox-id", required=True)
 
@@ -118,10 +168,18 @@ def main():
 
     args = parser.parse_args()
 
+    dispatch = {
+        "create": cmd_create,
+        "ssh-command": cmd_ssh_command,
+        "stop": cmd_stop,
+        "start": cmd_start,
+        "archive": cmd_archive,
+        "delete": cmd_delete,
+        "list": cmd_list,
+    }
+
     try:
-        {"create": cmd_create, "ssh-command": cmd_ssh_command, "delete": cmd_delete, "list": cmd_list}[
-            args.command
-        ](args)
+        dispatch[args.command](args)
     except Exception as e:
         print(json.dumps({"error": str(e)}), file=sys.stderr)
         sys.exit(1)
