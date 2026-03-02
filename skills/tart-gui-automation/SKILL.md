@@ -9,26 +9,26 @@ description: Run deterministic GUI workflows in isolated Tart macOS VMs. Provide
 
 ```bash
 # 1. Start VM
-uv run --script scripts/tart_vm_harness.py start \
+scripts/tart_vm_harness.py start \
   --base-vm macos-tahoe-xcode \
   --share-name workspaces --share-path .
 
 # 2. Run commands in guest
-uv run --script scripts/tart_vm_harness.py exec \
+scripts/tart_vm_harness.py exec \
   --session-file output/tart-harness/*/session.json -- swift build
 
 # 3. Capture screenshot (optionally resize for LLM consumption)
-uv run --script scripts/tart_vm_harness.py capture \
+scripts/tart_vm_harness.py capture \
   --session-file output/tart-harness/*/session.json \
   --output output/screenshot.png --max-dimension 1280
 
 # 4. Click by landmark name (from .tart/target.yaml)
-uv run --script scripts/tart_vm_harness.py click \
+scripts/tart_vm_harness.py click \
   --session-file output/tart-harness/*/session.json \
   --landmark toolbar_open_menu
 
 # 5. Multi-step batch (single VNC connection)
-uv run --script scripts/tart_vm_harness.py batch \
+scripts/tart_vm_harness.py batch \
   --session-file output/tart-harness/*/session.json \
   --steps-json '{"steps": [
     {"action": "click", "landmark": "dock_icon"},
@@ -38,7 +38,7 @@ uv run --script scripts/tart_vm_harness.py batch \
   ]}'
 
 # 6. Teardown
-uv run --script scripts/tart_vm_harness.py teardown \
+scripts/tart_vm_harness.py teardown \
   --session-file output/tart-harness/*/session.json
 ```
 
@@ -56,17 +56,17 @@ See `references/image-matrix.md` for the full matrix.
 
 **Primary: `tart exec`** — runs commands via the guest agent (no SSH needed):
 ```bash
-uv run --script scripts/tart_vm_harness.py exec \
+scripts/tart_vm_harness.py exec \
   --session-file session.json -- echo hello
 ```
 
 **Fallback: SSH** — used automatically if `tart exec` fails and `ssh_host` is in session:
 ```bash
 # First enable SSH if needed
-uv run --script scripts/tart_vm_harness.py enable-ssh --session-file session.json
+scripts/tart_vm_harness.py enable-ssh --session-file session.json
 
 # Then discover the SSH host
-uv run --script scripts/tart_vm_harness.py discover-ssh --session-file session.json
+scripts/tart_vm_harness.py discover-ssh --session-file session.json
 ```
 
 The `start` command probes `tart exec` and records `tart_exec_available` in session.json.
@@ -141,7 +141,7 @@ Flow recipes in `.tart/flows/` provide agent-readable step sequences for common 
 For resolution-independent coordinates, use `--logical-resolution` at start:
 
 ```bash
-uv run --script scripts/tart_vm_harness.py start \
+scripts/tart_vm_harness.py start \
   --base-vm macos-tahoe-xcode \
   --logical-resolution 1024x768
 ```

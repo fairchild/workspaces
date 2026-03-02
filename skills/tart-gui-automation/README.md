@@ -51,16 +51,16 @@ No other setup needed. The harness script manages its own Python dependencies vi
 
 ```bash
 # Agent starts a VM, builds the app, clicks around, captures proof, tears down
-uv run --script scripts/tart_vm_harness.py start --base-vm macos-tahoe-xcode
-uv run --script scripts/tart_vm_harness.py exec  --session-file output/tart-harness/*/session.json -- swift build
-uv run --script scripts/tart_vm_harness.py exec  --session-file output/tart-harness/*/session.json -- open -a MyApp
-uv run --script scripts/tart_vm_harness.py batch  --session-file output/tart-harness/*/session.json \
+scripts/tart_vm_harness.py start --base-vm macos-tahoe-xcode
+scripts/tart_vm_harness.py exec  --session-file output/tart-harness/*/session.json -- swift build
+scripts/tart_vm_harness.py exec  --session-file output/tart-harness/*/session.json -- open -a MyApp
+scripts/tart_vm_harness.py batch  --session-file output/tart-harness/*/session.json \
   --steps-json '{"steps": [
     {"action": "click", "landmark": "toolbar_open_menu"},
     {"action": "wait", "seconds": 0.5},
     {"action": "capture", "output": "menu-open.png", "max_dimension": 1280}
   ]}'
-uv run --script scripts/tart_vm_harness.py teardown --session-file output/tart-harness/*/session.json
+scripts/tart_vm_harness.py teardown --session-file output/tart-harness/*/session.json
 ```
 
 The agent gets all of this from `SKILL.md`. You don't need to prompt it with commands.

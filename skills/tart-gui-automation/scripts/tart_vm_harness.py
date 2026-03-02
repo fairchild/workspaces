@@ -548,7 +548,7 @@ def command_discover_ssh(args: argparse.Namespace) -> int:
             if "Off" in output:
                 log(
                     f"WARNING: Remote Login is OFF in guest. "
-                    f"Enable it with: uv run --script {__file__} enable-ssh "
+                    f"Enable it with: {__file__} enable-ssh "
                     f"--session-file {session_path}"
                 )
         except Exception:

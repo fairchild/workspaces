@@ -62,17 +62,17 @@ Record the `display` value so future sessions know which resolution the coordina
 
 ```bash
 # Click by landmark name (resolves from .tart/target.yaml)
-uv run --script tart_vm_harness.py click \
+tart_vm_harness.py click \
   --session-file session.json \
   --landmark toolbar_open_menu
 
 # Click by raw coordinates (unchanged)
-uv run --script tart_vm_harness.py click \
+tart_vm_harness.py click \
   --session-file session.json \
   --x 1870 --y 125
 
 # Batch with landmarks
-uv run --script tart_vm_harness.py batch \
+tart_vm_harness.py batch \
   --session-file session.json \
   --steps-json '{"steps": [{"action": "click", "landmark": "dock_icon"}, {"action": "wait", "seconds": 2}]}'
 ```

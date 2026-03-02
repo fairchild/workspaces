@@ -26,7 +26,7 @@
 
 **Checks**:
 1. Is Remote Login enabled in guest? Check via `tart exec <vm> -- systemsetup -getremotelogin`
-2. Enable it: `uv run --script tart_vm_harness.py enable-ssh --session-file session.json`
+2. Enable it: `tart_vm_harness.py enable-ssh --session-file session.json`
 3. Is the VM on the expected bridge interface? Check `--bridge-interface` matches your network
 4. Are credentials correct? Default: `admin` / `admin`
 5. Is the shared folder mounted? In guest: `ls "/Volumes/My Shared Files/"`
@@ -36,7 +36,7 @@
 **Symptoms**: `capture` command errors after retries.
 
 **Checks**:
-1. Is the VM still running? `uv run --script tart_vm_harness.py status --session-file session.json`
+1. Is the VM still running? `tart_vm_harness.py status --session-file session.json`
 2. Is the VNC port reachable? `nc -z 127.0.0.1 <port>`
 3. VNC password from session.json may have changed (rare — restart VM)
 4. Try increasing timeout: the harness uses 12s connect + exponential backoff

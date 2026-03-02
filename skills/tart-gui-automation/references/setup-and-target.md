@@ -32,18 +32,18 @@ tart set <vm> --display 2048x1536   # Retina 2x (default)
 
 **Primary method: `tart exec`** — works out of the box with `*-base` and `*-xcode` images (guest agent pre-installed):
 ```bash
-uv run --script scripts/tart_vm_harness.py exec \
+scripts/tart_vm_harness.py exec \
   --session-file session.json -- <command>
 ```
 
 **Fallback: SSH** — for when tart exec is unavailable (vanilla images, custom setups):
 1. Enable Remote Login if not already on:
    ```bash
-   uv run --script scripts/tart_vm_harness.py enable-ssh --session-file session.json
+   scripts/tart_vm_harness.py enable-ssh --session-file session.json
    ```
 2. Discover SSH host:
    ```bash
-   uv run --script scripts/tart_vm_harness.py discover-ssh --session-file session.json
+   scripts/tart_vm_harness.py discover-ssh --session-file session.json
    ```
 
 **Note**: SSH is NOT always available. Vanilla images have Remote Login disabled. The `discover-ssh` command will warn if Remote Login is off (when tart exec is available to check).
@@ -52,7 +52,7 @@ uv run --script scripts/tart_vm_harness.py exec \
 
 For VNC-based mouse automation, install `cliclick` in the guest:
 ```bash
-uv run --script scripts/tart_vm_harness.py exec \
+scripts/tart_vm_harness.py exec \
   --session-file session.json -- brew install cliclick
 ```
 

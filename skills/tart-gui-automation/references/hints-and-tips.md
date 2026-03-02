@@ -68,10 +68,10 @@ This skips `atexit` handlers and Twisted teardown. The OS closes the TCP socket 
 
 ```bash
 # BAD — process kill leaves TCP in CLOSE_WAIT for ~40s
-timeout 240 uv run --script vnc_script.py
+timeout 240 vnc_script.py
 
 # GOOD — script manages its own lifecycle with os._exit(0)
-uv run --script vnc_script.py
+vnc_script.py
 ```
 
 A CLOSE_WAIT socket blocks new VNC connections. Wait ~40s before reconnecting or you'll get `Connection refused`.

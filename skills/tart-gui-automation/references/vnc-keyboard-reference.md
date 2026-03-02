@@ -97,25 +97,25 @@ client.mousePress(5)     # Scroll down
 
 ```bash
 # Click (by coordinates or landmark)
-uv run --script tart_vm_harness.py click \
+tart_vm_harness.py click \
   --session-file session.json --x 500 --y 300
-uv run --script tart_vm_harness.py click \
+tart_vm_harness.py click \
   --session-file session.json --landmark toolbar_open_menu
 
 # Double-click
-uv run --script tart_vm_harness.py double-click \
+tart_vm_harness.py double-click \
   --session-file session.json --x 500 --y 300
 
 # Right-click
-uv run --script tart_vm_harness.py click \
+tart_vm_harness.py click \
   --session-file session.json --x 500 --y 300 --button right
 
 # Scroll
-uv run --script tart_vm_harness.py scroll \
+tart_vm_harness.py scroll \
   --session-file session.json --x 500 --y 300 --direction down --clicks 3
 
 # Drag
-uv run --script tart_vm_harness.py drag \
+tart_vm_harness.py drag \
   --session-file session.json --from-x 100 --from-y 200 --to-x 400 --to-y 500
 ```
 
