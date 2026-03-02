@@ -51,7 +51,10 @@ public actor DaytonaBackend: RemoteBackendProtocol {
     }
 
     public func isAvailable() async -> Bool {
-        (try? await resolveUV()) != nil
+        guard ProcessInfo.processInfo.environment["DAYTONA_API_KEY"] != nil else {
+            return false
+        }
+        return (try? await resolveUV()) != nil
     }
 
     // MARK: - Sandbox Lifecycle
