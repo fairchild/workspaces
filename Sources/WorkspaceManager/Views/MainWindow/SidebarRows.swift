@@ -104,15 +104,15 @@ private struct PaneCountBadge: View {
             .padding(.horizontal, 7)
             .padding(.vertical, 2)
             .foregroundStyle(sessionActivity.badgeColor)
-        .background(
-            Capsule()
-                .fill(sessionActivity.badgeColor.opacity(sessionActivity.isActive ? 0.14 : 0.12))
-        )
-        .overlay(
-            Capsule()
-                .stroke(sessionActivity.badgeColor.opacity(0.22), lineWidth: 0.5)
-        )
-        .accessibilityLabel("\(count) pane\(count == 1 ? "" : "s")")
+            .background(
+                Capsule()
+                    .fill(sessionActivity.badgeColor.opacity(sessionActivity.isActive ? 0.14 : 0.12))
+            )
+            .overlay(
+                Capsule()
+                    .stroke(sessionActivity.badgeColor.opacity(0.22), lineWidth: 0.5)
+            )
+            .accessibilityLabel("\(count) pane\(count == 1 ? "" : "s")")
     }
 }
 

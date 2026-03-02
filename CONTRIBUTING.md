@@ -21,11 +21,13 @@ swift test
 
 Or with mask: `mask setup && mask build && mask test`
 
-Install git hooks (recommended) so commits run lint automatically:
+Install git hooks so commits run lint automatically:
 
 ```bash
 mask hooks-install
 ```
+
+`mask setup` now installs hooks for you as part of first-time setup.
 
 To run the app in dev mode (isolated data directory):
 
