@@ -12,15 +12,21 @@ completed: null
 
 **Vision**: A Mac-native app for managing AI coding sessions. Add repos, fork them into isolated workspaces, run any terminal-based coding agent in an embedded terminal, and track file changes—all without context-switching to Finder or a separate terminal.
 
-## Status Snapshot (2026-02-28)
+## Status Snapshot (2026-03-01)
 
 - Latest shipped release: `v0.1.2` (GitHub release + DMG workflow path healthy).
-- Test baseline: `swift test` is green at 97 tests across 17 suites.
+- Test baseline: `swift test` is green at 142 tests across 23 suites.
 - Daily-driver reliability fixes have landed:
   - shared non-blocking process execution (`ProcessRunner`) adopted across git/workspace/backend services
   - terminal identity hardening on workspace switch and restart generation
   - workspace recency ordering now updates on selection
-- Active implementation focus (current branch): web sources + embedded web view (`backlog/repo-webview-plan.md`) and shortcut/terminal multiplexing polish.
+- Open-in-editor hardening has landed on mainline:
+  - deterministic launch guardrails for shortcut/UI-triggered editor handoff
+  - launch metrics/signposts and smoke coverage for editor-launch reliability
+- Tart GUI automation + editor handoff UX hardening landed in PR #19:
+  - target-manifest-driven Tart harness/docs for repeatable automation runs
+  - workspace editor toolbar/context attachment launch-path improvements
+- Active implementation focus: close remaining refinement-gate gaps (docs parity + split shortcut parity), then continue daily-driver UX quick wins.
 
 ---
 
@@ -135,21 +141,23 @@ The next cycle prioritizes implementation quality for shipped behavior before ex
 - **Session coordinator**: Manages terminal surface lifecycle, reuse, and focus restoration
 - **Refinement/performance hardening (2026-02-15)**: Signposts, perf baseline report, session regression tests, and memory-policy guardrails (`backlog/refinement-performance-followup.md`)
 - **Daily-driver reliability hardening (2026-02-26 to 2026-02-28)**: non-blocking process runner, terminal/workspace identity fixes, recency sort correctness, and release metadata consistency
-- **97 tests** passing across 17 suites (services, models, session behavior, process runner, app-level routing/UX behaviors)
+- **Open-in-editor polish (PR #18 + follow-up fixes)**: deterministic launch guardrails, launch metrics/signposts, and strengthened shortcut smoke assertions
+- **Editor UX + automation hardening (PR #19)**: external editor service/toolbar action hardening and Tart automation target-manifest/documentation upgrades
+- **142 tests** passing across 23 suites (services, models, session behavior, process runner, app-level routing/UX behaviors)
 - **Monorepo extraction**: Clean standalone repo, SPM-only build (no Xcode project)
 
 ---
 
 ## Active Phase: Daily-Driver Polish + Web Sources (MPP)
 
-Current focus is to finish daily-driver quality gates while shipping the web-source MPP without regressing terminal-first workflows.
+Current focus is to close the remaining refinement-gate quality tasks and ship daily-driver UX polish without regressing terminal-first workflows.
 
 ### Tier 1: Quick Wins
 
 | Item | Effort | Impact | Notes |
 |------|--------|--------|-------|
 | Web sources + embedded web view MPP | Medium | High | Domain-locked sidebar web sources and detail rendering. See `backlog/repo-webview-plan.md`. |
-| Open-in-editor shortcut flow polish | Low | High | Make editor-launch path deterministic and documented for daily use. |
+| Product docs parity pass | Low | High | Align `docs/product_overview.md` and `docs/user-stories.md` with shipped UX to close refinement-gate exit criteria. |
 | Quick switcher (Cmd+P) | Low | Medium | Filtered overlay to jump repos/workspaces. Session coordinator has the data. |
 | Workspace creation progress UI | Medium | Medium | Existing backlog item. Eliminates "frozen" feel on large repos. |
 
@@ -195,6 +203,18 @@ Summary: backend abstraction/registry, VZTahoeBackend implementation (VM lifecyc
 ---
 
 ## Learnings
+
+### 2026-03-01 — PR #18/#19 mainline hardening pass
+
+**Context**: PR #18 and PR #19 were merged to mainline to harden open-in-editor behavior and strengthen GUI automation/editor handoff reliability.
+
+**Results**:
+- Open-in-editor routing now has deterministic guardrails for missing/invalid targets plus launch outcome metrics.
+- Shortcut smoke coverage for open-in-editor is hardened (including fixture-home assertions).
+- Tart GUI automation gained target-manifest workflow/docs updates and activation/verification flows.
+- `swift test` is green at 142 tests across 23 suites.
+
+**What this changes for planning**: Open-in-editor shortcut polish moves out of quick wins; highest-value refinement work is now docs parity and remaining split shortcut parity.
 
 ### 2026-02-28 — Release metadata consistency pass
 
