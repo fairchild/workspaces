@@ -190,15 +190,42 @@ private struct OpenInEditorSplitButton: View {
     let onOpenInDefaultEditor: () -> Void
     let onOpenInEditor: (ExternalEditorID) -> Void
 
+    @State private var isHoveringPrimarySegment = false
+    @State private var isHoveringMenuSegment = false
+
+    private var alternateEditorOptions: [ExternalEditorDescriptor] {
+        editorOptions.filter { $0.id != defaultEditor.id }
+    }
+
+    private var hasAlternateEditorOptions: Bool {
+        !alternateEditorOptions.isEmpty
+    }
+
     var body: some View {
-        ControlGroup {
+        HStack(spacing: 0) {
             Button {
                 onOpenInDefaultEditor()
             } label: {
                 Text("Open")
                     .font(.system(size: 12, weight: .semibold))
-                    .frame(minWidth: 44)
+                    .lineLimit(1)
+                    .padding(.horizontal, 12)
+                    .frame(minWidth: 52, minHeight: OpenControlMetrics.height, alignment: .center)
+                    .contentShape(Rectangle())
             }
+            .buttonStyle(
+                OpenControlSegmentButtonStyle(
+                    isHovered: isHoveringPrimarySegment,
+                    isDisabled: false
+                )
+            )
+            .onHover { isHoveringPrimarySegment = $0 }
+
+            Rectangle()
+                .fill(OpenControlPalette.border)
+                .frame(width: OpenControlMetrics.dividerWidth)
+                .padding(.vertical, 4)
+                .opacity(hasAlternateEditorOptions ? 1 : 0.45)
 
             Menu {
                 Button("Open in...") {
@@ -209,28 +236,85 @@ private struct OpenInEditorSplitButton: View {
                     modifiers: AppChromeShortcut.openInEditor.eventModifiers
                 )
 
-                Divider()
+                if hasAlternateEditorOptions {
+                    Divider()
 
-                ForEach(editorOptions) { editor in
-                    Button(editor.displayName) {
-                        onOpenInEditor(editor.id)
+                    ForEach(alternateEditorOptions) { editor in
+                        Button(editor.displayName) {
+                            onOpenInEditor(editor.id)
+                        }
                     }
                 }
             } label: {
                 Image(systemName: "chevron.down")
                     .font(.system(size: 10, weight: .semibold))
-                    .frame(width: 10, height: 10, alignment: .center)
+                    .frame(
+                        width: OpenControlMetrics.chevronSegmentWidth,
+                        height: OpenControlMetrics.height,
+                        alignment: .center
+                    )
+                    .contentShape(Rectangle())
             }
+            .buttonStyle(
+                OpenControlSegmentButtonStyle(
+                    isHovered: isHoveringMenuSegment,
+                    isDisabled: !hasAlternateEditorOptions
+                )
+            )
+            .onHover { isHoveringMenuSegment = $0 }
             .menuIndicator(.hidden)
-            .frame(width: 20)
+            .disabled(!hasAlternateEditorOptions)
             .accessibilityLabel("Choose editor")
-            .help("Choose editor")
+            .help(hasAlternateEditorOptions ? "Choose editor" : "No alternate editors available")
         }
-        .controlGroupStyle(.navigation)
-        .controlSize(.small)
+        .frame(height: OpenControlMetrics.height)
+        .background(OpenControlPalette.background)
+        .clipShape(RoundedRectangle(cornerRadius: OpenControlMetrics.cornerRadius, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: OpenControlMetrics.cornerRadius, style: .continuous)
+                .stroke(OpenControlPalette.border, lineWidth: OpenControlMetrics.borderWidth)
+        }
         .fixedSize(horizontal: true, vertical: false)
         .help("Open in \(defaultEditor.displayName) (Cmd+Shift+O)")
         .accessibilityLabel("Open in \(defaultEditor.displayName)")
+    }
+}
+
+private enum OpenControlMetrics {
+    static let height: CGFloat = 24
+    static let chevronSegmentWidth: CGFloat = 24
+    static let dividerWidth: CGFloat = 1
+    static let borderWidth: CGFloat = 1
+    static let cornerRadius: CGFloat = 6
+}
+
+private enum OpenControlPalette {
+    static let background = Color(nsColor: .windowBackgroundColor)
+    static let border = Color(nsColor: .separatorColor).opacity(0.9)
+    static let hover = Color.primary.opacity(0.08)
+    static let pressed = Color.primary.opacity(0.14)
+}
+
+private struct OpenControlSegmentButtonStyle: ButtonStyle {
+    let isHovered: Bool
+    let isDisabled: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(isDisabled ? Color.secondary : Color.primary)
+            .background(
+                Group {
+                    if isDisabled {
+                        Color.clear
+                    } else if configuration.isPressed {
+                        OpenControlPalette.pressed
+                    } else if isHovered {
+                        OpenControlPalette.hover
+                    } else {
+                        Color.clear
+                    }
+                }
+            )
     }
 }
 
