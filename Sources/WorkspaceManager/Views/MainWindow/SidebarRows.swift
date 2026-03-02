@@ -234,12 +234,16 @@ struct WorkspaceRow: View {
                         .controlSize(.small)
                         .frame(width: 16, height: 16)
                 } else {
-                    Image(systemName: workspace.isRemote
-                        ? (workspace.status == .active ? "cloud.fill" : "cloud")
-                        : (sessionActivity.isActive ? "terminal.fill" : "terminal"))
-                        .foregroundStyle(workspace.isRemote
+                    Image(
+                        systemName: workspace.isRemote
+                            ? (workspace.status == .active ? "cloud.fill" : "cloud")
+                            : (sessionActivity.isActive ? "terminal.fill" : "terminal")
+                    )
+                    .foregroundStyle(
+                        workspace.isRemote
                             ? (workspace.status == .active ? .blue : .secondary)
-                            : sessionActivity.iconColor(inactiveColor: .secondary))
+                            : sessionActivity.iconColor(inactiveColor: .secondary)
+                    )
                 }
 
                 Text(workspace.name)

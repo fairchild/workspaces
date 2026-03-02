@@ -47,12 +47,15 @@ public protocol WorkspaceServiceProtocol: Sendable {
     func sanitizeFilename(_ name: String) async -> String
 }
 
-public protocol DaytonaBackendProtocol: Sendable {
-    func createSandbox(name: String, cloneURL: String?) async throws -> DaytonaSandboxInfo
-    func getSSHCommand(sandboxId: String) async throws -> DaytonaSandboxInfo
+public protocol RemoteBackendProtocol: Sendable {
+    var identifier: String { get }
+    func isAvailable() async -> Bool
+
+    func createSandbox(name: String, cloneURL: String?) async throws -> RemoteSandboxInfo
+    func getSSHCommand(sandboxId: String) async throws -> RemoteSandboxInfo
     func stopSandbox(sandboxId: String) async throws
-    func startSandbox(sandboxId: String) async throws -> DaytonaSandboxInfo
+    func startSandbox(sandboxId: String) async throws -> RemoteSandboxInfo
     func archiveSandbox(sandboxId: String) async throws
     func deleteSandbox(sandboxId: String) async throws
-    func listSandboxes() async throws -> [DaytonaSandboxStatus]
+    func listSandboxes() async throws -> [RemoteSandboxStatus]
 }

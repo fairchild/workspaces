@@ -83,8 +83,8 @@ public final class Workspace {
     /// Isolation backend identifier ("local", "daytona", etc.)
     public var backendIdentifier: String = "local"
 
-    /// Daytona sandbox ID for remote workspaces (nil for local)
-    public var sandboxId: String?
+    /// Remote instance ID (nil for local workspaces)
+    public var remoteId: String?
 
     public var workspaceURL: URL {
         URL(fileURLWithPath: path)
@@ -109,7 +109,7 @@ public final class Workspace {
         status: WorkspaceStatus = .active,
         gitBranch: String? = nil,
         backendIdentifier: String = "local",
-        sandboxId: String? = nil
+        remoteId: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -120,7 +120,7 @@ public final class Workspace {
         self.statusRaw = status.rawValue
         self.gitBranch = gitBranch
         self.backendIdentifier = backendIdentifier
-        self.sandboxId = sandboxId
+        self.remoteId = remoteId
     }
 }
 

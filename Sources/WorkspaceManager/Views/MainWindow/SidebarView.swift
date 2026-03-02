@@ -18,7 +18,7 @@ struct SidebarView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.gitService) private var gitService
     @Environment(\.workspaceService) private var workspaceService
-    @Environment(\.daytonaBackend) private var daytonaBackend
+    @Environment(\.remoteBackend) private var remoteBackend
     let repos: [Repo]
     let webSources: [WebSource]
     @Binding var selectedWorkspace: Workspace?
@@ -35,7 +35,7 @@ struct SidebarView: View {
     @State private var isAddingRepo = false
     @State private var isAddingWebSource = false
     @State private var repoForNewWorkspace: Repo?
-    @State private var isDaytonaAvailable = false
+    @State private var isRemoteBackendAvailable = false
 
     // Error alert state
     @State private var errorMessage: String?
@@ -133,7 +133,7 @@ struct SidebarView: View {
                             } else {
                                 ForEach(repoWorkspaces) { workspace in
                                     let workspaceSessionKey: HostTerminalSessionKey = {
-                                        if let sandboxId = workspace.sandboxId {
+                                        if let sandboxId = workspace.remoteId {
                                             return .remoteSandbox(sandboxId)
                                         }
                                         return .hostPath(normalizePath(workspace.workspaceURL))
@@ -161,7 +161,8 @@ struct SidebarView: View {
 
                                         if !workspace.isRemote {
                                             Button("Reveal in Finder") {
-                                                NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: workspace.path)
+                                                NSWorkspace.shared.selectFile(
+                                                    nil, inFileViewerRootedAtPath: workspace.path)
                                             }
                                         }
 
@@ -276,7 +277,7 @@ struct SidebarView: View {
             }
         }
         .sheet(item: $repoForNewWorkspace) { repo in
-            NewWorkspaceSheet(repo: repo, isDaytonaAvailable: isDaytonaAvailable) { name, backend in
+            NewWorkspaceSheet(repo: repo, isRemoteBackendAvailable: isRemoteBackendAvailable) { name, backend in
                 Task {
                     switch backend {
                     case .local:
@@ -332,7 +333,7 @@ struct SidebarView: View {
             }
         }
         .task {
-            isDaytonaAvailable = await DaytonaBackend.isAvailable()
+            isRemoteBackendAvailable = await remoteBackend.isAvailable()
         }
     }
 
@@ -496,7 +497,7 @@ struct SidebarView: View {
     private func createRemoteWorkspace(from repo: Repo, name: String) async {
         let repoId = repo.id
         let cloneURL = repo.remoteURL
-        let backend = daytonaBackend
+        let backend = remoteBackend
 
         await MainActor.run {
             creatingForRepoId = repoId
@@ -512,8 +513,8 @@ struct SidebarView: View {
                     name: name,
                     path: FileManager.default.temporaryDirectory,
                     sourceRepo: repo,
-                    backendIdentifier: DaytonaBackend.identifier,
-                    sandboxId: info.sandboxId
+                    backendIdentifier: backend.identifier,
+                    remoteId: info.sandboxId
                 )
                 modelContext.insert(workspace)
                 if saveModelContext(action: "save remote workspace") {
@@ -540,16 +541,16 @@ struct SidebarView: View {
 
     private func performDelete(_ workspace: Workspace, deleteFiles: Bool) {
         let workspaceURL = workspace.workspaceURL
-        let sandboxId = workspace.sandboxId
+        let sandboxId = workspace.remoteId
         let isRemote = workspace.isRemote
-        let backend = daytonaBackend
+        let backend = remoteBackend
 
         Task {
             if isRemote, let sandboxId {
                 do {
                     try await backend.deleteSandbox(sandboxId: sandboxId)
                 } catch {
-                    NSLog("[Daytona] Failed to delete sandbox %@: %@", sandboxId, error.localizedDescription)
+                    NSLog("[RemoteBackend] Failed to delete sandbox %@: %@", sandboxId, error.localizedDescription)
                 }
             } else {
                 do {
@@ -616,8 +617,8 @@ struct SidebarView: View {
     }
 
     private func performStop(_ workspace: Workspace) {
-        guard let sandboxId = workspace.sandboxId else { return }
-        let backend = daytonaBackend
+        guard let sandboxId = workspace.remoteId else { return }
+        let backend = remoteBackend
         sandboxAction = SandboxActionState(sandboxId: sandboxId, message: "Stopping...")
 
         Task {
@@ -639,8 +640,8 @@ struct SidebarView: View {
     }
 
     private func performStart(_ workspace: Workspace) {
-        guard let sandboxId = workspace.sandboxId else { return }
-        let backend = daytonaBackend
+        guard let sandboxId = workspace.remoteId else { return }
+        let backend = remoteBackend
         sandboxAction = SandboxActionState(sandboxId: sandboxId, message: "Starting...")
 
         Task {
@@ -663,8 +664,8 @@ struct SidebarView: View {
     }
 
     private func performArchive(_ workspace: Workspace) {
-        guard let sandboxId = workspace.sandboxId else { return }
-        let backend = daytonaBackend
+        guard let sandboxId = workspace.remoteId else { return }
+        let backend = remoteBackend
         sandboxAction = SandboxActionState(sandboxId: sandboxId, message: "Archiving...")
 
         Task {
@@ -814,9 +815,9 @@ struct SidebarView: View {
     }
 
     private func workspaceStatusMessage(_ workspace: Workspace) -> String? {
-        guard let sandboxId = workspace.sandboxId else { return nil }
-        if connectingSandboxId == sandboxId { return "Connecting..." }
-        if let action = sandboxAction, action.sandboxId == sandboxId { return action.message }
+        guard let remoteId = workspace.remoteId else { return nil }
+        if connectingSandboxId == remoteId { return "Connecting..." }
+        if let action = sandboxAction, action.sandboxId == remoteId { return action.message }
         return nil
     }
 

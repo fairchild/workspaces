@@ -7,7 +7,7 @@
 
 import Foundation
 
-public struct DaytonaSandboxInfo: Decodable, Sendable {
+public struct RemoteSandboxInfo: Decodable, Sendable {
     public let sandboxId: String
     public let sshCommand: String
 
@@ -17,14 +17,15 @@ public struct DaytonaSandboxInfo: Decodable, Sendable {
     }
 }
 
-public struct DaytonaSandboxStatus: Decodable, Sendable {
+public struct RemoteSandboxStatus: Decodable, Sendable {
     public let sandboxId: String
     public let state: String
 }
 
-public actor DaytonaBackend: DaytonaBackendProtocol {
-    public static let identifier = "daytona"
+public actor DaytonaBackend: RemoteBackendProtocol {
     public static let shared = DaytonaBackend()
+
+    public nonisolated var identifier: String { "daytona" }
 
     private let scriptPath: String
 
@@ -43,18 +44,19 @@ public actor DaytonaBackend: DaytonaBackendProtocol {
                 .appendingPathComponent("scripts/daytona-sandbox-manager.py").path,
         ]
 
-        self.scriptPath = candidates.first {
-            FileManager.default.fileExists(atPath: $0)
-        } ?? "scripts/daytona-sandbox-manager.py"
+        self.scriptPath =
+            candidates.first {
+                FileManager.default.fileExists(atPath: $0)
+            } ?? "scripts/daytona-sandbox-manager.py"
     }
 
-    public static func isAvailable() async -> Bool {
-        (try? await shared.resolveUV()) != nil
+    public func isAvailable() async -> Bool {
+        (try? await resolveUV()) != nil
     }
 
     // MARK: - Sandbox Lifecycle
 
-    public func createSandbox(name: String, cloneURL: String? = nil) async throws -> DaytonaSandboxInfo {
+    public func createSandbox(name: String, cloneURL: String? = nil) async throws -> RemoteSandboxInfo {
         var args = ["create", "--name", name]
         if let url = cloneURL {
             args += ["--clone-url", url]
@@ -62,7 +64,7 @@ public actor DaytonaBackend: DaytonaBackendProtocol {
         return try await runCommand(args)
     }
 
-    public func getSSHCommand(sandboxId: String) async throws -> DaytonaSandboxInfo {
+    public func getSSHCommand(sandboxId: String) async throws -> RemoteSandboxInfo {
         try await runCommand(["ssh-command", "--sandbox-id", sandboxId])
     }
 
@@ -70,7 +72,7 @@ public actor DaytonaBackend: DaytonaBackendProtocol {
         let _: StopResponse = try await runCommand(["stop", "--sandbox-id", sandboxId])
     }
 
-    public func startSandbox(sandboxId: String) async throws -> DaytonaSandboxInfo {
+    public func startSandbox(sandboxId: String) async throws -> RemoteSandboxInfo {
         try await runCommand(["start", "--sandbox-id", sandboxId])
     }
 
@@ -82,7 +84,7 @@ public actor DaytonaBackend: DaytonaBackendProtocol {
         let _: DeleteResponse = try await runCommand(["delete", "--sandbox-id", sandboxId])
     }
 
-    public func listSandboxes() async throws -> [DaytonaSandboxStatus] {
+    public func listSandboxes() async throws -> [RemoteSandboxStatus] {
         try await runCommand(["list"])
     }
 

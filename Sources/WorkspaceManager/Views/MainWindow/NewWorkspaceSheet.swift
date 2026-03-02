@@ -31,7 +31,7 @@ enum WorkspaceBackendChoice: String, CaseIterable, Identifiable {
 
 struct NewWorkspaceSheet: View {
     let repo: Repo
-    let isDaytonaAvailable: Bool
+    let isRemoteBackendAvailable: Bool
     let onCreate: (String, WorkspaceBackendChoice) -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -59,7 +59,7 @@ struct NewWorkspaceSheet: View {
         case .local:
             return "A copy of the repository will be created in a new directory."
         case .remoteVM:
-            return "A remote Linux sandbox will be created via Daytona."
+            return "A remote Linux sandbox will be created in the cloud."
         }
     }
 
@@ -87,7 +87,7 @@ struct NewWorkspaceSheet: View {
                 TextField("Workspace Name", text: $name)
                     .textFieldStyle(.roundedBorder)
 
-                if isDaytonaAvailable {
+                if isRemoteBackendAvailable {
                     Picker("Environment", selection: $backend) {
                         ForEach(WorkspaceBackendChoice.allCases) { choice in
                             Label(choice.label, systemImage: choice.icon)
