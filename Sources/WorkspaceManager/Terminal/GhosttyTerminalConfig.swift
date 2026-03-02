@@ -59,6 +59,20 @@ struct GhosttyTerminalConfig {
         self.environmentVariables = environment
     }
 
+    /// Create a config with a custom command (e.g. SSH to a remote sandbox).
+    /// The working directory is a local placeholder — the command itself determines the remote context.
+    init(customCommand: String, fontSize: Float32 = 13) {
+        self.fontSize = fontSize
+        self.workingDirectory = FileManager.default.temporaryDirectory.path
+        self.command = customCommand
+        self.environmentVariables = [
+            "TERM": "xterm-256color",
+            "COLORTERM": "truecolor",
+            "LANG": "en_US.UTF-8",
+            "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin",
+        ]
+    }
+
     private static func isExecutableAvailable(_ executable: String, inPath path: String?) -> Bool {
         guard let path else { return false }
         for directory in path.split(separator: ":") {

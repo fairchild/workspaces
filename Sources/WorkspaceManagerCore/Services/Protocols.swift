@@ -46,3 +46,9 @@ public protocol WorkspaceServiceProtocol: Sendable {
     func getWorkspaceSize(at workspaceURL: URL) async throws -> Int64
     func sanitizeFilename(_ name: String) async -> String
 }
+
+public protocol DaytonaBackendProtocol: Sendable {
+    func createSandbox(name: String, cloneURL: String?) async throws -> DaytonaSandboxInfo
+    func getSSHCommand(sandboxId: String) async throws -> DaytonaSandboxInfo
+    func deleteSandbox(sandboxId: String) async throws
+}

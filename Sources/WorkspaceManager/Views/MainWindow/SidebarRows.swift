@@ -225,19 +225,27 @@ struct WorkspaceRow: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Image(systemName: sessionActivity.isActive ? "terminal.fill" : "terminal")
-                .foregroundStyle(sessionActivity.iconColor(inactiveColor: .secondary))
+            Image(systemName: workspace.isRemote
+                ? (workspace.status == .active ? "cloud.fill" : "cloud")
+                : (sessionActivity.isActive ? "terminal.fill" : "terminal"))
+                .foregroundStyle(workspace.isRemote
+                    ? (workspace.status == .active ? .blue : .secondary)
+                    : sessionActivity.iconColor(inactiveColor: .secondary))
 
             Text(workspace.name)
                 .font(.system(size: 16, weight: .semibold))
                 .lineLimit(1)
 
-            if workspace.status == .archived {
-                Text("Archived")
+            if workspace.status != .active {
+                Text(workspace.status.label)
                     .font(.caption2)
                     .padding(.horizontal, 4)
                     .padding(.vertical, 1)
-                    .background(.secondary.opacity(0.2))
+                    .background(
+                        workspace.status == .stopped
+                            ? Color.orange.opacity(0.2)
+                            : Color.secondary.opacity(0.2)
+                    )
                     .clipShape(RoundedRectangle(cornerRadius: 3))
             }
 

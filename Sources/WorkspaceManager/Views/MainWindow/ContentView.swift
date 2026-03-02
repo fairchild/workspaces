@@ -25,6 +25,7 @@ struct ContentView: View {
     @AppStorage(TerminalMultiplexingMode.storageKey)
     private var terminalMultiplexingModeRawValue: String = TerminalMultiplexingMode.defaultValue.rawValue
     @Environment(\.externalEditorService) private var externalEditorService
+    @Environment(\.daytonaBackend) private var daytonaBackend
 
     @State private var selectedWorkspace: Workspace?
     @State private var selectedWebSource: WebSource?
@@ -542,17 +543,56 @@ struct ContentView: View {
         cancelPendingRepoClickMeasurement(reason: "workspace_selected")
         selectedWebSource = nil
         clearCodePreview()
-        let workspaceDirectory = workspace.workspaceURL.standardizedFileURL.resolvingSymlinksInPath()
-        let session = activateHostSession(
-            key: .hostPath(workspaceDirectory.path),
-            directory: workspaceDirectory
-        )
-        columnVisibility = .all
 
-        requestMainTerminalFocus(targetSessionID: session.id)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-            Task { @MainActor in
-                requestMainTerminalFocus(targetSessionID: session.id)
+        if workspace.isRemote, let sandboxId = workspace.sandboxId {
+            handleRemoteWorkspaceSelection(workspace, sandboxId: sandboxId)
+        } else {
+            let workspaceDirectory = workspace.workspaceURL.standardizedFileURL.resolvingSymlinksInPath()
+            let session = activateHostSession(
+                key: .hostPath(workspaceDirectory.path),
+                directory: workspaceDirectory
+            )
+            columnVisibility = .all
+
+            requestMainTerminalFocus(targetSessionID: session.id)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                Task { @MainActor in
+                    requestMainTerminalFocus(targetSessionID: session.id)
+                }
+            }
+        }
+    }
+
+    @MainActor
+    private func handleRemoteWorkspaceSelection(_ workspace: Workspace, sandboxId: String) {
+        let sessionKey = HostTerminalSessionKey.remoteSandbox(sandboxId)
+        let placeholderDir = FileManager.default.temporaryDirectory
+
+        // Reuse existing session for this specific sandbox
+        if let existing = hostTerminalState.sessions.first(where: { $0.key == sessionKey }) {
+            hostTerminalState.activateExistingSession(sessionID: existing.id)
+            columnVisibility = .all
+            requestMainTerminalFocus(targetSessionID: existing.id)
+            return
+        }
+
+        // Fetch SSH command in the background and create session
+        let backend = daytonaBackend
+        Task {
+            do {
+                let info = try await backend.getSSHCommand(sandboxId: sandboxId)
+                await MainActor.run {
+                    let session = activateHostSession(
+                        key: sessionKey,
+                        directory: placeholderDir,
+                        customCommand: info.sshCommand
+                    )
+                    columnVisibility = .all
+                    requestMainTerminalFocus(targetSessionID: session.id)
+                    NSLog("[Daytona] SSH session created for sandbox %@", sandboxId)
+                }
+            } catch {
+                NSLog("[Daytona] Failed to get SSH command for sandbox %@: %@", sandboxId, error.localizedDescription)
             }
         }
     }
@@ -886,10 +926,11 @@ struct ContentView: View {
 
     @discardableResult
     @MainActor
-    private func activateHostSession(key: HostTerminalSessionKey, directory: URL) -> HostTerminalSession {
+    private func activateHostSession(key: HostTerminalSessionKey, directory: URL, customCommand: String? = nil) -> HostTerminalSession {
         let result = hostTerminalState.activateSession(
             key: key,
-            directory: directory
+            directory: directory,
+            customCommand: customCommand
         )
         if result.created {
             NSLog(
@@ -1233,9 +1274,10 @@ final class HostTerminalStateStore: ObservableObject {
     @discardableResult
     func activateSession(
         key: HostTerminalSessionKey,
-        directory: URL
+        directory: URL,
+        customCommand: String? = nil
     ) -> HostTerminalSessionActivationResult {
-        let result = coordinator.activate(key: key, directory: directory)
+        let result = coordinator.activate(key: key, directory: directory, customCommand: customCommand)
         publishSnapshot()
         return result
     }

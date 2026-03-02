@@ -405,6 +405,10 @@ private struct ExternalEditorServiceKey: EnvironmentKey {
     static let defaultValue: any ExternalEditorServiceProtocol = ExternalEditorService.shared
 }
 
+private struct DaytonaBackendKey: EnvironmentKey {
+    static let defaultValue: any DaytonaBackendProtocol = DaytonaBackend.shared
+}
+
 extension EnvironmentValues {
     var gitService: any GitServiceProtocol {
         get { self[GitServiceKey.self] }
@@ -419,6 +423,11 @@ extension EnvironmentValues {
     var externalEditorService: any ExternalEditorServiceProtocol {
         get { self[ExternalEditorServiceKey.self] }
         set { self[ExternalEditorServiceKey.self] = newValue }
+    }
+
+    var daytonaBackend: any DaytonaBackendProtocol {
+        get { self[DaytonaBackendKey.self] }
+        set { self[DaytonaBackendKey.self] = newValue }
     }
 }
 

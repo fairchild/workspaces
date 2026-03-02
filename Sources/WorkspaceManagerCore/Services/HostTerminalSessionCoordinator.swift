@@ -11,6 +11,8 @@ public enum HostTerminalSessionKey: Hashable, Sendable, CustomDebugStringConvert
     case defaultHome
     case repoPath(String)
     case hostPath(String)
+    /// Remote sandbox session — keyed by sandbox ID, not a filesystem path.
+    case remoteSandbox(String)
 
     public var debugDescription: String {
         switch self {
@@ -20,6 +22,8 @@ public enum HostTerminalSessionKey: Hashable, Sendable, CustomDebugStringConvert
             return "repoPath(\(path))"
         case .hostPath(let path):
             return "hostPath(\(path))"
+        case .remoteSandbox(let id):
+            return "remoteSandbox(\(id))"
         }
     }
 
@@ -31,6 +35,8 @@ public enum HostTerminalSessionKey: Hashable, Sendable, CustomDebugStringConvert
             return .repoPath(Self.normalizePath(path))
         case .hostPath(let path):
             return .hostPath(Self.normalizePath(path))
+        case .remoteSandbox:
+            return self
         }
     }
 
@@ -46,15 +52,23 @@ public struct HostTerminalSession: Identifiable, Hashable, Sendable {
     public let id: UUID
     public let key: HostTerminalSessionKey
     public let directoryPath: String
+    /// Custom shell command override (e.g. SSH to remote sandbox). When set, the terminal
+    /// launches this command instead of the user's default shell.
+    public let customCommand: String?
 
     public var directoryURL: URL {
         URL(fileURLWithPath: directoryPath)
     }
 
-    public init(id: UUID = UUID(), key: HostTerminalSessionKey, directory: URL) {
+    public var isRemote: Bool {
+        customCommand != nil
+    }
+
+    public init(id: UUID = UUID(), key: HostTerminalSessionKey, directory: URL, customCommand: String? = nil) {
         self.id = id
         self.key = key.normalized()
         self.directoryPath = Self.normalize(directory).path
+        self.customCommand = customCommand
     }
 
     static func normalize(_ url: URL) -> URL {
@@ -101,7 +115,8 @@ public struct HostTerminalSessionCoordinator: Sendable {
     @discardableResult
     public mutating func activate(
         key: HostTerminalSessionKey,
-        directory: URL
+        directory: URL,
+        customCommand: String? = nil
     ) -> HostTerminalSessionActivationResult {
         let normalizedDirectory = HostTerminalSession.normalize(directory)
         let normalizedPath = normalizedDirectory.path
@@ -119,7 +134,8 @@ public struct HostTerminalSessionCoordinator: Sendable {
 
         let session = HostTerminalSession(
             key: normalizedKey,
-            directory: normalizedDirectory
+            directory: normalizedDirectory,
+            customCommand: customCommand
         )
         sessions.append(session)
         activeSessionID = session.id

@@ -13,6 +13,7 @@ struct SidebarView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.gitService) private var gitService
     @Environment(\.workspaceService) private var workspaceService
+    @Environment(\.daytonaBackend) private var daytonaBackend
     let repos: [Repo]
     let webSources: [WebSource]
     @Binding var selectedWorkspace: Workspace?
@@ -28,6 +29,7 @@ struct SidebarView: View {
     @State private var isAddingRepo = false
     @State private var isAddingWebSource = false
     @State private var repoForNewWorkspace: Repo?
+    @State private var isDaytonaAvailable = false
 
     // Error alert state
     @State private var errorMessage: String?
@@ -252,9 +254,14 @@ struct SidebarView: View {
             }
         }
         .sheet(item: $repoForNewWorkspace) { repo in
-            NewWorkspaceSheet(repo: repo) { name in
+            NewWorkspaceSheet(repo: repo, isDaytonaAvailable: isDaytonaAvailable) { name, backend in
                 Task {
-                    await createWorkspace(from: repo, name: name)
+                    switch backend {
+                    case .local:
+                        await createWorkspace(from: repo, name: name)
+                    case .remoteVM:
+                        await createRemoteWorkspace(from: repo, name: name)
+                    }
                 }
             }
         }
@@ -301,6 +308,9 @@ struct SidebarView: View {
             Task {
                 await autoImportReposFromCodeHome()
             }
+        }
+        .task {
+            isDaytonaAvailable = await DaytonaBackend.isAvailable()
         }
     }
 
@@ -456,6 +466,37 @@ struct SidebarView: View {
         } catch {
             await MainActor.run {
                 errorMessage = "Failed to create workspace: \(error.localizedDescription)"
+                showingError = true
+            }
+        }
+    }
+
+    private func createRemoteWorkspace(from repo: Repo, name: String) async {
+        let cloneURL = repo.remoteURL
+        let backend = daytonaBackend
+
+        do {
+            let info = try await backend.createSandbox(name: name, cloneURL: cloneURL)
+
+            await MainActor.run {
+                let workspace = Workspace(
+                    name: name,
+                    path: FileManager.default.temporaryDirectory,
+                    sourceRepo: repo,
+                    backendIdentifier: DaytonaBackend.identifier,
+                    sandboxId: info.sandboxId
+                )
+                modelContext.insert(workspace)
+                if saveModelContext(action: "save remote workspace") {
+                    onWorkspaceCreated()
+                    selectedWorkspace = workspace
+                } else {
+                    modelContext.rollback()
+                }
+            }
+        } catch {
+            await MainActor.run {
+                errorMessage = "Failed to create remote workspace: \(error.localizedDescription)"
                 showingError = true
             }
         }

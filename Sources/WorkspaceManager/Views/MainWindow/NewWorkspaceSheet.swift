@@ -8,12 +8,35 @@
 import SwiftUI
 import WorkspaceManagerCore
 
+enum WorkspaceBackendChoice: String, CaseIterable, Identifiable {
+    case local
+    case remoteVM
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .local: return "Local"
+        case .remoteVM: return "Remote VM"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .local: return "laptopcomputer"
+        case .remoteVM: return "cloud"
+        }
+    }
+}
+
 struct NewWorkspaceSheet: View {
     let repo: Repo
-    let onCreate: (String) -> Void
+    let isDaytonaAvailable: Bool
+    let onCreate: (String, WorkspaceBackendChoice) -> Void
 
     @Environment(\.dismiss) private var dismiss
     @State private var name = ""
+    @State private var backend: WorkspaceBackendChoice = .local
     @State private var isCreating = false
 
     var isValid: Bool {
@@ -31,12 +54,21 @@ struct NewWorkspaceSheet: View {
         return candidate
     }
 
+    private var descriptionText: String {
+        switch backend {
+        case .local:
+            return "A copy of the repository will be created in a new directory."
+        case .remoteVM:
+            return "A Daytona sandbox will be created with the repo cloned via SSH."
+        }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             VStack(spacing: 8) {
-                Image(systemName: "plus.rectangle.on.folder.fill")
+                Image(systemName: backend == .remoteVM ? "cloud.fill" : "plus.rectangle.on.folder.fill")
                     .font(.system(size: 36))
-                    .foregroundStyle(.blue)
+                    .foregroundStyle(backend == .remoteVM ? .blue : .blue)
 
                 Text("New Workspace")
                     .font(.title2)
@@ -55,7 +87,17 @@ struct NewWorkspaceSheet: View {
                 TextField("Workspace Name", text: $name)
                     .textFieldStyle(.roundedBorder)
 
-                Text("A copy of the repository will be created in a new directory.")
+                if isDaytonaAvailable {
+                    Picker("Environment", selection: $backend) {
+                        ForEach(WorkspaceBackendChoice.allCases) { choice in
+                            Label(choice.label, systemImage: choice.icon)
+                                .tag(choice)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                }
+
+                Text(descriptionText)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -74,7 +116,7 @@ struct NewWorkspaceSheet: View {
 
                 Button("Create") {
                     isCreating = true
-                    onCreate(name.trimmingCharacters(in: .whitespacesAndNewlines))
+                    onCreate(name.trimmingCharacters(in: .whitespacesAndNewlines), backend)
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)
