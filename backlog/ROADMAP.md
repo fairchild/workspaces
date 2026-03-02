@@ -168,7 +168,7 @@ These wait for VZ backend or until usage reveals the need:
 - **Session history** (persist scrollback) — non-trivial GhosttyKit integration
 - **File watching auto-refresh** — manual refresh works
 - **Sparkle auto-update** — user base is one, defer
-- **Multi-terminal split** — high effort
+- **Pane-tree terminal tiling** — high effort; deferred with explicit execution plan in `backlog/pane-tree-tiling_plan.md`
 
 ### Dropped
 
@@ -199,6 +199,7 @@ Summary: backend abstraction/registry, VZTahoeBackend implementation (VM lifecyc
 | Shared desktop focus contention hardening | Follow-up | `backlog/shared-desktop-focus-contention-followup.md` |
 | Workspace creation progress indicator | UX | `backlog/workspace-create-progress-followup.md` |
 | Sparkle auto-update decision record | Plan | `backlog/sparkle-autoupdate-plan.md` |
+| Pane-tree terminal tiling model | Plan | `backlog/pane-tree-tiling_plan.md` |
 
 ---
 
