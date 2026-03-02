@@ -98,6 +98,54 @@ sequenceDiagram
     Content->>Perf: endRepoClickToFocusedInputIfNeeded(outcome)
 ```
 
+### `open_in_editor_launch`
+
+What it measures:
+- Time from `Open in Editor` invocation to editor process launch return (`Process.run()` success or failure).
+
+Start event:
+- `PerformanceSignposts.beginOpenInEditorLaunch(...)` in `OpenInEditorShortcutFlow.perform(...)`.
+
+End event:
+- `PerformanceSignposts.endOpenInEditorLaunchIfNeeded(...)` on launch success or failure.
+
+Why it matters:
+- This is the user-facing latency for the `Cmd+Shift+O` hero flow.
+- It also records guardrail outcomes for launch failures with categorized reasons.
+
+Outcome + guardrail fields:
+- `outcome=success|failure`
+- `failure_reason` (only when `outcome=failure`):
+  - `project_root_not_found`
+  - `file_not_found`
+  - `file_outside_project`
+  - `editor_not_installed`
+  - `editor_cli_unavailable`
+  - `launch_failed`
+  - `unexpected_error`
+
+Trigger field:
+- `trigger=shortcut|uiPrimaryAction|uiMenuSelection|unknown`
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant View as "ContentView"
+    participant Flow as "OpenInEditorShortcutFlow"
+    participant Perf as "PerformanceSignposts"
+    participant Editor as "ExternalEditorService"
+
+    User->>View: Cmd+Shift+O (or Open control)
+    View->>Flow: perform(target, editor, trigger)
+    Flow->>Perf: beginOpenInEditorLaunch(...)
+    Flow->>Editor: open(projectRoot, file?, editor)
+    alt Launch succeeds
+        Flow->>Perf: endOpenInEditorLaunchIfNeeded(outcome=success)
+    else Guardrail / launch failure
+        Flow->>Perf: endOpenInEditorLaunchIfNeeded(outcome=failure, failure_reason=...)
+    end
+```
+
 ## Interpreting Dashboard Changes
 
 1. Small run-to-run movement is normal (scheduler/window focus variance).

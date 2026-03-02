@@ -24,6 +24,7 @@ BUILD_BEFORE_LAUNCH=false
 KEEP_TMP=false
 APP_PID=""
 APP_LOG=""
+ARG_LINES=()
 
 TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/wm-open-shortcut-smoke-XXXXXX")"
 TEST_HOME="$TMP_ROOT/home"
@@ -210,6 +211,13 @@ wait_for_log_pattern() {
     return 1
 }
 
+wait_for_metric_success() {
+    local target_kind="$1"
+    local timeout_seconds="${2:-8}"
+    local pattern="\\[Perf\\] metric=open_in_editor_launch .*target=${target_kind} .*outcome=success"
+    wait_for_log_pattern "$pattern" "$timeout_seconds"
+}
+
 wait_for_invocation() {
     local timeout_seconds="${1:-6}"
     local deadline=$((SECONDS + timeout_seconds))
@@ -242,17 +250,25 @@ verify_single_invocation() {
     [[ "$invocation_count" == "1" ]] || fail "expected exactly 1 editor launch invocation, found $invocation_count"
 }
 
+read_args_file() {
+    local file_path="$1"
+    ARG_LINES=()
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        ARG_LINES+=("$line")
+    done < "$file_path"
+}
+
 verify_repo_only_invocation() {
     verify_single_invocation
 
-    mapfile -t args <"$CAPTURE_DIR/invocation-1.args"
-    [[ "${#args[@]}" -eq 1 ]] || fail "repo-only scenario expected 1 argument, found ${#args[@]}"
+    read_args_file "$CAPTURE_DIR/invocation-1.args"
+    [[ "${#ARG_LINES[@]}" -eq 1 ]] || fail "repo-only scenario expected 1 argument, found ${#ARG_LINES[@]}"
 
-    case "${args[0]}" in
-        "$TEST_HOME/code/skills"|"$TEST_HOME/code/services"|"$TEST_HOME/code/superpowers"|"$TEST_HOME/code/workspaces")
+    case "${ARG_LINES[0]}" in
+        "$HOME/code/skills"|"$HOME/code/services"|"$HOME/code/superpowers"|"$HOME/code/workspaces")
             ;;
         *)
-            fail "repo-only scenario used unexpected project root: ${args[0]}"
+            fail "repo-only scenario used unexpected project root: ${ARG_LINES[0]}"
             ;;
     esac
 }
@@ -260,14 +276,14 @@ verify_repo_only_invocation() {
 verify_file_selected_invocation() {
     verify_single_invocation
 
-    mapfile -t args <"$CAPTURE_DIR/invocation-1.args"
-    [[ "${#args[@]}" -eq 2 ]] || fail "file-selected scenario expected 2 arguments, found ${#args[@]}"
+    read_args_file "$CAPTURE_DIR/invocation-1.args"
+    [[ "${#ARG_LINES[@]}" -eq 2 ]] || fail "file-selected scenario expected 2 arguments, found ${#ARG_LINES[@]}"
 
-    local expected_root="$TEST_HOME/code/skills"
-    local expected_file="$TEST_HOME/code/skills/README.md"
+    local expected_root="$HOME/code/skills"
+    local expected_file="$HOME/code/skills/README.md"
 
-    [[ "${args[0]}" == "$expected_root" ]] || fail "file-selected scenario root mismatch: ${args[0]}"
-    [[ "${args[1]}" == "$expected_file" ]] || fail "file-selected scenario file mismatch: ${args[1]}"
+    [[ "${ARG_LINES[0]}" == "$expected_root" ]] || fail "file-selected scenario root mismatch: ${ARG_LINES[0]}"
+    [[ "${ARG_LINES[1]}" == "$expected_file" ]] || fail "file-selected scenario file mismatch: ${ARG_LINES[1]}"
 }
 
 run_repo_only_scenario() {
@@ -282,6 +298,8 @@ run_repo_only_scenario() {
     activate_app
     trigger_shortcut_until_invoked || fail "repo-only scenario did not trigger editor launch"
     verify_repo_only_invocation
+    wait_for_metric_success "project" 8 \
+        || fail "repo-only scenario missing open_in_editor_launch success metric in $APP_LOG"
     stop_app
 }
 
@@ -301,6 +319,8 @@ run_file_selected_scenario() {
     activate_app
     trigger_shortcut_until_invoked || fail "file-selected scenario did not trigger editor launch"
     verify_file_selected_invocation
+    wait_for_metric_success "project_and_file" 8 \
+        || fail "file-selected scenario missing open_in_editor_launch success metric in $APP_LOG"
     stop_app
 }
 

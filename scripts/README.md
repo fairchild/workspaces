@@ -57,6 +57,7 @@ Use these scripts for day-to-day UI verification:
   - repo selected, no file preview -> open project root only
   - file preview selected -> open project root + active file
 - Uses fixture mode and a fake Zed CLI shim to verify launched arguments.
+- Verifies `[Perf] metric=open_in_editor_launch ... outcome=success` log evidence.
 
 8. `./scripts/tart-webview-demo.sh`
 - Runs the repo/webview transition flow inside an isolated Tart VM.

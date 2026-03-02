@@ -70,3 +70,4 @@ Current split UI model is two-pane horizontal:
 4. Confirm logs include:
    - `[GhosttyAppManager] action=new_split ...`
    - `[GhosttyAppManager] action=goto_split ...`
+   - `[Perf] metric=open_in_editor_launch ... outcome=success|failure`

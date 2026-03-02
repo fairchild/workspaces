@@ -13,6 +13,97 @@ import Testing
 @MainActor
 @Suite("OpenInEditorShortcutFlow", .serialized)
 struct OpenInEditorShortcutFlowTests {
+    private struct MetricEvent: Equatable {
+        let phase: String
+        let fields: [String: String]
+    }
+
+    @Test("Launch metrics record success and duration for shortcut trigger")
+    func launchMetricsRecordSuccessForShortcutTrigger() throws {
+        let service = RecordingExternalEditorService()
+        let projectRootURL = URL(fileURLWithPath: "/tmp/workspaces-shortcut-success")
+        let target = OpenInEditorTarget.project(rootURL: projectRootURL)
+
+        let events = try captureOpenInEditorMetricEvents {
+            try OpenInEditorShortcutFlow.perform(
+                target: target,
+                editorID: nil,
+                externalEditorService: service,
+                trigger: .shortcut
+            )
+        }
+
+        #expect(events.count == 2)
+        guard events.count == 2 else { return }
+        #expect(events[0].phase == "started")
+        #expect(events[0].fields["metric"] == "open_in_editor_launch")
+        #expect(events[0].fields["status"] == "started")
+        #expect(events[0].fields["trigger"] == "shortcut")
+        #expect(events[0].fields["editor"] == "zed")
+        #expect(events[0].fields["target"] == "project")
+
+        #expect(events[1].phase == "completed")
+        #expect(events[1].fields["metric"] == "open_in_editor_launch")
+        #expect(events[1].fields["status"] == "completed")
+        #expect(events[1].fields["outcome"] == "success")
+        #expect(events[1].fields["failure_reason"] == nil)
+        #expect(events[1].fields["duration_ms"] != nil)
+    }
+
+    @Test("Launch metrics record categorized failure reason")
+    func launchMetricsRecordCategorizedFailureReason() {
+        let service = FailingExternalEditorService(error: .editorNotInstalled(.zed))
+        let projectRootURL = URL(fileURLWithPath: "/tmp/workspaces-shortcut-failure")
+        let target = OpenInEditorTarget.project(rootURL: projectRootURL)
+
+        var events: [MetricEvent] = []
+        PerformanceSignposts.setOpenInEditorMetricObserver { phase, fields in
+            events.append(MetricEvent(phase: phase, fields: fields))
+        }
+        defer {
+            PerformanceSignposts.setOpenInEditorMetricObserver(nil)
+        }
+
+        do {
+            try OpenInEditorShortcutFlow.perform(
+                target: target,
+                editorID: .zed,
+                externalEditorService: service,
+                trigger: .uiPrimaryAction
+            )
+            Issue.record("Expected editorNotInstalled error")
+        } catch let error as ExternalEditorError {
+            #expect(error == .editorNotInstalled(.zed))
+        } catch {
+            Issue.record("Expected ExternalEditorError, got \(error)")
+        }
+
+        #expect(events.count == 2)
+        guard events.count == 2 else { return }
+        #expect(events[1].phase == "completed")
+        #expect(events[1].fields["status"] == "completed")
+        #expect(events[1].fields["outcome"] == "failure")
+        #expect(events[1].fields["failure_reason"] == "editor_not_installed")
+        #expect(events[1].fields["duration_ms"] != nil)
+    }
+
+    @Test("No-target guardrail skips launch without metric interval")
+    func noTargetGuardrailSkipsLaunchWithoutMetricInterval() throws {
+        let service = RecordingExternalEditorService()
+
+        let events = try captureOpenInEditorMetricEvents {
+            try OpenInEditorShortcutFlow.perform(
+                target: nil,
+                editorID: nil,
+                externalEditorService: service,
+                trigger: .shortcut
+            )
+        }
+
+        #expect(events.isEmpty)
+        #expect(service.calls.isEmpty)
+    }
+
     @Test("Shortcut routing falls back to Ghostty when no open target exists")
     func shortcutRoutingFallsBackToGhosttyWithoutTarget() {
         ShortcutRoutingPolicy.shared.clearOverrides()
@@ -70,6 +161,20 @@ struct OpenInEditorShortcutFlowTests {
 
         #expect(service.calls == [.openProjectAndFile(projectRootURL, fileURL, editor: .zed)])
     }
+
+    private func captureOpenInEditorMetricEvents(
+        _ body: () throws -> Void
+    ) rethrows -> [MetricEvent] {
+        var events: [MetricEvent] = []
+        PerformanceSignposts.setOpenInEditorMetricObserver { phase, fields in
+            events.append(MetricEvent(phase: phase, fields: fields))
+        }
+        defer {
+            PerformanceSignposts.setOpenInEditorMetricObserver(nil)
+        }
+        try body()
+        return events
+    }
 }
 
 private final class RecordingExternalEditorService: ExternalEditorServiceProtocol {
@@ -88,5 +193,23 @@ private final class RecordingExternalEditorService: ExternalEditorServiceProtoco
 
     func open(projectRootURL: URL, fileURL: URL, editor: ExternalEditorID?) throws {
         calls.append(.openProjectAndFile(projectRootURL, fileURL, editor: editor))
+    }
+}
+
+private final class FailingExternalEditorService: ExternalEditorServiceProtocol {
+    let defaultEditor: ExternalEditorID = .zed
+    let availableEditors: [ExternalEditorDescriptor] = []
+    private let error: ExternalEditorError
+
+    init(error: ExternalEditorError) {
+        self.error = error
+    }
+
+    func open(projectRootURL: URL, editor: ExternalEditorID?) throws {
+        throw error
+    }
+
+    func open(projectRootURL: URL, fileURL: URL, editor: ExternalEditorID?) throws {
+        throw error
     }
 }
