@@ -25,12 +25,30 @@ KEEP_TMP=false
 APP_PID=""
 APP_LOG=""
 ARG_LINES=()
+ACCOUNT_HOME=""
 
 TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/wm-open-shortcut-smoke-XXXXXX")"
 TEST_HOME="$TMP_ROOT/home"
 CAPTURE_DIR="$TMP_ROOT/captures"
 FAKE_ZED_APP="$TMP_ROOT/Zed.app"
 FAKE_ZED_CLI="$FAKE_ZED_APP/Contents/MacOS/cli"
+
+resolve_account_home() {
+    local directory_home=""
+    if command -v dscl >/dev/null 2>&1; then
+        directory_home="$(dscl . -read "/Users/$USER" NFSHomeDirectory 2>/dev/null | awk '{print $2}' || true)"
+    fi
+
+    if [[ -z "$directory_home" ]]; then
+        directory_home="$(eval echo "~$USER")"
+    fi
+
+    if [[ -z "$directory_home" ]]; then
+        fail "unable to resolve account home directory"
+    fi
+
+    ACCOUNT_HOME="$directory_home"
+}
 
 log() {
     echo "[$(date +%H:%M:%S)] $*"
@@ -265,7 +283,7 @@ verify_repo_only_invocation() {
     [[ "${#ARG_LINES[@]}" -eq 1 ]] || fail "repo-only scenario expected 1 argument, found ${#ARG_LINES[@]}"
 
     case "${ARG_LINES[0]}" in
-        "$TEST_HOME/code/skills"|"$TEST_HOME/code/services"|"$TEST_HOME/code/superpowers"|"$TEST_HOME/code/workspaces")
+        "$ACCOUNT_HOME/code/skills"|"$ACCOUNT_HOME/code/services"|"$ACCOUNT_HOME/code/superpowers"|"$ACCOUNT_HOME/code/workspaces")
             ;;
         *)
             fail "repo-only scenario used unexpected project root: ${ARG_LINES[0]}"
@@ -279,8 +297,8 @@ verify_file_selected_invocation() {
     read_args_file "$CAPTURE_DIR/invocation-1.args"
     [[ "${#ARG_LINES[@]}" -eq 2 ]] || fail "file-selected scenario expected 2 arguments, found ${#ARG_LINES[@]}"
 
-    local expected_root="$TEST_HOME/code/skills"
-    local expected_file="$TEST_HOME/code/skills/README.md"
+    local expected_root="$ACCOUNT_HOME/code/skills"
+    local expected_file="$ACCOUNT_HOME/code/skills/README.md"
 
     [[ "${ARG_LINES[0]}" == "$expected_root" ]] || fail "file-selected scenario root mismatch: ${ARG_LINES[0]}"
     [[ "${ARG_LINES[1]}" == "$expected_file" ]] || fail "file-selected scenario file mismatch: ${ARG_LINES[1]}"
@@ -333,6 +351,7 @@ main() {
     require_cmd sed
     require_cmd swift
 
+    resolve_account_home
     ensure_clean_process_space
     prepare_fixture_home
     prepare_fake_zed_cli
