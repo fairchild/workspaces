@@ -119,8 +119,8 @@ enum OpenInEditorShortcutFlow {
     }
 }
 
-private extension OpenInEditorTarget {
-    var metricKind: String {
+extension OpenInEditorTarget {
+    fileprivate var metricKind: String {
         switch self {
         case .project:
             return "project"
