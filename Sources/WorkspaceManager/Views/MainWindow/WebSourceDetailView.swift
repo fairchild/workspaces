@@ -17,9 +17,6 @@ struct WebSourceDetailView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            header
-            Divider()
-
             if source.baseURL != nil {
                 WebSourceView(
                     source: source,
@@ -55,7 +52,6 @@ struct WebSourceDetailView: View {
             }
         }
         .navigationTitle(source.name)
-        .navigationSubtitle(source.allowedHost)
         .onAppear {
             surfaceStore.cancelPendingRelease()
         }
@@ -65,49 +61,5 @@ struct WebSourceDetailView: View {
         .onDisappear {
             surfaceStore.scheduleInactiveRelease()
         }
-    }
-
-    private var header: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "globe")
-                .foregroundStyle(.cyan)
-
-            VStack(alignment: .leading, spacing: 1) {
-                Text(source.name)
-                    .font(.headline)
-                    .lineLimit(1)
-                Text(source.allowedHost)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-
-            Spacer()
-
-            Button {
-                guard let baseURL = source.baseURL else { return }
-                NSWorkspace.shared.open(baseURL)
-            } label: {
-                Image(systemName: "safari")
-            }
-            .buttonStyle(.borderless)
-            .help("Open in Browser")
-
-            Button {
-                let webView = surfaceStore.ensureSurface(for: source)
-                if let currentURL = webView.url {
-                    webView.load(URLRequest(url: currentURL))
-                } else if let baseURL = source.baseURL {
-                    webView.load(URLRequest(url: baseURL))
-                }
-            } label: {
-                Image(systemName: "arrow.clockwise")
-            }
-            .buttonStyle(.borderless)
-            .help("Reload")
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(Color(nsColor: .controlBackgroundColor))
     }
 }

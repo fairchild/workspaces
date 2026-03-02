@@ -94,6 +94,23 @@ public enum WebSourceValidation {
         return baseURL.host ?? baseURL.absoluteString
     }
 
+    public static func faviconURL(baseURL: URL) -> URL? {
+        guard let scheme = baseURL.scheme?.lowercased(),
+            scheme == "http" || scheme == "https",
+            let host = baseURL.host?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !host.isEmpty
+        else {
+            return nil
+        }
+
+        var components = URLComponents()
+        components.scheme = scheme
+        components.host = host
+        components.port = baseURL.port
+        components.path = "/favicon.ico"
+        return components.url
+    }
+
     public static func host(
         _ candidateHost: String,
         isAllowedFor allowedHost: String,

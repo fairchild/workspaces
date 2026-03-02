@@ -136,6 +136,26 @@ struct ModelsTests {
             #expect(name == "docs.swift.org")
         }
 
+        @Test("Builds favicon URL from https host")
+        func faviconURLForHTTPSHost() throws {
+            let normalized = try WebSourceValidation.normalizeBaseURL("https://docs.example.com")
+            let faviconURL = WebSourceValidation.faviconURL(baseURL: normalized.baseURL)
+            #expect(faviconURL?.absoluteString == "https://docs.example.com/favicon.ico")
+        }
+
+        @Test("Builds favicon URL from http host with port")
+        func faviconURLForHTTPHostWithPort() throws {
+            let normalized = try WebSourceValidation.normalizeBaseURL("http://localhost:8080")
+            let faviconURL = WebSourceValidation.faviconURL(baseURL: normalized.baseURL)
+            #expect(faviconURL?.absoluteString == "http://localhost:8080/favicon.ico")
+        }
+
+        @Test("Returns nil favicon URL for non-web or hostless URLs")
+        func faviconURLRejectsInvalidHostOrScheme() {
+            #expect(WebSourceValidation.faviconURL(baseURL: URL(fileURLWithPath: "/tmp/index.html")) == nil)
+            #expect(WebSourceValidation.faviconURL(baseURL: URL(string: "/relative/path")!) == nil)
+        }
+
         @Test("Host policy allows exact host and subdomains")
         func hostPolicyAllowsSubdomains() {
             #expect(
