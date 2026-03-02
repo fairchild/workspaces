@@ -3,8 +3,20 @@ import Foundation
 
 enum ExternalEditorID: String, CaseIterable, Identifiable, Sendable {
     case zed
+    case vscode
+    case cursor
+    case sublimeText
 
     var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .zed: return "Zed"
+        case .vscode: return "VS Code"
+        case .cursor: return "Cursor"
+        case .sublimeText: return "Sublime Text"
+        }
+    }
 }
 
 struct ExternalEditorDescriptor: Identifiable, Hashable, Sendable {
@@ -28,8 +40,8 @@ enum ExternalEditorError: LocalizedError, Equatable {
             return "File not found: \(url.path)"
         case .fileOutsideProject(_, let file):
             return "Selected file is outside the project folder: \(file.path)"
-        case .editorNotInstalled(.zed):
-            return "Zed is not installed. Install Zed to use Open in Editor."
+        case .editorNotInstalled(let editor):
+            return "\(editor.displayName) is not installed. Install \(editor.displayName) to use Open in Editor."
         case .editorCLIUnavailable(let editor, let path):
             return "Could not locate \(editor.displayName) CLI at: \(path)"
         case .launchFailed(let editor, let reason):
@@ -48,8 +60,6 @@ protocol ExternalEditorServiceProtocol {
 
 final class ExternalEditorService: ExternalEditorServiceProtocol {
     static let shared = ExternalEditorService()
-    private static let zedBundleIdentifier = "dev.zed.Zed"
-    private static let zedAppPathOverrideEnvKey = "WORKSPACES_EDITOR_ZED_APP_PATH"
 
     typealias ResolveApplicationURL = (_ bundleIdentifier: String) -> URL?
     typealias LaunchProcess = (_ executable: String, _ arguments: [String]) throws -> Void
@@ -57,6 +67,35 @@ final class ExternalEditorService: ExternalEditorServiceProtocol {
     private let fileManager: FileManager
     private let resolveApplicationURL: ResolveApplicationURL
     private let launchProcess: LaunchProcess
+
+    private struct EditorSpec {
+        let bundleIdentifier: String
+        let cliRelativePath: String
+        let appPathOverrideEnvKey: String?
+    }
+
+    private static let editorSpecs: [ExternalEditorID: EditorSpec] = [
+        .zed: EditorSpec(
+            bundleIdentifier: "dev.zed.Zed",
+            cliRelativePath: "Contents/MacOS/cli",
+            appPathOverrideEnvKey: "WORKSPACES_EDITOR_ZED_APP_PATH"
+        ),
+        .vscode: EditorSpec(
+            bundleIdentifier: "com.microsoft.VSCode",
+            cliRelativePath: "Contents/Resources/app/bin/code",
+            appPathOverrideEnvKey: "WORKSPACES_EDITOR_VSCODE_APP_PATH"
+        ),
+        .cursor: EditorSpec(
+            bundleIdentifier: "com.todesktop.230313mzl4w4u92",
+            cliRelativePath: "Contents/Resources/app/bin/cursor",
+            appPathOverrideEnvKey: "WORKSPACES_EDITOR_CURSOR_APP_PATH"
+        ),
+        .sublimeText: EditorSpec(
+            bundleIdentifier: "com.sublimetext.4",
+            cliRelativePath: "Contents/SharedSupport/bin/subl",
+            appPathOverrideEnvKey: "WORKSPACES_EDITOR_SUBLIME_APP_PATH"
+        ),
+    ]
 
     init(
         fileManager: FileManager = .default,
@@ -75,9 +114,7 @@ final class ExternalEditorService: ExternalEditorServiceProtocol {
     }
 
     var availableEditors: [ExternalEditorDescriptor] {
-        [
-            ExternalEditorDescriptor(id: .zed, displayName: "Zed")
-        ]
+        ExternalEditorID.allCases.map { ExternalEditorDescriptor(id: $0, displayName: $0.displayName) }
     }
 
     func open(projectRootURL: URL, editor: ExternalEditorID? = nil) throws {
@@ -119,40 +156,32 @@ final class ExternalEditorService: ExternalEditorServiceProtocol {
         }
 
         let targetEditor = editor ?? defaultEditor
-
-        switch targetEditor {
-        case .zed:
-            try openInZed(projectRootURL: resolvedProjectRoot, fileURL: resolvedFileURL)
-        }
+        try openInEditor(targetEditor, projectRootURL: resolvedProjectRoot, fileURL: resolvedFileURL)
     }
 
-    private func openInZed(projectRootURL: URL, fileURL: URL?) throws {
-        let bundleIdentifier = Self.zedBundleIdentifier
-
-        guard let appURL = resolveApplicationURL(bundleIdentifier) else {
-            throw ExternalEditorError.editorNotInstalled(.zed)
+    private func openInEditor(_ editor: ExternalEditorID, projectRootURL: URL, fileURL: URL?) throws {
+        guard let spec = Self.editorSpecs[editor] else {
+            throw ExternalEditorError.editorNotInstalled(editor)
         }
 
-        let cliURL =
-            appURL
-            .appendingPathComponent("Contents", isDirectory: true)
-            .appendingPathComponent("MacOS", isDirectory: true)
-            .appendingPathComponent("cli", isDirectory: false)
+        guard let appURL = resolveApplicationURL(spec.bundleIdentifier) else {
+            throw ExternalEditorError.editorNotInstalled(editor)
+        }
+
+        let cliURL = appURL.appendingPathComponent(spec.cliRelativePath)
 
         guard fileManager.isExecutableFile(atPath: cliURL.path) else {
-            throw ExternalEditorError.editorCLIUnavailable(.zed, path: cliURL.path)
+            throw ExternalEditorError.editorCLIUnavailable(editor, path: cliURL.path)
         }
 
         do {
-            // Open workspace root first, then optional file path so Zed activates
-            // the file within that project rather than opening file-only context.
             var arguments = [projectRootURL.path]
             if let fileURL {
                 arguments.append(fileURL.path)
             }
             try launchProcess(cliURL.path, arguments)
         } catch {
-            throw ExternalEditorError.launchFailed(.zed, reason: error.localizedDescription)
+            throw ExternalEditorError.launchFailed(editor, reason: error.localizedDescription)
         }
     }
 
@@ -164,8 +193,9 @@ final class ExternalEditorService: ExternalEditorServiceProtocol {
     }
 
     private static func defaultResolveApplicationURL(bundleIdentifier: String) -> URL? {
-        if bundleIdentifier == zedBundleIdentifier,
-            let overridePath = ProcessInfo.processInfo.environment[zedAppPathOverrideEnvKey]?
+        if let spec = editorSpecs.values.first(where: { $0.bundleIdentifier == bundleIdentifier }),
+            let envKey = spec.appPathOverrideEnvKey,
+            let overridePath = ProcessInfo.processInfo.environment[envKey]?
                 .trimmingCharacters(in: .whitespacesAndNewlines),
             !overridePath.isEmpty
         {
@@ -182,7 +212,7 @@ final class ExternalEditorService: ExternalEditorServiceProtocol {
 
             NSLog(
                 "[ExternalEditor] Ignoring %@ override; directory missing at %@",
-                zedAppPathOverrideEnvKey,
+                envKey,
                 overrideURL.path
             )
         }
@@ -194,14 +224,5 @@ final class ExternalEditorService: ExternalEditorServiceProtocol {
         if path == root { return true }
         guard root != "/" else { return true }
         return path.hasPrefix(root + "/")
-    }
-}
-
-extension ExternalEditorID {
-    fileprivate var displayName: String {
-        switch self {
-        case .zed:
-            return "Zed"
-        }
     }
 }

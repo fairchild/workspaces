@@ -21,7 +21,7 @@ struct ExternalEditorServiceTests {
 
         let environmentKey = "WORKSPACES_EDITOR_ZED_APP_PATH"
         let previousValue = ProcessInfo.processInfo.environment[environmentKey]
-        setEnvironmentValue(fixture.zedAppURL.path, key: environmentKey)
+        setEnvironmentValue(fixture.appURL.path, key: environmentKey)
         defer { setEnvironmentValue(previousValue, key: environmentKey) }
 
         var launchedExecutable: String?
@@ -49,7 +49,7 @@ struct ExternalEditorServiceTests {
 
         let service = ExternalEditorService(
             fileManager: fileManager,
-            resolveApplicationURL: { _ in fixture.zedAppURL },
+            resolveApplicationURL: { _ in fixture.appURL },
             launchProcess: { executable, arguments in
                 launchedExecutable = executable
                 launchedArguments = arguments
@@ -76,7 +76,7 @@ struct ExternalEditorServiceTests {
 
         let service = ExternalEditorService(
             fileManager: fileManager,
-            resolveApplicationURL: { _ in fixture.zedAppURL },
+            resolveApplicationURL: { _ in fixture.appURL },
             launchProcess: { _, arguments in
                 launchedArguments = arguments
             }
@@ -100,7 +100,7 @@ struct ExternalEditorServiceTests {
 
         let service = ExternalEditorService(
             fileManager: fileManager,
-            resolveApplicationURL: { _ in fixture.zedAppURL },
+            resolveApplicationURL: { _ in fixture.appURL },
             launchProcess: { _, arguments in
                 launchedArguments = arguments
             }
@@ -152,7 +152,7 @@ struct ExternalEditorServiceTests {
 
         let service = ExternalEditorService(
             fileManager: fileManager,
-            resolveApplicationURL: { _ in fixture.zedAppURL },
+            resolveApplicationURL: { _ in fixture.appURL },
             launchProcess: { _, _ in
                 Issue.record("Launch should not run when file is missing")
             }
@@ -184,7 +184,7 @@ struct ExternalEditorServiceTests {
 
         let service = ExternalEditorService(
             fileManager: fileManager,
-            resolveApplicationURL: { _ in fixture.zedAppURL },
+            resolveApplicationURL: { _ in fixture.appURL },
             launchProcess: { _, _ in
                 Issue.record("Launch should not run when file is outside project root")
             }
@@ -215,7 +215,7 @@ struct ExternalEditorServiceTests {
 
         let service = ExternalEditorService(
             fileManager: fileManager,
-            resolveApplicationURL: { _ in fixture.zedAppURL },
+            resolveApplicationURL: { _ in fixture.appURL },
             launchProcess: { _, _ in
                 Issue.record("Launch should not run when project root is missing")
             }
@@ -240,7 +240,7 @@ struct ExternalEditorServiceTests {
 
         let service = ExternalEditorService(
             fileManager: fileManager,
-            resolveApplicationURL: { _ in fixture.zedAppURL },
+            resolveApplicationURL: { _ in fixture.appURL },
             launchProcess: { _, _ in
                 throw StubLaunchError(reason: "stub launch failure")
             }
@@ -258,15 +258,129 @@ struct ExternalEditorServiceTests {
         }
     }
 
+    @Test("Opening in VS Code launches correct CLI path")
+    func openingInVSCodeLaunchesCorrectCLIPath() throws {
+        let fileManager = FileManager.default
+        let fixture = try makeFixture(fileManager: fileManager, editor: .vscode)
+        defer { try? fileManager.removeItem(at: fixture.root) }
+
+        var launchedExecutable: String?
+        var launchedArguments: [String]?
+
+        let service = ExternalEditorService(
+            fileManager: fileManager,
+            resolveApplicationURL: { _ in fixture.appURL },
+            launchProcess: { executable, arguments in
+                launchedExecutable = executable
+                launchedArguments = arguments
+            }
+        )
+
+        try service.open(
+            projectRootURL: fixture.projectRootURL,
+            fileURL: fixture.fileURL,
+            editor: .vscode
+        )
+
+        #expect(launchedExecutable == fixture.cliURL.path)
+        #expect(launchedArguments == [fixture.projectRootURL.path, fixture.fileURL.path])
+    }
+
+    @Test("Opening in Cursor launches correct CLI path")
+    func openingInCursorLaunchesCorrectCLIPath() throws {
+        let fileManager = FileManager.default
+        let fixture = try makeFixture(fileManager: fileManager, editor: .cursor)
+        defer { try? fileManager.removeItem(at: fixture.root) }
+
+        var launchedExecutable: String?
+
+        let service = ExternalEditorService(
+            fileManager: fileManager,
+            resolveApplicationURL: { _ in fixture.appURL },
+            launchProcess: { executable, _ in
+                launchedExecutable = executable
+            }
+        )
+
+        try service.open(projectRootURL: fixture.projectRootURL, editor: .cursor)
+
+        #expect(launchedExecutable == fixture.cliURL.path)
+    }
+
+    @Test("Opening in Sublime Text launches correct CLI path")
+    func openingInSublimeTextLaunchesCorrectCLIPath() throws {
+        let fileManager = FileManager.default
+        let fixture = try makeFixture(fileManager: fileManager, editor: .sublimeText)
+        defer { try? fileManager.removeItem(at: fixture.root) }
+
+        var launchedExecutable: String?
+
+        let service = ExternalEditorService(
+            fileManager: fileManager,
+            resolveApplicationURL: { _ in fixture.appURL },
+            launchProcess: { executable, _ in
+                launchedExecutable = executable
+            }
+        )
+
+        try service.open(projectRootURL: fixture.projectRootURL, editor: .sublimeText)
+
+        #expect(launchedExecutable == fixture.cliURL.path)
+    }
+
+    @Test("Missing editor returns editorNotInstalled for each editor ID")
+    func missingEditorReturnsEditorNotInstalled() throws {
+        let fileManager = FileManager.default
+        let fixture = try makeFixture(fileManager: fileManager)
+        defer { try? fileManager.removeItem(at: fixture.root) }
+
+        let service = ExternalEditorService(
+            fileManager: fileManager,
+            resolveApplicationURL: { _ in nil },
+            launchProcess: { _, _ in }
+        )
+
+        for editor in ExternalEditorID.allCases {
+            do {
+                try service.open(projectRootURL: fixture.projectRootURL, editor: editor)
+                Issue.record("Expected editorNotInstalled for \(editor.displayName)")
+            } catch let error as ExternalEditorError {
+                #expect(error == .editorNotInstalled(editor))
+            }
+        }
+    }
+
+    @Test("availableEditors includes all editor IDs")
+    func availableEditorsIncludesAllEditorIDs() {
+        let service = ExternalEditorService(
+            resolveApplicationURL: { _ in nil },
+            launchProcess: { _, _ in }
+        )
+
+        let editorIDs = Set(service.availableEditors.map(\.id))
+        let allIDs = Set(ExternalEditorID.allCases)
+        #expect(editorIDs == allIDs)
+    }
+
+    private struct EditorFixture {
+        let root: URL
+        let projectRootURL: URL
+        let fileURL: URL
+        let appURL: URL
+        let cliURL: URL
+    }
+
+    private static let editorCLIPaths: [ExternalEditorID: (appName: String, cliRelativePath: String)] = [
+        .zed: ("Zed.app", "Contents/MacOS/cli"),
+        .vscode: ("VSCode.app", "Contents/Resources/app/bin/code"),
+        .cursor: ("Cursor.app", "Contents/Resources/app/bin/cursor"),
+        .sublimeText: ("SublimeText.app", "Contents/SharedSupport/bin/subl"),
+    ]
+
     private func makeFixture(
-        fileManager: FileManager
-    ) throws -> (
-        root: URL,
-        projectRootURL: URL,
-        fileURL: URL,
-        zedAppURL: URL,
-        cliURL: URL
-    ) {
+        fileManager: FileManager,
+        editor: ExternalEditorID = .zed
+    ) throws -> EditorFixture {
         let root = fileManager.temporaryDirectory
             .appendingPathComponent("workspace-manager-editor-tests-\(UUID().uuidString)", isDirectory: true)
         try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
@@ -279,21 +393,19 @@ struct ExternalEditorServiceTests {
         let fileURL = sourceDirectory.appendingPathComponent("main.swift")
         try Data("print(\"hello\")\n".utf8).write(to: fileURL)
 
-        let zedAppURL = root.appendingPathComponent("Zed.app", isDirectory: true)
-        let cliDirectory =
-            zedAppURL
-            .appendingPathComponent("Contents", isDirectory: true)
-            .appendingPathComponent("MacOS", isDirectory: true)
+        let spec = Self.editorCLIPaths[editor]!
+        let appURL = root.appendingPathComponent(spec.appName, isDirectory: true)
+        let cliURL = appURL.appendingPathComponent(spec.cliRelativePath)
+        let cliDirectory = cliURL.deletingLastPathComponent()
         try fileManager.createDirectory(at: cliDirectory, withIntermediateDirectories: true)
-        let cliURL = cliDirectory.appendingPathComponent("cli")
         try Data("#!/bin/sh\n".utf8).write(to: cliURL)
         try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: cliURL.path)
 
-        return (
+        return EditorFixture(
             root: root,
             projectRootURL: projectRootURL.standardizedFileURL.resolvingSymlinksInPath(),
             fileURL: fileURL.standardizedFileURL.resolvingSymlinksInPath(),
-            zedAppURL: zedAppURL.standardizedFileURL.resolvingSymlinksInPath(),
+            appURL: appURL.standardizedFileURL.resolvingSymlinksInPath(),
             cliURL: cliURL.standardizedFileURL.resolvingSymlinksInPath()
         )
     }
