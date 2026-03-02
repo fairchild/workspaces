@@ -6,13 +6,22 @@
 import SwiftUI
 import WorkspaceManagerCore
 
+enum TerminalPaneChromePolicy: Equatable, Sendable {
+    case minimal
+
+    static let current: Self = .minimal
+
+    var showsPaneHeader: Bool {
+        false
+    }
+
+    var showsManualRestartControl: Bool {
+        false
+    }
+}
+
 @MainActor
 final class HostTerminalSurfaceStore {
-    // Current refinement-gate policy: keep surfaces unbounded for deterministic
-    // session restore. Revisit with an inactive-surface LRU if sustained usage
-    // exceeds the threshold below or memory pressure is observed in profiling.
-    private let revisitThreshold = 24
-    private var didEmitRevisitLog = false
     private var surfaces: [UUID: GhosttySurfaceView] = [:]
     private var sessionIDsBySurfaceIdentity: [ObjectIdentifier: UUID] = [:]
 
@@ -22,20 +31,18 @@ final class HostTerminalSurfaceStore {
             return existing
         }
 
+        let sessionID = session.id
         let created = GhosttySurfaceView(
             workingDirectory: session.directoryURL,
-            onProcessExit: onProcessExit
+            onProcessExit: { [weak self] in
+                Task { @MainActor in
+                    self?.invalidate(sessionID: sessionID)
+                    onProcessExit?()
+                }
+            }
         )
         surfaces[session.id] = created
         sessionIDsBySurfaceIdentity[ObjectIdentifier(created)] = session.id
-
-        if surfaces.count >= revisitThreshold, !didEmitRevisitLog {
-            didEmitRevisitLog = true
-            NSLog(
-                "[HostSurfaceStore] Unbounded policy threshold reached (surfaces=%ld). Consider inactive LRU cap if memory pressure appears.",
-                surfaces.count
-            )
-        }
 
         return created
     }
@@ -58,21 +65,28 @@ final class HostTerminalSurfaceStore {
 struct TerminalContainerView: View {
     let workingDirectory: URL
     let processExitContext: String
+    let chromePolicy: TerminalPaneChromePolicy = .current
 
-    private var terminalIdentity: TerminalIdentity {
-        TerminalIdentity(
-            workingDirectoryPath: workingDirectory.path
-        )
+    static func identityToken(for workingDirectory: URL) -> String {
+        workingDirectory.path
+    }
+
+    @ViewBuilder
+    private var terminalSurface: some View {
+        switch chromePolicy {
+        case .minimal:
+            GhosttyTerminalRepresentable(
+                workingDirectory: workingDirectory,
+                onProcessExit: {
+                    NSLog("[GhosttyTerminal] Process exited for %@", processExitContext)
+                }
+            )
+        }
     }
 
     var body: some View {
-        GhosttyTerminalRepresentable(
-            workingDirectory: workingDirectory,
-            onProcessExit: {
-                NSLog("[GhosttyTerminal] Process exited for %@", processExitContext)
-            }
-        )
-        .id(terminalIdentity)
+        terminalSurface
+            .id(Self.identityToken(for: workingDirectory))
     }
 }
 
@@ -90,10 +104,6 @@ extension TerminalContainerView {
             processExitContext: "host terminal"
         )
     }
-}
-
-private struct TerminalIdentity: Hashable {
-    let workingDirectoryPath: String
 }
 
 struct GhosttyTerminalRepresentable: NSViewRepresentable {
@@ -117,17 +127,30 @@ struct PersistentHostTerminalContainerView: View {
     let session: HostTerminalSession
     let surfaceStore: HostTerminalSurfaceStore
     var onProcessExit: (() -> Void)?
+    let chromePolicy: TerminalPaneChromePolicy = .current
+
+    static func identityToken(for sessionID: UUID) -> UUID {
+        sessionID
+    }
+
+    @ViewBuilder
+    private var terminalSurface: some View {
+        switch chromePolicy {
+        case .minimal:
+            PersistentHostGhosttyRepresentable(
+                session: session,
+                surfaceStore: surfaceStore,
+                onProcessExit: {
+                    NSLog("[GhosttyTerminal] Process exited for host session %@", session.id.uuidString)
+                    onProcessExit?()
+                }
+            )
+        }
+    }
 
     var body: some View {
-        PersistentHostGhosttyRepresentable(
-            session: session,
-            surfaceStore: surfaceStore,
-            onProcessExit: {
-                NSLog("[GhosttyTerminal] Process exited for host session %@", session.id.uuidString)
-                onProcessExit?()
-            }
-        )
-        .id(session.id)
+        terminalSurface
+            .id(Self.identityToken(for: session.id))
     }
 }
 

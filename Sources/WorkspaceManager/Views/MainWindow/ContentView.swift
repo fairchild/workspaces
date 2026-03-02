@@ -96,15 +96,36 @@ struct ContentView: View {
         return repoByNormalizedPath[normalizedActiveSessionPath]
     }
 
-    private var activeRepoPathForSidebar: String? {
-        if let selectedRepoForInspector {
-            return normalizePath(selectedRepoForInspector.localPath)
+    private var paneCountBySessionKeyForSidebar: [HostTerminalSessionKey: Int] {
+        var paneCounts: [HostTerminalSessionKey: Int] = [:]
+        paneCounts.reserveCapacity(hostTerminalState.sessions.count)
+
+        for session in hostTerminalState.sessions {
+            paneCounts[session.key, default: 0] &+= 1
+            if hostTerminalState.splitSession(for: session.id) != nil {
+                paneCounts[session.key, default: 0] &+= 1
+            }
         }
 
-        guard let activeRepoPath = sessionPresentation.activeRepoPath else {
-            return nil
-        }
-        return normalizePath(activeRepoPath)
+        return paneCounts
+    }
+
+    private var activeSessionKeyForSidebar: HostTerminalSessionKey? {
+        Self.sidebarActiveSessionKey(
+            selectedWebSourceID: selectedWebSource?.id,
+            activeSessionID: hostTerminalState.activeSessionID,
+            sessions: hostTerminalState.sessions
+        )
+    }
+
+    static func sidebarActiveSessionKey(
+        selectedWebSourceID: UUID?,
+        activeSessionID: UUID?,
+        sessions: [HostTerminalSession]
+    ) -> HostTerminalSessionKey? {
+        guard selectedWebSourceID == nil else { return nil }
+        guard let activeSessionID else { return nil }
+        return sessions.first(where: { $0.id == activeSessionID })?.key
     }
 
     private var hasInspectorTarget: Bool {
@@ -230,10 +251,8 @@ struct ContentView: View {
                 selectedWorkspace: $selectedWorkspace,
                 selectedWebSource: $selectedWebSource,
                 defaultHostPath: resolvedDefaultHostDirectory.path,
-                hasDefaultHostSession: sessionPresentation.hasDefaultHomeSession,
-                isDefaultHostSessionActive: sessionPresentation.isDefaultHomeSessionActive,
-                liveRepoPaths: sessionPresentation.liveRepoPaths,
-                activeRepoPath: activeRepoPathForSidebar,
+                paneCountBySessionKey: paneCountBySessionKeyForSidebar,
+                activeSessionKey: activeSessionKeyForSidebar,
                 onDefaultHostSelected: handleDefaultHostSelection,
                 onRepoSelected: handleRepoSelection,
                 onWebSourceSelected: handleWebSourceSelection,
@@ -558,24 +577,16 @@ struct ContentView: View {
     @MainActor
     private func handleTerminalProcessExit(sessionID: UUID) {
         NSLog("[HostSession] Process exit detected for session %@", sessionID.uuidString)
-        guard hostTerminalState.handleProcessExit(for: sessionID) else {
+        guard
+            let focusSessionID = hostTerminalState.handleProcessExitAndResolveFocusTarget(
+                for: sessionID,
+                defaultHomeDirectory: resolvedDefaultHostDirectory
+            )
+        else {
             return
         }
-
-        if hostTerminalState.sessions.isEmpty {
-            let replacementSession = activateHostSession(
-                key: .defaultHome,
-                directory: resolvedDefaultHostDirectory
-            )
-            requestMainTerminalFocus(
-                targetSessionID: replacementSession.id,
-                activateApp: false
-            )
-            return
-        }
-
         requestMainTerminalFocus(
-            targetSessionID: hostTerminalState.activeSessionID,
+            targetSessionID: focusSessionID,
             activateApp: false
         )
     }
@@ -1299,6 +1310,28 @@ final class HostTerminalStateStore: ObservableObject {
         }
 
         return removed
+    }
+
+    /// Handles process-exit cleanup and resolves which session should receive focus.
+    /// Returns `nil` if the session was unknown/no-op.
+    @discardableResult
+    func handleProcessExitAndResolveFocusTarget(
+        for sessionID: UUID,
+        defaultHomeDirectory: URL
+    ) -> UUID? {
+        guard handleProcessExit(for: sessionID) else {
+            return nil
+        }
+
+        if sessions.isEmpty {
+            let replacement = activateSession(
+                key: .defaultHome,
+                directory: defaultHomeDirectory
+            )
+            return replacement.session.id
+        }
+
+        return activeSessionID
     }
 
     func splitSession(for primarySessionID: UUID?) -> HostTerminalSession? {

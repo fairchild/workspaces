@@ -22,6 +22,7 @@ final class GhosttySurfaceView: NSView, NSTextInputClient {
     private(set) var surface: ghostty_surface_t?
     private(set) var terminalTitle: String = ""
     private(set) var currentWorkingDirectory: String?
+    private var didProcessExit = false
     var workingDirectoryPath: String { workingDirectory.path }
 
     init(workingDirectory: URL, onProcessExit: (() -> Void)? = nil) {
@@ -127,7 +128,8 @@ final class GhosttySurfaceView: NSView, NSTextInputClient {
     }
 
     func runtimeDidRequestClose(processAlive: Bool) {
-        if !processAlive {
+        if !processAlive, !didProcessExit {
+            didProcessExit = true
             onProcessExit?()
         }
     }

@@ -8,6 +8,64 @@
 import SwiftUI
 import WorkspaceManagerCore
 
+enum SidebarSessionActivity: Equatable {
+    case inactive
+    case live
+    case active
+
+    init(hasLiveSession: Bool, isActiveSession: Bool) {
+        if isActiveSession {
+            self = .active
+        } else if hasLiveSession {
+            self = .live
+        } else {
+            self = .inactive
+        }
+    }
+
+    var isActive: Bool {
+        self == .active
+    }
+
+    var hasLiveSession: Bool {
+        self != .inactive
+    }
+
+    private var liveStatusColor: Color {
+        switch self {
+        case .inactive:
+            return .secondary
+        case .live:
+            return .mint
+        case .active:
+            return .green
+        }
+    }
+
+    func iconColor(inactiveColor: Color) -> Color {
+        hasLiveSession ? liveStatusColor : inactiveColor
+    }
+
+    var badgeColor: Color {
+        hasLiveSession ? liveStatusColor : .secondary
+    }
+
+    var accessibilityDescription: String {
+        switch self {
+        case .inactive:
+            return "no live session"
+        case .live:
+            return "live session"
+        case .active:
+            return "active session"
+        }
+    }
+
+    static func showsPaneCountBadge(for paneCount: Int) -> Bool {
+        paneCount > 1
+    }
+}
+
 private struct WorkspaceCountBadge: View {
     let count: Int
     let isCollapsed: Bool
@@ -35,35 +93,33 @@ private struct WorkspaceCountBadge: View {
     }
 }
 
-private struct LiveSessionBadge: View {
-    let isActiveSession: Bool
+private struct PaneCountBadge: View {
+    let count: Int
+    let sessionActivity: SidebarSessionActivity
 
     var body: some View {
-        HStack(spacing: 4) {
-            Image(systemName: isActiveSession ? "terminal.fill" : "terminal")
-                .font(.caption2)
-
-            if isActiveSession {
-                Text("LIVE")
-                    .font(.caption2)
-                    .fontWeight(.semibold)
-            }
-        }
-        .padding(.horizontal, 6)
-        .padding(.vertical, 3)
-        .foregroundStyle(isActiveSession ? .green : .secondary)
+        Text("\(count)")
+            .font(.caption2.monospacedDigit())
+            .fontWeight(.semibold)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 2)
+            .foregroundStyle(sessionActivity.badgeColor)
         .background(
             Capsule()
-                .fill(isActiveSession ? Color.green.opacity(0.18) : Color.secondary.opacity(0.15))
+                .fill(sessionActivity.badgeColor.opacity(sessionActivity.isActive ? 0.14 : 0.12))
         )
-        .accessibilityLabel(isActiveSession ? "Active live terminal session" : "Live terminal session")
+        .overlay(
+            Capsule()
+                .stroke(sessionActivity.badgeColor.opacity(0.22), lineWidth: 0.5)
+        )
+        .accessibilityLabel("\(count) pane\(count == 1 ? "" : "s")")
     }
 }
 
 struct HostTerminalRow: View {
     let defaultHostPath: String
-    let hasLiveSession: Bool
-    let isActiveSession: Bool
+    let sessionActivity: SidebarSessionActivity
+    let paneCount: Int
 
     private var displayHostPath: String {
         let homePath = FileManager.default.homeDirectoryForCurrentUser.path
@@ -78,8 +134,8 @@ struct HostTerminalRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: isActiveSession ? "house.fill" : "house")
-                .foregroundStyle(.orange)
+            Image(systemName: sessionActivity.isActive ? "house.fill" : "house")
+                .foregroundStyle(sessionActivity.iconColor(inactiveColor: .orange))
 
             Text(displayHostPath)
                 .font(.system(size: 16, weight: .medium))
@@ -88,19 +144,22 @@ struct HostTerminalRow: View {
 
             Spacer(minLength: 8)
 
-            if hasLiveSession {
-                LiveSessionBadge(isActiveSession: isActiveSession)
-                    .help(isActiveSession ? "Active live terminal session" : "Live terminal session")
+            if SidebarSessionActivity.showsPaneCountBadge(for: paneCount) {
+                PaneCountBadge(count: paneCount, sessionActivity: sessionActivity)
+                    .help("\(paneCount) open panes")
             }
         }
-        .accessibilityLabel("Code home \(displayHostPath)")
+        .accessibilityLabel(
+            "Code home \(displayHostPath), \(sessionActivity.accessibilityDescription)"
+                + (SidebarSessionActivity.showsPaneCountBadge(for: paneCount) ? ", \(paneCount) panes" : "")
+        )
     }
 }
 
 struct RepoRow: View {
     let repo: Repo
-    let hasLiveSession: Bool
-    let isActiveSession: Bool
+    let sessionActivity: SidebarSessionActivity
+    let paneCount: Int
     let isExpanded: Bool
     let onToggleExpansion: () -> Void
     let onSelectRepo: () -> Void
@@ -122,7 +181,7 @@ struct RepoRow: View {
             Button(action: onSelectRepo) {
                 HStack(spacing: 10) {
                     Image(systemName: "folder.fill")
-                        .foregroundStyle(.blue)
+                        .foregroundStyle(sessionActivity.iconColor(inactiveColor: .blue))
                         .frame(width: 18, alignment: .leading)
 
                     Text(repo.name)
@@ -138,9 +197,9 @@ struct RepoRow: View {
                         )
                     }
 
-                    if hasLiveSession {
-                        LiveSessionBadge(isActiveSession: isActiveSession)
-                            .help(isActiveSession ? "Active live terminal session" : "Live terminal session")
+                    if SidebarSessionActivity.showsPaneCountBadge(for: paneCount) {
+                        PaneCountBadge(count: paneCount, sessionActivity: sessionActivity)
+                            .help("\(paneCount) open panes")
                     }
                 }
                 .contentShape(Rectangle())
@@ -150,7 +209,9 @@ struct RepoRow: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(
-            "\(repo.name), \(repo.workspaces.count) workspace\(repo.workspaces.count == 1 ? "" : "s"), \(isExpanded ? "expanded" : "collapsed")"
+            "\(repo.name), \(repo.workspaces.count) workspace\(repo.workspaces.count == 1 ? "" : "s"), \(sessionActivity.accessibilityDescription)"
+                + (SidebarSessionActivity.showsPaneCountBadge(for: paneCount) ? ", \(paneCount) panes" : "")
+                + ", \(isExpanded ? "expanded" : "collapsed")"
         )
     }
 }
@@ -158,28 +219,33 @@ struct RepoRow: View {
 struct WorkspaceRow: View {
     let workspace: Workspace
     var isSelected: Bool = false
+    var sessionActivity: SidebarSessionActivity = .inactive
+    var paneCount: Int = 0
     var isNested: Bool = false
 
     var body: some View {
         HStack(spacing: 8) {
-            Label {
-                HStack {
-                    Text(workspace.name)
-                        .font(.system(size: 16, weight: .semibold))
-                        .lineLimit(1)
+            Image(systemName: sessionActivity.isActive ? "terminal.fill" : "terminal")
+                .foregroundStyle(sessionActivity.iconColor(inactiveColor: .secondary))
 
-                    if workspace.status == .archived {
-                        Text("Archived")
-                            .font(.caption2)
-                            .padding(.horizontal, 4)
-                            .padding(.vertical, 1)
-                            .background(.secondary.opacity(0.2))
-                            .clipShape(RoundedRectangle(cornerRadius: 3))
-                    }
-                }
-            } icon: {
-                Image(systemName: "terminal.fill")
-                    .foregroundStyle(workspace.status == .active ? .green : .secondary)
+            Text(workspace.name)
+                .font(.system(size: 16, weight: .semibold))
+                .lineLimit(1)
+
+            if workspace.status == .archived {
+                Text("Archived")
+                    .font(.caption2)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 1)
+                    .background(.secondary.opacity(0.2))
+                    .clipShape(RoundedRectangle(cornerRadius: 3))
+            }
+
+            Spacer(minLength: 8)
+
+            if SidebarSessionActivity.showsPaneCountBadge(for: paneCount) {
+                PaneCountBadge(count: paneCount, sessionActivity: sessionActivity)
+                    .help("\(paneCount) open panes")
             }
         }
         .padding(.leading, isNested ? 20 : 0)
@@ -188,6 +254,11 @@ struct WorkspaceRow: View {
         .background(
             RoundedRectangle(cornerRadius: 5)
                 .fill(isSelected ? Color.accentColor.opacity(0.13) : .clear)
+        )
+        .accessibilityLabel(
+            "\(workspace.name), \(sessionActivity.accessibilityDescription)"
+                + (SidebarSessionActivity.showsPaneCountBadge(for: paneCount) ? ", \(paneCount) panes" : "")
+                + (workspace.status == .archived ? ", archived" : "")
         )
     }
 }
