@@ -282,8 +282,8 @@ verify_repo_only_invocation() {
     read_args_file "$CAPTURE_DIR/invocation-1.args"
     [[ "${#ARG_LINES[@]}" -eq 1 ]] || fail "repo-only scenario expected 1 argument, found ${#ARG_LINES[@]}"
 
-    case "${ARG_LINES[0]}" in
-        "$ACCOUNT_HOME/code/skills"|"$ACCOUNT_HOME/code/services"|"$ACCOUNT_HOME/code/superpowers"|"$ACCOUNT_HOME/code/workspaces")
+    case "" in
+        "/code/skills"|"/code/services"|"/code/superpowers"|"/code/workspaces")
             ;;
         *)
             fail "repo-only scenario used unexpected project root: ${ARG_LINES[0]}"
@@ -297,8 +297,8 @@ verify_file_selected_invocation() {
     read_args_file "$CAPTURE_DIR/invocation-1.args"
     [[ "${#ARG_LINES[@]}" -eq 2 ]] || fail "file-selected scenario expected 2 arguments, found ${#ARG_LINES[@]}"
 
-    local expected_root="$ACCOUNT_HOME/code/skills"
-    local expected_file="$ACCOUNT_HOME/code/skills/README.md"
+    local expected_root="/code/skills"
+    local expected_file="/code/skills/README.md"
 
     [[ "${ARG_LINES[0]}" == "$expected_root" ]] || fail "file-selected scenario root mismatch: ${ARG_LINES[0]}"
     [[ "${ARG_LINES[1]}" == "$expected_file" ]] || fail "file-selected scenario file mismatch: ${ARG_LINES[1]}"
