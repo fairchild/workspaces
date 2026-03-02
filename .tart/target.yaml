@@ -11,11 +11,13 @@ target:
     open /Volumes/My\ Shared\ Files/workspaces/.build/arm64-apple-macosx/debug/WorkspaceManager.app
 
 landmarks:
-  # macOS system UI (stable for 2048x1536)
+  # macOS system UI
   apple_menu:         { x: 14,   y: 46 }
-  menu_app_name:      { x: 110,  y: 46 }
-  menu_file:          { x: 165,  y: 46 }
-  menu_edit:          { x: 210,  y: 46 }
+
+  # Menu bar (calibrated 2026-03-02 — "WorkspaceManager" is long, pushes items right)
+  menu_app_name:      { x: 200,  y: 46 }
+  menu_file:          { x: 400,  y: 46 }
+  menu_edit:          { x: 510,  y: 46 }
 
   # WorkspaceManager toolbar (calibrated 2026-03-01)
   toolbar_zed:        { x: 1790, y: 125 }
@@ -35,7 +37,7 @@ timing:
   dismiss_delay_ms: 300
 
 calibrated:
-  date: "2026-03-01"
+  date: "2026-03-02"
   display: "2048x1536"
   os: "macOS Tahoe"
-  notes: "toolbar y=125 confirmed via sweep 70-140 step 5; dock x approximate"
+  notes: "menu bar recalibrated 03-02 (WorkspaceManager pushes File to x=400); toolbar y=125 confirmed; dock x approximate"

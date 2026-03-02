@@ -153,6 +153,23 @@ def resolve_click_coords(
 # VNC mouse button mapping
 BUTTON_MAP: dict[str, int] = {"left": 1, "right": 3, "middle": 2}
 
+# vncdotool KEYMAP uses short lowercase names (esc, bsp, del, pgup, pgdn, etc).
+# Map common long-form names to vncdotool's expected short forms.
+KEYSYM_ALIASES: dict[str, str] = {
+    "escape": "esc",
+    "backspace": "bsp",
+    "delete": "del",
+    "insert": "ins",
+    "pageup": "pgup",
+    "pagedown": "pgdn",
+}
+
+
+def normalize_key(name: str) -> str:
+    """Map a user-friendly key name to the vncdotool KEYMAP name."""
+    lower = name.strip().lower()
+    return KEYSYM_ALIASES.get(lower, lower)
+
 
 # ---------------------------------------------------------------------------
 # tart exec
@@ -240,7 +257,7 @@ def vnc_send_keys(
     vnc_host: str, vnc_port: int, vnc_password: str, keys: str
 ) -> None:
     """Send a key combination via VNC (e.g. 'meta+space', 'ctrl+shift+a')."""
-    parts = [k.strip().lower() for k in keys.split("+")]
+    parts = [normalize_key(k) for k in keys.split("+")]
     if not parts:
         return
 
@@ -885,7 +902,7 @@ def command_batch(args: argparse.Namespace) -> int:
                 keys = step.get("keys")
                 if not keys:
                     raise fail(f"step {i}: 'send-keys' requires 'keys' field")
-                parts = [k.strip().lower() for k in keys.split("+")]
+                parts = [normalize_key(k) for k in keys.split("+")]
                 modifiers, final_key = parts[:-1], parts[-1]
                 for mod in modifiers:
                     client.keyDown(mod)
