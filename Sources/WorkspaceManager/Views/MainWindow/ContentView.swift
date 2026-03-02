@@ -248,6 +248,22 @@ struct ContentView: View {
     private var splitViewWithToolbar: some View {
         baseSplitView
             .toolbar {
+                ToolbarItemGroup(placement: .automatic) {
+                    if let defaultEditor = defaultEditorDescriptor,
+                        let workspace = selectedWorkspace
+                    {
+                        WorkspaceEditorToolbarButton(
+                            workspaceName: workspace.name,
+                            editorOptions: availableEditors,
+                            defaultEditor: defaultEditor,
+                            onOpenInDefaultEditor: openInDefaultEditor,
+                            onOpenInEditor: openInSelectedEditor,
+                            onRevealInFinder: revealInFinder,
+                            onCopyPath: copyWorkspacePath
+                        )
+                    }
+                }
+
                 ToolbarItemGroup(placement: .primaryAction) {
                     Button {
                         withAnimation(.easeInOut(duration: 0.2)) {
@@ -624,6 +640,29 @@ struct ContentView: View {
         } catch {
             presentOpenInEditorError(error)
         }
+    }
+
+    @MainActor
+    private func revealInFinder() {
+        guard let target = openInEditorTarget else { return }
+        switch target {
+        case .project(let rootURL):
+            NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: rootURL.path)
+        case .projectAndFile(let rootURL, let fileURL):
+            NSWorkspace.shared.selectFile(fileURL.path, inFileViewerRootedAtPath: rootURL.path)
+        }
+    }
+
+    @MainActor
+    private func copyWorkspacePath() {
+        guard let target = openInEditorTarget else { return }
+        let path: String
+        switch target {
+        case .project(let rootURL): path = rootURL.path
+        case .projectAndFile(_, let fileURL): path = fileURL.path
+        }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(path, forType: .string)
     }
 
     private func handleCodePreviewSelection(_ selection: CodePreviewSelection) {
