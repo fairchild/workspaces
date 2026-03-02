@@ -1,0 +1,41 @@
+# WorkspaceManager target manifest
+# Physical pixel coordinates calibrated for the display resolution below.
+# Used by tart_vm_harness.py --landmark and batch steps.
+
+target:
+  app_name: WorkspaceManager
+  bundle_id: com.cloudcompute.workspaces
+  base_vm: macos-tahoe-xcode
+  display: "2048x1536"
+  launch_cmd: >-
+    open /Volumes/My\ Shared\ Files/workspaces/.build/arm64-apple-macosx/debug/WorkspaceManager.app
+
+landmarks:
+  # macOS system UI (stable for 2048x1536)
+  apple_menu:         { x: 14,   y: 46 }
+  menu_app_name:      { x: 110,  y: 46 }
+  menu_file:          { x: 165,  y: 46 }
+  menu_edit:          { x: 210,  y: 46 }
+
+  # WorkspaceManager toolbar (calibrated 2026-03-01)
+  toolbar_zed:        { x: 1790, y: 125 }
+  toolbar_open_menu:  { x: 1870, y: 125 }
+
+  # Sidebar
+  sidebar_first_repo: { x: 55,   y: 68 }
+  sidebar_first_ws:   { x: 55,   y: 92 }
+
+  # Dock
+  dock_icon:          { x: 1650, y: 1490 }
+
+timing:
+  post_click_ms: 500
+  app_launch_ms: 3000
+  menu_settle_ms: 300
+  dismiss_delay_ms: 300
+
+calibrated:
+  date: "2026-03-01"
+  display: "2048x1536"
+  os: "macOS Tahoe"
+  notes: "toolbar y=125 confirmed via sweep 70-140 step 5; dock x approximate"
