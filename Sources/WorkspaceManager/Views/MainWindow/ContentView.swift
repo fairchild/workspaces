@@ -1047,11 +1047,6 @@ struct MainTerminalDetailView: View {
     let rightPaneStateStore: RightPaneStateStore
     @Binding var isRightPaneVisible: Bool
 
-    private var activeHostSession: HostTerminalSession? {
-        guard let activeHostTerminalSessionID else { return hostTerminalSessions.last }
-        return hostTerminalSessions.first(where: { $0.id == activeHostTerminalSessionID }) ?? hostTerminalSessions.last
-    }
-
     var body: some View {
         HSplitView {
             previewAndTerminalPanel
@@ -1077,7 +1072,6 @@ struct MainTerminalDetailView: View {
             }
         }
         .navigationTitle(selectedWorkspace?.name ?? "Host")
-        .navigationSubtitle(selectedWorkspace?.sourceRepo?.name ?? (activeHostSession?.directoryPath ?? ""))
     }
 
     @ViewBuilder

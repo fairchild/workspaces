@@ -51,7 +51,7 @@ struct WorkspaceManagerApp: App {
         .defaultSize(width: 1400, height: 900)
         .windowResizability(.contentSize)
         .windowStyle(.automatic)
-        .windowToolbarStyle(.unified(showsTitle: true))
+        .windowToolbarStyle(.unifiedCompact(showsTitle: true))
         .commands {
             CommandGroup(after: .newItem) {
                 Button("New Workspace...") {

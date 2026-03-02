@@ -56,66 +56,29 @@ final class HostTerminalSurfaceStore {
 }
 
 struct TerminalContainerView: View {
-    let modeLabel: String
     let workingDirectory: URL
     let processExitContext: String
-    @State private var restartGeneration = 0
 
     private var terminalIdentity: TerminalIdentity {
         TerminalIdentity(
-            workingDirectoryPath: workingDirectory.path,
-            restartGeneration: restartGeneration
+            workingDirectoryPath: workingDirectory.path
         )
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Image(systemName: "terminal.fill")
-                    .foregroundStyle(.secondary)
-
-                Text(modeLabel)
-                    .font(.caption)
-                    .fontWeight(.semibold)
-                    .foregroundStyle(.secondary)
-
-                Text(workingDirectory.path)
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.head)
-
-                Spacer()
-
-                Button {
-                    restartGeneration &+= 1
-                } label: {
-                    Image(systemName: "arrow.counterclockwise")
-                }
-                .buttonStyle(.borderless)
-                .help("Restart Terminal")
+        GhosttyTerminalRepresentable(
+            workingDirectory: workingDirectory,
+            onProcessExit: {
+                NSLog("[GhosttyTerminal] Process exited for %@", processExitContext)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(Color(nsColor: .controlBackgroundColor))
-
-            Divider()
-
-            GhosttyTerminalRepresentable(
-                workingDirectory: workingDirectory,
-                onProcessExit: {
-                    NSLog("[GhosttyTerminal] Process exited for %@", processExitContext)
-                }
-            )
-            .id(terminalIdentity)
-        }
+        )
+        .id(terminalIdentity)
     }
 }
 
 extension TerminalContainerView {
     init(workspace: Workspace) {
         self.init(
-            modeLabel: "Workspace",
             workingDirectory: workspace.workspaceURL,
             processExitContext: "workspace '\(workspace.name)'"
         )
@@ -123,7 +86,6 @@ extension TerminalContainerView {
 
     init(hostDirectory: URL) {
         self.init(
-            modeLabel: "Host",
             workingDirectory: hostDirectory,
             processExitContext: "host terminal"
         )
@@ -132,7 +94,6 @@ extension TerminalContainerView {
 
 private struct TerminalIdentity: Hashable {
     let workingDirectoryPath: String
-    let restartGeneration: Int
 }
 
 struct GhosttyTerminalRepresentable: NSViewRepresentable {
@@ -156,58 +117,18 @@ struct PersistentHostTerminalContainerView: View {
     let session: HostTerminalSession
     let surfaceStore: HostTerminalSurfaceStore
     var onProcessExit: (() -> Void)?
-    @State private var restartGeneration = 0
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Image(systemName: "terminal.fill")
-                    .foregroundStyle(.secondary)
-
-                Text("Host")
-                    .font(.caption)
-                    .fontWeight(.semibold)
-                    .foregroundStyle(.secondary)
-
-                Text(session.directoryPath)
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.head)
-
-                Spacer()
-
-                Button {
-                    surfaceStore.invalidate(sessionID: session.id)
-                    restartGeneration &+= 1
-                } label: {
-                    Image(systemName: "arrow.counterclockwise")
-                }
-                .buttonStyle(.borderless)
-                .help("Restart Terminal")
+        PersistentHostGhosttyRepresentable(
+            session: session,
+            surfaceStore: surfaceStore,
+            onProcessExit: {
+                NSLog("[GhosttyTerminal] Process exited for host session %@", session.id.uuidString)
+                onProcessExit?()
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(Color(nsColor: .controlBackgroundColor))
-
-            Divider()
-
-            PersistentHostGhosttyRepresentable(
-                session: session,
-                surfaceStore: surfaceStore,
-                onProcessExit: {
-                    NSLog("[GhosttyTerminal] Process exited for host session %@", session.id.uuidString)
-                    onProcessExit?()
-                }
-            )
-            .id(PersistentHostTerminalIdentity(sessionID: session.id, restartGeneration: restartGeneration))
-        }
+        )
+        .id(session.id)
     }
-}
-
-private struct PersistentHostTerminalIdentity: Hashable {
-    let sessionID: UUID
-    let restartGeneration: Int
 }
 
 private struct PersistentHostGhosttyRepresentable: NSViewRepresentable {
