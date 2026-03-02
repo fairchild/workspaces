@@ -48,6 +48,29 @@ struct WebSourceBehaviorTests {
         #expect(policy.shouldAllow(url: URL(string: "about:blank")!))
     }
 
+    @Test("Navigation policy allows additional exact allowlisted domains")
+    func navigationPolicyAllowsAdditionalExactDomains() {
+        let policy = WebNavigationPolicy(
+            allowedHost: "example.com",
+            additionalAllowedDomains: ["portal.example.net"]
+        )
+
+        #expect(policy.shouldAllow(url: URL(string: "https://portal.example.net/docs")!))
+        #expect(!policy.shouldAllow(url: URL(string: "https://www.portal.example.net/docs")!))
+    }
+
+    @Test("Navigation policy allows additional wildcard allowlisted domains")
+    func navigationPolicyAllowsAdditionalWildcardDomains() {
+        let policy = WebNavigationPolicy(
+            allowedHost: "example.com",
+            additionalAllowedDomains: ["*.swift.org"]
+        )
+
+        #expect(policy.shouldAllow(url: URL(string: "https://swift.org/documentation")!))
+        #expect(policy.shouldAllow(url: URL(string: "https://docs.swift.org/documentation")!))
+        #expect(!policy.shouldAllow(url: URL(string: "https://swift.com/documentation")!))
+    }
+
     @Test("Blocked main-frame navigation opens externally and records callback")
     func blockedMainFrameNavigationOpensExternally() {
         let blockedURL = URL(string: "https://example.net/path")!

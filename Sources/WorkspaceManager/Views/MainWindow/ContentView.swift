@@ -278,7 +278,23 @@ struct ContentView: View {
         baseSplitView
             .toolbar {
                 ToolbarItemGroup(placement: .automatic) {
-                    if let defaultEditor = defaultEditorDescriptor,
+                    if let selectedWebSource {
+                        Button {
+                            openSelectedWebSourceInBrowser()
+                        } label: {
+                            Image(systemName: "safari")
+                        }
+                        .help("Open in Browser")
+                        .disabled(selectedWebSource.baseURL == nil)
+
+                        Button {
+                            reloadSelectedWebSource()
+                        } label: {
+                            Image(systemName: "arrow.clockwise")
+                        }
+                        .help("Reload")
+                        .disabled(selectedWebSource.baseURL == nil)
+                    } else if let defaultEditor = defaultEditorDescriptor,
                         let workspace = selectedWorkspace
                     {
                         WorkspaceEditorToolbarButton(
@@ -870,6 +886,28 @@ struct ContentView: View {
     private func handleCodePreviewSelection(_ selection: CodePreviewSelection) {
         selectedCodePreview = selection
         isTerminalPanelVisible = true
+    }
+
+    @MainActor
+    private func openSelectedWebSourceInBrowser() {
+        guard let selectedWebSource else { return }
+        let webView = webSurfaceStore.ensureSurface(for: selectedWebSource)
+        if let currentURL = webView.url {
+            NSWorkspace.shared.open(currentURL)
+        } else if let baseURL = selectedWebSource.baseURL {
+            NSWorkspace.shared.open(baseURL)
+        }
+    }
+
+    @MainActor
+    private func reloadSelectedWebSource() {
+        guard let selectedWebSource else { return }
+        let webView = webSurfaceStore.ensureSurface(for: selectedWebSource)
+        if let currentURL = webView.url {
+            webView.load(URLRequest(url: currentURL))
+        } else if let baseURL = selectedWebSource.baseURL {
+            webView.load(URLRequest(url: baseURL))
+        }
     }
 
     private func clearCodePreview() {

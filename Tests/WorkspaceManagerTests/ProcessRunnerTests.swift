@@ -58,4 +58,18 @@ struct ProcessRunnerTests {
         #expect(result.exitCode == 7)
         #expect(result.stderr.contains("intentional failure"))
     }
+
+    @Test("Captures short stdout reliably for rapid process exits")
+    func capturesShortStdoutReliably() async throws {
+        for index in 0..<100 {
+            let token = "rapid-\(index)"
+            let result = try await ProcessRunner.run(
+                executable: "/bin/echo",
+                arguments: [token]
+            )
+
+            #expect(result.success)
+            #expect(result.stdout.contains(token))
+        }
+    }
 }

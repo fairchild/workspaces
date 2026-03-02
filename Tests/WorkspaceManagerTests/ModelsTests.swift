@@ -136,6 +136,26 @@ struct ModelsTests {
             #expect(name == "docs.swift.org")
         }
 
+        @Test("Builds favicon URL from https host")
+        func faviconURLForHTTPSHost() throws {
+            let normalized = try WebSourceValidation.normalizeBaseURL("https://docs.example.com")
+            let faviconURL = WebSourceValidation.faviconURL(baseURL: normalized.baseURL)
+            #expect(faviconURL?.absoluteString == "https://docs.example.com/favicon.ico")
+        }
+
+        @Test("Builds favicon URL from http host with port")
+        func faviconURLForHTTPHostWithPort() throws {
+            let normalized = try WebSourceValidation.normalizeBaseURL("http://localhost:8080")
+            let faviconURL = WebSourceValidation.faviconURL(baseURL: normalized.baseURL)
+            #expect(faviconURL?.absoluteString == "http://localhost:8080/favicon.ico")
+        }
+
+        @Test("Returns nil favicon URL for non-web or hostless URLs")
+        func faviconURLRejectsInvalidHostOrScheme() {
+            #expect(WebSourceValidation.faviconURL(baseURL: URL(fileURLWithPath: "/tmp/index.html")) == nil)
+            #expect(WebSourceValidation.faviconURL(baseURL: URL(string: "/relative/path")!) == nil)
+        }
+
         @Test("Host policy allows exact host and subdomains")
         func hostPolicyAllowsSubdomains() {
             #expect(
@@ -159,6 +179,33 @@ struct ModelsTests {
                     allowsSubdomains: true
                 )
             )
+        }
+
+        @Test("Additional allowlist normalization supports wildcard and deduplicates values")
+        func normalizeAdditionalAllowlistDomains() throws {
+            let domains = try WebSourceValidation.normalizeAdditionalAllowedDomains(
+                " api.example.com, *.example.org\nAPI.example.com \n"
+            )
+            #expect(domains == ["api.example.com", "*.example.org"])
+        }
+
+        @Test("Additional allowlist normalization rejects invalid domains")
+        func rejectInvalidAdditionalAllowlistDomain() {
+            #expect(throws: WebSourceValidationError.invalidAllowlistedDomain("https://example.com")) {
+                try WebSourceValidation.normalizeAdditionalAllowedDomains("https://example.com")
+            }
+            #expect(throws: WebSourceValidationError.invalidAllowlistedDomain("*.bad/domain")) {
+                try WebSourceValidation.normalizeAdditionalAllowedDomains("*.bad/domain")
+            }
+        }
+
+        @Test("Allowlist host matching supports wildcard entries")
+        func allowlistHostMatchingSupportsWildcard() {
+            #expect(WebSourceValidation.host("example.com", matchesAllowlistDomain: "*.example.com"))
+            #expect(WebSourceValidation.host("docs.example.com", matchesAllowlistDomain: "*.example.com"))
+            #expect(!WebSourceValidation.host("example.net", matchesAllowlistDomain: "*.example.com"))
+            #expect(WebSourceValidation.host("api.example.com", matchesAllowlistDomain: "api.example.com"))
+            #expect(!WebSourceValidation.host("www.api.example.com", matchesAllowlistDomain: "api.example.com"))
         }
     }
 }

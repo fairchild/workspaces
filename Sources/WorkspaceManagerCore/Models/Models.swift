@@ -45,6 +45,7 @@ public final class WebSource {
     public var name: String
     public var baseURLString: String
     public var allowedHost: String
+    public var additionalAllowedDomainsRaw: String
     public var addedAt: Date
     public var lastAccessedAt: Date
 
@@ -52,11 +53,21 @@ public final class WebSource {
         URL(string: baseURLString)
     }
 
+    public var additionalAllowedDomains: [String] {
+        get {
+            Self.decodeAdditionalAllowedDomains(additionalAllowedDomainsRaw)
+        }
+        set {
+            additionalAllowedDomainsRaw = Self.encodeAdditionalAllowedDomains(newValue)
+        }
+    }
+
     public init(
         id: UUID = UUID(),
         name: String,
         baseURLString: String,
         allowedHost: String,
+        additionalAllowedDomains: [String] = [],
         addedAt: Date = Date(),
         lastAccessedAt: Date = Date()
     ) {
@@ -64,8 +75,23 @@ public final class WebSource {
         self.name = name
         self.baseURLString = baseURLString
         self.allowedHost = allowedHost.lowercased()
+        self.additionalAllowedDomainsRaw = Self.encodeAdditionalAllowedDomains(additionalAllowedDomains)
         self.addedAt = addedAt
         self.lastAccessedAt = lastAccessedAt
+    }
+
+    private static func decodeAdditionalAllowedDomains(_ rawValue: String) -> [String] {
+        rawValue
+            .split(separator: "\n")
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            .filter { !$0.isEmpty }
+    }
+
+    private static func encodeAdditionalAllowedDomains(_ domains: [String]) -> String {
+        domains
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n")
     }
 }
 

@@ -11,58 +11,30 @@ enum ProcessRunner {
     private final class State: @unchecked Sendable {
         private let lock = NSLock()
 
-        private var stdoutData = Data()
-        private var stderrData = Data()
-        private var exitCode: Int32 = 0
-        private var didTerminate = false
-        private var stdoutDone = false
-        private var stderrDone = false
+        private var stdoutData: Data?
+        private var stderrData: Data?
+        private var exitCode: Int32?
         private var didResume = false
 
-        func appendStdout(_ data: Data) {
+        func completeStdout(_ data: Data) -> ProcessResult? {
             lock.lock()
-            stdoutData.append(data)
-            lock.unlock()
-        }
-
-        func appendStderr(_ data: Data) {
-            lock.lock()
-            stderrData.append(data)
-            lock.unlock()
-        }
-
-        func markStdoutDone() -> ProcessResult? {
-            lock.lock()
-            stdoutDone = true
+            stdoutData = data
             let result = makeResultIfReadyLocked()
             lock.unlock()
             return result
         }
 
-        func markStderrDone() -> ProcessResult? {
+        func completeStderr(_ data: Data) -> ProcessResult? {
             lock.lock()
-            stderrDone = true
+            stderrData = data
             let result = makeResultIfReadyLocked()
             lock.unlock()
             return result
         }
 
-        func markTerminated(
-            exitCode: Int32,
-            remainingStdout: Data,
-            remainingStderr: Data
-        ) -> ProcessResult? {
+        func markTerminated(exitCode: Int32) -> ProcessResult? {
             lock.lock()
             self.exitCode = exitCode
-            didTerminate = true
-            stdoutDone = true
-            stderrDone = true
-            if !remainingStdout.isEmpty {
-                stdoutData.append(remainingStdout)
-            }
-            if !remainingStderr.isEmpty {
-                stderrData.append(remainingStderr)
-            }
             let result = makeResultIfReadyLocked()
             lock.unlock()
             return result
@@ -77,12 +49,18 @@ enum ProcessRunner {
         }
 
         private func makeResultIfReadyLocked() -> ProcessResult? {
-            guard !didResume, didTerminate, stdoutDone, stderrDone else { return nil }
+            guard
+                !didResume,
+                let exitCode,
+                let stdoutData,
+                let stderrData
+            else { return nil }
+
             didResume = true
             return ProcessResult(
                 exitCode: exitCode,
-                stdout: String(data: stdoutData, encoding: .utf8) ?? "",
-                stderr: String(data: stderrData, encoding: .utf8) ?? ""
+                stdout: String(data: stdoutData, encoding: .utf8) ?? String(decoding: stdoutData, as: UTF8.self),
+                stderr: String(data: stderrData, encoding: .utf8) ?? String(decoding: stderrData, as: UTF8.self)
             )
         }
     }
@@ -109,42 +87,22 @@ enum ProcessRunner {
             let stderrHandle = stderrPipe.fileHandleForReading
             let state = State()
 
-            stdoutHandle.readabilityHandler = { handle in
-                let data = handle.availableData
-                if data.isEmpty {
-                    handle.readabilityHandler = nil
-                    if let result = state.markStdoutDone() {
-                        continuation.resume(returning: result)
-                    }
-                } else {
-                    state.appendStdout(data)
+            DispatchQueue.global(qos: .userInitiated).async {
+                let data = stdoutHandle.readDataToEndOfFile()
+                if let result = state.completeStdout(data) {
+                    continuation.resume(returning: result)
                 }
             }
 
-            stderrHandle.readabilityHandler = { handle in
-                let data = handle.availableData
-                if data.isEmpty {
-                    handle.readabilityHandler = nil
-                    if let result = state.markStderrDone() {
-                        continuation.resume(returning: result)
-                    }
-                } else {
-                    state.appendStderr(data)
+            DispatchQueue.global(qos: .userInitiated).async {
+                let data = stderrHandle.readDataToEndOfFile()
+                if let result = state.completeStderr(data) {
+                    continuation.resume(returning: result)
                 }
             }
 
-            process.terminationHandler = { _ in
-                stdoutHandle.readabilityHandler = nil
-                stderrHandle.readabilityHandler = nil
-
-                let remainingStdout = stdoutHandle.readDataToEndOfFile()
-                let remainingStderr = stderrHandle.readDataToEndOfFile()
-
-                if let result = state.markTerminated(
-                    exitCode: process.terminationStatus,
-                    remainingStdout: remainingStdout,
-                    remainingStderr: remainingStderr
-                ) {
+            process.terminationHandler = { process in
+                if let result = state.markTerminated(exitCode: process.terminationStatus) {
                     continuation.resume(returning: result)
                 }
             }
@@ -152,8 +110,8 @@ enum ProcessRunner {
             do {
                 try process.run()
             } catch {
-                stdoutHandle.readabilityHandler = nil
-                stderrHandle.readabilityHandler = nil
+                try? stdoutHandle.close()
+                try? stderrHandle.close()
                 if state.markFailed() {
                     continuation.resume(throwing: error)
                 }
