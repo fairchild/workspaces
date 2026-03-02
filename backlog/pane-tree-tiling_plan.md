@@ -1,7 +1,11 @@
 ---
-topic: terminal-tiling
-priority: 1
-description: Replace current split/session model with a pane-tree tiling engine while preserving Ghostty action-driven routing.
+status: pending
+category: plan
+pr: null
+branch: null
+score: null
+retro_summary: null
+completed: null
 ---
 
 # Pane-Tree Tiling for Main Terminal Panel

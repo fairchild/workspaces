@@ -12,7 +12,7 @@ completed: null
 
 **Vision**: A Mac-native app for managing AI coding sessions. Add repos, fork them into isolated workspaces, run any terminal-based coding agent in an embedded terminal, and track file changes—all without context-switching to Finder or a separate terminal.
 
-## Status Snapshot (2026-03-01)
+## Status Snapshot (2026-03-02)
 
 - Latest shipped release: `v0.1.2` (GitHub release + DMG workflow path healthy).
 - Test baseline: `swift test` is green at 142 tests across 23 suites.
@@ -26,7 +26,7 @@ completed: null
 - Tart GUI automation + editor handoff UX hardening landed in PR #19:
   - target-manifest-driven Tart harness/docs for repeatable automation runs
   - workspace editor toolbar/context attachment launch-path improvements
-- Active implementation focus: close remaining refinement-gate gaps (docs parity + split shortcut parity), then continue daily-driver UX quick wins.
+- Active implementation focus: close remaining refinement-gate gaps (docs parity + split shortcut parity), then execute only core quality improvements that reduce complexity and protect interaction latency.
 
 ---
 
@@ -139,7 +139,7 @@ The next cycle prioritizes implementation quality for shipped behavior before ex
 - **Terminal migration**: SwiftTerm replaced with GhosttyKit (`libghostty`) for persistent session support
 - **Host-terminal-first UX**: Auto-discovery from `~/code`, persistent per-repo host sessions, live session indicators
 - **Session coordinator**: Manages terminal surface lifecycle, reuse, and focus restoration
-- **Refinement/performance hardening (2026-02-15)**: Signposts, perf baseline report, session regression tests, and memory-policy guardrails (`backlog/refinement-performance-followup.md`)
+- **Refinement/performance hardening (2026-02-15)**: Signposts, perf baseline report, session regression tests, and memory-policy guardrails (`backlog/done/refinement-performance-followup.md`)
 - **Daily-driver reliability hardening (2026-02-26 to 2026-02-28)**: non-blocking process runner, terminal/workspace identity fixes, recency sort correctness, and release metadata consistency
 - **Open-in-editor polish (PR #18 + follow-up fixes)**: deterministic launch guardrails, launch metrics/signposts, and strengthened shortcut smoke assertions
 - **Editor UX + automation hardening (PR #19)**: external editor service/toolbar action hardening and Tart automation target-manifest/documentation upgrades
@@ -148,27 +148,47 @@ The next cycle prioritizes implementation quality for shipped behavior before ex
 
 ---
 
-## Active Phase: Daily-Driver Polish + Web Sources (MPP)
+## Active Phase: Core Terminal Quality + Determinism
 
-Current focus is to close the remaining refinement-gate quality tasks and ship daily-driver UX polish without regressing terminal-first workflows.
+Prioritization lens for this phase (aligned with `README.md`):
 
-### Tier 1: Quick Wins
+1. Keep the product simple: one clear core workflow (select context, run terminal, inspect files/changes).
+2. Improve quality before adding surface area: determinism, readability, testability, and memory behavior first.
+3. Protect performance: prioritize changes that keep startup and interaction latency boringly consistent.
 
-| Item | Effort | Impact | Notes |
-|------|--------|--------|-------|
-| Web sources + embedded web view MPP | Medium | High | Domain-locked sidebar web sources and detail rendering. See `backlog/repo-webview-plan.md`. |
-| Product docs parity pass | Low | High | Align `docs/product_overview.md` and `docs/user-stories.md` with shipped UX to close refinement-gate exit criteria. |
-| Quick switcher (Cmd+P) | Low | Medium | Filtered overlay to jump repos/workspaces. Session coordinator has the data. |
-| Workspace creation progress UI | Medium | Medium | Existing backlog item. Eliminates "frozen" feel on large repos. |
+### Now (P0): Must Land Before New Feature Breadth
 
-### Tier 2: Defer
+| Item | Effort | Impact | Why now |
+|------|--------|--------|---------|
+| Ghostty shortcut parity completion (`resize_split`, `equalize_splits`) | Medium | High | Core terminal correctness is still open and currently user-visible. |
+| Product docs parity (`docs/product_overview.md`, `docs/user-stories.md`) | Low | High | Required refinement-gate exit criteria and prevents expectation drift. |
+| Main window composition + inspector tests | Medium | High | Reduces regression risk by shrinking `ContentView` responsibilities and adding missing state tests. |
+| Workspace creation progress UI | Medium | Medium | Removes perceived hangs in large repos without adding major architecture complexity. |
+| Release docs/script idempotency hardening | Low | Medium | Keeps shipping path reliable and lowers operational toil. |
 
-These wait for VZ backend or until usage reveals the need:
+### Next (P1): Core UX Evolution With Controlled Refactor Scope
 
-- **Session history** (persist scrollback) — non-trivial GhosttyKit integration
-- **File watching auto-refresh** — manual refresh works
-- **Sparkle auto-update** — user base is one, defer
-- **Pane-tree terminal tiling** — high effort; deferred with explicit execution plan in `backlog/pane-tree-tiling_plan.md`
+| Item | Effort | Impact | Guardrail |
+|------|--------|--------|-----------|
+| Pane-tree terminal tiling model | High | High | Execute only with reducer-first design + invariant tests + memory sync contract. See `backlog/pane-tree-tiling_plan.md`. |
+| Ghostty appearance hardening follow-up | Medium | Medium | Run after shortcut parity to verify no routing/appearance interaction regressions. |
+| Shared desktop focus contention hardening | Medium | Medium | Improves verification reliability for daily development without product-surface expansion. |
+
+### Later (P2): Strategic Expansion
+
+| Item | Effort | Impact | Note |
+|------|--------|--------|------|
+| VZ backend (M2-M6) | High | High | Strategic roadmap track; resume after P0 quality gate closes and P1 core UX risk is contained. |
+| URL sources + embedded web view (MPP) | Medium | Medium | Valuable, but not core to terminal-first reliability/performance goals. |
+
+### Icebox (P3): Optional/Context-Dependent
+
+- **tmux per-worktree productization** (`backlog/tmux-support_plan.md`) — defer while choosing one primary multiplexing model (pane tree) to avoid dual-mode complexity.
+- **Sparkle auto-update** (`backlog/sparkle-autoupdate-plan.md`) — defer until external user distribution pressure increases.
+- **Landing page** (`backlog/landing-page.md`) — go-to-market asset; not on critical path for product quality.
+- **Swift dev skills task-list** (`backlog/swift-dev-skills-task-list.md`) — internal workflow optimization, not user-facing product quality.
+- **Session history** (persist scrollback) — non-trivial GhosttyKit scope.
+- **File watching auto-refresh** — manual refresh currently sufficient.
 
 ### Dropped
 
@@ -190,16 +210,20 @@ Summary: backend abstraction/registry, VZTahoeBackend implementation (VM lifecyc
 
 ## Backlog
 
-| Item | Category | Pointer |
-|------|----------|---------|
-| Isolation strategy options | Research | `backlog/isolation-strategies.md` |
-| VZ Tahoe execution brief | Plan | `backlog/vz-tahoe-execution-brief-plan.md` |
-| URL sources + embedded web view | Plan | `backlog/repo-webview-plan.md` |
-| Main window composition + inspector tests | Tech Debt | `backlog/main-window-composition-and-inspector-tests_task-list.md` |
-| Shared desktop focus contention hardening | Follow-up | `backlog/shared-desktop-focus-contention-followup.md` |
-| Workspace creation progress indicator | UX | `backlog/workspace-create-progress-followup.md` |
-| Sparkle auto-update decision record | Plan | `backlog/sparkle-autoupdate-plan.md` |
-| Pane-tree terminal tiling model | Plan | `backlog/pane-tree-tiling_plan.md` |
+| Item | Category | Priority Band | Pointer |
+|------|----------|---------------|---------|
+| Main window composition + inspector tests | Follow-up | P0 | `backlog/main-window-composition-and-inspector-tests_task-list.md` |
+| Workspace creation progress indicator | Follow-up | P0 | `backlog/workspace-create-progress-followup.md` |
+| Pane-tree terminal tiling model | Plan | P1 | `backlog/pane-tree-tiling_plan.md` |
+| Ghostty appearance hardening | Follow-up | P1 | `backlog/ghostty-appearance-hardening_followup.md` |
+| Shared desktop focus contention hardening | Follow-up | P1 | `backlog/shared-desktop-focus-contention-followup.md` |
+| VZ Tahoe execution brief | Plan | P2 | `backlog/vz-tahoe-execution-brief-plan.md` |
+| Isolation strategy options (research) | Plan | P2 | `backlog/isolation-strategies.md` |
+| URL sources + embedded web view | Plan | P2 | `backlog/repo-webview-plan.md` |
+| tmux per-worktree support | Plan | P3 | `backlog/tmux-support_plan.md` |
+| Sparkle auto-update decision record | Plan | P3 | `backlog/sparkle-autoupdate-plan.md` |
+| Landing page | Plan | P3 | `backlog/landing-page.md` |
+| Swift dev skills task-list | Task List | P3 | `backlog/swift-dev-skills-task-list.md` |
 
 ---
 
