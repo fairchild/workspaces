@@ -2,7 +2,9 @@
 
 **Terminal-first workspace manager for AI coding sessions on macOS.**
 
-Workspaces gives you a native app for organizing repositories, spinning up isolated worktrees, and dropping into embedded terminal sessions. It works with any terminal-based coding agent — Claude Code, Aider, Codex CLI, or whatever you run in a shell.
+ Workspaces gives you a native app to wrap a termianl with some niceties for spinning up isolated workspaces. Designed to optimize my personal worflows terminal-based coding agent workflows.
+
+![Workspaces main window][screenshot-main]
 
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
@@ -11,7 +13,6 @@ Workspaces gives you a native app for organizing repositories, spinning up isola
 - **Any terminal agent**: Embedded terminal with workspace management around it. Anything that runs in a shell works — Claude Code, Aider, Codex CLI, or a plain `bash` session.
 - **Fork-friendly**: No backwards-compatibility baggage. Take what works, change what doesn't.
 - **Opinionated defaults**: Three-column layout, terminal-first launch, lifecycle hooks. Customizable by editing the source directly.
-- **Pairs with [dotclaude](https://github.com/fairchild/dotclaude)**: Shared Claude Code configuration — skills, hooks, settings. Optional but useful if Claude Code is your agent of choice.
 
 ## Download
 
@@ -37,6 +38,7 @@ Workspaces gives you a native app for organizing repositories, spinning up isola
 - Repository management and workspace creation
 - Integrated GhosttyKit terminal surface
 - File browser and git status view
+- `cmd+o` to open repo in editor, defaulting to zed
 - Lifecycle hooks (`setup.sh` / `archive.sh`)
 
 ## Usage
@@ -97,3 +99,5 @@ For UI smoke/capture script entry points, see:
 ## License
 
 [Apache-2.0](LICENSE) — Copyright 2026 Michael Fairchild
+
+[screenshot-main]: docs/assets/screenshot-main.jpg
