@@ -1,3 +1,13 @@
+---
+status: pending
+category: plan
+pr: null
+branch: null
+score: null
+retro_summary: null
+completed: null
+---
+
 # Landing Page
 
 **Status**: backlog

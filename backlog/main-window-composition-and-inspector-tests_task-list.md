@@ -1,7 +1,11 @@
 ---
-topic: main-window-tech-debt
-priority: 2
-description: Split ContentView responsibilities and add inspector state persistence coverage.
+status: pending
+category: followup
+pr: null
+branch: null
+score: null
+retro_summary: null
+completed: null
 ---
 
 # Main Window Composition + Inspector Tests

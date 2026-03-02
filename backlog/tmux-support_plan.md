@@ -1,7 +1,11 @@
 ---
-topic: terminal-multiplexing
-priority: 2
-description: Productionize tmux-per-worktree terminal mode with explicit shortcut policy, lifecycle semantics, and verification coverage.
+status: pending
+category: plan
+pr: null
+branch: null
+score: null
+retro_summary: null
+completed: null
 ---
 
 # tmux Per-Worktree Support Plan

@@ -1,7 +1,11 @@
 ---
-topic: terminal-hardening
-priority: 2
-description: Post-merge hardening for Ghostty system appearance sync across new shortcut-routing and multiplexing paths.
+status: pending
+category: followup
+pr: null
+branch: null
+score: null
+retro_summary: null
+completed: null
 ---
 
 # Ghostty Appearance Sync Hardening
