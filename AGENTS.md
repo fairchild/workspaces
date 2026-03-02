@@ -57,9 +57,9 @@ swift run     # Run
 
 | Task | Primary Doc | Skip |
 |------|-------------|------|
-| Understand the app | README.md | SPECS.md, backlog/ |
+| Understand the app | README.md | backlog/ |
 | Architectural decisions | ARCHITECTURE.md | backlog/ |
-| Implement a component | SPECS.md (find relevant section) | Read whole file |
+| Implement a component | docs/original_spec.md (find relevant section) | Read whole file |
 | libghostty internals | docs/development/libghostty-integration.md | - |
 | Debug an issue | docs/development/troubleshooting.md | - |
 | Terminal keyboard focus | docs/development/solution-terminal-keyboard.md | - |
@@ -124,6 +124,6 @@ Tests use **Swift Testing** (`@Suite`, `@Test`, `#expect`), not XCTest. Test beh
 ## Don't
 
 - Don't modify Package.swift unless adding dependencies
-- Don't read SPECS.md entirely - find the component you need
+- Don't read docs/original_spec.md entirely - find the component you need
 - Don't put service logic in Views - use Services/
 - Don't store URLs directly in SwiftData models

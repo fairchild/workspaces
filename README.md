@@ -8,12 +8,10 @@ Workspaces gives you a native app for organizing repositories, spinning up isola
 
 ## Philosophy
 
-Workspaces is an **agent-first codebase** — a modern baseline for building macOS developer tools with AI in the loop.
-
-- **Any terminal agent**: The core design is an embedded terminal with workspace management chrome around it. Anything that runs in a shell works — Claude Code, Aider, Codex CLI, Copilot CLI, or a plain `bash` session.
+- **Any terminal agent**: Embedded terminal with workspace management around it. Anything that runs in a shell works — Claude Code, Aider, Codex CLI, or a plain `bash` session.
 - **Fork-friendly**: No backwards-compatibility baggage. Take what works, change what doesn't.
-- **Opinionated defaults**: Three-column layout, terminal-first launch, lifecycle hooks. Sensible out of the box, fully customizable.
-- **Pairs with [dotclaude](https://github.com/fairchild/dotclaude)**: The author uses Claude Code as a daily driver. Together, the two repos demonstrate a complete AI-augmented development setup — but Workspaces itself is agent-agnostic.
+- **Opinionated defaults**: Three-column layout, terminal-first launch, lifecycle hooks. Customizable by editing the source directly.
+- **Pairs with [dotclaude](https://github.com/fairchild/dotclaude)**: Shared Claude Code configuration — skills, hooks, settings. Optional but useful if Claude Code is your agent of choice.
 
 ## Download
 
@@ -49,15 +47,10 @@ Workspaces is an **agent-first codebase** — a modern baseline for building mac
 4. Click repo/workspace rows to switch terminal context
 5. Use the right pane for files and git changes
 
-### CLI Usage
+### CLI (source builds)
 
 ```bash
 swift run WorkspaceManagerCLI help
-```
-
-Common workflow:
-
-```bash
 swift run WorkspaceManagerCLI repo add ~/code/my-repo
 swift run WorkspaceManagerCLI ws new my-repo feature-auth
 swift run WorkspaceManagerCLI open my-repo/feature-auth --cmd "claude"
@@ -76,7 +69,11 @@ Workspaces is designed to be forked. There's no plugin system or extension API �
 - **Swap the terminal**: The `TerminalView` wrapper abstracts the terminal backend
 - **Adjust keyboard shortcuts**: See `ShortcutRoutingPolicy.swift`
 
-If you build something interesting on top of Workspaces, open an issue — we'd love to hear about it.
+If you build something interesting on top of this, open an issue.
+
+## Roadmap
+
+[backlog/ROADMAP.md](./backlog/ROADMAP.md) and the other files in [backlog/](./backlog/) sketch a loose direction. It evolves as the project gets used and developed — nothing there is a promise.
 
 ## Developer Setup and Contributing
 
@@ -96,28 +93,6 @@ For performance testing and benchmarking workflows, see:
 For UI smoke/capture script entry points, see:
 
 - [scripts/README.md](./scripts/README.md)
-
-### Sandbox-Safe Local Launch
-
-If your shell environment restricts writes to `~/Library/Application Support`, launch with a writable local data directory:
-
-```bash
-WORKSPACES_DATA_DIR="$PWD/.workspacemanager-data" swift run WorkspaceManager
-```
-
-Preferred dev launcher (recommended):
-
-```bash
-./scripts/launch-dev.sh
-```
-
-`launch-dev.sh` always runs the latest debug binary from `.build/` and defaults to an isolated local data root, which helps us dogfood and validate isolation patterns described in `backlog/isolation-strategies.md`.
-
-Shared-desktop safe launch (do not steal foreground focus):
-
-```bash
-./scripts/launch-dev.sh --no-activate
-```
 
 ## License
 

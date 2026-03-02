@@ -39,12 +39,12 @@
 ┌─────────────────────────────────────────────────────────────────────┐
 │                          Services Layer                             │
 ├─────────────────┬──────────────────────┬────────────────────────────┤
-│   GitService    │  WorkspaceService    │    (Future: Backends)      │
+│   GitService    │  WorkspaceService    │    Backends                │
 │   (actor)       │  (actor)             │                            │
 │                 │                      │                            │
 │  • getStatus()  │  • createWorkspace() │    LocalBackend            │
-│  • getFileTree()│  • deleteWorkspace() │    DockerBackend           │
-│  • getBranch()  │  • copyRepo()        │    AppleContainerBackend   │
+│  • getFileTree()│  • deleteWorkspace() │    DaytonaBackend          │
+│  • getBranch()  │  • copyRepo()        │                            │
 └─────────────────┴──────────────────────┴────────────────────────────┘
                               │
                               ▼
@@ -53,7 +53,7 @@
 ├─────────────────────────────────────────────────────────────────────┤
 │  ModelContainer                                                     │
 │  ├── Repo (id, name, localPath, remoteURL, addedAt)                 │
-│  └── Workspace (id, name, path, sourceRepo, status, gitBranch)      │
+│  └── Workspace (id, name, path, sourceRepo, statusRaw, gitBranch)   │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -158,21 +158,26 @@ let changes = try await GitService.shared.getStatus(at: workspace.workspaceURL)
 
 ### 5. Workspace Isolation via Abstraction
 
-**Decision**: Define `WorkspaceBackend` protocol now, implement local-only for MVP.
+**Decision**: Define `RemoteBackendProtocol`, ship with `LocalBackend` and `DaytonaBackend`.
 
 **Rationale**:
-- Apple Container (macOS 26) will be the ideal backend
-- Docker is a good fallback
-- Abstraction allows adding backends without changing app code
+- Local backend covers the common case (direct filesystem access)
+- Daytona provides remote cloud sandboxes via SSH
+- Protocol abstraction allows adding backends without changing app code
 
-**MVP**: Only `LocalBackend` (no isolation, direct filesystem access)
+**Current backends**:
+- `LocalBackend` — direct filesystem, no isolation
+- `DaytonaBackend` — remote VM sandboxes via Daytona API
 
-**Future**:
+**Protocol**:
 ```swift
-protocol WorkspaceBackend: Actor {
-    func start(workspace: Workspace) async throws
-    func execute(command: [String], ...) async throws -> ProcessResult
-    func createTerminal(for: Workspace) async throws -> BackendTerminal
+protocol RemoteBackendProtocol: Sendable {
+    var identifier: String { get }
+    func isAvailable() async -> Bool
+    func createSandbox(name: String, cloneURL: String?) async throws -> RemoteSandboxInfo
+    func stopSandbox(sandboxId: String) async throws
+    func deleteSandbox(sandboxId: String) async throws
+    // ...
 }
 ```
 
@@ -454,24 +459,13 @@ do {
 
 ## Testing Strategy
 
-### Unit Tests (Future)
-- GitService parsing
-- WorkspaceService file operations
-- Model relationships
+Uses **Swift Testing** (`@Suite`, `@Test`, `#expect`). Test suites cover:
 
-### Manual Testing (MVP)
-1. Add repo → appears in sidebar
-2. Create workspace → directory created, appears in sidebar
-3. Select workspace → terminal opens in correct directory
-4. Run commands → output appears
-5. Modify files → git status updates
-6. Quit and relaunch → data persists
-
-### Edge Cases to Test
-- Repo without .git directory
-- Repo with no remote
-- Very large repos
-- Repos with special characters in path
-- Workspace name conflicts
-- Disk full during copy
-- Permission denied errors
+- `GitServiceTests` — git status parsing, branch detection, file tree
+- `WorkspaceServiceTests` — workspace creation, lifecycle hooks, deletion
+- `ModelsTests` — Codable roundtrips, data contracts
+- `LocalBackendTests` — filesystem operations
+- `HostTerminalSessionCoordinatorTests` — terminal session identity
+- `HostTerminalDefaultsTests` — terminal preference persistence
+- `ProcessRunnerTests` — shell command execution
+- `RepositoryDiscoveryTests` — repo scanning and validation

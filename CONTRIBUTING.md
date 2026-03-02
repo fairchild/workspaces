@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for contributing to WorkspaceManager.
+Thanks for contributing to Workspaces.
 
 ## Prerequisites
 
@@ -36,6 +36,19 @@ To run the app in dev mode (isolated data directory):
 ```
 
 Or with mask: `mask dev`
+
+`launch-dev.sh` runs the debug binary from `.build/` with an isolated local data root. Useful options:
+
+```bash
+./scripts/launch-dev.sh --no-build      # skip rebuild, launch existing binary
+./scripts/launch-dev.sh --no-activate    # don't steal foreground focus
+```
+
+If your shell restricts writes to `~/Library/Application Support`, set a custom data dir:
+
+```bash
+WORKSPACES_DATA_DIR="$PWD/.workspacemanager-data" swift run WorkspaceManager
+```
 
 ## Daily Development Checks
 
@@ -90,6 +103,12 @@ workspaces/
 2. Add or update tests when behavior changes.
 3. Run local checks (`swift test`, `swift build`, lint when relevant).
 4. Include a concise summary of behavior changes and verification results in the PR.
+
+## Agent Self-Verification
+
+A bundled [tart-gui-automation](.agents/skills/tart-gui-automation/) skill lets Claude Code (or any coding agent) build and launch the app in an ephemeral Tart macOS VM, capture screenshots, and verify UI behavior without touching the host. See the CLAUDE.md "Dev Verification Practice" section for the workflow.
+
+Requires [Tart](https://github.com/cirruslabs/tart) and a macOS guest image (`macos-tahoe-xcode`).
 
 ## Release and Signing
 
