@@ -219,33 +219,63 @@ struct RepoRow: View {
 struct WorkspaceRow: View {
     let workspace: Workspace
     var isSelected: Bool = false
+    var statusMessage: String? = nil
     var sessionActivity: SidebarSessionActivity = .inactive
     var paneCount: Int = 0
     var isNested: Bool = false
 
+    private var isBusy: Bool { statusMessage != nil }
+
     var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: sessionActivity.isActive ? "terminal.fill" : "terminal")
-                .foregroundStyle(sessionActivity.iconColor(inactiveColor: .secondary))
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 8) {
+                if isBusy {
+                    ProgressView()
+                        .controlSize(.small)
+                        .frame(width: 16, height: 16)
+                } else {
+                    Image(
+                        systemName: workspace.isRemote
+                            ? (workspace.status == .active ? "cloud.fill" : "cloud")
+                            : (sessionActivity.isActive ? "terminal.fill" : "terminal")
+                    )
+                    .foregroundStyle(
+                        workspace.isRemote
+                            ? (workspace.status == .active ? .blue : .secondary)
+                            : sessionActivity.iconColor(inactiveColor: .secondary)
+                    )
+                }
 
-            Text(workspace.name)
-                .font(.system(size: 16, weight: .semibold))
-                .lineLimit(1)
+                Text(workspace.name)
+                    .font(.system(size: 16, weight: .semibold))
+                    .lineLimit(1)
 
-            if workspace.status == .archived {
-                Text("Archived")
-                    .font(.caption2)
-                    .padding(.horizontal, 4)
-                    .padding(.vertical, 1)
-                    .background(.secondary.opacity(0.2))
-                    .clipShape(RoundedRectangle(cornerRadius: 3))
+                if !isBusy, workspace.status != .active {
+                    Text(workspace.status.label)
+                        .font(.caption2)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(
+                            workspace.status == .stopped
+                                ? Color.orange.opacity(0.2)
+                                : Color.secondary.opacity(0.2)
+                        )
+                        .clipShape(RoundedRectangle(cornerRadius: 3))
+                }
+
+                Spacer(minLength: 8)
+
+                if SidebarSessionActivity.showsPaneCountBadge(for: paneCount) {
+                    PaneCountBadge(count: paneCount, sessionActivity: sessionActivity)
+                        .help("\(paneCount) open panes")
+                }
             }
 
-            Spacer(minLength: 8)
-
-            if SidebarSessionActivity.showsPaneCountBadge(for: paneCount) {
-                PaneCountBadge(count: paneCount, sessionActivity: sessionActivity)
-                    .help("\(paneCount) open panes")
+            if let statusMessage {
+                Text(statusMessage)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.leading, isNested ? 24 : 24)
             }
         }
         .padding(.leading, isNested ? 20 : 0)
@@ -259,6 +289,7 @@ struct WorkspaceRow: View {
             "\(workspace.name), \(sessionActivity.accessibilityDescription)"
                 + (SidebarSessionActivity.showsPaneCountBadge(for: paneCount) ? ", \(paneCount) panes" : "")
                 + (workspace.status == .archived ? ", archived" : "")
+                + (statusMessage.map { ", \($0)" } ?? "")
         )
     }
 }

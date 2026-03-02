@@ -80,11 +80,18 @@ public final class Workspace {
     public var statusRaw: String
     public var gitBranch: String?
 
-    /// Isolation backend identifier ("local", "docker", "apple-container", etc.)
+    /// Isolation backend identifier ("local", "daytona", etc.)
     public var backendIdentifier: String = "local"
+
+    /// Remote instance ID (nil for local workspaces)
+    public var remoteId: String?
 
     public var workspaceURL: URL {
         URL(fileURLWithPath: path)
+    }
+
+    public var isRemote: Bool {
+        backendIdentifier != "local"
     }
 
     public var status: WorkspaceStatus {
@@ -101,7 +108,8 @@ public final class Workspace {
         lastAccessedAt: Date = Date(),
         status: WorkspaceStatus = .active,
         gitBranch: String? = nil,
-        backendIdentifier: String = "local"
+        backendIdentifier: String = "local",
+        remoteId: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -112,16 +120,19 @@ public final class Workspace {
         self.statusRaw = status.rawValue
         self.gitBranch = gitBranch
         self.backendIdentifier = backendIdentifier
+        self.remoteId = remoteId
     }
 }
 
 public enum WorkspaceStatus: String, Codable, CaseIterable, Sendable {
     case active
+    case stopped
     case archived
 
     public var label: String {
         switch self {
         case .active: return "Active"
+        case .stopped: return "Stopped"
         case .archived: return "Archived"
         }
     }

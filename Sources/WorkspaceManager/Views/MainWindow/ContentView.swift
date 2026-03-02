@@ -18,6 +18,7 @@ struct ContentView: View {
         case repo(UUID)
     }
 
+    @Environment(\.modelContext) private var modelContext
     @Binding var deepLinkState: WorkspaceDeepLinkState
     @ObservedObject var hostTerminalState: HostTerminalStateStore
     @Query(sort: \Repo.addedAt, order: .reverse) private var repos: [Repo]
@@ -25,6 +26,7 @@ struct ContentView: View {
     @AppStorage(TerminalMultiplexingMode.storageKey)
     private var terminalMultiplexingModeRawValue: String = TerminalMultiplexingMode.defaultValue.rawValue
     @Environment(\.externalEditorService) private var externalEditorService
+    @Environment(\.remoteBackend) private var remoteBackend
 
     @State private var selectedWorkspace: Workspace?
     @State private var selectedWebSource: WebSource?
@@ -37,6 +39,8 @@ struct ContentView: View {
     @State private var didApplyFixturePreviewBootstrap = false
     @State private var didApplyFixtureWebBootstrap = false
     @State private var openInEditorErrorMessage: String?
+    @State private var remoteErrorMessage: String?
+    @State private var connectingSandboxId: String?
     @StateObject private var rightPaneStateStore = RightPaneStateStore()
     @StateObject private var webSurfaceStore = WebSurfaceStore()
     private let resolvedDefaultHostDirectory = HostTerminalDefaults.defaultWorkingDirectory()
@@ -239,7 +243,12 @@ struct ContentView: View {
                 surfaceStore: webSurfaceStore
             )
         } else {
-            terminalDetailContent
+            ZStack {
+                terminalDetailContent
+                if connectingSandboxId != nil {
+                    SandboxConnectingOverlay(workspaceName: selectedWorkspace?.name)
+                }
+            }
         }
     }
 
@@ -253,6 +262,7 @@ struct ContentView: View {
                 defaultHostPath: resolvedDefaultHostDirectory.path,
                 paneCountBySessionKey: paneCountBySessionKeyForSidebar,
                 activeSessionKey: activeSessionKeyForSidebar,
+                connectingSandboxId: connectingSandboxId,
                 onDefaultHostSelected: handleDefaultHostSelection,
                 onRepoSelected: handleRepoSelection,
                 onWebSourceSelected: handleWebSourceSelection,
@@ -307,6 +317,9 @@ struct ContentView: View {
                 maybeApplyFixtureWebBootstrap()
                 pruneRightPaneState()
                 syncOpenInEditorShortcutRouting()
+            }
+            .task {
+                await syncCloudWorkspaceStatuses()
             }
             .onDisappear {
                 ShortcutRoutingPolicy.shared.setOverride(nil, for: AppChromeShortcut.openInEditor.chord)
@@ -364,6 +377,17 @@ struct ContentView: View {
                 }
             } message: {
                 Text(openInEditorErrorMessage ?? "Unknown error.")
+            }
+            .alert(
+                "Could Not Connect to Sandbox",
+                isPresented: Binding(
+                    get: { remoteErrorMessage != nil },
+                    set: { if !$0 { remoteErrorMessage = nil } }
+                )
+            ) {
+                Button("OK", role: .cancel) { remoteErrorMessage = nil }
+            } message: {
+                Text(remoteErrorMessage ?? "Unknown error.")
             }
     }
 
@@ -542,17 +566,84 @@ struct ContentView: View {
         cancelPendingRepoClickMeasurement(reason: "workspace_selected")
         selectedWebSource = nil
         clearCodePreview()
-        let workspaceDirectory = workspace.workspaceURL.standardizedFileURL.resolvingSymlinksInPath()
-        let session = activateHostSession(
-            key: .hostPath(workspaceDirectory.path),
-            directory: workspaceDirectory
-        )
-        columnVisibility = .all
 
-        requestMainTerminalFocus(targetSessionID: session.id)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-            Task { @MainActor in
-                requestMainTerminalFocus(targetSessionID: session.id)
+        if workspace.isRemote, let sandboxId = workspace.remoteId {
+            handleRemoteWorkspaceSelection(workspace, sandboxId: sandboxId)
+        } else {
+            let workspaceDirectory = workspace.workspaceURL.standardizedFileURL.resolvingSymlinksInPath()
+            let session = activateHostSession(
+                key: .hostPath(workspaceDirectory.path),
+                directory: workspaceDirectory
+            )
+            columnVisibility = .all
+
+            requestMainTerminalFocus(targetSessionID: session.id)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                Task { @MainActor in
+                    requestMainTerminalFocus(targetSessionID: session.id)
+                }
+            }
+        }
+    }
+
+    @MainActor
+    private func handleRemoteWorkspaceSelection(_ workspace: Workspace, sandboxId: String) {
+        let sessionKey = HostTerminalSessionKey.remoteSandbox(sandboxId)
+        let placeholderDir = FileManager.default.temporaryDirectory
+
+        // Reuse existing session for this specific sandbox
+        if workspace.status == .active,
+            let existing = hostTerminalState.sessions.first(where: { $0.key == sessionKey })
+        {
+            hostTerminalState.activateExistingSession(sessionID: existing.id)
+            columnVisibility = .all
+            requestMainTerminalFocus(targetSessionID: existing.id)
+            return
+        }
+
+        // Prevent concurrent connection attempts
+        guard connectingSandboxId == nil else {
+            NSLog("[RemoteBackend] Ignoring selection — already connecting to %@", connectingSandboxId ?? "")
+            return
+        }
+
+        let backend = remoteBackend
+        let needsStart = workspace.status == .stopped || workspace.status == .archived
+        connectingSandboxId = sandboxId
+
+        Task {
+            do {
+                let info: RemoteSandboxInfo
+                if needsStart {
+                    NSLog("[RemoteBackend] Starting sandbox %@ (was %@)", sandboxId, workspace.status.rawValue)
+                    info = try await backend.startSandbox(sandboxId: sandboxId)
+                    await MainActor.run {
+                        workspace.status = .active
+                    }
+                } else {
+                    info = try await backend.getSSHCommand(sandboxId: sandboxId)
+                }
+
+                await MainActor.run {
+                    // Stale completion — user clicked something else while we were connecting
+                    guard connectingSandboxId == sandboxId else { return }
+                    connectingSandboxId = nil
+                    let session = activateHostSession(
+                        key: sessionKey,
+                        directory: placeholderDir,
+                        customCommand: info.sshCommand
+                    )
+                    columnVisibility = .all
+                    requestMainTerminalFocus(targetSessionID: session.id)
+                    NSLog("[RemoteBackend] SSH session created for sandbox %@", sandboxId)
+                }
+            } catch {
+                NSLog("[RemoteBackend] Failed to connect to sandbox %@: %@", sandboxId, error.localizedDescription)
+                await MainActor.run {
+                    guard connectingSandboxId == sandboxId else { return }
+                    connectingSandboxId = nil
+                    remoteErrorMessage = error.localizedDescription
+                }
             }
         }
     }
@@ -585,10 +676,83 @@ struct ContentView: View {
         else {
             return
         }
+
+        // Sync sidebar selection to match the new active session.
+        syncSidebarSelectionToActiveSession()
+
         requestMainTerminalFocus(
             targetSessionID: focusSessionID,
             activateApp: false
         )
+    }
+
+    @MainActor
+    private func syncSidebarSelectionToActiveSession() {
+        guard let activeSession = activeHostSession else {
+            selectedWorkspace = nil
+            return
+        }
+
+        switch activeSession.key {
+        case .remoteSandbox(let sandboxId):
+            let match = repos.flatMap(\.workspaces).first { $0.remoteId == sandboxId }
+            selectedWorkspace = match
+        case .hostPath(let path):
+            let normalizedPath = normalizePath(path)
+            let match = repos.flatMap(\.workspaces).first { normalizePath($0.path) == normalizedPath }
+            selectedWorkspace = match
+        case .repoPath, .defaultHome:
+            selectedWorkspace = nil
+        }
+    }
+
+    private func syncCloudWorkspaceStatuses() async {
+        let cloudWorkspaces = repos.flatMap(\.workspaces).filter { $0.remoteId != nil }
+        guard !cloudWorkspaces.isEmpty else { return }
+
+        let backend = remoteBackend
+        let statuses: [RemoteSandboxStatus]
+        do {
+            statuses = try await backend.listSandboxes()
+        } catch {
+            NSLog("[RemoteBackend] Failed to sync sandbox statuses: %@", error.localizedDescription)
+            return
+        }
+
+        let stateById = Dictionary(uniqueKeysWithValues: statuses.map { ($0.sandboxId, $0.state) })
+        var changed = false
+
+        for workspace in cloudWorkspaces {
+            guard let sandboxId = workspace.remoteId else { continue }
+            let newStatus: WorkspaceStatus
+            if let state = stateById[sandboxId] {
+                switch state {
+                case "started", "starting":
+                    newStatus = .active
+                case "stopped", "stopping":
+                    newStatus = .stopped
+                case "archived", "archiving":
+                    newStatus = .archived
+                default:
+                    continue
+                }
+            } else {
+                // Sandbox no longer exists on remote backend — mark archived
+                newStatus = .archived
+            }
+
+            if workspace.status != newStatus {
+                NSLog(
+                    "[RemoteBackend] Syncing workspace '%@' status: %@ → %@",
+                    workspace.name, workspace.status.rawValue, newStatus.rawValue)
+                workspace.status = newStatus
+                changed = true
+            }
+        }
+
+        if changed {
+            try? modelContext.save()
+        }
     }
 
     @MainActor
@@ -886,10 +1050,13 @@ struct ContentView: View {
 
     @discardableResult
     @MainActor
-    private func activateHostSession(key: HostTerminalSessionKey, directory: URL) -> HostTerminalSession {
+    private func activateHostSession(
+        key: HostTerminalSessionKey, directory: URL, customCommand: String? = nil
+    ) -> HostTerminalSession {
         let result = hostTerminalState.activateSession(
             key: key,
-            directory: directory
+            directory: directory,
+            customCommand: customCommand
         )
         if result.created {
             NSLog(
@@ -1134,6 +1301,25 @@ struct MainTerminalDetailView: View {
     }
 }
 
+struct SandboxConnectingOverlay: View {
+    let workspaceName: String?
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.5)
+            VStack(spacing: 12) {
+                ProgressView()
+                    .controlSize(.large)
+                Text("Connecting to \(workspaceName ?? "sandbox")...")
+                    .font(.headline)
+                    .foregroundStyle(.white)
+            }
+            .padding(24)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+        }
+    }
+}
+
 struct HostTerminalSessionStack: View {
     let sessions: [HostTerminalSession]
     let activeSessionID: UUID?
@@ -1233,9 +1419,10 @@ final class HostTerminalStateStore: ObservableObject {
     @discardableResult
     func activateSession(
         key: HostTerminalSessionKey,
-        directory: URL
+        directory: URL,
+        customCommand: String? = nil
     ) -> HostTerminalSessionActivationResult {
-        let result = coordinator.activate(key: key, directory: directory)
+        let result = coordinator.activate(key: key, directory: directory, customCommand: customCommand)
         publishSnapshot()
         return result
     }

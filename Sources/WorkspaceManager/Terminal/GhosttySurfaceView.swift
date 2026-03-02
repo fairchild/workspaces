@@ -35,6 +35,16 @@ final class GhosttySurfaceView: NSView, NSTextInputClient {
         createSurfaceIfNeeded()
     }
 
+    init(customCommand: String, onProcessExit: (() -> Void)? = nil) {
+        self.workingDirectory = FileManager.default.temporaryDirectory
+        self.onProcessExit = onProcessExit
+        self.terminalConfig = GhosttyTerminalConfig(customCommand: customCommand)
+        super.init(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+        self.wantsLayer = true
+
+        createSurfaceIfNeeded()
+    }
+
     required init?(coder: NSCoder) {
         fatalError("init(coder:) is not supported")
     }

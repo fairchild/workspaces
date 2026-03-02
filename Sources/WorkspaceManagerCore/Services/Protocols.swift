@@ -46,3 +46,16 @@ public protocol WorkspaceServiceProtocol: Sendable {
     func getWorkspaceSize(at workspaceURL: URL) async throws -> Int64
     func sanitizeFilename(_ name: String) async -> String
 }
+
+public protocol RemoteBackendProtocol: Sendable {
+    var identifier: String { get }
+    func isAvailable() async -> Bool
+
+    func createSandbox(name: String, cloneURL: String?) async throws -> RemoteSandboxInfo
+    func getSSHCommand(sandboxId: String) async throws -> RemoteSandboxInfo
+    func stopSandbox(sandboxId: String) async throws
+    func startSandbox(sandboxId: String) async throws -> RemoteSandboxInfo
+    func archiveSandbox(sandboxId: String) async throws
+    func deleteSandbox(sandboxId: String) async throws
+    func listSandboxes() async throws -> [RemoteSandboxStatus]
+}

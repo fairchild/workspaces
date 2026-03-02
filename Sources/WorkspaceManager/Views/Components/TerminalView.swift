@@ -32,15 +32,25 @@ final class HostTerminalSurfaceStore {
         }
 
         let sessionID = session.id
-        let created = GhosttySurfaceView(
-            workingDirectory: session.directoryURL,
-            onProcessExit: { [weak self] in
-                Task { @MainActor in
-                    self?.invalidate(sessionID: sessionID)
-                    onProcessExit?()
-                }
+        let wrappedOnProcessExit: () -> Void = { [weak self] in
+            Task { @MainActor in
+                self?.invalidate(sessionID: sessionID)
+                onProcessExit?()
             }
-        )
+        }
+
+        let created: GhosttySurfaceView
+        if let customCommand = session.customCommand {
+            created = GhosttySurfaceView(
+                customCommand: customCommand,
+                onProcessExit: wrappedOnProcessExit
+            )
+        } else {
+            created = GhosttySurfaceView(
+                workingDirectory: session.directoryURL,
+                onProcessExit: wrappedOnProcessExit
+            )
+        }
         surfaces[session.id] = created
         sessionIDsBySurfaceIdentity[ObjectIdentifier(created)] = session.id
 
