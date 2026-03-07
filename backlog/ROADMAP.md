@@ -15,7 +15,7 @@ completed: null
 ## Status Snapshot (2026-03-07)
 
 - Latest shipped release: `v0.1.2` (GitHub release + DMG workflow path healthy).
-- Test baseline: `swift test` is green at 185 tests across 29 suites.
+- Test baseline: `swift test` is green at 196 tests across 31 suites.
 - Daily-driver reliability fixes have landed:
   - shared non-blocking process execution (`ProcessRunner`) adopted across git/workspace/backend services
   - terminal identity hardening on workspace switch and restart generation
@@ -248,6 +248,18 @@ Summary: backend abstraction/registry, VZTahoeBackend implementation (VM lifecyc
 - `swift test` is green at 185 tests across 29 suites.
 
 **What this changes for planning**: The highest-value next work is maintainability-first quality improvement, especially shrinking oversized integration files and tightening the Ghostty/AppKit boundary before new feature breadth.
+
+### 2026-03-07 — Main-window maintainability pass (in flight)
+
+**Context**: The next quality branch continues the maintainability pass by reducing `ContentView`'s mixed state/orchestration surface instead of adding product scope.
+
+**Results so far**:
+- `ContentView` now uses a dedicated `MainWindowViewState` instead of a long list of top-level `@State` fields.
+- Root-view presentation and selection-derived state moved into `MainWindowPresentationController`.
+- Deep-link and UI-fixture bootstrap decisions moved into `MainWindowBootstrapController`.
+- Focused controller tests were added, bringing `swift test` to 196 tests across 31 suites.
+
+**What this changes for planning**: the next maintainability slice after this PR should continue Phase 2 only if a clearly separable root-view seam remains; otherwise move to the Ghostty boundary cleanup in Phase 3.
 
 ### 2026-03-01 — PR #18/#19 mainline hardening pass
 

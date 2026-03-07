@@ -2,7 +2,7 @@
 status: in-progress
 category: followup
 pr: null
-branch: codex/maintainability-quality-pass
+branch: codex/sidebar-content-maintainability
 score: null
 retro_summary: null
 completed: null
@@ -38,11 +38,19 @@ Reduce coupling and file-level complexity without changing user-visible behavior
 - Separate workspace creation/deletion/remote-sandbox lifecycle logic from row rendering and list composition.
 - Keep existing behavior-level tests green and add tests for any newly extracted pure helpers.
 
+Status:
+- Completed on `codex/maintainability-quality-pass` via `SidebarWorkspaceController`, with the workspace lifecycle/persistence path extracted out of `SidebarView.swift`.
+
 ### Phase 2: Main-window orchestration cleanup
 
 - Continue shrinking `ContentView.swift` by extracting lifecycle and selection orchestration that is still mixed into the root view.
 - Prefer coordinator/controller seams that can be tested without driving the full view tree.
 - Keep the root file primarily declarative: queries, bindings, layout, and high-level wiring.
+
+Status:
+- In progress on `codex/sidebar-content-maintainability`.
+- `MainWindowViewState`, `MainWindowPresentationController`, and `MainWindowBootstrapController` now hold root-view state, inspector/sidebar derivation, and deep-link/fixture bootstrap decisions.
+- Added focused tests for the new controller seams to keep the refactor behavior-preserving.
 
 ### Phase 3: Ghostty boundary cleanup
 
@@ -68,3 +76,4 @@ swift test
 
 - Refinement-gate closure work is already on `main`; this follow-up is about quality of the implementation, not missing shipped behavior.
 - Shared-desktop verification determinism remains a related but separate track in `backlog/shared-desktop-focus-contention-followup.md`.
+- Current local validation after the Phase 2 extraction is green at 196 tests across 31 suites.
