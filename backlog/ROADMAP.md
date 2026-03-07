@@ -26,6 +26,9 @@ completed: null
 - Tart GUI automation + editor handoff UX hardening landed in PR #19:
   - target-manifest-driven Tart harness/docs for repeatable automation runs
   - workspace editor toolbar/context attachment launch-path improvements
+- URL sources + embedded webview MPP support is on mainline:
+  - sidebar-managed URL sources with persisted metadata
+  - embedded domain-scoped browsing alongside terminal-first routing
 - Refinement-gate closure work has landed on mainline:
   - Ghostty split shortcut parity (`resize_split`, `equalize_splits`)
   - product/release docs parity and release-script ergonomics hardening
@@ -146,6 +149,7 @@ The next cycle prioritizes implementation quality for shipped behavior before ex
 - **Phase 4 partial**: Keyboard shortcuts, signed + notarized DMG releases through `v0.1.2`, GitHub Actions CI
 - **Terminal migration**: SwiftTerm replaced with GhosttyKit (`libghostty`) for persistent session support
 - **Host-terminal-first UX**: Auto-discovery from `~/code`, persistent per-repo host sessions, live session indicators
+- **URL sources + embedded webview (MPP)**: persisted `WebSource` entries, embedded browsing with domain policy, and terminal/web selection coexistence
 - **Session coordinator**: Manages terminal surface lifecycle, reuse, and focus restoration
 - **Refinement/performance hardening (2026-02-15)**: Signposts, perf baseline report, session regression tests, and memory-policy guardrails (`backlog/done/refinement-performance-followup.md`)
 - **Daily-driver reliability hardening (2026-02-26 to 2026-02-28)**: non-blocking process runner, terminal/workspace identity fixes, recency sort correctness, and release metadata consistency
@@ -187,7 +191,6 @@ Prioritization lens for this phase (aligned with `README.md`):
 | Item | Effort | Impact | Note |
 |------|--------|--------|------|
 | VZ backend (M2-M6) | High | High | Strategic roadmap track; resume after P0 quality gate closes and P1 core UX risk is contained. |
-| URL sources + embedded web view (MPP) | Medium | Medium | Valuable, but not core to terminal-first reliability/performance goals. |
 
 ### Icebox (P3): Optional/Context-Dependent
 
@@ -226,7 +229,6 @@ Summary: backend abstraction/registry, VZTahoeBackend implementation (VM lifecyc
 | Shared desktop focus contention hardening | Follow-up | P1 | `backlog/shared-desktop-focus-contention-followup.md` |
 | VZ Tahoe execution brief | Plan | P2 | `backlog/vz-tahoe-execution-brief-plan.md` |
 | Isolation strategy options (research) | Plan | P2 | `backlog/isolation-strategies.md` |
-| URL sources + embedded web view | Plan | P2 | `backlog/repo-webview-plan.md` |
 | tmux per-worktree support | Plan | P3 | `backlog/tmux-support_plan.md` |
 | Sparkle auto-update decision record | Plan | P3 | `backlog/sparkle-autoupdate-plan.md` |
 | Landing page | Plan | P3 | `backlog/landing-page.md` |

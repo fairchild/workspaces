@@ -1,11 +1,11 @@
 ---
-status: pending
+status: done
 category: plan
 pr: null
-branch: null
+branch: main
 score: null
-retro_summary: null
-completed: null
+retro_summary: MPP URL source support shipped on mainline; future browser expansion belongs in separate follow-ups.
+completed: 2026-03-07
 ---
 
 # URL Sources + Embedded Webview (MPP)

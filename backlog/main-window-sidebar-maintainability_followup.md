@@ -1,7 +1,7 @@
 ---
 status: in-progress
 category: followup
-pr: null
+pr: 29
 branch: codex/sidebar-content-maintainability
 score: null
 retro_summary: null
