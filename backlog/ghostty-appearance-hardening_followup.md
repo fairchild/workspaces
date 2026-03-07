@@ -14,7 +14,7 @@ completed: null
 
 Ghostty system appearance sync shipped in PR #14 and is now in mainline. Since then, PR #18 and PR #19 introduced additional hardening around open-in-editor shortcut flow, metrics, and broader terminal-mode behavior. The appearance sync remains relevant and active, but we now need a focused hardening pass to ensure it remains deterministic when combined with new routing and mode semantics.
 
-This work is deferred because the merged behavior is functionally correct today and current active priority remains refinement-gate closure (docs parity + split shortcut parity). The risk is not immediate feature breakage; it is regression risk as terminal routing continues to evolve.
+This work is deferred because the merged behavior is functionally correct today and current active priority is the maintainability-first quality pass in the main window/sidebar/Ghostty surfaces. The risk is not immediate feature breakage; it is regression risk as terminal routing continues to evolve.
 
 ## Key Decisions
 
@@ -119,7 +119,7 @@ ps aux | rg '.build/arm64-apple-macosx/debug/WorkspaceManager'
 ## Roadmap Position
 
 - Place this follow-up in the same daily-driver hardening band as PR #18/#19 outcomes.
-- Sequence immediately before the remaining refinement-gate split shortcut parity closure, because both rely on stable routing semantics.
+- Sequence after the current maintainability pass, because both rely on stable routing semantics and benefit from cleaner seams.
 - Treat as a risk-reduction task, not a feature track.
 
 ## References

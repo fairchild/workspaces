@@ -19,55 +19,6 @@ struct WorkspaceCreationStatus {
 }
 
 struct SidebarView: View {
-    static func preferredRepoForNewWorkspace(
-        selectedWorkspace: Workspace?,
-        activeSessionKey: HostTerminalSessionKey?,
-        repos: [Repo],
-        normalizeRepoPath: (URL) -> String
-    ) -> Repo? {
-        if let selectedWorkspace {
-            return selectedWorkspace.sourceRepo
-        }
-
-        if case .repoPath(let activeRepoPath) = activeSessionKey {
-            let normalizedActiveRepoPath = normalizeRepoPath(URL(fileURLWithPath: activeRepoPath))
-            if let matchedRepo = repos.first(where: {
-                normalizeRepoPath($0.localURL) == normalizedActiveRepoPath
-            }) {
-                return matchedRepo
-            }
-        }
-
-        return repos.first
-    }
-
-    static func cleanupRemoteSandboxAfterFailedPersistence(
-        sandboxId: String,
-        deleteSandbox: @Sendable (String) async throws -> Void
-    ) async -> Error? {
-        do {
-            try await deleteSandbox(sandboxId)
-            return nil
-        } catch {
-            return error
-        }
-    }
-
-    static func remoteWorkspacePersistenceFailureMessage(
-        existingMessage: String?,
-        sandboxId: String,
-        cleanupError: Error
-    ) -> String {
-        let cleanupMessage =
-            "Cleanup also failed for remote sandbox '\(sandboxId)': \(cleanupError.localizedDescription)"
-
-        if let existingMessage, !existingMessage.isEmpty {
-            return "\(existingMessage)\n\n\(cleanupMessage)"
-        }
-
-        return cleanupMessage
-    }
-
     @Environment(\.modelContext) private var modelContext
     @Environment(\.gitService) private var gitService
     @Environment(\.workspaceService) private var workspaceService
@@ -111,6 +62,14 @@ struct SidebarView: View {
     private var isRepoAutoImportDisabled: Bool {
         let environment = ProcessInfo.processInfo.environment
         return isUIFixtureMode || environment["WORKSPACES_DISABLE_AUTO_IMPORT"] == "1"
+    }
+
+    private var workspaceController: SidebarWorkspaceController {
+        SidebarWorkspaceController(
+            modelContext: modelContext,
+            workspaceService: workspaceService,
+            remoteBackend: remoteBackend
+        )
     }
 
     var body: some View {
@@ -336,7 +295,7 @@ struct SidebarView: View {
                 isRemoteBackendAvailable: isRemoteBackendAvailable,
                 isCreateDisabled: isCreatingWorkspace(for: repo.id)
             ) { name, backend in
-                Task {
+                Task { @MainActor in
                     switch backend {
                     case .local:
                         await createWorkspace(from: repo, name: name)
@@ -366,10 +325,14 @@ struct SidebarView: View {
             presenting: workspaceToDelete
         ) { workspace in
             Button("Delete (Keep Files)", role: .destructive) {
-                performDelete(workspace, deleteFiles: false)
+                Task { @MainActor in
+                    await performDelete(workspace, deleteFiles: false)
+                }
             }
             Button("Delete and Remove Files", role: .destructive) {
-                performDelete(workspace, deleteFiles: true)
+                Task { @MainActor in
+                    await performDelete(workspace, deleteFiles: true)
+                }
             }
             Button("Cancel", role: .cancel) {
                 workspaceToDelete = nil
@@ -537,44 +500,20 @@ struct SidebarView: View {
 
     private func updateLocalCreationStatus(repoID: UUID, phase: WorkspaceCreationPhase) {
         workspaceCreationStatusByRepoID[repoID] = WorkspaceCreationStatus(
-            message: localCreationMessage(for: phase)
+            message: SidebarWorkspaceController.localCreationMessage(for: phase)
         )
     }
 
-    private func localCreationMessage(for phase: WorkspaceCreationPhase) -> String {
-        switch phase {
-        case .preparing:
-            return "Preparing workspace..."
-        case .copyingRepository:
-            return "Copying repository..."
-        case .creatingBranch:
-            return "Creating branch..."
-        case .runningSetupScript:
-            return "Running setup script..."
-        case .finished:
-            return "Finishing workspace..."
-        }
-    }
-
+    @MainActor
     private func createWorkspace(from repo: Repo, name: String) async {
         let repoID = repo.id
-        // Extract value types before crossing actor boundary
-        let repoName = repo.name
-        let repoLocalURL = repo.localURL
-
-        let shouldStart = await MainActor.run { () -> Bool in
-            guard !isCreatingWorkspace(for: repoID) else { return false }
-            expandedRepoIDs.insert(repoID)
-            updateLocalCreationStatus(repoID: repoID, phase: .preparing)
-            return true
-        }
-
-        guard shouldStart else { return }
+        guard !isCreatingWorkspace(for: repoID) else { return }
+        expandedRepoIDs.insert(repoID)
+        updateLocalCreationStatus(repoID: repoID, phase: .preparing)
 
         do {
-            let info = try await workspaceService.createWorkspace(
-                repoName: repoName,
-                repoLocalURL: repoLocalURL,
+            let workspace = try await workspaceController.createWorkspace(
+                from: repo,
                 name: name,
                 progress: { phase in
                     await MainActor.run {
@@ -582,106 +521,34 @@ struct SidebarView: View {
                     }
                 }
             )
-
-            let didPersist = await MainActor.run { () -> Bool in
-                // Keep SwiftData model creation and relationship writes on MainActor.
-                let workspace = Workspace(
-                    name: info.name,
-                    path: info.path,
-                    sourceRepo: repo,
-                    gitBranch: info.gitBranch
-                )
-                modelContext.insert(workspace)
-                if saveModelContext(action: "save workspace") {
-                    workspaceCreationStatusByRepoID.removeValue(forKey: repoID)
-                    onWorkspaceCreated()
-                    selectedWorkspace = workspace
-                    return true
-                }
-                workspaceCreationStatusByRepoID.removeValue(forKey: repoID)
-                modelContext.rollback()
-                return false
-            }
-
-            if !didPersist {
-                cleanupWorkspaceDirectoryAfterFailedPersistence(info.path)
-            }
+            workspaceCreationStatusByRepoID.removeValue(forKey: repoID)
+            onWorkspaceCreated()
+            selectedWorkspace = workspace
         } catch {
-            await MainActor.run {
-                workspaceCreationStatusByRepoID.removeValue(forKey: repoID)
-                errorMessage = "Failed to create workspace: \(error.localizedDescription)"
-                showingError = true
-            }
+            workspaceCreationStatusByRepoID.removeValue(forKey: repoID)
+            errorMessage = "Failed to create workspace: \(error.localizedDescription)"
+            showingError = true
         }
     }
 
+    @MainActor
     private func createRemoteWorkspace(from repo: Repo, name: String) async {
-        let repoId = repo.id
-        let cloneURL = repo.remoteURL
-        let backend = remoteBackend
-
-        let shouldStart = await MainActor.run { () -> Bool in
-            guard !isCreatingWorkspace(for: repoId) else { return false }
-            workspaceCreationStatusByRepoID[repoId] = WorkspaceCreationStatus(
-                message: "Creating cloud workspace..."
-            )
-            expandedRepoIDs.insert(repoId)
-            return true
-        }
-
-        guard shouldStart else { return }
+        let repoID = repo.id
+        guard !isCreatingWorkspace(for: repoID) else { return }
+        workspaceCreationStatusByRepoID[repoID] = WorkspaceCreationStatus(
+            message: "Creating cloud workspace..."
+        )
+        expandedRepoIDs.insert(repoID)
 
         do {
-            let info = try await backend.createSandbox(name: name, cloneURL: cloneURL)
-
-            let didPersist = await MainActor.run { () -> Bool in
-                workspaceCreationStatusByRepoID.removeValue(forKey: repoId)
-                let workspace = Workspace(
-                    name: name,
-                    path: FileManager.default.temporaryDirectory,
-                    sourceRepo: repo,
-                    backendIdentifier: backend.identifier,
-                    remoteId: info.sandboxId
-                )
-                modelContext.insert(workspace)
-                if saveModelContext(action: "save remote workspace") {
-                    onWorkspaceCreated()
-                    selectedWorkspace = workspace
-                    return true
-                }
-
-                modelContext.rollback()
-                return false
-            }
-
-            guard !didPersist else { return }
-
-            if let cleanupError = await Self.cleanupRemoteSandboxAfterFailedPersistence(
-                sandboxId: info.sandboxId,
-                deleteSandbox: { sandboxId in
-                    try await backend.deleteSandbox(sandboxId: sandboxId)
-                }
-            ) {
-                NSLog(
-                    "[RemoteBackend] Failed to clean up sandbox %@ after persistence failure: %@",
-                    info.sandboxId,
-                    cleanupError.localizedDescription
-                )
-                await MainActor.run {
-                    errorMessage = Self.remoteWorkspacePersistenceFailureMessage(
-                        existingMessage: errorMessage,
-                        sandboxId: info.sandboxId,
-                        cleanupError: cleanupError
-                    )
-                    showingError = true
-                }
-            }
+            let workspace = try await workspaceController.createRemoteWorkspace(from: repo, name: name)
+            workspaceCreationStatusByRepoID.removeValue(forKey: repoID)
+            onWorkspaceCreated()
+            selectedWorkspace = workspace
         } catch {
-            await MainActor.run {
-                workspaceCreationStatusByRepoID.removeValue(forKey: repoId)
-                errorMessage = "Failed to create remote workspace: \(error.localizedDescription)"
-                showingError = true
-            }
+            workspaceCreationStatusByRepoID.removeValue(forKey: repoID)
+            errorMessage = "Failed to create remote workspace: \(error.localizedDescription)"
+            showingError = true
         }
     }
 
@@ -691,44 +558,18 @@ struct SidebarView: View {
         showingDeleteConfirmation = true
     }
 
-    private func performDelete(_ workspace: Workspace, deleteFiles: Bool) {
-        let workspaceURL = workspace.workspaceURL
-        let sandboxId = workspace.remoteId
-        let isRemote = workspace.isRemote
-        let backend = remoteBackend
-
-        Task {
-            if isRemote, let sandboxId {
-                do {
-                    try await backend.deleteSandbox(sandboxId: sandboxId)
-                } catch {
-                    NSLog("[RemoteBackend] Failed to delete sandbox %@: %@", sandboxId, error.localizedDescription)
-                }
-            } else {
-                do {
-                    try await workspaceService.deleteWorkspace(at: workspaceURL, deleteFiles: deleteFiles)
-                } catch {
-                    await MainActor.run {
-                        errorMessage = "Failed to delete workspace: \(error.localizedDescription)"
-                        showingError = true
-                        workspaceToDelete = nil
-                    }
-                    return
-                }
+    @MainActor
+    private func performDelete(_ workspace: Workspace, deleteFiles: Bool) async {
+        do {
+            try await workspaceController.deleteWorkspace(workspace, deleteFiles: deleteFiles)
+            if selectedWorkspace == workspace {
+                selectedWorkspace = nil
             }
-
-            await MainActor.run {
-                modelContext.delete(workspace)
-                if saveModelContext(action: "update workspace list") {
-                    if selectedWorkspace == workspace {
-                        selectedWorkspace = nil
-                    }
-                } else {
-                    modelContext.rollback()
-                }
-                workspaceToDelete = nil
-            }
+        } catch {
+            errorMessage = "Failed to delete workspace: \(error.localizedDescription)"
+            showingError = true
         }
+        workspaceToDelete = nil
     }
 
     @ViewBuilder
@@ -770,70 +611,49 @@ struct SidebarView: View {
 
     private func performStop(_ workspace: Workspace) {
         guard let sandboxId = workspace.remoteId else { return }
-        let backend = remoteBackend
         sandboxAction = SandboxActionState(sandboxId: sandboxId, message: "Stopping...")
 
-        Task {
+        Task { @MainActor in
             do {
-                try await backend.stopSandbox(sandboxId: sandboxId)
-                await MainActor.run {
-                    sandboxAction = nil
-                    workspace.status = .stopped
-                    _ = saveModelContext(action: "stop sandbox")
-                }
+                try await workspaceController.stop(workspace)
+                sandboxAction = nil
             } catch {
-                await MainActor.run {
-                    sandboxAction = nil
-                    errorMessage = "Failed to stop sandbox: \(error.localizedDescription)"
-                    showingError = true
-                }
+                sandboxAction = nil
+                errorMessage = "Failed to stop sandbox: \(error.localizedDescription)"
+                showingError = true
             }
         }
     }
 
     private func performStart(_ workspace: Workspace) {
         guard let sandboxId = workspace.remoteId else { return }
-        let backend = remoteBackend
         sandboxAction = SandboxActionState(sandboxId: sandboxId, message: "Starting...")
 
-        Task {
+        Task { @MainActor in
             do {
-                _ = try await backend.startSandbox(sandboxId: sandboxId)
-                await MainActor.run {
-                    sandboxAction = nil
-                    workspace.status = .active
-                    _ = saveModelContext(action: "start sandbox")
-                    selectedWorkspace = workspace
-                }
+                try await workspaceController.start(workspace)
+                sandboxAction = nil
+                selectedWorkspace = workspace
             } catch {
-                await MainActor.run {
-                    sandboxAction = nil
-                    errorMessage = "Failed to start sandbox: \(error.localizedDescription)"
-                    showingError = true
-                }
+                sandboxAction = nil
+                errorMessage = "Failed to start sandbox: \(error.localizedDescription)"
+                showingError = true
             }
         }
     }
 
     private func performArchive(_ workspace: Workspace) {
         guard let sandboxId = workspace.remoteId else { return }
-        let backend = remoteBackend
         sandboxAction = SandboxActionState(sandboxId: sandboxId, message: "Archiving...")
 
-        Task {
+        Task { @MainActor in
             do {
-                try await backend.archiveSandbox(sandboxId: sandboxId)
-                await MainActor.run {
-                    sandboxAction = nil
-                    workspace.status = .archived
-                    _ = saveModelContext(action: "archive sandbox")
-                }
+                try await workspaceController.archive(workspace)
+                sandboxAction = nil
             } catch {
-                await MainActor.run {
-                    sandboxAction = nil
-                    errorMessage = "Failed to archive sandbox: \(error.localizedDescription)"
-                    showingError = true
-                }
+                sandboxAction = nil
+                errorMessage = "Failed to archive sandbox: \(error.localizedDescription)"
+                showingError = true
             }
         }
     }
@@ -846,7 +666,7 @@ struct SidebarView: View {
     @MainActor
     private func handleNewWorkspaceShortcut() {
         guard
-            let preferredRepo = Self.preferredRepoForNewWorkspace(
+            let preferredRepo = SidebarWorkspaceController.preferredRepoForNewWorkspace(
                 selectedWorkspace: selectedWorkspace,
                 activeSessionKey: activeSessionKey,
                 repos: repos,
@@ -898,17 +718,6 @@ struct SidebarView: View {
             errorMessage = "Failed to \(action): \(error.localizedDescription)"
             showingError = true
             return false
-        }
-    }
-
-    private func cleanupWorkspaceDirectoryAfterFailedPersistence(_ workspaceURL: URL) {
-        try? FileManager.default.removeItem(at: workspaceURL)
-
-        let parentDir = workspaceURL.deletingLastPathComponent()
-        if let contents = try? FileManager.default.contentsOfDirectory(atPath: parentDir.path),
-            contents.isEmpty
-        {
-            try? FileManager.default.removeItem(at: parentDir)
         }
     }
 

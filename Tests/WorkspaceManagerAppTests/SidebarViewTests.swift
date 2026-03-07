@@ -4,7 +4,7 @@ import WorkspaceManagerCore
 
 @testable import WorkspaceManager
 
-@Suite("SidebarView")
+@Suite("SidebarWorkspaceController")
 struct SidebarViewTests {
     private struct CleanupError: LocalizedError {
         var errorDescription: String? { "cleanup failed" }
@@ -21,7 +21,7 @@ struct SidebarViewTests {
         )
         repoB.workspaces = [workspace]
 
-        let preferredRepo = SidebarView.preferredRepoForNewWorkspace(
+        let preferredRepo = SidebarWorkspaceController.preferredRepoForNewWorkspace(
             selectedWorkspace: workspace,
             activeSessionKey: .repoPath(repoA.localURL.path),
             repos: [repoA, repoB],
@@ -36,7 +36,7 @@ struct SidebarViewTests {
         let repoA = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))
         let repoB = Repo(name: "beta", localPath: URL(fileURLWithPath: "/tmp/beta"))
 
-        let preferredRepo = SidebarView.preferredRepoForNewWorkspace(
+        let preferredRepo = SidebarWorkspaceController.preferredRepoForNewWorkspace(
             selectedWorkspace: nil,
             activeSessionKey: .repoPath(repoB.localURL.path),
             repos: [repoA, repoB],
@@ -51,7 +51,7 @@ struct SidebarViewTests {
         let repoA = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))
         let repoB = Repo(name: "beta", localPath: URL(fileURLWithPath: "/tmp/beta"))
 
-        let preferredRepo = SidebarView.preferredRepoForNewWorkspace(
+        let preferredRepo = SidebarWorkspaceController.preferredRepoForNewWorkspace(
             selectedWorkspace: nil,
             activeSessionKey: .defaultHome,
             repos: [repoA, repoB],
@@ -66,7 +66,7 @@ struct SidebarViewTests {
         let sandboxID = "sandbox-123"
         let recordedSandboxID = LockedBox<String?>(nil)
 
-        let cleanupError = await SidebarView.cleanupRemoteSandboxAfterFailedPersistence(
+        let cleanupError = await SidebarWorkspaceController.cleanupRemoteSandboxAfterFailedPersistence(
             sandboxId: sandboxID,
             deleteSandbox: { requestedSandboxID in
                 await recordedSandboxID.set(requestedSandboxID)
@@ -79,7 +79,7 @@ struct SidebarViewTests {
 
     @Test("Remote cleanup helper returns thrown delete error")
     func remoteCleanupHelperReturnsThrownDeleteError() async throws {
-        let cleanupError = await SidebarView.cleanupRemoteSandboxAfterFailedPersistence(
+        let cleanupError = await SidebarWorkspaceController.cleanupRemoteSandboxAfterFailedPersistence(
             sandboxId: "sandbox-123",
             deleteSandbox: { _ in
                 throw CleanupError()
@@ -91,7 +91,7 @@ struct SidebarViewTests {
 
     @Test("Remote cleanup message appends cleanup failure to existing persistence error")
     func remoteCleanupMessageAppendsCleanupFailure() {
-        let message = SidebarView.remoteWorkspacePersistenceFailureMessage(
+        let message = SidebarWorkspaceController.remoteWorkspacePersistenceFailureMessage(
             existingMessage: "Failed to save remote workspace: write failed",
             sandboxId: "sandbox-123",
             cleanupError: CleanupError()
@@ -99,6 +99,15 @@ struct SidebarViewTests {
 
         #expect(message.contains("Failed to save remote workspace: write failed"))
         #expect(message.contains("Cleanup also failed for remote sandbox 'sandbox-123': cleanup failed"))
+    }
+
+    @Test("Local creation message matches progress phase")
+    func localCreationMessageMatchesPhase() {
+        #expect(SidebarWorkspaceController.localCreationMessage(for: .preparing) == "Preparing workspace...")
+        #expect(SidebarWorkspaceController.localCreationMessage(for: .copyingRepository) == "Copying repository...")
+        #expect(SidebarWorkspaceController.localCreationMessage(for: .creatingBranch) == "Creating branch...")
+        #expect(SidebarWorkspaceController.localCreationMessage(for: .runningSetupScript) == "Running setup script...")
+        #expect(SidebarWorkspaceController.localCreationMessage(for: .finished) == "Finishing workspace...")
     }
 }
 

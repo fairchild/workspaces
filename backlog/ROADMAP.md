@@ -12,10 +12,10 @@ completed: null
 
 **Vision**: A Mac-native app for managing AI coding sessions. Add repos, fork them into isolated workspaces, run any terminal-based coding agent in an embedded terminal, and track file changes—all without context-switching to Finder or a separate terminal.
 
-## Status Snapshot (2026-03-02)
+## Status Snapshot (2026-03-07)
 
 - Latest shipped release: `v0.1.2` (GitHub release + DMG workflow path healthy).
-- Test baseline: `swift test` is green at 142 tests across 23 suites.
+- Test baseline: `swift test` is green at 185 tests across 29 suites.
 - Daily-driver reliability fixes have landed:
   - shared non-blocking process execution (`ProcessRunner`) adopted across git/workspace/backend services
   - terminal identity hardening on workspace switch and restart generation
@@ -26,7 +26,13 @@ completed: null
 - Tart GUI automation + editor handoff UX hardening landed in PR #19:
   - target-manifest-driven Tart harness/docs for repeatable automation runs
   - workspace editor toolbar/context attachment launch-path improvements
-- Active implementation focus: close remaining refinement-gate gaps (docs parity + split shortcut parity), then execute only core quality improvements that reduce complexity and protect interaction latency.
+- Refinement-gate closure work has landed on mainline:
+  - Ghostty split shortcut parity (`resize_split`, `equalize_splits`)
+  - product/release docs parity and release-script ergonomics hardening
+  - main-window coordinator extraction plus inspector/right-pane regression coverage
+  - workspace creation progress UX
+  - strict-concurrency warning cleanup in the app layer
+- Active implementation focus: maintainability-first quality work that reduces `ContentView`/`SidebarView`/Ghostty integration complexity before new feature breadth.
 
 ---
 
@@ -82,12 +88,13 @@ Execution priority is:
 ### Best Implementation Order
 
 1. [x] Host-terminal-first foundation and persistent session UX.
-2. [ ] Refinement gate: quality hardening and performance baselining for current feature set (in progress; reliability fixes landed, docs parity + shortcut parity pending).
-3. [ ] Backend abstraction/registry in core while preserving `LocalBackend`.
-4. [ ] `VZTahoeBackend` implementation (runtime checks, VM lifecycle, vmnet, SSH executor, allowlist).
-5. [ ] New-workspace flow integration to create/start VM only for VZ workspaces.
-6. [ ] CLI backend-aware routing (`auto`, `--host`, `--vm`) plus VM lifecycle commands.
-7. [ ] Tests, docs, fallback hardening, and validation.
+2. [x] Refinement gate: quality hardening and performance baselining for current feature set.
+3. [ ] Maintainability-first quality pass: continue shrinking oversized integration files and keep verification deterministic.
+4. [ ] Backend abstraction/registry in core while preserving `LocalBackend`.
+5. [ ] `VZTahoeBackend` implementation (runtime checks, VM lifecycle, vmnet, SSH executor, allowlist).
+6. [ ] New-workspace flow integration to create/start VM only for VZ workspaces.
+7. [ ] CLI backend-aware routing (`auto`, `--host`, `--vm`) plus VM lifecycle commands.
+8. [ ] Tests, docs, fallback hardening, and validation.
 
 ### Performance Backlog (Fast-Path Follow-ups)
 
@@ -118,7 +125,7 @@ The next cycle prioritizes implementation quality for shipped behavior before ex
   - repo-click-to-focused-terminal
 - [ ] No open crash/repro defects around workspace selection and session switching.
 - [x] Release workflow passes end-to-end from the mainline release flow (signed + notarized DMG published).
-- [ ] Product docs (`docs/product_overview.md`, `docs/user-stories.md`) reflect implemented UX.
+- [x] Product docs (`docs/product_overview.md`, `docs/user-stories.md`) reflect implemented UX.
 
 ### Planned Work Items
 
@@ -126,8 +133,9 @@ The next cycle prioritizes implementation quality for shipped behavior before ex
 - [x] Add focused regression tests for session reuse + focus restoration behavior.
 - [x] Add a lightweight memory guardrail decision: either cap inactive surfaces (LRU) or document why unbounded is acceptable today.
 - [x] Land daily-driver reliability fixes: deadlock-safe process execution, terminal identity reset on workspace switch, and recency updates.
-- [ ] Complete Ghostty shortcut pass-through parity for split actions (`resize_split`, `equalize_splits`) and keep `mask verify-shortcuts` green.
-- [ ] Tighten release docs/scripts around Apple credential troubleshooting and idempotent setup (metadata consistency now fixed in workflow title/version flow).
+- [x] Complete Ghostty shortcut pass-through parity for split actions (`resize_split`, `equalize_splits`) and keep `mask verify-shortcuts` green.
+- [x] Tighten release docs/scripts around Apple credential troubleshooting and idempotent setup (metadata consistency now fixed in workflow title/version flow).
+- [x] Land main-window coordinator extraction, inspector/right-pane regression coverage, and workspace creation progress UX.
 - [ ] Capture usage findings and feed them into post-refinement prioritization for M2.
 
 ---
@@ -143,12 +151,13 @@ The next cycle prioritizes implementation quality for shipped behavior before ex
 - **Daily-driver reliability hardening (2026-02-26 to 2026-02-28)**: non-blocking process runner, terminal/workspace identity fixes, recency sort correctness, and release metadata consistency
 - **Open-in-editor polish (PR #18 + follow-up fixes)**: deterministic launch guardrails, launch metrics/signposts, and strengthened shortcut smoke assertions
 - **Editor UX + automation hardening (PR #19)**: external editor service/toolbar action hardening and Tart automation target-manifest/documentation upgrades
-- **142 tests** passing across 23 suites (services, models, session behavior, process runner, app-level routing/UX behaviors)
+- **Refinement-gate closure (2026-03-07)**: split parity, docs/release parity, main-window/inspector hardening, workspace creation progress, and app-layer strict-concurrency cleanup
+- **185 tests** passing across 29 suites (services, models, session behavior, process runner, app-level routing/UX behaviors)
 - **Monorepo extraction**: Clean standalone repo, SPM-only build (no Xcode project)
 
 ---
 
-## Active Phase: Core Terminal Quality + Determinism
+## Active Phase: Maintainability + Determinism
 
 Prioritization lens for this phase (aligned with `README.md`):
 
@@ -160,19 +169,18 @@ Prioritization lens for this phase (aligned with `README.md`):
 
 | Item | Effort | Impact | Why now |
 |------|--------|--------|---------|
-| Ghostty shortcut parity completion (`resize_split`, `equalize_splits`) | Medium | High | Core terminal correctness is still open and currently user-visible. |
-| Product docs parity (`docs/product_overview.md`, `docs/user-stories.md`) | Low | High | Required refinement-gate exit criteria and prevents expectation drift. |
-| Main window composition + inspector tests | Medium | High | Reduces regression risk by shrinking `ContentView` responsibilities and adding missing state tests. |
-| Workspace creation progress UI | Medium | Medium | Removes perceived hangs in large repos without adding major architecture complexity. |
-| Release docs/script idempotency hardening | Low | Medium | Keeps shipping path reliable and lowers operational toil. |
+| Main-window/sidebar maintainability pass | Medium | High | `ContentView` and `SidebarView` are still the largest integration files and slow down safe iteration. |
+| Ghostty boundary maintainability | Medium | High | `GhosttySurfaceView` and `GhosttyAppManager` remain the riskiest AppKit/C interop surfaces to modify. |
+| Shared-desktop verification reliability | Medium | Medium | UI evidence capture is still the least deterministic quality loop and slows confident refactors. |
+| Usage findings + post-refinement prioritization | Low | Medium | Needed to decide whether M2 starts next or more quality work should land first. |
 
 ### Next (P1): Core UX Evolution With Controlled Refactor Scope
 
 | Item | Effort | Impact | Guardrail |
 |------|--------|--------|-----------|
 | Pane-tree terminal tiling model | High | High | Execute only with reducer-first design + invariant tests + memory sync contract. See `backlog/pane-tree-tiling_plan.md`. |
-| Ghostty appearance hardening follow-up | Medium | Medium | Run after shortcut parity to verify no routing/appearance interaction regressions. |
-| Shared desktop focus contention hardening | Medium | Medium | Improves verification reliability for daily development without product-surface expansion. |
+| Ghostty appearance hardening follow-up | Medium | Medium | Run after the current maintainability pass so appearance behavior is checked against the new seams. |
+| Logging + error-surface cleanup | Low | Medium | Standardize `print`/`NSLog` usage and reduce ad hoc alert/reporting paths once large-file refactors settle. |
 
 ### Later (P2): Strategic Expansion
 
@@ -212,8 +220,7 @@ Summary: backend abstraction/registry, VZTahoeBackend implementation (VM lifecyc
 
 | Item | Category | Priority Band | Pointer |
 |------|----------|---------------|---------|
-| Main window composition + inspector tests | Follow-up | P0 | `backlog/main-window-composition-and-inspector-tests_task-list.md` |
-| Workspace creation progress indicator | Follow-up | P0 | `backlog/workspace-create-progress-followup.md` |
+| Main-window + sidebar maintainability pass | Follow-up | P0 | `backlog/main-window-sidebar-maintainability_followup.md` |
 | Pane-tree terminal tiling model | Plan | P1 | `backlog/pane-tree-tiling_plan.md` |
 | Ghostty appearance hardening | Follow-up | P1 | `backlog/ghostty-appearance-hardening_followup.md` |
 | Shared desktop focus contention hardening | Follow-up | P1 | `backlog/shared-desktop-focus-contention-followup.md` |
@@ -229,6 +236,19 @@ Summary: backend abstraction/registry, VZTahoeBackend implementation (VM lifecyc
 
 ## Learnings
 
+### 2026-03-07 — Refinement gate closure + strict-concurrency cleanup
+
+**Context**: The remaining refinement-gate items and follow-up cleanup work were merged to mainline.
+
+**Results**:
+- Ghostty split shortcut parity now covers `new_split`, `goto_split`, `resize_split`, and `equalize_splits`.
+- Product docs, release docs, and release-script ergonomics now match shipped behavior.
+- Main-window coordinator extraction, inspector/right-pane regression tests, and workspace-creation progress UX are landed.
+- App-layer strict-concurrency warnings are cleaned up and `swift build -Xswiftc -warn-concurrency` is green.
+- `swift test` is green at 185 tests across 29 suites.
+
+**What this changes for planning**: The highest-value next work is maintainability-first quality improvement, especially shrinking oversized integration files and tightening the Ghostty/AppKit boundary before new feature breadth.
+
 ### 2026-03-01 — PR #18/#19 mainline hardening pass
 
 **Context**: PR #18 and PR #19 were merged to mainline to harden open-in-editor behavior and strengthen GUI automation/editor handoff reliability.
@@ -239,7 +259,7 @@ Summary: backend abstraction/registry, VZTahoeBackend implementation (VM lifecyc
 - Tart GUI automation gained target-manifest workflow/docs updates and activation/verification flows.
 - `swift test` is green at 142 tests across 23 suites.
 
-**What this changes for planning**: Open-in-editor shortcut polish moves out of quick wins; highest-value refinement work is now docs parity and remaining split shortcut parity.
+**What this changed for planning at the time**: Open-in-editor shortcut polish moved out of quick wins; remaining refinement work centered on docs parity and split shortcut parity.
 
 ### 2026-02-28 — Release metadata consistency pass
 
