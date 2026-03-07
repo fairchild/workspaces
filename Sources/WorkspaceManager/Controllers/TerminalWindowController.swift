@@ -9,6 +9,7 @@ import AppKit
 
 /// Manages focus for terminal views within a window.
 /// Uses NotificationCenter instead of window delegate so SwiftUI window behavior stays intact.
+@MainActor
 final class TerminalFocusManager: NSObject {
 
     static let shared = TerminalFocusManager()
@@ -65,10 +66,42 @@ final class TerminalFocusManager: NSObject {
         let shouldRetry = Self.shouldRetry(after: delay)
 
         let work = DispatchWorkItem { [weak self, weak terminal] in
-            guard let self, let terminal else { return }
+            Task { @MainActor in
+                guard let self, let terminal else { return }
 
-            guard let window = terminal.window else {
-                if shouldRetry {
+                guard let window = terminal.window else {
+                    if shouldRetry {
+                        self.requestFocus(
+                            for: terminal,
+                            delay: nextDelay,
+                            activateApp: activateApp,
+                            onFocused: onFocused
+                        )
+                    }
+                    return
+                }
+
+                if activateApp {
+                    NSApp.activate(ignoringOtherApps: true)
+                    window.makeKeyAndOrderFront(nil)
+                } else {
+                    // Keep focus intent without stealing foreground when app is inactive.
+                    if !NSApp.isActive || !window.isKeyWindow {
+                        self.focusedTerminal = terminal
+                        return
+                    }
+                }
+
+                if let oldFocused = self.focusedTerminal, oldFocused !== terminal {
+                    _ = oldFocused.resignFirstResponder()
+                }
+
+                let success = window.makeFirstResponder(terminal)
+                if success {
+                    self.focusedTerminal = terminal
+                    PerformanceSignposts.endLaunchToFirstPromptIfNeeded(trigger: "terminal_focus")
+                    onFocused?()
+                } else if shouldRetry {
                     self.requestFocus(
                         for: terminal,
                         delay: nextDelay,
@@ -76,36 +109,6 @@ final class TerminalFocusManager: NSObject {
                         onFocused: onFocused
                     )
                 }
-                return
-            }
-
-            if activateApp {
-                NSApp.activate(ignoringOtherApps: true)
-                window.makeKeyAndOrderFront(nil)
-            } else {
-                // Keep focus intent without stealing foreground when app is inactive.
-                if !NSApp.isActive || !window.isKeyWindow {
-                    self.focusedTerminal = terminal
-                    return
-                }
-            }
-
-            if let oldFocused = self.focusedTerminal, oldFocused !== terminal {
-                _ = oldFocused.resignFirstResponder()
-            }
-
-            let success = window.makeFirstResponder(terminal)
-            if success {
-                self.focusedTerminal = terminal
-                PerformanceSignposts.endLaunchToFirstPromptIfNeeded(trigger: "terminal_focus")
-                onFocused?()
-            } else if shouldRetry {
-                self.requestFocus(
-                    for: terminal,
-                    delay: nextDelay,
-                    activateApp: activateApp,
-                    onFocused: onFocused
-                )
             }
         }
 
@@ -118,14 +121,14 @@ final class TerminalFocusManager: NSObject {
         }
     }
 
-    static func nextRetryDelay(after delay: TimeInterval?) -> TimeInterval {
+    nonisolated static func nextRetryDelay(after delay: TimeInterval?) -> TimeInterval {
         if let delay {
             return min(delay * 2, 0.5)
         }
         return 0.05
     }
 
-    static func shouldRetry(after delay: TimeInterval?) -> Bool {
+    nonisolated static func shouldRetry(after delay: TimeInterval?) -> Bool {
         (delay ?? 0) < 0.5
     }
 
@@ -148,7 +151,7 @@ final class TerminalFocusManager: NSObject {
         guard let window = notification.object as? NSWindow else { return }
 
         if window.firstResponder === window, let terminal = focusedTerminal {
-            DispatchQueue.main.async {
+            Task { @MainActor in
                 self.requestFocus(for: terminal, activateApp: false)
             }
         }

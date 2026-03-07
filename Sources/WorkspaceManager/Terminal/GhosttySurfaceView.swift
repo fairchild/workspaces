@@ -7,7 +7,8 @@ import AppKit
 import Foundation
 import GhosttyKit
 
-final class GhosttySurfaceView: NSView, NSTextInputClient {
+@MainActor
+final class GhosttySurfaceView: NSView {
     private let workingDirectory: URL
     private let onProcessExit: (() -> Void)?
 
@@ -50,10 +51,15 @@ final class GhosttySurfaceView: NSView, NSTextInputClient {
     }
 
     deinit {
-        removeEventMonitor()
+        MainActor.assumeIsolated {
+            if let eventMonitor {
+                NSEvent.removeMonitor(eventMonitor)
+                self.eventMonitor = nil
+            }
 
-        if let surface {
-            ghostty_surface_free(surface)
+            if let surface {
+                ghostty_surface_free(surface)
+            }
         }
     }
 
@@ -733,3 +739,6 @@ final class GhosttySurfaceView: NSView, NSTextInputClient {
         currentColorScheme = resolvedColorScheme
     }
 }
+
+@MainActor
+extension GhosttySurfaceView: @preconcurrency NSTextInputClient {}

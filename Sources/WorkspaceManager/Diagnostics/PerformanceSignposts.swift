@@ -26,16 +26,16 @@ enum PerformanceSignposts {
     private static let clock = ContinuousClock()
     private static let lock = NSLock()
 
-    private static var launchInterval: ActiveInterval?
-    private static var launchCompleted = false
-    private static var repoHydrationInterval: ActiveInterval?
-    private static var repoClickIntervals: [UUID: ActiveInterval] = [:]
-    private static var webViewInitializationInterval: ActiveInterval?
-    private static var webFirstLoadInterval: ActiveInterval?
-    private static var webFirstLoadSourceID: UUID?
-    private static var openInEditorIntervals: [UUID: ActiveInterval] = [:]
+    nonisolated(unsafe) private static var launchInterval: ActiveInterval?
+    nonisolated(unsafe) private static var launchCompleted = false
+    nonisolated(unsafe) private static var repoHydrationInterval: ActiveInterval?
+    nonisolated(unsafe) private static var repoClickIntervals: [UUID: ActiveInterval] = [:]
+    nonisolated(unsafe) private static var webViewInitializationInterval: ActiveInterval?
+    nonisolated(unsafe) private static var webFirstLoadInterval: ActiveInterval?
+    nonisolated(unsafe) private static var webFirstLoadSourceID: UUID?
+    nonisolated(unsafe) private static var openInEditorIntervals: [UUID: ActiveInterval] = [:]
     #if DEBUG
-        private static var openInEditorMetricObserver: OpenInEditorMetricObserver?
+        nonisolated(unsafe) private static var openInEditorMetricObserver: OpenInEditorMetricObserver?
     #endif
 
     static func beginLaunchToFirstPromptIfNeeded() {
