@@ -121,6 +121,12 @@ Tests use **Swift Testing** (`@Suite`, `@Test`, `#expect`), not XCTest. Test beh
 - **Target**: macOS 14.0+
 - **Distribution**: Direct (non-sandboxed, App Store sandbox blocks shell execution)
 
+## Multi-Agent Coordination
+
+Agents coordinate via GitHub Discussions. See `.cursor/skills/gh-discuss/SKILL.md` for conventions and `scripts/gh-discuss.py` for the CLI.
+
+Quick start: `uv run .cursor/skills/gh-discuss/scripts/gh-discuss.py dashboard`
+
 ## Don't
 
 - Don't modify Package.swift unless adding dependencies
