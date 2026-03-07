@@ -33,6 +33,86 @@ struct HostTerminalStateStoreTests {
 
         #expect(split != nil)
         #expect(store.splitLayout(for: activation.session.id) == preferredLayout)
+        #expect(store.splitFraction(for: activation.session.id) == HostTerminalStateStore.defaultSplitFraction)
+    }
+
+    @Test("Split fraction updates clamp to supported bounds")
+    func splitFractionUpdatesClampToSupportedBounds() {
+        let store = HostTerminalStateStore()
+        let activation = store.activateSession(
+            key: .defaultHome,
+            directory: URL(fileURLWithPath: "/Users/test/code")
+        )
+        let primaryID = activation.session.id
+        _ = store.ensureSplit(
+            forPrimarySessionID: primaryID,
+            preferredLayout: .defaultTrailing
+        )
+
+        #expect(store.updateSplitFraction(0.95, forPrimarySessionID: primaryID))
+        #expect(store.splitFraction(for: primaryID) == 0.8)
+
+        #expect(store.updateSplitFraction(0.01, forPrimarySessionID: primaryID))
+        #expect(store.splitFraction(for: primaryID) == 0.2)
+    }
+
+    @Test("Equalize split resets fraction to default")
+    func equalizeSplitResetsFractionToDefault() throws {
+        let store = HostTerminalStateStore()
+        let activation = store.activateSession(
+            key: .defaultHome,
+            directory: URL(fileURLWithPath: "/Users/test/code")
+        )
+        let primaryID = activation.session.id
+        let split = try #require(
+            store.ensureSplit(
+                forPrimarySessionID: primaryID,
+                preferredLayout: .defaultTrailing
+            )
+        )
+
+        #expect(store.updateSplitFraction(0.7, forPrimarySessionID: primaryID))
+        #expect(store.equalizeSplit(containing: split.id))
+        #expect(store.splitFraction(for: primaryID) == HostTerminalStateStore.defaultSplitFraction)
+    }
+
+    @Test("Resize split grows trailing pane for left action from trailing split")
+    func resizeSplitGrowsTrailingPaneForLeftAction() throws {
+        let store = HostTerminalStateStore()
+        let activation = store.activateSession(
+            key: .defaultHome,
+            directory: URL(fileURLWithPath: "/Users/test/code")
+        )
+        let primaryID = activation.session.id
+        let split = try #require(
+            store.ensureSplit(
+                forPrimarySessionID: primaryID,
+                preferredLayout: .defaultTrailing
+            )
+        )
+
+        #expect(store.resizeSplit(containing: split.id, direction: .left, amount: 100))
+        #expect(store.splitFraction(for: primaryID) == 0.45)
+    }
+
+    @Test("Resize split ignores orthogonal and outer-edge directions")
+    func resizeSplitIgnoresOrthogonalAndOuterEdgeDirections() throws {
+        let store = HostTerminalStateStore()
+        let activation = store.activateSession(
+            key: .defaultHome,
+            directory: URL(fileURLWithPath: "/Users/test/code")
+        )
+        let primaryID = activation.session.id
+        let split = try #require(
+            store.ensureSplit(
+                forPrimarySessionID: primaryID,
+                preferredLayout: .defaultTrailing
+            )
+        )
+
+        #expect(!store.resizeSplit(containing: split.id, direction: .up, amount: 100))
+        #expect(!store.resizeSplit(containing: primaryID, direction: .left, amount: 100))
+        #expect(store.splitFraction(for: primaryID) == HostTerminalStateStore.defaultSplitFraction)
     }
 
     @Test("Directional focus follows top-bottom split layout")

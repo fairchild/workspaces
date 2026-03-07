@@ -86,6 +86,8 @@ cp scripts/signing-config.sh.template scripts/signing-config.sh
 
 Edit `scripts/signing-config.sh` with your credentials. The template has inline comments explaining each field. This file is gitignored — never commit it.
 
+Use `scripts/signing-config.sh` for local signing/notarization only. For GitHub Actions release setup, use `./scripts/setup-release-secrets.sh`.
+
 #### Step 5: Verify the Full Pipeline
 
 Run a local unsigned build first to confirm the toolchain works:
@@ -105,7 +107,20 @@ codesign -dv --verbose=4 build/WorkspaceManager.app
 
 ### GitHub Actions Setup (for CI/CD)
 
-Add these **secrets** to your GitHub repository (Settings > Secrets and variables > Actions > Secrets):
+Preferred setup path:
+
+```bash
+./scripts/setup-release-secrets.sh \
+    --p12-path ~/.config/apple/Developer_ID_Application_<TEAM_ID>.p12
+```
+
+Notes:
+- The script is idempotent by default and only fills missing secrets/variables.
+- Add `--force` to overwrite existing values.
+- Add `--non-interactive` for CI-friendly usage.
+- Add `--run-release --watch` to dispatch the release workflow from `main` immediately after setup and stream the result.
+
+If you prefer to configure GitHub manually, add these **secrets** to your GitHub repository (Settings > Secrets and variables > Actions > Secrets):
 
 | Secret | Description |
 |--------|-------------|
@@ -120,7 +135,7 @@ Add these **variables** to your GitHub repository (Settings > Secrets and variab
 | `APPLE_ID` | Your Apple ID email |
 | `APPLE_TEAM_ID` | 10-character Team ID |
 
-To export your certificate for CI:
+To export your certificate for CI or for `setup-release-secrets.sh`:
 
 1. Open Keychain Access > login > My Certificates
 2. Right-click your "Developer ID Application" certificate > Export Items...
@@ -308,6 +323,7 @@ Common issues:
 - **Unsigned code**: All binaries and frameworks must be signed
 - **Hardened runtime missing**: Use `--options runtime` when signing
 - **Invalid entitlements**: Check entitlements file syntax
+- **Secrets/variables drift**: Re-run `./scripts/setup-release-secrets.sh`; it is safe to run repeatedly and `--force` will refresh existing values
 
 ### "App is damaged" Error
 
@@ -332,6 +348,7 @@ security find-identity -v -p codesigning
 |--------|---------|
 | `scripts/build-release.sh` | Build app bundle from SPM |
 | `scripts/notarize.sh` | Create DMG and notarize |
+| `scripts/setup-release-secrets.sh` | Configure GitHub Actions release secrets/variables from a verified `.p12` |
 | `scripts/signing-config.sh` | Your signing credentials (not in git) |
 
 ---

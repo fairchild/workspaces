@@ -11,6 +11,8 @@ final class GhosttyAppManager: NSObject {
     enum SplitActionKind: String {
         case newSplit = "new_split"
         case gotoSplit = "goto_split"
+        case resizeSplit = "resize_split"
+        case equalizeSplits = "equalize_splits"
     }
 
     enum SplitDirection: Int {
@@ -29,9 +31,17 @@ final class GhosttyAppManager: NSObject {
         case right = 5
     }
 
+    enum SplitResizeDirection: Int {
+        case up = 0
+        case down = 1
+        case left = 2
+        case right = 3
+    }
+
     struct SplitActionRequest {
         let kind: SplitActionKind
         let directionRawValue: Int?
+        let amount: Int?
 
         var splitDirection: SplitDirection? {
             guard let directionRawValue else { return nil }
@@ -42,12 +52,18 @@ final class GhosttyAppManager: NSObject {
             guard let directionRawValue else { return nil }
             return SplitFocusDirection(rawValue: directionRawValue)
         }
+
+        var resizeDirection: SplitResizeDirection? {
+            guard let directionRawValue else { return nil }
+            return SplitResizeDirection(rawValue: directionRawValue)
+        }
     }
 
     static let shared = GhosttyAppManager()
     static let splitActionNotification = Notification.Name("WorkspaceManager.Ghostty.SplitActionRequested")
     static let splitActionKindUserInfoKey = "kind"
     static let splitActionDirectionUserInfoKey = "directionRawValue"
+    static let splitActionAmountUserInfoKey = "amount"
 
     private(set) var app: ghostty_app_t?
     private var config: ghostty_config_t?
@@ -208,12 +224,30 @@ final class GhosttyAppManager: NSObject {
             return true
 
         case GHOSTTY_ACTION_RESIZE_SPLIT:
-            NSLog("[GhosttyAppManager] action=resize_split (defer)")
-            return false
+            let directionRawValue = Int(action.action.resize_split.direction.rawValue)
+            let amount = Int(action.action.resize_split.amount)
+            postSplitAction(
+                kind: .resizeSplit,
+                directionRawValue: directionRawValue,
+                amount: amount,
+                sourceSurfaceView: surfaceView
+            )
+            NSLog(
+                "[GhosttyAppManager] action=resize_split direction=%d amount=%d",
+                directionRawValue,
+                amount
+            )
+            return true
 
         case GHOSTTY_ACTION_EQUALIZE_SPLITS:
-            NSLog("[GhosttyAppManager] action=equalize_splits (defer)")
-            return false
+            postSplitAction(
+                kind: .equalizeSplits,
+                directionRawValue: nil,
+                amount: nil,
+                sourceSurfaceView: surfaceView
+            )
+            NSLog("[GhosttyAppManager] action=equalize_splits")
+            return true
 
         case GHOSTTY_ACTION_SET_TITLE:
             let title = action.action.set_title.title.flatMap { String(cString: $0) } ?? ""
@@ -243,15 +277,18 @@ final class GhosttyAppManager: NSObject {
         }
 
         let directionRawValue = userInfo[splitActionDirectionUserInfoKey] as? Int
+        let amount = userInfo[splitActionAmountUserInfoKey] as? Int
         return SplitActionRequest(
             kind: kind,
-            directionRawValue: directionRawValue
+            directionRawValue: directionRawValue,
+            amount: amount
         )
     }
 
     private static func postSplitAction(
         kind: SplitActionKind,
         directionRawValue: Int?,
+        amount: Int? = nil,
         sourceSurfaceView: GhosttySurfaceView
     ) {
         DispatchQueue.main.async {
@@ -260,6 +297,9 @@ final class GhosttyAppManager: NSObject {
             ]
             if let directionRawValue {
                 userInfo[splitActionDirectionUserInfoKey] = directionRawValue
+            }
+            if let amount {
+                userInfo[splitActionAmountUserInfoKey] = amount
             }
 
             NotificationCenter.default.post(

@@ -14,7 +14,60 @@ struct SandboxActionState {
     let message: String
 }
 
+struct WorkspaceCreationStatus {
+    let message: String
+}
+
 struct SidebarView: View {
+    static func preferredRepoForNewWorkspace(
+        selectedWorkspace: Workspace?,
+        activeSessionKey: HostTerminalSessionKey?,
+        repos: [Repo],
+        normalizeRepoPath: (URL) -> String
+    ) -> Repo? {
+        if let selectedWorkspace {
+            return selectedWorkspace.sourceRepo
+        }
+
+        if case .repoPath(let activeRepoPath) = activeSessionKey {
+            let normalizedActiveRepoPath = normalizeRepoPath(URL(fileURLWithPath: activeRepoPath))
+            if let matchedRepo = repos.first(where: {
+                normalizeRepoPath($0.localURL) == normalizedActiveRepoPath
+            }) {
+                return matchedRepo
+            }
+        }
+
+        return repos.first
+    }
+
+    static func cleanupRemoteSandboxAfterFailedPersistence(
+        sandboxId: String,
+        deleteSandbox: @Sendable (String) async throws -> Void
+    ) async -> Error? {
+        do {
+            try await deleteSandbox(sandboxId)
+            return nil
+        } catch {
+            return error
+        }
+    }
+
+    static func remoteWorkspacePersistenceFailureMessage(
+        existingMessage: String?,
+        sandboxId: String,
+        cleanupError: Error
+    ) -> String {
+        let cleanupMessage =
+            "Cleanup also failed for remote sandbox '\(sandboxId)': \(cleanupError.localizedDescription)"
+
+        if let existingMessage, !existingMessage.isEmpty {
+            return "\(existingMessage)\n\n\(cleanupMessage)"
+        }
+
+        return cleanupMessage
+    }
+
     @Environment(\.modelContext) private var modelContext
     @Environment(\.gitService) private var gitService
     @Environment(\.workspaceService) private var workspaceService
@@ -49,7 +102,7 @@ struct SidebarView: View {
     @State private var expandedRepoIDs: Set<UUID> = []
     @State private var didInitializeRepoExpansion = false
     @State private var sandboxAction: SandboxActionState?
-    @State private var creatingForRepoId: UUID?
+    @State private var workspaceCreationStatusByRepoID: [UUID: WorkspaceCreationStatus] = [:]
 
     private var isUIFixtureMode: Bool {
         ProcessInfo.processInfo.environment["WORKSPACES_UI_FIXTURE"] == "1"
@@ -108,6 +161,7 @@ struct SidebarView: View {
                             Button("New Workspace...") {
                                 repoForNewWorkspace = repo
                             }
+                            .disabled(isCreatingWorkspace(for: repo.id))
 
                             Divider()
 
@@ -125,7 +179,7 @@ struct SidebarView: View {
                         if isRepoExpanded(repo) {
                             let repoWorkspaces = sortedWorkspaces(for: repo)
 
-                            if repoWorkspaces.isEmpty, creatingForRepoId != repo.id {
+                            if repoWorkspaces.isEmpty, creationStatus(for: repo.id) == nil {
                                 Text("No workspaces")
                                     .foregroundStyle(.secondary)
                                     .font(.caption)
@@ -183,12 +237,12 @@ struct SidebarView: View {
                                 }
                             }
 
-                            if creatingForRepoId == repo.id {
+                            if let creationStatus = creationStatus(for: repo.id) {
                                 HStack(spacing: 8) {
                                     ProgressView()
                                         .controlSize(.small)
                                         .frame(width: 16, height: 16)
-                                    Text("Creating cloud workspace...")
+                                    Text(creationStatus.message)
                                         .font(.callout)
                                         .foregroundStyle(.secondary)
                                 }
@@ -277,7 +331,11 @@ struct SidebarView: View {
             }
         }
         .sheet(item: $repoForNewWorkspace) { repo in
-            NewWorkspaceSheet(repo: repo, isRemoteBackendAvailable: isRemoteBackendAvailable) { name, backend in
+            NewWorkspaceSheet(
+                repo: repo,
+                isRemoteBackendAvailable: isRemoteBackendAvailable,
+                isCreateDisabled: isCreatingWorkspace(for: repo.id)
+            ) { name, backend in
                 Task {
                     switch backend {
                     case .local:
@@ -469,16 +527,60 @@ struct SidebarView: View {
         NSWorkspace.shared.open(url)
     }
 
+    private func creationStatus(for repoID: UUID) -> WorkspaceCreationStatus? {
+        workspaceCreationStatusByRepoID[repoID]
+    }
+
+    private func isCreatingWorkspace(for repoID: UUID) -> Bool {
+        workspaceCreationStatusByRepoID[repoID] != nil
+    }
+
+    private func updateLocalCreationStatus(repoID: UUID, phase: WorkspaceCreationPhase) {
+        workspaceCreationStatusByRepoID[repoID] = WorkspaceCreationStatus(
+            message: localCreationMessage(for: phase)
+        )
+    }
+
+    private func localCreationMessage(for phase: WorkspaceCreationPhase) -> String {
+        switch phase {
+        case .preparing:
+            return "Preparing workspace..."
+        case .copyingRepository:
+            return "Copying repository..."
+        case .creatingBranch:
+            return "Creating branch..."
+        case .runningSetupScript:
+            return "Running setup script..."
+        case .finished:
+            return "Finishing workspace..."
+        }
+    }
+
     private func createWorkspace(from repo: Repo, name: String) async {
+        let repoID = repo.id
         // Extract value types before crossing actor boundary
         let repoName = repo.name
         let repoLocalURL = repo.localURL
+
+        let shouldStart = await MainActor.run { () -> Bool in
+            guard !isCreatingWorkspace(for: repoID) else { return false }
+            expandedRepoIDs.insert(repoID)
+            updateLocalCreationStatus(repoID: repoID, phase: .preparing)
+            return true
+        }
+
+        guard shouldStart else { return }
 
         do {
             let info = try await workspaceService.createWorkspace(
                 repoName: repoName,
                 repoLocalURL: repoLocalURL,
-                name: name
+                name: name,
+                progress: { phase in
+                    await MainActor.run {
+                        updateLocalCreationStatus(repoID: repoID, phase: phase)
+                    }
+                }
             )
 
             let didPersist = await MainActor.run { () -> Bool in
@@ -491,10 +593,12 @@ struct SidebarView: View {
                 )
                 modelContext.insert(workspace)
                 if saveModelContext(action: "save workspace") {
+                    workspaceCreationStatusByRepoID.removeValue(forKey: repoID)
                     onWorkspaceCreated()
                     selectedWorkspace = workspace
                     return true
                 }
+                workspaceCreationStatusByRepoID.removeValue(forKey: repoID)
                 modelContext.rollback()
                 return false
             }
@@ -504,6 +608,7 @@ struct SidebarView: View {
             }
         } catch {
             await MainActor.run {
+                workspaceCreationStatusByRepoID.removeValue(forKey: repoID)
                 errorMessage = "Failed to create workspace: \(error.localizedDescription)"
                 showingError = true
             }
@@ -515,16 +620,22 @@ struct SidebarView: View {
         let cloneURL = repo.remoteURL
         let backend = remoteBackend
 
-        await MainActor.run {
-            creatingForRepoId = repoId
+        let shouldStart = await MainActor.run { () -> Bool in
+            guard !isCreatingWorkspace(for: repoId) else { return false }
+            workspaceCreationStatusByRepoID[repoId] = WorkspaceCreationStatus(
+                message: "Creating cloud workspace..."
+            )
             expandedRepoIDs.insert(repoId)
+            return true
         }
+
+        guard shouldStart else { return }
 
         do {
             let info = try await backend.createSandbox(name: name, cloneURL: cloneURL)
 
-            await MainActor.run {
-                creatingForRepoId = nil
+            let didPersist = await MainActor.run { () -> Bool in
+                workspaceCreationStatusByRepoID.removeValue(forKey: repoId)
                 let workspace = Workspace(
                     name: name,
                     path: FileManager.default.temporaryDirectory,
@@ -536,13 +647,38 @@ struct SidebarView: View {
                 if saveModelContext(action: "save remote workspace") {
                     onWorkspaceCreated()
                     selectedWorkspace = workspace
-                } else {
-                    modelContext.rollback()
+                    return true
+                }
+
+                modelContext.rollback()
+                return false
+            }
+
+            guard !didPersist else { return }
+
+            if let cleanupError = await Self.cleanupRemoteSandboxAfterFailedPersistence(
+                sandboxId: info.sandboxId,
+                deleteSandbox: { sandboxId in
+                    try await backend.deleteSandbox(sandboxId: sandboxId)
+                }
+            ) {
+                NSLog(
+                    "[RemoteBackend] Failed to clean up sandbox %@ after persistence failure: %@",
+                    info.sandboxId,
+                    cleanupError.localizedDescription
+                )
+                await MainActor.run {
+                    errorMessage = Self.remoteWorkspacePersistenceFailureMessage(
+                        existingMessage: errorMessage,
+                        sandboxId: info.sandboxId,
+                        cleanupError: cleanupError
+                    )
+                    showingError = true
                 }
             }
         } catch {
             await MainActor.run {
-                creatingForRepoId = nil
+                workspaceCreationStatusByRepoID.removeValue(forKey: repoId)
                 errorMessage = "Failed to create remote workspace: \(error.localizedDescription)"
                 showingError = true
             }
@@ -709,13 +845,26 @@ struct SidebarView: View {
 
     @MainActor
     private func handleNewWorkspaceShortcut() {
-        if let preferredRepo = selectedWorkspace?.sourceRepo ?? repos.first {
-            repoForNewWorkspace = preferredRepo
+        guard
+            let preferredRepo = Self.preferredRepoForNewWorkspace(
+                selectedWorkspace: selectedWorkspace,
+                activeSessionKey: activeSessionKey,
+                repos: repos,
+                normalizeRepoPath: normalizePath(_:)
+            )
+        else {
+            errorMessage = "Add a repository first, then create a workspace."
+            showingError = true
             return
         }
 
-        errorMessage = "Add a repository first, then create a workspace."
-        showingError = true
+        guard !isCreatingWorkspace(for: preferredRepo.id) else {
+            errorMessage = "A workspace is already being created for '\(preferredRepo.name)'."
+            showingError = true
+            return
+        }
+
+        repoForNewWorkspace = preferredRepo
     }
 
     @MainActor

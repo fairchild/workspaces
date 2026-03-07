@@ -22,6 +22,16 @@ public struct NewWorkspaceInfo: Sendable {
     }
 }
 
+public enum WorkspaceCreationPhase: String, CaseIterable, Sendable {
+    case preparing
+    case copyingRepository
+    case creatingBranch
+    case runningSetupScript
+    case finished
+}
+
+public typealias WorkspaceCreationProgressHandler = @Sendable (WorkspaceCreationPhase) async -> Void
+
 public protocol GitServiceProtocol: Sendable {
     func getStatus(at path: URL) async throws -> [FileChange]
     func getRemoteURL(at path: URL) async throws -> String?
@@ -39,12 +49,32 @@ extension GitServiceProtocol {
 
 public protocol WorkspaceServiceProtocol: Sendable {
     var workspacesRoot: URL { get async }
-    func createWorkspace(repoName: String, repoLocalURL: URL, name: String) async throws -> NewWorkspaceInfo
+    func createWorkspace(
+        repoName: String,
+        repoLocalURL: URL,
+        name: String,
+        progress: WorkspaceCreationProgressHandler?
+    ) async throws -> NewWorkspaceInfo
     func archiveWorkspace(at workspaceURL: URL) async throws
     func deleteWorkspace(at workspaceURL: URL, deleteFiles: Bool) async throws
     func runLifecycleScript(_ scriptName: String, in directory: URL) async throws -> WorkspaceService.ScriptResult
     func getWorkspaceSize(at workspaceURL: URL) async throws -> Int64
     func sanitizeFilename(_ name: String) async -> String
+}
+
+extension WorkspaceServiceProtocol {
+    public func createWorkspace(
+        repoName: String,
+        repoLocalURL: URL,
+        name: String
+    ) async throws -> NewWorkspaceInfo {
+        try await createWorkspace(
+            repoName: repoName,
+            repoLocalURL: repoLocalURL,
+            name: name,
+            progress: nil
+        )
+    }
 }
 
 public protocol RemoteBackendProtocol: Sendable {

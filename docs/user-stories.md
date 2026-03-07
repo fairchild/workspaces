@@ -9,8 +9,11 @@ Workspaces is a Mac app for managing isolated AI coding sessions. Users add git 
 - App launch defaults to a host terminal rooted at `~/code` (`$HOME/code`, then `$HOME` fallback).
 - Repositories are auto-discovered from `~/code` (non-recursive) on first load, and can still be managed manually.
 - Sidebar repo/workspace clicks open or resume persistent host terminal sessions for those directories.
+- Workspace rows are nested under expandable repo rows instead of living in a separate sidebar section.
 - Sidebar shows live-session state so users can see which repos already have an active terminal.
+- Workspace creation shows immediate inline progress on the source repo row while copy/setup work runs.
 - Shortcut policy direction: Ghostty bindings should flow through by default; app-specific shortcuts should be limited to wrapper chrome.
+- Ghostty split actions currently support create, focus, resize, and equalize within the app's two-pane split model.
 
 ---
 
@@ -38,6 +41,7 @@ sequenceDiagram
     User->>App: Opens "New Workspace..." for that repo
     App-->>User: Shows name input sheet
     User->>App: Enters "feature-auth" → Create
+    App-->>User: Shows inline progress on repo row
     App->>App: Copies repo to ~/workspaces/my-project/feature-auth
     App->>App: Runs setup.sh (if exists)
     App-->>User: Workspace selected, session available
@@ -68,7 +72,7 @@ sequenceDiagram
 
 **Sidebar structure:**
 - Repositories section includes a one-click "Host Portfolio" row plus repo rows.
-- Workspaces are listed in a dedicated section (not nested under each repo row).
+- Workspaces appear under their source repo when that repo is expanded.
 - Repo rows can show a live terminal indicator and active-session highlight.
 - Selected workspace controls right-pane file/changes context.
 - "Add repository" remains available at the bottom.
@@ -79,7 +83,8 @@ sequenceDiagram
 2. **Repos hydrate** — App auto-loads top-level git repos from `~/code`.
 3. **Select repo** — Clicking repo opens/resumes a host terminal session in that repo.
 4. **Create workspace** — User runs "New Workspace..." and enters a name.
-5. **Workspace initialized** — Repo copy is created, setup hook runs, workspace appears in sidebar.
+5. **Progress shown** — Repo row stays expanded and displays coarse creation progress while copy/setup runs.
+6. **Workspace initialized** — Repo copy is created, setup hook runs, workspace appears in sidebar.
 
 ---
 

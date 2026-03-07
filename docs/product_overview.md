@@ -21,27 +21,28 @@ Think of it as **a terminal session manager for your code portfolio, with worksp
 - **Repository Discovery**: Auto-hydrates repositories from `~/code` (non-recursive), with manual add/remove
 - **Persistent Host Sessions**: Click repo/workspace rows to open or resume a live host terminal in that directory
 - **Workspace Creation**: Create isolated workspace copies per repo
+- **Inline Workspace Progress**: Repo rows show coarse creation progress while a workspace copy/setup is in flight
 - **Lifecycle Hooks**: `setup.sh` runs after creation, `archive.sh` runs on close
 - **Embedded Terminal**: GhosttyKit (`libghostty`) terminal as the primary interface
+- **Two-Pane Split Control**: Ghostty split actions can create, focus, resize, and equalize the current two-pane stack
 - **Ghostty-First Shortcut Routing**: Terminal keybindings should default to Ghostty behavior; app-level shortcuts are for non-overlapping chrome actions
 - **File/Changes Pane**: Collapsible right pane showing file tree and git status
 - **Configurable Location**: Choose where workspaces are stored (default: `~/workspaces`)
 
 ## Sidebar Structure
 
-The sidebar is split into **Repositories** and **Workspaces** sections with explicit host/session controls:
+The sidebar centers on a persistent **Host Portfolio** row plus expandable repo rows that reveal their workspaces inline:
 
 ```
 ┌──────────────────┐
 │ Host Portfolio [LIVE] │  ← One-click return to default host terminal
 │                  │
 │ [repo] my-api LIVE │  ← Repo rows can show live terminal badge
-│ [repo] frontend    │
-│ [repo] services    │
-│                  │
-│ Workspaces       │
-│ ◀ feature-auth   │  ← Selected workspace (drives right pane context)
-│   bugfix-nav     │
+│   ↳ feature-auth  │  ← Workspace rows live under their repo
+│   ↳ bugfix-nav    │
+│ [repo] frontend   │
+│ [repo] services   │
+│   ↳ release-prep  │
 ├──────────────────┤
 │ [+] Add repo     │  ← Add new repository
 └──────────────────┘
@@ -50,8 +51,9 @@ The sidebar is split into **Repositories** and **Workspaces** sections with expl
 **Key interactions:**
 - Click `Host Portfolio` row → switch back to the default `~/code` host session
 - Click repo row → open/resume persistent host terminal session for that repo path
+- Click repo disclosure/expansion → reveal or hide workspaces nested under that repo
 - Click workspace row → open/resume persistent host terminal session for that workspace path and update right pane context
-- Click `+`/`New Workspace` action on a repo → opens "New Workspace" modal
+- Click `+`/`New Workspace` action on a repo → opens "New Workspace" modal and keeps that repo expanded while creation progress is shown inline
 - Click `⋯` on repo row → menu: Reveal in Finder, Remove
 - Click `⋯` on workspace row → menu: Delete, Reveal in Finder
 
@@ -87,6 +89,7 @@ Developers who regularly use terminal-based coding agents (Claude Code, Aider, C
 - Conflict handling: if both app and Ghostty claim a shortcut, expose an explicit user override so the user chooses the route.
 - Future settings requirement: per-shortcut routing control (`App` vs `Ghostty`) in preferences.
 - Implementation guardrail: avoid one-off per-key hardcoding in terminal event handlers; route by policy and binding detection.
+- Current split contract: Ghostty `new_split`, `goto_split`, `resize_split`, and `equalize_splits` actions map onto the app's current two-pane split model; orthogonal resize directions remain explicit no-ops with logging.
 
 ## What This Is NOT
 
