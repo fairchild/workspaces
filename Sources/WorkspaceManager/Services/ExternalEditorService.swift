@@ -59,7 +59,7 @@ protocol ExternalEditorServiceProtocol {
 }
 
 final class ExternalEditorService: ExternalEditorServiceProtocol {
-    static let shared = ExternalEditorService()
+    nonisolated(unsafe) static let shared = ExternalEditorService()
 
     typealias ResolveApplicationURL = (_ bundleIdentifier: String) -> URL?
     typealias LaunchProcess = (_ executable: String, _ arguments: [String]) throws -> Void

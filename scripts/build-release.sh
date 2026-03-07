@@ -158,7 +158,8 @@ if [[ "$SIGN_APP" == true ]]; then
         log_success "Using SIGNING_IDENTITY from environment"
     else
         log_warning "signing-config.sh not found - building without code signing"
-        log_warning "Copy signing-config.sh.template and fill in your credentials to enable signing"
+        log_warning "For local signing, copy scripts/signing-config.sh.template to scripts/signing-config.sh"
+        log_warning "For GitHub Actions release setup, use ./scripts/setup-release-secrets.sh (see RELEASING.md)"
         SIGN_APP=false
     fi
 fi
@@ -320,7 +321,7 @@ if [[ "$SIGN_APP" == true ]] && [[ -n "$SIGNING_IDENTITY" ]]; then
     echo ""
 else
     echo "Next steps:"
-    echo "  1. Set up signing-config.sh for code signing"
+    echo "  1. Set up scripts/signing-config.sh for local code signing"
     echo "  2. Re-run with signing enabled"
     echo "  3. Run ./scripts/notarize.sh for notarization"
     echo ""

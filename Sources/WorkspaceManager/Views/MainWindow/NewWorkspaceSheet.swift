@@ -32,6 +32,7 @@ enum WorkspaceBackendChoice: String, CaseIterable, Identifiable {
 struct NewWorkspaceSheet: View {
     let repo: Repo
     let isRemoteBackendAvailable: Bool
+    let isCreateDisabled: Bool
     let onCreate: (String, WorkspaceBackendChoice) -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -120,7 +121,7 @@ struct NewWorkspaceSheet: View {
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)
-                .disabled(!isValid || isCreating)
+                .disabled(!isValid || isCreating || isCreateDisabled)
             }
             .padding()
         }

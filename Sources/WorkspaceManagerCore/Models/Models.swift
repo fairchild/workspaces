@@ -45,7 +45,7 @@ public final class WebSource {
     public var name: String
     public var baseURLString: String
     public var allowedHost: String
-    public var additionalAllowedDomainsRaw: String
+    public var additionalAllowedDomainsRaw: String = ""
     public var addedAt: Date
     public var lastAccessedAt: Date
 

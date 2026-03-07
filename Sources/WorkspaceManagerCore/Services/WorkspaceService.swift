@@ -46,7 +46,12 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
 
     // MARK: - Create Workspace
 
-    public func createWorkspace(repoName: String, repoLocalURL: URL, name: String) async throws -> NewWorkspaceInfo {
+    public func createWorkspace(
+        repoName: String,
+        repoLocalURL: URL,
+        name: String,
+        progress: WorkspaceCreationProgressHandler? = nil
+    ) async throws -> NewWorkspaceInfo {
         let sanitizedName = sanitizeFilename(name)
         guard isValidWorkspaceNameComponent(sanitizedName) else {
             throw WorkspaceError.invalidName(name: name)
@@ -70,9 +75,12 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
             withIntermediateDirectories: true
         )
 
+        await progress?(.preparing)
+        await progress?(.copyingRepository)
         try await copyRepository(from: repoLocalURL, to: workspaceDir)
 
         let branchName = "workspace/\(sanitizedName)"
+        await progress?(.creatingBranch)
         do {
             try await gitService.createBranch(branchName, at: workspaceDir)
         } catch {
@@ -81,6 +89,7 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
 
         let currentBranch = try? await gitService.getCurrentBranch(at: workspaceDir)
 
+        await progress?(.runningSetupScript)
         let setupResult = try await runLifecycleScript("setup.sh", in: workspaceDir)
         if !setupResult.stdout.isEmpty {
             print("setup.sh output:\n\(setupResult.stdout)")
@@ -88,6 +97,8 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
         if setupResult.exitCode != 0 {
             print("setup.sh warning (exit \(setupResult.exitCode)):\n\(setupResult.stderr)")
         }
+
+        await progress?(.finished)
 
         return NewWorkspaceInfo(
             name: name,

@@ -2,7 +2,7 @@
 
 **Terminal-first workspace manager for AI coding sessions on macOS.**
 
- Workspaces gives you a native app to wrap a termianl with some niceties for spinning up isolated workspaces. Designed to optimize my personal worflows terminal-based coding agent workflows.
+ Workspaces gives you a native app that wraps a terminal with some niceties for spinning up isolated workspaces. Designed to optimize terminal-based coding agent workflows.
 
 ![Workspaces main window][screenshot-main]
 
@@ -34,9 +34,11 @@
 ## Features
 
 - Three-column layout: sidebar, terminal, and detail pane
-- Opens straight to a terminal — switch repos and the session follows
+- Opens straight to a terminal with persistent host sessions for repo and workspace rows
 - Repository management and workspace creation
+- Nested workspace rows under each repo, with inline creation progress
 - Integrated GhosttyKit terminal surface
+- Two-pane split controls driven by Ghostty actions (`Cmd+D`, focus, resize, equalize)
 - File browser and git status view
 - `cmd+o` to open repo in editor, defaulting to zed
 - Lifecycle hooks (`setup.sh` / `archive.sh`)

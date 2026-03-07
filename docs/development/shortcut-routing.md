@@ -32,6 +32,7 @@ Everything else routes to Ghostty unless an override is added.
 - Runtime action bridge from Ghostty to SwiftUI state:
   - `Sources/WorkspaceManager/Terminal/GhosttyAppManager.swift`
   - `Sources/WorkspaceManager/Views/MainWindow/ContentView.swift`
+  - `Sources/WorkspaceManager/Views/MainWindow/SplitRoutingController.swift`
 
 ## Event Flow
 
@@ -42,19 +43,22 @@ Everything else routes to Ghostty unless an override is added.
 3. Ghostty binding check uses `ghostty_surface_key_is_binding` with event text populated.
 4. If binding exists, key is forwarded via `keyDown` into Ghostty.
 5. If Ghostty emits split actions, runtime callback posts a typed split action notification.
-6. `ContentView` updates split UI/focus state (`new_split`, `goto_split`).
+6. `ContentView` hands the notification to `SplitRoutingController`, which updates split UI/focus state (`new_split`, `goto_split`, `resize_split`, `equalize_splits`).
 
 ## Split Navigation Scope
 
-Current split UI model is two-pane horizontal:
+Current split UI model is a two-pane stack:
 
-- primary terminal + optional right split
+- primary terminal + optional split terminal
+- first split direction determines the active axis (`left/right` => horizontal, `up/down` => vertical)
+- divider position is session-scoped and can be resized/equalized without persisting across launches
 
 `goto_split` behavior in this model:
 
 - `previous` / `next`: toggles focus between primary and split.
-- `left` / `right`: directional focus when target exists.
-- `up` / `down`: no-op (no vertical split in current UI).
+- `left` / `right`: directional focus when target exists for horizontal stacks.
+- `up` / `down`: directional focus when target exists for vertical stacks.
+- Orthogonal directions remain no-ops when they do not match the active split axis.
 
 ## Verification Checklist
 
@@ -63,6 +67,8 @@ Current split UI model is two-pane horizontal:
 3. Verify:
    - `Cmd+B` toggles sidebar
    - `Cmd+D` creates split
+   - optional: configured Ghostty resize binding moves the divider by 5% steps and clamps at 20%/80%
+   - optional: configured Ghostty equalize binding resets divider to 50/50
    - `Cmd+Shift+O` opens selected repo/file in editor when target is available
    - `Cmd+]` / `Cmd+[` move focus across split when both panes exist
    - or run `mask verify-shortcuts` for scripted smoke evidence
@@ -70,4 +76,6 @@ Current split UI model is two-pane horizontal:
 4. Confirm logs include:
    - `[GhosttyAppManager] action=new_split ...`
    - `[GhosttyAppManager] action=goto_split ...`
+   - `[GhosttyAppManager] action=resize_split ...`
+   - `[GhosttyAppManager] action=equalize_splits ...`
    - `[Perf] metric=open_in_editor_launch ... outcome=success|failure`

@@ -12,6 +12,17 @@ import Testing
 
 @Suite("WorkspaceService", .serialized)
 struct WorkspaceServiceTests {
+    actor PhaseRecorder {
+        private var phases: [WorkspaceCreationPhase] = []
+
+        func record(_ phase: WorkspaceCreationPhase) {
+            phases.append(phase)
+        }
+
+        func snapshot() -> [WorkspaceCreationPhase] {
+            phases
+        }
+    }
 
     // MARK: - Helpers
 
@@ -256,6 +267,56 @@ struct WorkspaceServiceTests {
         await #expect(throws: WorkspaceError.self) {
             _ = try await service.createWorkspace(repoName: "test-repo", repoLocalURL: repoDir, name: "   ")
         }
+    }
+
+    @Test("createWorkspace emits progress phases in order on success")
+    func createWorkspaceEmitsProgressPhasesInOrderOnSuccess() async throws {
+        let mockGit = MockGitService()
+        let service = WorkspaceService(gitService: mockGit)
+        let (testRoot, repoDir, wsRoot) = try makeWorkspaceFixture()
+        defer { try? FileManager.default.removeItem(at: testRoot) }
+        let originalRoot = setWorkspacesRoot(wsRoot)
+        defer { restoreWorkspacesRoot(originalRoot) }
+
+        let recorder = PhaseRecorder()
+        _ = try await service.createWorkspace(
+            repoName: "test-repo",
+            repoLocalURL: repoDir,
+            name: "progress-ws",
+            progress: { phase in
+                await recorder.record(phase)
+            }
+        )
+
+        let phases = await recorder.snapshot()
+        #expect(phases == [.preparing, .copyingRepository, .creatingBranch, .runningSetupScript, .finished])
+    }
+
+    @Test("createWorkspace stops progress at failing phase")
+    func createWorkspaceStopsProgressAtFailingPhase() async throws {
+        let mockGit = MockGitService()
+        let service = WorkspaceService(gitService: mockGit)
+        let tempRoot = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: tempRoot) }
+        let wsRoot = tempRoot.appendingPathComponent("workspaces")
+        try FileManager.default.createDirectory(at: wsRoot, withIntermediateDirectories: true)
+        let originalRoot = setWorkspacesRoot(wsRoot)
+        defer { restoreWorkspacesRoot(originalRoot) }
+
+        let recorder = PhaseRecorder()
+        await #expect(throws: WorkspaceError.self) {
+            _ = try await service.createWorkspace(
+                repoName: "test-repo",
+                repoLocalURL: tempRoot.appendingPathComponent("missing-repo"),
+                name: "progress-fail",
+                progress: { phase in
+                    await recorder.record(phase)
+                }
+            )
+        }
+
+        let phases = await recorder.snapshot()
+        #expect(phases == [.preparing, .copyingRepository])
     }
 
     // MARK: - deleteWorkspace Tests

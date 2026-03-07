@@ -14,7 +14,7 @@
 #
 # Prerequisites:
 #   1. Run ./scripts/build-release.sh first (or this script will run it)
-#   2. Set up scripts/signing-config.sh with your Apple Developer credentials
+#   2. Set up scripts/signing-config.sh for local signing, or export the same values as environment variables
 #   3. Apple Developer Program membership ($99/year)
 #
 # Output:
@@ -118,26 +118,27 @@ if [[ -f "$SIGNING_CONFIG" ]]; then
     log_success "Loaded signing configuration from $SIGNING_CONFIG"
 else
     log_warning "signing-config.sh not found - using environment variables"
+    log_warning "For GitHub Actions release setup, use ./scripts/setup-release-secrets.sh (see RELEASING.md)"
 fi
 
 # Validate required variables
 if [[ -z "$TEAM_ID" ]] || [[ "$TEAM_ID" == "XXXXXXXXXX" ]]; then
-    log_error "TEAM_ID not configured (set in signing-config.sh or environment)"
+    log_error "TEAM_ID not configured (set in scripts/signing-config.sh or environment; see RELEASING.md)"
     exit 1
 fi
 
 if [[ -z "$APPLE_ID" ]] || [[ "$APPLE_ID" == *"example.com" ]]; then
-    log_error "APPLE_ID not configured (set in signing-config.sh or environment)"
+    log_error "APPLE_ID not configured (set in scripts/signing-config.sh or environment; see RELEASING.md)"
     exit 1
 fi
 
 if [[ -z "$APP_PASSWORD" ]] || [[ "$APP_PASSWORD" == "xxxx-xxxx-xxxx-xxxx" ]]; then
-    log_error "APP_PASSWORD not configured (set in signing-config.sh or environment)"
+    log_error "APP_PASSWORD not configured (set in scripts/signing-config.sh or environment; see RELEASING.md)"
     exit 1
 fi
 
 if [[ -z "$SIGNING_IDENTITY" ]] || [[ "$SIGNING_IDENTITY" == *"Your Name"* ]]; then
-    log_error "SIGNING_IDENTITY not configured (set in signing-config.sh or environment)"
+    log_error "SIGNING_IDENTITY not configured (set in scripts/signing-config.sh or environment; see RELEASING.md)"
     exit 1
 fi
 

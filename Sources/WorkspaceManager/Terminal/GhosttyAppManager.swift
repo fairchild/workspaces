@@ -7,10 +7,13 @@ import AppKit
 import Foundation
 import GhosttyKit
 
+@MainActor
 final class GhosttyAppManager: NSObject {
     enum SplitActionKind: String {
         case newSplit = "new_split"
         case gotoSplit = "goto_split"
+        case resizeSplit = "resize_split"
+        case equalizeSplits = "equalize_splits"
     }
 
     enum SplitDirection: Int {
@@ -29,9 +32,17 @@ final class GhosttyAppManager: NSObject {
         case right = 5
     }
 
+    enum SplitResizeDirection: Int {
+        case up = 0
+        case down = 1
+        case left = 2
+        case right = 3
+    }
+
     struct SplitActionRequest {
         let kind: SplitActionKind
         let directionRawValue: Int?
+        let amount: Int?
 
         var splitDirection: SplitDirection? {
             guard let directionRawValue else { return nil }
@@ -42,12 +53,18 @@ final class GhosttyAppManager: NSObject {
             guard let directionRawValue else { return nil }
             return SplitFocusDirection(rawValue: directionRawValue)
         }
+
+        var resizeDirection: SplitResizeDirection? {
+            guard let directionRawValue else { return nil }
+            return SplitResizeDirection(rawValue: directionRawValue)
+        }
     }
 
     static let shared = GhosttyAppManager()
-    static let splitActionNotification = Notification.Name("WorkspaceManager.Ghostty.SplitActionRequested")
-    static let splitActionKindUserInfoKey = "kind"
-    static let splitActionDirectionUserInfoKey = "directionRawValue"
+    nonisolated static let splitActionNotification = Notification.Name("WorkspaceManager.Ghostty.SplitActionRequested")
+    nonisolated static let splitActionKindUserInfoKey = "kind"
+    nonisolated static let splitActionDirectionUserInfoKey = "directionRawValue"
+    nonisolated static let splitActionAmountUserInfoKey = "amount"
 
     private(set) var app: ghostty_app_t?
     private var config: ghostty_config_t?
@@ -59,13 +76,15 @@ final class GhosttyAppManager: NSObject {
     }
 
     deinit {
-        NotificationCenter.default.removeObserver(self)
+        MainActor.assumeIsolated {
+            NotificationCenter.default.removeObserver(self)
 
-        if let app {
-            ghostty_app_free(app)
-        }
-        if let config {
-            ghostty_config_free(config)
+            if let app {
+                ghostty_app_free(app)
+            }
+            if let config {
+                ghostty_config_free(config)
+            }
         }
     }
 
@@ -163,28 +182,52 @@ final class GhosttyAppManager: NSObject {
         return Unmanaged<GhosttySurfaceView>.fromOpaque(userdata).takeUnretainedValue()
     }
 
-    private static func surfaceView(from target: ghostty_target_s) -> GhosttySurfaceView? {
+    private static func surfaceUserdata(from target: ghostty_target_s) -> UnsafeMutableRawPointer? {
         guard target.tag == GHOSTTY_TARGET_SURFACE,
-            let surface = target.target.surface,
-            let userdata = ghostty_surface_userdata(surface)
+            let surface = target.target.surface
         else {
             return nil
         }
 
-        return Unmanaged<GhosttySurfaceView>.fromOpaque(userdata).takeUnretainedValue()
+        return ghostty_surface_userdata(surface)
+    }
+
+    private static func surfaceView(from target: ghostty_target_s) -> GhosttySurfaceView? {
+        surfaceView(from: surfaceUserdata(from: target))
+    }
+
+    private static func runOnMainAsync(_ operation: @escaping @MainActor @Sendable () -> Void) {
+        if Thread.isMainThread {
+            MainActor.assumeIsolated { operation() }
+            return
+        }
+
+        Task { @MainActor in
+            operation()
+        }
+    }
+
+    private static func runOnMainSync<T: Sendable>(_ operation: @MainActor () -> T) -> T {
+        if Thread.isMainThread {
+            return MainActor.assumeIsolated { operation() }
+        }
+
+        return DispatchQueue.main.sync {
+            MainActor.assumeIsolated { operation() }
+        }
     }
 
     // MARK: Runtime callbacks
 
     private static func wakeup(_ userdata: UnsafeMutableRawPointer?) {
-        guard let manager = manager(from: userdata) else { return }
-        DispatchQueue.main.async {
+        runOnMainAsync {
+            guard let manager = manager(from: userdata) else { return }
             manager.tick()
         }
     }
 
     private static func action(_ app: ghostty_app_t, target: ghostty_target_s, action: ghostty_action_s) -> Bool {
-        guard let surfaceView = surfaceView(from: target) else { return false }
+        guard let sourceSurfaceUserdata = surfaceUserdata(from: target) else { return false }
 
         switch action.tag {
         case GHOSTTY_ACTION_NEW_SPLIT:
@@ -192,7 +235,7 @@ final class GhosttyAppManager: NSObject {
             postSplitAction(
                 kind: .newSplit,
                 directionRawValue: directionRawValue,
-                sourceSurfaceView: surfaceView
+                sourceSurfaceUserdata: sourceSurfaceUserdata
             )
             NSLog("[GhosttyAppManager] action=new_split direction=%d", directionRawValue)
             return true
@@ -202,29 +245,49 @@ final class GhosttyAppManager: NSObject {
             postSplitAction(
                 kind: .gotoSplit,
                 directionRawValue: directionRawValue,
-                sourceSurfaceView: surfaceView
+                sourceSurfaceUserdata: sourceSurfaceUserdata
             )
             NSLog("[GhosttyAppManager] action=goto_split direction=%d", directionRawValue)
             return true
 
         case GHOSTTY_ACTION_RESIZE_SPLIT:
-            NSLog("[GhosttyAppManager] action=resize_split (defer)")
-            return false
+            let directionRawValue = Int(action.action.resize_split.direction.rawValue)
+            let amount = Int(action.action.resize_split.amount)
+            postSplitAction(
+                kind: .resizeSplit,
+                directionRawValue: directionRawValue,
+                amount: amount,
+                sourceSurfaceUserdata: sourceSurfaceUserdata
+            )
+            NSLog(
+                "[GhosttyAppManager] action=resize_split direction=%d amount=%d",
+                directionRawValue,
+                amount
+            )
+            return true
 
         case GHOSTTY_ACTION_EQUALIZE_SPLITS:
-            NSLog("[GhosttyAppManager] action=equalize_splits (defer)")
-            return false
+            postSplitAction(
+                kind: .equalizeSplits,
+                directionRawValue: nil,
+                amount: nil,
+                sourceSurfaceUserdata: sourceSurfaceUserdata
+            )
+            NSLog("[GhosttyAppManager] action=equalize_splits")
+            return true
 
         case GHOSTTY_ACTION_SET_TITLE:
             let title = action.action.set_title.title.flatMap { String(cString: $0) } ?? ""
-            DispatchQueue.main.async {
+            runOnMainAsync {
+                guard let surfaceView = surfaceView(from: sourceSurfaceUserdata) else { return }
                 surfaceView.updateTerminalTitle(title)
             }
             return true
 
         case GHOSTTY_ACTION_PWD:
             let pwd = action.action.pwd.pwd.flatMap { String(cString: $0) }
-            DispatchQueue.main.async {
+            runOnMainAsync {
+                guard let surfaceView = surfaceView(from: sourceSurfaceUserdata) else { return }
                 surfaceView.updateWorkingDirectory(pwd)
             }
             return true
@@ -234,7 +297,7 @@ final class GhosttyAppManager: NSObject {
         }
     }
 
-    static func splitActionRequest(from notification: Notification) -> SplitActionRequest? {
+    nonisolated static func splitActionRequest(from notification: Notification) -> SplitActionRequest? {
         guard let userInfo = notification.userInfo,
             let kindRawValue = userInfo[splitActionKindUserInfoKey] as? String,
             let kind = SplitActionKind(rawValue: kindRawValue)
@@ -243,23 +306,31 @@ final class GhosttyAppManager: NSObject {
         }
 
         let directionRawValue = userInfo[splitActionDirectionUserInfoKey] as? Int
+        let amount = userInfo[splitActionAmountUserInfoKey] as? Int
         return SplitActionRequest(
             kind: kind,
-            directionRawValue: directionRawValue
+            directionRawValue: directionRawValue,
+            amount: amount
         )
     }
 
     private static func postSplitAction(
         kind: SplitActionKind,
         directionRawValue: Int?,
-        sourceSurfaceView: GhosttySurfaceView
+        amount: Int? = nil,
+        sourceSurfaceUserdata: UnsafeMutableRawPointer?
     ) {
-        DispatchQueue.main.async {
+        runOnMainAsync {
+            guard let sourceSurfaceView = surfaceView(from: sourceSurfaceUserdata) else { return }
+
             var userInfo: [String: Any] = [
                 splitActionKindUserInfoKey: kind.rawValue
             ]
             if let directionRawValue {
                 userInfo[splitActionDirectionUserInfoKey] = directionRawValue
+            }
+            if let amount {
+                userInfo[splitActionAmountUserInfoKey] = amount
             }
 
             NotificationCenter.default.post(
@@ -275,30 +346,36 @@ final class GhosttyAppManager: NSObject {
         location: ghostty_clipboard_e,
         state: UnsafeMutableRawPointer?
     ) {
-        guard let surfaceView = surfaceView(from: userdata),
-            let surface = surfaceView.surface
-        else {
+        let surfaceAddress = runOnMainSync {
+            surfaceView(from: userdata)?.surface.map { UInt(bitPattern: $0) }
+        }
+        let surface = surfaceAddress.flatMap(UnsafeMutableRawPointer.init(bitPattern:))
+        guard let surface else {
             return
         }
 
-        let pasteboard: NSPasteboard =
-            switch location {
-            case GHOSTTY_CLIPBOARD_STANDARD:
-                .general
-            default:
-                .general
-            }
+        let value = runOnMainSync {
+            let pasteboard: NSPasteboard =
+                switch location {
+                case GHOSTTY_CLIPBOARD_STANDARD:
+                    .general
+                default:
+                    .general
+                }
 
-        let value = pasteboard.string(forType: .string) ?? ""
+            return pasteboard.string(forType: .string) ?? ""
+        }
         value.withCString { pointer in
             ghostty_surface_complete_clipboard_request(surface, pointer, state, false)
         }
     }
 
     private static func confirmReadClipboard(_ userdata: UnsafeMutableRawPointer?, state: UnsafeMutableRawPointer?) {
-        guard let surfaceView = surfaceView(from: userdata),
-            let surface = surfaceView.surface
-        else {
+        let surfaceAddress = runOnMainSync {
+            surfaceView(from: userdata)?.surface.map { UInt(bitPattern: $0) }
+        }
+        let surface = surfaceAddress.flatMap(UnsafeMutableRawPointer.init(bitPattern:))
+        guard let surface else {
             return
         }
 
@@ -343,7 +420,7 @@ final class GhosttyAppManager: NSObject {
 
         guard let value = preferredText ?? fallbackText else { return }
 
-        DispatchQueue.main.async {
+        runOnMainAsync {
             let pasteboard = NSPasteboard.general
             pasteboard.clearContents()
             pasteboard.setString(value, forType: .string)
@@ -351,9 +428,8 @@ final class GhosttyAppManager: NSObject {
     }
 
     private static func closeSurface(_ userdata: UnsafeMutableRawPointer?, processAlive: Bool) {
-        guard let surfaceView = surfaceView(from: userdata) else { return }
-
-        DispatchQueue.main.async {
+        runOnMainAsync {
+            guard let surfaceView = surfaceView(from: userdata) else { return }
             surfaceView.runtimeDidRequestClose(processAlive: processAlive)
         }
     }

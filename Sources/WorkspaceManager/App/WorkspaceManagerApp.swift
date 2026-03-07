@@ -276,6 +276,7 @@ private struct MainWindowRootView: View {
 
 // MARK: - AppDelegate for AppKit-level hooks
 
+@MainActor
 class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var windowObserver: Any?
@@ -313,8 +314,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             object: nil,
             queue: .main
         ) { notification in
-            if let window = notification.object as? NSWindow {
-                TerminalFocusManager.shared.registerWindow(window)
+            let window = notification.object as? NSWindow
+            Task { @MainActor in
+                if let window {
+                    TerminalFocusManager.shared.registerWindow(window)
+                }
             }
         }
     }
@@ -402,7 +406,7 @@ private struct WorkspaceServiceKey: EnvironmentKey {
 }
 
 private struct ExternalEditorServiceKey: EnvironmentKey {
-    static let defaultValue: any ExternalEditorServiceProtocol = ExternalEditorService.shared
+    nonisolated(unsafe) static let defaultValue: any ExternalEditorServiceProtocol = ExternalEditorService.shared
 }
 
 private struct RemoteBackendKey: EnvironmentKey {

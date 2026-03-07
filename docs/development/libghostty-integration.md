@@ -80,7 +80,7 @@ The `Cmd+D` path is runtime-action-driven:
 1. `GhosttySurfaceView` routes non-app-owned shortcuts to Ghostty binding handling.
 2. `libghostty` dispatches `GHOSTTY_ACTION_NEW_SPLIT` through `ghostty_runtime_action_cb`.
 3. `GhosttyAppManager.action(...)` posts a split action notification and returns `true`.
-4. The app then materializes the split in UI state (`ContentView` / `HostTerminalStateStore`).
+4. The app then materializes the split in UI state (`SplitRoutingController` / `HostTerminalStateStore`).
 
 Important: returning `false` for `GHOSTTY_ACTION_NEW_SPLIT` means "not performed" and
 no split will appear even if the key event reached Ghostty.
@@ -90,10 +90,12 @@ no split will appear even if the key event reached Ghostty.
 - Preserve AppKit replay semantics (`performKeyEquivalent` + `doCommand`) so command/control shortcuts that don't map to app menus can still flow to Ghostty encoding paths.
 - Apply app-vs-terminal ownership via policy (`ShortcutRoutingPolicy`) rather than per-shortcut conditionals.
 
-Current parity gap:
+Current split parity:
 - `GHOSTTY_ACTION_NEW_SPLIT` is routed.
-- `GHOSTTY_ACTION_GOTO_SPLIT` is routed for the current two-pane horizontal split model.
-- `resize_split` and `equalize_splits` are not yet mapped to app-owned split tree behavior.
+- `GHOSTTY_ACTION_GOTO_SPLIT` is routed for the current two-pane split model.
+- `GHOSTTY_ACTION_RESIZE_SPLIT` updates the divider when the requested direction matches the active split axis and divider edge.
+- `GHOSTTY_ACTION_EQUALIZE_SPLITS` resets the divider to 50/50.
+- Orthogonal or unsupported resize directions remain explicit no-ops with logging.
 
 See `docs/development/shortcut-routing.md` for the full routing model.
 
@@ -147,6 +149,7 @@ Treat both as watch items for future Ghostty pin updates.
    - option/command combinations
    - `Cmd+B` toggles sidebar
    - `Cmd+D` creates visible right split
+   - optional: configured Ghostty resize/equalize bindings move the divider and reset it to 50/50
    - copy/paste
    - restart button recreates terminal
    - click away/back restores focus
@@ -172,14 +175,19 @@ Use this exact loop in future sessions to avoid stale-build confusion:
    - `swift build`
 3. Launch debug app (never `/Applications` during verification):
    - `./scripts/launch-dev.sh --no-build`
+   - shared-desktop option: `./scripts/launch-dev.sh --no-build --no-activate`
 4. Verify process path points to `.build/.../WorkspaceManager`:
    - `ps aux | rg '.build/arm64-apple-macosx/debug/WorkspaceManager'`
 5. Exercise shortcuts:
    - `Cmd+B` collapse/restore sidebar
    - `Cmd+D` create split pane
+   - optional: trigger configured resize/equalize bindings and confirm divider movement / 50:50 reset
    - Optional scripted smoke: `mask verify-shortcuts`
 6. Verify split runtime path in logs:
    - `tail -n 80 .dev-data/logs/launch-dev-*.log`
    - Expect `"[GhosttyAppManager] action=new_split direction="`
+   - Optional resize/equalize traces:
+     - `"[GhosttyAppManager] action=resize_split direction="`
+     - `"[GhosttyAppManager] action=equalize_splits"`
 
 If shortcut behavior regresses, first confirm step 4 before changing code.
