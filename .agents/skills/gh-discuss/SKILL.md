@@ -15,7 +15,7 @@ Agents coordinate through GitHub Discussions — a durable, web-visible layer th
 ## Script Location
 
 ```bash
-uv run .agents/skills/gh-discuss/scripts/gh-discuss.py <command>
+.agents/skills/gh-discuss/scripts/gh-discuss.py <command>
 ```
 
 ## Quick Reference
