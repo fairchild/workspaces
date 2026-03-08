@@ -11,13 +11,6 @@ import SwiftUI
 import WorkspaceManagerCore
 
 struct ContentView: View {
-    private enum OpenInEditorContextKey: Equatable {
-        case none
-        case file(String)
-        case workspace(UUID)
-        case repo(UUID)
-    }
-
     @Environment(\.modelContext) private var modelContext
     @Binding var deepLinkState: WorkspaceDeepLinkState
     @ObservedObject var hostTerminalState: HostTerminalStateStore
@@ -28,26 +21,17 @@ struct ContentView: View {
     @Environment(\.externalEditorService) private var externalEditorService
     @Environment(\.remoteBackend) private var remoteBackend
 
-    @State private var selectedWorkspace: Workspace?
-    @State private var selectedWebSource: WebSource?
-    @State private var selectedCodePreview: CodePreviewSelection?
-    @State private var isTerminalPanelVisible = true
-    @State private var isRightPaneVisible = false
-    @State private var columnVisibility: NavigationSplitViewVisibility = .all
-    @State private var didRunPerfAutoSelection = false
-    @State private var didApplyFixturePreviewBootstrap = false
-    @State private var didApplyFixtureWebBootstrap = false
-    @State private var openInEditorErrorMessage: String?
-    @State private var remoteErrorMessage: String?
-    @State private var connectingSandboxId: String?
+    @State private var viewState = MainWindowViewState()
     @StateObject private var rightPaneStateStore = RightPaneStateStore()
     @StateObject private var webSurfaceStore = WebSurfaceStore()
     @StateObject private var terminalFocusCoordinator = TerminalFocusCoordinator()
     private let resolvedDefaultHostDirectory = HostTerminalDefaults.defaultWorkingDirectory()
         .standardizedFileURL
         .resolvingSymlinksInPath()
+    private let bootstrapController = MainWindowBootstrapController()
     private let inspectorStateController = InspectorStateController()
     private let mainSelectionCoordinator = MainSelectionCoordinator()
+    private let presentationController = MainWindowPresentationController()
     private let splitRoutingController = SplitRoutingController()
 
     private var sessionPresentation: HostTerminalSessionPresentation {
@@ -59,24 +43,10 @@ struct ContentView: View {
     }
 
     private var activeHostSession: HostTerminalSession? {
-        guard let activeSessionID = hostTerminalState.activeSessionID else {
-            return hostTerminalState.sessions.last
-        }
-        return hostTerminalState.sessions.first(where: { $0.id == activeSessionID }) ?? hostTerminalState.sessions.last
-    }
-
-    private var repoByNormalizedPath: [String: Repo] {
-        var index: [String: Repo] = [:]
-        index.reserveCapacity(repos.count)
-
-        for repo in repos {
-            let normalizedPath = normalizePath(repo.localPath)
-            if index[normalizedPath] == nil {
-                index[normalizedPath] = repo
-            }
-        }
-
-        return index
+        presentationController.activeHostSession(
+            activeSessionID: hostTerminalState.activeSessionID,
+            sessions: hostTerminalState.sessions
+        )
     }
 
     private var normalizedRepoPathSnapshot: [String] {
@@ -84,42 +54,28 @@ struct ContentView: View {
     }
 
     private var selectedRepoForInspector: Repo? {
-        guard selectedWorkspace == nil, selectedWebSource == nil else {
-            return nil
-        }
-
-        if let activeRepoPath = sessionPresentation.activeRepoPath {
-            let normalizedActiveRepoPath = normalizePath(activeRepoPath)
-            if let matchedRepo = repoByNormalizedPath[normalizedActiveRepoPath] {
-                return matchedRepo
-            }
-        }
-
-        guard let activeHostSession else {
-            return nil
-        }
-
-        let normalizedActiveSessionPath = normalizePath(activeHostSession.directoryPath)
-        return repoByNormalizedPath[normalizedActiveSessionPath]
+        presentationController.selectedRepoForInspector(
+            selectedWorkspace: viewState.selectedWorkspace,
+            selectedWebSource: viewState.selectedWebSource,
+            activeRepoPath: sessionPresentation.activeRepoPath,
+            activeHostSession: activeHostSession,
+            repos: repos,
+            normalizePath: normalizePath
+        )
     }
 
     private var paneCountBySessionKeyForSidebar: [HostTerminalSessionKey: Int] {
-        var paneCounts: [HostTerminalSessionKey: Int] = [:]
-        paneCounts.reserveCapacity(hostTerminalState.sessions.count)
-
-        for session in hostTerminalState.sessions {
-            paneCounts[session.key, default: 0] &+= 1
-            if hostTerminalState.splitSession(for: session.id) != nil {
-                paneCounts[session.key, default: 0] &+= 1
+        presentationController.paneCountBySessionKey(
+            sessions: hostTerminalState.sessions,
+            splitSession: { sessionID in
+                hostTerminalState.splitSession(for: sessionID)
             }
-        }
-
-        return paneCounts
+        )
     }
 
     private var activeSessionKeyForSidebar: HostTerminalSessionKey? {
-        Self.sidebarActiveSessionKey(
-            selectedWebSourceID: selectedWebSource?.id,
+        presentationController.activeSessionKeyForSidebar(
+            selectedWebSource: viewState.selectedWebSource,
             activeSessionID: hostTerminalState.activeSessionID,
             sessions: hostTerminalState.sessions
         )
@@ -131,13 +87,16 @@ struct ContentView: View {
         sessions: [HostTerminalSession]
     ) -> HostTerminalSessionKey? {
         guard selectedWebSourceID == nil else { return nil }
-        guard let activeSessionID else { return nil }
-        return sessions.first(where: { $0.id == activeSessionID })?.key
+        return MainWindowPresentationController().activeSessionKeyForSidebar(
+            selectedWebSource: nil,
+            activeSessionID: activeSessionID,
+            sessions: sessions
+        )
     }
 
     private var hasInspectorTarget: Bool {
         inspectorStateController.hasInspectorTarget(
-            selectedWorkspace: selectedWorkspace,
+            selectedWorkspace: viewState.selectedWorkspace,
             selectedRepo: selectedRepoForInspector
         )
     }
@@ -164,32 +123,19 @@ struct ContentView: View {
     }
 
     private var openInEditorTarget: OpenInEditorTarget? {
-        if let selectedCodePreview {
-            return .projectAndFile(
-                rootURL: selectedCodePreview.rootURL,
-                fileURL: selectedCodePreview.fileURL
-            )
-        }
-        if let selectedWorkspace {
-            return .project(rootURL: selectedWorkspace.workspaceURL)
-        }
-        if let selectedRepoForInspector {
-            return .project(rootURL: selectedRepoForInspector.localURL)
-        }
-        return nil
+        presentationController.openInEditorTarget(
+            selectedCodePreview: viewState.selectedCodePreview,
+            selectedWorkspace: viewState.selectedWorkspace,
+            selectedRepo: selectedRepoForInspector
+        )
     }
 
-    private var openInEditorContextKey: OpenInEditorContextKey {
-        if let selectedCodePreview {
-            return .file(selectedCodePreview.id)
-        }
-        if let selectedWorkspace {
-            return .workspace(selectedWorkspace.id)
-        }
-        if let selectedRepoForInspector {
-            return .repo(selectedRepoForInspector.id)
-        }
-        return .none
+    private var openInEditorContextKey: MainWindowOpenInEditorContextKey {
+        presentationController.openInEditorContextKey(
+            selectedCodePreview: viewState.selectedCodePreview,
+            selectedWorkspace: viewState.selectedWorkspace,
+            selectedRepo: selectedRepoForInspector
+        )
     }
 
     private var openInEditorFocusedAction: (@MainActor () -> Void)? {
@@ -199,10 +145,10 @@ struct ContentView: View {
 
     private var isShowingOpenInEditorError: Binding<Bool> {
         Binding(
-            get: { openInEditorErrorMessage != nil },
+            get: { viewState.openInEditorErrorMessage != nil },
             set: { isPresented in
                 if !isPresented {
-                    openInEditorErrorMessage = nil
+                    viewState.openInEditorErrorMessage = nil
                 }
             }
         )
@@ -211,7 +157,7 @@ struct ContentView: View {
     @ViewBuilder
     private var terminalDetailContent: some View {
         MainTerminalDetailView(
-            selectedWorkspace: selectedWorkspace,
+            selectedWorkspace: viewState.selectedWorkspace,
             selectedRepo: selectedRepoForInspector,
             hostTerminalSessions: hostTerminalState.sessions,
             activeHostTerminalSessionID: hostTerminalState.activeSessionID,
@@ -227,21 +173,21 @@ struct ContentView: View {
                 )
             },
             onTerminalProcessExit: handleTerminalProcessExit(sessionID:),
-            selectedCodePreview: $selectedCodePreview,
-            isTerminalPanelVisible: $isTerminalPanelVisible,
+            selectedCodePreview: $viewState.selectedCodePreview,
+            isTerminalPanelVisible: $viewState.isTerminalPanelVisible,
             onFileSelected: handleCodePreviewSelection,
             availableEditors: availableEditors,
             defaultEditor: defaultEditorDescriptor,
             onOpenInDefaultEditor: openInDefaultEditor,
             onOpenInEditor: openInSelectedEditor,
             rightPaneStateStore: rightPaneStateStore,
-            isRightPaneVisible: $isRightPaneVisible
+            isRightPaneVisible: $viewState.isRightPaneVisible
         )
     }
 
     @ViewBuilder
     private var detailContent: some View {
-        if let selectedWebSource {
+        if let selectedWebSource = viewState.selectedWebSource {
             WebSourceDetailView(
                 source: selectedWebSource,
                 surfaceStore: webSurfaceStore
@@ -249,24 +195,24 @@ struct ContentView: View {
         } else {
             ZStack {
                 terminalDetailContent
-                if connectingSandboxId != nil {
-                    SandboxConnectingOverlay(workspaceName: selectedWorkspace?.name)
+                if viewState.connectingSandboxId != nil {
+                    SandboxConnectingOverlay(workspaceName: viewState.selectedWorkspace?.name)
                 }
             }
         }
     }
 
     private var baseSplitView: some View {
-        NavigationSplitView(columnVisibility: $columnVisibility) {
+        NavigationSplitView(columnVisibility: $viewState.columnVisibility) {
             SidebarView(
                 repos: repos,
                 webSources: webSources,
-                selectedWorkspace: $selectedWorkspace,
-                selectedWebSource: $selectedWebSource,
+                selectedWorkspace: $viewState.selectedWorkspace,
+                selectedWebSource: $viewState.selectedWebSource,
                 defaultHostPath: resolvedDefaultHostDirectory.path,
                 paneCountBySessionKey: paneCountBySessionKeyForSidebar,
                 activeSessionKey: activeSessionKeyForSidebar,
-                connectingSandboxId: connectingSandboxId,
+                connectingSandboxId: viewState.connectingSandboxId,
                 onDefaultHostSelected: handleDefaultHostSelection,
                 onRepoSelected: handleRepoSelection,
                 onWebSourceSelected: handleWebSourceSelection,
@@ -282,7 +228,7 @@ struct ContentView: View {
         baseSplitView
             .toolbar {
                 ToolbarItemGroup(placement: .automatic) {
-                    if let selectedWebSource {
+                    if let selectedWebSource = viewState.selectedWebSource {
                         Button {
                             openSelectedWebSourceInBrowser()
                         } label: {
@@ -299,7 +245,7 @@ struct ContentView: View {
                         .help("Reload")
                         .disabled(selectedWebSource.baseURL == nil)
                     } else if let defaultEditor = defaultEditorDescriptor,
-                        let workspace = selectedWorkspace
+                        let workspace = viewState.selectedWorkspace
                     {
                         WorkspaceEditorToolbarButton(
                             workspaceName: workspace.name,
@@ -316,12 +262,12 @@ struct ContentView: View {
                 ToolbarItemGroup(placement: .primaryAction) {
                     Button {
                         withAnimation(.easeInOut(duration: 0.2)) {
-                            isRightPaneVisible.toggle()
+                            viewState.isRightPaneVisible.toggle()
                         }
                     } label: {
                         Image(systemName: "sidebar.trailing")
                     }
-                    .help(isRightPaneVisible ? "Hide Inspector" : "Show Inspector")
+                    .help(viewState.isRightPaneVisible ? "Hide Inspector" : "Show Inspector")
                     .disabled(!hasInspectorTarget)
                 }
             }
@@ -358,8 +304,10 @@ struct ContentView: View {
             }
             .onChange(of: webSources.map(\.id)) { _, sourceIDs in
                 let validIDs = Set(sourceIDs)
-                if let selectedWebSource, !validIDs.contains(selectedWebSource.id) {
-                    self.selectedWebSource = nil
+                if let selectedWebSource = viewState.selectedWebSource,
+                    !validIDs.contains(selectedWebSource.id)
+                {
+                    viewState.selectedWebSource = nil
                     webSurfaceStore.releaseInactiveSurface()
                 }
                 maybeApplyFixtureWebBootstrap()
@@ -367,8 +315,8 @@ struct ContentView: View {
             .onChange(of: inspectorTargetIDSet) { _, _ in
                 pruneRightPaneState()
             }
-            .onChange(of: selectedWorkspace?.id) { _, _ in
-                guard let selectedWorkspace else { return }
+            .onChange(of: viewState.selectedWorkspace?.id) { _, _ in
+                guard let selectedWorkspace = viewState.selectedWorkspace else { return }
                 handleWorkspaceSelection(selectedWorkspace)
             }
             .onChange(of: openInEditorContextKey) { _, _ in
@@ -403,21 +351,21 @@ struct ContentView: View {
                 isPresented: isShowingOpenInEditorError
             ) {
                 Button("OK", role: .cancel) {
-                    openInEditorErrorMessage = nil
+                    viewState.openInEditorErrorMessage = nil
                 }
             } message: {
-                Text(openInEditorErrorMessage ?? "Unknown error.")
+                Text(viewState.openInEditorErrorMessage ?? "Unknown error.")
             }
             .alert(
                 "Could Not Connect to Sandbox",
                 isPresented: Binding(
-                    get: { remoteErrorMessage != nil },
-                    set: { if !$0 { remoteErrorMessage = nil } }
+                    get: { viewState.remoteErrorMessage != nil },
+                    set: { if !$0 { viewState.remoteErrorMessage = nil } }
                 )
             ) {
-                Button("OK", role: .cancel) { remoteErrorMessage = nil }
+                Button("OK", role: .cancel) { viewState.remoteErrorMessage = nil }
             } message: {
-                Text(remoteErrorMessage ?? "Unknown error.")
+                Text(viewState.remoteErrorMessage ?? "Unknown error.")
             }
     }
 
@@ -427,40 +375,49 @@ struct ContentView: View {
 
     @MainActor
     private func processPendingDeepLink() {
-        guard let request = deepLinkState.pendingRequest else { return }
-
-        guard let workspace = bestWorkspaceMatch(for: request.cwd) else {
-            // On cold launch, wait for SwiftData to load before deciding this is a no-match.
-            if repos.isEmpty { return }
+        switch bootstrapController.deepLinkDecision(
+            pendingRequest: deepLinkState.pendingRequest,
+            repos: repos,
+            normalizePath: normalizePath,
+            pathIsInside: path(_:isInside:)
+        ) {
+        case .none, .waitForRepos:
+            return
+        case .clearNoMatch(let request):
             NSLog("[DeepLink] No workspace match for cwd: %@", request.cwd)
             deepLinkState.clearPendingRequest()
-            return
+        case .select(let request, let workspace):
+            NSLog(
+                "[DeepLink] Matched workspace '%@' for cwd '%@' (session_id=%@ source=%@)",
+                workspace.name,
+                request.cwd,
+                request.sessionID ?? "",
+                request.source ?? ""
+            )
+
+            viewState.selectedWebSource = nil
+            viewState.selectedWorkspace = workspace
+            clearCodePreview()
+            viewState.columnVisibility = .all
+            deepLinkState.clearPendingRequest()
+            focusWorkspaceWindow()
         }
-
-        NSLog(
-            "[DeepLink] Matched workspace '%@' for cwd '%@' (session_id=%@ source=%@)",
-            workspace.name,
-            request.cwd,
-            request.sessionID ?? "",
-            request.source ?? ""
-        )
-
-        selectedWebSource = nil
-        selectedWorkspace = workspace
-        clearCodePreview()
-        columnVisibility = .all
-        deepLinkState.clearPendingRequest()
-        focusWorkspaceWindow()
     }
 
     @MainActor
     private func maybeAutoSelectRepoForPerf() {
-        guard ProcessInfo.processInfo.environment["WORKSPACES_PERF_AUTO_SELECT_FIRST_REPO"] == "1" else { return }
-        guard !didRunPerfAutoSelection else { return }
-        guard deepLinkState.pendingRequest == nil else { return }
-        guard let firstRepo = repos.first else { return }
+        guard
+            let firstRepo = bootstrapController.perfAutoSelectedRepo(
+                environment: ProcessInfo.processInfo.environment,
+                didRun: viewState.didRunPerfAutoSelection,
+                pendingRequest: deepLinkState.pendingRequest,
+                repos: repos
+            )
+        else {
+            return
+        }
 
-        didRunPerfAutoSelection = true
+        viewState.didRunPerfAutoSelection = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
             Task { @MainActor in
                 handleRepoSelection(firstRepo)
@@ -470,72 +427,66 @@ struct ContentView: View {
 
     @MainActor
     private func maybeApplyFixturePreviewBootstrap() {
-        guard !didApplyFixturePreviewBootstrap else { return }
-        guard deepLinkState.pendingRequest == nil else { return }
-        guard let configuration = fixturePreviewBootstrapConfiguration else { return }
-
-        guard !repos.isEmpty else { return }
-        didApplyFixturePreviewBootstrap = true
-
-        guard
-            let resolved = UIFixturePreviewBootstrap.resolveSelection(
-                configuration: configuration,
-                repos: repos
-            )
-        else {
+        switch bootstrapController.previewBootstrapDecision(
+            didApply: viewState.didApplyFixturePreviewBootstrap,
+            pendingRequest: deepLinkState.pendingRequest,
+            configuration: fixturePreviewBootstrapConfiguration,
+            repos: repos
+        ) {
+        case .none:
+            return
+        case .noMatch(let configuration):
+            viewState.didApplyFixturePreviewBootstrap = true
             NSLog(
                 "[UIFixture] Preview bootstrap skipped (repo=%@ path=%@)",
                 configuration.repoName,
                 configuration.relativePath
             )
-            return
+        case .apply(_, let repo, let selection):
+            viewState.didApplyFixturePreviewBootstrap = true
+            handleRepoSelection(repo)
+            viewState.selectedCodePreview = selection
+            viewState.isTerminalPanelVisible = true
+            viewState.isRightPaneVisible = true
+
+            NSLog(
+                "[UIFixture] Preview bootstrap applied (repo=%@ file=%@)",
+                repo.name,
+                selection.relativePath
+            )
         }
-
-        handleRepoSelection(resolved.repo)
-        selectedCodePreview = resolved.selection
-        isTerminalPanelVisible = true
-        isRightPaneVisible = true
-
-        NSLog(
-            "[UIFixture] Preview bootstrap applied (repo=%@ file=%@)",
-            resolved.repo.name,
-            resolved.selection.relativePath
-        )
     }
 
     @MainActor
     private func maybeApplyFixtureWebBootstrap() {
-        guard !didApplyFixtureWebBootstrap else { return }
-        guard deepLinkState.pendingRequest == nil else { return }
-        guard let configuration = fixtureWebBootstrapConfiguration else { return }
-        guard !webSources.isEmpty else { return }
-        didApplyFixtureWebBootstrap = true
-
-        let targetName = configuration.webSourceName
-        let selectedSource =
-            webSources.first(where: { $0.name.caseInsensitiveCompare(targetName) == .orderedSame })
-            ?? webSources.first(where: { $0.name.localizedCaseInsensitiveContains(targetName) })
-            ?? webSources.first
-
-        guard let selectedSource else {
-            NSLog("[UIFixture] Web bootstrap skipped (target=%@)", targetName)
+        switch bootstrapController.webBootstrapDecision(
+            didApply: viewState.didApplyFixtureWebBootstrap,
+            pendingRequest: deepLinkState.pendingRequest,
+            configuration: fixtureWebBootstrapConfiguration,
+            webSources: webSources
+        ) {
+        case .none:
             return
+        case .noMatch(let targetName):
+            viewState.didApplyFixtureWebBootstrap = true
+            NSLog("[UIFixture] Web bootstrap skipped (target=%@)", targetName)
+        case .select(let targetName, let selectedSource):
+            viewState.didApplyFixtureWebBootstrap = true
+            handleWebSourceSelection(selectedSource)
+            NSLog(
+                "[UIFixture] Web bootstrap applied (target=%@ selected=%@)",
+                targetName,
+                selectedSource.name
+            )
         }
-
-        handleWebSourceSelection(selectedSource)
-        NSLog(
-            "[UIFixture] Web bootstrap applied (target=%@ selected=%@)",
-            targetName,
-            selectedSource.name
-        )
     }
 
     @MainActor
     private func handleRepoSelection(_ repo: Repo) {
         let repoDirectory = repo.localURL.standardizedFileURL.resolvingSymlinksInPath()
 
-        selectedWebSource = nil
-        selectedWorkspace = nil
+        viewState.selectedWebSource = nil
+        viewState.selectedWorkspace = nil
         clearCodePreview()
         let session = activateHostSession(
             key: .repoPath(repoDirectory.path),
@@ -545,7 +496,7 @@ struct ContentView: View {
             sessionID: session.id,
             repoPath: repoDirectory.path
         )
-        columnVisibility = .all
+        viewState.columnVisibility = .all
 
         terminalFocusCoordinator.requestMainTerminalFocus(
             targetSessionID: session.id,
@@ -578,14 +529,14 @@ struct ContentView: View {
     @MainActor
     private func handleDefaultHostSelection() {
         terminalFocusCoordinator.cancelPendingRepoClickMeasurement(reason: "default_host_selected")
-        selectedWebSource = nil
-        selectedWorkspace = nil
+        viewState.selectedWebSource = nil
+        viewState.selectedWorkspace = nil
         clearCodePreview()
         let session = activateHostSession(
             key: .defaultHome,
             directory: resolvedDefaultHostDirectory
         )
-        columnVisibility = .all
+        viewState.columnVisibility = .all
 
         terminalFocusCoordinator.requestMainTerminalFocus(
             targetSessionID: session.id,
@@ -606,7 +557,7 @@ struct ContentView: View {
     @MainActor
     private func handleWorkspaceSelection(_ workspace: Workspace) {
         terminalFocusCoordinator.cancelPendingRepoClickMeasurement(reason: "workspace_selected")
-        selectedWebSource = nil
+        viewState.selectedWebSource = nil
         clearCodePreview()
 
         if workspace.isRemote, let sandboxId = workspace.remoteId {
@@ -617,7 +568,7 @@ struct ContentView: View {
                 key: .hostPath(workspaceDirectory.path),
                 directory: workspaceDirectory
             )
-            columnVisibility = .all
+            viewState.columnVisibility = .all
 
             terminalFocusCoordinator.requestMainTerminalFocus(
                 targetSessionID: session.id,
@@ -646,7 +597,7 @@ struct ContentView: View {
             let existing = hostTerminalState.sessions.first(where: { $0.key == sessionKey })
         {
             hostTerminalState.activateExistingSession(sessionID: existing.id)
-            columnVisibility = .all
+            viewState.columnVisibility = .all
             terminalFocusCoordinator.requestMainTerminalFocus(
                 targetSessionID: existing.id,
                 surfaceStore: hostTerminalState.surfaceStore,
@@ -656,14 +607,17 @@ struct ContentView: View {
         }
 
         // Prevent concurrent connection attempts
-        guard connectingSandboxId == nil else {
-            NSLog("[RemoteBackend] Ignoring selection — already connecting to %@", connectingSandboxId ?? "")
+        guard viewState.connectingSandboxId == nil else {
+            NSLog(
+                "[RemoteBackend] Ignoring selection — already connecting to %@",
+                viewState.connectingSandboxId ?? ""
+            )
             return
         }
 
         let backend = remoteBackend
         let needsStart = workspace.status == .stopped || workspace.status == .archived
-        connectingSandboxId = sandboxId
+        viewState.connectingSandboxId = sandboxId
 
         Task {
             do {
@@ -680,14 +634,14 @@ struct ContentView: View {
 
                 await MainActor.run {
                     // Stale completion — user clicked something else while we were connecting
-                    guard connectingSandboxId == sandboxId else { return }
-                    connectingSandboxId = nil
+                    guard viewState.connectingSandboxId == sandboxId else { return }
+                    viewState.connectingSandboxId = nil
                     let session = activateHostSession(
                         key: sessionKey,
                         directory: placeholderDir,
                         customCommand: info.sshCommand
                     )
-                    columnVisibility = .all
+                    viewState.columnVisibility = .all
                     terminalFocusCoordinator.requestMainTerminalFocus(
                         targetSessionID: session.id,
                         surfaceStore: hostTerminalState.surfaceStore,
@@ -698,9 +652,9 @@ struct ContentView: View {
             } catch {
                 NSLog("[RemoteBackend] Failed to connect to sandbox %@: %@", sandboxId, error.localizedDescription)
                 await MainActor.run {
-                    guard connectingSandboxId == sandboxId else { return }
-                    connectingSandboxId = nil
-                    remoteErrorMessage = error.localizedDescription
+                    guard viewState.connectingSandboxId == sandboxId else { return }
+                    viewState.connectingSandboxId = nil
+                    viewState.remoteErrorMessage = error.localizedDescription
                 }
             }
         }
@@ -709,18 +663,18 @@ struct ContentView: View {
     @MainActor
     private func handleWebSourceSelection(_ source: WebSource) {
         terminalFocusCoordinator.cancelPendingRepoClickMeasurement(reason: "web_source_selected")
-        selectedWorkspace = nil
+        viewState.selectedWorkspace = nil
         clearCodePreview()
-        isRightPaneVisible = false
-        selectedWebSource = source
-        columnVisibility = .all
+        viewState.isRightPaneVisible = false
+        viewState.selectedWebSource = source
+        viewState.columnVisibility = .all
         webSurfaceStore.cancelPendingRelease()
     }
 
     @MainActor
     private func handleWorkspaceCreated() {
-        guard selectedWorkspace == nil else { return }
-        isRightPaneVisible = false
+        guard viewState.selectedWorkspace == nil else { return }
+        viewState.isRightPaneVisible = false
     }
 
     @MainActor
@@ -748,7 +702,7 @@ struct ContentView: View {
 
     @MainActor
     private func syncSidebarSelectionToActiveSession() {
-        selectedWorkspace = mainSelectionCoordinator.syncedWorkspaceSelection(
+        viewState.selectedWorkspace = mainSelectionCoordinator.syncedWorkspaceSelection(
             for: activeHostSession,
             repos: repos,
             normalizePath: normalizePath
@@ -816,13 +770,13 @@ struct ContentView: View {
     @MainActor
     private func toggleSidebarVisibility() {
         withAnimation(.easeInOut(duration: 0.16)) {
-            switch columnVisibility {
+            switch viewState.columnVisibility {
             case .detailOnly:
-                columnVisibility = .all
+                viewState.columnVisibility = .all
             case .all:
-                columnVisibility = .detailOnly
+                viewState.columnVisibility = .detailOnly
             default:
-                columnVisibility = .detailOnly
+                viewState.columnVisibility = .detailOnly
             }
         }
     }
@@ -832,16 +786,16 @@ struct ContentView: View {
         withAnimation(.easeInOut(duration: 0.2)) {
             inspectorStateController.toggleInspectorVisibility(
                 hasTarget: hasInspectorTarget,
-                isVisible: &isRightPaneVisible
+                isVisible: &viewState.isRightPaneVisible
             )
         }
     }
 
     @MainActor
     private func toggleTerminalPanelVisibility() {
-        guard selectedCodePreview != nil else { return }
+        guard viewState.selectedCodePreview != nil else { return }
         withAnimation(.easeInOut(duration: 0.2)) {
-            isTerminalPanelVisible.toggle()
+            viewState.isTerminalPanelVisible.toggle()
         }
     }
 
@@ -919,13 +873,13 @@ struct ContentView: View {
     }
 
     private func handleCodePreviewSelection(_ selection: CodePreviewSelection) {
-        selectedCodePreview = selection
-        isTerminalPanelVisible = true
+        viewState.selectedCodePreview = selection
+        viewState.isTerminalPanelVisible = true
     }
 
     @MainActor
     private func openSelectedWebSourceInBrowser() {
-        guard let selectedWebSource else { return }
+        guard let selectedWebSource = viewState.selectedWebSource else { return }
         let webView = webSurfaceStore.ensureSurface(for: selectedWebSource)
         if let currentURL = webView.url {
             NSWorkspace.shared.open(currentURL)
@@ -936,7 +890,7 @@ struct ContentView: View {
 
     @MainActor
     private func reloadSelectedWebSource() {
-        guard let selectedWebSource else { return }
+        guard let selectedWebSource = viewState.selectedWebSource else { return }
         let webView = webSurfaceStore.ensureSurface(for: selectedWebSource)
         if let currentURL = webView.url {
             webView.load(URLRequest(url: currentURL))
@@ -946,8 +900,8 @@ struct ContentView: View {
     }
 
     private func clearCodePreview() {
-        selectedCodePreview = nil
-        isTerminalPanelVisible = true
+        viewState.selectedCodePreview = nil
+        viewState.isTerminalPanelVisible = true
     }
 
     @MainActor
@@ -958,9 +912,10 @@ struct ContentView: View {
     @MainActor
     private func presentOpenInEditorError(_ error: Error) {
         if let externalEditorError = error as? ExternalEditorError {
-            openInEditorErrorMessage = externalEditorError.errorDescription ?? "Could not open the selected file."
+            viewState.openInEditorErrorMessage =
+                externalEditorError.errorDescription ?? "Could not open the selected file."
         } else {
-            openInEditorErrorMessage = error.localizedDescription
+            viewState.openInEditorErrorMessage = error.localizedDescription
         }
     }
 
@@ -997,15 +952,6 @@ struct ContentView: View {
         }
 
         return result.session
-    }
-
-    private func bestWorkspaceMatch(for cwd: String) -> Workspace? {
-        mainSelectionCoordinator.bestWorkspaceMatch(
-            for: cwd,
-            repos: repos,
-            normalizePath: normalizePath,
-            pathIsInside: path(_:isInside:)
-        )
     }
 
     private func focusWorkspaceWindow() {
