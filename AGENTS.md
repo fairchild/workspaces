@@ -123,9 +123,9 @@ Tests use **Swift Testing** (`@Suite`, `@Test`, `#expect`), not XCTest. Test beh
 
 ## Multi-Agent Coordination
 
-Agents coordinate via GitHub Discussions. See `.cursor/skills/gh-discuss/SKILL.md` for conventions and `scripts/gh-discuss.py` for the CLI.
+Agents coordinate via GitHub Discussions. See `.agents/skills/gh-discuss/SKILL.md` for conventions and the CLI script.
 
-Quick start: `uv run .cursor/skills/gh-discuss/scripts/gh-discuss.py dashboard`
+Quick start: `uv run .agents/skills/gh-discuss/scripts/gh-discuss.py dashboard`
 
 ## Don't
 
