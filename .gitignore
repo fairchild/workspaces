@@ -38,6 +38,9 @@ output/
 .ssh/
 secrets/
 
+# Python
+__pycache__/
+
 # macOS
 .DS_Store
 *.swp
