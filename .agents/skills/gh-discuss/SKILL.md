@@ -15,7 +15,7 @@ Agents coordinate through GitHub Discussions — a durable, web-visible layer th
 ## Script Location
 
 ```bash
-uv run .cursor/skills/gh-discuss/scripts/gh-discuss.py <command>
+.agents/skills/gh-discuss/scripts/gh-discuss.py <command>
 ```
 
 ## Quick Reference
@@ -32,6 +32,10 @@ uv run .cursor/skills/gh-discuss/scripts/gh-discuss.py <command>
 | Abandon a task | `gh-discuss.py abandon <NUMBER>` |
 | Ask a blocking question | `gh-discuss.py create --decision "Question?" --body "Options"` |
 | Check pending decisions | `gh-discuss.py list --decisions` |
+| Verify app credentials | `gh-discuss.py setup` |
+| Live bot identity test | `gh-discuss.py verify` |
+| Run unit tests | `test_gh_discuss.py` |
+| Run all tests (+ live) | `test_gh_discuss.py --live` |
 
 ## Category Mapping
 
@@ -101,3 +105,7 @@ gh-discuss.py create --from-backlog backlog/some-plan.md
 ```
 
 This extracts the first `# heading` as the title and includes the file content in the discussion body.
+
+## GitHub App (Optional)
+
+Posts as a bot account instead of your personal account. See `references/github-app-setup.md` for setup instructions. Run `gh-discuss.py setup` to validate credentials.
