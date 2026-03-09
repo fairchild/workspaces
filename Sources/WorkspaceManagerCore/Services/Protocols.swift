@@ -82,6 +82,61 @@ public protocol WorkspaceProcessMonitorProtocol: Sendable {
     func detectAgentSession(in workspaceDirectory: URL) async -> WorkspaceProcessMonitor.AgentStatus
 }
 
+public enum StreamDisconnectReason: Sendable, Equatable {
+    case none
+    case transportError
+    case authFailure
+}
+
+public protocol EventStreamServiceProtocol: Sendable {
+    func connect(owner: String, jwt: String, githubToken: String?) async
+    func disconnect() async
+    var events: AsyncStream<WebhookEvent> { get async }
+    var isConnected: Bool { get async }
+    var lastDisconnectReason: StreamDisconnectReason { get async }
+}
+
+public protocol GitHubDeviceAuthProtocol: Sendable {
+    func requestDeviceCode(scope: String) async throws -> DeviceCodeResponse
+    func pollForToken(deviceCode: String, interval: Int) async throws -> GitHubAuthToken
+}
+
+extension GitHubDeviceAuthProtocol {
+    public func requestDeviceCode() async throws -> DeviceCodeResponse {
+        try await requestDeviceCode(scope: "")
+    }
+}
+
+public protocol NotificationSessionServiceProtocol: Sendable {
+    func createSession(githubToken: String) async throws -> NotificationSession
+}
+
+// MARK: - Notification coordinator
+
+public enum NotificationAuthState: Sendable, Equatable {
+    case signedOut
+    case requestingCode
+    case awaitingUserAuth(userCode: String, verificationURL: String)
+    case exchangingToken
+    case signedIn(login: String)
+    case failed(String)
+}
+
+@MainActor
+public protocol NotificationCoordinatorProtocol: AnyObject {
+    var authState: NotificationAuthState { get }
+    var isStreamConnected: Bool { get }
+    var events: [WebhookEvent] { get }
+    var unseenEventCount: Int { get }
+
+    func startDeviceFlow() async
+    func signOut()
+    func loadStoredAuth()
+    func connectStream(remoteURL: String) async
+    func disconnectStream() async
+    func markActivitySeen()
+}
+
 public protocol RemoteBackendProtocol: Sendable {
     var identifier: String { get }
     func isAvailable() async -> Bool

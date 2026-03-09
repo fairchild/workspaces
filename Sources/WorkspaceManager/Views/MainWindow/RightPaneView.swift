@@ -50,18 +50,22 @@ struct RightPaneView: View {
     let targetID: String
     let directoryURL: URL
     let onFileSelected: (CodePreviewSelection) -> Void
+    private let showActivity: Bool
 
     @Environment(\.gitService) private var gitService
     @ObservedObject private var state: RightPaneSessionState
+    @ObservedObject private var notificationCoordinator = NotificationCoordinator.shared
 
     enum Tab: String, CaseIterable {
         case files = "Files"
         case changes = "Changes"
+        case activity = "Activity"
 
         var icon: String {
             switch self {
             case .files: return "folder"
             case .changes: return "arrow.triangle.2.circlepath"
+            case .activity: return "bell"
             }
         }
     }
@@ -75,6 +79,7 @@ struct RightPaneView: View {
         self.directoryURL = workspace.workspaceURL
         self.state = state
         self.onFileSelected = onFileSelected
+        self.showActivity = true
     }
 
     init(
@@ -86,20 +91,24 @@ struct RightPaneView: View {
         self.directoryURL = repo.localURL
         self.state = state
         self.onFileSelected = onFileSelected
+        self.showActivity = false
     }
 
     var body: some View {
         VStack(spacing: 0) {
             // Tab bar
             HStack(spacing: 0) {
-                ForEach(Tab.allCases, id: \.self) { tab in
+                ForEach(visibleTabs, id: \.self) { tab in
                     TabButton(
                         title: tab.rawValue,
                         icon: tab.icon,
                         isSelected: state.selectedTab == tab,
-                        badge: tab == .changes ? state.changedFiles.count : nil
+                        badge: badgeCount(for: tab)
                     ) {
                         state.selectedTab = tab
+                        if tab == .activity {
+                            notificationCoordinator.markActivitySeen()
+                        }
                     }
                 }
             }
@@ -125,15 +134,28 @@ struct RightPaneView: View {
                         isLoading: state.isLoading,
                         onFileSelected: selectFile
                     )
+                case .activity:
+                    ActivityTabView(
+                        events: notificationCoordinator.events,
+                        isConnected: notificationCoordinator.isStreamConnected,
+                        authState: notificationCoordinator.authState
+                    )
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             Divider()
 
-            // Footer with refresh
+            // Footer
             HStack {
-                if state.isLoading {
+                if state.selectedTab == .activity {
+                    Circle()
+                        .fill(notificationCoordinator.isStreamConnected ? Color.mint : Color.secondary)
+                        .frame(width: 6, height: 6)
+                    Text(notificationCoordinator.isStreamConnected ? "Connected" : "Disconnected")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else if state.isLoading {
                     ProgressView()
                         .controlSize(.small)
                     Text("Refreshing...")
@@ -147,14 +169,16 @@ struct RightPaneView: View {
 
                 Spacer()
 
-                Button {
-                    Task { await refresh() }
-                } label: {
-                    Image(systemName: "arrow.clockwise")
+                if state.selectedTab != .activity {
+                    Button {
+                        Task { await refresh() }
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(state.isLoading)
+                    .help("Refresh")
                 }
-                .buttonStyle(.borderless)
-                .disabled(state.isLoading)
-                .help("Refresh")
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
@@ -163,6 +187,22 @@ struct RightPaneView: View {
             if !state.hasLoadedOnce || state.fileTree == nil {
                 await refresh()
             }
+        }
+    }
+
+    private var visibleTabs: [Tab] {
+        showActivity ? Tab.allCases : Tab.allCases.filter { $0 != .activity }
+    }
+
+    private func badgeCount(for tab: Tab) -> Int? {
+        switch tab {
+        case .files: return nil
+        case .changes:
+            let count = state.changedFiles.count
+            return count > 0 ? count : nil
+        case .activity:
+            let count = notificationCoordinator.unseenEventCount
+            return count > 0 ? count : nil
         }
     }
 
@@ -364,6 +404,70 @@ struct ChangedFilesTabView: View {
             }
             .listStyle(.plain)
         }
+    }
+}
+
+// MARK: - Activity Tab
+
+struct ActivityTabView: View {
+    let events: [WebhookEvent]
+    let isConnected: Bool
+    let authState: NotificationAuthState
+    @AppStorage(NotificationConstants.enabledKey)
+    private var notificationsEnabled = NotificationConstants.defaultEnabled
+
+    var body: some View {
+        if !notificationsEnabled {
+            ContentUnavailableView(
+                "Notifications Disabled",
+                systemImage: "bell.slash",
+                description: Text("Enable in Settings")
+            )
+        } else if case .signedIn = authState {
+            if events.isEmpty {
+                ContentUnavailableView(
+                    "No Events Yet",
+                    systemImage: "clock",
+                    description: Text("Events will appear here")
+                )
+            } else {
+                List(events) { event in
+                    EventRow(event: event)
+                }
+                .listStyle(.plain)
+            }
+        } else {
+            ContentUnavailableView(
+                "Not Signed In",
+                systemImage: "person.crop.circle.badge.questionmark",
+                description: Text("Sign in with GitHub in Settings")
+            )
+        }
+    }
+}
+
+struct EventRow: View {
+    let event: WebhookEvent
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: event.icon)
+                .foregroundStyle(event.color)
+                .frame(width: 16)
+                .padding(.top, 2)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(event.summary)
+                    .font(.callout)
+                    .lineLimit(2)
+
+                Text(event.timestamp.formatted(.relative(presentation: .named)))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, 2)
+        .accessibilityElement(children: .combine)
     }
 }
 

@@ -21,6 +21,7 @@ struct ContentView: View {
     @Environment(\.externalEditorService) private var externalEditorService
     @Environment(\.remoteBackend) private var remoteBackend
     @Environment(\.workspaceService) private var workspaceService
+    @ObservedObject private var notificationCoordinator = NotificationCoordinator.shared
 
     @State private var viewState = MainWindowViewState()
     @State private var repoForNewWorkspaceFromLanding: Repo?
@@ -341,8 +342,14 @@ struct ContentView: View {
                 pruneRightPaneState()
             }
             .onChange(of: viewState.selectedWorkspace?.id) { _, _ in
-                guard let selectedWorkspace = viewState.selectedWorkspace else { return }
+                guard let selectedWorkspace = viewState.selectedWorkspace else {
+                    Task { await notificationCoordinator.disconnectStream() }
+                    return
+                }
                 handleWorkspaceSelection(selectedWorkspace)
+                if let remoteURL = selectedWorkspace.sourceRepo?.remoteURL {
+                    Task { await notificationCoordinator.connectStream(remoteURL: remoteURL) }
+                }
             }
             .onChange(of: openInEditorContextKey) { _, _ in
                 syncOpenInEditorShortcutRouting()
