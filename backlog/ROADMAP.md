@@ -35,7 +35,7 @@ completed: null
   - main-window coordinator extraction plus inspector/right-pane regression coverage
   - workspace creation progress UX
   - strict-concurrency warning cleanup in the app layer
-- Active implementation focus: maintainability-first quality work that reduces `ContentView`/`SidebarView`/Ghostty integration complexity before new feature breadth.
+- Active implementation focus: terminal-first Apple-native main-window/user-flow redesign, plus maintainability-first quality work that reduces `ContentView`/`SidebarView`/Ghostty integration complexity before new feature breadth.
 
 ---
 
@@ -173,6 +173,7 @@ Prioritization lens for this phase (aligned with `README.md`):
 
 | Item | Effort | Impact | Why now |
 |------|--------|--------|---------|
+| Apple-native main-window redesign | High | High | The product works, but the sidebar hierarchy, context framing, inspector treatment, and first-run/create flows are not yet as calm or native as the terminal-first workflow deserves. See `backlog/apple-native-main-window-redesign_plan.md`. |
 | Main-window/sidebar maintainability pass | Medium | High | `ContentView` and `SidebarView` are still the largest integration files and slow down safe iteration. |
 | Ghostty boundary maintainability | Medium | High | `GhosttySurfaceView` and `GhosttyAppManager` remain the riskiest AppKit/C interop surfaces to modify. |
 | Shared-desktop verification reliability | Medium | Medium | UI evidence capture is still the least deterministic quality loop and slows confident refactors. |
@@ -223,6 +224,7 @@ Summary: backend abstraction/registry, VZTahoeBackend implementation (VM lifecyc
 
 | Item | Category | Priority Band | Pointer |
 |------|----------|---------------|---------|
+| Apple-native main-window redesign | Plan | P0 | `backlog/apple-native-main-window-redesign_plan.md` |
 | Main-window + sidebar maintainability pass | Follow-up | P0 | `backlog/main-window-sidebar-maintainability_followup.md` |
 | Pane-tree terminal tiling model | Plan | P1 | `backlog/pane-tree-tiling_plan.md` |
 | Ghostty appearance hardening | Follow-up | P1 | `backlog/ghostty-appearance-hardening_followup.md` |
