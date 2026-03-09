@@ -34,7 +34,8 @@ final class RepoLandingBridge: NSObject, WKScriptMessageHandler {
         _ userContentController: WKUserContentController,
         didReceive message: WKScriptMessage
     ) {
-        guard let body = message.body as? [String: Any],
+        guard message.name == Self.handlerName,
+            let body = message.body as? [String: Any],
             let action = body["action"] as? String
         else { return }
 

@@ -77,6 +77,11 @@ extension WorkspaceServiceProtocol {
     }
 }
 
+public protocol WorkspaceProcessMonitorProtocol: Sendable {
+    func detectAgents(in workspaceDirectories: [UUID: URL]) async -> [UUID: WorkspaceProcessMonitor.AgentStatus]
+    func detectAgentSession(in workspaceDirectory: URL) async -> WorkspaceProcessMonitor.AgentStatus
+}
+
 public protocol RemoteBackendProtocol: Sendable {
     var identifier: String { get }
     func isAvailable() async -> Bool

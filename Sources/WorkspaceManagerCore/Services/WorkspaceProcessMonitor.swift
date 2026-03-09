@@ -7,7 +7,7 @@
 
 import Foundation
 
-public actor WorkspaceProcessMonitor {
+public actor WorkspaceProcessMonitor: WorkspaceProcessMonitorProtocol {
     public struct DetectedProcess: Sendable, Equatable, Codable {
         public let displayName: String
         public let isKnownAgent: Bool
@@ -55,13 +55,14 @@ public actor WorkspaceProcessMonitor {
     public init() {}
 
     public func detectAgents(in workspaceDirectories: [UUID: URL]) async -> [UUID: AgentStatus] {
-        let processes = await fetchProcessCWDs()
-        let fullCommands = await fetchFullCommands()
+        async let processes = fetchProcessCWDs()
+        async let fullCommands = fetchFullCommands()
+        let (resolvedProcesses, resolvedFullCommands) = await (processes, fullCommands)
         var results: [UUID: AgentStatus] = [:]
         for (id, directory) in workspaceDirectories {
             results[id] = matchProcesses(
-                processes: processes,
-                fullCommands: fullCommands,
+                processes: resolvedProcesses,
+                fullCommands: resolvedFullCommands,
                 workspacePath: directory.path
             )
         }
@@ -69,11 +70,11 @@ public actor WorkspaceProcessMonitor {
     }
 
     public func detectAgentSession(in workspaceDirectory: URL) async -> AgentStatus {
-        let processes = await fetchProcessCWDs()
-        let fullCommands = await fetchFullCommands()
+        async let processes = fetchProcessCWDs()
+        async let fullCommands = fetchFullCommands()
         return matchProcesses(
-            processes: processes,
-            fullCommands: fullCommands,
+            processes: await processes,
+            fullCommands: await fullCommands,
             workspacePath: workspaceDirectory.path
         )
     }
@@ -174,8 +175,16 @@ public actor WorkspaceProcessMonitor {
             }
         }
 
-        // Known agents first, then others
-        return AgentStatus(processes: detected.sorted { $0.isKnownAgent && !$1.isKnownAgent })
+        // Known agents first, then others; tie-break by name for deterministic ordering.
+        return AgentStatus(
+            processes: detected.sorted { lhs, rhs in
+                if lhs.isKnownAgent != rhs.isKnownAgent {
+                    return lhs.isKnownAgent && !rhs.isKnownAgent
+                }
+                return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName)
+                    == .orderedAscending
+            }
+        )
     }
 
     /// Extract a readable command name from lsof command + ps args.

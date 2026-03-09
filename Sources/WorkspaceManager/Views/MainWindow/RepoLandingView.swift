@@ -11,6 +11,8 @@ import WebKit
 import WorkspaceManagerCore
 
 struct RepoLandingView: View {
+    @Environment(\.workspaceProcessMonitor) private var processMonitor
+
     let repo: Repo
     let onWorkspaceSelected: (Workspace) -> Void
     let onOpenTerminal: (Repo) -> Void
@@ -20,7 +22,6 @@ struct RepoLandingView: View {
 
     @State private var agentStatuses: [UUID: WorkspaceProcessMonitor.AgentStatus] = [:]
     @State private var bridge = RepoLandingBridge()
-    private let processMonitor = WorkspaceProcessMonitor()
 
     private var sortedWorkspaces: [Workspace] {
         repo.workspaces.sorted { $0.lastAccessedAt > $1.lastAccessedAt }
@@ -40,7 +41,9 @@ struct RepoLandingView: View {
         .navigationTitle(repo.name)
         .background(Color(nsColor: .windowBackgroundColor))
         .task(id: repo.id) {
-            configureBridge()
+            await MainActor.run {
+                configureBridge()
+            }
             await pollAgentStatuses()
         }
     }
@@ -61,6 +64,7 @@ struct RepoLandingView: View {
 
     // MARK: - Bridge Wiring
 
+    @MainActor
     private func configureBridge() {
         bridge.onReady = { pushDataToWeb() }
         bridge.onSelectWorkspace = { idString in
@@ -165,6 +169,7 @@ struct RepoLandingView: View {
 
     // MARK: - Web Data Push
 
+    @MainActor
     private func pushDataToWeb() {
         guard resolvedWebIndex != nil else { return }
         let data = RepoLandingData(
