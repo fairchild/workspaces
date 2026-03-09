@@ -70,6 +70,7 @@ Workspaces is designed to be forked. There's no plugin system or extension API â
 
 - **Change the layout**: Edit `ContentView.swift` to rearrange panes
 - **Add lifecycle hooks**: Drop scripts into workspace directories (`setup.sh`, `archive.sh`)
+- **Override the repo landing page**: Place an `index.html` in `.agents/workspaces/` (per-repo) or `~/.agents/workspaces/` (global) to replace the native grid with a custom HTML dashboard. See [docs/development/repo-landing-overrides.md](./docs/development/repo-landing-overrides.md) and the [example override](./.agents/workspaces/) in this repo.
 - **Swap the terminal**: The `TerminalView` wrapper abstracts the terminal backend
 - **Adjust keyboard shortcuts**: See `ShortcutRoutingPolicy.swift`
 

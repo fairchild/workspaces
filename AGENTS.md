@@ -27,6 +27,14 @@ Canonical reference:
 - `docs/development/shortcut-routing.md` ("Shortcut Routing Architecture")
 - `backlog/shared-desktop-focus-contention-followup.md` (longer-term isolation follow-up)
 
+## Evidence-Driven Development
+
+Verify your work visually, then present evidence to the user. Don't just say it works — prove it.
+
+- **Self-verify**: Use Tart VMs (`/tart-gui-automation`) to build, launch, and screenshot the app in an isolated environment.
+- **Present evidence**: Open HTML artifacts in the browser (`open <path>`), render screenshots inline in chat, and show test output. The user should see the proof without asking twice.
+- **Tests are evidence too**: Run `swift test` and show the summary. Green tests are necessary but not sufficient — visual confirmation of UI changes is expected.
+
 ## Commit Hygiene
 
 - Do not include screenshot artifacts in commits unless explicitly requested (`output/`).
