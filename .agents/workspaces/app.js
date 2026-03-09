@@ -217,14 +217,14 @@
     if (!window.webkit?.messageHandlers?.repoLanding) {
         render({
             repo: {
-                name: "minnetonka-v3",
-                localPath: "/Users/fairchild/conductor/workspaces/workspaces/minnetonka-v3",
-                remoteURL: "https://github.com/fairchild/minnetonka-v3"
+                name: "example-repo",
+                localPath: "/Users/me/code/example-repo",
+                remoteURL: "https://github.com/example/example-repo"
             },
             workspaces: [
                 {
-                    id: "1", name: "repo-landing-page", branch: "repo-landing-page",
-                    path: "/Users/fairchild/conductor/workspaces/workspaces/minnetonka-v3",
+                    id: "1", name: "feature-landing-page", branch: "feature/landing-page",
+                    path: "/Users/me/code/example-repo",
                     status: "active", lastAccessedAt: Date.now() / 1000 - 120,
                     isAgentRunning: true, agentName: "Claude",
                     processes: [
@@ -234,21 +234,21 @@
                 },
                 {
                     id: "2", name: "terminal-splits", branch: "ws/terminal-splits",
-                    path: "/Users/fairchild/conductor/workspaces/workspaces/minnetonka-v3/.workspaces/terminal-splits",
+                    path: "/Users/me/code/example-repo/.workspaces/terminal-splits",
                     status: "active", lastAccessedAt: Date.now() / 1000 - 3600,
                     isAgentRunning: false, agentName: null,
                     processes: []
                 },
                 {
                     id: "3", name: "perf-signposts", branch: "ws/perf-signposts",
-                    path: "/Users/fairchild/conductor/workspaces/workspaces/minnetonka-v3/.workspaces/perf-signposts",
+                    path: "/Users/me/code/example-repo/.workspaces/perf-signposts",
                     status: "stopped", lastAccessedAt: Date.now() / 1000 - 86400,
                     isAgentRunning: false, agentName: null,
                     processes: []
                 },
                 {
-                    id: "4", name: "vz-backend-spike", branch: "ws/vz-backend",
-                    path: "/Users/fairchild/conductor/workspaces/workspaces/minnetonka-v3/.workspaces/vz-backend",
+                    id: "4", name: "remote-vm-spike", branch: "ws/remote-vm",
+                    path: "/Users/me/code/example-repo/.workspaces/remote-vm",
                     status: "archived", lastAccessedAt: Date.now() / 1000 - 86400 * 5,
                     isAgentRunning: false, agentName: null,
                     processes: [{ displayName: "Pi", isKnownAgent: true }]

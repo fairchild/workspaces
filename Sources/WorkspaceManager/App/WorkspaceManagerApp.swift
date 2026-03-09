@@ -405,6 +405,10 @@ private struct WorkspaceServiceKey: EnvironmentKey {
     static let defaultValue: any WorkspaceServiceProtocol = WorkspaceService.shared
 }
 
+private struct WorkspaceProcessMonitorKey: EnvironmentKey {
+    static let defaultValue: any WorkspaceProcessMonitorProtocol = WorkspaceProcessMonitor()
+}
+
 private struct ExternalEditorServiceKey: EnvironmentKey {
     nonisolated(unsafe) static let defaultValue: any ExternalEditorServiceProtocol = ExternalEditorService.shared
 }
@@ -422,6 +426,11 @@ extension EnvironmentValues {
     var workspaceService: any WorkspaceServiceProtocol {
         get { self[WorkspaceServiceKey.self] }
         set { self[WorkspaceServiceKey.self] = newValue }
+    }
+
+    var workspaceProcessMonitor: any WorkspaceProcessMonitorProtocol {
+        get { self[WorkspaceProcessMonitorKey.self] }
+        set { self[WorkspaceProcessMonitorKey.self] = newValue }
     }
 
     var externalEditorService: any ExternalEditorServiceProtocol {
