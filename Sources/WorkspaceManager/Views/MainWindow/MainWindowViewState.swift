@@ -4,6 +4,7 @@ import WorkspaceManagerCore
 struct MainWindowViewState {
     var selectedWorkspace: Workspace?
     var selectedWebSource: WebSource?
+    var selectedRepoForLanding: Repo?
     var selectedCodePreview: CodePreviewSelection?
     var isTerminalPanelVisible = true
     var isRightPaneVisible = false
