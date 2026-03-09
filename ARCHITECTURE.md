@@ -236,7 +236,38 @@ protocol RemoteBackendProtocol: Sendable {
 **Documentation**: `docs/development/solution-terminal-keyboard.md`
 and `docs/development/libghostty-integration.md`
 
-### 8. Host Terminal Surface Memory Policy (Refinement Gate)
+### 8. Real-Time Notifications via Cloudflare Worker
+
+**Decision**: Relay GitHub webhooks to connected clients over WebSocket via a Cloudflare Worker with Durable Objects.
+
+**Rationale**:
+- GitHub webhooks need a public endpoint — Cloudflare Workers provide this with zero server management
+- Durable Objects give per-repo state (SQLite event storage, WebSocket sessions) without external databases
+- Hibernation API means idle repos cost nothing
+- WebSocket provides instant delivery without polling
+
+**Architecture**:
+```
+GitHub webhook ──▶ Worker ──▶ Durable Object (per owner/repo)
+                                  │
+                              ┌───┴───┐
+                              │SQLite │  ← 7-day event retention
+                              └───┬───┘
+                                  │
+                              WebSocket broadcast
+                                  │
+macOS App ◀───────────────────────┘
+  NotificationCoordinator (auth + stream lifecycle)
+  └── EventStreamService (WebSocket + reconnect)
+```
+
+**Auth**: GitHub Device Flow → token → JWT (8h, HMAC-SHA256). JWT `orgs` claim prevents IDOR on WebSocket connect. JWT is silently refreshed 15 min before expiry; on failure the user is signed out.
+
+**Files**: `infra/cloudflare-webhook-relay/`, `NotificationCoordinator.swift`, `EventStreamService.swift`
+
+**Documentation**: `docs/development/notifications.md`
+
+### 9. Host Terminal Surface Memory Policy (Refinement Gate)
 
 **Decision**: Keep terminal surfaces unbounded for now (no inactive-surface LRU cap yet).
 
@@ -469,3 +500,7 @@ Uses **Swift Testing** (`@Suite`, `@Test`, `#expect`). Test suites cover:
 - `HostTerminalDefaultsTests` — terminal preference persistence
 - `ProcessRunnerTests` — shell command execution
 - `RepositoryDiscoveryTests` — repo scanning and validation
+- `GitHubDeviceAuthTests` — device flow auth with mock HTTP
+- `NotificationSessionServiceTests` — JWT session exchange with mock HTTP
+- `WebhookEventTests` — Codable roundtrips for event model
+- `NotificationCoordinatorTests` — JWT parsing, remote URL parsing, coordinator lifecycle
