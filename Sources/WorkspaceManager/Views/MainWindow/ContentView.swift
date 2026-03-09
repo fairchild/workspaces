@@ -20,8 +20,12 @@ struct ContentView: View {
     private var terminalMultiplexingModeRawValue: String = TerminalMultiplexingMode.defaultValue.rawValue
     @Environment(\.externalEditorService) private var externalEditorService
     @Environment(\.remoteBackend) private var remoteBackend
+    @Environment(\.workspaceService) private var workspaceService
 
     @State private var viewState = MainWindowViewState()
+    @State private var repoForNewWorkspaceFromLanding: Repo?
+    @State private var landingErrorMessage: String?
+    @State private var isRemoteBackendAvailableForLanding = false
     @StateObject private var rightPaneStateStore = RightPaneStateStore()
     @StateObject private var webSurfaceStore = WebSurfaceStore()
     @StateObject private var terminalFocusCoordinator = TerminalFocusCoordinator()
@@ -192,6 +196,26 @@ struct ContentView: View {
                 source: selectedWebSource,
                 surfaceStore: webSurfaceStore
             )
+        } else if let selectedRepo = viewState.selectedRepoForLanding {
+            RepoLandingView(
+                repo: selectedRepo,
+                onWorkspaceSelected: { workspace in
+                    viewState.selectedRepoForLanding = nil
+                    viewState.selectedWorkspace = workspace
+                },
+                onOpenTerminal: handleRepoTerminalSelection,
+                onNewWorkspace: { repo in
+                    repoForNewWorkspaceFromLanding = repo
+                },
+                onArchiveWorkspace: { workspace in
+                    Task { @MainActor in
+                        await archiveWorkspaceFromLanding(workspace)
+                    }
+                },
+                onOpenWorkspaceInEditor: { workspace in
+                    openWorkspaceInDefaultEditorFromLanding(workspace)
+                }
+            )
         } else {
             ZStack {
                 terminalDetailContent
@@ -285,6 +309,7 @@ struct ContentView: View {
                 syncOpenInEditorShortcutRouting()
             }
             .task {
+                isRemoteBackendAvailableForLanding = await remoteBackend.isAvailable()
                 await syncCloudWorkspaceStatuses()
             }
             .onDisappear {
@@ -371,6 +396,28 @@ struct ContentView: View {
 
     var body: some View {
         splitViewWithFocusAndAlerts
+            .sheet(item: $repoForNewWorkspaceFromLanding) { repo in
+                NewWorkspaceSheet(
+                    repo: repo,
+                    isRemoteBackendAvailable: isRemoteBackendAvailableForLanding,
+                    isCreateDisabled: false
+                ) { name, backend in
+                    Task { @MainActor in
+                        await createWorkspaceFromLanding(repo: repo, name: name, backend: backend)
+                    }
+                }
+            }
+            .alert(
+                "Error",
+                isPresented: Binding(
+                    get: { landingErrorMessage != nil },
+                    set: { if !$0 { landingErrorMessage = nil } }
+                )
+            ) {
+                Button("OK", role: .cancel) { landingErrorMessage = nil }
+            } message: {
+                Text(landingErrorMessage ?? "Unknown error.")
+            }
     }
 
     @MainActor
@@ -396,6 +443,7 @@ struct ContentView: View {
             )
 
             viewState.selectedWebSource = nil
+            viewState.selectedRepoForLanding = nil
             viewState.selectedWorkspace = workspace
             clearCodePreview()
             viewState.columnVisibility = .all
@@ -420,7 +468,7 @@ struct ContentView: View {
         viewState.didRunPerfAutoSelection = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
             Task { @MainActor in
-                handleRepoSelection(firstRepo)
+                handleRepoTerminalSelection(firstRepo)
             }
         }
     }
@@ -444,7 +492,7 @@ struct ContentView: View {
             )
         case .apply(_, let repo, let selection):
             viewState.didApplyFixturePreviewBootstrap = true
-            handleRepoSelection(repo)
+            handleRepoTerminalSelection(repo)
             viewState.selectedCodePreview = selection
             viewState.isTerminalPanelVisible = true
             viewState.isRightPaneVisible = true
@@ -483,10 +531,21 @@ struct ContentView: View {
 
     @MainActor
     private func handleRepoSelection(_ repo: Repo) {
+        viewState.selectedWebSource = nil
+        viewState.selectedWorkspace = nil
+        clearCodePreview()
+        viewState.selectedRepoForLanding = repo
+        viewState.isRightPaneVisible = false
+        viewState.columnVisibility = .all
+    }
+
+    @MainActor
+    private func handleRepoTerminalSelection(_ repo: Repo) {
         let repoDirectory = repo.localURL.standardizedFileURL.resolvingSymlinksInPath()
 
         viewState.selectedWebSource = nil
         viewState.selectedWorkspace = nil
+        viewState.selectedRepoForLanding = nil
         clearCodePreview()
         let session = activateHostSession(
             key: .repoPath(repoDirectory.path),
@@ -531,6 +590,7 @@ struct ContentView: View {
         terminalFocusCoordinator.cancelPendingRepoClickMeasurement(reason: "default_host_selected")
         viewState.selectedWebSource = nil
         viewState.selectedWorkspace = nil
+        viewState.selectedRepoForLanding = nil
         clearCodePreview()
         let session = activateHostSession(
             key: .defaultHome,
@@ -558,6 +618,7 @@ struct ContentView: View {
     private func handleWorkspaceSelection(_ workspace: Workspace) {
         terminalFocusCoordinator.cancelPendingRepoClickMeasurement(reason: "workspace_selected")
         viewState.selectedWebSource = nil
+        viewState.selectedRepoForLanding = nil
         clearCodePreview()
 
         if workspace.isRemote, let sandboxId = workspace.remoteId {
@@ -664,6 +725,7 @@ struct ContentView: View {
     private func handleWebSourceSelection(_ source: WebSource) {
         terminalFocusCoordinator.cancelPendingRepoClickMeasurement(reason: "web_source_selected")
         viewState.selectedWorkspace = nil
+        viewState.selectedRepoForLanding = nil
         clearCodePreview()
         viewState.isRightPaneVisible = false
         viewState.selectedWebSource = source
@@ -675,6 +737,60 @@ struct ContentView: View {
     private func handleWorkspaceCreated() {
         guard viewState.selectedWorkspace == nil else { return }
         viewState.isRightPaneVisible = false
+    }
+
+    @MainActor
+    private func createWorkspaceFromLanding(repo: Repo, name: String, backend: WorkspaceBackendChoice) async {
+        let controller = SidebarWorkspaceController(
+            modelContext: modelContext,
+            workspaceService: workspaceService,
+            remoteBackend: remoteBackend
+        )
+        do {
+            let workspace: Workspace
+            switch backend {
+            case .local:
+                workspace = try await controller.createWorkspace(from: repo, name: name, progress: { _ in })
+            case .remoteVM:
+                workspace = try await controller.createRemoteWorkspace(from: repo, name: name)
+            }
+            viewState.selectedRepoForLanding = nil
+            viewState.selectedWorkspace = workspace
+        } catch {
+            landingErrorMessage = "Failed to create workspace: \(error.localizedDescription)"
+        }
+    }
+
+    @MainActor
+    private func archiveWorkspaceFromLanding(_ workspace: Workspace) async {
+        if workspace.isRemote {
+            let controller = SidebarWorkspaceController(
+                modelContext: modelContext,
+                workspaceService: workspaceService,
+                remoteBackend: remoteBackend
+            )
+            do {
+                try await controller.archive(workspace)
+            } catch {
+                landingErrorMessage = "Failed to archive workspace: \(error.localizedDescription)"
+            }
+        } else {
+            workspace.status = .archived
+        }
+    }
+
+    @MainActor
+    private func openWorkspaceInDefaultEditorFromLanding(_ workspace: Workspace) {
+        do {
+            try OpenInEditorShortcutFlow.perform(
+                target: .project(rootURL: workspace.workspaceURL),
+                editorID: nil,
+                externalEditorService: externalEditorService,
+                trigger: .uiPrimaryAction
+            )
+        } catch {
+            presentOpenInEditorError(error)
+        }
     }
 
     @MainActor
