@@ -69,6 +69,7 @@ swift run     # Run
 | Architectural decisions | ARCHITECTURE.md | backlog/ |
 | Implement a component | docs/original_spec.md (find relevant section) | Read whole file |
 | libghostty internals | docs/development/libghostty-integration.md | - |
+| Notifications / webhooks | docs/development/notifications.md | - |
 | Debug an issue | docs/development/troubleshooting.md | - |
 | Terminal keyboard focus | docs/development/solution-terminal-keyboard.md | - |
 | Roadmap/planning | backlog/ROADMAP.md | - |
@@ -87,6 +88,14 @@ swift run     # Run
 | Terminal wrapper | Sources/WorkspaceManager/Views/Components/TerminalView.swift |
 | Sidebar (repos/workspaces) | Sources/WorkspaceManager/Views/MainWindow/SidebarView.swift |
 | Right pane (files/changes) | Sources/WorkspaceManager/Views/MainWindow/RightPaneView.swift |
+| Notification constants | Sources/WorkspaceManagerCore/Services/NotificationConstants.swift |
+| Notification coordinator | Sources/WorkspaceManager/Views/MainWindow/NotificationCoordinator.swift |
+| WebSocket event stream | Sources/WorkspaceManagerCore/Services/EventStreamService.swift |
+| GitHub Device Flow auth | Sources/WorkspaceManagerCore/Services/GitHubDeviceAuth.swift |
+| JWT session exchange | Sources/WorkspaceManagerCore/Services/NotificationSessionService.swift |
+| Keychain storage | Sources/WorkspaceManagerCore/Services/KeychainHelper.swift |
+| Webhook event model | Sources/WorkspaceManagerCore/Models/WebhookEvent.swift |
+| Cloudflare Worker (infra) | infra/cloudflare-webhook-relay/ |
 | Tests | Tests/WorkspaceManagerTests/ |
 
 ## Key Patterns

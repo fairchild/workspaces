@@ -42,6 +42,9 @@ secrets/
 # Python
 __pycache__/
 
+# Node/Bun (Cloudflare Worker)
+node_modules/
+
 # macOS
 .DS_Store
 *.swp
