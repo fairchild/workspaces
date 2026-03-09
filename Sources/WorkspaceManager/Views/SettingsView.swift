@@ -6,24 +6,24 @@
 //
 
 import SwiftUI
+import WorkspaceManagerCore
 
 struct SettingsView: View {
-    // Workspace root path stored in UserDefaults
     @AppStorage("workspacesRoot") private var workspacesRootPath: String = ""
     @AppStorage(TerminalMultiplexingMode.storageKey)
     private var terminalMultiplexingModeRawValue: String = TerminalMultiplexingMode.defaultValue.rawValue
+    @AppStorage(NotificationConstants.enabledKey)
+    private var notificationsEnabled: Bool = NotificationConstants.defaultEnabled
 
-    // File picker state
     @State private var showFolderPicker = false
+    @ObservedObject private var notificationCoordinator = NotificationCoordinator.shared
 
-    // Default path for display
     private var defaultPath: String {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("workspaces")
             .path
     }
 
-    // Display path (shows default if custom not set)
     private var displayPath: String {
         workspacesRootPath.isEmpty ? defaultPath : workspacesRootPath
     }
@@ -138,9 +138,23 @@ struct SettingsView: View {
             } header: {
                 Text("Terminal")
             }
+            Section {
+                VStack(alignment: .leading, spacing: 10) {
+                    Toggle("Enable real-time notifications", isOn: $notificationsEnabled)
+
+                    if notificationsEnabled {
+                        notificationAuthSection
+                    }
+                }
+            } header: {
+                Text("Notifications")
+            }
         }
         .formStyle(.grouped)
-        .frame(width: 500, height: 350)
+        .frame(width: 500, height: 450)
+        .onAppear {
+            notificationCoordinator.loadStoredAuth()
+        }
         .fileImporter(
             isPresented: $showFolderPicker,
             allowedContentTypes: [.folder],
@@ -149,7 +163,6 @@ struct SettingsView: View {
             switch result {
             case .success(let urls):
                 if let url = urls.first {
-                    // Get security-scoped access
                     if url.startAccessingSecurityScopedResource() {
                         workspacesRootPath = url.path
                         url.stopAccessingSecurityScopedResource()
@@ -159,6 +172,76 @@ struct SettingsView: View {
                 }
             case .failure(let error):
                 print("Folder picker error: \(error)")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var notificationAuthSection: some View {
+        switch notificationCoordinator.authState {
+        case .signedIn(let login):
+            HStack {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+                Text("Connected as \(login)")
+                    .font(.callout)
+                Spacer()
+                Button("Sign Out") {
+                    notificationCoordinator.signOut()
+                    notificationsEnabled = false
+                }
+                .font(.callout)
+            }
+
+        case .requestingCode, .exchangingToken:
+            HStack {
+                ProgressView()
+                    .controlSize(.small)
+                Text(
+                    notificationCoordinator.authState == .requestingCode
+                        ? "Starting authentication..." : "Completing authentication..."
+                )
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            }
+
+        case .awaitingUserAuth(let code, let url):
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Enter this code on GitHub:")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                HStack {
+                    Text(code)
+                        .font(.system(.title2, design: .monospaced, weight: .bold))
+                        .textSelection(.enabled)
+                    Button("Copy") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(code, forType: .string)
+                    }
+                    .font(.callout)
+                }
+                Button("Open GitHub") {
+                    if let url = URL(string: url) {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
+                .font(.callout)
+            }
+
+        case .failed(let message):
+            VStack(alignment: .leading, spacing: 6) {
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                Button("Try Again") {
+                    Task { await notificationCoordinator.startDeviceFlow() }
+                }
+                .font(.callout)
+            }
+
+        case .signedOut:
+            Button("Sign in with GitHub") {
+                Task { await notificationCoordinator.startDeviceFlow() }
             }
         }
     }
