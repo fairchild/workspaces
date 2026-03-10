@@ -129,6 +129,106 @@ public final class WebSource {
     }
 }
 
+public struct SSHWorkspaceMetadata: Codable, Equatable, Sendable {
+    public var host: String
+    public var user: String?
+    public var port: Int
+    public var authMode: String?
+    public var workingDir: String?
+
+    public init(
+        host: String,
+        user: String? = nil,
+        port: Int = 22,
+        authMode: String? = nil,
+        workingDir: String? = nil
+    ) {
+        self.host = host
+        self.user = user
+        self.port = port
+        self.authMode = authMode
+        self.workingDir = workingDir
+    }
+}
+
+public struct KubernetesWorkspaceMetadata: Codable, Equatable, Sendable {
+    public var context: String
+    public var namespace: String?
+    public var pod: String?
+    public var deployment: String?
+    public var container: String?
+
+    public init(
+        context: String,
+        namespace: String? = nil,
+        pod: String? = nil,
+        deployment: String? = nil,
+        container: String? = nil
+    ) {
+        self.context = context
+        self.namespace = namespace
+        self.pod = pod
+        self.deployment = deployment
+        self.container = container
+    }
+}
+
+public struct ComposeWorkspaceMetadata: Codable, Equatable, Sendable {
+    public var projectName: String?
+    public var composeFiles: [String]
+    public var service: String
+    public var workdir: String?
+
+    public init(
+        projectName: String? = nil,
+        composeFiles: [String] = [],
+        service: String,
+        workdir: String? = nil
+    ) {
+        self.projectName = projectName
+        self.composeFiles = composeFiles
+        self.service = service
+        self.workdir = workdir
+    }
+}
+
+private struct WorkspaceRemoteMetadataPayload: Codable, Equatable, Sendable {
+    enum Kind: String, Codable, Sendable {
+        case ssh
+        case kubernetes
+        case compose
+    }
+
+    let kind: Kind
+    var ssh: SSHWorkspaceMetadata?
+    var kubernetes: KubernetesWorkspaceMetadata?
+    var compose: ComposeWorkspaceMetadata?
+
+    static func ssh(_ metadata: SSHWorkspaceMetadata) -> Self {
+        Self(kind: .ssh, ssh: metadata)
+    }
+
+    static func kubernetes(_ metadata: KubernetesWorkspaceMetadata) -> Self {
+        Self(kind: .kubernetes, kubernetes: metadata)
+    }
+
+    static func compose(_ metadata: ComposeWorkspaceMetadata) -> Self {
+        Self(kind: .compose, compose: metadata)
+    }
+
+    private init(
+        kind: Kind,
+        ssh: SSHWorkspaceMetadata? = nil,
+        kubernetes: KubernetesWorkspaceMetadata? = nil,
+        compose: ComposeWorkspaceMetadata? = nil
+    ) {
+        self.kind = kind
+        self.ssh = ssh
+        self.kubernetes = kubernetes
+        self.compose = compose
+    }
+}
+
 @Model
 public final class Workspace {
     public var id: UUID
@@ -146,6 +246,9 @@ public final class Workspace {
     /// Remote instance ID (nil for local workspaces)
     public var remoteId: String?
 
+    /// Backend-specific metadata encoded as JSON; empty string means no metadata.
+    public var remoteMetadataJSON: String = ""
+
     @Relationship(deleteRule: .cascade, inverse: \WebSource.sourceWorkspace)
     public var webSources: [WebSource] = []
 
@@ -162,6 +265,36 @@ public final class Workspace {
         set { statusRaw = newValue.rawValue }
     }
 
+    public var sshMetadata: SSHWorkspaceMetadata? {
+        get {
+            guard let payload = remoteMetadataPayload, payload.kind == .ssh else { return nil }
+            return payload.ssh
+        }
+        set {
+            setRemoteMetadata(newValue.map(WorkspaceRemoteMetadataPayload.ssh), for: .ssh)
+        }
+    }
+
+    public var kubernetesMetadata: KubernetesWorkspaceMetadata? {
+        get {
+            guard let payload = remoteMetadataPayload, payload.kind == .kubernetes else { return nil }
+            return payload.kubernetes
+        }
+        set {
+            setRemoteMetadata(newValue.map(WorkspaceRemoteMetadataPayload.kubernetes), for: .kubernetes)
+        }
+    }
+
+    public var composeMetadata: ComposeWorkspaceMetadata? {
+        get {
+            guard let payload = remoteMetadataPayload, payload.kind == .compose else { return nil }
+            return payload.compose
+        }
+        set {
+            setRemoteMetadata(newValue.map(WorkspaceRemoteMetadataPayload.compose), for: .compose)
+        }
+    }
+
     public init(
         id: UUID = UUID(),
         name: String,
@@ -172,7 +305,8 @@ public final class Workspace {
         status: WorkspaceStatus = .active,
         gitBranch: String? = nil,
         backendIdentifier: String = "local",
-        remoteId: String? = nil
+        remoteId: String? = nil,
+        remoteMetadataJSON: String = ""
     ) {
         self.id = id
         self.name = name
@@ -184,6 +318,45 @@ public final class Workspace {
         self.gitBranch = gitBranch
         self.backendIdentifier = backendIdentifier
         self.remoteId = remoteId
+        self.remoteMetadataJSON = remoteMetadataJSON
+    }
+
+    private var remoteMetadataPayload: WorkspaceRemoteMetadataPayload? {
+        get {
+            let trimmedJSON = remoteMetadataJSON.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmedJSON.isEmpty, let data = trimmedJSON.data(using: .utf8) else { return nil }
+            return try? JSONDecoder().decode(WorkspaceRemoteMetadataPayload.self, from: data)
+        }
+        set {
+            guard let newValue else {
+                remoteMetadataJSON = ""
+                return
+            }
+
+            guard
+                let data = try? JSONEncoder().encode(newValue),
+                let json = String(data: data, encoding: .utf8)
+            else {
+                remoteMetadataJSON = ""
+                return
+            }
+
+            remoteMetadataJSON = json
+        }
+    }
+
+    private func setRemoteMetadata(
+        _ payload: WorkspaceRemoteMetadataPayload?,
+        for kind: WorkspaceRemoteMetadataPayload.Kind
+    ) {
+        guard let payload else {
+            if remoteMetadataPayload?.kind == kind {
+                remoteMetadataPayload = nil
+            }
+            return
+        }
+
+        remoteMetadataPayload = payload
     }
 }
 

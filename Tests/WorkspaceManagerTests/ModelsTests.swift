@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import SwiftData
 import Testing
 
 @testable import WorkspaceManagerCore
@@ -72,6 +73,184 @@ struct ModelsTests {
                 let decoded = try decoder.decode(WorkspaceStatus.self, from: data)
                 #expect(decoded == status)
             }
+        }
+    }
+
+    @Suite("RemoteWorkspaceMetadata")
+    struct RemoteWorkspaceMetadataTests {
+        @Test("SSH metadata survives Codable roundtrip")
+        func sshMetadataRoundtrip() throws {
+            let metadata = SSHWorkspaceMetadata(
+                host: "ssh.example.com",
+                user: "alice",
+                authMode: "key",
+                workingDir: "/workspace"
+            )
+
+            let data = try JSONEncoder().encode(metadata)
+            let decoded = try JSONDecoder().decode(SSHWorkspaceMetadata.self, from: data)
+
+            #expect(decoded == metadata)
+            #expect(decoded.port == 22)
+        }
+
+        @Test("Kubernetes metadata survives Codable roundtrip")
+        func kubernetesMetadataRoundtrip() throws {
+            let metadata = KubernetesWorkspaceMetadata(
+                context: "prod-cluster",
+                namespace: "payments",
+                deployment: "api",
+                container: "web"
+            )
+
+            let data = try JSONEncoder().encode(metadata)
+            let decoded = try JSONDecoder().decode(KubernetesWorkspaceMetadata.self, from: data)
+
+            #expect(decoded == metadata)
+        }
+
+        @Test("Compose metadata survives Codable roundtrip")
+        func composeMetadataRoundtrip() throws {
+            let metadata = ComposeWorkspaceMetadata(
+                projectName: "acme",
+                composeFiles: ["compose.yml", "compose.dev.yml"],
+                service: "web",
+                workdir: "/app"
+            )
+
+            let data = try JSONEncoder().encode(metadata)
+            let decoded = try JSONDecoder().decode(ComposeWorkspaceMetadata.self, from: data)
+
+            #expect(decoded == metadata)
+        }
+
+        @Test("Typed accessors write and replace metadata kinds")
+        func typedAccessorsWriteAndReplaceMetadataKinds() {
+            let workspace = makeWorkspace()
+            let ssh = SSHWorkspaceMetadata(
+                host: "ssh.example.com",
+                user: "alice",
+                authMode: "key",
+                workingDir: "/workspace"
+            )
+            let kubernetes = KubernetesWorkspaceMetadata(
+                context: "prod-cluster",
+                namespace: "payments",
+                pod: "api-123",
+                container: "web"
+            )
+
+            workspace.sshMetadata = ssh
+
+            #expect(workspace.sshMetadata == ssh)
+            #expect(workspace.kubernetesMetadata == nil)
+            #expect(workspace.composeMetadata == nil)
+            #expect(workspace.remoteMetadataJSON.contains(#""kind":"ssh""#))
+
+            workspace.kubernetesMetadata = kubernetes
+
+            #expect(workspace.sshMetadata == nil)
+            #expect(workspace.kubernetesMetadata == kubernetes)
+            #expect(workspace.composeMetadata == nil)
+            #expect(workspace.remoteMetadataJSON.contains(#""kind":"kubernetes""#))
+        }
+
+        @Test("Nil clearing only removes the matching metadata kind")
+        func nilClearingOnlyRemovesMatchingMetadataKind() {
+            let workspace = makeWorkspace()
+            let compose = ComposeWorkspaceMetadata(
+                projectName: "acme",
+                composeFiles: ["compose.yml"],
+                service: "web",
+                workdir: "/app"
+            )
+
+            workspace.composeMetadata = compose
+            workspace.sshMetadata = nil
+
+            #expect(workspace.composeMetadata == compose)
+            #expect(!workspace.remoteMetadataJSON.isEmpty)
+
+            workspace.composeMetadata = nil
+
+            #expect(workspace.composeMetadata == nil)
+            #expect(workspace.remoteMetadataJSON.isEmpty)
+        }
+
+        @Test("Empty, malformed, and unknown metadata payloads decode as nil")
+        func invalidOrUnknownMetadataPayloadsDecodeAsNil() {
+            let workspace = makeWorkspace()
+
+            #expect(workspace.sshMetadata == nil)
+            #expect(workspace.kubernetesMetadata == nil)
+            #expect(workspace.composeMetadata == nil)
+
+            workspace.remoteMetadataJSON = "{not-json"
+            #expect(workspace.sshMetadata == nil)
+            #expect(workspace.kubernetesMetadata == nil)
+            #expect(workspace.composeMetadata == nil)
+
+            workspace.remoteMetadataJSON = #"{"kind":"docker","compose":{"service":"web"}}"#
+            #expect(workspace.sshMetadata == nil)
+            #expect(workspace.kubernetesMetadata == nil)
+            #expect(workspace.composeMetadata == nil)
+        }
+
+        @Test("Legacy Daytona workspace stays remote without metadata")
+        func legacyDaytonaWorkspaceStaysRemoteWithoutMetadata() {
+            let repo = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))
+            let workspace = Workspace(
+                name: "cloud-feature",
+                path: URL(fileURLWithPath: "/tmp/alpha/workspaces/cloud-feature"),
+                sourceRepo: repo,
+                backendIdentifier: "daytona",
+                remoteId: "sandbox-123"
+            )
+
+            #expect(workspace.isRemote)
+            #expect(workspace.remoteId == "sandbox-123")
+            #expect(workspace.remoteMetadataJSON.isEmpty)
+            #expect(workspace.sshMetadata == nil)
+            #expect(workspace.kubernetesMetadata == nil)
+            #expect(workspace.composeMetadata == nil)
+        }
+
+        @Test("Workspace persists empty remote metadata JSON by default")
+        @MainActor
+        func workspacePersistsEmptyRemoteMetadataJSONByDefault() throws {
+            let schema = Schema([Repo.self, Workspace.self, WebSource.self])
+            let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
+            let container = try ModelContainer(for: schema, configurations: [configuration])
+            let context = container.mainContext
+
+            let repo = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))
+            let workspace = Workspace(
+                name: "cloud-feature",
+                path: URL(fileURLWithPath: "/tmp/alpha/workspaces/cloud-feature"),
+                sourceRepo: repo,
+                backendIdentifier: "daytona",
+                remoteId: "sandbox-123"
+            )
+
+            context.insert(repo)
+            context.insert(workspace)
+            try context.save()
+
+            let fetched = try context.fetch(FetchDescriptor<Workspace>())
+
+            #expect(fetched.count == 1)
+            #expect(fetched[0].remoteMetadataJSON.isEmpty)
+            #expect(fetched[0].remoteId == "sandbox-123")
+            #expect(fetched[0].sshMetadata == nil)
+        }
+
+        private func makeWorkspace() -> Workspace {
+            let repo = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))
+            return Workspace(
+                name: "feature-a",
+                path: URL(fileURLWithPath: "/tmp/alpha/workspaces/feature-a"),
+                sourceRepo: repo
+            )
         }
     }
 
