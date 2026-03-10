@@ -25,6 +25,7 @@ final class GhosttySurfaceView: NSView {
     private(set) var currentWorkingDirectory: String?
     private var didProcessExit = false
     var workingDirectoryPath: String { workingDirectory.path }
+    var contextMenuProvider: (() -> NSMenu?)?
 
     init(workingDirectory: URL, onProcessExit: (() -> Void)? = nil) {
         self.workingDirectory = workingDirectory
@@ -285,6 +286,11 @@ final class GhosttySurfaceView: NSView {
 
     override func rightMouseUp(with event: NSEvent) {
         sendMouseButton(event, state: GHOSTTY_MOUSE_RELEASE)
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        TerminalFocusManager.shared.requestFocus(for: self)
+        return contextMenuProvider?()
     }
 
     override func otherMouseDown(with event: NSEvent) {

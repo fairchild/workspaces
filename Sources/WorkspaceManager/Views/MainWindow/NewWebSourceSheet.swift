@@ -8,6 +8,7 @@
 import SwiftUI
 
 struct NewWebSourceSheet: View {
+    let target: WebSourceCreationTarget
     let onCreate: (String, String, String) -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -22,16 +23,21 @@ struct NewWebSourceSheet: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            VStack(spacing: 8) {
-                Image(systemName: "globe.badge.plus")
-                    .font(.system(size: 36))
-                    .foregroundStyle(.cyan)
+            VStack(spacing: 10) {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color.secondary.opacity(0.08))
+                    .frame(width: 44, height: 44)
+                    .overlay {
+                        Image(systemName: target.iconName)
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundStyle(.primary)
+                    }
 
-                Text("Add URL Source")
-                    .font(.title2)
+                Text(target.title)
+                    .font(.title3)
                     .fontWeight(.semibold)
 
-                Text("Browse a domain inside Workspaces")
+                Text(target.subtitle)
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -76,7 +82,7 @@ struct NewWebSourceSheet: View {
 
                 Spacer()
 
-                Button("Add") {
+                Button(target.buttonTitle) {
                     isCreating = true
                     onCreate(
                         url.trimmingCharacters(in: .whitespacesAndNewlines),

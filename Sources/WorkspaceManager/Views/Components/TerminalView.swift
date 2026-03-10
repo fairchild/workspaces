@@ -3,6 +3,7 @@
 //  WorkspaceManager
 //
 
+import AppKit
 import SwiftUI
 import WorkspaceManagerCore
 
@@ -25,9 +26,14 @@ final class HostTerminalSurfaceStore {
     private var surfaces: [UUID: GhosttySurfaceView] = [:]
     private var sessionIDsBySurfaceIdentity: [ObjectIdentifier: UUID] = [:]
 
-    func view(for session: HostTerminalSession, onProcessExit: (() -> Void)? = nil) -> GhosttySurfaceView {
+    func view(
+        for session: HostTerminalSession,
+        onProcessExit: (() -> Void)? = nil,
+        contextMenuProvider: (() -> NSMenu?)? = nil
+    ) -> GhosttySurfaceView {
         if let existing = surfaces[session.id] {
             sessionIDsBySurfaceIdentity[ObjectIdentifier(existing)] = session.id
+            existing.contextMenuProvider = contextMenuProvider
             return existing
         }
 
@@ -53,6 +59,7 @@ final class HostTerminalSurfaceStore {
         }
         surfaces[session.id] = created
         sessionIDsBySurfaceIdentity[ObjectIdentifier(created)] = session.id
+        created.contextMenuProvider = contextMenuProvider
 
         return created
     }
@@ -137,6 +144,7 @@ struct PersistentHostTerminalContainerView: View {
     let session: HostTerminalSession
     let surfaceStore: HostTerminalSurfaceStore
     var onProcessExit: (() -> Void)?
+    var contextMenuProvider: (() -> NSMenu?)?
     let chromePolicy: TerminalPaneChromePolicy = .current
 
     static func identityToken(for sessionID: UUID) -> UUID {
@@ -150,6 +158,7 @@ struct PersistentHostTerminalContainerView: View {
             PersistentHostGhosttyRepresentable(
                 session: session,
                 surfaceStore: surfaceStore,
+                contextMenuProvider: contextMenuProvider,
                 onProcessExit: {
                     NSLog("[GhosttyTerminal] Process exited for host session %@", session.id.uuidString)
                     onProcessExit?()
@@ -167,14 +176,19 @@ struct PersistentHostTerminalContainerView: View {
 private struct PersistentHostGhosttyRepresentable: NSViewRepresentable {
     let session: HostTerminalSession
     let surfaceStore: HostTerminalSurfaceStore
+    var contextMenuProvider: (() -> NSMenu?)?
     var onProcessExit: (() -> Void)?
 
     func makeNSView(context: Context) -> GhosttySurfaceView {
-        surfaceStore.view(for: session, onProcessExit: onProcessExit)
+        surfaceStore.view(
+            for: session,
+            onProcessExit: onProcessExit,
+            contextMenuProvider: contextMenuProvider
+        )
     }
 
     func updateNSView(_ nsView: GhosttySurfaceView, context: Context) {
         _ = context
-        _ = nsView
+        nsView.contextMenuProvider = contextMenuProvider
     }
 }

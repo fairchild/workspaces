@@ -12,6 +12,7 @@ struct MainWindowViewState {
     var didRunPerfAutoSelection = false
     var didApplyFixturePreviewBootstrap = false
     var didApplyFixtureWebBootstrap = false
+    var didResolveInitialSurface = false
     var openInEditorErrorMessage: String?
     var remoteErrorMessage: String?
     var connectingSandboxId: String?
