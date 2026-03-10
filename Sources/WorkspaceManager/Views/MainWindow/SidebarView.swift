@@ -227,15 +227,15 @@ struct SidebarView: View {
             Spacer(minLength: 8)
             if !repos.isEmpty {
                 Menu {
-                    Picker(
-                        "Sort Repositories",
-                        selection: Binding(
-                            get: { repoSortMode },
-                            set: updateRepoSortMode
-                        )
-                    ) {
-                        ForEach(SidebarRepoSortMode.allCases) { mode in
-                            Text(mode.title).tag(mode)
+                    ForEach(SidebarRepoSortMode.allCases) { mode in
+                        Button {
+                            updateRepoSortMode(mode)
+                        } label: {
+                            if repoSortMode == mode {
+                                Label(mode.title, systemImage: "checkmark")
+                            } else {
+                                Text(mode.title)
+                            }
                         }
                     }
                 } label: {
