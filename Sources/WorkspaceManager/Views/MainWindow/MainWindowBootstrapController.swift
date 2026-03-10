@@ -25,6 +25,12 @@ struct MainWindowBootstrapController {
         case select(targetName: String, source: WebSource)
     }
 
+    enum RestoredSurfaceDecision {
+        case none
+        case clearInvalid
+        case select(MainWindowLaunchSurface)
+    }
+
     private let selectionCoordinator = MainSelectionCoordinator()
 
     func deepLinkDecision(
@@ -110,5 +116,121 @@ struct MainWindowBootstrapController {
         }
 
         return .select(targetName: targetName, source: selectedSource)
+    }
+
+    func restoredSurfaceDecision(
+        rawValue: String,
+        repos: [Repo],
+        webSources: [WebSource]
+    ) -> RestoredSurfaceDecision {
+        guard let savedSurface = MainWindowLastSurface.decode(from: rawValue) else {
+            return .none
+        }
+
+        switch savedSurface.kind {
+        case .repoOverview:
+            guard let repo = selectionCoordinator.repo(with: savedSurface.id, in: repos) else {
+                return .clearInvalid
+            }
+            return .select(.repoOverview(repo))
+
+        case .repoTerminal:
+            guard let repo = selectionCoordinator.repo(with: savedSurface.id, in: repos) else {
+                return .clearInvalid
+            }
+            return .select(.repoTerminal(repo))
+
+        case .workspaceTerminal:
+            guard let workspace = selectionCoordinator.workspace(with: savedSurface.id, in: repos) else {
+                return .clearInvalid
+            }
+            return .select(.workspace(workspace))
+
+        case .webView:
+            guard let source = selectionCoordinator.webSource(with: savedSurface.id, in: webSources) else {
+                return .clearInvalid
+            }
+            return .select(.webView(source))
+        }
+    }
+
+    func sanitizedLastSurfaceRawValue(
+        rawValue: String,
+        repos: [Repo],
+        webSources: [WebSource]
+    ) -> String {
+        switch restoredSurfaceDecision(rawValue: rawValue, repos: repos, webSources: webSources) {
+        case .clearInvalid:
+            return ""
+        case .none, .select:
+            return rawValue
+        }
+    }
+
+    func fallbackSurface(
+        repos: [Repo],
+        webSources: [WebSource]
+    ) -> MainWindowLaunchSurface? {
+        if let workspace =
+            repos
+            .flatMap(\.workspaces)
+            .sorted(by: { $0.lastAccessedAt > $1.lastAccessedAt })
+            .first
+        {
+            return .workspace(workspace)
+        }
+
+        if let source =
+            webSources
+            .sorted(by: { $0.lastAccessedAt > $1.lastAccessedAt })
+            .first
+        {
+            return .webView(source)
+        }
+
+        guard let repo = repos.first else { return nil }
+        return .repoOverview(repo)
+    }
+
+    func fallbackSurfaceAfterRemovingWorkspace(
+        repoID: UUID?,
+        repos: [Repo],
+        webSources: [WebSource]
+    ) -> MainWindowLaunchSurface? {
+        if let repo = selectionCoordinator.repo(with: repoID, in: repos) {
+            return .repoOverview(repo)
+        }
+
+        return fallbackSurface(repos: repos, webSources: webSources)
+    }
+
+    func fallbackSurfaceAfterRemovingWebSource(
+        ownerWorkspaceID: UUID?,
+        ownerRepoID: UUID?,
+        repos: [Repo]
+    ) -> MainWindowLaunchSurface? {
+        if let workspace = selectionCoordinator.workspace(with: ownerWorkspaceID, in: repos) {
+            return .workspace(workspace)
+        }
+
+        if let repo = selectionCoordinator.repo(with: ownerRepoID, in: repos) {
+            return .repoOverview(repo)
+        }
+
+        return nonWebFallbackSurface(repos: repos)
+    }
+
+    func nonWebFallbackSurface(repos: [Repo]) -> MainWindowLaunchSurface? {
+        if let workspace =
+            repos
+            .flatMap(\.workspaces)
+            .sorted(by: { $0.lastAccessedAt > $1.lastAccessedAt })
+            .first
+        {
+            return .workspace(workspace)
+        }
+
+        guard let repo = repos.first else { return nil }
+        return .repoOverview(repo)
     }
 }

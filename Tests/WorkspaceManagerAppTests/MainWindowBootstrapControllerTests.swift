@@ -161,6 +161,243 @@ struct MainWindowBootstrapControllerTests {
         }
     }
 
+    @Test("Restored surface selects repo terminal by stored repo id")
+    func restoredSurfaceSelectsRepoTerminal() {
+        let repo = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))
+        let saved = MainWindowLastSurface(kind: .repoTerminal, id: repo.id)
+
+        let decision = controller.restoredSurfaceDecision(
+            rawValue: saved.rawValue,
+            repos: [repo],
+            webSources: []
+        )
+
+        switch decision {
+        case .select(.repoTerminal(let restoredRepo)):
+            #expect(restoredRepo.id == repo.id)
+        default:
+            Issue.record("Expected restored surface decision to select the repo terminal")
+        }
+    }
+
+    @Test("Restored surface selects scoped web view by stored id")
+    func restoredSurfaceSelectsScopedWebView() {
+        let repo = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))
+        let workspace = Workspace(
+            name: "feature-a",
+            path: URL(fileURLWithPath: "/tmp/alpha/workspaces/feature-a"),
+            sourceRepo: repo
+        )
+        let source = WebSource(
+            name: "Docs",
+            baseURLString: "https://docs.example.com/",
+            allowedHost: "docs.example.com",
+            sourceWorkspace: workspace
+        )
+        let saved = MainWindowLastSurface(kind: .webView, id: source.id)
+
+        let decision = controller.restoredSurfaceDecision(
+            rawValue: saved.rawValue,
+            repos: [repo],
+            webSources: [source]
+        )
+
+        switch decision {
+        case .select(.webView(let restoredSource)):
+            #expect(restoredSource.id == source.id)
+        default:
+            Issue.record("Expected restored surface decision to select the web view")
+        }
+    }
+
+    @Test("Restored surface clears invalid targets")
+    func restoredSurfaceClearsInvalidTargets() {
+        let saved = MainWindowLastSurface(kind: .repoOverview, id: UUID())
+
+        let decision = controller.restoredSurfaceDecision(
+            rawValue: saved.rawValue,
+            repos: [],
+            webSources: []
+        )
+
+        switch decision {
+        case .clearInvalid:
+            _ = Bool(true)
+        default:
+            Issue.record("Expected restored surface decision to clear invalid state")
+        }
+    }
+
+    @Test("Sanitized last surface clears invalid stored targets")
+    func sanitizedLastSurfaceClearsInvalidTarget() {
+        let saved = MainWindowLastSurface(kind: .repoTerminal, id: UUID())
+
+        let sanitized = controller.sanitizedLastSurfaceRawValue(
+            rawValue: saved.rawValue,
+            repos: [],
+            webSources: []
+        )
+
+        #expect(sanitized.isEmpty)
+    }
+
+    @Test("Fallback prefers most recent workspace before web or repo")
+    func fallbackPrefersMostRecentWorkspace() {
+        let repo = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))
+        let olderWorkspace = Workspace(
+            name: "older",
+            path: URL(fileURLWithPath: "/tmp/alpha/workspaces/older"),
+            sourceRepo: repo,
+            lastAccessedAt: Date(timeIntervalSince1970: 10)
+        )
+        let newerWorkspace = Workspace(
+            name: "newer",
+            path: URL(fileURLWithPath: "/tmp/alpha/workspaces/newer"),
+            sourceRepo: repo,
+            lastAccessedAt: Date(timeIntervalSince1970: 20)
+        )
+        repo.workspaces = [olderWorkspace, newerWorkspace]
+
+        let source = WebSource(
+            name: "Docs",
+            baseURLString: "https://docs.example.com/",
+            allowedHost: "docs.example.com",
+            lastAccessedAt: Date(timeIntervalSince1970: 30)
+        )
+
+        let fallback = controller.fallbackSurface(
+            repos: [repo],
+            webSources: [source]
+        )
+
+        switch fallback {
+        case .workspace(let workspace):
+            #expect(workspace.id == newerWorkspace.id)
+        default:
+            Issue.record("Expected fallback to prefer the most recent workspace")
+        }
+    }
+
+    @Test("Fallback prefers most recent web view before first repo when no workspace exists")
+    func fallbackPrefersWebViewBeforeRepo() {
+        let repo = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))
+        let source = WebSource(
+            name: "Docs",
+            baseURLString: "https://docs.example.com/",
+            allowedHost: "docs.example.com",
+            lastAccessedAt: Date(timeIntervalSince1970: 30)
+        )
+
+        let fallback = controller.fallbackSurface(
+            repos: [repo],
+            webSources: [source]
+        )
+
+        switch fallback {
+        case .webView(let selectedSource):
+            #expect(selectedSource.id == source.id)
+        default:
+            Issue.record("Expected fallback to prefer a recent web view")
+        }
+    }
+
+    @Test("Non-web fallback prefers most recent workspace before repo overview")
+    func nonWebFallbackPrefersWorkspace() {
+        let repo = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))
+        let workspace = Workspace(
+            name: "newer",
+            path: URL(fileURLWithPath: "/tmp/alpha/workspaces/newer"),
+            sourceRepo: repo,
+            lastAccessedAt: Date(timeIntervalSince1970: 20)
+        )
+        repo.workspaces = [workspace]
+
+        let fallback = controller.nonWebFallbackSurface(repos: [repo])
+
+        switch fallback {
+        case .workspace(let selectedWorkspace):
+            #expect(selectedWorkspace.id == workspace.id)
+        default:
+            Issue.record("Expected non-web fallback to prefer the most recent workspace")
+        }
+    }
+
+    @Test("Removing selected workspace falls back to its repo overview when repo remains")
+    func removingSelectedWorkspaceFallsBackToRepoOverview() {
+        let repo = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))
+
+        let fallback = controller.fallbackSurfaceAfterRemovingWorkspace(
+            repoID: repo.id,
+            repos: [repo],
+            webSources: []
+        )
+
+        switch fallback {
+        case .repoOverview(let selectedRepo):
+            #expect(selectedRepo.id == repo.id)
+        default:
+            Issue.record("Expected workspace removal to fall back to the owning repo overview")
+        }
+    }
+
+    @Test("Removing selected workspace falls back to general surface when repo is gone")
+    func removingSelectedWorkspaceFallsBackWhenRepoIsGone() {
+        let fallback = controller.fallbackSurfaceAfterRemovingWorkspace(
+            repoID: UUID(),
+            repos: [],
+            webSources: []
+        )
+
+        switch fallback {
+        case nil:
+            _ = Bool(true)
+        default:
+            Issue.record("Expected workspace removal without a repo to clear back to no surface")
+        }
+    }
+
+    @Test("Removing workspace-owned web view falls back to its workspace")
+    func removingWorkspaceOwnedWebViewFallsBackToWorkspace() {
+        let repo = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))
+        let workspace = Workspace(
+            name: "feature-a",
+            path: URL(fileURLWithPath: "/tmp/alpha/workspaces/feature-a"),
+            sourceRepo: repo
+        )
+        repo.workspaces = [workspace]
+
+        let fallback = controller.fallbackSurfaceAfterRemovingWebSource(
+            ownerWorkspaceID: workspace.id,
+            ownerRepoID: repo.id,
+            repos: [repo]
+        )
+
+        switch fallback {
+        case .workspace(let selectedWorkspace):
+            #expect(selectedWorkspace.id == workspace.id)
+        default:
+            Issue.record("Expected workspace-owned web view removal to return to the workspace")
+        }
+    }
+
+    @Test("Removing repo-owned web view falls back to its repo overview")
+    func removingRepoOwnedWebViewFallsBackToRepoOverview() {
+        let repo = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))
+
+        let fallback = controller.fallbackSurfaceAfterRemovingWebSource(
+            ownerWorkspaceID: nil,
+            ownerRepoID: repo.id,
+            repos: [repo]
+        )
+
+        switch fallback {
+        case .repoOverview(let selectedRepo):
+            #expect(selectedRepo.id == repo.id)
+        default:
+            Issue.record("Expected repo-owned web view removal to return to the repo overview")
+        }
+    }
+
     private func makeFixtureRoot(fileManager: FileManager) throws -> URL {
         let root = fileManager.temporaryDirectory
             .appendingPathComponent("wm-main-window-bootstrap-\(UUID().uuidString)", isDirectory: true)

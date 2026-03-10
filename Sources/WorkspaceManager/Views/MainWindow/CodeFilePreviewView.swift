@@ -41,10 +41,17 @@ struct CodeFilePreviewView: View {
                 Image(systemName: "doc.text")
                     .foregroundStyle(.secondary)
 
-                Text(selection.relativePath)
-                    .font(.system(.caption, design: .monospaced))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(selection.fileName)
+                        .font(.callout.weight(.semibold))
+                        .lineLimit(1)
+
+                    Text(selection.relativePath)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
 
                 Spacer()
 
@@ -85,7 +92,7 @@ struct CodeFilePreviewView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
-            .background(Color(nsColor: .controlBackgroundColor))
+            .background(Color(nsColor: .windowBackgroundColor))
 
             Divider()
 

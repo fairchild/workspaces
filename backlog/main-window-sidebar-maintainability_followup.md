@@ -1,10 +1,10 @@
 ---
 status: in-progress
 category: followup
-pr: 29
-branch: codex/sidebar-content-maintainability
+pr: 36
+branch: codex/apple-native-main-window-redesign-backlog
 score: null
-retro_summary: null
+retro_summary: Main-window state, navigation transitions, launch-surface resolution, and remote-workspace selection now have dedicated controller seams; sidebar sorting also moved into a small pure controller. Ghostty boundary cleanup remains.
 completed: null
 ---
 
@@ -51,6 +51,9 @@ Status:
 - In progress on `codex/sidebar-content-maintainability`.
 - `MainWindowViewState`, `MainWindowPresentationController`, and `MainWindowBootstrapController` now hold root-view state, inspector/sidebar derivation, and deep-link/fixture bootstrap decisions.
 - Added focused tests for the new controller seams to keep the refactor behavior-preserving.
+- `MainWindowNavigationStateController`, `MainWindowSurfaceResolutionController`, and `MainWindowRemoteWorkspaceStateController` now centralize previously ad hoc selection and lifecycle behavior.
+- Selection state now stores stable IDs/lightweight structs instead of live SwiftData objects to avoid stale-object hazards after deletion or async completion.
+- `SidebarRepoSortController` now holds stable repository sorting rules instead of burying sort policy in `SidebarView`.
 
 ### Phase 3: Ghostty boundary cleanup
 
@@ -76,4 +79,4 @@ swift test
 
 - Refinement-gate closure work is already on `main`; this follow-up is about quality of the implementation, not missing shipped behavior.
 - Shared-desktop verification determinism remains a related but separate track in `backlog/shared-desktop-focus-contention-followup.md`.
-- Current local validation after the Phase 2 extraction is green at 196 tests across 31 suites.
+- Current local validation after the additional extraction pass is green at 270 tests across 45 suites.

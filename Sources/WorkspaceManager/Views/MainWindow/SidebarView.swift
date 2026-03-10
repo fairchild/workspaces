@@ -25,19 +25,22 @@ struct SidebarView: View {
     @Environment(\.remoteBackend) private var remoteBackend
     let repos: [Repo]
     let webSources: [WebSource]
+    let selectedRepo: Repo?
     @Binding var selectedWorkspace: Workspace?
     @Binding var selectedWebSource: WebSource?
-    let defaultHostPath: String
     let paneCountBySessionKey: [HostTerminalSessionKey: Int]
     let activeSessionKey: HostTerminalSessionKey?
     let connectingSandboxId: String?
-    let onDefaultHostSelected: () -> Void
     let onRepoSelected: (Repo) -> Void
+    let onRepoTerminalSelected: (Repo) -> Void
     let onWebSourceSelected: (WebSource) -> Void
+    let onRequestWebSourceCreation: (WebSourceCreationTarget) -> Void
     let onWorkspaceCreated: () -> Void
 
+    @AppStorage(SidebarRepoSortMode.storageKey)
+    private var repoSortModeRawValue: String = SidebarRepoSortMode.alphabetical.rawValue
+
     @State private var isAddingRepo = false
-    @State private var isAddingWebSource = false
     @State private var repoForNewWorkspace: Repo?
     @State private var isRemoteBackendAvailable = false
 
@@ -51,9 +54,11 @@ struct SidebarView: View {
 
     @State private var didAttemptDefaultRepoImport = false
     @State private var expandedRepoIDs: Set<UUID> = []
+    @State private var expandedWorkspaceIDs: Set<UUID> = []
     @State private var didInitializeRepoExpansion = false
     @State private var sandboxAction: SandboxActionState?
     @State private var workspaceCreationStatusByRepoID: [UUID: WorkspaceCreationStatus] = [:]
+    @State private var repoLastAccessedSnapshotByID: [UUID: Date] = [:]
 
     private var isUIFixtureMode: Bool {
         ProcessInfo.processInfo.environment["WORKSPACES_UI_FIXTURE"] == "1"
@@ -72,293 +77,423 @@ struct SidebarView: View {
         )
     }
 
+    private var repoSortController: SidebarRepoSortController {
+        SidebarRepoSortController()
+    }
+
+    private var repoSortMode: SidebarRepoSortMode {
+        SidebarRepoSortMode(rawValue: repoSortModeRawValue) ?? .alphabetical
+    }
+
+    private var sortedRepos: [Repo] {
+        repoSortController.sortedRepos(
+            repos,
+            mode: repoSortMode,
+            lastAccessedSnapshot: repoLastAccessedSnapshotByID
+        )
+    }
+
+    private var globalWebSources: [WebSource] {
+        webSources
+            .filter(\.isGlobal)
+            .sorted { $0.lastAccessedAt > $1.lastAccessedAt }
+    }
+
     var body: some View {
+        sidebarList
+            .listStyle(.sidebar)
+            .environment(\.defaultMinListRowHeight, 34)
+            .safeAreaInset(edge: .bottom) {
+                footerBar
+            }
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    addSourceMenu
+                }
+            }
+            .fileImporter(
+                isPresented: $isAddingRepo,
+                allowedContentTypes: [.folder],
+                allowsMultipleSelection: false
+            ) { result in
+                if case .success(let urls) = result, let url = urls.first {
+                    Task {
+                        await addRepo(from: url)
+                    }
+                }
+            }
+            .sheet(item: $repoForNewWorkspace) { repo in
+                NewWorkspaceSheet(
+                    repo: repo,
+                    isRemoteBackendAvailable: isRemoteBackendAvailable,
+                    isCreateDisabled: isCreatingWorkspace(for: repo.id)
+                ) { name, backend in
+                    Task { @MainActor in
+                        switch backend {
+                        case .local:
+                            await createWorkspace(from: repo, name: name)
+                        case .remoteVM:
+                            await createRemoteWorkspace(from: repo, name: name)
+                        }
+                    }
+                }
+            }
+            .alert("Error", isPresented: $showingError) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(errorMessage ?? "An unknown error occurred")
+            }
+            .confirmationDialog(
+                "Delete Workspace",
+                isPresented: $showingDeleteConfirmation,
+                presenting: workspaceToDelete
+            ) { workspace in
+                Button("Delete (Keep Files)", role: .destructive) {
+                    Task { @MainActor in
+                        await performDelete(workspace, deleteFiles: false)
+                    }
+                }
+                Button("Delete and Remove Files", role: .destructive) {
+                    Task { @MainActor in
+                        await performDelete(workspace, deleteFiles: true)
+                    }
+                }
+                Button("Cancel", role: .cancel) {
+                    workspaceToDelete = nil
+                }
+            } message: { workspace in
+                Text("Are you sure you want to delete '\(workspace.name)'?")
+            }
+            .focusedSceneValue(\.newWorkspaceAction, handleNewWorkspaceShortcut)
+            .onChange(of: selectedWorkspace?.id) { _, _ in
+                expandRepoForSelectedWorkspace()
+            }
+            .onChange(of: selectedWebSource?.id) { _, _ in
+                expandContainersForSelectedWebSource()
+            }
+            .onChange(of: repos.map(\.id)) { _, _ in
+                pruneExpandedRepos()
+                pruneExpandedWorkspaces()
+                syncRepoSortSnapshot()
+            }
+            .onChange(of: repoSortModeRawValue) { _, _ in
+                syncRepoSortSnapshot(forceRefresh: true)
+            }
+            .onAppear {
+                initializeExpandedReposIfNeeded()
+                expandContainersForSelectedWebSource()
+                syncRepoSortSnapshot(forceRefresh: false)
+                guard !isRepoAutoImportDisabled else { return }
+                guard !didAttemptDefaultRepoImport else { return }
+                didAttemptDefaultRepoImport = true
+                Task {
+                    await autoImportReposFromCodeHome()
+                }
+            }
+            .task {
+                isRemoteBackendAvailable = await remoteBackend.isAvailable()
+            }
+    }
+
+    private var sidebarList: some View {
         List {
-            // Repositories Section
-            Section("Repositories") {
-                Button {
-                    selectedWebSource = nil
-                    onDefaultHostSelected()
+            repositoriesSection
+
+            if !globalWebSources.isEmpty {
+                webSection
+            }
+        }
+    }
+
+    private var repositoriesSection: some View {
+        Section {
+            if repos.isEmpty {
+                Text("No repositories")
+                    .foregroundStyle(.secondary)
+                    .font(.callout)
+            } else {
+                ForEach(sortedRepos) { repo in
+                    repoListRow(repo)
+                }
+            }
+        } header: {
+            repositoriesHeader
+        }
+    }
+
+    private var repositoriesHeader: some View {
+        HStack(spacing: 8) {
+            Text("Repositories")
+            Spacer(minLength: 8)
+            if !repos.isEmpty {
+                Menu {
+                    ForEach(SidebarRepoSortMode.allCases) { mode in
+                        Button {
+                            updateRepoSortMode(mode)
+                        } label: {
+                            if repoSortMode == mode {
+                                Label(mode.title, systemImage: "checkmark")
+                            } else {
+                                Text(mode.title)
+                            }
+                        }
+                    }
                 } label: {
-                    HostTerminalRow(
-                        defaultHostPath: defaultHostPath,
-                        sessionActivity: sessionActivity(for: .defaultHome),
-                        paneCount: paneCount(for: .defaultHome)
+                    Image(systemName: "arrow.up.arrow.down")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 18, height: 18)
+                        .contentShape(Rectangle())
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .help("Sort repositories")
+            }
+        }
+    }
+
+    private var webSection: some View {
+        Section("Web") {
+            ForEach(globalWebSources) { source in
+                Button {
+                    onWebSourceSelected(source)
+                } label: {
+                    WebSourceRow(
+                        source: source,
+                        isSelected: selectedWebSource?.id == source.id
                     )
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-
-                if repos.isEmpty {
-                    Text("No repositories")
-                        .foregroundStyle(.secondary)
-                        .font(.callout)
-                } else {
-                    ForEach(repos) { repo in
-                        let normalizedRepoPath = normalizePath(repo.localURL)
-                        let repoSessionKey = HostTerminalSessionKey.repoPath(normalizedRepoPath)
-                        RepoRow(
-                            repo: repo,
-                            sessionActivity: sessionActivity(for: repoSessionKey),
-                            paneCount: paneCount(for: repoSessionKey),
-                            isExpanded: isRepoExpanded(repo),
-                            onToggleExpansion: {
-                                toggleRepoExpansion(repo)
-                            },
-                            onSelectRepo: {
-                                if !repo.workspaces.isEmpty, !isRepoExpanded(repo) {
-                                    expandedRepoIDs.insert(repo.id)
-                                }
-                                selectedWebSource = nil
-                                onRepoSelected(repo)
-                            }
-                        )
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentShape(Rectangle())
-                        .contextMenu {
-                            Button("New Workspace...") {
-                                repoForNewWorkspace = repo
-                            }
-                            .disabled(isCreatingWorkspace(for: repo.id))
-
-                            Divider()
-
-                            Button("Reveal in Finder") {
-                                NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: repo.localPath)
-                            }
-
-                            Divider()
-
-                            Button("Remove from List", role: .destructive) {
-                                removeRepo(repo)
-                            }
-                        }
-
-                        if isRepoExpanded(repo) {
-                            let repoWorkspaces = sortedWorkspaces(for: repo)
-
-                            if repoWorkspaces.isEmpty, creationStatus(for: repo.id) == nil {
-                                Text("No workspaces")
-                                    .foregroundStyle(.secondary)
-                                    .font(.caption)
-                                    .padding(.leading, 28)
-                            } else {
-                                ForEach(repoWorkspaces) { workspace in
-                                    let workspaceSessionKey: HostTerminalSessionKey = {
-                                        if let sandboxId = workspace.remoteId {
-                                            return .remoteSandbox(sandboxId)
-                                        }
-                                        return .hostPath(normalizePath(workspace.workspaceURL))
-                                    }()
-                                    Button {
-                                        selectWorkspace(workspace)
-                                    } label: {
-                                        WorkspaceRow(
-                                            workspace: workspace,
-                                            isSelected: selectedWorkspace?.id == workspace.id,
-                                            statusMessage: workspaceStatusMessage(workspace),
-                                            sessionActivity: sessionActivity(for: workspaceSessionKey),
-                                            paneCount: paneCount(for: workspaceSessionKey),
-                                            isNested: true
-                                        )
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                        .contentShape(Rectangle())
-                                    }
-                                    .buttonStyle(.plain)
-                                    .contextMenu {
-                                        Button("Open in New Window") {
-                                            openInNewWindow(workspace)
-                                        }
-                                        .disabled(true)
-
-                                        if !workspace.isRemote {
-                                            Button("Reveal in Finder") {
-                                                NSWorkspace.shared.selectFile(
-                                                    nil, inFileViewerRootedAtPath: workspace.path)
-                                            }
-                                        }
-
-                                        Divider()
-
-                                        if workspace.isRemote {
-                                            remoteWorkspaceActions(workspace)
-                                        } else {
-                                            localWorkspaceActions(workspace)
-                                        }
-
-                                        Divider()
-
-                                        Button("Delete Workspace", role: .destructive) {
-                                            deleteWorkspace(workspace)
-                                        }
-                                    }
-                                }
-                            }
-
-                            if let creationStatus = creationStatus(for: repo.id) {
-                                HStack(spacing: 8) {
-                                    ProgressView()
-                                        .controlSize(.small)
-                                        .frame(width: 16, height: 16)
-                                    Text(creationStatus.message)
-                                        .font(.callout)
-                                        .foregroundStyle(.secondary)
-                                }
-                                .padding(.leading, 28)
-                            }
-                        }
+                .contextMenu {
+                    Button("Open in Browser") {
+                        openWebSourceExternally(source)
                     }
-                }
-            }
 
-            Section("Web") {
-                if webSources.isEmpty {
-                    Text("No URL sources")
-                        .foregroundStyle(.secondary)
-                        .font(.callout)
-                } else {
-                    ForEach(webSources) { source in
-                        Button {
-                            selectedWorkspace = nil
-                            selectedWebSource = source
-                            source.lastAccessedAt = Date()
-                            if !saveModelContext(action: "update URL source access time") {
-                                modelContext.rollback()
-                            }
-                            onWebSourceSelected(source)
-                        } label: {
-                            WebSourceRow(
-                                source: source,
-                                isSelected: selectedWebSource?.id == source.id
-                            )
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .contextMenu {
-                            Button("Open in Browser") {
-                                openWebSourceExternally(source)
-                            }
+                    Divider()
 
-                            Divider()
-
-                            Button("Remove from List", role: .destructive) {
-                                removeWebSource(source)
-                            }
-                        }
+                    Button("Remove from List", role: .destructive) {
+                        removeWebSource(source)
                     }
                 }
             }
         }
-        .listStyle(.sidebar)
-        .environment(\.defaultMinListRowHeight, 30)
-        .safeAreaInset(edge: .bottom) {
-            VStack(spacing: 8) {
-                Divider()
+    }
 
-                VStack(spacing: 6) {
-                    Button {
-                        isAddingRepo = true
-                    } label: {
-                        Label("Add Repository", systemImage: "plus.circle.fill")
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .buttonStyle(.borderless)
+    private var footerBar: some View {
+        VStack(spacing: 0) {
+            Divider()
 
-                    Button {
-                        isAddingWebSource = true
-                    } label: {
-                        Label("Add URL Source", systemImage: "globe")
-                            .frame(maxWidth: .infinity, alignment: .leading)
+            HStack(spacing: 12) {
+                Text(repos.isEmpty ? "Add a repository to get started" : "\(repos.count) repositories")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(Color(nsColor: .windowBackgroundColor))
+        }
+    }
+
+    private var addSourceMenu: some View {
+        Menu {
+            Button("Add Repository") {
+                isAddingRepo = true
+            }
+
+            Button("Add URL Source") {
+                onRequestWebSourceCreation(.global)
+            }
+        } label: {
+            Image(systemName: "plus")
+        }
+    }
+
+    @ViewBuilder
+    private func repoListRow(_ repo: Repo) -> some View {
+        let normalizedRepoPath = normalizePath(repo.localURL)
+        let repoSessionKey = HostTerminalSessionKey.repoPath(normalizedRepoPath)
+
+        RepoRow(
+            repo: repo,
+            sessionActivity: sessionActivity(for: repoSessionKey),
+            paneCount: paneCount(for: repoSessionKey),
+            isSelected: selectedRepo?.id == repo.id,
+            isExpanded: isRepoExpanded(repo),
+            onToggleExpansion: {
+                toggleRepoExpansion(repo)
+            },
+            onSelectRepo: {
+                if !isRepoExpanded(repo) {
+                    expandedRepoIDs.insert(repo.id)
+                }
+                onRepoSelected(repo)
+            },
+            onNewWorkspace: {
+                repoForNewWorkspace = repo
+            },
+            onNewWebView: {
+                onRequestWebSourceCreation(.repo(repo))
+            }
+        )
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+        .contextMenu {
+            Button("Open Terminal") {
+                onRepoTerminalSelected(repo)
+            }
+
+            Divider()
+
+            Button("New Workspace...") {
+                repoForNewWorkspace = repo
+            }
+            .disabled(isCreatingWorkspace(for: repo.id))
+
+            Button("Add Web View...") {
+                onRequestWebSourceCreation(.repo(repo))
+            }
+
+            Divider()
+
+            Button("Reveal in Finder") {
+                NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: repo.localPath)
+            }
+
+            Divider()
+
+            Button("Remove from List", role: .destructive) {
+                removeRepo(repo)
+            }
+        }
+
+        if isRepoExpanded(repo) {
+            repoChildrenList(repo)
+        }
+    }
+
+    @ViewBuilder
+    private func repoChildrenList(_ repo: Repo) -> some View {
+        repoWebSourceList(repo)
+        repoWorkspaceList(repo)
+    }
+
+    @ViewBuilder
+    private func repoWorkspaceList(_ repo: Repo) -> some View {
+        let repoWorkspaces = sortedWorkspaces(for: repo)
+
+        if !repoWorkspaces.isEmpty {
+            ForEach(repoWorkspaces) { workspace in
+                WorkspaceRow(
+                    workspace: workspace,
+                    isSelected: selectedWorkspace?.id == workspace.id,
+                    statusMessage: workspaceStatusMessage(workspace),
+                    sessionActivity: sessionActivity(for: sessionKey(for: workspace)),
+                    paneCount: paneCount(for: sessionKey(for: workspace)),
+                    isNested: true,
+                    isExpanded: isWorkspaceExpanded(workspace),
+                    showsDisclosure: !workspace.webSources.isEmpty,
+                    onToggleExpansion: {
+                        toggleWorkspaceExpansion(workspace)
+                    },
+                    onSelect: {
+                        selectWorkspace(workspace)
                     }
-                    .buttonStyle(.borderless)
-                }
-                .padding(.horizontal, 12)
-                .padding(.bottom, 8)
-            }
-        }
-        .fileImporter(
-            isPresented: $isAddingRepo,
-            allowedContentTypes: [.folder],
-            allowsMultipleSelection: false
-        ) { result in
-            if case .success(let urls) = result, let url = urls.first {
-                Task {
-                    await addRepo(from: url)
-                }
-            }
-        }
-        .sheet(item: $repoForNewWorkspace) { repo in
-            NewWorkspaceSheet(
-                repo: repo,
-                isRemoteBackendAvailable: isRemoteBackendAvailable,
-                isCreateDisabled: isCreatingWorkspace(for: repo.id)
-            ) { name, backend in
-                Task { @MainActor in
-                    switch backend {
-                    case .local:
-                        await createWorkspace(from: repo, name: name)
-                    case .remoteVM:
-                        await createRemoteWorkspace(from: repo, name: name)
-                    }
-                }
-            }
-        }
-        .sheet(isPresented: $isAddingWebSource) {
-            NewWebSourceSheet { rawURL, displayName, additionalAllowedDomainsRaw in
-                addWebSource(
-                    rawURL: rawURL,
-                    displayName: displayName,
-                    additionalAllowedDomainsRaw: additionalAllowedDomainsRaw
                 )
-            }
-        }
-        .alert("Error", isPresented: $showingError) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(errorMessage ?? "An unknown error occurred")
-        }
-        .confirmationDialog(
-            "Delete Workspace",
-            isPresented: $showingDeleteConfirmation,
-            presenting: workspaceToDelete
-        ) { workspace in
-            Button("Delete (Keep Files)", role: .destructive) {
-                Task { @MainActor in
-                    await performDelete(workspace, deleteFiles: false)
+                .contextMenu {
+                    Button("Open in New Window") {
+                        openInNewWindow(workspace)
+                    }
+                    .disabled(true)
+
+                    if !workspace.isRemote {
+                        Button("Reveal in Finder") {
+                            NSWorkspace.shared.selectFile(
+                                nil, inFileViewerRootedAtPath: workspace.path)
+                        }
+                    }
+
+                    Divider()
+
+                    if workspace.isRemote {
+                        remoteWorkspaceActions(workspace)
+                    } else {
+                        localWorkspaceActions(workspace)
+                    }
+
+                    Divider()
+
+                    Button("Delete Workspace", role: .destructive) {
+                        deleteWorkspace(workspace)
+                    }
+                }
+
+                if isWorkspaceExpanded(workspace) {
+                    workspaceWebSourceList(workspace)
                 }
             }
-            Button("Delete and Remove Files", role: .destructive) {
-                Task { @MainActor in
-                    await performDelete(workspace, deleteFiles: true)
-                }
+        }
+
+        if let creationStatus = creationStatus(for: repo.id) {
+            HStack(spacing: 8) {
+                ProgressView()
+                    .controlSize(.small)
+                    .frame(width: 16, height: 16)
+                Text(creationStatus.message)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
             }
-            Button("Cancel", role: .cancel) {
-                workspaceToDelete = nil
-            }
-        } message: { workspace in
-            Text("Are you sure you want to delete '\(workspace.name)'?")
+            .padding(.leading, 28)
         }
-        .focusedSceneValue(\.newWorkspaceAction, handleNewWorkspaceShortcut)
-        .onChange(of: selectedWorkspace?.id) { _, _ in
-            updateLastAccessedTimestamp()
-            expandRepoForSelectedWorkspace()
-        }
-        .onChange(of: repos.map(\.id)) { _, _ in
-            pruneExpandedRepos()
-        }
-        .onAppear {
-            initializeExpandedReposIfNeeded()
-            guard !isRepoAutoImportDisabled else { return }
-            guard !didAttemptDefaultRepoImport else { return }
-            didAttemptDefaultRepoImport = true
-            Task {
-                await autoImportReposFromCodeHome()
+    }
+
+    @ViewBuilder
+    private func repoWebSourceList(_ repo: Repo) -> some View {
+        let sources = sortedRepoWebSources(for: repo)
+
+        if !sources.isEmpty {
+            ForEach(sources) { source in
+                sidebarWebSourceButton(source, paddingLeading: 18)
             }
         }
-        .task {
-            isRemoteBackendAvailable = await remoteBackend.isAvailable()
+    }
+
+    @ViewBuilder
+    private func workspaceWebSourceList(_ workspace: Workspace) -> some View {
+        let sources = sortedWorkspaceWebSources(for: workspace)
+
+        ForEach(sources) { source in
+            sidebarWebSourceButton(source, paddingLeading: 42)
+        }
+    }
+
+    @ViewBuilder
+    private func sidebarWebSourceButton(_ source: WebSource, paddingLeading: CGFloat) -> some View {
+        Button {
+            onWebSourceSelected(source)
+        } label: {
+            WebSourceRow(
+                source: source,
+                isSelected: selectedWebSource?.id == source.id
+            )
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .padding(.leading, paddingLeading)
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            Button("Open in Browser") {
+                openWebSourceExternally(source)
+            }
+
+            Divider()
+
+            Button("Remove from List", role: .destructive) {
+                removeWebSource(source)
+            }
         }
     }
 
@@ -421,66 +556,9 @@ struct SidebarView: View {
     }
 
     @MainActor
-    private func addWebSource(
-        rawURL: String,
-        displayName: String,
-        additionalAllowedDomainsRaw: String
-    ) {
-        do {
-            let normalized = try WebSourceValidation.normalizeBaseURL(rawURL)
-            let normalizedURLString = normalized.baseURL.absoluteString
-            let parsedAdditionalDomains = try WebSourceValidation.normalizeAdditionalAllowedDomains(
-                additionalAllowedDomainsRaw
-            )
-            let additionalAllowedDomains = parsedAdditionalDomains.filter { domain in
-                domain != normalized.allowedHost
-                    && domain != "*.\(normalized.allowedHost)"
-            }
-
-            if webSources.contains(where: { normalizeWebURLString($0.baseURLString) == normalizedURLString }) {
-                errorMessage = "That URL source is already in the list."
-                showingError = true
-                return
-            }
-
-            let source = WebSource(
-                name: WebSourceValidation.normalizedDisplayName(
-                    explicitName: displayName,
-                    baseURL: normalized.baseURL
-                ),
-                baseURLString: normalizedURLString,
-                allowedHost: normalized.allowedHost,
-                additionalAllowedDomains: additionalAllowedDomains
-            )
-
-            modelContext.insert(source)
-            if saveModelContext(action: "save URL source") {
-                selectedWorkspace = nil
-                selectedWebSource = source
-                onWebSourceSelected(source)
-            } else {
-                modelContext.rollback()
-            }
-        } catch {
-            if let validationError = error as? WebSourceValidationError {
-                errorMessage = validationError.errorDescription
-            } else {
-                errorMessage = "Failed to add URL source: \(error.localizedDescription)"
-            }
-            showingError = true
-        }
-    }
-
-    @MainActor
     private func removeWebSource(_ source: WebSource) {
-        let removedWasSelected = selectedWebSource?.id == source.id
         modelContext.delete(source)
-        if saveModelContext(action: "remove URL source") {
-            if removedWasSelected {
-                selectedWebSource = nil
-                onDefaultHostSelected()
-            }
-        } else {
+        if !saveModelContext(action: "remove URL source") {
             modelContext.rollback()
         }
     }
@@ -688,16 +766,6 @@ struct SidebarView: View {
     }
 
     @MainActor
-    private func updateLastAccessedTimestamp() {
-        guard let selectedWorkspace else { return }
-
-        selectedWorkspace.lastAccessedAt = Date()
-        if !saveModelContext(action: "update workspace access time") {
-            modelContext.rollback()
-        }
-    }
-
-    @MainActor
     private func selectWorkspace(_ workspace: Workspace) {
         // Force a value transition when re-selecting the same workspace so the
         // host session activation path in ContentView runs again.
@@ -781,6 +849,13 @@ struct SidebarView: View {
         paneCountBySessionKey[key] ?? 0
     }
 
+    private func sessionKey(for workspace: Workspace) -> HostTerminalSessionKey {
+        if let sandboxId = workspace.remoteId {
+            return .remoteSandbox(sandboxId)
+        }
+        return .hostPath(normalizePath(workspace.workspaceURL))
+    }
+
     private func sessionActivity(for key: HostTerminalSessionKey) -> SidebarSessionActivity {
         SidebarSessionActivity(
             hasLiveSession: paneCount(for: key) > 0,
@@ -795,15 +870,20 @@ struct SidebarView: View {
         return nil
     }
 
-    private func normalizeWebURLString(_ rawURL: String) -> String {
-        if let normalized = try? WebSourceValidation.normalizeBaseURL(rawURL) {
-            return normalized.baseURL.absoluteString
-        }
-        return rawURL.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
     private func sortedWorkspaces(for repo: Repo) -> [Workspace] {
         repo.workspaces.sorted { lhs, rhs in
+            lhs.lastAccessedAt > rhs.lastAccessedAt
+        }
+    }
+
+    private func sortedRepoWebSources(for repo: Repo) -> [WebSource] {
+        repo.webSources.sorted { lhs, rhs in
+            lhs.lastAccessedAt > rhs.lastAccessedAt
+        }
+    }
+
+    private func sortedWorkspaceWebSources(for workspace: Workspace) -> [WebSource] {
+        workspace.webSources.sorted { lhs, rhs in
             lhs.lastAccessedAt > rhs.lastAccessedAt
         }
     }
@@ -813,12 +893,24 @@ struct SidebarView: View {
     }
 
     private func toggleRepoExpansion(_ repo: Repo) {
-        guard !repo.workspaces.isEmpty else { return }
-
         if expandedRepoIDs.contains(repo.id) {
             expandedRepoIDs.remove(repo.id)
         } else {
             expandedRepoIDs.insert(repo.id)
+        }
+    }
+
+    private func isWorkspaceExpanded(_ workspace: Workspace) -> Bool {
+        expandedWorkspaceIDs.contains(workspace.id)
+    }
+
+    private func toggleWorkspaceExpansion(_ workspace: Workspace) {
+        guard !workspace.webSources.isEmpty else { return }
+
+        if expandedWorkspaceIDs.contains(workspace.id) {
+            expandedWorkspaceIDs.remove(workspace.id)
+        } else {
+            expandedWorkspaceIDs.insert(workspace.id)
         }
     }
 
@@ -827,7 +919,7 @@ struct SidebarView: View {
         didInitializeRepoExpansion = true
 
         if isUIFixtureMode {
-            expandedRepoIDs = Set(repos.filter { !$0.workspaces.isEmpty }.map(\.id))
+            expandedRepoIDs = Set(repos.map(\.id))
             return
         }
 
@@ -836,13 +928,56 @@ struct SidebarView: View {
     }
 
     private func expandRepoForSelectedWorkspace() {
-        guard let selectedRepoID = selectedWorkspace?.sourceRepo?.id else { return }
+        guard let selectedWorkspace else { return }
+        guard let selectedRepoID = selectedWorkspace.sourceRepo?.id else { return }
         expandedRepoIDs.insert(selectedRepoID)
+        if !selectedWorkspace.webSources.isEmpty {
+            expandedWorkspaceIDs.insert(selectedWorkspace.id)
+        }
+    }
+
+    private func expandContainersForSelectedWebSource() {
+        guard let selectedWebSource else { return }
+
+        if let repoID = selectedWebSource.ownerRepo?.id {
+            expandedRepoIDs.insert(repoID)
+        }
+
+        if let workspaceID = selectedWebSource.sourceWorkspace?.id {
+            expandedWorkspaceIDs.insert(workspaceID)
+        }
     }
 
     private func pruneExpandedRepos() {
         let currentRepoIDs = Set(repos.map(\.id))
         expandedRepoIDs.formIntersection(currentRepoIDs)
+    }
+
+    private func pruneExpandedWorkspaces() {
+        let currentWorkspaceIDs = Set(repos.flatMap(\.workspaces).map(\.id))
+        expandedWorkspaceIDs.formIntersection(currentWorkspaceIDs)
+    }
+
+    private func updateRepoSortMode(_ mode: SidebarRepoSortMode) {
+        repoSortModeRawValue = mode.rawValue
+        syncRepoSortSnapshot(forceRefresh: true)
+    }
+
+    private func syncRepoSortSnapshot(forceRefresh: Bool = false) {
+        guard repoSortMode == .lastAccessed else {
+            repoLastAccessedSnapshotByID.removeAll()
+            return
+        }
+
+        let currentRepoIDs = Set(repos.map(\.id))
+        repoLastAccessedSnapshotByID = repoSortController.prunedSnapshot(
+            repoLastAccessedSnapshotByID,
+            validRepoIDs: currentRepoIDs
+        )
+
+        if forceRefresh || repoLastAccessedSnapshotByID.isEmpty {
+            repoLastAccessedSnapshotByID = repoSortController.snapshot(for: repos)
+        }
     }
 
 }

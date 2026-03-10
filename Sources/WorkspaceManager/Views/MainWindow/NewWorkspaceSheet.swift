@@ -66,13 +66,18 @@ struct NewWorkspaceSheet: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            VStack(spacing: 8) {
-                Image(systemName: backend == .remoteVM ? "cloud.fill" : "plus.rectangle.on.folder.fill")
-                    .font(.system(size: 36))
-                    .foregroundStyle(backend == .remoteVM ? .blue : .blue)
+            VStack(spacing: 10) {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color.secondary.opacity(0.08))
+                    .frame(width: 44, height: 44)
+                    .overlay {
+                        Image(systemName: backend == .remoteVM ? "cloud.fill" : "plus.rectangle.on.folder.fill")
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundStyle(.primary)
+                    }
 
                 Text("New Workspace")
-                    .font(.title2)
+                    .font(.title3)
                     .fontWeight(.semibold)
 
                 Text("from \(repo.name)")
@@ -101,6 +106,7 @@ struct NewWorkspaceSheet: View {
                 Text(descriptionText)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             .formStyle(.grouped)
             .scrollDisabled(true)

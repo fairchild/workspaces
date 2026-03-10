@@ -15,14 +15,13 @@ struct WorkspaceEditorToolbarButton: View {
             Button {
                 onOpenInDefaultEditor()
             } label: {
-                HStack(spacing: 4) {
-                    Text(defaultEditor.displayName)
+                Label {
+                    Text("Open in \(defaultEditor.displayName)")
                         .font(.system(size: 12, weight: .medium))
-                    Text("/\(workspaceName)")
-                        .font(.system(size: 12, design: .monospaced))
-                        .lineLimit(1)
+                } icon: {
+                    Image(systemName: "arrow.up.forward.square")
+                        .font(.system(size: 11, weight: .semibold))
                 }
-                .frame(minWidth: 60)
             }
             .help("Open in \(defaultEditor.displayName)")
 
@@ -43,12 +42,8 @@ struct WorkspaceEditorToolbarButton: View {
                     onCopyPath()
                 }
             } label: {
-                HStack(spacing: 2) {
-                    Text("Open")
-                        .font(.system(size: 12, weight: .semibold))
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 8, weight: .semibold))
-                }
+                Image(systemName: "ellipsis.circle")
+                    .font(.system(size: 12, weight: .semibold))
             }
             .menuIndicator(.hidden)
             .accessibilityLabel("Choose editor or action")

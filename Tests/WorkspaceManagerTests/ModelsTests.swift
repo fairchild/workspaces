@@ -208,4 +208,54 @@ struct ModelsTests {
             #expect(!WebSourceValidation.host("www.api.example.com", matchesAllowlistDomain: "api.example.com"))
         }
     }
+
+    @Suite("WebSourceOwnership")
+    struct WebSourceOwnershipTests {
+        @Test("Global sources report global ownership")
+        func globalSourceOwnership() {
+            let source = WebSource(
+                name: "Docs",
+                baseURLString: "https://docs.example.com/",
+                allowedHost: "docs.example.com"
+            )
+
+            #expect(source.isGlobal)
+            #expect(source.ownershipScope == .global)
+            #expect(source.ownerRepo == nil)
+        }
+
+        @Test("Repo-owned sources derive repo ownership")
+        func repoOwnedSourceOwnership() {
+            let repo = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))
+            let source = WebSource(
+                name: "Docs",
+                baseURLString: "https://docs.example.com/",
+                allowedHost: "docs.example.com",
+                sourceRepo: repo
+            )
+
+            #expect(!source.isGlobal)
+            #expect(source.ownershipScope == .repo(repo.id))
+            #expect(source.ownerRepo?.id == repo.id)
+        }
+
+        @Test("Workspace-owned sources derive workspace scope and repo owner")
+        func workspaceOwnedSourceOwnership() {
+            let repo = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))
+            let workspace = Workspace(
+                name: "feature-a",
+                path: URL(fileURLWithPath: "/tmp/alpha/workspaces/feature-a"),
+                sourceRepo: repo
+            )
+            let source = WebSource(
+                name: "Docs",
+                baseURLString: "https://docs.example.com/",
+                allowedHost: "docs.example.com",
+                sourceWorkspace: workspace
+            )
+
+            #expect(source.ownershipScope == .workspace(workspace.id))
+            #expect(source.ownerRepo?.id == repo.id)
+        }
+    }
 }

@@ -16,9 +16,13 @@ public final class Repo {
     public var localPath: String  // Store as String, convert to URL when needed
     public var remoteURL: String?
     public var addedAt: Date
+    public var lastAccessedAt: Date = Date()
 
     @Relationship(deleteRule: .cascade, inverse: \Workspace.sourceRepo)
     public var workspaces: [Workspace] = []
+
+    @Relationship(deleteRule: .cascade, inverse: \WebSource.sourceRepo)
+    public var webSources: [WebSource] = []
 
     public var localURL: URL {
         URL(fileURLWithPath: localPath)
@@ -29,13 +33,15 @@ public final class Repo {
         name: String,
         localPath: URL,
         remoteURL: String? = nil,
-        addedAt: Date = Date()
+        addedAt: Date = Date(),
+        lastAccessedAt: Date = Date()
     ) {
         self.id = id
         self.name = name
         self.localPath = localPath.path
         self.remoteURL = remoteURL
         self.addedAt = addedAt
+        self.lastAccessedAt = lastAccessedAt
     }
 }
 
@@ -48,9 +54,29 @@ public final class WebSource {
     public var additionalAllowedDomainsRaw: String = ""
     public var addedAt: Date
     public var lastAccessedAt: Date
+    public var sourceRepo: Repo?
+    public var sourceWorkspace: Workspace?
 
     public var baseURL: URL? {
         URL(string: baseURLString)
+    }
+
+    public var ownershipScope: WebSourceOwnershipScope {
+        if let sourceWorkspace {
+            return .workspace(sourceWorkspace.id)
+        }
+        if let sourceRepo {
+            return .repo(sourceRepo.id)
+        }
+        return .global
+    }
+
+    public var ownerRepo: Repo? {
+        sourceWorkspace?.sourceRepo ?? sourceRepo
+    }
+
+    public var isGlobal: Bool {
+        sourceRepo == nil && sourceWorkspace == nil
     }
 
     public var additionalAllowedDomains: [String] {
@@ -69,8 +95,14 @@ public final class WebSource {
         allowedHost: String,
         additionalAllowedDomains: [String] = [],
         addedAt: Date = Date(),
-        lastAccessedAt: Date = Date()
+        lastAccessedAt: Date = Date(),
+        sourceRepo: Repo? = nil,
+        sourceWorkspace: Workspace? = nil
     ) {
+        precondition(
+            sourceRepo == nil || sourceWorkspace == nil,
+            "WebSource cannot be owned by both a repo and a workspace"
+        )
         self.id = id
         self.name = name
         self.baseURLString = baseURLString
@@ -78,6 +110,8 @@ public final class WebSource {
         self.additionalAllowedDomainsRaw = Self.encodeAdditionalAllowedDomains(additionalAllowedDomains)
         self.addedAt = addedAt
         self.lastAccessedAt = lastAccessedAt
+        self.sourceRepo = sourceRepo
+        self.sourceWorkspace = sourceWorkspace
     }
 
     private static func decodeAdditionalAllowedDomains(_ rawValue: String) -> [String] {
@@ -111,6 +145,9 @@ public final class Workspace {
 
     /// Remote instance ID (nil for local workspaces)
     public var remoteId: String?
+
+    @Relationship(deleteRule: .cascade, inverse: \WebSource.sourceWorkspace)
+    public var webSources: [WebSource] = []
 
     public var workspaceURL: URL {
         URL(fileURLWithPath: path)
@@ -148,6 +185,12 @@ public final class Workspace {
         self.backendIdentifier = backendIdentifier
         self.remoteId = remoteId
     }
+}
+
+public enum WebSourceOwnershipScope: Hashable, Codable, Sendable {
+    case global
+    case repo(UUID)
+    case workspace(UUID)
 }
 
 public enum WorkspaceStatus: String, Codable, CaseIterable, Sendable {

@@ -96,29 +96,43 @@ struct RightPaneView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Tab bar
-            HStack(spacing: 0) {
-                ForEach(visibleTabs, id: \.self) { tab in
-                    TabButton(
-                        title: tab.rawValue,
-                        icon: tab.icon,
-                        isSelected: state.selectedTab == tab,
-                        badge: badgeCount(for: tab)
-                    ) {
-                        state.selectedTab = tab
-                        if tab == .activity {
-                            notificationCoordinator.markActivitySeen()
-                        }
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Inspector")
+                            .font(.headline)
+
+                        Text(summaryText)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Spacer()
+
+                    if let badge = badgeCount(for: state.selectedTab), badge > 0 {
+                        Text("\(badge)")
+                            .font(.caption2.weight(.medium))
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 4)
+                            .background(Color.secondary.opacity(0.12), in: Capsule())
                     }
                 }
+
+                Picker("Inspector Tab", selection: selectedTabBinding) {
+                    ForEach(visibleTabs, id: \.self) { tab in
+                        Text(tab.rawValue)
+                            .tag(tab)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
-            .background(Color(nsColor: .controlBackgroundColor))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 12)
+            .background(Color(nsColor: .windowBackgroundColor))
 
             Divider()
 
-            // Tab content
             ZStack {
                 switch state.selectedTab {
                 case .files:
@@ -146,7 +160,6 @@ struct RightPaneView: View {
 
             Divider()
 
-            // Footer
             HStack {
                 if state.selectedTab == .activity {
                     Circle()
@@ -192,6 +205,18 @@ struct RightPaneView: View {
 
     private var visibleTabs: [Tab] {
         showActivity ? Tab.allCases : Tab.allCases.filter { $0 != .activity }
+    }
+
+    private var selectedTabBinding: Binding<Tab> {
+        Binding(
+            get: { state.selectedTab },
+            set: { nextTab in
+                state.selectedTab = nextTab
+                if nextTab == .activity {
+                    notificationCoordinator.markActivitySeen()
+                }
+            }
+        )
     }
 
     private func badgeCount(for tab: Tab) -> Int? {
@@ -250,43 +275,34 @@ struct RightPaneView: View {
             )
         )
     }
-}
 
-// MARK: - Tab Button
-
-struct TabButton: View {
-    let title: String
-    let icon: String
-    let isSelected: Bool
-    var badge: Int?
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 4) {
-                Image(systemName: icon)
-                    .font(.caption)
-
-                Text(title)
-                    .font(.caption)
-
-                if let badge, badge > 0 {
-                    Text("\(badge)")
-                        .font(.caption2)
-                        .fontWeight(.medium)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 1)
-                        .background(isSelected ? .white.opacity(0.3) : .secondary.opacity(0.2))
-                        .clipShape(Capsule())
-                }
+    private var summaryText: String {
+        switch state.selectedTab {
+        case .files:
+            if state.isLoading {
+                return "Refreshing file tree"
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 4)
-            .background(isSelected ? Color.accentColor : Color.clear)
-            .foregroundStyle(isSelected ? .white : .primary)
-            .clipShape(RoundedRectangle(cornerRadius: 6))
+            if let itemCount = state.fileTree?.children?.count, itemCount > 0 {
+                return "\(itemCount) top-level items"
+            }
+            return "Browse files in this context"
+        case .changes:
+            if state.isLoading {
+                return "Refreshing working tree"
+            }
+            let changeCount = state.changedFiles.count
+            if changeCount == 0 {
+                return "Working tree clean"
+            }
+            return "\(changeCount) changed file\(changeCount == 1 ? "" : "s")"
+        case .activity:
+            if notificationCoordinator.unseenEventCount > 0 {
+                return "\(notificationCoordinator.unseenEventCount) unseen updates"
+            }
+            return notificationCoordinator.isStreamConnected
+                ? "Live workspace activity"
+                : "Activity stream disconnected"
         }
-        .buttonStyle(.plain)
     }
 }
 

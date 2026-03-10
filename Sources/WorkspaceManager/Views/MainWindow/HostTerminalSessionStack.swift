@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import WorkspaceManagerCore
 
@@ -10,6 +11,7 @@ struct HostTerminalSessionStack: View {
     let surfaceStore: HostTerminalSurfaceStore
     let onSplitFractionChanged: ((CGFloat) -> Void)?
     var onTerminalProcessExit: ((UUID) -> Void)?
+    var contextMenuProvider: ((HostTerminalSession) -> NSMenu?)?
 
     private var activeSession: HostTerminalSession? {
         guard let activeSessionID else { return sessions.last }
@@ -30,6 +32,9 @@ struct HostTerminalSessionStack: View {
             surfaceStore: surfaceStore,
             onProcessExit: {
                 onTerminalProcessExit?(session.id)
+            },
+            contextMenuProvider: {
+                contextMenuProvider?(session)
             }
         )
         .frame(

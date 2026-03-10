@@ -257,11 +257,13 @@ private func seedUIFixtureDataIfNeeded(in context: ModelContext) {
 
 private struct MainWindowRootView: View {
     @State private var deepLinkState = WorkspaceDeepLinkState()
+    @SceneStorage(MainWindowLastSurface.storageKey) private var lastSurfaceRawValue = ""
     @StateObject private var hostTerminalState = HostTerminalStateStore()
 
     var body: some View {
         ContentView(
             deepLinkState: $deepLinkState,
+            lastSurfaceRawValue: $lastSurfaceRawValue,
             hostTerminalState: hostTerminalState
         )
         .onOpenURL { url in

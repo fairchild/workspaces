@@ -1,11 +1,11 @@
 ---
-status: pending
+status: completed
 category: plan
-pr: null
-branch: null
+pr: 36
+branch: codex/apple-native-main-window-redesign-backlog
 score: null
-retro_summary: null
-completed: null
+retro_summary: Implemented on the redesign branch with repo overview as the primary repo surface, scoped web views, calmer sidebar chrome, removal of the Recent section, and deterministic launch/selection hardening.
+completed: 2026-03-10
 topic: apple-native-main-window-redesign
 priority: 1
 description: Redesign the main window and adjacent flows so Workspaces feels calmer, clearer, and more Apple-native without compromising terminal-first behavior.
@@ -25,9 +25,16 @@ This creates three user-flow problems:
 
 The redesign should keep the existing three-column architecture and terminal-first behavior, but make the UI feel more like a first-party Apple tool: calmer, more obvious, more semantic, and more system-native.
 
-## Why This Was Explored And Why It Is Deferred
+## Implementation Status
 
-This work was explored after reviewing the current main-window screenshot and the app's code-level user flow. The product is already good enough to use daily, but the visual hierarchy and contextual framing are now a bottleneck to perceived quality. This work is deferred from the current session because it needs a deliberate, multi-file pass across the main window shell, sidebar rows, inspector, and creation sheets, plus regression verification around terminal/sidebar behavior.
+This plan was implemented on `codex/apple-native-main-window-redesign-backlog` and is retained as the design/handoff record for what shipped. The final implementation deliberately diverged from a few early ideas in this document:
+
+- `Host` is no longer a visible top-level navigation concept.
+- The `Recent` section was removed instead of being elevated.
+- Repo overview is the primary repo destination.
+- Repo/web/workspace navigation is flatter and quieter than the initial grouped proposal.
+
+Validation on the branch included build/test runs plus live debug-app launch, screenshot capture, and `Cmd+B` / `Cmd+D` runtime checks.
 
 ## Single-Input Handoff Contract
 
@@ -57,8 +64,8 @@ Distilled guidance from those skills that should drive this work:
 
 - Workspaces is explicitly terminal-first and uses a three-column layout: sidebar, terminal/detail, inspector.
 - Current behavior from `README.md` and code:
-  - launch into a host terminal
-  - sidebar selection opens or resumes persistent sessions
+  - launch restores the last active surface or falls back to a repo overview
+  - sidebar selection opens repo overviews, web views, or resumes persistent terminal sessions
   - right pane shows files and git changes
   - workspace creation and URL-source creation happen in sheets
 - Current implementation anchors:

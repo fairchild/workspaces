@@ -8,6 +8,12 @@
 import SwiftUI
 import WorkspaceManagerCore
 
+private enum SidebarTreeMetrics {
+    static let disclosureWidth: CGFloat = 12
+    static let disclosureHeight: CGFloat = 14
+    static let iconColumnWidth: CGFloat = 18
+}
+
 enum SidebarSessionActivity: Equatable {
     case inactive
     case live
@@ -31,23 +37,29 @@ enum SidebarSessionActivity: Equatable {
         self != .inactive
     }
 
-    private var liveStatusColor: Color {
+    var indicatorColor: Color {
         switch self {
         case .inactive:
-            return .secondary
+            return .clear
         case .live:
-            return .mint
+            return Color.accentColor.opacity(0.75)
         case .active:
-            return .green
+            return .accentColor
         }
     }
 
     func iconColor(inactiveColor: Color) -> Color {
-        hasLiveSession ? liveStatusColor : inactiveColor
+        if isActive {
+            return .primary
+        }
+        if hasLiveSession {
+            return .secondary
+        }
+        return inactiveColor
     }
 
     var badgeColor: Color {
-        hasLiveSession ? liveStatusColor : .secondary
+        isActive ? .primary : .secondary
     }
 
     var accessibilityDescription: String {
@@ -72,22 +84,14 @@ private struct WorkspaceCountBadge: View {
 
     var body: some View {
         Text("\(count)")
-            .font(.caption.monospacedDigit())
-            .fontWeight(.semibold)
-            .foregroundStyle(Color.primary.opacity(isCollapsed ? 0.96 : 0.9))
-            .padding(.horizontal, 9)
-            .padding(.vertical, 4)
+            .font(.caption2.monospacedDigit())
+            .fontWeight(.medium)
+            .foregroundStyle(Color.secondary.opacity(isCollapsed ? 0.95 : 0.82))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
             .background(
                 Capsule()
-                    .fill(
-                        isCollapsed
-                            ? Color.accentColor.opacity(0.26)
-                            : Color.secondary.opacity(0.18)
-                    )
-            )
-            .overlay(
-                Capsule()
-                    .stroke(Color.white.opacity(isCollapsed ? 0.12 : 0.08), lineWidth: 0.5)
+                    .fill(Color.secondary.opacity(isCollapsed ? 0.1 : 0.06))
             )
             .accessibilityLabel("\(count) workspace\(count == 1 ? "" : "s")")
     }
@@ -100,59 +104,28 @@ private struct PaneCountBadge: View {
     var body: some View {
         Text("\(count)")
             .font(.caption2.monospacedDigit())
-            .fontWeight(.semibold)
+            .fontWeight(.medium)
             .padding(.horizontal, 7)
             .padding(.vertical, 2)
             .foregroundStyle(sessionActivity.badgeColor)
             .background(
                 Capsule()
-                    .fill(sessionActivity.badgeColor.opacity(sessionActivity.isActive ? 0.14 : 0.12))
-            )
-            .overlay(
-                Capsule()
-                    .stroke(sessionActivity.badgeColor.opacity(0.22), lineWidth: 0.5)
+                    .fill(Color.secondary.opacity(sessionActivity.isActive ? 0.16 : 0.1))
             )
             .accessibilityLabel("\(count) pane\(count == 1 ? "" : "s")")
     }
 }
 
-struct HostTerminalRow: View {
-    let defaultHostPath: String
+private struct SessionActivityIndicator: View {
     let sessionActivity: SidebarSessionActivity
-    let paneCount: Int
-
-    private var displayHostPath: String {
-        let homePath = FileManager.default.homeDirectoryForCurrentUser.path
-        if defaultHostPath == homePath {
-            return "~"
-        }
-        if defaultHostPath.hasPrefix(homePath + "/") {
-            return "~" + defaultHostPath.dropFirst(homePath.count)
-        }
-        return defaultHostPath
-    }
 
     var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: sessionActivity.isActive ? "house.fill" : "house")
-                .foregroundStyle(sessionActivity.iconColor(inactiveColor: .orange))
-
-            Text(displayHostPath)
-                .font(.system(size: 16, weight: .medium))
-                .lineLimit(1)
-                .truncationMode(.middle)
-
-            Spacer(minLength: 8)
-
-            if SidebarSessionActivity.showsPaneCountBadge(for: paneCount) {
-                PaneCountBadge(count: paneCount, sessionActivity: sessionActivity)
-                    .help("\(paneCount) open panes")
-            }
+        if sessionActivity.hasLiveSession {
+            Circle()
+                .fill(sessionActivity.indicatorColor)
+                .frame(width: 7, height: 7)
+                .accessibilityHidden(true)
         }
-        .accessibilityLabel(
-            "Code home \(displayHostPath), \(sessionActivity.accessibilityDescription)"
-                + (SidebarSessionActivity.showsPaneCountBadge(for: paneCount) ? ", \(paneCount) panes" : "")
-        )
     }
 }
 
@@ -160,52 +133,52 @@ struct RepoRow: View {
     let repo: Repo
     let sessionActivity: SidebarSessionActivity
     let paneCount: Int
+    let isSelected: Bool
     let isExpanded: Bool
     let onToggleExpansion: () -> Void
     let onSelectRepo: () -> Void
+    let onNewWorkspace: (() -> Void)?
+    let onNewWebView: (() -> Void)?
+
+    @State private var isHovering = false
+
+    private var showsQuickActions: Bool {
+        onNewWorkspace != nil || onNewWebView != nil
+    }
 
     var body: some View {
         let workspaceCount = repo.workspaces.count
+        let showsVisibleQuickActions = showsQuickActions && isHovering
 
         HStack(spacing: 10) {
             Button(action: onToggleExpansion) {
-                Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                    .font(.caption)
-                    .fontWeight(.semibold)
-                    .foregroundStyle(repo.workspaces.isEmpty ? .tertiary : .secondary)
-                    .frame(width: 14, height: 14)
+                repoFolderIcon
             }
             .buttonStyle(.plain)
-            .disabled(repo.workspaces.isEmpty)
+            .help(isExpanded ? "Collapse \(repo.name)" : "Expand \(repo.name)")
 
             Button(action: onSelectRepo) {
-                HStack(spacing: 10) {
-                    Image(systemName: "folder.fill")
-                        .foregroundStyle(sessionActivity.iconColor(inactiveColor: .blue))
-                        .frame(width: 18, alignment: .leading)
-
-                    Text(repo.name)
-                        .font(.system(size: 16, weight: .semibold))
-                        .lineLimit(1)
-
-                    Spacer(minLength: 8)
-
-                    if workspaceCount > 0 {
-                        WorkspaceCountBadge(
-                            count: workspaceCount,
-                            isCollapsed: !isExpanded
-                        )
-                    }
-
-                    if SidebarSessionActivity.showsPaneCountBadge(for: paneCount) {
-                        PaneCountBadge(count: paneCount, sessionActivity: sessionActivity)
-                            .help("\(paneCount) open panes")
-                    }
-                }
-                .contentShape(Rectangle())
+                repoLabelContent(workspaceCount: workspaceCount)
             }
             .buttonStyle(.plain)
 
+            if showsQuickActions {
+                repoActionMenu
+                    .opacity(showsVisibleQuickActions ? 1 : 0)
+                    .allowsHitTesting(showsVisibleQuickActions)
+                    .accessibilityHidden(!showsVisibleQuickActions)
+            }
+        }
+        .padding(.vertical, 2)
+        .padding(.horizontal, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 5)
+                .fill(isSelected ? Color.accentColor.opacity(0.1) : .clear)
+        )
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.12)) {
+                isHovering = hovering
+            }
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(
@@ -213,6 +186,74 @@ struct RepoRow: View {
                 + (SidebarSessionActivity.showsPaneCountBadge(for: paneCount) ? ", \(paneCount) panes" : "")
                 + ", \(isExpanded ? "expanded" : "collapsed")"
         )
+    }
+
+    private var repoFolderIcon: some View {
+        Image(systemName: isExpanded ? "folder.fill" : "folder")
+            .foregroundStyle(
+                isSelected
+                    ? Color.primary
+                    : sessionActivity.iconColor(inactiveColor: Color.secondary.opacity(0.82))
+            )
+            .frame(width: SidebarTreeMetrics.iconColumnWidth, alignment: .center)
+            .contentTransition(.symbolEffect(.replace))
+    }
+
+    private func repoLabelContent(workspaceCount: Int) -> some View {
+        HStack(spacing: 10) {
+            Text(repo.name)
+                .font(.callout.weight(isSelected || sessionActivity.isActive ? .semibold : .regular))
+                .lineLimit(1)
+
+            Spacer(minLength: 8)
+
+            SessionActivityIndicator(sessionActivity: sessionActivity)
+
+            if workspaceCount > 1, !isExpanded {
+                WorkspaceCountBadge(
+                    count: workspaceCount,
+                    isCollapsed: true
+                )
+            }
+
+            if SidebarSessionActivity.showsPaneCountBadge(for: paneCount) {
+                PaneCountBadge(count: paneCount, sessionActivity: sessionActivity)
+                    .help("\(paneCount) open panes")
+            }
+        }
+        .contentShape(Rectangle())
+    }
+
+    private var repoActionMenu: some View {
+        Menu {
+            if let onNewWorkspace {
+                Button("New Workspace") {
+                    onNewWorkspace()
+                }
+            }
+
+            if let onNewWebView {
+                Button("Add Web View") {
+                    onNewWebView()
+                }
+            }
+        } label: {
+            Image(systemName: "plus")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 22, height: 22)
+                .background(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(Color.secondary.opacity(0.08))
+                )
+                .overlay {
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .stroke(Color.secondary.opacity(0.08), lineWidth: 1)
+                }
+        }
+        .menuIndicator(.hidden)
+        .menuStyle(.borderlessButton)
+        .frame(width: 22, height: 22)
     }
 }
 
@@ -223,16 +264,59 @@ struct WorkspaceRow: View {
     var sessionActivity: SidebarSessionActivity = .inactive
     var paneCount: Int = 0
     var isNested: Bool = false
+    var isExpanded: Bool = false
+    var showsDisclosure: Bool = false
+    var onToggleExpansion: (() -> Void)? = nil
+    var onSelect: (() -> Void)? = nil
 
     private var isBusy: Bool { statusMessage != nil }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
+        HStack(spacing: 10) {
+            if showsDisclosure, let onToggleExpansion {
+                Button(action: onToggleExpansion) {
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(.secondary.opacity(0.8))
+                        .frame(
+                            width: SidebarTreeMetrics.disclosureWidth,
+                            height: SidebarTreeMetrics.disclosureHeight
+                        )
+                }
+                .buttonStyle(.plain)
+            }
+
+            if let onSelect {
+                Button(action: onSelect) {
+                    rowContent
+                }
+                .buttonStyle(.plain)
+            } else {
+                rowContent
+            }
+        }
+        .padding(.leading, isNested ? 18 : 0)
+        .padding(.vertical, 4)
+        .padding(.horizontal, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 5)
+                .fill(isSelected ? Color.accentColor.opacity(0.1) : .clear)
+        )
+        .accessibilityLabel(
+            "\(workspace.name), \(sessionActivity.accessibilityDescription)"
+                + (SidebarSessionActivity.showsPaneCountBadge(for: paneCount) ? ", \(paneCount) panes" : "")
+                + (workspace.status == .archived ? ", archived" : "")
+                + (statusMessage.map { ", \($0)" } ?? "")
+        )
+    }
+
+    private var rowContent: some View {
+        VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
                 if isBusy {
                     ProgressView()
                         .controlSize(.small)
-                        .frame(width: 16, height: 16)
+                        .frame(width: SidebarTreeMetrics.iconColumnWidth, height: 16)
                 } else {
                     Image(
                         systemName: workspace.isRemote
@@ -241,29 +325,33 @@ struct WorkspaceRow: View {
                     )
                     .foregroundStyle(
                         workspace.isRemote
-                            ? (workspace.status == .active ? .blue : .secondary)
+                            ? (workspace.status == .active ? .accentColor : .secondary)
                             : sessionActivity.iconColor(inactiveColor: .secondary)
                     )
+                    .frame(width: SidebarTreeMetrics.iconColumnWidth, alignment: .center)
                 }
 
                 Text(workspace.name)
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(.callout.weight(isSelected || sessionActivity.isActive ? .semibold : .regular))
                     .lineLimit(1)
 
                 if !isBusy, workspace.status != .active {
                     Text(workspace.status.label)
                         .font(.caption2)
+                        .foregroundStyle(.secondary)
                         .padding(.horizontal, 4)
                         .padding(.vertical, 1)
                         .background(
                             workspace.status == .stopped
-                                ? Color.orange.opacity(0.2)
+                                ? Color.orange.opacity(0.14)
                                 : Color.secondary.opacity(0.2)
                         )
                         .clipShape(RoundedRectangle(cornerRadius: 3))
                 }
 
                 Spacer(minLength: 8)
+
+                SessionActivityIndicator(sessionActivity: sessionActivity)
 
                 if SidebarSessionActivity.showsPaneCountBadge(for: paneCount) {
                     PaneCountBadge(count: paneCount, sessionActivity: sessionActivity)
@@ -275,21 +363,11 @@ struct WorkspaceRow: View {
                 Text(statusMessage)
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .padding(.leading, isNested ? 24 : 24)
+                    .padding(.leading, 24)
+                    .lineLimit(1)
             }
         }
-        .padding(.leading, isNested ? 20 : 0)
-        .padding(.vertical, 2)
-        .padding(.horizontal, 4)
-        .background(
-            RoundedRectangle(cornerRadius: 5)
-                .fill(isSelected ? Color.accentColor.opacity(0.13) : .clear)
-        )
-        .accessibilityLabel(
-            "\(workspace.name), \(sessionActivity.accessibilityDescription)"
-                + (SidebarSessionActivity.showsPaneCountBadge(for: paneCount) ? ", \(paneCount) panes" : "")
-                + (workspace.status == .archived ? ", archived" : "")
-                + (statusMessage.map { ", \($0)" } ?? "")
-        )
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
     }
 }

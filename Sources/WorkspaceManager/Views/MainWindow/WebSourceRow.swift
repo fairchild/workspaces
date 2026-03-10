@@ -13,22 +13,23 @@ struct WebSourceRow: View {
     var isSelected: Bool
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             WebSourceFaviconView(source: source)
+                .frame(width: 18, alignment: .center)
 
             Text(source.name)
-                .font(.system(size: 15, weight: .semibold))
+                .font(.callout.weight(isSelected ? .semibold : .regular))
                 .lineLimit(1)
 
             Spacer(minLength: 8)
         }
-        .padding(.vertical, 2)
-        .padding(.horizontal, 4)
+        .padding(.vertical, 4)
+        .padding(.horizontal, 8)
         .background(
-            RoundedRectangle(cornerRadius: 5)
-                .fill(isSelected ? Color.accentColor.opacity(0.13) : .clear)
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(isSelected ? Color.accentColor.opacity(0.1) : .clear)
         )
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(source.name), web source")
+        .accessibilityLabel("\(source.name), web view")
     }
 }

@@ -12,7 +12,7 @@
 
 - **Any terminal agent**: Embedded terminal with workspace management around it. Anything that runs in a shell works â€” Claude Code, Aider, Codex CLI, or a plain `bash` session.
 - **Fork-friendly**: No backwards-compatibility baggage. Take what works, change what doesn't.
-- **Opinionated defaults**: Three-column layout, terminal-first launch, lifecycle hooks. Customizable by editing the source directly.
+- **Opinionated defaults**: Three-column layout, terminal-first workflow, lifecycle hooks. Customizable by editing the source directly.
 
 ## Download
 
@@ -34,22 +34,26 @@
 ## Features
 
 - Three-column layout: sidebar, terminal, and detail pane
-- Opens straight to a terminal with persistent host sessions for repo and workspace rows
-- Repository management and workspace creation
-- Nested workspace rows under each repo, with inline creation progress
+- Restores the last active repo overview, workspace terminal, or web view on launch
+- Repository overview with workspace and web-view creation
+- Nested repo-scoped web views and workspaces in a single calm source list
+- Repository sorting with stable `Alphabetical` and `Last Accessed` modes
+- Persistent terminal sessions for repo and workspace rows
 - Integrated GhosttyKit terminal surface
 - Two-pane split controls driven by Ghostty actions (`Cmd+D`, focus, resize, equalize)
+- Embedded web views with global, repo-owned, and workspace-owned scope
 - File browser and git status view
 - `cmd+o` to open repo in editor, defaulting to zed
 - Lifecycle hooks (`setup.sh` / `archive.sh`)
 
 ## Usage
 
-1. Launch app and review repositories in the sidebar
+1. Launch app and resume your last repo overview, workspace terminal, or web view
 2. Add repositories manually if needed
-3. Create workspaces from repo actions
-4. Click repo/workspace rows to switch terminal context
-5. Use the right pane for files and git changes
+3. Click a repo row to open its overview, or expand it to jump into web views and workspaces
+4. Create workspaces or add web views from repo actions
+5. Click a workspace row to open its terminal context
+6. Use the right pane for files and git changes
 
 ### CLI (source builds)
 
@@ -70,7 +74,7 @@ Workspaces is designed to be forked. There's no plugin system or extension API â
 
 - **Change the layout**: Edit `ContentView.swift` to rearrange panes
 - **Add lifecycle hooks**: Drop scripts into workspace directories (`setup.sh`, `archive.sh`)
-- **Override the repo landing page**: Place an `index.html` in `.agents/workspaces/` (per-repo) or `~/.agents/workspaces/` (global) to replace the native grid with a custom HTML dashboard. See [docs/development/repo-landing-overrides.md](./docs/development/repo-landing-overrides.md) and the [example override](./.agents/workspaces/) in this repo.
+- **Customize repo overview and sidebar behavior**: Start with `RepoLandingView.swift`, `SidebarView.swift`, and `SidebarRows.swift`
 - **Swap the terminal**: The `TerminalView` wrapper abstracts the terminal backend
 - **Adjust keyboard shortcuts**: See `ShortcutRoutingPolicy.swift`
 

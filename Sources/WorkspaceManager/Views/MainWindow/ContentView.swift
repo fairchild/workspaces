@@ -13,6 +13,7 @@ import WorkspaceManagerCore
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
     @Binding var deepLinkState: WorkspaceDeepLinkState
+    @Binding var lastSurfaceRawValue: String
     @ObservedObject var hostTerminalState: HostTerminalStateStore
     @Query(sort: \Repo.addedAt, order: .reverse) private var repos: [Repo]
     @Query(sort: \WebSource.addedAt, order: .reverse) private var webSources: [WebSource]
@@ -25,6 +26,7 @@ struct ContentView: View {
 
     @State private var viewState = MainWindowViewState()
     @State private var repoForNewWorkspaceFromLanding: Repo?
+    @State private var webSourceCreationTarget: WebSourceCreationTarget?
     @State private var landingErrorMessage: String?
     @State private var isRemoteBackendAvailableForLanding = false
     @StateObject private var rightPaneStateStore = RightPaneStateStore()
@@ -36,6 +38,9 @@ struct ContentView: View {
     private let bootstrapController = MainWindowBootstrapController()
     private let inspectorStateController = InspectorStateController()
     private let mainSelectionCoordinator = MainSelectionCoordinator()
+    private let navigationStateController = MainWindowNavigationStateController()
+    private let remoteWorkspaceStateController = MainWindowRemoteWorkspaceStateController()
+    private let surfaceResolutionController = MainWindowSurfaceResolutionController()
     private let presentationController = MainWindowPresentationController()
     private let splitRoutingController = SplitRoutingController()
 
@@ -54,18 +59,66 @@ struct ContentView: View {
         )
     }
 
+    private var currentSelectedWorkspace: Workspace? {
+        mainSelectionCoordinator.workspace(with: viewState.selectedWorkspace?.workspaceID, in: repos)
+    }
+
+    private var currentSelectedWebSource: WebSource? {
+        mainSelectionCoordinator.webSource(with: viewState.selectedWebSource?.webSourceID, in: webSources)
+    }
+
+    private var currentSelectedRepoForLanding: Repo? {
+        mainSelectionCoordinator.repo(with: viewState.selectedRepoForLandingID, in: repos)
+    }
+
     private var normalizedRepoPathSnapshot: [String] {
         repos.map { normalizePath($0.localPath) }
     }
 
+    private var repoIDSnapshot: [UUID] {
+        repos.map(\.id)
+    }
+
+    private var workspaceIDSnapshot: [UUID] {
+        repos.flatMap(\.workspaces).map(\.id)
+    }
+
+    private var webSourceIDSnapshot: [UUID] {
+        webSources.map(\.id)
+    }
+
     private var selectedRepoForInspector: Repo? {
         presentationController.selectedRepoForInspector(
-            selectedWorkspace: viewState.selectedWorkspace,
-            selectedWebSource: viewState.selectedWebSource,
+            selectedWorkspace: currentSelectedWorkspace,
+            selectedWebSource: currentSelectedWebSource,
             activeRepoPath: sessionPresentation.activeRepoPath,
             activeHostSession: activeHostSession,
             repos: repos,
             normalizePath: normalizePath
+        )
+    }
+
+    private var selectedRepoForSidebar: Repo? {
+        currentSelectedRepoForLanding ?? selectedRepoForInspector
+    }
+
+    private var selectedWorkspaceBinding: Binding<Workspace?> {
+        Binding(
+            get: { currentSelectedWorkspace },
+            set: { workspace in
+                guard let workspace else {
+                    setSelectedWorkspace(nil)
+                    return
+                }
+                handleWorkspaceSelection(workspace)
+            }
+        )
+    }
+
+    private var selectedWebSourceBinding: Binding<WebSource?> {
+        Binding(
+            get: { currentSelectedWebSource },
+            set: { setSelectedWebSource($0) }
         )
     }
 
@@ -80,7 +133,7 @@ struct ContentView: View {
 
     private var activeSessionKeyForSidebar: HostTerminalSessionKey? {
         presentationController.activeSessionKeyForSidebar(
-            selectedWebSource: viewState.selectedWebSource,
+            selectedWebSource: currentSelectedWebSource,
             activeSessionID: hostTerminalState.activeSessionID,
             sessions: hostTerminalState.sessions
         )
@@ -101,7 +154,7 @@ struct ContentView: View {
 
     private var hasInspectorTarget: Bool {
         inspectorStateController.hasInspectorTarget(
-            selectedWorkspace: viewState.selectedWorkspace,
+            selectedWorkspace: currentSelectedWorkspace,
             selectedRepo: selectedRepoForInspector
         )
     }
@@ -130,7 +183,7 @@ struct ContentView: View {
     private var openInEditorTarget: OpenInEditorTarget? {
         presentationController.openInEditorTarget(
             selectedCodePreview: viewState.selectedCodePreview,
-            selectedWorkspace: viewState.selectedWorkspace,
+            selectedWorkspace: currentSelectedWorkspace,
             selectedRepo: selectedRepoForInspector
         )
     }
@@ -138,7 +191,7 @@ struct ContentView: View {
     private var openInEditorContextKey: MainWindowOpenInEditorContextKey {
         presentationController.openInEditorContextKey(
             selectedCodePreview: viewState.selectedCodePreview,
-            selectedWorkspace: viewState.selectedWorkspace,
+            selectedWorkspace: currentSelectedWorkspace,
             selectedRepo: selectedRepoForInspector
         )
     }
@@ -162,14 +215,16 @@ struct ContentView: View {
     @ViewBuilder
     private var terminalDetailContent: some View {
         MainTerminalDetailView(
-            selectedWorkspace: viewState.selectedWorkspace,
+            selectedWorkspace: currentSelectedWorkspace,
             selectedRepo: selectedRepoForInspector,
+            activeHostSession: activeHostSession,
             hostTerminalSessions: hostTerminalState.sessions,
             activeHostTerminalSessionID: hostTerminalState.activeSessionID,
             activeSplitHostSession: hostTerminalState.splitSession(for: hostTerminalState.activeSessionID),
             activeSplitLayout: hostTerminalState.splitLayout(for: hostTerminalState.activeSessionID),
             activeSplitFraction: hostTerminalState.splitFraction(for: hostTerminalState.activeSessionID),
             hostSurfaceStore: hostTerminalState.surfaceStore,
+            terminalContextMenuProvider: terminalContextMenu(for:),
             onSplitFractionChanged: { nextFraction in
                 guard let activeSessionID = hostTerminalState.activeSessionID else { return }
                 _ = hostTerminalState.updateSplitFraction(
@@ -192,21 +247,24 @@ struct ContentView: View {
 
     @ViewBuilder
     private var detailContent: some View {
-        if let selectedWebSource = viewState.selectedWebSource {
+        if let selectedWebSource = currentSelectedWebSource {
             WebSourceDetailView(
                 source: selectedWebSource,
                 surfaceStore: webSurfaceStore
             )
-        } else if let selectedRepo = viewState.selectedRepoForLanding {
+        } else if let selectedRepo = currentSelectedRepoForLanding {
             RepoLandingView(
                 repo: selectedRepo,
                 onWorkspaceSelected: { workspace in
-                    viewState.selectedRepoForLanding = nil
-                    viewState.selectedWorkspace = workspace
+                    handleWorkspaceSelection(workspace)
                 },
+                onWebSourceSelected: handleWebSourceSelection,
                 onOpenTerminal: handleRepoTerminalSelection,
                 onNewWorkspace: { repo in
                     repoForNewWorkspaceFromLanding = repo
+                },
+                onNewWebSource: { repo in
+                    webSourceCreationTarget = .repo(repo)
                 },
                 onArchiveWorkspace: { workspace in
                     Task { @MainActor in
@@ -218,12 +276,7 @@ struct ContentView: View {
                 }
             )
         } else {
-            ZStack {
-                terminalDetailContent
-                if viewState.connectingSandboxId != nil {
-                    SandboxConnectingOverlay(workspaceName: viewState.selectedWorkspace?.name)
-                }
-            }
+            terminalDetailContent
         }
     }
 
@@ -232,20 +285,28 @@ struct ContentView: View {
             SidebarView(
                 repos: repos,
                 webSources: webSources,
-                selectedWorkspace: $viewState.selectedWorkspace,
-                selectedWebSource: $viewState.selectedWebSource,
-                defaultHostPath: resolvedDefaultHostDirectory.path,
+                selectedRepo: selectedRepoForSidebar,
+                selectedWorkspace: selectedWorkspaceBinding,
+                selectedWebSource: selectedWebSourceBinding,
                 paneCountBySessionKey: paneCountBySessionKeyForSidebar,
                 activeSessionKey: activeSessionKeyForSidebar,
                 connectingSandboxId: viewState.connectingSandboxId,
-                onDefaultHostSelected: handleDefaultHostSelection,
                 onRepoSelected: handleRepoSelection,
+                onRepoTerminalSelected: handleRepoTerminalSelection,
                 onWebSourceSelected: handleWebSourceSelection,
+                onRequestWebSourceCreation: { target in
+                    webSourceCreationTarget = target
+                },
                 onWorkspaceCreated: handleWorkspaceCreated
             )
             .navigationSplitViewColumnWidth(min: 200, ideal: 260, max: 350)
         } detail: {
-            detailContent
+            ZStack {
+                detailContent
+                if viewState.connectingSandboxId != nil {
+                    SandboxConnectingOverlay(workspaceName: viewState.pendingRemoteWorkspace?.workspaceName)
+                }
+            }
         }
     }
 
@@ -253,7 +314,7 @@ struct ContentView: View {
         baseSplitView
             .toolbar {
                 ToolbarItemGroup(placement: .automatic) {
-                    if let selectedWebSource = viewState.selectedWebSource {
+                    if let selectedWebSource = currentSelectedWebSource {
                         Button {
                             openSelectedWebSourceInBrowser()
                         } label: {
@@ -270,7 +331,7 @@ struct ContentView: View {
                         .help("Reload")
                         .disabled(selectedWebSource.baseURL == nil)
                     } else if let defaultEditor = defaultEditorDescriptor,
-                        let workspace = viewState.selectedWorkspace
+                        let workspace = currentSelectedWorkspace
                     {
                         WorkspaceEditorToolbarButton(
                             workspaceName: workspace.name,
@@ -302,10 +363,7 @@ struct ContentView: View {
         splitViewWithToolbar
             .onAppear {
                 ensureInitialHostSession()
-                processPendingDeepLink()
-                maybeAutoSelectRepoForPerf()
-                maybeApplyFixturePreviewBootstrap()
-                maybeApplyFixtureWebBootstrap()
+                resolveSurfaceLifecycle()
                 pruneRightPaneState()
                 syncOpenInEditorShortcutRouting()
             }
@@ -317,36 +375,31 @@ struct ContentView: View {
                 ShortcutRoutingPolicy.shared.setOverride(nil, for: AppChromeShortcut.openInEditor.chord)
             }
             .onChange(of: deepLinkState.pendingRequest) { _, _ in
-                processPendingDeepLink()
+                resolveSurfaceLifecycle()
             }
-            .onChange(of: repos.count) { _, _ in
-                processPendingDeepLink()
-                maybeAutoSelectRepoForPerf()
-                maybeApplyFixturePreviewBootstrap()
-                maybeApplyFixtureWebBootstrap()
+            .onChange(of: repoIDSnapshot) { _, _ in
+                reconcileSelectionAfterModelChange()
+                resolveSurfaceLifecycle()
+            }
+            .onChange(of: workspaceIDSnapshot) { _, _ in
+                reconcileSelectionAfterModelChange()
+                resolveSurfaceLifecycle()
             }
             .onChange(of: normalizedRepoPathSnapshot) { _, paths in
                 hostTerminalState.pruneRepoSessions(validRepoPaths: Set(paths))
             }
-            .onChange(of: webSources.map(\.id)) { _, sourceIDs in
-                let validIDs = Set(sourceIDs)
-                if let selectedWebSource = viewState.selectedWebSource,
-                    !validIDs.contains(selectedWebSource.id)
-                {
-                    viewState.selectedWebSource = nil
-                    webSurfaceStore.releaseInactiveSurface()
-                }
-                maybeApplyFixtureWebBootstrap()
+            .onChange(of: webSourceIDSnapshot) { _, _ in
+                reconcileSelectionAfterModelChange()
+                resolveSurfaceLifecycle()
             }
             .onChange(of: inspectorTargetIDSet) { _, _ in
                 pruneRightPaneState()
             }
-            .onChange(of: viewState.selectedWorkspace?.id) { _, _ in
-                guard let selectedWorkspace = viewState.selectedWorkspace else {
+            .onChange(of: currentSelectedWorkspace?.id) { _, _ in
+                guard let selectedWorkspace = currentSelectedWorkspace else {
                     Task { await notificationCoordinator.disconnectStream() }
                     return
                 }
-                handleWorkspaceSelection(selectedWorkspace)
                 if let remoteURL = selectedWorkspace.sourceRepo?.remoteURL {
                     Task { await notificationCoordinator.connectStream(remoteURL: remoteURL) }
                 }
@@ -414,6 +467,18 @@ struct ContentView: View {
                     }
                 }
             }
+            .sheet(item: $webSourceCreationTarget) { target in
+                NewWebSourceSheet(target: target) { rawURL, displayName, additionalAllowedDomainsRaw in
+                    Task { @MainActor in
+                        addWebSource(
+                            rawURL: rawURL,
+                            displayName: displayName,
+                            additionalAllowedDomainsRaw: additionalAllowedDomainsRaw,
+                            target: target
+                        )
+                    }
+                }
+            }
             .alert(
                 "Error",
                 isPresented: Binding(
@@ -428,19 +493,79 @@ struct ContentView: View {
     }
 
     @MainActor
-    private func processPendingDeepLink() {
-        switch bootstrapController.deepLinkDecision(
-            pendingRequest: deepLinkState.pendingRequest,
-            repos: repos,
-            normalizePath: normalizePath,
-            pathIsInside: path(_:isInside:)
-        ) {
-        case .none, .waitForRepos:
+    private func setSelectedWorkspace(_ workspace: Workspace?) {
+        viewState.selectedWorkspace = workspace.map(MainWindowWorkspaceSelection.init(workspace:))
+    }
+
+    @MainActor
+    private func setSelectedWebSource(_ source: WebSource?) {
+        viewState.selectedWebSource = source.map(MainWindowWebSourceSelection.init(source:))
+    }
+
+    @MainActor
+    private func setSelectedRepoForLanding(_ repo: Repo?) {
+        viewState.selectedRepoForLandingID = repo?.id
+    }
+
+    @MainActor
+    private func applyNavigationDestination(
+        _ destination: MainWindowNavigationDestination,
+        persistSurface: Bool = true
+    ) {
+        let transition = navigationStateController.transition(to: destination)
+        navigationStateController.apply(transition, to: &viewState)
+        if persistSurface {
+            persistLastSurface(transition.persistedSurface)
+        }
+    }
+
+    @MainActor
+    private func abandonPendingRemoteConnection(reason: String) {
+        guard viewState.connectingSandboxId != nil || viewState.pendingRemoteWorkspace != nil else {
             return
-        case .clearNoMatch(let request):
+        }
+
+        NSLog("[RemoteBackend] Discarding pending sandbox connection (%@)", reason)
+        viewState.connectingSandboxId = nil
+        viewState.pendingRemoteWorkspace = nil
+    }
+
+    @MainActor
+    private func resolveSurfaceLifecycle() {
+        for _ in 0..<8 {
+            let action = surfaceResolutionController.nextAction(
+                context: MainWindowSurfaceResolutionContext(
+                    environment: ProcessInfo.processInfo.environment,
+                    didRunPerfAutoSelection: viewState.didRunPerfAutoSelection,
+                    didApplyFixturePreviewBootstrap: viewState.didApplyFixturePreviewBootstrap,
+                    didApplyFixtureWebBootstrap: viewState.didApplyFixtureWebBootstrap,
+                    didResolveInitialSurface: viewState.didResolveInitialSurface,
+                    pendingRequest: deepLinkState.pendingRequest,
+                    lastSurfaceRawValue: lastSurfaceRawValue,
+                    previewConfiguration: fixturePreviewBootstrapConfiguration,
+                    webConfiguration: fixtureWebBootstrapConfiguration,
+                    repos: repos,
+                    webSources: webSources
+                )
+            )
+
+            guard applySurfaceResolutionAction(action) else { break }
+        }
+    }
+
+    @MainActor
+    @discardableResult
+    private func applySurfaceResolutionAction(_ action: MainWindowSurfaceResolutionAction) -> Bool {
+        switch action {
+        case .none, .waitForRepos:
+            return false
+
+        case .clearDeepLinkNoMatch(let request):
             NSLog("[DeepLink] No workspace match for cwd: %@", request.cwd)
             deepLinkState.clearPendingRequest()
-        case .select(let request, let workspace):
+            return true
+
+        case .selectDeepLinkedWorkspace(let request, let workspace):
             NSLog(
                 "[DeepLink] Matched workspace '%@' for cwd '%@' (session_id=%@ source=%@)",
                 workspace.name,
@@ -449,56 +574,35 @@ struct ContentView: View {
                 request.source ?? ""
             )
 
-            viewState.selectedWebSource = nil
-            viewState.selectedRepoForLanding = nil
-            viewState.selectedWorkspace = workspace
-            clearCodePreview()
-            viewState.columnVisibility = .all
+            abandonPendingRemoteConnection(reason: "deep_link_selected")
+            handleWorkspaceSelection(workspace)
             deepLinkState.clearPendingRequest()
+            viewState.didResolveInitialSurface = true
             focusWorkspaceWindow()
-        }
-    }
+            return false
 
-    @MainActor
-    private func maybeAutoSelectRepoForPerf() {
-        guard
-            let firstRepo = bootstrapController.perfAutoSelectedRepo(
-                environment: ProcessInfo.processInfo.environment,
-                didRun: viewState.didRunPerfAutoSelection,
-                pendingRequest: deepLinkState.pendingRequest,
-                repos: repos
-            )
-        else {
-            return
-        }
-
-        viewState.didRunPerfAutoSelection = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            Task { @MainActor in
-                handleRepoTerminalSelection(firstRepo)
+        case .perfAutoSelect(let repo):
+            viewState.didRunPerfAutoSelection = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                Task { @MainActor in
+                    viewState.didResolveInitialSurface = true
+                    handleRepoTerminalSelection(repo)
+                }
             }
-        }
-    }
+            return false
 
-    @MainActor
-    private func maybeApplyFixturePreviewBootstrap() {
-        switch bootstrapController.previewBootstrapDecision(
-            didApply: viewState.didApplyFixturePreviewBootstrap,
-            pendingRequest: deepLinkState.pendingRequest,
-            configuration: fixturePreviewBootstrapConfiguration,
-            repos: repos
-        ) {
-        case .none:
-            return
-        case .noMatch(let configuration):
+        case .recordMissingPreviewBootstrap(let configuration):
             viewState.didApplyFixturePreviewBootstrap = true
             NSLog(
                 "[UIFixture] Preview bootstrap skipped (repo=%@ path=%@)",
                 configuration.repoName,
                 configuration.relativePath
             )
-        case .apply(_, let repo, let selection):
+            return true
+
+        case .applyPreviewBootstrap(_, let repo, let selection):
             viewState.didApplyFixturePreviewBootstrap = true
+            viewState.didResolveInitialSurface = true
             handleRepoTerminalSelection(repo)
             viewState.selectedCodePreview = selection
             viewState.isTerminalPanelVisible = true
@@ -509,51 +613,139 @@ struct ContentView: View {
                 repo.name,
                 selection.relativePath
             )
-        }
-    }
+            return false
 
-    @MainActor
-    private func maybeApplyFixtureWebBootstrap() {
-        switch bootstrapController.webBootstrapDecision(
-            didApply: viewState.didApplyFixtureWebBootstrap,
-            pendingRequest: deepLinkState.pendingRequest,
-            configuration: fixtureWebBootstrapConfiguration,
-            webSources: webSources
-        ) {
-        case .none:
-            return
-        case .noMatch(let targetName):
+        case .recordMissingWebBootstrap(let targetName):
             viewState.didApplyFixtureWebBootstrap = true
             NSLog("[UIFixture] Web bootstrap skipped (target=%@)", targetName)
-        case .select(let targetName, let selectedSource):
+            return true
+
+        case .applyWebBootstrap(let targetName, let selectedSource):
             viewState.didApplyFixtureWebBootstrap = true
+            viewState.didResolveInitialSurface = true
             handleWebSourceSelection(selectedSource)
             NSLog(
                 "[UIFixture] Web bootstrap applied (target=%@ selected=%@)",
                 targetName,
                 selectedSource.name
             )
+            return false
+
+        case .clearInvalidLastSurface:
+            lastSurfaceRawValue = ""
+            return true
+
+        case .restore(let surface):
+            viewState.didResolveInitialSurface = true
+            applyLaunchSurface(surface)
+            return false
+
+        case .fallback(let surface):
+            viewState.didResolveInitialSurface = true
+            applyLaunchSurface(surface)
+            return false
+        }
+    }
+
+    @MainActor
+    private func clearInvalidLastSurfaceIfNeeded() {
+        lastSurfaceRawValue = bootstrapController.sanitizedLastSurfaceRawValue(
+            rawValue: lastSurfaceRawValue,
+            repos: repos,
+            webSources: webSources
+        )
+    }
+
+    @MainActor
+    private func reconcileSelectionAfterModelChange() {
+        clearInvalidLastSurfaceIfNeeded()
+
+        if let selectedWebSource = viewState.selectedWebSource,
+            currentSelectedWebSource == nil
+        {
+            setSelectedWebSource(nil)
+            webSurfaceStore.releaseInactiveSurface()
+            handleSelectedWebSourceRemoval(selectedWebSource)
+            return
+        }
+
+        if let selectedWorkspace = viewState.selectedWorkspace,
+            currentSelectedWorkspace == nil
+        {
+            handleSelectedWorkspaceRemoval(selectedWorkspace)
+            return
+        }
+
+        if viewState.selectedRepoForLandingID != nil,
+            currentSelectedRepoForLanding == nil
+        {
+            handleSelectedRepoRemoval()
+        }
+    }
+
+    @MainActor
+    private func handleSelectedWorkspaceRemoval(_ removedWorkspace: MainWindowWorkspaceSelection) {
+        setSelectedWorkspace(nil)
+        clearCodePreview()
+
+        if let surface = bootstrapController.fallbackSurfaceAfterRemovingWorkspace(
+            repoID: removedWorkspace.repoID,
+            repos: repos,
+            webSources: webSources
+        ) {
+            viewState.didResolveInitialSurface = true
+            applyLaunchSurface(surface)
+            return
+        }
+
+        viewState.didResolveInitialSurface = false
+    }
+
+    @MainActor
+    private func handleSelectedRepoRemoval() {
+        setSelectedRepoForLanding(nil)
+        clearCodePreview()
+
+        applyFallbackAfterInvalidSelection()
+    }
+
+    @MainActor
+    private func applyFallbackAfterInvalidSelection() {
+        viewState.didResolveInitialSurface = false
+        if let surface = bootstrapController.fallbackSurface(repos: repos, webSources: webSources) {
+            viewState.didResolveInitialSurface = true
+            applyLaunchSurface(surface)
+        }
+    }
+
+    @MainActor
+    private func applyLaunchSurface(_ surface: MainWindowLaunchSurface) {
+        switch surface {
+        case .repoOverview(let repo):
+            handleRepoSelection(repo)
+        case .repoTerminal(let repo):
+            handleRepoTerminalSelection(repo)
+        case .workspace(let workspace):
+            handleWorkspaceSelection(workspace)
+        case .webView(let source):
+            handleWebSourceSelection(source)
         }
     }
 
     @MainActor
     private func handleRepoSelection(_ repo: Repo) {
-        viewState.selectedWebSource = nil
-        viewState.selectedWorkspace = nil
-        clearCodePreview()
-        viewState.selectedRepoForLanding = repo
-        viewState.isRightPaneVisible = false
-        viewState.columnVisibility = .all
+        abandonPendingRemoteConnection(reason: "repo_overview_selected")
+        markAccessed(repo: repo)
+        applyNavigationDestination(.repoOverview(repo))
     }
 
     @MainActor
     private func handleRepoTerminalSelection(_ repo: Repo) {
         let repoDirectory = repo.localURL.standardizedFileURL.resolvingSymlinksInPath()
 
-        viewState.selectedWebSource = nil
-        viewState.selectedWorkspace = nil
-        viewState.selectedRepoForLanding = nil
-        clearCodePreview()
+        abandonPendingRemoteConnection(reason: "repo_terminal_selected")
+        markAccessed(repo: repo)
+        applyNavigationDestination(.repoTerminal(repo))
         let session = activateHostSession(
             key: .repoPath(repoDirectory.path),
             directory: repoDirectory
@@ -562,8 +754,6 @@ struct ContentView: View {
             sessionID: session.id,
             repoPath: repoDirectory.path
         )
-        viewState.columnVisibility = .all
-
         terminalFocusCoordinator.requestMainTerminalFocus(
             targetSessionID: session.id,
             surfaceStore: hostTerminalState.surfaceStore,
@@ -593,51 +783,20 @@ struct ContentView: View {
     }
 
     @MainActor
-    private func handleDefaultHostSelection() {
-        terminalFocusCoordinator.cancelPendingRepoClickMeasurement(reason: "default_host_selected")
-        viewState.selectedWebSource = nil
-        viewState.selectedWorkspace = nil
-        viewState.selectedRepoForLanding = nil
-        clearCodePreview()
-        let session = activateHostSession(
-            key: .defaultHome,
-            directory: resolvedDefaultHostDirectory
-        )
-        viewState.columnVisibility = .all
-
-        terminalFocusCoordinator.requestMainTerminalFocus(
-            targetSessionID: session.id,
-            surfaceStore: hostTerminalState.surfaceStore,
-            activeSessionID: hostTerminalState.activeSessionID
-        )
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-            Task { @MainActor in
-                terminalFocusCoordinator.requestMainTerminalFocus(
-                    targetSessionID: session.id,
-                    surfaceStore: hostTerminalState.surfaceStore,
-                    activeSessionID: hostTerminalState.activeSessionID
-                )
-            }
-        }
-    }
-
-    @MainActor
     private func handleWorkspaceSelection(_ workspace: Workspace) {
         terminalFocusCoordinator.cancelPendingRepoClickMeasurement(reason: "workspace_selected")
-        viewState.selectedWebSource = nil
-        viewState.selectedRepoForLanding = nil
-        clearCodePreview()
 
         if workspace.isRemote, let sandboxId = workspace.remoteId {
             handleRemoteWorkspaceSelection(workspace, sandboxId: sandboxId)
         } else {
+            abandonPendingRemoteConnection(reason: "local_workspace_selected")
+            markAccessed(workspace: workspace)
+            applyNavigationDestination(.workspaceTerminal(workspace))
             let workspaceDirectory = workspace.workspaceURL.standardizedFileURL.resolvingSymlinksInPath()
             let session = activateHostSession(
                 key: .hostPath(workspaceDirectory.path),
                 directory: workspaceDirectory
             )
-            viewState.columnVisibility = .all
-
             terminalFocusCoordinator.requestMainTerminalFocus(
                 targetSessionID: session.id,
                 surfaceStore: hostTerminalState.surfaceStore,
@@ -653,6 +812,7 @@ struct ContentView: View {
                 }
             }
         }
+
     }
 
     @MainActor
@@ -664,8 +824,10 @@ struct ContentView: View {
         if workspace.status == .active,
             let existing = hostTerminalState.sessions.first(where: { $0.key == sessionKey })
         {
+            abandonPendingRemoteConnection(reason: "remote_workspace_reused_existing_session")
+            markAccessed(workspace: workspace)
+            applyNavigationDestination(.workspaceTerminal(workspace))
             hostTerminalState.activateExistingSession(sessionID: existing.id)
-            viewState.columnVisibility = .all
             terminalFocusCoordinator.requestMainTerminalFocus(
                 targetSessionID: existing.id,
                 surfaceStore: hostTerminalState.surfaceStore,
@@ -674,18 +836,23 @@ struct ContentView: View {
             return
         }
 
-        // Prevent concurrent connection attempts
-        guard viewState.connectingSandboxId == nil else {
+        switch remoteWorkspaceStateController.selectionDecision(
+            for: workspace,
+            connectingSandboxID: viewState.connectingSandboxId
+        ) {
+        case .ignoreInFlightConnection(let existingSandboxID):
             NSLog(
                 "[RemoteBackend] Ignoring selection — already connecting to %@",
-                viewState.connectingSandboxId ?? ""
+                existingSandboxID
             )
             return
+        case .beginConnection(let pendingSelection):
+            viewState.connectingSandboxId = sandboxId
+            viewState.pendingRemoteWorkspace = pendingSelection
         }
 
         let backend = remoteBackend
         let needsStart = workspace.status == .stopped || workspace.status == .archived
-        viewState.connectingSandboxId = sandboxId
 
         Task {
             do {
@@ -701,15 +868,31 @@ struct ContentView: View {
                 }
 
                 await MainActor.run {
-                    // Stale completion — user clicked something else while we were connecting
-                    guard viewState.connectingSandboxId == sandboxId else { return }
+                    guard let pendingSelection = viewState.pendingRemoteWorkspace else {
+                        return
+                    }
+                    let shouldAcceptCompletion = remoteWorkspaceStateController.shouldAcceptCompletion(
+                        sandboxID: sandboxId,
+                        pendingSelection: pendingSelection
+                    )
+                    guard shouldAcceptCompletion else {
+                        return
+                    }
+                    let currentWorkspace = mainSelectionCoordinator.workspace(
+                        with: pendingSelection.workspaceID,
+                        in: repos
+                    )
+
                     viewState.connectingSandboxId = nil
+                    viewState.pendingRemoteWorkspace = nil
+                    guard let currentWorkspace else { return }
+                    markAccessed(workspace: currentWorkspace)
+                    applyNavigationDestination(.workspaceTerminal(currentWorkspace))
                     let session = activateHostSession(
                         key: sessionKey,
                         directory: placeholderDir,
                         customCommand: info.sshCommand
                     )
-                    viewState.columnVisibility = .all
                     terminalFocusCoordinator.requestMainTerminalFocus(
                         targetSessionID: session.id,
                         surfaceStore: hostTerminalState.surfaceStore,
@@ -720,8 +903,18 @@ struct ContentView: View {
             } catch {
                 NSLog("[RemoteBackend] Failed to connect to sandbox %@: %@", sandboxId, error.localizedDescription)
                 await MainActor.run {
-                    guard viewState.connectingSandboxId == sandboxId else { return }
+                    guard let pendingSelection = viewState.pendingRemoteWorkspace else {
+                        return
+                    }
+                    let shouldAcceptCompletion = remoteWorkspaceStateController.shouldAcceptCompletion(
+                        sandboxID: sandboxId,
+                        pendingSelection: pendingSelection
+                    )
+                    guard shouldAcceptCompletion else {
+                        return
+                    }
                     viewState.connectingSandboxId = nil
+                    viewState.pendingRemoteWorkspace = nil
                     viewState.remoteErrorMessage = error.localizedDescription
                 }
             }
@@ -731,18 +924,15 @@ struct ContentView: View {
     @MainActor
     private func handleWebSourceSelection(_ source: WebSource) {
         terminalFocusCoordinator.cancelPendingRepoClickMeasurement(reason: "web_source_selected")
-        viewState.selectedWorkspace = nil
-        viewState.selectedRepoForLanding = nil
-        clearCodePreview()
-        viewState.isRightPaneVisible = false
-        viewState.selectedWebSource = source
-        viewState.columnVisibility = .all
+        abandonPendingRemoteConnection(reason: "web_source_selected")
+        applyNavigationDestination(.webView(source))
         webSurfaceStore.cancelPendingRelease()
+        markAccessed(webSource: source)
     }
 
     @MainActor
     private func handleWorkspaceCreated() {
-        guard viewState.selectedWorkspace == nil else { return }
+        guard currentSelectedWorkspace == nil else { return }
         viewState.isRightPaneVisible = false
     }
 
@@ -761,8 +951,8 @@ struct ContentView: View {
             case .remoteVM:
                 workspace = try await controller.createRemoteWorkspace(from: repo, name: name)
             }
-            viewState.selectedRepoForLanding = nil
-            viewState.selectedWorkspace = workspace
+            abandonPendingRemoteConnection(reason: "workspace_created")
+            handleWorkspaceSelection(workspace)
         } catch {
             landingErrorMessage = "Failed to create workspace: \(error.localizedDescription)"
         }
@@ -801,6 +991,86 @@ struct ContentView: View {
     }
 
     @MainActor
+    private func addWebSource(
+        rawURL: String,
+        displayName: String,
+        additionalAllowedDomainsRaw: String,
+        target: WebSourceCreationTarget
+    ) {
+        do {
+            let source = try WebSourceCreationSupport.makeSource(
+                rawURL: rawURL,
+                displayName: displayName,
+                additionalAllowedDomainsRaw: additionalAllowedDomainsRaw,
+                target: target,
+                existingSources: webSources
+            )
+
+            modelContext.insert(source)
+            try modelContext.save()
+            handleWebSourceSelection(source)
+        } catch {
+            if let validationError = error as? WebSourceValidationError {
+                landingErrorMessage = validationError.errorDescription
+            } else {
+                landingErrorMessage = error.localizedDescription
+            }
+            modelContext.rollback()
+        }
+    }
+
+    @MainActor
+    private func handleSelectedWebSourceRemoval(_ source: MainWindowWebSourceSelection) {
+        if let lastSurface = MainWindowLastSurface.decode(from: lastSurfaceRawValue),
+            lastSurface.kind == .webView,
+            lastSurface.id == source.webSourceID
+        {
+            lastSurfaceRawValue = ""
+        }
+
+        viewState.didResolveInitialSurface = false
+        if let surface = bootstrapController.fallbackSurfaceAfterRemovingWebSource(
+            ownerWorkspaceID: source.ownerWorkspaceID,
+            ownerRepoID: source.ownerRepoID,
+            repos: repos
+        ) {
+            viewState.didResolveInitialSurface = true
+            applyLaunchSurface(surface)
+        }
+    }
+
+    @MainActor
+    private func markAccessed(repo: Repo) {
+        repo.lastAccessedAt = Date()
+        saveAccessTimestampChanges()
+    }
+
+    @MainActor
+    private func markAccessed(workspace: Workspace) {
+        let accessDate = Date()
+        workspace.lastAccessedAt = accessDate
+        workspace.sourceRepo?.lastAccessedAt = accessDate
+        saveAccessTimestampChanges()
+    }
+
+    @MainActor
+    private func markAccessed(webSource: WebSource) {
+        let accessDate = Date()
+        webSource.lastAccessedAt = accessDate
+        webSource.ownerRepo?.lastAccessedAt = accessDate
+        saveAccessTimestampChanges()
+    }
+
+    @MainActor
+    private func saveAccessTimestampChanges() {
+        do {
+            try modelContext.save()
+        } catch {
+            modelContext.rollback()
+        }
+    }
+
+    @MainActor
     private func handleTerminalProcessExit(sessionID: UUID) {
         NSLog("[HostSession] Process exit detected for session %@", sessionID.uuidString)
         guard
@@ -825,11 +1095,12 @@ struct ContentView: View {
 
     @MainActor
     private func syncSidebarSelectionToActiveSession() {
-        viewState.selectedWorkspace = mainSelectionCoordinator.syncedWorkspaceSelection(
+        let syncedWorkspace = mainSelectionCoordinator.syncedWorkspaceSelection(
             for: activeHostSession,
             repos: repos,
             normalizePath: normalizePath
         )
+        setSelectedWorkspace(syncedWorkspace)
     }
 
     private func syncCloudWorkspaceStatuses() async {
@@ -1002,7 +1273,7 @@ struct ContentView: View {
 
     @MainActor
     private func openSelectedWebSourceInBrowser() {
-        guard let selectedWebSource = viewState.selectedWebSource else { return }
+        guard let selectedWebSource = currentSelectedWebSource else { return }
         let webView = webSurfaceStore.ensureSurface(for: selectedWebSource)
         if let currentURL = webView.url {
             NSWorkspace.shared.open(currentURL)
@@ -1013,7 +1284,7 @@ struct ContentView: View {
 
     @MainActor
     private func reloadSelectedWebSource() {
-        guard let selectedWebSource = viewState.selectedWebSource else { return }
+        guard let selectedWebSource = currentSelectedWebSource else { return }
         let webView = webSurfaceStore.ensureSurface(for: selectedWebSource)
         if let currentURL = webView.url {
             webView.load(URLRequest(url: currentURL))
@@ -1025,6 +1296,62 @@ struct ContentView: View {
     private func clearCodePreview() {
         viewState.selectedCodePreview = nil
         viewState.isTerminalPanelVisible = true
+    }
+
+    private func persistLastSurface(_ surface: MainWindowLastSurface) {
+        lastSurfaceRawValue = surface.rawValue
+    }
+
+    private func terminalContextMenu(for session: HostTerminalSession) -> NSMenu? {
+        guard let target = webSourceCreationTarget(for: session) else { return nil }
+
+        let menu = NSMenu(title: "Terminal")
+        menu.addItem(
+            ContextMenuActionItem.make(
+                title: target.buttonTitle,
+                systemImage: target.iconName
+            ) {
+                webSourceCreationTarget = target
+            }
+        )
+        return menu
+    }
+
+    private func webSourceCreationTarget(for session: HostTerminalSession) -> WebSourceCreationTarget? {
+        switch session.key {
+        case .repoPath(let repoPath):
+            let normalizedRepoPath = normalizePath(repoPath)
+            guard let repo = repos.first(where: { normalizePath($0.localPath) == normalizedRepoPath }) else {
+                return nil
+            }
+            return .repo(repo)
+
+        case .hostPath(let workspacePath):
+            let normalizedWorkspacePath = normalizePath(workspacePath)
+            guard
+                let workspace =
+                    repos
+                    .flatMap(\.workspaces)
+                    .first(where: { normalizePath($0.path) == normalizedWorkspacePath })
+            else {
+                return nil
+            }
+            return .workspace(workspace)
+
+        case .remoteSandbox(let sandboxID):
+            guard
+                let workspace =
+                    repos
+                    .flatMap(\.workspaces)
+                    .first(where: { $0.remoteId == sandboxID })
+            else {
+                return nil
+            }
+            return .workspace(workspace)
+
+        case .defaultHome:
+            return nil
+        }
     }
 
     @MainActor
@@ -1100,17 +1427,51 @@ struct ContentView: View {
     }
 }
 
+@MainActor
+private final class ContextMenuActionItem: NSObject {
+    private let action: () -> Void
+
+    init(action: @escaping () -> Void) {
+        self.action = action
+    }
+
+    @objc
+    private func performAction(_ sender: Any?) {
+        _ = sender
+        action()
+    }
+
+    static func make(
+        title: String,
+        systemImage: String,
+        action: @escaping () -> Void
+    ) -> NSMenuItem {
+        let handler = ContextMenuActionItem(action: action)
+        let item = NSMenuItem(
+            title: title,
+            action: #selector(ContextMenuActionItem.performAction(_:)),
+            keyEquivalent: ""
+        )
+        item.target = handler
+        item.representedObject = handler
+        item.image = NSImage(systemSymbolName: systemImage, accessibilityDescription: title)
+        return item
+    }
+}
+
 // MARK: - Main Terminal (Host-pinned)
 
 struct MainTerminalDetailView: View {
     let selectedWorkspace: Workspace?
     let selectedRepo: Repo?
+    let activeHostSession: HostTerminalSession?
     let hostTerminalSessions: [HostTerminalSession]
     let activeHostTerminalSessionID: UUID?
     let activeSplitHostSession: HostTerminalSession?
     let activeSplitLayout: HostTerminalStateStore.SplitPaneLayout?
     let activeSplitFraction: CGFloat?
     let hostSurfaceStore: HostTerminalSurfaceStore
+    let terminalContextMenuProvider: (HostTerminalSession) -> NSMenu?
     let onSplitFractionChanged: (CGFloat) -> Void
     var onTerminalProcessExit: ((UUID) -> Void)?
     @Binding var selectedCodePreview: CodePreviewSelection?
@@ -1147,7 +1508,7 @@ struct MainTerminalDetailView: View {
                 }
             }
         }
-        .navigationTitle(selectedWorkspace?.name ?? "Host")
+        .navigationTitle(navigationTitle)
     }
 
     @ViewBuilder
@@ -1196,8 +1557,30 @@ struct MainTerminalDetailView: View {
             splitFraction: activeSplitFraction,
             surfaceStore: hostSurfaceStore,
             onSplitFractionChanged: onSplitFractionChanged,
-            onTerminalProcessExit: onTerminalProcessExit
+            onTerminalProcessExit: onTerminalProcessExit,
+            contextMenuProvider: terminalContextMenuProvider
         )
+    }
+
+    private var navigationTitle: String {
+        if let selectedWorkspace {
+            return selectedWorkspace.name
+        }
+
+        if let selectedRepo {
+            return selectedRepo.name
+        }
+
+        guard let activeHostSession else { return "WorkspaceManager" }
+
+        switch activeHostSession.key {
+        case .defaultHome:
+            return "WorkspaceManager"
+        case .repoPath, .hostPath:
+            return activeHostSession.directoryURL.lastPathComponent
+        case .remoteSandbox(let sandboxID):
+            return selectedWorkspace?.name ?? "Sandbox \(sandboxID)"
+        }
     }
 }
 
@@ -1227,11 +1610,13 @@ struct SandboxConnectingOverlay: View {
 
 private struct ContentViewPreviewHost: View {
     @State private var deepLinkState = WorkspaceDeepLinkState()
+    @State private var lastSurfaceRawValue = ""
     @StateObject private var hostTerminalState = HostTerminalStateStore()
 
     var body: some View {
         ContentView(
             deepLinkState: $deepLinkState,
+            lastSurfaceRawValue: $lastSurfaceRawValue,
             hostTerminalState: hostTerminalState
         )
     }
