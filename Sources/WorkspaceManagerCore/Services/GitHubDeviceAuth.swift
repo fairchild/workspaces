@@ -78,7 +78,9 @@ public actor GitHubDeviceAuth: GitHubDeviceAuthProtocol {
         request.httpBody = try JSONEncoder().encode(body)
 
         let (data, response) = try await session.data(for: request)
-        let httpResponse = response as! HTTPURLResponse
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw DeviceAuthError.requestFailed(-1)
+        }
 
         guard httpResponse.statusCode == 200 else {
             log.error("Device code request failed: \(httpResponse.statusCode)")
