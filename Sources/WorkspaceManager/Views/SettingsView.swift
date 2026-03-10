@@ -149,6 +149,17 @@ struct SettingsView: View {
             } header: {
                 Text("Notifications")
             }
+
+            Section {
+                HStack {
+                    Text("Version")
+                    Spacer()
+                    Text(Self.versionString)
+                        .foregroundStyle(.secondary)
+                }
+            } header: {
+                Text("About")
+            }
         }
         .formStyle(.grouped)
         .frame(width: 500, height: 450)
@@ -244,6 +255,12 @@ struct SettingsView: View {
                 Task { await notificationCoordinator.startDeviceFlow() }
             }
         }
+    }
+
+    private static var versionString: String {
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
+        return "\(version) (\(build))"
     }
 }
 

@@ -103,9 +103,17 @@ final class NotificationCoordinator: NotificationCoordinatorProtocol, Observable
         refreshTask = nil
         currentRemoteURL = nil
 
-        try? KeychainHelper.delete(key: NotificationConstants.keychainJWTKey)
-        try? KeychainHelper.delete(key: NotificationConstants.keychainLoginKey)
-        try? KeychainHelper.delete(key: NotificationConstants.keychainGitHubTokenKey)
+        for key in [
+            NotificationConstants.keychainJWTKey,
+            NotificationConstants.keychainLoginKey,
+            NotificationConstants.keychainGitHubTokenKey,
+        ] {
+            do {
+                try KeychainHelper.delete(key: key)
+            } catch {
+                log.warning("Failed to delete keychain item \(key): \(error.localizedDescription)")
+            }
+        }
 
         Task { await eventStreamService.disconnect() }
         eventListenerTask?.cancel()
@@ -165,15 +173,17 @@ final class NotificationCoordinator: NotificationCoordinatorProtocol, Observable
     private func startStream(
         remoteURL: String, resetActivity: Bool
     ) async {
-        guard
-            let jwt = try? KeychainHelper.loadString(
-                key: NotificationConstants.keychainJWTKey
-            ),
-            let githubToken = try? KeychainHelper.loadString(
-                key: NotificationConstants.keychainGitHubTokenKey
-            ),
-            let owner = Self.parseOwner(from: remoteURL)
-        else {
+        var jwt: String?
+        var githubToken: String?
+        do {
+            jwt = try KeychainHelper.loadString(key: NotificationConstants.keychainJWTKey)
+            githubToken = try KeychainHelper.loadString(key: NotificationConstants.keychainGitHubTokenKey)
+        } catch {
+            log.error("Failed to load credentials from keychain: \(error.localizedDescription)")
+            jwt = nil
+            githubToken = nil
+        }
+        guard let jwt, let githubToken, let owner = Self.parseOwner(from: remoteURL) else {
             await eventStreamService.disconnect()
             isStreamConnected = false
             return

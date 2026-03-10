@@ -47,7 +47,9 @@ public actor NotificationSessionService: NotificationSessionServiceProtocol {
         request.httpBody = try JSONEncoder().encode(["github_token": githubToken])
 
         let (data, response) = try await session.data(for: request)
-        let httpResponse = response as! HTTPURLResponse
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw NotificationSessionError.invalidResponse
+        }
 
         guard httpResponse.statusCode == 200 else {
             let body = String(data: data, encoding: .utf8) ?? "(no body)"

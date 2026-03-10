@@ -1,24 +1,38 @@
 import Foundation
 import Security
 
-public enum KeychainError: Error {
+public enum KeychainError: LocalizedError {
     case saveFailed(OSStatus)
     case loadFailed(OSStatus)
     case deleteFailed(OSStatus)
     case unexpectedData
+
+    public var errorDescription: String? {
+        switch self {
+        case .saveFailed(let status):
+            "Keychain save failed (OSStatus \(status))"
+        case .loadFailed(let status):
+            "Keychain load failed (OSStatus \(status))"
+        case .deleteFailed(let status):
+            "Keychain delete failed (OSStatus \(status))"
+        case .unexpectedData:
+            "Keychain returned unexpected data"
+        }
+    }
 }
 
 public enum KeychainHelper {
     private static let service = "com.cloudcompute.workspaces"
 
     public static func save(key: String, data: Data) throws {
-        // Delete existing item first to avoid duplicates
-        let deleteQuery: [String: Any] = [
+        let baseQuery: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: key,
         ]
-        SecItemDelete(deleteQuery as CFDictionary)
+
+        // Try deleting any existing item first
+        SecItemDelete(baseQuery as CFDictionary)
 
         let addQuery: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -29,6 +43,20 @@ public enum KeychainHelper {
         ]
 
         let status = SecItemAdd(addQuery as CFDictionary, nil)
+
+        if status == errSecDuplicateItem {
+            // Delete failed silently (e.g. item owned by different signing identity).
+            // Fall back to update-in-place.
+            let updateStatus = SecItemUpdate(
+                baseQuery as CFDictionary,
+                [kSecValueData as String: data] as CFDictionary
+            )
+            guard updateStatus == errSecSuccess else {
+                throw KeychainError.saveFailed(updateStatus)
+            }
+            return
+        }
+
         guard status == errSecSuccess else {
             throw KeychainError.saveFailed(status)
         }

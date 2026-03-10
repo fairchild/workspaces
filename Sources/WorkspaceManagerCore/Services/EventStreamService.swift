@@ -83,7 +83,10 @@ public actor EventStreamService: EventStreamServiceProtocol {
             let jwt = currentJWT
         else { return }
 
-        var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)!
+        guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
+            log.error("Failed to parse base URL for WebSocket")
+            return
+        }
         components.scheme = baseURL.scheme == "http" ? "ws" : "wss"
         components.path = "/ws/\(owner)"
 
@@ -141,9 +144,13 @@ public actor EventStreamService: EventStreamServiceProtocol {
                     _lastDisconnectReason = .transportError
                     log.warning("WebSocket disconnected: \(error.localizedDescription)")
                     await scheduleReconnect()
-                } else {
+                } else if Self.isAuthError(error) {
                     _lastDisconnectReason = .authFailure
-                    log.error("WebSocket connection rejected: \(error.localizedDescription)")
+                    log.error("WebSocket auth rejected: \(error.localizedDescription)")
+                } else {
+                    _lastDisconnectReason = .transportError
+                    log.warning("WebSocket connection failed (will retry): \(error.localizedDescription)")
+                    await scheduleReconnect()
                 }
                 return
             }
@@ -208,6 +215,20 @@ public actor EventStreamService: EventStreamServiceProtocol {
             guard !Task.isCancelled, let task else { return }
             task.sendPing { _ in }
         }
+    }
+
+    private static func isAuthError(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        // URLSession WebSocket reports HTTP 401/403 as POSIXError or URLError
+        // with specific codes; network timeouts use different domains/codes.
+        if nsError.domain == NSURLErrorDomain {
+            // Explicit server rejection codes (not timeouts or connectivity)
+            return [
+                NSURLErrorUserAuthenticationRequired,  // -1013
+                NSURLErrorUserCancelledAuthentication,  // -1012
+            ].contains(nsError.code)
+        }
+        return false
     }
 
     private func scheduleReconnect() async {
