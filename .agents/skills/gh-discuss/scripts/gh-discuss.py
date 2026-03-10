@@ -10,7 +10,7 @@ Usage:
     gh-discuss.py verify
     gh-discuss.py dashboard
     gh-discuss.py list [--unclaimed] [--decisions]
-    gh-discuss.py create TITLE [--body BODY] [--priority P] [--decision]
+    gh-discuss.py create TITLE [--body BODY] [--priority P] [--decision] [--category CAT]
     gh-discuss.py claim NUMBER
     gh-discuss.py update NUMBER MESSAGE
     gh-discuss.py complete NUMBER [--pr PR]
@@ -271,18 +271,25 @@ def cmd_dashboard(args: argparse.Namespace, auth: dict[str, str] | None = None) 
     tasks = repo["general"]["nodes"]
     decisions = repo["qa"]["nodes"]
 
-    unclaimed = [t for t in tasks if "[claimed:" not in t["title"]]
-    claimed = [t for t in tasks if "[claimed:" in t["title"]]
+    ideas = [t for t in tasks if "[idea]" in t["title"]]
+    non_ideas = [t for t in tasks if "[idea]" not in t["title"]]
+    unclaimed = [t for t in non_ideas if "[claimed:" not in t["title"]]
+    claimed = [t for t in non_ideas if "[claimed:" in t["title"]]
     unanswered = [d for d in decisions if not d.get("isAnswered")]
     answered = [d for d in decisions if d.get("isAnswered")]
 
     print(f"=== Dashboard ({info['slug']}) ===\n")
 
-    print(f"Open Tasks: {len(tasks)}  (unclaimed: {len(unclaimed)}, claimed: {len(claimed)})")
+    print(f"Open Tasks: {len(non_ideas)}  (unclaimed: {len(unclaimed)}, claimed: {len(claimed)})")
     for t in unclaimed:
         print(f"  #{t['number']}  {t['title']}")
     for t in claimed:
         print(f"  #{t['number']}  {t['title']}")
+
+    if ideas:
+        print(f"\nIdeas: {len(ideas)}")
+        for t in ideas:
+            print(f"  #{t['number']}  {t['title']}")
 
     print(f"\nPending Decisions: {len(unanswered)}  (answered: {len(answered)})")
     for d in unanswered:
@@ -338,15 +345,21 @@ def cmd_list(args: argparse.Namespace, auth: dict[str, str] | None = None) -> No
 def cmd_create(args: argparse.Namespace, auth: dict[str, str] | None = None) -> None:
     info = repo_info(env=auth)
 
-    if args.decision:
+    if args.category:
+        cat_id = get_category_id(info, args.category)
+        prefix = ""  # caller controls prefix in title
+    elif args.decision:
         cat_id = get_category_id(info, "Q&A")
         prefix = "[decision]"
     else:
         cat_id = get_category_id(info, "General")
         prefix = "[task]"
 
-    raw_title = re.sub(r"^\[(?:task|decision)\]\s*", "", args.title)
-    title = f"{prefix} {raw_title}"
+    if prefix:
+        raw_title = re.sub(r"^\[(?:task|decision|idea)\]\s*", "", args.title)
+        title = f"{prefix} {raw_title}"
+    else:
+        title = args.title  # caller controls full title (--category mode)
     body_parts = [comment_header(), ""]
 
     if args.from_backlog:
@@ -745,6 +758,7 @@ def main() -> None:
     p_create.add_argument("title", nargs="?", default="", help="Discussion title")
     p_create.add_argument("--body", "-b", help="Discussion body")
     p_create.add_argument("--priority", "-p", choices=["p0", "p1", "p2"], help="Priority tag in title")
+    p_create.add_argument("--category", help="Discussion category name (overrides default)")
     p_create.add_argument("--decision", "-d", action="store_true", help="Create as Q&A decision")
     p_create.add_argument("--from-backlog", help="Path to backlog file to sync")
 

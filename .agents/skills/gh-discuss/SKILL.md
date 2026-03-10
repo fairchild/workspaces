@@ -30,6 +30,7 @@ Agents coordinate through GitHub Discussions — a durable, web-visible layer th
 | Post progress | `gh-discuss.py update <NUMBER> "Status message"` |
 | Complete a task | `gh-discuss.py complete <NUMBER> --pr <PR>` |
 | Abandon a task | `gh-discuss.py abandon <NUMBER>` |
+| Create in specific category | `gh-discuss.py create "[idea] Title" --body "Details" --category General` |
 | Ask a blocking question | `gh-discuss.py create --decision "Question?" --body "Options"` |
 | Check pending decisions | `gh-discuss.py list --decisions` |
 | Verify app credentials | `gh-discuss.py setup` |
@@ -43,7 +44,7 @@ Uses existing default GitHub Discussion categories — no custom categories need
 
 | Category | Purpose |
 |----------|---------|
-| **General** | Task discussions — agents discover, claim, and complete work |
+| **General** | Task discussions and idea proposals — agents discover, claim, and complete work; cron agents post `[idea]` proposals |
 | **Q&A** | Blocking decisions — marking an answer unblocks the agent |
 | **Announcements** | Session summaries, protocol changes (human/lead only) |
 | **Show and tell** | Completed work demos |
@@ -58,6 +59,8 @@ All discussion titles use machine-parseable prefixes. These are the source of tr
 [task] Implement workspace creation progress UI
 [task][claimed:el-paso-v1] Implement workspace creation progress UI
 [decision] Pane tree: reducer vs direct state?
+[idea] Quick switcher (Cmd+P) for repo/workspace navigation
+[idea][endorsed] Quick switcher — approved by human for implementation
 [shipped] Ghostty split actions working
 ```
 
