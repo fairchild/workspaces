@@ -1,10 +1,32 @@
 import SwiftUI
 import WorkspaceManagerCore
 
+struct MainWindowWorkspaceSelection: Equatable {
+    let workspaceID: UUID
+    let repoID: UUID?
+
+    init(workspace: Workspace) {
+        workspaceID = workspace.id
+        repoID = workspace.sourceRepo?.id
+    }
+}
+
+struct MainWindowWebSourceSelection: Equatable {
+    let webSourceID: UUID
+    let ownerRepoID: UUID?
+    let ownerWorkspaceID: UUID?
+
+    init(source: WebSource) {
+        webSourceID = source.id
+        ownerRepoID = source.ownerRepo?.id
+        ownerWorkspaceID = source.sourceWorkspace?.id
+    }
+}
+
 struct MainWindowViewState {
-    var selectedWorkspace: Workspace?
-    var selectedWebSource: WebSource?
-    var selectedRepoForLanding: Repo?
+    var selectedWorkspace: MainWindowWorkspaceSelection?
+    var selectedWebSource: MainWindowWebSourceSelection?
+    var selectedRepoForLandingID: UUID?
     var selectedCodePreview: CodePreviewSelection?
     var isTerminalPanelVisible = true
     var isRightPaneVisible = false

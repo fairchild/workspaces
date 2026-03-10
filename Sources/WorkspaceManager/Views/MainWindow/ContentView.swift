@@ -57,14 +57,38 @@ struct ContentView: View {
         )
     }
 
+    private var currentSelectedWorkspace: Workspace? {
+        mainSelectionCoordinator.workspace(with: viewState.selectedWorkspace?.workspaceID, in: repos)
+    }
+
+    private var currentSelectedWebSource: WebSource? {
+        mainSelectionCoordinator.webSource(with: viewState.selectedWebSource?.webSourceID, in: webSources)
+    }
+
+    private var currentSelectedRepoForLanding: Repo? {
+        mainSelectionCoordinator.repo(with: viewState.selectedRepoForLandingID, in: repos)
+    }
+
     private var normalizedRepoPathSnapshot: [String] {
         repos.map { normalizePath($0.localPath) }
     }
 
+    private var repoIDSnapshot: [UUID] {
+        repos.map(\.id)
+    }
+
+    private var workspaceIDSnapshot: [UUID] {
+        repos.flatMap(\.workspaces).map(\.id)
+    }
+
+    private var webSourceIDSnapshot: [UUID] {
+        webSources.map(\.id)
+    }
+
     private var selectedRepoForInspector: Repo? {
         presentationController.selectedRepoForInspector(
-            selectedWorkspace: viewState.selectedWorkspace,
-            selectedWebSource: viewState.selectedWebSource,
+            selectedWorkspace: currentSelectedWorkspace,
+            selectedWebSource: currentSelectedWebSource,
             activeRepoPath: sessionPresentation.activeRepoPath,
             activeHostSession: activeHostSession,
             repos: repos,
@@ -73,7 +97,21 @@ struct ContentView: View {
     }
 
     private var selectedRepoForSidebar: Repo? {
-        viewState.selectedRepoForLanding ?? selectedRepoForInspector
+        currentSelectedRepoForLanding ?? selectedRepoForInspector
+    }
+
+    private var selectedWorkspaceBinding: Binding<Workspace?> {
+        Binding(
+            get: { currentSelectedWorkspace },
+            set: { setSelectedWorkspace($0) }
+        )
+    }
+
+    private var selectedWebSourceBinding: Binding<WebSource?> {
+        Binding(
+            get: { currentSelectedWebSource },
+            set: { setSelectedWebSource($0) }
+        )
     }
 
     private var paneCountBySessionKeyForSidebar: [HostTerminalSessionKey: Int] {
@@ -87,7 +125,7 @@ struct ContentView: View {
 
     private var activeSessionKeyForSidebar: HostTerminalSessionKey? {
         presentationController.activeSessionKeyForSidebar(
-            selectedWebSource: viewState.selectedWebSource,
+            selectedWebSource: currentSelectedWebSource,
             activeSessionID: hostTerminalState.activeSessionID,
             sessions: hostTerminalState.sessions
         )
@@ -108,7 +146,7 @@ struct ContentView: View {
 
     private var hasInspectorTarget: Bool {
         inspectorStateController.hasInspectorTarget(
-            selectedWorkspace: viewState.selectedWorkspace,
+            selectedWorkspace: currentSelectedWorkspace,
             selectedRepo: selectedRepoForInspector
         )
     }
@@ -137,7 +175,7 @@ struct ContentView: View {
     private var openInEditorTarget: OpenInEditorTarget? {
         presentationController.openInEditorTarget(
             selectedCodePreview: viewState.selectedCodePreview,
-            selectedWorkspace: viewState.selectedWorkspace,
+            selectedWorkspace: currentSelectedWorkspace,
             selectedRepo: selectedRepoForInspector
         )
     }
@@ -145,7 +183,7 @@ struct ContentView: View {
     private var openInEditorContextKey: MainWindowOpenInEditorContextKey {
         presentationController.openInEditorContextKey(
             selectedCodePreview: viewState.selectedCodePreview,
-            selectedWorkspace: viewState.selectedWorkspace,
+            selectedWorkspace: currentSelectedWorkspace,
             selectedRepo: selectedRepoForInspector
         )
     }
@@ -169,7 +207,7 @@ struct ContentView: View {
     @ViewBuilder
     private var terminalDetailContent: some View {
         MainTerminalDetailView(
-            selectedWorkspace: viewState.selectedWorkspace,
+            selectedWorkspace: currentSelectedWorkspace,
             selectedRepo: selectedRepoForInspector,
             activeHostSession: activeHostSession,
             hostTerminalSessions: hostTerminalState.sessions,
@@ -201,17 +239,17 @@ struct ContentView: View {
 
     @ViewBuilder
     private var detailContent: some View {
-        if let selectedWebSource = viewState.selectedWebSource {
+        if let selectedWebSource = currentSelectedWebSource {
             WebSourceDetailView(
                 source: selectedWebSource,
                 surfaceStore: webSurfaceStore
             )
-        } else if let selectedRepo = viewState.selectedRepoForLanding {
+        } else if let selectedRepo = currentSelectedRepoForLanding {
             RepoLandingView(
                 repo: selectedRepo,
                 onWorkspaceSelected: { workspace in
-                    viewState.selectedRepoForLanding = nil
-                    viewState.selectedWorkspace = workspace
+                    setSelectedRepoForLanding(nil)
+                    setSelectedWorkspace(workspace)
                 },
                 onWebSourceSelected: handleWebSourceSelection,
                 onOpenTerminal: handleRepoTerminalSelection,
@@ -234,7 +272,7 @@ struct ContentView: View {
             ZStack {
                 terminalDetailContent
                 if viewState.connectingSandboxId != nil {
-                    SandboxConnectingOverlay(workspaceName: viewState.selectedWorkspace?.name)
+                    SandboxConnectingOverlay(workspaceName: currentSelectedWorkspace?.name)
                 }
             }
         }
@@ -246,8 +284,8 @@ struct ContentView: View {
                 repos: repos,
                 webSources: webSources,
                 selectedRepo: selectedRepoForSidebar,
-                selectedWorkspace: $viewState.selectedWorkspace,
-                selectedWebSource: $viewState.selectedWebSource,
+                selectedWorkspace: selectedWorkspaceBinding,
+                selectedWebSource: selectedWebSourceBinding,
                 paneCountBySessionKey: paneCountBySessionKeyForSidebar,
                 activeSessionKey: activeSessionKeyForSidebar,
                 connectingSandboxId: viewState.connectingSandboxId,
@@ -269,7 +307,7 @@ struct ContentView: View {
         baseSplitView
             .toolbar {
                 ToolbarItemGroup(placement: .automatic) {
-                    if let selectedWebSource = viewState.selectedWebSource {
+                    if let selectedWebSource = currentSelectedWebSource {
                         Button {
                             openSelectedWebSourceInBrowser()
                         } label: {
@@ -286,7 +324,7 @@ struct ContentView: View {
                         .help("Reload")
                         .disabled(selectedWebSource.baseURL == nil)
                     } else if let defaultEditor = defaultEditorDescriptor,
-                        let workspace = viewState.selectedWorkspace
+                        let workspace = currentSelectedWorkspace
                     {
                         WorkspaceEditorToolbarButton(
                             workspaceName: workspace.name,
@@ -339,26 +377,23 @@ struct ContentView: View {
                 maybeRestoreLastSurface()
                 maybeApplyFallbackLaunchSurface()
             }
-            .onChange(of: repos.count) { _, _ in
+            .onChange(of: repoIDSnapshot) { _, _ in
                 processPendingDeepLink()
                 maybeAutoSelectRepoForPerf()
                 maybeApplyFixturePreviewBootstrap()
                 maybeApplyFixtureWebBootstrap()
+                reconcileSelectionAfterModelChange()
                 maybeRestoreLastSurface()
                 maybeApplyFallbackLaunchSurface()
+            }
+            .onChange(of: workspaceIDSnapshot) { _, _ in
+                reconcileSelectionAfterModelChange()
             }
             .onChange(of: normalizedRepoPathSnapshot) { _, paths in
                 hostTerminalState.pruneRepoSessions(validRepoPaths: Set(paths))
             }
-            .onChange(of: webSources.map(\.id)) { _, sourceIDs in
-                let validIDs = Set(sourceIDs)
-                if let selectedWebSource = viewState.selectedWebSource,
-                    !validIDs.contains(selectedWebSource.id)
-                {
-                    viewState.selectedWebSource = nil
-                    webSurfaceStore.releaseInactiveSurface()
-                    handleSelectedWebSourceRemoval(selectedWebSource)
-                }
+            .onChange(of: webSourceIDSnapshot) { _, _ in
+                reconcileSelectionAfterModelChange()
                 maybeApplyFixtureWebBootstrap()
                 maybeRestoreLastSurface()
                 maybeApplyFallbackLaunchSurface()
@@ -366,8 +401,8 @@ struct ContentView: View {
             .onChange(of: inspectorTargetIDSet) { _, _ in
                 pruneRightPaneState()
             }
-            .onChange(of: viewState.selectedWorkspace?.id) { _, _ in
-                guard let selectedWorkspace = viewState.selectedWorkspace else {
+            .onChange(of: currentSelectedWorkspace?.id) { _, _ in
+                guard let selectedWorkspace = currentSelectedWorkspace else {
                     Task { await notificationCoordinator.disconnectStream() }
                     return
                 }
@@ -465,6 +500,21 @@ struct ContentView: View {
     }
 
     @MainActor
+    private func setSelectedWorkspace(_ workspace: Workspace?) {
+        viewState.selectedWorkspace = workspace.map(MainWindowWorkspaceSelection.init(workspace:))
+    }
+
+    @MainActor
+    private func setSelectedWebSource(_ source: WebSource?) {
+        viewState.selectedWebSource = source.map(MainWindowWebSourceSelection.init(source:))
+    }
+
+    @MainActor
+    private func setSelectedRepoForLanding(_ repo: Repo?) {
+        viewState.selectedRepoForLandingID = repo?.id
+    }
+
+    @MainActor
     private func processPendingDeepLink() {
         switch bootstrapController.deepLinkDecision(
             pendingRequest: deepLinkState.pendingRequest,
@@ -486,9 +536,9 @@ struct ContentView: View {
                 request.source ?? ""
             )
 
-            viewState.selectedWebSource = nil
-            viewState.selectedRepoForLanding = nil
-            viewState.selectedWorkspace = workspace
+            setSelectedWebSource(nil)
+            setSelectedRepoForLanding(nil)
+            setSelectedWorkspace(workspace)
             clearCodePreview()
             viewState.columnVisibility = .all
             deepLinkState.clearPendingRequest()
@@ -602,15 +652,15 @@ struct ContentView: View {
     private func maybeApplyFallbackLaunchSurface() {
         guard !viewState.didResolveInitialSurface else { return }
         guard deepLinkState.pendingRequest == nil else { return }
-        guard viewState.selectedWorkspace == nil else {
+        guard currentSelectedWorkspace == nil else {
             viewState.didResolveInitialSurface = true
             return
         }
-        guard viewState.selectedRepoForLanding == nil else {
+        guard currentSelectedRepoForLanding == nil else {
             viewState.didResolveInitialSurface = true
             return
         }
-        guard viewState.selectedWebSource == nil else {
+        guard currentSelectedWebSource == nil else {
             viewState.didResolveInitialSurface = true
             return
         }
@@ -629,6 +679,77 @@ struct ContentView: View {
     }
 
     @MainActor
+    private func reconcileSelectionAfterModelChange() {
+        clearInvalidLastSurfaceIfNeeded()
+
+        if let selectedWebSource = viewState.selectedWebSource,
+            currentSelectedWebSource == nil
+        {
+            setSelectedWebSource(nil)
+            webSurfaceStore.releaseInactiveSurface()
+            handleSelectedWebSourceRemoval(selectedWebSource)
+            return
+        }
+
+        if let selectedWorkspace = viewState.selectedWorkspace,
+            currentSelectedWorkspace == nil
+        {
+            handleSelectedWorkspaceRemoval(selectedWorkspace)
+            return
+        }
+
+        if viewState.selectedRepoForLandingID != nil,
+            currentSelectedRepoForLanding == nil
+        {
+            handleSelectedRepoRemoval()
+        }
+    }
+
+    @MainActor
+    private func clearInvalidLastSurfaceIfNeeded() {
+        lastSurfaceRawValue = bootstrapController.sanitizedLastSurfaceRawValue(
+            rawValue: lastSurfaceRawValue,
+            repos: repos,
+            webSources: webSources
+        )
+    }
+
+    @MainActor
+    private func handleSelectedWorkspaceRemoval(_ removedWorkspace: MainWindowWorkspaceSelection) {
+        setSelectedWorkspace(nil)
+        clearCodePreview()
+
+        if let surface = bootstrapController.fallbackSurfaceAfterRemovingWorkspace(
+            repoID: removedWorkspace.repoID,
+            repos: repos,
+            webSources: webSources
+        ) {
+            viewState.didResolveInitialSurface = true
+            applyLaunchSurface(surface)
+            return
+        }
+
+        viewState.didResolveInitialSurface = false
+    }
+
+    @MainActor
+    private func handleSelectedRepoRemoval() {
+        setSelectedRepoForLanding(nil)
+        clearCodePreview()
+
+        applyFallbackAfterInvalidSelection()
+    }
+
+    @MainActor
+    private func applyFallbackAfterInvalidSelection() {
+        viewState.didResolveInitialSurface = false
+        if let surface = bootstrapController.fallbackSurface(repos: repos, webSources: webSources) {
+            viewState.didResolveInitialSurface = true
+            applyLaunchSurface(surface)
+        }
+    }
+
+    @MainActor
     private func applyLaunchSurface(_ surface: MainWindowLaunchSurface) {
         switch surface {
         case .repoOverview(let repo):
@@ -636,7 +757,7 @@ struct ContentView: View {
         case .repoTerminal(let repo):
             handleRepoTerminalSelection(repo)
         case .workspace(let workspace):
-            viewState.selectedWorkspace = workspace
+            setSelectedWorkspace(workspace)
         case .webView(let source):
             handleWebSourceSelection(source)
         }
@@ -644,10 +765,10 @@ struct ContentView: View {
 
     @MainActor
     private func handleRepoSelection(_ repo: Repo) {
-        viewState.selectedWebSource = nil
-        viewState.selectedWorkspace = nil
+        setSelectedWebSource(nil)
+        setSelectedWorkspace(nil)
         clearCodePreview()
-        viewState.selectedRepoForLanding = repo
+        setSelectedRepoForLanding(repo)
         viewState.isRightPaneVisible = false
         viewState.columnVisibility = .all
         persistLastSurface(.init(kind: .repoOverview, id: repo.id))
@@ -657,9 +778,9 @@ struct ContentView: View {
     private func handleRepoTerminalSelection(_ repo: Repo) {
         let repoDirectory = repo.localURL.standardizedFileURL.resolvingSymlinksInPath()
 
-        viewState.selectedWebSource = nil
-        viewState.selectedWorkspace = nil
-        viewState.selectedRepoForLanding = nil
+        setSelectedWebSource(nil)
+        setSelectedWorkspace(nil)
+        setSelectedRepoForLanding(nil)
         clearCodePreview()
         let session = activateHostSession(
             key: .repoPath(repoDirectory.path),
@@ -701,39 +822,10 @@ struct ContentView: View {
     }
 
     @MainActor
-    private func handleDefaultHostSelection() {
-        terminalFocusCoordinator.cancelPendingRepoClickMeasurement(reason: "default_host_selected")
-        viewState.selectedWebSource = nil
-        viewState.selectedWorkspace = nil
-        viewState.selectedRepoForLanding = nil
-        clearCodePreview()
-        let session = activateHostSession(
-            key: .defaultHome,
-            directory: resolvedDefaultHostDirectory
-        )
-        viewState.columnVisibility = .all
-
-        terminalFocusCoordinator.requestMainTerminalFocus(
-            targetSessionID: session.id,
-            surfaceStore: hostTerminalState.surfaceStore,
-            activeSessionID: hostTerminalState.activeSessionID
-        )
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-            Task { @MainActor in
-                terminalFocusCoordinator.requestMainTerminalFocus(
-                    targetSessionID: session.id,
-                    surfaceStore: hostTerminalState.surfaceStore,
-                    activeSessionID: hostTerminalState.activeSessionID
-                )
-            }
-        }
-    }
-
-    @MainActor
     private func handleWorkspaceSelection(_ workspace: Workspace) {
         terminalFocusCoordinator.cancelPendingRepoClickMeasurement(reason: "workspace_selected")
-        viewState.selectedWebSource = nil
-        viewState.selectedRepoForLanding = nil
+        setSelectedWebSource(nil)
+        setSelectedRepoForLanding(nil)
         clearCodePreview()
 
         if workspace.isRemote, let sandboxId = workspace.remoteId {
@@ -841,11 +933,11 @@ struct ContentView: View {
     @MainActor
     private func handleWebSourceSelection(_ source: WebSource) {
         terminalFocusCoordinator.cancelPendingRepoClickMeasurement(reason: "web_source_selected")
-        viewState.selectedWorkspace = nil
-        viewState.selectedRepoForLanding = nil
+        setSelectedWorkspace(nil)
+        setSelectedRepoForLanding(nil)
         clearCodePreview()
         viewState.isRightPaneVisible = false
-        viewState.selectedWebSource = source
+        setSelectedWebSource(source)
         viewState.columnVisibility = .all
         webSurfaceStore.cancelPendingRelease()
         source.lastAccessedAt = Date()
@@ -859,7 +951,7 @@ struct ContentView: View {
 
     @MainActor
     private func handleWorkspaceCreated() {
-        guard viewState.selectedWorkspace == nil else { return }
+        guard currentSelectedWorkspace == nil else { return }
         viewState.isRightPaneVisible = false
     }
 
@@ -878,8 +970,8 @@ struct ContentView: View {
             case .remoteVM:
                 workspace = try await controller.createRemoteWorkspace(from: repo, name: name)
             }
-            viewState.selectedRepoForLanding = nil
-            viewState.selectedWorkspace = workspace
+            setSelectedRepoForLanding(nil)
+            setSelectedWorkspace(workspace)
         } catch {
             landingErrorMessage = "Failed to create workspace: \(error.localizedDescription)"
         }
@@ -947,30 +1039,20 @@ struct ContentView: View {
     }
 
     @MainActor
-    private func handleSelectedWebSourceRemoval(_ source: WebSource) {
+    private func handleSelectedWebSourceRemoval(_ source: MainWindowWebSourceSelection) {
         if let lastSurface = MainWindowLastSurface.decode(from: lastSurfaceRawValue),
             lastSurface.kind == .webView,
-            lastSurface.id == source.id
+            lastSurface.id == source.webSourceID
         {
             lastSurfaceRawValue = ""
         }
 
-        if let workspace =
-            repos
-            .flatMap(\.workspaces)
-            .first(where: { $0.id == source.sourceWorkspace?.id })
-        {
-            viewState.selectedWorkspace = workspace
-            return
-        }
-
-        if let repo = repos.first(where: { $0.id == source.ownerRepo?.id }) {
-            handleRepoSelection(repo)
-            return
-        }
-
         viewState.didResolveInitialSurface = false
-        if let surface = bootstrapController.nonWebFallbackSurface(repos: repos) {
+        if let surface = bootstrapController.fallbackSurfaceAfterRemovingWebSource(
+            ownerWorkspaceID: source.ownerWorkspaceID,
+            ownerRepoID: source.ownerRepoID,
+            repos: repos
+        ) {
             viewState.didResolveInitialSurface = true
             applyLaunchSurface(surface)
         }
@@ -1001,11 +1083,12 @@ struct ContentView: View {
 
     @MainActor
     private func syncSidebarSelectionToActiveSession() {
-        viewState.selectedWorkspace = mainSelectionCoordinator.syncedWorkspaceSelection(
+        let syncedWorkspace = mainSelectionCoordinator.syncedWorkspaceSelection(
             for: activeHostSession,
             repos: repos,
             normalizePath: normalizePath
         )
+        setSelectedWorkspace(syncedWorkspace)
     }
 
     private func syncCloudWorkspaceStatuses() async {
@@ -1178,7 +1261,7 @@ struct ContentView: View {
 
     @MainActor
     private func openSelectedWebSourceInBrowser() {
-        guard let selectedWebSource = viewState.selectedWebSource else { return }
+        guard let selectedWebSource = currentSelectedWebSource else { return }
         let webView = webSurfaceStore.ensureSurface(for: selectedWebSource)
         if let currentURL = webView.url {
             NSWorkspace.shared.open(currentURL)
@@ -1189,7 +1272,7 @@ struct ContentView: View {
 
     @MainActor
     private func reloadSelectedWebSource() {
-        guard let selectedWebSource = viewState.selectedWebSource else { return }
+        guard let selectedWebSource = currentSelectedWebSource else { return }
         let webView = webSurfaceStore.ensureSurface(for: selectedWebSource)
         if let currentURL = webView.url {
             webView.load(URLRequest(url: currentURL))

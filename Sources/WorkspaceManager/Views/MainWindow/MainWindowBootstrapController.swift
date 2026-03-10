@@ -129,32 +129,41 @@ struct MainWindowBootstrapController {
 
         switch savedSurface.kind {
         case .repoOverview:
-            guard let repo = repos.first(where: { $0.id == savedSurface.id }) else {
+            guard let repo = selectionCoordinator.repo(with: savedSurface.id, in: repos) else {
                 return .clearInvalid
             }
             return .select(.repoOverview(repo))
 
         case .repoTerminal:
-            guard let repo = repos.first(where: { $0.id == savedSurface.id }) else {
+            guard let repo = selectionCoordinator.repo(with: savedSurface.id, in: repos) else {
                 return .clearInvalid
             }
             return .select(.repoTerminal(repo))
 
         case .workspaceTerminal:
-            let workspace =
-                repos
-                .flatMap(\.workspaces)
-                .first(where: { $0.id == savedSurface.id })
-            guard let workspace else {
+            guard let workspace = selectionCoordinator.workspace(with: savedSurface.id, in: repos) else {
                 return .clearInvalid
             }
             return .select(.workspace(workspace))
 
         case .webView:
-            guard let source = webSources.first(where: { $0.id == savedSurface.id }) else {
+            guard let source = selectionCoordinator.webSource(with: savedSurface.id, in: webSources) else {
                 return .clearInvalid
             }
             return .select(.webView(source))
+        }
+    }
+
+    func sanitizedLastSurfaceRawValue(
+        rawValue: String,
+        repos: [Repo],
+        webSources: [WebSource]
+    ) -> String {
+        switch restoredSurfaceDecision(rawValue: rawValue, repos: repos, webSources: webSources) {
+        case .clearInvalid:
+            return ""
+        case .none, .select:
+            return rawValue
         }
     }
 
@@ -181,6 +190,34 @@ struct MainWindowBootstrapController {
 
         guard let repo = repos.first else { return nil }
         return .repoOverview(repo)
+    }
+
+    func fallbackSurfaceAfterRemovingWorkspace(
+        repoID: UUID?,
+        repos: [Repo],
+        webSources: [WebSource]
+    ) -> MainWindowLaunchSurface? {
+        if let repo = selectionCoordinator.repo(with: repoID, in: repos) {
+            return .repoOverview(repo)
+        }
+
+        return fallbackSurface(repos: repos, webSources: webSources)
+    }
+
+    func fallbackSurfaceAfterRemovingWebSource(
+        ownerWorkspaceID: UUID?,
+        ownerRepoID: UUID?,
+        repos: [Repo]
+    ) -> MainWindowLaunchSurface? {
+        if let workspace = selectionCoordinator.workspace(with: ownerWorkspaceID, in: repos) {
+            return .workspace(workspace)
+        }
+
+        if let repo = selectionCoordinator.repo(with: ownerRepoID, in: repos) {
+            return .repoOverview(repo)
+        }
+
+        return nonWebFallbackSurface(repos: repos)
     }
 
     func nonWebFallbackSurface(repos: [Repo]) -> MainWindowLaunchSurface? {

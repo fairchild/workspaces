@@ -5,9 +5,7 @@
 //  Landing page shown when clicking a repo — overview of all workspaces.
 //
 
-import AppKit
 import SwiftUI
-import WebKit
 import WorkspaceManagerCore
 
 struct RepoLandingView: View {
@@ -23,7 +21,6 @@ struct RepoLandingView: View {
     let onOpenWorkspaceInEditor: (Workspace) -> Void
 
     @State private var agentStatuses: [UUID: WorkspaceProcessMonitor.AgentStatus] = [:]
-    @State private var bridge = RepoLandingBridge()
 
     private var sortedWorkspaces: [Workspace] {
         repo.workspaces.sorted { $0.lastAccessedAt > $1.lastAccessedAt }
@@ -37,67 +34,13 @@ struct RepoLandingView: View {
         VStack(spacing: 0) {
             repoHeader
             Divider()
-            if let webIndexURL = resolvedWebIndex {
-                RepoLandingWebView(indexURL: webIndexURL, bridge: bridge)
-                    .id(repo.id)
-            } else {
-                overviewContent
-            }
+            overviewContent
         }
         .navigationTitle(repo.name)
         .background(Color(nsColor: .windowBackgroundColor))
         .task(id: repo.id) {
-            await MainActor.run {
-                configureBridge()
-            }
             await pollAgentStatuses()
         }
-    }
-
-    // MARK: - Web Index Resolution
-
-    private var resolvedWebIndex: URL? {
-        // 1. Repo-local override
-        let repoWeb = repo.localURL.appendingPathComponent(".agents/workspaces/index.html")
-        if FileManager.default.fileExists(atPath: repoWeb.path) { return repoWeb }
-        // 2. User-global override
-        let globalWeb = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".agents/workspaces/index.html")
-        if FileManager.default.fileExists(atPath: globalWeb.path) { return globalWeb }
-        // No bundled default — native SwiftUI grid is the default
-        return nil
-    }
-
-    // MARK: - Bridge Wiring
-
-    @MainActor
-    private func configureBridge() {
-        bridge.onReady = { pushDataToWeb() }
-        bridge.onSelectWorkspace = { idString in
-            if let workspace = repo.workspaces.first(where: { $0.id.uuidString == idString }) {
-                onWorkspaceSelected(workspace)
-            }
-        }
-        bridge.onCreateWorkspace = { onNewWorkspace(repo) }
-        bridge.onOpenTerminal = { onOpenTerminal(repo) }
-        bridge.onArchiveWorkspace = { idString in
-            if let workspace = repo.workspaces.first(where: { $0.id.uuidString == idString }) {
-                onArchiveWorkspace(workspace)
-            }
-        }
-        bridge.onOpenInEditor = { idString in
-            if let workspace = repo.workspaces.first(where: { $0.id.uuidString == idString }) {
-                onOpenWorkspaceInEditor(workspace)
-            }
-        }
-        bridge.onRevealInFinder = { idString in
-            if let workspace = repo.workspaces.first(where: { $0.id.uuidString == idString }) {
-                NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: workspace.path)
-            }
-        }
-        // Push data immediately — if the web view is already ready, it renders now.
-        // If not yet ready, the bridge queues it and delivers on "ready".
-        pushDataToWeb()
     }
 
     // MARK: - Header
@@ -248,41 +191,9 @@ struct RepoLandingView: View {
             let statuses = await processMonitor.detectAgents(in: directories)
             await MainActor.run {
                 agentStatuses = statuses
-                pushDataToWeb()
             }
             try? await Task.sleep(for: .seconds(10))
         }
-    }
-
-    // MARK: - Web Data Push
-
-    @MainActor
-    private func pushDataToWeb() {
-        guard resolvedWebIndex != nil else { return }
-        let data = RepoLandingData(
-            repo: .init(
-                name: repo.name,
-                localPath: repo.localPath,
-                remoteURL: repo.remoteURL
-            ),
-            workspaces: sortedWorkspaces.map { ws in
-                let status = agentStatuses[ws.id] ?? .inactive
-                return .init(
-                    id: ws.id.uuidString,
-                    name: ws.name,
-                    branch: ws.gitBranch,
-                    path: ws.path,
-                    status: ws.status.rawValue,
-                    lastAccessedAt: ws.lastAccessedAt.timeIntervalSince1970,
-                    isAgentRunning: status.isAgentRunning,
-                    agentName: status.agentName,
-                    processes: status.processes.map {
-                        .init(displayName: $0.displayName, isKnownAgent: $0.isKnownAgent)
-                    }
-                )
-            }
-        )
-        bridge.pushData(data)
     }
 }
 

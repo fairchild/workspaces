@@ -2,6 +2,21 @@ import Foundation
 import WorkspaceManagerCore
 
 struct MainSelectionCoordinator {
+    func repo(with id: UUID?, in repos: [Repo]) -> Repo? {
+        guard let id else { return nil }
+        return repos.first { $0.id == id }
+    }
+
+    func workspace(with id: UUID?, in repos: [Repo]) -> Workspace? {
+        guard let id else { return nil }
+        return repos.flatMap(\.workspaces).first { $0.id == id }
+    }
+
+    func webSource(with id: UUID?, in webSources: [WebSource]) -> WebSource? {
+        guard let id else { return nil }
+        return webSources.first { $0.id == id }
+    }
+
     func bestWorkspaceMatch(
         for cwd: String,
         repos: [Repo],

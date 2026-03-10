@@ -228,6 +228,19 @@ struct MainWindowBootstrapControllerTests {
         }
     }
 
+    @Test("Sanitized last surface clears invalid stored targets")
+    func sanitizedLastSurfaceClearsInvalidTarget() {
+        let saved = MainWindowLastSurface(kind: .repoTerminal, id: UUID())
+
+        let sanitized = controller.sanitizedLastSurfaceRawValue(
+            rawValue: saved.rawValue,
+            repos: [],
+            webSources: []
+        )
+
+        #expect(sanitized.isEmpty)
+    }
+
     @Test("Fallback prefers most recent workspace before web or repo")
     func fallbackPrefersMostRecentWorkspace() {
         let repo = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))
@@ -306,6 +319,82 @@ struct MainWindowBootstrapControllerTests {
             #expect(selectedWorkspace.id == workspace.id)
         default:
             Issue.record("Expected non-web fallback to prefer the most recent workspace")
+        }
+    }
+
+    @Test("Removing selected workspace falls back to its repo overview when repo remains")
+    func removingSelectedWorkspaceFallsBackToRepoOverview() {
+        let repo = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))
+
+        let fallback = controller.fallbackSurfaceAfterRemovingWorkspace(
+            repoID: repo.id,
+            repos: [repo],
+            webSources: []
+        )
+
+        switch fallback {
+        case .repoOverview(let selectedRepo):
+            #expect(selectedRepo.id == repo.id)
+        default:
+            Issue.record("Expected workspace removal to fall back to the owning repo overview")
+        }
+    }
+
+    @Test("Removing selected workspace falls back to general surface when repo is gone")
+    func removingSelectedWorkspaceFallsBackWhenRepoIsGone() {
+        let fallback = controller.fallbackSurfaceAfterRemovingWorkspace(
+            repoID: UUID(),
+            repos: [],
+            webSources: []
+        )
+
+        switch fallback {
+        case nil:
+            _ = Bool(true)
+        default:
+            Issue.record("Expected workspace removal without a repo to clear back to no surface")
+        }
+    }
+
+    @Test("Removing workspace-owned web view falls back to its workspace")
+    func removingWorkspaceOwnedWebViewFallsBackToWorkspace() {
+        let repo = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))
+        let workspace = Workspace(
+            name: "feature-a",
+            path: URL(fileURLWithPath: "/tmp/alpha/workspaces/feature-a"),
+            sourceRepo: repo
+        )
+        repo.workspaces = [workspace]
+
+        let fallback = controller.fallbackSurfaceAfterRemovingWebSource(
+            ownerWorkspaceID: workspace.id,
+            ownerRepoID: repo.id,
+            repos: [repo]
+        )
+
+        switch fallback {
+        case .workspace(let selectedWorkspace):
+            #expect(selectedWorkspace.id == workspace.id)
+        default:
+            Issue.record("Expected workspace-owned web view removal to return to the workspace")
+        }
+    }
+
+    @Test("Removing repo-owned web view falls back to its repo overview")
+    func removingRepoOwnedWebViewFallsBackToRepoOverview() {
+        let repo = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))
+
+        let fallback = controller.fallbackSurfaceAfterRemovingWebSource(
+            ownerWorkspaceID: nil,
+            ownerRepoID: repo.id,
+            repos: [repo]
+        )
+
+        switch fallback {
+        case .repoOverview(let selectedRepo):
+            #expect(selectedRepo.id == repo.id)
+        default:
+            Issue.record("Expected repo-owned web view removal to return to the repo overview")
         }
     }
 
