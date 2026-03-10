@@ -39,6 +39,7 @@ struct ContentView: View {
     private let bootstrapController = MainWindowBootstrapController()
     private let inspectorStateController = InspectorStateController()
     private let mainSelectionCoordinator = MainSelectionCoordinator()
+    private let navigationStateController = MainWindowNavigationStateController()
     private let presentationController = MainWindowPresentationController()
     private let splitRoutingController = SplitRoutingController()
 
@@ -515,6 +516,18 @@ struct ContentView: View {
     }
 
     @MainActor
+    private func applyNavigationDestination(
+        _ destination: MainWindowNavigationDestination,
+        persistSurface: Bool = true
+    ) {
+        let transition = navigationStateController.transition(to: destination)
+        navigationStateController.apply(transition, to: &viewState)
+        if persistSurface {
+            persistLastSurface(transition.persistedSurface)
+        }
+    }
+
+    @MainActor
     private func processPendingDeepLink() {
         switch bootstrapController.deepLinkDecision(
             pendingRequest: deepLinkState.pendingRequest,
@@ -536,14 +549,9 @@ struct ContentView: View {
                 request.source ?? ""
             )
 
-            setSelectedWebSource(nil)
-            setSelectedRepoForLanding(nil)
-            setSelectedWorkspace(workspace)
-            clearCodePreview()
-            viewState.columnVisibility = .all
+            applyNavigationDestination(.workspaceTerminal(workspace))
             deepLinkState.clearPendingRequest()
             viewState.didResolveInitialSurface = true
-            persistLastSurface(.init(kind: .workspaceTerminal, id: workspace.id))
             focusWorkspaceWindow()
         }
     }
@@ -757,7 +765,7 @@ struct ContentView: View {
         case .repoTerminal(let repo):
             handleRepoTerminalSelection(repo)
         case .workspace(let workspace):
-            setSelectedWorkspace(workspace)
+            handleWorkspaceSelection(workspace)
         case .webView(let source):
             handleWebSourceSelection(source)
         }
@@ -765,23 +773,14 @@ struct ContentView: View {
 
     @MainActor
     private func handleRepoSelection(_ repo: Repo) {
-        setSelectedWebSource(nil)
-        setSelectedWorkspace(nil)
-        clearCodePreview()
-        setSelectedRepoForLanding(repo)
-        viewState.isRightPaneVisible = false
-        viewState.columnVisibility = .all
-        persistLastSurface(.init(kind: .repoOverview, id: repo.id))
+        applyNavigationDestination(.repoOverview(repo))
     }
 
     @MainActor
     private func handleRepoTerminalSelection(_ repo: Repo) {
         let repoDirectory = repo.localURL.standardizedFileURL.resolvingSymlinksInPath()
 
-        setSelectedWebSource(nil)
-        setSelectedWorkspace(nil)
-        setSelectedRepoForLanding(nil)
-        clearCodePreview()
+        applyNavigationDestination(.repoTerminal(repo))
         let session = activateHostSession(
             key: .repoPath(repoDirectory.path),
             directory: repoDirectory
@@ -790,9 +789,6 @@ struct ContentView: View {
             sessionID: session.id,
             repoPath: repoDirectory.path
         )
-        viewState.columnVisibility = .all
-        persistLastSurface(.init(kind: .repoTerminal, id: repo.id))
-
         terminalFocusCoordinator.requestMainTerminalFocus(
             targetSessionID: session.id,
             surfaceStore: hostTerminalState.surfaceStore,
@@ -824,9 +820,7 @@ struct ContentView: View {
     @MainActor
     private func handleWorkspaceSelection(_ workspace: Workspace) {
         terminalFocusCoordinator.cancelPendingRepoClickMeasurement(reason: "workspace_selected")
-        setSelectedWebSource(nil)
-        setSelectedRepoForLanding(nil)
-        clearCodePreview()
+        applyNavigationDestination(.workspaceTerminal(workspace))
 
         if workspace.isRemote, let sandboxId = workspace.remoteId {
             handleRemoteWorkspaceSelection(workspace, sandboxId: sandboxId)
@@ -836,8 +830,6 @@ struct ContentView: View {
                 key: .hostPath(workspaceDirectory.path),
                 directory: workspaceDirectory
             )
-            viewState.columnVisibility = .all
-
             terminalFocusCoordinator.requestMainTerminalFocus(
                 targetSessionID: session.id,
                 surfaceStore: hostTerminalState.surfaceStore,
@@ -854,7 +846,6 @@ struct ContentView: View {
             }
         }
 
-        persistLastSurface(.init(kind: .workspaceTerminal, id: workspace.id))
     }
 
     @MainActor
@@ -933,12 +924,7 @@ struct ContentView: View {
     @MainActor
     private func handleWebSourceSelection(_ source: WebSource) {
         terminalFocusCoordinator.cancelPendingRepoClickMeasurement(reason: "web_source_selected")
-        setSelectedWorkspace(nil)
-        setSelectedRepoForLanding(nil)
-        clearCodePreview()
-        viewState.isRightPaneVisible = false
-        setSelectedWebSource(source)
-        viewState.columnVisibility = .all
+        applyNavigationDestination(.webView(source))
         webSurfaceStore.cancelPendingRelease()
         source.lastAccessedAt = Date()
         do {
@@ -946,7 +932,6 @@ struct ContentView: View {
         } catch {
             modelContext.rollback()
         }
-        persistLastSurface(.init(kind: .webView, id: source.id))
     }
 
     @MainActor
