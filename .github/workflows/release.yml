@@ -167,6 +167,10 @@ jobs:
 
           VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" build/WorkspaceManager.app/Contents/Info.plist)
           BUILD=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" build/WorkspaceManager.app/Contents/Info.plist)
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]] && [[ "${GITHUB_REF_NAME}" != "v${VERSION}" ]]; then
+            echo "::error::Tag/version mismatch: tag=${GITHUB_REF_NAME} plist=v${VERSION}"
+            exit 1
+          fi
           if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
             TAG="${GITHUB_REF_NAME}"
           else
