@@ -8,6 +8,12 @@
 import SwiftUI
 import WorkspaceManagerCore
 
+private enum SidebarTreeMetrics {
+    static let disclosureWidth: CGFloat = 12
+    static let disclosureHeight: CGFloat = 14
+    static let iconColumnWidth: CGFloat = 18
+}
+
 enum SidebarSessionActivity: Equatable {
     case inactive
     case live
@@ -78,14 +84,14 @@ private struct WorkspaceCountBadge: View {
 
     var body: some View {
         Text("\(count)")
-            .font(.caption.monospacedDigit())
+            .font(.caption2.monospacedDigit())
             .fontWeight(.medium)
-            .foregroundStyle(Color.primary.opacity(isCollapsed ? 0.92 : 0.78))
-            .padding(.horizontal, 9)
-            .padding(.vertical, 4)
+            .foregroundStyle(Color.secondary.opacity(isCollapsed ? 0.95 : 0.82))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
             .background(
                 Capsule()
-                    .fill(Color.secondary.opacity(isCollapsed ? 0.14 : 0.08))
+                    .fill(Color.secondary.opacity(isCollapsed ? 0.1 : 0.06))
             )
             .accessibilityLabel("\(count) workspace\(count == 1 ? "" : "s")")
     }
@@ -142,27 +148,25 @@ struct RepoRow: View {
 
     var body: some View {
         let workspaceCount = repo.workspaces.count
+        let showsVisibleQuickActions = showsQuickActions && isHovering
 
         HStack(spacing: 10) {
             Button(action: onToggleExpansion) {
-                Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                    .font(.caption)
-                    .fontWeight(.semibold)
-                    .foregroundStyle(.secondary)
-                    .frame(width: 14, height: 14)
+                repoFolderIcon
             }
             .buttonStyle(.plain)
+            .help(isExpanded ? "Collapse \(repo.name)" : "Expand \(repo.name)")
 
             Button(action: onSelectRepo) {
-                rowContent(workspaceCount: workspaceCount)
+                repoLabelContent(workspaceCount: workspaceCount)
             }
             .buttonStyle(.plain)
 
             if showsQuickActions {
                 repoActionMenu
-                    .opacity(isHovering ? 1 : 0)
-                    .allowsHitTesting(isHovering)
-                    .accessibilityHidden(!isHovering)
+                    .opacity(showsVisibleQuickActions ? 1 : 0)
+                    .allowsHitTesting(showsVisibleQuickActions)
+                    .accessibilityHidden(!showsVisibleQuickActions)
             }
         }
         .padding(.vertical, 2)
@@ -184,14 +188,19 @@ struct RepoRow: View {
         )
     }
 
-    private func rowContent(workspaceCount: Int) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: "folder.fill")
-                .foregroundStyle(
-                    isSelected ? Color.primary : sessionActivity.iconColor(inactiveColor: .secondary)
-                )
-                .frame(width: 18, alignment: .leading)
+    private var repoFolderIcon: some View {
+        Image(systemName: isExpanded ? "folder.fill" : "folder")
+            .foregroundStyle(
+                isSelected
+                    ? Color.primary
+                    : sessionActivity.iconColor(inactiveColor: Color.secondary.opacity(0.82))
+            )
+            .frame(width: SidebarTreeMetrics.iconColumnWidth, alignment: .center)
+            .contentTransition(.symbolEffect(.replace))
+    }
 
+    private func repoLabelContent(workspaceCount: Int) -> some View {
+        HStack(spacing: 10) {
             Text(repo.name)
                 .font(.callout.weight(isSelected || sessionActivity.isActive ? .semibold : .regular))
                 .lineLimit(1)
@@ -200,7 +209,7 @@ struct RepoRow: View {
 
             SessionActivityIndicator(sessionActivity: sessionActivity)
 
-            if workspaceCount > 0, !isExpanded {
+            if workspaceCount > 1, !isExpanded {
                 WorkspaceCountBadge(
                     count: workspaceCount,
                     isCollapsed: true
@@ -230,12 +239,21 @@ struct RepoRow: View {
             }
         } label: {
             Image(systemName: "plus")
-                .font(.caption.weight(.semibold))
+                .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(.secondary)
-                .frame(width: 20, height: 20)
+                .frame(width: 22, height: 22)
+                .background(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(Color.secondary.opacity(0.08))
+                )
+                .overlay {
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .stroke(Color.secondary.opacity(0.08), lineWidth: 1)
+                }
         }
+        .menuIndicator(.hidden)
         .menuStyle(.borderlessButton)
-        .frame(width: 20, height: 20)
+        .frame(width: 22, height: 22)
     }
 }
 
@@ -258,10 +276,12 @@ struct WorkspaceRow: View {
             if showsDisclosure, let onToggleExpansion {
                 Button(action: onToggleExpansion) {
                     Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                        .font(.caption)
-                        .fontWeight(.semibold)
-                        .foregroundStyle(.secondary)
-                        .frame(width: 14, height: 14)
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(.secondary.opacity(0.8))
+                        .frame(
+                            width: SidebarTreeMetrics.disclosureWidth,
+                            height: SidebarTreeMetrics.disclosureHeight
+                        )
                 }
                 .buttonStyle(.plain)
             }
@@ -296,7 +316,7 @@ struct WorkspaceRow: View {
                 if isBusy {
                     ProgressView()
                         .controlSize(.small)
-                        .frame(width: 16, height: 16)
+                        .frame(width: SidebarTreeMetrics.iconColumnWidth, height: 16)
                 } else {
                     Image(
                         systemName: workspace.isRemote
@@ -308,7 +328,7 @@ struct WorkspaceRow: View {
                             ? (workspace.status == .active ? .accentColor : .secondary)
                             : sessionActivity.iconColor(inactiveColor: .secondary)
                     )
-                    .frame(width: 16, alignment: .center)
+                    .frame(width: SidebarTreeMetrics.iconColumnWidth, alignment: .center)
                 }
 
                 Text(workspace.name)

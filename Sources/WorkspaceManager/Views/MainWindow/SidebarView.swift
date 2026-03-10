@@ -432,7 +432,7 @@ struct SidebarView: View {
 
         if !sources.isEmpty {
             ForEach(sources) { source in
-                sidebarWebSourceButton(source, paddingLeading: 28)
+                sidebarWebSourceButton(source, paddingLeading: 18)
             }
         }
     }
@@ -442,7 +442,7 @@ struct SidebarView: View {
         let sources = sortedWorkspaceWebSources(for: workspace)
 
         ForEach(sources) { source in
-            sidebarWebSourceButton(source, paddingLeading: 52)
+            sidebarWebSourceButton(source, paddingLeading: 42)
         }
     }
 

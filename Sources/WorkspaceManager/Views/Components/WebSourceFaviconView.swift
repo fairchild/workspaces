@@ -41,10 +41,11 @@ struct WebSourceFaviconView: View {
                     .scaledToFit()
             } else {
                 Image(systemName: "globe")
-                    .foregroundStyle(.cyan)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.secondary)
             }
         }
-        .frame(width: 18, height: 18, alignment: .leading)
+        .frame(width: 16, height: 16, alignment: .leading)
         .clipShape(.rect(cornerRadius: 3))
         .task(id: source.baseURLString) {
             await loadFavicon()

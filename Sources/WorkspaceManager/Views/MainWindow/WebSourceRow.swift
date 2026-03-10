@@ -13,8 +13,9 @@ struct WebSourceRow: View {
     var isSelected: Bool
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             WebSourceFaviconView(source: source)
+                .frame(width: 18, alignment: .center)
 
             Text(source.name)
                 .font(.callout.weight(isSelected ? .semibold : .regular))
