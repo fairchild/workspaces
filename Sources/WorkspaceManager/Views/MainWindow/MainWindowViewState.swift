@@ -23,10 +23,23 @@ struct MainWindowWebSourceSelection: Equatable {
     }
 }
 
+struct MainWindowPendingRemoteWorkspaceSelection: Equatable {
+    let workspaceID: UUID
+    let workspaceName: String
+    let sandboxID: String
+
+    init(workspace: Workspace, sandboxID: String) {
+        workspaceID = workspace.id
+        workspaceName = workspace.name
+        self.sandboxID = sandboxID
+    }
+}
+
 struct MainWindowViewState {
     var selectedWorkspace: MainWindowWorkspaceSelection?
     var selectedWebSource: MainWindowWebSourceSelection?
     var selectedRepoForLandingID: UUID?
+    var pendingRemoteWorkspace: MainWindowPendingRemoteWorkspaceSelection?
     var selectedCodePreview: CodePreviewSelection?
     var isTerminalPanelVisible = true
     var isRightPaneVisible = false
