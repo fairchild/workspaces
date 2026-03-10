@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.3.0] - 2026-03-10
+
+### Added
+- refine main window navigation and simplify sidebar chrome
+- add notification client with GitHub auth and Activity tab
+- add Cloudflare webhook relay worker with Durable Objects
+- add repo landing page with web bridge and override support
+- add workspace process monitor for agent detection
+- add GitHub App auth for gh-discuss skill (#31)
+- add gh-discuss skill for multi-agent coordination via GitHub Discussions (#27)
+
+### Fixed
+- improve crash safety and reliability
+- address repo landing review feedback
+
+### Other
+- ignore tmp
+- Extract main-window presentation and bootstrap controllers (#29)
+- Complete refinement hardening and start maintainability pass (#28)
+
 ## [0.2.0] - 2026-03-02
 
 ### Added
