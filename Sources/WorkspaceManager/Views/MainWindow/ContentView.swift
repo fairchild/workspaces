@@ -735,6 +735,7 @@ struct ContentView: View {
     @MainActor
     private func handleRepoSelection(_ repo: Repo) {
         abandonPendingRemoteConnection(reason: "repo_overview_selected")
+        markAccessed(repo: repo)
         applyNavigationDestination(.repoOverview(repo))
     }
 
@@ -743,6 +744,7 @@ struct ContentView: View {
         let repoDirectory = repo.localURL.standardizedFileURL.resolvingSymlinksInPath()
 
         abandonPendingRemoteConnection(reason: "repo_terminal_selected")
+        markAccessed(repo: repo)
         applyNavigationDestination(.repoTerminal(repo))
         let session = activateHostSession(
             key: .repoPath(repoDirectory.path),
@@ -788,6 +790,7 @@ struct ContentView: View {
             handleRemoteWorkspaceSelection(workspace, sandboxId: sandboxId)
         } else {
             abandonPendingRemoteConnection(reason: "local_workspace_selected")
+            markAccessed(workspace: workspace)
             applyNavigationDestination(.workspaceTerminal(workspace))
             let workspaceDirectory = workspace.workspaceURL.standardizedFileURL.resolvingSymlinksInPath()
             let session = activateHostSession(
@@ -822,6 +825,7 @@ struct ContentView: View {
             let existing = hostTerminalState.sessions.first(where: { $0.key == sessionKey })
         {
             abandonPendingRemoteConnection(reason: "remote_workspace_reused_existing_session")
+            markAccessed(workspace: workspace)
             applyNavigationDestination(.workspaceTerminal(workspace))
             hostTerminalState.activateExistingSession(sessionID: existing.id)
             terminalFocusCoordinator.requestMainTerminalFocus(
@@ -882,6 +886,7 @@ struct ContentView: View {
                     viewState.connectingSandboxId = nil
                     viewState.pendingRemoteWorkspace = nil
                     guard let currentWorkspace else { return }
+                    markAccessed(workspace: currentWorkspace)
                     applyNavigationDestination(.workspaceTerminal(currentWorkspace))
                     let session = activateHostSession(
                         key: sessionKey,
@@ -922,12 +927,7 @@ struct ContentView: View {
         abandonPendingRemoteConnection(reason: "web_source_selected")
         applyNavigationDestination(.webView(source))
         webSurfaceStore.cancelPendingRelease()
-        source.lastAccessedAt = Date()
-        do {
-            try modelContext.save()
-        } catch {
-            modelContext.rollback()
-        }
+        markAccessed(webSource: source)
     }
 
     @MainActor
@@ -1036,6 +1036,37 @@ struct ContentView: View {
         ) {
             viewState.didResolveInitialSurface = true
             applyLaunchSurface(surface)
+        }
+    }
+
+    @MainActor
+    private func markAccessed(repo: Repo) {
+        repo.lastAccessedAt = Date()
+        saveAccessTimestampChanges()
+    }
+
+    @MainActor
+    private func markAccessed(workspace: Workspace) {
+        let accessDate = Date()
+        workspace.lastAccessedAt = accessDate
+        workspace.sourceRepo?.lastAccessedAt = accessDate
+        saveAccessTimestampChanges()
+    }
+
+    @MainActor
+    private func markAccessed(webSource: WebSource) {
+        let accessDate = Date()
+        webSource.lastAccessedAt = accessDate
+        webSource.ownerRepo?.lastAccessedAt = accessDate
+        saveAccessTimestampChanges()
+    }
+
+    @MainActor
+    private func saveAccessTimestampChanges() {
+        do {
+            try modelContext.save()
+        } catch {
+            modelContext.rollback()
         }
     }
 

@@ -37,6 +37,9 @@ struct SidebarView: View {
     let onRequestWebSourceCreation: (WebSourceCreationTarget) -> Void
     let onWorkspaceCreated: () -> Void
 
+    @AppStorage(SidebarRepoSortMode.storageKey)
+    private var repoSortModeRawValue: String = SidebarRepoSortMode.alphabetical.rawValue
+
     @State private var isAddingRepo = false
     @State private var repoForNewWorkspace: Repo?
     @State private var isRemoteBackendAvailable = false
@@ -55,6 +58,7 @@ struct SidebarView: View {
     @State private var didInitializeRepoExpansion = false
     @State private var sandboxAction: SandboxActionState?
     @State private var workspaceCreationStatusByRepoID: [UUID: WorkspaceCreationStatus] = [:]
+    @State private var repoLastAccessedSnapshotByID: [UUID: Date] = [:]
 
     private var isUIFixtureMode: Bool {
         ProcessInfo.processInfo.environment["WORKSPACES_UI_FIXTURE"] == "1"
@@ -73,15 +77,19 @@ struct SidebarView: View {
         )
     }
 
-    private var recentWorkspaces: [Workspace] {
-        Array(
-            repos
-                .flatMap(\.workspaces)
-                .filter { $0.status != .archived }
-                .sorted { lhs, rhs in
-                    lhs.lastAccessedAt > rhs.lastAccessedAt
-                }
-                .prefix(5)
+    private var repoSortController: SidebarRepoSortController {
+        SidebarRepoSortController()
+    }
+
+    private var repoSortMode: SidebarRepoSortMode {
+        SidebarRepoSortMode(rawValue: repoSortModeRawValue) ?? .alphabetical
+    }
+
+    private var sortedRepos: [Repo] {
+        repoSortController.sortedRepos(
+            repos,
+            mode: repoSortMode,
+            lastAccessedSnapshot: repoLastAccessedSnapshotByID
         )
     }
 
@@ -158,7 +166,6 @@ struct SidebarView: View {
             }
             .focusedSceneValue(\.newWorkspaceAction, handleNewWorkspaceShortcut)
             .onChange(of: selectedWorkspace?.id) { _, _ in
-                updateLastAccessedTimestamp()
                 expandRepoForSelectedWorkspace()
             }
             .onChange(of: selectedWebSource?.id) { _, _ in
@@ -167,10 +174,15 @@ struct SidebarView: View {
             .onChange(of: repos.map(\.id)) { _, _ in
                 pruneExpandedRepos()
                 pruneExpandedWorkspaces()
+                syncRepoSortSnapshot()
+            }
+            .onChange(of: repoSortModeRawValue) { _, _ in
+                syncRepoSortSnapshot(forceRefresh: true)
             }
             .onAppear {
                 initializeExpandedReposIfNeeded()
                 expandContainersForSelectedWebSource()
+                syncRepoSortSnapshot(forceRefresh: false)
                 guard !isRepoAutoImportDisabled else { return }
                 guard !didAttemptDefaultRepoImport else { return }
                 didAttemptDefaultRepoImport = true
@@ -185,10 +197,6 @@ struct SidebarView: View {
 
     private var sidebarList: some View {
         List {
-            if !recentWorkspaces.isEmpty {
-                recentSection
-            }
-
             repositoriesSection
 
             if !globalWebSources.isEmpty {
@@ -197,33 +205,49 @@ struct SidebarView: View {
         }
     }
 
-    private var recentSection: some View {
-        Section("Recent") {
-            ForEach(recentWorkspaces) { workspace in
-                WorkspaceRow(
-                    workspace: workspace,
-                    isSelected: selectedWorkspace?.id == workspace.id,
-                    statusMessage: workspaceStatusMessage(workspace) ?? workspace.sourceRepo?.name,
-                    sessionActivity: sessionActivity(for: sessionKey(for: workspace)),
-                    paneCount: paneCount(for: sessionKey(for: workspace)),
-                    onSelect: {
-                        selectWorkspace(workspace)
-                    }
-                )
-            }
-        }
-    }
-
     private var repositoriesSection: some View {
-        Section("Repositories") {
+        Section {
             if repos.isEmpty {
                 Text("No repositories")
                     .foregroundStyle(.secondary)
                     .font(.callout)
             } else {
-                ForEach(repos) { repo in
+                ForEach(sortedRepos) { repo in
                     repoListRow(repo)
                 }
+            }
+        } header: {
+            repositoriesHeader
+        }
+    }
+
+    private var repositoriesHeader: some View {
+        HStack(spacing: 8) {
+            Text("Repositories")
+            Spacer(minLength: 8)
+            if !repos.isEmpty {
+                Menu {
+                    Picker(
+                        "Sort Repositories",
+                        selection: Binding(
+                            get: { repoSortMode },
+                            set: updateRepoSortMode
+                        )
+                    ) {
+                        ForEach(SidebarRepoSortMode.allCases) { mode in
+                            Text(mode.title).tag(mode)
+                        }
+                    }
+                } label: {
+                    Image(systemName: "arrow.up.arrow.down")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 18, height: 18)
+                        .contentShape(Rectangle())
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .help("Sort repositories")
             }
         }
     }
@@ -742,16 +766,6 @@ struct SidebarView: View {
     }
 
     @MainActor
-    private func updateLastAccessedTimestamp() {
-        guard let selectedWorkspace else { return }
-
-        selectedWorkspace.lastAccessedAt = Date()
-        if !saveModelContext(action: "update workspace access time") {
-            modelContext.rollback()
-        }
-    }
-
-    @MainActor
     private func selectWorkspace(_ workspace: Workspace) {
         // Force a value transition when re-selecting the same workspace so the
         // host session activation path in ContentView runs again.
@@ -942,6 +956,28 @@ struct SidebarView: View {
     private func pruneExpandedWorkspaces() {
         let currentWorkspaceIDs = Set(repos.flatMap(\.workspaces).map(\.id))
         expandedWorkspaceIDs.formIntersection(currentWorkspaceIDs)
+    }
+
+    private func updateRepoSortMode(_ mode: SidebarRepoSortMode) {
+        repoSortModeRawValue = mode.rawValue
+        syncRepoSortSnapshot(forceRefresh: true)
+    }
+
+    private func syncRepoSortSnapshot(forceRefresh: Bool = false) {
+        guard repoSortMode == .lastAccessed else {
+            repoLastAccessedSnapshotByID.removeAll()
+            return
+        }
+
+        let currentRepoIDs = Set(repos.map(\.id))
+        repoLastAccessedSnapshotByID = repoSortController.prunedSnapshot(
+            repoLastAccessedSnapshotByID,
+            validRepoIDs: currentRepoIDs
+        )
+
+        if forceRefresh || repoLastAccessedSnapshotByID.isEmpty {
+            repoLastAccessedSnapshotByID = repoSortController.snapshot(for: repos)
+        }
     }
 
 }

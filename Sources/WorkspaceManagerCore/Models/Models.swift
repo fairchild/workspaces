@@ -16,6 +16,7 @@ public final class Repo {
     public var localPath: String  // Store as String, convert to URL when needed
     public var remoteURL: String?
     public var addedAt: Date
+    public var lastAccessedAt: Date = Date()
 
     @Relationship(deleteRule: .cascade, inverse: \Workspace.sourceRepo)
     public var workspaces: [Workspace] = []
@@ -32,13 +33,15 @@ public final class Repo {
         name: String,
         localPath: URL,
         remoteURL: String? = nil,
-        addedAt: Date = Date()
+        addedAt: Date = Date(),
+        lastAccessedAt: Date = Date()
     ) {
         self.id = id
         self.name = name
         self.localPath = localPath.path
         self.remoteURL = remoteURL
         self.addedAt = addedAt
+        self.lastAccessedAt = lastAccessedAt
     }
 }
 
