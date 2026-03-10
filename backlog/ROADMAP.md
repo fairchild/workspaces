@@ -12,10 +12,10 @@ completed: null
 
 **Vision**: A Mac-native app for managing AI coding sessions. Add repos, fork them into isolated workspaces, run any terminal-based coding agent in an embedded terminal, and track file changes—all without context-switching to Finder or a separate terminal.
 
-## Status Snapshot (2026-03-07)
+## Status Snapshot (2026-03-10)
 
 - Latest shipped release: `v0.1.2` (GitHub release + DMG workflow path healthy).
-- Test baseline: `swift test` is green at 196 tests across 31 suites.
+- Branch validation baseline: `swift test` is green at 270 tests across 45 suites.
 - Daily-driver reliability fixes have landed:
   - shared non-blocking process execution (`ProcessRunner`) adopted across git/workspace/backend services
   - terminal identity hardening on workspace switch and restart generation
@@ -29,13 +29,18 @@ completed: null
 - URL sources + embedded webview MPP support is on mainline:
   - sidebar-managed URL sources with persisted metadata
   - embedded domain-scoped browsing alongside terminal-first routing
+- Main-window/sidebar redesign and navigation hardening are now validated on the active branch:
+  - repo overview is the primary repo destination
+  - scoped web views can be global, repo-owned, or workspace-owned
+  - sidebar chrome is flatter and calmer, with explicit repo sorting replacing the old `Recent` section
+  - launch/selection state is hardened with per-window restore state and deterministic remote-workspace activation
 - Refinement-gate closure work has landed on mainline:
   - Ghostty split shortcut parity (`resize_split`, `equalize_splits`)
   - product/release docs parity and release-script ergonomics hardening
   - main-window coordinator extraction plus inspector/right-pane regression coverage
   - workspace creation progress UX
   - strict-concurrency warning cleanup in the app layer
-- Active implementation focus: terminal-first Apple-native main-window/user-flow redesign, plus maintainability-first quality work that reduces `ContentView`/`SidebarView`/Ghostty integration complexity before new feature breadth.
+- Active implementation focus: maintainability-first quality work that keeps shrinking `ContentView`/`SidebarView`/Ghostty integration complexity now that the main-window redesign direction is validated.
 
 ---
 
@@ -50,13 +55,15 @@ Execution priority is:
 
 ### Product Defaults
 
-- App launch opens a live host terminal in `~/code` by default (fallback to `$HOME/code`, then `$HOME`).
-- Main terminal stays host-pinned by default.
-- Sidebar clicks are explicit terminal actions:
-  - Host Portfolio row returns to the default host session.
-  - Repo/workspace rows open or resume persistent host sessions in those directories.
-- Users can spawn additional regular host terminals from the host context.
-- Sidebar shows live session indicators for repos with active terminals.
+- App launch restores the last active repo overview, repo terminal, workspace terminal, or web view. If the saved surface is invalid, fallback is: most recent workspace, then most recent web view, then first repo overview.
+- Sidebar top-level concepts are `Repositories` and `Web`.
+- Sidebar clicks are explicit context actions:
+  - Repo row opens the repo overview.
+  - Expanded repo rows reveal repo-owned web views first, then workspaces.
+  - Workspace rows open or resume persistent terminal sessions in those directories.
+  - Web rows open embedded web views.
+- Repository ordering is explicit and stable: `Alphabetical` by default, with `Last Accessed` only re-sorted on demand.
+- Sidebar shows live session indicators for repos/workspaces with active terminals.
 
 ### VM Lifecycle Scope
 
@@ -90,7 +97,7 @@ Execution priority is:
 
 ### Best Implementation Order
 
-1. [x] Host-terminal-first foundation and persistent session UX.
+1. [x] Persistent terminal foundation and session UX.
 2. [x] Refinement gate: quality hardening and performance baselining for current feature set.
 3. [ ] Maintainability-first quality pass: continue shrinking oversized integration files and keep verification deterministic.
 4. [ ] Backend abstraction/registry in core while preserving `LocalBackend`.
@@ -126,7 +133,7 @@ The next cycle prioritizes implementation quality for shipped behavior before ex
   - launch-to-first-prompt
   - repo hydration
   - repo-click-to-focused-terminal
-- [ ] No open crash/repro defects around workspace selection and session switching.
+- [x] No known crash/repro defects remain around workspace selection and session switching on the validated branch.
 - [x] Release workflow passes end-to-end from the mainline release flow (signed + notarized DMG published).
 - [x] Product docs (`docs/product_overview.md`, `docs/user-stories.md`) reflect implemented UX.
 
@@ -148,15 +155,16 @@ The next cycle prioritizes implementation quality for shipped behavior before ex
 - **Phases 1-3 complete**: Three-column layout, SwiftData persistence, repo/workspace CRUD, file tree, git status pane
 - **Phase 4 partial**: Keyboard shortcuts, signed + notarized DMG releases through `v0.1.2`, GitHub Actions CI
 - **Terminal migration**: SwiftTerm replaced with GhosttyKit (`libghostty`) for persistent session support
-- **Host-terminal-first UX**: Auto-discovery from `~/code`, persistent per-repo host sessions, live session indicators
-- **URL sources + embedded webview (MPP)**: persisted `WebSource` entries, embedded browsing with domain policy, and terminal/web selection coexistence
+- **Terminal-first repo/workspace UX**: Auto-discovery from `~/code`, repo overview as the primary repo surface, persistent repo/workspace terminals, and live session indicators
+- **URL sources + embedded webview (MPP)**: persisted `WebSource` entries, embedded browsing with global/repo/workspace scope, and terminal/web selection coexistence
 - **Session coordinator**: Manages terminal surface lifecycle, reuse, and focus restoration
 - **Refinement/performance hardening (2026-02-15)**: Signposts, perf baseline report, session regression tests, and memory-policy guardrails (`backlog/done/refinement-performance-followup.md`)
 - **Daily-driver reliability hardening (2026-02-26 to 2026-02-28)**: non-blocking process runner, terminal/workspace identity fixes, recency sort correctness, and release metadata consistency
 - **Open-in-editor polish (PR #18 + follow-up fixes)**: deterministic launch guardrails, launch metrics/signposts, and strengthened shortcut smoke assertions
 - **Editor UX + automation hardening (PR #19)**: external editor service/toolbar action hardening and Tart automation target-manifest/documentation upgrades
 - **Refinement-gate closure (2026-03-07)**: split parity, docs/release parity, main-window/inspector hardening, workspace creation progress, and app-layer strict-concurrency cleanup
-- **185 tests** passing across 29 suites (services, models, session behavior, process runner, app-level routing/UX behaviors)
+- **Main-window/sidebar redesign + navigation hardening (2026-03-10)**: repo overview launch flow, scoped web views, quieter sidebar hierarchy, repo sorting, per-window last-surface restore, and deterministic remote-workspace selection handling
+- **270 tests** passing across 45 suites (services, models, session behavior, process runner, app-level routing/UX behaviors)
 - **Monorepo extraction**: Clean standalone repo, SPM-only build (no Xcode project)
 
 ---
@@ -173,7 +181,6 @@ Prioritization lens for this phase (aligned with `README.md`):
 
 | Item | Effort | Impact | Why now |
 |------|--------|--------|---------|
-| Apple-native main-window redesign | High | High | The product works, but the sidebar hierarchy, context framing, inspector treatment, and first-run/create flows are not yet as calm or native as the terminal-first workflow deserves. See `backlog/apple-native-main-window-redesign_plan.md`. |
 | Main-window/sidebar maintainability pass | Medium | High | `ContentView` and `SidebarView` are still the largest integration files and slow down safe iteration. |
 | Ghostty boundary maintainability | Medium | High | `GhosttySurfaceView` and `GhosttyAppManager` remain the riskiest AppKit/C interop surfaces to modify. |
 | Shared-desktop verification reliability | Medium | Medium | UI evidence capture is still the least deterministic quality loop and slows confident refactors. |
@@ -224,11 +231,10 @@ Summary: backend abstraction/registry, VZTahoeBackend implementation (VM lifecyc
 
 | Item | Category | Priority Band | Pointer |
 |------|----------|---------------|---------|
-| Apple-native main-window redesign | Plan | P0 | `backlog/apple-native-main-window-redesign_plan.md` |
 | Main-window + sidebar maintainability pass | Follow-up | P0 | `backlog/main-window-sidebar-maintainability_followup.md` |
 | Pane-tree terminal tiling model | Plan | P1 | `backlog/pane-tree-tiling_plan.md` |
 | Ghostty appearance hardening | Follow-up | P1 | `backlog/ghostty-appearance-hardening_followup.md` |
-| Shared desktop focus contention hardening | Follow-up | P1 | `backlog/shared-desktop-focus-contention-followup.md` |
+| Shared desktop focus contention hardening | Follow-up | P0 | `backlog/shared-desktop-focus-contention-followup.md` |
 | VZ Tahoe execution brief | Plan | P2 | `backlog/vz-tahoe-execution-brief-plan.md` |
 | Isolation strategy options (research) | Plan | P2 | `backlog/isolation-strategies.md` |
 | tmux per-worktree support | Plan | P3 | `backlog/tmux-support_plan.md` |
@@ -239,6 +245,20 @@ Summary: backend abstraction/registry, VZTahoeBackend implementation (VM lifecyc
 ---
 
 ## Learnings
+
+### 2026-03-10 — Main-window/sidebar redesign landed on active branch
+
+**Context**: The Apple-native main-window redesign plan was executed together with deeper main-window state hardening and sidebar simplification.
+
+**Results**:
+- Repo overview is now the primary repo destination; workspaces and repo-owned web views are launched from there or from the calmer repo tree.
+- The visible `Host` / `Recent` model is gone. Sidebar top-level concepts are now `Repositories` and `Web`.
+- Scoped web views now support global, repo-owned, and workspace-owned ownership.
+- Last-surface restoration is per-window, and remote workspace selection no longer commits visible state before attach succeeds.
+- Repository ordering is explicit and stable with `Alphabetical` and on-demand `Last Accessed` modes.
+- Validation on the branch is green at 270 tests across 45 suites, plus live debug-app launch/capture and `Cmd+B` / `Cmd+D` runtime checks.
+
+**What this changes for planning**: The redesign itself is no longer the blocking priority. The remaining work is maintainability, Ghostty-boundary cleanup, and more deterministic shared-desktop verification.
 
 ### 2026-03-07 — Refinement gate closure + strict-concurrency cleanup
 

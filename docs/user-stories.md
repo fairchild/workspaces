@@ -4,20 +4,21 @@
 
 Workspaces is a Mac app for managing isolated AI coding sessions. Users add git repos, fork them into workspaces, and run terminal-based coding agents (Claude Code, Aider, Codex CLI, or any shell command) in an embedded terminal. Each workspace is a clean copy with automatic setup.
 
-### Current Behavior Snapshot (2026-02-15)
+### Current Behavior Snapshot (2026-03-10)
 
-- App launch defaults to a host terminal rooted at `~/code` (`$HOME/code`, then `$HOME` fallback).
+- App launch restores the last active repo overview, workspace terminal, or web view. If no saved surface is valid, it falls back to the most recent workspace, then web view, then first repo overview.
 - Repositories are auto-discovered from `~/code` (non-recursive) on first load, and can still be managed manually.
-- Sidebar repo/workspace clicks open or resume persistent host terminal sessions for those directories.
-- Workspace rows are nested under expandable repo rows instead of living in a separate sidebar section.
+- Sidebar repo clicks open repo overviews. Workspace clicks open or resume persistent terminal sessions for those directories.
+- Repo-owned web views and workspaces are nested under expandable repo rows.
 - Sidebar shows live-session state so users can see which repos already have an active terminal.
+- Sidebar sorting is explicit: `Alphabetical` by default, with a stable `Last Accessed` option.
 - Workspace creation shows immediate inline progress on the source repo row while copy/setup work runs.
 - Shortcut policy direction: Ghostty bindings should flow through by default; app-specific shortcuts should be limited to wrapper chrome.
 - Ghostty split actions currently support create, focus, resize, and equalize within the app's two-pane split model.
 
 ---
 
-## Story 1: First-Time Setup (Portfolio-First)
+## Story 1: First-Time Setup (Repo-First)
 
 **As a** developer new to Workspaces
 **I want to** add my first repository and create a workspace
@@ -33,11 +34,11 @@ sequenceDiagram
     participant Terminal
 
     User->>App: Launches app
-    App->>App: Resolves host default directory
+    App->>App: Restores last active surface or falls back
     App->>App: Auto-discovers repos in ~/code
-    App-->>User: Shows host terminal + repos
+    App-->>User: Shows repo list and current surface
     User->>App: Clicks a repo row
-    App->>Terminal: Opens/resumes repo host session
+    App-->>User: Opens repo overview
     User->>App: Opens "New Workspace..." for that repo
     App-->>User: Shows name input sheet
     User->>App: Enters "feature-auth" → Create
@@ -71,20 +72,20 @@ sequenceDiagram
 ```
 
 **Sidebar structure:**
-- Repositories section includes a one-click "Host Portfolio" row plus repo rows.
-- Workspaces appear under their source repo when that repo is expanded.
+- Repositories section shows repo rows only.
+- Repo-owned web views and workspaces appear under their source repo when that repo is expanded.
 - Repo rows can show a live terminal indicator and active-session highlight.
 - Selected workspace controls right-pane file/changes context.
-- "Add repository" remains available at the bottom.
+- Repository sorting is available from the `Repositories` header.
 
 ### Steps
 
-1. **Launch app** — Host terminal opens in default code directory.
+1. **Launch app** — App restores the last active surface or falls back to a repo overview.
 2. **Repos hydrate** — App auto-loads top-level git repos from `~/code`.
-3. **Select repo** — Clicking repo opens/resumes a host terminal session in that repo.
+3. **Select repo** — Clicking repo opens its overview.
 4. **Create workspace** — User runs "New Workspace..." and enters a name.
 5. **Progress shown** — Repo row stays expanded and displays coarse creation progress while copy/setup runs.
-6. **Workspace initialized** — Repo copy is created, setup hook runs, workspace appears in sidebar.
+6. **Workspace initialized** — Repo copy is created, setup hook runs, workspace appears in sidebar and opens in the terminal.
 
 ---
 
@@ -313,11 +314,11 @@ sequenceDiagram
 
 ---
 
-## Story 6: Returning to Host Portfolio Context
+## Story 6: Returning to Repo Overview Context
 
 **As a** developer switching between many repos and workspaces
-**I want to** get back to my `~/code` portfolio terminal in one click
-**So that** I can quickly return to broad host-level work
+**I want to** get back to a repo's overview in one click
+**So that** I can launch another workspace or web view without losing context
 
 ### Flow Diagram
 
@@ -325,53 +326,48 @@ sequenceDiagram
 sequenceDiagram
     actor User
     participant Sidebar
-    participant SessionCoord as Session Coordinator
-    participant Terminal
+    participant App
+    participant Overview
 
     User->>Sidebar: Works in repo/workspace sessions
     Note over Sidebar: Live indicators show active sessions
-    User->>Sidebar: Clicks "Host Portfolio" row
-    Sidebar->>SessionCoord: Request .defaultHome session
-    SessionCoord->>SessionCoord: Finds existing host session
-    SessionCoord->>Terminal: Activates host portfolio surface
-    Terminal-->>User: Prior prompt/history restored
+    User->>Sidebar: Clicks repo row
+    Sidebar->>App: Request repo overview
+    App->>Overview: Select repo overview surface
+    Overview-->>User: Shows workspace + web-view actions
 ```
 
 ### ASCII Wireframe
 
 ```
 ┌─────────────────────┐
-│ Host Portfolio  ◀── │ ← User clicks here to return
-│                     │
 │ [repo] my-api LIVE  │ ← Live indicator (has active session)
-│ [repo] frontend     │
+│   🌐 docs           │
+│   > feature-auth    │
+│ [repo] frontend  ◀──│ ← User clicks repo row to return
 │ [repo] services LIVE│
-│                     │
-│ Workspaces          │
-│   feature-auth      │
-│   bugfix-nav        │
-├─────────────────────┤
-│ [+] Add repo        │
 └─────────────────────┘
         │
-        ▼  (after clicking Host Portfolio)
+        ▼  (after clicking repo row)
 ┌─────────────────────────────────────────┐
-│ ~/code $                                │
-│ git log --oneline -5                    │
-│ a1b2c3d feat: add session indicators    │
-│ d4e5f6g fix: terminal focus on switch   │
-│ _                                       │
+│ frontend                                │
+│ ~/code/frontend                         │
 │                                         │
-│ (prior prompt/history intact)           │
+│  Workspaces                             │
+│   • sidebar-cleanup                     │
+│   • release-prep                        │
+│                                         │
+│  Web Views                              │
+│   • docs                                │
 └─────────────────────────────────────────┘
 ```
 
 ### Steps
 
 1. **Work in repo/workspace sessions** — User clicks around and accumulates live sessions.
-2. **Review session indicators** — Sidebar shows which repos have live terminals.
-3. **Click Host Portfolio** — Main terminal switches back to the default host portfolio session.
-4. **Resume prior context** — Existing host prompt/history is still there, ready for input.
+2. **Review session indicators** — Sidebar shows which repos already have active terminals.
+3. **Click repo row** — Main content switches from the workspace terminal back to that repo's overview.
+4. **Launch next action** — User creates a workspace or opens a repo-owned web view from the overview.
 
 ---
 

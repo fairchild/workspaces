@@ -11,15 +11,17 @@ Developers using terminal-based coding agents (Claude Code, Aider, Codex CLI, Co
 
 ## Solution Summary
 
-**Workspaces** is a Mac-native app for terminal-first AI coding with fast context switching. It keeps a persistent host terminal portfolio, discovers local repositories in `~/code`, and lets you spin up isolated workspace copies when needed.
+**Workspaces** is a Mac-native app for terminal-first AI coding with fast context switching. It discovers local repositories in `~/code`, restores the last surface you were using, opens repo overviews for navigation and launch actions, and lets you spin up isolated workspace copies when needed.
 
 Think of it as **a terminal session manager for your code portfolio, with workspace isolation when you need it**.
 
 ## Core Capabilities
 
-- **Host Portfolio Default**: App starts in `~/code` by default (`$HOME/code`, then `$HOME` fallback)
+- **Launch Restoration**: Reopens the last active repo overview, workspace terminal, or web view
 - **Repository Discovery**: Auto-hydrates repositories from `~/code` (non-recursive), with manual add/remove
-- **Persistent Host Sessions**: Click repo/workspace rows to open or resume a live host terminal in that directory
+- **Repo Overview Launcher**: Clicking a repo opens an overview with workspace and web-view actions
+- **Persistent Terminal Sessions**: Repo and workspace terminals resume instead of restarting from scratch
+- **Scoped Web Views**: Global, repo-owned, and workspace-owned web views live alongside terminal contexts
 - **Workspace Creation**: Create isolated workspace copies per repo
 - **Inline Workspace Progress**: Repo rows show coarse creation progress while a workspace copy/setup is in flight
 - **Lifecycle Hooks**: `setup.sh` runs after creation, `archive.sh` runs on close
@@ -31,29 +33,30 @@ Think of it as **a terminal session manager for your code portfolio, with worksp
 
 ## Sidebar Structure
 
-The sidebar centers on a persistent **Host Portfolio** row plus expandable repo rows that reveal their workspaces inline:
+The sidebar is organized around **Repositories** and **Web**. Repo rows open repo overviews; expanded repos reveal repo web views first, then workspaces:
 
 ```
 ┌──────────────────┐
-│ Host Portfolio [LIVE] │  ← One-click return to default host terminal
-│                  │
-│ [repo] my-api LIVE │  ← Repo rows can show live terminal badge
-│   ↳ feature-auth  │  ← Workspace rows live under their repo
-│   ↳ bugfix-nav    │
+│ [repo] my-api     │  ← Click opens repo overview
+│   🌐 docs         │  ← Repo-owned web view
+│   > feature-auth  │  ← Workspace terminal
 │ [repo] frontend   │
 │ [repo] services   │
-│   ↳ release-prep  │
+│   🌐 changelog    │
+│   > release-prep  │
 ├──────────────────┤
-│ [+] Add repo     │  ← Add new repository
+│ Web              │  ← Global web views live here
+│   🌐 GitHub      │
 └──────────────────┘
 ```
 
 **Key interactions:**
-- Click `Host Portfolio` row → switch back to the default `~/code` host session
-- Click repo row → open/resume persistent host terminal session for that repo path
-- Click repo disclosure/expansion → reveal or hide workspaces nested under that repo
-- Click workspace row → open/resume persistent host terminal session for that workspace path and update right pane context
-- Click `+`/`New Workspace` action on a repo → opens "New Workspace" modal and keeps that repo expanded while creation progress is shown inline
+- Click repo row → open the repo overview
+- Click repo disclosure/expansion → reveal or hide repo-owned web views and workspaces
+- Click workspace row → open or resume the persistent terminal session for that workspace and update right pane context
+- Click web row → open the embedded web view for that source
+- Click `+` or `New Workspace` on a repo → open the workspace sheet and keep that repo expanded while creation progress is shown inline
+- Use the repository sort menu to switch between `Alphabetical` and stable `Last Accessed` ordering
 - Click `⋯` on repo row → menu: Reveal in Finder, Remove
 - Click `⋯` on workspace row → menu: Delete, Reveal in Finder
 

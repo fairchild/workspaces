@@ -37,19 +37,19 @@ Each screenshot should show the full app window (three-column layout) in a reali
 
 | Screenshot | Shows | Maps to |
 |------------|-------|---------|
-| **Portfolio overview** | App launch state — sidebar with repos, host terminal at `~/code`, file browser | Story 1: First-Time Setup |
+| **Repo overview** | App launch or return state — sidebar with repos, repo overview, and launch actions | Story 1: First-Time Setup |
 | **AI coding session** | Workspace selected, terminal-based agent running in terminal, files/changes in right pane | Story 1: terminal in use |
 | **Workspace switching** | Multiple workspaces under a repo, live-session indicators in sidebar | Story 2: Switching Between Workspaces |
-| **Parallel experiments** | Two+ workspaces from the same repo visible in sidebar | Story 3: Creating Parallel Experiments |
+| **Parallel experiments** | Repo web views mixed with two+ workspaces under the same repo | Story 3: Creating Parallel Experiments |
 
-Four screenshots is enough. Stories 4-7 (delete, settings, host return, shortcuts) are interaction-based and don't screenshot well — mention them in feature bullets instead.
+Four screenshots is enough. Stories 4-7 (delete, settings, repo-overview return, shortcuts) are interaction-based and don't screenshot well — mention them in feature bullets instead.
 
 ### 3. Feature Bullets
 
 Short list covering what's not shown in screenshots:
 
 - Lifecycle hooks (`setup.sh` / `archive.sh`) for workspace automation
-- One-click return to host portfolio terminal
+- Repo overview as the launch/return surface for workspace and web-view actions
 - Ghostty keybindings pass through — feels like your terminal, not a wrapper
 - Settings for workspace root location
 - CLI for scripting (`WorkspaceManagerCLI`)
@@ -76,10 +76,10 @@ Bottom of page:
 
 Before building the page, capture the four screenshots:
 
-1. **Fresh launch** — Open app with a few repos in `~/code`, no workspace selected. Shows the portfolio overview state.
+1. **Fresh launch or restored overview** — Open app with a few repos in `~/code` and land on a repo overview. Shows the current launch/navigation model.
 2. **Active session** — Select a workspace, run a coding agent (or any command) in terminal. Wait for some output. Shows the app doing its job.
 3. **Multiple workspaces** — Create 2-3 workspaces under one repo. Click between them so sidebar shows live indicators.
-4. **Parallel experiments** — Ensure sidebar shows `approach-a`, `approach-b` (or similar) under the same repo.
+4. **Parallel experiments** — Ensure sidebar shows a repo-owned web view plus `approach-a`, `approach-b` (or similar) under the same repo.
 
 Capture at 2x resolution for Retina. Use the app's actual dark theme — no mocking needed, real screenshots sell better.
 
