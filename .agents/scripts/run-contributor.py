@@ -21,6 +21,9 @@ CLAUDE_TASK = (
     "comments), then propose a new idea only if nothing else needs you. Output ONLY the "
     "JSON block as specified in your prompt."
 )
+REPO_ROOT = Path(__file__).resolve().parents[2]
+GH_DISCUSS_SCRIPT = REPO_ROOT / ".agents" / "skills" / "gh-discuss" / "scripts" / "gh-discuss.py"
+VALIDATOR_SCRIPT = REPO_ROOT / ".agents" / "scripts" / "validate-agent-output.py"
 
 
 def parse_args() -> argparse.Namespace:
@@ -45,6 +48,7 @@ def log(message: str) -> None:
 def run_checked(
     cmd: list[str],
     *,
+    cwd: Path | None = None,
     env: dict[str, str] | None = None,
     input: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
@@ -54,6 +58,7 @@ def run_checked(
         capture_output=True,
         text=True,
         env=env,
+        cwd=cwd,
     )
     if result.returncode != 0:
         command = " ".join(cmd)
@@ -67,6 +72,7 @@ def run_checked(
 def run_optional(
     cmd: list[str],
     *,
+    cwd: Path | None = None,
     env: dict[str, str] | None = None,
     default: str,
 ) -> str:
@@ -75,6 +81,7 @@ def run_optional(
         capture_output=True,
         text=True,
         env=env,
+        cwd=cwd,
     )
     if result.returncode != 0:
         return default
@@ -89,6 +96,7 @@ def repo_owner_name(env: dict[str, str]) -> tuple[str, str]:
 
     result = run_checked(
         ["gh", "repo", "view", "--json", "owner,name"],
+        cwd=REPO_ROOT,
         env=env,
     )
     data = json.loads(result.stdout)
@@ -97,7 +105,7 @@ def repo_owner_name(env: dict[str, str]) -> tuple[str, str]:
 
 def gather_backlog_state() -> str:
     lines: list[str] = []
-    for path in sorted(Path("backlog").glob("*.md")):
+    for path in sorted((REPO_ROOT / "backlog").glob("*.md")):
         status = "unknown"
         try:
             for line in path.read_text().splitlines():
@@ -116,6 +124,7 @@ def gather_context(env: dict[str, str]) -> str:
 
     recent_commits = run_checked(
         ["git", "log", "--oneline", "--since=2 weeks ago"],
+        cwd=REPO_ROOT,
         env=env,
     ).stdout.rstrip()
 
@@ -156,6 +165,7 @@ query($owner: String!, $name: String!) {
                 '\\(.body[:200] | gsub(\\"\\n\\";\\" \\"))") | join(""))"'
             ),
         ],
+        cwd=REPO_ROOT,
         env=env,
         default="",
     ).rstrip()
@@ -172,6 +182,7 @@ query($owner: String!, $name: String!) {
             "--json",
             "number,title,state,labels,assignees",
         ],
+        cwd=REPO_ROOT,
         env=env,
         default="[]\n",
     ).rstrip()
@@ -188,6 +199,7 @@ query($owner: String!, $name: String!) {
             "--json",
             "number,title,author,isDraft,reviewDecision",
         ],
+        cwd=REPO_ROOT,
         env=env,
         default="[]\n",
     ).rstrip()
@@ -220,6 +232,7 @@ def run_claude(prompt_file: Path, context: str, env: dict[str, str]) -> str:
             context,
             CLAUDE_TASK,
         ],
+        cwd=REPO_ROOT,
         env=env,
     ).stdout
 
@@ -227,11 +240,12 @@ def run_claude(prompt_file: Path, context: str, env: dict[str, str]) -> str:
 def validate_output(raw_output: str, env: dict[str, str]) -> tuple[int, str | None, str]:
     log("Validating agent output")
     result = subprocess.run(
-        ["uv", "run", ".agents/scripts/validate-agent-output.py", "--check-dedup"],
+        ["uv", "run", str(VALIDATOR_SCRIPT), "--check-dedup"],
         input=raw_output,
         capture_output=True,
         text=True,
         env=env,
+        cwd=REPO_ROOT,
     )
     if result.returncode == 0:
         return 0, result.stdout, result.stderr
@@ -266,7 +280,7 @@ def route_action(validated_json: str, dry_run: bool, env: dict[str, str]) -> int
             [
                 "uv",
                 "run",
-                ".agents/skills/gh-discuss/scripts/gh-discuss.py",
+                str(GH_DISCUSS_SCRIPT),
                 "create",
                 str(data["title"]),
                 "--body",
@@ -274,6 +288,7 @@ def route_action(validated_json: str, dry_run: bool, env: dict[str, str]) -> int
                 "--category",
                 "General",
             ],
+            cwd=REPO_ROOT,
             env=env,
         )
         return 0
@@ -283,11 +298,12 @@ def route_action(validated_json: str, dry_run: bool, env: dict[str, str]) -> int
             [
                 "uv",
                 "run",
-                ".agents/skills/gh-discuss/scripts/gh-discuss.py",
+                str(GH_DISCUSS_SCRIPT),
                 "update",
                 str(data["discussion_number"]),
                 body,
             ],
+            cwd=REPO_ROOT,
             env=env,
         )
         return 0
@@ -308,6 +324,7 @@ def route_action(validated_json: str, dry_run: bool, env: dict[str, str]) -> int
                     "--body-file",
                     body_file,
                 ],
+                cwd=REPO_ROOT,
                 env=env,
             )
             return 0
@@ -321,6 +338,7 @@ def route_action(validated_json: str, dry_run: bool, env: dict[str, str]) -> int
                     "--body-file",
                     body_file,
                 ],
+                cwd=REPO_ROOT,
                 env=env,
             )
             return 0
@@ -336,8 +354,9 @@ def route_action(validated_json: str, dry_run: bool, env: dict[str, str]) -> int
 
 def main() -> int:
     args = parse_args()
-    if not args.prompt_file.is_file():
-        print(f"error: prompt file not found: {args.prompt_file}", file=sys.stderr)
+    prompt_file = args.prompt_file.resolve()
+    if not prompt_file.is_file():
+        print(f"error: prompt file not found: {prompt_file}", file=sys.stderr)
         return 1
 
     require_env("CLAUDE_CODE_OAUTH_TOKEN")
@@ -345,7 +364,7 @@ def main() -> int:
     env = dict(os.environ)
 
     context = gather_context(env)
-    raw_output = run_claude(args.prompt_file, context, env)
+    raw_output = run_claude(prompt_file, context, env)
     exit_code, validated_json, error_text = validate_output(raw_output, env)
 
     if exit_code == 2 and error_text.startswith("duplicate:"):
