@@ -318,7 +318,7 @@ struct ContentView: View {
     private var splitViewWithToolbar: some View {
         baseSplitView
             .toolbar {
-                ToolbarItem(placement: .automatic) {
+                ToolbarItem(placement: .principal) {
                     AppBuildIdentityBadge(identity: buildIdentity)
                 }
 

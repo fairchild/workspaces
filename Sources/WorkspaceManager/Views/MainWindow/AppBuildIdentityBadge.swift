@@ -19,7 +19,7 @@ struct AppBuildIdentityBadge: View {
                         .font(.system(.caption, design: .monospaced))
                         .lineLimit(1)
                         .truncationMode(.middle)
-                        .frame(maxWidth: 280, alignment: .leading)
+                        .frame(maxWidth: 220, alignment: .leading)
                 }
             }
             .foregroundStyle(.primary)
