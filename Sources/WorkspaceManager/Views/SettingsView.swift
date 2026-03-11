@@ -5,6 +5,7 @@
 //  App settings including configurable workspace location
 //
 
+import AppKit
 import SwiftUI
 import WorkspaceManagerCore
 
@@ -16,7 +17,17 @@ struct SettingsView: View {
     private var notificationsEnabled: Bool = NotificationConstants.defaultEnabled
 
     @State private var showFolderPicker = false
+    @State private var commandLineToolStatus: CommandLineToolStatus
+    @State private var commandLineToolFeedback: String?
+    @State private var commandLineToolFeedbackIsError = false
     @ObservedObject private var notificationCoordinator = NotificationCoordinator.shared
+
+    private let commandLineToolService: CommandLineToolService
+
+    init(commandLineToolService: CommandLineToolService = CommandLineToolService()) {
+        self.commandLineToolService = commandLineToolService
+        _commandLineToolStatus = State(initialValue: commandLineToolService.status())
+    }
 
     private var defaultPath: String {
         FileManager.default.homeDirectoryForCurrentUser
@@ -74,6 +85,66 @@ struct SettingsView: View {
                 }
             } header: {
                 Text("General")
+            }
+
+            Section {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Use Workspaces from Terminal")
+                        .font(.headline)
+
+                    HStack(spacing: 8) {
+                        Image(systemName: commandLineToolStatusSymbolName)
+                            .foregroundStyle(commandLineToolStatusColor)
+                        Text(commandLineToolStatusTitle)
+                            .font(.callout.weight(.medium))
+                    }
+
+                    if let commandPath = commandLineToolStatus.commandPath {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Command Path")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+
+                            Text(commandPath)
+                                .font(.system(.body, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                                .lineLimit(2)
+                                .truncationMode(.middle)
+                        }
+                        .padding(8)
+                        .background(Color(nsColor: .textBackgroundColor))
+                        .clipShape(.rect(cornerRadius: 6))
+                    }
+
+                    Text(commandLineToolStatusDetail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    HStack(spacing: 10) {
+                        if let primaryAction = commandLineToolStatus.primaryAction {
+                            Button(primaryAction.title) {
+                                installCommandLineTool()
+                            }
+                            .buttonStyle(.borderedProminent)
+                        }
+
+                        if commandLineToolStatus.setupCommand != nil {
+                            Button("Copy Setup Command") {
+                                copyCommandLineToolSetupCommand()
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                    }
+
+                    if let commandLineToolFeedback {
+                        Text(commandLineToolFeedback)
+                            .font(.caption)
+                            .foregroundStyle(commandLineToolFeedbackIsError ? .red : .green)
+                    }
+                }
+            } header: {
+                Text("Command Line Tool")
             }
 
             Section {
@@ -162,8 +233,9 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 500, height: 450)
+        .frame(width: 520, height: 540)
         .onAppear {
+            refreshCommandLineToolStatus()
             notificationCoordinator.loadStoredAuth()
         }
         .fileImporter(
@@ -184,6 +256,70 @@ struct SettingsView: View {
             case .failure(let error):
                 print("Folder picker error: \(error)")
             }
+        }
+    }
+
+    private var commandLineToolStatusTitle: String {
+        switch commandLineToolStatus.availability {
+        case .installed:
+            return "Installed"
+        case .notInstalled:
+            return "Not Installed"
+        case .unavailable:
+            return "Unavailable"
+        }
+    }
+
+    private var commandLineToolStatusSymbolName: String {
+        switch commandLineToolStatus.availability {
+        case .installed:
+            return "checkmark.circle.fill"
+        case .notInstalled:
+            return "arrow.down.circle"
+        case .unavailable:
+            return "exclamationmark.triangle.fill"
+        }
+    }
+
+    private var commandLineToolStatusColor: Color {
+        switch commandLineToolStatus.availability {
+        case .installed:
+            return .green
+        case .notInstalled:
+            return .orange
+        case .unavailable:
+            return .red
+        }
+    }
+
+    private var commandLineToolStatusDetail: String {
+        let commandPath = commandLineToolStatus.commandPath ?? "the selected install location"
+
+        switch commandLineToolStatus.reason {
+        case .active:
+            return "The `workspaces` command is ready to open Workspaces from Terminal."
+        case .missing:
+            return "Install the `workspaces` command at \(commandPath) so `workspaces .` opens the current folder."
+        case .missingFromPath:
+            return
+                "The launcher is already linked at \(commandPath), but Terminal may not see that directory yet. Use the copied setup command to prepend it to PATH."
+        case .brokenSymlink:
+            return "The command link exists at \(commandPath), but it no longer points to this app."
+        case .differentTarget(let existingTargetPath):
+            if let existingTargetPath {
+                return "The command at \(commandPath) points to \(existingTargetPath) instead of this app."
+            }
+            return "The command at \(commandPath) points somewhere else and should be repaired."
+        case .conflictingFile:
+            return
+                "A different file already exists at \(commandPath). Move or rename it before installing this launcher."
+        case .shadowedByOtherCommand(let path):
+            return
+                "Another `workspaces` command at \(path) is taking precedence in PATH. Install here, then use the copied setup command to make this location win."
+        case .missingBundledCommand:
+            return "This app build does not include the bundled `workspaces` launcher."
+        case .noWritableInstallLocation:
+            return "No writable install location was found for the `workspaces` command."
         }
     }
 
@@ -255,6 +391,34 @@ struct SettingsView: View {
                 Task { await notificationCoordinator.startDeviceFlow() }
             }
         }
+    }
+
+    private func refreshCommandLineToolStatus() {
+        commandLineToolStatus = commandLineToolService.status()
+    }
+
+    private func installCommandLineTool() {
+        do {
+            commandLineToolStatus = try commandLineToolService.installOrRepair()
+            commandLineToolFeedbackIsError = false
+            if let commandPath = commandLineToolStatus.commandPath {
+                commandLineToolFeedback = "Linked `workspaces` at \(commandPath)."
+            } else {
+                commandLineToolFeedback = "Updated the `workspaces` command."
+            }
+        } catch {
+            commandLineToolFeedbackIsError = true
+            commandLineToolFeedback = error.localizedDescription
+            refreshCommandLineToolStatus()
+        }
+    }
+
+    private func copyCommandLineToolSetupCommand() {
+        guard let setupCommand = commandLineToolStatus.setupCommand else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(setupCommand, forType: .string)
+        commandLineToolFeedbackIsError = false
+        commandLineToolFeedback = "Copied the setup command."
     }
 
     private static var versionString: String {

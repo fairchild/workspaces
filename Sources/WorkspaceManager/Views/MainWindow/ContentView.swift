@@ -44,6 +44,10 @@ struct ContentView: View {
     private let presentationController = MainWindowPresentationController()
     private let splitRoutingController = SplitRoutingController()
 
+    private var launchRepositoryService: LaunchRepositoryService {
+        LaunchRepositoryService(modelContext: modelContext)
+    }
+
     private var sessionPresentation: HostTerminalSessionPresentation {
         hostTerminalState.sessionPresentation
     }
@@ -575,7 +579,53 @@ struct ContentView: View {
             )
 
             abandonPendingRemoteConnection(reason: "deep_link_selected")
-            handleWorkspaceSelection(workspace)
+            handleWorkspaceSelection(
+                workspace,
+                preferredDirectory: URL(fileURLWithPath: request.cwd, isDirectory: true)
+            )
+            deepLinkState.clearPendingRequest()
+            viewState.didResolveInitialSurface = true
+            focusWorkspaceWindow()
+            return false
+
+        case .selectDeepLinkedRepo(let request, let repo):
+            NSLog(
+                "[DeepLink] Matched repo '%@' for cwd '%@' (session_id=%@ source=%@)",
+                repo.name,
+                request.cwd,
+                request.sessionID ?? "",
+                request.source ?? ""
+            )
+
+            abandonPendingRemoteConnection(reason: "deep_link_selected")
+            handleRepoTerminalSelection(
+                repo,
+                preferredDirectory: URL(fileURLWithPath: request.cwd, isDirectory: true)
+            )
+            deepLinkState.clearPendingRequest()
+            viewState.didResolveInitialSurface = true
+            focusWorkspaceWindow()
+            return false
+
+        case .importDeepLinkedRepo(let request, let repoRoot):
+            guard let repo = launchRepositoryService.existingOrImportedRepo(at: repoRoot) else {
+                NSLog("[DeepLink] Failed to import repo for cwd '%@' repo_root='%@'", request.cwd, repoRoot)
+                deepLinkState.clearPendingRequest()
+                return true
+            }
+
+            NSLog(
+                "[DeepLink] Imported repo '%@' for cwd '%@' (repo_root=%@)",
+                repo.name,
+                request.cwd,
+                repoRoot
+            )
+
+            abandonPendingRemoteConnection(reason: "deep_link_repo_imported")
+            handleRepoTerminalSelection(
+                repo,
+                preferredDirectory: URL(fileURLWithPath: request.cwd, isDirectory: true)
+            )
             deepLinkState.clearPendingRequest()
             viewState.didResolveInitialSurface = true
             focusWorkspaceWindow()
@@ -741,14 +791,23 @@ struct ContentView: View {
 
     @MainActor
     private func handleRepoTerminalSelection(_ repo: Repo) {
+        handleRepoTerminalSelection(repo, preferredDirectory: nil)
+    }
+
+    @MainActor
+    private func handleRepoTerminalSelection(_ repo: Repo, preferredDirectory: URL?) {
         let repoDirectory = repo.localURL.standardizedFileURL.resolvingSymlinksInPath()
+        let launchDirectory = preferredSessionDirectory(
+            preferredDirectory,
+            inside: repoDirectory
+        )
 
         abandonPendingRemoteConnection(reason: "repo_terminal_selected")
         markAccessed(repo: repo)
         applyNavigationDestination(.repoTerminal(repo))
         let session = activateHostSession(
             key: .repoPath(repoDirectory.path),
-            directory: repoDirectory
+            directory: launchDirectory
         )
         terminalFocusCoordinator.beginRepoClickMeasurement(
             sessionID: session.id,
@@ -784,6 +843,11 @@ struct ContentView: View {
 
     @MainActor
     private func handleWorkspaceSelection(_ workspace: Workspace) {
+        handleWorkspaceSelection(workspace, preferredDirectory: nil)
+    }
+
+    @MainActor
+    private func handleWorkspaceSelection(_ workspace: Workspace, preferredDirectory: URL?) {
         terminalFocusCoordinator.cancelPendingRepoClickMeasurement(reason: "workspace_selected")
 
         if workspace.isRemote, let sandboxId = workspace.remoteId {
@@ -793,9 +857,13 @@ struct ContentView: View {
             markAccessed(workspace: workspace)
             applyNavigationDestination(.workspaceTerminal(workspace))
             let workspaceDirectory = workspace.workspaceURL.standardizedFileURL.resolvingSymlinksInPath()
+            let launchDirectory = preferredSessionDirectory(
+                preferredDirectory,
+                inside: workspaceDirectory
+            )
             let session = activateHostSession(
                 key: .hostPath(workspaceDirectory.path),
-                directory: workspaceDirectory
+                directory: launchDirectory
             )
             terminalFocusCoordinator.requestMainTerminalFocus(
                 targetSessionID: session.id,
@@ -1413,6 +1481,26 @@ struct ContentView: View {
             guard let terminal = TerminalFocusManager.shared.focusedTerminal else { return }
             TerminalFocusManager.shared.requestFocus(for: terminal)
         }
+    }
+
+    private func preferredSessionDirectory(_ preferredDirectory: URL?, inside root: URL) -> URL {
+        guard let preferredDirectory else { return root }
+
+        let normalizedRoot = root.standardizedFileURL.resolvingSymlinksInPath()
+        let normalizedPreferred = preferredDirectory.standardizedFileURL.resolvingSymlinksInPath()
+        guard path(normalizedPreferred.path, isInside: normalizedRoot.path) else {
+            return normalizedRoot
+        }
+
+        var isDirectory = ObjCBool(false)
+        guard
+            FileManager.default.fileExists(atPath: normalizedPreferred.path, isDirectory: &isDirectory),
+            isDirectory.boolValue
+        else {
+            return normalizedRoot
+        }
+
+        return normalizedPreferred
     }
 
     private func path(_ path: String, isInside root: String) -> Bool {

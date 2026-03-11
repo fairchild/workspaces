@@ -2,6 +2,7 @@ import Foundation
 
 struct WorkspaceDeepLink: Equatable {
     let cwd: String
+    let repoRoot: String?
     let sessionID: String?
     let source: String?
 
@@ -24,6 +25,14 @@ struct WorkspaceDeepLink: Equatable {
         guard normalizedCWD.hasPrefix("/") else { return nil }
 
         cwd = normalizedCWD
+        if let rawRepoRoot = queryItems.first(where: { $0.name == "repo_root" })?.value,
+            !rawRepoRoot.isEmpty
+        {
+            let normalizedRepoRoot = Self.normalizePath(rawRepoRoot)
+            repoRoot = normalizedRepoRoot.hasPrefix("/") ? normalizedRepoRoot : nil
+        } else {
+            repoRoot = nil
+        }
         sessionID = queryItems.first(where: { $0.name == "session_id" })?.value
         source = queryItems.first(where: { $0.name == "source" })?.value
     }

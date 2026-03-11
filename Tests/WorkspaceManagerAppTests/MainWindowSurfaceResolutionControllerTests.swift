@@ -45,6 +45,71 @@ struct MainWindowSurfaceResolutionControllerTests {
         }
     }
 
+    @Test("Repo deep link resolution selects repo terminal when workspace does not match")
+    func repoDeepLinkSelectsRepo() {
+        let repo = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))
+        let deepLink = makeDeepLink(
+            cwd: "/tmp/alpha/Sources/App",
+            repoRoot: "/tmp/alpha"
+        )
+
+        let action = controller.nextAction(
+            context: MainWindowSurfaceResolutionContext(
+                environment: [:],
+                didRunPerfAutoSelection: false,
+                didApplyFixturePreviewBootstrap: false,
+                didApplyFixtureWebBootstrap: false,
+                didResolveInitialSurface: false,
+                pendingRequest: deepLink,
+                lastSurfaceRawValue: "",
+                previewConfiguration: nil,
+                webConfiguration: nil,
+                repos: [repo],
+                webSources: []
+            )
+        )
+
+        switch action {
+        case .selectDeepLinkedRepo(let request, let selectedRepo):
+            #expect(request == deepLink)
+            #expect(selectedRepo.id == repo.id)
+        default:
+            Issue.record("Expected repo deep link to select the repo")
+        }
+    }
+
+    @Test("Repo deep link requests repo import when repo is untracked")
+    func repoDeepLinkRequestsImport() {
+        let deepLink = makeDeepLink(
+            cwd: "/tmp/alpha/Sources/App",
+            repoRoot: "/tmp/alpha"
+        )
+
+        let action = controller.nextAction(
+            context: MainWindowSurfaceResolutionContext(
+                environment: [:],
+                didRunPerfAutoSelection: false,
+                didApplyFixturePreviewBootstrap: false,
+                didApplyFixtureWebBootstrap: false,
+                didResolveInitialSurface: false,
+                pendingRequest: deepLink,
+                lastSurfaceRawValue: "",
+                previewConfiguration: nil,
+                webConfiguration: nil,
+                repos: [],
+                webSources: []
+            )
+        )
+
+        switch action {
+        case .importDeepLinkedRepo(let request, let repoRoot):
+            #expect(request == deepLink)
+            #expect(repoRoot == "/tmp/alpha")
+        default:
+            Issue.record("Expected repo deep link to request repo import")
+        }
+    }
+
     @Test("Resolved initial surface blocks later launch-resolution actions")
     func resolvedInitialSurfaceBlocksLaterActions() {
         let repo = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))
@@ -160,9 +225,11 @@ struct MainWindowSurfaceResolutionControllerTests {
         return Repo(name: name, localPath: repoURL)
     }
 
-    private func makeDeepLink(cwd: String) -> WorkspaceDeepLink {
+    private func makeDeepLink(cwd: String, repoRoot: String? = nil) -> WorkspaceDeepLink {
         let encodedCWD = cwd.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)!
-        let url = URL(string: "workspaces://focus?cwd=\(encodedCWD)")!
+        let encodedRepoRoot = repoRoot?.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)
+        let repoRootQuery = encodedRepoRoot.map { "&repo_root=\($0)" } ?? ""
+        let url = URL(string: "workspaces://focus?cwd=\(encodedCWD)\(repoRootQuery)")!
         return WorkspaceDeepLink(url: url)!
     }
 }

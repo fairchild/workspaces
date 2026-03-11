@@ -19,7 +19,7 @@
     <key>CFBundleDisplayName</key>
     <string>Workspaces</string>
 
-    <!-- Custom URL scheme for focusing an existing workspace -->
+    <!-- Custom URL scheme for focusing an existing directory, repo, or workspace -->
     <key>CFBundleURLTypes</key>
     <array>
         <dict>

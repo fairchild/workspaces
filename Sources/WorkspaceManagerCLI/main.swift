@@ -3,6 +3,7 @@
 //  WorkspaceManagerCLI
 //
 
+import AppKit
 import Darwin
 import Foundation
 import WorkspaceManagerCore
@@ -22,14 +23,32 @@ struct WorkspaceManagerCLI {
 }
 
 private final class CLIApp {
+    private static let appBundleIdentifier = "com.cloudcompute.workspaces"
+    private static let reservedCommands: Set<String> = [
+        "help",
+        "--help",
+        "-h",
+        "repo",
+        "ws",
+        "open",
+        "run",
+        "resume",
+        "status",
+        "recent",
+        "doctor",
+    ]
+
     private let stateStore = CLIStateStore()
     private let workspaceService: WorkspaceService = .shared
     private let gitService: GitService = .shared
 
     func run(arguments: [String]) async throws -> Int32 {
         guard let command = arguments.first else {
-            printHelp()
-            return 0
+            return try launchApp(request: nil)
+        }
+
+        if let launchRequest = try appLaunchRequest(for: arguments) {
+            return try launchApp(request: launchRequest)
         }
 
         var state = try stateStore.load()
@@ -58,6 +77,73 @@ private final class CLIApp {
         default:
             throw CLIError("Unknown command '\(command)'. Run 'workspaces help'.")
         }
+    }
+
+    private func appLaunchRequest(for arguments: [String]) throws -> AppLaunchRequest? {
+        guard arguments.count == 1 else { return nil }
+        guard let rawArgument = arguments.first else { return nil }
+        guard !Self.reservedCommands.contains(rawArgument) else { return nil }
+        guard looksLikePath(rawArgument) || fileSystemEntryExists(at: rawArgument) else { return nil }
+
+        let resolvedURL = normalizePath(rawArgument)
+        var isDirectory = ObjCBool(false)
+        let exists = FileManager.default.fileExists(atPath: resolvedURL.path, isDirectory: &isDirectory)
+        guard exists else {
+            throw CLIError("Path not found: \(rawArgument)")
+        }
+
+        let launchDirectory =
+            isDirectory.boolValue
+            ? resolvedURL
+            : resolvedURL.deletingLastPathComponent()
+        return try AppLaunchRequest(launchDirectory: launchDirectory)
+    }
+
+    private func looksLikePath(_ argument: String) -> Bool {
+        argument == "."
+            || argument == ".."
+            || argument.hasPrefix("./")
+            || argument.hasPrefix("../")
+            || argument.hasPrefix("/")
+            || argument.hasPrefix("~")
+    }
+
+    private func fileSystemEntryExists(at rawPath: String) -> Bool {
+        FileManager.default.fileExists(atPath: normalizePath(rawPath).path)
+    }
+
+    private func launchApp(request: AppLaunchRequest?) throws -> Int32 {
+        guard let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: Self.appBundleIdentifier)
+        else {
+            throw CLIError(
+                "Could not find the Workspaces app. Install it first so the 'workspaces' launcher can hand off to the GUI."
+            )
+        }
+
+        if let request {
+            let deepLinkURL = request.deepLinkURL
+            guard NSWorkspace.shared.open(deepLinkURL) else {
+                throw CLIError("Failed to open Workspaces for path: \(request.launchDirectory.path)")
+            }
+            return 0
+        }
+
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+
+        let semaphore = DispatchSemaphore(value: 0)
+        var openError: Error?
+        NSWorkspace.shared.openApplication(at: appURL, configuration: configuration) { _, error in
+            openError = error
+            semaphore.signal()
+        }
+        semaphore.wait()
+
+        if let openError {
+            throw CLIError("Failed to launch Workspaces: \(openError.localizedDescription)")
+        }
+
+        return 0
     }
 
     private func runRepo(arguments: [String], state: inout CLIState) async throws -> Int32 {
@@ -655,6 +741,44 @@ private struct WorkspaceLocalConfig {
     var archiveHook: String?
 }
 
+private struct AppLaunchRequest {
+    let launchDirectory: URL
+    let repoRoot: URL?
+
+    init(launchDirectory: URL) throws {
+        var isDirectory = ObjCBool(false)
+        guard
+            FileManager.default.fileExists(atPath: launchDirectory.path, isDirectory: &isDirectory),
+            isDirectory.boolValue
+        else {
+            throw CLIError("Path is not a directory: \(launchDirectory.path)")
+        }
+
+        let normalizedDirectory = launchDirectory.standardizedFileURL.resolvingSymlinksInPath()
+        self.launchDirectory = normalizedDirectory
+        repoRoot = resolveGitTopLevel(for: normalizedDirectory)
+    }
+
+    var deepLinkURL: URL {
+        var components = URLComponents()
+        components.scheme = "workspaces"
+        components.host = "focus"
+        components.queryItems = [
+            URLQueryItem(name: "cwd", value: launchDirectory.path),
+            URLQueryItem(name: "source", value: "cli"),
+        ]
+
+        if let repoRoot {
+            components.queryItems?.append(URLQueryItem(name: "repo_root", value: repoRoot.path))
+        }
+
+        guard let url = components.url else {
+            preconditionFailure("Failed to build Workspaces deep link URL.")
+        }
+        return url
+    }
+}
+
 // MARK: - Helpers
 
 private struct CLIError: LocalizedError {
@@ -678,6 +802,41 @@ private func validateGitRepository(at url: URL) throws {
     guard FileManager.default.fileExists(atPath: gitDir) else {
         throw CLIError("Not a git repository: \(url.path)")
     }
+}
+
+private func resolveGitTopLevel(for directory: URL) -> URL? {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+    process.arguments = ["-C", directory.path, "rev-parse", "--show-toplevel"]
+
+    let stdoutPipe = Pipe()
+    let stderrPipe = Pipe()
+    process.standardOutput = stdoutPipe
+    process.standardError = stderrPipe
+
+    do {
+        try process.run()
+    } catch {
+        return nil
+    }
+
+    process.waitUntilExit()
+    guard process.terminationStatus == 0 else {
+        return nil
+    }
+
+    let data = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+    guard
+        let output = String(data: data, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+        !output.isEmpty
+    else {
+        return nil
+    }
+
+    return URL(fileURLWithPath: output, isDirectory: true)
+        .standardizedFileURL
+        .resolvingSymlinksInPath()
 }
 
 private func resolveExecutable(_ name: String) throws -> String {
@@ -772,6 +931,9 @@ private func printHelp() {
         WorkspaceManager CLI
 
         Usage:
+          workspaces
+          workspaces .
+          workspaces /path/to/repo
           workspaces repo add <path>
           workspaces repo list
           workspaces ws new <repo> <name>
@@ -785,6 +947,10 @@ private func printHelp() {
           workspaces recent
           workspaces doctor
           workspaces help
+
+        Launch behavior:
+          - no args: open the Workspaces app
+          - path arg: open the app and focus the matching workspace or repo
 
         Workspace selectors:
           - UUID
