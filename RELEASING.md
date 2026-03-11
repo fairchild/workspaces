@@ -6,7 +6,7 @@ This document describes the complete process for creating a new release of Works
 
 WorkspaceManager is distributed as a notarized DMG file via GitHub Releases. The release process involves:
 
-1. **Versioning** - Update version numbers in Info.plist
+1. **Versioning** - Update version numbers through `scripts/release-version.sh`
 2. **Building** - Create release binary with SPM
 3. **Bundling** - Package into a proper .app bundle
 4. **Signing** - Sign with Developer ID certificate
@@ -157,17 +157,17 @@ The recommended method for production releases.
 
 1. **Update Version**
 
-   Edit `Sources/WorkspaceManager/Resources/Info.plist`:
-   ```xml
-   <key>CFBundleShortVersionString</key>
-   <string>0.2.0</string>  <!-- New version -->
+   Use the helper script so version and build metadata stay together:
+   ```bash
+   ./scripts/release-version.sh set 0.3.1 --bump-build
+   ./scripts/release-version.sh print-tag
    ```
 
 2. **Merge Version Changes to `main`**
 
    ```bash
    git add .
-   git commit -m "chore: bump version to 0.2.0"
+   git commit -m "chore: bump version to 0.3.1"
    git push origin <your-branch>
    # Open PR and merge after CI is green
    ```
@@ -181,6 +181,7 @@ The recommended method for production releases.
    - Guardrails:
      - Manual releases fail if started from a non-`main` branch.
      - Release commit must be reachable from `origin/main`.
+     - Tag-driven releases fail fast if app version metadata does not match the requested release tag.
      - Temporary signing keychain is cleaned up and prior keychain defaults are restored on self-hosted runners.
    - Actions performed:
      - Build GhosttyKit
@@ -206,8 +207,9 @@ If you prefer to cut the tag yourself first, you can push a release tag from a `
 ```bash
 git checkout main
 git pull --ff-only origin main
-git tag v0.2.0
-git push origin v0.2.0
+./scripts/release-version.sh assert-tag-match v0.3.1
+git tag v0.3.1
+git push origin v0.3.1
 ```
 
 - The `Release` workflow triggers on both `v*` and `workspaces-v*` tags.
@@ -221,11 +223,7 @@ For testing or when CI isn't available.
 1. **Update Version**
 
    ```bash
-   # Edit Info.plist manually or use PlistBuddy:
-   /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString 0.2.0" \
-       Sources/WorkspaceManager/Resources/Info.plist
-   /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $(($(date +%s)/86400))" \
-       Sources/WorkspaceManager/Resources/Info.plist
+   ./scripts/release-version.sh set 0.3.1 --bump-build
    ```
 
 2. **Build and Sign**
@@ -252,10 +250,10 @@ For testing or when CI isn't available.
 
    ```bash
    # Create release with GitHub CLI
-   gh release create v0.2.0 \
-       --title "Workspaces v0.2.0" \
+   gh release create v0.3.1 \
+       --title "Workspaces v0.3.1" \
        --notes "Release notes here" \
-       build/WorkspaceManager-0.2.0.dmg
+       build/WorkspaceManager-0.3.1.dmg
    ```
 
 ---
@@ -294,7 +292,7 @@ spctl --assess --type execute --verbose build/WorkspaceManager.app
 
 ### Notarization
 ```bash
-xcrun stapler validate build/WorkspaceManager-0.2.0.dmg
+xcrun stapler validate build/WorkspaceManager-0.3.1.dmg
 # Should say "The validate action worked!"
 ```
 
@@ -358,7 +356,7 @@ security find-identity -v -p codesigning
 When announcing a release:
 
 ```markdown
-## Workspaces v0.2.0
+## Workspaces v0.3.1
 
 ### What's New
 - Feature 1
@@ -366,7 +364,7 @@ When announcing a release:
 - Bug fix 1
 
 ### Download
-[WorkspaceManager-0.2.0.dmg](link)
+[WorkspaceManager-0.3.1.dmg](link)
 
 ### Requirements
 - macOS 14.0 (Sonoma) or later

@@ -2,6 +2,12 @@
 
 This directory contains build/release helpers plus UI test utilities.
 
+## Release Helpers
+
+- `./scripts/release-version.sh`
+  - Reads, sets, and validates app release version metadata from `Sources/WorkspaceManager/Resources/Info.plist`.
+  - Use this instead of editing `Info.plist` by hand before tagging or notarizing a release.
+
 ## Primary UI Test Entry Points
 
 Use these scripts for day-to-day UI verification:

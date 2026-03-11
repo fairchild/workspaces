@@ -154,6 +154,12 @@ jobs:
           echo "APP_PASSWORD=$APPLE_APP_PASSWORD" >> "$GITHUB_ENV"
           echo "BUNDLE_ID=com.cloudcompute.workspaces" >> "$GITHUB_ENV"
 
+      - name: Validate app version metadata
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          set -euo pipefail
+          ./scripts/release-version.sh assert-tag-match "${GITHUB_REF_NAME}"
+
       - name: Build signed app
         run: ./scripts/build-release.sh
 
@@ -165,12 +171,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" build/WorkspaceManager.app/Contents/Info.plist)
-          BUILD=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" build/WorkspaceManager.app/Contents/Info.plist)
-          if [[ "${GITHUB_REF_TYPE}" == "tag" ]] && [[ "${GITHUB_REF_NAME}" != "v${VERSION}" ]]; then
-            echo "::error::Tag/version mismatch: tag=${GITHUB_REF_NAME} plist=v${VERSION}"
-            exit 1
-          fi
+          VERSION=$(./scripts/release-version.sh print)
+          BUILD=$(./scripts/release-version.sh print-build)
           if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
             TAG="${GITHUB_REF_NAME}"
           else
