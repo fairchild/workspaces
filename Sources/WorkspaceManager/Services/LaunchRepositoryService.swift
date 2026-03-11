@@ -1,14 +1,21 @@
 import Foundation
+import OSLog
 import SwiftData
 import WorkspaceManagerCore
 
 @MainActor
 struct LaunchRepositoryService {
+    private static let log = Logger(
+        subsystem: "com.cloudcompute.workspaces",
+        category: "LaunchRepositoryService"
+    )
+
     let modelContext: ModelContext
 
     func trackedRepo(matchingNormalizedPath normalizedPath: String) -> Repo? {
         let descriptor = FetchDescriptor<Repo>()
         guard let fetchedRepos = try? modelContext.fetch(descriptor) else {
+            Self.log.error("Failed to fetch tracked repos while resolving path \(normalizedPath, privacy: .public)")
             return nil
         }
 
@@ -35,6 +42,9 @@ struct LaunchRepositoryService {
             return repo
         } catch {
             modelContext.rollback()
+            Self.log.error(
+                "Failed to save imported repo at \(repoRootPath, privacy: .public): \(String(describing: error), privacy: .public)"
+            )
             return nil
         }
     }

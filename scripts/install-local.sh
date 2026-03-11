@@ -73,6 +73,8 @@ log_error() {
 
 resolve_default_cli_link_path() {
     local dir
+    # Keep this preference order in sync with
+    # Sources/WorkspaceManager/Services/CommandLineToolService.swift.
     for dir in /opt/homebrew/bin /usr/local/bin "$HOME/.local/bin" "$HOME/bin"; do
         local parent
         parent="$(dirname "$dir")"
@@ -202,7 +204,6 @@ fi
 
 TMP_DEST="${DEST_APP}.tmp.$$"
 rm -rf "$TMP_DEST"
-rm -rf "$DEST_APP"
 
 if ! ditto "$SOURCE_APP" "$TMP_DEST"; then
     log_error "Failed to copy app bundle to temporary destination"
@@ -210,6 +211,7 @@ if ! ditto "$SOURCE_APP" "$TMP_DEST"; then
     exit 1
 fi
 
+rm -rf "$DEST_APP"
 mv "$TMP_DEST" "$DEST_APP"
 log_success "Installed: $DEST_APP"
 

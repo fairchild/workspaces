@@ -21,12 +21,14 @@ struct WorkspaceDeepLink: Equatable {
             return nil
         }
 
+        guard Self.isAbsolutePathInput(rawCWD) else { return nil }
         let normalizedCWD = Self.normalizePath(rawCWD)
         guard normalizedCWD.hasPrefix("/") else { return nil }
 
         cwd = normalizedCWD
         if let rawRepoRoot = queryItems.first(where: { $0.name == "repo_root" })?.value,
-            !rawRepoRoot.isEmpty
+            !rawRepoRoot.isEmpty,
+            Self.isAbsolutePathInput(rawRepoRoot)
         {
             let normalizedRepoRoot = Self.normalizePath(rawRepoRoot)
             repoRoot = normalizedRepoRoot.hasPrefix("/") ? normalizedRepoRoot : nil
@@ -40,6 +42,10 @@ struct WorkspaceDeepLink: Equatable {
     private static func normalizePath(_ path: String) -> String {
         let expanded = NSString(string: path).expandingTildeInPath
         return URL(fileURLWithPath: expanded).standardizedFileURL.path
+    }
+
+    private static func isAbsolutePathInput(_ path: String) -> Bool {
+        path.hasPrefix("/") || path.hasPrefix("~")
     }
 }
 
