@@ -465,6 +465,7 @@ struct CommandLineToolService {
     }
 
     private static func defaultPreferredInstallDirectories(homeDirectoryURL: URL) -> [URL] {
+        // Keep this order in sync with scripts/install-local.sh.
         [
             URL(fileURLWithPath: "/opt/homebrew/bin", isDirectory: true),
             URL(fileURLWithPath: "/usr/local/bin", isDirectory: true),
