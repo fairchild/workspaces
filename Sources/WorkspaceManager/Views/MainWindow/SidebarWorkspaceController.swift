@@ -90,6 +90,25 @@ struct SidebarWorkspaceController {
 
     func createWorkspace(
         from repo: Repo,
+        request: NewWorkspaceRequest,
+        progress: WorkspaceCreationProgressHandler? = nil
+    ) async throws -> Workspace {
+        switch request.backend {
+        case .local:
+            return try await createLocalWorkspace(from: repo, name: request.name, progress: progress)
+        case .daytona:
+            return try await createDaytonaWorkspace(from: repo, name: request.name)
+        case .sshHost:
+            throw ControllerError.message("SSH host workspaces are not supported yet.")
+        case .kubernetesPod:
+            throw ControllerError.message("Kubernetes pod workspaces are not supported yet.")
+        case .sshCompose:
+            throw ControllerError.message("SSH Compose workspaces are not supported yet.")
+        }
+    }
+
+    private func createLocalWorkspace(
+        from repo: Repo,
         name: String,
         progress: WorkspaceCreationProgressHandler? = nil
     ) async throws -> Workspace {
@@ -117,13 +136,17 @@ struct SidebarWorkspaceController {
         }
     }
 
-    func createRemoteWorkspace(from repo: Repo, name: String) async throws -> Workspace {
+    private func createDaytonaWorkspace(from repo: Repo, name: String) async throws -> Workspace {
+        guard await remoteBackend.isAvailable() else {
+            throw BackendError.notAvailable("Daytona")
+        }
+
         let info = try await remoteBackend.createSandbox(name: name, cloneURL: repo.remoteURL)
         let workspace = Workspace(
             name: name,
             path: FileManager.default.temporaryDirectory,
             sourceRepo: repo,
-            backendIdentifier: remoteBackend.identifier,
+            backendIdentifier: WorkspaceBackendChoice.daytona.rawValue,
             remoteId: info.sandboxId
         )
         modelContext.insert(workspace)

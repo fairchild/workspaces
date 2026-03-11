@@ -28,7 +28,7 @@ struct ContentView: View {
     @State private var repoForNewWorkspaceFromLanding: Repo?
     @State private var webSourceCreationTarget: WebSourceCreationTarget?
     @State private var landingErrorMessage: String?
-    @State private var isRemoteBackendAvailableForLanding = false
+    @State private var isDaytonaBackendAvailableForLanding = false
     @StateObject private var rightPaneStateStore = RightPaneStateStore()
     @StateObject private var webSurfaceStore = WebSurfaceStore()
     @StateObject private var terminalFocusCoordinator = TerminalFocusCoordinator()
@@ -368,7 +368,7 @@ struct ContentView: View {
                 syncOpenInEditorShortcutRouting()
             }
             .task {
-                isRemoteBackendAvailableForLanding = await remoteBackend.isAvailable()
+                isDaytonaBackendAvailableForLanding = await remoteBackend.isAvailable()
                 await syncCloudWorkspaceStatuses()
             }
             .onDisappear {
@@ -459,11 +459,11 @@ struct ContentView: View {
             .sheet(item: $repoForNewWorkspaceFromLanding) { repo in
                 NewWorkspaceSheet(
                     repo: repo,
-                    isRemoteBackendAvailable: isRemoteBackendAvailableForLanding,
+                    isDaytonaBackendAvailable: isDaytonaBackendAvailableForLanding,
                     isCreateDisabled: false
-                ) { name, backend in
+                ) { request in
                     Task { @MainActor in
-                        await createWorkspaceFromLanding(repo: repo, name: name, backend: backend)
+                        await createWorkspaceFromLanding(repo: repo, request: request)
                     }
                 }
             }
@@ -937,20 +937,18 @@ struct ContentView: View {
     }
 
     @MainActor
-    private func createWorkspaceFromLanding(repo: Repo, name: String, backend: WorkspaceBackendChoice) async {
+    private func createWorkspaceFromLanding(repo: Repo, request: NewWorkspaceRequest) async {
         let controller = SidebarWorkspaceController(
             modelContext: modelContext,
             workspaceService: workspaceService,
             remoteBackend: remoteBackend
         )
         do {
-            let workspace: Workspace
-            switch backend {
-            case .local:
-                workspace = try await controller.createWorkspace(from: repo, name: name, progress: { _ in })
-            case .remoteVM:
-                workspace = try await controller.createRemoteWorkspace(from: repo, name: name)
-            }
+            let workspace = try await controller.createWorkspace(
+                from: repo,
+                request: request,
+                progress: nil
+            )
             abandonPendingRemoteConnection(reason: "workspace_created")
             handleWorkspaceSelection(workspace)
         } catch {

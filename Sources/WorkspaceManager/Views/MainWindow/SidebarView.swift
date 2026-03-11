@@ -42,7 +42,7 @@ struct SidebarView: View {
 
     @State private var isAddingRepo = false
     @State private var repoForNewWorkspace: Repo?
-    @State private var isRemoteBackendAvailable = false
+    @State private var isDaytonaBackendAvailable = false
 
     // Error alert state
     @State private var errorMessage: String?
@@ -125,16 +125,11 @@ struct SidebarView: View {
             .sheet(item: $repoForNewWorkspace) { repo in
                 NewWorkspaceSheet(
                     repo: repo,
-                    isRemoteBackendAvailable: isRemoteBackendAvailable,
+                    isDaytonaBackendAvailable: isDaytonaBackendAvailable,
                     isCreateDisabled: isCreatingWorkspace(for: repo.id)
-                ) { name, backend in
+                ) { request in
                     Task { @MainActor in
-                        switch backend {
-                        case .local:
-                            await createWorkspace(from: repo, name: name)
-                        case .remoteVM:
-                            await createRemoteWorkspace(from: repo, name: name)
-                        }
+                        await createWorkspace(from: repo, request: request)
                     }
                 }
             }
@@ -191,7 +186,7 @@ struct SidebarView: View {
                 }
             }
             .task {
-                isRemoteBackendAvailable = await remoteBackend.isAvailable()
+                isDaytonaBackendAvailable = await remoteBackend.isAvailable()
             }
     }
 
@@ -583,21 +578,46 @@ struct SidebarView: View {
     }
 
     @MainActor
-    private func createWorkspace(from repo: Repo, name: String) async {
+    private func createWorkspace(from repo: Repo, request: NewWorkspaceRequest) async {
         let repoID = repo.id
         guard !isCreatingWorkspace(for: repoID) else { return }
         expandedRepoIDs.insert(repoID)
-        updateLocalCreationStatus(repoID: repoID, phase: .preparing)
+        switch request.backendChoice {
+        case .local:
+            updateLocalCreationStatus(repoID: repoID, phase: .preparing)
+        case .daytona:
+            workspaceCreationStatusByRepoID[repoID] = WorkspaceCreationStatus(
+                message: "Creating Daytona workspace..."
+            )
+        case .sshHost:
+            workspaceCreationStatusByRepoID[repoID] = WorkspaceCreationStatus(
+                message: "Preparing SSH host workspace..."
+            )
+        case .kubernetesPod:
+            workspaceCreationStatusByRepoID[repoID] = WorkspaceCreationStatus(
+                message: "Preparing Kubernetes pod workspace..."
+            )
+        case .sshCompose:
+            workspaceCreationStatusByRepoID[repoID] = WorkspaceCreationStatus(
+                message: "Preparing SSH Compose workspace..."
+            )
+        }
 
         do {
-            let workspace = try await workspaceController.createWorkspace(
-                from: repo,
-                name: name,
-                progress: { phase in
+            let progress: WorkspaceCreationProgressHandler?
+            if request.backendChoice == .local {
+                progress = { phase in
                     await MainActor.run {
                         updateLocalCreationStatus(repoID: repoID, phase: phase)
                     }
                 }
+            } else {
+                progress = nil
+            }
+            let workspace = try await workspaceController.createWorkspace(
+                from: repo,
+                request: request,
+                progress: progress
             )
             workspaceCreationStatusByRepoID.removeValue(forKey: repoID)
             onWorkspaceCreated()
@@ -605,27 +625,6 @@ struct SidebarView: View {
         } catch {
             workspaceCreationStatusByRepoID.removeValue(forKey: repoID)
             errorMessage = "Failed to create workspace: \(error.localizedDescription)"
-            showingError = true
-        }
-    }
-
-    @MainActor
-    private func createRemoteWorkspace(from repo: Repo, name: String) async {
-        let repoID = repo.id
-        guard !isCreatingWorkspace(for: repoID) else { return }
-        workspaceCreationStatusByRepoID[repoID] = WorkspaceCreationStatus(
-            message: "Creating cloud workspace..."
-        )
-        expandedRepoIDs.insert(repoID)
-
-        do {
-            let workspace = try await workspaceController.createRemoteWorkspace(from: repo, name: name)
-            workspaceCreationStatusByRepoID.removeValue(forKey: repoID)
-            onWorkspaceCreated()
-            selectedWorkspace = workspace
-        } catch {
-            workspaceCreationStatusByRepoID.removeValue(forKey: repoID)
-            errorMessage = "Failed to create remote workspace: \(error.localizedDescription)"
             showingError = true
         }
     }
