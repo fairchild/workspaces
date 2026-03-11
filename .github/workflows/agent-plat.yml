@@ -15,7 +15,7 @@ permissions:
   contents: read
   discussions: write
   issues: read
-  pull-requests: read
+  pull-requests: write
 
 concurrency:
   group: agent-plat
