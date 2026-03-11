@@ -137,15 +137,91 @@ public protocol NotificationCoordinatorProtocol: AnyObject {
     func markActivitySeen()
 }
 
+public struct RuntimeCapabilities: Sendable, Equatable {
+    public let supportsCreate: Bool
+    public let supportsDelete: Bool
+    public let supportsStartStop: Bool
+    public let supportsArchive: Bool
+    public let supportsList: Bool
+    public let supportsCompose: Bool
+    public let supportsPortForwarding: Bool
+
+    public init(
+        supportsCreate: Bool = false,
+        supportsDelete: Bool = false,
+        supportsStartStop: Bool = false,
+        supportsArchive: Bool = false,
+        supportsList: Bool = false,
+        supportsCompose: Bool = false,
+        supportsPortForwarding: Bool = false
+    ) {
+        self.supportsCreate = supportsCreate
+        self.supportsDelete = supportsDelete
+        self.supportsStartStop = supportsStartStop
+        self.supportsArchive = supportsArchive
+        self.supportsList = supportsList
+        self.supportsCompose = supportsCompose
+        self.supportsPortForwarding = supportsPortForwarding
+    }
+}
+
+public enum RemoteBackendCapabilityError: LocalizedError, Sendable {
+    case unsupportedOperation(backendIdentifier: String, operation: String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .unsupportedOperation(let backendIdentifier, let operation):
+            return "Remote backend '\(backendIdentifier)' does not support \(operation)."
+        }
+    }
+}
+
 public protocol RemoteBackendProtocol: Sendable {
     var identifier: String { get }
-    func isAvailable() async -> Bool
+    var runtimeCapabilities: RuntimeCapabilities { get }
 
-    func createSandbox(name: String, cloneURL: String?) async throws -> RemoteSandboxInfo
-    func getSSHCommand(sandboxId: String) async throws -> RemoteSandboxInfo
+    func openSession(sandboxId: String, workspaceStatus: WorkspaceStatus) async throws -> RemoteSandboxInfo
+    func resolveCommand(sandboxId: String) async throws -> RemoteSandboxInfo
+    func healthCheck() async -> Bool
+}
+
+extension RemoteBackendProtocol {
+    public func openSession(
+        sandboxId: String,
+        workspaceStatus: WorkspaceStatus
+    ) async throws -> RemoteSandboxInfo {
+        switch workspaceStatus {
+        case .active:
+            return try await resolveCommand(sandboxId: sandboxId)
+        case .stopped, .archived:
+            guard runtimeCapabilities.supportsStartStop,
+                let backend = self as? any StartStopCapable
+            else {
+                throw RemoteBackendCapabilityError.unsupportedOperation(
+                    backendIdentifier: identifier,
+                    operation: "starting and resuming remote workspaces"
+                )
+            }
+
+            return try await backend.startSandbox(sandboxId: sandboxId)
+        }
+    }
+}
+
+public protocol StartStopCapable: RemoteBackendProtocol {
     func stopSandbox(sandboxId: String) async throws
     func startSandbox(sandboxId: String) async throws -> RemoteSandboxInfo
+}
+
+public protocol Archivable: RemoteBackendProtocol {
     func archiveSandbox(sandboxId: String) async throws
-    func deleteSandbox(sandboxId: String) async throws
+}
+
+public protocol Listable: RemoteBackendProtocol {
     func listSandboxes() async throws -> [RemoteSandboxStatus]
+}
+
+public protocol ProvisionCapable: RemoteBackendProtocol {
+    func createSandbox(name: String, cloneURL: String?) async throws -> RemoteSandboxInfo
+    func deleteSandbox(sandboxId: String) async throws
 }

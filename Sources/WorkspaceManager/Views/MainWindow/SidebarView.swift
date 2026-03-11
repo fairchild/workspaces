@@ -85,6 +85,10 @@ struct SidebarView: View {
         SidebarRepoSortMode(rawValue: repoSortModeRawValue) ?? .alphabetical
     }
 
+    private var remoteCapabilities: RuntimeCapabilities {
+        remoteBackend.runtimeCapabilities
+    }
+
     private var sortedRepos: [Repo] {
         repoSortController.sortedRepos(
             repos,
@@ -191,7 +195,11 @@ struct SidebarView: View {
                 }
             }
             .task {
-                isRemoteBackendAvailable = await remoteBackend.isAvailable()
+                if remoteCapabilities.supportsCreate {
+                    isRemoteBackendAvailable = await remoteBackend.healthCheck()
+                } else {
+                    isRemoteBackendAvailable = false
+                }
             }
     }
 
@@ -613,6 +621,16 @@ struct SidebarView: View {
     private func createRemoteWorkspace(from repo: Repo, name: String) async {
         let repoID = repo.id
         guard !isCreatingWorkspace(for: repoID) else { return }
+        guard remoteCapabilities.supportsCreate else {
+            errorMessage =
+                RemoteBackendCapabilityError.unsupportedOperation(
+                    backendIdentifier: remoteBackend.identifier,
+                    operation: "creating remote workspaces"
+                ).localizedDescription
+            showingError = true
+            return
+        }
+
         workspaceCreationStatusByRepoID[repoID] = WorkspaceCreationStatus(
             message: "Creating cloud workspace..."
         )
@@ -652,24 +670,36 @@ struct SidebarView: View {
 
     @ViewBuilder
     private func remoteWorkspaceActions(_ workspace: Workspace) -> some View {
+        let capabilities = remoteCapabilities
+
         switch workspace.status {
         case .active:
-            Button("Stop") {
-                performStop(workspace)
+            if capabilities.supportsStartStop {
+                Button("Stop") {
+                    performStop(workspace)
+                }
             }
-            Button("Archive") {
-                performArchive(workspace)
+            if capabilities.supportsArchive {
+                Button("Archive") {
+                    performArchive(workspace)
+                }
             }
         case .stopped:
-            Button("Start") {
-                performStart(workspace)
+            if capabilities.supportsStartStop {
+                Button("Start") {
+                    performStart(workspace)
+                }
             }
-            Button("Archive") {
-                performArchive(workspace)
+            if capabilities.supportsArchive {
+                Button("Archive") {
+                    performArchive(workspace)
+                }
             }
         case .archived:
-            Button("Start") {
-                performStart(workspace)
+            if capabilities.supportsStartStop {
+                Button("Start") {
+                    performStart(workspace)
+                }
             }
         }
     }

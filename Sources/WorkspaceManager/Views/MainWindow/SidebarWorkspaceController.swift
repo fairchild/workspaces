@@ -60,17 +60,25 @@ struct SidebarWorkspaceController {
 
     nonisolated static func remoteWorkspacePersistenceFailureMessage(
         existingMessage: String?,
-        sandboxId: String,
-        cleanupError: Error
+        cleanupMessage: String
     ) -> String {
-        let cleanupMessage =
-            "Cleanup also failed for remote sandbox '\(sandboxId)': \(cleanupError.localizedDescription)"
-
         if let existingMessage, !existingMessage.isEmpty {
             return "\(existingMessage)\n\n\(cleanupMessage)"
         }
 
         return cleanupMessage
+    }
+
+    nonisolated static func remoteWorkspacePersistenceFailureMessage(
+        existingMessage: String?,
+        sandboxId: String,
+        cleanupError: Error
+    ) -> String {
+        remoteWorkspacePersistenceFailureMessage(
+            existingMessage: existingMessage,
+            cleanupMessage:
+                "Cleanup also failed for remote sandbox '\(sandboxId)': \(cleanupError.localizedDescription)"
+        )
     }
 
     nonisolated static func localCreationMessage(for phase: WorkspaceCreationPhase) -> String {
@@ -86,6 +94,54 @@ struct SidebarWorkspaceController {
         case .finished:
             return "Finishing workspace..."
         }
+    }
+
+    private func unsupportedOperationMessage(_ operation: String) -> String {
+        RemoteBackendCapabilityError.unsupportedOperation(
+            backendIdentifier: remoteBackend.identifier,
+            operation: operation
+        ).localizedDescription
+    }
+
+    private func provisioningBackend(
+        requiresCreate: Bool = false,
+        requiresDelete: Bool = false,
+        operation: String
+    ) throws -> any ProvisionCapable {
+        let capabilities = remoteBackend.runtimeCapabilities
+
+        guard
+            (!requiresCreate || capabilities.supportsCreate)
+                && (!requiresDelete || capabilities.supportsDelete)
+        else {
+            throw ControllerError.message(unsupportedOperationMessage(operation))
+        }
+
+        guard let backend = remoteBackend as? any ProvisionCapable else {
+            throw ControllerError.message(unsupportedOperationMessage(operation))
+        }
+
+        return backend
+    }
+
+    private func startStopBackend(operation: String) throws -> any StartStopCapable {
+        guard remoteBackend.runtimeCapabilities.supportsStartStop,
+            let backend = remoteBackend as? any StartStopCapable
+        else {
+            throw ControllerError.message(unsupportedOperationMessage(operation))
+        }
+
+        return backend
+    }
+
+    private func archivableBackend(operation: String) throws -> any Archivable {
+        guard remoteBackend.runtimeCapabilities.supportsArchive,
+            let backend = remoteBackend as? any Archivable
+        else {
+            throw ControllerError.message(unsupportedOperationMessage(operation))
+        }
+
+        return backend
     }
 
     func createWorkspace(
@@ -118,7 +174,11 @@ struct SidebarWorkspaceController {
     }
 
     func createRemoteWorkspace(from repo: Repo, name: String) async throws -> Workspace {
-        let info = try await remoteBackend.createSandbox(name: name, cloneURL: repo.remoteURL)
+        let backend = try provisioningBackend(
+            requiresCreate: true,
+            operation: "creating remote workspaces"
+        )
+        let info = try await backend.createSandbox(name: name, cloneURL: repo.remoteURL)
         let workspace = Workspace(
             name: name,
             path: FileManager.default.temporaryDirectory,
@@ -132,22 +192,36 @@ struct SidebarWorkspaceController {
             try saveModelContext(action: "save remote workspace")
             return workspace
         } catch {
-            if let cleanupError = await Self.cleanupRemoteSandboxAfterFailedPersistence(
-                sandboxId: info.sandboxId,
-                deleteSandbox: { sandboxId in
-                    try await remoteBackend.deleteSandbox(sandboxId: sandboxId)
+            if remoteBackend.runtimeCapabilities.supportsDelete {
+                if let cleanupError = await Self.cleanupRemoteSandboxAfterFailedPersistence(
+                    sandboxId: info.sandboxId,
+                    deleteSandbox: { sandboxId in
+                        try await backend.deleteSandbox(sandboxId: sandboxId)
+                    }
+                ) {
+                    NSLog(
+                        "[RemoteBackend] Failed to clean up sandbox %@ after persistence failure: %@",
+                        info.sandboxId,
+                        cleanupError.localizedDescription
+                    )
+                    throw ControllerError.message(
+                        Self.remoteWorkspacePersistenceFailureMessage(
+                            existingMessage: error.localizedDescription,
+                            cleanupMessage:
+                                "Cleanup also failed for remote sandbox '\(info.sandboxId)': \(cleanupError.localizedDescription)"
+                        )
+                    )
                 }
-            ) {
+            } else {
                 NSLog(
-                    "[RemoteBackend] Failed to clean up sandbox %@ after persistence failure: %@",
-                    info.sandboxId,
-                    cleanupError.localizedDescription
+                    "[RemoteBackend] Skipping sandbox cleanup after persistence failure because %@ does not support delete",
+                    remoteBackend.identifier
                 )
                 throw ControllerError.message(
                     Self.remoteWorkspacePersistenceFailureMessage(
                         existingMessage: error.localizedDescription,
-                        sandboxId: info.sandboxId,
-                        cleanupError: cleanupError
+                        cleanupMessage:
+                            "Cleanup was skipped for remote sandbox '\(info.sandboxId)' because backend '\(remoteBackend.identifier)' does not support deletion."
                     )
                 )
             }
@@ -159,10 +233,20 @@ struct SidebarWorkspaceController {
         let workspaceURL = workspace.workspaceURL
 
         if workspace.isRemote, let sandboxId = workspace.remoteId {
-            do {
-                try await remoteBackend.deleteSandbox(sandboxId: sandboxId)
-            } catch {
-                NSLog("[RemoteBackend] Failed to delete sandbox %@: %@", sandboxId, error.localizedDescription)
+            if remoteBackend.runtimeCapabilities.supportsDelete,
+                let backend = remoteBackend as? any ProvisionCapable
+            {
+                do {
+                    try await backend.deleteSandbox(sandboxId: sandboxId)
+                } catch {
+                    NSLog("[RemoteBackend] Failed to delete sandbox %@: %@", sandboxId, error.localizedDescription)
+                }
+            } else {
+                NSLog(
+                    "[RemoteBackend] Backend %@ does not support deleting sandbox %@; removing local record only",
+                    remoteBackend.identifier,
+                    sandboxId
+                )
             }
         } else {
             try await workspaceService.deleteWorkspace(at: workspaceURL, deleteFiles: deleteFiles)
@@ -174,21 +258,24 @@ struct SidebarWorkspaceController {
 
     func stop(_ workspace: Workspace) async throws {
         guard let sandboxId = workspace.remoteId else { return }
-        try await remoteBackend.stopSandbox(sandboxId: sandboxId)
+        let backend = try startStopBackend(operation: "stopping remote workspaces")
+        try await backend.stopSandbox(sandboxId: sandboxId)
         workspace.status = .stopped
         try saveModelContext(action: "stop sandbox")
     }
 
     func start(_ workspace: Workspace) async throws {
         guard let sandboxId = workspace.remoteId else { return }
-        _ = try await remoteBackend.startSandbox(sandboxId: sandboxId)
+        let backend = try startStopBackend(operation: "starting remote workspaces")
+        _ = try await backend.startSandbox(sandboxId: sandboxId)
         workspace.status = .active
         try saveModelContext(action: "start sandbox")
     }
 
     func archive(_ workspace: Workspace) async throws {
         guard let sandboxId = workspace.remoteId else { return }
-        try await remoteBackend.archiveSandbox(sandboxId: sandboxId)
+        let backend = try archivableBackend(operation: "archiving remote workspaces")
+        try await backend.archiveSandbox(sandboxId: sandboxId)
         workspace.status = .archived
         try saveModelContext(action: "archive sandbox")
     }

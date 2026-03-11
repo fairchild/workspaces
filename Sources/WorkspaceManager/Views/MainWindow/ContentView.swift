@@ -368,7 +368,12 @@ struct ContentView: View {
                 syncOpenInEditorShortcutRouting()
             }
             .task {
-                isRemoteBackendAvailableForLanding = await remoteBackend.isAvailable()
+                let supportsRemoteCreate = remoteBackend.runtimeCapabilities.supportsCreate
+                if supportsRemoteCreate {
+                    isRemoteBackendAvailableForLanding = await remoteBackend.healthCheck()
+                } else {
+                    isRemoteBackendAvailableForLanding = false
+                }
                 await syncCloudWorkspaceStatuses()
             }
             .onDisappear {
@@ -852,19 +857,31 @@ struct ContentView: View {
         }
 
         let backend = remoteBackend
+        let capabilities = backend.runtimeCapabilities
         let needsStart = workspace.status == .stopped || workspace.status == .archived
 
         Task {
             do {
-                let info: RemoteSandboxInfo
+                if needsStart && !capabilities.supportsStartStop {
+                    throw RemoteBackendCapabilityError.unsupportedOperation(
+                        backendIdentifier: backend.identifier,
+                        operation: "starting and resuming remote workspaces"
+                    )
+                }
+
                 if needsStart {
                     NSLog("[RemoteBackend] Starting sandbox %@ (was %@)", sandboxId, workspace.status.rawValue)
-                    info = try await backend.startSandbox(sandboxId: sandboxId)
+                }
+
+                let info = try await backend.openSession(
+                    sandboxId: sandboxId,
+                    workspaceStatus: workspace.status
+                )
+
+                if needsStart {
                     await MainActor.run {
                         workspace.status = .active
                     }
-                } else {
-                    info = try await backend.getSSHCommand(sandboxId: sandboxId)
                 }
 
                 await MainActor.run {
@@ -949,6 +966,12 @@ struct ContentView: View {
             case .local:
                 workspace = try await controller.createWorkspace(from: repo, name: name, progress: { _ in })
             case .remoteVM:
+                guard remoteBackend.runtimeCapabilities.supportsCreate else {
+                    throw RemoteBackendCapabilityError.unsupportedOperation(
+                        backendIdentifier: remoteBackend.identifier,
+                        operation: "creating remote workspaces"
+                    )
+                }
                 workspace = try await controller.createRemoteWorkspace(from: repo, name: name)
             }
             abandonPendingRemoteConnection(reason: "workspace_created")
@@ -961,6 +984,15 @@ struct ContentView: View {
     @MainActor
     private func archiveWorkspaceFromLanding(_ workspace: Workspace) async {
         if workspace.isRemote {
+            guard remoteBackend.runtimeCapabilities.supportsArchive else {
+                landingErrorMessage =
+                    RemoteBackendCapabilityError.unsupportedOperation(
+                        backendIdentifier: remoteBackend.identifier,
+                        operation: "archiving remote workspaces"
+                    ).localizedDescription
+                return
+            }
+
             let controller = SidebarWorkspaceController(
                 modelContext: modelContext,
                 workspaceService: workspaceService,
@@ -1108,9 +1140,18 @@ struct ContentView: View {
         guard !cloudWorkspaces.isEmpty else { return }
 
         let backend = remoteBackend
+        guard backend.runtimeCapabilities.supportsList else { return }
+        guard let listableBackend = backend as? any Listable else {
+            NSLog(
+                "[RemoteBackend] Backend %@ advertised list support but does not conform to Listable",
+                backend.identifier
+            )
+            return
+        }
+
         let statuses: [RemoteSandboxStatus]
         do {
-            statuses = try await backend.listSandboxes()
+            statuses = try await listableBackend.listSandboxes()
         } catch {
             NSLog("[RemoteBackend] Failed to sync sandbox statuses: %@", error.localizedDescription)
             return

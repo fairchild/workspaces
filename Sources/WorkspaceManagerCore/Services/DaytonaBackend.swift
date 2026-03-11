@@ -22,10 +22,19 @@ public struct RemoteSandboxStatus: Decodable, Sendable {
     public let state: String
 }
 
-public actor DaytonaBackend: RemoteBackendProtocol {
+public actor DaytonaBackend: ProvisionCapable, StartStopCapable, Archivable, Listable {
     public static let shared = DaytonaBackend()
 
     public nonisolated var identifier: String { "daytona" }
+    public nonisolated var runtimeCapabilities: RuntimeCapabilities {
+        RuntimeCapabilities(
+            supportsCreate: true,
+            supportsDelete: true,
+            supportsStartStop: true,
+            supportsArchive: true,
+            supportsList: true
+        )
+    }
 
     private let scriptPath: String
 
@@ -50,7 +59,7 @@ public actor DaytonaBackend: RemoteBackendProtocol {
             } ?? "scripts/daytona-sandbox-manager.py"
     }
 
-    public func isAvailable() async -> Bool {
+    public func healthCheck() async -> Bool {
         guard ProcessInfo.processInfo.environment["DAYTONA_API_KEY"] != nil else {
             return false
         }
@@ -58,6 +67,18 @@ public actor DaytonaBackend: RemoteBackendProtocol {
     }
 
     // MARK: - Sandbox Lifecycle
+
+    public func openSession(
+        sandboxId: String,
+        workspaceStatus: WorkspaceStatus
+    ) async throws -> RemoteSandboxInfo {
+        switch workspaceStatus {
+        case .active:
+            return try await resolveCommand(sandboxId: sandboxId)
+        case .stopped, .archived:
+            return try await startSandbox(sandboxId: sandboxId)
+        }
+    }
 
     public func createSandbox(name: String, cloneURL: String? = nil) async throws -> RemoteSandboxInfo {
         var args = ["create", "--name", name]
@@ -67,7 +88,7 @@ public actor DaytonaBackend: RemoteBackendProtocol {
         return try await runCommand(args)
     }
 
-    public func getSSHCommand(sandboxId: String) async throws -> RemoteSandboxInfo {
+    public func resolveCommand(sandboxId: String) async throws -> RemoteSandboxInfo {
         try await runCommand(["ssh-command", "--sandbox-id", sandboxId])
     }
 
