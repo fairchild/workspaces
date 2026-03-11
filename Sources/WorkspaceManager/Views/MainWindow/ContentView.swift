@@ -32,6 +32,7 @@ struct ContentView: View {
     @StateObject private var rightPaneStateStore = RightPaneStateStore()
     @StateObject private var webSurfaceStore = WebSurfaceStore()
     @StateObject private var terminalFocusCoordinator = TerminalFocusCoordinator()
+    private let buildIdentity = AppBuildIdentity.current
     private let resolvedDefaultHostDirectory = HostTerminalDefaults.defaultWorkingDirectory()
         .standardizedFileURL
         .resolvingSymlinksInPath()
@@ -317,6 +318,10 @@ struct ContentView: View {
     private var splitViewWithToolbar: some View {
         baseSplitView
             .toolbar {
+                ToolbarItem(placement: .principal) {
+                    AppBuildIdentityBadge(identity: buildIdentity)
+                }
+
                 ToolbarItemGroup(placement: .automatic) {
                     if let selectedWebSource = currentSelectedWebSource {
                         Button {
