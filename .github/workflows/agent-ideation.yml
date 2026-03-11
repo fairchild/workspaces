@@ -1,0 +1,93 @@
+name: Agent Ideation
+
+on:
+  schedule:
+    - cron: '0 14 * * *'  # Daily at 2pm UTC (7am PT)
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Print proposal without posting'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  discussions: write
+
+concurrency:
+  group: agent-ideation
+  cancel-in-progress: false
+
+jobs:
+  propose-idea:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 50
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Gather context
+        run: |
+          git log --oneline --since="2 weeks ago" > /tmp/recent-commits.txt
+
+          gh api graphql -f query='
+            query($owner: String!, $name: String!) {
+              repository(owner: $owner, name: $name) {
+                discussions(first: 30, states: OPEN) {
+                  nodes { number title category { name } }
+                }
+              }
+            }
+          ' -f owner='${{ github.repository_owner }}' \
+            -f name='${{ github.event.repository.name }}' \
+            --jq '.data.repository.discussions.nodes[] | "#\(.number) [\(.category.name)] \(.title)"' \
+            > /tmp/open-discussions.txt 2>/dev/null || true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run Claude Code ideation
+        run: |
+          npx @anthropic-ai/claude-code --print \
+            --system-prompt "$(cat .agents/prompts/ideation.md)" \
+            --append-system-prompt "Recent commits (last 2 weeks):
+          $(cat /tmp/recent-commits.txt)
+
+          Open discussions:
+          $(cat /tmp/open-discussions.txt)" \
+            "Inspect this project and propose one focused idea." \
+            > /tmp/proposal.txt
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+
+      - name: Parse and post
+        run: |
+          # Extract title (line between ---TITLE--- and ---BODY---)
+          TITLE=$(sed -n '/^---TITLE---$/,/^---BODY---$/{/^---/d;p;}' /tmp/proposal.txt | head -1 | xargs)
+
+          # Extract body (everything after ---BODY---)
+          BODY=$(sed -n '/^---BODY---$/,${/^---BODY---$/d;p;}' /tmp/proposal.txt)
+
+          if [ -z "$TITLE" ]; then
+            echo "::error::Failed to parse title from proposal"
+            echo "--- Raw output ---"
+            cat /tmp/proposal.txt
+            exit 1
+          fi
+
+          echo "Title: $TITLE"
+          echo "---"
+          echo "$BODY"
+
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            echo "::notice::Dry run — skipping post"
+            exit 0
+          fi
+
+          uv run .agents/skills/gh-discuss/scripts/gh-discuss.py create \
+            "$TITLE" --body "$BODY" --category General
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
