@@ -224,7 +224,7 @@ def run_claude(prompt_file: Path, context: str, env: dict[str, str]) -> str:
     ).stdout
 
 
-def validate_output(raw_output: str, env: dict[str, str]) -> tuple[int, str | None]:
+def validate_output(raw_output: str, env: dict[str, str]) -> tuple[int, str | None, str]:
     log("Validating agent output")
     result = subprocess.run(
         ["uv", "run", ".agents/scripts/validate-agent-output.py", "--check-dedup"],
@@ -234,10 +234,11 @@ def validate_output(raw_output: str, env: dict[str, str]) -> tuple[int, str | No
         env=env,
     )
     if result.returncode == 0:
-        return 0, result.stdout
-    if result.stderr.strip():
-        print(result.stderr.strip(), file=sys.stderr)
-    return result.returncode, None
+        return 0, result.stdout, result.stderr
+    error_text = result.stderr.strip()
+    if error_text:
+        print(error_text, file=sys.stderr)
+    return result.returncode, None, error_text
 
 
 def build_body(data: dict[str, object]) -> str:
@@ -345,9 +346,9 @@ def main() -> int:
 
     context = gather_context(env)
     raw_output = run_claude(args.prompt_file, context, env)
-    exit_code, validated_json = validate_output(raw_output, env)
+    exit_code, validated_json, error_text = validate_output(raw_output, env)
 
-    if exit_code == 2:
+    if exit_code == 2 and error_text.startswith("duplicate:"):
         log("Skipping duplicate proposal")
         return 0
     if exit_code != 0 or validated_json is None:
