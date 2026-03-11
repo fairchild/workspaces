@@ -215,6 +215,12 @@ mkdir -p "$APP_BUNDLE/Contents/Resources"
 cp ".build/release/$APP_NAME" "$APP_BUNDLE/Contents/MacOS/"
 log_success "Copied executable"
 
+CLI_NAME="workspaces"
+if [[ -f ".build/release/$CLI_NAME" ]]; then
+    cp ".build/release/$CLI_NAME" "$APP_BUNDLE/Contents/MacOS/"
+    log_success "Copied CLI launcher"
+fi
+
 # Copy Info.plist
 INFO_PLIST="Sources/WorkspaceManager/Resources/Info.plist"
 if [[ -f "$INFO_PLIST" ]]; then

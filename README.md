@@ -58,10 +58,11 @@
 ### CLI (source builds)
 
 ```bash
-swift run WorkspaceManagerCLI help
-swift run WorkspaceManagerCLI repo add ~/code/my-repo
-swift run WorkspaceManagerCLI ws new my-repo feature-auth
-swift run WorkspaceManagerCLI open my-repo/feature-auth --cmd "claude"
+swift run workspaces
+swift run workspaces .
+swift run workspaces repo add ~/code/my-repo
+swift run workspaces ws new my-repo feature-auth
+swift run workspaces open my-repo/feature-auth --cmd "claude"
 ```
 
 ## Configuration

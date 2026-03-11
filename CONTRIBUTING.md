@@ -70,18 +70,21 @@ Replace your installed app in `/Applications` with your current local build:
 ./scripts/install-local.sh
 ```
 
+This also links `workspaces` into the first writable directory already on your `PATH` unless you pass `--no-cli-link`.
+
 Useful options:
 
 ```bash
 ./scripts/install-local.sh --no-build --no-open
 ./scripts/install-local.sh --signed
 ./scripts/install-local.sh --dest ~/Applications/WorkspaceManager.app
+./scripts/install-local.sh --cli-link ~/.local/bin/workspaces
 ```
 
 ## CLI Development
 
 ```bash
-swift run WorkspaceManagerCLI help
+swift run workspaces help
 ```
 
 ## Project Structure

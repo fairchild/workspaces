@@ -29,12 +29,15 @@ NC='\033[0m'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 APP_NAME="WorkspaceManager"
+CLI_NAME="workspaces"
 SOURCE_APP="$PROJECT_DIR/build/$APP_NAME.app"
 DEST_APP="/Applications/$APP_NAME.app"
 
 BUILD_SIGNED=false
 SKIP_BUILD=false
 OPEN_AFTER_INSTALL=true
+LINK_CLI=true
+CLI_LINK_PATH=""
 
 usage() {
     cat <<USAGE
@@ -44,6 +47,9 @@ Options:
   --signed        Build with signing (uses scripts/build-release.sh)
   --no-build      Skip build and install existing build/WorkspaceManager.app
   --no-open       Do not relaunch app after install
+  --no-cli-link   Do not update the `workspaces` CLI symlink
+  --cli-link <path>
+                  Override CLI symlink path (default: first writable PATH dir)
   --dest <path>   Install destination app bundle path
   --help, -h      Show this help
 USAGE
@@ -65,6 +71,49 @@ log_error() {
     echo -e "${RED}ERR${NC} $1"
 }
 
+resolve_default_cli_link_path() {
+    local dir
+    for dir in /opt/homebrew/bin /usr/local/bin "$HOME/.local/bin" "$HOME/bin"; do
+        local parent
+        parent="$(dirname "$dir")"
+        if [[ -d "$dir" && -w "$dir" ]]; then
+            printf "%s/%s\n" "$dir" "$CLI_NAME"
+            return 0
+        fi
+        if [[ ! -d "$dir" && -d "$parent" && -w "$parent" ]]; then
+            printf "%s/%s\n" "$dir" "$CLI_NAME"
+            return 0
+        fi
+    done
+
+    local original_ifs="$IFS"
+    IFS=':'
+    for dir in $PATH; do
+        [[ -n "$dir" ]] || continue
+        if [[ -d "$dir" && -w "$dir" ]]; then
+            printf "%s/%s\n" "$dir" "$CLI_NAME"
+            IFS="$original_ifs"
+            return 0
+        fi
+    done
+    IFS="$original_ifs"
+
+    return 1
+}
+
+expand_home_prefix() {
+    local path="$1"
+    if [[ "$path" == "~" ]]; then
+        printf "%s\n" "$HOME"
+        return
+    fi
+    if [[ "$path" == "~/"* ]]; then
+        printf "%s\n" "$HOME/${path#~/}"
+        return
+    fi
+    printf "%s\n" "$path"
+}
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --signed)
@@ -78,6 +127,18 @@ while [[ $# -gt 0 ]]; do
         --no-open)
             OPEN_AFTER_INSTALL=false
             shift
+            ;;
+        --no-cli-link)
+            LINK_CLI=false
+            shift
+            ;;
+        --cli-link)
+            if [[ $# -lt 2 ]]; then
+                log_error "--cli-link requires a value"
+                exit 1
+            fi
+            CLI_LINK_PATH="$2"
+            shift 2
             ;;
         --dest)
             if [[ $# -lt 2 ]]; then
@@ -167,6 +228,35 @@ fi
 if [[ "$OPEN_AFTER_INSTALL" == true ]]; then
     log_step "Launching installed app"
     open "$DEST_APP"
+fi
+
+if [[ "$LINK_CLI" == true ]]; then
+    CLI_SOURCE="$DEST_APP/Contents/MacOS/$CLI_NAME"
+    if [[ -x "$CLI_SOURCE" ]]; then
+        if [[ -z "$CLI_LINK_PATH" ]]; then
+            if ! CLI_LINK_PATH="$(resolve_default_cli_link_path)"; then
+                log_warning "No writable PATH directory found for CLI link; use $CLI_SOURCE directly"
+                CLI_LINK_PATH=""
+            fi
+        fi
+
+        if [[ -n "$CLI_LINK_PATH" ]]; then
+            CLI_LINK_PATH="$(expand_home_prefix "$CLI_LINK_PATH")"
+            CLI_LINK_DIR="$(dirname "$CLI_LINK_PATH")"
+            mkdir -p "$CLI_LINK_DIR"
+            CLI_LINK_DIR="$(cd "$CLI_LINK_DIR" && pwd)"
+            CLI_LINK_PATH="$CLI_LINK_DIR/$(basename "$CLI_LINK_PATH")"
+
+            if [[ -e "$CLI_LINK_PATH" && ! -L "$CLI_LINK_PATH" ]]; then
+                log_warning "Skipping CLI link because a non-symlink file exists at $CLI_LINK_PATH"
+            else
+                ln -sfn "$CLI_SOURCE" "$CLI_LINK_PATH"
+                log_success "Linked CLI: $CLI_LINK_PATH"
+            fi
+        fi
+    else
+        log_warning "CLI launcher not found in app bundle; skipping CLI link"
+    fi
 fi
 
 echo ""

@@ -20,6 +20,8 @@ enum MainWindowSurfaceResolutionAction {
     case waitForRepos
     case clearDeepLinkNoMatch(WorkspaceDeepLink)
     case selectDeepLinkedWorkspace(WorkspaceDeepLink, Workspace)
+    case selectDeepLinkedRepo(WorkspaceDeepLink, Repo)
+    case importDeepLinkedRepo(WorkspaceDeepLink, String)
     case perfAutoSelect(Repo)
     case recordMissingPreviewBootstrap(UIFixturePreviewBootstrapConfiguration)
     case applyPreviewBootstrap(UIFixturePreviewBootstrapConfiguration, Repo, CodePreviewSelection)
@@ -46,8 +48,12 @@ struct MainWindowSurfaceResolutionController {
             return .waitForRepos
         case .clearNoMatch(let request):
             return .clearDeepLinkNoMatch(request)
-        case .select(let request, let workspace):
+        case .selectWorkspace(let request, let workspace):
             return .selectDeepLinkedWorkspace(request, workspace)
+        case .selectRepo(let request, let repo):
+            return .selectDeepLinkedRepo(request, repo)
+        case .importRepo(let request, let repoRoot):
+            return .importDeepLinkedRepo(request, repoRoot)
         }
 
         guard !context.didResolveInitialSurface else { return .none }

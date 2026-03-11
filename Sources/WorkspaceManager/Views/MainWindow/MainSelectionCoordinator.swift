@@ -42,6 +42,37 @@ struct MainSelectionCoordinator {
         return bestMatch?.workspace
     }
 
+    func bestRepoMatch(
+        for cwd: String,
+        repoRoot: String?,
+        repos: [Repo],
+        normalizePath: (String) -> String,
+        pathIsInside: (String, String) -> Bool
+    ) -> Repo? {
+        if let repoRoot {
+            let normalizedRepoRoot = normalizePath(repoRoot)
+            if let exact = repos.first(where: { normalizePath($0.localPath) == normalizedRepoRoot }) {
+                return exact
+            }
+        }
+
+        let normalizedCWD = normalizePath(cwd)
+        let matches = repos.compactMap { repo -> (repo: Repo, matchLength: Int)? in
+            let repoPath = normalizePath(repo.localPath)
+            guard pathIsInside(normalizedCWD, repoPath) else { return nil }
+            return (repo, repoPath.count)
+        }
+
+        let bestMatch = matches.sorted { lhs, rhs in
+            if lhs.matchLength == rhs.matchLength {
+                return lhs.repo.lastAccessedAt > rhs.repo.lastAccessedAt
+            }
+            return lhs.matchLength > rhs.matchLength
+        }.first
+
+        return bestMatch?.repo
+    }
+
     func syncedWorkspaceSelection(
         for activeSession: HostTerminalSession?,
         repos: [Repo],

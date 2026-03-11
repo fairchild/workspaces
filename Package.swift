@@ -31,6 +31,7 @@ let package = Package(
     platforms: [.macOS(.v14)],
     products: [
         .executable(name: "WorkspaceManager", targets: ["WorkspaceManager"]),
+        .executable(name: "workspaces", targets: ["WorkspaceManagerCLI"]),
         .executable(name: "WorkspaceManagerCLI", targets: ["WorkspaceManagerCLI"]),
     ],
     dependencies: [],

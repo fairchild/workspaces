@@ -45,4 +45,30 @@ struct MainSelectionCoordinatorTests {
 
         #expect(resolved?.id == source.id)
     }
+
+    @Test("Best repo match prefers explicit repo root and longest path")
+    func bestRepoMatchPrefersExplicitRepoRoot() {
+        let firstRepo = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))
+        let secondRepo = Repo(name: "nested", localPath: URL(fileURLWithPath: "/tmp/alpha/nested"))
+
+        let resolved = coordinator.bestRepoMatch(
+            for: "/tmp/alpha/nested/Sources/App",
+            repoRoot: "/tmp/alpha/nested",
+            repos: [firstRepo, secondRepo],
+            normalizePath: normalizePath,
+            pathIsInside: path(_:isInside:)
+        )
+
+        #expect(resolved?.id == secondRepo.id)
+    }
+
+    private func normalizePath(_ rawPath: String) -> String {
+        URL(fileURLWithPath: rawPath).standardizedFileURL.resolvingSymlinksInPath().path
+    }
+
+    private func path(_ path: String, isInside root: String) -> Bool {
+        if path == root { return true }
+        guard root != "/" else { return true }
+        return path.hasPrefix(root + "/")
+    }
 }

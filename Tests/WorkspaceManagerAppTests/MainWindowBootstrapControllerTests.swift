@@ -45,11 +45,58 @@ struct MainWindowBootstrapControllerTests {
         )
 
         switch decision {
-        case .select(let pendingRequest, let matchedWorkspace):
+        case .selectWorkspace(let pendingRequest, let matchedWorkspace):
             #expect(pendingRequest == request)
             #expect(matchedWorkspace.id == workspace.id)
         default:
             Issue.record("Expected deep link decision to select workspace")
+        }
+    }
+
+    @Test("Deep link selects matching repo when cwd is inside repo root")
+    func deepLinkSelectsMatchingRepo() {
+        let repo = Repo(name: "app", localPath: URL(fileURLWithPath: "/tmp/app"))
+        let request = makeDeepLink(
+            cwd: "/tmp/app/Sources/App",
+            repoRoot: "/tmp/app"
+        )
+
+        let decision = controller.deepLinkDecision(
+            pendingRequest: request,
+            repos: [repo],
+            normalizePath: normalizePath,
+            pathIsInside: path(_:isInside:)
+        )
+
+        switch decision {
+        case .selectRepo(let pendingRequest, let matchedRepo):
+            #expect(pendingRequest == request)
+            #expect(matchedRepo.id == repo.id)
+        default:
+            Issue.record("Expected deep link decision to select repo")
+        }
+    }
+
+    @Test("Deep link requests repo import when repo root is not tracked")
+    func deepLinkRequestsRepoImportForUntrackedRepo() {
+        let request = makeDeepLink(
+            cwd: "/tmp/app/Sources/App",
+            repoRoot: "/tmp/app"
+        )
+
+        let decision = controller.deepLinkDecision(
+            pendingRequest: request,
+            repos: [],
+            normalizePath: normalizePath,
+            pathIsInside: path(_:isInside:)
+        )
+
+        switch decision {
+        case .importRepo(let pendingRequest, let repoRoot):
+            #expect(pendingRequest == request)
+            #expect(repoRoot == "/tmp/app")
+        default:
+            Issue.record("Expected deep link decision to request repo import")
         }
     }
 
@@ -415,9 +462,11 @@ struct MainWindowBootstrapControllerTests {
         return Repo(name: name, localPath: repoURL)
     }
 
-    private func makeDeepLink(cwd: String) -> WorkspaceDeepLink {
+    private func makeDeepLink(cwd: String, repoRoot: String? = nil) -> WorkspaceDeepLink {
         let encodedCWD = cwd.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)!
-        let url = URL(string: "workspaces://focus?cwd=\(encodedCWD)")!
+        let encodedRepoRoot = repoRoot?.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)
+        let repoRootQuery = encodedRepoRoot.map { "&repo_root=\($0)" } ?? ""
+        let url = URL(string: "workspaces://focus?cwd=\(encodedCWD)\(repoRootQuery)")!
         return WorkspaceDeepLink(url: url)!
     }
 

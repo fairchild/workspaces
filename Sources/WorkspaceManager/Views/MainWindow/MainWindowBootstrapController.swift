@@ -6,7 +6,9 @@ struct MainWindowBootstrapController {
         case none
         case waitForRepos(WorkspaceDeepLink)
         case clearNoMatch(WorkspaceDeepLink)
-        case select(request: WorkspaceDeepLink, workspace: Workspace)
+        case selectWorkspace(request: WorkspaceDeepLink, workspace: Workspace)
+        case selectRepo(request: WorkspaceDeepLink, repo: Repo)
+        case importRepo(request: WorkspaceDeepLink, repoRoot: String)
     }
 
     enum PreviewBootstrapDecision {
@@ -49,7 +51,21 @@ struct MainWindowBootstrapController {
             normalizePath: normalizePath,
             pathIsInside: pathIsInside
         ) {
-            return .select(request: pendingRequest, workspace: workspace)
+            return .selectWorkspace(request: pendingRequest, workspace: workspace)
+        }
+
+        if let repo = selectionCoordinator.bestRepoMatch(
+            for: pendingRequest.cwd,
+            repoRoot: pendingRequest.repoRoot,
+            repos: repos,
+            normalizePath: normalizePath,
+            pathIsInside: pathIsInside
+        ) {
+            return .selectRepo(request: pendingRequest, repo: repo)
+        }
+
+        if let repoRoot = pendingRequest.repoRoot {
+            return .importRepo(request: pendingRequest, repoRoot: repoRoot)
         }
 
         return repos.isEmpty ? .waitForRepos(pendingRequest) : .clearNoMatch(pendingRequest)
