@@ -5,6 +5,7 @@
 //  Collapsible right pane with Files and Changes tabs
 //
 
+import AppKit
 import SwiftUI
 import WorkspaceManagerCore
 
@@ -431,20 +432,30 @@ struct ActivityTabView: View {
     let authState: NotificationAuthState
     @AppStorage(NotificationConstants.enabledKey)
     private var notificationsEnabled = NotificationConstants.defaultEnabled
+    @ObservedObject private var notificationCoordinator = NotificationCoordinator.shared
+    @Environment(\.openURL) private var openURL
 
     var body: some View {
-        if !notificationsEnabled {
-            ContentUnavailableView(
-                "Notifications Disabled",
-                systemImage: "bell.slash",
-                description: Text("Enable in Settings")
-            )
-        } else if case .signedIn = authState {
-            if events.isEmpty {
+        if case .signedIn(let login) = authState {
+            if !notificationsEnabled {
+                ContentUnavailableView {
+                    Label("Notifications Disabled", systemImage: "bell.slash")
+                } description: {
+                    Text("Connected as \(login). Enable notifications in Settings to show live GitHub activity here.")
+                } actions: {
+                    SettingsLink {
+                        Text("Open Settings")
+                    }
+                }
+            } else if events.isEmpty {
                 ContentUnavailableView(
                     "No Events Yet",
-                    systemImage: "clock",
-                    description: Text("Events will appear here")
+                    systemImage: isConnected ? "clock" : "bell.badge",
+                    description: Text(
+                        isConnected
+                            ? "Live GitHub activity will appear here."
+                            : "GitHub is signed in, but the activity stream is not connected yet."
+                    )
                 )
             } else {
                 List(events) { event in
@@ -453,11 +464,105 @@ struct ActivityTabView: View {
                 .listStyle(.plain)
             }
         } else {
-            ContentUnavailableView(
-                "Not Signed In",
-                systemImage: "person.crop.circle.badge.questionmark",
-                description: Text("Sign in with GitHub in Settings")
-            )
+            authenticationStateView
+        }
+    }
+
+    @ViewBuilder
+    private var authenticationStateView: some View {
+        switch authState {
+        case .signedOut:
+            ContentUnavailableView {
+                Label("Connect GitHub", systemImage: "person.crop.circle.badge.plus")
+            } description: {
+                Text(
+                    notificationsEnabled
+                        ? "Sign in to see pull requests, checks, and other repository activity here."
+                        : "Sign in to link your GitHub account. Enable notifications in Settings to see live activity here."
+                )
+            } actions: {
+                VStack(spacing: 10) {
+                    Button("Connect GitHub") {
+                        Task { await notificationCoordinator.startDeviceFlow() }
+                    }
+                    .buttonStyle(.borderedProminent)
+
+                    SettingsLink {
+                        Text("Open Settings")
+                    }
+                }
+            }
+
+        case .requestingCode:
+            ContentUnavailableView {
+                Label("Connecting GitHub", systemImage: "person.crop.circle.badge.clock")
+            } description: {
+                Text("Preparing a secure sign-in flow.")
+            } actions: {
+                ProgressView()
+                    .controlSize(.regular)
+            }
+
+        case .awaitingUserAuth(let userCode, let verificationURL):
+            ContentUnavailableView {
+                Label("Finish on GitHub", systemImage: "number.square")
+            } description: {
+                Text("Enter this one-time code on GitHub to finish linking your account.")
+            } actions: {
+                VStack(spacing: 10) {
+                    Text(userCode)
+                        .font(.system(.title3, design: .monospaced, weight: .semibold))
+                        .textSelection(.enabled)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+
+                    HStack(spacing: 10) {
+                        Button("Copy Code") {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(userCode, forType: .string)
+                        }
+                        .buttonStyle(.bordered)
+
+                        Button("Open GitHub") {
+                            guard let url = URL(string: verificationURL) else { return }
+                            openURL(url)
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                }
+            }
+
+        case .exchangingToken:
+            ContentUnavailableView {
+                Label("Connecting GitHub", systemImage: "lock.shield")
+            } description: {
+                Text("Completing sign-in.")
+            } actions: {
+                ProgressView()
+                    .controlSize(.regular)
+            }
+
+        case .failed(let message):
+            ContentUnavailableView {
+                Label("Could Not Connect GitHub", systemImage: "exclamationmark.triangle")
+            } description: {
+                Text(message)
+            } actions: {
+                VStack(spacing: 10) {
+                    Button("Try Again") {
+                        Task { await notificationCoordinator.startDeviceFlow() }
+                    }
+                    .buttonStyle(.borderedProminent)
+
+                    SettingsLink {
+                        Text("Open Settings")
+                    }
+                }
+            }
+
+        case .signedIn:
+            EmptyView()
         }
     }
 }
