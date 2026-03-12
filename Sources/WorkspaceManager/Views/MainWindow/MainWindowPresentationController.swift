@@ -82,8 +82,10 @@ struct MainWindowPresentationController {
                 fileURL: selectedCodePreview.fileURL
             )
         }
-        if let selectedWorkspace {
-            return .project(rootURL: selectedWorkspace.workspaceURL)
+        if let selectedWorkspace,
+            let localDirectoryURL = selectedWorkspace.localDirectoryURL
+        {
+            return .project(rootURL: localDirectoryURL)
         }
         if let selectedRepo {
             return .project(rootURL: selectedRepo.localURL)

@@ -22,7 +22,7 @@ struct SidebarView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.gitService) private var gitService
     @Environment(\.workspaceService) private var workspaceService
-    @Environment(\.remoteBackend) private var remoteBackend
+    @Environment(\.remoteBackendRegistry) private var remoteBackendRegistry
     let repos: [Repo]
     let webSources: [WebSource]
     let selectedRepo: Repo?
@@ -42,7 +42,7 @@ struct SidebarView: View {
 
     @State private var isAddingRepo = false
     @State private var repoForNewWorkspace: Repo?
-    @State private var isRemoteBackendAvailable = false
+    @State private var isDaytonaBackendAvailable = false
 
     // Error alert state
     @State private var errorMessage: String?
@@ -73,8 +73,20 @@ struct SidebarView: View {
         SidebarWorkspaceController(
             modelContext: modelContext,
             workspaceService: workspaceService,
-            remoteBackend: remoteBackend
+            remoteBackendRegistry: remoteBackendRegistry
         )
+    }
+
+    private var creationBackendIdentifiers: Set<String> {
+        Set(remoteBackendRegistry.creationBackendIdentifiers)
+    }
+
+    private var supportsDaytonaCreation: Bool {
+        creationBackendIdentifiers.contains(DaytonaBackend.identifier)
+    }
+
+    private var supportsSSHCreation: Bool {
+        creationBackendIdentifiers.contains(SSHBackend.identifier)
     }
 
     private var repoSortController: SidebarRepoSortController {
@@ -125,16 +137,13 @@ struct SidebarView: View {
             .sheet(item: $repoForNewWorkspace) { repo in
                 NewWorkspaceSheet(
                     repo: repo,
-                    isRemoteBackendAvailable: isRemoteBackendAvailable,
+                    supportsDaytonaCreation: supportsDaytonaCreation,
+                    supportsSSHCreation: supportsSSHCreation,
+                    isDaytonaAvailable: isDaytonaBackendAvailable,
                     isCreateDisabled: isCreatingWorkspace(for: repo.id)
-                ) { name, backend in
+                ) { request in
                     Task { @MainActor in
-                        switch backend {
-                        case .local:
-                            await createWorkspace(from: repo, name: name)
-                        case .remoteVM:
-                            await createRemoteWorkspace(from: repo, name: name)
-                        }
+                        await createWorkspace(from: repo, request: request)
                     }
                 }
             }
@@ -148,21 +157,35 @@ struct SidebarView: View {
                 isPresented: $showingDeleteConfirmation,
                 presenting: workspaceToDelete
             ) { workspace in
-                Button("Delete (Keep Files)", role: .destructive) {
-                    Task { @MainActor in
-                        await performDelete(workspace, deleteFiles: false)
+                if workspaceDeleteSupportsRemovingFiles(workspace) {
+                    Button("Delete (Keep Files)", role: .destructive) {
+                        Task { @MainActor in
+                            await performDelete(workspace, deleteFiles: false)
+                        }
                     }
-                }
-                Button("Delete and Remove Files", role: .destructive) {
-                    Task { @MainActor in
-                        await performDelete(workspace, deleteFiles: true)
+                    Button("Delete and Remove Files", role: .destructive) {
+                        Task { @MainActor in
+                            await performDelete(workspace, deleteFiles: true)
+                        }
+                    }
+                } else if workspaceDeleteAffectsRemoteProvider(workspace) {
+                    Button("Delete Remote Workspace", role: .destructive) {
+                        Task { @MainActor in
+                            await performDelete(workspace, deleteFiles: false)
+                        }
+                    }
+                } else {
+                    Button("Remove from List", role: .destructive) {
+                        Task { @MainActor in
+                            await performDelete(workspace, deleteFiles: false)
+                        }
                     }
                 }
                 Button("Cancel", role: .cancel) {
                     workspaceToDelete = nil
                 }
             } message: { workspace in
-                Text("Are you sure you want to delete '\(workspace.name)'?")
+                Text(deleteConfirmationMessage(for: workspace))
             }
             .focusedSceneValue(\.newWorkspaceAction, handleNewWorkspaceShortcut)
             .onChange(of: selectedWorkspace?.id) { _, _ in
@@ -191,7 +214,13 @@ struct SidebarView: View {
                 }
             }
             .task {
-                isRemoteBackendAvailable = await remoteBackend.isAvailable()
+                if supportsDaytonaCreation,
+                    let daytonaBackend = remoteBackendRegistry.backend(for: DaytonaBackend.identifier)
+                {
+                    isDaytonaBackendAvailable = await daytonaBackend.healthCheck()
+                } else {
+                    isDaytonaBackendAvailable = false
+                }
             }
     }
 
@@ -418,7 +447,7 @@ struct SidebarView: View {
 
                     Divider()
 
-                    if workspace.isRemote {
+                    if workspaceUsesProviderLifecycleActions(workspace) {
                         remoteWorkspaceActions(workspace)
                     } else {
                         localWorkspaceActions(workspace)
@@ -541,26 +570,20 @@ struct SidebarView: View {
             }
 
             modelContext.insert(repo)
-            if !saveModelContext(action: "save repository") {
-                modelContext.rollback()
-            }
+            _ = saveModelContext(action: "save repository")
         }
     }
 
     @MainActor
     private func removeRepo(_ repo: Repo) {
         modelContext.delete(repo)
-        if !saveModelContext(action: "remove repository") {
-            modelContext.rollback()
-        }
+        _ = saveModelContext(action: "remove repository")
     }
 
     @MainActor
     private func removeWebSource(_ source: WebSource) {
         modelContext.delete(source)
-        if !saveModelContext(action: "remove URL source") {
-            modelContext.rollback()
-        }
+        _ = saveModelContext(action: "remove URL source")
     }
 
     private func openWebSourceExternally(_ source: WebSource) {
@@ -583,21 +606,38 @@ struct SidebarView: View {
     }
 
     @MainActor
-    private func createWorkspace(from repo: Repo, name: String) async {
+    private func createWorkspace(from repo: Repo, request: NewWorkspaceRequest) async {
         let repoID = repo.id
         guard !isCreatingWorkspace(for: repoID) else { return }
         expandedRepoIDs.insert(repoID)
-        updateLocalCreationStatus(repoID: repoID, phase: .preparing)
+        switch request.backendChoice {
+        case .local:
+            updateLocalCreationStatus(repoID: repoID, phase: .preparing)
+        case .daytona:
+            workspaceCreationStatusByRepoID[repoID] = WorkspaceCreationStatus(
+                message: "Creating remote workspace..."
+            )
+        case .sshHost:
+            workspaceCreationStatusByRepoID[repoID] = WorkspaceCreationStatus(
+                message: "Preparing SSH workspace..."
+            )
+        }
 
         do {
-            let workspace = try await workspaceController.createWorkspace(
-                from: repo,
-                name: name,
-                progress: { phase in
+            let progress: WorkspaceCreationProgressHandler?
+            if request.backendChoice == .local {
+                progress = { phase in
                     await MainActor.run {
                         updateLocalCreationStatus(repoID: repoID, phase: phase)
                     }
                 }
+            } else {
+                progress = nil
+            }
+            let workspace = try await workspaceController.createWorkspace(
+                from: repo,
+                request: request,
+                progress: progress
             )
             workspaceCreationStatusByRepoID.removeValue(forKey: repoID)
             onWorkspaceCreated()
@@ -605,27 +645,6 @@ struct SidebarView: View {
         } catch {
             workspaceCreationStatusByRepoID.removeValue(forKey: repoID)
             errorMessage = "Failed to create workspace: \(error.localizedDescription)"
-            showingError = true
-        }
-    }
-
-    @MainActor
-    private func createRemoteWorkspace(from repo: Repo, name: String) async {
-        let repoID = repo.id
-        guard !isCreatingWorkspace(for: repoID) else { return }
-        workspaceCreationStatusByRepoID[repoID] = WorkspaceCreationStatus(
-            message: "Creating cloud workspace..."
-        )
-        expandedRepoIDs.insert(repoID)
-
-        do {
-            let workspace = try await workspaceController.createRemoteWorkspace(from: repo, name: name)
-            workspaceCreationStatusByRepoID.removeValue(forKey: repoID)
-            onWorkspaceCreated()
-            selectedWorkspace = workspace
-        } catch {
-            workspaceCreationStatusByRepoID.removeValue(forKey: repoID)
-            errorMessage = "Failed to create remote workspace: \(error.localizedDescription)"
             showingError = true
         }
     }
@@ -652,24 +671,36 @@ struct SidebarView: View {
 
     @ViewBuilder
     private func remoteWorkspaceActions(_ workspace: Workspace) -> some View {
+        let capabilities = remoteCapabilities(for: workspace)
+
         switch workspace.status {
         case .active:
-            Button("Stop") {
-                performStop(workspace)
+            if capabilities.supportsStartStop {
+                Button("Stop") {
+                    performStop(workspace)
+                }
             }
-            Button("Archive") {
-                performArchive(workspace)
+            if capabilities.supportsArchive {
+                Button("Archive") {
+                    performArchive(workspace)
+                }
             }
         case .stopped:
-            Button("Start") {
-                performStart(workspace)
+            if capabilities.supportsStartStop {
+                Button("Start") {
+                    performStart(workspace)
+                }
             }
-            Button("Archive") {
-                performArchive(workspace)
+            if capabilities.supportsArchive {
+                Button("Archive") {
+                    performArchive(workspace)
+                }
             }
         case .archived:
-            Button("Start") {
-                performStart(workspace)
+            if capabilities.supportsStartStop {
+                Button("Start") {
+                    performStart(workspace)
+                }
             }
         }
     }
@@ -679,10 +710,12 @@ struct SidebarView: View {
         if workspace.status == .active {
             Button("Archive") {
                 workspace.status = .archived
+                _ = saveModelContext(action: "archive workspace")
             }
         } else {
             Button("Unarchive") {
                 workspace.status = .active
+                _ = saveModelContext(action: "unarchive workspace")
             }
         }
     }
@@ -697,7 +730,7 @@ struct SidebarView: View {
                 sandboxAction = nil
             } catch {
                 sandboxAction = nil
-                errorMessage = "Failed to stop sandbox: \(error.localizedDescription)"
+                errorMessage = "Failed to stop remote workspace: \(error.localizedDescription)"
                 showingError = true
             }
         }
@@ -714,7 +747,7 @@ struct SidebarView: View {
                 selectedWorkspace = workspace
             } catch {
                 sandboxAction = nil
-                errorMessage = "Failed to start sandbox: \(error.localizedDescription)"
+                errorMessage = "Failed to start remote workspace: \(error.localizedDescription)"
                 showingError = true
             }
         }
@@ -730,10 +763,45 @@ struct SidebarView: View {
                 sandboxAction = nil
             } catch {
                 sandboxAction = nil
-                errorMessage = "Failed to archive sandbox: \(error.localizedDescription)"
+                errorMessage = "Failed to archive remote workspace: \(error.localizedDescription)"
                 showingError = true
             }
         }
+    }
+
+    private func remoteCapabilities(for workspace: Workspace) -> RuntimeCapabilities {
+        guard workspace.isRemote,
+            let backend = remoteBackendRegistry.backend(for: workspace.backendIdentifier)
+        else {
+            return RuntimeCapabilities()
+        }
+
+        return backend.runtimeCapabilities
+    }
+
+    private func workspaceUsesProviderLifecycleActions(_ workspace: Workspace) -> Bool {
+        let capabilities = remoteCapabilities(for: workspace)
+        return capabilities.supportsStartStop || capabilities.supportsArchive
+    }
+
+    private func workspaceDeleteSupportsRemovingFiles(_ workspace: Workspace) -> Bool {
+        !workspace.isRemote
+    }
+
+    private func workspaceDeleteAffectsRemoteProvider(_ workspace: Workspace) -> Bool {
+        workspace.isRemote && remoteCapabilities(for: workspace).supportsDelete
+    }
+
+    private func deleteConfirmationMessage(for workspace: Workspace) -> String {
+        if workspaceDeleteSupportsRemovingFiles(workspace) {
+            return "Are you sure you want to delete '\(workspace.name)'?"
+        }
+
+        if workspaceDeleteAffectsRemoteProvider(workspace) {
+            return "Delete '\(workspace.name)' from the remote provider?"
+        }
+
+        return "Remove '\(workspace.name)' from the app? Files on the SSH host will not be deleted."
     }
 
     @MainActor
@@ -783,6 +851,7 @@ struct SidebarView: View {
             try modelContext.save()
             return true
         } catch {
+            modelContext.rollback()
             errorMessage = "Failed to \(action): \(error.localizedDescription)"
             showingError = true
             return false
@@ -852,6 +921,9 @@ struct SidebarView: View {
     private func sessionKey(for workspace: Workspace) -> HostTerminalSessionKey {
         if let sandboxId = workspace.remoteId {
             return .remoteSandbox(sandboxId)
+        }
+        if workspace.isRemote {
+            return .remoteSandbox("workspace-\(workspace.id.uuidString)")
         }
         return .hostPath(normalizePath(workspace.workspaceURL))
     }

@@ -49,9 +49,10 @@ final class RightPaneStateStore: ObservableObject {
 
 struct RightPaneView: View {
     let targetID: String
-    let directoryURL: URL
+    let directoryURL: URL?
     let onFileSelected: (CodePreviewSelection) -> Void
     private let showActivity: Bool
+    private let supportsFilesystemInspection: Bool
 
     @Environment(\.gitService) private var gitService
     @ObservedObject private var state: RightPaneSessionState
@@ -77,10 +78,11 @@ struct RightPaneView: View {
         onFileSelected: @escaping (CodePreviewSelection) -> Void = { _ in }
     ) {
         self.targetID = "workspace-\(workspace.id.uuidString)"
-        self.directoryURL = workspace.workspaceURL
+        self.directoryURL = workspace.localDirectoryURL
         self.state = state
         self.onFileSelected = onFileSelected
         self.showActivity = true
+        self.supportsFilesystemInspection = workspace.localDirectoryURL != nil
     }
 
     init(
@@ -93,6 +95,7 @@ struct RightPaneView: View {
         self.state = state
         self.onFileSelected = onFileSelected
         self.showActivity = false
+        self.supportsFilesystemInspection = true
     }
 
     var body: some View {
@@ -110,7 +113,7 @@ struct RightPaneView: View {
 
                     Spacer()
 
-                    if let badge = badgeCount(for: state.selectedTab), badge > 0 {
+                    if let badge = badgeCount(for: displayedTab), badge > 0 {
                         Text("\(badge)")
                             .font(.caption2.weight(.medium))
                             .padding(.horizontal, 7)
@@ -135,7 +138,7 @@ struct RightPaneView: View {
             Divider()
 
             ZStack {
-                switch state.selectedTab {
+                switch displayedTab {
                 case .files:
                     FileTreeTabView(
                         root: state.fileTree,
@@ -162,7 +165,7 @@ struct RightPaneView: View {
             Divider()
 
             HStack {
-                if state.selectedTab == .activity {
+                if displayedTab == .activity {
                     Circle()
                         .fill(notificationCoordinator.isStreamConnected ? Color.mint : Color.secondary)
                         .frame(width: 6, height: 6)
@@ -183,7 +186,7 @@ struct RightPaneView: View {
 
                 Spacer()
 
-                if state.selectedTab != .activity {
+                if supportsFilesystemInspection, displayedTab != .activity {
                     Button {
                         Task { await refresh() }
                     } label: {
@@ -198,19 +201,30 @@ struct RightPaneView: View {
             .padding(.vertical, 6)
         }
         .task(id: targetID) {
-            if !state.hasLoadedOnce || state.fileTree == nil {
+            normalizeSelectedTab()
+            if supportsFilesystemInspection, !state.hasLoadedOnce || state.fileTree == nil {
                 await refresh()
             }
         }
     }
 
     private var visibleTabs: [Tab] {
-        showActivity ? Tab.allCases : Tab.allCases.filter { $0 != .activity }
+        guard supportsFilesystemInspection else {
+            return showActivity ? [.activity] : []
+        }
+        return showActivity ? Tab.allCases : Tab.allCases.filter { $0 != .activity }
+    }
+
+    private var displayedTab: Tab {
+        if visibleTabs.contains(state.selectedTab) {
+            return state.selectedTab
+        }
+        return visibleTabs.first ?? .files
     }
 
     private var selectedTabBinding: Binding<Tab> {
         Binding(
-            get: { state.selectedTab },
+            get: { displayedTab },
             set: { nextTab in
                 state.selectedTab = nextTab
                 if nextTab == .activity {
@@ -233,7 +247,25 @@ struct RightPaneView: View {
     }
 
     @MainActor
+    private func normalizeSelectedTab() {
+        guard !visibleTabs.isEmpty else { return }
+        guard !visibleTabs.contains(state.selectedTab) else { return }
+        state.selectedTab = visibleTabs[0]
+        if state.selectedTab == .activity {
+            notificationCoordinator.markActivitySeen()
+        }
+    }
+
+    @MainActor
     private func refresh() async {
+        guard supportsFilesystemInspection else {
+            state.fileTree = nil
+            state.changedFiles = []
+            state.hasLoadedOnce = true
+            state.lastRefresh = Date()
+            return
+        }
+
         state.isLoading = true
         defer {
             state.isLoading = false
@@ -250,6 +282,7 @@ struct RightPaneView: View {
     }
 
     private func loadFileTree() async -> FileNode? {
+        guard let directoryURL else { return nil }
         do {
             return try await gitService.getFileTree(at: directoryURL)
         } catch {
@@ -259,6 +292,7 @@ struct RightPaneView: View {
     }
 
     private func loadGitStatus() async -> [FileChange] {
+        guard let directoryURL else { return [] }
         do {
             return try await gitService.getStatus(at: directoryURL)
         } catch {
@@ -268,7 +302,7 @@ struct RightPaneView: View {
     }
 
     private func selectFile(relativePath: String) {
-        guard !relativePath.isEmpty else { return }
+        guard !relativePath.isEmpty, let directoryURL else { return }
         onFileSelected(
             CodePreviewSelection(
                 rootURL: directoryURL,
@@ -278,8 +312,11 @@ struct RightPaneView: View {
     }
 
     private var summaryText: String {
-        switch state.selectedTab {
+        switch displayedTab {
         case .files:
+            guard supportsFilesystemInspection else {
+                return "Files are available only for local workspaces"
+            }
             if state.isLoading {
                 return "Refreshing file tree"
             }
@@ -288,6 +325,9 @@ struct RightPaneView: View {
             }
             return "Browse files in this context"
         case .changes:
+            guard supportsFilesystemInspection else {
+                return "Git changes are available only for local workspaces"
+            }
             if state.isLoading {
                 return "Refreshing working tree"
             }
