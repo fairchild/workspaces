@@ -292,9 +292,12 @@ struct NewWorkspaceSheet: View {
             }
 
             if repoRemoteURL == nil {
-                Text("SSH workspaces require a repository remote URL so the remote checkout can be cloned on first connect.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                Text(
+                    "SSH workspaces require a repository remote URL so the "
+                        + "remote checkout can be cloned on first connect."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
             }
         }
     }

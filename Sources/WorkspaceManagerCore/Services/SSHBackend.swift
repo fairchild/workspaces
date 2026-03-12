@@ -27,8 +27,8 @@ public struct SSHSessionPlan: Sendable, Equatable {
 }
 
 public actor SSHBackend: RemoteBackendProtocol {
-    public typealias CommandRunner = @Sendable (_ executable: String, _ arguments: [String]) async throws ->
-        ProcessResult
+    public typealias CommandRunner =
+        @Sendable (_ executable: String, _ arguments: [String]) async throws -> ProcessResult
 
     public nonisolated static let identifier = "ssh"
     public static let shared = SSHBackend()
@@ -171,7 +171,9 @@ public actor SSHBackend: RemoteBackendProtocol {
         if let compose {
             let composeDirectory = composeProjectDirectory(compose: compose, workingDirectory: workingDirectory)
             let composeCommand = try composeCommandString(compose: compose)
-            return "cd \(singleQuoted(composeDirectory)) && exec \(composeCommand) exec \(singleQuoted(compose.service)) ${SHELL:-/bin/bash} -l"
+            return
+                "cd \(singleQuoted(composeDirectory)) && exec \(composeCommand) exec "
+                + "\(singleQuoted(compose.service)) ${SHELL:-/bin/bash} -l"
         }
 
         return "cd \(singleQuoted(workingDirectory)) && exec ${SHELL:-/bin/bash} -l"
@@ -205,7 +207,9 @@ public actor SSHBackend: RemoteBackendProtocol {
         }
 
         var parts = ["docker", "compose"]
-        if let projectName = compose.projectName?.trimmingCharacters(in: .whitespacesAndNewlines), !projectName.isEmpty {
+        if let projectName = compose.projectName?.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        ), !projectName.isEmpty {
             parts += ["-p", projectName]
         }
         for file in composeFiles {
@@ -244,7 +248,8 @@ public actor SSHBackend: RemoteBackendProtocol {
             return candidate
         }
 
-        let path = ProcessInfo.processInfo.environment["PATH"]
+        let path =
+            ProcessInfo.processInfo.environment["PATH"]
             ?? "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
         for directory in path.split(separator: ":") {
             let candidate = URL(fileURLWithPath: String(directory), isDirectory: true)
@@ -263,7 +268,9 @@ public actor SSHBackend: RemoteBackendProtocol {
             return "''"
         }
 
-        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._/:~@")
+        let allowed = CharacterSet(
+            charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._/:~@"
+        )
         if value.rangeOfCharacter(from: allowed.inverted) == nil {
             return value
         }

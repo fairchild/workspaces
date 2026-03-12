@@ -872,7 +872,8 @@ struct ContentView: View {
 
         if workspace.isRemote {
             guard let sandboxId = workspace.remoteId else {
-                viewState.remoteErrorMessage = RemoteWorkspaceError.missingRemoteIdentifier
+                viewState.remoteErrorMessage =
+                    RemoteWorkspaceError.missingRemoteIdentifier
                     .localizedDescription
                 return
             }
@@ -947,7 +948,8 @@ struct ContentView: View {
         guard let backend = remoteBackendRegistry.backend(for: workspace.backendIdentifier) else {
             viewState.connectingSandboxId = nil
             viewState.pendingRemoteWorkspace = nil
-            viewState.remoteErrorMessage = RemoteWorkspaceError.backendNotRegistered(workspace.backendIdentifier)
+            viewState.remoteErrorMessage =
+                RemoteWorkspaceError.backendNotRegistered(workspace.backendIdentifier)
                 .localizedDescription
             return
         }
