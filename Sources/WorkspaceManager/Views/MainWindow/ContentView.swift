@@ -19,6 +19,8 @@ struct ContentView: View {
     @Query(sort: \WebSource.addedAt, order: .reverse) private var webSources: [WebSource]
     @AppStorage(TerminalMultiplexingMode.storageKey)
     private var terminalMultiplexingModeRawValue: String = TerminalMultiplexingMode.defaultValue.rawValue
+    @AppStorage(NotificationConstants.enabledKey)
+    private var notificationsEnabled = NotificationConstants.defaultEnabled
     @Environment(\.externalEditorService) private var externalEditorService
     @Environment(\.remoteBackend) private var remoteBackend
     @Environment(\.workspaceService) private var workspaceService
@@ -32,6 +34,7 @@ struct ContentView: View {
     @StateObject private var rightPaneStateStore = RightPaneStateStore()
     @StateObject private var webSurfaceStore = WebSurfaceStore()
     @StateObject private var terminalFocusCoordinator = TerminalFocusCoordinator()
+    private let buildIdentity = AppBuildIdentity.current
     private let resolvedDefaultHostDirectory = HostTerminalDefaults.defaultWorkingDirectory()
         .standardizedFileURL
         .resolvingSymlinksInPath()
@@ -317,6 +320,10 @@ struct ContentView: View {
     private var splitViewWithToolbar: some View {
         baseSplitView
             .toolbar {
+                ToolbarItem(placement: .principal) {
+                    AppBuildIdentityBadge(identity: buildIdentity)
+                }
+
                 ToolbarItemGroup(placement: .automatic) {
                     if let selectedWebSource = currentSelectedWebSource {
                         Button {
@@ -370,6 +377,7 @@ struct ContentView: View {
                 resolveSurfaceLifecycle()
                 pruneRightPaneState()
                 syncOpenInEditorShortcutRouting()
+                notificationCoordinator.loadStoredAuth()
             }
             .task {
                 isRemoteBackendAvailableForLanding = await remoteBackend.isAvailable()
@@ -400,13 +408,13 @@ struct ContentView: View {
                 pruneRightPaneState()
             }
             .onChange(of: currentSelectedWorkspace?.id) { _, _ in
-                guard let selectedWorkspace = currentSelectedWorkspace else {
-                    Task { await notificationCoordinator.disconnectStream() }
-                    return
-                }
-                if let remoteURL = selectedWorkspace.sourceRepo?.remoteURL {
-                    Task { await notificationCoordinator.connectStream(remoteURL: remoteURL) }
-                }
+                syncNotificationStreamForSelection()
+            }
+            .onChange(of: notificationCoordinator.authState) { _, _ in
+                syncNotificationStreamForSelection()
+            }
+            .onChange(of: notificationsEnabled) { _, _ in
+                syncNotificationStreamForSelection()
             }
             .onChange(of: openInEditorContextKey) { _, _ in
                 syncOpenInEditorShortcutRouting()
@@ -456,6 +464,19 @@ struct ContentView: View {
             } message: {
                 Text(viewState.remoteErrorMessage ?? "Unknown error.")
             }
+    }
+
+    private func syncNotificationStreamForSelection() {
+        guard
+            notificationsEnabled,
+            case .signedIn = notificationCoordinator.authState,
+            let remoteURL = currentSelectedWorkspace?.sourceRepo?.remoteURL
+        else {
+            Task { await notificationCoordinator.disconnectStream() }
+            return
+        }
+
+        Task { await notificationCoordinator.connectStream(remoteURL: remoteURL) }
     }
 
     var body: some View {

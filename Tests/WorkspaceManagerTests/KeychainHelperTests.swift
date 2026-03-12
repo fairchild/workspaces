@@ -8,6 +8,12 @@ struct KeychainHelperTests {
     // Use a unique key prefix per test run to avoid polluting the real keychain
     private static let testPrefix = "test-\(UUID().uuidString.prefix(8))"
 
+    init() {
+        // SPM test runner lacks keychain-access-groups entitlements required
+        // for the data protection keychain; fall back to legacy keychain.
+        KeychainHelper.useDataProtection = false
+    }
+
     private func testKey(_ name: String) -> String {
         "\(Self.testPrefix)-\(name)"
     }

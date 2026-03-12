@@ -1,0 +1,129 @@
+# Agent Team
+
+Workspaces has a founding team of AI agents that propose improvements, review each other's work, and plan approved ideas into actionable issues. The goal is autonomous development with human approval gating — the repo advances itself, guided by the owner.
+
+## Team
+
+### April Clearwater — Application Lead
+Focuses on UI, terminal, workflows, user experience. Thinks about what the person at the keyboard experiences.
+
+### Plat Ironwood — Platform Lead
+Focuses on CI/CD, agent infrastructure, distribution, notifications, testing. Thinks about what breaks at 3am.
+
+### Peter Planner
+Converts approved ideas into GitHub Issues and Milestones. Activated when the owner approves a proposal.
+
+All agents share core principles: quality over speed, hardening over feature expansion, calm/clean/intuitive UX without compromise.
+
+## How It Works
+
+```
+Daily (weekdays, alternating who goes first, 30 min offset):
+
+  Agent wakes up
+    │
+    1. Check open PRs → give code review
+    2. Check in-progress issues → suggest next steps
+    3. Read new discussion comments → react
+    4. If nothing needs attention → propose new [idea]
+    │
+    Post to GitHub Discussions
+    │
+  Owner reviews, replies with approval keyword
+    │
+  Peter Planner (event-triggered)
+    1. Replies "Working on it..."
+    2. Reads full thread + owner's modifications
+    3. Creates Issue(s) or Milestone + Issues
+    4. Links discussion ↔ issues
+    5. Marks [idea][endorsed]
+```
+
+### Schedule
+
+| Day | First (7:00am PT) | Second (7:30am PT) |
+|-----|--------------------|--------------------|
+| Mon | April | Plat |
+| Tue | Plat | April |
+| Wed | April | Plat |
+| Thu | Plat | April |
+| Fri | April | Plat |
+
+The 30-minute offset means the second agent sees the first's output and can comment on it.
+
+### Approval Keywords
+
+Reply to any `[idea]` discussion with one of these to trigger Peter Planner:
+
+> yes, let's do it, plan it, approved, go ahead, ship it, lgtm, do it
+
+The reply can include modifications — Peter reads the full thread and incorporates them.
+
+### Discussion Lifecycle
+
+```
+[idea] New proposal          → open, awaiting review
+[idea][endorsed] Approved    → planned into issues, work can begin
+[shipped] Completed          → closed after delivery
+```
+
+## Files
+
+| File | Purpose |
+|------|---------|
+| `.agents/prompts/april-clearwater.md` | April's persona and instructions |
+| `.agents/prompts/plat-ironwood.md` | Plat's persona and instructions |
+| `.agents/prompts/peter-planner.md` | Planner instructions |
+| `.agents/scripts/run-contributor.py` | Shared runtime for contributor agents |
+| `.agents/scripts/validate-agent-output.py` | Output validation + dedup checking |
+| `.github/workflows/agent-april.yml` | April's cron workflow |
+| `.github/workflows/agent-plat.yml` | Plat's cron workflow |
+| `.github/workflows/agent-peter.yml` | Event-triggered planner workflow |
+
+## Runtime Layout
+
+April and Plat now use thin workflow wrappers. Their workflow YAML keeps only repository policy:
+
+- schedules
+- `workflow_dispatch`
+- permissions
+- concurrency
+- checkout and tool setup
+
+The shared contributor behavior lives in `.agents/scripts/run-contributor.py`:
+
+1. gather repo and GitHub context
+2. run Claude Code with the agent prompt
+3. validate JSON output through `validate-agent-output.py`
+4. either pretty-print validated JSON for dry runs or route the action back into GitHub
+
+Peter Planner stays separate because it is event-driven and uses a different planning schema.
+
+## Reliability
+
+- **JSON output format** — agents output structured JSON in code fences, validated before posting (replaces fragile sed-based delimiter parsing)
+- **Dedup checking** — proposed titles are compared against open discussions before posting
+- **GraphQL for Discussions** — GitHub REST API doesn't support Discussions; all queries use GraphQL
+- **Early filtering** — planner workflow skips non-owner comments at the job level (no wasted compute)
+- **Shell safety** — event context passed via env vars, body content via temp files
+
+## Vision: Autonomous Development
+
+This is the seed of a self-driving development loop. The current state and where we're headed:
+
+### Phase 1: Propose + Plan (current)
+Agents propose ideas and review each other's work. Human approves. Planner creates issues.
+
+### Phase 2: Memory
+Add persistent memory so agents build context across sessions — what shipped, what worked, what didn't. They stop re-proposing similar ideas and develop a sense of project trajectory.
+
+### Phase 3: Execute
+Approved and planned issues get picked up by agents that create branches, write code, open PRs. Human reviews PRs.
+
+### Phase 4: Evaluate
+After work ships, agents assess impact — did the change improve the codebase? Did tests pass? Did performance hold? Evaluation feeds back into ideation priorities.
+
+### Phase 5: Multi-agent, multi-model
+Add more agents (Codex, other models) with different perspectives. User feedback signals (usage patterns, bug reports) flow into the ideation context. The team grows and diversifies.
+
+The human remains the final authority at every stage. Agents propose, plan, and eventually execute — but nothing ships without explicit approval. The system gets more autonomous over time, but the owner always has the steering wheel.

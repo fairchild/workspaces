@@ -24,6 +24,7 @@ final class NotificationCoordinator: NotificationCoordinatorProtocol, Observable
     private var eventListenerTask: Task<Void, Never>?
     private var connectionPollingTask: Task<Void, Never>?
     private var refreshTask: Task<Void, Never>?
+    private var jwtRefreshTask: Task<Bool, Never>?
     private var currentRemoteURL: String?
     private static let maxEvents = 100
     private static let refreshMargin: TimeInterval = 15 * 60
@@ -51,7 +52,7 @@ final class NotificationCoordinator: NotificationCoordinatorProtocol, Observable
         authState = .signedIn(login: login)
 
         if jwtNeedsRefresh() {
-            Task { await refreshJWTOrSignOut() }
+            Task { await refreshStoredJWTOrSignOut() }
         } else {
             scheduleRefresh()
         }
@@ -101,6 +102,8 @@ final class NotificationCoordinator: NotificationCoordinatorProtocol, Observable
         currentDeviceAuth = nil
         refreshTask?.cancel()
         refreshTask = nil
+        jwtRefreshTask?.cancel()
+        jwtRefreshTask = nil
         currentRemoteURL = nil
 
         for key in [
@@ -231,28 +234,39 @@ final class NotificationCoordinator: NotificationCoordinatorProtocol, Observable
 
     @discardableResult
     private func refreshJWT() async -> Bool {
-        guard
-            let githubToken = try? KeychainHelper.loadString(
-                key: NotificationConstants.keychainGitHubTokenKey)
-        else {
-            log.warning("No stored GitHub token — cannot refresh JWT")
-            return false
+        if let jwtRefreshTask {
+            return await jwtRefreshTask.value
         }
 
-        do {
-            let session = try await sessionService.createSession(
-                githubToken: githubToken
-            )
-            try updateSessionCredentials(
-                jwt: session.jwt, login: session.login
-            )
-            log.info("JWT refreshed, expires \(session.expiresAt)")
-            scheduleRefresh()
-            return true
-        } catch {
-            log.error("JWT refresh failed: \(error.localizedDescription)")
-            return false
+        let task = Task<Bool, Never> { @MainActor in
+            guard
+                let githubToken = try? KeychainHelper.loadString(
+                    key: NotificationConstants.keychainGitHubTokenKey)
+            else {
+                log.warning("No stored GitHub token — cannot refresh JWT")
+                return false
+            }
+
+            do {
+                let session = try await sessionService.createSession(
+                    githubToken: githubToken
+                )
+                try updateSessionCredentials(
+                    jwt: session.jwt, login: session.login
+                )
+                log.info("JWT refreshed, expires \(session.expiresAt)")
+                scheduleRefresh()
+                return true
+            } catch {
+                log.error("JWT refresh failed: \(error.localizedDescription)")
+                return false
+            }
         }
+
+        jwtRefreshTask = task
+        let refreshed = await task.value
+        jwtRefreshTask = nil
+        return refreshed
     }
 
     private func refreshJWTOrSignOut() async {
@@ -267,6 +281,13 @@ final class NotificationCoordinator: NotificationCoordinatorProtocol, Observable
         )
         guard enabled, let remoteURL = currentRemoteURL else { return }
         await startStream(remoteURL: remoteURL, resetActivity: false)
+    }
+
+    private func refreshStoredJWTOrSignOut() async {
+        let refreshed = await refreshJWT()
+        if !refreshed {
+            signOut()
+        }
     }
 
     private func scheduleRefresh() {
