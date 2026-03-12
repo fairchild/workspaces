@@ -149,8 +149,8 @@ brew install --cask swiftbar
 # 2. Configure SwiftBar to use a plugin folder (e.g. ~/swiftbar)
 #    Open SwiftBar preferences and set the plugin folder
 
-# 3. Symlink the menu bar plugin
-ln -s "$(pwd)/scripts/runner-ci-menubar.5s.sh" ~/swiftbar/
+# 3. Install the menu bar plugin
+./scripts/install-runner-ci-menubar.sh ~/swiftbar
 
 # 4. Install runner activity hooks (writes to all runners' .env files)
 ./scripts/install-runner-hooks.sh
@@ -177,7 +177,8 @@ ln -s "$(pwd)/scripts/runner-ci-menubar.5s.sh" ~/swiftbar/
 | Script | Purpose |
 |--------|---------|
 | `runner-status.sh` | CLI status of all runners, WorkspaceManager processes, recent jobs |
-| `runner-ci-menubar.5s.sh` | SwiftBar plugin (symlink into plugin folder) |
+| `runner-ci-menubar.5s.sh` | SwiftBar plugin (installed into plugin folder) |
+| `install-runner-ci-menubar.sh` | Installs the SwiftBar plugin as a durable local copy |
 | `runner-notify-start.sh` | Runner hook: logs job start to activity log |
 | `runner-notify-complete.sh` | Runner hook: logs job completion to activity log |
 | `install-runner-hooks.sh` | Installs hooks on all runners (copies scripts, updates .env) |
