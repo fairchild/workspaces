@@ -115,12 +115,7 @@ struct SidebarWorkspaceController {
         if workspace.isRemote {
             let backend = try remoteBackend(for: workspace)
             if backend.runtimeCapabilities.supportsDelete {
-                guard
-                    let remoteId = workspace.remoteId?.trimmingCharacters(in: .whitespacesAndNewlines),
-                    !remoteId.isEmpty
-                else {
-                    throw RemoteWorkspaceError.missingRemoteIdentifier
-                }
+                let remoteId = try requiredRemoteIdentifier(for: workspace)
                 let provisionableBackend = try provisioningBackend(
                     identifier: workspace.backendIdentifier,
                     requiresDelete: true,
@@ -137,24 +132,24 @@ struct SidebarWorkspaceController {
     }
 
     func stop(_ workspace: Workspace) async throws {
-        guard let remoteId = workspace.remoteId else { return }
         let backend = try startStopBackend(for: workspace, operation: "stopping remote workspaces")
+        let remoteId = try requiredRemoteIdentifier(for: workspace)
         try await backend.stopSandbox(sandboxId: remoteId)
         workspace.status = .stopped
         try saveModelContext(action: "stop remote workspace")
     }
 
     func start(_ workspace: Workspace) async throws {
-        guard let remoteId = workspace.remoteId else { return }
         let backend = try startStopBackend(for: workspace, operation: "starting remote workspaces")
+        let remoteId = try requiredRemoteIdentifier(for: workspace)
         _ = try await backend.startSandbox(sandboxId: remoteId)
         workspace.status = .active
         try saveModelContext(action: "start remote workspace")
     }
 
     func archive(_ workspace: Workspace) async throws {
-        guard let remoteId = workspace.remoteId else { return }
         let backend = try archivableBackend(for: workspace, operation: "archiving remote workspaces")
+        let remoteId = try requiredRemoteIdentifier(for: workspace)
         try await backend.archiveSandbox(sandboxId: remoteId)
         workspace.status = .archived
         try saveModelContext(action: "archive remote workspace")
@@ -363,6 +358,17 @@ struct SidebarWorkspaceController {
         }
 
         return archivableBackend
+    }
+
+    private func requiredRemoteIdentifier(for workspace: Workspace) throws -> String {
+        guard
+            let remoteId = workspace.remoteId?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !remoteId.isEmpty
+        else {
+            throw RemoteWorkspaceError.missingRemoteIdentifier
+        }
+
+        return remoteId
     }
 
     private func saveModelContext(action: String) throws {

@@ -393,6 +393,63 @@ struct SidebarWorkspaceControllerBehaviorTests {
         #expect(await backend.deleteSandboxCallCount() == 0)
     }
 
+    @Test("Managed lifecycle operations fail closed when remote identifier is missing")
+    @MainActor
+    func managedLifecycleOperationsFailClosedWhenRemoteIdentifierIsMissing() async throws {
+        let fixture = try makeModelContext()
+        let context = fixture.context
+        let repo = Repo(
+            name: "api",
+            localPath: URL(fileURLWithPath: "/tmp/api"),
+            remoteURL: "git@github.com:acme/api.git"
+        )
+        let workspace = Workspace(
+            name: "feature-a",
+            path: URL(fileURLWithPath: "/tmp/api/workspaces/feature-a"),
+            sourceRepo: repo,
+            backendIdentifier: DaytonaBackend.identifier
+        )
+        context.insert(repo)
+        context.insert(workspace)
+        try context.save()
+
+        let backend = MockRemoteBackend(
+            identifier: DaytonaBackend.identifier,
+            runtimeCapabilities: RuntimeCapabilities(
+                supportsCreate: true,
+                supportsDelete: true,
+                supportsStartStop: true,
+                supportsArchive: true,
+                supportsList: true
+            )
+        )
+        let controller = SidebarWorkspaceController(
+            modelContext: context,
+            workspaceService: MockWorkspaceService(),
+            remoteBackendRegistry: MockRemoteBackendRegistry(
+                backends: [DaytonaBackend.identifier: backend]
+            )
+        )
+
+        await #expect(throws: RemoteWorkspaceError.self) {
+            try await controller.stop(workspace)
+        }
+        await #expect(throws: RemoteWorkspaceError.self) {
+            try await controller.start(workspace)
+        }
+        await #expect(throws: RemoteWorkspaceError.self) {
+            try await controller.archive(workspace)
+        }
+
+        let fetchedWorkspace = try #require(
+            context.fetch(FetchDescriptor<Workspace>()).first
+        )
+        #expect(fetchedWorkspace.status == .active)
+        #expect(await backend.stopSandboxCallCount() == 0)
+        #expect(await backend.startSandboxCallCount() == 0)
+        #expect(await backend.archiveSandboxCallCount() == 0)
+    }
+
     @MainActor
     private func makeModelContext() throws -> ModelContextFixture {
         let schema = Schema([Repo.self, Workspace.self, WebSource.self])
@@ -464,6 +521,9 @@ private actor MockRemoteBackend: ProvisionCapable, StartStopCapable, Archivable,
     var createSandboxResult = RemoteSandboxInfo(sandboxId: "remote-123", sshCommand: "ssh remote")
     var createSandboxCalls: [(name: String, cloneURL: String?)] = []
     var deleteSandboxCalls: [String] = []
+    var stopSandboxCalls: [String] = []
+    var startSandboxCalls: [String] = []
+    var archiveSandboxCalls: [String] = []
     var deleteSandboxError: (any Error)?
 
     init(
@@ -503,6 +563,18 @@ private actor MockRemoteBackend: ProvisionCapable, StartStopCapable, Archivable,
         deleteSandboxCalls.count
     }
 
+    func stopSandboxCallCount() -> Int {
+        stopSandboxCalls.count
+    }
+
+    func startSandboxCallCount() -> Int {
+        startSandboxCalls.count
+    }
+
+    func archiveSandboxCallCount() -> Int {
+        archiveSandboxCalls.count
+    }
+
     func deleteSandbox(sandboxId: String) async throws {
         deleteSandboxCalls.append(sandboxId)
         if let deleteSandboxError {
@@ -510,13 +582,18 @@ private actor MockRemoteBackend: ProvisionCapable, StartStopCapable, Archivable,
         }
     }
 
-    func stopSandbox(sandboxId: String) async throws {}
-
-    func startSandbox(sandboxId: String) async throws -> RemoteSandboxInfo {
-        createSandboxResult
+    func stopSandbox(sandboxId: String) async throws {
+        stopSandboxCalls.append(sandboxId)
     }
 
-    func archiveSandbox(sandboxId: String) async throws {}
+    func startSandbox(sandboxId: String) async throws -> RemoteSandboxInfo {
+        startSandboxCalls.append(sandboxId)
+        return createSandboxResult
+    }
+
+    func archiveSandbox(sandboxId: String) async throws {
+        archiveSandboxCalls.append(sandboxId)
+    }
 
     func listSandboxes() async throws -> [RemoteSandboxStatus] { [] }
 }
