@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.5.0] - 2026-03-12
+
+### Added
+- generate fun unique workspace names (#79)
+- add drive milestone skill (#77)
+- runner-status script for CI visibility (#69)
+- CI visibility via runner status and menu bar indicator (#73)
+- add ops reporting loop (#72)
+
+### Fixed
+- harden release workflow and prep (#76)
+- sanitize pipe chars and resolve symlink in runner scripts (#74)
+
+### Other
+- Fix SwiftBar runner plugin installation (#78)
+- Add Lume macOS VM validation and smoke automation (#54)
+- Add observer replay fixtures (#75)
+- Implement registry-backed remote workspaces and SSH host support (#55)
+
 ## [0.4.0] - 2026-03-11
 
 ### Added
