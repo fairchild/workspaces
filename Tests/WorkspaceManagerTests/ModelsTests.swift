@@ -183,6 +183,33 @@ struct ModelsTests {
             )
         }
 
+        @Test("Additive payload wins when kind is present alongside new metadata")
+        func additivePayloadWinsWhenKindIsPresent() {
+            let workspace = makeWorkspace()
+
+            workspace.remoteMetadataJSON =
+                #"{"kind":"ssh","ssh":{"host":"ssh.example.com","user":"alice","port":22,"authMode":"key","workingDir":"/workspace"},"compose":{"projectName":"acme","composeFiles":["compose.yml"],"service":"web","workdir":"/app"}}"#
+
+            #expect(
+                workspace.sshMetadata
+                    == SSHWorkspaceMetadata(
+                        host: "ssh.example.com",
+                        user: "alice",
+                        authMode: "key",
+                        workingDir: "/workspace"
+                    )
+            )
+            #expect(
+                workspace.composeMetadata
+                    == ComposeWorkspaceMetadata(
+                        projectName: "acme",
+                        composeFiles: ["compose.yml"],
+                        service: "web",
+                        workdir: "/app"
+                    )
+            )
+        }
+
         @Test("Clearing Compose metadata preserves SSH metadata")
         func clearingComposePreservesSSHMetadata() {
             let workspace = makeWorkspace()

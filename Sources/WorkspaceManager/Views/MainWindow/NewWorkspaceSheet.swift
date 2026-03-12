@@ -57,14 +57,36 @@ struct NewWorkspaceSheet: View {
             .filter { !$0.isEmpty }
     }
 
+    private var availableBackends: [WorkspaceBackendChoice] {
+        var choices: [WorkspaceBackendChoice] = [.local]
+        if supportsDaytonaCreation {
+            choices.append(.daytona)
+        }
+        if supportsSSHCreation {
+            choices.append(.sshHost)
+        }
+        return choices
+    }
+
+    private var sanitizedWorkspaceNameComponent: String {
+        WorkspaceService.sanitizeWorkspaceNameComponent(trimmedName)
+    }
+
     private var defaultSSHWorkingDirectory: String {
-        let workspaceName = trimmedName.isEmpty ? suggestedName : trimmedName
-        return "~/workspaces/\(repo.name)/\(workspaceName)"
+        let repoComponent = sanitizedPathComponent(repo.name, fallback: "repo")
+        let workspaceComponent = sanitizedPathComponent(
+            trimmedName.isEmpty ? suggestedName : trimmedName,
+            fallback: "workspace"
+        )
+        return "~/workspaces/\(repoComponent)/\(workspaceComponent)"
     }
 
     private var requestValidationMessage: String? {
         guard !trimmedName.isEmpty else {
             return "Enter a workspace name."
+        }
+        guard WorkspaceService.isValidWorkspaceNameComponent(sanitizedWorkspaceNameComponent) else {
+            return "Enter a valid workspace name."
         }
 
         switch backend {
@@ -158,7 +180,7 @@ struct NewWorkspaceSheet: View {
                     TextField("Workspace Name", text: $name)
 
                     Picker("Environment", selection: $backend) {
-                        ForEach(WorkspaceBackendChoice.allCases) { choice in
+                        ForEach(availableBackends) { choice in
                             Text(choice.label)
                                 .tag(choice)
                         }
@@ -211,26 +233,13 @@ struct NewWorkspaceSheet: View {
             if name.isEmpty {
                 name = suggestedName
             }
-            if !supportsDaytonaCreation && backend == .daytona {
-                backend = .local
-            }
-            if !supportsSSHCreation && backend == .sshHost {
-                backend = .local
+            if !availableBackends.contains(backend) {
+                backend = availableBackends.first ?? .local
             }
         }
-        .onChange(of: supportsDaytonaCreation) { _, supported in
-            if !supported && backend == .daytona {
-                backend = .local
-            }
-        }
-        .onChange(of: supportsSSHCreation) { _, supported in
-            if !supported && backend == .sshHost {
-                backend = .local
-            }
-        }
-        .onChange(of: isDaytonaAvailable) { _, available in
-            if !available && backend == .daytona {
-                backend = .local
+        .onChange(of: availableBackends) { _, choices in
+            if !choices.contains(backend) {
+                backend = choices.first ?? .local
             }
         }
     }
@@ -309,5 +318,13 @@ struct NewWorkspaceSheet: View {
     private func trimmedOrNil(_ value: String) -> String? {
         let trimmedValue = trimmed(value)
         return trimmedValue.isEmpty ? nil : trimmedValue
+    }
+
+    private func sanitizedPathComponent(_ value: String, fallback: String) -> String {
+        let sanitized = WorkspaceService.sanitizeWorkspaceNameComponent(value)
+        guard WorkspaceService.isValidWorkspaceNameComponent(sanitized) else {
+            return fallback
+        }
+        return sanitized
     }
 }

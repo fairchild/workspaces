@@ -112,13 +112,14 @@ public actor SSHBackend: RemoteBackendProtocol {
             workingDirectory: workingDirectory,
             compose: workspace.composeMetadata
         )
-        let sshArguments = sshInvocationArguments(for: ssh)
+        let sshOptions = sshOptionArguments(for: ssh)
+        let destination = connectionTarget(for: ssh)
 
         return SSHSessionPlan(
             remoteId: remoteId,
             workingDirectory: workingDirectory,
-            bootstrapArguments: sshArguments + ["sh", "-lc", bootstrapScript],
-            interactiveCommand: ([sshExecutable] + sshArguments + ["-t", "sh", "-lc", interactiveScript])
+            bootstrapArguments: sshOptions + [destination, "sh", "-lc", bootstrapScript],
+            interactiveCommand: ([sshExecutable] + sshOptions + ["-t", destination, "sh", "-lc", interactiveScript])
                 .map(shellQuoted)
                 .joined(separator: " ")
         )
@@ -132,10 +133,14 @@ public actor SSHBackend: RemoteBackendProtocol {
             return configured
         }
 
-        let repoName = workspace.sourceRepo?.name.trimmingCharacters(in: .whitespacesAndNewlines)
-        let resolvedRepoName = (repoName?.isEmpty == false) ? repoName! : "repo"
-        let workspaceName = workspace.name.trimmingCharacters(in: .whitespacesAndNewlines)
-        let resolvedWorkspaceName = workspaceName.isEmpty ? "workspace" : workspaceName
+        let resolvedRepoName = sanitizedDefaultPathComponent(
+            workspace.sourceRepo?.name,
+            fallback: "repo"
+        )
+        let resolvedWorkspaceName = sanitizedDefaultPathComponent(
+            workspace.name,
+            fallback: "workspace"
+        )
         return "~/workspaces/\(resolvedRepoName)/\(resolvedWorkspaceName)"
     }
 
@@ -219,15 +224,13 @@ public actor SSHBackend: RemoteBackendProtocol {
         return parts.map(shellQuoted).joined(separator: " ")
     }
 
-    private static func sshInvocationArguments(for ssh: SSHWorkspaceMetadata) -> [String] {
-        var arguments = [
+    private static func sshOptionArguments(for ssh: SSHWorkspaceMetadata) -> [String] {
+        [
             "-A",
             "-o", "BatchMode=yes",
             "-o", "ConnectTimeout=10",
+            "-p", String(ssh.port),
         ]
-        arguments += ["-p", String(ssh.port)]
-        arguments.append(connectionTarget(for: ssh))
-        return arguments
     }
 
     private static func connectionTarget(for ssh: SSHWorkspaceMetadata) -> String {
@@ -235,6 +238,20 @@ public actor SSHBackend: RemoteBackendProtocol {
             return "\(user)@\(ssh.host)"
         }
         return ssh.host
+    }
+
+    private static func sanitizedDefaultPathComponent(
+        _ value: String?,
+        fallback: String
+    ) -> String {
+        guard let value else { return fallback }
+        let sanitized = WorkspaceService.sanitizeWorkspaceNameComponent(
+            value.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+        guard WorkspaceService.isValidWorkspaceNameComponent(sanitized) else {
+            return fallback
+        }
+        return sanitized
     }
 
     private static func resolveExecutable(named name: String) -> String? {

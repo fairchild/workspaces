@@ -115,14 +115,14 @@ struct SidebarWorkspaceController {
         if workspace.isRemote {
             let backend = try remoteBackend(for: workspace)
             if let remoteId = workspace.remoteId,
-                backend.runtimeCapabilities.supportsDelete,
-                let provisionableBackend = backend as? any ProvisionCapable
+                backend.runtimeCapabilities.supportsDelete
             {
-                do {
-                    try await provisionableBackend.deleteSandbox(sandboxId: remoteId)
-                } catch {
-                    NSLog("[RemoteBackend] Failed to delete workspace %@: %@", remoteId, error.localizedDescription)
-                }
+                let provisionableBackend = try provisioningBackend(
+                    identifier: workspace.backendIdentifier,
+                    requiresDelete: true,
+                    operation: "deleting remote workspaces"
+                )
+                try await provisionableBackend.deleteSandbox(sandboxId: remoteId)
             }
         } else {
             try await workspaceService.deleteWorkspace(at: workspace.workspaceURL, deleteFiles: deleteFiles)
@@ -241,6 +241,11 @@ struct SidebarWorkspaceController {
         name: String,
         request: SSHHostWorkspaceRequest
     ) throws -> Workspace {
+        let sanitizedName = WorkspaceService.sanitizeWorkspaceNameComponent(name)
+        guard WorkspaceService.isValidWorkspaceNameComponent(sanitizedName) else {
+            throw WorkspaceError.invalidName(name: name)
+        }
+
         guard remoteBackendRegistry.backend(for: SSHBackend.identifier) != nil else {
             throw ControllerError.message(
                 RemoteWorkspaceError.backendNotRegistered(SSHBackend.identifier).localizedDescription

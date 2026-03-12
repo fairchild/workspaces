@@ -25,16 +25,17 @@ struct SSHBackendTests {
         #expect(plan.bootstrapArguments.contains("alice@ssh.example.com"))
         #expect(bootstrapScript.contains("/srv/workspaces/feature-a"))
         #expect(plan.interactiveCommand.contains("/usr/bin/ssh"))
+        #expect(plan.interactiveCommand.contains("-t alice@ssh.example.com"))
         #expect(plan.interactiveCommand.contains("alice@ssh.example.com"))
         #expect(plan.interactiveCommand.contains("/srv/workspaces/feature-a"))
         #expect(plan.interactiveCommand.contains("exec ${SHELL:-/bin/bash} -l"))
     }
 
-    @Test("Resolves default working directory from repo and workspace names")
+    @Test("Resolves default working directory from sanitized repo and workspace names")
     func resolvesDefaultWorkingDirectory() {
-        let repo = Repo(name: "acme-api", localPath: URL(fileURLWithPath: "/tmp/acme"))
+        let repo = Repo(name: "Acme API", localPath: URL(fileURLWithPath: "/tmp/acme"))
         let workspace = Workspace(
-            name: "feature-a",
+            name: "Feature/A",
             path: URL(fileURLWithPath: "/tmp/acme/workspaces/feature-a"),
             sourceRepo: repo,
             backendIdentifier: SSHBackend.identifier,

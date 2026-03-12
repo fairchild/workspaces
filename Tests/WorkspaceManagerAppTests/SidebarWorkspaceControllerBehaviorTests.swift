@@ -136,6 +136,46 @@ struct SidebarWorkspaceControllerBehaviorTests {
         #expect(workspace.composeMetadata == compose)
     }
 
+    @Test("SSH request rejects invalid names after sanitization")
+    @MainActor
+    func sshRequestRejectsInvalidNames() async throws {
+        let (container, context) = try makeModelContext()
+        _ = container
+        let repo = Repo(
+            name: "api",
+            localPath: URL(fileURLWithPath: "/tmp/api"),
+            remoteURL: "git@github.com:acme/api.git"
+        )
+        context.insert(repo)
+
+        let controller = SidebarWorkspaceController(
+            modelContext: context,
+            workspaceService: MockWorkspaceService(),
+            remoteBackendRegistry: MockRemoteBackendRegistry(
+                creationBackendIdentifiers: [SSHBackend.identifier],
+                backends: [SSHBackend.identifier: SSHBackend()]
+            )
+        )
+
+        await #expect(throws: WorkspaceError.self) {
+            _ = try await controller.createWorkspace(
+                from: repo,
+                request: NewWorkspaceRequest(
+                    name: "..",
+                    backend: .sshHost(
+                        SSHHostWorkspaceRequest(
+                            ssh: SSHWorkspaceMetadata(host: "ssh.example.com"),
+                            compose: nil
+                        )
+                    )
+                )
+            )
+        }
+
+        let fetchedWorkspaces = try context.fetch(FetchDescriptor<Workspace>())
+        #expect(fetchedWorkspaces.isEmpty)
+    }
+
     @Test("Lifecycle operations are capability-gated per backend")
     @MainActor
     func lifecycleOperationsAreCapabilityGatedPerBackend() async throws {
@@ -209,6 +249,55 @@ struct SidebarWorkspaceControllerBehaviorTests {
         _ = container
     }
 
+    @Test("Deleting Daytona workspace preserves the record when provider deletion fails")
+    @MainActor
+    func deletingDaytonaWorkspacePreservesRecordWhenProviderDeletionFails() async throws {
+        let (container, context) = try makeModelContext()
+        let repo = Repo(
+            name: "api",
+            localPath: URL(fileURLWithPath: "/tmp/api"),
+            remoteURL: "git@github.com:acme/api.git"
+        )
+        let workspace = Workspace(
+            name: "feature-a",
+            path: URL(fileURLWithPath: "/tmp/api/workspaces/feature-a"),
+            sourceRepo: repo,
+            backendIdentifier: DaytonaBackend.identifier,
+            remoteId: "daytona-123"
+        )
+        context.insert(repo)
+        context.insert(workspace)
+        try context.save()
+
+        let backend = MockRemoteBackend(
+            identifier: DaytonaBackend.identifier,
+            runtimeCapabilities: RuntimeCapabilities(
+                supportsCreate: true,
+                supportsDelete: true,
+                supportsStartStop: true,
+                supportsArchive: true,
+                supportsList: true
+            )
+        )
+        await backend.setDeleteSandboxError(TestBackendError.deleteFailed)
+        let controller = SidebarWorkspaceController(
+            modelContext: context,
+            workspaceService: MockWorkspaceService(),
+            remoteBackendRegistry: MockRemoteBackendRegistry(
+                backends: [DaytonaBackend.identifier: backend]
+            )
+        )
+
+        await #expect(throws: TestBackendError.self) {
+            try await controller.deleteWorkspace(workspace, deleteFiles: false)
+        }
+
+        let fetchedWorkspaces = try context.fetch(FetchDescriptor<Workspace>())
+        #expect(fetchedWorkspaces.count == 1)
+        #expect(await backend.deleteSandboxCallCount() == 1)
+        _ = container
+    }
+
     @MainActor
     private func makeModelContext() throws -> (ModelContainer, ModelContext) {
         let schema = Schema([Repo.self, Workspace.self, WebSource.self])
@@ -271,6 +360,8 @@ private actor MockRemoteBackend: ProvisionCapable, StartStopCapable, Archivable,
 
     var createSandboxResult = RemoteSandboxInfo(sandboxId: "remote-123", sshCommand: "ssh remote")
     var createSandboxCalls: [(name: String, cloneURL: String?)] = []
+    var deleteSandboxCalls: [String] = []
+    var deleteSandboxError: (any Error)?
 
     init(
         identifier: String,
@@ -301,7 +392,20 @@ private actor MockRemoteBackend: ProvisionCapable, StartStopCapable, Archivable,
         createSandboxCalls.count
     }
 
-    func deleteSandbox(sandboxId: String) async throws {}
+    func setDeleteSandboxError(_ error: (any Error)?) {
+        deleteSandboxError = error
+    }
+
+    func deleteSandboxCallCount() -> Int {
+        deleteSandboxCalls.count
+    }
+
+    func deleteSandbox(sandboxId: String) async throws {
+        deleteSandboxCalls.append(sandboxId)
+        if let deleteSandboxError {
+            throw deleteSandboxError
+        }
+    }
 
     func stopSandbox(sandboxId: String) async throws {}
 
@@ -312,6 +416,10 @@ private actor MockRemoteBackend: ProvisionCapable, StartStopCapable, Archivable,
     func archiveSandbox(sandboxId: String) async throws {}
 
     func listSandboxes() async throws -> [RemoteSandboxStatus] { [] }
+}
+
+private enum TestBackendError: Error {
+    case deleteFailed
 }
 
 private final class MockRemoteBackendRegistry: RemoteBackendRegistryProtocol, @unchecked Sendable {

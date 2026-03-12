@@ -41,17 +41,6 @@ enum WorkspaceBackendChoice: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
-    var remoteBackendIdentifier: String? {
-        switch self {
-        case .local:
-            return nil
-        case .daytona:
-            return DaytonaBackend.identifier
-        case .sshHost:
-            return SSHBackend.identifier
-        }
-    }
-
     var usesSSHConfiguration: Bool {
         self == .sshHost
     }

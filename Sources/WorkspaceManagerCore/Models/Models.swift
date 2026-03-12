@@ -226,36 +226,41 @@ private struct WorkspaceRemoteMetadataPayload: Codable, Equatable, Sendable {
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        let ssh = try container.decodeIfPresent(SSHWorkspaceMetadata.self, forKey: .ssh)
+        let kubernetes = try container.decodeIfPresent(
+            KubernetesWorkspaceMetadata.self,
+            forKey: .kubernetes
+        )
+        let compose = try container.decodeIfPresent(
+            ComposeWorkspaceMetadata.self,
+            forKey: .compose
+        )
+
+        if ssh != nil || kubernetes != nil || compose != nil {
+            self.init(ssh: ssh, kubernetes: kubernetes, compose: compose)
+            return
+        }
+
         if container.contains(.kind) {
             let kind = try container.decode(Kind.self, forKey: .kind)
             switch kind {
             case .ssh:
                 self.init(
-                    ssh: try container.decodeIfPresent(SSHWorkspaceMetadata.self, forKey: .ssh)
+                    ssh: ssh
                 )
             case .kubernetes:
                 self.init(
-                    kubernetes: try container.decodeIfPresent(
-                        KubernetesWorkspaceMetadata.self,
-                        forKey: .kubernetes
-                    )
+                    kubernetes: kubernetes
                 )
             case .compose:
                 self.init(
-                    compose: try container.decodeIfPresent(ComposeWorkspaceMetadata.self, forKey: .compose)
+                    compose: compose
                 )
             }
             return
         }
 
-        self.init(
-            ssh: try container.decodeIfPresent(SSHWorkspaceMetadata.self, forKey: .ssh),
-            kubernetes: try container.decodeIfPresent(
-                KubernetesWorkspaceMetadata.self,
-                forKey: .kubernetes
-            ),
-            compose: try container.decodeIfPresent(ComposeWorkspaceMetadata.self, forKey: .compose)
-        )
+        self.init()
     }
 
     func encode(to encoder: Encoder) throws {
