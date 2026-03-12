@@ -43,6 +43,29 @@ ISSUE_MARKER_RE = re.compile(
 MILESTONE_MARKER_RE = re.compile(r"<!-- peter-planner:discussion=(?P<number>\d+);milestone -->")
 LEGACY_ACK_SNIPPET = "*Peter Planner*\n\nWorking on it"
 LEGACY_RECONCILIATION_MILESTONES = {43: {2, 3}}
+ISSUE_TITLE_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "as",
+    "at",
+    "be",
+    "by",
+    "do",
+    "for",
+    "from",
+    "if",
+    "in",
+    "into",
+    "it",
+    "manual",
+    "of",
+    "on",
+    "or",
+    "scheduled",
+    "the",
+    "to",
+}
 
 
 class PlannerError(RuntimeError):
@@ -301,6 +324,29 @@ def extract_issue_slugs(body: str, discussion_number: int) -> list[str]:
         if int(match.group("number")) == discussion_number:
             slugs.append(match.group("slug"))
     return slugs
+
+
+def issue_title_tokens(title: str) -> set[str]:
+    return {
+        token
+        for token in issue_slug(title).split("-")
+        if token and token not in ISSUE_TITLE_STOPWORDS
+    }
+
+
+def titles_loosely_match(left: str, right: str) -> bool:
+    if issue_slug(left) == issue_slug(right):
+        return True
+    left_tokens = issue_title_tokens(left)
+    right_tokens = issue_title_tokens(right)
+    if not left_tokens or not right_tokens:
+        return False
+    overlap = left_tokens & right_tokens
+    if len(overlap) < 5:
+        return False
+    if len(overlap) == min(len(left_tokens), len(right_tokens)):
+        return True
+    return len(overlap) / len(left_tokens | right_tokens) >= 0.75
 
 
 def has_milestone_marker(description: str | None, discussion_number: int) -> bool:
@@ -656,6 +702,28 @@ def fetch_issue_marker_map(
     return marker_map
 
 
+def find_similar_issue_candidate(
+    discussion_number: int,
+    issue_plan: NormalizedIssue,
+    issues: list[dict[str, Any]],
+    used_issue_numbers: set[int],
+) -> dict[str, Any] | None:
+    candidates = [
+        issue
+        for issue in issues
+        if int(issue["number"]) not in used_issue_numbers
+        and extract_issue_slugs(str(issue.get("body", "")), discussion_number)
+        and titles_loosely_match(str(issue.get("title", "")), issue_plan.title)
+    ]
+    if len(candidates) > 1:
+        numbers = ", ".join(f"#{issue['number']}" for issue in sorted(candidates, key=lambda item: item["number"]))
+        raise PlannerError(
+            f"multiple existing issues for discussion #{discussion_number} match "
+            f"'{issue_plan.title}': {numbers}"
+        )
+    return candidates[0] if candidates else None
+
+
 def build_execution_state(
     discussion: dict[str, Any],
     plan: NormalizedPlan,
@@ -689,10 +757,20 @@ def build_execution_state(
     ]
 
     issue_marker_map = fetch_issue_marker_map(discussion_number, existing_issues)
-    issues = [
-        IssueExecution(issue=item, existing_issue=issue_marker_map.get(item.slug))
-        for item in plan.issues
-    ]
+    used_issue_numbers: set[int] = set()
+    issues: list[IssueExecution] = []
+    for item in plan.issues:
+        existing_issue = issue_marker_map.get(item.slug)
+        if existing_issue is None:
+            existing_issue = find_similar_issue_candidate(
+                discussion_number,
+                item,
+                existing_issues,
+                used_issue_numbers,
+            )
+        if existing_issue is not None:
+            used_issue_numbers.add(int(existing_issue["number"]))
+        issues.append(IssueExecution(issue=item, existing_issue=existing_issue))
 
     milestone = None
     if plan.milestone_name:

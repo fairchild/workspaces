@@ -165,6 +165,46 @@ class RunPlannerTests(unittest.TestCase):
         self.assertEqual(execution.existing_milestone["number"], 9)
         self.assertTrue(all(item.existing_issue is not None for item in execution.issues))
 
+    def test_build_execution_state_reuses_issue_when_title_drifts(self) -> None:
+        discussion = self.make_discussion(
+            comments=[
+                {
+                    "id": "C1",
+                    "createdAt": "2026-03-12T02:10:00Z",
+                    "body": run_planner.comment_marker(43, "planned"),
+                }
+            ]
+        )
+        plan = self.make_plan(
+            [
+                "Replace bare self-hosted runner label",
+                "Stand up tart-ui runner",
+                "Move `perf-validation` job to `tart-ui` runner and make it manual/scheduled",
+            ],
+            discussion=discussion,
+        )
+        prior_title = (
+            "Move `perf-validation` job to `tart-ui` runner and make it "
+            "manual/scheduled instead of push-triggered"
+        )
+        existing_issues = [
+            {
+                "number": 103,
+                "title": prior_title,
+                "body": run_planner.compose_issue_body(
+                    "## Context\nBody",
+                    discussion["url"],
+                    discussion["number"],
+                    run_planner.issue_slug(prior_title),
+                ),
+                "url": "https://github.com/fairchild/workspaces/issues/103",
+                "labels": [],
+            }
+        ]
+
+        execution = run_planner.build_execution_state(discussion, plan, existing_issues, [])
+        self.assertEqual(execution.issues[2].existing_issue["number"], 103)
+
     def test_retry_partial_state_keeps_marked_ack_and_orphan_cleanup(self) -> None:
         discussion = self.make_discussion(
             comments=[
@@ -215,6 +255,17 @@ class RunPlannerTests(unittest.TestCase):
         issues = [{"body": run_planner.issue_marker(43, "audit-runners")}]
         self.assertTrue(run_planner.discussion_has_completed_plan(43, comments, issues))
         self.assertFalse(run_planner.discussion_has_completed_plan(43, comments, []))
+
+    def test_titles_loosely_match_minor_suffix_change(self) -> None:
+        self.assertTrue(
+            run_planner.titles_loosely_match(
+                "Move `perf-validation` job to `tart-ui` runner and make it manual/scheduled",
+                (
+                    "Move `perf-validation` job to `tart-ui` runner and make it "
+                    "manual/scheduled instead of push-triggered"
+                ),
+            )
+        )
 
     def test_claude_timeout_seconds_honors_override(self) -> None:
         self.assertEqual(
