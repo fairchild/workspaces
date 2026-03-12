@@ -39,6 +39,7 @@ CLI_NAME="workspaces"
 APP_BUNDLE="$BUILD_DIR/$APP_NAME.app"
 VERIFY_KEYCHAIN_SIGNING_SCRIPT="$SCRIPT_DIR/verify-app-keychain-signing.sh"
 PLIST_BUDDY="/usr/libexec/PlistBuddy"
+CLI_BUNDLE_RELATIVE_PATH="Contents/Helpers/$CLI_NAME"
 
 SIGNING_CONFIG="${SIGNING_CONFIG:-$SCRIPT_DIR/signing-config.sh}"
 CODESIGN_KEYCHAIN_PATH="${CODESIGN_KEYCHAIN_PATH:-}"
@@ -357,13 +358,14 @@ log_success "Build complete"
 log_step "Creating app bundle"
 
 mkdir -p "$APP_BUNDLE/Contents/MacOS"
+mkdir -p "$APP_BUNDLE/Contents/Helpers"
 mkdir -p "$APP_BUNDLE/Contents/Resources"
 
 cp ".build/release/$APP_NAME" "$APP_BUNDLE/Contents/MacOS/"
 log_success "Copied executable"
 
 if [[ -f ".build/release/$CLI_NAME" ]]; then
-    cp ".build/release/$CLI_NAME" "$APP_BUNDLE/Contents/MacOS/"
+    cp ".build/release/$CLI_NAME" "$APP_BUNDLE/$CLI_BUNDLE_RELATIVE_PATH"
     log_success "Copied CLI launcher"
 fi
 
@@ -414,6 +416,11 @@ fi
 
 if [[ "$SIGN_APP" == true ]] && [[ -n "${SIGNING_IDENTITY:-}" ]]; then
     log_step "Code signing"
+
+    if [[ -f "$APP_BUNDLE/$CLI_BUNDLE_RELATIVE_PATH" ]]; then
+        codesign_with_identity "$APP_BUNDLE/$CLI_BUNDLE_RELATIVE_PATH"
+        log_success "Signed bundled CLI launcher"
+    fi
 
     if [[ -d "$APP_BUNDLE/Contents/Frameworks" ]]; then
         local_framework=""

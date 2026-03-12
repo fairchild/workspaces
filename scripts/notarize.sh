@@ -43,6 +43,7 @@ APP_NAME="WorkspaceManager"
 APP_BUNDLE="$BUILD_DIR/$APP_NAME.app"
 SIGNING_CONFIG="${SIGNING_CONFIG:-$SCRIPT_DIR/signing-config.sh}"
 CODESIGN_KEYCHAIN_PATH="${CODESIGN_KEYCHAIN_PATH:-}"
+PLIST_BUDDY="/usr/libexec/PlistBuddy"
 
 # Default bundle ID (can be overridden by signing-config.sh or env)
 BUNDLE_ID="${BUNDLE_ID:-com.cloudcompute.workspaces}"
@@ -94,6 +95,12 @@ log_warning() {
 
 log_error() {
     echo -e "${RED}✗${NC} $1"
+}
+
+plist_print() {
+    local plist_path="$1"
+    local key_path="$2"
+    "$PLIST_BUDDY" -c "Print :$key_path" "$plist_path" 2>/dev/null || true
 }
 
 # Get version from Info.plist
@@ -232,13 +239,17 @@ else
     echo "  This may take several minutes..."
     echo ""
 
+    NOTARY_RESULT_PLIST="$BUILD_DIR/notarytool-submit-result.plist"
+    NOTARY_LOG_PATH="$BUILD_DIR/notarytool-log.json"
+    rm -f "$NOTARY_RESULT_PLIST" "$NOTARY_LOG_PATH"
+
     # Submit and wait for result
     xcrun notarytool submit "$DMG_PATH" \
         --apple-id "$APPLE_ID" \
         --password "$APP_PASSWORD" \
         --team-id "$TEAM_ID" \
         --wait \
-        --progress
+        --output-format plist >"$NOTARY_RESULT_PLIST"
 
     # Check if notarization succeeded
     if [[ $? -ne 0 ]]; then
@@ -246,6 +257,27 @@ else
         echo ""
         echo "To see detailed logs, run:"
         echo "  xcrun notarytool log <submission-id> --apple-id $APPLE_ID --password <password> --team-id $TEAM_ID"
+        exit 1
+    fi
+
+    NOTARY_SUBMISSION_ID="$(plist_print "$NOTARY_RESULT_PLIST" "id")"
+    NOTARY_STATUS="$(plist_print "$NOTARY_RESULT_PLIST" "status")"
+    [[ -n "$NOTARY_STATUS" ]] || NOTARY_STATUS="unknown"
+
+    if [[ "$NOTARY_STATUS" != "Accepted" ]]; then
+        log_error "Notarization returned status: $NOTARY_STATUS"
+        if [[ -n "$NOTARY_SUBMISSION_ID" ]]; then
+            echo "Submission ID: $NOTARY_SUBMISSION_ID"
+            xcrun notarytool log "$NOTARY_SUBMISSION_ID" \
+                --apple-id "$APPLE_ID" \
+                --password "$APP_PASSWORD" \
+                --team-id "$TEAM_ID" \
+                --output-format json >"$NOTARY_LOG_PATH" || true
+            if [[ -f "$NOTARY_LOG_PATH" ]]; then
+                echo "Saved notarization log to $NOTARY_LOG_PATH"
+                cat "$NOTARY_LOG_PATH"
+            fi
+        fi
         exit 1
     fi
 

@@ -36,6 +36,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 APP_NAME="WorkspaceManager"
 CLI_NAME="workspaces"
+CLI_HELPER_RELATIVE_PATH="Contents/Helpers/$CLI_NAME"
+CLI_LEGACY_RELATIVE_PATH="Contents/MacOS/$CLI_NAME"
 SOURCE_APP="$PROJECT_DIR/build/$APP_NAME.app"
 DEST_APP="/Applications/$APP_NAME.app"
 SIGNING_CONFIG="${SIGNING_CONFIG:-$SCRIPT_DIR/signing-config.sh}"
@@ -195,6 +197,24 @@ report_keychain_mode() {
     log_warning "$output"
 }
 
+resolve_cli_source() {
+    local app_path="$1"
+
+    local helper_path="$app_path/$CLI_HELPER_RELATIVE_PATH"
+    if [[ -x "$helper_path" ]]; then
+        printf '%s\n' "$helper_path"
+        return 0
+    fi
+
+    local legacy_path="$app_path/$CLI_LEGACY_RELATIVE_PATH"
+    if [[ -x "$legacy_path" ]]; then
+        printf '%s\n' "$legacy_path"
+        return 0
+    fi
+
+    return 1
+}
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --signed)
@@ -310,8 +330,7 @@ if [[ "$OPEN_AFTER_INSTALL" == true ]]; then
 fi
 
 if [[ "$LINK_CLI" == true ]]; then
-    CLI_SOURCE="$DEST_APP/Contents/MacOS/$CLI_NAME"
-    if [[ -x "$CLI_SOURCE" ]]; then
+    if CLI_SOURCE="$(resolve_cli_source "$DEST_APP")"; then
         if [[ -z "$CLI_LINK_PATH" ]]; then
             if ! CLI_LINK_PATH="$(resolve_default_cli_link_path)"; then
                 log_warning "No writable PATH directory found for CLI link; use $CLI_SOURCE directly"
