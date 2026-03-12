@@ -107,9 +107,9 @@ workspaces/
 3. Run local checks (`swift test`, `swift build`, lint when relevant).
 4. Include a concise summary of behavior changes and verification results in the PR.
 
-## Self-Hosted CI Runners
+## CI Runner Lanes
 
-CI runs on a self-hosted macOS runner. The app auto-detects CI (via the standard `CI` env var) and uses `.accessory` activation policy so it never steals focus or appears in the dock. If you write a script that launches the app headlessly, set `WORKSPACES_NO_ACTIVATE_ON_LAUNCH=1`:
+Generic lint/build/test CI runs on GitHub-hosted macOS (`macos-17`). Self-hosted jobs must use explicit lanes: `[self-hosted, tart-ui]` for UI/perf automation and `[self-hosted, signing-host]` for release/signing/notarization. The app auto-detects CI (via the standard `CI` env var) and uses `.accessory` activation policy so it never steals focus or appears in the dock. If you write a script that launches the app headlessly, set `WORKSPACES_NO_ACTIVATE_ON_LAUNCH=1`:
 
 ```bash
 WORKSPACES_NO_ACTIVATE_ON_LAUNCH=1 swift run WorkspaceManager
