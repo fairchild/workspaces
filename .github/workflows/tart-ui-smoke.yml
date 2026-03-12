@@ -1,0 +1,38 @@
+name: Tart UI Smoke
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - codex/**
+    paths:
+      - .github/workflows/tart-ui-smoke.yml
+      - scripts/runner.sh
+
+concurrency:
+  group: tart-ui-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    # Smoke-test the dedicated Tart UI lane before routing heavier UI and perf
+    # automation jobs onto it.
+    runs-on: [self-hosted, tart-ui]
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Print runner identity
+        run: |
+          echo "runner=${RUNNER_NAME}"
+          echo "os=${RUNNER_OS}"
+          echo "arch=${RUNNER_ARCH}"
+
+      - name: Print macOS and toolchain versions
+        run: |
+          sw_vers
+          uname -a
+          swift --version
+          xcodebuild -version
