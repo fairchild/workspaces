@@ -78,7 +78,7 @@ The reply can include modifications — Peter reads the full thread and incorpor
 | `.agents/scripts/validate-agent-output.py` | Output validation + dedup checking |
 | `.github/workflows/agent-april.yml` | April's cron workflow |
 | `.github/workflows/agent-plat.yml` | Plat's cron workflow |
-| `.github/workflows/agent-planner.yml` | Event-triggered planner workflow |
+| `.github/workflows/agent-peter.yml` | Event-triggered planner workflow |
 
 ## Runtime Layout
 
