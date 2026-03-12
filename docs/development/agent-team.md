@@ -13,6 +13,9 @@ Focuses on CI/CD, agent infrastructure, distribution, notifications, testing. Th
 ### Peter Planner
 Converts approved ideas into GitHub Issues and Milestones. Activated when the owner approves a proposal.
 
+### Observer
+Gathers operational evidence from GitHub and the checked-in perf snapshots. Runs weekly, updates the ops timeline, and may open a focused `[idea] [ops] ...` discussion when thresholds are breached.
+
 All agents share core principles: quality over speed, hardening over feature expansion, calm/clean/intuitive UX without compromise.
 
 ## How It Works
@@ -37,6 +40,11 @@ Daily (weekdays, alternating who goes first, 30 min offset):
     3. Creates Issue(s) or Milestone + Issues
     4. Links discussion ↔ issues
     5. Marks [idea][endorsed]
+    │
+  Observer (weekly)
+    1. Reads idea/issue/PR/workflow history
+    2. Summarizes the closed loop into docs/ops artifacts
+    3. Opens one [idea] [ops] discussion only if a threshold breach needs attention
 ```
 
 ### Schedule
@@ -50,6 +58,8 @@ Daily (weekdays, alternating who goes first, 30 min offset):
 | Fri | April | Plat |
 
 The 30-minute offset means the second agent sees the first's output and can comment on it.
+
+Observer runs separately once a week on Monday at 13:30 UTC to evaluate loop health and evidence trends.
 
 ### Approval Keywords
 
@@ -78,9 +88,12 @@ The reply can include modifications — Peter reads the full thread and incorpor
 | `.agents/scripts/run-contributor.py` | Shared runtime for contributor agents |
 | `.agents/scripts/run-planner.py` | Shared runtime for Peter's planning workflow |
 | `.agents/scripts/validate-agent-output.py` | Output validation + dedup checking |
+| `scripts/ops-report.py` | Deterministic GitHub + perf reporting for the ops loop |
+| `docs/ops/` | Checked-in ops timeline, snapshot JSON, and dashboard |
 | `.github/workflows/agent-april.yml` | April's cron workflow |
 | `.github/workflows/agent-plat.yml` | Plat's cron workflow |
 | `.github/workflows/agent-peter.yml` | Event-triggered planner workflow |
+| `.github/workflows/agent-observer.yml` | Weekly deterministic ops observer workflow |
 
 ## Runtime Layout
 
@@ -107,6 +120,13 @@ Peter Planner stays separate because it is event-driven and uses a different pla
 4. validate + normalize the plan (labels, milestone naming, markers)
 5. reconcile retries, create or reuse GitHub artifacts, and update the discussion
 
+Observer is deterministic rather than model-driven. Its workflow delegates to `scripts/ops-report.py`:
+
+1. fetch idea discussions, issues, PRs, workflow runs, and perf snapshots
+2. build `docs/ops/` style artifacts (`timeline.csv`, `latest-summary.json`, `dashboard.md`)
+3. evaluate perf, CI, and throughput thresholds
+4. optionally open one `[idea] [ops] ...` discussion when the loop needs hardening
+
 ## Reliability
 
 - **JSON output format** — agents output structured JSON in code fences, validated before posting (replaces fragile sed-based delimiter parsing)
@@ -117,6 +137,7 @@ Peter Planner stays separate because it is event-driven and uses a different pla
 - **Catalog-backed labels** — Peter can only use repo-managed labels from `.agents/config/peter-planner.toml`, with alias normalization for common CI/platform terms
 - **Idempotent planning markers** — planner comments, milestone descriptions, and issue bodies carry machine markers so retries reuse existing artifacts instead of leaking duplicates
 - **Discussion token override** — `permissions.discussions: write` is enough for comments, issues, and milestones, but GitHub's built-in Actions token still cannot retitle discussions via `updateDiscussion` in this repo. `agent-peter.yml` therefore prefers the repo secret `PETER_DISCUSSION_TOKEN` when present, and the repo's default Actions workflow permission should stay at `write`
+- **Simple operational memory** — GitHub stays the raw event source; `docs/ops/` stores small checked-in snapshots and dashboards instead of introducing a separate analytics service or database in v1
 
 ## Vision: Autonomous Development
 
