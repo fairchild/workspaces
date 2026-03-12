@@ -40,6 +40,9 @@ jobs:
 
       - name: Run planner
         run: |
+          # GITHUB_TOKEN can comment on discussions with discussions:write, but it
+          # still cannot retitle discussions here. Prefer the explicit repo secret
+          # when it exists so Peter can apply [idea][endorsed] reliably.
           if [ -n "${PETER_DISCUSSION_TOKEN}" ]; then
             export GH_TOKEN="${PETER_DISCUSSION_TOKEN}"
           fi
