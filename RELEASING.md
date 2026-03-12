@@ -234,7 +234,10 @@ The recommended method for production releases.
    - Trigger: `workflow_dispatch`
    - In GitHub: Actions > `Release` > `Run workflow`
    - Ref: `main` or an existing release tag (`v*`, `workspaces-v*`)
-   - Runner lane: `[self-hosted, signing-host]` (the signing runner must advertise the `signing-host` label before dispatch)
+   - Runner lane: `[self-hosted, signing-host]`
+     - At least one online runner must advertise the `signing-host` label before dispatch.
+     - The release lane can be an existing signing-capable host; it does not need to be a separate machine, but it must be intentionally designated for release duties.
+     - See [docs/development/signing-runner-setup.md](./docs/development/signing-runner-setup.md) for label assignment and verification commands.
    - Guardrails:
      - Manual releases fail if started from a non-`main` branch.
      - Release commit must be reachable from `origin/main`.
