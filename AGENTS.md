@@ -114,6 +114,13 @@ swift run     # Run
 
 5. **Keyboard Focus**: Ghostty-style retry-based focus restoration. See `docs/development/solution-terminal-keyboard.md`.
 
+6. **CI Activation Policy**: The app auto-detects CI via the `CI` env var and uses `.accessory` activation policy (no dock, no Cmd+Tab, no focus steal). Three modes:
+   - Normal launch: `.regular` + `activate()` — full foreground
+   - `WORKSPACES_NO_ACTIVATE_ON_LAUNCH=1`: `.regular`, no `activate()` — dock visible, no focus steal
+   - `CI=true`: `.accessory` — fully invisible
+
+   This prevents the app from stealing focus on self-hosted runners. Any script that launches the app headlessly should set `WORKSPACES_NO_ACTIVATE_ON_LAUNCH=1`. See `WorkspaceManagerApp.swift` `AppDelegate`.
+
 ## Testing
 
 Tests use **Swift Testing** (`@Suite`, `@Test`, `#expect`), not XCTest. Test behavior, not implementation.
