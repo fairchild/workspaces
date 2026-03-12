@@ -73,6 +73,7 @@ The dedicated GitHub Actions workflow is `.github/workflows/perf-validation.yml`
 - Trigger it manually with `workflow_dispatch` when you want an on-demand baseline.
 - It also runs on a nightly `schedule` so trend data keeps moving without blocking normal pushes.
 - It runs on `[self-hosted, tart-ui]`, not in the main `CI` workflow, so app-launching perf checks stay off the interactive desktop.
+- It rebuilds the app before capture, but leaves the full Swift test suite to the main `CI` workflow on GitHub-hosted macOS; this avoids headless keychain-specific failures on the Tart lane from blocking perf artifact generation.
 - On `codex/**` branches, pushes that change the perf workflow, perf script, or app/test sources also trigger it so branch-local validation is possible before merge.
 
 ## Why `WORKSPACES_PERF_AUTO_SELECT_FIRST_REPO=1` is used
