@@ -14,7 +14,7 @@ Focuses on CI/CD, agent infrastructure, distribution, notifications, testing. Th
 Converts approved ideas into GitHub Issues and Milestones. Activated when the owner approves a proposal.
 
 ### Observer
-Gathers operational evidence from GitHub and the checked-in perf snapshots. Runs weekly, updates the ops timeline, and may open a focused `[idea] [ops] ...` discussion when thresholds are breached.
+Gathers operational evidence from GitHub and the checked-in perf snapshots. Runs weekly, updates the ops timeline, and may open a focused `[idea] [ops] ...` discussion when thresholds are breached. For local validation, the same runtime can replay checked-in scenario packs from `fixtures/ops-report/` without touching GitHub.
 
 All agents share core principles: quality over speed, hardening over feature expansion, calm/clean/intuitive UX without compromise.
 
@@ -89,6 +89,7 @@ The reply can include modifications — Peter reads the full thread and incorpor
 | `.agents/scripts/run-planner.py` | Shared runtime for Peter's planning workflow |
 | `.agents/scripts/validate-agent-output.py` | Output validation + dedup checking |
 | `scripts/ops-report.py` | Deterministic GitHub + perf reporting for the ops loop |
+| `fixtures/ops-report/` | Checked-in replay packs for Observer dry runs and tests |
 | `docs/ops/` | Checked-in ops timeline, snapshot JSON, and dashboard |
 | `.github/workflows/agent-april.yml` | April's cron workflow |
 | `.github/workflows/agent-plat.yml` | Plat's cron workflow |
@@ -127,6 +128,8 @@ Observer is deterministic rather than model-driven. Its workflow delegates to `s
 3. evaluate perf, CI, and throughput thresholds
 4. optionally open one `[idea] [ops] ...` discussion when the loop needs hardening
 
+For manual dry runs, `scripts/ops-report.py` also accepts `--fixtures-dir fixtures/ops-report/<scenario>` and replays synthetic inputs through the same reporting and breach-selection logic. Those fixture runs never update `docs/ops/` and never create GitHub discussions.
+
 ## Reliability
 
 - **JSON output format** — agents output structured JSON in code fences, validated before posting (replaces fragile sed-based delimiter parsing)
@@ -138,6 +141,7 @@ Observer is deterministic rather than model-driven. Its workflow delegates to `s
 - **Idempotent planning markers** — planner comments, milestone descriptions, and issue bodies carry machine markers so retries reuse existing artifacts instead of leaking duplicates
 - **Discussion token override** — `permissions.discussions: write` is enough for comments, issues, and milestones, but GitHub's built-in Actions token still cannot retitle discussions via `updateDiscussion` in this repo. `agent-peter.yml` therefore prefers the repo secret `PETER_DISCUSSION_TOKEN` when present, and the repo's default Actions workflow permission should stay at `write`
 - **Simple operational memory** — GitHub stays the raw event source; `docs/ops/` stores small checked-in snapshots and dashboards instead of introducing a separate analytics service or database in v1
+- **Replay fixtures stay separate from memory** — Observer scenario packs live in `fixtures/ops-report/` so synthetic dry-run inputs do not get confused with the real operational snapshots in `docs/ops/`
 
 ## Vision: Autonomous Development
 

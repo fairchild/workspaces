@@ -18,7 +18,7 @@ import subprocess
 import sys
 import tempfile
 from collections import Counter, defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -29,6 +29,15 @@ OPS_DIR = REPO_ROOT / "docs" / "ops"
 PERF_DIR = REPO_ROOT / "docs" / "performance"
 PERF_LATEST_PATH = PERF_DIR / "latest-summary.json"
 PERF_HISTORY_PATH = PERF_DIR / "metrics-history.csv"
+FIXTURE_REQUIRED_FILES = (
+    "repo.json",
+    "discussions.json",
+    "issues.json",
+    "prs.json",
+    "runs.json",
+    "perf-latest-summary.json",
+    "perf-history.csv",
+)
 
 APPROVAL_PATTERN = re.compile(
     r"\b(yes|let.s do it|plan it|approved|go ahead|ship it|lgtm|do it)\b",
@@ -84,8 +93,21 @@ class OpsReportError(RuntimeError):
 class RepoInfo:
     owner: str
     name: str
-    repository_id: str
-    category_ids: dict[str, str]
+    repository_id: str = ""
+    category_ids: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ReportInputs:
+    repo: RepoInfo
+    discussions: list[dict[str, Any]]
+    issues: list[dict[str, Any]]
+    prs: list[dict[str, Any]]
+    runs: list[dict[str, Any]]
+    perf_latest_path: Path
+    perf_history_path: Path
+    source_mode: str
+    fixture_name: str | None = None
 
 
 def parse_args() -> argparse.Namespace:
@@ -95,7 +117,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--open-idea-on-breach", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--fixtures-dir", type=Path)
     return parser.parse_args()
+
+
+def validate_args(args: argparse.Namespace) -> None:
+    if args.days <= 0:
+        raise OpsReportError("--days must be a positive integer")
+    if args.fixtures_dir is None:
+        return
+    if args.record:
+        raise OpsReportError("--fixtures-dir cannot be combined with --record")
+    if args.open_idea_on_breach and not args.dry_run:
+        raise OpsReportError("--fixtures-dir with --open-idea-on-breach requires --dry-run")
 
 
 def log(message: str) -> None:
@@ -123,6 +157,15 @@ def run_checked(
             f"command failed ({command}): {(result.stderr or result.stdout).strip() or 'unknown error'}"
         )
     return result
+
+
+def load_json_file(path: Path) -> Any:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as error:
+        raise OpsReportError(f"missing required file: {path}") from error
+    except json.JSONDecodeError as error:
+        raise OpsReportError(f"invalid JSON in {path}: {error}") from error
 
 
 def graphql(query: str, env: dict[str, str], **variables: Any) -> dict[str, Any]:
@@ -221,6 +264,69 @@ query($owner: String!, $name: String!) {
         repository_id=repo["id"],
         category_ids=category_ids,
     )
+
+
+def load_fixture_inputs(fixtures_dir: Path) -> ReportInputs:
+    if not fixtures_dir.is_dir():
+        raise OpsReportError(f"fixture pack not found: {fixtures_dir}")
+
+    missing = [name for name in FIXTURE_REQUIRED_FILES if not (fixtures_dir / name).is_file()]
+    if missing:
+        raise OpsReportError(
+            f"fixture pack {fixtures_dir} is missing required files: {', '.join(missing)}"
+        )
+
+    repo_payload = load_json_file(fixtures_dir / "repo.json")
+    owner = str(repo_payload.get("owner", "")).strip()
+    name = str(repo_payload.get("name", "")).strip()
+    if not owner or not name:
+        raise OpsReportError(f"{fixtures_dir / 'repo.json'} must include non-empty owner and name")
+
+    category_ids = {
+        str(key): str(value)
+        for key, value in dict(repo_payload.get("category_ids") or {}).items()
+    }
+    return ReportInputs(
+        repo=RepoInfo(
+            owner=owner,
+            name=name,
+            repository_id=str(repo_payload.get("repository_id", "")),
+            category_ids=category_ids,
+        ),
+        discussions=list(load_json_file(fixtures_dir / "discussions.json")),
+        issues=list(load_json_file(fixtures_dir / "issues.json")),
+        prs=list(load_json_file(fixtures_dir / "prs.json")),
+        runs=list(load_json_file(fixtures_dir / "runs.json")),
+        perf_latest_path=fixtures_dir / "perf-latest-summary.json",
+        perf_history_path=fixtures_dir / "perf-history.csv",
+        source_mode="fixture",
+        fixture_name=fixtures_dir.name,
+    )
+
+
+def load_live_inputs(env: dict[str, str]) -> ReportInputs:
+    repo = repo_info(env)
+    return ReportInputs(
+        repo=repo,
+        discussions=fetch_discussions(repo, env),
+        issues=fetch_issues(env),
+        prs=fetch_pull_requests(env),
+        runs=fetch_runs(env),
+        perf_latest_path=PERF_LATEST_PATH,
+        perf_history_path=PERF_HISTORY_PATH,
+        source_mode="live",
+    )
+
+
+def load_inputs(args: argparse.Namespace, env: dict[str, str]) -> ReportInputs:
+    if args.fixtures_dir is not None:
+        fixture_path = args.fixtures_dir
+        if not fixture_path.is_absolute():
+            fixture_path = (REPO_ROOT / fixture_path).resolve()
+        log(f"Loading fixture data from {fixture_path}")
+        return load_fixture_inputs(fixture_path)
+    log("Fetching GitHub data")
+    return load_live_inputs(env)
 
 
 def fetch_discussions_by_state(repo: RepoInfo, state: str, env: dict[str, str]) -> list[dict[str, Any]]:
@@ -335,7 +441,7 @@ def fetch_runs(env: dict[str, str], limit: int = 500) -> list[dict[str, Any]]:
 
 
 def contains_idea_title(title: str) -> bool:
-    return "[idea]" in title.lower()
+    return IDEA_PATTERN.search(title) is not None
 
 
 def select_approval_timestamp(comments: list[dict[str, Any]], owner_login: str) -> str | None:
@@ -647,15 +753,20 @@ def summarize_ci(runs: list[dict[str, Any]], days: int, current_time: datetime) 
     }
 
 
-def load_perf_history() -> list[dict[str, str]]:
-    if not PERF_HISTORY_PATH.is_file():
+def load_perf_history(history_path: Path = PERF_HISTORY_PATH) -> list[dict[str, str]]:
+    if not history_path.is_file():
         return []
-    with PERF_HISTORY_PATH.open(newline="", encoding="utf-8") as handle:
+    with history_path.open(newline="", encoding="utf-8") as handle:
         return list(csv.DictReader(handle))
 
 
-def load_perf_summary(current_time: datetime) -> dict[str, Any]:
-    if not PERF_LATEST_PATH.is_file():
+def load_perf_summary(
+    current_time: datetime,
+    *,
+    latest_path: Path = PERF_LATEST_PATH,
+    history_path: Path = PERF_HISTORY_PATH,
+) -> dict[str, Any]:
+    if not latest_path.is_file():
         return {
             "available": False,
             "latest_timestamp": None,
@@ -663,8 +774,8 @@ def load_perf_summary(current_time: datetime) -> dict[str, Any]:
             "metrics": {},
         }
 
-    latest = json.loads(PERF_LATEST_PATH.read_text(encoding="utf-8"))
-    history = load_perf_history()
+    latest = json.loads(latest_path.read_text(encoding="utf-8"))
+    history = load_perf_history(history_path)
     latest_timestamp = latest.get("metadata", {}).get("timestamp")
     latest_dt = parse_datetime(str(latest_timestamp)) if latest_timestamp else None
     freshness_days = None
@@ -805,11 +916,16 @@ def build_summary(
     perf: dict[str, Any],
     current_time: datetime,
     days: int,
+    *,
+    source_mode: str,
+    fixture_name: str | None,
 ) -> dict[str, Any]:
     stale = stale_items(rows, current_time)
     breaches = detect_breaches(perf, ci, stale)
     return {
         "generated_at": current_time.isoformat().replace("+00:00", "Z"),
+        "source_mode": source_mode,
+        "fixture_name": fixture_name,
         "window_days": days,
         "funnel": build_funnel(rows),
         "lead_times": build_lead_times(rows),
@@ -832,6 +948,11 @@ def render_dashboard(rows: list[dict[str, str]], summary: dict[str, Any]) -> str
         "# Ops Dashboard",
         "",
         f"Last updated: `{summary['generated_at']}`",
+        (
+            f"Source: `fixture:{summary['fixture_name']}`"
+            if summary.get("source_mode") == "fixture"
+            else "Source: `live`"
+        ),
         "",
         "## Funnel",
         "",
@@ -934,6 +1055,37 @@ def create_output_dir(args: argparse.Namespace) -> Path:
         return args.output_dir
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     return Path(tempfile.mkdtemp(prefix=f"workspaces-ops-report-{timestamp}-"))
+
+
+def build_report(
+    inputs: ReportInputs,
+    *,
+    current_time: datetime,
+    days: int,
+) -> tuple[list[dict[str, str]], dict[str, Any]]:
+    rows = build_timeline_rows(
+        inputs.discussions,
+        inputs.issues,
+        inputs.prs,
+        inputs.repo.owner,
+        current_time,
+    )
+    ci = summarize_ci(inputs.runs, days, current_time)
+    perf = load_perf_summary(
+        current_time,
+        latest_path=inputs.perf_latest_path,
+        history_path=inputs.perf_history_path,
+    )
+    summary = build_summary(
+        rows,
+        ci,
+        perf,
+        current_time,
+        days,
+        source_mode=inputs.source_mode,
+        fixture_name=inputs.fixture_name,
+    )
+    return rows, summary
 
 
 def write_artifacts(output_dir: Path, rows: list[dict[str, str]], summary: dict[str, Any]) -> dict[str, Path]:
@@ -1083,23 +1235,12 @@ def print_idea_preview(idea: dict[str, str] | None, skip_reason: str | None) -> 
 
 def main() -> int:
     args = parse_args()
-    if args.days <= 0:
-        raise OpsReportError("--days must be a positive integer")
+    validate_args(args)
 
     env = dict(os.environ)
-    repo = repo_info(env)
     current_time = now_utc()
-
-    log("Fetching GitHub data")
-    discussions = fetch_discussions(repo, env)
-    issues = fetch_issues(env)
-    prs = fetch_pull_requests(env)
-    runs = fetch_runs(env)
-
-    rows = build_timeline_rows(discussions, issues, prs, repo.owner, current_time)
-    ci = summarize_ci(runs, args.days, current_time)
-    perf = load_perf_summary(current_time)
-    summary = build_summary(rows, ci, perf, current_time, args.days)
+    inputs = load_inputs(args, env)
+    rows, summary = build_report(inputs, current_time=current_time, days=args.days)
 
     output_dir = create_output_dir(args)
     paths = write_artifacts(output_dir, rows, summary)
@@ -1113,11 +1254,13 @@ def main() -> int:
         return 0
 
     idea = candidate_idea_from_breaches(summary)
-    skip_reason = should_skip_idea(idea, discussions, current_time)
+    skip_reason = should_skip_idea(idea, inputs.discussions, current_time)
     if args.dry_run:
         print_idea_preview(idea, skip_reason)
         return 0
 
+    if inputs.source_mode == "fixture":
+        raise OpsReportError("fixture mode cannot create discussions")
     if idea is None:
         log("No breach candidate found; nothing to open")
         return 0
@@ -1125,7 +1268,7 @@ def main() -> int:
         log(f"Skipping ops discussion creation: {skip_reason}")
         return 0
 
-    discussion = create_ops_discussion(repo, idea, env)
+    discussion = create_ops_discussion(inputs.repo, idea, env)
     log(f"Created ops discussion #{discussion['number']}")
     print(json.dumps({"created_discussion": discussion}, indent=2, ensure_ascii=False))
     return 0

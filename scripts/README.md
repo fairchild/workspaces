@@ -2,6 +2,17 @@
 
 This directory contains build/release helpers plus UI test utilities.
 
+## Ops Reporting
+
+- `uv run --script ./scripts/ops-report.py`
+  - Builds an operational snapshot from live GitHub history plus checked-in perf artifacts.
+  - Writes `timeline.csv`, `latest-summary.json`, and `dashboard.md` to a temp directory by default.
+- `uv run --script ./scripts/ops-report.py --fixtures-dir fixtures/ops-report/perf-breach --dry-run --open-idea-on-breach`
+  - Replays a checked-in fixture pack without touching GitHub or `docs/ops/`.
+  - Use this to observe breach selection, dedupe, and cooldown behavior on demand.
+- Fixture packs live under `./fixtures/ops-report/`.
+  - `docs/ops/` remains reserved for real checked-in snapshots from live data.
+
 ## Release Helpers
 
 - `./scripts/release-version.sh`

@@ -7,15 +7,21 @@
 
 from __future__ import annotations
 
+import argparse
 import importlib.util
+import os
+import subprocess
 import sys
 import tempfile
 import unittest
 from datetime import UTC, datetime
 from pathlib import Path
+from unittest import mock
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+FIXTURES_DIR = REPO_ROOT / "fixtures" / "ops-report"
+SCRIPT_PATH = REPO_ROOT / "scripts" / "ops-report.py"
 
 
 def load_module(name: str, path: Path):
@@ -27,10 +33,26 @@ def load_module(name: str, path: Path):
     return module
 
 
-ops_report = load_module("ops_report", REPO_ROOT / "scripts" / "ops-report.py")
+ops_report = load_module("ops_report", SCRIPT_PATH)
 
 
 class OpsReportTests(unittest.TestCase):
+    maxDiff = None
+
+    def fixture_path(self, name: str) -> Path:
+        return FIXTURES_DIR / name
+
+    def load_fixture_report(
+        self,
+        name: str,
+        *,
+        current_time: datetime | None = None,
+    ) -> tuple[ops_report.ReportInputs, list[dict[str, str]], dict[str, object]]:
+        current_time = current_time or datetime(2026, 3, 12, tzinfo=UTC)
+        inputs = ops_report.load_fixture_inputs(self.fixture_path(name))
+        rows, summary = ops_report.build_report(inputs, current_time=current_time, days=30)
+        return inputs, rows, summary
+
     def test_select_approval_timestamp_uses_owner_keyword(self) -> None:
         comments = [
             {
@@ -243,15 +265,11 @@ class OpsReportTests(unittest.TestCase):
                 + "\n",
                 encoding="utf-8",
             )
-            original_latest = ops_report.PERF_LATEST_PATH
-            original_history = ops_report.PERF_HISTORY_PATH
-            ops_report.PERF_LATEST_PATH = latest_path
-            ops_report.PERF_HISTORY_PATH = history_path
-            try:
-                perf = ops_report.load_perf_summary(datetime(2026, 3, 12, tzinfo=UTC))
-            finally:
-                ops_report.PERF_LATEST_PATH = original_latest
-                ops_report.PERF_HISTORY_PATH = original_history
+            perf = ops_report.load_perf_summary(
+                datetime(2026, 3, 12, tzinfo=UTC),
+                latest_path=latest_path,
+                history_path=history_path,
+            )
 
         self.assertTrue(perf["available"])
         self.assertAlmostEqual(perf["freshness_days"], 1.5833333, places=3)
@@ -308,6 +326,113 @@ class OpsReportTests(unittest.TestCase):
         idea = ops_report.candidate_idea_from_breaches(summary)
         self.assertIsNotNone(idea)
         self.assertEqual(idea["title"], "[idea] [ops] Investigate performance regression")
+
+    def test_validate_args_rejects_invalid_fixture_combinations(self) -> None:
+        args = argparse.Namespace(
+            record=True,
+            days=30,
+            output_dir=None,
+            open_idea_on_breach=False,
+            dry_run=False,
+            fixtures_dir=Path("fixtures/ops-report/clean"),
+        )
+        with self.assertRaisesRegex(ops_report.OpsReportError, "cannot be combined with --record"):
+            ops_report.validate_args(args)
+
+        args = argparse.Namespace(
+            record=False,
+            days=30,
+            output_dir=None,
+            open_idea_on_breach=True,
+            dry_run=False,
+            fixtures_dir=Path("fixtures/ops-report/clean"),
+        )
+        with self.assertRaisesRegex(ops_report.OpsReportError, "requires --dry-run"):
+            ops_report.validate_args(args)
+
+    def test_load_fixture_inputs_missing_file_raises(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "repo.json").write_text('{"owner":"fairchild","name":"workspaces"}\n', encoding="utf-8")
+            with self.assertRaisesRegex(ops_report.OpsReportError, "missing required files"):
+                ops_report.load_fixture_inputs(root)
+
+    def test_load_inputs_uses_fixture_without_gh_calls(self) -> None:
+        args = argparse.Namespace(
+            record=False,
+            days=30,
+            output_dir=None,
+            open_idea_on_breach=False,
+            dry_run=False,
+            fixtures_dir=self.fixture_path("clean"),
+        )
+        with mock.patch.object(ops_report, "run_checked", side_effect=AssertionError("run_checked called")):
+            with mock.patch.object(ops_report, "graphql", side_effect=AssertionError("graphql called")):
+                inputs = ops_report.load_inputs(args, {})
+
+        self.assertEqual(inputs.source_mode, "fixture")
+        self.assertEqual(inputs.fixture_name, "clean")
+
+    def test_fixture_report_includes_source_metadata_and_dashboard_label(self) -> None:
+        _, rows, summary = self.load_fixture_report("clean")
+        dashboard = ops_report.render_dashboard(rows, summary)
+        self.assertEqual(summary["source_mode"], "fixture")
+        self.assertEqual(summary["fixture_name"], "clean")
+        self.assertIn("Source: `fixture:clean`", dashboard)
+
+    def test_fixture_scenarios_produce_expected_preview_states(self) -> None:
+        expected = {
+            "clean": (None, "no breach candidate"),
+            "perf-breach": ("[idea] [ops] Investigate performance regression", None),
+            "ci-breach": ("[idea] [ops] Stabilize GitHub Actions reliability", None),
+            "throughput-breach": ("[idea] [ops] Unblock planned work from execution", None),
+            "deduped": (
+                "[idea] [ops] Stabilize GitHub Actions reliability",
+                "matching open ops discussion already exists",
+            ),
+            "cooldown": (
+                "[idea] [ops] Stabilize GitHub Actions reliability",
+                "matching ops discussion closed within the 30-day cooldown",
+            ),
+        }
+        current_time = datetime(2026, 3, 12, tzinfo=UTC)
+        for fixture_name, (expected_title, expected_reason) in expected.items():
+            with self.subTest(fixture=fixture_name):
+                inputs, _, summary = self.load_fixture_report(fixture_name, current_time=current_time)
+                idea = ops_report.candidate_idea_from_breaches(summary)
+                skip_reason = ops_report.should_skip_idea(idea, inputs.discussions, current_time)
+                actual_title = idea["title"] if idea is not None else None
+                self.assertEqual(actual_title, expected_title)
+                self.assertEqual(skip_reason, expected_reason)
+
+    def test_cli_smoke_fixture_preview_writes_artifacts_without_system_tools(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir) / "out"
+            env = os.environ.copy()
+            env["PATH"] = ""
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT_PATH),
+                    "--fixtures-dir",
+                    str(self.fixture_path("clean")),
+                    "--output-dir",
+                    str(output_dir),
+                    "--dry-run",
+                    "--open-idea-on-breach",
+                ],
+                cwd=REPO_ROOT,
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("output_dir=", result.stdout)
+            self.assertIn('"would_open_discussion": null', result.stdout)
+            self.assertTrue((output_dir / "timeline.csv").is_file())
+            self.assertTrue((output_dir / "latest-summary.json").is_file())
+            self.assertTrue((output_dir / "dashboard.md").is_file())
 
 
 if __name__ == "__main__":
