@@ -326,6 +326,13 @@ def extract_issue_slugs(body: str, discussion_number: int) -> list[str]:
     return slugs
 
 
+def extract_summary_issue_numbers(body: str, discussion_number: int) -> list[int]:
+    if marker_status(body, discussion_number) != "planned":
+        return []
+    numbers = [int(match) for match in re.findall(r"(?m)^\s*-\s+#(\d+)\b", body)]
+    return unique_preserving_order(numbers)
+
+
 def issue_title_tokens(title: str) -> set[str]:
     return {
         token
@@ -815,6 +822,26 @@ def discussion_has_completed_plan(
     return has_summary and has_any_issue
 
 
+def has_summary_issue_set(
+    discussion_number: int,
+    comments: list[dict[str, Any]],
+    issues: list[dict[str, Any]],
+) -> bool:
+    issue_numbers = {int(issue["number"]) for issue in issues}
+    issue_marker_numbers = {
+        int(issue["number"])
+        for issue in issues
+        if extract_issue_slugs(str(issue.get("body", "")), discussion_number)
+    }
+    for comment in comments:
+        planned_numbers = extract_summary_issue_numbers(str(comment.get("body", "")), discussion_number)
+        if not planned_numbers:
+            continue
+        if all(number in issue_numbers and number in issue_marker_numbers for number in planned_numbers):
+            return True
+    return False
+
+
 def delete_discussion_comment(comment_id: str, env: dict[str, str]) -> None:
     mutation = """
 mutation($id: ID!) {
@@ -1068,6 +1095,16 @@ def main() -> int:
     discussion = fetch_discussion(owner, name, number, env)
     repo = f"{owner}/{name}"
     existing_issues = fetch_existing_issues(env)
+    if not args.dry_run and has_summary_issue_set(
+        number,
+        discussion["comments"]["nodes"],
+        existing_issues,
+    ):
+        new_title = endorse_title(str(discussion["title"]))
+        if new_title != discussion["title"]:
+            maybe_update_discussion_title(discussion["id"], new_title, env)
+        log(f"Discussion #{number} already has a recorded Peter plan; nothing to do")
+        return 0
 
     catalog = load_label_catalog(CATALOG_FILE)
     raw_output = load_plan_output(args, discussion, catalog, env)

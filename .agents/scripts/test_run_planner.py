@@ -256,6 +256,28 @@ class RunPlannerTests(unittest.TestCase):
         self.assertTrue(run_planner.discussion_has_completed_plan(43, comments, issues))
         self.assertFalse(run_planner.discussion_has_completed_plan(43, comments, []))
 
+    def test_has_summary_issue_set_reads_issue_numbers_from_summary_comment(self) -> None:
+        comments = [
+            {
+                "id": "planned",
+                "body": "\n".join(
+                    [
+                        run_planner.comment_marker(43, "planned"),
+                        "",
+                        "- #61 — Audit runners",
+                        "- #62 — Provision tart-ui runner",
+                        "- #63 — Move perf-validation workflow",
+                    ]
+                ),
+            }
+        ]
+        issues = [
+            {"number": 61, "body": run_planner.issue_marker(43, "audit-runners")},
+            {"number": 62, "body": run_planner.issue_marker(43, "provision-tart-ui-runner")},
+            {"number": 63, "body": run_planner.issue_marker(43, "move-perf-validation")},
+        ]
+        self.assertTrue(run_planner.has_summary_issue_set(43, comments, issues))
+
     def test_titles_loosely_match_minor_suffix_change(self) -> None:
         self.assertTrue(
             run_planner.titles_loosely_match(
