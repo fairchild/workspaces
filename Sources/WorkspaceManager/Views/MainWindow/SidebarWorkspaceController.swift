@@ -114,9 +114,13 @@ struct SidebarWorkspaceController {
     func deleteWorkspace(_ workspace: Workspace, deleteFiles: Bool) async throws {
         if workspace.isRemote {
             let backend = try remoteBackend(for: workspace)
-            if let remoteId = workspace.remoteId,
-                backend.runtimeCapabilities.supportsDelete
-            {
+            if backend.runtimeCapabilities.supportsDelete {
+                guard
+                    let remoteId = workspace.remoteId?.trimmingCharacters(in: .whitespacesAndNewlines),
+                    !remoteId.isEmpty
+                else {
+                    throw RemoteWorkspaceError.missingRemoteIdentifier
+                }
                 let provisionableBackend = try provisioningBackend(
                     identifier: workspace.backendIdentifier,
                     requiresDelete: true,

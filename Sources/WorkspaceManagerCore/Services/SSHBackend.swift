@@ -29,6 +29,7 @@ public struct SSHSessionPlan: Sendable, Equatable {
 public actor SSHBackend: RemoteBackendProtocol {
     public typealias CommandRunner =
         @Sendable (_ executable: String, _ arguments: [String]) async throws -> ProcessResult
+    public typealias ExecutableResolver = @Sendable (_ executableName: String) -> String?
 
     public nonisolated static let identifier = "ssh"
     public static let shared = SSHBackend()
@@ -41,9 +42,11 @@ public actor SSHBackend: RemoteBackendProtocol {
     }
 
     private let runCommand: CommandRunner
+    private let resolveExecutablePath: ExecutableResolver
 
     public init(
-        runCommand: CommandRunner? = nil
+        runCommand: CommandRunner? = nil,
+        resolveExecutablePath: ExecutableResolver? = nil
     ) {
         self.runCommand =
             runCommand
@@ -54,6 +57,11 @@ public actor SSHBackend: RemoteBackendProtocol {
                     environment: ProcessInfo.processInfo.environment
                 )
             }
+        self.resolveExecutablePath =
+            resolveExecutablePath
+            ?? { executableName in
+                Self.resolveExecutable(named: executableName)
+            }
     }
 
     public func healthCheck() async -> Bool {
@@ -61,7 +69,7 @@ public actor SSHBackend: RemoteBackendProtocol {
     }
 
     public func openSession(for request: RemoteWorkspaceSessionRequest) async throws -> RemoteSandboxInfo {
-        guard let sshExecutable = Self.resolveExecutable(named: "ssh") else {
+        guard let sshExecutable = resolveExecutablePath("ssh") else {
             throw BackendError.commandNotFound("ssh")
         }
 

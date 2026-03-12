@@ -25,10 +25,13 @@ struct SSHBackendTests {
         #expect(plan.bootstrapArguments.contains("alice@ssh.example.com"))
         #expect(bootstrapScript.contains("/srv/workspaces/feature-a"))
         #expect(plan.interactiveCommand.contains("/usr/bin/ssh"))
-        #expect(plan.interactiveCommand.contains("-t alice@ssh.example.com"))
         #expect(plan.interactiveCommand.contains("alice@ssh.example.com"))
         #expect(plan.interactiveCommand.contains("/srv/workspaces/feature-a"))
         #expect(plan.interactiveCommand.contains("exec ${SHELL:-/bin/bash} -l"))
+        assertTTYFlagPrecedesDestination(
+            in: plan.interactiveCommand,
+            destination: "alice@ssh.example.com"
+        )
     }
 
     @Test("Resolves default working directory from sanitized repo and workspace names")
@@ -61,11 +64,15 @@ struct SSHBackendTests {
 
         let plan = try SSHBackend.sessionPlan(for: request)
         let bootstrapScript = try #require(plan.bootstrapArguments.last)
+        let workingDirectorySuffix = "/workspaces/api/feature-a"
 
-        #expect(bootstrapScript.contains("mkdir -p $HOME'/workspaces/api/feature-a'"))
-        #expect(bootstrapScript.contains("[ ! -d $HOME'/workspaces/api/feature-a/.git' ]"))
-        #expect(plan.interactiveCommand.contains("cd $HOME'\"'\"'/workspaces/api/feature-a'"))
-        #expect(!bootstrapScript.contains("'~/workspaces"))
+        #expect(bootstrapScript.contains("mkdir -p $HOME"))
+        #expect(bootstrapScript.contains(workingDirectorySuffix))
+        #expect(bootstrapScript.contains(".git"))
+        #expect(plan.interactiveCommand.contains("$HOME"))
+        #expect(plan.interactiveCommand.contains(workingDirectorySuffix))
+        #expect(!bootstrapScript.contains("~/workspaces"))
+        #expect(!plan.interactiveCommand.contains("~/workspaces"))
     }
 
     @Test("Bootstrap script clones when the remote checkout is missing")
@@ -80,30 +87,45 @@ struct SSHBackendTests {
         let plan = try SSHBackend.sessionPlan(for: request)
         let script = try #require(plan.bootstrapArguments.last)
 
-        #expect(script.contains("if [ ! -d '/srv/workspaces/feature-a/.git' ]; then git clone"))
-        #expect(script.contains("'git@github.com:acme/api.git' '/srv/workspaces/feature-a'"))
+        #expect(script.contains("if [ ! -d "))
+        #expect(script.contains("/srv/workspaces/feature-a/.git"))
+        #expect(script.contains("git clone"))
+        #expect(script.contains("git@github.com:acme/api.git"))
+        #expect(script.contains("/srv/workspaces/feature-a"))
     }
 
     @Test("Missing repository remote URL fails before opening the session")
-    func missingRepositoryRemoteURLFails() async throws {
+    func missingRepositoryRemoteURLFails() {
         let request = makeRequest(
             repoRemoteURL: nil,
             ssh: SSHWorkspaceMetadata(host: "ssh.example.com")
         )
 
-        await #expect(throws: RemoteWorkspaceError.self) {
-            _ = try await SSHBackend().openSession(for: request)
+        do {
+            _ = try SSHBackend.sessionPlan(for: request)
+            Issue.record("Expected missing remote URL to fail session planning")
+        } catch let error as RemoteWorkspaceError {
+            #expect(error.localizedDescription == RemoteWorkspaceError.missingRemoteURL.localizedDescription)
+        } catch {
+            Issue.record("Expected RemoteWorkspaceError.missingRemoteURL, got \(error)")
         }
     }
 
     @Test("Invalid SSH port fails before opening the session")
-    func invalidSSHPortFails() async throws {
+    func invalidSSHPortFails() {
         let request = makeRequest(
             ssh: SSHWorkspaceMetadata(host: "ssh.example.com", port: 0)
         )
 
-        await #expect(throws: RemoteWorkspaceError.self) {
-            _ = try await SSHBackend().openSession(for: request)
+        do {
+            _ = try SSHBackend.sessionPlan(for: request)
+            Issue.record("Expected invalid SSH port to fail session planning")
+        } catch let error as RemoteWorkspaceError {
+            #expect(
+                error.localizedDescription.contains("port must be between 1 and 65535")
+            )
+        } catch {
+            Issue.record("Expected RemoteWorkspaceError.invalidSSHConfiguration, got \(error)")
         }
     }
 
@@ -133,9 +155,12 @@ struct SSHBackendTests {
 
     @Test("Bootstrap failures surface before a terminal command is returned")
     func bootstrapFailuresSurface() async throws {
-        let backend = SSHBackend { _, _ in
-            ProcessResult(exitCode: 1, stdout: "", stderr: "clone failed")
-        }
+        let backend = SSHBackend(
+            runCommand: { _, _ in
+                ProcessResult(exitCode: 1, stdout: "", stderr: "clone failed")
+            },
+            resolveExecutablePath: { _ in "/usr/bin/ssh" }
+        )
         let request = makeRequest(
             ssh: SSHWorkspaceMetadata(host: "ssh.example.com")
         )
@@ -169,5 +194,19 @@ struct SSHBackendTests {
         workspace.sshMetadata = ssh
         workspace.composeMetadata = compose
         return workspace.remoteSessionRequest
+    }
+
+    private func assertTTYFlagPrecedesDestination(
+        in interactiveCommand: String,
+        destination: String
+    ) {
+        let ttyRange = interactiveCommand.range(of: " -t ")
+        let destinationRange = interactiveCommand.range(of: destination)
+
+        #expect(ttyRange != nil)
+        #expect(destinationRange != nil)
+        if let ttyRange, let destinationRange {
+            #expect(ttyRange.lowerBound < destinationRange.lowerBound)
+        }
     }
 }

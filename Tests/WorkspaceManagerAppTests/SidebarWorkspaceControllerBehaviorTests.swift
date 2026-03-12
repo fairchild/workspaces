@@ -10,8 +10,8 @@ struct SidebarWorkspaceControllerBehaviorTests {
     @Test("Local request routes through WorkspaceService")
     @MainActor
     func localRequestRoutesThroughWorkspaceService() async throws {
-        let (container, context) = try makeModelContext()
-        _ = container
+        let fixture = try makeModelContext()
+        let context = fixture.context
         let repo = Repo(name: "api", localPath: URL(fileURLWithPath: "/tmp/api"))
         context.insert(repo)
 
@@ -41,8 +41,8 @@ struct SidebarWorkspaceControllerBehaviorTests {
     @Test("Daytona request routes through provisionable backend")
     @MainActor
     func daytonaRequestRoutesThroughProvisionableBackend() async throws {
-        let (container, context) = try makeModelContext()
-        _ = container
+        let fixture = try makeModelContext()
+        let context = fixture.context
         let repo = Repo(
             name: "api",
             localPath: URL(fileURLWithPath: "/tmp/api"),
@@ -88,8 +88,8 @@ struct SidebarWorkspaceControllerBehaviorTests {
     @Test("SSH request creates a persisted local record with metadata")
     @MainActor
     func sshRequestCreatesPersistedLocalRecord() async throws {
-        let (container, context) = try makeModelContext()
-        _ = container
+        let fixture = try makeModelContext()
+        let context = fixture.context
         let repo = Repo(
             name: "api",
             localPath: URL(fileURLWithPath: "/tmp/api"),
@@ -139,8 +139,8 @@ struct SidebarWorkspaceControllerBehaviorTests {
     @Test("SSH request rejects invalid names after sanitization")
     @MainActor
     func sshRequestRejectsInvalidNames() async throws {
-        let (container, context) = try makeModelContext()
-        _ = container
+        let fixture = try makeModelContext()
+        let context = fixture.context
         let repo = Repo(
             name: "api",
             localPath: URL(fileURLWithPath: "/tmp/api"),
@@ -179,8 +179,8 @@ struct SidebarWorkspaceControllerBehaviorTests {
     @Test("SSH request rejects invalid ports")
     @MainActor
     func sshRequestRejectsInvalidPorts() async throws {
-        let (container, context) = try makeModelContext()
-        _ = container
+        let fixture = try makeModelContext()
+        let context = fixture.context
         let repo = Repo(
             name: "api",
             localPath: URL(fileURLWithPath: "/tmp/api"),
@@ -219,8 +219,8 @@ struct SidebarWorkspaceControllerBehaviorTests {
     @Test("Lifecycle operations are capability-gated per backend")
     @MainActor
     func lifecycleOperationsAreCapabilityGatedPerBackend() async throws {
-        let (container, context) = try makeModelContext()
-        _ = container
+        let fixture = try makeModelContext()
+        let context = fixture.context
         let repo = Repo(
             name: "api",
             localPath: URL(fileURLWithPath: "/tmp/api"),
@@ -254,7 +254,8 @@ struct SidebarWorkspaceControllerBehaviorTests {
     @Test("Deleting SSH workspace removes only the local record")
     @MainActor
     func deletingSSHWorkspaceRemovesOnlyLocalRecord() async throws {
-        let (container, context) = try makeModelContext()
+        let fixture = try makeModelContext()
+        let context = fixture.context
         let repo = Repo(
             name: "api",
             localPath: URL(fileURLWithPath: "/tmp/api"),
@@ -286,13 +287,13 @@ struct SidebarWorkspaceControllerBehaviorTests {
         let fetchedWorkspaces = try context.fetch(FetchDescriptor<Workspace>())
         #expect(fetchedWorkspaces.isEmpty)
         #expect(workspaceService.deleteWorkspaceCalls.isEmpty)
-        _ = container
     }
 
     @Test("Deleting Daytona workspace preserves the record when provider deletion fails")
     @MainActor
     func deletingDaytonaWorkspacePreservesRecordWhenProviderDeletionFails() async throws {
-        let (container, context) = try makeModelContext()
+        let fixture = try makeModelContext()
+        let context = fixture.context
         let repo = Repo(
             name: "api",
             localPath: URL(fileURLWithPath: "/tmp/api"),
@@ -335,16 +336,78 @@ struct SidebarWorkspaceControllerBehaviorTests {
         let fetchedWorkspaces = try context.fetch(FetchDescriptor<Workspace>())
         #expect(fetchedWorkspaces.count == 1)
         #expect(await backend.deleteSandboxCallCount() == 1)
-        _ = container
+    }
+
+    @Test("Deleting Daytona workspace fails closed when remote identifier is missing")
+    @MainActor
+    func deletingDaytonaWorkspaceFailsClosedWhenRemoteIdentifierIsMissing() async throws {
+        let fixture = try makeModelContext()
+        let context = fixture.context
+        let repo = Repo(
+            name: "api",
+            localPath: URL(fileURLWithPath: "/tmp/api"),
+            remoteURL: "git@github.com:acme/api.git"
+        )
+        let workspace = Workspace(
+            name: "feature-a",
+            path: URL(fileURLWithPath: "/tmp/api/workspaces/feature-a"),
+            sourceRepo: repo,
+            backendIdentifier: DaytonaBackend.identifier
+        )
+        context.insert(repo)
+        context.insert(workspace)
+        try context.save()
+
+        let backend = MockRemoteBackend(
+            identifier: DaytonaBackend.identifier,
+            runtimeCapabilities: RuntimeCapabilities(
+                supportsCreate: true,
+                supportsDelete: true,
+                supportsStartStop: true,
+                supportsArchive: true,
+                supportsList: true
+            )
+        )
+        let controller = SidebarWorkspaceController(
+            modelContext: context,
+            workspaceService: MockWorkspaceService(),
+            remoteBackendRegistry: MockRemoteBackendRegistry(
+                backends: [DaytonaBackend.identifier: backend]
+            )
+        )
+
+        do {
+            try await controller.deleteWorkspace(workspace, deleteFiles: false)
+            Issue.record("Expected delete to fail when remoteId is missing")
+        } catch let error as RemoteWorkspaceError {
+            #expect(
+                error.localizedDescription
+                    == RemoteWorkspaceError.missingRemoteIdentifier.localizedDescription
+            )
+        } catch {
+            Issue.record("Expected RemoteWorkspaceError.missingRemoteIdentifier, got \(error)")
+        }
+
+        let fetchedWorkspaces = try context.fetch(FetchDescriptor<Workspace>())
+        #expect(fetchedWorkspaces.count == 1)
+        #expect(await backend.deleteSandboxCallCount() == 0)
     }
 
     @MainActor
-    private func makeModelContext() throws -> (ModelContainer, ModelContext) {
+    private func makeModelContext() throws -> ModelContextFixture {
         let schema = Schema([Repo.self, Workspace.self, WebSource.self])
         let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
         let container = try ModelContainer(for: schema, configurations: [configuration])
-        return (container, container.mainContext)
+        return ModelContextFixture(
+            container: container,
+            context: container.mainContext
+        )
     }
+}
+
+private struct ModelContextFixture {
+    let container: ModelContainer
+    let context: ModelContext
 }
 
 private final class MockWorkspaceService: WorkspaceServiceProtocol, @unchecked Sendable {
