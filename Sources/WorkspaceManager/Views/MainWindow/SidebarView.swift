@@ -9,8 +9,8 @@ import SwiftData
 import SwiftUI
 import WorkspaceManagerCore
 
-struct SandboxActionState {
-    let sandboxId: String
+struct WorkspaceActionState {
+    let workspaceID: UUID
     let message: String
 }
 
@@ -18,11 +18,18 @@ struct WorkspaceCreationStatus {
     let message: String
 }
 
+private struct NewWorkspaceSheetContext: Identifiable {
+    let repo: Repo
+
+    var id: UUID { repo.id }
+}
+
 struct SidebarView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.gitService) private var gitService
+    @Environment(\.lumeRuntimeService) private var lumeRuntimeService
     @Environment(\.workspaceService) private var workspaceService
-    @Environment(\.remoteBackendRegistry) private var remoteBackendRegistry
+    @Environment(\.workspaceProviderRegistry) private var workspaceProviderRegistry
     let repos: [Repo]
     let webSources: [WebSource]
     let selectedRepo: Repo?
@@ -30,19 +37,25 @@ struct SidebarView: View {
     @Binding var selectedWebSource: WebSource?
     let paneCountBySessionKey: [HostTerminalSessionKey: Int]
     let activeSessionKey: HostTerminalSessionKey?
-    let connectingSandboxId: String?
+    let connectingWorkspaceID: UUID?
     let onRepoSelected: (Repo) -> Void
     let onRepoTerminalSelected: (Repo) -> Void
     let onWebSourceSelected: (WebSource) -> Void
     let onRequestWebSourceCreation: (WebSourceCreationTarget) -> Void
     let onWorkspaceCreated: () -> Void
+    let lumeSetupCoordinator: LumeSetupCoordinator
+    let hostLumeSmokeAutomation: HostLumeSmokeAutomationController
 
     @AppStorage(SidebarRepoSortMode.storageKey)
     private var repoSortModeRawValue: String = SidebarRepoSortMode.alphabetical.rawValue
 
     @State private var isAddingRepo = false
-    @State private var repoForNewWorkspace: Repo?
-    @State private var isDaytonaBackendAvailable = false
+    @State private var newWorkspaceSheetContext: NewWorkspaceSheetContext?
+    @State private var providerAvailabilityByID: [String: WorkspaceProviderAvailability] =
+        UIFixtureLumeEnvironment.initialProviderAvailabilityByID()
+    @State private var isRefreshingProviderAvailability = false
+    @State private var lumeRuntimeSnapshot: LumeRuntimeSnapshot? =
+        UIFixtureLumeEnvironment.initialRuntimeSnapshot()
 
     // Error alert state
     @State private var errorMessage: String?
@@ -56,7 +69,7 @@ struct SidebarView: View {
     @State private var expandedRepoIDs: Set<UUID> = []
     @State private var expandedWorkspaceIDs: Set<UUID> = []
     @State private var didInitializeRepoExpansion = false
-    @State private var sandboxAction: SandboxActionState?
+    @State private var workspaceAction: WorkspaceActionState?
     @State private var workspaceCreationStatusByRepoID: [UUID: WorkspaceCreationStatus] = [:]
     @State private var repoLastAccessedSnapshotByID: [UUID: Date] = [:]
 
@@ -73,20 +86,8 @@ struct SidebarView: View {
         SidebarWorkspaceController(
             modelContext: modelContext,
             workspaceService: workspaceService,
-            remoteBackendRegistry: remoteBackendRegistry
+            workspaceProviderRegistry: workspaceProviderRegistry
         )
-    }
-
-    private var creationBackendIdentifiers: Set<String> {
-        Set(remoteBackendRegistry.creationBackendIdentifiers)
-    }
-
-    private var supportsDaytonaCreation: Bool {
-        creationBackendIdentifiers.contains(DaytonaBackend.identifier)
-    }
-
-    private var supportsSSHCreation: Bool {
-        creationBackendIdentifiers.contains(SSHBackend.identifier)
     }
 
     private var repoSortController: SidebarRepoSortController {
@@ -134,21 +135,35 @@ struct SidebarView: View {
                     }
                 }
             }
-            .sheet(item: $repoForNewWorkspace) { repo in
+            .sheet(item: $newWorkspaceSheetContext) { context in
                 NewWorkspaceSheet(
-                    repo: repo,
-                    supportsDaytonaCreation: supportsDaytonaCreation,
-                    supportsSSHCreation: supportsSSHCreation,
-                    isDaytonaAvailable: isDaytonaBackendAvailable,
-                    isCreateDisabled: isCreatingWorkspace(for: repo.id)
-                ) { request in
+                    repo: context.repo,
+                    environmentOptions: environmentOptions(for: context.repo),
+                    isCreateDisabled: isCreatingWorkspace(for: context.repo.id)
+                ) { name, providerID, guestOS in
                     Task { @MainActor in
-                        await createWorkspace(from: repo, request: request)
+                        await createWorkspace(
+                            from: context.repo,
+                            name: name,
+                            providerID: providerID,
+                            guestOS: guestOS
+                        )
                     }
                 }
+                .id(newWorkspaceSheetRefreshID(for: context.repo))
             }
             .alert("Error", isPresented: $showingError) {
                 Button("OK", role: .cancel) {}
+
+                if shouldOfferLumeRecoveryActions {
+                    Button("Open VM Runtime") {
+                        openSettingsWindow()
+                    }
+
+                    Button("Open Lume Log") {
+                        openLumeLog()
+                    }
+                }
             } message: {
                 Text(errorMessage ?? "An unknown error occurred")
             }
@@ -157,35 +172,21 @@ struct SidebarView: View {
                 isPresented: $showingDeleteConfirmation,
                 presenting: workspaceToDelete
             ) { workspace in
-                if workspaceDeleteSupportsRemovingFiles(workspace) {
-                    Button("Delete (Keep Files)", role: .destructive) {
-                        Task { @MainActor in
-                            await performDelete(workspace, deleteFiles: false)
-                        }
+                Button("Delete (Keep Files)", role: .destructive) {
+                    Task { @MainActor in
+                        await performDelete(workspace, deleteFiles: false)
                     }
-                    Button("Delete and Remove Files", role: .destructive) {
-                        Task { @MainActor in
-                            await performDelete(workspace, deleteFiles: true)
-                        }
-                    }
-                } else if workspaceDeleteAffectsRemoteProvider(workspace) {
-                    Button("Delete Remote Workspace", role: .destructive) {
-                        Task { @MainActor in
-                            await performDelete(workspace, deleteFiles: false)
-                        }
-                    }
-                } else {
-                    Button("Remove from List", role: .destructive) {
-                        Task { @MainActor in
-                            await performDelete(workspace, deleteFiles: false)
-                        }
+                }
+                Button("Delete and Remove Files", role: .destructive) {
+                    Task { @MainActor in
+                        await performDelete(workspace, deleteFiles: true)
                     }
                 }
                 Button("Cancel", role: .cancel) {
                     workspaceToDelete = nil
                 }
             } message: { workspace in
-                Text(deleteConfirmationMessage(for: workspace))
+                Text("Are you sure you want to delete '\(workspace.name)'?")
             }
             .focusedSceneValue(\.newWorkspaceAction, handleNewWorkspaceShortcut)
             .onChange(of: selectedWorkspace?.id) { _, _ in
@@ -198,6 +199,9 @@ struct SidebarView: View {
                 pruneExpandedRepos()
                 pruneExpandedWorkspaces()
                 syncRepoSortSnapshot()
+                Task { @MainActor in
+                    await maybeDriveHostLumeSmokeAutomation()
+                }
             }
             .onChange(of: repoSortModeRawValue) { _, _ in
                 syncRepoSortSnapshot(forceRefresh: true)
@@ -214,12 +218,20 @@ struct SidebarView: View {
                 }
             }
             .task {
-                if supportsDaytonaCreation,
-                    let daytonaBackend = remoteBackendRegistry.backend(for: DaytonaBackend.identifier)
-                {
-                    isDaytonaBackendAvailable = await daytonaBackend.healthCheck()
-                } else {
-                    isDaytonaBackendAvailable = false
+                if await seedFixtureProviderStateIfNeeded() {
+                    return
+                }
+                await refreshProviderAvailability()
+                await refreshLumeRuntimeSnapshot()
+                await maybeDriveHostLumeSmokeAutomation()
+            }
+            .onChange(of: errorMessage) { _, message in
+                guard let message else { return }
+                Task { @MainActor in
+                    await hostLumeSmokeAutomation.noteFailure(
+                        message: message,
+                        recoveryHints: hostLumeSmokeRecoveryHints(for: message)
+                    )
                 }
             }
     }
@@ -362,7 +374,9 @@ struct SidebarView: View {
                 onRepoSelected(repo)
             },
             onNewWorkspace: {
-                repoForNewWorkspace = repo
+                Task { @MainActor in
+                    await prepareNewWorkspaceSheet(for: repo)
+                }
             },
             onNewWebView: {
                 onRequestWebSourceCreation(.repo(repo))
@@ -378,7 +392,9 @@ struct SidebarView: View {
             Divider()
 
             Button("New Workspace...") {
-                repoForNewWorkspace = repo
+                Task { @MainActor in
+                    await prepareNewWorkspaceSheet(for: repo)
+                }
             }
             .disabled(isCreatingWorkspace(for: repo.id))
 
@@ -438,7 +454,7 @@ struct SidebarView: View {
                     }
                     .disabled(true)
 
-                    if !workspace.isRemote {
+                    if usesHostWorkspaceFiles(for: workspace) {
                         Button("Reveal in Finder") {
                             NSWorkspace.shared.selectFile(
                                 nil, inFileViewerRootedAtPath: workspace.path)
@@ -447,10 +463,10 @@ struct SidebarView: View {
 
                     Divider()
 
-                    if workspaceUsesProviderLifecycleActions(workspace) {
-                        remoteWorkspaceActions(workspace)
-                    } else {
+                    if workspace.backendIdentifier == LocalWorkspaceProvider.identifier {
                         localWorkspaceActions(workspace)
+                    } else {
+                        providerWorkspaceActions(workspace)
                     }
 
                     Divider()
@@ -570,25 +586,63 @@ struct SidebarView: View {
             }
 
             modelContext.insert(repo)
-            _ = saveModelContext(action: "save repository")
+            if !saveModelContext(action: "save repository") {
+                modelContext.rollback()
+            }
         }
     }
 
     @MainActor
     private func removeRepo(_ repo: Repo) {
         modelContext.delete(repo)
-        _ = saveModelContext(action: "remove repository")
+        if !saveModelContext(action: "remove repository") {
+            modelContext.rollback()
+        }
     }
 
     @MainActor
     private func removeWebSource(_ source: WebSource) {
         modelContext.delete(source)
-        _ = saveModelContext(action: "remove URL source")
+        if !saveModelContext(action: "remove URL source") {
+            modelContext.rollback()
+        }
     }
 
     private func openWebSourceExternally(_ source: WebSource) {
         guard let url = source.baseURL else { return }
         NSWorkspace.shared.open(url)
+    }
+
+    private var shouldOfferLumeRecoveryActions: Bool {
+        !hostLumeSmokeRecoveryHints(for: errorMessage).isEmpty
+    }
+
+    private func openSettingsWindow() {
+        let selector = Selector(("showSettingsWindow:"))
+        if NSApp.sendAction(selector, to: nil, from: nil) {
+            return
+        }
+
+        _ = NSApp.sendAction(Selector(("showPreferencesWindow:")), to: nil, from: nil)
+    }
+
+    private func openLumeLog() {
+        let candidatePaths = [
+            lumeRuntimeSnapshot?.errorLogPath,
+            lumeRuntimeSnapshot?.infoLogPath,
+        ]
+
+        for path in candidatePaths {
+            guard let path, !path.isEmpty else { continue }
+            let logURL = URL(fileURLWithPath: path)
+            if FileManager.default.fileExists(atPath: logURL.path) {
+                NSWorkspace.shared.open(logURL)
+                return
+            }
+        }
+
+        errorMessage = "No Lume log file is available yet."
+        showingError = true
     }
 
     private func creationStatus(for repoID: UUID) -> WorkspaceCreationStatus? {
@@ -606,45 +660,89 @@ struct SidebarView: View {
     }
 
     @MainActor
-    private func createWorkspace(from repo: Repo, request: NewWorkspaceRequest) async {
+    private func createWorkspace(
+        from repo: Repo,
+        name: String,
+        providerID: String,
+        guestOS: WorkspaceGuestOS? = nil
+    ) async {
+        let effectiveGuestOS =
+            providerID == LumeWorkspaceProvider.identifier ? (guestOS ?? .macOS) : guestOS
+
+        if providerID == LumeWorkspaceProvider.identifier {
+            do {
+                let intercepted = try await lumeSetupCoordinator.prepareIfNeeded(
+                    for: .createWorkspace(name: name, guestOS: effectiveGuestOS ?? .macOS)
+                ) {
+                    await refreshLumeRuntimeSnapshot()
+                    await createWorkspaceAfterSetup(
+                        from: repo,
+                        name: name,
+                        providerID: providerID,
+                        guestOS: effectiveGuestOS
+                    )
+                }
+                if intercepted {
+                    return
+                }
+            } catch {
+                errorMessage = error.localizedDescription
+                showingError = true
+                return
+            }
+        }
+
+        await createWorkspaceAfterSetup(
+            from: repo,
+            name: name,
+            providerID: providerID,
+            guestOS: effectiveGuestOS
+        )
+    }
+
+    @MainActor
+    private func createWorkspaceAfterSetup(
+        from repo: Repo,
+        name: String,
+        providerID: String,
+        guestOS: WorkspaceGuestOS? = nil
+    ) async {
         let repoID = repo.id
         guard !isCreatingWorkspace(for: repoID) else { return }
         expandedRepoIDs.insert(repoID)
-        switch request.backendChoice {
-        case .local:
-            updateLocalCreationStatus(repoID: repoID, phase: .preparing)
-        case .daytona:
-            workspaceCreationStatusByRepoID[repoID] = WorkspaceCreationStatus(
-                message: "Creating remote workspace..."
-            )
-        case .sshHost:
-            workspaceCreationStatusByRepoID[repoID] = WorkspaceCreationStatus(
-                message: "Preparing SSH workspace..."
-            )
-        }
+        workspaceCreationStatusByRepoID[repoID] = WorkspaceCreationStatus(
+            message: initialCreationMessage(for: providerID)
+        )
+        await hostLumeSmokeAutomation.noteWorkspacePhaseChanged(
+            message: initialCreationMessage(for: providerID)
+        )
 
         do {
-            let progress: WorkspaceCreationProgressHandler?
-            if request.backendChoice == .local {
-                progress = { phase in
-                    await MainActor.run {
-                        updateLocalCreationStatus(repoID: repoID, phase: phase)
-                    }
-                }
-            } else {
-                progress = nil
-            }
             let workspace = try await workspaceController.createWorkspace(
                 from: repo,
-                request: request,
-                progress: progress
+                name: name,
+                providerID: providerID,
+                guestOS: guestOS,
+                progress: { phase in
+                    await MainActor.run {
+                        workspaceCreationStatusByRepoID[repoID] = WorkspaceCreationStatus(message: phase)
+                    }
+                    await hostLumeSmokeAutomation.noteWorkspacePhaseChanged(message: phase)
+                },
+                onPersisted: { record in
+                    await hostLumeSmokeAutomation.noteWorkspacePersisted(record)
+                }
             )
             workspaceCreationStatusByRepoID.removeValue(forKey: repoID)
             onWorkspaceCreated()
             selectedWorkspace = workspace
+            await hostLumeSmokeAutomation.noteWorkspaceActive(
+                HostLumeSmokeWorkspaceRecord(workspace: workspace)
+            )
         } catch {
             workspaceCreationStatusByRepoID.removeValue(forKey: repoID)
-            errorMessage = "Failed to create workspace: \(error.localizedDescription)"
+            let providerName = providerDisplayName(for: providerID)
+            errorMessage = "Failed to create \(providerName) workspace: \(error.localizedDescription)"
             showingError = true
         }
     }
@@ -670,138 +768,174 @@ struct SidebarView: View {
     }
 
     @ViewBuilder
-    private func remoteWorkspaceActions(_ workspace: Workspace) -> some View {
-        let capabilities = remoteCapabilities(for: workspace)
-
-        switch workspace.status {
-        case .active:
-            if capabilities.supportsStartStop {
-                Button("Stop") {
-                    performStop(workspace)
-                }
+    private func localWorkspaceActions(_ workspace: Workspace) -> some View {
+        if workspace.status == .active {
+            Button("Archive") {
+                toggleLocalWorkspaceArchive(workspace, archived: true)
             }
-            if capabilities.supportsArchive {
-                Button("Archive") {
-                    performArchive(workspace)
-                }
-            }
-        case .stopped:
-            if capabilities.supportsStartStop {
-                Button("Start") {
-                    performStart(workspace)
-                }
-            }
-            if capabilities.supportsArchive {
-                Button("Archive") {
-                    performArchive(workspace)
-                }
-            }
-        case .archived:
-            if capabilities.supportsStartStop {
-                Button("Start") {
-                    performStart(workspace)
-                }
+        } else {
+            Button("Unarchive") {
+                toggleLocalWorkspaceArchive(workspace, archived: false)
             }
         }
     }
 
     @ViewBuilder
-    private func localWorkspaceActions(_ workspace: Workspace) -> some View {
-        if workspace.status == .active {
-            Button("Archive") {
-                workspace.status = .archived
-                _ = saveModelContext(action: "archive workspace")
+    private func providerWorkspaceActions(_ workspace: Workspace) -> some View {
+        let descriptor = providerDescriptor(for: workspace)
+
+        if descriptor?.supportsDesktop == true {
+            Button("Open Desktop") {
+                openDesktop(for: workspace)
             }
-        } else {
-            Button("Unarchive") {
-                workspace.status = .active
-                _ = saveModelContext(action: "unarchive workspace")
+            .disabled(workspace.status == .provisioning)
+        }
+
+        switch workspace.status {
+        case .active:
+            Button("Stop") {
+                performStop(workspace)
             }
+            if descriptor?.supportsArchive == true {
+                Button("Archive") {
+                    performArchive(workspace)
+                }
+            }
+        case .stopped, .archived:
+            Button("Start") {
+                performStart(workspace)
+            }
+            if descriptor?.supportsArchive == true, workspace.status == .stopped {
+                Button("Archive") {
+                    performArchive(workspace)
+                }
+            }
+        case .provisioning:
+            EmptyView()
+        }
+    }
+
+    private func toggleLocalWorkspaceArchive(_ workspace: Workspace, archived: Bool) {
+        workspace.status = archived ? .archived : .active
+        if !saveModelContext(action: archived ? "archive workspace" : "unarchive workspace") {
+            modelContext.rollback()
         }
     }
 
     private func performStop(_ workspace: Workspace) {
-        guard let sandboxId = workspace.remoteId else { return }
-        sandboxAction = SandboxActionState(sandboxId: sandboxId, message: "Stopping...")
+        workspaceAction = WorkspaceActionState(workspaceID: workspace.id, message: "Stopping...")
 
         Task { @MainActor in
             do {
                 try await workspaceController.stop(workspace)
-                sandboxAction = nil
+                workspaceAction = nil
             } catch {
-                sandboxAction = nil
-                errorMessage = "Failed to stop remote workspace: \(error.localizedDescription)"
+                workspaceAction = nil
+                errorMessage = "Failed to stop workspace: \(error.localizedDescription)"
                 showingError = true
             }
         }
     }
 
     private func performStart(_ workspace: Workspace) {
-        guard let sandboxId = workspace.remoteId else { return }
-        sandboxAction = SandboxActionState(sandboxId: sandboxId, message: "Starting...")
-
         Task { @MainActor in
-            do {
-                try await workspaceController.start(workspace)
-                sandboxAction = nil
-                selectedWorkspace = workspace
-            } catch {
-                sandboxAction = nil
-                errorMessage = "Failed to start remote workspace: \(error.localizedDescription)"
-                showingError = true
+            if workspace.backendIdentifier == LumeWorkspaceProvider.identifier {
+                do {
+                    let intercepted = try await lumeSetupCoordinator.prepareIfNeeded(
+                        for: .startWorkspace(workspaceName: workspace.name)
+                    ) {
+                        await refreshLumeRuntimeSnapshot()
+                        await performStartAfterSetup(workspace)
+                    }
+                    if intercepted {
+                        return
+                    }
+                } catch {
+                    errorMessage = error.localizedDescription
+                    showingError = true
+                    return
+                }
             }
+
+            await performStartAfterSetup(workspace)
+        }
+    }
+
+    @MainActor
+    private func performStartAfterSetup(_ workspace: Workspace) async {
+        workspaceAction = WorkspaceActionState(workspaceID: workspace.id, message: "Starting...")
+
+        do {
+            try await workspaceController.start(workspace)
+            workspaceAction = nil
+            selectedWorkspace = workspace
+        } catch {
+            workspaceAction = nil
+            errorMessage = "Failed to start workspace: \(error.localizedDescription)"
+            showingError = true
         }
     }
 
     private func performArchive(_ workspace: Workspace) {
-        guard let sandboxId = workspace.remoteId else { return }
-        sandboxAction = SandboxActionState(sandboxId: sandboxId, message: "Archiving...")
+        workspaceAction = WorkspaceActionState(workspaceID: workspace.id, message: "Archiving...")
 
         Task { @MainActor in
             do {
                 try await workspaceController.archive(workspace)
-                sandboxAction = nil
+                workspaceAction = nil
             } catch {
-                sandboxAction = nil
-                errorMessage = "Failed to archive remote workspace: \(error.localizedDescription)"
+                workspaceAction = nil
+                errorMessage = "Failed to archive workspace: \(error.localizedDescription)"
                 showingError = true
             }
         }
     }
 
-    private func remoteCapabilities(for workspace: Workspace) -> RuntimeCapabilities {
-        guard workspace.isRemote,
-            let backend = remoteBackendRegistry.backend(for: workspace.backendIdentifier)
-        else {
-            return RuntimeCapabilities()
+    private func openDesktop(for workspace: Workspace) {
+        Task { @MainActor in
+            if workspace.backendIdentifier == LumeWorkspaceProvider.identifier {
+                do {
+                    let intercepted = try await lumeSetupCoordinator.prepareIfNeeded(
+                        for: .openDesktop(workspaceName: workspace.name)
+                    ) {
+                        await refreshLumeRuntimeSnapshot()
+                        await openDesktopAfterSetup(workspace)
+                    }
+                    if intercepted {
+                        return
+                    }
+                } catch {
+                    errorMessage = error.localizedDescription
+                    showingError = true
+                    return
+                }
+            }
+
+            await openDesktopAfterSetup(workspace)
+        }
+    }
+
+    @MainActor
+    private func openDesktopAfterSetup(_ workspace: Workspace) async {
+        guard let provider = workspaceProviderRegistry.provider(for: workspace) else {
+            errorMessage = "No workspace provider is registered for '\(workspace.backendIdentifier)'."
+            showingError = true
+            return
         }
 
-        return backend.runtimeCapabilities
-    }
+        workspaceAction = WorkspaceActionState(workspaceID: workspace.id, message: "Opening desktop...")
 
-    private func workspaceUsesProviderLifecycleActions(_ workspace: Workspace) -> Bool {
-        let capabilities = remoteCapabilities(for: workspace)
-        return capabilities.supportsStartStop || capabilities.supportsArchive
-    }
-
-    private func workspaceDeleteSupportsRemovingFiles(_ workspace: Workspace) -> Bool {
-        !workspace.isRemote
-    }
-
-    private func workspaceDeleteAffectsRemoteProvider(_ workspace: Workspace) -> Bool {
-        workspace.isRemote && remoteCapabilities(for: workspace).supportsDelete
-    }
-
-    private func deleteConfirmationMessage(for workspace: Workspace) -> String {
-        if workspaceDeleteSupportsRemovingFiles(workspace) {
-            return "Are you sure you want to delete '\(workspace.name)'?"
+        do {
+            let spec = try await provider.desktopLaunchSpec(for: WorkspaceProviderTarget(workspace))
+            workspace.status = spec.statusAfterLaunch
+            _ = saveModelContext(action: "update workspace status")
+            workspaceAction = nil
+            NSWorkspace.shared.open(spec.vncURL)
+        } catch {
+            workspaceAction = nil
+            errorMessage = "Failed to open desktop: \(error.localizedDescription)"
+            showingError = true
         }
-
-        if workspaceDeleteAffectsRemoteProvider(workspace) {
-            return "Delete '\(workspace.name)' from the remote provider?"
-        }
-
-        return "Remove '\(workspace.name)' from the app? Files on the SSH host will not be deleted."
     }
 
     @MainActor
@@ -830,7 +964,49 @@ struct SidebarView: View {
             return
         }
 
-        repoForNewWorkspace = preferredRepo
+        Task { @MainActor in
+            await prepareNewWorkspaceSheet(for: preferredRepo)
+        }
+    }
+
+    @MainActor
+    private func prepareNewWorkspaceSheet(for repo: Repo) async {
+        if providerAvailabilityIsPending {
+            await refreshProviderAvailability()
+        }
+
+        await refreshLumeRuntimeSnapshot()
+
+        newWorkspaceSheetContext = NewWorkspaceSheetContext(repo: repo)
+    }
+
+    @MainActor
+    private func maybeDriveHostLumeSmokeAutomation() async {
+        guard hostLumeSmokeAutomation.isEnabled else { return }
+        guard let targetRepoURL = hostLumeSmokeAutomation.targetRepoURL else { return }
+
+        if let matchedRepo = hostLumeSmokeAutomation.matchingRepo(in: repos, normalizePath: normalizePath(_:)) {
+            await hostLumeSmokeAutomation.noteRepoReady(matchedRepo)
+
+            guard hostLumeSmokeAutomation.shouldStartWorkspaceCreation() else { return }
+            await hostLumeSmokeAutomation.noteWorkspaceCreationStarted(repo: matchedRepo)
+            await createWorkspace(
+                from: matchedRepo,
+                name: hostLumeSmokeAutomation.targetWorkspaceName ?? "lume-smoke",
+                providerID: LumeWorkspaceProvider.identifier,
+                guestOS: .macOS
+            )
+            return
+        }
+
+        guard FileManager.default.fileExists(atPath: targetRepoURL.path) else {
+            let message = "Smoke repo path does not exist: \(targetRepoURL.path)"
+            errorMessage = message
+            showingError = true
+            return
+        }
+
+        await addRepo(from: targetRepoURL)
     }
 
     @MainActor
@@ -851,7 +1027,6 @@ struct SidebarView: View {
             try modelContext.save()
             return true
         } catch {
-            modelContext.rollback()
             errorMessage = "Failed to \(action): \(error.localizedDescription)"
             showingError = true
             return false
@@ -919,12 +1094,10 @@ struct SidebarView: View {
     }
 
     private func sessionKey(for workspace: Workspace) -> HostTerminalSessionKey {
-        if let sandboxId = workspace.remoteId {
-            return .remoteSandbox(sandboxId)
+        if let provider = workspaceProviderRegistry.provider(for: workspace) {
+            return provider.sessionKey(for: WorkspaceProviderTarget(workspace))
         }
-        if workspace.isRemote {
-            return .remoteSandbox("workspace-\(workspace.id.uuidString)")
-        }
+
         return .hostPath(normalizePath(workspace.workspaceURL))
     }
 
@@ -936,10 +1109,196 @@ struct SidebarView: View {
     }
 
     private func workspaceStatusMessage(_ workspace: Workspace) -> String? {
-        guard let remoteId = workspace.remoteId else { return nil }
-        if connectingSandboxId == remoteId { return "Connecting..." }
-        if let action = sandboxAction, action.sandboxId == remoteId { return action.message }
+        if connectingWorkspaceID == workspace.id { return "Connecting..." }
+        if let action = workspaceAction, action.workspaceID == workspace.id { return action.message }
         return nil
+    }
+
+    private func usesHostWorkspaceFiles(for workspace: Workspace) -> Bool {
+        providerDescriptor(for: workspace)?.usesHostWorkspaceFiles ?? !workspace.isRemote
+    }
+
+    private func providerDescriptor(for workspace: Workspace) -> WorkspaceProviderDescriptor? {
+        workspaceProviderRegistry.provider(for: workspace)?.descriptor
+    }
+
+    private func providerDisplayName(for providerID: String) -> String {
+        workspaceProviderRegistry.provider(for: providerID)?.descriptor.displayName ?? providerID
+    }
+
+    private var providerAvailabilityIsPending: Bool {
+        workspaceProviderRegistry.providers.contains { provider in
+            providerAvailabilityByID[provider.descriptor.id] == nil
+        }
+    }
+
+    private var providerAvailabilityRefreshSignature: String {
+        workspaceProviderRegistry.providers
+            .map(\.descriptor.id)
+            .sorted()
+            .map { providerID in
+                guard let availability = providerAvailabilityByID[providerID] else {
+                    return "\(providerID):pending"
+                }
+
+                return "\(providerID):\(availability.isAvailable):\(availability.reason ?? "")"
+            }
+            .joined(separator: "|")
+    }
+
+    private var lumeRuntimeRefreshSignature: String {
+        guard let snapshot = lumeRuntimeSnapshot else {
+            return "runtime:pending"
+        }
+
+        return [
+            snapshot.state.rawValue,
+            snapshot.reason ?? "",
+            snapshot.defaultMacOSImage?.entry.imageReference ?? "",
+            snapshot.defaultMacOSImageError ?? "",
+        ]
+        .joined(separator: "|")
+    }
+
+    private func newWorkspaceSheetRefreshID(for repo: Repo) -> String {
+        [
+            repo.id.uuidString,
+            providerAvailabilityRefreshSignature,
+            lumeRuntimeRefreshSignature,
+            isCreatingWorkspace(for: repo.id) ? "creating" : "idle",
+        ]
+        .joined(separator: "::")
+    }
+
+    private func environmentOptions(for repo: Repo) -> [WorkspaceEnvironmentSheetOption] {
+        [
+            localEnvironmentOption(for: repo),
+            cloudLinuxEnvironmentOption(for: repo),
+            macOSEnvironmentOption(for: repo),
+            linuxVMEnvironmentOption(for: repo),
+        ]
+    }
+
+    private func availability(
+        for descriptor: WorkspaceProviderDescriptor,
+        repo: Repo
+    ) -> WorkspaceProviderAvailability {
+        let baseAvailability: WorkspaceProviderAvailability
+        if let resolvedAvailability = providerAvailabilityByID[descriptor.id] {
+            baseAvailability = resolvedAvailability
+        } else if descriptor.id == LocalWorkspaceProvider.identifier {
+            baseAvailability = .available
+        } else if isRefreshingProviderAvailability {
+            baseAvailability = .unavailable("Checking provider availability...")
+        } else {
+            baseAvailability = .unavailable("Timed out checking provider availability.")
+        }
+
+        guard baseAvailability.isAvailable else { return baseAvailability }
+
+        if descriptor.requiresRemoteRepository,
+            repo.remoteURL?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true
+        {
+            return .unavailable("This repository needs a remote origin URL for \(descriptor.displayName).")
+        }
+
+        return baseAvailability
+    }
+
+    @MainActor
+    private func refreshProviderAvailability() async {
+        isRefreshingProviderAvailability = true
+        defer {
+            isRefreshingProviderAvailability = false
+
+            for provider in workspaceProviderRegistry.providers {
+                let providerID = provider.descriptor.id
+                guard providerAvailabilityByID[providerID] == nil else { continue }
+                providerAvailabilityByID[providerID] = .unavailable(
+                    "Timed out checking \(provider.descriptor.displayName) availability."
+                )
+            }
+        }
+
+        if providerAvailabilityByID[LocalWorkspaceProvider.identifier] == nil {
+            providerAvailabilityByID[LocalWorkspaceProvider.identifier] = .available
+        }
+
+        await withTaskGroup(of: (String, WorkspaceProviderAvailability).self) { group in
+            for provider in workspaceProviderRegistry.providers {
+                let providerID = provider.descriptor.id
+                group.addTask {
+                    (
+                        providerID,
+                        await availabilityWithTimeout(
+                            for: provider,
+                            displayName: provider.descriptor.displayName
+                        )
+                    )
+                }
+            }
+
+            for await (providerID, availability) in group {
+                providerAvailabilityByID[providerID] = availability
+            }
+        }
+    }
+
+    private func availabilityWithTimeout(
+        for provider: any WorkspaceProviderProtocol,
+        displayName: String,
+        timeoutNanoseconds: UInt64 = 5_000_000_000
+    ) async -> WorkspaceProviderAvailability {
+        await withTaskGroup(of: WorkspaceProviderAvailability?.self) { group in
+            group.addTask {
+                await provider.availability()
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: timeoutNanoseconds)
+                return nil
+            }
+
+            let firstResult = await group.next() ?? nil
+            group.cancelAll()
+
+            if let availability = firstResult {
+                return availability
+            }
+
+            return .unavailable("Timed out checking \(displayName) availability.")
+        }
+    }
+
+    @MainActor
+    private func refreshLumeRuntimeSnapshot() async {
+        lumeRuntimeSnapshot = await lumeRuntimeService.snapshot()
+    }
+
+    @MainActor
+    private func seedFixtureProviderStateIfNeeded() async -> Bool {
+        guard UIFixtureLumeEnvironment.isEnabled() else { return false }
+
+        providerAvailabilityByID = UIFixtureLumeEnvironment.initialProviderAvailabilityByID()
+        lumeRuntimeSnapshot = await lumeRuntimeService.snapshot()
+        return true
+    }
+
+    private func initialCreationMessage(for providerID: String) -> String {
+        switch providerID {
+        case DaytonaWorkspaceProvider.identifier:
+            return "Creating cloud workspace..."
+        case LumeWorkspaceProvider.identifier:
+            return "Preparing VM workspace..."
+        default:
+            return SidebarWorkspaceController.localCreationMessage(for: .preparing)
+        }
+    }
+
+    private func normalizeWebURLString(_ rawURL: String) -> String {
+        if let normalized = try? WebSourceValidation.normalizeBaseURL(rawURL) {
+            return normalized.baseURL.absoluteString
+        }
+        return rawURL.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func sortedWorkspaces(for repo: Repo) -> [Workspace] {
@@ -1052,4 +1411,273 @@ struct SidebarView: View {
         }
     }
 
+    private func localEnvironmentOption(for repo: Repo) -> WorkspaceEnvironmentSheetOption {
+        let descriptor = workspaceProviderRegistry.provider(for: LocalWorkspaceProvider.identifier)?.descriptor
+        let availability = availability(
+            for: descriptor
+                ?? WorkspaceProviderDescriptor(
+                    id: LocalWorkspaceProvider.identifier,
+                    displayName: "Local",
+                    description: "Create a local workspace copy on this Mac."
+                ),
+            repo: repo
+        )
+
+        return WorkspaceEnvironmentSheetOption(
+            kind: .local,
+            title: "Local",
+            subtitle: "Create a local workspace copy on this Mac",
+            description: descriptor?.description ?? "Create a local workspace copy on this Mac.",
+            iconName: "plus.rectangle.on.folder.fill",
+            providerID: LocalWorkspaceProvider.identifier,
+            guestOS: nil,
+            isAvailable: availability.isAvailable,
+            statusText: nil,
+            availabilityReason: availability.reason
+        )
+    }
+
+    private func cloudLinuxEnvironmentOption(for repo: Repo) -> WorkspaceEnvironmentSheetOption {
+        let descriptor = workspaceProviderRegistry.provider(for: DaytonaWorkspaceProvider.identifier)?.descriptor
+        let availability = availability(
+            for: descriptor
+                ?? WorkspaceProviderDescriptor(
+                    id: DaytonaWorkspaceProvider.identifier,
+                    displayName: "Cloud Linux",
+                    description: "Create a cloud Linux workspace."
+                ),
+            repo: repo
+        )
+
+        return WorkspaceEnvironmentSheetOption(
+            kind: .cloudLinux,
+            title: "Cloud Linux",
+            subtitle: "Runs in Daytona cloud infrastructure",
+            description: descriptor?.description
+                ?? "Create a cloud Linux workspace managed by Daytona.",
+            iconName: "cloud.fill",
+            providerID: DaytonaWorkspaceProvider.identifier,
+            guestOS: .linux,
+            isAvailable: availability.isAvailable,
+            statusText: nil,
+            availabilityReason: availability.reason
+        )
+    }
+
+    private func macOSEnvironmentOption(for repo: Repo) -> WorkspaceEnvironmentSheetOption {
+        let baseAvailability = lumeEnvironmentAvailability()
+
+        let isAvailable: Bool
+        let availabilityReason: String?
+        if !baseAvailability.isAvailable {
+            isAvailable = false
+            availabilityReason = baseAvailability.reason
+        } else if let snapshot = lumeRuntimeSnapshot,
+            snapshot.state == .unsupportedHost
+        {
+            isAvailable = false
+            availabilityReason = snapshot.reason
+        } else {
+            isAvailable = true
+            availabilityReason = nonBlockingMacOSAvailabilityReason()
+        }
+
+        let hostMatchSummary = macOSBaseSummary()
+
+        return WorkspaceEnvironmentSheetOption(
+            kind: .macOSVM,
+            title: "macOS VM",
+            subtitle: hostMatchSummary,
+            description: macOSEnvironmentDescription(),
+            iconName: "desktopcomputer",
+            providerID: LumeWorkspaceProvider.identifier,
+            guestOS: .macOS,
+            isAvailable: isAvailable,
+            statusText: macOSRuntimeStatusText(),
+            availabilityReason: availabilityReason
+        )
+    }
+
+    private func linuxVMEnvironmentOption(for repo: Repo) -> WorkspaceEnvironmentSheetOption {
+        let availability = lumeEnvironmentAvailability()
+
+        return WorkspaceEnvironmentSheetOption(
+            kind: .linuxVM,
+            title: "Linux VM",
+            subtitle: "Runs in a local Linux VM on this Mac",
+            description: linuxVMEnvironmentDescription(),
+            iconName: "server.rack",
+            providerID: LumeWorkspaceProvider.identifier,
+            guestOS: .linux,
+            isAvailable: availability.isAvailable,
+            statusText: lumeRuntimeStatusText(),
+            availabilityReason: availability.reason
+        )
+    }
+
+    private func lumeEnvironmentAvailability() -> WorkspaceProviderAvailability {
+        if let snapshot = lumeRuntimeSnapshot, snapshot.state == .unsupportedHost {
+            return .unavailable(snapshot.reason ?? "Lume requires Apple Silicon.")
+        }
+
+        #if arch(arm64)
+            return .available
+        #else
+            return .unavailable("Lume requires Apple Silicon.")
+        #endif
+    }
+
+    private func lumeRuntimeStatusText() -> String? {
+        guard let snapshot = lumeRuntimeSnapshot else { return nil }
+        switch snapshot.state {
+        case .setupRequired:
+            return "Setup required"
+        case .repairRequired:
+            return "Repair required"
+        case .ready:
+            return "Ready"
+        case .installing:
+            return "Installing"
+        case .verifying:
+            return "Verifying"
+        case .unsupportedHost:
+            return nil
+        }
+    }
+
+    private func macOSRuntimeStatusText() -> String? {
+        if let snapshot = lumeRuntimeSnapshot, snapshot.state != .ready {
+            return lumeRuntimeStatusText()
+        }
+
+        if let baseSnapshot = lumeRuntimeSnapshot?.baseVM {
+            switch baseSnapshot.status {
+            case .ready:
+                return "Fast clone ready"
+            case .preparing:
+                return "Preparing base"
+            case .missing:
+                if baseSnapshot.profile.imageReference != nil {
+                    return "Downloads base on first use"
+                }
+                return "Prepares base on first use"
+            case .repairRequired:
+                return "Repair base VM"
+            }
+        }
+
+        if let snapshot = lumeRuntimeSnapshot,
+            snapshot.state == .ready,
+            snapshot.defaultMacOSImage == nil,
+            snapshot.defaultMacOSImageError != nil
+        {
+            return "Stock macOS"
+        }
+
+        return lumeRuntimeStatusText()
+    }
+
+    private func macOSEnvironmentDescription() -> String {
+        let base =
+            "Runs in a local macOS VM. Files stay on the host, the terminal opens in-app with `lume ssh`, and desktop opens in an external VNC client."
+
+        guard let snapshot = lumeRuntimeSnapshot else {
+            return base
+        }
+
+        switch snapshot.state {
+        case .setupRequired:
+            return "\(base) Workspaces will install and verify Lume automatically the first time you use this."
+        case .repairRequired:
+            return "\(base) Workspaces will repair the local VM runtime automatically before continuing."
+        case .ready, .installing, .verifying, .unsupportedHost:
+            break
+        }
+
+        if let baseSnapshot = snapshot.baseVM {
+            switch baseSnapshot.status {
+            case .ready:
+                return "\(base) Workspaces will clone the prepared base VM for a faster macOS workspace start."
+            case .preparing:
+                return "\(base) A prepared base VM is already being created. Workspaces will clone it once it is ready."
+            case .missing:
+                if baseSnapshot.profile.imageReference != nil {
+                    return """
+                        \(base) Workspaces will download the matching base VM once, then clone it for faster future macOS workspaces.
+                        """
+                }
+                return """
+                    \(base) No host-matched golden image is available yet, so Workspaces will prepare a stock macOS base VM once and clone it for faster future workspaces.
+                    """
+            case .repairRequired:
+                return "\(base) Workspaces will repair or recreate the prepared base VM before continuing."
+            }
+        }
+
+        if snapshot.defaultMacOSImage == nil, snapshot.defaultMacOSImageError != nil {
+            return """
+                \(base) No host-matched golden image is available yet, so Workspaces will fall back to stock macOS setup automatically.
+                """
+        }
+
+        return base
+    }
+
+    private func linuxVMEnvironmentDescription() -> String {
+        let base =
+            "Uses the same host-shared file model as macOS VM workspaces. Terminal opens in-app, and desktop opens externally when available."
+
+        guard let snapshot = lumeRuntimeSnapshot else {
+            return base
+        }
+
+        switch snapshot.state {
+        case .setupRequired:
+            return "\(base) Workspaces will install and verify Lume automatically the first time you use this."
+        case .repairRequired:
+            return "\(base) Workspaces will repair the local VM runtime automatically before continuing."
+        case .ready, .installing, .verifying, .unsupportedHost:
+            return base
+        }
+    }
+
+    private func nonBlockingMacOSAvailabilityReason() -> String? {
+        guard let snapshot = lumeRuntimeSnapshot else { return nil }
+
+        if let baseSnapshot = snapshot.baseVM, let reason = baseSnapshot.reason {
+            return reason
+        }
+
+        if snapshot.defaultMacOSImage == nil, snapshot.defaultMacOSImageError != nil {
+            return "Workspaces will use stock macOS because no host-matched golden image is available yet."
+        }
+
+        return nil
+    }
+
+    private func macOSBaseSummary() -> String {
+        guard let snapshot = lumeRuntimeSnapshot else {
+            return "Matches this Mac by default"
+        }
+
+        if let baseSnapshot = snapshot.baseVM {
+            switch baseSnapshot.status {
+            case .ready:
+                return "Fast clone ready: \(baseSnapshot.profile.displayName)"
+            case .preparing:
+                return "Preparing base: \(baseSnapshot.profile.displayName)"
+            case .missing:
+                if baseSnapshot.profile.imageReference != nil {
+                    return "Will download base once: \(baseSnapshot.profile.displayName)"
+                }
+                return "Needs one-time base preparation"
+            case .repairRequired:
+                return "Needs base VM repair: \(baseSnapshot.profile.displayName)"
+            }
+        }
+
+        return snapshot.defaultMacOSImage?.profileDisplayName
+            ?? snapshot.hostProfile?.displayName
+            ?? "Matches this Mac by default"
+    }
 }

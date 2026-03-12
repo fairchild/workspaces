@@ -80,6 +80,10 @@ public actor DaytonaBackend: ProvisionCapable, StartStopCapable, Archivable, Lis
             return try await resolveCommand(sandboxId: sandboxId)
         case .stopped, .archived:
             return try await startSandbox(sandboxId: sandboxId)
+        case .provisioning:
+            throw RemoteWorkspaceError.commandFailed(
+                "Workspace '\(request.name)' is still provisioning."
+            )
         }
     }
 

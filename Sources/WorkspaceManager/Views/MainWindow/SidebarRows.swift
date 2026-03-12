@@ -269,7 +269,44 @@ struct WorkspaceRow: View {
     var onToggleExpansion: (() -> Void)? = nil
     var onSelect: (() -> Void)? = nil
 
-    private var isBusy: Bool { statusMessage != nil }
+    private var isBusy: Bool {
+        statusMessage != nil || workspace.status == .provisioning
+    }
+
+    private var providerIconName: String {
+        switch workspace.backendIdentifier {
+        case LumeWorkspaceProvider.identifier:
+            return "desktopcomputer"
+        case DaytonaWorkspaceProvider.identifier:
+            return workspace.status == .active ? "cloud.fill" : "cloud"
+        default:
+            return sessionActivity.isActive ? "terminal.fill" : "terminal"
+        }
+    }
+
+    private var providerIconColor: Color {
+        switch workspace.backendIdentifier {
+        case LumeWorkspaceProvider.identifier:
+            return workspace.status == .active ? .teal : .secondary
+        case DaytonaWorkspaceProvider.identifier:
+            return workspace.status == .active ? .blue : .secondary
+        default:
+            return sessionActivity.iconColor(inactiveColor: .secondary)
+        }
+    }
+
+    private var statusBadgeColor: Color {
+        switch workspace.status {
+        case .provisioning:
+            return .blue.opacity(0.2)
+        case .stopped:
+            return .orange.opacity(0.2)
+        case .archived:
+            return .secondary.opacity(0.2)
+        case .active:
+            return .clear
+        }
+    }
 
     var body: some View {
         HStack(spacing: 10) {
@@ -318,17 +355,9 @@ struct WorkspaceRow: View {
                         .controlSize(.small)
                         .frame(width: SidebarTreeMetrics.iconColumnWidth, height: 16)
                 } else {
-                    Image(
-                        systemName: workspace.isRemote
-                            ? (workspace.status == .active ? "cloud.fill" : "cloud")
-                            : (sessionActivity.isActive ? "terminal.fill" : "terminal")
-                    )
-                    .foregroundStyle(
-                        workspace.isRemote
-                            ? (workspace.status == .active ? .accentColor : .secondary)
-                            : sessionActivity.iconColor(inactiveColor: .secondary)
-                    )
-                    .frame(width: SidebarTreeMetrics.iconColumnWidth, alignment: .center)
+                    Image(systemName: providerIconName)
+                        .foregroundStyle(providerIconColor)
+                        .frame(width: SidebarTreeMetrics.iconColumnWidth, alignment: .center)
                 }
 
                 Text(workspace.name)
@@ -341,11 +370,7 @@ struct WorkspaceRow: View {
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 4)
                         .padding(.vertical, 1)
-                        .background(
-                            workspace.status == .stopped
-                                ? Color.orange.opacity(0.14)
-                                : Color.secondary.opacity(0.2)
-                        )
+                        .background(statusBadgeColor)
                         .clipShape(RoundedRectangle(cornerRadius: 3))
                 }
 

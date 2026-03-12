@@ -53,6 +53,34 @@ struct HostTerminalSessionCoordinatorTests {
         #expect(first.session.id == second.session.id)
     }
 
+    @Test("Backend sessions do not reuse host-path sessions for the same directory")
+    func backendSessionsDoNotReuseHostPathSessions() {
+        var coordinator = HostTerminalSessionCoordinator()
+        let sharedDirectory = URL(fileURLWithPath: "/tmp/shared-workspace")
+
+        let hostSession = coordinator.activate(
+            key: .hostPath(sharedDirectory.path),
+            directory: sharedDirectory
+        )
+        let backendSession = coordinator.activate(
+            key: .backendSession(providerID: "lume", instanceID: "vm-123"),
+            directory: sharedDirectory,
+            customCommand: "/usr/local/bin/lume ssh vm-123"
+        )
+        let backendSessionReuse = coordinator.activate(
+            key: .backendSession(providerID: "lume", instanceID: "vm-123"),
+            directory: sharedDirectory,
+            customCommand: "/usr/local/bin/lume ssh vm-123"
+        )
+
+        #expect(hostSession.created)
+        #expect(backendSession.created)
+        #expect(!backendSessionReuse.created)
+        #expect(hostSession.session.id != backendSession.session.id)
+        #expect(backendSession.session.id == backendSessionReuse.session.id)
+        #expect(coordinator.sessions.count == 2)
+    }
+
     @Test("Prunes removed repo sessions and keeps default host session")
     func prunesRemovedRepoSessions() {
         var coordinator = HostTerminalSessionCoordinator()

@@ -29,19 +29,29 @@ Use these scripts for day-to-day UI verification:
 - Uses explicit runtime data-root isolation by default:
   - `WORKSPACES_DATA_DIR=./.dev-data/workspacemanager`
 - Includes inline educational notes about isolation boundaries and dogfooding strategy.
+- Requires a visible app window before reporting success.
+- On startup failure, writes a diagnostics bundle under `.dev-data/logs/launch-diagnostics-<timestamp>/`.
+- Use `./scripts/launch-dev.sh --watch` to keep tailing the launch log until interrupted.
 - See `backlog/isolation-strategies.md` for long-form architecture context.
 
-2. `./scripts/ui-smoke.sh`
+2. `./scripts/dev-smoke.sh`
+- Fast debug-app startup smoke for local development.
+- Launches the debug build through `launch-dev.sh`, requires a visible window, and captures a window-only screenshot.
+- Writes artifacts to:
+  - `./output/dev-smoke/dev-smoke-<timestamp>.png`
+  - latest launch log under `./.dev-data/logs/`
+
+3. `./scripts/ui-smoke.sh`
 - Fast interaction smoke test.
 - Validates launch, focus, typing, and Enter behavior.
 - Writes artifacts to `/tmp/workspaces-ui-smoke-<timestamp>/`.
 
-3. `./scripts/ui-capture.sh`
+4. `./scripts/ui-capture.sh`
 - Screenshot-focused flow capture.
 - Same core interaction path plus screenshot artifacts.
 - Writes artifacts to `/tmp/workspaces-ui-capture-<timestamp>/`.
 
-4. `./scripts/sidebar-capture.sh`
+5. `./scripts/sidebar-capture.sh`
 - Fast deterministic sidebar-only capture loop for visual polish work.
 - Launches app in `WORKSPACES_UI_FIXTURE=1` mode (in-memory sample data).
 - Captures the WorkspaceManager window and writes:
@@ -49,7 +59,7 @@ Use these scripts for day-to-day UI verification:
   - timestamped snapshots: `./output/sidebar/sidebar-<timestamp>.png`
 - Also preserves raw run artifacts under `/tmp/workspaces-sidebar-capture-<timestamp>/`.
 
-5. `./scripts/preview-open-capture.sh`
+6. `./scripts/preview-open-capture.sh`
 - Deterministic preview-open capture for `Open` header polish.
 - Launches with fixture bootstrap variables so a repo and target file open automatically:
   - `WORKSPACES_UI_FIXTURE_OPEN_PREVIEW=1`
@@ -61,14 +71,14 @@ Use these scripts for day-to-day UI verification:
   - latest: `./output/preview-open/latest.png`
   - timestamped snapshots: `./output/preview-open/preview-open-<timestamp>.png`
 
-6. `./scripts/capture-window.sh`
+7. `./scripts/capture-window.sh`
 - One-shot window-only capture for shared-desktop workflows.
 - Captures by window id (`screencapture -l`) and **does not activate the app by default**.
 - Default output:
   - timestamped: `./output/window/window-<timestamp>.png`
   - latest copy: `./output/window/latest.png`
 
-7. `./scripts/open-in-editor-shortcut-smoke.sh`
+8. `./scripts/open-in-editor-shortcut-smoke.sh`
 - End-to-end regression smoke for `Cmd+Shift+O` editor launch.
 - Covers both target paths:
   - repo selected, no file preview -> open project root only
@@ -76,7 +86,7 @@ Use these scripts for day-to-day UI verification:
 - Uses fixture mode and a fake Zed CLI shim to verify launched arguments.
 - Verifies `[Perf] metric=open_in_editor_launch ... outcome=success` log evidence.
 
-8. `./scripts/tart-webview-demo.sh`
+9. `./scripts/tart-webview-demo.sh`
 - Runs the repo/webview transition flow inside an isolated Tart VM.
 - Clones a prepared base VM, boots it with this repo mounted, drives the guest
   UI over SSH + VNC, and outputs capture artifacts under:
@@ -113,7 +123,18 @@ Optional flags:
 - `--open-vnc` opens a live VNC viewer on the host while recording.
   - default is headless (`--no-open-vnc`).
 
-9. `./scripts/tart-webview-memory-benchmark.sh`
+10. `./scripts/lume-e2e-capture.sh`
+- Deterministic evidence capture for the Lume first-use setup flow.
+- Launches in dedicated Lume fixture mode and captures the app window by
+  CoreGraphics window id.
+- Generates a unique workspace name per run to avoid conflicts.
+- Writes artifacts under:
+  - `./output/lume-e2e/latest/`
+  - `./output/lume-e2e/<timestamp>/`
+- Canonical runbook:
+  - `docs/development/lume-validation.md`
+
+11. `./scripts/tart-webview-memory-benchmark.sh`
 - Runs a repeatable memory benchmark inside an isolated Tart VM.
 - For each run, it launches the app twice and samples memory in two states:
   - fixture idle launch (no web bootstrap)
@@ -131,13 +152,20 @@ UI automation scripts (`ui-smoke.sh`, `ui-capture.sh`, `sidebar-capture.sh`, `pr
 - use explicit app target launch (`swift run WorkspaceManager`)
 - run with `WORKSPACES_DATA_DIR` pointed at a workspace-local writable folder
 
+Lume validation:
+- `docs/development/lume-integration.md`
+- `docs/development/lume-validation.md`
+- use `./scripts/lume-e2e-capture.sh` for screenshot evidence
+- use the real-host checklist in the runbook when validating actual Lume install and VM behavior
+
 ## Shortcut Verification Loop (dev contract)
 
 For keyboard/split/sidebar changes, always verify with the debug launcher:
 
 1. `./scripts/build-ghosttykit.sh`
 2. `swift build`
-3. `./scripts/launch-dev.sh --no-build`
+3. `./scripts/dev-smoke.sh --no-build`
+   - launcher-only path: `./scripts/launch-dev.sh --no-build`
    - shared-desktop safe mode: `./scripts/launch-dev.sh --no-build --no-activate`
 4. Confirm debug process path:
    - `ps aux | rg '.build/arm64-apple-macosx/debug/WorkspaceManager'`
@@ -147,8 +175,96 @@ For keyboard/split/sidebar changes, always verify with the debug launcher:
 6. Capture evidence without focus steal:
    - `./scripts/capture-window.sh`
 
+If you use `mise`, equivalent convenience tasks are:
+- `mise run dev-launch`
+- `mise run dev-watch`
+- `mise run dev-smoke`
+- `mise run dev-lume-preflight`
+- `mise run dev-lume-standalone-preflight`
+- `mise run dev-lume-standalone-prepare-base`
+- `mise run dev-lume-standalone-verify-base`
+- `mise run dev-lume-standalone-clone-smoke`
+- `mise run dev-lume-standalone-validate`
+- `mise run dev-lume-macos-smoke`
+
+12. `./scripts/lume-host-preflight.sh`
+- Fast readiness check for a real-host Lume macOS VM run.
+- Verifies:
+  - Apple Silicon host
+  - free disk for Workspaces-managed Lume storage and `~/workspaces`
+  - host macOS and Xcode detection
+- direct restore-image discovery through `Virtualization`
+- debug app launch through `launch-dev.sh`
+- foregrounds the app by default for deterministic launch verification; use `--no-activate` only for shared-desktop-safe manual checks
+- Use this before trying the full host-backed smoke.
+
+13. `./scripts/lume-standalone-validate.sh`
+- Standalone Lume-only validation gate.
+- Uses the Lume CLI and daemon directly with no Swift app involvement.
+- Owns the trusted validated base namespace:
+  - `workspaces-validated-base-macos-<profileKey>`
+- Uses isolated Workspaces-managed storage under:
+  - `~/Library/Application Support/WorkspaceManager/LumeStorage/validated-bases`
+  - `~/Library/Application Support/WorkspaceManager/LumeStorage/standalone-smoke`
+- Writes the validated-base manifest under:
+  - `~/Library/Application Support/WorkspaceManager/LumeValidatedBases/<vmName>.json`
+- Writes artifacts under:
+  - `./output/lume-standalone/latest/`
+  - `./output/lume-standalone/<timestamp>/`
+- Uses the newest Workspaces-owned Tahoe unattended profile or helper when present.
+- Current full-flow Tahoe override:
+  - `./config/lume/unattended/tahoe-workspaces-v23.yml`
+- Current recreate-from-scratch helper:
+  - `./config/lume/unattended/tahoe-workspaces-v18-official-run-bootstrap-ssh.yml`
+- Captures:
+  - `summary.md`
+  - `status.json`
+  - base/clone daemon snapshots
+  - SSH probe transcripts
+  - copied Lume daemon logs
+  - `unattended-debug/` for stock base-prep failures
+- For the exact manual recovery and troubleshooting path:
+  - `./docs/development/lume-recreate-runbook.md`
+
+14. `./scripts/lume-host-macos-smoke.sh`
+- Long-running real-host smoke for the Lume macOS VM path.
+- Runs `lume-standalone-validate.sh` first so Lume defects are caught before the Swift app path.
+- Creates a disposable git repo under `~/code/`, launches the debug app with a dev-only automation mode, waits for a real Lume macOS workspace to become active, then validates `lume ssh`.
+- launches the app with activation enabled so the automation window is reliably visible and the event stream starts deterministically
+- Writes artifacts under:
+  - `./output/lume-host-smoke/latest/`
+  - `./output/lume-host-smoke/<timestamp>/`
+- Captures:
+  - `events.jsonl`
+  - launch log
+  - start/final screenshots
+  - copied Lume daemon logs
+  - SSH probe transcript
+  - `summary.md`
+
+Lume contract:
+- the standalone validator is the only path allowed to mark a base VM `ready`
+- the app/runtime may only clone from a base whose manifest is `state=ready` for the current host profile
+
 Full contract and troubleshooting details:
-- `docs/development/libghostty-integration.md`
+- `docs/development/lume-integration.md`
+- `docs/development/lume-validation.md`
+
+15. `./scripts/lume-pr-validation.sh`
+- Aggregate PR evidence chain for the Lume integration.
+- Reuses an existing passing standalone bundle, then runs:
+  - GhosttyKit build
+  - `swift build`
+  - targeted Swift tests
+  - `dev-smoke`
+  - `ui-smoke`
+  - `lume-host-preflight`
+  - `lume-host-macos-smoke`
+- Writes a single summary plus per-step logs under:
+  - `./output/lume-pr-validation/latest/`
+  - `./output/lume-pr-validation/<timestamp>/`
+- Current passing bundle:
+  - `./output/lume-pr-validation/20260311-194047/`
 
 ## Legacy UI Scripts
 

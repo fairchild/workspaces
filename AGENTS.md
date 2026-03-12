@@ -10,17 +10,68 @@ When changing terminal/keyboard/sidebar behavior, use this loop so future sessio
    - `./scripts/build-ghosttykit.sh`
    - `swift build`
 2. Launch only the debug binary:
+   - fastest startup sanity check: `./scripts/dev-smoke.sh --no-build`
    - `./scripts/launch-dev.sh --no-build`
    - shared-desktop mode (preferred when user is actively using machine): `./scripts/launch-dev.sh --no-build --no-activate`
+   - keep logs attached while debugging launcher/startup issues: `./scripts/launch-dev.sh --no-build --watch`
+   - direct binary fallback if the launcher is being debugged:
+     `WORKSPACES_DATA_DIR=.dev-data/workspacemanager WORKSPACES_APP_VARIANT=dev .build/arm64-apple-macosx/debug/WorkspaceManager`
 3. Confirm the running process is the debug path (not `/Applications`):
    - `ps aux | rg '.build/arm64-apple-macosx/debug/WorkspaceManager'`
-4. Verify shortcut behavior:
+4. Distinguish the debug app from the installed app:
+   - debug launches set `WORKSPACES_APP_VARIANT=dev`
+   - the debug app shows a `DEV` Dock badge and `Development Build` window subtitle
+   - if both apps are running, kill `/Applications/WorkspaceManager.app` before testing
+5. Verify shortcut behavior:
    - `Cmd+B` toggles left sidebar
    - `Cmd+D` creates a visible right split for the focused terminal
-5. If split fails, check launch logs in `.dev-data/logs/` for:
+6. If split fails, check launch logs in `.dev-data/logs/` for:
    - `"[GhosttyAppManager] action=new_split direction="`
-6. Capture verification evidence without forcing app activation:
+7. Capture verification evidence without forcing app activation:
    - `./scripts/capture-window.sh`
+8. `mise` convenience tasks:
+   - `mise run dev-launch`
+   - `mise run dev-watch`
+   - `mise run dev-smoke`
+   - `mise run dev-lume-preflight`
+   - `mise run dev-lume-standalone-validate`
+   - `mise run dev-lume-macos-smoke`
+
+For real-host Lume validation:
+
+1. Prove Lume itself first:
+   - `./scripts/lume-standalone-validate.sh`
+   - `mise run dev-lume-standalone-validate`
+2. Run the fast machine preflight for the app layer:
+   - `./scripts/lume-host-preflight.sh`
+   - `mise run dev-lume-preflight`
+3. Run the full smoke when you need a real macOS VM end to end:
+   - `./scripts/lume-host-macos-smoke.sh`
+   - `mise run dev-lume-macos-smoke`
+4. The app smoke uses a dev-only app automation mode, not fixture providers:
+   - `WORKSPACES_AUTOMATION_MODE=host-lume-macos-smoke`
+   - it writes JSONL milestones to the configured `WORKSPACES_AUTOMATION_EVENTS_PATH`
+   - artifacts land under `output/lume-host-smoke/<timestamp>/`
+5. Lume storage contract:
+   - standalone validated bases live under `~/Library/Application Support/WorkspaceManager/LumeStorage/validated-bases`
+   - app-created workspace VMs live under `~/Library/Application Support/WorkspaceManager/LumeStorage/workspace-vms`
+   - only the standalone validator may mark a base ready, via `~/Library/Application Support/WorkspaceManager/LumeValidatedBases/<vmName>.json`
+6. Workspaces-owned unattended overrides for stock base prep live under:
+   - `config/lume/unattended/`
+   - current full-flow Tahoe override: `config/lume/unattended/tahoe-workspaces-v23.yml`
+   - current from-scratch recovery helper: `config/lume/unattended/tahoe-workspaces-v18-official-run-bootstrap-ssh.yml`
+7. Upstream Lume local-testing note:
+   - do not point the standalone validator at raw `libs/lume/.build/debug/lume`
+   - for local upstream validation, use `libs/lume/scripts/install-local.sh` into an isolated install dir and point `LUME_BIN` at that installed binary
+   - `install-local.sh --no-background-service` unloads the current `com.trycua.lume_daemon` LaunchAgent during cleanup, so restart the daemon manually or reinstall the LaunchAgent before normal Workspaces validation
+8. Canonical Lume docs:
+   - `docs/development/lume-integration.md`
+   - `docs/development/lume-validation.md`
+   - `docs/development/lume-recreate-runbook.md`
+
+Launcher contract:
+- `launch-dev.sh` should only report success once the debug process is still alive and a visible app window exists.
+- if startup fails, inspect the latest `.dev-data/logs/launch-diagnostics-<timestamp>/` bundle first.
 
 Canonical reference:
 - `docs/development/libghostty-integration.md` ("Shortcut + split contract" and "Agent self-verification runbook")

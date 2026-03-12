@@ -81,8 +81,10 @@ struct MainSelectionCoordinator {
         guard let activeSession else { return nil }
 
         switch activeSession.key {
-        case .remoteSandbox(let sandboxId):
-            return repos.flatMap(\.workspaces).first { $0.remoteId == sandboxId }
+        case .backendSession(let providerID, let instanceID):
+            return repos.flatMap(\.workspaces).first {
+                $0.backendIdentifier == providerID && $0.remoteId == instanceID
+            }
         case .hostPath(let path):
             let normalizedPath = normalizePath(path)
             return repos.flatMap(\.workspaces).first { normalizePath($0.path) == normalizedPath }

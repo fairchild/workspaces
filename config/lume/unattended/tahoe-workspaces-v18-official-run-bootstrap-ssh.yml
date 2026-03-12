@@ -1,0 +1,51 @@
+# Resume-only helper for a VM that is already running under the official signed
+# Lume runtime. This validates guest DHCP from inside the VM, then enables sshd
+# using launchctl bootstrap instead of the older load -w path.
+
+boot_wait: 20
+
+boot_commands:
+  - "<wait 'Enter Password', timeout=900>"
+  - "<delay 1>"
+  - "<capture 'login-screen'>"
+  - "<type 'lumesetup26'>"
+  - "<delay 1>"
+  - "<enter>"
+  - "<delay 20>"
+  - "<click_at 960,540>"
+  - "<delay 2>"
+
+  - "<cmd+space>"
+  - "<delay 5>"
+  - "<type 'Termina', delay=350>"
+  - "<delay 5>"
+  - "<enter>"
+  - "<delay 5>"
+
+  - "<type 'ipconfig getifaddr en0', delay=250>"
+  - "<enter>"
+  - "<delay 5>"
+  - "<capture 'en0-before-ssh-bootstrap'>"
+
+  - "<type 'sudo launchctl bootstrap system /System/Library/LaunchDaemons/ssh.plist', delay=250>"
+  - "<enter>"
+  - "<delay 3>"
+  - "<type 'lumesetup26', delay=250>"
+  - "<enter>"
+  - "<delay 10>"
+  - "<capture 'after-bootstrap-sshd'>"
+
+  - "<type 'sudo launchctl print system/com.openssh.sshd | head', delay=250>"
+  - "<enter>"
+  - "<delay 5>"
+  - "<capture 'sshd-launchctl-print'>"
+
+health_check:
+  type: ssh
+  user: lume
+  password: lumesetup26
+  timeout: 30
+  retries: 8
+  retry_delay: 15
+  ip_timeout: 900
+  ip_retry_delay: 15

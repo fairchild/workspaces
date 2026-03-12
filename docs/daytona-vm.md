@@ -1,5 +1,7 @@
 # Daytona Cloud Workspaces
 
+Historical note: this document describes the original Daytona-specific remote workspace flow. The current provider architecture that also includes Lume is documented in [VM Workspace Providers and Lume](vm-provider-architecture.md).
+
 Remote Linux sandboxes via [Daytona](https://www.daytona.io), integrated alongside local workspaces.
 
 ## What It Does

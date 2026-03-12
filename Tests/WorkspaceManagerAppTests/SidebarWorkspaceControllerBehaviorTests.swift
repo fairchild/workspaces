@@ -21,26 +21,27 @@ struct SidebarWorkspaceControllerBehaviorTests {
             path: URL(fileURLWithPath: "/tmp/api/workspaces/feature-a"),
             gitBranch: "workspace/feature-a"
         )
-        let controller = SidebarWorkspaceController(
-            modelContext: context,
+        let controller = makeController(
+            context: context,
             workspaceService: workspaceService,
-            remoteBackendRegistry: MockRemoteBackendRegistry()
+            providers: [LocalWorkspaceProvider()]
         )
 
         let workspace = try await controller.createWorkspace(
             from: repo,
-            request: NewWorkspaceRequest(name: "feature-a", backend: .local)
+            name: "feature-a",
+            providerID: LocalWorkspaceProvider.identifier
         )
 
         #expect(workspaceService.createWorkspaceCalls.count == 1)
-        #expect(workspace.backendIdentifier == "local")
+        #expect(workspace.backendIdentifier == LocalWorkspaceProvider.identifier)
         #expect(workspace.gitBranch == "workspace/feature-a")
         #expect(workspace.remoteId == nil)
     }
 
-    @Test("Daytona request routes through provisionable backend")
+    @Test("Remote request routes through workspace provider")
     @MainActor
-    func daytonaRequestRoutesThroughProvisionableBackend() async throws {
+    func remoteRequestRoutesThroughWorkspaceProvider() async throws {
         let fixture = try makeModelContext()
         let context = fixture.context
         let repo = Repo(
@@ -50,175 +51,44 @@ struct SidebarWorkspaceControllerBehaviorTests {
         )
         context.insert(repo)
 
-        let backend = MockRemoteBackend(
-            identifier: DaytonaBackend.identifier,
-            runtimeCapabilities: RuntimeCapabilities(
-                supportsCreate: true,
-                supportsDelete: true,
-                supportsStartStop: true,
+        let provider = MockWorkspaceProvider(
+            descriptor: WorkspaceProviderDescriptor(
+                id: DaytonaWorkspaceProvider.identifier,
+                displayName: "Daytona",
+                description: "Remote Linux workspaces.",
                 supportsArchive: true,
-                supportsList: true
+                requiresRemoteRepository: true
             )
         )
-        await backend.setCreateSandboxResult(
-            RemoteSandboxInfo(
-                sandboxId: "daytona-123",
-                sshCommand: "ssh daytona"
+        await provider.setCreateResult(
+            WorkspaceProviderCreationResult(
+                name: "feature-a",
+                path: URL(fileURLWithPath: "/tmp/api/workspaces/feature-a"),
+                status: .active,
+                backendIdentifier: DaytonaWorkspaceProvider.identifier,
+                remoteId: "daytona-123"
             )
         )
-        let controller = SidebarWorkspaceController(
-            modelContext: context,
+        let controller = makeController(
+            context: context,
             workspaceService: MockWorkspaceService(),
-            remoteBackendRegistry: MockRemoteBackendRegistry(
-                creationBackendIdentifiers: [DaytonaBackend.identifier],
-                backends: [DaytonaBackend.identifier: backend]
-            )
+            providers: [LocalWorkspaceProvider(), provider]
         )
 
         let workspace = try await controller.createWorkspace(
             from: repo,
-            request: NewWorkspaceRequest(name: "feature-a", backend: .daytona)
+            name: "feature-a",
+            providerID: DaytonaWorkspaceProvider.identifier
         )
 
-        #expect(await backend.createSandboxCallCount() == 1)
-        #expect(workspace.backendIdentifier == DaytonaBackend.identifier)
+        #expect(await provider.createCallCount() == 1)
+        #expect(workspace.backendIdentifier == DaytonaWorkspaceProvider.identifier)
         #expect(workspace.remoteId == "daytona-123")
     }
 
-    @Test("SSH request creates a persisted local record with metadata")
+    @Test("Deleting host-backed provider workspace removes local files after provider cleanup")
     @MainActor
-    func sshRequestCreatesPersistedLocalRecord() async throws {
-        let fixture = try makeModelContext()
-        let context = fixture.context
-        let repo = Repo(
-            name: "api",
-            localPath: URL(fileURLWithPath: "/tmp/api"),
-            remoteURL: "git@github.com:acme/api.git"
-        )
-        context.insert(repo)
-
-        let controller = SidebarWorkspaceController(
-            modelContext: context,
-            workspaceService: MockWorkspaceService(),
-            remoteBackendRegistry: MockRemoteBackendRegistry(
-                creationBackendIdentifiers: [SSHBackend.identifier],
-                backends: [SSHBackend.identifier: SSHBackend()]
-            )
-        )
-        let ssh = SSHWorkspaceMetadata(
-            host: "ssh.example.com",
-            user: "alice",
-            port: 2222,
-            authMode: "ssh-agent",
-            workingDir: "/srv/workspaces/feature-a"
-        )
-        let compose = ComposeWorkspaceMetadata(
-            composeFiles: ["compose.yml"],
-            service: "web"
-        )
-
-        let workspace = try await controller.createWorkspace(
-            from: repo,
-            request: NewWorkspaceRequest(
-                name: "feature-a",
-                backend: .sshHost(
-                    SSHHostWorkspaceRequest(
-                        ssh: ssh,
-                        compose: compose
-                    )
-                )
-            )
-        )
-
-        #expect(workspace.backendIdentifier == SSHBackend.identifier)
-        #expect(workspace.remoteId != nil)
-        #expect(workspace.sshMetadata == ssh)
-        #expect(workspace.composeMetadata == compose)
-    }
-
-    @Test("SSH request rejects invalid names after sanitization")
-    @MainActor
-    func sshRequestRejectsInvalidNames() async throws {
-        let fixture = try makeModelContext()
-        let context = fixture.context
-        let repo = Repo(
-            name: "api",
-            localPath: URL(fileURLWithPath: "/tmp/api"),
-            remoteURL: "git@github.com:acme/api.git"
-        )
-        context.insert(repo)
-
-        let controller = SidebarWorkspaceController(
-            modelContext: context,
-            workspaceService: MockWorkspaceService(),
-            remoteBackendRegistry: MockRemoteBackendRegistry(
-                creationBackendIdentifiers: [SSHBackend.identifier],
-                backends: [SSHBackend.identifier: SSHBackend()]
-            )
-        )
-
-        await #expect(throws: WorkspaceError.self) {
-            _ = try await controller.createWorkspace(
-                from: repo,
-                request: NewWorkspaceRequest(
-                    name: "..",
-                    backend: .sshHost(
-                        SSHHostWorkspaceRequest(
-                            ssh: SSHWorkspaceMetadata(host: "ssh.example.com"),
-                            compose: nil
-                        )
-                    )
-                )
-            )
-        }
-
-        let fetchedWorkspaces = try context.fetch(FetchDescriptor<Workspace>())
-        #expect(fetchedWorkspaces.isEmpty)
-    }
-
-    @Test("SSH request rejects invalid ports")
-    @MainActor
-    func sshRequestRejectsInvalidPorts() async throws {
-        let fixture = try makeModelContext()
-        let context = fixture.context
-        let repo = Repo(
-            name: "api",
-            localPath: URL(fileURLWithPath: "/tmp/api"),
-            remoteURL: "git@github.com:acme/api.git"
-        )
-        context.insert(repo)
-
-        let controller = SidebarWorkspaceController(
-            modelContext: context,
-            workspaceService: MockWorkspaceService(),
-            remoteBackendRegistry: MockRemoteBackendRegistry(
-                creationBackendIdentifiers: [SSHBackend.identifier],
-                backends: [SSHBackend.identifier: SSHBackend()]
-            )
-        )
-
-        await #expect(throws: RemoteWorkspaceError.self) {
-            _ = try await controller.createWorkspace(
-                from: repo,
-                request: NewWorkspaceRequest(
-                    name: "feature-a",
-                    backend: .sshHost(
-                        SSHHostWorkspaceRequest(
-                            ssh: SSHWorkspaceMetadata(host: "ssh.example.com", port: 0),
-                            compose: nil
-                        )
-                    )
-                )
-            )
-        }
-
-        let fetchedWorkspaces = try context.fetch(FetchDescriptor<Workspace>())
-        #expect(fetchedWorkspaces.isEmpty)
-    }
-
-    @Test("Lifecycle operations are capability-gated per backend")
-    @MainActor
-    func lifecycleOperationsAreCapabilityGatedPerBackend() async throws {
+    func deletingHostBackedProviderWorkspaceRemovesLocalFilesAfterProviderCleanup() async throws {
         let fixture = try makeModelContext()
         let context = fixture.context
         let repo = Repo(
@@ -230,68 +100,42 @@ struct SidebarWorkspaceControllerBehaviorTests {
             name: "feature-a",
             path: URL(fileURLWithPath: "/tmp/api/workspaces/feature-a"),
             sourceRepo: repo,
-            backendIdentifier: SSHBackend.identifier,
-            remoteId: "remote-123"
+            backendIdentifier: LumeWorkspaceProvider.identifier,
+            remoteId: "lume-123"
         )
-        workspace.sshMetadata = SSHWorkspaceMetadata(host: "ssh.example.com")
-        context.insert(repo)
-        context.insert(workspace)
-        try context.save()
-
-        let controller = SidebarWorkspaceController(
-            modelContext: context,
-            workspaceService: MockWorkspaceService(),
-            remoteBackendRegistry: MockRemoteBackendRegistry(
-                backends: [SSHBackend.identifier: SSHBackend()]
-            )
-        )
-
-        await #expect(throws: SidebarWorkspaceController.ControllerError.self) {
-            try await controller.start(workspace)
-        }
-    }
-
-    @Test("Deleting SSH workspace removes only the local record")
-    @MainActor
-    func deletingSSHWorkspaceRemovesOnlyLocalRecord() async throws {
-        let fixture = try makeModelContext()
-        let context = fixture.context
-        let repo = Repo(
-            name: "api",
-            localPath: URL(fileURLWithPath: "/tmp/api"),
-            remoteURL: "git@github.com:acme/api.git"
-        )
-        let workspace = Workspace(
-            name: "feature-a",
-            path: URL(fileURLWithPath: "/tmp/api/workspaces/feature-a"),
-            sourceRepo: repo,
-            backendIdentifier: SSHBackend.identifier,
-            remoteId: "remote-123"
-        )
-        workspace.sshMetadata = SSHWorkspaceMetadata(host: "ssh.example.com")
         context.insert(repo)
         context.insert(workspace)
         try context.save()
 
         let workspaceService = MockWorkspaceService()
-        let controller = SidebarWorkspaceController(
-            modelContext: context,
-            workspaceService: workspaceService,
-            remoteBackendRegistry: MockRemoteBackendRegistry(
-                backends: [SSHBackend.identifier: SSHBackend()]
+        let provider = MockWorkspaceProvider(
+            descriptor: WorkspaceProviderDescriptor(
+                id: LumeWorkspaceProvider.identifier,
+                displayName: "Lume",
+                description: "Local macOS and Linux VMs.",
+                supportedGuestOS: [.macOS, .linux],
+                supportsDesktop: true,
+                usesHostWorkspaceFiles: true
             )
+        )
+        let controller = makeController(
+            context: context,
+            workspaceService: workspaceService,
+            providers: [LocalWorkspaceProvider(), provider]
         )
 
         try await controller.deleteWorkspace(workspace, deleteFiles: true)
 
         let fetchedWorkspaces = try context.fetch(FetchDescriptor<Workspace>())
         #expect(fetchedWorkspaces.isEmpty)
-        #expect(workspaceService.deleteWorkspaceCalls.isEmpty)
+        #expect(await provider.deleteCallCount() == 1)
+        #expect(workspaceService.deleteWorkspaceCalls.count == 1)
+        #expect(workspaceService.deleteWorkspaceCalls.first?.deleteFiles == true)
     }
 
-    @Test("Deleting Daytona workspace preserves the record when provider deletion fails")
+    @Test("Deleting remote workspace preserves the record when provider deletion fails")
     @MainActor
-    func deletingDaytonaWorkspacePreservesRecordWhenProviderDeletionFails() async throws {
+    func deletingRemoteWorkspacePreservesRecordWhenProviderDeletionFails() async throws {
         let fixture = try makeModelContext()
         let context = fixture.context
         let repo = Repo(
@@ -303,44 +147,41 @@ struct SidebarWorkspaceControllerBehaviorTests {
             name: "feature-a",
             path: URL(fileURLWithPath: "/tmp/api/workspaces/feature-a"),
             sourceRepo: repo,
-            backendIdentifier: DaytonaBackend.identifier,
+            backendIdentifier: DaytonaWorkspaceProvider.identifier,
             remoteId: "daytona-123"
         )
         context.insert(repo)
         context.insert(workspace)
         try context.save()
 
-        let backend = MockRemoteBackend(
-            identifier: DaytonaBackend.identifier,
-            runtimeCapabilities: RuntimeCapabilities(
-                supportsCreate: true,
-                supportsDelete: true,
-                supportsStartStop: true,
+        let provider = MockWorkspaceProvider(
+            descriptor: WorkspaceProviderDescriptor(
+                id: DaytonaWorkspaceProvider.identifier,
+                displayName: "Daytona",
+                description: "Remote Linux workspaces.",
                 supportsArchive: true,
-                supportsList: true
+                requiresRemoteRepository: true
             )
         )
-        await backend.setDeleteSandboxError(TestBackendError.deleteFailed)
-        let controller = SidebarWorkspaceController(
-            modelContext: context,
+        await provider.setDeleteError(TestWorkspaceProviderError.deleteFailed)
+        let controller = makeController(
+            context: context,
             workspaceService: MockWorkspaceService(),
-            remoteBackendRegistry: MockRemoteBackendRegistry(
-                backends: [DaytonaBackend.identifier: backend]
-            )
+            providers: [LocalWorkspaceProvider(), provider]
         )
 
-        await #expect(throws: TestBackendError.self) {
+        await #expect(throws: TestWorkspaceProviderError.self) {
             try await controller.deleteWorkspace(workspace, deleteFiles: false)
         }
 
         let fetchedWorkspaces = try context.fetch(FetchDescriptor<Workspace>())
         #expect(fetchedWorkspaces.count == 1)
-        #expect(await backend.deleteSandboxCallCount() == 1)
+        #expect(await provider.deleteCallCount() == 1)
     }
 
-    @Test("Deleting Daytona workspace fails closed when remote identifier is missing")
+    @Test("Deleting remote workspace fails closed when remote identifier is missing")
     @MainActor
-    func deletingDaytonaWorkspaceFailsClosedWhenRemoteIdentifierIsMissing() async throws {
+    func deletingRemoteWorkspaceFailsClosedWhenRemoteIdentifierIsMissing() async throws {
         let fixture = try makeModelContext()
         let context = fixture.context
         let repo = Repo(
@@ -352,45 +193,93 @@ struct SidebarWorkspaceControllerBehaviorTests {
             name: "feature-a",
             path: URL(fileURLWithPath: "/tmp/api/workspaces/feature-a"),
             sourceRepo: repo,
-            backendIdentifier: DaytonaBackend.identifier
+            backendIdentifier: DaytonaWorkspaceProvider.identifier
         )
         context.insert(repo)
         context.insert(workspace)
         try context.save()
 
-        let backend = MockRemoteBackend(
-            identifier: DaytonaBackend.identifier,
-            runtimeCapabilities: RuntimeCapabilities(
-                supportsCreate: true,
-                supportsDelete: true,
-                supportsStartStop: true,
+        let provider = MockWorkspaceProvider(
+            descriptor: WorkspaceProviderDescriptor(
+                id: DaytonaWorkspaceProvider.identifier,
+                displayName: "Daytona",
+                description: "Remote Linux workspaces.",
                 supportsArchive: true,
-                supportsList: true
-            )
+                requiresRemoteRepository: true
+            ),
+            requiresRemoteIdentifier: true
         )
-        let controller = SidebarWorkspaceController(
-            modelContext: context,
+        let controller = makeController(
+            context: context,
             workspaceService: MockWorkspaceService(),
-            remoteBackendRegistry: MockRemoteBackendRegistry(
-                backends: [DaytonaBackend.identifier: backend]
-            )
+            providers: [LocalWorkspaceProvider(), provider]
         )
 
         do {
             try await controller.deleteWorkspace(workspace, deleteFiles: false)
             Issue.record("Expected delete to fail when remoteId is missing")
-        } catch let error as RemoteWorkspaceError {
-            #expect(
-                error.localizedDescription
-                    == RemoteWorkspaceError.missingRemoteIdentifier.localizedDescription
-            )
+        } catch let error as WorkspaceProviderError {
+            guard case .invalidWorkspace(let message) = error else {
+                Issue.record("Expected invalidWorkspace error, got \(error)")
+                return
+            }
+            #expect(message.contains("remote identifier"))
         } catch {
-            Issue.record("Expected RemoteWorkspaceError.missingRemoteIdentifier, got \(error)")
+            Issue.record("Expected WorkspaceProviderError.invalidWorkspace, got \(error)")
         }
 
         let fetchedWorkspaces = try context.fetch(FetchDescriptor<Workspace>())
         #expect(fetchedWorkspaces.count == 1)
-        #expect(await backend.deleteSandboxCallCount() == 0)
+        #expect(await provider.deleteCallCount() == 0)
+    }
+
+    @Test("Lifecycle operations update status through provider")
+    @MainActor
+    func lifecycleOperationsUpdateStatusThroughProvider() async throws {
+        let fixture = try makeModelContext()
+        let context = fixture.context
+        let repo = Repo(
+            name: "api",
+            localPath: URL(fileURLWithPath: "/tmp/api"),
+            remoteURL: "git@github.com:acme/api.git"
+        )
+        let workspace = Workspace(
+            name: "feature-a",
+            path: URL(fileURLWithPath: "/tmp/api/workspaces/feature-a"),
+            sourceRepo: repo,
+            status: .stopped,
+            backendIdentifier: DaytonaWorkspaceProvider.identifier,
+            remoteId: "daytona-123"
+        )
+        context.insert(repo)
+        context.insert(workspace)
+        try context.save()
+
+        let provider = MockWorkspaceProvider(
+            descriptor: WorkspaceProviderDescriptor(
+                id: DaytonaWorkspaceProvider.identifier,
+                displayName: "Daytona",
+                description: "Remote Linux workspaces.",
+                supportsArchive: true,
+                requiresRemoteRepository: true
+            ),
+            requiresRemoteIdentifier: true
+        )
+        let controller = makeController(
+            context: context,
+            workspaceService: MockWorkspaceService(),
+            providers: [LocalWorkspaceProvider(), provider]
+        )
+
+        try await controller.start(workspace)
+        #expect(workspace.status == .active)
+        try await controller.stop(workspace)
+        #expect(workspace.status == .stopped)
+        try await controller.archive(workspace)
+        #expect(workspace.status == .archived)
+        #expect(await provider.startCallCount() == 1)
+        #expect(await provider.stopCallCount() == 1)
+        #expect(await provider.archiveCallCount() == 1)
     }
 
     @Test("Managed lifecycle operations fail closed when remote identifier is missing")
@@ -407,47 +296,43 @@ struct SidebarWorkspaceControllerBehaviorTests {
             name: "feature-a",
             path: URL(fileURLWithPath: "/tmp/api/workspaces/feature-a"),
             sourceRepo: repo,
-            backendIdentifier: DaytonaBackend.identifier
+            backendIdentifier: DaytonaWorkspaceProvider.identifier
         )
         context.insert(repo)
         context.insert(workspace)
         try context.save()
 
-        let backend = MockRemoteBackend(
-            identifier: DaytonaBackend.identifier,
-            runtimeCapabilities: RuntimeCapabilities(
-                supportsCreate: true,
-                supportsDelete: true,
-                supportsStartStop: true,
+        let provider = MockWorkspaceProvider(
+            descriptor: WorkspaceProviderDescriptor(
+                id: DaytonaWorkspaceProvider.identifier,
+                displayName: "Daytona",
+                description: "Remote Linux workspaces.",
                 supportsArchive: true,
-                supportsList: true
-            )
+                requiresRemoteRepository: true
+            ),
+            requiresRemoteIdentifier: true
         )
-        let controller = SidebarWorkspaceController(
-            modelContext: context,
+        let controller = makeController(
+            context: context,
             workspaceService: MockWorkspaceService(),
-            remoteBackendRegistry: MockRemoteBackendRegistry(
-                backends: [DaytonaBackend.identifier: backend]
-            )
+            providers: [LocalWorkspaceProvider(), provider]
         )
 
-        await #expect(throws: RemoteWorkspaceError.self) {
+        await #expect(throws: WorkspaceProviderError.self) {
             try await controller.stop(workspace)
         }
-        await #expect(throws: RemoteWorkspaceError.self) {
+        await #expect(throws: WorkspaceProviderError.self) {
             try await controller.start(workspace)
         }
-        await #expect(throws: RemoteWorkspaceError.self) {
+        await #expect(throws: WorkspaceProviderError.self) {
             try await controller.archive(workspace)
         }
 
-        let fetchedWorkspace = try #require(
-            context.fetch(FetchDescriptor<Workspace>()).first
-        )
+        let fetchedWorkspace = try #require(context.fetch(FetchDescriptor<Workspace>()).first)
         #expect(fetchedWorkspace.status == .active)
-        #expect(await backend.stopSandboxCallCount() == 0)
-        #expect(await backend.startSandboxCallCount() == 0)
-        #expect(await backend.archiveSandboxCallCount() == 0)
+        #expect(await provider.stopCallCount() == 0)
+        #expect(await provider.startCallCount() == 0)
+        #expect(await provider.archiveCallCount() == 0)
     }
 
     @MainActor
@@ -458,6 +343,19 @@ struct SidebarWorkspaceControllerBehaviorTests {
         return ModelContextFixture(
             container: container,
             context: container.mainContext
+        )
+    }
+
+    @MainActor
+    private func makeController(
+        context: ModelContext,
+        workspaceService: MockWorkspaceService,
+        providers: [any WorkspaceProviderProtocol]
+    ) -> SidebarWorkspaceController {
+        SidebarWorkspaceController(
+            modelContext: context,
+            workspaceService: workspaceService,
+            workspaceProviderRegistry: WorkspaceProviderRegistry(providers: providers)
         )
     }
 }
@@ -504,7 +402,10 @@ private final class MockWorkspaceService: WorkspaceServiceProtocol, @unchecked S
         deleteWorkspaceCalls.append((workspaceURL, deleteFiles))
     }
 
-    func runLifecycleScript(_ scriptName: String, in directory: URL) async throws -> WorkspaceService.ScriptResult {
+    func runLifecycleScript(
+        _ scriptName: String,
+        in directory: URL
+    ) async throws -> WorkspaceService.ScriptResult {
         WorkspaceService.ScriptResult(exitCode: 0, stdout: "", stderr: "")
     }
 
@@ -513,108 +414,132 @@ private final class MockWorkspaceService: WorkspaceServiceProtocol, @unchecked S
     func sanitizeFilename(_ name: String) async -> String { name }
 }
 
-private actor MockRemoteBackend: ProvisionCapable, StartStopCapable, Archivable, Listable {
-    nonisolated let identifier: String
-    nonisolated let runtimeCapabilities: RuntimeCapabilities
-    private let healthCheckResult: Bool
+private actor MockWorkspaceProvider: WorkspaceProviderProtocol {
+    nonisolated let descriptor: WorkspaceProviderDescriptor
 
-    var createSandboxResult = RemoteSandboxInfo(sandboxId: "remote-123", sshCommand: "ssh remote")
-    var createSandboxCalls: [(name: String, cloneURL: String?)] = []
-    var deleteSandboxCalls: [String] = []
-    var stopSandboxCalls: [String] = []
-    var startSandboxCalls: [String] = []
-    var archiveSandboxCalls: [String] = []
-    var deleteSandboxError: (any Error)?
+    private let requiresRemoteIdentifier: Bool
+    private var createResult: WorkspaceProviderCreationResult
+    private var createError: (any Error)?
+    private var deleteError: (any Error)?
+    private var startError: (any Error)?
+    private var stopError: (any Error)?
+    private var archiveError: (any Error)?
+    private var createRequests: [WorkspaceProviderCreationRequest] = []
+    private var deleteTargets: [WorkspaceProviderTarget] = []
+    private var startTargets: [WorkspaceProviderTarget] = []
+    private var stopTargets: [WorkspaceProviderTarget] = []
+    private var archiveTargets: [WorkspaceProviderTarget] = []
 
     init(
-        identifier: String,
-        runtimeCapabilities: RuntimeCapabilities,
-        healthCheckResult: Bool = true
+        descriptor: WorkspaceProviderDescriptor,
+        requiresRemoteIdentifier: Bool = false
     ) {
-        self.identifier = identifier
-        self.runtimeCapabilities = runtimeCapabilities
-        self.healthCheckResult = healthCheckResult
+        self.descriptor = descriptor
+        self.requiresRemoteIdentifier = requiresRemoteIdentifier
+        self.createResult = WorkspaceProviderCreationResult(
+            name: "feature-a",
+            path: URL(fileURLWithPath: "/tmp/workspaces/feature-a"),
+            status: .active,
+            backendIdentifier: descriptor.id,
+            remoteId: "\(descriptor.id)-123"
+        )
     }
 
-    func healthCheck() async -> Bool { healthCheckResult }
-
-    func openSession(for request: RemoteWorkspaceSessionRequest) async throws -> RemoteSandboxInfo {
-        createSandboxResult
+    func availability() async -> WorkspaceProviderAvailability {
+        WorkspaceProviderAvailability(isAvailable: true)
     }
 
-    func createSandbox(name: String, cloneURL: String?) async throws -> RemoteSandboxInfo {
-        createSandboxCalls.append((name, cloneURL))
-        return createSandboxResult
+    nonisolated func sessionKey(for workspace: WorkspaceProviderTarget) -> HostTerminalSessionKey {
+        .backendSession(providerID: descriptor.id, instanceID: workspace.remoteId ?? workspace.name)
     }
 
-    func setCreateSandboxResult(_ result: RemoteSandboxInfo) {
-        createSandboxResult = result
+    func createWorkspace(
+        request: WorkspaceProviderCreationRequest,
+        workspaceService: any WorkspaceServiceProtocol,
+        progress: WorkspaceProviderProgressHandler?,
+        persist: WorkspaceProviderPersistenceHandler?
+    ) async throws -> WorkspaceProviderCreationResult {
+        if let createError {
+            throw createError
+        }
+        createRequests.append(request)
+        return createResult
     }
 
-    func createSandboxCallCount() -> Int {
-        createSandboxCalls.count
+    func terminalLaunchSpec(for workspace: WorkspaceProviderTarget) async throws -> TerminalLaunchSpec {
+        TerminalLaunchSpec(
+            sessionKey: .backendSession(providerID: descriptor.id, instanceID: workspace.remoteId ?? workspace.name),
+            workingDirectory: workspace.workspaceURL
+        )
     }
 
-    func setDeleteSandboxError(_ error: (any Error)?) {
-        deleteSandboxError = error
-    }
-
-    func deleteSandboxCallCount() -> Int {
-        deleteSandboxCalls.count
-    }
-
-    func stopSandboxCallCount() -> Int {
-        stopSandboxCalls.count
-    }
-
-    func startSandboxCallCount() -> Int {
-        startSandboxCalls.count
-    }
-
-    func archiveSandboxCallCount() -> Int {
-        archiveSandboxCalls.count
-    }
-
-    func deleteSandbox(sandboxId: String) async throws {
-        deleteSandboxCalls.append(sandboxId)
-        if let deleteSandboxError {
-            throw deleteSandboxError
+    func startWorkspace(_ workspace: WorkspaceProviderTarget) async throws {
+        try requireRemoteIdentifierIfNeeded(for: workspace)
+        startTargets.append(workspace)
+        if let startError {
+            throw startError
         }
     }
 
-    func stopSandbox(sandboxId: String) async throws {
-        stopSandboxCalls.append(sandboxId)
+    func stopWorkspace(_ workspace: WorkspaceProviderTarget) async throws {
+        try requireRemoteIdentifierIfNeeded(for: workspace)
+        stopTargets.append(workspace)
+        if let stopError {
+            throw stopError
+        }
     }
 
-    func startSandbox(sandboxId: String) async throws -> RemoteSandboxInfo {
-        startSandboxCalls.append(sandboxId)
-        return createSandboxResult
+    func archiveWorkspace(_ workspace: WorkspaceProviderTarget) async throws {
+        try requireRemoteIdentifierIfNeeded(for: workspace)
+        archiveTargets.append(workspace)
+        if let archiveError {
+            throw archiveError
+        }
     }
 
-    func archiveSandbox(sandboxId: String) async throws {
-        archiveSandboxCalls.append(sandboxId)
+    func deleteWorkspace(_ workspace: WorkspaceProviderTarget) async throws {
+        try requireRemoteIdentifierIfNeeded(for: workspace)
+        deleteTargets.append(workspace)
+        if let deleteError {
+            throw deleteError
+        }
     }
 
-    func listSandboxes() async throws -> [RemoteSandboxStatus] { [] }
+    func setCreateResult(_ result: WorkspaceProviderCreationResult) {
+        createResult = result
+    }
+
+    func setDeleteError(_ error: (any Error)?) {
+        deleteError = error
+    }
+
+    func createCallCount() -> Int {
+        createRequests.count
+    }
+
+    func deleteCallCount() -> Int {
+        deleteTargets.count
+    }
+
+    func startCallCount() -> Int {
+        startTargets.count
+    }
+
+    func stopCallCount() -> Int {
+        stopTargets.count
+    }
+
+    func archiveCallCount() -> Int {
+        archiveTargets.count
+    }
+
+    private func requireRemoteIdentifierIfNeeded(for workspace: WorkspaceProviderTarget) throws {
+        if requiresRemoteIdentifier, workspace.remoteId == nil {
+            throw WorkspaceProviderError.invalidWorkspace("Workspace is missing a remote identifier.")
+        }
+    }
 }
 
-private enum TestBackendError: Error {
+private enum TestWorkspaceProviderError: Error {
     case deleteFailed
-}
-
-private final class MockRemoteBackendRegistry: RemoteBackendRegistryProtocol, @unchecked Sendable {
-    let creationBackendIdentifiers: [String]
-    private let backends: [String: any RemoteBackendProtocol]
-
-    init(
-        creationBackendIdentifiers: [String] = [],
-        backends: [String: any RemoteBackendProtocol] = [:]
-    ) {
-        self.creationBackendIdentifiers = creationBackendIdentifiers
-        self.backends = backends
-    }
-
-    func backend(for identifier: String) -> (any RemoteBackendProtocol)? {
-        backends[identifier]
-    }
 }

@@ -6,6 +6,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=scripts/lib/ui-test-common.sh
 source "$SCRIPT_DIR/lib/ui-test-common.sh"
+LAUNCH_SCRIPT="$REPO_ROOT/scripts/launch-dev.sh"
 
 ws_prepare_artifacts "workspaces-ui-smoke"
 ws_register_cleanup_trap
@@ -15,9 +16,19 @@ ws_kill_existing
 ws_require_cmd swift
 ws_require_cmd osascript
 ws_require_cmd cliclick
+ws_require_cmd pgrep
 
 ws_build_app
-ws_launch_app 5
+(
+    cd "$REPO_ROOT"
+    "$LAUNCH_SCRIPT" --no-build --no-activate --window-timeout 20 >"$APP_LOG" 2>&1
+)
+APP_PID="$(pgrep -f "$REPO_ROOT/.build/arm64-apple-macosx/debug/WorkspaceManager" | head -n 1 || true)"
+if [[ -z "$APP_PID" ]]; then
+    ws_log "ERROR: could not find debug WorkspaceManager pid after launch."
+    tail -n 40 "$APP_LOG" || true
+    exit 1
+fi
 ws_activate_app
 ws_get_window_geometry
 ws_compute_click_points

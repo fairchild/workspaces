@@ -100,9 +100,27 @@ For performance testing and benchmarking workflows, see:
 - [docs/performance-testing.md](./docs/performance-testing.md)
 - [docs/performance/dashboard.md](./docs/performance/dashboard.md)
 
+For VM and provider-backed workspace architecture, see:
+
+- [docs/vm-provider-architecture.md](./docs/vm-provider-architecture.md)
+- [docs/development/lume-integration.md](./docs/development/lume-integration.md)
+- [docs/development/lume-validation.md](./docs/development/lume-validation.md)
+- [docs/development/lume-recreate-runbook.md](./docs/development/lume-recreate-runbook.md)
+
+The Lume validation flow uses isolated Workspaces-managed VM storage and a standalone validated-base manifest before the app will reuse a macOS base VM.
+
 For UI smoke/capture script entry points, see:
 
 - [scripts/README.md](./scripts/README.md)
+
+If you use `mise`, developer convenience tasks include:
+
+- `mise run dev-launch`
+- `mise run dev-watch`
+- `mise run dev-smoke`
+- `mise run dev-lume-preflight`
+- `mise run dev-lume-standalone-validate`
+- `mise run dev-lume-macos-smoke`
 
 ## License
 

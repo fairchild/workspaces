@@ -11,8 +11,8 @@ public enum HostTerminalSessionKey: Hashable, Sendable, CustomDebugStringConvert
     case defaultHome
     case repoPath(String)
     case hostPath(String)
-    /// Remote sandbox session — keyed by sandbox ID, not a filesystem path.
-    case remoteSandbox(String)
+    /// Provider-backed session keyed by provider identifier and remote instance ID.
+    case backendSession(providerID: String, instanceID: String)
 
     public var debugDescription: String {
         switch self {
@@ -22,8 +22,8 @@ public enum HostTerminalSessionKey: Hashable, Sendable, CustomDebugStringConvert
             return "repoPath(\(path))"
         case .hostPath(let path):
             return "hostPath(\(path))"
-        case .remoteSandbox(let id):
-            return "remoteSandbox(\(id))"
+        case .backendSession(let providerID, let instanceID):
+            return "backendSession(\(providerID), \(instanceID))"
         }
     }
 
@@ -35,7 +35,7 @@ public enum HostTerminalSessionKey: Hashable, Sendable, CustomDebugStringConvert
             return .repoPath(Self.normalizePath(path))
         case .hostPath(let path):
             return .hostPath(Self.normalizePath(path))
-        case .remoteSandbox:
+        case .backendSession:
             return self
         }
     }
@@ -127,7 +127,11 @@ public struct HostTerminalSessionCoordinator: Sendable {
             return HostTerminalSessionActivationResult(session: existing, created: false)
         }
 
-        if let existing = sessions.first(where: { $0.directoryPath == normalizedPath }) {
+        if shouldReuseByDirectoryPath(for: normalizedKey),
+            let existing = sessions.first(where: {
+                shouldReuseByDirectoryPath(for: $0.key) && $0.directoryPath == normalizedPath
+            })
+        {
             activeSessionID = existing.id
             return HostTerminalSessionActivationResult(session: existing, created: false)
         }
@@ -140,6 +144,15 @@ public struct HostTerminalSessionCoordinator: Sendable {
         sessions.append(session)
         activeSessionID = session.id
         return HostTerminalSessionActivationResult(session: session, created: true)
+    }
+
+    private func shouldReuseByDirectoryPath(for key: HostTerminalSessionKey) -> Bool {
+        switch key {
+        case .backendSession:
+            return false
+        case .defaultHome, .repoPath, .hostPath:
+            return true
+        }
     }
 
     @discardableResult

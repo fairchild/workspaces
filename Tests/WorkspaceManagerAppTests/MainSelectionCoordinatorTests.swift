@@ -8,6 +8,45 @@ import WorkspaceManagerCore
 struct MainSelectionCoordinatorTests {
     private let coordinator = MainSelectionCoordinator()
 
+    @Test("Backend session selects workspace by provider and instance")
+    func backendSessionSelectionMatchesProviderAndInstance() {
+        let repo = Repo(name: "repo", localPath: URL(fileURLWithPath: "/tmp/repo"))
+        let localWorkspace = Workspace(
+            name: "local",
+            path: URL(fileURLWithPath: "/tmp/workspaces/local"),
+            sourceRepo: repo
+        )
+        let lumeWorkspace = Workspace(
+            name: "lume",
+            path: URL(fileURLWithPath: "/tmp/workspaces/lume"),
+            sourceRepo: repo,
+            backendIdentifier: LumeWorkspaceProvider.identifier,
+            remoteId: "vm-123"
+        )
+        let daytonaWorkspace = Workspace(
+            name: "daytona",
+            path: URL(fileURLWithPath: "/tmp/workspaces/daytona"),
+            sourceRepo: repo,
+            backendIdentifier: DaytonaWorkspaceProvider.identifier,
+            remoteId: "vm-123"
+        )
+        repo.workspaces = [localWorkspace, lumeWorkspace, daytonaWorkspace]
+
+        let activeSession = HostTerminalSession(
+            key: .backendSession(providerID: LumeWorkspaceProvider.identifier, instanceID: "vm-123"),
+            directory: URL(fileURLWithPath: "/tmp/workspaces/lume"),
+            customCommand: "/usr/local/bin/lume ssh vm-123"
+        )
+
+        let selection = coordinator.syncedWorkspaceSelection(
+            for: activeSession,
+            repos: [repo],
+            normalizePath: normalizePath
+        )
+
+        #expect(selection?.id == lumeWorkspace.id)
+    }
+
     @Test("Repo lookup returns current repo by id")
     func repoLookupReturnsMatchingRepo() {
         let repo = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))

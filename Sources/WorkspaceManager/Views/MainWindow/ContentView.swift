@@ -15,6 +15,8 @@ struct ContentView: View {
     @Binding var deepLinkState: WorkspaceDeepLinkState
     @Binding var lastSurfaceRawValue: String
     @ObservedObject var hostTerminalState: HostTerminalStateStore
+    @ObservedObject var lumeSetupCoordinator: LumeSetupCoordinator
+    @ObservedObject var hostLumeSmokeAutomation: HostLumeSmokeAutomationController
     @Query(sort: \Repo.addedAt, order: .reverse) private var repos: [Repo]
     @Query(sort: \WebSource.addedAt, order: .reverse) private var webSources: [WebSource]
     @AppStorage(TerminalMultiplexingMode.storageKey)
@@ -22,15 +24,20 @@ struct ContentView: View {
     @AppStorage(NotificationConstants.enabledKey)
     private var notificationsEnabled = NotificationConstants.defaultEnabled
     @Environment(\.externalEditorService) private var externalEditorService
-    @Environment(\.remoteBackendRegistry) private var remoteBackendRegistry
+    @Environment(\.lumeRuntimeService) private var lumeRuntimeService
     @Environment(\.workspaceService) private var workspaceService
+    @Environment(\.workspaceProviderRegistry) private var workspaceProviderRegistry
     @ObservedObject private var notificationCoordinator = NotificationCoordinator.shared
 
     @State private var viewState = MainWindowViewState()
     @State private var repoForNewWorkspaceFromLanding: Repo?
     @State private var webSourceCreationTarget: WebSourceCreationTarget?
     @State private var landingErrorMessage: String?
-    @State private var isDaytonaBackendAvailableForLanding = false
+    @State private var providerAvailabilityByID: [String: WorkspaceProviderAvailability] =
+        UIFixtureLumeEnvironment.initialProviderAvailabilityByID()
+    @State private var isRefreshingProviderAvailability = false
+    @State private var lumeRuntimeSnapshot: LumeRuntimeSnapshot? =
+        UIFixtureLumeEnvironment.initialRuntimeSnapshot()
     @StateObject private var rightPaneStateStore = RightPaneStateStore()
     @StateObject private var webSurfaceStore = WebSurfaceStore()
     @StateObject private var terminalFocusCoordinator = TerminalFocusCoordinator()
@@ -42,7 +49,6 @@ struct ContentView: View {
     private let inspectorStateController = InspectorStateController()
     private let mainSelectionCoordinator = MainSelectionCoordinator()
     private let navigationStateController = MainWindowNavigationStateController()
-    private let remoteWorkspaceStateController = MainWindowRemoteWorkspaceStateController()
     private let surfaceResolutionController = MainWindowSurfaceResolutionController()
     private let presentationController = MainWindowPresentationController()
     private let splitRoutingController = SplitRoutingController()
@@ -208,16 +214,13 @@ struct ContentView: View {
         return openInDefaultEditor
     }
 
-    private var creationBackendIdentifiers: Set<String> {
-        Set(remoteBackendRegistry.creationBackendIdentifiers)
+    private var selectedWorkspaceProviderDescriptor: WorkspaceProviderDescriptor? {
+        guard let workspace = currentSelectedWorkspace else { return nil }
+        return workspaceProviderRegistry.provider(for: workspace)?.descriptor
     }
 
-    private var supportsDaytonaCreation: Bool {
-        creationBackendIdentifiers.contains(DaytonaBackend.identifier)
-    }
-
-    private var supportsSSHCreation: Bool {
-        creationBackendIdentifiers.contains(SSHBackend.identifier)
+    private var selectedWorkspaceSupportsDesktop: Bool {
+        selectedWorkspaceProviderDescriptor?.supportsDesktop == true
     }
 
     private var isShowingOpenInEditorError: Binding<Bool> {
@@ -280,14 +283,29 @@ struct ContentView: View {
                 onWebSourceSelected: handleWebSourceSelection,
                 onOpenTerminal: handleRepoTerminalSelection,
                 onNewWorkspace: { repo in
-                    repoForNewWorkspaceFromLanding = repo
+                    Task { @MainActor in
+                        await presentNewWorkspaceFromLanding(repo)
+                    }
                 },
                 onNewWebSource: { repo in
                     webSourceCreationTarget = .repo(repo)
+                },
+                onArchiveWorkspace: { workspace in
+                    Task { @MainActor in
+                        await archiveWorkspaceFromLanding(workspace)
+                    }
+                },
+                onOpenWorkspaceInEditor: { workspace in
+                    openWorkspaceInDefaultEditorFromLanding(workspace)
                 }
             )
         } else {
-            terminalDetailContent
+            ZStack {
+                terminalDetailContent
+                if viewState.connectingWorkspaceID != nil {
+                    WorkspaceConnectingOverlay(workspaceName: currentSelectedWorkspace?.name)
+                }
+            }
         }
     }
 
@@ -301,23 +319,20 @@ struct ContentView: View {
                 selectedWebSource: selectedWebSourceBinding,
                 paneCountBySessionKey: paneCountBySessionKeyForSidebar,
                 activeSessionKey: activeSessionKeyForSidebar,
-                connectingSandboxId: viewState.connectingSandboxId,
+                connectingWorkspaceID: viewState.connectingWorkspaceID,
                 onRepoSelected: handleRepoSelection,
                 onRepoTerminalSelected: handleRepoTerminalSelection,
                 onWebSourceSelected: handleWebSourceSelection,
                 onRequestWebSourceCreation: { target in
                     webSourceCreationTarget = target
                 },
-                onWorkspaceCreated: handleWorkspaceCreated
+                onWorkspaceCreated: handleWorkspaceCreated,
+                lumeSetupCoordinator: lumeSetupCoordinator,
+                hostLumeSmokeAutomation: hostLumeSmokeAutomation
             )
             .navigationSplitViewColumnWidth(min: 200, ideal: 260, max: 350)
         } detail: {
-            ZStack {
-                detailContent
-                if viewState.connectingSandboxId != nil {
-                    SandboxConnectingOverlay(workspaceName: viewState.pendingRemoteWorkspace?.workspaceName)
-                }
-            }
+            detailContent
         }
     }
 
@@ -345,18 +360,28 @@ struct ContentView: View {
                         }
                         .help("Reload")
                         .disabled(selectedWebSource.baseURL == nil)
-                    } else if let defaultEditor = defaultEditorDescriptor,
-                        let workspace = currentSelectedWorkspace
-                    {
-                        WorkspaceEditorToolbarButton(
-                            workspaceName: workspace.name,
-                            editorOptions: availableEditors,
-                            defaultEditor: defaultEditor,
-                            onOpenInDefaultEditor: openInDefaultEditor,
-                            onOpenInEditor: openInSelectedEditor,
-                            onRevealInFinder: revealInFinder,
-                            onCopyPath: copyWorkspacePath
-                        )
+                    } else if let workspace = currentSelectedWorkspace {
+                        if selectedWorkspaceSupportsDesktop {
+                            Button {
+                                openDesktop(for: workspace)
+                            } label: {
+                                Image(systemName: "desktopcomputer")
+                            }
+                            .help("Open Desktop")
+                            .disabled(workspace.status == .provisioning)
+                        }
+
+                        if let defaultEditor = defaultEditorDescriptor {
+                            WorkspaceEditorToolbarButton(
+                                workspaceName: workspace.name,
+                                editorOptions: availableEditors,
+                                defaultEditor: defaultEditor,
+                                onOpenInDefaultEditor: openInDefaultEditor,
+                                onOpenInEditor: openInSelectedEditor,
+                                onRevealInFinder: revealInFinder,
+                                onCopyPath: copyWorkspacePath
+                            )
+                        }
                     }
                 }
 
@@ -381,17 +406,20 @@ struct ContentView: View {
                 resolveSurfaceLifecycle()
                 pruneRightPaneState()
                 syncOpenInEditorShortcutRouting()
+                Task { @MainActor in
+                    await hostLumeSmokeAutomation.noteLaunchReady()
+                }
                 notificationCoordinator.loadStoredAuth()
+                Task { @MainActor in
+                    if await seedLandingProviderStateIfNeeded() {
+                        return
+                    }
+                    await refreshLandingProviderAvailability()
+                    await refreshLandingRuntimeSnapshot()
+                }
             }
             .task {
-                if supportsDaytonaCreation,
-                    let daytonaBackend = remoteBackendRegistry.backend(for: DaytonaBackend.identifier)
-                {
-                    isDaytonaBackendAvailableForLanding = await daytonaBackend.healthCheck()
-                } else {
-                    isDaytonaBackendAvailableForLanding = false
-                }
-                await syncCloudWorkspaceStatuses()
+                await syncWorkspaceStatuses()
             }
             .onDisappear {
                 ShortcutRoutingPolicy.shared.setOverride(nil, for: AppChromeShortcut.openInEditor.chord)
@@ -464,15 +492,90 @@ struct ContentView: View {
                 Text(viewState.openInEditorErrorMessage ?? "Unknown error.")
             }
             .alert(
-                "Could Not Connect to Remote Workspace",
+                "Could Not Open Workspace",
                 isPresented: Binding(
-                    get: { viewState.remoteErrorMessage != nil },
-                    set: { if !$0 { viewState.remoteErrorMessage = nil } }
+                    get: { viewState.workspaceOperationErrorMessage != nil },
+                    set: { if !$0 { viewState.workspaceOperationErrorMessage = nil } }
                 )
             ) {
-                Button("OK", role: .cancel) { viewState.remoteErrorMessage = nil }
+                Button("OK", role: .cancel) { viewState.workspaceOperationErrorMessage = nil }
             } message: {
-                Text(viewState.remoteErrorMessage ?? "Unknown error.")
+                Text(viewState.workspaceOperationErrorMessage ?? "Unknown error.")
+            }
+            .alert(
+                "Could Not Set Up macOS VM Support",
+                isPresented: Binding(
+                    get: { lumeSetupCoordinator.errorMessage != nil },
+                    set: { if !$0 { lumeSetupCoordinator.clearError() } }
+                )
+            ) {
+                Button("OK", role: .cancel) { lumeSetupCoordinator.clearError() }
+            } message: {
+                Text(lumeSetupCoordinator.errorMessage ?? "Unknown error.")
+            }
+            .sheet(
+                item: Binding(
+                    get: { lumeSetupCoordinator.confirmationRequest },
+                    set: { request in
+                        if request == nil {
+                            lumeSetupCoordinator.cancelPendingAction()
+                        }
+                    }
+                )
+            ) { request in
+                LumeSetupConfirmationSheet(
+                    request: request,
+                    onConfirm: {
+                        lumeSetupCoordinator.confirmAndContinue()
+                    },
+                    onCancel: {
+                        lumeSetupCoordinator.cancelPendingAction()
+                    }
+                )
+            }
+            .sheet(
+                item: Binding(
+                    get: { lumeSetupCoordinator.progressPresentation },
+                    set: { _ in }
+                )
+            ) { presentation in
+                LumeSetupProgressSheet(presentation: presentation)
+                    .interactiveDismissDisabled(true)
+            }
+            .onChange(of: lumeSetupCoordinator.confirmationRequest) { _, request in
+                guard let request else { return }
+                Task { @MainActor in
+                    await hostLumeSmokeAutomation.noteSetupConfirmationPresented(request)
+                    if hostLumeSmokeAutomation.isEnabled {
+                        DispatchQueue.main.async {
+                            lumeSetupCoordinator.confirmAndContinue()
+                        }
+                    }
+                }
+            }
+            .onChange(of: lumeSetupCoordinator.progressPresentation?.step) { _, step in
+                guard let step else { return }
+                Task { @MainActor in
+                    await hostLumeSmokeAutomation.noteSetupStepChanged(step)
+                }
+            }
+            .onChange(of: lumeSetupCoordinator.errorMessage) { _, message in
+                guard let message else { return }
+                Task { @MainActor in
+                    await hostLumeSmokeAutomation.noteFailure(
+                        message: message,
+                        recoveryHints: hostLumeSmokeRecoveryHints(for: message)
+                    )
+                }
+            }
+            .onChange(of: viewState.workspaceOperationErrorMessage) { _, message in
+                guard let message else { return }
+                Task { @MainActor in
+                    await hostLumeSmokeAutomation.noteFailure(
+                        message: message,
+                        recoveryHints: hostLumeSmokeRecoveryHints(for: message)
+                    )
+                }
             }
     }
 
@@ -494,13 +597,16 @@ struct ContentView: View {
             .sheet(item: $repoForNewWorkspaceFromLanding) { repo in
                 NewWorkspaceSheet(
                     repo: repo,
-                    supportsDaytonaCreation: supportsDaytonaCreation,
-                    supportsSSHCreation: supportsSSHCreation,
-                    isDaytonaAvailable: isDaytonaBackendAvailableForLanding,
+                    environmentOptions: environmentOptions(for: repo),
                     isCreateDisabled: false
-                ) { request in
+                ) { name, providerID, guestOS in
                     Task { @MainActor in
-                        await createWorkspaceFromLanding(repo: repo, request: request)
+                        await createWorkspaceFromLanding(
+                            repo: repo,
+                            name: name,
+                            providerID: providerID,
+                            guestOS: guestOS
+                        )
                     }
                 }
             }
@@ -545,6 +651,20 @@ struct ContentView: View {
     }
 
     @MainActor
+    private func presentNewWorkspaceFromLanding(_ repo: Repo) async {
+        if await seedLandingProviderStateIfNeeded() {
+            repoForNewWorkspaceFromLanding = repo
+            return
+        }
+
+        if landingProviderAvailabilityIsPending {
+            await refreshLandingProviderAvailability()
+        }
+        await refreshLandingRuntimeSnapshot()
+        repoForNewWorkspaceFromLanding = repo
+    }
+
+    @MainActor
     private func applyNavigationDestination(
         _ destination: MainWindowNavigationDestination,
         persistSurface: Bool = true
@@ -558,12 +678,12 @@ struct ContentView: View {
 
     @MainActor
     private func abandonPendingRemoteConnection(reason: String) {
-        guard viewState.connectingSandboxId != nil || viewState.pendingRemoteWorkspace != nil else {
+        guard viewState.connectingWorkspaceID != nil || viewState.pendingRemoteWorkspace != nil else {
             return
         }
 
-        NSLog("[RemoteBackend] Discarding pending sandbox connection (%@)", reason)
-        viewState.connectingSandboxId = nil
+        NSLog("[WorkspaceProvider] Discarding pending remote connection (%@)", reason)
+        viewState.connectingWorkspaceID = nil
         viewState.pendingRemoteWorkspace = nil
     }
 
@@ -883,14 +1003,8 @@ struct ContentView: View {
     private func handleWorkspaceSelection(_ workspace: Workspace, preferredDirectory: URL?) {
         terminalFocusCoordinator.cancelPendingRepoClickMeasurement(reason: "workspace_selected")
 
-        if workspace.isRemote {
-            guard let sandboxId = workspace.remoteId else {
-                viewState.remoteErrorMessage =
-                    RemoteWorkspaceError.missingRemoteIdentifier
-                    .localizedDescription
-                return
-            }
-            handleRemoteWorkspaceSelection(workspace, sandboxId: sandboxId)
+        if workspace.backendIdentifier != LocalWorkspaceProvider.identifier {
+            handleProviderBackedWorkspaceSelection(workspace)
         } else {
             abandonPendingRemoteConnection(reason: "local_workspace_selected")
             markAccessed(workspace: workspace)
@@ -923,12 +1037,15 @@ struct ContentView: View {
     }
 
     @MainActor
-    private func handleRemoteWorkspaceSelection(_ workspace: Workspace, sandboxId: String) {
-        let sessionKey = HostTerminalSessionKey.remoteSandbox(sandboxId)
-        let placeholderDir = FileManager.default.temporaryDirectory
-        let sessionRequest = workspace.remoteSessionRequest
+    private func handleProviderBackedWorkspaceSelection(_ workspace: Workspace) {
+        guard let provider = workspaceProviderRegistry.provider(for: workspace) else {
+            viewState.workspaceOperationErrorMessage =
+                "No workspace provider is registered for '\(workspace.backendIdentifier)'."
+            return
+        }
 
-        // Reuse existing session for this specific sandbox
+        let providerTarget = WorkspaceProviderTarget(workspace)
+        let sessionKey = provider.sessionKey(for: providerTarget)
         if workspace.status == .active,
             let existing = hostTerminalState.sessions.first(where: { $0.key == sessionKey })
         {
@@ -944,101 +1061,73 @@ struct ContentView: View {
             return
         }
 
-        switch remoteWorkspaceStateController.selectionDecision(
-            for: workspace,
-            connectingSandboxID: viewState.connectingSandboxId
-        ) {
-        case .ignoreInFlightConnection(let existingSandboxID):
-            NSLog(
-                "[RemoteBackend] Ignoring selection — already connecting to %@",
-                existingSandboxID
-            )
-            return
-        case .beginConnection(let pendingSelection):
-            viewState.connectingSandboxId = sandboxId
-            viewState.pendingRemoteWorkspace = pendingSelection
-        }
-
-        guard let backend = remoteBackendRegistry.backend(for: workspace.backendIdentifier) else {
-            viewState.connectingSandboxId = nil
-            viewState.pendingRemoteWorkspace = nil
-            viewState.remoteErrorMessage =
-                RemoteWorkspaceError.backendNotRegistered(workspace.backendIdentifier)
-                .localizedDescription
-            return
-        }
-        let activatesProviderSession = backend.runtimeCapabilities.supportsStartStop
-
-        Task {
-            do {
-                let info = try await backend.openSession(for: sessionRequest)
-
-                if activatesProviderSession, workspace.status != .active {
-                    await MainActor.run {
-                        workspace.status = .active
+        Task { @MainActor in
+            if provider.descriptor.id == LumeWorkspaceProvider.identifier {
+                do {
+                    let intercepted = try await lumeSetupCoordinator.prepareIfNeeded(
+                        for: .openTerminal(workspaceName: workspace.name)
+                    ) {
+                        await connectToProviderBackedWorkspace(workspace, provider: provider)
                     }
-                }
-
-                await MainActor.run {
-                    guard let pendingSelection = viewState.pendingRemoteWorkspace else {
+                    if intercepted {
                         return
                     }
-                    let shouldAcceptCompletion = remoteWorkspaceStateController.shouldAcceptCompletion(
-                        sandboxID: sandboxId,
-                        pendingSelection: pendingSelection
-                    )
-                    guard shouldAcceptCompletion else {
-                        return
-                    }
-                    let currentWorkspace = mainSelectionCoordinator.workspace(
-                        with: pendingSelection.workspaceID,
-                        in: repos
-                    )
-
-                    viewState.connectingSandboxId = nil
-                    viewState.pendingRemoteWorkspace = nil
-                    guard let currentWorkspace else { return }
-                    markAccessed(workspace: currentWorkspace)
-                    applyNavigationDestination(.workspaceTerminal(currentWorkspace))
-                    let session = activateHostSession(
-                        key: sessionKey,
-                        directory: placeholderDir,
-                        customCommand: info.sshCommand
-                    )
-                    terminalFocusCoordinator.requestMainTerminalFocus(
-                        targetSessionID: session.id,
-                        surfaceStore: hostTerminalState.surfaceStore,
-                        activeSessionID: hostTerminalState.activeSessionID
-                    )
-                    NSLog("[RemoteBackend] SSH session created for remote workspace %@", sandboxId)
-                }
-            } catch {
-                NSLog(
-                    "[RemoteBackend] Failed to connect to remote workspace %@: %@",
-                    sandboxId,
-                    error.localizedDescription
-                )
-                await MainActor.run {
-                    guard let pendingSelection = viewState.pendingRemoteWorkspace else {
-                        return
-                    }
-                    let shouldAcceptCompletion = remoteWorkspaceStateController.shouldAcceptCompletion(
-                        sandboxID: sandboxId,
-                        pendingSelection: pendingSelection
-                    )
-                    guard shouldAcceptCompletion else {
-                        return
-                    }
-                    viewState.connectingSandboxId = nil
-                    viewState.pendingRemoteWorkspace = nil
-                    viewState.remoteErrorMessage = error.localizedDescription
+                } catch {
+                    viewState.workspaceOperationErrorMessage = error.localizedDescription
+                    return
                 }
             }
+
+            await connectToProviderBackedWorkspace(workspace, provider: provider)
+        }
+    }
+
+    @MainActor
+    private func connectToProviderBackedWorkspace(
+        _ workspace: Workspace,
+        provider: any WorkspaceProviderProtocol
+    ) async {
+        viewState.connectingWorkspaceID = workspace.id
+
+        do {
+            let launchSpec = try await provider.terminalLaunchSpec(for: WorkspaceProviderTarget(workspace))
+
+            guard viewState.connectingWorkspaceID == workspace.id else { return }
+            viewState.connectingWorkspaceID = nil
+            workspace.status = launchSpec.statusAfterLaunch
+            try? modelContext.save()
+            let session = activateHostSession(
+                key: launchSpec.sessionKey,
+                directory: launchSpec.workingDirectory,
+                customCommand: launchSpec.customCommand
+            )
+            viewState.columnVisibility = .all
+            terminalFocusCoordinator.requestMainTerminalFocus(
+                targetSessionID: session.id,
+                surfaceStore: hostTerminalState.surfaceStore,
+                activeSessionID: hostTerminalState.activeSessionID
+            )
+            NSLog(
+                "[WorkspaceProvider] Session created for %@ workspace %@",
+                workspace.backendIdentifier,
+                workspace.name
+            )
+        } catch {
+            NSLog(
+                "[WorkspaceProvider] Failed to connect to %@ workspace %@: %@",
+                workspace.backendIdentifier,
+                workspace.name,
+                error.localizedDescription
+            )
+            guard viewState.connectingWorkspaceID == workspace.id else { return }
+            viewState.connectingWorkspaceID = nil
+            viewState.workspaceOperationErrorMessage = error.localizedDescription
         }
     }
 
     @MainActor
     private func handleWebSourceSelection(_ source: WebSource) {
+        viewState.connectingWorkspaceID = nil
         terminalFocusCoordinator.cancelPendingRepoClickMeasurement(reason: "web_source_selected")
         abandonPendingRemoteConnection(reason: "web_source_selected")
         applyNavigationDestination(.webView(source))
@@ -1053,22 +1142,106 @@ struct ContentView: View {
     }
 
     @MainActor
-    private func createWorkspaceFromLanding(repo: Repo, request: NewWorkspaceRequest) async {
+    private func createWorkspaceFromLanding(
+        repo: Repo,
+        name: String,
+        providerID: String,
+        guestOS: WorkspaceGuestOS?
+    ) async {
+        do {
+            let effectiveGuestOS =
+                providerID == LumeWorkspaceProvider.identifier ? (guestOS ?? .macOS) : guestOS
+
+            if providerID == LumeWorkspaceProvider.identifier {
+                let intercepted = try await lumeSetupCoordinator.prepareIfNeeded(
+                    for: .createWorkspace(name: name, guestOS: effectiveGuestOS ?? .macOS)
+                ) {
+                    do {
+                        try await createWorkspaceFromLanding(
+                            repo: repo,
+                            name: name,
+                            providerID: providerID,
+                            guestOS: effectiveGuestOS,
+                            skipSetup: true
+                        )
+                    } catch {
+                        landingErrorMessage = "Failed to create workspace: \(error.localizedDescription)"
+                    }
+                }
+                if intercepted {
+                    return
+                }
+            }
+
+            try await createWorkspaceFromLanding(
+                repo: repo,
+                name: name,
+                providerID: providerID,
+                guestOS: effectiveGuestOS,
+                skipSetup: true
+            )
+        } catch {
+            landingErrorMessage = "Failed to create workspace: \(error.localizedDescription)"
+        }
+    }
+
+    @MainActor
+    private func createWorkspaceFromLanding(
+        repo: Repo,
+        name: String,
+        providerID: String,
+        guestOS: WorkspaceGuestOS?,
+        skipSetup: Bool
+    ) async throws {
         let controller = SidebarWorkspaceController(
             modelContext: modelContext,
             workspaceService: workspaceService,
-            remoteBackendRegistry: remoteBackendRegistry
+            workspaceProviderRegistry: workspaceProviderRegistry
         )
-        do {
-            let workspace = try await controller.createWorkspace(
-                from: repo,
-                request: request,
-                progress: nil
-            )
+        let workspace = try await controller.createWorkspace(
+            from: repo,
+            name: name,
+            providerID: providerID,
+            guestOS: guestOS,
+            progress: { _ in },
+            onPersisted: nil
+        )
+
+        if skipSetup {
             abandonPendingRemoteConnection(reason: "workspace_created")
             handleWorkspaceSelection(workspace)
+        }
+    }
+
+    @MainActor
+    private func archiveWorkspaceFromLanding(_ workspace: Workspace) async {
+        if workspace.backendIdentifier != LocalWorkspaceProvider.identifier {
+            let controller = SidebarWorkspaceController(
+                modelContext: modelContext,
+                workspaceService: workspaceService,
+                workspaceProviderRegistry: workspaceProviderRegistry
+            )
+            do {
+                try await controller.archive(workspace)
+            } catch {
+                landingErrorMessage = "Failed to archive workspace: \(error.localizedDescription)"
+            }
+        } else {
+            workspace.status = .archived
+        }
+    }
+
+    @MainActor
+    private func openWorkspaceInDefaultEditorFromLanding(_ workspace: Workspace) {
+        do {
+            try OpenInEditorShortcutFlow.perform(
+                target: .project(rootURL: workspace.workspaceURL),
+                editorID: nil,
+                externalEditorService: externalEditorService,
+                trigger: .uiPrimaryAction
+            )
         } catch {
-            landingErrorMessage = "Failed to create workspace: \(error.localizedDescription)"
+            presentOpenInEditorError(error)
         }
     }
 
@@ -1151,8 +1324,6 @@ struct ContentView: View {
             modelContext.rollback()
         }
     }
-
-    @MainActor
     private func handleTerminalProcessExit(sessionID: UUID) {
         NSLog("[HostSession] Process exit detected for session %@", sessionID.uuidString)
         guard
@@ -1185,81 +1356,103 @@ struct ContentView: View {
         setSelectedWorkspace(syncedWorkspace)
     }
 
-    private func syncCloudWorkspaceStatuses() async {
-        var changed = false
-
-        let remoteWorkspaces = repos.flatMap(\.workspaces).filter {
-            $0.isRemote && $0.remoteId != nil
+    @MainActor
+    private func syncWorkspaceStatuses() async {
+        let nonLocalWorkspaces = repos.flatMap(\.workspaces).filter {
+            $0.backendIdentifier != LocalWorkspaceProvider.identifier && $0.remoteId != nil
         }
-        let workspacesByBackend = Dictionary(grouping: remoteWorkspaces, by: \.backendIdentifier)
+        guard !nonLocalWorkspaces.isEmpty else { return }
 
-        for (backendIdentifier, workspaces) in workspacesByBackend {
-            guard let backend = remoteBackendRegistry.backend(for: backendIdentifier) else {
-                NSLog("[RemoteBackend] No backend registered for %@", backendIdentifier)
-                continue
-            }
+        var changed = false
+        let groupedWorkspaces = Dictionary(grouping: nonLocalWorkspaces, by: \.backendIdentifier)
 
-            guard backend.runtimeCapabilities.supportsList,
-                let listableBackend = backend as? any Listable
-            else {
-                continue
-            }
+        for (providerID, providerWorkspaces) in groupedWorkspaces {
+            guard let provider = workspaceProviderRegistry.provider(for: providerID) else { continue }
 
-            let statuses: [RemoteSandboxStatus]
             do {
-                statuses = try await listableBackend.listSandboxes()
+                let snapshots = try await provider.syncStatuses(
+                    for: providerWorkspaces.map(WorkspaceProviderTarget.init)
+                )
+                let statusesByRemoteID = Dictionary(
+                    uniqueKeysWithValues: snapshots.map { ($0.remoteId, $0.status) }
+                )
+
+                for workspace in providerWorkspaces {
+                    guard let remoteID = workspace.remoteId else { continue }
+                    let newStatus = statusesByRemoteID[remoteID] ?? .archived
+                    if workspace.status != newStatus {
+                        NSLog(
+                            "[WorkspaceProvider] Syncing workspace '%@' (%@): %@ -> %@",
+                            workspace.name,
+                            providerID,
+                            workspace.status.rawValue,
+                            newStatus.rawValue
+                        )
+                        workspace.status = newStatus
+                        changed = true
+                    }
+                }
             } catch {
                 NSLog(
-                    "[RemoteBackend] Failed to sync remote workspace statuses for %@: %@",
-                    backendIdentifier,
+                    "[WorkspaceProvider] Failed to sync %@ workspace statuses: %@",
+                    providerID,
                     error.localizedDescription
                 )
-                continue
-            }
-
-            let stateById = Dictionary(uniqueKeysWithValues: statuses.map { ($0.sandboxId, $0.state) })
-
-            for workspace in workspaces {
-                guard let sandboxId = workspace.remoteId else { continue }
-                let newStatus: WorkspaceStatus
-                if let state = stateById[sandboxId] {
-                    switch state {
-                    case "started", "starting":
-                        newStatus = .active
-                    case "stopped", "stopping":
-                        newStatus = .stopped
-                    case "archived", "archiving":
-                        newStatus = .archived
-                    default:
-                        continue
-                    }
-                } else {
-                    newStatus = .archived
-                }
-
-                if workspace.status != newStatus {
-                    NSLog(
-                        "[RemoteBackend] Syncing workspace '%@' status: %@ → %@",
-                        workspace.name,
-                        workspace.status.rawValue,
-                        newStatus.rawValue
-                    )
-                    workspace.status = newStatus
-                    changed = true
-                }
             }
         }
 
         if changed {
-            do {
-                try modelContext.save()
-            } catch {
-                modelContext.rollback()
-                NSLog(
-                    "[RemoteBackend] Failed to persist remote workspace statuses: %@",
-                    error.localizedDescription
-                )
+            try? modelContext.save()
+        }
+    }
+
+    @MainActor
+    private func openDesktop(for workspace: Workspace) {
+        guard let provider = workspaceProviderRegistry.provider(for: workspace) else {
+            viewState.workspaceOperationErrorMessage =
+                "No workspace provider is registered for '\(workspace.backendIdentifier)'."
+            return
+        }
+
+        Task { @MainActor in
+            if provider.descriptor.id == LumeWorkspaceProvider.identifier {
+                do {
+                    let intercepted = try await lumeSetupCoordinator.prepareIfNeeded(
+                        for: .openDesktop(workspaceName: workspace.name)
+                    ) {
+                        await openDesktopAfterSetup(workspace, provider: provider)
+                    }
+                    if intercepted {
+                        return
+                    }
+                } catch {
+                    viewState.workspaceOperationErrorMessage = error.localizedDescription
+                    return
+                }
             }
+
+            await openDesktopAfterSetup(workspace, provider: provider)
+        }
+    }
+
+    @MainActor
+    private func openDesktopAfterSetup(
+        _ workspace: Workspace,
+        provider: any WorkspaceProviderProtocol
+    ) async {
+        viewState.connectingWorkspaceID = workspace.id
+
+        do {
+            let launchSpec = try await provider.desktopLaunchSpec(for: WorkspaceProviderTarget(workspace))
+            guard viewState.connectingWorkspaceID == workspace.id else { return }
+            viewState.connectingWorkspaceID = nil
+            workspace.status = launchSpec.statusAfterLaunch
+            try? modelContext.save()
+            NSWorkspace.shared.open(launchSpec.vncURL)
+        } catch {
+            guard viewState.connectingWorkspaceID == workspace.id else { return }
+            viewState.connectingWorkspaceID = nil
+            viewState.workspaceOperationErrorMessage = error.localizedDescription
         }
     }
 
@@ -1449,12 +1642,12 @@ struct ContentView: View {
             }
             return .workspace(workspace)
 
-        case .remoteSandbox(let sandboxID):
+        case .backendSession(_, let instanceID):
             guard
                 let workspace =
                     repos
                     .flatMap(\.workspaces)
-                    .first(where: { $0.remoteId == sandboxID })
+                    .first(where: { $0.remoteId == instanceID })
             else {
                 return nil
             }
@@ -1555,6 +1748,390 @@ struct ContentView: View {
     private func normalizePath(_ rawPath: String) -> String {
         let expanded = NSString(string: rawPath).expandingTildeInPath
         return URL(fileURLWithPath: expanded).standardizedFileURL.resolvingSymlinksInPath().path
+    }
+
+    private var landingProviderAvailabilityIsPending: Bool {
+        workspaceProviderRegistry.providers.contains { provider in
+            providerAvailabilityByID[provider.descriptor.id] == nil
+        }
+    }
+
+    @MainActor
+    private func seedLandingProviderStateIfNeeded() async -> Bool {
+        guard UIFixtureLumeEnvironment.isEnabled() else { return false }
+
+        providerAvailabilityByID = UIFixtureLumeEnvironment.initialProviderAvailabilityByID()
+        lumeRuntimeSnapshot = await lumeRuntimeService.snapshot()
+        return true
+    }
+
+    @MainActor
+    private func refreshLandingProviderAvailability() async {
+        isRefreshingProviderAvailability = true
+        defer {
+            isRefreshingProviderAvailability = false
+
+            for provider in workspaceProviderRegistry.providers {
+                let providerID = provider.descriptor.id
+                guard providerAvailabilityByID[providerID] == nil else { continue }
+                providerAvailabilityByID[providerID] = .unavailable(
+                    "Timed out checking \(provider.descriptor.displayName) availability."
+                )
+            }
+        }
+
+        if providerAvailabilityByID[LocalWorkspaceProvider.identifier] == nil {
+            providerAvailabilityByID[LocalWorkspaceProvider.identifier] = .available
+        }
+
+        await withTaskGroup(of: (String, WorkspaceProviderAvailability).self) { group in
+            for provider in workspaceProviderRegistry.providers {
+                group.addTask {
+                    (
+                        provider.descriptor.id,
+                        await landingAvailabilityWithTimeout(
+                            for: provider,
+                            displayName: provider.descriptor.displayName
+                        )
+                    )
+                }
+            }
+
+            for await (providerID, availability) in group {
+                providerAvailabilityByID[providerID] = availability
+            }
+        }
+    }
+
+    private func landingAvailabilityWithTimeout(
+        for provider: any WorkspaceProviderProtocol,
+        displayName: String,
+        timeoutNanoseconds: UInt64 = 5_000_000_000
+    ) async -> WorkspaceProviderAvailability {
+        await withTaskGroup(of: WorkspaceProviderAvailability?.self) { group in
+            group.addTask {
+                await provider.availability()
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: timeoutNanoseconds)
+                return nil
+            }
+
+            let firstResult = await group.next() ?? nil
+            group.cancelAll()
+
+            if let availability = firstResult {
+                return availability
+            }
+
+            return .unavailable("Timed out checking \(displayName) availability.")
+        }
+    }
+
+    @MainActor
+    private func refreshLandingRuntimeSnapshot() async {
+        lumeRuntimeSnapshot = await lumeRuntimeService.snapshot()
+    }
+
+    private func environmentOptions(for repo: Repo) -> [WorkspaceEnvironmentSheetOption] {
+        [
+            localEnvironmentOption(for: repo),
+            cloudLinuxEnvironmentOption(for: repo),
+            macOSEnvironmentOption(for: repo),
+            linuxVMEnvironmentOption(for: repo),
+        ]
+    }
+
+    private func landingAvailability(
+        for descriptor: WorkspaceProviderDescriptor,
+        repo: Repo
+    ) -> WorkspaceProviderAvailability {
+        let baseAvailability: WorkspaceProviderAvailability
+        if let resolvedAvailability = providerAvailabilityByID[descriptor.id] {
+            baseAvailability = resolvedAvailability
+        } else if descriptor.id == LocalWorkspaceProvider.identifier {
+            baseAvailability = .available
+        } else if isRefreshingProviderAvailability {
+            baseAvailability = .unavailable("Checking provider availability...")
+        } else {
+            baseAvailability = .unavailable("Timed out checking provider availability.")
+        }
+
+        guard baseAvailability.isAvailable else { return baseAvailability }
+
+        if descriptor.requiresRemoteRepository,
+            repo.remoteURL?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true
+        {
+            return .unavailable("This repository needs a remote origin URL for \(descriptor.displayName).")
+        }
+
+        return baseAvailability
+    }
+
+    private func localEnvironmentOption(for repo: Repo) -> WorkspaceEnvironmentSheetOption {
+        let descriptor = workspaceProviderRegistry.provider(for: LocalWorkspaceProvider.identifier)?.descriptor
+        let availability = landingAvailability(
+            for: descriptor
+                ?? WorkspaceProviderDescriptor(
+                    id: LocalWorkspaceProvider.identifier,
+                    displayName: "Local",
+                    description: "Create a local workspace copy on this Mac."
+                ),
+            repo: repo
+        )
+
+        return WorkspaceEnvironmentSheetOption(
+            kind: .local,
+            title: "Local",
+            subtitle: "Create a local workspace copy on this Mac",
+            description: descriptor?.description ?? "Create a local workspace copy on this Mac.",
+            iconName: "plus.rectangle.on.folder.fill",
+            providerID: LocalWorkspaceProvider.identifier,
+            guestOS: nil,
+            isAvailable: availability.isAvailable,
+            statusText: nil,
+            availabilityReason: availability.reason
+        )
+    }
+
+    private func cloudLinuxEnvironmentOption(for repo: Repo) -> WorkspaceEnvironmentSheetOption {
+        let descriptor = workspaceProviderRegistry.provider(for: DaytonaWorkspaceProvider.identifier)?.descriptor
+        let availability = landingAvailability(
+            for: descriptor
+                ?? WorkspaceProviderDescriptor(
+                    id: DaytonaWorkspaceProvider.identifier,
+                    displayName: "Cloud Linux",
+                    description: "Create a cloud Linux workspace."
+                ),
+            repo: repo
+        )
+
+        return WorkspaceEnvironmentSheetOption(
+            kind: .cloudLinux,
+            title: "Cloud Linux",
+            subtitle: "Runs in Daytona cloud infrastructure",
+            description: descriptor?.description
+                ?? "Create a cloud Linux workspace managed by Daytona.",
+            iconName: "cloud.fill",
+            providerID: DaytonaWorkspaceProvider.identifier,
+            guestOS: .linux,
+            isAvailable: availability.isAvailable,
+            statusText: nil,
+            availabilityReason: availability.reason
+        )
+    }
+
+    private func macOSEnvironmentOption(for repo: Repo) -> WorkspaceEnvironmentSheetOption {
+        let baseAvailability = lumeEnvironmentAvailability()
+
+        let isAvailable: Bool
+        let availabilityReason: String?
+        if !baseAvailability.isAvailable {
+            isAvailable = false
+            availabilityReason = baseAvailability.reason
+        } else if let snapshot = lumeRuntimeSnapshot, snapshot.state == .unsupportedHost {
+            isAvailable = false
+            availabilityReason = snapshot.reason
+        } else {
+            isAvailable = true
+            availabilityReason = nonBlockingMacOSAvailabilityReason()
+        }
+
+        return WorkspaceEnvironmentSheetOption(
+            kind: .macOSVM,
+            title: "macOS VM",
+            subtitle: macOSBaseSummary(),
+            description: macOSEnvironmentDescription(),
+            iconName: "desktopcomputer",
+            providerID: LumeWorkspaceProvider.identifier,
+            guestOS: .macOS,
+            isAvailable: isAvailable,
+            statusText: macOSRuntimeStatusText(),
+            availabilityReason: availabilityReason
+        )
+    }
+
+    private func linuxVMEnvironmentOption(for repo: Repo) -> WorkspaceEnvironmentSheetOption {
+        let availability = lumeEnvironmentAvailability()
+
+        return WorkspaceEnvironmentSheetOption(
+            kind: .linuxVM,
+            title: "Linux VM",
+            subtitle: "Runs in a local Linux VM on this Mac",
+            description: linuxVMEnvironmentDescription(),
+            iconName: "server.rack",
+            providerID: LumeWorkspaceProvider.identifier,
+            guestOS: .linux,
+            isAvailable: availability.isAvailable,
+            statusText: lumeRuntimeStatusText(),
+            availabilityReason: availability.reason
+        )
+    }
+
+    private func lumeEnvironmentAvailability() -> WorkspaceProviderAvailability {
+        if let snapshot = lumeRuntimeSnapshot, snapshot.state == .unsupportedHost {
+            return .unavailable(snapshot.reason ?? "Lume requires Apple Silicon.")
+        }
+
+        #if arch(arm64)
+            return .available
+        #else
+            return .unavailable("Lume requires Apple Silicon.")
+        #endif
+    }
+
+    private func lumeRuntimeStatusText() -> String? {
+        guard let snapshot = lumeRuntimeSnapshot else { return nil }
+        switch snapshot.state {
+        case .setupRequired:
+            return "Setup required"
+        case .repairRequired:
+            return "Repair required"
+        case .ready:
+            return "Ready"
+        case .installing:
+            return "Installing"
+        case .verifying:
+            return "Verifying"
+        case .unsupportedHost:
+            return nil
+        }
+    }
+
+    private func macOSRuntimeStatusText() -> String? {
+        if let snapshot = lumeRuntimeSnapshot, snapshot.state != .ready {
+            return lumeRuntimeStatusText()
+        }
+
+        if let baseSnapshot = lumeRuntimeSnapshot?.baseVM {
+            switch baseSnapshot.status {
+            case .ready:
+                return "Fast clone ready"
+            case .preparing:
+                return "Preparing base"
+            case .missing:
+                if baseSnapshot.profile.imageReference != nil {
+                    return "Downloads base on first use"
+                }
+                return "Prepares base on first use"
+            case .repairRequired:
+                return "Repair base VM"
+            }
+        }
+
+        if let snapshot = lumeRuntimeSnapshot,
+            snapshot.state == .ready,
+            snapshot.defaultMacOSImage == nil,
+            snapshot.defaultMacOSImageError != nil
+        {
+            return "Stock macOS"
+        }
+
+        return lumeRuntimeStatusText()
+    }
+
+    private func macOSEnvironmentDescription() -> String {
+        let base =
+            "Runs in a local macOS VM. Files stay on the host, the terminal opens in-app with `lume ssh`, and desktop opens in an external VNC client."
+
+        guard let snapshot = lumeRuntimeSnapshot else {
+            return base
+        }
+
+        switch snapshot.state {
+        case .setupRequired:
+            return "\(base) Workspaces will install and verify Lume automatically the first time you use this."
+        case .repairRequired:
+            return "\(base) Workspaces will repair the local VM runtime automatically before continuing."
+        case .ready, .installing, .verifying, .unsupportedHost:
+            break
+        }
+
+        if let baseSnapshot = snapshot.baseVM {
+            switch baseSnapshot.status {
+            case .ready:
+                return "\(base) Workspaces will clone the prepared base VM for a faster macOS workspace start."
+            case .preparing:
+                return "\(base) A prepared base VM is already being created. Workspaces will clone it once it is ready."
+            case .missing:
+                if baseSnapshot.profile.imageReference != nil {
+                    return """
+                        \(base) Workspaces will download the matching base VM once, then clone it for faster future macOS workspaces.
+                        """
+                }
+                return """
+                    \(base) No host-matched golden image is available yet, so Workspaces will prepare a stock macOS base VM once and clone it for faster future workspaces.
+                    """
+            case .repairRequired:
+                return "\(base) Workspaces will repair or recreate the prepared base VM before continuing."
+            }
+        }
+
+        if snapshot.defaultMacOSImage == nil, snapshot.defaultMacOSImageError != nil {
+            return """
+                \(base) No host-matched golden image is available yet, so Workspaces will fall back to stock macOS setup automatically.
+                """
+        }
+
+        return base
+    }
+
+    private func linuxVMEnvironmentDescription() -> String {
+        let base =
+            "Uses the same host-shared file model as macOS VM workspaces. Terminal opens in-app, and desktop opens externally when available."
+
+        guard let snapshot = lumeRuntimeSnapshot else {
+            return base
+        }
+
+        switch snapshot.state {
+        case .setupRequired:
+            return "\(base) Workspaces will install and verify Lume automatically the first time you use this."
+        case .repairRequired:
+            return "\(base) Workspaces will repair the local VM runtime automatically before continuing."
+        case .ready, .installing, .verifying, .unsupportedHost:
+            return base
+        }
+    }
+
+    private func nonBlockingMacOSAvailabilityReason() -> String? {
+        guard let snapshot = lumeRuntimeSnapshot else { return nil }
+
+        if let baseSnapshot = snapshot.baseVM, let reason = baseSnapshot.reason {
+            return reason
+        }
+
+        if snapshot.defaultMacOSImage == nil, snapshot.defaultMacOSImageError != nil {
+            return "Workspaces will use stock macOS because no host-matched golden image is available yet."
+        }
+
+        return nil
+    }
+
+    private func macOSBaseSummary() -> String {
+        guard let snapshot = lumeRuntimeSnapshot else {
+            return "Matches this Mac by default"
+        }
+
+        if let baseSnapshot = snapshot.baseVM {
+            switch baseSnapshot.status {
+            case .ready:
+                return "Fast clone ready: \(baseSnapshot.profile.displayName)"
+            case .preparing:
+                return "Preparing base: \(baseSnapshot.profile.displayName)"
+            case .missing:
+                if baseSnapshot.profile.imageReference != nil {
+                    return "Will download base once: \(baseSnapshot.profile.displayName)"
+                }
+                return "Needs one-time base preparation"
+            case .repairRequired:
+                return "Needs base VM repair: \(baseSnapshot.profile.displayName)"
+            }
+        }
+
+        return snapshot.defaultMacOSImage?.profileDisplayName
+            ?? snapshot.hostProfile?.displayName
+            ?? "Matches this Mac by default"
     }
 }
 
@@ -1709,13 +2286,13 @@ struct MainTerminalDetailView: View {
             return "WorkspaceManager"
         case .repoPath, .hostPath:
             return activeHostSession.directoryURL.lastPathComponent
-        case .remoteSandbox(let sandboxID):
-            return selectedWorkspace?.name ?? "Remote Workspace \(sandboxID)"
+        case .backendSession(_, let instanceID):
+            return selectedWorkspace?.name ?? "Workspace \(instanceID)"
         }
     }
 }
 
-struct SandboxConnectingOverlay: View {
+struct WorkspaceConnectingOverlay: View {
     let workspaceName: String?
 
     var body: some View {
@@ -1724,7 +2301,7 @@ struct SandboxConnectingOverlay: View {
             VStack(spacing: 12) {
                 ProgressView()
                     .controlSize(.large)
-                Text("Connecting to \(workspaceName ?? "remote workspace")...")
+                Text("Connecting to \(workspaceName ?? "workspace")...")
                     .font(.headline)
                     .foregroundStyle(.white)
             }
@@ -1743,12 +2320,18 @@ private struct ContentViewPreviewHost: View {
     @State private var deepLinkState = WorkspaceDeepLinkState()
     @State private var lastSurfaceRawValue = ""
     @StateObject private var hostTerminalState = HostTerminalStateStore()
+    @StateObject private var lumeSetupCoordinator = LumeSetupCoordinator()
+    @StateObject private var hostLumeSmokeAutomation = HostLumeSmokeAutomationController(
+        environment: [:]
+    )
 
     var body: some View {
         ContentView(
             deepLinkState: $deepLinkState,
             lastSurfaceRawValue: $lastSurfaceRawValue,
-            hostTerminalState: hostTerminalState
+            hostTerminalState: hostTerminalState,
+            lumeSetupCoordinator: lumeSetupCoordinator,
+            hostLumeSmokeAutomation: hostLumeSmokeAutomation
         )
     }
 }
