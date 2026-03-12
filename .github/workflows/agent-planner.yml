@@ -70,8 +70,25 @@ jobs:
             exit 0
           fi
 
-          if echo "$DISC_TITLE" | grep -qF '[endorsed]'; then
-            echo "::notice::Skipping — already endorsed"
+          # Check if Peter Planner already processed this discussion (comment-based dedup)
+          OWNER="${{ github.repository_owner }}"
+          NAME="${GITHUB_REPOSITORY#*/}"
+          ALREADY_PLANNED=$(gh api graphql -f query='
+            query($owner: String!, $name: String!, $num: Int!) {
+              repository(owner: $owner, name: $name) {
+                discussion(number: $num) {
+                  comments(first: 50) {
+                    nodes { body }
+                  }
+                }
+              }
+            }
+          ' -f owner="$OWNER" -f name="$NAME" -F num="$DISC_NUMBER" \
+            --jq '.data.repository.discussion.comments.nodes[].body' \
+            | grep -cF 'Planned into the following issues' || true)
+
+          if [ "$ALREADY_PLANNED" -gt 0 ]; then
+            echo "::notice::Skipping — already planned (found summary comment)"
             echo "approved=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -102,6 +119,7 @@ jobs:
           REPO_OWNER: ${{ github.repository_owner }}
           DISC_NUMBER: ${{ github.event.discussion.number }}
           DISC_TITLE: ${{ github.event.discussion.title }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Acknowledge
         if: steps.detect.outputs.approved == 'true'
@@ -232,36 +250,3 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-
-      - name: Mark discussion endorsed
-        if: steps.detect.outputs.approved == 'true'
-        run: |
-          set -euo pipefail
-          NUMBER="${{ steps.detect.outputs.number }}"
-          OWNER="${{ github.repository_owner }}"
-          NAME="${GITHUB_REPOSITORY#*/}"
-
-          # Get discussion node ID and title via GraphQL
-          DISC_INFO=$(gh api graphql -f query='
-            query($owner: String!, $name: String!, $num: Int!) {
-              repository(owner: $owner, name: $name) {
-                discussion(number: $num) { id title }
-              }
-            }
-          ' -f owner="$OWNER" -f name="$NAME" -F num="$NUMBER")
-
-          DISC_ID=$(echo "$DISC_INFO" | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['repository']['discussion']['id'])")
-          DISC_TITLE=$(echo "$DISC_INFO" | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['repository']['discussion']['title'])")
-          NEW_TITLE=$(echo "$DISC_TITLE" | sed 's/\[idea\]/[idea][endorsed]/')
-
-          gh api graphql -f query='
-            mutation($id: ID!, $title: String!) {
-              updateDiscussion(input: { discussionId: $id, title: $title }) {
-                discussion { id title }
-              }
-            }
-          ' -f id="$DISC_ID" -f title="$NEW_TITLE"
-
-          echo "::notice::Marked discussion #${NUMBER} as endorsed"
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
