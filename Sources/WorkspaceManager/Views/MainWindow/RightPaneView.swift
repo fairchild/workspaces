@@ -9,6 +9,29 @@ import AppKit
 import SwiftUI
 import WorkspaceManagerCore
 
+struct RightPaneTabPolicy {
+    let supportsFilesystemInspection: Bool
+    let showActivity: Bool
+    let notificationsEnabled: Bool
+
+    var visibleTabs: [RightPaneView.Tab] {
+        let canShowActivity = showActivity && notificationsEnabled
+        if supportsFilesystemInspection {
+            return canShowActivity
+                ? RightPaneView.Tab.allCases
+                : RightPaneView.Tab.allCases.filter { $0 != .activity }
+        }
+        return canShowActivity ? [.activity] : [.files]
+    }
+
+    func normalizedSelection(for selectedTab: RightPaneView.Tab) -> RightPaneView.Tab {
+        if visibleTabs.contains(selectedTab) {
+            return selectedTab
+        }
+        return visibleTabs.first ?? .files
+    }
+}
+
 @MainActor
 final class RightPaneSessionState: ObservableObject {
     @Published var selectedTab: RightPaneView.Tab = .files
@@ -54,6 +77,8 @@ struct RightPaneView: View {
     private let showActivity: Bool
     private let supportsFilesystemInspection: Bool
 
+    @AppStorage(NotificationConstants.enabledKey)
+    private var notificationsEnabled = NotificationConstants.defaultEnabled
     @Environment(\.gitService) private var gitService
     @ObservedObject private var state: RightPaneSessionState
     @ObservedObject private var notificationCoordinator = NotificationCoordinator.shared
@@ -206,20 +231,25 @@ struct RightPaneView: View {
                 await refresh()
             }
         }
+        .onChange(of: notificationsEnabled) { _, _ in
+            normalizeSelectedTab()
+        }
+    }
+
+    private var tabPolicy: RightPaneTabPolicy {
+        RightPaneTabPolicy(
+            supportsFilesystemInspection: supportsFilesystemInspection,
+            showActivity: showActivity,
+            notificationsEnabled: notificationsEnabled
+        )
     }
 
     private var visibleTabs: [Tab] {
-        guard supportsFilesystemInspection else {
-            return showActivity ? [.activity] : []
-        }
-        return showActivity ? Tab.allCases : Tab.allCases.filter { $0 != .activity }
+        tabPolicy.visibleTabs
     }
 
     private var displayedTab: Tab {
-        if visibleTabs.contains(state.selectedTab) {
-            return state.selectedTab
-        }
-        return visibleTabs.first ?? .files
+        tabPolicy.normalizedSelection(for: state.selectedTab)
     }
 
     private var selectedTabBinding: Binding<Tab> {
@@ -248,9 +278,9 @@ struct RightPaneView: View {
 
     @MainActor
     private func normalizeSelectedTab() {
-        guard !visibleTabs.isEmpty else { return }
-        guard !visibleTabs.contains(state.selectedTab) else { return }
-        state.selectedTab = visibleTabs[0]
+        let normalizedTab = tabPolicy.normalizedSelection(for: state.selectedTab)
+        guard state.selectedTab != normalizedTab else { return }
+        state.selectedTab = normalizedTab
         if state.selectedTab == .activity {
             notificationCoordinator.markActivitySeen()
         }
