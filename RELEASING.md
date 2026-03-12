@@ -111,6 +111,20 @@ Set both:
 
 Use `scripts/signing-config.sh` for local signing/notarization only. For GitHub Actions release setup, use `./scripts/setup-release-secrets.sh`.
 
+If the Apple Developer portal is unclear about macOS provisioning profiles, use
+Xcode to bootstrap the profile:
+
+1. Create a temporary macOS app target on team `LKVN4J3C6C`
+2. Set the bundle identifier to `com.cloudcompute.workspaces`
+3. In `Signing & Capabilities`, add `Keychain Sharing`
+4. Build/archive once so Xcode generates the macOS profile
+5. Copy the resulting profile from `~/Library/Developer/Xcode/UserData/Provisioning Profiles/`
+   to `~/.config/apple/workspaces.provisionprofile`
+
+The generated profile should be an `OSX` profile for
+`com.cloudcompute.workspaces`, for example `Mac Team Direct Provisioning Profile:
+com.cloudcompute.workspaces`.
+
 #### Step 6: Verify the Full Pipeline
 
 Run a local unsigned build first to confirm the toolchain works:
