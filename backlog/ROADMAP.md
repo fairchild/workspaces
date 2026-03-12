@@ -235,8 +235,9 @@ Default execution policy:
 
 Current GitHub state (2026-03-12):
 
-- the current open milestone is `Core reliability and maintainability` (#1)
-- it is the first roadmap-aligned execution milestone and should stay limited to the current `P0` theme
+- the active milestone is `Core reliability and maintainability` (#1)
+- the queued next milestone is `Lume runtime hardening` (#5)
+- the active milestone should stay limited to the current `P0` theme
 - roadmap ordering still wins over milestone drift; if the milestone scope widens, bring it back to the `P0` set
 
 Theme-to-milestone map:
@@ -244,7 +245,7 @@ Theme-to-milestone map:
 | Roadmap theme | Milestone posture |
 |------|----------|
 | Core reliability and maintainability | Current execution milestone |
-| Lume runtime hardening | Next-up standalone milestone after the current core-reliability milestone |
+| Lume runtime hardening | Queued standalone milestone after the current core-reliability milestone |
 | Notification catch-up and reconnect correctness | Standalone milestone after Lume unless activity work becomes urgent sooner |
 | Terminal multiplexing direction | Milestone only after an explicit product decision to invest here |
 | Strategic isolation backend direction | Backlog/research until promoted by a fresh approved discussion |

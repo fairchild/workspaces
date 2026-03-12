@@ -4,6 +4,7 @@ category: followup
 topic: lume-runtime
 priority: 2
 description: Post-merge cleanup for Lume runtime decomposition, transport unification, launcher hardening, and stronger VM/error typing.
+milestone: 5
 ---
 
 # Lume Runtime Architecture Follow-Ups
@@ -109,6 +110,14 @@ LumeWorkspaceProvider
 **Acceptance criteria:**
 - [ ] Docs no longer describe duplicated transport internals or Python-based detachment
 - [ ] PR reviewers can trace runtime/provider responsibilities to small focused types
+
+## GitHub
+
+- Milestone: [#5 Lume runtime hardening](https://github.com/fairchild/workspaces/milestone/5)
+- Related issues:
+  - [#87 Extract shared Lume transport and runner helpers](https://github.com/fairchild/workspaces/issues/87)
+  - [#88 Replace Python detachment and normalize Lume VM typing](https://github.com/fairchild/workspaces/issues/88)
+  - [#89 Refresh Lume runtime docs after the architecture cleanup](https://github.com/fairchild/workspaces/issues/89)
 
 ## Verification Commands
 
