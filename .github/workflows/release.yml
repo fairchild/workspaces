@@ -20,7 +20,7 @@ jobs:
     runs-on: ${{ vars.PREFERRED_RUNNER != '' && vars.PREFERRED_RUNNER || 'self-hosted' }}
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
