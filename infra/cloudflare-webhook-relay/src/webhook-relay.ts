@@ -15,6 +15,7 @@ interface StoredEvent {
   summary: string;
   repo: string;
   payload: string | null;
+  idempotency_key: string;
   delivery_id: string | null;
   sender: string | null;
   clients_sent: number;
@@ -25,8 +26,30 @@ interface ClientAttachment {
   allowedRepos: string[];
 }
 
+function canonicalJSONString(value: unknown): string {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value);
+  }
+
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => canonicalJSONString(entry)).join(",")}]`;
+  }
+
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, entry]) => entry !== undefined)
+    .sort(([left], [right]) => left.localeCompare(right));
+
+  return `{${entries.map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJSONString(entry)}`).join(",")}}`;
+}
+
+async function sha256Hex(input: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(input));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
 export class WebhookRelay extends DurableObject<Env> {
   private sql: SqlStorage;
+  private schemaReadyPromise: Promise<void> | null = null;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -40,6 +63,7 @@ export class WebhookRelay extends DurableObject<Env> {
         summary TEXT NOT NULL,
         repo TEXT NOT NULL,
         payload TEXT,
+        idempotency_key TEXT NOT NULL,
         delivery_id TEXT,
         sender TEXT,
         clients_sent INTEGER NOT NULL DEFAULT 0,
@@ -70,9 +94,131 @@ export class WebhookRelay extends DurableObject<Env> {
     if (!cols.has("repo")) {
       this.sql.exec(`ALTER TABLE events ADD COLUMN repo TEXT NOT NULL DEFAULT ''`);
     }
+    if (!cols.has("idempotency_key")) {
+      this.sql.exec(`ALTER TABLE events ADD COLUMN idempotency_key TEXT`);
+    }
+  }
+
+  private ensureSchemaReady(): Promise<void> {
+    if (this.schemaReadyPromise == null) {
+      this.schemaReadyPromise = this.ctx.blockConcurrencyWhile(async () => {
+        await this.backfillIdempotencyKeys();
+        this.pruneDuplicateEvents();
+        this.sql.exec(
+          `CREATE UNIQUE INDEX IF NOT EXISTS idx_events_idempotency_key ON events(idempotency_key)`
+        );
+      }).catch((error) => {
+        this.schemaReadyPromise = null;
+        throw error;
+      });
+    }
+
+    return this.schemaReadyPromise;
+  }
+
+  private async backfillIdempotencyKeys(): Promise<void> {
+    const rows = this.sql.exec(
+      `SELECT id, type, action, summary, repo, payload, sender
+       FROM events
+       WHERE idempotency_key IS NULL OR idempotency_key = ''`
+    );
+
+    for (const row of rows) {
+      const eventID = row.id as string;
+      const key = await this.buildStoredEventIdempotencyKey({
+        type: row.type as string,
+        action: row.action as string,
+        summary: row.summary as string,
+        repo: row.repo as string,
+        payload: row.payload as string | null,
+        sender: row.sender as string | null,
+      });
+      this.sql.exec(`UPDATE events SET idempotency_key = ? WHERE id = ?`, key, eventID);
+    }
+  }
+
+  private pruneDuplicateEvents(): void {
+    const countCursor = this.sql.exec(
+      `SELECT COUNT(*) AS cnt
+       FROM events AS older
+       WHERE EXISTS (
+         SELECT 1
+         FROM events AS newer
+         WHERE newer.idempotency_key = older.idempotency_key
+           AND (
+             newer.created_at > older.created_at
+             OR (newer.created_at = older.created_at AND newer.id > older.id)
+           )
+       )`
+    );
+
+    let duplicates = 0;
+    for (const row of countCursor) {
+      duplicates = row.cnt as number;
+    }
+
+    if (duplicates == 0) {
+      return;
+    }
+
+    this.sql.exec(
+      `DELETE FROM events
+       WHERE id IN (
+         SELECT older.id
+         FROM events AS older
+         WHERE EXISTS (
+           SELECT 1
+           FROM events AS newer
+           WHERE newer.idempotency_key = older.idempotency_key
+             AND (
+               newer.created_at > older.created_at
+               OR (newer.created_at = older.created_at AND newer.id > older.id)
+             )
+         )
+       )`
+    );
+
+    log.info("do_event_duplicates_pruned", { count: duplicates });
+  }
+
+  private async buildIdempotencyKey(
+    eventType: string,
+    body: Record<string, unknown>
+  ): Promise<string> {
+    const canonical = canonicalJSONString({ eventType, body });
+    return `msg:${await sha256Hex(canonical)}`;
+  }
+
+  private async buildStoredEventIdempotencyKey(row: {
+    type: string;
+    action: string;
+    summary: string;
+    repo: string;
+    payload: string | null;
+    sender: string | null;
+  }): Promise<string> {
+    if (row.payload) {
+      try {
+        const payload = JSON.parse(row.payload) as Record<string, unknown>;
+        return this.buildIdempotencyKey(row.type, payload);
+      } catch {
+        // Fall through to a legacy deterministic key when payload is malformed.
+      }
+    }
+
+    const canonical = canonicalJSONString({
+      eventType: row.type,
+      action: row.action,
+      summary: row.summary,
+      repo: row.repo,
+      sender: row.sender,
+    });
+    return `legacy:${await sha256Hex(canonical)}`;
   }
 
   async fetch(request: Request): Promise<Response> {
+    await this.ensureSchemaReady();
+
     if (request.method === "GET" && request.headers.get("Upgrade") === "websocket") {
       return this.handleWebSocketUpgrade(request);
     }
@@ -108,11 +254,13 @@ export class WebhookRelay extends DurableObject<Env> {
   private async handleWebhookPost(request: Request): Promise<Response> {
     const eventType = request.headers.get("X-GitHub-Event") ?? "unknown";
     const deliveryId = request.headers.get("X-GitHub-Delivery") ?? null;
-    const body = await request.json<Record<string, unknown>>();
+    const payloadText = await request.text();
+    const body = JSON.parse(payloadText) as Record<string, unknown>;
     const action = (body.action as string) ?? "";
     const sender = (body.sender as Record<string, unknown>)?.login as string ?? null;
     const repo = (body.repository as Record<string, unknown>)?.full_name as string ?? "unknown";
     const summary = this.buildSummary(eventType, action, body);
+    const idempotencyKey = await this.buildIdempotencyKey(eventType, body);
 
     const event: StoredEvent = {
       id: crypto.randomUUID(),
@@ -120,7 +268,8 @@ export class WebhookRelay extends DurableObject<Env> {
       action,
       summary,
       repo,
-      payload: JSON.stringify(body),
+      payload: payloadText,
+      idempotency_key: idempotencyKey,
       delivery_id: deliveryId,
       sender,
       clients_sent: 0,
@@ -128,11 +277,34 @@ export class WebhookRelay extends DurableObject<Env> {
     };
 
     this.sql.exec(
-      `INSERT INTO events (id, type, action, summary, repo, payload, delivery_id, sender, clients_sent, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR IGNORE INTO events (
+         id, type, action, summary, repo, payload, idempotency_key, delivery_id, sender, clients_sent, created_at
+       )
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       event.id, event.type, event.action, event.summary, event.repo,
-      event.payload, event.delivery_id, event.sender, event.clients_sent, event.created_at
+      event.payload, event.idempotency_key, event.delivery_id, event.sender, event.clients_sent, event.created_at
     );
+
+    let storedEventID: string | null = null;
+    for (
+      const row of this.sql.exec(
+        `SELECT id FROM events WHERE idempotency_key = ? LIMIT 1`,
+        event.idempotency_key
+      )
+    ) {
+      storedEventID = row.id as string;
+      break;
+    }
+
+    if (storedEventID !== event.id) {
+      log.info("do_event_duplicate_ignored", {
+        delivery_id: deliveryId,
+        event_type: eventType,
+        action,
+        repo,
+      });
+      return new Response("OK", { status: 200 });
+    }
 
     this.pruneOldEvents();
 

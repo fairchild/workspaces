@@ -487,8 +487,10 @@ struct ActivityTabView: View {
                     }
                     .buttonStyle(.borderedProminent)
 
-                    SettingsLink {
-                        Text("Open Settings")
+                    if !notificationsEnabled {
+                        SettingsLink {
+                            Text("Open Settings")
+                        }
                     }
                 }
             }
@@ -555,8 +557,10 @@ struct ActivityTabView: View {
                     }
                     .buttonStyle(.borderedProminent)
 
-                    SettingsLink {
-                        Text("Open Settings")
+                    if !notificationsEnabled {
+                        SettingsLink {
+                            Text("Open Settings")
+                        }
                     }
                 }
             }
