@@ -37,22 +37,50 @@ struct RightPaneTabPolicyTests {
         #expect(policy.normalizedSelection(for: .activity) == .files)
     }
 
-    @Test("Re-enabling notifications preserves the normalized non-activity selection")
-    func reenablingNotificationsPreservesNormalizedSelection() {
+    @Test("Repo tabs exclude activity regardless of notification setting")
+    func repoTabsExcludeActivityRegardlessOfNotificationSetting() {
+        let disabledPolicy = RightPaneTabPolicy(
+            supportsFilesystemInspection: true,
+            showActivity: false,
+            notificationsEnabled: false
+        )
+        let enabledPolicy = RightPaneTabPolicy(
+            supportsFilesystemInspection: true,
+            showActivity: false,
+            notificationsEnabled: true
+        )
+
+        #expect(disabledPolicy.visibleTabs == [.files, .changes])
+        #expect(enabledPolicy.visibleTabs == [.files, .changes])
+    }
+
+    @Test("Disabled notifications preserve non-activity tab selections")
+    func disabledNotificationsPreserveNonActivitySelections() {
+        let disabledPolicy = RightPaneTabPolicy(
+            supportsFilesystemInspection: true,
+            showActivity: true,
+            notificationsEnabled: false
+        )
+
+        #expect(disabledPolicy.normalizedSelection(for: .files) == .files)
+        #expect(disabledPolicy.normalizedSelection(for: .changes) == .changes)
+    }
+
+    @Test("Re-enabling notifications keeps a previously normalized files selection")
+    func reenablingNotificationsKeepsNormalizedFilesSelection() {
         let disabledPolicy = RightPaneTabPolicy(
             supportsFilesystemInspection: true,
             showActivity: true,
             notificationsEnabled: false
         )
         let normalizedSelection = disabledPolicy.normalizedSelection(for: .activity)
-
-        let enabledPolicy = RightPaneTabPolicy(
+        let reenabledPolicy = RightPaneTabPolicy(
             supportsFilesystemInspection: true,
             showActivity: true,
             notificationsEnabled: true
         )
 
         #expect(normalizedSelection == .files)
-        #expect(enabledPolicy.normalizedSelection(for: normalizedSelection) == .files)
+        #expect(reenabledPolicy.normalizedSelection(for: normalizedSelection) == .files)
     }
 }

@@ -28,7 +28,7 @@ struct RightPaneTabPolicy {
         if visibleTabs.contains(selectedTab) {
             return selectedTab
         }
-        return visibleTabs.first ?? .files
+        return visibleTabs[0]
     }
 }
 
