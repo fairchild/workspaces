@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.4.0] - 2026-03-11
+
+### Added
+- add GitHub connect entrypoints in the activity panel
+- add conductor setup automation for trusted mise installs
+- expand agent automation support for remote runtime and scheduled workflows
+
+### Fixed
+- provision packaged apps correctly for the data protection keychain
+- dedupe notification activity replays and JWT refresh churn
+- stop app focus stealing on self-hosted CI runners
+- harden contributor and Peter automation workflows
+
+### Other
+- update GitHub Actions runtimes to Node.js 24
+- document keychain-signing bootstrap and agent-team token requirements
+
 ## [0.3.0] - 2026-03-10
 
 ### Added

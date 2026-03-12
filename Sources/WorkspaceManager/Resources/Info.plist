@@ -40,11 +40,11 @@
 
     <!-- Marketing version shown to users (semantic version) -->
     <key>CFBundleShortVersionString</key>
-    <string>0.3.0</string>
+    <string>0.4.0</string>
 
     <!-- Build number (increment on each build, used for updates) -->
     <key>CFBundleVersion</key>
-    <string>5</string>
+    <string>6</string>
 
     <!-- ============================================================
          BUNDLE CONFIGURATION
