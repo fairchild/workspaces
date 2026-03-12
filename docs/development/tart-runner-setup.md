@@ -17,14 +17,49 @@ REPO_ROOT=$(pwd)
 TART_VM=workspaces-tart-ui
 TART_BASE_VM=macos-tahoe-xcode
 TART_LOG_DIR="${HOME}/.local/state/workspaces"
-TART_LOG_PATH="${TART_LOG_DIR}/tart-ui-runner.log"
+TART_LOG_PATH="${TART_LOG_DIR}/tart-ui-vm.launchd.log"
+PLIST_PATH="${HOME}/Library/LaunchAgents/com.fairchild.workspaces.tart-ui-vm.plist"
 
 mkdir -p "${TART_LOG_DIR}"
 tart clone "${TART_BASE_VM}" "${TART_VM}" 2>/dev/null || true
 
-nohup tart run --no-graphics \
-  --dir="workspaces:${REPO_ROOT}" \
-  "${TART_VM}" > "${TART_LOG_PATH}" 2>&1 &
+cat > "${PLIST_PATH}" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.fairchild.workspaces.tart-ui-vm</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/tart</string>
+    <string>run</string>
+    <string>--no-graphics</string>
+    <string>--net-bridged=en0</string>
+    <string>${TART_VM}</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>WorkingDirectory</key>
+  <string>${HOME}</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>${TART_LOG_PATH}</string>
+  <key>StandardErrorPath</key>
+  <string>${TART_LOG_PATH}</string>
+</dict>
+</plist>
+EOF
+
+launchctl bootout "gui/$(id -u)" "${PLIST_PATH}" 2>/dev/null || true
+launchctl bootstrap "gui/$(id -u)" "${PLIST_PATH}"
+launchctl kickstart -k "gui/$(id -u)/com.fairchild.workspaces.tart-ui-vm"
 ```
 
 Wait until the guest responds to `tart exec`:
@@ -88,6 +123,18 @@ gh run watch --exit-status "$(gh run list --workflow tart-ui-smoke.yml --limit 1
 The run should execute on `[self-hosted, tart-ui]` and print `sw_vers`, `swift --version`, and `xcodebuild -version`.
 
 ## Day-two operations
+
+Restart the host-side Tart VM supervisor:
+
+```bash
+launchctl kickstart -k "gui/$(id -u)/com.fairchild.workspaces.tart-ui-vm"
+```
+
+Unload the host-side Tart VM supervisor:
+
+```bash
+launchctl bootout "gui/$(id -u)" "${HOME}/Library/LaunchAgents/com.fairchild.workspaces.tart-ui-vm.plist"
+```
 
 Check the guest-side service status:
 
