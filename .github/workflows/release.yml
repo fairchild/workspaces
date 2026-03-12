@@ -56,6 +56,7 @@ jobs:
         env:
           APPLE_DEVELOPER_ID_CERT_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_CERT_BASE64 }}
           APPLE_DEVELOPER_ID_CERT_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_CERT_PASSWORD }}
+          APPLE_DEVELOPER_ID_PROVISIONING_PROFILE_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_PROVISIONING_PROFILE_BASE64 }}
           APPLE_ID: ${{ vars.APPLE_ID != '' && vars.APPLE_ID || secrets.APPLE_ID }}
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
           APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID != '' && vars.APPLE_TEAM_ID || secrets.APPLE_TEAM_ID }}
@@ -65,6 +66,7 @@ jobs:
 
           [[ -n "$APPLE_DEVELOPER_ID_CERT_BASE64" ]] || missing+=("APPLE_DEVELOPER_ID_CERT_BASE64")
           [[ -n "$APPLE_DEVELOPER_ID_CERT_PASSWORD" ]] || missing+=("APPLE_DEVELOPER_ID_CERT_PASSWORD")
+          [[ -n "$APPLE_DEVELOPER_ID_PROVISIONING_PROFILE_BASE64" ]] || missing+=("APPLE_DEVELOPER_ID_PROVISIONING_PROFILE_BASE64")
           [[ -n "$APPLE_ID" ]] || missing+=("APPLE_ID")
           [[ -n "$APPLE_APP_PASSWORD" ]] || missing+=("APPLE_APP_PASSWORD")
           [[ -n "$APPLE_TEAM_ID" ]] || missing+=("APPLE_TEAM_ID")
@@ -141,6 +143,21 @@ jobs:
             echo "$ORIGINAL_KEYCHAIN_LIST"
             echo "EOF"
           } >> "$GITHUB_ENV"
+
+      - name: Prepare provisioning profile
+        env:
+          APPLE_DEVELOPER_ID_PROVISIONING_PROFILE_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_PROVISIONING_PROFILE_BASE64 }}
+        run: |
+          set -euo pipefail
+
+          PROFILE_PATH="$RUNNER_TEMP/workspaces-release.provisionprofile"
+
+          if ! (echo "$APPLE_DEVELOPER_ID_PROVISIONING_PROFILE_BASE64" | base64 --decode > "$PROFILE_PATH" 2>/dev/null); then
+            echo "$APPLE_DEVELOPER_ID_PROVISIONING_PROFILE_BASE64" | base64 -D > "$PROFILE_PATH"
+          fi
+
+          security cms -D -i "$PROFILE_PATH" >/dev/null
+          echo "PROVISIONING_PROFILE_PATH=$PROFILE_PATH" >> "$GITHUB_ENV"
 
       - name: Export signing environment
         env:

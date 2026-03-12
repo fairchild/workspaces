@@ -20,6 +20,7 @@ WorkspaceManager is distributed as a notarized DMG file via GitHub Releases. The
 
 You need an Apple Developer Program membership ($99/year) for:
 - Developer ID Application certificate (for code signing)
+- Developer ID provisioning profile with keychain sharing for `com.cloudcompute.workspaces`
 - Notarization (for Gatekeeper approval)
 
 ### Local Development Setup
@@ -60,7 +61,24 @@ If nothing shows up, check that both the certificate *and* its private key are i
 
 Your 10-character Team ID is at [developer.apple.com/account](https://developer.apple.com/account) under Membership Details. It's also shown in the parentheses of your signing identity from Step 1.
 
-#### Step 3: Create an App-Specific Password
+#### Step 3: Create a Developer ID Provisioning Profile
+
+The data protection keychain requires more than a Developer ID certificate. The
+packaged app also needs a macOS provisioning profile that authorizes:
+
+- the `com.cloudcompute.workspaces` App ID
+- keychain sharing for that App ID
+
+Create a macOS Developer ID provisioning profile in the Apple Developer portal
+for `com.cloudcompute.workspaces`, enable Keychain Sharing, download the
+`.provisionprofile`, and store it somewhere local, for example:
+
+```bash
+mkdir -p ~/.config/apple
+mv ~/Downloads/WorkspaceManager.provisionprofile ~/.config/apple/workspaces.provisionprofile
+```
+
+#### Step 4: Create an App-Specific Password
 
 Notarization requires an app-specific password (your regular Apple ID password won't work).
 
@@ -78,7 +96,7 @@ xcrun notarytool store-credentials "workspaces-notarize" \
     --password xxxx-xxxx-xxxx-xxxx
 ```
 
-#### Step 4: Configure Local Signing
+#### Step 5: Configure Local Signing
 
 ```bash
 cp scripts/signing-config.sh.template scripts/signing-config.sh
@@ -86,9 +104,28 @@ cp scripts/signing-config.sh.template scripts/signing-config.sh
 
 Edit `scripts/signing-config.sh` with your credentials. The template has inline comments explaining each field. This file is gitignored — never commit it.
 
+Set both:
+
+- `SIGNING_IDENTITY` to your Developer ID Application certificate
+- `PROVISIONING_PROFILE_PATH` to the downloaded `.provisionprofile`
+
 Use `scripts/signing-config.sh` for local signing/notarization only. For GitHub Actions release setup, use `./scripts/setup-release-secrets.sh`.
 
-#### Step 5: Verify the Full Pipeline
+If the Apple Developer portal is unclear about macOS provisioning profiles, use
+Xcode to bootstrap the profile:
+
+1. Create a temporary macOS app target on team `LKVN4J3C6C`
+2. Set the bundle identifier to `com.cloudcompute.workspaces`
+3. In `Signing & Capabilities`, add `Keychain Sharing`
+4. Build/archive once so Xcode generates the macOS profile
+5. Copy the resulting profile from `~/Library/Developer/Xcode/UserData/Provisioning Profiles/`
+   to `~/.config/apple/workspaces.provisionprofile`
+
+The generated profile should be an `OSX` profile for
+`com.cloudcompute.workspaces`, for example `Mac Team Direct Provisioning Profile:
+com.cloudcompute.workspaces`.
+
+#### Step 6: Verify the Full Pipeline
 
 Run a local unsigned build first to confirm the toolchain works:
 
@@ -101,8 +138,8 @@ Then test signing:
 
 ```bash
 ./scripts/build-release.sh
-codesign -dv --verbose=4 build/WorkspaceManager.app
-# Should show your Developer ID Application identity
+./scripts/verify-app-keychain-signing.sh build/WorkspaceManager.app
+# Should confirm the embedded provisioning profile and keychain access group
 ```
 
 ### GitHub Actions Setup (for CI/CD)
@@ -111,7 +148,8 @@ Preferred setup path:
 
 ```bash
 ./scripts/setup-release-secrets.sh \
-    --p12-path ~/.config/apple/Developer_ID_Application_<TEAM_ID>.p12
+    --p12-path ~/.config/apple/Developer_ID_Application_<TEAM_ID>.p12 \
+    --profile-path ~/.config/apple/workspaces.provisionprofile
 ```
 
 Notes:
@@ -126,6 +164,7 @@ If you prefer to configure GitHub manually, add these **secrets** to your GitHub
 |--------|-------------|
 | `APPLE_DEVELOPER_ID_CERT_BASE64` | Base64-encoded .p12 certificate |
 | `APPLE_DEVELOPER_ID_CERT_PASSWORD` | Password for the .p12 file |
+| `APPLE_DEVELOPER_ID_PROVISIONING_PROFILE_BASE64` | Base64-encoded Developer ID provisioning profile with keychain sharing |
 | `APPLE_APP_PASSWORD` | App-specific password |
 
 Add these **variables** to your GitHub repository (Settings > Secrets and variables > Actions > Variables):
@@ -145,6 +184,13 @@ To export your certificate for CI or for `setup-release-secrets.sh`:
 ```bash
 base64 -i Developer_ID_Application.p12 | pbcopy
 # Paste as APPLE_DEVELOPER_ID_CERT_BASE64 secret
+```
+
+To export the provisioning profile for CI:
+
+```bash
+base64 -i ~/.config/apple/workspaces.provisionprofile | pbcopy
+# Paste as APPLE_DEVELOPER_ID_PROVISIONING_PROFILE_BASE64 secret
 ```
 
 ---
@@ -186,6 +232,7 @@ The recommended method for production releases.
    - Actions performed:
      - Build GhosttyKit
      - Import signing certificate from secrets
+     - Decode provisioning profile from secrets
      - Build signed `.app`
      - Notarize and staple `.dmg`
      - Publish a GitHub release with artifacts
@@ -280,8 +327,8 @@ After creating a release, verify:
 
 ### Code Signature
 ```bash
-codesign -dv --verbose=4 build/WorkspaceManager.app
-# Should show "Developer ID Application: Your Name (TEAM_ID)"
+./scripts/verify-app-keychain-signing.sh build/WorkspaceManager.app
+# Should confirm the embedded provisioning profile and keychain access group
 ```
 
 ### Gatekeeper
@@ -320,7 +367,8 @@ xcrun notarytool log <submission-id> \
 Common issues:
 - **Unsigned code**: All binaries and frameworks must be signed
 - **Hardened runtime missing**: Use `--options runtime` when signing
-- **Invalid entitlements**: Check entitlements file syntax
+- **Invalid entitlements**: Check entitlements file syntax and provisioning profile authorization
+- **Missing provisioning profile**: Signed packaged builds need `PROVISIONING_PROFILE_PATH` locally and `APPLE_DEVELOPER_ID_PROVISIONING_PROFILE_BASE64` in CI
 - **Secrets/variables drift**: Re-run `./scripts/setup-release-secrets.sh`; it is safe to run repeatedly and `--force` will refresh existing values
 
 ### "App is damaged" Error
@@ -345,8 +393,9 @@ security find-identity -v -p codesigning
 | Script | Purpose |
 |--------|---------|
 | `scripts/build-release.sh` | Build app bundle from SPM |
+| `scripts/verify-app-keychain-signing.sh` | Verify embedded provisioning profile and signed keychain entitlements |
 | `scripts/notarize.sh` | Create DMG and notarize |
-| `scripts/setup-release-secrets.sh` | Configure GitHub Actions release secrets/variables from a verified `.p12` |
+| `scripts/setup-release-secrets.sh` | Configure GitHub Actions release secrets/variables from a verified `.p12` and provisioning profile |
 | `scripts/signing-config.sh` | Your signing credentials (not in git) |
 
 ---
