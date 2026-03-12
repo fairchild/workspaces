@@ -107,15 +107,18 @@ workspaces/
 3. Run local checks (`swift test`, `swift build`, lint when relevant).
 4. Include a concise summary of behavior changes and verification results in the PR.
 
-## Self-Hosted CI Runners
+## CI Runner Lanes
 
-CI runs on self-hosted macOS runners on developer machines. Three runners are registered:
+Generic lint/build/test CI runs on GitHub-hosted macOS (`macos-17`). Self-hosted jobs must use explicit lanes: `[self-hosted, tart-ui]` for UI/perf automation and `[self-hosted, signing-host]` for release/signing/notarization. `Perf Validation` runs separately from the main CI workflow so app-launching checks stay off the default path.
 
-| Runner | Repo | Location |
-|--------|------|----------|
-| blue-workspaces | workspaces | `~/.local/share/actions-runner-workspaces` |
-| blue | services | `~/.local/share/actions-runner` |
-| blue-code-cadence | code-cadence | `~/.local/share/actions-runner-code-cadence` |
+For this repo, the currently registered self-hosted runners are:
+
+| Runner | Labels | Location |
+|--------|--------|----------|
+| `blue-workspaces` | `self-hosted-macos` | `~/.local/share/actions-runner-workspaces` |
+| `workspaces-tart-ui` | `tart-ui` | Tart guest `~/.local/share/actions-runner-tart-ui` |
+
+The release workflow also expects a separate runner advertising the `signing-host` label before dispatch.
 
 ### Focus stealing prevention
 

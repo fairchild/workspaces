@@ -224,11 +224,12 @@ The recommended method for production releases.
    - Trigger: `workflow_dispatch`
    - In GitHub: Actions > `Release` > `Run workflow`
    - Branch to release from: `main`
+   - Runner lane: `[self-hosted, signing-host]` (the signing runner must advertise the `signing-host` label before dispatch)
    - Guardrails:
      - Manual releases fail if started from a non-`main` branch.
      - Release commit must be reachable from `origin/main`.
      - Tag-driven releases fail fast if app version metadata does not match the requested release tag.
-     - Temporary signing keychain is cleaned up and prior keychain defaults are restored on self-hosted runners.
+     - Temporary signing keychain is cleaned up and prior keychain defaults are restored on the shared `signing-host` runner.
    - Actions performed:
      - Build GhosttyKit
      - Import signing certificate from secrets

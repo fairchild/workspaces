@@ -16,8 +16,9 @@ permissions:
 
 jobs:
   build-sign-notarize-release:
-    # Use the same runner class as CI to avoid GhosttyKit regressions on hosted images.
-    runs-on: ${{ vars.PREFERRED_RUNNER != '' && vars.PREFERRED_RUNNER || 'self-hosted' }}
+    # Release signing/notarization stays on the dedicated signing lane so it
+    # never contends with generic CI or Tart UI automation.
+    runs-on: [self-hosted, signing-host]
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v5

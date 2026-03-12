@@ -8,12 +8,14 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ci-self-hosted-${{ github.ref }}
+  group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   build-and-test:
-    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork && 'macos-17' || 'self-hosted' }}
+    # Generic build/lint/test runs on GitHub-hosted macOS so routine CI never
+    # depends on the interactive desktop or the dedicated self-hosted lanes.
+    runs-on: macos-17
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v5
@@ -49,12 +51,12 @@ jobs:
       - name: Test
         run: swift test
 
-  # The app auto-detects CI=true and uses .accessory activation policy,
-  # so perf runs won't steal focus on self-hosted runners.
+  # Reserve perf validation for the dedicated Tart UI lane. Keep it disabled
+  # until issue #62 provisions the runner and flips TART_UI_READY=true.
   perf-validation:
-    if: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork) }}
+    if: ${{ vars.TART_UI_READY == 'true' && !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork) }}
     needs: build-and-test
-    runs-on: self-hosted
+    runs-on: [self-hosted, tart-ui]
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v5
