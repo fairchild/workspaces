@@ -3,8 +3,45 @@ name: CI
 on:
   push:
     branches: [main]
+    paths:
+      # Keep expensive hosted macOS CI focused on product, build, and release inputs.
+      - ".github/workflows/ci.yml"
+      - ".github/workflows/ci-fallback.yml"
+      - ".github/workflows/release.yml"
+      - ".swift-format"
+      - "Package.swift"
+      - "WorkspaceManager.entitlements"
+      - "Sources/**"
+      - "Tests/**"
+      - "scripts/build-ghosttykit.sh"
+      - "scripts/build-release.sh"
+      - "scripts/notarize.sh"
+      - "scripts/prepare-release.sh"
+      - "scripts/release-version.sh"
+      - "scripts/setup-release-secrets.sh"
+      - "scripts/verify-app-keychain-signing.sh"
+      - "scripts/verify-p12.sh"
+      - "scripts/verify-release-bundle.sh"
   pull_request:
     branches: [main]
+    paths:
+      - ".github/workflows/ci.yml"
+      - ".github/workflows/ci-fallback.yml"
+      - ".github/workflows/release.yml"
+      - ".swift-format"
+      - "Package.swift"
+      - "WorkspaceManager.entitlements"
+      - "Sources/**"
+      - "Tests/**"
+      - "scripts/build-ghosttykit.sh"
+      - "scripts/build-release.sh"
+      - "scripts/notarize.sh"
+      - "scripts/prepare-release.sh"
+      - "scripts/release-version.sh"
+      - "scripts/setup-release-secrets.sh"
+      - "scripts/verify-app-keychain-signing.sh"
+      - "scripts/verify-p12.sh"
+      - "scripts/verify-release-bundle.sh"
   workflow_dispatch:
 
 concurrency:
