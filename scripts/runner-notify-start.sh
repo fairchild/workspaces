@@ -6,7 +6,7 @@
 # All work is wrapped in a subshell with || true, and we exit 0 unconditionally.
 
 (
-    sanitize() { printf '%s' "$1" | tr -d '"\\'; }
+    sanitize() { printf '%s' "$1" | tr -d '"\\|'; }
 
     repo="$(sanitize "${GITHUB_REPOSITORY##*/}")"
     job="$(sanitize "${GITHUB_JOB:-unknown}")"

@@ -70,4 +70,5 @@ fi
 
 echo "---"
 echo "Refresh | refresh=true"
-echo "Open runner-status.sh | bash='$(cd "$(dirname "$0")/.." 2>/dev/null && pwd)/scripts/runner-status.sh' terminal=true"
+REAL_SCRIPT="$(readlink "$0" 2>/dev/null || echo "$0")"
+echo "Open runner-status.sh | bash='$(cd "$(dirname "$REAL_SCRIPT")/.." 2>/dev/null && pwd)/scripts/runner-status.sh' terminal=true"
