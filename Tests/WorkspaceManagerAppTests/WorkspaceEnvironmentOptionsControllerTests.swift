@@ -9,8 +9,8 @@ struct WorkspaceEnvironmentOptionsControllerTests {
     private let controller = WorkspaceEnvironmentOptionsController()
 
     @Test("Nil snapshot keeps the default macOS base summary")
-    func nilSnapshotKeepsDefaultMacOSSummary() {
-        let option = macOSOption(snapshot: nil)
+    func nilSnapshotKeepsDefaultMacOSSummary() throws {
+        let option = try macOSOption(snapshot: nil)
 
         #expect(option.subtitle == "Matches this Mac by default")
         #expect(option.statusText == nil)
@@ -18,35 +18,35 @@ struct WorkspaceEnvironmentOptionsControllerTests {
     }
 
     @Test("Setup required snapshot surfaces setup messaging for macOS and Linux VM options")
-    func setupRequiredSnapshotSurfacesSetupMessaging() {
-        let snapshot = makeSnapshot(state: .setupRequired)
+    func setupRequiredSnapshotSurfacesSetupMessaging() throws {
+        let snapshot = try makeSnapshot(state: .setupRequired)
 
-        let macOSOption = macOSOption(snapshot: snapshot)
+        let macOSOption = try macOSOption(snapshot: snapshot)
         #expect(macOSOption.statusText == "Setup required")
         #expect(macOSOption.description.contains("install and verify Lume automatically"))
 
-        let linuxOption = linuxVMOption(snapshot: snapshot)
+        let linuxOption = try linuxVMOption(snapshot: snapshot)
         #expect(linuxOption.statusText == "Setup required")
         #expect(linuxOption.description.contains("install and verify Lume automatically"))
     }
 
     @Test("Repair required snapshot surfaces repair messaging for macOS and Linux VM options")
-    func repairRequiredSnapshotSurfacesRepairMessaging() {
-        let snapshot = makeSnapshot(state: .repairRequired)
+    func repairRequiredSnapshotSurfacesRepairMessaging() throws {
+        let snapshot = try makeSnapshot(state: .repairRequired)
 
-        let macOSOption = macOSOption(snapshot: snapshot)
+        let macOSOption = try macOSOption(snapshot: snapshot)
         #expect(macOSOption.statusText == "Repair required")
         #expect(macOSOption.description.contains("repair the local VM runtime automatically"))
 
-        let linuxOption = linuxVMOption(snapshot: snapshot)
+        let linuxOption = try linuxVMOption(snapshot: snapshot)
         #expect(linuxOption.statusText == "Repair required")
         #expect(linuxOption.description.contains("repair the local VM runtime automatically"))
     }
 
     @Test("Ready snapshot reflects a prepared base VM")
-    func readySnapshotReflectsPreparedBaseVM() {
+    func readySnapshotReflectsPreparedBaseVM() throws {
         let baseSnapshot = makeBaseSnapshot(status: .ready)
-        let option = macOSOption(
+        let option = try macOSOption(
             snapshot: makeSnapshot(
                 state: .ready,
                 baseVM: baseSnapshot
@@ -59,14 +59,14 @@ struct WorkspaceEnvironmentOptionsControllerTests {
     }
 
     @Test("Missing stock base snapshot reports one-time preparation and a non-blocking reason")
-    func missingStockBaseSnapshotReportsOneTimePreparation() {
+    func missingStockBaseSnapshotReportsOneTimePreparation() throws {
         let reason = "No prepared base VM exists yet."
         let baseSnapshot = makeBaseSnapshot(
             status: .missing,
             imageReference: nil,
             reason: reason
         )
-        let option = macOSOption(
+        let option = try macOSOption(
             snapshot: makeSnapshot(
                 state: .ready,
                 baseVM: baseSnapshot
@@ -82,8 +82,8 @@ struct WorkspaceEnvironmentOptionsControllerTests {
     }
 
     @Test("Ready snapshot without a matching image falls back to stock macOS")
-    func readySnapshotWithoutMatchingImageFallsBackToStockMacOS() {
-        let option = macOSOption(
+    func readySnapshotWithoutMatchingImageFallsBackToStockMacOS() throws {
+        let option = try macOSOption(
             snapshot: makeSnapshot(
                 state: .ready,
                 usesDefaultMacOSImage: false,
@@ -102,27 +102,27 @@ struct WorkspaceEnvironmentOptionsControllerTests {
     }
 
     @Test("Unsupported host snapshot disables both Lume options")
-    func unsupportedHostSnapshotDisablesBothLumeOptions() {
-        let snapshot = makeSnapshot(
+    func unsupportedHostSnapshotDisablesBothLumeOptions() throws {
+        let snapshot = try makeSnapshot(
             state: .unsupportedHost,
             reason: "Lume requires Apple Silicon."
         )
 
-        let macOSOption = macOSOption(snapshot: snapshot)
+        let macOSOption = try macOSOption(snapshot: snapshot)
         #expect(!macOSOption.isAvailable)
         #expect(macOSOption.availabilityReason == "Lume requires Apple Silicon.")
 
-        let linuxOption = linuxVMOption(snapshot: snapshot)
+        let linuxOption = try linuxVMOption(snapshot: snapshot)
         #expect(!linuxOption.isAvailable)
         #expect(linuxOption.availabilityReason == "Lume requires Apple Silicon.")
     }
 
-    private func macOSOption(snapshot: LumeRuntimeSnapshot?) -> WorkspaceEnvironmentSheetOption {
-        environmentOptions(snapshot: snapshot).first { $0.kind == .macOSVM }!
+    private func macOSOption(snapshot: LumeRuntimeSnapshot?) throws -> WorkspaceEnvironmentSheetOption {
+        try #require(environmentOptions(snapshot: snapshot).first { $0.kind == .macOSVM })
     }
 
-    private func linuxVMOption(snapshot: LumeRuntimeSnapshot?) -> WorkspaceEnvironmentSheetOption {
-        environmentOptions(snapshot: snapshot).first { $0.kind == .linuxVM }!
+    private func linuxVMOption(snapshot: LumeRuntimeSnapshot?) throws -> WorkspaceEnvironmentSheetOption {
+        try #require(environmentOptions(snapshot: snapshot).first { $0.kind == .linuxVM })
     }
 
     private func environmentOptions(snapshot: LumeRuntimeSnapshot?) -> [WorkspaceEnvironmentSheetOption] {
@@ -146,8 +146,17 @@ struct WorkspaceEnvironmentOptionsControllerTests {
         usesDefaultMacOSImage: Bool = true,
         defaultMacOSImageError: String? = nil,
         baseVM: LumeBaseVMSnapshot? = nil
-    ) -> LumeRuntimeSnapshot {
-        LumeRuntimeSnapshot(
+    ) throws -> LumeRuntimeSnapshot {
+        let resolvedDefaultMacOSImage: LumeImageResolution? =
+            if let defaultMacOSImage {
+                defaultMacOSImage
+            } else if usesDefaultMacOSImage {
+                try makeDefaultImageResolution()
+            } else {
+                nil
+            }
+
+        return LumeRuntimeSnapshot(
             state: state,
             reason: reason,
             executablePath: state == .ready ? "/Users/test/.local/bin/lume" : nil,
@@ -155,7 +164,7 @@ struct WorkspaceEnvironmentOptionsControllerTests {
             launchAgentInstalled: state == .ready,
             daemonReachable: state == .ready,
             hostProfile: makeHostProfile(),
-            defaultMacOSImage: defaultMacOSImage ?? (usesDefaultMacOSImage ? makeDefaultImageResolution() : nil),
+            defaultMacOSImage: resolvedDefaultMacOSImage,
             defaultMacOSImageError: defaultMacOSImageError,
             baseVM: baseVM,
             infoLogPath: "/tmp/lume_daemon.log",
@@ -196,10 +205,14 @@ struct WorkspaceEnvironmentOptionsControllerTests {
         )
     }
 
-    private func makeDefaultImageResolution() -> LumeImageResolution {
-        LumeImageResolution(
+    private func makeDefaultImageResolution() throws -> LumeImageResolution {
+        let macOSCatalogEntry = try #require(
+            LumeRuntimeService.imageCatalog.first { $0.guestOS == .macOS }
+        )
+
+        return LumeImageResolution(
             hostProfile: makeHostProfile(),
-            entry: LumeRuntimeService.imageCatalog.first { $0.guestOS == .macOS }!,
+            entry: macOSCatalogEntry,
             matchKind: .exact
         )
     }
