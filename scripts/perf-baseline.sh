@@ -61,25 +61,32 @@ done
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 OUTPUT_DIR="/tmp/workspaces-perf-baseline-$(date +%Y%m%d-%H%M%S)"
+PERF_DATA_DIR="$OUTPUT_DIR/app-data"
+DEBUG_BINARY="$ROOT_DIR/.build/arm64-apple-macosx/debug/WorkspaceManager"
 
-mkdir -p "$OUTPUT_DIR"
+mkdir -p "$OUTPUT_DIR" "$PERF_DATA_DIR"
 
 echo "WorkspaceManager perf baseline"
 echo "  runs: $RUNS"
 echo "  sleep per run: ${SLEEP_SECONDS}s"
 echo "  record in repo docs: $RECORD"
 echo "  output: $OUTPUT_DIR"
+echo "  data dir: $PERF_DATA_DIR"
 
 for i in $(seq 1 "$RUNS"); do
     LOG_FILE="$OUTPUT_DIR/run-$i.log"
     echo "[$i/$RUNS] Launching app..."
 
-    pkill -f "WorkspaceManager" 2>/dev/null || true
+    # Only kill the debug binary, not the installed /Applications app.
+    pkill -f "$DEBUG_BINARY" 2>/dev/null || true
     sleep 1
 
     (
         cd "$ROOT_DIR"
-        WORKSPACES_NO_ACTIVATE_ON_LAUNCH=1 WORKSPACES_PERF_AUTO_SELECT_FIRST_REPO=1 swift run WorkspaceManager >"$LOG_FILE" 2>&1
+        WORKSPACES_DATA_DIR="$PERF_DATA_DIR" \
+        WORKSPACES_NO_ACTIVATE_ON_LAUNCH=1 \
+        WORKSPACES_PERF_AUTO_SELECT_FIRST_REPO=1 \
+        swift run WorkspaceManager >"$LOG_FILE" 2>&1
     ) &
     APP_PID=$!
 
