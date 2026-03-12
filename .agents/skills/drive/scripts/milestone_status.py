@@ -16,15 +16,29 @@ from pathlib import Path
 from typing import Any
 
 
-REPO_ROOT = Path(__file__).resolve().parents[4]
 PLANNER_MARKER_RE = re.compile(r"<!-- peter-planner:discussion=(?P<number>\d+);milestone -->")
 MILESTONE_URL_RE = re.compile(r"/milestone/(?P<number>\d+)")
 M_SHORT_RE = re.compile(r"\bm(?P<number>\d+)\b", re.IGNORECASE)
 MILESTONE_WORD_RE = re.compile(r"\bmilestone\s+(?P<number>\d+)\b", re.IGNORECASE)
+H2_HEADING_RE = re.compile(r"^##\s+\S", re.MULTILINE)
 
 
 class MilestoneError(RuntimeError):
     """Raised when milestone resolution fails."""
+
+
+def discover_repo_root() -> Path:
+    # This script lives at .agents/skills/drive/scripts/, which is four levels
+    # below the repo root in this repository layout.
+    repo_root = Path(__file__).resolve().parents[4]
+    if not (repo_root / "AGENTS.md").exists():
+        raise MilestoneError(
+            f"could not locate repo root from {__file__}; expected {repo_root / 'AGENTS.md'} to exist"
+        )
+    return repo_root
+
+
+REPO_ROOT = discover_repo_root()
 
 
 def run_checked(cmd: list[str]) -> subprocess.CompletedProcess[str]:
@@ -104,15 +118,21 @@ def resolve_next_open_milestone(repo: str) -> int:
     if not milestones:
         raise MilestoneError("no open milestones found")
 
-    milestones.sort(
+    with_open_issues = [item for item in milestones if int(item.get("open_issues", 0)) > 0]
+    candidates = with_open_issues if with_open_issues else milestones
+
+    planner_candidates = [
+        item for item in candidates if PLANNER_MARKER_RE.search(item.get("description") or "")
+    ]
+    selected_pool = planner_candidates if planner_candidates else candidates
+    selected = min(
+        selected_pool,
         key=lambda item: (
             item.get("due_on") is None,
             item.get("due_on") or "",
             int(item["number"]),
-        )
+        ),
     )
-    with_open_issues = [item for item in milestones if int(item.get("open_issues", 0)) > 0]
-    selected = with_open_issues[0] if with_open_issues else milestones[0]
     return int(selected["number"])
 
 
@@ -121,25 +141,28 @@ def fetch_milestone(repo: str, number: int) -> dict[str, Any]:
 
 
 def fetch_issues(repo: str, milestone_number: int) -> list[dict[str, Any]]:
-    data = json.loads(
-        run_checked(
-            [
-                "gh",
-                "issue",
-                "list",
-                "--repo",
-                repo,
-                "--milestone",
-                str(milestone_number),
-                "--state",
-                "all",
-                "--limit",
-                "200",
-                "--json",
-                "number,title,state,url,labels,assignees",
-            ]
-        ).stdout
-    )
+    data: list[dict[str, Any]] = []
+    page = 1
+
+    while True:
+        page_items = json.loads(
+            run_checked(
+                [
+                    "gh",
+                    "api",
+                    f"repos/{repo}/issues?milestone={milestone_number}&state=all&per_page=100&page={page}",
+                ]
+            ).stdout
+        )
+        if not page_items:
+            break
+
+        data.extend(item for item in page_items if "pull_request" not in item)
+
+        if len(page_items) < 100:
+            break
+        page += 1
+
     data.sort(key=lambda item: int(item["number"]))
     return data
 
@@ -149,10 +172,14 @@ def simplify_issue(issue: dict[str, Any]) -> dict[str, Any]:
         "number": int(issue["number"]),
         "title": issue["title"],
         "state": issue["state"],
-        "url": issue["url"],
+        "url": issue["html_url"],
         "labels": [label["name"] for label in issue.get("labels", [])],
         "assignees": [assignee["login"] for assignee in issue.get("assignees", [])],
     }
+
+
+def has_structured_milestone_description(description: str) -> bool:
+    return len(H2_HEADING_RE.findall(description)) >= 2
 
 
 def build_output(repo: str, raw_target: str) -> dict[str, Any]:
@@ -183,7 +210,7 @@ def build_output(repo: str, raw_target: str) -> dict[str, Any]:
         },
         "planning_signals": {
             "planner_marker_present": bool(PLANNER_MARKER_RE.search(description)),
-            "description_has_markdown_sections": "## " in description,
+            "description_has_markdown_sections": has_structured_milestone_description(description),
         },
         "issue_summary": {
             "open_numbers": open_issue_numbers,

@@ -31,13 +31,15 @@ Read these repo sources before acting:
 - `AGENTS.md` for project guardrails and validation expectations
 - `docs/development/agent-team.md` for the planner/executor lifecycle
 - `.agents/prompts/peter-planner.md` if the existing milestone plan looks thin or stale
-- `.agents/skills/gh-discuss/SKILL.md` when execution should also update GitHub Discussions
+- `.agents/skills/gh-discuss/SKILL.md` when execution should also claim work or update GitHub Discussions
+- `.agents/skills/tart-gui-automation/SKILL.md` when execution includes UI, terminal, runner, or other Tart-backed validation
 
 ## Workflow
 
 ### 1. Refresh live milestone context
 
 - Use `milestone_status.py` to resolve the target and fetch the latest milestone description, issue list, and planner marker status.
+- If the milestone work is represented in GitHub Discussions, check the `gh-discuss` dashboard and claim the relevant task before coding so parallel sessions do not duplicate work.
 - Re-check GitHub directly for issue comments, open or merged PRs, workflow state, and any existing execution branches.
 - Never trust an old copied plan or a stale milestone description without re-validating it against current GitHub state.
 
