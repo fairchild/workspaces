@@ -9,6 +9,8 @@ RUNNER_VERSION="${RUNNER_VERSION:-2.332.0}"
 GITHUB_ORG="${GITHUB_ORG:-fairchild}"
 GITHUB_REPO="${GITHUB_REPO:-workspaces}"
 RUNNER_NAME="${RUNNER_NAME:-$(hostname -s)-workspaces}"
+# This default is a generic registration label set, not one of the repo's
+# workflow lanes. Lane-specific automation should override RUNNER_LABELS.
 RUNNER_LABELS="${RUNNER_LABELS:-self-hosted-macos,macos,$(uname -m)}"
 RUNNER_REGISTRATION_TOKEN="${RUNNER_REGISTRATION_TOKEN:-}"
 
@@ -146,8 +148,13 @@ cmd_setup() {
     check_dependencies
 
     if [ -f "${RUNNER_DIR}/.runner" ]; then
-        log_warn "Runner already configured. Use 'stop' then 'setup --force' to reconfigure."
+        log_warn "Runner already configured. Stop the service, remove ${RUNNER_DIR}/.runner if you want to re-register it, then rerun 'setup'."
         exit 0
+    fi
+
+    if [[ "${RUNNER_LABELS}" == "self-hosted-macos,macos,$(uname -m)" ]]; then
+        log_warn "RUNNER_LABELS is using the generic default (${RUNNER_LABELS})."
+        log_warn "Repo workflows target explicit lanes such as 'tart-ui' and 'signing-host'; set RUNNER_LABELS accordingly before setup."
     fi
 
     if [ ! -f "${RUNNER_DIR}/config.sh" ]; then
@@ -307,6 +314,11 @@ Examples:
   $0 start     # Start runner
   $0 stop      # Stop when done
   $0 status    # Check if running
+
+Notes:
+  The default RUNNER_LABELS (${RUNNER_LABELS}) is a generic label set. Repo
+  workflows only target explicit lanes such as tart-ui and signing-host, so
+  export RUNNER_LABELS before setup when provisioning a workflow runner.
 EOF
 }
 

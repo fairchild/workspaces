@@ -19,6 +19,7 @@ TART_BASE_VM=macos-tahoe-xcode
 TART_LOG_DIR="${HOME}/.local/state/workspaces"
 TART_LOG_PATH="${TART_LOG_DIR}/tart-ui-vm.launchd.log"
 PLIST_PATH="${HOME}/Library/LaunchAgents/com.fairchild.workspaces.tart-ui-vm.plist"
+TART_BIN="$(command -v tart)"
 
 mkdir -p "${TART_LOG_DIR}"
 tart clone "${TART_BASE_VM}" "${TART_VM}" 2>/dev/null || true
@@ -32,7 +33,7 @@ cat > "${PLIST_PATH}" <<EOF
   <string>com.fairchild.workspaces.tart-ui-vm</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/opt/homebrew/bin/tart</string>
+    <string>${TART_BIN}</string>
     <string>run</string>
     <string>--no-graphics</string>
     <string>--net-bridged=en0</string>
@@ -47,7 +48,7 @@ cat > "${PLIST_PATH}" <<EOF
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key>
-    <string>/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <string>$(dirname "${TART_BIN}"):/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
   </dict>
   <key>StandardOutPath</key>
   <string>${TART_LOG_PATH}</string>
@@ -113,7 +114,7 @@ Confirm there is an online runner whose labels include `tart-ui`.
 
 The repo includes a manual smoke workflow at `.github/workflows/tart-ui-smoke.yml`.
 
-Before the workflow lands on `main`, pushes to `codex/**` branches that touch the workflow or `scripts/runner.sh` will also trigger the smoke run so the lane can be validated pre-merge.
+Pushes to `codex/**` branches that touch the workflow or `scripts/runner.sh` also trigger the smoke run so the lane can be validated pre-merge.
 
 ```bash
 gh workflow run tart-ui-smoke.yml --ref <branch-with-workflow>

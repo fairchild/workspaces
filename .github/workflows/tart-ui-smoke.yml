@@ -9,6 +9,10 @@ on:
       - .github/workflows/tart-ui-smoke.yml
       - scripts/runner.sh
 
+concurrency:
+  group: tart-ui-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   smoke:
     # Smoke-test the dedicated Tart UI lane before routing heavier UI and perf

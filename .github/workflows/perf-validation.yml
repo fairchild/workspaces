@@ -13,7 +13,6 @@ on:
       - scripts/perf-baseline.sh
       - Sources/**
       - Tests/**
-      - docs/performance-testing.md
 
 concurrency:
   group: perf-validation-${{ github.ref }}
