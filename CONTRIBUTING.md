@@ -109,16 +109,16 @@ workspaces/
 
 ## CI Runner Lanes
 
-Generic lint/build/test CI runs on GitHub-hosted macOS (`macos-17`). Self-hosted jobs must use explicit lanes: `[self-hosted, tart-ui]` for UI/perf automation and `[self-hosted, signing-host]` for release/signing/notarization. The `Perf Validation` workflow runs separately from the main CI workflow via `workflow_dispatch`, a nightly schedule, and scoped `codex/**` pushes so app-launching checks stay off the default path.
+Generic lint/build/test CI runs on GitHub-hosted macOS (`macos-17`) and is path-scoped to product, test, build, and release inputs so docs, backlog, skill, and changelog-only pushes do not consume the hosted macOS queue. Self-hosted jobs must use explicit lanes: `[self-hosted, tart-ui]` for UI/perf automation and `[self-hosted, signing-host]` for release/signing/notarization. The `Perf Validation` workflow runs separately from the main CI workflow via `workflow_dispatch`, a nightly schedule, and scoped `codex/**` pushes so app-launching checks stay off the default path.
 
-For this repo, the currently registered self-hosted runners are:
+For this repo, the default self-hosted runner layout is:
 
 | Runner | Labels | Location |
 |--------|--------|----------|
-| `blue-workspaces` | `self-hosted-macos` | `~/.local/share/actions-runner-workspaces` |
+| `blue-workspaces` | `self-hosted-macos`, optionally `signing-host` when it is serving as the release lane | `~/.local/share/actions-runner-workspaces` |
 | `workspaces-tart-ui` | `tart-ui` | Tart guest `~/.local/share/actions-runner-tart-ui` |
 
-The release workflow also expects a separate runner advertising the `signing-host` label before dispatch.
+The release workflow requires at least one online runner advertising the `signing-host` label before dispatch. That label is operational state in GitHub, not something stored in the repo. If `blue-workspaces` is not carrying the release lane, move `signing-host` to whichever signing-capable runner should own releases. See [docs/development/signing-runner-setup.md](./docs/development/signing-runner-setup.md).
 
 ### Focus stealing prevention
 
