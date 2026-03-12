@@ -60,12 +60,12 @@ public actor SSHBackend: RemoteBackendProtocol {
         Self.resolveExecutable(named: "ssh") != nil
     }
 
-    public func openSession(for workspace: Workspace) async throws -> RemoteSandboxInfo {
+    public func openSession(for request: RemoteWorkspaceSessionRequest) async throws -> RemoteSandboxInfo {
         guard let sshExecutable = Self.resolveExecutable(named: "ssh") else {
             throw BackendError.commandNotFound("ssh")
         }
 
-        let plan = try Self.sessionPlan(for: workspace, sshExecutable: sshExecutable)
+        let plan = try Self.sessionPlan(for: request, sshExecutable: sshExecutable)
         let bootstrap = try await runCommand(sshExecutable, plan.bootstrapArguments)
         guard bootstrap.success else {
             let stderr = bootstrap.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -83,15 +83,15 @@ public actor SSHBackend: RemoteBackendProtocol {
     }
 
     static func sessionPlan(
-        for workspace: Workspace,
+        for request: RemoteWorkspaceSessionRequest,
         sshExecutable: String = "/usr/bin/ssh"
     ) throws -> SSHSessionPlan {
-        guard let remoteId = workspace.remoteId?.trimmingCharacters(in: .whitespacesAndNewlines), !remoteId.isEmpty
+        guard let remoteId = request.remoteId?.trimmingCharacters(in: .whitespacesAndNewlines), !remoteId.isEmpty
         else {
             throw RemoteWorkspaceError.missingRemoteIdentifier
         }
 
-        guard let ssh = workspace.sshMetadata else {
+        guard let ssh = request.sshMetadata else {
             throw RemoteWorkspaceError.missingSSHMetadata
         }
         guard (1...65535).contains(ssh.port) else {
@@ -101,21 +101,21 @@ public actor SSHBackend: RemoteBackendProtocol {
         }
 
         guard
-            let remoteURL = workspace.sourceRepo?.remoteURL?.trimmingCharacters(in: .whitespacesAndNewlines),
+            let remoteURL = request.repoRemoteURL?.trimmingCharacters(in: .whitespacesAndNewlines),
             !remoteURL.isEmpty
         else {
             throw RemoteWorkspaceError.missingRemoteURL
         }
 
-        let workingDirectory = resolvedWorkingDirectory(for: workspace, ssh: ssh)
+        let workingDirectory = resolvedWorkingDirectory(for: request, ssh: ssh)
         let bootstrapScript = try bootstrapScript(
             workingDirectory: workingDirectory,
             remoteURL: remoteURL,
-            compose: workspace.composeMetadata
+            compose: request.composeMetadata
         )
         let interactiveScript = try interactiveScript(
             workingDirectory: workingDirectory,
-            compose: workspace.composeMetadata
+            compose: request.composeMetadata
         )
         let sshOptions = sshOptionArguments(for: ssh)
         let destination = connectionTarget(for: ssh)
@@ -131,7 +131,7 @@ public actor SSHBackend: RemoteBackendProtocol {
     }
 
     static func resolvedWorkingDirectory(
-        for workspace: Workspace,
+        for request: RemoteWorkspaceSessionRequest,
         ssh: SSHWorkspaceMetadata
     ) -> String {
         if let configured = ssh.workingDir?.trimmingCharacters(in: .whitespacesAndNewlines), !configured.isEmpty {
@@ -139,11 +139,11 @@ public actor SSHBackend: RemoteBackendProtocol {
         }
 
         let resolvedRepoName = sanitizedDefaultPathComponent(
-            workspace.sourceRepo?.name,
+            request.repoName,
             fallback: "repo"
         )
         let resolvedWorkspaceName = sanitizedDefaultPathComponent(
-            workspace.name,
+            request.name,
             fallback: "workspace"
         )
         return "~/workspaces/\(resolvedRepoName)/\(resolvedWorkspaceName)"

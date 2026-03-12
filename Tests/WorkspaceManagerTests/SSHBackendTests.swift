@@ -7,7 +7,7 @@ import Testing
 struct SSHBackendTests {
     @Test("Generates SSH login-shell command for plain SSH workspaces")
     func generatesPlainSSHCommand() throws {
-        let workspace = makeWorkspace(
+        let request = makeRequest(
             ssh: SSHWorkspaceMetadata(
                 host: "ssh.example.com",
                 user: "alice",
@@ -17,7 +17,7 @@ struct SSHBackendTests {
             )
         )
 
-        let plan = try SSHBackend.sessionPlan(for: workspace, sshExecutable: "/usr/bin/ssh")
+        let plan = try SSHBackend.sessionPlan(for: request, sshExecutable: "/usr/bin/ssh")
         let bootstrapScript = try #require(plan.bootstrapArguments.last)
 
         #expect(plan.remoteId == "remote-123")
@@ -33,17 +33,20 @@ struct SSHBackendTests {
 
     @Test("Resolves default working directory from sanitized repo and workspace names")
     func resolvesDefaultWorkingDirectory() {
-        let repo = Repo(name: "Acme API", localPath: URL(fileURLWithPath: "/tmp/acme"))
-        let workspace = Workspace(
+        let request = RemoteWorkspaceSessionRequest(
+            workspaceID: UUID(),
             name: "Feature/A",
-            path: URL(fileURLWithPath: "/tmp/acme/workspaces/feature-a"),
-            sourceRepo: repo,
             backendIdentifier: SSHBackend.identifier,
-            remoteId: "remote-123"
+            remoteId: "remote-123",
+            status: .active,
+            repoName: "Acme API",
+            repoRemoteURL: "git@github.com:acme/api.git",
+            sshMetadata: SSHWorkspaceMetadata(host: "ssh.example.com"),
+            composeMetadata: nil
         )
 
         let resolved = SSHBackend.resolvedWorkingDirectory(
-            for: workspace,
+            for: request,
             ssh: SSHWorkspaceMetadata(host: "ssh.example.com")
         )
 
@@ -52,11 +55,11 @@ struct SSHBackendTests {
 
     @Test("Default home-relative working directory expands with HOME in shell scripts")
     func defaultWorkingDirectoryExpandsHomeDirectory() throws {
-        let workspace = makeWorkspace(
+        let request = makeRequest(
             ssh: SSHWorkspaceMetadata(host: "ssh.example.com")
         )
 
-        let plan = try SSHBackend.sessionPlan(for: workspace)
+        let plan = try SSHBackend.sessionPlan(for: request)
         let bootstrapScript = try #require(plan.bootstrapArguments.last)
 
         #expect(bootstrapScript.contains("mkdir -p $HOME'/workspaces/api/feature-a'"))
@@ -67,14 +70,14 @@ struct SSHBackendTests {
 
     @Test("Bootstrap script clones when the remote checkout is missing")
     func bootstrapScriptClonesWhenMissing() throws {
-        let workspace = makeWorkspace(
+        let request = makeRequest(
             ssh: SSHWorkspaceMetadata(
                 host: "ssh.example.com",
                 workingDir: "/srv/workspaces/feature-a"
             )
         )
 
-        let plan = try SSHBackend.sessionPlan(for: workspace)
+        let plan = try SSHBackend.sessionPlan(for: request)
         let script = try #require(plan.bootstrapArguments.last)
 
         #expect(script.contains("if [ ! -d '/srv/workspaces/feature-a/.git' ]; then git clone"))
@@ -83,30 +86,30 @@ struct SSHBackendTests {
 
     @Test("Missing repository remote URL fails before opening the session")
     func missingRepositoryRemoteURLFails() async throws {
-        let workspace = makeWorkspace(
+        let request = makeRequest(
             repoRemoteURL: nil,
             ssh: SSHWorkspaceMetadata(host: "ssh.example.com")
         )
 
         await #expect(throws: RemoteWorkspaceError.self) {
-            _ = try await SSHBackend().openSession(for: workspace)
+            _ = try await SSHBackend().openSession(for: request)
         }
     }
 
     @Test("Invalid SSH port fails before opening the session")
     func invalidSSHPortFails() async throws {
-        let workspace = makeWorkspace(
+        let request = makeRequest(
             ssh: SSHWorkspaceMetadata(host: "ssh.example.com", port: 0)
         )
 
         await #expect(throws: RemoteWorkspaceError.self) {
-            _ = try await SSHBackend().openSession(for: workspace)
+            _ = try await SSHBackend().openSession(for: request)
         }
     }
 
     @Test("Compose workspaces include config, up, and exec commands")
     func composeCommandsAreIncluded() throws {
-        let workspace = makeWorkspace(
+        let request = makeRequest(
             ssh: SSHWorkspaceMetadata(
                 host: "ssh.example.com",
                 workingDir: "/srv/workspaces/feature-a"
@@ -118,7 +121,7 @@ struct SSHBackendTests {
             )
         )
 
-        let plan = try SSHBackend.sessionPlan(for: workspace)
+        let plan = try SSHBackend.sessionPlan(for: request)
         let bootstrapScript = try #require(plan.bootstrapArguments.last)
 
         #expect(bootstrapScript.contains("docker compose -p acme -f compose.yml -f compose.dev.yml config >/dev/null"))
@@ -133,12 +136,12 @@ struct SSHBackendTests {
         let backend = SSHBackend { _, _ in
             ProcessResult(exitCode: 1, stdout: "", stderr: "clone failed")
         }
-        let workspace = makeWorkspace(
+        let request = makeRequest(
             ssh: SSHWorkspaceMetadata(host: "ssh.example.com")
         )
 
         do {
-            _ = try await backend.openSession(for: workspace)
+            _ = try await backend.openSession(for: request)
             Issue.record("Expected SSH bootstrap failure to throw")
         } catch {
             #expect(error is RemoteWorkspaceError)
@@ -146,11 +149,11 @@ struct SSHBackendTests {
         }
     }
 
-    private func makeWorkspace(
+    private func makeRequest(
         repoRemoteURL: String? = "git@github.com:acme/api.git",
         ssh: SSHWorkspaceMetadata,
         compose: ComposeWorkspaceMetadata? = nil
-    ) -> Workspace {
+    ) -> RemoteWorkspaceSessionRequest {
         let repo = Repo(
             name: "api",
             localPath: URL(fileURLWithPath: "/tmp/api"),
@@ -165,6 +168,6 @@ struct SSHBackendTests {
         )
         workspace.sshMetadata = ssh
         workspace.composeMetadata = compose
-        return workspace
+        return workspace.remoteSessionRequest
     }
 }

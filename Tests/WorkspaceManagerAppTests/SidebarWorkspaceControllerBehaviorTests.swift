@@ -415,7 +415,7 @@ private actor MockRemoteBackend: ProvisionCapable, StartStopCapable, Archivable,
 
     func healthCheck() async -> Bool { healthCheckResult }
 
-    func openSession(for workspace: Workspace) async throws -> RemoteSandboxInfo {
+    func openSession(for request: RemoteWorkspaceSessionRequest) async throws -> RemoteSandboxInfo {
         createSandboxResult
     }
 

@@ -281,14 +281,6 @@ struct ContentView: View {
                 },
                 onNewWebSource: { repo in
                     webSourceCreationTarget = .repo(repo)
-                },
-                onArchiveWorkspace: { workspace in
-                    Task { @MainActor in
-                        await archiveWorkspaceFromLanding(workspace)
-                    }
-                },
-                onOpenWorkspaceInEditor: { workspace in
-                    openWorkspaceInDefaultEditorFromLanding(workspace)
                 }
             )
         } else {
@@ -913,6 +905,7 @@ struct ContentView: View {
     private func handleRemoteWorkspaceSelection(_ workspace: Workspace, sandboxId: String) {
         let sessionKey = HostTerminalSessionKey.remoteSandbox(sandboxId)
         let placeholderDir = FileManager.default.temporaryDirectory
+        let sessionRequest = workspace.remoteSessionRequest
 
         // Reuse existing session for this specific sandbox
         if workspace.status == .active,
@@ -957,7 +950,7 @@ struct ContentView: View {
 
         Task {
             do {
-                let info = try await backend.openSession(for: workspace)
+                let info = try await backend.openSession(for: sessionRequest)
 
                 if activatesProviderSession, workspace.status != .active {
                     await MainActor.run {
@@ -1055,47 +1048,6 @@ struct ContentView: View {
             handleWorkspaceSelection(workspace)
         } catch {
             landingErrorMessage = "Failed to create workspace: \(error.localizedDescription)"
-        }
-    }
-
-    @MainActor
-    private func archiveWorkspaceFromLanding(_ workspace: Workspace) async {
-        if workspace.isRemote,
-            let backend = remoteBackendRegistry.backend(for: workspace.backendIdentifier),
-            backend.runtimeCapabilities.supportsArchive
-        {
-            let controller = SidebarWorkspaceController(
-                modelContext: modelContext,
-                workspaceService: workspaceService,
-                remoteBackendRegistry: remoteBackendRegistry
-            )
-            do {
-                try await controller.archive(workspace)
-            } catch {
-                landingErrorMessage = "Failed to archive workspace: \(error.localizedDescription)"
-            }
-        } else {
-            workspace.status = .archived
-            do {
-                try modelContext.save()
-            } catch {
-                modelContext.rollback()
-                landingErrorMessage = "Failed to archive workspace: \(error.localizedDescription)"
-            }
-        }
-    }
-
-    @MainActor
-    private func openWorkspaceInDefaultEditorFromLanding(_ workspace: Workspace) {
-        do {
-            try OpenInEditorShortcutFlow.perform(
-                target: .project(rootURL: workspace.workspaceURL),
-                editorID: nil,
-                externalEditorService: externalEditorService,
-                trigger: .uiPrimaryAction
-            )
-        } catch {
-            presentOpenInEditorError(error)
         }
     }
 

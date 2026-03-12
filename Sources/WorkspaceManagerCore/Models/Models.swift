@@ -298,8 +298,27 @@ public final class Workspace: @unchecked Sendable {
         URL(fileURLWithPath: path)
     }
 
+    public var localDirectoryURL: URL? {
+        guard !isRemote else { return nil }
+        return workspaceURL
+    }
+
     public var isRemote: Bool {
         backendIdentifier != "local"
+    }
+
+    public var remoteSessionRequest: RemoteWorkspaceSessionRequest {
+        RemoteWorkspaceSessionRequest(
+            workspaceID: id,
+            name: name,
+            backendIdentifier: backendIdentifier,
+            remoteId: remoteId,
+            status: status,
+            repoName: sourceRepo?.name,
+            repoRemoteURL: sourceRepo?.remoteURL,
+            sshMetadata: sshMetadata,
+            composeMetadata: composeMetadata
+        )
     }
 
     public var status: WorkspaceStatus {

@@ -69,13 +69,13 @@ public actor DaytonaBackend: ProvisionCapable, StartStopCapable, Archivable, Lis
 
     // MARK: - Sandbox Lifecycle
 
-    public func openSession(for workspace: Workspace) async throws -> RemoteSandboxInfo {
-        guard let sandboxId = workspace.remoteId?.trimmingCharacters(in: .whitespacesAndNewlines), !sandboxId.isEmpty
+    public func openSession(for request: RemoteWorkspaceSessionRequest) async throws -> RemoteSandboxInfo {
+        guard let sandboxId = request.remoteId?.trimmingCharacters(in: .whitespacesAndNewlines), !sandboxId.isEmpty
         else {
             throw RemoteWorkspaceError.missingRemoteIdentifier
         }
 
-        switch workspace.status {
+        switch request.status {
         case .active:
             return try await resolveCommand(sandboxId: sandboxId)
         case .stopped, .archived:

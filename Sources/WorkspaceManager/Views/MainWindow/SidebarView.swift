@@ -922,6 +922,9 @@ struct SidebarView: View {
         if let sandboxId = workspace.remoteId {
             return .remoteSandbox(sandboxId)
         }
+        if workspace.isRemote {
+            return .remoteSandbox("workspace-\(workspace.id.uuidString)")
+        }
         return .hostPath(normalizePath(workspace.workspaceURL))
     }
 

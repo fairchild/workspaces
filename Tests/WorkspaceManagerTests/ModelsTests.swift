@@ -272,6 +272,59 @@ struct ModelsTests {
             #expect(workspace.composeMetadata == nil)
         }
 
+        @Test("Remote workspaces do not expose a local directory URL")
+        func remoteWorkspaceDoesNotExposeLocalDirectoryURL() {
+            let repo = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))
+            let remoteWorkspace = Workspace(
+                name: "cloud-feature",
+                path: URL(fileURLWithPath: "/tmp/alpha/workspaces/cloud-feature"),
+                sourceRepo: repo,
+                backendIdentifier: SSHBackend.identifier,
+                remoteId: "remote-123"
+            )
+            let localWorkspace = Workspace(
+                name: "feature-a",
+                path: URL(fileURLWithPath: "/tmp/alpha/workspaces/feature-a"),
+                sourceRepo: repo
+            )
+
+            #expect(remoteWorkspace.localDirectoryURL == nil)
+            #expect(localWorkspace.localDirectoryURL == localWorkspace.workspaceURL)
+        }
+
+        @Test("Remote session request snapshots repo and metadata state")
+        func remoteSessionRequestSnapshotsRepoAndMetadataState() {
+            let repo = Repo(
+                name: "alpha",
+                localPath: URL(fileURLWithPath: "/tmp/alpha"),
+                remoteURL: "git@github.com:acme/alpha.git"
+            )
+            let workspace = Workspace(
+                name: "cloud-feature",
+                path: URL(fileURLWithPath: "/tmp/alpha/workspaces/cloud-feature"),
+                sourceRepo: repo,
+                backendIdentifier: SSHBackend.identifier,
+                remoteId: "remote-123"
+            )
+            let ssh = SSHWorkspaceMetadata(host: "ssh.example.com", user: "alice", port: 2222)
+            let compose = ComposeWorkspaceMetadata(composeFiles: ["compose.yml"], service: "web")
+            workspace.status = .stopped
+            workspace.sshMetadata = ssh
+            workspace.composeMetadata = compose
+
+            let request = workspace.remoteSessionRequest
+
+            #expect(request.workspaceID == workspace.id)
+            #expect(request.name == "cloud-feature")
+            #expect(request.backendIdentifier == SSHBackend.identifier)
+            #expect(request.remoteId == "remote-123")
+            #expect(request.status == .stopped)
+            #expect(request.repoName == "alpha")
+            #expect(request.repoRemoteURL == "git@github.com:acme/alpha.git")
+            #expect(request.sshMetadata == ssh)
+            #expect(request.composeMetadata == compose)
+        }
+
         @Test("Workspace persists empty remote metadata JSON by default")
         @MainActor
         func workspacePersistsEmptyRemoteMetadataJSONByDefault() throws {

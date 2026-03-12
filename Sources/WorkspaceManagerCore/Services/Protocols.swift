@@ -22,6 +22,41 @@ public struct NewWorkspaceInfo: Sendable {
     }
 }
 
+/// Sendable snapshot of persisted workspace state needed to open a remote session.
+public struct RemoteWorkspaceSessionRequest: Sendable, Equatable {
+    public let workspaceID: UUID
+    public let name: String
+    public let backendIdentifier: String
+    public let remoteId: String?
+    public let status: WorkspaceStatus
+    public let repoName: String?
+    public let repoRemoteURL: String?
+    public let sshMetadata: SSHWorkspaceMetadata?
+    public let composeMetadata: ComposeWorkspaceMetadata?
+
+    public init(
+        workspaceID: UUID,
+        name: String,
+        backendIdentifier: String,
+        remoteId: String?,
+        status: WorkspaceStatus,
+        repoName: String?,
+        repoRemoteURL: String?,
+        sshMetadata: SSHWorkspaceMetadata?,
+        composeMetadata: ComposeWorkspaceMetadata?
+    ) {
+        self.workspaceID = workspaceID
+        self.name = name
+        self.backendIdentifier = backendIdentifier
+        self.remoteId = remoteId
+        self.status = status
+        self.repoName = repoName
+        self.repoRemoteURL = repoRemoteURL
+        self.sshMetadata = sshMetadata
+        self.composeMetadata = composeMetadata
+    }
+}
+
 public enum WorkspaceCreationPhase: String, CaseIterable, Sendable {
     case preparing
     case copyingRepository
@@ -181,7 +216,7 @@ public protocol RemoteBackendProtocol: Sendable {
     var runtimeCapabilities: RuntimeCapabilities { get }
 
     func healthCheck() async -> Bool
-    func openSession(for workspace: Workspace) async throws -> RemoteSandboxInfo
+    func openSession(for request: RemoteWorkspaceSessionRequest) async throws -> RemoteSandboxInfo
 }
 
 public protocol StartStopCapable: RemoteBackendProtocol {
