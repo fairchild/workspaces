@@ -79,7 +79,7 @@ for i in $(seq 1 "$RUNS"); do
 
     (
         cd "$ROOT_DIR"
-        WORKSPACES_PERF_AUTO_SELECT_FIRST_REPO=1 swift run WorkspaceManager >"$LOG_FILE" 2>&1
+        WORKSPACES_NO_ACTIVATE_ON_LAUNCH=1 WORKSPACES_PERF_AUTO_SELECT_FIRST_REPO=1 swift run WorkspaceManager >"$LOG_FILE" 2>&1
     ) &
     APP_PID=$!
 
