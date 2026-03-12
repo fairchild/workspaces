@@ -6,7 +6,7 @@ This document describes the complete process for creating a new release of Works
 
 WorkspaceManager is distributed as a notarized DMG file via GitHub Releases. The release process involves:
 
-1. **Versioning** - Update version numbers through `scripts/release-version.sh`
+1. **Versioning** - Prepare version, changelog, commit, and tag through `scripts/prepare-release.sh`
 2. **Building** - Create release binary with SPM
 3. **Bundling** - Package into a proper .app bundle
 4. **Signing** - Sign with Developer ID certificate
@@ -139,7 +139,9 @@ Then test signing:
 ```bash
 ./scripts/build-release.sh
 ./scripts/verify-app-keychain-signing.sh build/WorkspaceManager.app
-# Should confirm the embedded provisioning profile and keychain access group
+./scripts/verify-release-bundle.sh build/WorkspaceManager.app
+# Should confirm the embedded provisioning profile, keychain access group,
+# and Developer ID signing across nested code objects
 ```
 
 ### GitHub Actions Setup (for CI/CD)
@@ -201,29 +203,37 @@ base64 -i ~/.config/apple/workspaces.provisionprofile | pbcopy
 
 The recommended method for production releases.
 
-1. **Update Version**
+1. **Prepare And Push The Release From `main`**
 
-   Use the helper script so version and build metadata stay together:
+   Run the helper on a clean local `main` checkout:
    ```bash
-   ./scripts/release-version.sh set 0.3.1 --bump-build
-   ./scripts/release-version.sh print-tag
+   git checkout main
+   ./scripts/prepare-release.sh --version 0.3.1
    ```
 
-2. **Merge Version Changes to `main`**
+   The helper:
+   - fetches `origin/main` and fast-forwards local `main` before mutating
+   - updates `Info.plist` version/build metadata
+   - prepends a changelog entry from commits since the latest `v*` tag
+   - creates commit `release: v0.3.1`
+   - creates lightweight tag `v0.3.1`
+   - pushes `main` first, then pushes the tag
 
+   Preview the computed release without mutating:
    ```bash
-   git add .
-   git commit -m "chore: bump version to 0.3.1"
-   git push origin <your-branch>
-   # Open PR and merge after CI is green
+   ./scripts/prepare-release.sh --version 0.3.1 --dry-run
    ```
 
-3. **Run Release Workflow Manually (from `main`)**
+2. **Release Workflow Trigger**
+
+   Pushing `v0.3.1` triggers `.github/workflows/release.yml` automatically.
+
+3. **Optional Manual Rerun (from `main` or an existing release tag)**
 
    - Workflow: `.github/workflows/release.yml`
    - Trigger: `workflow_dispatch`
    - In GitHub: Actions > `Release` > `Run workflow`
-   - Branch to release from: `main`
+   - Ref: `main` or an existing release tag (`v*`, `workspaces-v*`)
    - Runner lane: `[self-hosted, signing-host]` (the signing runner must advertise the `signing-host` label before dispatch)
    - Guardrails:
      - Manual releases fail if started from a non-`main` branch.
@@ -235,18 +245,23 @@ The recommended method for production releases.
      - Import signing certificate from secrets
      - Decode provisioning profile from secrets
      - Build signed `.app`
+     - Verify nested bundle signing before notarization
      - Notarize and staple `.dmg`
-     - Publish a GitHub release with artifacts
+     - Publish or refresh a GitHub release with artifacts via `gh`
 
 4. **Release Tag and Assets**
 
+   - `./scripts/prepare-release.sh --version <X.Y.Z>`:
+     - creates and pushes `v<X.Y.Z>`
+     - tag push triggers the release workflow automatically
    - Manual workflow-dispatch run from `main`:
      - If `v<version>` already exists, release assets are published to that tag
      - Otherwise tag format is `workspaces-v<version>-main.<run_number>`
    - Tag-push run: supports both `v<version>` and `workspaces-v*`
+   - Rerunning the workflow for an existing tag replaces assets in place and refreshes generated release notes; no GitHub release cleanup is required.
    - Assets:
-     - `WorkspaceManager-<version>.dmg`
-     - `WorkspaceManager-latest.dmg`
+      - `WorkspaceManager-<version>.dmg`
+      - `WorkspaceManager-latest.dmg`
 
 ### Method 1B: Tag-Driven Release (Main Commit Only)
 
@@ -268,10 +283,11 @@ git push origin v0.3.1
 
 For testing or when CI isn't available.
 
-1. **Update Version**
+1. **Prepare Release Metadata**
 
    ```bash
-   ./scripts/release-version.sh set 0.3.1 --bump-build
+   git checkout main
+   ./scripts/prepare-release.sh --version 0.3.1 --no-push
    ```
 
 2. **Build and Sign**
@@ -329,7 +345,9 @@ After creating a release, verify:
 ### Code Signature
 ```bash
 ./scripts/verify-app-keychain-signing.sh build/WorkspaceManager.app
-# Should confirm the embedded provisioning profile and keychain access group
+./scripts/verify-release-bundle.sh build/WorkspaceManager.app
+# Should confirm the embedded provisioning profile, keychain access group,
+# and Developer ID signing across nested code objects
 ```
 
 ### Gatekeeper
@@ -365,6 +383,12 @@ xcrun notarytool log <submission-id> \
     --team-id XXXXXXXXXX
 ```
 
+When `scripts/notarize.sh` fails, it also saves Apple's JSON response to:
+
+```bash
+build/notarytool-log.json
+```
+
 Common issues:
 - **Unsigned code**: All binaries and frameworks must be signed
 - **Hardened runtime missing**: Use `--options runtime` when signing
@@ -395,6 +419,8 @@ security find-identity -v -p codesigning
 |--------|---------|
 | `scripts/build-release.sh` | Build app bundle from SPM |
 | `scripts/verify-app-keychain-signing.sh` | Verify embedded provisioning profile and signed keychain entitlements |
+| `scripts/verify-release-bundle.sh` | Verify Developer ID signing across bundled code objects before notarization |
+| `scripts/prepare-release.sh` | Update release metadata, create the release commit, and tag/push the release |
 | `scripts/notarize.sh` | Create DMG and notarize |
 | `scripts/setup-release-secrets.sh` | Configure GitHub Actions release secrets/variables from a verified `.p12` and provisioning profile |
 | `scripts/signing-config.sh` | Your signing credentials (not in git) |

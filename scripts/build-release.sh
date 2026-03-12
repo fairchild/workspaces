@@ -38,6 +38,7 @@ APP_NAME="WorkspaceManager"
 CLI_NAME="workspaces"
 APP_BUNDLE="$BUILD_DIR/$APP_NAME.app"
 VERIFY_KEYCHAIN_SIGNING_SCRIPT="$SCRIPT_DIR/verify-app-keychain-signing.sh"
+VERIFY_RELEASE_BUNDLE_SCRIPT="$SCRIPT_DIR/verify-release-bundle.sh"
 PLIST_BUDDY="/usr/libexec/PlistBuddy"
 CLI_BUNDLE_RELATIVE_PATH="Contents/Helpers/$CLI_NAME"
 
@@ -233,6 +234,7 @@ prepare_signing_assets() {
     require_cmd security
     [[ -x "$PLIST_BUDDY" ]] || fail "PlistBuddy not found at $PLIST_BUDDY"
     [[ -x "$VERIFY_KEYCHAIN_SIGNING_SCRIPT" ]] || fail "Missing verifier script at $VERIFY_KEYCHAIN_SIGNING_SCRIPT"
+    [[ -x "$VERIFY_RELEASE_BUNDLE_SCRIPT" ]] || fail "Missing verifier script at $VERIFY_RELEASE_BUNDLE_SCRIPT"
     [[ -n "${SIGNING_IDENTITY:-}" ]] || fail "SIGNING_IDENTITY must be set for signed builds"
     [[ -n "$PROVISIONING_PROFILE_PATH" ]] || fail "PROVISIONING_PROFILE_PATH is required for signed builds"
 
@@ -296,6 +298,13 @@ verify_signed_keychain_access() {
     log_step "Verifying keychain signing"
     local output=""
     output="$("$VERIFY_KEYCHAIN_SIGNING_SCRIPT" "$APP_BUNDLE" 2>&1)" || fail "$output"
+    log_success "$output"
+}
+
+verify_release_bundle_signing() {
+    log_step "Verifying release bundle signing"
+    local output=""
+    output="$("$VERIFY_RELEASE_BUNDLE_SCRIPT" "$APP_BUNDLE" 2>&1)" || fail "$output"
     log_success "$output"
 }
 
@@ -440,6 +449,7 @@ if [[ "$SIGN_APP" == true ]] && [[ -n "${SIGNING_IDENTITY:-}" ]]; then
     log_success "Signature verified"
 
     verify_signed_keychain_access
+    verify_release_bundle_signing
 
     spctl --assess --type execute --verbose "$APP_BUNDLE" 2>&1 || \
         log_warning "Gatekeeper check failed - app needs notarization for distribution"
