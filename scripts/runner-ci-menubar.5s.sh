@@ -1,7 +1,9 @@
 #!/bin/bash
 # SwiftBar/xbar plugin: shows self-hosted GitHub Actions runner status in the menu bar.
-# Install: symlink or copy to ~/Library/Application Support/SwiftBar/plugins/
+# Install: run scripts/install-runner-ci-menubar.sh
 # Refresh: every 5 seconds (from filename)
+
+set -euo pipefail
 
 RUNNER_DIRS=(
     "$HOME/.local/share/actions-runner-workspaces"
@@ -9,6 +11,50 @@ RUNNER_DIRS=(
     "$HOME/.local/share/actions-runner-code-cadence"
 )
 LOG="$HOME/.local/share/runner-activity.log"
+
+resolve_real_script() {
+    local source="$1"
+    if [[ ! -L "$source" ]]; then
+        printf '%s\n' "$source"
+        return
+    fi
+
+    local target=""
+    target="$(readlink "$source" 2>/dev/null || true)"
+    if [[ -z "$target" ]]; then
+        printf '%s\n' "$source"
+        return
+    fi
+
+    if [[ "$target" == /* ]]; then
+        printf '%s\n' "$target"
+        return
+    fi
+
+    printf '%s\n' "$(cd "$(dirname "$source")" && cd "$(dirname "$target")" && pwd)/$(basename "$target")"
+}
+
+resolve_status_script() {
+    local plugin_dir=""
+    plugin_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+    local installed_sidecar="$plugin_dir/.runner-ci-menubar/runner-status.sh"
+    if [[ -x "$installed_sidecar" ]]; then
+        printf '%s\n' "$installed_sidecar"
+        return
+    fi
+
+    local real_script=""
+    real_script="$(resolve_real_script "$0")"
+    local repo_sidecar=""
+    repo_sidecar="$(cd "$(dirname "$real_script")" && pwd)/runner-status.sh"
+    if [[ -x "$repo_sidecar" ]]; then
+        printf '%s\n' "$repo_sidecar"
+        return
+    fi
+
+    return 1
+}
 
 total=0
 running=0
@@ -70,5 +116,9 @@ fi
 
 echo "---"
 echo "Refresh | refresh=true"
-REAL_SCRIPT="$(readlink "$0" 2>/dev/null || echo "$0")"
-echo "Open runner-status.sh | bash='$(cd "$(dirname "$REAL_SCRIPT")/.." 2>/dev/null && pwd)/scripts/runner-status.sh' terminal=true"
+STATUS_SCRIPT="$(resolve_status_script || true)"
+if [[ -n "$STATUS_SCRIPT" ]]; then
+    echo "Open runner-status.sh | bash='$STATUS_SCRIPT' terminal=true"
+else
+    echo "runner-status.sh not installed | color=#888888"
+fi
