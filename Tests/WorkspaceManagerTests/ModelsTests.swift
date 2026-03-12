@@ -124,8 +124,8 @@ struct ModelsTests {
             #expect(decoded == metadata)
         }
 
-        @Test("Typed accessors write and replace metadata kinds")
-        func typedAccessorsWriteAndReplaceMetadataKinds() {
+        @Test("SSH and Compose metadata coexist in additive payload")
+        func sshAndComposeMetadataCoexist() {
             let workspace = makeWorkspace()
             let ssh = SSHWorkspaceMetadata(
                 host: "ssh.example.com",
@@ -133,48 +133,78 @@ struct ModelsTests {
                 authMode: "key",
                 workingDir: "/workspace"
             )
-            let kubernetes = KubernetesWorkspaceMetadata(
-                context: "prod-cluster",
-                namespace: "payments",
-                pod: "api-123",
-                container: "web"
-            )
-
-            workspace.sshMetadata = ssh
-
-            #expect(workspace.sshMetadata == ssh)
-            #expect(workspace.kubernetesMetadata == nil)
-            #expect(workspace.composeMetadata == nil)
-            #expect(workspace.remoteMetadataJSON.contains(#""kind":"ssh""#))
-
-            workspace.kubernetesMetadata = kubernetes
-
-            #expect(workspace.sshMetadata == nil)
-            #expect(workspace.kubernetesMetadata == kubernetes)
-            #expect(workspace.composeMetadata == nil)
-            #expect(workspace.remoteMetadataJSON.contains(#""kind":"kubernetes""#))
-        }
-
-        @Test("Nil clearing only removes the matching metadata kind")
-        func nilClearingOnlyRemovesMatchingMetadataKind() {
-            let workspace = makeWorkspace()
             let compose = ComposeWorkspaceMetadata(
                 projectName: "acme",
                 composeFiles: ["compose.yml"],
-                service: "web",
-                workdir: "/app"
+                service: "web"
             )
 
+            workspace.sshMetadata = ssh
             workspace.composeMetadata = compose
-            workspace.sshMetadata = nil
 
+            #expect(workspace.sshMetadata == ssh)
             #expect(workspace.composeMetadata == compose)
-            #expect(!workspace.remoteMetadataJSON.isEmpty)
+            #expect(workspace.remoteMetadataJSON.contains(#""ssh""#))
+            #expect(workspace.remoteMetadataJSON.contains(#""compose""#))
+            #expect(!workspace.remoteMetadataJSON.contains(#""kind""#))
+        }
 
+        @Test("Legacy kind payloads decode into additive payload")
+        func legacyKindPayloadsDecodeIntoAdditivePayload() {
+            let workspace = makeWorkspace()
+
+            workspace.remoteMetadataJSON =
+                #"{"kind":"ssh","ssh":{"host":"ssh.example.com","user":"alice","port":22,"authMode":"key","workingDir":"/workspace"}}"#
+
+            #expect(
+                workspace.sshMetadata
+                    == SSHWorkspaceMetadata(
+                        host: "ssh.example.com",
+                        user: "alice",
+                        authMode: "key",
+                        workingDir: "/workspace"
+                    )
+            )
+            #expect(workspace.composeMetadata == nil)
+            #expect(workspace.kubernetesMetadata == nil)
+
+            workspace.remoteMetadataJSON =
+                #"{"kind":"compose","compose":{"projectName":"acme","composeFiles":["compose.yml"],"service":"web","workdir":"/app"}}"#
+
+            #expect(workspace.sshMetadata == nil)
+            #expect(
+                workspace.composeMetadata
+                    == ComposeWorkspaceMetadata(
+                        projectName: "acme",
+                        composeFiles: ["compose.yml"],
+                        service: "web",
+                        workdir: "/app"
+                    )
+            )
+        }
+
+        @Test("Clearing Compose metadata preserves SSH metadata")
+        func clearingComposePreservesSSHMetadata() {
+            let workspace = makeWorkspace()
+            let ssh = SSHWorkspaceMetadata(
+                host: "ssh.example.com",
+                user: "alice",
+                authMode: "key",
+                workingDir: "/workspace"
+            )
+            let compose = ComposeWorkspaceMetadata(
+                composeFiles: ["compose.yml"],
+                service: "web"
+            )
+
+            workspace.sshMetadata = ssh
+            workspace.composeMetadata = compose
             workspace.composeMetadata = nil
 
             #expect(workspace.composeMetadata == nil)
-            #expect(workspace.remoteMetadataJSON.isEmpty)
+            #expect(workspace.sshMetadata == ssh)
+            #expect(workspace.remoteMetadataJSON.contains(#""ssh""#))
+            #expect(!workspace.remoteMetadataJSON.contains(#""compose""#))
         }
 
         @Test("Empty, malformed, and unknown metadata payloads decode as nil")

@@ -20,7 +20,7 @@ struct ContentView: View {
     @AppStorage(TerminalMultiplexingMode.storageKey)
     private var terminalMultiplexingModeRawValue: String = TerminalMultiplexingMode.defaultValue.rawValue
     @Environment(\.externalEditorService) private var externalEditorService
-    @Environment(\.remoteBackend) private var remoteBackend
+    @Environment(\.remoteBackendRegistry) private var remoteBackendRegistry
     @Environment(\.workspaceService) private var workspaceService
     @ObservedObject private var notificationCoordinator = NotificationCoordinator.shared
 
@@ -28,7 +28,7 @@ struct ContentView: View {
     @State private var repoForNewWorkspaceFromLanding: Repo?
     @State private var webSourceCreationTarget: WebSourceCreationTarget?
     @State private var landingErrorMessage: String?
-    @State private var isRemoteBackendAvailableForLanding = false
+    @State private var isDaytonaBackendAvailableForLanding = false
     @StateObject private var rightPaneStateStore = RightPaneStateStore()
     @StateObject private var webSurfaceStore = WebSurfaceStore()
     @StateObject private var terminalFocusCoordinator = TerminalFocusCoordinator()
@@ -205,6 +205,18 @@ struct ContentView: View {
         return openInDefaultEditor
     }
 
+    private var creationBackendIdentifiers: Set<String> {
+        Set(remoteBackendRegistry.creationBackendIdentifiers)
+    }
+
+    private var supportsDaytonaCreation: Bool {
+        creationBackendIdentifiers.contains(DaytonaBackend.identifier)
+    }
+
+    private var supportsSSHCreation: Bool {
+        creationBackendIdentifiers.contains(SSHBackend.identifier)
+    }
+
     private var isShowingOpenInEditorError: Binding<Bool> {
         Binding(
             get: { viewState.openInEditorErrorMessage != nil },
@@ -372,7 +384,13 @@ struct ContentView: View {
                 syncOpenInEditorShortcutRouting()
             }
             .task {
-                isRemoteBackendAvailableForLanding = await remoteBackend.isAvailable()
+                if supportsDaytonaCreation,
+                    let daytonaBackend = remoteBackendRegistry.backend(for: DaytonaBackend.identifier)
+                {
+                    isDaytonaBackendAvailableForLanding = await daytonaBackend.healthCheck()
+                } else {
+                    isDaytonaBackendAvailableForLanding = false
+                }
                 await syncCloudWorkspaceStatuses()
             }
             .onDisappear {
@@ -446,7 +464,7 @@ struct ContentView: View {
                 Text(viewState.openInEditorErrorMessage ?? "Unknown error.")
             }
             .alert(
-                "Could Not Connect to Sandbox",
+                "Could Not Connect to Remote Workspace",
                 isPresented: Binding(
                     get: { viewState.remoteErrorMessage != nil },
                     set: { if !$0 { viewState.remoteErrorMessage = nil } }
@@ -463,11 +481,13 @@ struct ContentView: View {
             .sheet(item: $repoForNewWorkspaceFromLanding) { repo in
                 NewWorkspaceSheet(
                     repo: repo,
-                    isRemoteBackendAvailable: isRemoteBackendAvailableForLanding,
+                    supportsDaytonaCreation: supportsDaytonaCreation,
+                    supportsSSHCreation: supportsSSHCreation,
+                    isDaytonaAvailable: isDaytonaBackendAvailableForLanding,
                     isCreateDisabled: false
-                ) { name, backend in
+                ) { request in
                     Task { @MainActor in
-                        await createWorkspaceFromLanding(repo: repo, name: name, backend: backend)
+                        await createWorkspaceFromLanding(repo: repo, request: request)
                     }
                 }
             }
@@ -850,7 +870,12 @@ struct ContentView: View {
     private func handleWorkspaceSelection(_ workspace: Workspace, preferredDirectory: URL?) {
         terminalFocusCoordinator.cancelPendingRepoClickMeasurement(reason: "workspace_selected")
 
-        if workspace.isRemote, let sandboxId = workspace.remoteId {
+        if workspace.isRemote {
+            guard let sandboxId = workspace.remoteId else {
+                viewState.remoteErrorMessage = RemoteWorkspaceError.missingRemoteIdentifier
+                    .localizedDescription
+                return
+            }
             handleRemoteWorkspaceSelection(workspace, sandboxId: sandboxId)
         } else {
             abandonPendingRemoteConnection(reason: "local_workspace_selected")
@@ -919,20 +944,23 @@ struct ContentView: View {
             viewState.pendingRemoteWorkspace = pendingSelection
         }
 
-        let backend = remoteBackend
-        let needsStart = workspace.status == .stopped || workspace.status == .archived
+        guard let backend = remoteBackendRegistry.backend(for: workspace.backendIdentifier) else {
+            viewState.connectingSandboxId = nil
+            viewState.pendingRemoteWorkspace = nil
+            viewState.remoteErrorMessage = RemoteWorkspaceError.backendNotRegistered(workspace.backendIdentifier)
+                .localizedDescription
+            return
+        }
+        let activatesProviderSession = backend.runtimeCapabilities.supportsStartStop
 
         Task {
             do {
-                let info: RemoteSandboxInfo
-                if needsStart {
-                    NSLog("[RemoteBackend] Starting sandbox %@ (was %@)", sandboxId, workspace.status.rawValue)
-                    info = try await backend.startSandbox(sandboxId: sandboxId)
+                let info = try await backend.openSession(for: workspace)
+
+                if activatesProviderSession, workspace.status != .active {
                     await MainActor.run {
                         workspace.status = .active
                     }
-                } else {
-                    info = try await backend.getSSHCommand(sandboxId: sandboxId)
                 }
 
                 await MainActor.run {
@@ -966,10 +994,14 @@ struct ContentView: View {
                         surfaceStore: hostTerminalState.surfaceStore,
                         activeSessionID: hostTerminalState.activeSessionID
                     )
-                    NSLog("[RemoteBackend] SSH session created for sandbox %@", sandboxId)
+                    NSLog("[RemoteBackend] SSH session created for remote workspace %@", sandboxId)
                 }
             } catch {
-                NSLog("[RemoteBackend] Failed to connect to sandbox %@: %@", sandboxId, error.localizedDescription)
+                NSLog(
+                    "[RemoteBackend] Failed to connect to remote workspace %@: %@",
+                    sandboxId,
+                    error.localizedDescription
+                )
                 await MainActor.run {
                     guard let pendingSelection = viewState.pendingRemoteWorkspace else {
                         return
@@ -1005,20 +1037,18 @@ struct ContentView: View {
     }
 
     @MainActor
-    private func createWorkspaceFromLanding(repo: Repo, name: String, backend: WorkspaceBackendChoice) async {
+    private func createWorkspaceFromLanding(repo: Repo, request: NewWorkspaceRequest) async {
         let controller = SidebarWorkspaceController(
             modelContext: modelContext,
             workspaceService: workspaceService,
-            remoteBackend: remoteBackend
+            remoteBackendRegistry: remoteBackendRegistry
         )
         do {
-            let workspace: Workspace
-            switch backend {
-            case .local:
-                workspace = try await controller.createWorkspace(from: repo, name: name, progress: { _ in })
-            case .remoteVM:
-                workspace = try await controller.createRemoteWorkspace(from: repo, name: name)
-            }
+            let workspace = try await controller.createWorkspace(
+                from: repo,
+                request: request,
+                progress: nil
+            )
             abandonPendingRemoteConnection(reason: "workspace_created")
             handleWorkspaceSelection(workspace)
         } catch {
@@ -1028,11 +1058,14 @@ struct ContentView: View {
 
     @MainActor
     private func archiveWorkspaceFromLanding(_ workspace: Workspace) async {
-        if workspace.isRemote {
+        if workspace.isRemote,
+            let backend = remoteBackendRegistry.backend(for: workspace.backendIdentifier),
+            backend.runtimeCapabilities.supportsArchive
+        {
             let controller = SidebarWorkspaceController(
                 modelContext: modelContext,
                 workspaceService: workspaceService,
-                remoteBackend: remoteBackend
+                remoteBackendRegistry: remoteBackendRegistry
             )
             do {
                 try await controller.archive(workspace)
@@ -1041,6 +1074,7 @@ struct ContentView: View {
             }
         } else {
             workspace.status = .archived
+            try? modelContext.save()
         }
     }
 
@@ -1172,46 +1206,67 @@ struct ContentView: View {
     }
 
     private func syncCloudWorkspaceStatuses() async {
-        let cloudWorkspaces = repos.flatMap(\.workspaces).filter { $0.remoteId != nil }
-        guard !cloudWorkspaces.isEmpty else { return }
-
-        let backend = remoteBackend
-        let statuses: [RemoteSandboxStatus]
-        do {
-            statuses = try await backend.listSandboxes()
-        } catch {
-            NSLog("[RemoteBackend] Failed to sync sandbox statuses: %@", error.localizedDescription)
-            return
-        }
-
-        let stateById = Dictionary(uniqueKeysWithValues: statuses.map { ($0.sandboxId, $0.state) })
         var changed = false
 
-        for workspace in cloudWorkspaces {
-            guard let sandboxId = workspace.remoteId else { continue }
-            let newStatus: WorkspaceStatus
-            if let state = stateById[sandboxId] {
-                switch state {
-                case "started", "starting":
-                    newStatus = .active
-                case "stopped", "stopping":
-                    newStatus = .stopped
-                case "archived", "archiving":
-                    newStatus = .archived
-                default:
-                    continue
-                }
-            } else {
-                // Sandbox no longer exists on remote backend — mark archived
-                newStatus = .archived
+        let remoteWorkspaces = repos.flatMap(\.workspaces).filter {
+            $0.isRemote && $0.remoteId != nil
+        }
+        let workspacesByBackend = Dictionary(grouping: remoteWorkspaces, by: \.backendIdentifier)
+
+        for (backendIdentifier, workspaces) in workspacesByBackend {
+            guard let backend = remoteBackendRegistry.backend(for: backendIdentifier) else {
+                NSLog("[RemoteBackend] No backend registered for %@", backendIdentifier)
+                continue
             }
 
-            if workspace.status != newStatus {
+            guard backend.runtimeCapabilities.supportsList,
+                let listableBackend = backend as? any Listable
+            else {
+                continue
+            }
+
+            let statuses: [RemoteSandboxStatus]
+            do {
+                statuses = try await listableBackend.listSandboxes()
+            } catch {
                 NSLog(
-                    "[RemoteBackend] Syncing workspace '%@' status: %@ → %@",
-                    workspace.name, workspace.status.rawValue, newStatus.rawValue)
-                workspace.status = newStatus
-                changed = true
+                    "[RemoteBackend] Failed to sync remote workspace statuses for %@: %@",
+                    backendIdentifier,
+                    error.localizedDescription
+                )
+                continue
+            }
+
+            let stateById = Dictionary(uniqueKeysWithValues: statuses.map { ($0.sandboxId, $0.state) })
+
+            for workspace in workspaces {
+                guard let sandboxId = workspace.remoteId else { continue }
+                let newStatus: WorkspaceStatus
+                if let state = stateById[sandboxId] {
+                    switch state {
+                    case "started", "starting":
+                        newStatus = .active
+                    case "stopped", "stopping":
+                        newStatus = .stopped
+                    case "archived", "archiving":
+                        newStatus = .archived
+                    default:
+                        continue
+                    }
+                } else {
+                    newStatus = .archived
+                }
+
+                if workspace.status != newStatus {
+                    NSLog(
+                        "[RemoteBackend] Syncing workspace '%@' status: %@ → %@",
+                        workspace.name,
+                        workspace.status.rawValue,
+                        newStatus.rawValue
+                    )
+                    workspace.status = newStatus
+                    changed = true
+                }
             }
         }
 
@@ -1667,7 +1722,7 @@ struct MainTerminalDetailView: View {
         case .repoPath, .hostPath:
             return activeHostSession.directoryURL.lastPathComponent
         case .remoteSandbox(let sandboxID):
-            return selectedWorkspace?.name ?? "Sandbox \(sandboxID)"
+            return selectedWorkspace?.name ?? "Remote Workspace \(sandboxID)"
         }
     }
 }
@@ -1681,7 +1736,7 @@ struct SandboxConnectingOverlay: View {
             VStack(spacing: 12) {
                 ProgressView()
                     .controlSize(.large)
-                Text("Connecting to \(workspaceName ?? "sandbox")...")
+                Text("Connecting to \(workspaceName ?? "remote workspace")...")
                     .font(.headline)
                     .foregroundStyle(.white)
             }

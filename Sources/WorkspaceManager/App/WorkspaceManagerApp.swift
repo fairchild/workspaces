@@ -415,8 +415,8 @@ private struct ExternalEditorServiceKey: EnvironmentKey {
     nonisolated(unsafe) static let defaultValue: any ExternalEditorServiceProtocol = ExternalEditorService.shared
 }
 
-private struct RemoteBackendKey: EnvironmentKey {
-    static let defaultValue: any RemoteBackendProtocol = DaytonaBackend.shared
+private struct RemoteBackendRegistryKey: EnvironmentKey {
+    static let defaultValue: any RemoteBackendRegistryProtocol = RemoteBackendRegistry.shared
 }
 
 extension EnvironmentValues {
@@ -440,9 +440,9 @@ extension EnvironmentValues {
         set { self[ExternalEditorServiceKey.self] = newValue }
     }
 
-    var remoteBackend: any RemoteBackendProtocol {
-        get { self[RemoteBackendKey.self] }
-        set { self[RemoteBackendKey.self] = newValue }
+    var remoteBackendRegistry: any RemoteBackendRegistryProtocol {
+        get { self[RemoteBackendRegistryKey.self] }
+        set { self[RemoteBackendRegistryKey.self] = newValue }
     }
 }
 

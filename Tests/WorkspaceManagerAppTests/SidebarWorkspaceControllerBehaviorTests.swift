@@ -1,0 +1,332 @@
+import Foundation
+import SwiftData
+import Testing
+import WorkspaceManagerCore
+
+@testable import WorkspaceManager
+
+@Suite("SidebarWorkspaceControllerBehavior")
+struct SidebarWorkspaceControllerBehaviorTests {
+    @Test("Local request routes through WorkspaceService")
+    @MainActor
+    func localRequestRoutesThroughWorkspaceService() async throws {
+        let (container, context) = try makeModelContext()
+        _ = container
+        let repo = Repo(name: "api", localPath: URL(fileURLWithPath: "/tmp/api"))
+        context.insert(repo)
+
+        let workspaceService = MockWorkspaceService()
+        workspaceService.createWorkspaceResult = NewWorkspaceInfo(
+            name: "feature-a",
+            path: URL(fileURLWithPath: "/tmp/api/workspaces/feature-a"),
+            gitBranch: "workspace/feature-a"
+        )
+        let controller = SidebarWorkspaceController(
+            modelContext: context,
+            workspaceService: workspaceService,
+            remoteBackendRegistry: MockRemoteBackendRegistry()
+        )
+
+        let workspace = try await controller.createWorkspace(
+            from: repo,
+            request: NewWorkspaceRequest(name: "feature-a", backend: .local)
+        )
+
+        #expect(workspaceService.createWorkspaceCalls.count == 1)
+        #expect(workspace.backendIdentifier == "local")
+        #expect(workspace.gitBranch == "workspace/feature-a")
+        #expect(workspace.remoteId == nil)
+    }
+
+    @Test("Daytona request routes through provisionable backend")
+    @MainActor
+    func daytonaRequestRoutesThroughProvisionableBackend() async throws {
+        let (container, context) = try makeModelContext()
+        _ = container
+        let repo = Repo(
+            name: "api",
+            localPath: URL(fileURLWithPath: "/tmp/api"),
+            remoteURL: "git@github.com:acme/api.git"
+        )
+        context.insert(repo)
+
+        let backend = MockRemoteBackend(
+            identifier: DaytonaBackend.identifier,
+            runtimeCapabilities: RuntimeCapabilities(
+                supportsCreate: true,
+                supportsDelete: true,
+                supportsStartStop: true,
+                supportsArchive: true,
+                supportsList: true
+            )
+        )
+        await backend.setCreateSandboxResult(
+            RemoteSandboxInfo(
+                sandboxId: "daytona-123",
+                sshCommand: "ssh daytona"
+            )
+        )
+        let controller = SidebarWorkspaceController(
+            modelContext: context,
+            workspaceService: MockWorkspaceService(),
+            remoteBackendRegistry: MockRemoteBackendRegistry(
+                creationBackendIdentifiers: [DaytonaBackend.identifier],
+                backends: [DaytonaBackend.identifier: backend]
+            )
+        )
+
+        let workspace = try await controller.createWorkspace(
+            from: repo,
+            request: NewWorkspaceRequest(name: "feature-a", backend: .daytona)
+        )
+
+        #expect(await backend.createSandboxCallCount() == 1)
+        #expect(workspace.backendIdentifier == DaytonaBackend.identifier)
+        #expect(workspace.remoteId == "daytona-123")
+    }
+
+    @Test("SSH request creates a persisted local record with metadata")
+    @MainActor
+    func sshRequestCreatesPersistedLocalRecord() async throws {
+        let (container, context) = try makeModelContext()
+        _ = container
+        let repo = Repo(
+            name: "api",
+            localPath: URL(fileURLWithPath: "/tmp/api"),
+            remoteURL: "git@github.com:acme/api.git"
+        )
+        context.insert(repo)
+
+        let controller = SidebarWorkspaceController(
+            modelContext: context,
+            workspaceService: MockWorkspaceService(),
+            remoteBackendRegistry: MockRemoteBackendRegistry(
+                creationBackendIdentifiers: [SSHBackend.identifier],
+                backends: [SSHBackend.identifier: SSHBackend()]
+            )
+        )
+        let ssh = SSHWorkspaceMetadata(
+            host: "ssh.example.com",
+            user: "alice",
+            port: 2222,
+            authMode: "ssh-agent",
+            workingDir: "/srv/workspaces/feature-a"
+        )
+        let compose = ComposeWorkspaceMetadata(
+            composeFiles: ["compose.yml"],
+            service: "web"
+        )
+
+        let workspace = try await controller.createWorkspace(
+            from: repo,
+            request: NewWorkspaceRequest(
+                name: "feature-a",
+                backend: .sshHost(
+                    SSHHostWorkspaceRequest(
+                        ssh: ssh,
+                        compose: compose
+                    )
+                )
+            )
+        )
+
+        #expect(workspace.backendIdentifier == SSHBackend.identifier)
+        #expect(workspace.remoteId != nil)
+        #expect(workspace.sshMetadata == ssh)
+        #expect(workspace.composeMetadata == compose)
+    }
+
+    @Test("Lifecycle operations are capability-gated per backend")
+    @MainActor
+    func lifecycleOperationsAreCapabilityGatedPerBackend() async throws {
+        let (container, context) = try makeModelContext()
+        _ = container
+        let repo = Repo(
+            name: "api",
+            localPath: URL(fileURLWithPath: "/tmp/api"),
+            remoteURL: "git@github.com:acme/api.git"
+        )
+        let workspace = Workspace(
+            name: "feature-a",
+            path: URL(fileURLWithPath: "/tmp/api/workspaces/feature-a"),
+            sourceRepo: repo,
+            backendIdentifier: SSHBackend.identifier,
+            remoteId: "remote-123"
+        )
+        workspace.sshMetadata = SSHWorkspaceMetadata(host: "ssh.example.com")
+        context.insert(repo)
+        context.insert(workspace)
+        try context.save()
+
+        let controller = SidebarWorkspaceController(
+            modelContext: context,
+            workspaceService: MockWorkspaceService(),
+            remoteBackendRegistry: MockRemoteBackendRegistry(
+                backends: [SSHBackend.identifier: SSHBackend()]
+            )
+        )
+
+        await #expect(throws: SidebarWorkspaceController.ControllerError.self) {
+            try await controller.start(workspace)
+        }
+    }
+
+    @Test("Deleting SSH workspace removes only the local record")
+    @MainActor
+    func deletingSSHWorkspaceRemovesOnlyLocalRecord() async throws {
+        let (container, context) = try makeModelContext()
+        let repo = Repo(
+            name: "api",
+            localPath: URL(fileURLWithPath: "/tmp/api"),
+            remoteURL: "git@github.com:acme/api.git"
+        )
+        let workspace = Workspace(
+            name: "feature-a",
+            path: URL(fileURLWithPath: "/tmp/api/workspaces/feature-a"),
+            sourceRepo: repo,
+            backendIdentifier: SSHBackend.identifier,
+            remoteId: "remote-123"
+        )
+        workspace.sshMetadata = SSHWorkspaceMetadata(host: "ssh.example.com")
+        context.insert(repo)
+        context.insert(workspace)
+        try context.save()
+
+        let workspaceService = MockWorkspaceService()
+        let controller = SidebarWorkspaceController(
+            modelContext: context,
+            workspaceService: workspaceService,
+            remoteBackendRegistry: MockRemoteBackendRegistry(
+                backends: [SSHBackend.identifier: SSHBackend()]
+            )
+        )
+
+        try await controller.deleteWorkspace(workspace, deleteFiles: true)
+
+        let fetchedWorkspaces = try context.fetch(FetchDescriptor<Workspace>())
+        #expect(fetchedWorkspaces.isEmpty)
+        #expect(workspaceService.deleteWorkspaceCalls.isEmpty)
+        _ = container
+    }
+
+    @MainActor
+    private func makeModelContext() throws -> (ModelContainer, ModelContext) {
+        let schema = Schema([Repo.self, Workspace.self, WebSource.self])
+        let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
+        let container = try ModelContainer(for: schema, configurations: [configuration])
+        return (container, container.mainContext)
+    }
+}
+
+private final class MockWorkspaceService: WorkspaceServiceProtocol, @unchecked Sendable {
+    struct CreateWorkspaceCall: Sendable {
+        let repoName: String
+        let repoLocalURL: URL
+        let name: String
+    }
+
+    var workspacesRoot: URL {
+        get async { URL(fileURLWithPath: "/tmp/workspaces") }
+    }
+
+    var createWorkspaceResult = NewWorkspaceInfo(
+        name: "feature-a",
+        path: URL(fileURLWithPath: "/tmp/workspaces/feature-a"),
+        gitBranch: "workspace/feature-a"
+    )
+    var createWorkspaceCalls: [CreateWorkspaceCall] = []
+    var deleteWorkspaceCalls: [(workspaceURL: URL, deleteFiles: Bool)] = []
+
+    func createWorkspace(
+        repoName: String,
+        repoLocalURL: URL,
+        name: String,
+        progress: WorkspaceCreationProgressHandler?
+    ) async throws -> NewWorkspaceInfo {
+        createWorkspaceCalls.append(
+            CreateWorkspaceCall(repoName: repoName, repoLocalURL: repoLocalURL, name: name)
+        )
+        return createWorkspaceResult
+    }
+
+    func archiveWorkspace(at workspaceURL: URL) async throws {}
+
+    func deleteWorkspace(at workspaceURL: URL, deleteFiles: Bool) async throws {
+        deleteWorkspaceCalls.append((workspaceURL, deleteFiles))
+    }
+
+    func runLifecycleScript(_ scriptName: String, in directory: URL) async throws -> WorkspaceService.ScriptResult {
+        WorkspaceService.ScriptResult(exitCode: 0, stdout: "", stderr: "")
+    }
+
+    func getWorkspaceSize(at workspaceURL: URL) async throws -> Int64 { 0 }
+
+    func sanitizeFilename(_ name: String) async -> String { name }
+}
+
+private actor MockRemoteBackend: ProvisionCapable, StartStopCapable, Archivable, Listable {
+    nonisolated let identifier: String
+    nonisolated let runtimeCapabilities: RuntimeCapabilities
+    private let healthCheckResult: Bool
+
+    var createSandboxResult = RemoteSandboxInfo(sandboxId: "remote-123", sshCommand: "ssh remote")
+    var createSandboxCalls: [(name: String, cloneURL: String?)] = []
+
+    init(
+        identifier: String,
+        runtimeCapabilities: RuntimeCapabilities,
+        healthCheckResult: Bool = true
+    ) {
+        self.identifier = identifier
+        self.runtimeCapabilities = runtimeCapabilities
+        self.healthCheckResult = healthCheckResult
+    }
+
+    func healthCheck() async -> Bool { healthCheckResult }
+
+    func openSession(for workspace: Workspace) async throws -> RemoteSandboxInfo {
+        createSandboxResult
+    }
+
+    func createSandbox(name: String, cloneURL: String?) async throws -> RemoteSandboxInfo {
+        createSandboxCalls.append((name, cloneURL))
+        return createSandboxResult
+    }
+
+    func setCreateSandboxResult(_ result: RemoteSandboxInfo) {
+        createSandboxResult = result
+    }
+
+    func createSandboxCallCount() -> Int {
+        createSandboxCalls.count
+    }
+
+    func deleteSandbox(sandboxId: String) async throws {}
+
+    func stopSandbox(sandboxId: String) async throws {}
+
+    func startSandbox(sandboxId: String) async throws -> RemoteSandboxInfo {
+        createSandboxResult
+    }
+
+    func archiveSandbox(sandboxId: String) async throws {}
+
+    func listSandboxes() async throws -> [RemoteSandboxStatus] { [] }
+}
+
+private final class MockRemoteBackendRegistry: RemoteBackendRegistryProtocol, @unchecked Sendable {
+    let creationBackendIdentifiers: [String]
+    private let backends: [String: any RemoteBackendProtocol]
+
+    init(
+        creationBackendIdentifiers: [String] = [],
+        backends: [String: any RemoteBackendProtocol] = [:]
+    ) {
+        self.creationBackendIdentifiers = creationBackendIdentifiers
+        self.backends = backends
+    }
+
+    func backend(for identifier: String) -> (any RemoteBackendProtocol)? {
+        backends[identifier]
+    }
+}
