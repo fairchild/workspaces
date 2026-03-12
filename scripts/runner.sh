@@ -4,16 +4,17 @@ set -euo pipefail
 # macOS GitHub Actions Runner Management Script
 # Handles setup, start, stop, and status for on-demand self-hosted runners
 
-RUNNER_DIR="${HOME}/.local/share/actions-runner-workspaces"
-RUNNER_VERSION="2.321.0"
-GITHUB_ORG="fairchild"
-GITHUB_REPO="workspaces"
-RUNNER_NAME="$(hostname -s)-workspaces"
-RUNNER_LABELS="self-hosted-macos,macos,$(uname -m)"
+RUNNER_DIR="${RUNNER_DIR:-${HOME}/.local/share/actions-runner-workspaces}"
+RUNNER_VERSION="${RUNNER_VERSION:-2.332.0}"
+GITHUB_ORG="${GITHUB_ORG:-fairchild}"
+GITHUB_REPO="${GITHUB_REPO:-workspaces}"
+RUNNER_NAME="${RUNNER_NAME:-$(hostname -s)-workspaces}"
+RUNNER_LABELS="${RUNNER_LABELS:-self-hosted-macos,macos,$(uname -m)}"
+RUNNER_REGISTRATION_TOKEN="${RUNNER_REGISTRATION_TOKEN:-}"
 
 # Config file for GitHub App credentials
-CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/github-runner"
-CONFIG_FILE="${CONFIG_DIR}/config"
+CONFIG_DIR="${CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/github-runner}"
+CONFIG_FILE="${CONFIG_FILE:-${CONFIG_DIR}/config}"
 
 # Colors for output
 RED='\033[0;31m'
@@ -27,11 +28,20 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1" >&2; }
 
 check_dependencies() {
     local missing=()
-    for cmd in curl jq openssl; do
+    for cmd in curl; do
         if ! command -v "$cmd" &>/dev/null; then
             missing+=("$cmd")
         fi
     done
+
+    if [ -z "${RUNNER_REGISTRATION_TOKEN}" ]; then
+        for cmd in jq openssl; do
+            if ! command -v "$cmd" &>/dev/null; then
+                missing+=("$cmd")
+            fi
+        done
+    fi
+
     if [ ${#missing[@]} -ne 0 ]; then
         log_error "Missing dependencies: ${missing[*]}"
         log_info "Install with: brew install ${missing[*]}"
@@ -76,6 +86,12 @@ generate_jwt() {
 }
 
 get_registration_token() {
+    if [ -n "${RUNNER_REGISTRATION_TOKEN}" ]; then
+        log_info "Using runner registration token from environment"
+        echo "$RUNNER_REGISTRATION_TOKEN"
+        return
+    fi
+
     load_config
 
     log_info "Generating GitHub App JWT..."
@@ -230,6 +246,39 @@ cmd_logs() {
     fi
 }
 
+run_service_command() {
+    local subcommand="$1"
+
+    if [ ! -f "${RUNNER_DIR}/.runner" ]; then
+        log_error "Runner not configured. Run 'setup' first."
+        exit 1
+    fi
+
+    if [ ! -f "${RUNNER_DIR}/svc.sh" ]; then
+        log_error "Runner service helper not found at ${RUNNER_DIR}/svc.sh"
+        exit 1
+    fi
+
+    cd "$RUNNER_DIR"
+    ./svc.sh "$subcommand"
+}
+
+cmd_service_install() {
+    run_service_command install
+}
+
+cmd_service_start() {
+    run_service_command start
+}
+
+cmd_service_stop() {
+    run_service_command stop
+}
+
+cmd_service_status() {
+    run_service_command status
+}
+
 cmd_help() {
     cat << EOF
 GitHub Actions Runner Management Script (workspaces)
@@ -237,15 +286,21 @@ GitHub Actions Runner Management Script (workspaces)
 Usage: $0 <command>
 
 Commands:
-  setup   Configure the runner (downloads if needed, fetches token via GitHub App)
-  start   Start the runner in background
-  stop    Stop the running runner
-  status  Show runner status
-  logs    Tail the runner logs
-  help    Show this help message
+  setup            Configure the runner (downloads if needed, fetches token via GitHub App or RUNNER_REGISTRATION_TOKEN)
+  start            Start the runner in background
+  stop             Stop the running runner
+  status           Show runner status
+  logs             Tail the runner logs
+  service-install  Install the runner as a user launchd service
+  service-start    Start the launchd service
+  service-stop     Stop the launchd service
+  service-status   Show launchd service status
+  help             Show this help message
 
 Configuration:
   Uses shared config at ${CONFIG_FILE}
+  Override with env vars such as RUNNER_DIR, RUNNER_NAME, RUNNER_LABELS,
+  RUNNER_VERSION, GITHUB_ORG, GITHUB_REPO, and RUNNER_REGISTRATION_TOKEN.
 
 Examples:
   $0 setup     # One-time setup
@@ -256,11 +311,15 @@ EOF
 }
 
 case "${1:-help}" in
-    setup)  cmd_setup ;;
-    start)  cmd_start ;;
-    stop)   cmd_stop ;;
-    status) cmd_status ;;
-    logs)   cmd_logs ;;
-    help)   cmd_help ;;
+    setup)            cmd_setup ;;
+    start)            cmd_start ;;
+    stop)             cmd_stop ;;
+    status)           cmd_status ;;
+    logs)             cmd_logs ;;
+    service-install)  cmd_service_install ;;
+    service-start)    cmd_service_start ;;
+    service-stop)     cmd_service_stop ;;
+    service-status)   cmd_service_status ;;
+    help)             cmd_help ;;
     *)      log_error "Unknown command: $1"; cmd_help; exit 1 ;;
 esac
