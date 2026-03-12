@@ -24,7 +24,7 @@ public struct LocalWorkspaceProvider: WorkspaceProviderProtocol {
     }
 
     public func sessionKey(for workspace: WorkspaceProviderTarget) -> HostTerminalSessionKey {
-        .hostPath(workspace.workspaceURL.path)
+        .hostPath((workspace.localDirectoryURL ?? workspace.workspaceURL).path)
     }
 
     public func createWorkspace(
@@ -52,9 +52,13 @@ public struct LocalWorkspaceProvider: WorkspaceProviderProtocol {
     }
 
     public func terminalLaunchSpec(for workspace: WorkspaceProviderTarget) async throws -> TerminalLaunchSpec {
-        TerminalLaunchSpec(
+        guard let localDirectoryURL = workspace.localDirectoryURL else {
+            throw WorkspaceProviderError.invalidWorkspace("Local workspace is missing a host directory.")
+        }
+
+        return TerminalLaunchSpec(
             sessionKey: sessionKey(for: workspace),
-            workingDirectory: workspace.workspaceURL
+            workingDirectory: localDirectoryURL
         )
     }
 

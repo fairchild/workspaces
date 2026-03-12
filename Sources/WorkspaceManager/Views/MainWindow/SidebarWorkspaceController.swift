@@ -181,21 +181,23 @@ struct SidebarWorkspaceController {
     ) throws {
         if let existingWorkspace {
             existingWorkspace.name = result.name
-            existingWorkspace.path = result.path.path
+            existingWorkspace.path = result.persistedPath ?? result.path.path
             existingWorkspace.gitBranch = result.gitBranch
             existingWorkspace.status = result.status
             existingWorkspace.backendIdentifier = result.backendIdentifier
             existingWorkspace.remoteId = result.remoteId
+            existingWorkspace.sessionRoutingID = result.sessionRoutingID
             existingWorkspace.backendMetadataRaw = result.backendMetadataRaw
         } else {
             let workspace = Workspace(
                 name: result.name,
-                path: result.path,
+                path: URL(fileURLWithPath: result.persistedPath ?? result.path.path),
                 sourceRepo: repo,
                 status: result.status,
                 gitBranch: result.gitBranch,
                 backendIdentifier: result.backendIdentifier,
                 remoteId: result.remoteId,
+                sessionRoutingID: result.sessionRoutingID,
                 backendMetadataRaw: result.backendMetadataRaw
             )
             modelContext.insert(workspace)

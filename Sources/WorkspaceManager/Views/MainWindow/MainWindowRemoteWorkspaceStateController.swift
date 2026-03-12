@@ -2,31 +2,29 @@ import WorkspaceManagerCore
 
 enum MainWindowRemoteWorkspaceSelectionDecision: Equatable {
     case beginConnection(MainWindowPendingRemoteWorkspaceSelection)
-    case ignoreInFlightConnection(sandboxID: String)
+    case ignoreInFlightConnection(routingID: String)
 }
 
 struct MainWindowRemoteWorkspaceStateController {
     func selectionDecision(
         for workspace: Workspace,
-        connectingSandboxID: String?
+        connectingRoutingID: String?
     ) -> MainWindowRemoteWorkspaceSelectionDecision {
-        guard let sandboxID = workspace.remoteId else {
-            preconditionFailure("Remote workspace selection requires a sandbox identifier")
-        }
+        let routingID = workspace.terminalSessionIdentifier
 
-        if let connectingSandboxID {
-            return .ignoreInFlightConnection(sandboxID: connectingSandboxID)
+        if let connectingRoutingID {
+            return .ignoreInFlightConnection(routingID: connectingRoutingID)
         }
 
         return .beginConnection(
-            MainWindowPendingRemoteWorkspaceSelection(workspace: workspace, sandboxID: sandboxID)
+            MainWindowPendingRemoteWorkspaceSelection(workspace: workspace, routingID: routingID)
         )
     }
 
     func shouldAcceptCompletion(
-        sandboxID: String,
+        routingID: String,
         pendingSelection: MainWindowPendingRemoteWorkspaceSelection?
     ) -> Bool {
-        pendingSelection?.sandboxID == sandboxID
+        pendingSelection?.routingID == routingID
     }
 }

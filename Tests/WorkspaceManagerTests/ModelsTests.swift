@@ -333,10 +333,17 @@ struct ModelsTests {
             let repo = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))
             let remoteWorkspace = Workspace(
                 name: "cloud-feature",
-                path: URL(fileURLWithPath: "/tmp/alpha/workspaces/cloud-feature"),
+                path: URL(fileURLWithPath: Workspace.remotePathSentinel),
                 sourceRepo: repo,
                 backendIdentifier: SSHBackend.identifier,
                 remoteId: "remote-123"
+            )
+            let hostSharedRemoteWorkspace = Workspace(
+                name: "vm-feature",
+                path: URL(fileURLWithPath: "/tmp/alpha/workspaces/vm-feature"),
+                sourceRepo: repo,
+                backendIdentifier: LumeWorkspaceProvider.identifier,
+                remoteId: "vm-123"
             )
             let localWorkspace = Workspace(
                 name: "feature-a",
@@ -345,6 +352,7 @@ struct ModelsTests {
             )
 
             #expect(remoteWorkspace.localDirectoryURL == nil)
+            #expect(hostSharedRemoteWorkspace.localDirectoryURL == hostSharedRemoteWorkspace.workspaceURL)
             #expect(localWorkspace.localDirectoryURL == localWorkspace.workspaceURL)
         }
 
@@ -374,11 +382,27 @@ struct ModelsTests {
             #expect(request.name == "cloud-feature")
             #expect(request.backendIdentifier == SSHBackend.identifier)
             #expect(request.remoteId == "remote-123")
+            #expect(request.sessionRoutingID == workspace.terminalSessionIdentifier)
             #expect(request.status == .stopped)
             #expect(request.repoName == "alpha")
             #expect(request.repoRemoteURL == "git@github.com:acme/alpha.git")
             #expect(request.sshMetadata == ssh)
             #expect(request.composeMetadata == compose)
+        }
+
+        @Test("Terminal session identifier prefers explicit routing ID")
+        func terminalSessionIdentifierPrefersRoutingID() {
+            let repo = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))
+            let workspace = Workspace(
+                name: "cloud-feature",
+                path: URL(fileURLWithPath: Workspace.remotePathSentinel),
+                sourceRepo: repo,
+                backendIdentifier: SSHBackend.identifier,
+                remoteId: "provider-123",
+                sessionRoutingID: "ssh-route-123"
+            )
+
+            #expect(workspace.terminalSessionIdentifier == "ssh-route-123")
         }
 
         @Test("Workspace persists empty remote metadata JSON by default")

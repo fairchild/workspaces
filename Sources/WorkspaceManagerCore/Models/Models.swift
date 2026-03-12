@@ -273,6 +273,8 @@ private struct WorkspaceRemoteMetadataPayload: Codable, Equatable, Sendable {
 
 @Model
 public final class Workspace {
+    public static let remotePathSentinel = "/__workspace_manager_remote__"
+
     public var id: UUID
     public var name: String
     public var path: String  // Store as String, convert to URL when needed
@@ -288,6 +290,9 @@ public final class Workspace {
     /// Remote instance ID (nil for local workspaces)
     public var remoteId: String?
 
+    /// Stable terminal-routing identity for workspaces whose provider ID is not a lifecycle ID.
+    public var sessionRoutingID: String?
+
     /// Provider-specific metadata encoded as JSON.
     public var backendMetadataRaw: String = ""
 
@@ -302,12 +307,37 @@ public final class Workspace {
     }
 
     public var localDirectoryURL: URL? {
-        guard !isRemote else { return nil }
+        guard usesHostWorkspaceFiles, path != Self.remotePathSentinel else { return nil }
         return workspaceURL
     }
 
     public var isRemote: Bool {
         backendIdentifier != "local"
+    }
+
+    public var usesHostWorkspaceFiles: Bool {
+        switch backendIdentifier {
+        case LocalWorkspaceProvider.identifier, LumeWorkspaceProvider.identifier:
+            return true
+        default:
+            return false
+        }
+    }
+
+    public var terminalSessionIdentifier: String {
+        if let sessionRoutingID = sessionRoutingID?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !sessionRoutingID.isEmpty
+        {
+            return sessionRoutingID
+        }
+
+        if let remoteId = remoteId?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !remoteId.isEmpty
+        {
+            return remoteId
+        }
+
+        return id.uuidString
     }
 
     public var remoteSessionRequest: RemoteWorkspaceSessionRequest {
@@ -316,11 +346,20 @@ public final class Workspace {
             name: name,
             backendIdentifier: backendIdentifier,
             remoteId: remoteId,
+            sessionRoutingID: terminalSessionIdentifier,
             status: status,
             repoName: sourceRepo?.name,
             repoRemoteURL: sourceRepo?.remoteURL,
             sshMetadata: sshMetadata,
             composeMetadata: composeMetadata
+        )
+    }
+
+    public var localWorkspaceContext: LocalWorkspaceContext? {
+        guard let localDirectoryURL else { return nil }
+        return LocalWorkspaceContext(
+            workspaceID: id,
+            directoryURL: localDirectoryURL
         )
     }
 
@@ -367,6 +406,7 @@ public final class Workspace {
         gitBranch: String? = nil,
         backendIdentifier: String = "local",
         remoteId: String? = nil,
+        sessionRoutingID: String? = nil,
         backendMetadataRaw: String = "",
         remoteMetadataJSON: String = ""
     ) {
@@ -380,6 +420,7 @@ public final class Workspace {
         self.gitBranch = gitBranch
         self.backendIdentifier = backendIdentifier
         self.remoteId = remoteId
+        self.sessionRoutingID = sessionRoutingID
         self.backendMetadataRaw = backendMetadataRaw
         self.remoteMetadataJSON = remoteMetadataJSON
     }

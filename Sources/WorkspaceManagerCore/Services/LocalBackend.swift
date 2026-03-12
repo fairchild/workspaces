@@ -20,33 +20,33 @@ public actor LocalBackend {
         true
     }
 
-    public func initialize(workspace: Workspace) async throws {
+    public func initialize(workspace: LocalWorkspaceContext) async throws {
         try FileManager.default.createDirectory(
-            at: workspace.workspaceURL,
+            at: workspace.directoryURL,
             withIntermediateDirectories: true
         )
     }
 
-    public func start(workspace: Workspace) async throws {
+    public func start(workspace: LocalWorkspaceContext) async throws {
         // Nothing to do for local backend
     }
 
-    public func stop(workspace: Workspace) async throws {
-        terminals[workspace.id]?.close()
-        terminals.removeValue(forKey: workspace.id)
+    public func stop(workspace: LocalWorkspaceContext) async throws {
+        terminals[workspace.workspaceID]?.close()
+        terminals.removeValue(forKey: workspace.workspaceID)
     }
 
-    public func destroy(workspace: Workspace) async throws {
+    public func destroy(workspace: LocalWorkspaceContext) async throws {
         try await stop(workspace: workspace)
     }
 
-    public func isRunning(workspace: Workspace) async -> Bool {
+    public func isRunning(workspace: LocalWorkspaceContext) async -> Bool {
         true
     }
 
     public func execute(
         command: [String],
-        in workspace: Workspace,
+        in workspace: LocalWorkspaceContext,
         environment: [String: String] = [:],
         workingDirectory: String? = nil
     ) async throws -> ProcessResult {
@@ -65,9 +65,9 @@ public actor LocalBackend {
 
         let workDir: URL
         if let dir = workingDirectory {
-            workDir = workspace.workspaceURL.appendingPathComponent(dir)
+            workDir = workspace.directoryURL.appendingPathComponent(dir)
         } else {
-            workDir = workspace.workspaceURL
+            workDir = workspace.directoryURL
         }
 
         var env = ProcessInfo.processInfo.environment
@@ -83,14 +83,14 @@ public actor LocalBackend {
         )
     }
 
-    public func createTerminal(for workspace: Workspace) async throws -> LocalTerminal {
-        let terminal = try LocalTerminal(workingDirectory: workspace.workspaceURL)
-        terminals[workspace.id] = terminal
+    public func createTerminal(for workspace: LocalWorkspaceContext) async throws -> LocalTerminal {
+        let terminal = try LocalTerminal(workingDirectory: workspace.directoryURL)
+        terminals[workspace.workspaceID] = terminal
         return terminal
     }
 
-    public func hostPath(for workspace: Workspace) -> URL? {
-        workspace.workspaceURL
+    public func hostPath(for workspace: LocalWorkspaceContext) -> URL? {
+        workspace.directoryURL
     }
 
     // MARK: - Private

@@ -30,6 +30,7 @@ Everything else routes to Ghostty unless an override is added.
 - Key-equivalent handling:
   - `Sources/WorkspaceManager/Terminal/GhosttySurfaceView.swift`
 - Runtime action bridge from Ghostty to SwiftUI state:
+  - `Sources/WorkspaceManager/Terminal/GhosttyRuntimeActionBridge.swift`
   - `Sources/WorkspaceManager/Terminal/GhosttyAppManager.swift`
   - `Sources/WorkspaceManager/Views/MainWindow/ContentView.swift`
   - `Sources/WorkspaceManager/Views/MainWindow/SplitRoutingController.swift`
@@ -42,7 +43,7 @@ Everything else routes to Ghostty unless an override is added.
    - `ghostty` -> continue with Ghostty binding checks.
 3. Ghostty binding check uses `ghostty_surface_key_is_binding` with event text populated.
 4. If binding exists, key is forwarded via `keyDown` into Ghostty.
-5. If Ghostty emits split actions, runtime callback posts a typed split action notification.
+5. If Ghostty emits split actions, `GhosttyRuntimeActionBridge` posts a typed split action notification.
 6. `ContentView` hands the notification to `SplitRoutingController`, which updates split UI/focus state (`new_split`, `goto_split`, `resize_split`, `equalize_splits`).
 
 ## Split Navigation Scope
@@ -63,8 +64,10 @@ Current split UI model is a two-pane stack:
 ## Verification Checklist
 
 1. Launch debug app via `./scripts/launch-dev.sh --no-build`
+   - shared-desktop-safe capture path: `./scripts/launch-dev.sh --no-build --no-activate`
 2. Confirm debug process path in `.build/.../WorkspaceManager`
-3. Verify:
+3. If you used `--no-activate`, pause your own input, run `./scripts/capture-window.sh`, then resume.
+4. Verify:
    - `Cmd+B` toggles sidebar
    - `Cmd+D` creates split
    - optional: configured Ghostty resize binding moves the divider by 5% steps and clamps at 20%/80%
@@ -73,9 +76,15 @@ Current split UI model is a two-pane stack:
    - `Cmd+]` / `Cmd+[` move focus across split when both panes exist
    - or run `mask verify-shortcuts` for scripted smoke evidence
    - and run `mask verify-open-shortcut` for Open-in-Editor shortcut coverage
-4. Confirm logs include:
+5. Confirm logs include:
    - `[GhosttyAppManager] action=new_split ...`
    - `[GhosttyAppManager] action=goto_split ...`
    - `[GhosttyAppManager] action=resize_split ...`
    - `[GhosttyAppManager] action=equalize_splits ...`
    - `[Perf] metric=open_in_editor_launch ... outcome=success|failure`
+
+`./scripts/shortcut-pass-through-smoke.sh` is a separate activation-driving smoke:
+- it requires Accessibility + Automation permissions
+- it requires `Terminal Multiplexing Mode = Ghostty Splits`
+- it exits early when the app is in `tmux` mode because Workspaces is not expected to materialize Ghostty-managed split actions there
+- it is not shared-desktop-safe; use Tart/Lume or a separate macOS user/session when you need input-driving automation without foreground focus

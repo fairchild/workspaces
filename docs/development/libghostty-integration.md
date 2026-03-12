@@ -37,7 +37,10 @@ Behavior:
 ### Files
 
 - App/runtime owner: `Sources/WorkspaceManager/Terminal/GhosttyAppManager.swift`
+- Runtime action bridge: `Sources/WorkspaceManager/Terminal/GhosttyRuntimeActionBridge.swift`
 - Terminal view: `Sources/WorkspaceManager/Terminal/GhosttySurfaceView.swift`
+- Input routing helper: `Sources/WorkspaceManager/Terminal/GhosttySurfaceInputRouter.swift`
+- IME/text-input helper: `Sources/WorkspaceManager/Terminal/GhosttySurfaceTextInputBridge.swift`
 - Input mapping helpers: `Sources/WorkspaceManager/Terminal/GhosttyInput.swift`
 - Surface config builder: `Sources/WorkspaceManager/Terminal/GhosttyTerminalConfig.swift`
 - SwiftUI bridge: `Sources/WorkspaceManager/Views/Components/TerminalView.swift`
@@ -49,10 +52,11 @@ Behavior:
 - `ghostty_config_new/finalize/free`
 - `ghostty_app_new/free/tick`
 - app-wide focus sync via `ghostty_app_set_focus(...)`
+- clipboard callbacks + app-level color-scheme synchronization
 
 Registered callbacks in `ghostty_runtime_config_s`:
 - `wakeup_cb`: schedules `ghostty_app_tick` on main queue
-- `action_cb`: handles terminal title/pwd updates and forwards split requests to SwiftUI state
+- `action_cb`: delegates runtime action decoding and split notification posting to `GhosttyRuntimeActionBridge`
 - `read_clipboard_cb` / `write_clipboard_cb`
 - `confirm_read_clipboard_cb`
 - `close_surface_cb`
@@ -62,8 +66,9 @@ Registered callbacks in `ghostty_runtime_config_s`:
 `GhosttySurfaceView` owns one `ghostty_surface_t` and:
 - builds `ghostty_surface_config_s` with platform/tag/userdata
 - sets working directory, command, environment, font size (surface-level config only)
-- maps AppKit keyboard/mouse/scroll/focus events to `ghostty_surface_*` C APIs
-- maintains NSTextInputClient path for IME/dead key compatibility
+- keeps lifecycle/appearance work localized to surface creation, sizing, and per-surface color updates
+- delegates keyboard/mouse/shortcut routing to `GhosttySurfaceInputRouter`
+- delegates NSTextInputClient / IME / dead-key behavior to `GhosttySurfaceTextInputBridge`
 - updates content scale + framebuffer size on backing/frame changes
 - installs minimal local monitor for `.leftMouseDown` and command `.keyUp`
 
@@ -79,7 +84,7 @@ The `Cmd+D` path is runtime-action-driven:
 
 1. `GhosttySurfaceView` routes non-app-owned shortcuts to Ghostty binding handling.
 2. `libghostty` dispatches `GHOSTTY_ACTION_NEW_SPLIT` through `ghostty_runtime_action_cb`.
-3. `GhosttyAppManager.action(...)` posts a split action notification and returns `true`.
+3. `GhosttyRuntimeActionBridge` posts a split action notification and returns `true` through `GhosttyAppManager.action(...)`.
 4. The app then materializes the split in UI state (`SplitRoutingController` / `HostTerminalStateStore`).
 
 Important: returning `false` for `GHOSTTY_ACTION_NEW_SPLIT` means "not performed" and
@@ -96,6 +101,10 @@ Current split parity:
 - `GHOSTTY_ACTION_RESIZE_SPLIT` updates the divider when the requested direction matches the active split axis and divider edge.
 - `GHOSTTY_ACTION_EQUALIZE_SPLITS` resets the divider to 50/50.
 - Orthogonal or unsupported resize directions remain explicit no-ops with logging.
+
+Current split verification expectation:
+- `shortcut-pass-through-smoke.sh` is valid only when `Terminal Multiplexing Mode = Ghostty Splits`.
+- If the app is in `tmux` mode, Ghostty split actions are intentionally not expected to materialize in Workspaces UI, and the script exits early with guidance.
 
 See `docs/development/shortcut-routing.md` for the full routing model.
 
@@ -120,6 +129,14 @@ Not configured yet (by design in this migration):
 - app-owned font-family override
 
 Reason: keep integration on stable C fields and avoid config file management in v1.
+
+## Appearance Sync
+
+`GhosttyAppearanceSync` is the single mapping layer for AppKit appearance -> Ghostty color scheme.
+
+- Surface-level updates call `ghostty_surface_set_color_scheme(...)` only when the resolved scheme actually changes, unless the caller explicitly forces a refresh.
+- App-level updates call `ghostty_app_set_color_scheme(...)` through the same dedupe helper so the global Ghostty app and the active surface stay in sync without duplicate writes.
+- Current mapping stays intentionally small: Aqua -> light, Dark Aqua -> dark.
 
 ## Known Warnings / Quirks
 
@@ -178,16 +195,22 @@ Use this exact loop in future sessions to avoid stale-build confusion:
    - shared-desktop option: `./scripts/launch-dev.sh --no-build --no-activate`
 4. Verify process path points to `.build/.../WorkspaceManager`:
    - `ps aux | rg '.build/arm64-apple-macosx/debug/WorkspaceManager'`
-5. Exercise shortcuts:
+5. Shared-desktop-safe capture handshake:
+   - if you launched with `--no-activate`, pause your own keyboard/mouse input
+   - run `./scripts/capture-window.sh`
+   - resume input after the capture finishes
+6. Exercise shortcuts when activation is allowed:
    - `Cmd+B` collapse/restore sidebar
    - `Cmd+D` create split pane
    - optional: trigger configured resize/equalize bindings and confirm divider movement / 50:50 reset
+   - `./scripts/shortcut-pass-through-smoke.sh` is intentionally not shared-desktop-safe and requires `Ghostty Splits` mode
    - Optional scripted smoke: `mask verify-shortcuts`
-6. Verify split runtime path in logs:
+7. Verify split runtime path in logs:
    - `tail -n 80 .dev-data/logs/launch-dev-*.log`
    - Expect `"[GhosttyAppManager] action=new_split direction="`
    - Optional resize/equalize traces:
      - `"[GhosttyAppManager] action=resize_split direction="`
      - `"[GhosttyAppManager] action=equalize_splits"`
+8. If you need input-driving automation without foreground activation on a shared desktop, escalate to Tart/Lume or a separate macOS user/session instead of forcing local focus.
 
 If shortcut behavior regresses, first confirm step 4 before changing code.

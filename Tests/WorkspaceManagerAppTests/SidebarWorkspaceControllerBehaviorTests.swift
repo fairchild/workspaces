@@ -682,7 +682,7 @@ private actor MockWorkspaceProvider: WorkspaceProviderProtocol {
     }
 
     nonisolated func sessionKey(for workspace: WorkspaceProviderTarget) -> HostTerminalSessionKey {
-        .backendSession(providerID: descriptor.id, instanceID: workspace.remoteId ?? workspace.name)
+        .backendSession(providerID: descriptor.id, instanceID: workspace.terminalSessionIdentifier)
     }
 
     func createWorkspace(
@@ -711,7 +711,7 @@ private actor MockWorkspaceProvider: WorkspaceProviderProtocol {
 
     func terminalLaunchSpec(for workspace: WorkspaceProviderTarget) async throws -> TerminalLaunchSpec {
         TerminalLaunchSpec(
-            sessionKey: .backendSession(providerID: descriptor.id, instanceID: workspace.remoteId ?? workspace.name),
+            sessionKey: .backendSession(providerID: descriptor.id, instanceID: workspace.terminalSessionIdentifier),
             workingDirectory: workspace.workspaceURL
         )
     }

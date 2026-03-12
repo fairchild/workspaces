@@ -52,6 +52,7 @@ struct ContentView: View {
     private let surfaceResolutionController = MainWindowSurfaceResolutionController()
     private let presentationController = MainWindowPresentationController()
     private let splitRoutingController = SplitRoutingController()
+    private let workspaceEnvironmentOptionsController = WorkspaceEnvironmentOptionsController()
 
     private var launchRepositoryService: LaunchRepositoryService {
         LaunchRepositoryService(modelContext: modelContext)
@@ -1653,7 +1654,7 @@ struct ContentView: View {
                 let workspace =
                     repos
                     .flatMap(\.workspaces)
-                    .first(where: { $0.remoteId == instanceID })
+                    .first(where: { $0.terminalSessionIdentifier == instanceID })
             else {
                 return nil
             }
@@ -1757,17 +1758,24 @@ struct ContentView: View {
     }
 
     private var landingProviderAvailabilityIsPending: Bool {
-        workspaceProviderRegistry.providers.contains { provider in
-            providerAvailabilityByID[provider.descriptor.id] == nil
-        }
+        workspaceEnvironmentOptionsController.providerAvailabilityIsPending(
+            providerAvailabilityByID: providerAvailabilityByID,
+            registry: workspaceProviderRegistry
+        )
     }
 
     @MainActor
     private func seedLandingProviderStateIfNeeded() async -> Bool {
-        guard UIFixtureLumeEnvironment.isEnabled() else { return false }
+        guard
+            let state = await workspaceEnvironmentOptionsController.seedFixtureStateIfNeeded(
+                runtimeService: lumeRuntimeService
+            )
+        else {
+            return false
+        }
 
-        providerAvailabilityByID = UIFixtureLumeEnvironment.initialProviderAvailabilityByID()
-        lumeRuntimeSnapshot = await lumeRuntimeService.snapshot()
+        providerAvailabilityByID = state.providerAvailabilityByID
+        lumeRuntimeSnapshot = state.lumeRuntimeSnapshot
         return true
     }
 
@@ -1776,368 +1784,29 @@ struct ContentView: View {
         isRefreshingProviderAvailability = true
         defer {
             isRefreshingProviderAvailability = false
-
-            for provider in workspaceProviderRegistry.providers {
-                let providerID = provider.descriptor.id
-                guard providerAvailabilityByID[providerID] == nil else { continue }
-                providerAvailabilityByID[providerID] = .unavailable(
-                    "Timed out checking \(provider.descriptor.displayName) availability."
-                )
-            }
         }
 
-        if providerAvailabilityByID[LocalWorkspaceProvider.identifier] == nil {
-            providerAvailabilityByID[LocalWorkspaceProvider.identifier] = .available
-        }
-
-        await withTaskGroup(of: (String, WorkspaceProviderAvailability).self) { group in
-            for provider in workspaceProviderRegistry.providers {
-                group.addTask {
-                    (
-                        provider.descriptor.id,
-                        await landingAvailabilityWithTimeout(
-                            for: provider,
-                            displayName: provider.descriptor.displayName
-                        )
-                    )
-                }
-            }
-
-            for await (providerID, availability) in group {
-                providerAvailabilityByID[providerID] = availability
-            }
-        }
-    }
-
-    private func landingAvailabilityWithTimeout(
-        for provider: any WorkspaceProviderProtocol,
-        displayName: String,
-        timeoutNanoseconds: UInt64 = 5_000_000_000
-    ) async -> WorkspaceProviderAvailability {
-        await withTaskGroup(of: WorkspaceProviderAvailability?.self) { group in
-            group.addTask {
-                await provider.availability()
-            }
-            group.addTask {
-                try? await Task.sleep(nanoseconds: timeoutNanoseconds)
-                return nil
-            }
-
-            let firstResult = await group.next() ?? nil
-            group.cancelAll()
-
-            if let availability = firstResult {
-                return availability
-            }
-
-            return .unavailable("Timed out checking \(displayName) availability.")
-        }
+        providerAvailabilityByID = await workspaceEnvironmentOptionsController.refreshProviderAvailability(
+            registry: workspaceProviderRegistry,
+            existingAvailabilityByID: providerAvailabilityByID
+        )
     }
 
     @MainActor
     private func refreshLandingRuntimeSnapshot() async {
-        lumeRuntimeSnapshot = await lumeRuntimeService.snapshot()
+        lumeRuntimeSnapshot = await workspaceEnvironmentOptionsController.refreshLumeRuntimeSnapshot(
+            runtimeService: lumeRuntimeService
+        )
     }
 
     private func environmentOptions(for repo: Repo) -> [WorkspaceEnvironmentSheetOption] {
-        [
-            localEnvironmentOption(for: repo),
-            cloudLinuxEnvironmentOption(for: repo),
-            macOSEnvironmentOption(for: repo),
-            linuxVMEnvironmentOption(for: repo),
-        ]
-    }
-
-    private func landingAvailability(
-        for descriptor: WorkspaceProviderDescriptor,
-        repo: Repo
-    ) -> WorkspaceProviderAvailability {
-        let baseAvailability: WorkspaceProviderAvailability
-        if let resolvedAvailability = providerAvailabilityByID[descriptor.id] {
-            baseAvailability = resolvedAvailability
-        } else if descriptor.id == LocalWorkspaceProvider.identifier {
-            baseAvailability = .available
-        } else if isRefreshingProviderAvailability {
-            baseAvailability = .unavailable("Checking provider availability...")
-        } else {
-            baseAvailability = .unavailable("Timed out checking provider availability.")
-        }
-
-        guard baseAvailability.isAvailable else { return baseAvailability }
-
-        if descriptor.requiresRemoteRepository,
-            repo.remoteURL?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true
-        {
-            return .unavailable("This repository needs a remote origin URL for \(descriptor.displayName).")
-        }
-
-        return baseAvailability
-    }
-
-    private func localEnvironmentOption(for repo: Repo) -> WorkspaceEnvironmentSheetOption {
-        let descriptor = workspaceProviderRegistry.provider(for: LocalWorkspaceProvider.identifier)?.descriptor
-        let availability = landingAvailability(
-            for: descriptor
-                ?? WorkspaceProviderDescriptor(
-                    id: LocalWorkspaceProvider.identifier,
-                    displayName: "Local",
-                    description: "Create a local workspace copy on this Mac."
-                ),
-            repo: repo
+        workspaceEnvironmentOptionsController.environmentOptions(
+            for: repo,
+            registry: workspaceProviderRegistry,
+            providerAvailabilityByID: providerAvailabilityByID,
+            isRefreshingProviderAvailability: isRefreshingProviderAvailability,
+            lumeRuntimeSnapshot: lumeRuntimeSnapshot
         )
-
-        return WorkspaceEnvironmentSheetOption(
-            kind: .local,
-            title: "Local",
-            subtitle: "Create a local workspace copy on this Mac",
-            description: descriptor?.description ?? "Create a local workspace copy on this Mac.",
-            iconName: "plus.rectangle.on.folder.fill",
-            providerID: LocalWorkspaceProvider.identifier,
-            guestOS: nil,
-            isAvailable: availability.isAvailable,
-            statusText: nil,
-            availabilityReason: availability.reason
-        )
-    }
-
-    private func cloudLinuxEnvironmentOption(for repo: Repo) -> WorkspaceEnvironmentSheetOption {
-        let descriptor = workspaceProviderRegistry.provider(for: DaytonaWorkspaceProvider.identifier)?.descriptor
-        let availability = landingAvailability(
-            for: descriptor
-                ?? WorkspaceProviderDescriptor(
-                    id: DaytonaWorkspaceProvider.identifier,
-                    displayName: "Cloud Linux",
-                    description: "Create a cloud Linux workspace."
-                ),
-            repo: repo
-        )
-
-        return WorkspaceEnvironmentSheetOption(
-            kind: .cloudLinux,
-            title: "Cloud Linux",
-            subtitle: "Runs in Daytona cloud infrastructure",
-            description: descriptor?.description
-                ?? "Create a cloud Linux workspace managed by Daytona.",
-            iconName: "cloud.fill",
-            providerID: DaytonaWorkspaceProvider.identifier,
-            guestOS: .linux,
-            isAvailable: availability.isAvailable,
-            statusText: nil,
-            availabilityReason: availability.reason
-        )
-    }
-
-    private func macOSEnvironmentOption(for repo: Repo) -> WorkspaceEnvironmentSheetOption {
-        let baseAvailability = lumeEnvironmentAvailability()
-
-        let isAvailable: Bool
-        let availabilityReason: String?
-        if !baseAvailability.isAvailable {
-            isAvailable = false
-            availabilityReason = baseAvailability.reason
-        } else if let snapshot = lumeRuntimeSnapshot, snapshot.state == .unsupportedHost {
-            isAvailable = false
-            availabilityReason = snapshot.reason
-        } else {
-            isAvailable = true
-            availabilityReason = nonBlockingMacOSAvailabilityReason()
-        }
-
-        return WorkspaceEnvironmentSheetOption(
-            kind: .macOSVM,
-            title: "macOS VM",
-            subtitle: macOSBaseSummary(),
-            description: macOSEnvironmentDescription(),
-            iconName: "desktopcomputer",
-            providerID: LumeWorkspaceProvider.identifier,
-            guestOS: .macOS,
-            isAvailable: isAvailable,
-            statusText: macOSRuntimeStatusText(),
-            availabilityReason: availabilityReason
-        )
-    }
-
-    private func linuxVMEnvironmentOption(for repo: Repo) -> WorkspaceEnvironmentSheetOption {
-        let availability = lumeEnvironmentAvailability()
-
-        return WorkspaceEnvironmentSheetOption(
-            kind: .linuxVM,
-            title: "Linux VM",
-            subtitle: "Runs in a local Linux VM on this Mac",
-            description: linuxVMEnvironmentDescription(),
-            iconName: "server.rack",
-            providerID: LumeWorkspaceProvider.identifier,
-            guestOS: .linux,
-            isAvailable: availability.isAvailable,
-            statusText: lumeRuntimeStatusText(),
-            availabilityReason: availability.reason
-        )
-    }
-
-    private func lumeEnvironmentAvailability() -> WorkspaceProviderAvailability {
-        if let snapshot = lumeRuntimeSnapshot, snapshot.state == .unsupportedHost {
-            return .unavailable(snapshot.reason ?? "Lume requires Apple Silicon.")
-        }
-
-        #if arch(arm64)
-            return .available
-        #else
-            return .unavailable("Lume requires Apple Silicon.")
-        #endif
-    }
-
-    private func lumeRuntimeStatusText() -> String? {
-        guard let snapshot = lumeRuntimeSnapshot else { return nil }
-        switch snapshot.state {
-        case .setupRequired:
-            return "Setup required"
-        case .repairRequired:
-            return "Repair required"
-        case .ready:
-            return "Ready"
-        case .installing:
-            return "Installing"
-        case .verifying:
-            return "Verifying"
-        case .unsupportedHost:
-            return nil
-        }
-    }
-
-    private func macOSRuntimeStatusText() -> String? {
-        if let snapshot = lumeRuntimeSnapshot, snapshot.state != .ready {
-            return lumeRuntimeStatusText()
-        }
-
-        if let baseSnapshot = lumeRuntimeSnapshot?.baseVM {
-            switch baseSnapshot.status {
-            case .ready:
-                return "Fast clone ready"
-            case .preparing:
-                return "Preparing base"
-            case .missing:
-                if baseSnapshot.profile.imageReference != nil {
-                    return "Downloads base on first use"
-                }
-                return "Prepares base on first use"
-            case .repairRequired:
-                return "Repair base VM"
-            }
-        }
-
-        if let snapshot = lumeRuntimeSnapshot,
-            snapshot.state == .ready,
-            snapshot.defaultMacOSImage == nil,
-            snapshot.defaultMacOSImageError != nil
-        {
-            return "Stock macOS"
-        }
-
-        return lumeRuntimeStatusText()
-    }
-
-    private func macOSEnvironmentDescription() -> String {
-        let base =
-            "Runs in a local macOS VM. Files stay on the host, the terminal opens in-app with `lume ssh`, and desktop opens in an external VNC client."
-
-        guard let snapshot = lumeRuntimeSnapshot else {
-            return base
-        }
-
-        switch snapshot.state {
-        case .setupRequired:
-            return "\(base) Workspaces will install and verify Lume automatically the first time you use this."
-        case .repairRequired:
-            return "\(base) Workspaces will repair the local VM runtime automatically before continuing."
-        case .ready, .installing, .verifying, .unsupportedHost:
-            break
-        }
-
-        if let baseSnapshot = snapshot.baseVM {
-            switch baseSnapshot.status {
-            case .ready:
-                return "\(base) Workspaces will clone the prepared base VM for a faster macOS workspace start."
-            case .preparing:
-                return "\(base) A prepared base VM is already being created. Workspaces will clone it once it is ready."
-            case .missing:
-                if baseSnapshot.profile.imageReference != nil {
-                    return """
-                        \(base) Workspaces will download the matching base VM once, then clone it for faster future macOS workspaces.
-                        """
-                }
-                return """
-                    \(base) No host-matched golden image is available yet, so Workspaces will prepare a stock macOS base VM once and clone it for faster future workspaces.
-                    """
-            case .repairRequired:
-                return "\(base) Workspaces will repair or recreate the prepared base VM before continuing."
-            }
-        }
-
-        if snapshot.defaultMacOSImage == nil, snapshot.defaultMacOSImageError != nil {
-            return """
-                \(base) No host-matched golden image is available yet, so Workspaces will fall back to stock macOS setup automatically.
-                """
-        }
-
-        return base
-    }
-
-    private func linuxVMEnvironmentDescription() -> String {
-        let base =
-            "Uses the same host-shared file model as macOS VM workspaces. Terminal opens in-app, and desktop opens externally when available."
-
-        guard let snapshot = lumeRuntimeSnapshot else {
-            return base
-        }
-
-        switch snapshot.state {
-        case .setupRequired:
-            return "\(base) Workspaces will install and verify Lume automatically the first time you use this."
-        case .repairRequired:
-            return "\(base) Workspaces will repair the local VM runtime automatically before continuing."
-        case .ready, .installing, .verifying, .unsupportedHost:
-            return base
-        }
-    }
-
-    private func nonBlockingMacOSAvailabilityReason() -> String? {
-        guard let snapshot = lumeRuntimeSnapshot else { return nil }
-
-        if let baseSnapshot = snapshot.baseVM, let reason = baseSnapshot.reason {
-            return reason
-        }
-
-        if snapshot.defaultMacOSImage == nil, snapshot.defaultMacOSImageError != nil {
-            return "Workspaces will use stock macOS because no host-matched golden image is available yet."
-        }
-
-        return nil
-    }
-
-    private func macOSBaseSummary() -> String {
-        guard let snapshot = lumeRuntimeSnapshot else {
-            return "Matches this Mac by default"
-        }
-
-        if let baseSnapshot = snapshot.baseVM {
-            switch baseSnapshot.status {
-            case .ready:
-                return "Fast clone ready: \(baseSnapshot.profile.displayName)"
-            case .preparing:
-                return "Preparing base: \(baseSnapshot.profile.displayName)"
-            case .missing:
-                if baseSnapshot.profile.imageReference != nil {
-                    return "Will download base once: \(baseSnapshot.profile.displayName)"
-                }
-                return "Needs one-time base preparation"
-            case .repairRequired:
-                return "Needs base VM repair: \(baseSnapshot.profile.displayName)"
-            }
-        }
-
-        return snapshot.defaultMacOSImage?.profileDisplayName
-            ?? snapshot.hostProfile?.displayName
-            ?? "Matches this Mac by default"
     }
 }
 

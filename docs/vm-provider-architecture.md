@@ -256,9 +256,11 @@ flowchart LR
 When a terminal session becomes active, the app maps it back to a workspace using:
 
 - `backendIdentifier`
-- `remoteId`
+- `terminalSessionIdentifier`
 
-instead of relying only on a sandbox ID or a filesystem path.
+where `terminalSessionIdentifier` is backed by persisted `sessionRoutingID` for current records and only falls back to `remoteId` for legacy rows.
+
+`remoteId` remains the provider lifecycle/status identity, not the universal terminal routing key.
 
 That is what keeps sidebar selection synchronized with provider-backed terminals after adding Lume.
 

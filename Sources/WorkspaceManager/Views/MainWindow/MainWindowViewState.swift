@@ -26,12 +26,12 @@ struct MainWindowWebSourceSelection: Equatable {
 struct MainWindowPendingRemoteWorkspaceSelection: Equatable {
     let workspaceID: UUID
     let workspaceName: String
-    let sandboxID: String
+    let routingID: String
 
-    init(workspace: Workspace, sandboxID: String) {
+    init(workspace: Workspace, routingID: String) {
         workspaceID = workspace.id
         workspaceName = workspace.name
-        self.sandboxID = sandboxID
+        self.routingID = routingID
     }
 }
 

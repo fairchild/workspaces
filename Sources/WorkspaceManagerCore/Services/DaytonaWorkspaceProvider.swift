@@ -34,7 +34,7 @@ public actor DaytonaWorkspaceProvider: WorkspaceProviderProtocol {
     }
 
     public nonisolated func sessionKey(for workspace: WorkspaceProviderTarget) -> HostTerminalSessionKey {
-        .backendSession(providerID: Self.identifier, instanceID: workspace.remoteId ?? workspace.id.uuidString)
+        .backendSession(providerID: Self.identifier, instanceID: workspace.terminalSessionIdentifier)
     }
 
     public func createWorkspace(
@@ -55,6 +55,7 @@ public actor DaytonaWorkspaceProvider: WorkspaceProviderProtocol {
         return WorkspaceProviderCreationResult(
             name: request.workspaceName,
             path: FileManager.default.temporaryDirectory,
+            persistedPath: Workspace.remotePathSentinel,
             status: .active,
             backendIdentifier: descriptor.id,
             remoteId: info.sandboxId
@@ -72,6 +73,7 @@ public actor DaytonaWorkspaceProvider: WorkspaceProviderProtocol {
                 name: workspace.name,
                 backendIdentifier: descriptor.id,
                 remoteId: sandboxId,
+                sessionRoutingID: workspace.terminalSessionIdentifier,
                 status: workspace.status,
                 repoName: nil,
                 repoRemoteURL: nil,

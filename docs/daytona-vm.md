@@ -25,7 +25,7 @@ Click "New Workspace" on any repo, pick "Remote VM", and get an SSH terminal int
 │  handleRemoteWorkspaceSelection()                            │
 │    ├─ if stopped/archived → startSandbox() first             │
 │    ├─ getSSHCommand()                                        │
-│    └─ activateHostSession(key: .remoteSandbox(id),           │
+│    └─ activateHostSession(key: .backendSession(daytona, id), │
 │         customCommand: sshCommand)                           │
 │              │                                               │
 │              ▼                                               │
@@ -40,7 +40,7 @@ Click "New Workspace" on any repo, pick "Remote VM", and get an SSH terminal int
 
 ## Session Identity
 
-Remote sessions use `HostTerminalSessionKey.remoteSandbox(sandboxId)` — keyed by the Daytona sandbox UUID, not a filesystem path. This avoids path normalization issues since there's no local directory to reference.
+Remote sessions use `HostTerminalSessionKey.backendSession(providerID: "daytona", instanceID: sessionRoutingID)` rather than a filesystem path. For Daytona, `sessionRoutingID` currently matches the sandbox UUID for new records, but it is persisted as a routing identifier distinct from provider lifecycle/status state.
 
 The `HostTerminalSession` has a `customCommand` field. When set, the terminal launches that command (the SSH invocation) instead of the user's default shell.
 
@@ -59,11 +59,13 @@ On launch, `syncCloudWorkspaceStatuses()` queries the Daytona API and reconciles
 ```swift
 // Workspace (SwiftData @Model)
 backendIdentifier: String  // "daytona" for remote, "local" for local
-sandboxId: String?         // Daytona sandbox UUID (nil for local)
+remoteId: String?          // Daytona sandbox UUID for provider lifecycle/status
+sessionRoutingID: String?  // terminal routing key / backend session identity
 statusRaw: String          // "active", "stopped", "archived"
+path: String               // "/__workspace_manager_remote__" sentinel for remote-only rows
 ```
 
-Remote workspaces store `FileManager.default.temporaryDirectory` as their path since there's no local directory. The `isRemote` computed property is `backendIdentifier != "local"`.
+Remote Daytona rows now persist a named remote-path sentinel instead of `FileManager.default.temporaryDirectory`. `FileManager.default.temporaryDirectory` is still used as a transient working directory when launching the SSH command, but it is no longer the stored identity for the workspace row.
 
 ## Backend Layer
 
@@ -116,7 +118,7 @@ Only one remote connection can be in-flight at a time. Clicking a second cloud w
 | `Sources/WorkspaceManagerCore/Services/DaytonaBackend.swift` | Swift actor wrapping the CLI |
 | `Sources/WorkspaceManagerCore/Services/Protocols.swift` | `DaytonaBackendProtocol` |
 | `Sources/WorkspaceManagerCore/Models/Models.swift` | `WorkspaceStatus` enum, `sandboxId` field |
-| `Sources/WorkspaceManagerCore/Services/HostTerminalSessionCoordinator.swift` | `.remoteSandbox` key type |
+| `Sources/WorkspaceManagerCore/Services/HostTerminalSessionCoordinator.swift` | `.backendSession` key type |
 | `Sources/WorkspaceManager/Views/MainWindow/ContentView.swift` | Remote selection, connecting overlay, status sync |
 | `Sources/WorkspaceManager/Views/MainWindow/SidebarView.swift` | Lifecycle actions, creation progress |
 | `Sources/WorkspaceManager/Views/MainWindow/SidebarRows.swift` | Cloud icon, status badges, inline progress |

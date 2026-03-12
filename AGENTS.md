@@ -29,6 +29,10 @@ When changing terminal/keyboard/sidebar behavior, use this loop so future sessio
    - `"[GhosttyAppManager] action=new_split direction="`
 7. Capture verification evidence without forcing app activation:
    - `./scripts/capture-window.sh`
+   - when using `--no-activate`, pause your own keyboard/mouse input first, capture, then resume
+   - treat `--no-activate` as a capture-only shared-desktop handshake, not an input-driving automation lane
+   - run activation-driving scripts such as `./scripts/shortcut-pass-through-smoke.sh` only when foreground input is acceptable and `Terminal Multiplexing Mode` is set to `Ghostty Splits`
+   - if you need input-driving automation without disturbing the active desktop, use Tart/Lume or a separate macOS user/session
 8. `mise` convenience tasks:
    - `mise run dev-launch`
    - `mise run dev-watch`

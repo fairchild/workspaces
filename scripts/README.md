@@ -30,6 +30,8 @@ Use these scripts for day-to-day UI verification:
   - `WORKSPACES_DATA_DIR=./.dev-data/workspacemanager`
 - Includes inline educational notes about isolation boundaries and dogfooding strategy.
 - Requires a visible app window before reporting success.
+- `--no-activate` keeps launch verification in shared-desktop-safe mode and does not assume the app becomes frontmost.
+- In shared-desktop mode, pair the launch with `./scripts/capture-window.sh` and pause your own input during capture.
 - On startup failure, writes a diagnostics bundle under `.dev-data/logs/launch-diagnostics-<timestamp>/`.
 - Use `./scripts/launch-dev.sh --watch` to keep tailing the launch log until interrupted.
 - See `backlog/isolation-strategies.md` for long-form architecture context.
@@ -37,6 +39,7 @@ Use these scripts for day-to-day UI verification:
 2. `./scripts/dev-smoke.sh`
 - Fast debug-app startup smoke for local development.
 - Launches the debug build through `launch-dev.sh`, requires a visible window, and captures a window-only screenshot.
+- `--no-activate` keeps the run shared-desktop-safe and requires window-id capture to succeed; there is no fullscreen fallback in that mode.
 - Writes artifacts to:
   - `./output/dev-smoke/dev-smoke-<timestamp>.png`
   - latest launch log under `./.dev-data/logs/`
@@ -74,6 +77,7 @@ Use these scripts for day-to-day UI verification:
 7. `./scripts/capture-window.sh`
 - One-shot window-only capture for shared-desktop workflows.
 - Captures by window id (`screencapture -l`) and **does not activate the app by default**.
+- Makes no frontmost-app assumption; pause your own keyboard/mouse input while the capture runs, then resume.
 - Default output:
   - timestamped: `./output/window/window-<timestamp>.png`
   - latest copy: `./output/window/latest.png`
@@ -174,6 +178,13 @@ For keyboard/split/sidebar changes, always verify with the debug launcher:
    - `Cmd+D` creates a visible right split
 6. Capture evidence without focus steal:
    - `./scripts/capture-window.sh`
+   - in shared-desktop mode: pause input, capture, resume
+
+Activation-driving shortcut smoke:
+- `./scripts/shortcut-pass-through-smoke.sh`
+- Requires Accessibility + Automation permissions.
+- Requires `Terminal Multiplexing Mode = Ghostty Splits`; the script exits early in `tmux` mode.
+- Intentionally not shared-desktop-safe. Use it only when foreground input is acceptable, or move to Tart/Lume / a separate user session.
 
 If you use `mise`, equivalent convenience tasks are:
 - `mise run dev-launch`

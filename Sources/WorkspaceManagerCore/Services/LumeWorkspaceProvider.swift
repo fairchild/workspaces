@@ -95,7 +95,7 @@ public actor LumeWorkspaceProvider: WorkspaceProviderProtocol {
     }
 
     public nonisolated func sessionKey(for workspace: WorkspaceProviderTarget) -> HostTerminalSessionKey {
-        .backendSession(providerID: Self.identifier, instanceID: workspace.remoteId ?? workspace.id.uuidString)
+        .backendSession(providerID: Self.identifier, instanceID: workspace.terminalSessionIdentifier)
     }
 
     public func createWorkspace(

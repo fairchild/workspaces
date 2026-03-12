@@ -17,6 +17,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 DEBUG_BINARY="$REPO_ROOT/.build/arm64-apple-macosx/debug/WorkspaceManager"
 INSTALLED_APP_BINARY="/Applications/WorkspaceManager.app/Contents/MacOS/WorkspaceManager"
+BUNDLE_ID="com.cloudcompute.workspaces"
+GHOSTTY_MANAGED_MODE="ghostty_managed_splits"
 
 BUILD_BEFORE_LAUNCH=false
 
@@ -31,6 +33,7 @@ Options:
 Notes:
 - This script activates WorkspaceManager and sends keyboard input.
 - Requires Accessibility + Automation permissions for this terminal.
+- Requires Terminal Multiplexing Mode = Ghostty Splits; tmux mode is intentionally unsupported here.
 USAGE
 }
 
@@ -68,6 +71,18 @@ require_cmd() {
 ensure_clean_process_space() {
     if pgrep -f "$INSTALLED_APP_BINARY" >/dev/null 2>&1; then
         fail "installed app is running ($INSTALLED_APP_BINARY); quit it before shortcut smoke"
+    fi
+}
+
+require_ghostty_managed_mode() {
+    local mode
+    mode="$(defaults read "$BUNDLE_ID" terminalMultiplexingMode 2>/dev/null || true)"
+    if [[ -z "$mode" ]]; then
+        mode="$GHOSTTY_MANAGED_MODE"
+    fi
+
+    if [[ "$mode" != "$GHOSTTY_MANAGED_MODE" ]]; then
+        fail "shortcut smoke requires Ghostty Splits mode; current terminalMultiplexingMode is '$mode'. Switch the app setting before running this script."
     fi
 }
 
@@ -165,6 +180,7 @@ main() {
     require_cmd cliclick
 
     ensure_clean_process_space
+    require_ghostty_managed_mode
     launch_debug_app
     ensure_clean_process_space
 

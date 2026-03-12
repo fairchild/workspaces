@@ -28,6 +28,7 @@ public struct RemoteWorkspaceSessionRequest: Sendable, Equatable {
     public let name: String
     public let backendIdentifier: String
     public let remoteId: String?
+    public let sessionRoutingID: String
     public let status: WorkspaceStatus
     public let repoName: String?
     public let repoRemoteURL: String?
@@ -39,6 +40,7 @@ public struct RemoteWorkspaceSessionRequest: Sendable, Equatable {
         name: String,
         backendIdentifier: String,
         remoteId: String?,
+        sessionRoutingID: String,
         status: WorkspaceStatus,
         repoName: String?,
         repoRemoteURL: String?,
@@ -49,11 +51,22 @@ public struct RemoteWorkspaceSessionRequest: Sendable, Equatable {
         self.name = name
         self.backendIdentifier = backendIdentifier
         self.remoteId = remoteId
+        self.sessionRoutingID = sessionRoutingID
         self.status = status
         self.repoName = repoName
         self.repoRemoteURL = repoRemoteURL
         self.sshMetadata = sshMetadata
         self.composeMetadata = composeMetadata
+    }
+}
+
+public struct LocalWorkspaceContext: Sendable, Equatable {
+    public let workspaceID: UUID
+    public let directoryURL: URL
+
+    public init(workspaceID: UUID, directoryURL: URL) {
+        self.workspaceID = workspaceID
+        self.directoryURL = directoryURL
     }
 }
 

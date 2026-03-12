@@ -90,9 +90,12 @@ ensure_dependencies() {
 
 activate_if_requested() {
     if [[ "$ACTIVATE_APP" == true ]]; then
+        log "Capture mode: interactive (--activate)"
         osascript -e 'tell application "System Events" to set frontmost of process "WorkspaceManager" to true' >/dev/null 2>&1 \
             || fail "could not activate $APP_NAME"
         sleep 0.2
+    else
+        log "Capture mode: shared-desktop-safe (no activation)"
     fi
 }
 

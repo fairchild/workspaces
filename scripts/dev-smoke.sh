@@ -111,7 +111,11 @@ capture_evidence() {
             exit 0
         fi
 
-        log "Window-only capture failed; falling back to full-screen capture."
+        if [[ "$NO_ACTIVATE" == true ]]; then
+            fail "Window-only capture failed in shared-desktop mode. Keep the app visible and rerun ./scripts/capture-window.sh, or rerun dev-smoke without --no-activate if foreground capture is acceptable."
+        fi
+
+        log "Window-only capture failed; falling back to full-screen capture because activation is allowed."
         screencapture -x "$SCREENSHOT_PATH"
     )
 }
@@ -125,6 +129,11 @@ main() {
     latest_log="$(ls -1t "$REPO_ROOT"/.dev-data/logs/launch-dev-*.log 2>/dev/null | head -n 1 || true)"
 
     log "Dev smoke passed."
+    if [[ "$NO_ACTIVATE" == true ]]; then
+        log "Mode: shared-desktop-safe (no foreground activation, window-only capture required)"
+    else
+        log "Mode: interactive (foreground activation allowed for fallback capture)"
+    fi
     log "Screenshot: $SCREENSHOT_PATH"
     if [[ -n "$latest_log" ]]; then
         log "Launch log: $latest_log"

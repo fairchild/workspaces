@@ -124,27 +124,33 @@ public struct WorkspaceProviderCreationRequest: Sendable {
 public struct WorkspaceProviderCreationResult: Sendable {
     public let name: String
     public let path: URL
+    public let persistedPath: String?
     public let gitBranch: String?
     public let status: WorkspaceStatus
     public let backendIdentifier: String
     public let remoteId: String?
+    public let sessionRoutingID: String?
     public let backendMetadataRaw: String
 
     public init(
         name: String,
         path: URL,
+        persistedPath: String? = nil,
         gitBranch: String? = nil,
         status: WorkspaceStatus = .active,
         backendIdentifier: String,
         remoteId: String? = nil,
+        sessionRoutingID: String? = nil,
         backendMetadataRaw: String = ""
     ) {
         self.name = name
         self.path = path
+        self.persistedPath = persistedPath
         self.gitBranch = gitBranch
         self.status = status
         self.backendIdentifier = backendIdentifier
         self.remoteId = remoteId
+        self.sessionRoutingID = sessionRoutingID
         self.backendMetadataRaw = backendMetadataRaw
     }
 }
@@ -167,6 +173,7 @@ public struct WorkspaceProviderTarget: Sendable, Equatable {
     public let status: WorkspaceStatus
     public let backendIdentifier: String
     public let remoteId: String?
+    public let sessionRoutingID: String?
     public let backendMetadataRaw: String
 
     public init(
@@ -177,6 +184,7 @@ public struct WorkspaceProviderTarget: Sendable, Equatable {
         status: WorkspaceStatus,
         backendIdentifier: String,
         remoteId: String?,
+        sessionRoutingID: String?,
         backendMetadataRaw: String
     ) {
         self.id = id
@@ -186,6 +194,7 @@ public struct WorkspaceProviderTarget: Sendable, Equatable {
         self.status = status
         self.backendIdentifier = backendIdentifier
         self.remoteId = remoteId
+        self.sessionRoutingID = sessionRoutingID
         self.backendMetadataRaw = backendMetadataRaw
     }
 
@@ -198,12 +207,43 @@ public struct WorkspaceProviderTarget: Sendable, Equatable {
             status: workspace.status,
             backendIdentifier: workspace.backendIdentifier,
             remoteId: workspace.remoteId,
+            sessionRoutingID: workspace.sessionRoutingID,
             backendMetadataRaw: workspace.backendMetadataRaw
         )
     }
 
     public var workspaceURL: URL {
         URL(fileURLWithPath: path)
+    }
+
+    public var usesHostWorkspaceFiles: Bool {
+        switch backendIdentifier {
+        case LocalWorkspaceProvider.identifier, LumeWorkspaceProvider.identifier:
+            return true
+        default:
+            return false
+        }
+    }
+
+    public var localDirectoryURL: URL? {
+        guard usesHostWorkspaceFiles, path != Workspace.remotePathSentinel else { return nil }
+        return workspaceURL
+    }
+
+    public var terminalSessionIdentifier: String {
+        if let sessionRoutingID = sessionRoutingID?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !sessionRoutingID.isEmpty
+        {
+            return sessionRoutingID
+        }
+
+        if let remoteId = remoteId?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !remoteId.isEmpty
+        {
+            return remoteId
+        }
+
+        return id.uuidString
     }
 
     public func decodeBackendMetadata<T: Decodable>(_ type: T.Type) -> T? {
