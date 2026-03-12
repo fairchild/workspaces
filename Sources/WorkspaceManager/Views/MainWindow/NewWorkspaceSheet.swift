@@ -59,7 +59,7 @@ struct NewWorkspaceSheet: View {
 
     private var availableBackends: [WorkspaceBackendChoice] {
         var choices: [WorkspaceBackendChoice] = [.local]
-        if supportsDaytonaCreation {
+        if supportsDaytonaCreation && isDaytonaAvailable {
             choices.append(.daytona)
         }
         if supportsSSHCreation {

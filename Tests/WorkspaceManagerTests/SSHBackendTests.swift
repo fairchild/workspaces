@@ -50,6 +50,21 @@ struct SSHBackendTests {
         #expect(resolved == "~/workspaces/acme-api/feature-a")
     }
 
+    @Test("Default home-relative working directory expands with HOME in shell scripts")
+    func defaultWorkingDirectoryExpandsHomeDirectory() throws {
+        let workspace = makeWorkspace(
+            ssh: SSHWorkspaceMetadata(host: "ssh.example.com")
+        )
+
+        let plan = try SSHBackend.sessionPlan(for: workspace)
+        let bootstrapScript = try #require(plan.bootstrapArguments.last)
+
+        #expect(bootstrapScript.contains("mkdir -p $HOME'/workspaces/api/feature-a'"))
+        #expect(bootstrapScript.contains("[ ! -d $HOME'/workspaces/api/feature-a/.git' ]"))
+        #expect(plan.interactiveCommand.contains("cd $HOME'\"'\"'/workspaces/api/feature-a'"))
+        #expect(!bootstrapScript.contains("'~/workspaces"))
+    }
+
     @Test("Bootstrap script clones when the remote checkout is missing")
     func bootstrapScriptClonesWhenMissing() throws {
         let workspace = makeWorkspace(

@@ -154,19 +154,19 @@ public actor SSHBackend: RemoteBackendProtocol {
         remoteURL: String,
         compose: ComposeWorkspaceMetadata?
     ) throws -> String {
-        let escapedWorkingDirectory = singleQuoted(workingDirectory)
-        let escapedGitDirectory = singleQuoted("\(workingDirectory)/.git")
+        let shellWorkingDirectory = shellPath(workingDirectory)
+        let shellGitDirectory = shellPath("\(workingDirectory)/.git")
 
         var commands = [
             "set -e",
-            "mkdir -p \(escapedWorkingDirectory)",
-            "if [ ! -d \(escapedGitDirectory) ]; then git clone \(singleQuoted(remoteURL)) \(escapedWorkingDirectory); fi",
+            "mkdir -p \(shellWorkingDirectory)",
+            "if [ ! -d \(shellGitDirectory) ]; then git clone \(singleQuoted(remoteURL)) \(shellWorkingDirectory); fi",
         ]
 
         if let compose {
             let composeDirectory = composeProjectDirectory(compose: compose, workingDirectory: workingDirectory)
             let composeCommand = try composeCommandString(compose: compose)
-            commands.append("cd \(singleQuoted(composeDirectory))")
+            commands.append("cd \(shellPath(composeDirectory))")
             commands.append("\(composeCommand) config >/dev/null")
             commands.append("\(composeCommand) up -d")
         }
@@ -182,11 +182,11 @@ public actor SSHBackend: RemoteBackendProtocol {
             let composeDirectory = composeProjectDirectory(compose: compose, workingDirectory: workingDirectory)
             let composeCommand = try composeCommandString(compose: compose)
             return
-                "cd \(singleQuoted(composeDirectory)) && exec \(composeCommand) exec "
+                "cd \(shellPath(composeDirectory)) && exec \(composeCommand) exec "
                 + "\(singleQuoted(compose.service)) ${SHELL:-/bin/bash} -l"
         }
 
-        return "cd \(singleQuoted(workingDirectory)) && exec ${SHELL:-/bin/bash} -l"
+        return "cd \(shellPath(workingDirectory)) && exec ${SHELL:-/bin/bash} -l"
     }
 
     private static func composeProjectDirectory(
@@ -303,5 +303,18 @@ public actor SSHBackend: RemoteBackendProtocol {
     private static func singleQuoted(_ value: String) -> String {
         let escaped = value.replacingOccurrences(of: "'", with: "'\"'\"'")
         return "'\(escaped)'"
+    }
+
+    private static func shellPath(_ path: String) -> String {
+        if path == "~" {
+            return "$HOME"
+        }
+
+        if path.hasPrefix("~/") {
+            let suffix = String(path.dropFirst(1))
+            return "$HOME" + singleQuoted(suffix)
+        }
+
+        return singleQuoted(path)
     }
 }
