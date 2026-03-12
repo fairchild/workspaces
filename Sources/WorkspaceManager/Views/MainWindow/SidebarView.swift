@@ -570,26 +570,20 @@ struct SidebarView: View {
             }
 
             modelContext.insert(repo)
-            if !saveModelContext(action: "save repository") {
-                modelContext.rollback()
-            }
+            _ = saveModelContext(action: "save repository")
         }
     }
 
     @MainActor
     private func removeRepo(_ repo: Repo) {
         modelContext.delete(repo)
-        if !saveModelContext(action: "remove repository") {
-            modelContext.rollback()
-        }
+        _ = saveModelContext(action: "remove repository")
     }
 
     @MainActor
     private func removeWebSource(_ source: WebSource) {
         modelContext.delete(source)
-        if !saveModelContext(action: "remove URL source") {
-            modelContext.rollback()
-        }
+        _ = saveModelContext(action: "remove URL source")
     }
 
     private func openWebSourceExternally(_ source: WebSource) {
@@ -857,6 +851,7 @@ struct SidebarView: View {
             try modelContext.save()
             return true
         } catch {
+            modelContext.rollback()
             errorMessage = "Failed to \(action): \(error.localizedDescription)"
             showingError = true
             return false

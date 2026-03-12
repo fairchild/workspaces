@@ -78,6 +78,17 @@ struct SSHBackendTests {
         }
     }
 
+    @Test("Invalid SSH port fails before opening the session")
+    func invalidSSHPortFails() async throws {
+        let workspace = makeWorkspace(
+            ssh: SSHWorkspaceMetadata(host: "ssh.example.com", port: 0)
+        )
+
+        await #expect(throws: RemoteWorkspaceError.self) {
+            _ = try await SSHBackend().openSession(for: workspace)
+        }
+    }
+
     @Test("Compose workspaces include config, up, and exec commands")
     func composeCommandsAreIncluded() throws {
         let workspace = makeWorkspace(

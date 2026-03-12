@@ -1076,7 +1076,12 @@ struct ContentView: View {
             }
         } else {
             workspace.status = .archived
-            try? modelContext.save()
+            do {
+                try modelContext.save()
+            } catch {
+                modelContext.rollback()
+                landingErrorMessage = "Failed to archive workspace: \(error.localizedDescription)"
+            }
         }
     }
 
@@ -1273,7 +1278,15 @@ struct ContentView: View {
         }
 
         if changed {
-            try? modelContext.save()
+            do {
+                try modelContext.save()
+            } catch {
+                modelContext.rollback()
+                NSLog(
+                    "[RemoteBackend] Failed to persist remote workspace statuses: %@",
+                    error.localizedDescription
+                )
+            }
         }
     }
 

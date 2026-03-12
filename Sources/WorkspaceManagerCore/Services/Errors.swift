@@ -37,6 +37,7 @@ public enum RemoteWorkspaceError: LocalizedError {
     case missingRemoteIdentifier
     case backendNotRegistered(String)
     case missingSSHMetadata
+    case invalidSSHConfiguration(String)
     case missingRemoteURL
     case invalidComposeConfiguration(String)
     case commandFailed(String)
@@ -49,6 +50,8 @@ public enum RemoteWorkspaceError: LocalizedError {
             return "Remote backend '\(identifier)' is not registered."
         case .missingSSHMetadata:
             return "SSH workspace metadata is missing or invalid."
+        case .invalidSSHConfiguration(let reason):
+            return "SSH configuration is invalid: \(reason)"
         case .missingRemoteURL:
             return "The repository must have a remote URL to bootstrap an SSH workspace."
         case .invalidComposeConfiguration(let reason):

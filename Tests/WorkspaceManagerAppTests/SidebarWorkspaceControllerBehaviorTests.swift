@@ -176,6 +176,46 @@ struct SidebarWorkspaceControllerBehaviorTests {
         #expect(fetchedWorkspaces.isEmpty)
     }
 
+    @Test("SSH request rejects invalid ports")
+    @MainActor
+    func sshRequestRejectsInvalidPorts() async throws {
+        let (container, context) = try makeModelContext()
+        _ = container
+        let repo = Repo(
+            name: "api",
+            localPath: URL(fileURLWithPath: "/tmp/api"),
+            remoteURL: "git@github.com:acme/api.git"
+        )
+        context.insert(repo)
+
+        let controller = SidebarWorkspaceController(
+            modelContext: context,
+            workspaceService: MockWorkspaceService(),
+            remoteBackendRegistry: MockRemoteBackendRegistry(
+                creationBackendIdentifiers: [SSHBackend.identifier],
+                backends: [SSHBackend.identifier: SSHBackend()]
+            )
+        )
+
+        await #expect(throws: RemoteWorkspaceError.self) {
+            _ = try await controller.createWorkspace(
+                from: repo,
+                request: NewWorkspaceRequest(
+                    name: "feature-a",
+                    backend: .sshHost(
+                        SSHHostWorkspaceRequest(
+                            ssh: SSHWorkspaceMetadata(host: "ssh.example.com", port: 0),
+                            compose: nil
+                        )
+                    )
+                )
+            )
+        }
+
+        let fetchedWorkspaces = try context.fetch(FetchDescriptor<Workspace>())
+        #expect(fetchedWorkspaces.isEmpty)
+    }
+
     @Test("Lifecycle operations are capability-gated per backend")
     @MainActor
     func lifecycleOperationsAreCapabilityGatedPerBackend() async throws {

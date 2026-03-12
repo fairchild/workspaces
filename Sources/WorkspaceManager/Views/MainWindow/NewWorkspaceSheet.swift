@@ -104,6 +104,9 @@ struct NewWorkspaceSheet: View {
             guard !trimmed(sshHost).isEmpty else {
                 return "Enter an SSH host."
             }
+            guard (1...65535).contains(sshPort) else {
+                return "Enter an SSH port between 1 and 65535."
+            }
             guard repoRemoteURL != nil else {
                 return "This repository needs a remote URL before you can create an SSH workspace."
             }

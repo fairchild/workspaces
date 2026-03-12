@@ -245,6 +245,11 @@ struct SidebarWorkspaceController {
         guard WorkspaceService.isValidWorkspaceNameComponent(sanitizedName) else {
             throw WorkspaceError.invalidName(name: name)
         }
+        guard (1...65535).contains(request.ssh.port) else {
+            throw RemoteWorkspaceError.invalidSSHConfiguration(
+                "port must be between 1 and 65535"
+            )
+        }
 
         guard remoteBackendRegistry.backend(for: SSHBackend.identifier) != nil else {
             throw ControllerError.message(

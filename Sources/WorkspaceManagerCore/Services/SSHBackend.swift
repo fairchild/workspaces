@@ -94,6 +94,11 @@ public actor SSHBackend: RemoteBackendProtocol {
         guard let ssh = workspace.sshMetadata else {
             throw RemoteWorkspaceError.missingSSHMetadata
         }
+        guard (1...65535).contains(ssh.port) else {
+            throw RemoteWorkspaceError.invalidSSHConfiguration(
+                "port must be between 1 and 65535"
+            )
+        }
 
         guard
             let remoteURL = workspace.sourceRepo?.remoteURL?.trimmingCharacters(in: .whitespacesAndNewlines),
