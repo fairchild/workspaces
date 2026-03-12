@@ -35,6 +35,15 @@ Verify your work visually, then present evidence to the user. Don't just say it 
 - **Present evidence**: Open HTML artifacts in the browser (`open <path>`), render screenshots inline in chat, and show test output. The user should see the proof without asking twice.
 - **Tests are evidence too**: Run `swift test` and show the summary. Green tests are necessary but not sufficient — visual confirmation of UI changes is expected.
 
+## High-Signal Lessons
+
+- **Never use bare `self-hosted` for workflows in this repo.** Self-hosted jobs must use explicit purpose-specific runner labels. Intrusive UI/perf automation should not share the interactive desktop runner.
+- **Keep terminal surfaces nearly chrome-free.** Repo overview pages can carry metadata and actions, but terminal views should default to the canvas with minimal surrounding UI.
+- **Prefer quiet discoverability over persistent controls.** Avoid right-click-only primary actions, but also avoid always-visible sidebar affordances that add noise. Hover-visible scoped actions are usually the right compromise.
+- **Persist selection state by stable IDs, not live SwiftData objects.** Restore and fallback logic should resolve models late and validate them against current data before selection.
+- **Release version metadata must have one source of truth.** Tag, app version, and packaged artifact version should be validated against each other before a release is created.
+- **If the app opens or closes unexpectedly on a dev machine, check the launching process first.** On this project, CI/self-hosted runner behavior can look like an app bug.
+
 ## Commit Hygiene
 
 - Do not include screenshot artifacts in commits unless explicitly requested (`output/`).
