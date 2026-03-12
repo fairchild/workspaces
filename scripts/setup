@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+#MISE description="Trust mise config and install tools"
+set -euo pipefail
+[[ -f .mise.toml ]] && mise trust && mise install
