@@ -1,4 +1,8 @@
 ---
+status: pending
+category: followup
+issue: 83
+milestone: 1
 topic: remote-workspaces
 priority: 2
 description: Separate SSH routing identity from provider IDs, remove placeholder remote paths, and eliminate Workspace @unchecked Sendable

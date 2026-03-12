@@ -1,10 +1,27 @@
 ---
+status: completed
+category: followup
+pr: 67
+retro_summary: Peter now runs through `run-planner.py`, handles milestone reuse, and uses tempfile-backed orchestration instead of inline workflow bash.
+completed: 2026-03-11
 topic: agent-workflows
 priority: 3
 description: Refactor Peter Planner workflow to match April/Plat's clean Python wrapper pattern
 ---
 
 # Agent Peter Workflow Refactor
+
+## Implementation Status
+
+This follow-up is complete and retained as a delivery record for the agent-team workflow evolution.
+
+What landed:
+
+- `agent-peter.yml` now delegates to `.agents/scripts/run-planner.py`
+- planner validation and milestone handling are centralized in Python
+- milestone reuse and tempfile-backed orchestration are in place
+
+This file remains useful as historical context, but it is no longer active backlog work.
 
 ## Problem Statement
 

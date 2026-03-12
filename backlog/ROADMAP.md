@@ -1,242 +1,286 @@
 ---
 status: in-progress
 category: plan
-pr: null
-branch: null
-score: null
-retro_summary: null
-completed: null
 ---
 
-# AI Coding Workspace Manager — MVP Roadmap
+# Workspaces Roadmap
 
-**Vision**: A Mac-native app for managing AI coding sessions. Add repos, fork them into isolated workspaces, run any terminal-based coding agent in an embedded terminal, and track file changes—all without context-switching to Finder or a separate terminal.
+## Vision
 
-## Status Snapshot (2026-03-10)
+Build the best Mac-native control surface for terminal-based coding agents:
 
-- Latest shipped release: `v0.1.2` (GitHub release + DMG workflow path healthy).
-- Branch validation baseline: `swift test` is green at 270 tests across 45 suites.
-- Daily-driver reliability fixes have landed:
-  - shared non-blocking process execution (`ProcessRunner`) adopted across git/workspace/backend services
-  - terminal identity hardening on workspace switch and restart generation
-  - workspace recency ordering now updates on selection
-- Open-in-editor hardening has landed on mainline:
-  - deterministic launch guardrails for shortcut/UI-triggered editor handoff
-  - launch metrics/signposts and smoke coverage for editor-launch reliability
-- Tart GUI automation + editor handoff UX hardening landed in PR #19:
-  - target-manifest-driven Tart harness/docs for repeatable automation runs
-  - workspace editor toolbar/context attachment launch-path improvements
-- URL sources + embedded webview MPP support is on mainline:
-  - sidebar-managed URL sources with persisted metadata
-  - embedded domain-scoped browsing alongside terminal-first routing
-- Main-window/sidebar redesign and navigation hardening are now validated on the active branch:
-  - repo overview is the primary repo destination
-  - scoped web views can be global, repo-owned, or workspace-owned
-  - sidebar chrome is flatter and calmer, with explicit repo sorting replacing the old `Recent` section
-  - launch/selection state is hardened with per-window restore state and deterministic remote-workspace activation
-- Refinement-gate closure work has landed on mainline:
-  - Ghostty split shortcut parity (`resize_split`, `equalize_splits`)
-  - product/release docs parity and release-script ergonomics hardening
-  - main-window coordinator extraction plus inspector/right-pane regression coverage
-  - workspace creation progress UX
-  - strict-concurrency warning cleanup in the app layer
-- Active implementation focus: maintainability-first quality work that keeps shrinking `ContentView`/`SidebarView`/Ghostty integration complexity now that the main-window redesign direction is validated.
+- select the right repo or workspace quickly
+- keep long-lived terminal context intact
+- attach the minimum useful chrome around that terminal
+- add remote runtimes and activity feeds only when they make that workflow more reliable
+
+This roadmap is grounded in the current codebase and recent releases, not older MVP assumptions.
 
 ---
 
-## Current Locked Direction (2026-02-14)
+## Current Product Reality (2026-03-12)
 
-For the VZ/Tahoe implementation track (`M2`-`M6`), `backlog/vz-tahoe-execution-brief-plan.md` is the source of truth.
+Latest shipped release: `0.4.0` on 2026-03-11.
 
-Execution priority is:
+What is already real in code:
 
-1. Complete the **Refinement Gate (Before M2)** in this roadmap.
-2. Resume the execution brief milestones starting at `M2`.
+- terminal-first main window with repo overview, persistent repo/workspace terminals, and embedded web views
+- calmer repo-first sidebar with explicit sorting and per-window last-surface restoration
+- Ghostty-backed terminal integration with current two-pane split actions and focus routing
+- local workspaces plus remote/provider-backed workspace plumbing
+- Daytona and Lume provider tracks in core, including host-side validation/setup flows for Lume
+- notification/auth/activity infrastructure, including GitHub auth entrypoints and webhook/event-stream services
+- workspace process monitoring and agent-awareness in repo overview cards
+- automation-oriented dev tooling, Tart GUI verification, and host-Lume smoke coverage
 
-### Product Defaults
+What this means for planning:
 
-- App launch restores the last active repo overview, repo terminal, workspace terminal, or web view. If the saved surface is invalid, fallback is: most recent workspace, then most recent web view, then first repo overview.
-- Sidebar top-level concepts are `Repositories` and `Web`.
-- Sidebar clicks are explicit context actions:
-  - Repo row opens the repo overview.
-  - Expanded repo rows reveal repo-owned web views first, then workspaces.
-  - Workspace rows open or resume persistent terminal sessions in those directories.
-  - Web rows open embedded web views.
-- Repository ordering is explicit and stable: `Alphabetical` by default, with `Last Accessed` only re-sorted on demand.
-- Sidebar shows live session indicators for repos/workspaces with active terminals.
-
-### VM Lifecycle Scope
-
-- No VM creation or startup at app launch.
-- VM creation/start is triggered when creating a new workspace configured for `vzLinuxTahoe`.
-- Existing tracked workspaces remain `local` (no auto-migration).
-
-### Backend + Platform Scope
-
-- Native `Virtualization.framework` backend first (`vzLinuxTahoe`).
-- VZ backend support target: macOS 26+ (Tahoe), Apple Silicon only.
-- New workspaces default to VZ backend only on supported hosts; fallback remains local backend.
-
-### Execution Routing Defaults
-
-- VZ workspaces: run commands in VM by default.
-- Host build/test routing in `auto` mode for:
-  - `xcodebuild`
-  - `swift build`
-  - `swift test`
-- Explicit overrides:
-  - `--host` forces host execution.
-  - `--vm` forces VM execution.
-
-### Security Defaults
-
-- Workspace mount in VM is RW virtiofs.
-- Per-workspace vmnet logical network with NAT default.
-- Outbound egress is unrestricted in phase 1.
-- Any non-workspace extra mounts require an external allowlist outside the repo/workspace.
-
-### Best Implementation Order
-
-1. [x] Persistent terminal foundation and session UX.
-2. [x] Refinement gate: quality hardening and performance baselining for current feature set.
-3. [ ] Maintainability-first quality pass: continue shrinking oversized integration files and keep verification deterministic.
-4. [ ] Backend abstraction/registry in core while preserving `LocalBackend`.
-5. [ ] `VZTahoeBackend` implementation (runtime checks, VM lifecycle, vmnet, SSH executor, allowlist).
-6. [ ] New-workspace flow integration to create/start VM only for VZ workspaces.
-7. [ ] CLI backend-aware routing (`auto`, `--host`, `--vm`) plus VM lifecycle commands.
-8. [ ] Tests, docs, fallback hardening, and validation.
-
-### Performance Backlog (Fast-Path Follow-ups)
-
-- [x] Add production signposts around launch, repo hydration, and repo-click-to-focus latency.
-- [x] Run baseline captures and check in a short perf report (including documented `xctrace` limitations on local runs).
-- [x] Add optional session/surface cap policy (LRU for inactive repo sessions) if memory pressure appears. (Decision: keep unbounded for now with guardrail logging + revisit threshold.)
-- [ ] Re-introduce remote URL metadata in a background/idle pipeline (not launch-critical path).
+- the product is no longer "just local workspace copies plus a terminal"
+- the highest risk is now complexity management and determinism, not raw feature absence
+- roadmap decisions should protect the terminal-first experience from being diluted by side systems
 
 ---
 
-## Refinement Gate (Before M2)
+## Product Goals
 
-The next cycle prioritizes implementation quality for shipped behavior before expanding the feature set.
+### Goal 1: Keep the core loop excellent
 
-### Objectives
+The core loop is: choose context, get a ready terminal, inspect files/changes, continue work without surprise.
 
-- Make session behavior deterministic under fast click-switching between repos and workspaces.
-- Keep launch and interaction latency consistently fast on real `~/code` portfolios.
-- Ensure release workflow reliability stays boring and repeatable.
-- Align product docs and stories with the behavior users are actually testing.
+Success means:
 
-### Exit Criteria
+- launch/restore behavior is boring and predictable
+- session reuse and focus stay correct under rapid switching
+- sidebar and repo overview stay calm even as more capabilities exist
 
-- [x] `swift test` remains green with added regression coverage for session focus and reuse semantics.
-- [x] A short perf report is checked in with baseline numbers for:
-  - launch-to-first-prompt
-  - repo hydration
-  - repo-click-to-focused-terminal
-- [x] No known crash/repro defects remain around workspace selection and session switching on the validated branch.
-- [x] Release workflow passes end-to-end from the mainline release flow (signed + notarized DMG published).
-- [x] Product docs (`docs/product_overview.md`, `docs/user-stories.md`) reflect implemented UX.
+### Goal 2: Make remote runtimes trustworthy
 
-### Planned Work Items
+Remote and VM-backed workspaces are now part of the product direction, but only if they feel as dependable as local workspaces.
 
-- [x] Add instrumentation signposts around launch, sidebar selection handling, and terminal focus handoff.
-- [x] Add focused regression tests for session reuse + focus restoration behavior.
-- [x] Add a lightweight memory guardrail decision: either cap inactive surfaces (LRU) or document why unbounded is acceptable today.
-- [x] Land daily-driver reliability fixes: deadlock-safe process execution, terminal identity reset on workspace switch, and recency updates.
-- [x] Complete Ghostty shortcut pass-through parity for split actions (`resize_split`, `equalize_splits`) and keep `mask verify-shortcuts` green.
-- [x] Tighten release docs/scripts around Apple credential troubleshooting and idempotent setup (metadata consistency now fixed in workflow title/version flow).
-- [x] Land main-window coordinator extraction, inspector/right-pane regression coverage, and workspace creation progress UX.
-- [ ] Capture usage findings and feed them into post-refinement prioritization for M2.
+Success means:
 
----
+- provider identity/state is explicit and not leaky
+- provisioning and attach flows are understandable
+- architecture stays small enough to evolve safely
 
-## Completed Work
+### Goal 3: Make notifications and automation useful without adding noise
 
-- **Phases 1-3 complete**: Three-column layout, SwiftData persistence, repo/workspace CRUD, file tree, git status pane
-- **Phase 4 partial**: Keyboard shortcuts, signed + notarized DMG releases through `v0.1.2`, GitHub Actions CI
-- **Terminal migration**: SwiftTerm replaced with GhosttyKit (`libghostty`) for persistent session support
-- **Terminal-first repo/workspace UX**: Auto-discovery from `~/code`, repo overview as the primary repo surface, persistent repo/workspace terminals, and live session indicators
-- **URL sources + embedded webview (MPP)**: persisted `WebSource` entries, embedded browsing with global/repo/workspace scope, and terminal/web selection coexistence
-- **Session coordinator**: Manages terminal surface lifecycle, reuse, and focus restoration
-- **Refinement/performance hardening (2026-02-15)**: Signposts, perf baseline report, session regression tests, and memory-policy guardrails (`backlog/done/refinement-performance-followup.md`)
-- **Daily-driver reliability hardening (2026-02-26 to 2026-02-28)**: non-blocking process runner, terminal/workspace identity fixes, recency sort correctness, and release metadata consistency
-- **Open-in-editor polish (PR #18 + follow-up fixes)**: deterministic launch guardrails, launch metrics/signposts, and strengthened shortcut smoke assertions
-- **Editor UX + automation hardening (PR #19)**: external editor service/toolbar action hardening and Tart automation target-manifest/documentation upgrades
-- **Refinement-gate closure (2026-03-07)**: split parity, docs/release parity, main-window/inspector hardening, workspace creation progress, and app-layer strict-concurrency cleanup
-- **Main-window/sidebar redesign + navigation hardening (2026-03-10)**: repo overview launch flow, scoped web views, quieter sidebar hierarchy, repo sorting, per-window last-surface restore, and deterministic remote-workspace selection handling
-- **270 tests** passing across 45 suites (services, models, session behavior, process runner, app-level routing/UX behaviors)
-- **Monorepo extraction**: Clean standalone repo, SPM-only build (no Xcode project)
+Activity, GitHub auth, and agent automation support should help users coordinate work, not create a second product with its own complexity tax.
+
+Success means:
+
+- reconnect/catch-up behavior is reliable
+- auth/session churn stays low
+- UI entrypoints reflect the actual value of the activity system
+
+### Goal 4: Preserve evidence-driven delivery
+
+This repo depends on strong verification loops for terminal and desktop behavior.
+
+Success means:
+
+- shared-desktop validation is less disruptive
+- remote/runtime smoke checks are repeatable
+- refactors come with deterministic proof, not hand-waving
 
 ---
 
-## Active Phase: Maintainability + Determinism
+## Shipped Baseline
 
-Prioritization lens for this phase (aligned with `README.md`):
+These are done enough that they should not be planned as upcoming roadmap items:
 
-1. Keep the product simple: one clear core workflow (select context, run terminal, inspect files/changes).
-2. Improve quality before adding surface area: determinism, readability, testability, and memory behavior first.
-3. Protect performance: prioritize changes that keep startup and interaction latency boringly consistent.
+- repo overview as the primary repo surface
+- scoped web views at global, repo, and workspace levels
+- persistent repo/workspace terminal sessions
+- Ghostty split/focus/resize/equalize integration for the current two-pane model
+- open-in-editor hardening and launch metrics
+- notification client foundation, webhook relay, and GitHub auth integration
+- workspace provider registry and active Lume/Daytona provider work
+- release/signing/notarization path through current releases
 
-### Now (P0): Must Land Before New Feature Breadth
-
-| Item | Effort | Impact | Why now |
-|------|--------|--------|---------|
-| Main-window/sidebar maintainability pass | Medium | High | `ContentView` and `SidebarView` are still the largest integration files and slow down safe iteration. |
-| Ghostty boundary maintainability | Medium | High | `GhosttySurfaceView` and `GhosttyAppManager` remain the riskiest AppKit/C interop surfaces to modify. |
-| Shared-desktop verification reliability | Medium | Medium | UI evidence capture is still the least deterministic quality loop and slows confident refactors. |
-| Usage findings + post-refinement prioritization | Low | Medium | Needed to decide whether M2 starts next or more quality work should land first. |
-
-### Next (P1): Core UX Evolution With Controlled Refactor Scope
-
-| Item | Effort | Impact | Guardrail |
-|------|--------|--------|-----------|
-| Pane-tree terminal tiling model | High | High | Execute only with reducer-first design + invariant tests + memory sync contract. See `backlog/pane-tree-tiling_plan.md`. |
-| Ghostty appearance hardening follow-up | Medium | Medium | Run after the current maintainability pass so appearance behavior is checked against the new seams. |
-| Logging + error-surface cleanup | Low | Medium | Standardize `print`/`NSLog` usage and reduce ad hoc alert/reporting paths once large-file refactors settle. |
-
-### Later (P2): Strategic Expansion
-
-| Item | Effort | Impact | Note |
-|------|--------|--------|------|
-| VZ backend (M2-M6) | High | High | Strategic roadmap track; resume after P0 quality gate closes and P1 core UX risk is contained. |
-
-### Icebox (P3): Optional/Context-Dependent
-
-- **tmux per-worktree productization** (`backlog/tmux-support_plan.md`) — defer while choosing one primary multiplexing model (pane tree) to avoid dual-mode complexity.
-- **Sparkle auto-update** (`backlog/sparkle-autoupdate-plan.md`) — defer until external user distribution pressure increases.
-- **Landing page** (`backlog/landing-page.md`) — go-to-market asset; not on critical path for product quality.
-- **Swift dev skills task-list** (`backlog/swift-dev-skills-task-list.md`) — internal workflow optimization, not user-facing product quality.
-- **Session history** (persist scrollback) — non-trivial GhosttyKit scope.
-- **File watching auto-refresh** — manual refresh currently sufficient.
-
-### Dropped
-
-Removed from roadmap (conflict with design principles or low value):
-
-- ~~Git operations from UI~~ — design principle: "not a git client"
-- ~~Search in files~~ — use terminal
-- ~~Workspace templates~~ — `setup.sh` handles this
+The roadmap should treat these as baseline capabilities that need hardening, not as net-new scope.
 
 ---
 
-## Next Phase: VZ Backend
+## Priority Rule
 
-VM-backed workspaces via macOS 26 Virtualization.framework. See `backlog/vz-tahoe-execution-brief-plan.md` for the full execution plan (M2-M6).
+Priority is driven by three filters, in this order:
 
-Summary: backend abstraction/registry, VZTahoeBackend implementation (VM lifecycle, vmnet, SSH executor), workspace creation integration, CLI routing with `--host`/`--vm` flags.
+- protect the core promise first: select context, get a dependable terminal, keep working
+- fix dependency debt before adding breadth: work that reduces regression risk outranks adjacent feature growth
+- expand side systems only after they are trustworthy enough not to drag on the core product
 
 ---
 
-## Backlog
+## Priority Bands
 
-| Item | Category | Priority Band | Pointer |
-|------|----------|---------------|---------|
+### Now (P0)
+
+#### 1. Maintainability pass on main window and Ghostty boundaries
+
+Why now:
+
+- `ContentView` remains a large orchestration surface
+- the Ghostty/AppKit bridge is still one of the riskiest places to change
+- future remote/activity work will compound costs if these seams stay muddy
+
+Primary pointers:
+
+- `backlog/main-window-sidebar-maintainability_followup.md`
+- `backlog/ghostty-appearance-hardening_followup.md`
+
+#### 2. Shared-desktop and evidence-loop reliability
+
+Why now:
+
+- local visual verification still contends with the active desktop session
+- this slows refactors and lowers confidence in UI and terminal behavior changes
+
+Primary pointer:
+
+- `backlog/shared-desktop-focus-contention-followup.md`
+
+#### 3. Remote workspace identity cleanup
+
+Why now:
+
+- remote workspace persistence and routing semantics are still not clean enough
+- this is foundational before expanding more remote/runtime behavior
+
+Primary pointer:
+
+- `backlog/remote-workspace-identity-sendability_followup.md`
+
+### Next (P1)
+
+#### 4. Lume runtime architecture cleanup
+
+Why next:
+
+- Lume has crossed from experiment to meaningful product surface
+- the current runtime/provider implementation works, but reviewer friction and maintenance cost are too high
+
+Primary pointer:
+
+- `backlog/lume-runtime-architecture-followups_followup.md`
+
+#### 5. Notification catch-up and reconnect correctness
+
+Why next:
+
+- `0.3.0` and `0.4.0` added enough notification surface that duplicate/replay behavior now matters
+- reconnect semantics should be reliable before investing in richer activity UX
+
+Primary pointer:
+
+- `backlog/notification-client-catchup-plan.md`
+
+#### 6. Decide the next terminal multiplexing step
+
+Why next:
+
+- current two-pane behavior is useful, but it is not the final terminal tiling model
+- this needs a deliberate decision, not incremental shortcut accretion
+
+Primary pointers:
+
+- `backlog/pane-tree-tiling_plan.md`
+- `backlog/tmux-support_plan.md`
+
+Decision bias:
+
+- prefer one primary multiplexing model
+- do not productize pane-tree and tmux deeply at the same time
+
+### Later (P2)
+
+#### 7. Strategic isolation backend direction
+
+The long-range isolation question is still open, but the roadmap should reflect current reality:
+
+- Lume-backed runtime work is already active product code
+- Daytona integration exists
+- Tahoe VZ remains a strategic native-backend direction, not the only path to remote isolation
+
+Primary pointers:
+
+- `backlog/vz-tahoe-execution-brief-plan.md`
+- `backlog/isolation-strategies.md`
+
+Planning note:
+
+- do not frame VZ as the immediate next milestone unless P0/P1 quality debt is materially lower
+
+### Icebox (P3)
+
+- Sparkle auto-update: `backlog/sparkle-autoupdate-plan.md`
+- landing page / marketing site: `backlog/landing-page.md`
+- internal skills/task-list work: `backlog/swift-dev-skills-task-list.md`
+
+---
+
+## Milestone Alignment
+
+Roadmap and GitHub milestones play different roles:
+
+- roadmap = strategic order and promotion rules
+- GitHub milestone = live execution contract for one promoted theme
+- backlog plan = design/supporting detail for work not yet promoted
+
+Default execution policy:
+
+- only `Now` items and explicitly pulled-forward `Next` items should become milestones
+- default to one active product milestone at a time unless a second lane is clearly independent
+- milestone names should come from the approved planning discussion title; the roadmap tracks themes, not canonical GitHub titles
+
+Current GitHub state (2026-03-12):
+
+- the current open milestone is `Core reliability and maintainability` (#1)
+- it is the first roadmap-aligned execution milestone and should stay limited to the current `P0` theme
+- roadmap ordering still wins over milestone drift; if the milestone scope widens, bring it back to the `P0` set
+
+Theme-to-milestone map:
+
+| Roadmap theme | Milestone posture |
+|------|----------|
+| Core reliability and maintainability | Current execution milestone |
+| Lume runtime hardening | Next-up standalone milestone after the current core-reliability milestone |
+| Notification catch-up and reconnect correctness | Standalone milestone after Lume unless activity work becomes urgent sooner |
+| Terminal multiplexing direction | Milestone only after an explicit product decision to invest here |
+| Strategic isolation backend direction | Backlog/research until promoted by a fresh approved discussion |
+
+---
+
+## Recommended Milestone Sequence
+
+This sequence follows the priority rule above: core promise first, dependency cleanup second, broader product bets after that.
+
+1. `Core reliability and maintainability`
+   Covers the current P0 set: main-window/Ghostty maintainability, shared-desktop verification reliability, and remote workspace identity cleanup.
+2. `Lume runtime hardening`
+   Refactor the runtime/provider internals now that the contract is proven.
+3. `Notification catch-up and reconnect correctness`
+   Make activity reliable before expanding activity UX.
+4. `Terminal multiplexing direction`
+   Either commit to pane-tree investment or consciously defer it.
+5. `Strategic isolation backend direction`
+   Promote only after the earlier milestones reduce implementation drag.
+
+---
+
+## Backlog Index
+
+| Item | Category | Priority | Pointer |
+|------|----------|----------|---------|
 | Main-window + sidebar maintainability pass | Follow-up | P0 | `backlog/main-window-sidebar-maintainability_followup.md` |
-| Pane-tree terminal tiling model | Plan | P1 | `backlog/pane-tree-tiling_plan.md` |
-| Ghostty appearance hardening | Follow-up | P1 | `backlog/ghostty-appearance-hardening_followup.md` |
+| Ghostty appearance hardening | Follow-up | P0 | `backlog/ghostty-appearance-hardening_followup.md` |
 | Shared desktop focus contention hardening | Follow-up | P0 | `backlog/shared-desktop-focus-contention-followup.md` |
-| VZ Tahoe execution brief | Plan | P2 | `backlog/vz-tahoe-execution-brief-plan.md` |
-| Isolation strategy options (research) | Plan | P2 | `backlog/isolation-strategies.md` |
+| Remote workspace identity and sendability cleanup | Follow-up | P0 | `backlog/remote-workspace-identity-sendability_followup.md` |
+| Lume runtime architecture follow-ups | Follow-up | P1 | `backlog/lume-runtime-architecture-followups_followup.md` |
+| Notification client catch-up | Plan | P1 | `backlog/notification-client-catchup-plan.md` |
+| Pane-tree terminal tiling model | Plan | P1 | `backlog/pane-tree-tiling_plan.md` |
+| Tahoe VZ backend execution brief | Plan | P2 | `backlog/vz-tahoe-execution-brief-plan.md` |
+| Isolation strategy options | Plan | P2 | `backlog/isolation-strategies.md` |
 | tmux per-worktree support | Plan | P3 | `backlog/tmux-support_plan.md` |
 | Sparkle auto-update decision record | Plan | P3 | `backlog/sparkle-autoupdate-plan.md` |
 | Landing page | Plan | P3 | `backlog/landing-page.md` |
@@ -244,108 +288,14 @@ Summary: backend abstraction/registry, VZTahoeBackend implementation (VM lifecyc
 
 ---
 
-## Learnings
+## Verification Notes
 
-### 2026-03-10 — Main-window/sidebar redesign landed on active branch
+Roadmap grounding sources:
 
-**Context**: The Apple-native main-window redesign plan was executed together with deeper main-window state hardening and sidebar simplification.
+- `CHANGELOG.md` through `0.4.0`
+- `README.md`
+- `docs/product_overview.md`
+- current app/core source files under `Sources/WorkspaceManager` and `Sources/WorkspaceManagerCore`
+- active backlog plans referenced above
 
-**Results**:
-- Repo overview is now the primary repo destination; workspaces and repo-owned web views are launched from there or from the calmer repo tree.
-- The visible `Host` / `Recent` model is gone. Sidebar top-level concepts are now `Repositories` and `Web`.
-- Scoped web views now support global, repo-owned, and workspace-owned ownership.
-- Last-surface restoration is per-window, and remote workspace selection no longer commits visible state before attach succeeds.
-- Repository ordering is explicit and stable with `Alphabetical` and on-demand `Last Accessed` modes.
-- Validation on the branch is green at 270 tests across 45 suites, plus live debug-app launch/capture and `Cmd+B` / `Cmd+D` runtime checks.
-
-**What this changes for planning**: The redesign itself is no longer the blocking priority. The remaining work is maintainability, Ghostty-boundary cleanup, and more deterministic shared-desktop verification.
-
-### 2026-03-07 — Refinement gate closure + strict-concurrency cleanup
-
-**Context**: The remaining refinement-gate items and follow-up cleanup work were merged to mainline.
-
-**Results**:
-- Ghostty split shortcut parity now covers `new_split`, `goto_split`, `resize_split`, and `equalize_splits`.
-- Product docs, release docs, and release-script ergonomics now match shipped behavior.
-- Main-window coordinator extraction, inspector/right-pane regression tests, and workspace-creation progress UX are landed.
-- App-layer strict-concurrency warnings are cleaned up and `swift build -Xswiftc -warn-concurrency` is green.
-- `swift test` is green at 185 tests across 29 suites.
-
-**What this changes for planning**: The highest-value next work is maintainability-first quality improvement, especially shrinking oversized integration files and tightening the Ghostty/AppKit boundary before new feature breadth.
-
-### 2026-03-07 — Main-window maintainability pass (in flight)
-
-**Context**: The next quality branch continues the maintainability pass by reducing `ContentView`'s mixed state/orchestration surface instead of adding product scope.
-
-**Results so far**:
-- `ContentView` now uses a dedicated `MainWindowViewState` instead of a long list of top-level `@State` fields.
-- Root-view presentation and selection-derived state moved into `MainWindowPresentationController`.
-- Deep-link and UI-fixture bootstrap decisions moved into `MainWindowBootstrapController`.
-- Focused controller tests were added, bringing `swift test` to 196 tests across 31 suites.
-
-**What this changes for planning**: the next maintainability slice after this PR should continue Phase 2 only if a clearly separable root-view seam remains; otherwise move to the Ghostty boundary cleanup in Phase 3.
-
-### 2026-03-01 — PR #18/#19 mainline hardening pass
-
-**Context**: PR #18 and PR #19 were merged to mainline to harden open-in-editor behavior and strengthen GUI automation/editor handoff reliability.
-
-**Results**:
-- Open-in-editor routing now has deterministic guardrails for missing/invalid targets plus launch outcome metrics.
-- Shortcut smoke coverage for open-in-editor is hardened (including fixture-home assertions).
-- Tart GUI automation gained target-manifest workflow/docs updates and activation/verification flows.
-- `swift test` is green at 142 tests across 23 suites.
-
-**What this changed for planning at the time**: Open-in-editor shortcut polish moved out of quick wins; remaining refinement work centered on docs parity and split shortcut parity.
-
-### 2026-02-28 — Release metadata consistency pass
-
-**Context**: After cutting `v0.1.2`, release naming drifted because workflow title formatting depended on both plist version and tag.
-
-**Results**:
-- Updated workflow release name to derive from tag consistently.
-- Bumped app bundle version metadata to match `v0.1.2`.
-- Verified `swift test` remains green (97 tests) and remote mainline stayed in sync.
-
-**What this changes for planning**: Release hardening is now mostly about documentation and credential/idempotency ergonomics, not core workflow correctness.
-
-### 2026-02-26 — Daily-driver reliability hardening
-
-**Context**: Daily use surfaced reliability gaps: process output deadlock risk, terminal/workspace mismatch on selection changes, and stale recency ordering.
-
-**Results**:
-- Added shared process runner with concurrent stdout/stderr draining and adopted it in core services.
-- Hardened terminal identity lifecycle for workspace switches/restarts.
-- Updated workspace selection flow to persist `lastAccessedAt` on selection for correct recency sorting.
-
-**What worked**: Prioritizing correctness-first fixes before feature expansion improved day-to-day confidence without adding product complexity.
-
-### 2026-01-30 — Documentation audit
-
-**Context**: Reviewed project state to plan next work.
-
-**Discovery**: The project is much further along than TASKS.md indicated. Tasks 1-9.5 were all implemented but documentation hadn't been updated:
-- Three-column layout, SwiftData persistence, repo/workspace flows all working
-- Right pane with file tree and git status complete
-- Settings with configurable workspace location done
-- 41 unit tests pass (GitService, WorkspaceService, Models)
-
-**What worked**: Code review revealed actual state vs documented state.
-
-**Remaining MVP work**:
-- Task 11: Build & Distribution (requires Apple Developer account)
-- Stretch items: file watching auto-refresh and multi-window workspace sessions
-
-### 2026-02-08 — Build health validation (post-monorepo extraction)
-
-**Context**: Validated standalone repo after extracting from services monorepo.
-
-**Results**: Clean bill of health — debug build, release build, 52 tests, lint all pass. No monorepo remnants.
-
-**Fixes applied**:
-- Updated stale test counts (36 → 52) and task statuses (async migration, error handling already done)
-- Fixed ARCHITECTURE.md doc path references
-- Removed unused `NSColor(hex:)` extension
-- Added release build to CI, `mask run` command
-- Removed TASKS.md (GitHub issues is source of truth) and progress.md (stale, replaced by roadmap learnings)
-
-**What worked**: Parallel exploration agents for fast codebase audit. The extraction was clean — zero issues blocking development.
+Local `swift test` could not be completed in this session because the checked-in `Frameworks/GhosttyKit.xcframework` artifact is currently incomplete in this worktree, causing SwiftPM to fail before tests run.

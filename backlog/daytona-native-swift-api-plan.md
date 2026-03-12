@@ -1,4 +1,6 @@
 ---
+status: pending
+category: plan
 topic: daytona
 relates_to: after:vz-tahoe-execution-brief-plan
 priority: 2

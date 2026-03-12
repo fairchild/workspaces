@@ -1,11 +1,6 @@
 ---
 status: pending
 category: plan
-pr: null
-branch: null
-score: null
-retro_summary: null
-completed: null
 ---
 
 # Pane-Tree Tiling for Main Terminal Panel
@@ -35,7 +30,7 @@ The product direction is now explicit: the main terminal panel should behave lik
 - Render path is still "single pane or one split pair", not recursive pane composition.
 - Ghostty action bridge is in place and should remain:
   - `Sources/WorkspaceManager/Terminal/GhosttyAppManager.swift`
-- `resize_split` and `equalize_splits` are currently deferred, confirming current model mismatch:
+- `resize_split` and `equalize_splits` now work within the current two-pane model, which confirms progress but does not remove the deeper model mismatch:
   - `Sources/WorkspaceManager/Terminal/GhosttyAppManager.swift`
 - Surface retention policy is currently unbounded and keyed by session UUID:
   - `Sources/WorkspaceManager/Views/Components/TerminalView.swift`
@@ -179,7 +174,7 @@ Location: `Sources/WorkspaceManager/Views/Components/TerminalView.swift`
 
 **Acceptance criteria:**
 - [ ] App no longer depends on `splitSessionsByPrimaryID` / `splitLayoutsByPrimaryID`.
-- [ ] `resize_split` and `equalize_splits` are implemented (not deferred).
+- [ ] Recursive pane behavior goes beyond the current two-pane `resize_split` and `equalize_splits` support.
 - [ ] Legacy two-pane behavior is representable as a pane-tree subset.
 
 ### Phase 3: Recursive Pane Rendering

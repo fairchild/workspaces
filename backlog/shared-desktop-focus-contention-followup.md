@@ -1,11 +1,8 @@
 ---
 status: pending
 category: followup
-pr: null
-branch: null
-score: null
-retro_summary: null
-completed: null
+issue: 82
+milestone: 1
 ---
 
 # Shared Desktop Focus Contention Hardening
@@ -38,4 +35,3 @@ Reduce focus and input contention for local automation while keeping day-to-day 
 - [ ] Visual verification scripts produce stable artifacts without interrupting active typing in other apps.
 - [ ] Shared-session protocol is documented in agent/dev docs.
 - [ ] Follow-on plan exists for separate-user or VM execution path.
-
