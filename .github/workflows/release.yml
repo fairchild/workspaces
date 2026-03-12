@@ -181,6 +181,9 @@ jobs:
       - name: Build signed app
         run: ./scripts/build-release.sh
 
+      - name: Verify signed app bundle
+        run: ./scripts/verify-release-bundle.sh build/WorkspaceManager.app
+
       - name: Notarize and package DMG
         run: bash ./scripts/notarize.sh
 
@@ -213,16 +216,30 @@ jobs:
           echo "dmg_path=$DMG_PATH" >> "$GITHUB_OUTPUT"
 
       - name: Publish GitHub release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.meta.outputs.tag }}
-          name: Workspaces ${{ steps.meta.outputs.tag }}
-          target_commitish: ${{ github.sha }}
-          files: |
-            ${{ steps.meta.outputs.dmg_path }}
-            build/WorkspaceManager-latest.dmg
-          generate_release_notes: true
-          prerelease: false
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          command -v gh >/dev/null 2>&1 || {
+            echo "::error::gh CLI is required to publish releases"
+            exit 1
+          }
+
+          TAG="${{ steps.meta.outputs.tag }}"
+          TITLE="Workspaces ${TAG}"
+          DMG_PATH="${{ steps.meta.outputs.dmg_path }}"
+          LATEST_DMG_PATH="build/WorkspaceManager-latest.dmg"
+
+          if gh release view "$TAG" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$DMG_PATH" "$LATEST_DMG_PATH" --clobber --repo "${GITHUB_REPOSITORY}"
+            gh release edit "$TAG" --title "$TITLE" --repo "${GITHUB_REPOSITORY}"
+          else
+            gh release create "$TAG" "$DMG_PATH" "$LATEST_DMG_PATH" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --title "$TITLE" \
+              --target "${GITHUB_SHA}" \
+              --generate-notes
+          fi
 
       - name: Cleanup keychain
         if: always()
