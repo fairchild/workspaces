@@ -229,16 +229,54 @@ jobs:
           TITLE="Workspaces ${TAG}"
           DMG_PATH="${{ steps.meta.outputs.dmg_path }}"
           LATEST_DMG_PATH="build/WorkspaceManager-latest.dmg"
+          GENERATED_NOTES_PATH="$RUNNER_TEMP/release-notes.md"
+          IS_PRERELEASE=false
+
+          case "$TAG" in
+            v[0-9]*.[0-9]*.[0-9]*-[A-Za-z0-9]*|v[0-9]*.[0-9]*.[0-9]*-[A-Za-z0-9]*.*|workspaces-v*)
+              IS_PRERELEASE=true
+              ;;
+          esac
 
           if gh release view "$TAG" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh api \
+              --method POST \
+              "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
+              -f tag_name="$TAG" \
+              -f target_commitish="${GITHUB_SHA}" \
+              --jq '.body' >"$GENERATED_NOTES_PATH"
+
             gh release upload "$TAG" "$DMG_PATH" "$LATEST_DMG_PATH" --clobber --repo "${GITHUB_REPOSITORY}"
-            gh release edit "$TAG" --title "$TITLE" --repo "${GITHUB_REPOSITORY}"
+            if [[ "$IS_PRERELEASE" == true ]]; then
+              gh release edit "$TAG" \
+                --title "$TITLE" \
+                --notes-file "$GENERATED_NOTES_PATH" \
+                --prerelease \
+                --repo "${GITHUB_REPOSITORY}"
+            else
+              gh release edit "$TAG" \
+                --title "$TITLE" \
+                --notes-file "$GENERATED_NOTES_PATH" \
+                --latest \
+                --repo "${GITHUB_REPOSITORY}"
+            fi
           else
-            gh release create "$TAG" "$DMG_PATH" "$LATEST_DMG_PATH" \
-              --repo "${GITHUB_REPOSITORY}" \
-              --title "$TITLE" \
-              --target "${GITHUB_SHA}" \
-              --generate-notes
+            if [[ "$IS_PRERELEASE" == true ]]; then
+              gh release create "$TAG" "$DMG_PATH" "$LATEST_DMG_PATH" \
+                --repo "${GITHUB_REPOSITORY}" \
+                --title "$TITLE" \
+                --target "${GITHUB_SHA}" \
+                --generate-notes \
+                --prerelease \
+                --latest=false
+            else
+              gh release create "$TAG" "$DMG_PATH" "$LATEST_DMG_PATH" \
+                --repo "${GITHUB_REPOSITORY}" \
+                --title "$TITLE" \
+                --target "${GITHUB_SHA}" \
+                --generate-notes \
+                --latest
+            fi
           fi
 
       - name: Cleanup keychain

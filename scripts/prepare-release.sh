@@ -114,6 +114,18 @@ strip_prefix() {
     printf '%s\n' "$subject" | sed -E 's/^(feat|fix|docs|chore|ci|build|refactor|style|test|perf)(\([^)]+\))?!?:[[:space:]]*//'
 }
 
+is_added_subject() {
+    local subject="$1"
+    local pattern='^feat(\([^)]+\))?!?:[[:space:]]*'
+    [[ "$subject" =~ $pattern ]]
+}
+
+is_fixed_subject() {
+    local subject="$1"
+    local pattern='^fix(\([^)]+\))?!?:[[:space:]]*'
+    [[ "$subject" =~ $pattern ]]
+}
+
 render_section_file() {
     local title="$1"
     local entries_file="$2"
@@ -152,20 +164,16 @@ build_changelog_entry() {
         cleaned="$(strip_prefix "$subject")"
         [[ -n "$cleaned" ]] || continue
 
-        case "$subject" in
-            feat:*|feat\(*)
-                printf '%s\n' "$cleaned" >>"$added_file"
-                added_count=$((added_count + 1))
-                ;;
-            fix:*|fix\(*)
-                printf '%s\n' "$cleaned" >>"$fixed_file"
-                fixed_count=$((fixed_count + 1))
-                ;;
-            *)
-                printf '%s\n' "$cleaned" >>"$other_file"
-                other_count=$((other_count + 1))
-                ;;
-        esac
+        if is_added_subject "$subject"; then
+            printf '%s\n' "$cleaned" >>"$added_file"
+            added_count=$((added_count + 1))
+        elif is_fixed_subject "$subject"; then
+            printf '%s\n' "$cleaned" >>"$fixed_file"
+            fixed_count=$((fixed_count + 1))
+        else
+            printf '%s\n' "$cleaned" >>"$other_file"
+            other_count=$((other_count + 1))
+        fi
     done < <(git log --reverse --format='%s' "$range")
 
     if (( added_count == 0 && fixed_count == 0 && other_count == 0 )); then
@@ -190,7 +198,11 @@ prepend_changelog_entry() {
     {
         printf '# Changelog\n\n'
         cat "$TMP_DIR/changelog-entry.txt"
-        tail -n +3 "$CHANGELOG_PATH"
+        awk '
+            NR == 1 { next }
+            NR == 2 && $0 == "" { next }
+            { print }
+        ' "$CHANGELOG_PATH"
     } >"$TMP_DIR/CHANGELOG.md"
 
     mv "$TMP_DIR/CHANGELOG.md" "$CHANGELOG_PATH"
@@ -245,7 +257,9 @@ LATEST_TAG="$(git tag --list 'v*' --sort=-version:refname | head -n 1)"
 if [[ -n "$LATEST_TAG" ]]; then
     COMMIT_RANGE="$LATEST_TAG..HEAD"
 else
-    COMMIT_RANGE="HEAD"
+    ROOT_COMMIT="$(git rev-list --max-parents=0 HEAD | tail -n 1)"
+    [[ -n "$ROOT_COMMIT" ]] || fail "Could not determine the root commit for the initial release"
+    COMMIT_RANGE="$ROOT_COMMIT..HEAD"
 fi
 
 build_changelog_entry "$COMMIT_RANGE"

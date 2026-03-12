@@ -258,10 +258,10 @@ The recommended method for production releases.
      - If `v<version>` already exists, release assets are published to that tag
      - Otherwise tag format is `workspaces-v<version>-main.<run_number>`
    - Tag-push run: supports both `v<version>` and `workspaces-v*`
-   - Rerunning the workflow for an existing tag replaces assets in place; no GitHub release cleanup is required.
+   - Rerunning the workflow for an existing tag replaces assets in place and refreshes generated release notes; no GitHub release cleanup is required.
    - Assets:
-     - `WorkspaceManager-<version>.dmg`
-     - `WorkspaceManager-latest.dmg`
+      - `WorkspaceManager-<version>.dmg`
+      - `WorkspaceManager-latest.dmg`
 
 ### Method 1B: Tag-Driven Release (Main Commit Only)
 
