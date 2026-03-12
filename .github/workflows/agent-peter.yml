@@ -16,7 +16,7 @@ permissions:
   issues: write
 
 concurrency:
-  group: agent-planner
+  group: agent-peter
   cancel-in-progress: false
 
 jobs:
