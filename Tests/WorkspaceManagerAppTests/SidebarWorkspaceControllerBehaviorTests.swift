@@ -86,6 +86,200 @@ struct SidebarWorkspaceControllerBehaviorTests {
         #expect(workspace.remoteId == "daytona-123")
     }
 
+    @Test("Generated local names auto-adjust when a tracked workspace already exists")
+    @MainActor
+    func generatedLocalNamesAutoAdjustForTrackedDuplicates() async throws {
+        let fixture = try makeModelContext()
+        let context = fixture.context
+        let repo = Repo(name: "api", localPath: URL(fileURLWithPath: "/tmp/api"))
+        let existingWorkspace = Workspace(
+            name: "solar-otter",
+            path: URL(fileURLWithPath: "/tmp/workspaces/api/solar-otter"),
+            sourceRepo: repo
+        )
+        context.insert(repo)
+        context.insert(existingWorkspace)
+        try context.save()
+
+        let workspaceService = MockWorkspaceService()
+        let controller = makeController(
+            context: context,
+            workspaceService: workspaceService,
+            providers: [LocalWorkspaceProvider()]
+        )
+
+        let workspace = try await controller.createWorkspace(
+            from: repo,
+            name: "solar-otter",
+            nameSource: .generatedDefault,
+            providerID: LocalWorkspaceProvider.identifier
+        )
+
+        #expect(workspace.name == "solar-otter-2")
+        #expect(workspaceService.createWorkspaceCalls.map(\.name) == ["solar-otter-2"])
+    }
+
+    @Test("Generated local names auto-adjust when only the directory exists on disk")
+    @MainActor
+    func generatedLocalNamesAutoAdjustForDirectoryDuplicates() async throws {
+        let fixture = try makeModelContext()
+        let context = fixture.context
+        let tempRoot = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: tempRoot) }
+
+        let repo = Repo(name: "api", localPath: URL(fileURLWithPath: "/tmp/api"))
+        context.insert(repo)
+        try context.save()
+
+        let occupiedDirectory =
+            tempRoot
+            .appendingPathComponent("api", isDirectory: true)
+            .appendingPathComponent("solar-otter", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: occupiedDirectory,
+            withIntermediateDirectories: true
+        )
+
+        let workspaceService = MockWorkspaceService()
+        workspaceService.workspacesRootValue = tempRoot
+        let controller = makeController(
+            context: context,
+            workspaceService: workspaceService,
+            providers: [LocalWorkspaceProvider()]
+        )
+
+        let workspace = try await controller.createWorkspace(
+            from: repo,
+            name: "solar-otter",
+            nameSource: .generatedDefault,
+            providerID: LocalWorkspaceProvider.identifier
+        )
+
+        #expect(workspace.name == "solar-otter-2")
+        #expect(workspaceService.createWorkspaceCalls.map(\.name) == ["solar-otter-2"])
+    }
+
+    @Test("Manual duplicate names fail before local creation starts")
+    @MainActor
+    func manualDuplicateNamesFailBeforeLocalCreation() async throws {
+        let fixture = try makeModelContext()
+        let context = fixture.context
+        let repo = Repo(name: "api", localPath: URL(fileURLWithPath: "/tmp/api"))
+        let existingWorkspace = Workspace(
+            name: "My Feature",
+            path: URL(fileURLWithPath: "/tmp/workspaces/api/my-feature"),
+            sourceRepo: repo
+        )
+        context.insert(repo)
+        context.insert(existingWorkspace)
+        try context.save()
+
+        let workspaceService = MockWorkspaceService()
+        let controller = makeController(
+            context: context,
+            workspaceService: workspaceService,
+            providers: [LocalWorkspaceProvider()]
+        )
+
+        await #expect(throws: WorkspaceError.self) {
+            _ = try await controller.createWorkspace(
+                from: repo,
+                name: "my-feature",
+                nameSource: .manual,
+                providerID: LocalWorkspaceProvider.identifier
+            )
+        }
+
+        #expect(workspaceService.createWorkspaceCalls.isEmpty)
+    }
+
+    @Test("Generated provider names are resolved before provider creation")
+    @MainActor
+    func generatedProviderNamesResolveBeforeProviderCreation() async throws {
+        let fixture = try makeModelContext()
+        let context = fixture.context
+        let repo = Repo(
+            name: "api",
+            localPath: URL(fileURLWithPath: "/tmp/api"),
+            remoteURL: "git@github.com:acme/api.git"
+        )
+        let existingWorkspace = Workspace(
+            name: "solar-otter",
+            path: URL(fileURLWithPath: "/tmp/workspaces/api/solar-otter"),
+            sourceRepo: repo
+        )
+        context.insert(repo)
+        context.insert(existingWorkspace)
+        try context.save()
+
+        let provider = MockWorkspaceProvider(
+            descriptor: WorkspaceProviderDescriptor(
+                id: DaytonaWorkspaceProvider.identifier,
+                displayName: "Daytona",
+                description: "Remote Linux workspaces.",
+                supportsArchive: true,
+                requiresRemoteRepository: true
+            )
+        )
+        let controller = makeController(
+            context: context,
+            workspaceService: MockWorkspaceService(),
+            providers: [LocalWorkspaceProvider(), provider]
+        )
+
+        let workspace = try await controller.createWorkspace(
+            from: repo,
+            name: "solar-otter",
+            nameSource: .generatedDefault,
+            providerID: DaytonaWorkspaceProvider.identifier
+        )
+
+        let createRequests = await provider.createRequestsSnapshot()
+        #expect(createRequests.map(\.workspaceName) == ["solar-otter-2"])
+        #expect(workspace.name == "solar-otter-2")
+    }
+
+    @Test("Concurrent generated local creates reserve distinct names")
+    @MainActor
+    func concurrentGeneratedLocalCreatesReserveDistinctNames() async throws {
+        let fixture = try makeModelContext()
+        let context = fixture.context
+        let repo = Repo(name: "api", localPath: URL(fileURLWithPath: "/tmp/api"))
+        context.insert(repo)
+        try context.save()
+
+        let workspaceService = MockWorkspaceService()
+        let gate = NameReservationGate(targetCount: 2)
+        workspaceService.createWorkspaceDelay = {
+            await gate.wait()
+        }
+        let controller = makeController(
+            context: context,
+            workspaceService: workspaceService,
+            providers: [LocalWorkspaceProvider()]
+        )
+
+        async let firstWorkspace = controller.createWorkspace(
+            from: repo,
+            name: "solar-otter",
+            nameSource: .generatedDefault,
+            providerID: LocalWorkspaceProvider.identifier
+        )
+        async let secondWorkspace = controller.createWorkspace(
+            from: repo,
+            name: "solar-otter",
+            nameSource: .generatedDefault,
+            providerID: LocalWorkspaceProvider.identifier
+        )
+
+        let first = try await firstWorkspace
+        let second = try await secondWorkspace
+        let names = [first.name, second.name].sorted()
+
+        #expect(names == ["solar-otter", "solar-otter-2"])
+        #expect(workspaceService.createWorkspaceCalls.map(\.name).sorted() == names)
+    }
+
     @Test("Deleting host-backed provider workspace removes local files after provider cleanup")
     @MainActor
     func deletingHostBackedProviderWorkspaceRemovesLocalFilesAfterProviderCleanup() async throws {
@@ -358,6 +552,14 @@ struct SidebarWorkspaceControllerBehaviorTests {
             workspaceProviderRegistry: WorkspaceProviderRegistry(providers: providers)
         )
     }
+
+    @MainActor
+    private func makeTempDir() throws -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SidebarWorkspaceControllerBehaviorTests-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
 }
 
 private struct ModelContextFixture {
@@ -372,17 +574,15 @@ private final class MockWorkspaceService: WorkspaceServiceProtocol, @unchecked S
         let name: String
     }
 
+    var workspacesRootValue = URL(fileURLWithPath: "/tmp/workspaces")
     var workspacesRoot: URL {
-        get async { URL(fileURLWithPath: "/tmp/workspaces") }
+        get async { workspacesRootValue }
     }
 
-    var createWorkspaceResult = NewWorkspaceInfo(
-        name: "feature-a",
-        path: URL(fileURLWithPath: "/tmp/workspaces/feature-a"),
-        gitBranch: "workspace/feature-a"
-    )
+    var createWorkspaceResult: NewWorkspaceInfo?
     var createWorkspaceCalls: [CreateWorkspaceCall] = []
     var deleteWorkspaceCalls: [(workspaceURL: URL, deleteFiles: Bool)] = []
+    var createWorkspaceDelay: @Sendable () async -> Void = {}
 
     func createWorkspace(
         repoName: String,
@@ -393,7 +593,20 @@ private final class MockWorkspaceService: WorkspaceServiceProtocol, @unchecked S
         createWorkspaceCalls.append(
             CreateWorkspaceCall(repoName: repoName, repoLocalURL: repoLocalURL, name: name)
         )
-        return createWorkspaceResult
+        await createWorkspaceDelay()
+        if let createWorkspaceResult {
+            return createWorkspaceResult
+        }
+
+        let sanitizedName = WorkspaceService.sanitizeWorkspaceNameComponent(name)
+        return NewWorkspaceInfo(
+            name: name,
+            path:
+                workspacesRootValue
+                .appendingPathComponent(repoName, isDirectory: true)
+                .appendingPathComponent(sanitizedName, isDirectory: true),
+            gitBranch: "workspace/\(sanitizedName)"
+        )
     }
 
     func archiveWorkspace(at workspaceURL: URL) async throws {}
@@ -414,11 +627,37 @@ private final class MockWorkspaceService: WorkspaceServiceProtocol, @unchecked S
     func sanitizeFilename(_ name: String) async -> String { name }
 }
 
+private actor NameReservationGate {
+    private let targetCount: Int
+    private var arrivals = 0
+    private var continuations: [CheckedContinuation<Void, Never>] = []
+
+    init(targetCount: Int) {
+        self.targetCount = targetCount
+    }
+
+    func wait() async {
+        arrivals += 1
+        guard arrivals < targetCount else {
+            let pendingContinuations = continuations
+            continuations.removeAll()
+            for continuation in pendingContinuations {
+                continuation.resume()
+            }
+            return
+        }
+
+        await withCheckedContinuation { continuation in
+            continuations.append(continuation)
+        }
+    }
+}
+
 private actor MockWorkspaceProvider: WorkspaceProviderProtocol {
     nonisolated let descriptor: WorkspaceProviderDescriptor
 
     private let requiresRemoteIdentifier: Bool
-    private var createResult: WorkspaceProviderCreationResult
+    private var createResult: WorkspaceProviderCreationResult?
     private var createError: (any Error)?
     private var deleteError: (any Error)?
     private var startError: (any Error)?
@@ -436,13 +675,6 @@ private actor MockWorkspaceProvider: WorkspaceProviderProtocol {
     ) {
         self.descriptor = descriptor
         self.requiresRemoteIdentifier = requiresRemoteIdentifier
-        self.createResult = WorkspaceProviderCreationResult(
-            name: "feature-a",
-            path: URL(fileURLWithPath: "/tmp/workspaces/feature-a"),
-            status: .active,
-            backendIdentifier: descriptor.id,
-            remoteId: "\(descriptor.id)-123"
-        )
     }
 
     func availability() async -> WorkspaceProviderAvailability {
@@ -463,7 +695,18 @@ private actor MockWorkspaceProvider: WorkspaceProviderProtocol {
             throw createError
         }
         createRequests.append(request)
-        return createResult
+        if let createResult {
+            return createResult
+        }
+
+        let sanitizedName = WorkspaceService.sanitizeWorkspaceNameComponent(request.workspaceName)
+        return WorkspaceProviderCreationResult(
+            name: request.workspaceName,
+            path: URL(fileURLWithPath: "/tmp/workspaces/\(sanitizedName)"),
+            status: .active,
+            backendIdentifier: descriptor.id,
+            remoteId: "\(descriptor.id)-123"
+        )
     }
 
     func terminalLaunchSpec(for workspace: WorkspaceProviderTarget) async throws -> TerminalLaunchSpec {
@@ -511,6 +754,10 @@ private actor MockWorkspaceProvider: WorkspaceProviderProtocol {
 
     func setDeleteError(_ error: (any Error)?) {
         deleteError = error
+    }
+
+    func createRequestsSnapshot() -> [WorkspaceProviderCreationRequest] {
+        createRequests
     }
 
     func createCallCount() -> Int {

@@ -599,11 +599,12 @@ struct ContentView: View {
                     repo: repo,
                     environmentOptions: environmentOptions(for: repo),
                     isCreateDisabled: false
-                ) { name, providerID, guestOS in
+                ) { name, nameSource, providerID, guestOS in
                     Task { @MainActor in
                         await createWorkspaceFromLanding(
                             repo: repo,
                             name: name,
+                            nameSource: nameSource,
                             providerID: providerID,
                             guestOS: guestOS
                         )
@@ -1145,6 +1146,7 @@ struct ContentView: View {
     private func createWorkspaceFromLanding(
         repo: Repo,
         name: String,
+        nameSource: WorkspaceNameSource,
         providerID: String,
         guestOS: WorkspaceGuestOS?
     ) async {
@@ -1160,6 +1162,7 @@ struct ContentView: View {
                         try await createWorkspaceFromLanding(
                             repo: repo,
                             name: name,
+                            nameSource: nameSource,
                             providerID: providerID,
                             guestOS: effectiveGuestOS,
                             skipSetup: true
@@ -1176,6 +1179,7 @@ struct ContentView: View {
             try await createWorkspaceFromLanding(
                 repo: repo,
                 name: name,
+                nameSource: nameSource,
                 providerID: providerID,
                 guestOS: effectiveGuestOS,
                 skipSetup: true
@@ -1189,6 +1193,7 @@ struct ContentView: View {
     private func createWorkspaceFromLanding(
         repo: Repo,
         name: String,
+        nameSource: WorkspaceNameSource,
         providerID: String,
         guestOS: WorkspaceGuestOS?,
         skipSetup: Bool
@@ -1201,6 +1206,7 @@ struct ContentView: View {
         let workspace = try await controller.createWorkspace(
             from: repo,
             name: name,
+            nameSource: nameSource,
             providerID: providerID,
             guestOS: guestOS,
             progress: { _ in },

@@ -9,6 +9,8 @@ import SwiftData
 
 @MainActor
 struct SidebarWorkspaceController {
+    private static let nameReservationStore = WorkspaceNameReservationStore.shared
+
     enum ControllerError: LocalizedError {
         case message(String)
 
@@ -64,6 +66,7 @@ struct SidebarWorkspaceController {
     func createWorkspace(
         from repo: Repo,
         name: String,
+        nameSource: WorkspaceNameSource = .manual,
         providerID: String,
         guestOS: WorkspaceGuestOS? = nil,
         progress: WorkspaceProviderProgressHandler? = nil,
@@ -73,12 +76,19 @@ struct SidebarWorkspaceController {
             throw ControllerError.message("Workspace provider '\(providerID)' is not registered.")
         }
 
+        let reservation = try await reserveWorkspaceName(
+            for: repo,
+            requestedName: name,
+            source: nameSource,
+            includeOnDiskDirectories: provider.descriptor.usesHostWorkspaceFiles
+        )
+
         var persistedWorkspace: Workspace?
         let request = WorkspaceProviderCreationRequest(
             repoName: repo.name,
             repoLocalURL: repo.localURL,
             repoRemoteURL: repo.remoteURL,
-            workspaceName: name,
+            workspaceName: reservation.resolvedName,
             guestOS: guestOS
         )
 
@@ -110,6 +120,7 @@ struct SidebarWorkspaceController {
                 throw ControllerError.message("Failed to create workspace record.")
             }
 
+            await Self.nameReservationStore.release(reservation)
             return persistedWorkspace
         } catch {
             if let persistedWorkspace {
@@ -120,6 +131,7 @@ struct SidebarWorkspaceController {
                     modelContext.rollback()
                 }
             }
+            await Self.nameReservationStore.release(reservation)
             throw error
         }
     }
@@ -191,6 +203,60 @@ struct SidebarWorkspaceController {
         }
 
         try saveModelContext(action: "save workspace")
+    }
+
+    private func reserveWorkspaceName(
+        for repo: Repo,
+        requestedName: String,
+        source: WorkspaceNameSource,
+        includeOnDiskDirectories: Bool
+    ) async throws -> WorkspaceNameReservation {
+        let occupiedNames = await occupiedSanitizedWorkspaceNames(
+            for: repo,
+            includeOnDiskDirectories: includeOnDiskDirectories
+        )
+
+        return try await Self.nameReservationStore.reserveName(
+            repoID: repo.id,
+            requestedName: requestedName,
+            source: source,
+            occupiedSanitizedNames: occupiedNames
+        )
+    }
+
+    private func occupiedSanitizedWorkspaceNames(
+        for repo: Repo,
+        includeOnDiskDirectories: Bool
+    ) async -> Set<String> {
+        var occupiedNames = WorkspaceNameGenerator.sanitizedNameSet(
+            from: repo.workspaces.map(\.name)
+        )
+
+        guard includeOnDiskDirectories else {
+            return occupiedNames
+        }
+
+        let root = await workspaceService.workspacesRoot
+        let repoDirectory = root.appendingPathComponent(repo.name, isDirectory: true)
+
+        guard FileManager.default.fileExists(atPath: repoDirectory.path) else {
+            return occupiedNames
+        }
+
+        let directoryNames =
+            (try? FileManager.default.contentsOfDirectory(
+                at: repoDirectory,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles]
+            ))?
+            .compactMap { url -> String? in
+                let values = try? url.resourceValues(forKeys: [.isDirectoryKey])
+                guard values?.isDirectory == true else { return nil }
+                return url.lastPathComponent
+            } ?? []
+
+        occupiedNames.formUnion(WorkspaceNameGenerator.sanitizedNameSet(from: directoryNames))
+        return occupiedNames
     }
 
     private func provider(for workspace: Workspace) throws -> any WorkspaceProviderProtocol {

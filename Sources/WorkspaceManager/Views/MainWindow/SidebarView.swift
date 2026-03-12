@@ -140,11 +140,12 @@ struct SidebarView: View {
                     repo: context.repo,
                     environmentOptions: environmentOptions(for: context.repo),
                     isCreateDisabled: isCreatingWorkspace(for: context.repo.id)
-                ) { name, providerID, guestOS in
+                ) { name, nameSource, providerID, guestOS in
                     Task { @MainActor in
                         await createWorkspace(
                             from: context.repo,
                             name: name,
+                            nameSource: nameSource,
                             providerID: providerID,
                             guestOS: guestOS
                         )
@@ -663,6 +664,7 @@ struct SidebarView: View {
     private func createWorkspace(
         from repo: Repo,
         name: String,
+        nameSource: WorkspaceNameSource,
         providerID: String,
         guestOS: WorkspaceGuestOS? = nil
     ) async {
@@ -678,6 +680,7 @@ struct SidebarView: View {
                     await createWorkspaceAfterSetup(
                         from: repo,
                         name: name,
+                        nameSource: nameSource,
                         providerID: providerID,
                         guestOS: effectiveGuestOS
                     )
@@ -695,6 +698,7 @@ struct SidebarView: View {
         await createWorkspaceAfterSetup(
             from: repo,
             name: name,
+            nameSource: nameSource,
             providerID: providerID,
             guestOS: effectiveGuestOS
         )
@@ -704,6 +708,7 @@ struct SidebarView: View {
     private func createWorkspaceAfterSetup(
         from repo: Repo,
         name: String,
+        nameSource: WorkspaceNameSource,
         providerID: String,
         guestOS: WorkspaceGuestOS? = nil
     ) async {
@@ -721,6 +726,7 @@ struct SidebarView: View {
             let workspace = try await workspaceController.createWorkspace(
                 from: repo,
                 name: name,
+                nameSource: nameSource,
                 providerID: providerID,
                 guestOS: guestOS,
                 progress: { phase in
@@ -993,6 +999,7 @@ struct SidebarView: View {
             await createWorkspace(
                 from: matchedRepo,
                 name: hostLumeSmokeAutomation.targetWorkspaceName ?? "lume-smoke",
+                nameSource: .manual,
                 providerID: LumeWorkspaceProvider.identifier,
                 guestOS: .macOS
             )

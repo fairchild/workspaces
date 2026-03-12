@@ -36,30 +36,35 @@ struct NewWorkspaceSheet: View {
     let repo: Repo
     let environmentOptions: [WorkspaceEnvironmentSheetOption]
     let isCreateDisabled: Bool
-    let onCreate: (String, String, WorkspaceGuestOS?) -> Void
+    let onCreate: (String, WorkspaceNameSource, String, WorkspaceGuestOS?) -> Void
 
     @Environment(\.dismiss) private var dismiss
     @State private var name = ""
     @State private var selectedEnvironmentID = WorkspaceEnvironmentSheetOption.Kind.local.rawValue
+    @State private var generatedName = ""
     @State private var isCreating = false
+    @State private var nameSource: WorkspaceNameSource = .generatedDefault
 
-    var isValid: Bool {
-        !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    private var trimmedName: String {
+        name.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private var selectedOption: WorkspaceEnvironmentSheetOption? {
         environmentOptions.first(where: { $0.id == selectedEnvironmentID })
     }
 
-    private var suggestedName: String {
-        let existingNames = Set(repo.workspaces.map { $0.name.lowercased() })
-        var version = 1
-        var candidate = "\(repo.name)-v\(version)"
-        while existingNames.contains(candidate.lowercased()) {
-            version += 1
-            candidate = "\(repo.name)-v\(version)"
+    private var sanitizedWorkspaceNameComponent: String {
+        WorkspaceService.sanitizeWorkspaceNameComponent(trimmedName)
+    }
+
+    private var requestValidationMessage: String? {
+        guard !trimmedName.isEmpty else {
+            return "Enter a workspace name."
         }
-        return candidate
+        guard WorkspaceService.isValidWorkspaceNameComponent(sanitizedWorkspaceNameComponent) else {
+            return "Enter a valid workspace name."
+        }
+        return nil
     }
 
     private var descriptionText: String {
@@ -74,7 +79,7 @@ struct NewWorkspaceSheet: View {
     }
 
     private var canCreate: Bool {
-        isValid
+        requestValidationMessage == nil
             && !isCreating
             && !isCreateDisabled
             && (selectedOption?.isAvailable ?? false)
@@ -155,6 +160,12 @@ struct NewWorkspaceSheet: View {
                         .font(.caption)
                         .foregroundStyle(.orange)
                 }
+
+                if let requestValidationMessage {
+                    Text(requestValidationMessage)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
             }
             .formStyle(.grouped)
             .scrollDisabled(true)
@@ -173,7 +184,8 @@ struct NewWorkspaceSheet: View {
                     isCreating = true
                     guard let selectedOption else { return }
                     onCreate(
-                        name.trimmingCharacters(in: .whitespacesAndNewlines),
+                        trimmedName,
+                        nameSource,
                         selectedOption.providerID,
                         selectedOption.guestOS
                     )
@@ -187,17 +199,40 @@ struct NewWorkspaceSheet: View {
         .frame(width: 360)
         .fixedSize(horizontal: false, vertical: true)
         .onAppear {
-            if name.isEmpty {
-                name = suggestedName
-            }
+            configureInitialNameIfNeeded()
             if let preferredInitialEnvironmentID {
                 selectedEnvironmentID = preferredInitialEnvironmentID
             }
+        }
+        .onChange(of: name) { _, newValue in
+            updateNameSource(for: newValue)
         }
     }
 
     private var iconName: String {
         selectedOption?.iconName ?? "plus.rectangle.on.folder.fill"
+    }
+
+    private func configureInitialNameIfNeeded() {
+        guard generatedName.isEmpty else { return }
+
+        generatedName = WorkspaceNameGenerator.generateDefaultName(
+            occupiedSanitizedNames: WorkspaceNameGenerator.sanitizedNameSet(
+                from: repo.workspaces.map(\.name)
+            )
+        )
+
+        if name.isEmpty {
+            name = generatedName
+        }
+
+        updateNameSource(for: name)
+    }
+
+    private func updateNameSource(for value: String) {
+        nameSource = value.trimmingCharacters(in: .whitespacesAndNewlines) == generatedName
+            ? .generatedDefault
+            : .manual
     }
 }
 
