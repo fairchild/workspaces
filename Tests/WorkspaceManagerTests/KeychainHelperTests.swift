@@ -1,7 +1,34 @@
 import Foundation
+import Security
 import Testing
 
 @testable import WorkspaceManagerCore
+
+private enum KeychainTestSupport {
+    static let disableMutatingTests = probeLegacyKeychainInteractionLockout()
+
+    private static func probeLegacyKeychainInteractionLockout() -> Bool {
+        let probeKey = "keychain-test-probe-\(UUID().uuidString)"
+        let originalUseDataProtection = KeychainHelper.useDataProtection
+
+        KeychainHelper.useDataProtection = false
+        KeychainHelper.resetDataProtectionSupportCache()
+        defer {
+            try? KeychainHelper.delete(key: probeKey)
+            KeychainHelper.useDataProtection = originalUseDataProtection
+            KeychainHelper.resetDataProtectionSupportCache()
+        }
+
+        do {
+            try KeychainHelper.saveString(key: probeKey, value: "probe")
+            return false
+        } catch KeychainError.saveFailed(let status) where status == errSecInteractionNotAllowed {
+            return true
+        } catch {
+            return false
+        }
+    }
+}
 
 @Suite("KeychainHelper", .serialized)
 struct KeychainHelperTests {
@@ -19,7 +46,13 @@ struct KeychainHelperTests {
         "\(Self.testPrefix)-\(name)"
     }
 
-    @Test("save and load roundtrip")
+    @Test(
+        "save and load roundtrip",
+        .disabled(
+            if: KeychainTestSupport.disableMutatingTests,
+            "Requires writable user-keychain access; headless runners may return errSecInteractionNotAllowed."
+        )
+    )
     func saveLoadRoundtrip() throws {
         let key = testKey("roundtrip")
         defer { try? KeychainHelper.delete(key: key) }
@@ -36,7 +69,13 @@ struct KeychainHelperTests {
         #expect(result == nil)
     }
 
-    @Test("save overwrites existing value")
+    @Test(
+        "save overwrites existing value",
+        .disabled(
+            if: KeychainTestSupport.disableMutatingTests,
+            "Requires writable user-keychain access; headless runners may return errSecInteractionNotAllowed."
+        )
+    )
     func saveOverwrite() throws {
         let key = testKey("overwrite")
         defer { try? KeychainHelper.delete(key: key) }
@@ -47,7 +86,13 @@ struct KeychainHelperTests {
         #expect(loaded == "second")
     }
 
-    @Test("delete removes item")
+    @Test(
+        "delete removes item",
+        .disabled(
+            if: KeychainTestSupport.disableMutatingTests,
+            "Requires writable user-keychain access; headless runners may return errSecInteractionNotAllowed."
+        )
+    )
     func deleteRemoves() throws {
         let key = testKey("delete")
 
@@ -63,7 +108,13 @@ struct KeychainHelperTests {
         try KeychainHelper.delete(key: key)
     }
 
-    @Test("save and load binary data")
+    @Test(
+        "save and load binary data",
+        .disabled(
+            if: KeychainTestSupport.disableMutatingTests,
+            "Requires writable user-keychain access; headless runners may return errSecInteractionNotAllowed."
+        )
+    )
     func binaryRoundtrip() throws {
         let key = testKey("binary")
         defer { try? KeychainHelper.delete(key: key) }
@@ -74,7 +125,13 @@ struct KeychainHelperTests {
         #expect(loaded == data)
     }
 
-    @Test("falls back when data protection keychain is unsupported")
+    @Test(
+        "falls back when data protection keychain is unsupported",
+        .disabled(
+            if: KeychainTestSupport.disableMutatingTests,
+            "Requires writable user-keychain access; headless runners may return errSecInteractionNotAllowed."
+        )
+    )
     func fallsBackWithoutEntitlement() throws {
         let key = testKey("dp-fallback")
         KeychainHelper.useDataProtection = true
