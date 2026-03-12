@@ -84,6 +84,7 @@ The reply can include modifications — Peter reads the full thread and incorpor
 | `.agents/prompts/april-clearwater.md` | April's persona and instructions |
 | `.agents/prompts/plat-ironwood.md` | Plat's persona and instructions |
 | `.agents/prompts/peter-planner.md` | Planner instructions |
+| `.agents/skills/drive/SKILL.md` | Manual milestone execution workflow after planning |
 | `.agents/config/peter-planner.toml` | Allowed planner labels + alias mapping |
 | `.agents/scripts/run-contributor.py` | Shared runtime for contributor agents |
 | `.agents/scripts/run-planner.py` | Shared runtime for Peter's planning workflow |
@@ -155,6 +156,8 @@ Add persistent memory so agents build context across sessions — what shipped, 
 
 ### Phase 3: Execute
 Approved and planned issues get picked up by agents that create branches, write code, open PRs. Human reviews PRs.
+
+The current repo-local bridge for this phase is the `$drive` skill: it resolves a live milestone, refreshes or rewrites the execution plan from current GitHub state, then drives the milestone issue by issue.
 
 ### Phase 4: Evaluate
 After work ships, agents assess impact — did the change improve the codebase? Did tests pass? Did performance hold? Evaluation feeds back into ideation priorities.

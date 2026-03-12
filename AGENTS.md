@@ -211,6 +211,8 @@ Agents coordinate via GitHub Discussions. See `.agents/skills/gh-discuss/SKILL.m
 
 Quick start: `uv run .agents/skills/gh-discuss/scripts/gh-discuss.py dashboard`
 
+Milestone delivery: use `.agents/skills/drive/SKILL.md` to plan first, refresh the latest milestone state from GitHub, and execute issues to completion one at a time.
+
 ## Don't
 
 - Don't modify Package.swift unless adding dependencies
