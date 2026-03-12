@@ -1,11 +1,8 @@
 ---
 status: pending
 category: followup
-pr: null
-branch: null
-score: null
-retro_summary: null
-completed: null
+issue: 84
+milestone: 1
 ---
 
 # Ghostty Appearance Sync Hardening
@@ -22,7 +19,7 @@ This work is deferred because the merged behavior is functionally correct today 
 |----------|--------|-----------|
 | Backlog category | `followup` | This is post-merge quality hardening, not new product surface area. |
 | Scope | Validate + harden interactions, not redesign appearance sync | The implementation in `/Sources/WorkspaceManager/Terminal` is already small and correct. |
-| Roadmap placement | Sequence after PR #18/#19 hardening and before remaining split-parity closure | It directly depends on recent routing/mode changes and informs refinement-gate stability. |
+| Roadmap placement | Sequence as a small Ghostty-quality follow-up within or just after the current maintainability milestone | It directly depends on recent routing/mode changes and should ride the same quality-first execution wave. |
 | Risk control | Add explicit tests/smoke coverage for mode + shortcut interactions | Existing tests cover mapping, but not enough integration interaction points. |
 
 ## Architecture

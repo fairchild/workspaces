@@ -1,4 +1,6 @@
 ---
+status: pending
+category: followup
 topic: lume-runtime
 priority: 2
 description: Post-merge cleanup for Lume runtime decomposition, transport unification, launcher hardening, and stronger VM/error typing.

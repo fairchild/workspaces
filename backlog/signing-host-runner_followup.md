@@ -1,4 +1,6 @@
 ---
+status: pending
+category: followup
 topic: release-runner-provisioning
 priority: 2
 description: Provision and verify the dedicated signing-host self-hosted runner required by the Release workflow.

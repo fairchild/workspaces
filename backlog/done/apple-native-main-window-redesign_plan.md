@@ -3,7 +3,6 @@ status: completed
 category: plan
 pr: 36
 branch: codex/apple-native-main-window-redesign-backlog
-score: null
 retro_summary: Implemented on the redesign branch with repo overview as the primary repo surface, scoped web views, calmer sidebar chrome, removal of the Recent section, and deterministic launch/selection hardening.
 completed: 2026-03-10
 topic: apple-native-main-window-redesign

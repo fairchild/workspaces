@@ -1,11 +1,11 @@
 ---
 status: in-progress
 category: followup
+issue: 81
+milestone: 1
 pr: 36
 branch: codex/apple-native-main-window-redesign-backlog
-score: null
 retro_summary: Main-window state, navigation transitions, launch-surface resolution, and remote-workspace selection now have dedicated controller seams; sidebar sorting also moved into a small pure controller. Ghostty boundary cleanup remains.
-completed: null
 ---
 
 # Main Window + Sidebar Maintainability Pass

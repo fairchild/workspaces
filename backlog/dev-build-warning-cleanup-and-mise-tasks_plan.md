@@ -1,18 +1,20 @@
 ---
+status: pending
+category: followup
 topic: developer-tooling
 priority: 2
-description: Reduce Swift 6 warning noise in local builds and evaluate replacing script-first dev entrypoints with mise tasks.
+description: Reduce remaining Swift 6 warning noise in local builds and consolidate the now-partially-adopted mise task surface.
 ---
 
 # Developer Build Warning Cleanup and Mise Task Migration
 
 ## Problem Statement
 
-Local developer workflows currently work, but they are noisy in ways that make them harder to trust. A cold `./scripts/launch-dev.sh --no-activate` run now succeeds and launches the debug app, but the underlying build still emits a large Swift 6 warning set centered on SwiftData models crossing actor and `@Sendable` boundaries. On 2026-03-08, a cold launcher rebuild reported `174` warnings and wrote the full output to `.dev-data/logs/build-dev-20260308-141224.log`.
+Local developer workflows currently work, but they are still noisier than they should be. A cold `./scripts/launch-dev.sh --no-activate` run succeeds and launches the debug app, but the underlying build still emits a large Swift 6 warning set centered on SwiftData models crossing actor and `@Sendable` boundaries. On 2026-03-08, a cold launcher rebuild reported `174` warnings and wrote the full output to `.dev-data/logs/build-dev-20260308-141224.log`.
 
-We also explored whether `launch-dev.sh` should be the one canonical "do the right thing" entrypoint. The launcher is better now: it preflights `.mise.toml` trust, auto-builds GhosttyKit when needed, and summarizes build logs instead of flooding the terminal. But the repo is still script-first, and `.mise.toml` currently only pins `zig`. That means task discovery, composition, and developer onboarding are still spread across shell scripts and docs rather than one unified task surface.
+We also explored whether `launch-dev.sh` should be the one canonical "do the right thing" entrypoint. The launcher is better now: it preflights `.mise.toml` trust, auto-builds GhosttyKit when needed, and summarizes build logs instead of flooding the terminal. The repo now has a small `mise` task catalog, but it is uneven: the primary `dev-*` launch and Lume flows are represented, while the broader build/test/task surface is still split between direct scripts, raw SwiftPM commands, and docs.
 
-This work matters because warning fatigue obscures real regressions, and fragmented entrypoints make it harder for future sessions to discover the correct build/test/launch path. The next step is not another round of tactical suppression. It is a deliberate boundary cleanup for provider/runtime APIs plus a decision on whether `mise` should become the top-level task runner for the repo.
+This work matters because warning fatigue obscures real regressions, and fragmented entrypoints make it harder for future sessions to discover the correct build/test/launch path. The next step is not another round of tactical suppression. It is a deliberate boundary cleanup for provider/runtime APIs plus a decision on how far to standardize the existing `mise` task surface.
 
 ## Key Decisions
 
@@ -68,7 +70,7 @@ SwiftData Repo/Workspace models
   - `.mise.toml` trust preflight at `scripts/launch-dev.sh:166-190`
   - GhosttyKit existence check and auto-build at `scripts/launch-dev.sh:193-207`
   - summarized build logging at `scripts/launch-dev.sh:209-244`
-- `.mise.toml:1-2` currently only pins `zig = "0.15.2"`, so the repo has no `mise` task catalog yet.
+- `.mise.toml` now includes a small `dev-*` task catalog for launch/smoke/Lume flows, but still lacks a full common build/test/task surface.
 - `WorkspaceProviderProtocol` currently exposes `Workspace` and `[Workspace]` directly across provider boundaries at `Sources/WorkspaceManagerCore/Services/WorkspaceProviders.swift:162-185`.
 - `SidebarWorkspaceController` persists partial results through a closure that captures non-Sendable SwiftData state at `Sources/WorkspaceManager/Views/MainWindow/SidebarWorkspaceController.swift:85-98`.
 - The fixture provider still mirrors the same pattern and warns on actor-isolated methods that take `Workspace` at `Sources/WorkspaceManager/App/UIFixtureLumeEnvironment.swift:387-421`.
