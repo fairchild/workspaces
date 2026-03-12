@@ -142,6 +142,9 @@ fi
 BUNDLE_ID="$(plist_print "$INFO_PLIST" "CFBundleIdentifier")"
 [[ -n "$BUNDLE_ID" ]] || fail "CFBundleIdentifier missing from $INFO_PLIST"
 
+PROFILE_PLATFORM="$(plist_print "$PROFILE_PLIST" "Platform:0")"
+[[ "$PROFILE_PLATFORM" == "OSX" ]] || fail "Provisioning profile platform must be OSX for macOS app bundles (got ${PROFILE_PLATFORM:-<missing>})"
+
 PROFILE_APPLICATION_IDENTIFIER="$(plist_print "$PROFILE_PLIST" "Entitlements:application-identifier")"
 if [[ -z "$PROFILE_APPLICATION_IDENTIFIER" ]]; then
     PROFILE_APPLICATION_IDENTIFIER="$(plist_print "$PROFILE_PLIST" "Entitlements:com.apple.application-identifier")"

@@ -52,6 +52,7 @@ SIGNING_ENTITLEMENTS_PLIST="$TMP_DIR/WorkspaceManager-signing.entitlements"
 
 PROFILE_APPLICATION_IDENTIFIER=""
 PROFILE_TEAM_ID=""
+PROFILE_PLATFORM=""
 EXPECTED_APPLICATION_IDENTIFIER=""
 EXPECTED_KEYCHAIN_GROUP=""
 
@@ -240,6 +241,9 @@ prepare_signing_assets() {
     if ! security cms -D -i "$PROVISIONING_PROFILE_PATH" >"$PROFILE_PLIST"; then
         fail "Failed to decode provisioning profile: $PROVISIONING_PROFILE_PATH"
     fi
+
+    PROFILE_PLATFORM="$(plist_print "$PROFILE_PLIST" "Platform:0")"
+    [[ "$PROFILE_PLATFORM" == "OSX" ]] || fail "Provisioning profile platform must be OSX for macOS packaged builds (got ${PROFILE_PLATFORM:-<missing>})"
 
     PROFILE_APPLICATION_IDENTIFIER="$(plist_print "$PROFILE_PLIST" "Entitlements:application-identifier")"
     if [[ -z "$PROFILE_APPLICATION_IDENTIFIER" ]]; then

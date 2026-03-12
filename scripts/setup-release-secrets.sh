@@ -43,10 +43,12 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VERIFY_SCRIPT="$SCRIPT_DIR/verify-p12.sh"
+PLIST_BUDDY="/usr/libexec/PlistBuddy"
 
 DEFAULT_TEAM_ID="LKVN4J3C6C"
 DEFAULT_P12_PATH="$HOME/.config/apple/Developer_ID_Application_LKVN4J3C6C.p12"
 DEFAULT_PROFILE_PATH="$HOME/.config/apple/workspaces.provisionprofile"
+EXPECTED_BUNDLE_ID="com.cloudcompute.workspaces"
 
 P12_PATH="${P12:-$DEFAULT_P12_PATH}"
 PROFILE_PATH="${PROVISIONING_PROFILE_PATH:-$DEFAULT_PROFILE_PATH}"
@@ -99,6 +101,51 @@ fail() {
 
 require_cmd() {
     command -v "$1" >/dev/null 2>&1 || fail "Required command not found: $1"
+}
+
+plist_print() {
+    local plist_path="$1"
+    local key_path="$2"
+    "$PLIST_BUDDY" -c "Print :$key_path" "$plist_path" 2>/dev/null || true
+}
+
+plist_array_values() {
+    local plist_path="$1"
+    local key_path="$2"
+    local index=0
+    local value=""
+
+    while value="$("$PLIST_BUDDY" -c "Print :$key_path:$index" "$plist_path" 2>/dev/null)"; do
+        printf '%s\n' "$value"
+        index=$((index + 1))
+    done
+}
+
+pattern_matches_value() {
+    local value="$1"
+    local pattern="$2"
+
+    if [[ "$pattern" == *"*" ]]; then
+        local prefix="${pattern%\*}"
+        [[ "$value" == "$prefix"* ]]
+        return
+    fi
+
+    [[ "$value" == "$pattern" ]]
+}
+
+array_authorizes_value() {
+    local expected="$1"
+    shift
+
+    local item=""
+    for item in "$@"; do
+        if pattern_matches_value "$expected" "$item"; then
+            return 0
+        fi
+    done
+
+    return 1
 }
 
 have_secret() {
@@ -257,14 +304,45 @@ fi
 
 if [[ "$NEED_PROFILE_B64" == true ]]; then
     require_cmd security
+    [[ -x "$PLIST_BUDDY" ]] || fail "PlistBuddy not found at $PLIST_BUDDY"
     [[ -n "$PROFILE_PATH" ]] || fail "Missing provisioning profile path. Use --profile-path or set PROVISIONING_PROFILE_PATH=/path/to/profile.provisionprofile."
     PROFILE_PATH="${PROFILE_PATH/#\~/$HOME}"
     PROFILE_PATH="$(cd "$(dirname "$PROFILE_PATH")" && pwd)/$(basename "$PROFILE_PATH")"
     [[ -f "$PROFILE_PATH" ]] || fail "Provisioning profile not found: $PROFILE_PATH (default is $DEFAULT_PROFILE_PATH)"
 
-    if ! security cms -D -i "$PROFILE_PATH" >/dev/null; then
+    PROFILE_PLIST="$(mktemp)"
+    if ! security cms -D -i "$PROFILE_PATH" >"$PROFILE_PLIST"; then
+        rm -f "$PROFILE_PLIST"
         fail "Failed to decode provisioning profile: $PROFILE_PATH"
     fi
+
+    PROFILE_PLATFORM="$(plist_print "$PROFILE_PLIST" "Platform:0")"
+    [[ "$PROFILE_PLATFORM" == "OSX" ]] || fail "Provisioning profile platform must be OSX for macOS release builds (got ${PROFILE_PLATFORM:-<missing>})"
+
+    PROFILE_APPLICATION_IDENTIFIER="$(plist_print "$PROFILE_PLIST" "Entitlements:application-identifier")"
+    if [[ -z "$PROFILE_APPLICATION_IDENTIFIER" ]]; then
+        PROFILE_APPLICATION_IDENTIFIER="$(plist_print "$PROFILE_PLIST" "Entitlements:com.apple.application-identifier")"
+    fi
+    [[ -n "$PROFILE_APPLICATION_IDENTIFIER" ]] || fail "Provisioning profile is missing application-identifier entitlement"
+
+    PROFILE_PREFIX="${PROFILE_APPLICATION_IDENTIFIER%%.*}"
+    [[ "$PROFILE_PREFIX" != "$PROFILE_APPLICATION_IDENTIFIER" ]] || fail "Provisioning profile application-identifier is malformed: $PROFILE_APPLICATION_IDENTIFIER"
+
+    EXPECTED_APPLICATION_IDENTIFIER="$PROFILE_PREFIX.$EXPECTED_BUNDLE_ID"
+    EXPECTED_KEYCHAIN_GROUP="$PROFILE_PREFIX.$EXPECTED_BUNDLE_ID"
+    pattern_matches_value "$EXPECTED_APPLICATION_IDENTIFIER" "$PROFILE_APPLICATION_IDENTIFIER" \
+        || fail "Provisioning profile does not authorize bundle identifier $EXPECTED_BUNDLE_ID"
+
+    PROFILE_KEYCHAIN_GROUPS=()
+    while IFS= read -r keychain_group; do
+        PROFILE_KEYCHAIN_GROUPS+=("$keychain_group")
+    done < <(plist_array_values "$PROFILE_PLIST" "Entitlements:keychain-access-groups")
+    (( ${#PROFILE_KEYCHAIN_GROUPS[@]} > 0 )) || fail "Provisioning profile is missing keychain-access-groups"
+
+    array_authorizes_value "$EXPECTED_KEYCHAIN_GROUP" "${PROFILE_KEYCHAIN_GROUPS[@]}" \
+        || fail "Provisioning profile does not authorize keychain group $EXPECTED_KEYCHAIN_GROUP"
+
+    rm -f "$PROFILE_PLIST"
 fi
 
 if [[ "$NEED_APPLE_ID_VAR" == true ]]; then
