@@ -98,7 +98,7 @@ struct SidebarViewTests {
         )
 
         #expect(message.contains("Failed to save remote workspace: write failed"))
-        #expect(message.contains("Cleanup also failed for remote sandbox 'sandbox-123': cleanup failed"))
+        #expect(message.contains("Cleanup also failed for remote workspace 'sandbox-123': cleanup failed"))
     }
 
     @Test("Local creation message matches progress phase")

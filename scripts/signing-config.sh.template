@@ -31,6 +31,11 @@ export BUNDLE_ID="com.cloudcompute.workspaces"
 # List available identities: security find-identity -v -p codesigning
 export SIGNING_IDENTITY="Developer ID Application: Your Name ($TEAM_ID)"
 
+# Developer ID provisioning profile with keychain sharing enabled for
+# com.cloudcompute.workspaces. Signed packaged apps need this in addition to the
+# certificate so they can claim the data protection keychain access group.
+export PROVISIONING_PROFILE_PATH="$HOME/.config/apple/workspaces.provisionprofile"
+
 # Your Apple ID email (used for notarization)
 export APPLE_ID="your.email@example.com"
 

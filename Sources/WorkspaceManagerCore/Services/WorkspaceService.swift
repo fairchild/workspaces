@@ -52,8 +52,8 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
         name: String,
         progress: WorkspaceCreationProgressHandler? = nil
     ) async throws -> NewWorkspaceInfo {
-        let sanitizedName = sanitizeFilename(name)
-        guard isValidWorkspaceNameComponent(sanitizedName) else {
+        let sanitizedName = Self.sanitizeWorkspaceNameComponent(name)
+        guard Self.isValidWorkspaceNameComponent(sanitizedName) else {
             throw WorkspaceError.invalidName(name: name)
         }
 
@@ -239,6 +239,10 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
     // MARK: - Helpers
 
     public func sanitizeFilename(_ name: String) -> String {
+        Self.sanitizeWorkspaceNameComponent(name)
+    }
+
+    public nonisolated static func sanitizeWorkspaceNameComponent(_ name: String) -> String {
         let invalidCharacters = CharacterSet(charactersIn: ":/\\?*\"<>|")
         let sanitized =
             name
@@ -252,7 +256,7 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
             .lowercased()
     }
 
-    private func isValidWorkspaceNameComponent(_ component: String) -> Bool {
+    public nonisolated static func isValidWorkspaceNameComponent(_ component: String) -> Bool {
         guard !component.isEmpty else { return false }
         guard component != ".", component != ".." else { return false }
         guard !component.contains("/"), !component.contains("\\") else { return false }

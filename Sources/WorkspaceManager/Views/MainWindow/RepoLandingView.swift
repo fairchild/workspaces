@@ -17,8 +17,6 @@ struct RepoLandingView: View {
     let onOpenTerminal: (Repo) -> Void
     let onNewWorkspace: (Repo) -> Void
     let onNewWebSource: (Repo) -> Void
-    let onArchiveWorkspace: (Workspace) -> Void
-    let onOpenWorkspaceInEditor: (Workspace) -> Void
 
     @State private var agentStatuses: [UUID: WorkspaceProcessMonitor.AgentStatus] = [:]
 
@@ -186,7 +184,9 @@ struct RepoLandingView: View {
     private func pollAgentStatuses() async {
         while !Task.isCancelled {
             let directories = Dictionary(
-                uniqueKeysWithValues: sortedWorkspaces.map { ($0.id, $0.workspaceURL) }
+                uniqueKeysWithValues: sortedWorkspaces.compactMap { workspace in
+                    workspace.localDirectoryURL.map { (workspace.id, $0) }
+                }
             )
             let statuses = await processMonitor.detectAgents(in: directories)
             await MainActor.run {
