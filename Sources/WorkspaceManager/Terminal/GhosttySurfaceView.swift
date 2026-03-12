@@ -439,11 +439,12 @@ final class GhosttySurfaceView: NSView {
     }
 
     private func applySystemColorSchemeIfNeeded(force: Bool = false) {
-        guard let resolvedColorScheme = GhosttyAppearanceSync.nextColorScheme(
-            for: window?.effectiveAppearance ?? effectiveAppearance,
-            currentColorScheme: currentColorScheme,
-            force: force
-        )
+        guard
+            let resolvedColorScheme = GhosttyAppearanceSync.nextColorScheme(
+                for: window?.effectiveAppearance ?? effectiveAppearance,
+                currentColorScheme: currentColorScheme,
+                force: force
+            )
         else {
             return
         }

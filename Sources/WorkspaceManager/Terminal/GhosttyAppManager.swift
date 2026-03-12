@@ -110,10 +110,11 @@ final class GhosttyAppManager: NSObject {
 
     func applyColorScheme(_ colorScheme: ghostty_color_scheme_e) {
         guard let app else { return }
-        guard let colorSchemeToApply = GhosttyAppearanceSync.nextColorScheme(
-            resolvedColorScheme: colorScheme,
-            currentColorScheme: currentColorScheme
-        )
+        guard
+            let colorSchemeToApply = GhosttyAppearanceSync.nextColorScheme(
+                resolvedColorScheme: colorScheme,
+                currentColorScheme: currentColorScheme
+            )
         else {
             return
         }
