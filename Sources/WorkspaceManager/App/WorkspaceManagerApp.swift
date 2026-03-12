@@ -284,23 +284,28 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var windowObserver: Any?
     private static let noActivateOnLaunchEnvKey = "WORKSPACES_NO_ACTIVATE_ON_LAUNCH"
 
+    private var isCI: Bool {
+        ProcessInfo.processInfo.environment["CI"] != nil
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSLog("[AppDelegate] applicationDidFinishLaunching")
         PerformanceSignposts.beginLaunchToFirstPromptIfNeeded()
 
         GhosttyAppManager.shared.initializeIfNeeded()
 
-        // Keep regular app activation policy so it appears in the dock/menu bar.
-        // Foreground activation is optional for shared-desktop workflows.
-        NSApp.setActivationPolicy(.regular)
-        if shouldActivateOnLaunch() {
+        if isCI {
+            // CI: fully invisible — no dock icon, no app-switcher, no focus steal.
+            NSApp.setActivationPolicy(.accessory)
+            NSLog("[AppDelegate] CI detected: .accessory policy (background)")
+        } else if !shouldActivateOnLaunch() {
+            // Shared-desktop: stay in dock/Cmd+Tab but don't steal focus.
+            NSApp.setActivationPolicy(.regular)
+            NSLog("[AppDelegate] No-activate mode: .regular policy, skipping activation")
+        } else {
+            NSApp.setActivationPolicy(.regular)
             NSApp.activate(ignoringOtherApps: true)
             NSLog("[AppDelegate] Set activation policy to .regular and activated")
-        } else {
-            NSLog(
-                "[AppDelegate] Set activation policy to .regular (launch activation disabled via %@)",
-                Self.noActivateOnLaunchEnvKey
-            )
         }
         // Applying after activation-policy setup avoids Dock showing the generic executable icon.
         applyApplicationIconIfAvailable()

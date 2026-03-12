@@ -44,11 +44,11 @@ private final class CLIApp {
 
     func run(arguments: [String]) async throws -> Int32 {
         guard let command = arguments.first else {
-            return try launchApp(request: nil)
+            return try await launchApp(request: nil)
         }
 
         if let launchRequest = try appLaunchRequest(for: arguments) {
-            return try launchApp(request: launchRequest)
+            return try await launchApp(request: launchRequest)
         }
 
         var state = try stateStore.load()
@@ -82,6 +82,8 @@ private final class CLIApp {
     private func appLaunchRequest(for arguments: [String]) throws -> AppLaunchRequest? {
         guard arguments.count == 1 else { return nil }
         guard let rawArgument = arguments.first else { return nil }
+        // Reserved verbs win over path-like arguments so `workspaces doctor`
+        // always dispatches to the subcommand even if a sibling folder exists.
         guard !Self.reservedCommands.contains(rawArgument) else { return nil }
         guard looksLikePath(rawArgument) || fileSystemEntryExists(at: rawArgument) else { return nil }
 
@@ -112,7 +114,7 @@ private final class CLIApp {
         FileManager.default.fileExists(atPath: normalizePath(rawPath).path)
     }
 
-    private func launchApp(request: AppLaunchRequest?) throws -> Int32 {
+    private func launchApp(request: AppLaunchRequest?) async throws -> Int32 {
         guard let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: Self.appBundleIdentifier)
         else {
             throw CLIError(
@@ -131,17 +133,7 @@ private final class CLIApp {
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = true
 
-        let semaphore = DispatchSemaphore(value: 0)
-        var openError: Error?
-        NSWorkspace.shared.openApplication(at: appURL, configuration: configuration) { _, error in
-            openError = error
-            semaphore.signal()
-        }
-        semaphore.wait()
-
-        if let openError {
-            throw CLIError("Failed to launch Workspaces: \(openError.localizedDescription)")
-        }
+        try await openApplication(at: appURL, configuration: configuration)
 
         return 0
     }
@@ -360,7 +352,7 @@ private final class CLIApp {
             print(execution.stdout, terminator: execution.stdout.hasSuffix("\n") ? "" : "\n")
         }
         if !execution.stderr.isEmpty {
-            writeStderr(execution.stderr, appendNewlineIfNeeded: true)
+            writeStderr(execution.stderr)
         }
 
         markWorkspaceAccess(workspaceID: workspace.id, command: commandString, state: &state)
@@ -760,22 +752,12 @@ private struct AppLaunchRequest {
     }
 
     var deepLinkURL: URL {
-        var components = URLComponents()
-        components.scheme = "workspaces"
-        components.host = "focus"
-        components.queryItems = [
-            URLQueryItem(name: "cwd", value: launchDirectory.path),
-            URLQueryItem(name: "source", value: "cli"),
-        ]
-
-        if let repoRoot {
-            components.queryItems?.append(URLQueryItem(name: "repo_root", value: repoRoot.path))
-        }
-
-        guard let url = components.url else {
-            preconditionFailure("Failed to build Workspaces deep link URL.")
-        }
-        return url
+        WorkspacesFocusLink(
+            cwd: launchDirectory.path,
+            repoRoot: repoRoot?.path,
+            source: "cli"
+        )
+        .url
     }
 }
 
@@ -837,6 +819,19 @@ private func resolveGitTopLevel(for directory: URL) -> URL? {
     return URL(fileURLWithPath: output, isDirectory: true)
         .standardizedFileURL
         .resolvingSymlinksInPath()
+}
+
+private func openApplication(at appURL: URL, configuration: NSWorkspace.OpenConfiguration) async throws {
+    try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+        NSWorkspace.shared.openApplication(at: appURL, configuration: configuration) { _, error in
+            if let error {
+                continuation.resume(throwing: CLIError("Failed to launch Workspaces: \(error.localizedDescription)"))
+                return
+            }
+
+            continuation.resume()
+        }
+    }
 }
 
 private func resolveExecutable(_ name: String) throws -> String {
@@ -912,12 +907,9 @@ private func parseTomlString<S: StringProtocol>(_ rawValue: S) -> String {
     return trimmed
 }
 
-private func writeStderr(_ message: String, appendNewlineIfNeeded: Bool = false) {
+private func writeStderr(_ message: String) {
     var final = message
-    if appendNewlineIfNeeded, !final.hasSuffix("\n") {
-        final += "\n"
-    }
-    if !appendNewlineIfNeeded {
+    if !final.hasSuffix("\n") {
         final += "\n"
     }
     if let data = final.data(using: .utf8) {

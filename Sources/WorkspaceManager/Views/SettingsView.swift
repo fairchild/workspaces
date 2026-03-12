@@ -17,7 +17,7 @@ struct SettingsView: View {
     private var notificationsEnabled: Bool = NotificationConstants.defaultEnabled
 
     @State private var showFolderPicker = false
-    @State private var commandLineToolStatus: CommandLineToolStatus
+    @State private var commandLineToolStatus: CommandLineToolStatus?
     @State private var commandLineToolFeedback: String?
     @State private var commandLineToolFeedbackIsError = false
     @ObservedObject private var notificationCoordinator = NotificationCoordinator.shared
@@ -26,7 +26,7 @@ struct SettingsView: View {
 
     init(commandLineToolService: CommandLineToolService = CommandLineToolService()) {
         self.commandLineToolService = commandLineToolService
-        _commandLineToolStatus = State(initialValue: commandLineToolService.status())
+        _commandLineToolStatus = State(initialValue: nil)
     }
 
     private var defaultPath: String {
@@ -92,48 +92,58 @@ struct SettingsView: View {
                     Text("Use Workspaces from Terminal")
                         .font(.headline)
 
-                    HStack(spacing: 8) {
-                        Image(systemName: commandLineToolStatusSymbolName)
-                            .foregroundStyle(commandLineToolStatusColor)
-                        Text(commandLineToolStatusTitle)
-                            .font(.callout.weight(.medium))
-                    }
-
-                    if let commandPath = commandLineToolStatus.commandPath {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Command Path")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-
-                            Text(commandPath)
-                                .font(.system(.body, design: .monospaced))
-                                .foregroundStyle(.secondary)
-                                .textSelection(.enabled)
-                                .lineLimit(2)
-                                .truncationMode(.middle)
-                        }
-                        .padding(8)
-                        .background(Color(nsColor: .textBackgroundColor))
-                        .clipShape(.rect(cornerRadius: 6))
-                    }
-
-                    Text(commandLineToolStatusDetail)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-
-                    HStack(spacing: 10) {
-                        if let primaryAction = commandLineToolStatus.primaryAction {
-                            Button(primaryAction.title) {
-                                installCommandLineTool()
-                            }
-                            .buttonStyle(.borderedProminent)
+                    if let commandLineToolStatus {
+                        HStack(spacing: 8) {
+                            Image(systemName: commandLineToolStatusSymbolName(for: commandLineToolStatus))
+                                .foregroundStyle(commandLineToolStatusColor(for: commandLineToolStatus))
+                            Text(commandLineToolStatusTitle(for: commandLineToolStatus))
+                                .font(.callout.weight(.medium))
                         }
 
-                        if commandLineToolStatus.setupCommand != nil {
-                            Button("Copy Setup Command") {
-                                copyCommandLineToolSetupCommand()
+                        if let commandPath = commandLineToolStatus.commandPath {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Command Path")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+
+                                Text(commandPath)
+                                    .font(.system(.body, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                                    .textSelection(.enabled)
+                                    .lineLimit(2)
+                                    .truncationMode(.middle)
                             }
-                            .buttonStyle(.bordered)
+                            .padding(8)
+                            .background(Color(nsColor: .textBackgroundColor))
+                            .clipShape(.rect(cornerRadius: 6))
+                        }
+
+                        Text(commandLineToolStatusDetail(for: commandLineToolStatus))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        HStack(spacing: 10) {
+                            if let primaryAction = commandLineToolStatus.primaryAction {
+                                Button(primaryAction.title) {
+                                    installCommandLineTool()
+                                }
+                                .buttonStyle(.borderedProminent)
+                            }
+
+                            if commandLineToolStatus.setupCommand != nil {
+                                Button("Copy Setup Command") {
+                                    copyCommandLineToolSetupCommand()
+                                }
+                                .buttonStyle(.bordered)
+                            }
+                        }
+                    } else {
+                        HStack(spacing: 8) {
+                            ProgressView()
+                                .controlSize(.small)
+                            Text("Checking installation status…")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
                         }
                     }
 
@@ -259,8 +269,8 @@ struct SettingsView: View {
         }
     }
 
-    private var commandLineToolStatusTitle: String {
-        switch commandLineToolStatus.availability {
+    private func commandLineToolStatusTitle(for status: CommandLineToolStatus) -> String {
+        switch status.availability {
         case .installed:
             return "Installed"
         case .notInstalled:
@@ -270,8 +280,8 @@ struct SettingsView: View {
         }
     }
 
-    private var commandLineToolStatusSymbolName: String {
-        switch commandLineToolStatus.availability {
+    private func commandLineToolStatusSymbolName(for status: CommandLineToolStatus) -> String {
+        switch status.availability {
         case .installed:
             return "checkmark.circle.fill"
         case .notInstalled:
@@ -281,8 +291,8 @@ struct SettingsView: View {
         }
     }
 
-    private var commandLineToolStatusColor: Color {
-        switch commandLineToolStatus.availability {
+    private func commandLineToolStatusColor(for status: CommandLineToolStatus) -> Color {
+        switch status.availability {
         case .installed:
             return .green
         case .notInstalled:
@@ -292,10 +302,10 @@ struct SettingsView: View {
         }
     }
 
-    private var commandLineToolStatusDetail: String {
-        let commandPath = commandLineToolStatus.commandPath ?? "the selected install location"
+    private func commandLineToolStatusDetail(for status: CommandLineToolStatus) -> String {
+        let commandPath = status.commandPath ?? "the selected install location"
 
-        switch commandLineToolStatus.reason {
+        switch status.reason {
         case .active:
             return "The `workspaces` command is ready to open Workspaces from Terminal."
         case .missing:
@@ -394,14 +404,21 @@ struct SettingsView: View {
     }
 
     private func refreshCommandLineToolStatus() {
-        commandLineToolStatus = commandLineToolService.status()
+        let service = commandLineToolService
+        DispatchQueue.global(qos: .userInitiated).async {
+            let status = service.status()
+            DispatchQueue.main.async {
+                commandLineToolStatus = status
+            }
+        }
     }
 
     private func installCommandLineTool() {
         do {
-            commandLineToolStatus = try commandLineToolService.installOrRepair()
+            let status = try commandLineToolService.installOrRepair()
+            commandLineToolStatus = status
             commandLineToolFeedbackIsError = false
-            if let commandPath = commandLineToolStatus.commandPath {
+            if let commandPath = status.commandPath {
                 commandLineToolFeedback = "Linked `workspaces` at \(commandPath)."
             } else {
                 commandLineToolFeedback = "Updated the `workspaces` command."
@@ -414,7 +431,7 @@ struct SettingsView: View {
     }
 
     private func copyCommandLineToolSetupCommand() {
-        guard let setupCommand = commandLineToolStatus.setupCommand else { return }
+        guard let setupCommand = commandLineToolStatus?.setupCommand else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(setupCommand, forType: .string)
         commandLineToolFeedbackIsError = false

@@ -16,7 +16,7 @@ jobs:
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork && 'macos-17' || 'self-hosted' }}
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Ensure mise
         run: |
@@ -49,13 +49,15 @@ jobs:
       - name: Test
         run: swift test
 
+  # The app auto-detects CI=true and uses .accessory activation policy,
+  # so perf runs won't steal focus on self-hosted runners.
   perf-validation:
     if: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork) }}
     needs: build-and-test
     runs-on: self-hosted
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Ensure mise
         run: |
@@ -94,7 +96,7 @@ jobs:
 
       - name: Upload perf artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: performance-dashboard-${{ github.run_id }}
           path: perf-artifacts

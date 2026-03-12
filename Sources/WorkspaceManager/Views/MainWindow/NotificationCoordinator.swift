@@ -8,6 +8,33 @@ private let log = Logger(
     category: "NotificationCoordinator"
 )
 
+protocol NotificationCredentialStoreProtocol: Sendable {
+    func loadString(key: String) throws -> String
+    func saveString(key: String, value: String) throws
+    func delete(key: String) throws
+}
+
+enum NotificationCredentialStoreError: Error {
+    case missingValue(String)
+}
+
+struct KeychainNotificationCredentialStore: NotificationCredentialStoreProtocol {
+    func loadString(key: String) throws -> String {
+        guard let value = try KeychainHelper.loadString(key: key) else {
+            throw NotificationCredentialStoreError.missingValue(key)
+        }
+        return value
+    }
+
+    func saveString(key: String, value: String) throws {
+        try KeychainHelper.saveString(key: key, value: value)
+    }
+
+    func delete(key: String) throws {
+        try KeychainHelper.delete(key: key)
+    }
+}
+
 @MainActor
 final class NotificationCoordinator: NotificationCoordinatorProtocol, ObservableObject {
     static let shared = NotificationCoordinator()
@@ -24,25 +51,33 @@ final class NotificationCoordinator: NotificationCoordinatorProtocol, Observable
     private var eventListenerTask: Task<Void, Never>?
     private var connectionPollingTask: Task<Void, Never>?
     private var refreshTask: Task<Void, Never>?
+    private var jwtRefreshTask: Task<Bool, Never>?
     private var currentRemoteURL: String?
+    private var seenEventIDs: Set<String> = []
+    private let credentialStore: any NotificationCredentialStoreProtocol
+    private let userDefaults: UserDefaults
     private static let maxEvents = 100
     private static let refreshMargin: TimeInterval = 15 * 60
 
     init(
         eventStreamService: any EventStreamServiceProtocol = EventStreamService(),
         sessionService: any NotificationSessionServiceProtocol = NotificationSessionService(),
+        credentialStore: any NotificationCredentialStoreProtocol = KeychainNotificationCredentialStore(),
+        userDefaults: UserDefaults = .standard,
         makeDeviceAuth: @escaping @Sendable () -> any GitHubDeviceAuthProtocol = {
             GitHubDeviceAuth(clientID: NotificationConstants.gitHubAppClientID)
         }
     ) {
         self.eventStreamService = eventStreamService
         self.sessionService = sessionService
+        self.credentialStore = credentialStore
+        self.userDefaults = userDefaults
         self.makeDeviceAuth = makeDeviceAuth
     }
 
     func loadStoredAuth() {
         guard
-            let login = try? KeychainHelper.loadString(
+            let login = try? credentialStore.loadString(
                 key: NotificationConstants.keychainLoginKey)
         else {
             return
@@ -51,7 +86,7 @@ final class NotificationCoordinator: NotificationCoordinatorProtocol, Observable
         authState = .signedIn(login: login)
 
         if jwtNeedsRefresh() {
-            Task { await refreshJWTOrSignOut() }
+            Task { await refreshStoredJWTOrSignOut() }
         } else {
             scheduleRefresh()
         }
@@ -101,6 +136,8 @@ final class NotificationCoordinator: NotificationCoordinatorProtocol, Observable
         currentDeviceAuth = nil
         refreshTask?.cancel()
         refreshTask = nil
+        jwtRefreshTask?.cancel()
+        jwtRefreshTask = nil
         currentRemoteURL = nil
 
         for key in [
@@ -109,7 +146,7 @@ final class NotificationCoordinator: NotificationCoordinatorProtocol, Observable
             NotificationConstants.keychainGitHubTokenKey,
         ] {
             do {
-                try KeychainHelper.delete(key: key)
+                try credentialStore.delete(key: key)
             } catch {
                 log.warning("Failed to delete keychain item \(key): \(error.localizedDescription)")
             }
@@ -121,13 +158,12 @@ final class NotificationCoordinator: NotificationCoordinatorProtocol, Observable
         connectionPollingTask?.cancel()
         connectionPollingTask = nil
         isStreamConnected = false
-        events = []
-        unseenEventCount = 0
+        clearActivity()
         authState = .signedOut
     }
 
     func connectStream(remoteURL: String) async {
-        let enabled = UserDefaults.standard.bool(forKey: NotificationConstants.enabledKey)
+        let enabled = userDefaults.bool(forKey: NotificationConstants.enabledKey)
         guard enabled else { return }
 
         currentRemoteURL = remoteURL
@@ -151,8 +187,7 @@ final class NotificationCoordinator: NotificationCoordinatorProtocol, Observable
         connectionPollingTask = nil
         currentRemoteURL = nil
         isStreamConnected = false
-        events = []
-        unseenEventCount = 0
+        clearActivity()
     }
 
     func markActivitySeen() {
@@ -163,11 +198,22 @@ final class NotificationCoordinator: NotificationCoordinatorProtocol, Observable
 
     private func handleEvent(_ event: WebhookEvent) {
         isStreamConnected = true
+        guard seenEventIDs.insert(event.id).inserted else { return }
         events.insert(event, at: 0)
         if events.count > Self.maxEvents {
-            events.removeLast(events.count - Self.maxEvents)
+            let overflowCount = events.count - Self.maxEvents
+            for event in events.suffix(overflowCount) {
+                seenEventIDs.remove(event.id)
+            }
+            events.removeLast(overflowCount)
         }
         unseenEventCount += 1
+    }
+
+    private func clearActivity() {
+        events = []
+        seenEventIDs.removeAll()
+        unseenEventCount = 0
     }
 
     private func startStream(
@@ -176,8 +222,8 @@ final class NotificationCoordinator: NotificationCoordinatorProtocol, Observable
         var jwt: String?
         var githubToken: String?
         do {
-            jwt = try KeychainHelper.loadString(key: NotificationConstants.keychainJWTKey)
-            githubToken = try KeychainHelper.loadString(key: NotificationConstants.keychainGitHubTokenKey)
+            jwt = try credentialStore.loadString(key: NotificationConstants.keychainJWTKey)
+            githubToken = try credentialStore.loadString(key: NotificationConstants.keychainGitHubTokenKey)
         } catch {
             log.error("Failed to load credentials from keychain: \(error.localizedDescription)")
             jwt = nil
@@ -190,8 +236,7 @@ final class NotificationCoordinator: NotificationCoordinatorProtocol, Observable
         }
 
         if resetActivity {
-            events = []
-            unseenEventCount = 0
+            clearActivity()
         }
 
         isStreamConnected = false
@@ -231,28 +276,39 @@ final class NotificationCoordinator: NotificationCoordinatorProtocol, Observable
 
     @discardableResult
     private func refreshJWT() async -> Bool {
-        guard
-            let githubToken = try? KeychainHelper.loadString(
-                key: NotificationConstants.keychainGitHubTokenKey)
-        else {
-            log.warning("No stored GitHub token — cannot refresh JWT")
-            return false
+        if let jwtRefreshTask {
+            return await jwtRefreshTask.value
         }
 
-        do {
-            let session = try await sessionService.createSession(
-                githubToken: githubToken
-            )
-            try updateSessionCredentials(
-                jwt: session.jwt, login: session.login
-            )
-            log.info("JWT refreshed, expires \(session.expiresAt)")
-            scheduleRefresh()
-            return true
-        } catch {
-            log.error("JWT refresh failed: \(error.localizedDescription)")
-            return false
+        let task = Task<Bool, Never> { @MainActor in
+            guard
+                let githubToken = try? credentialStore.loadString(
+                    key: NotificationConstants.keychainGitHubTokenKey)
+            else {
+                log.warning("No stored GitHub token — cannot refresh JWT")
+                return false
+            }
+
+            do {
+                let session = try await sessionService.createSession(
+                    githubToken: githubToken
+                )
+                try updateSessionCredentials(
+                    jwt: session.jwt, login: session.login
+                )
+                log.info("JWT refreshed, expires \(session.expiresAt)")
+                scheduleRefresh()
+                return true
+            } catch {
+                log.error("JWT refresh failed: \(error.localizedDescription)")
+                return false
+            }
         }
+
+        jwtRefreshTask = task
+        let refreshed = await task.value
+        jwtRefreshTask = nil
+        return refreshed
     }
 
     private func refreshJWTOrSignOut() async {
@@ -262,11 +318,18 @@ final class NotificationCoordinator: NotificationCoordinatorProtocol, Observable
             return
         }
 
-        let enabled = UserDefaults.standard.bool(
+        let enabled = userDefaults.bool(
             forKey: NotificationConstants.enabledKey
         )
         guard enabled, let remoteURL = currentRemoteURL else { return }
         await startStream(remoteURL: remoteURL, resetActivity: false)
+    }
+
+    private func refreshStoredJWTOrSignOut() async {
+        let refreshed = await refreshJWT()
+        if !refreshed {
+            signOut()
+        }
     }
 
     private func scheduleRefresh() {
@@ -294,15 +357,15 @@ final class NotificationCoordinator: NotificationCoordinatorProtocol, Observable
         githubToken: String, jwt: String, login: String
     ) throws {
         do {
-            try KeychainHelper.saveString(
+            try credentialStore.saveString(
                 key: NotificationConstants.keychainGitHubTokenKey,
                 value: githubToken
             )
             try updateSessionCredentials(jwt: jwt, login: login)
         } catch {
-            try? KeychainHelper.delete(key: NotificationConstants.keychainGitHubTokenKey)
-            try? KeychainHelper.delete(key: NotificationConstants.keychainJWTKey)
-            try? KeychainHelper.delete(key: NotificationConstants.keychainLoginKey)
+            try? credentialStore.delete(key: NotificationConstants.keychainGitHubTokenKey)
+            try? credentialStore.delete(key: NotificationConstants.keychainJWTKey)
+            try? credentialStore.delete(key: NotificationConstants.keychainLoginKey)
             throw error
         }
     }
@@ -311,17 +374,17 @@ final class NotificationCoordinator: NotificationCoordinatorProtocol, Observable
         jwt: String, login: String
     ) throws {
         do {
-            try KeychainHelper.saveString(
+            try credentialStore.saveString(
                 key: NotificationConstants.keychainJWTKey,
                 value: jwt
             )
-            try KeychainHelper.saveString(
+            try credentialStore.saveString(
                 key: NotificationConstants.keychainLoginKey,
                 value: login
             )
         } catch {
-            try? KeychainHelper.delete(key: NotificationConstants.keychainJWTKey)
-            try? KeychainHelper.delete(key: NotificationConstants.keychainLoginKey)
+            try? credentialStore.delete(key: NotificationConstants.keychainJWTKey)
+            try? credentialStore.delete(key: NotificationConstants.keychainLoginKey)
             throw error
         }
     }
@@ -335,7 +398,7 @@ final class NotificationCoordinator: NotificationCoordinatorProtocol, Observable
 
     private func jwtExpiry() -> Date? {
         guard
-            let jwt = try? KeychainHelper.loadString(
+            let jwt = try? credentialStore.loadString(
                 key: NotificationConstants.keychainJWTKey)
         else { return nil }
         return Self.parseJWTExpiry(jwt)

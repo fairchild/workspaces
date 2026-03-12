@@ -140,7 +140,7 @@ bun run --bun wrangler deploy --env preview # preview
 | `src/webhook-relay.ts` | `WebhookRelay` Durable Object — SQLite event storage, WebSocket lifecycle, broadcast |
 | `src/github-verify.ts` | Crypto — HMAC-SHA256 signature verification, JWT sign/verify, timing-safe compare |
 | `src/log.ts` | Structured JSON logging helper (`{ level, msg, ts, ...context }`) |
-| `test/e2e.ts` | E2E test harness — orchestrates mock + wrangler dev + 6 test scenarios |
+| `test/e2e.ts` | E2E test harness — orchestrates mock + wrangler dev + 11 behavior-level scenarios |
 | `test/mock-github.ts` | Mock GitHub API server with token-dependent behavior |
 
 ### Durable Object Lifecycle
@@ -164,17 +164,21 @@ CREATE TABLE events (
   summary      TEXT NOT NULL,          -- Human-readable summary
   repo         TEXT NOT NULL,          -- Full repo name (owner/repo)
   payload      TEXT,                   -- Full GitHub webhook payload (JSON)
+  idempotency_key TEXT NOT NULL,       -- Canonical payload hash; suppresses duplicate deliveries
   delivery_id  TEXT,                   -- X-GitHub-Delivery header (for tracing)
   sender       TEXT,                   -- GitHub login of the actor
   clients_sent INTEGER NOT NULL DEFAULT 0,  -- WebSocket clients that received the broadcast
   created_at   INTEGER NOT NULL        -- Unix timestamp (ms)
 );
 CREATE INDEX idx_events_created ON events(created_at);
+CREATE UNIQUE INDEX idx_events_idempotency_key ON events(idempotency_key);
 ```
 
 **Retention**: Events older than 7 days are pruned on each webhook insert.
 
-**Migration**: Schema is forward-migrated via `PRAGMA table_info` introspection — new columns are added idempotently on DO construction.
+**Idempotency**: duplicate webhook payloads are ignored using a canonical payload hash, so retries and repeated deliveries do not appear twice in catch-up or live broadcasts.
+
+**Migration**: Schema is forward-migrated via `PRAGMA table_info` introspection — new columns are added idempotently on DO construction, legacy rows are backfilled with idempotency keys, and existing duplicates are pruned before the unique index is enforced.
 
 ### Structured Logging
 
@@ -198,6 +202,8 @@ All logs are JSON with a consistent shape: `{ level, msg, ts, ...context }`.
 | msg | When | Context |
 |-----|------|---------|
 | `do_event_stored` | Event inserted + broadcast | event_id, delivery_id, event_type, action, sender, repo, clients_sent, total_clients |
+| `do_event_duplicate_ignored` | Duplicate payload dropped | delivery_id, event_type, action, repo |
+| `do_event_duplicates_pruned` | Legacy duplicates removed during migration | count |
 | `do_ws_connected` | New WebSocket accepted | catchup_count, total_clients |
 | `do_ws_closed` | WebSocket disconnected | code, remaining_clients |
 | `do_ws_error` | WebSocket error | detail |
@@ -237,14 +243,14 @@ The notification pipeline can be tested entirely locally without hitting product
 ```bash
 cd infra/cloudflare-webhook-relay
 bun install          # first time only
-bun run test:e2e     # runs mock GitHub API + wrangler dev + 6 test scenarios
+bun run test:e2e     # runs mock GitHub API + wrangler dev + 11 behavior-level scenarios
 ```
 
 The harness automatically:
 - Kills stale processes from previous runs on ports 8787/8788
 - Starts a mock GitHub API on port 8788
 - Starts `wrangler dev` on port 8787 (reads `.dev.vars` for secrets)
-- Runs 6 tests: health, auth session, no-install rejection, WebSocket catchup, webhook broadcast, per-client repo filtering
+- Runs 11 behavior-level tests covering health, auth, catchup, live broadcast, duplicate suppression, payload-order invariance, distinct-event preservation, restart persistence, legacy duplicate cleanup, and per-client repo filtering
 - Cleans up all processes on exit
 
 ### How It Works
