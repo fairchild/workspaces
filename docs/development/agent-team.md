@@ -74,7 +74,9 @@ The reply can include modifications — Peter reads the full thread and incorpor
 | `.agents/prompts/april-clearwater.md` | April's persona and instructions |
 | `.agents/prompts/plat-ironwood.md` | Plat's persona and instructions |
 | `.agents/prompts/peter-planner.md` | Planner instructions |
+| `.agents/config/peter-planner.toml` | Allowed planner labels + alias mapping |
 | `.agents/scripts/run-contributor.py` | Shared runtime for contributor agents |
+| `.agents/scripts/run-planner.py` | Shared runtime for Peter's planning workflow |
 | `.agents/scripts/validate-agent-output.py` | Output validation + dedup checking |
 | `.github/workflows/agent-april.yml` | April's cron workflow |
 | `.github/workflows/agent-plat.yml` | Plat's cron workflow |
@@ -82,7 +84,7 @@ The reply can include modifications — Peter reads the full thread and incorpor
 
 ## Runtime Layout
 
-April and Plat now use thin workflow wrappers. Their workflow YAML keeps only repository policy:
+April, Plat, and Peter now use thin workflow wrappers. Their workflow YAML keeps only repository policy:
 
 - schedules
 - `workflow_dispatch`
@@ -97,7 +99,13 @@ The shared contributor behavior lives in `.agents/scripts/run-contributor.py`:
 3. validate JSON output through `validate-agent-output.py`
 4. either pretty-print validated JSON for dry runs or route the action back into GitHub
 
-Peter Planner stays separate because it is event-driven and uses a different planning schema.
+Peter Planner stays separate because it is event-driven and uses a different planning schema, but its workflow now delegates the orchestration to `.agents/scripts/run-planner.py`:
+
+1. resolve manual dispatch vs owner approval comments
+2. fetch discussion, labels, issues, and milestones
+3. run Claude with the planner prompt
+4. validate + normalize the plan (labels, milestone naming, markers)
+5. reconcile retries, create or reuse GitHub artifacts, and update the discussion
 
 ## Reliability
 
@@ -106,6 +114,8 @@ Peter Planner stays separate because it is event-driven and uses a different pla
 - **GraphQL for Discussions** — GitHub REST API doesn't support Discussions; all queries use GraphQL
 - **Early filtering** — planner workflow skips non-owner comments at the job level (no wasted compute)
 - **Shell safety** — event context passed via env vars, body content via temp files
+- **Catalog-backed labels** — Peter can only use repo-managed labels from `.agents/config/peter-planner.toml`, with alias normalization for common CI/platform terms
+- **Idempotent planning markers** — planner comments, milestone descriptions, and issue bodies carry machine markers so retries reuse existing artifacts instead of leaking duplicates
 
 ## Vision: Autonomous Development
 
