@@ -12,6 +12,7 @@ struct KeychainHelperTests {
         // SPM test runner lacks keychain-access-groups entitlements required
         // for the data protection keychain; fall back to legacy keychain.
         KeychainHelper.useDataProtection = false
+        KeychainHelper.resetDataProtectionSupportCache()
     }
 
     private func testKey(_ name: String) -> String {
@@ -71,6 +72,25 @@ struct KeychainHelperTests {
         try KeychainHelper.save(key: key, data: data)
         let loaded = try KeychainHelper.load(key: key)
         #expect(loaded == data)
+    }
+
+    @Test("falls back when data protection keychain is unsupported")
+    func fallsBackWithoutEntitlement() throws {
+        let key = testKey("dp-fallback")
+        KeychainHelper.useDataProtection = true
+        defer {
+            try? KeychainHelper.delete(key: key)
+            KeychainHelper.useDataProtection = false
+            KeychainHelper.resetDataProtectionSupportCache()
+        }
+
+        try KeychainHelper.saveString(key: key, value: "fallback")
+        let loaded = try KeychainHelper.loadString(key: key)
+        #expect(loaded == "fallback")
+
+        try KeychainHelper.delete(key: key)
+        let deleted = try KeychainHelper.loadString(key: key)
+        #expect(deleted == nil)
     }
 
     @Test("KeychainError provides descriptive messages")

@@ -8,6 +8,7 @@
 # Secrets (sensitive):
 #   - APPLE_DEVELOPER_ID_CERT_BASE64
 #   - APPLE_DEVELOPER_ID_CERT_PASSWORD
+#   - APPLE_DEVELOPER_ID_PROVISIONING_PROFILE_BASE64
 #   - APPLE_APP_PASSWORD
 #
 # Variables (non-sensitive):
@@ -23,12 +24,14 @@
 #
 # Usage (interactive):
 #   ./scripts/setup-release-secrets.sh \
-#     --p12-path ~/.config/apple/Developer_ID_Application_LKVN4J3C6C.p12
+#     --p12-path ~/.config/apple/Developer_ID_Application_LKVN4J3C6C.p12 \
+#     --profile-path ~/.config/apple/workspaces.provisionprofile
 #
 # Usage (non-interactive):
 #   P12_PASSWORD='...' APPLE_ID='...' APPLE_APP_PASSWORD='...' \
 #   ./scripts/setup-release-secrets.sh \
 #     --p12-path ~/.config/apple/Developer_ID_Application_LKVN4J3C6C.p12 \
+#     --profile-path ~/.config/apple/workspaces.provisionprofile \
 #     --team-id LKVN4J3C6C \
 #     --non-interactive \
 #     --run-release \
@@ -43,8 +46,10 @@ VERIFY_SCRIPT="$SCRIPT_DIR/verify-p12.sh"
 
 DEFAULT_TEAM_ID="LKVN4J3C6C"
 DEFAULT_P12_PATH="$HOME/.config/apple/Developer_ID_Application_LKVN4J3C6C.p12"
+DEFAULT_PROFILE_PATH="$HOME/.config/apple/workspaces.provisionprofile"
 
 P12_PATH="${P12:-$DEFAULT_P12_PATH}"
+PROFILE_PATH="${PROVISIONING_PROFILE_PATH:-$DEFAULT_PROFILE_PATH}"
 TEAM_ID="${APPLE_TEAM_ID:-$DEFAULT_TEAM_ID}"
 APPLE_ID_VALUE="${APPLE_ID:-}"
 APPLE_APP_PASSWORD_VALUE="${APPLE_APP_PASSWORD:-}"
@@ -62,6 +67,7 @@ setup-release-secrets.sh - Configure GitHub release secrets from a verified p12
 
 Options:
   --p12-path PATH         Path to Developer ID Application .p12
+  --profile-path PATH     Path to Developer ID provisioning profile
   --team-id TEAM          Apple Team ID (default: LKVN4J3C6C)
   --apple-id EMAIL        Apple ID for notarization
   --app-password PASS     App-specific password for notarization
@@ -74,10 +80,11 @@ Options:
   --help                  Show this help
 
 Env alternatives:
-  P12, P12_PASSWORD, APPLE_ID, APPLE_APP_PASSWORD, APPLE_TEAM_ID
+  P12, P12_PASSWORD, PROVISIONING_PROFILE_PATH, APPLE_ID, APPLE_APP_PASSWORD, APPLE_TEAM_ID
 
 Defaults:
   p12 path: ~/.config/apple/Developer_ID_Application_LKVN4J3C6C.p12
+  profile path: ~/.config/apple/workspaces.provisionprofile
 EOF
 }
 
@@ -132,6 +139,11 @@ while [[ $# -gt 0 ]]; do
         --team-id)
             [[ $# -ge 2 ]] || fail "--team-id requires a value"
             TEAM_ID="$2"
+            shift 2
+            ;;
+        --profile-path)
+            [[ $# -ge 2 ]] || fail "--profile-path requires a value"
+            PROFILE_PATH="$2"
             shift 2
             ;;
         --apple-id)
@@ -191,6 +203,7 @@ gh auth status >/dev/null
 
 NEED_CERT_B64=false
 NEED_CERT_PASSWORD=false
+NEED_PROFILE_B64=false
 NEED_APP_PASSWORD=false
 NEED_APPLE_ID_VAR=false
 NEED_TEAM_ID_VAR=false
@@ -200,6 +213,9 @@ if [[ "$FORCE" == true ]] || ! have_secret "APPLE_DEVELOPER_ID_CERT_BASE64"; the
 fi
 if [[ "$FORCE" == true ]] || ! have_secret "APPLE_DEVELOPER_ID_CERT_PASSWORD"; then
     NEED_CERT_PASSWORD=true
+fi
+if [[ "$FORCE" == true ]] || ! have_secret "APPLE_DEVELOPER_ID_PROVISIONING_PROFILE_BASE64"; then
+    NEED_PROFILE_B64=true
 fi
 if [[ "$FORCE" == true ]] || ! have_secret "APPLE_APP_PASSWORD"; then
     NEED_APP_PASSWORD=true
@@ -239,6 +255,18 @@ if [[ "$NEED_CERT_SETUP" == true ]]; then
     log "p12 verification passed"
 fi
 
+if [[ "$NEED_PROFILE_B64" == true ]]; then
+    require_cmd security
+    [[ -n "$PROFILE_PATH" ]] || fail "Missing provisioning profile path. Use --profile-path or set PROVISIONING_PROFILE_PATH=/path/to/profile.provisionprofile."
+    PROFILE_PATH="${PROFILE_PATH/#\~/$HOME}"
+    PROFILE_PATH="$(cd "$(dirname "$PROFILE_PATH")" && pwd)/$(basename "$PROFILE_PATH")"
+    [[ -f "$PROFILE_PATH" ]] || fail "Provisioning profile not found: $PROFILE_PATH (default is $DEFAULT_PROFILE_PATH)"
+
+    if ! security cms -D -i "$PROFILE_PATH" >/dev/null; then
+        fail "Failed to decode provisioning profile: $PROFILE_PATH"
+    fi
+fi
+
 if [[ "$NEED_APPLE_ID_VAR" == true ]]; then
     if [[ "$NON_INTERACTIVE" == true ]]; then
         [[ -n "$APPLE_ID_VALUE" ]] || fail "APPLE_ID/--apple-id is required in non-interactive mode."
@@ -263,9 +291,13 @@ if [[ "$NEED_TEAM_ID_VAR" == true ]]; then
 fi
 
 TMP_B64=""
+TMP_PROFILE_B64=""
 cleanup() {
     if [[ -n "$TMP_B64" ]]; then
         rm -f "$TMP_B64"
+    fi
+    if [[ -n "$TMP_PROFILE_B64" ]]; then
+        rm -f "$TMP_PROFILE_B64"
     fi
 }
 trap cleanup EXIT
@@ -276,6 +308,15 @@ if [[ "$NEED_CERT_B64" == true ]]; then
         base64 -i "$P12_PATH" > "$TMP_B64"
     else
         base64 "$P12_PATH" > "$TMP_B64"
+    fi
+fi
+
+if [[ "$NEED_PROFILE_B64" == true ]]; then
+    TMP_PROFILE_B64="$(mktemp)"
+    if base64 -i "$PROFILE_PATH" >/dev/null 2>&1; then
+        base64 -i "$PROFILE_PATH" > "$TMP_PROFILE_B64"
+    else
+        base64 "$PROFILE_PATH" > "$TMP_PROFILE_B64"
     fi
 fi
 
@@ -293,6 +334,13 @@ if [[ "$NEED_CERT_PASSWORD" == true ]]; then
     log "Set secret APPLE_DEVELOPER_ID_CERT_PASSWORD"
 else
     log "Skip secret APPLE_DEVELOPER_ID_CERT_PASSWORD (already set)"
+fi
+
+if [[ "$NEED_PROFILE_B64" == true ]]; then
+    gh secret set APPLE_DEVELOPER_ID_PROVISIONING_PROFILE_BASE64 < "$TMP_PROFILE_B64"
+    log "Set secret APPLE_DEVELOPER_ID_PROVISIONING_PROFILE_BASE64"
+else
+    log "Skip secret APPLE_DEVELOPER_ID_PROVISIONING_PROFILE_BASE64 (already set)"
 fi
 
 if [[ "$NEED_APP_PASSWORD" == true ]]; then

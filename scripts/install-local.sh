@@ -5,15 +5,21 @@
 #
 # Common local testing workflow:
 #   1) Build WorkspaceManager.app
-#   2) Replace /Applications/WorkspaceManager.app
+#   2) Replace the local installed app bundle
 #   3) Optionally relaunch the app
 #
+# Default behavior prefers a signed/provisioned packaged app when local signing
+# material is configured. Otherwise it falls back to an unsigned build, which
+# uses the runtime legacy-keychain fallback instead of the data protection
+# keychain.
+#
 # Usage:
-#   ./scripts/install-local.sh                 # Unsiged build + install + open
-#   ./scripts/install-local.sh --signed        # Signed build + install + open
-#   ./scripts/install-local.sh --no-build      # Install existing build/ app
-#   ./scripts/install-local.sh --no-open       # Do not relaunch after install
-#   ./scripts/install-local.sh --dest <path>   # Install to custom .app path
+#   ./scripts/install-local.sh                         # Prefer signed when configured
+#   ./scripts/install-local.sh --signed               # Require signed/provisioned build
+#   ./scripts/install-local.sh --unsigned             # Force unsigned/ad-hoc build
+#   ./scripts/install-local.sh --no-build             # Install existing build/ app
+#   ./scripts/install-local.sh --no-open              # Do not relaunch app
+#   ./scripts/install-local.sh --dest <path>          # Install to custom .app path
 #
 # ==========================================================================
 
@@ -32,19 +38,25 @@ APP_NAME="WorkspaceManager"
 CLI_NAME="workspaces"
 SOURCE_APP="$PROJECT_DIR/build/$APP_NAME.app"
 DEST_APP="/Applications/$APP_NAME.app"
+SIGNING_CONFIG="${SIGNING_CONFIG:-$SCRIPT_DIR/signing-config.sh}"
+VERIFY_KEYCHAIN_SIGNING_SCRIPT="$SCRIPT_DIR/verify-app-keychain-signing.sh"
 
-BUILD_SIGNED=false
+BUILD_MODE="auto"
 SKIP_BUILD=false
 OPEN_AFTER_INSTALL=true
 LINK_CLI=true
 CLI_LINK_PATH=""
 
+EFFECTIVE_SIGNING_IDENTITY=""
+EFFECTIVE_PROVISIONING_PROFILE_PATH=""
+
 usage() {
-    cat <<USAGE
+    cat <<'USAGE'
 Usage: ./scripts/install-local.sh [options]
 
 Options:
-  --signed        Build with signing (uses scripts/build-release.sh)
+  --signed        Require a signed/provisioned packaged build
+  --unsigned      Force an unsigned/ad-hoc packaged build
   --no-build      Skip build and install existing build/WorkspaceManager.app
   --no-open       Do not relaunch app after install
   --no-cli-link   Do not update the `workspaces` CLI symlink
@@ -52,6 +64,10 @@ Options:
                   Override CLI symlink path (default: first writable PATH dir)
   --dest <path>   Install destination app bundle path
   --help, -h      Show this help
+
+Defaults:
+  Without --signed/--unsigned, the script prefers a signed/provisioned build
+  when SIGNING_IDENTITY and PROVISIONING_PROFILE_PATH are configured.
 USAGE
 }
 
@@ -71,19 +87,35 @@ log_error() {
     echo -e "${RED}ERR${NC} $1"
 }
 
+fail() {
+    log_error "$1"
+    exit 1
+}
+
+expand_home_prefix() {
+    local path="$1"
+    if [[ "$path" == "~" ]]; then
+        printf '%s\n' "$HOME"
+        return
+    fi
+    if [[ "$path" == "~/"* ]]; then
+        printf '%s\n' "$HOME/${path#~/}"
+        return
+    fi
+    printf '%s\n' "$path"
+}
+
 resolve_default_cli_link_path() {
-    local dir
-    # Keep this preference order in sync with
-    # Sources/WorkspaceManager/Services/CommandLineToolService.swift.
+    local dir=""
     for dir in /opt/homebrew/bin /usr/local/bin "$HOME/.local/bin" "$HOME/bin"; do
-        local parent
+        local parent=""
         parent="$(dirname "$dir")"
         if [[ -d "$dir" && -w "$dir" ]]; then
-            printf "%s/%s\n" "$dir" "$CLI_NAME"
+            printf '%s/%s\n' "$dir" "$CLI_NAME"
             return 0
         fi
         if [[ ! -d "$dir" && -d "$parent" && -w "$parent" ]]; then
-            printf "%s/%s\n" "$dir" "$CLI_NAME"
+            printf '%s/%s\n' "$dir" "$CLI_NAME"
             return 0
         fi
     done
@@ -93,7 +125,7 @@ resolve_default_cli_link_path() {
     for dir in $PATH; do
         [[ -n "$dir" ]] || continue
         if [[ -d "$dir" && -w "$dir" ]]; then
-            printf "%s/%s\n" "$dir" "$CLI_NAME"
+            printf '%s/%s\n' "$dir" "$CLI_NAME"
             IFS="$original_ifs"
             return 0
         fi
@@ -103,23 +135,74 @@ resolve_default_cli_link_path() {
     return 1
 }
 
-expand_home_prefix() {
-    local path="$1"
-    if [[ "$path" == "~" ]]; then
-        printf "%s\n" "$HOME"
+load_signing_context() {
+    if [[ -f "$SIGNING_CONFIG" ]]; then
+        # shellcheck disable=SC1090
+        source "$SIGNING_CONFIG"
+    fi
+
+    EFFECTIVE_SIGNING_IDENTITY="${SIGNING_IDENTITY:-}"
+    EFFECTIVE_PROVISIONING_PROFILE_PATH="${PROVISIONING_PROFILE_PATH:-}"
+    if [[ -n "$EFFECTIVE_PROVISIONING_PROFILE_PATH" ]]; then
+        EFFECTIVE_PROVISIONING_PROFILE_PATH="$(expand_home_prefix "$EFFECTIVE_PROVISIONING_PROFILE_PATH")"
+    fi
+}
+
+can_build_signed() {
+    [[ -n "$EFFECTIVE_SIGNING_IDENTITY" ]] || return 1
+    [[ -n "$EFFECTIVE_PROVISIONING_PROFILE_PATH" ]] || return 1
+    [[ -f "$EFFECTIVE_PROVISIONING_PROFILE_PATH" ]] || return 1
+}
+
+resolve_build_mode() {
+    load_signing_context
+
+    case "$BUILD_MODE" in
+        signed)
+            can_build_signed || fail "Signed install requires SIGNING_IDENTITY and a valid PROVISIONING_PROFILE_PATH"
+            ;;
+        auto)
+            if can_build_signed; then
+                BUILD_MODE="signed"
+            else
+                BUILD_MODE="unsigned"
+                log_warning "Signed packaged build is not configured; proceeding with unsigned install"
+                log_warning "Unsigned / ad-hoc installs use the runtime legacy-keychain fallback"
+            fi
+            ;;
+        unsigned)
+            ;;
+        *)
+            fail "Unsupported build mode: $BUILD_MODE"
+            ;;
+    esac
+}
+
+report_keychain_mode() {
+    local app_bundle="$1"
+    local output=""
+
+    if output="$("$VERIFY_KEYCHAIN_SIGNING_SCRIPT" "$app_bundle" 2>&1)"; then
+        log_success "$output"
         return
     fi
-    if [[ "$path" == "~/"* ]]; then
-        printf "%s\n" "$HOME/${path#~/}"
-        return
+
+    if [[ "$BUILD_MODE" == "signed" ]]; then
+        fail "Signed install verification failed: $output"
     fi
-    printf "%s\n" "$path"
+
+    log_warning "Installed app will use the runtime legacy-keychain fallback"
+    log_warning "$output"
 }
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --signed)
-            BUILD_SIGNED=true
+            BUILD_MODE="signed"
+            shift
+            ;;
+        --unsigned)
+            BUILD_MODE="unsigned"
             shift
             ;;
         --no-build)
@@ -135,18 +218,12 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --cli-link)
-            if [[ $# -lt 2 ]]; then
-                log_error "--cli-link requires a value"
-                exit 1
-            fi
+            [[ $# -ge 2 ]] || fail "--cli-link requires a value"
             CLI_LINK_PATH="$2"
             shift 2
             ;;
         --dest)
-            if [[ $# -lt 2 ]]; then
-                log_error "--dest requires a value"
-                exit 1
-            fi
+            [[ $# -ge 2 ]] || fail "--dest requires a value"
             DEST_APP="$2"
             shift 2
             ;;
@@ -155,39 +232,38 @@ while [[ $# -gt 0 ]]; do
             exit 0
             ;;
         *)
-            log_error "Unknown argument: $1"
             usage
-            exit 1
+            fail "Unknown argument: $1"
             ;;
     esac
 done
 
-if [[ ! -f "$PROJECT_DIR/Package.swift" ]]; then
-    log_error "Package.swift not found. Run from repo root or scripts/ directory."
-    exit 1
-fi
+[[ -f "$PROJECT_DIR/Package.swift" ]] || fail "Package.swift not found. Run from repo root or scripts/ directory."
+[[ "$DEST_APP" == *.app ]] || fail "Destination must be a .app bundle path: $DEST_APP"
+[[ -x "$VERIFY_KEYCHAIN_SIGNING_SCRIPT" ]] || fail "Missing verifier script at $VERIFY_KEYCHAIN_SIGNING_SCRIPT"
 
-if [[ ! "$DEST_APP" == *.app ]]; then
-    log_error "Destination must be a .app bundle path: $DEST_APP"
-    exit 1
-fi
+resolve_build_mode
 
 if [[ "$SKIP_BUILD" == false ]]; then
     log_step "Building app bundle"
     cd "$PROJECT_DIR"
-    if [[ "$BUILD_SIGNED" == true ]]; then
-        "$SCRIPT_DIR/build-release.sh"
-    else
-        "$SCRIPT_DIR/build-release.sh" --no-sign
-    fi
+
+    case "$BUILD_MODE" in
+        signed)
+            "$SCRIPT_DIR/build-release.sh"
+            ;;
+        unsigned)
+            if [[ -n "$EFFECTIVE_SIGNING_IDENTITY" ]] || [[ -n "$EFFECTIVE_PROVISIONING_PROFILE_PATH" ]]; then
+                log_warning "Signing configuration is incomplete or unsigned mode was requested; building unsigned app"
+            fi
+            "$SCRIPT_DIR/build-release.sh" --no-sign
+            ;;
+    esac
 else
     log_step "Skipping build (--no-build)"
 fi
 
-if [[ ! -d "$SOURCE_APP" ]]; then
-    log_error "Source app not found: $SOURCE_APP"
-    exit 1
-fi
+[[ -d "$SOURCE_APP" ]] || fail "Source app not found: $SOURCE_APP"
 
 log_step "Stopping running app (if open)"
 osascript -e 'tell application id "com.cloudcompute.workspaces" to quit' >/dev/null 2>&1 || true
@@ -206,9 +282,8 @@ TMP_DEST="${DEST_APP}.tmp.$$"
 rm -rf "$TMP_DEST"
 
 if ! ditto "$SOURCE_APP" "$TMP_DEST"; then
-    log_error "Failed to copy app bundle to temporary destination"
     rm -rf "$TMP_DEST"
-    exit 1
+    fail "Failed to copy app bundle to temporary destination"
 fi
 
 rm -rf "$DEST_APP"
@@ -226,6 +301,8 @@ if [[ -f "$SOURCE_BIN" && -f "$DEST_BIN" ]]; then
         log_warning "Binary checksum mismatch; verify install manually"
     fi
 fi
+
+report_keychain_mode "$DEST_APP"
 
 if [[ "$OPEN_AFTER_INSTALL" == true ]]; then
     log_step "Launching installed app"
@@ -260,7 +337,3 @@ if [[ "$LINK_CLI" == true ]]; then
         log_warning "CLI launcher not found in app bundle; skipping CLI link"
     fi
 fi
-
-echo ""
-echo "Installed app: $DEST_APP"
-echo "Source app:    $SOURCE_APP"

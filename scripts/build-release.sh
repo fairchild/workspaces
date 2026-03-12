@@ -3,72 +3,77 @@
 # build-release.sh - Build a release version of WorkspaceManager
 # ============================================================================
 #
-# Creates a signed .app bundle from the Swift Package Manager build.
+# Creates a packaged .app bundle from the Swift Package Manager build.
 #
 # Usage:
-#   ./scripts/build-release.sh           # Build and sign (if config exists)
+#   ./scripts/build-release.sh           # Build and sign (requires provisioning profile)
 #   ./scripts/build-release.sh --no-sign # Build without signing
 #   ./scripts/build-release.sh --help    # Show this help
 #
 # Output:
-#   build/WorkspaceManager.app - The signed application bundle
+#   build/WorkspaceManager.app - The packaged application bundle
 #
-# Prerequisites for signing:
+# Signed builds require:
 #   1. Copy scripts/signing-config.sh.template to scripts/signing-config.sh
-#   2. Fill in your Apple Developer credentials
+#   2. Fill in signing identity and PROVISIONING_PROFILE_PATH
+#
+# Unsigned / ad-hoc builds remain supported for local development but will use
+# the runtime legacy-keychain fallback instead of the data protection keychain.
 #
 # ============================================================================
 
-set -e  # Exit on error
-set -o pipefail  # Exit on pipe failure
+set -e
+set -o pipefail
 
-# Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m' # No Color
-
-# ============================================================================
-# Configuration
-# ============================================================================
+NC='\033[0m'
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 BUILD_DIR="$PROJECT_DIR/build"
 APP_NAME="WorkspaceManager"
+CLI_NAME="workspaces"
 APP_BUNDLE="$BUILD_DIR/$APP_NAME.app"
+VERIFY_KEYCHAIN_SIGNING_SCRIPT="$SCRIPT_DIR/verify-app-keychain-signing.sh"
+PLIST_BUDDY="/usr/libexec/PlistBuddy"
 
-# Source signing config if it exists. Allow callers (CI) to override this path.
 SIGNING_CONFIG="${SIGNING_CONFIG:-$SCRIPT_DIR/signing-config.sh}"
-# Optional: explicit keychain for codesign lookup (useful on self-hosted runners).
 CODESIGN_KEYCHAIN_PATH="${CODESIGN_KEYCHAIN_PATH:-}"
+PROVISIONING_PROFILE_PATH="${PROVISIONING_PROFILE_PATH:-}"
+BUNDLE_ID="${BUNDLE_ID:-com.cloudcompute.workspaces}"
 SIGN_APP=true
 
-# ============================================================================
-# Parse Arguments
-# ============================================================================
+TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/workspaces-build-release.XXXXXX")"
+PROFILE_PLIST="$TMP_DIR/provisioning-profile.plist"
+SIGNING_ENTITLEMENTS_PLIST="$TMP_DIR/WorkspaceManager-signing.entitlements"
 
-for arg in "$@"; do
-    case $arg in
-        --no-sign)
-            SIGN_APP=false
-            shift
-            ;;
-        --help|-h)
-            head -n 20 "$0" | tail -n +2 | sed 's/^# //' | sed 's/^#//'
-            exit 0
-            ;;
-        *)
-            echo -e "${RED}Unknown argument: $arg${NC}"
-            exit 1
-            ;;
-    esac
-done
+PROFILE_APPLICATION_IDENTIFIER=""
+PROFILE_TEAM_ID=""
+EXPECTED_APPLICATION_IDENTIFIER=""
+EXPECTED_KEYCHAIN_GROUP=""
 
-# ============================================================================
-# Helper Functions
-# ============================================================================
+cleanup() {
+    rm -rf "$TMP_DIR"
+}
+trap cleanup EXIT
+
+usage() {
+    cat <<'EOF'
+build-release.sh - Build a release version of WorkspaceManager
+
+Usage:
+  ./scripts/build-release.sh           Build and sign with provisioning profile
+  ./scripts/build-release.sh --no-sign Build without signing
+  ./scripts/build-release.sh --help    Show this help
+
+Signed builds require SIGNING_IDENTITY and PROVISIONING_PROFILE_PATH.
+Unsigned builds are suitable for local development but use the runtime legacy
+keychain fallback instead of the data protection keychain.
+EOF
+}
 
 log_step() {
     echo -e "\n${BLUE}==>${NC} $1"
@@ -86,6 +91,92 @@ log_error() {
     echo -e "${RED}✗${NC} $1"
 }
 
+fail() {
+    log_error "$1"
+    exit 1
+}
+
+require_cmd() {
+    command -v "$1" >/dev/null 2>&1 || fail "Required command not found: $1"
+}
+
+expand_home_prefix() {
+    local path="$1"
+    if [[ "$path" == "~" ]]; then
+        printf '%s\n' "$HOME"
+        return
+    fi
+    if [[ "$path" == "~/"* ]]; then
+        printf '%s\n' "$HOME/${path#~/}"
+        return
+    fi
+    printf '%s\n' "$path"
+}
+
+plist_print() {
+    local plist_path="$1"
+    local key_path="$2"
+    "$PLIST_BUDDY" -c "Print :$key_path" "$plist_path" 2>/dev/null || true
+}
+
+plist_array_values() {
+    local plist_path="$1"
+    local key_path="$2"
+    local index=0
+    local value=""
+
+    while value="$("$PLIST_BUDDY" -c "Print :$key_path:$index" "$plist_path" 2>/dev/null)"; do
+        printf '%s\n' "$value"
+        index=$((index + 1))
+    done
+}
+
+pattern_matches_value() {
+    local value="$1"
+    local pattern="$2"
+
+    if [[ "$pattern" == *"*" ]]; then
+        local prefix="${pattern%\*}"
+        [[ "$value" == "$prefix"* ]]
+        return
+    fi
+
+    [[ "$value" == "$pattern" ]]
+}
+
+array_authorizes_value() {
+    local expected="$1"
+    shift
+
+    local item=""
+    for item in "$@"; do
+        if pattern_matches_value "$expected" "$item"; then
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+plist_set_string() {
+    local plist_path="$1"
+    local key_path="$2"
+    local value="$3"
+
+    "$PLIST_BUDDY" -c "Delete :$key_path" "$plist_path" >/dev/null 2>&1 || true
+    "$PLIST_BUDDY" -c "Add :$key_path string $value" "$plist_path"
+}
+
+plist_replace_single_string_array() {
+    local plist_path="$1"
+    local key_path="$2"
+    local value="$3"
+
+    "$PLIST_BUDDY" -c "Delete :$key_path" "$plist_path" >/dev/null 2>&1 || true
+    "$PLIST_BUDDY" -c "Add :$key_path array" "$plist_path"
+    "$PLIST_BUDDY" -c "Add :$key_path:0 string $value" "$plist_path"
+}
+
 merge_icon_metadata() {
     local asset_info_plist="$1"
     local app_info_plist="$2"
@@ -94,10 +185,10 @@ merge_icon_metadata() {
         return
     fi
 
-    local icon_file
-    local icon_name
-    icon_file="$(/usr/libexec/PlistBuddy -c "Print :CFBundleIconFile" "$asset_info_plist" 2>/dev/null || true)"
-    icon_name="$(/usr/libexec/PlistBuddy -c "Print :CFBundleIconName" "$asset_info_plist" 2>/dev/null || true)"
+    local icon_file=""
+    local icon_name=""
+    icon_file="$(plist_print "$asset_info_plist" "CFBundleIconFile")"
+    icon_name="$(plist_print "$asset_info_plist" "CFBundleIconName")"
 
     if [[ -n "$icon_file" ]]; then
         plutil -replace CFBundleIconFile -string "$icon_file" "$app_info_plist"
@@ -136,26 +227,100 @@ codesign_with_identity() {
     "${cmd[@]}"
 }
 
-# ============================================================================
-# Pre-flight Checks
-# ============================================================================
+prepare_signing_assets() {
+    require_cmd security
+    [[ -x "$PLIST_BUDDY" ]] || fail "PlistBuddy not found at $PLIST_BUDDY"
+    [[ -x "$VERIFY_KEYCHAIN_SIGNING_SCRIPT" ]] || fail "Missing verifier script at $VERIFY_KEYCHAIN_SIGNING_SCRIPT"
+    [[ -n "${SIGNING_IDENTITY:-}" ]] || fail "SIGNING_IDENTITY must be set for signed builds"
+    [[ -n "$PROVISIONING_PROFILE_PATH" ]] || fail "PROVISIONING_PROFILE_PATH is required for signed builds"
+
+    PROVISIONING_PROFILE_PATH="$(expand_home_prefix "$PROVISIONING_PROFILE_PATH")"
+    [[ -f "$PROVISIONING_PROFILE_PATH" ]] || fail "Provisioning profile not found: $PROVISIONING_PROFILE_PATH"
+
+    if ! security cms -D -i "$PROVISIONING_PROFILE_PATH" >"$PROFILE_PLIST"; then
+        fail "Failed to decode provisioning profile: $PROVISIONING_PROFILE_PATH"
+    fi
+
+    PROFILE_APPLICATION_IDENTIFIER="$(plist_print "$PROFILE_PLIST" "Entitlements:application-identifier")"
+    if [[ -z "$PROFILE_APPLICATION_IDENTIFIER" ]]; then
+        PROFILE_APPLICATION_IDENTIFIER="$(plist_print "$PROFILE_PLIST" "Entitlements:com.apple.application-identifier")"
+    fi
+    [[ -n "$PROFILE_APPLICATION_IDENTIFIER" ]] || fail "Provisioning profile is missing application-identifier entitlement"
+
+    PROFILE_TEAM_ID="$(plist_print "$PROFILE_PLIST" "Entitlements:com.apple.developer.team-identifier")"
+    if [[ -z "$PROFILE_TEAM_ID" ]]; then
+        PROFILE_TEAM_ID="$(plist_print "$PROFILE_PLIST" "TeamIdentifier:0")"
+    fi
+    [[ -n "$PROFILE_TEAM_ID" ]] || fail "Provisioning profile is missing a team identifier"
+
+    local app_id_prefix="${PROFILE_APPLICATION_IDENTIFIER%%.*}"
+    [[ "$app_id_prefix" != "$PROFILE_APPLICATION_IDENTIFIER" ]] || fail "Provisioning profile application-identifier is malformed: $PROFILE_APPLICATION_IDENTIFIER"
+
+    EXPECTED_APPLICATION_IDENTIFIER="$app_id_prefix.$BUNDLE_ID"
+    EXPECTED_KEYCHAIN_GROUP="$app_id_prefix.$BUNDLE_ID"
+
+    pattern_matches_value "$EXPECTED_APPLICATION_IDENTIFIER" "$PROFILE_APPLICATION_IDENTIFIER" \
+        || fail "Provisioning profile does not authorize bundle identifier $BUNDLE_ID"
+
+    local -a profile_keychain_groups=()
+    local keychain_group=""
+    while IFS= read -r keychain_group; do
+        profile_keychain_groups+=("$keychain_group")
+    done < <(plist_array_values "$PROFILE_PLIST" "Entitlements:keychain-access-groups")
+    (( ${#profile_keychain_groups[@]} > 0 )) || fail "Provisioning profile is missing keychain-access-groups"
+
+    array_authorizes_value "$EXPECTED_KEYCHAIN_GROUP" "${profile_keychain_groups[@]}" \
+        || fail "Provisioning profile does not authorize keychain group $EXPECTED_KEYCHAIN_GROUP"
+
+    if [[ -n "${TEAM_ID:-}" ]] && [[ "$TEAM_ID" != "XXXXXXXXXX" ]] && [[ "$TEAM_ID" != "$PROFILE_TEAM_ID" ]]; then
+        fail "TEAM_ID ($TEAM_ID) does not match provisioning profile team identifier ($PROFILE_TEAM_ID)"
+    fi
+
+    local base_entitlements="$PROJECT_DIR/WorkspaceManager.entitlements"
+    [[ -f "$base_entitlements" ]] || fail "Base entitlements file not found: $base_entitlements"
+
+    cp "$base_entitlements" "$SIGNING_ENTITLEMENTS_PLIST"
+    plist_set_string "$SIGNING_ENTITLEMENTS_PLIST" "com.apple.application-identifier" "$EXPECTED_APPLICATION_IDENTIFIER"
+    plist_set_string "$SIGNING_ENTITLEMENTS_PLIST" "com.apple.developer.team-identifier" "$PROFILE_TEAM_ID"
+    plist_replace_single_string_array "$SIGNING_ENTITLEMENTS_PLIST" "keychain-access-groups" "$EXPECTED_KEYCHAIN_GROUP"
+
+    log_success "Prepared signing entitlements for $EXPECTED_KEYCHAIN_GROUP"
+}
+
+verify_signed_keychain_access() {
+    log_step "Verifying keychain signing"
+    local output=""
+    output="$("$VERIFY_KEYCHAIN_SIGNING_SCRIPT" "$APP_BUNDLE" 2>&1)" || fail "$output"
+    log_success "$output"
+}
+
+for arg in "$@"; do
+    case "$arg" in
+        --no-sign)
+            SIGN_APP=false
+            ;;
+        --help|-h)
+            usage
+            exit 0
+            ;;
+        *)
+            fail "Unknown argument: $arg"
+            ;;
+    esac
+done
 
 log_step "Pre-flight checks"
 
-# Check we're in the right directory
-if [[ ! -f "$PROJECT_DIR/Package.swift" ]]; then
-    log_error "Package.swift not found. Run from the WorkspaceManager directory."
-    exit 1
-fi
+[[ -f "$PROJECT_DIR/Package.swift" ]] || fail "Package.swift not found. Run from the WorkspaceManager directory."
 log_success "Package.swift found"
 
-# Check signing config
 if [[ "$SIGN_APP" == true ]]; then
     if [[ -f "$SIGNING_CONFIG" ]]; then
+        # shellcheck disable=SC1090
         source "$SIGNING_CONFIG"
         log_success "Loaded signing configuration from $SIGNING_CONFIG"
     elif [[ -n "${SIGNING_IDENTITY:-}" ]]; then
-        log_success "Using SIGNING_IDENTITY from environment"
+        log_success "Using signing configuration from environment"
     else
         log_warning "signing-config.sh not found - building without code signing"
         log_warning "For local signing, copy scripts/signing-config.sh.template to scripts/signing-config.sh"
@@ -164,21 +329,17 @@ if [[ "$SIGN_APP" == true ]]; then
     fi
 fi
 
-# ============================================================================
-# Build with Swift Package Manager
-# ============================================================================
+if [[ "$SIGN_APP" == true ]]; then
+    prepare_signing_assets
+fi
 
 log_step "Building release binary"
 
 cd "$PROJECT_DIR"
-
-# Clean previous build
 rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
 
-# Build release
-swift build -c release 2>&1 | while read line; do
-    # Show only important lines
+swift build -c release 2>&1 | while read -r line; do
     if [[ "$line" == *"error:"* ]] || [[ "$line" == *"warning:"* ]]; then
         echo "$line"
     elif [[ "$line" == *"Build complete"* ]]; then
@@ -186,73 +347,45 @@ swift build -c release 2>&1 | while read line; do
     fi
 done
 
-# Check build succeeded
-if [[ ! -f ".build/release/$APP_NAME" ]]; then
-    log_error "Build failed - executable not found"
-    exit 1
-fi
+[[ -f ".build/release/$APP_NAME" ]] || fail "Build failed - executable not found"
 log_success "Build complete"
 
-# ============================================================================
-# Create App Bundle Structure
-# ============================================================================
-
 log_step "Creating app bundle"
-
-# Create bundle directories
-# macOS app bundle structure:
-#   .app/
-#     Contents/
-#       Info.plist        <- App metadata
-#       MacOS/            <- Executable
-#       Resources/        <- Assets, localization, etc.
-#       Frameworks/       <- Embedded frameworks (if any)
 
 mkdir -p "$APP_BUNDLE/Contents/MacOS"
 mkdir -p "$APP_BUNDLE/Contents/Resources"
 
-# Copy executable
 cp ".build/release/$APP_NAME" "$APP_BUNDLE/Contents/MacOS/"
 log_success "Copied executable"
 
-CLI_NAME="workspaces"
 if [[ -f ".build/release/$CLI_NAME" ]]; then
     cp ".build/release/$CLI_NAME" "$APP_BUNDLE/Contents/MacOS/"
     log_success "Copied CLI launcher"
 fi
 
-# Copy Info.plist
 INFO_PLIST="Sources/WorkspaceManager/Resources/Info.plist"
-if [[ -f "$INFO_PLIST" ]]; then
-    cp "$INFO_PLIST" "$APP_BUNDLE/Contents/"
-    log_success "Copied Info.plist"
-else
-    log_error "Info.plist not found at $INFO_PLIST"
-    exit 1
-fi
+[[ -f "$INFO_PLIST" ]] || fail "Info.plist not found at $INFO_PLIST"
+cp "$INFO_PLIST" "$APP_BUNDLE/Contents/"
+log_success "Copied Info.plist"
 
-# Copy Privacy Manifest
 PRIVACY_MANIFEST="Sources/WorkspaceManager/Resources/PrivacyInfo.xcprivacy"
 if [[ -f "$PRIVACY_MANIFEST" ]]; then
     cp "$PRIVACY_MANIFEST" "$APP_BUNDLE/Contents/Resources/"
     log_success "Copied PrivacyInfo.xcprivacy"
 fi
 
-# Copy bundled resources from SPM build (if they exist)
 SPM_RESOURCES=".build/release/WorkspaceManager_WorkspaceManager.bundle"
 if [[ -d "$SPM_RESOURCES" ]]; then
     cp -R "$SPM_RESOURCES"/* "$APP_BUNDLE/Contents/Resources/" 2>/dev/null || true
     log_success "Copied SPM resources"
 fi
 
-# Compile asset catalog (if actool is available and assets exist)
 ASSETS_DIR="Sources/WorkspaceManager/Resources/Assets.xcassets"
-if [[ -d "$ASSETS_DIR" ]] && command -v actool &> /dev/null; then
+if [[ -d "$ASSETS_DIR" ]] && command -v actool >/dev/null 2>&1; then
     log_step "Compiling asset catalog"
     ASSET_INFO_PLIST="$BUILD_DIR/AssetInfo.plist"
     rm -f "$ASSET_INFO_PLIST"
 
-    # actool compiles .xcassets into Assets.car
     actool --compile "$APP_BUNDLE/Contents/Resources" \
            --platform macosx \
            --minimum-deployment-target 14.0 \
@@ -267,50 +400,41 @@ if [[ -d "$ASSETS_DIR" ]] && command -v actool &> /dev/null; then
     merge_icon_metadata "$ASSET_INFO_PLIST" "$APP_BUNDLE/Contents/Info.plist"
 fi
 
-# Create PkgInfo (standard for Mac apps)
-echo -n "APPL????" > "$APP_BUNDLE/Contents/PkgInfo"
+echo -n "APPL????" >"$APP_BUNDLE/Contents/PkgInfo"
 log_success "Created PkgInfo"
 
-# ============================================================================
-# Code Signing
-# ============================================================================
+if [[ "$SIGN_APP" == true ]]; then
+    cp "$PROVISIONING_PROFILE_PATH" "$APP_BUNDLE/Contents/embedded.provisionprofile"
+    log_success "Embedded provisioning profile"
+fi
 
-if [[ "$SIGN_APP" == true ]] && [[ -n "$SIGNING_IDENTITY" ]]; then
+if [[ "$SIGN_APP" == true ]] && [[ -n "${SIGNING_IDENTITY:-}" ]]; then
     log_step "Code signing"
 
-    # Sign embedded frameworks first (if any)
     if [[ -d "$APP_BUNDLE/Contents/Frameworks" ]]; then
-        for framework in "$APP_BUNDLE/Contents/Frameworks"/*; do
-            codesign_with_identity "$framework"
+        local_framework=""
+        shopt -s nullglob
+        for local_framework in "$APP_BUNDLE/Contents/Frameworks"/*; do
+            codesign_with_identity "$local_framework"
         done
+        shopt -u nullglob
         log_success "Signed embedded frameworks"
     fi
 
-    # Sign the main app bundle with entitlements
-    ENTITLEMENTS="$PROJECT_DIR/WorkspaceManager.entitlements"
-    if [[ -f "$ENTITLEMENTS" ]]; then
-        codesign_with_identity "$APP_BUNDLE" --entitlements "$ENTITLEMENTS"
-        log_success "Signed app bundle with entitlements"
-    else
-        codesign_with_identity "$APP_BUNDLE"
-        log_success "Signed app bundle"
-    fi
+    codesign_with_identity "$APP_BUNDLE" --entitlements "$SIGNING_ENTITLEMENTS_PLIST"
+    log_success "Signed app bundle with provisioning-aware entitlements"
 
-    # Verify signature
     log_step "Verifying signature"
     codesign --verify --deep --strict --verbose=1 "$APP_BUNDLE"
     log_success "Signature verified"
 
-    # Check Gatekeeper (informational only - may fail without notarization)
+    verify_signed_keychain_access
+
     spctl --assess --type execute --verbose "$APP_BUNDLE" 2>&1 || \
         log_warning "Gatekeeper check failed - app needs notarization for distribution"
 else
     log_warning "Skipping code signing"
 fi
-
-# ============================================================================
-# Summary
-# ============================================================================
 
 echo ""
 echo "============================================================================"
@@ -319,15 +443,20 @@ echo "==========================================================================
 echo ""
 echo "Output: $APP_BUNDLE"
 echo "Size:   $(du -sh "$APP_BUNDLE" | cut -f1)"
+if [[ "$SIGN_APP" == true ]]; then
+    echo "Keychain: data protection keychain enabled for $EXPECTED_KEYCHAIN_GROUP"
+else
+    echo "Keychain: runtime legacy-keychain fallback (unsigned / ad-hoc build)"
+fi
 echo ""
 
-if [[ "$SIGN_APP" == true ]] && [[ -n "$SIGNING_IDENTITY" ]]; then
+if [[ "$SIGN_APP" == true ]]; then
     echo "Next steps for distribution:"
     echo "  1. Run ./scripts/notarize.sh to notarize and create DMG"
     echo ""
 else
     echo "Next steps:"
-    echo "  1. Set up scripts/signing-config.sh for local code signing"
+    echo "  1. Set up scripts/signing-config.sh with SIGNING_IDENTITY and PROVISIONING_PROFILE_PATH"
     echo "  2. Re-run with signing enabled"
     echo "  3. Run ./scripts/notarize.sh for notarization"
     echo ""
