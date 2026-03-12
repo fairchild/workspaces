@@ -9,6 +9,10 @@ on:
         description: 'Discussion number to plan (skips approval check)'
         type: number
         required: false
+      dry_run:
+        description: 'Print the normalized plan without creating issues or comments'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -16,12 +20,11 @@ permissions:
   issues: write
 
 concurrency:
-  group: agent-peter
+  group: agent-peter-${{ inputs.discussion_number || github.event.discussion.number || github.run_id }}
   cancel-in-progress: false
 
 jobs:
-  plan:
-    # Only run for repo owner comments or manual dispatch (skip bot/agent comments early)
+  run:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       github.event.comment.user.login == github.repository_owner
@@ -35,218 +38,18 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v7
 
-      - name: Check auth
+      - name: Run planner
         run: |
-          if [ -z "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
-            echo "::error::CLAUDE_CODE_OAUTH_TOKEN secret is not set."
-            exit 1
+          ARGS=()
+          if [ -n "${DISCUSSION_NUMBER}" ]; then
+            ARGS+=(--discussion-number "$DISCUSSION_NUMBER")
           fi
+          if [ "$DRY_RUN" = "true" ]; then
+            ARGS+=(--dry-run)
+          fi
+          uv run .agents/scripts/run-planner.py "${ARGS[@]}"
         env:
+          DISCUSSION_NUMBER: ${{ inputs.discussion_number }}
+          DRY_RUN: ${{ inputs.dry_run || false }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-
-      - name: Detect approval
-        id: detect
-        run: |
-          set -euo pipefail
-
-          # Manual dispatch with explicit discussion number
-          if [ -n "${DISPATCH_NUMBER}" ]; then
-            echo "number=${DISPATCH_NUMBER}" >> "$GITHUB_OUTPUT"
-            echo "approved=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          # Event-triggered: check if this comment is an approval
-          # Only process comments from repo owner on [idea] discussions
-          if [ "$COMMENT_AUTHOR" != "$REPO_OWNER" ]; then
-            echo "::notice::Skipping — comment not from repo owner ($COMMENT_AUTHOR != $REPO_OWNER)"
-            echo "approved=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          if ! echo "$DISC_TITLE" | grep -qF '[idea]'; then
-            echo "::notice::Skipping — not an [idea] discussion"
-            echo "approved=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          # Check if Peter Planner already processed this discussion (comment-based dedup)
-          OWNER="${{ github.repository_owner }}"
-          NAME="${GITHUB_REPOSITORY#*/}"
-          ALREADY_PLANNED=$(gh api graphql -f query='
-            query($owner: String!, $name: String!, $num: Int!) {
-              repository(owner: $owner, name: $name) {
-                discussion(number: $num) {
-                  comments(first: 50) {
-                    nodes { body }
-                  }
-                }
-              }
-            }
-          ' -f owner="$OWNER" -f name="$NAME" -F num="$DISC_NUMBER" \
-            --jq '.data.repository.discussion.comments.nodes[].body' \
-            | grep -cF 'Planned into the following issues' || true)
-
-          if [ "$ALREADY_PLANNED" -gt 0 ]; then
-            echo "::notice::Skipping — already planned (found summary comment)"
-            echo "approved=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          # Check for approval keywords (case-insensitive)
-          APPROVED=$(echo "$COMMENT_BODY_JSON" | python3 -c "
-          import re, sys, json
-          body = json.loads(sys.stdin.read())
-          pattern = re.compile(
-              r'\b(yes|let.s do it|plan it|approved|go ahead|ship it|lgtm|do it)\b',
-              re.IGNORECASE
-          )
-          print('true' if pattern.search(body) else 'false')
-          ")
-
-          if [ "$APPROVED" = "true" ]; then
-            echo "::notice::Approval detected from $COMMENT_AUTHOR on discussion #$DISC_NUMBER"
-            echo "number=$DISC_NUMBER" >> "$GITHUB_OUTPUT"
-            echo "approved=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "::notice::No approval keyword found"
-            echo "approved=false" >> "$GITHUB_OUTPUT"
-          fi
-        env:
-          DISPATCH_NUMBER: ${{ inputs.discussion_number }}
-          COMMENT_BODY_JSON: ${{ toJSON(github.event.comment.body) }}
-          COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
-          REPO_OWNER: ${{ github.repository_owner }}
-          DISC_NUMBER: ${{ github.event.discussion.number }}
-          DISC_TITLE: ${{ github.event.discussion.title }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Acknowledge
-        if: steps.detect.outputs.approved == 'true'
-        run: |
-          uv run .agents/skills/gh-discuss/scripts/gh-discuss.py update \
-            "${{ steps.detect.outputs.number }}" \
-            "*Peter Planner*
-
-          Working on it — I'll break this into issues shortly."
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Fetch discussion thread
-        if: steps.detect.outputs.approved == 'true'
-        run: |
-          set -euo pipefail
-          NUMBER="${{ steps.detect.outputs.number }}"
-          OWNER="${{ github.repository_owner }}"
-          NAME="${GITHUB_REPOSITORY#*/}"
-
-          # Discussions require GraphQL API
-          gh api graphql -f query='
-            query($owner: String!, $name: String!, $num: Int!) {
-              repository(owner: $owner, name: $name) {
-                discussion(number: $num) {
-                  number title body
-                  author { login }
-                  comments(first: 50) {
-                    nodes { body author { login } createdAt }
-                  }
-                }
-              }
-            }
-          ' -f owner="$OWNER" -f name="$NAME" -F num="$NUMBER" \
-            > /tmp/discussion.json
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Run planning agent
-        if: steps.detect.outputs.approved == 'true'
-        run: |
-          set -euo pipefail
-
-          THREAD="Discussion to plan:
-          $(cat /tmp/discussion.json)"
-
-          npx --yes @anthropic-ai/claude-code --print \
-            --system-prompt "$(cat .agents/prompts/peter-planner.md)" \
-            --append-system-prompt "$THREAD" \
-            "Read this approved discussion and break it into actionable GitHub Issues. Output ONLY the JSON block as specified in your prompt." \
-            > /tmp/plan.txt
-        env:
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-
-      - name: Create issues and link back
-        if: steps.detect.outputs.approved == 'true'
-        run: |
-          set -euo pipefail
-
-          # Validate planning output
-          cat /tmp/plan.txt | uv run .agents/scripts/validate-agent-output.py > /tmp/plan-validated.json || {
-            echo "::error::Failed to parse planning output"
-            cat /tmp/plan.txt
-            exit 1
-          }
-
-          python3 << 'PYEOF'
-          import json, subprocess, sys, os
-
-          with open("/tmp/plan-validated.json") as f:
-              plan = json.load(f)
-
-          disc_number = plan["discussion_number"]
-          milestone_name = plan.get("milestone_name")
-          issues = sorted(plan["issues"], key=lambda i: i.get("priority", 99))
-          repo = os.environ["GITHUB_REPOSITORY"]
-
-          milestone_id = None
-          if milestone_name and len(issues) >= 3:
-              result = subprocess.run(
-                  ["gh", "api", f"repos/{repo}/milestones",
-                   "-f", f"title={milestone_name}", "-f", "state=open",
-                   "-X", "POST", "--jq", ".number"],
-                  capture_output=True, text=True
-              )
-              if result.returncode == 0:
-                  milestone_id = result.stdout.strip()
-                  print(f"Created milestone: {milestone_name} (#{milestone_id})")
-
-          created_issues = []
-          for issue in issues:
-              body = issue["body"] + f"\n\n---\n*Planned from [discussion #{disc_number}](https://github.com/{repo}/discussions/{disc_number}) by Peter Planner*"
-              cmd = [
-                  "gh", "issue", "create",
-                  "--title", issue["title"],
-                  "--body", body,
-              ]
-              for label in issue.get("labels", ["enhancement"]):
-                  cmd.extend(["--label", label])
-              if milestone_id:
-                  cmd.extend(["--milestone", milestone_name])
-
-              result = subprocess.run(cmd, capture_output=True, text=True)
-              if result.returncode == 0:
-                  url = result.stdout.strip()
-                  issue_num = url.split("/")[-1]
-                  created_issues.append({"number": issue_num, "title": issue["title"], "url": url})
-                  print(f"Created issue #{issue_num}: {issue['title']}")
-              else:
-                  print(f"Failed to create issue '{issue['title']}': {result.stderr}", file=sys.stderr)
-
-          # Build summary comment linking discussion to created issues
-          if created_issues:
-              lines = ["*Peter Planner*\n", "Planned into the following issues:\n"]
-              for ci in created_issues:
-                  lines.append(f"- #{ci['number']} — {ci['title']}")
-              if milestone_name:
-                  lines.append(f"\nMilestone: **{milestone_name}**")
-              summary = "\n".join(lines)
-
-              subprocess.run(
-                  ["uv", "run", ".agents/skills/gh-discuss/scripts/gh-discuss.py",
-                   "update", str(disc_number), summary],
-                  check=True
-              )
-              print(f"Posted summary to discussion #{disc_number}")
-          PYEOF
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_REPOSITORY: ${{ github.repository }}

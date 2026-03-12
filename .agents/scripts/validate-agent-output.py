@@ -17,6 +17,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 REQUIRED_FIELDS: dict[str, list[str]] = {
     "propose": ["title", "body", "persona"],
@@ -25,6 +26,10 @@ REQUIRED_FIELDS: dict[str, list[str]] = {
     "advance_issue": ["issue_number", "body", "persona"],
     "plan": ["discussion_number", "issues"],
 }
+
+
+class ValidationError(ValueError):
+    """Raised when agent output fails schema validation."""
 
 
 def extract_json(text: str) -> dict:
@@ -65,6 +70,63 @@ def check_dedup(title: str) -> str | None:
     return None
 
 
+def require_non_empty_string(value: Any, field_name: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValidationError(f"field '{field_name}' must be a non-empty string")
+    return value.strip()
+
+
+def validate_plan(data: dict[str, Any]) -> None:
+    milestone_name = data.get("milestone_name")
+    if milestone_name is not None and (not isinstance(milestone_name, str) or not milestone_name.strip()):
+        raise ValidationError("field 'milestone_name' must be a non-empty string or null")
+
+    issues = data.get("issues")
+    if not isinstance(issues, list) or not issues:
+        raise ValidationError("field 'issues' must be a non-empty list")
+
+    seen_titles: set[str] = set()
+    for index, issue in enumerate(issues, start=1):
+        if not isinstance(issue, dict):
+            raise ValidationError(f"issue #{index} must be an object")
+
+        title = require_non_empty_string(issue.get("title"), f"issues[{index}].title")
+        require_non_empty_string(issue.get("body"), f"issues[{index}].body")
+
+        title_key = title.casefold()
+        if title_key in seen_titles:
+            raise ValidationError(f"duplicate issue title in plan: '{title}'")
+        seen_titles.add(title_key)
+
+        labels = issue.get("labels")
+        if labels is None:
+            continue
+        if not isinstance(labels, list) or any(not isinstance(label, str) or not label.strip() for label in labels):
+            raise ValidationError(f"field 'issues[{index}].labels' must be a list of non-empty strings")
+
+
+def validate_data(data: dict[str, Any]) -> dict[str, Any]:
+    action = data.get("action")
+    if action not in REQUIRED_FIELDS:
+        raise ValidationError(
+            f"unknown action '{action}'. Expected one of: {list(REQUIRED_FIELDS)}"
+        )
+
+    missing = [field for field in REQUIRED_FIELDS[action] if not data.get(field)]
+    if missing:
+        raise ValidationError(f"missing required fields for '{action}': {missing}")
+
+    if action == "plan":
+        validate_plan(data)
+
+    if action == "propose":
+        title = require_non_empty_string(data.get("title"), "title")
+        if not title.startswith("[idea]"):
+            data["title"] = f"[idea] {title}"
+
+    return data
+
+
 def main() -> None:
     text = sys.stdin.read().strip()
     if not text:
@@ -79,27 +141,18 @@ def main() -> None:
         sys.exit(1)
 
     action = data.get("action")
-    if action not in REQUIRED_FIELDS:
-        print(f"error: unknown action '{action}'. Expected one of: {list(REQUIRED_FIELDS)}", file=sys.stderr)
+    try:
+        data = validate_data(data)
+    except ValidationError as e:
+        print(f"error: {e}", file=sys.stderr)
         sys.exit(1)
 
-    missing = [f for f in REQUIRED_FIELDS[action] if not data.get(f)]
-    if missing:
-        print(f"error: missing required fields for '{action}': {missing}", file=sys.stderr)
-        sys.exit(1)
-
-    # Fix common title issues for proposals
-    if action == "propose":
-        title = data["title"]
-        if not title.startswith("[idea]"):
-            data["title"] = f"[idea] {title}"
-
-        # Dedup check if requested
-        if "--check-dedup" in sys.argv:
-            dup = check_dedup(data["title"])
-            if dup:
-                print(f"duplicate: proposed '{data['title']}' matches existing '{dup}'", file=sys.stderr)
-                sys.exit(2)
+    # Dedup check if requested
+    if action == "propose" and "--check-dedup" in sys.argv:
+        dup = check_dedup(data["title"])
+        if dup:
+            print(f"duplicate: proposed '{data['title']}' matches existing '{dup}'", file=sys.stderr)
+            sys.exit(2)
 
     json.dump(data, sys.stdout, ensure_ascii=False)
 

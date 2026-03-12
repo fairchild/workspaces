@@ -1,0 +1,1051 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
+"""Run Peter Planner against an approved GitHub discussion."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+import tomllib
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+
+PLANNER_TASK = (
+    "Read this approved discussion and break it into actionable GitHub Issues. "
+    "Output ONLY the JSON block as specified in your prompt."
+)
+DEFAULT_CLAUDE_TIMEOUT_SECONDS = 300
+REPO_ROOT = Path(__file__).resolve().parents[2]
+PROMPT_FILE = REPO_ROOT / ".agents" / "prompts" / "peter-planner.md"
+VALIDATOR_SCRIPT = REPO_ROOT / ".agents" / "scripts" / "validate-agent-output.py"
+CATALOG_FILE = REPO_ROOT / ".agents" / "config" / "peter-planner.toml"
+
+APPROVAL_PATTERN = re.compile(
+    r"\b(yes|let.s do it|plan it|approved|go ahead|ship it|lgtm|do it)\b",
+    re.IGNORECASE,
+)
+COMMENT_MARKER_RE = re.compile(
+    r"<!-- peter-planner:discussion=(?P<number>\d+);status=(?P<status>ack|planned) -->"
+)
+ISSUE_MARKER_RE = re.compile(
+    r"<!-- peter-planner:discussion=(?P<number>\d+);issue=(?P<slug>[a-z0-9-]+) -->"
+)
+MILESTONE_MARKER_RE = re.compile(r"<!-- peter-planner:discussion=(?P<number>\d+);milestone -->")
+LEGACY_ACK_SNIPPET = "*Peter Planner*\n\nWorking on it"
+LEGACY_RECONCILIATION_MILESTONES = {43: {2, 3}}
+
+
+class PlannerError(RuntimeError):
+    """Raised when planner execution should fail the workflow."""
+
+
+@dataclass(frozen=True)
+class LabelSpec:
+    name: str
+    color: str
+    description: str
+
+
+@dataclass(frozen=True)
+class LabelCatalog:
+    labels: dict[str, LabelSpec]
+    aliases: dict[str, str]
+    default_labels: list[str]
+
+
+@dataclass(frozen=True)
+class NormalizedIssue:
+    title: str
+    body: str
+    labels: list[str]
+    priority: int
+    slug: str
+    body_with_marker: str
+
+
+@dataclass(frozen=True)
+class NormalizedPlan:
+    discussion_number: int
+    discussion_url: str
+    milestone_name: str | None
+    milestone_description: str | None
+    issues: list[NormalizedIssue]
+
+
+@dataclass(frozen=True)
+class IssueExecution:
+    issue: NormalizedIssue
+    existing_issue: dict[str, Any] | None
+
+
+@dataclass(frozen=True)
+class ExecutionState:
+    ack_comment: dict[str, Any] | None
+    stale_ack_comment_ids: list[str]
+    planned_comment: dict[str, Any] | None
+    stale_planned_comment_ids: list[str]
+    existing_milestone: dict[str, Any] | None
+    orphan_milestone_numbers: list[int]
+    issues: list[IssueExecution]
+
+    @property
+    def already_planned(self) -> bool:
+        if self.planned_comment is None:
+            return False
+        return all(item.existing_issue is not None for item in self.issues)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--discussion-number", type=int)
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--plan-file",
+        type=Path,
+        help="Use saved planner output instead of invoking Claude Code",
+    )
+    return parser.parse_args()
+
+
+def log(message: str) -> None:
+    print(f"[run-planner] {message}", file=sys.stderr)
+
+
+def run_checked(
+    cmd: list[str],
+    *,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+    input: str | None = None,
+    timeout: int | None = None,
+) -> subprocess.CompletedProcess[str]:
+    try:
+        result = subprocess.run(
+            cmd,
+            input=input,
+            capture_output=True,
+            text=True,
+            cwd=cwd,
+            env=env,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        command = " ".join(cmd)
+        raise PlannerError(f"command timed out after {exc.timeout}s ({command})") from exc
+    if result.returncode != 0:
+        command = " ".join(cmd)
+        raise PlannerError(
+            f"command failed ({command}): {(result.stderr or result.stdout).strip() or 'unknown error'}"
+        )
+    return result
+
+
+def claude_timeout_seconds(env: dict[str, str]) -> int:
+    raw_value = env.get("PETER_PLANNER_CLAUDE_TIMEOUT_SECONDS", "").strip()
+    if not raw_value:
+        return DEFAULT_CLAUDE_TIMEOUT_SECONDS
+    try:
+        value = int(raw_value)
+    except ValueError as exc:
+        raise PlannerError(
+            "PETER_PLANNER_CLAUDE_TIMEOUT_SECONDS must be a positive integer"
+        ) from exc
+    if value <= 0:
+        raise PlannerError(
+            "PETER_PLANNER_CLAUDE_TIMEOUT_SECONDS must be a positive integer"
+        )
+    return value
+
+
+def current_branch() -> str:
+    result = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode == 0 and result.stdout.strip():
+        return result.stdout.strip()
+    return "unknown"
+
+
+def repo_owner_name(env: dict[str, str]) -> tuple[str, str]:
+    slug = env.get("GITHUB_REPOSITORY", "").strip()
+    if slug and "/" in slug:
+        return tuple(slug.split("/", 1))  # type: ignore[return-value]
+
+    result = run_checked(
+        ["gh", "repo", "view", "--json", "owner,name"],
+        cwd=REPO_ROOT,
+        env=env,
+    )
+    data = json.loads(result.stdout)
+    return data["owner"]["login"], data["name"]
+
+
+def repo_slug(env: dict[str, str]) -> str:
+    owner, name = repo_owner_name(env)
+    return f"{owner}/{name}"
+
+
+def agent_header(env: dict[str, str]) -> str:
+    return f"**Agent**: `{repo_owner_name(env)[1]}` | **Branch**: `{current_branch()}`"
+
+
+def graphql(query: str, env: dict[str, str], **variables: Any) -> dict[str, Any]:
+    cmd = ["gh", "api", "graphql", "-f", f"query={query}"]
+    for key, value in variables.items():
+        if isinstance(value, bool):
+            cmd.extend(["-f", f"{key}={'true' if value else 'false'}"])
+        elif isinstance(value, int):
+            cmd.extend(["-F", f"{key}={value}"])
+        else:
+            cmd.extend(["-f", f"{key}={value}"])
+    result = run_checked(cmd, cwd=REPO_ROOT, env=env)
+    data = json.loads(result.stdout)
+    if "errors" in data:
+        raise PlannerError(f"graphql error: {data['errors']}")
+    return data
+
+
+def load_label_catalog(path: Path) -> LabelCatalog:
+    data = tomllib.loads(path.read_text(encoding="utf-8"))
+    labels: dict[str, LabelSpec] = {}
+    for name, spec in data["labels"].items():
+        labels[name] = LabelSpec(
+            name=name,
+            color=str(spec["color"]),
+            description=str(spec.get("description", "")),
+        )
+    aliases = {
+        normalize_label_key(alias): str(target)
+        for alias, target in data.get("aliases", {}).items()
+    }
+    default_labels = [str(label) for label in data["default_labels"]]
+    return LabelCatalog(labels=labels, aliases=aliases, default_labels=default_labels)
+
+
+def normalize_label_key(value: str) -> str:
+    return re.sub(r"\s+", " ", value.strip().lower())
+
+
+def canonical_label_name(label: str, catalog: LabelCatalog) -> str:
+    normalized = normalize_label_key(label)
+    for candidate in catalog.labels:
+        if normalize_label_key(candidate) == normalized:
+            return candidate
+    mapped = catalog.aliases.get(normalized)
+    if mapped:
+        return mapped
+    raise PlannerError(
+        f"label '{label}' is not in the Peter Planner catalog ({', '.join(sorted(catalog.labels))})"
+    )
+
+
+def unique_preserving_order(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        ordered.append(value)
+    return ordered
+
+
+def issue_slug(title: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
+    return slug or "planned-issue"
+
+
+def strip_discussion_tags(title: str) -> str:
+    return re.sub(r"^\s*(\[[^\]]+\]\s*)+", "", title).strip()
+
+
+def derive_milestone_name(title: str) -> str:
+    return strip_discussion_tags(title)
+
+
+def comment_marker(discussion_number: int, status: str) -> str:
+    return f"<!-- peter-planner:discussion={discussion_number};status={status} -->"
+
+
+def issue_marker(discussion_number: int, slug: str) -> str:
+    return f"<!-- peter-planner:discussion={discussion_number};issue={slug} -->"
+
+
+def milestone_marker(discussion_number: int) -> str:
+    return f"<!-- peter-planner:discussion={discussion_number};milestone -->"
+
+
+def marker_status(body: str, discussion_number: int) -> str | None:
+    match = COMMENT_MARKER_RE.search(body)
+    if not match or int(match.group("number")) != discussion_number:
+        return None
+    return match.group("status")
+
+
+def extract_issue_slugs(body: str, discussion_number: int) -> list[str]:
+    slugs: list[str] = []
+    for match in ISSUE_MARKER_RE.finditer(body):
+        if int(match.group("number")) == discussion_number:
+            slugs.append(match.group("slug"))
+    return slugs
+
+
+def has_milestone_marker(description: str | None, discussion_number: int) -> bool:
+    if not description:
+        return False
+    match = MILESTONE_MARKER_RE.search(description)
+    return bool(match and int(match.group("number")) == discussion_number)
+
+
+def select_latest(comments: list[dict[str, Any]]) -> dict[str, Any] | None:
+    if not comments:
+        return None
+    return sorted(comments, key=lambda item: item.get("createdAt", ""))[-1]
+
+
+def select_legacy_ack_comment_ids(
+    discussion_number: int,
+    comments: list[dict[str, Any]],
+) -> list[str]:
+    if discussion_number != 43:
+        return []
+    legacy_ids: list[str] = []
+    for comment in comments:
+        body = str(comment.get("body", ""))
+        if LEGACY_ACK_SNIPPET in body and marker_status(body, discussion_number) is None:
+            legacy_ids.append(str(comment["id"]))
+    return legacy_ids
+
+
+def select_legacy_orphan_milestones(
+    discussion_number: int,
+    milestones: list[dict[str, Any]],
+) -> list[int]:
+    allowed = LEGACY_RECONCILIATION_MILESTONES.get(discussion_number, set())
+    orphan_numbers: list[int] = []
+    for milestone in milestones:
+        if milestone["number"] not in allowed:
+            continue
+        if milestone.get("open_issues", 1) != 0:
+            continue
+        if milestone.get("creator", {}).get("login") != "github-actions[bot]":
+            continue
+        orphan_numbers.append(int(milestone["number"]))
+    return orphan_numbers
+
+
+def compose_ack_comment(discussion_number: int, env: dict[str, str]) -> str:
+    return (
+        f"{agent_header(env)}\n\n"
+        f"{comment_marker(discussion_number, 'ack')}\n\n"
+        "*Peter Planner*\n\n"
+        "Working on it — I'll break this into issues shortly."
+    )
+
+
+def compose_summary_comment(
+    discussion_number: int,
+    issues: list[dict[str, Any]],
+    milestone: dict[str, Any] | None,
+    env: dict[str, str],
+) -> str:
+    lines = [
+        agent_header(env),
+        "",
+        comment_marker(discussion_number, "planned"),
+        "",
+        "*Peter Planner*",
+        "",
+        "Planned into the following issues:",
+        "",
+    ]
+    for issue in issues:
+        lines.append(f"- #{issue['number']} — {issue['title']}")
+    if milestone is not None:
+        lines.extend(["", f"Milestone: [{milestone['title']}]({milestone['html_url']})"])
+    return "\n".join(lines)
+
+
+def compose_issue_body(body: str, discussion_url: str, discussion_number: int, slug: str) -> str:
+    return (
+        f"{body.rstrip()}\n\n"
+        "---\n"
+        f"*Planned from [discussion #{discussion_number}]({discussion_url}) by Peter Planner.*\n"
+        f"{issue_marker(discussion_number, slug)}"
+    )
+
+
+def compose_milestone_description(discussion_url: str, discussion_number: int) -> str:
+    return (
+        f"Planned from [discussion #{discussion_number}]({discussion_url}) by Peter Planner.\n\n"
+        f"{milestone_marker(discussion_number)}"
+    )
+
+
+def validate_output(raw_output: str, env: dict[str, str]) -> dict[str, Any]:
+    result = subprocess.run(
+        ["uv", "run", str(VALIDATOR_SCRIPT)],
+        input=raw_output,
+        capture_output=True,
+        text=True,
+        cwd=REPO_ROOT,
+        env=env,
+    )
+    if result.returncode != 0:
+        raise PlannerError(
+            f"failed to validate Peter Planner output: {(result.stderr or raw_output).strip()}"
+        )
+    return json.loads(result.stdout)
+
+
+def normalize_labels(raw_labels: list[str] | None, catalog: LabelCatalog) -> list[str]:
+    labels = list(catalog.default_labels)
+    extras = raw_labels or []
+    for label in extras:
+        labels.append(canonical_label_name(label, catalog))
+    return unique_preserving_order(labels)
+
+
+def normalize_plan(
+    data: dict[str, Any],
+    discussion: dict[str, Any],
+    catalog: LabelCatalog,
+) -> NormalizedPlan:
+    if int(data["discussion_number"]) != int(discussion["number"]):
+        raise PlannerError(
+            f"planner returned discussion #{data['discussion_number']} but expected #{discussion['number']}"
+        )
+
+    issues_data = sorted(data["issues"], key=lambda item: int(item.get("priority", 99)))
+    milestone_name = derive_milestone_name(discussion["title"]) if len(issues_data) >= 3 else None
+    normalized_issues: list[NormalizedIssue] = []
+    for item in issues_data:
+        title = str(item["title"]).strip()
+        body = str(item["body"]).strip()
+        slug = issue_slug(title)
+        normalized_issues.append(
+            NormalizedIssue(
+                title=title,
+                body=body,
+                labels=normalize_labels(item.get("labels"), catalog),
+                priority=int(item.get("priority", 99)),
+                slug=slug,
+                body_with_marker=compose_issue_body(
+                    body,
+                    discussion["url"],
+                    int(discussion["number"]),
+                    slug,
+                ),
+            )
+        )
+
+    return NormalizedPlan(
+        discussion_number=int(discussion["number"]),
+        discussion_url=str(discussion["url"]),
+        milestone_name=milestone_name,
+        milestone_description=(
+            compose_milestone_description(str(discussion["url"]), int(discussion["number"]))
+            if milestone_name
+            else None
+        ),
+        issues=normalized_issues,
+    )
+
+
+def serialize_plan(plan: NormalizedPlan) -> dict[str, Any]:
+    return {
+        "discussion_number": plan.discussion_number,
+        "milestone_name": plan.milestone_name,
+        "milestone_description": plan.milestone_description,
+        "issues": [
+            {
+                "title": issue.title,
+                "body": issue.body,
+                "labels": issue.labels,
+                "priority": issue.priority,
+                "slug": issue.slug,
+                "body_with_marker": issue.body_with_marker,
+            }
+            for issue in plan.issues
+        ],
+    }
+
+
+def fetch_discussion(owner: str, name: str, number: int, env: dict[str, str]) -> dict[str, Any]:
+    query = """
+query($owner: String!, $name: String!, $num: Int!) {
+  repository(owner: $owner, name: $name) {
+    discussion(number: $num) {
+      id
+      number
+      url
+      title
+      body
+      author { login }
+      comments(first: 100) {
+        nodes {
+          id
+          body
+          createdAt
+          author { login }
+        }
+      }
+    }
+  }
+}
+"""
+    data = graphql(query, env, owner=owner, name=name, num=number)
+    discussion = data["data"]["repository"]["discussion"]
+    if discussion is None:
+        raise PlannerError(f"discussion #{number} not found")
+    return discussion
+
+
+def fetch_repo_labels(repo: str, env: dict[str, str]) -> dict[str, dict[str, Any]]:
+    result = run_checked(
+        ["gh", "label", "list", "--limit", "200", "--json", "name,color,description"],
+        cwd=REPO_ROOT,
+        env=env,
+    )
+    return {item["name"]: item for item in json.loads(result.stdout)}
+
+
+def fetch_existing_issues(env: dict[str, str]) -> list[dict[str, Any]]:
+    result = run_checked(
+        [
+            "gh",
+            "issue",
+            "list",
+            "--state",
+            "all",
+            "--limit",
+            "200",
+            "--json",
+            "number,title,body,url,labels,milestone,state",
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+    )
+    return json.loads(result.stdout)
+
+
+def fetch_existing_milestones(repo: str, env: dict[str, str]) -> list[dict[str, Any]]:
+    result = run_checked(
+        ["gh", "api", f"repos/{repo}/milestones?state=all&per_page=100"],
+        cwd=REPO_ROOT,
+        env=env,
+    )
+    return json.loads(result.stdout)
+
+
+def ensure_catalog_labels(
+    labels_needed: list[str],
+    catalog: LabelCatalog,
+    repo_labels: dict[str, dict[str, Any]],
+    env: dict[str, str],
+) -> None:
+    for label_name in labels_needed:
+        if label_name in repo_labels:
+            continue
+        spec = catalog.labels[label_name]
+        run_checked(
+            [
+                "gh",
+                "api",
+                f"repos/{repo_slug(env)}/labels",
+                "-X",
+                "POST",
+                "-f",
+                f"name={spec.name}",
+                "-f",
+                f"color={spec.color}",
+                "-f",
+                f"description={spec.description}",
+            ],
+            cwd=REPO_ROOT,
+            env=env,
+        )
+        repo_labels[label_name] = {
+            "name": spec.name,
+            "color": spec.color,
+            "description": spec.description,
+        }
+        log(f"Created missing label '{label_name}' from catalog")
+
+
+def run_claude(
+    discussion: dict[str, Any],
+    catalog: LabelCatalog,
+    env: dict[str, str],
+    *,
+    timeout_seconds: int,
+) -> str:
+    label_summary = "\n".join(f"- {label}" for label in catalog.labels)
+    prompt_context = (
+        "Discussion to plan:\n"
+        f"{json.dumps(discussion, ensure_ascii=False)}\n\n"
+        "Allowed labels:\n"
+        f"{label_summary}"
+    )
+    return run_checked(
+        [
+            "npx",
+            "--yes",
+            "@anthropic-ai/claude-code",
+            "--print",
+            "--system-prompt",
+            PROMPT_FILE.read_text(encoding="utf-8"),
+            "--append-system-prompt",
+            prompt_context,
+            PLANNER_TASK,
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+        timeout=timeout_seconds,
+    ).stdout
+
+
+def load_plan_output(
+    args: argparse.Namespace,
+    discussion: dict[str, Any],
+    catalog: LabelCatalog,
+    env: dict[str, str],
+) -> str:
+    if args.plan_file is not None:
+        plan_file = args.plan_file.resolve()
+        if not plan_file.is_file():
+            raise PlannerError(f"plan file not found: {plan_file}")
+        log(f"Using planner output fixture from {plan_file}")
+        return plan_file.read_text(encoding="utf-8")
+
+    timeout_seconds = claude_timeout_seconds(env)
+    log(f"Running Claude Code with timeout={timeout_seconds}s")
+    return run_claude(
+        discussion,
+        catalog,
+        env,
+        timeout_seconds=timeout_seconds,
+    )
+
+
+def fetch_issue_marker_map(
+    discussion_number: int,
+    issues: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    marker_map: dict[str, dict[str, Any]] = {}
+    for issue in issues:
+        for slug in extract_issue_slugs(str(issue.get("body", "")), discussion_number):
+            if slug in marker_map:
+                raise PlannerError(
+                    f"multiple issues already carry Peter marker '{slug}' for discussion #{discussion_number}"
+                )
+            marker_map[slug] = issue
+    return marker_map
+
+
+def build_execution_state(
+    discussion: dict[str, Any],
+    plan: NormalizedPlan,
+    existing_issues: list[dict[str, Any]],
+    existing_milestones: list[dict[str, Any]],
+) -> ExecutionState:
+    discussion_number = int(discussion["number"])
+    ack_comments: list[dict[str, Any]] = []
+    planned_comments: list[dict[str, Any]] = []
+    for comment in discussion["comments"]["nodes"]:
+        status = marker_status(str(comment.get("body", "")), discussion_number)
+        if status == "ack":
+            ack_comments.append(comment)
+        elif status == "planned":
+            planned_comments.append(comment)
+
+    ack_comment = select_latest(ack_comments)
+    planned_comment = select_latest(planned_comments)
+
+    stale_ack_comment_ids = [
+        str(comment["id"])
+        for comment in ack_comments
+        if ack_comment is None or comment["id"] != ack_comment["id"]
+    ]
+    stale_ack_comment_ids.extend(select_legacy_ack_comment_ids(discussion_number, discussion["comments"]["nodes"]))
+
+    stale_planned_comment_ids = [
+        str(comment["id"])
+        for comment in planned_comments
+        if planned_comment is None or comment["id"] != planned_comment["id"]
+    ]
+
+    issue_marker_map = fetch_issue_marker_map(discussion_number, existing_issues)
+    issues = [
+        IssueExecution(issue=item, existing_issue=issue_marker_map.get(item.slug))
+        for item in plan.issues
+    ]
+
+    milestone = None
+    if plan.milestone_name:
+        for candidate in existing_milestones:
+            if has_milestone_marker(candidate.get("description"), discussion_number):
+                milestone = candidate
+                break
+        if milestone is None:
+            for candidate in existing_milestones:
+                if candidate.get("title") == plan.milestone_name:
+                    milestone = candidate
+                    break
+
+    orphan_milestone_numbers = select_legacy_orphan_milestones(discussion_number, existing_milestones)
+    if milestone is not None and int(milestone["number"]) in orphan_milestone_numbers:
+        milestone = None
+
+    return ExecutionState(
+        ack_comment=ack_comment,
+        stale_ack_comment_ids=unique_preserving_order(stale_ack_comment_ids),
+        planned_comment=planned_comment,
+        stale_planned_comment_ids=unique_preserving_order(stale_planned_comment_ids),
+        existing_milestone=milestone,
+        orphan_milestone_numbers=orphan_milestone_numbers,
+        issues=issues,
+    )
+
+
+def discussion_has_completed_plan(
+    discussion_number: int,
+    comments: list[dict[str, Any]],
+    issues: list[dict[str, Any]],
+) -> bool:
+    has_summary = any(
+        marker_status(str(comment.get("body", "")), discussion_number) == "planned"
+        for comment in comments
+    )
+    has_any_issue = any(
+        extract_issue_slugs(str(issue.get("body", "")), discussion_number)
+        for issue in issues
+    )
+    return has_summary and has_any_issue
+
+
+def delete_discussion_comment(comment_id: str, env: dict[str, str]) -> None:
+    mutation = """
+mutation($id: ID!) {
+  deleteDiscussionComment(input: { id: $id }) {
+    comment { id }
+  }
+}
+"""
+    graphql(mutation, env, id=comment_id)
+
+
+def add_discussion_comment(discussion_id: str, body: str, env: dict[str, str]) -> dict[str, Any]:
+    mutation = """
+mutation($discId: ID!, $body: String!) {
+  addDiscussionComment(input: {
+    discussionId: $discId
+    body: $body
+  }) {
+    comment { id body createdAt }
+  }
+}
+"""
+    data = graphql(mutation, env, discId=discussion_id, body=body)
+    return data["data"]["addDiscussionComment"]["comment"]
+
+
+def update_discussion_title(discussion_id: str, title: str, env: dict[str, str]) -> None:
+    mutation = """
+mutation($discId: ID!, $title: String!) {
+  updateDiscussion(input: {
+    discussionId: $discId
+    title: $title
+  }) {
+    discussion { id title }
+  }
+}
+"""
+    graphql(mutation, env, discId=discussion_id, title=title)
+
+
+def create_or_reuse_milestone(
+    repo: str,
+    discussion_number: int,
+    plan: NormalizedPlan,
+    execution: ExecutionState,
+    env: dict[str, str],
+) -> dict[str, Any] | None:
+    if plan.milestone_name is None or plan.milestone_description is None:
+        return None
+    if execution.existing_milestone is not None:
+        return execution.existing_milestone
+
+    result = subprocess.run(
+        [
+            "gh",
+            "api",
+            f"repos/{repo}/milestones",
+            "-X",
+            "POST",
+            "-f",
+            f"title={plan.milestone_name}",
+            "-f",
+            "state=open",
+            "-f",
+            f"description={plan.milestone_description}",
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        error_text = (result.stderr or result.stdout).strip()
+        if "already_exists" not in error_text and "already exists" not in error_text:
+            log(
+                f"Milestone create returned a non-zero status for discussion #{discussion_number}; "
+                "checking for an existing matching milestone before failing"
+            )
+
+    milestones = fetch_existing_milestones(repo, env)
+    for milestone in milestones:
+        if has_milestone_marker(milestone.get("description"), discussion_number):
+            return milestone
+        if milestone.get("title") == plan.milestone_name:
+            return milestone
+    raise PlannerError(
+        f"milestone '{plan.milestone_name}' was not available after creation attempt"
+    )
+
+
+def issue_labels(issue: dict[str, Any]) -> set[str]:
+    return {label["name"] for label in issue.get("labels", [])}
+
+
+def ensure_issue(
+    issue_plan: NormalizedIssue,
+    existing_issue: dict[str, Any] | None,
+    milestone_name: str | None,
+    env: dict[str, str],
+) -> dict[str, Any]:
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
+        handle.write(issue_plan.body_with_marker)
+        body_file = handle.name
+
+    try:
+        if existing_issue is None:
+            cmd = [
+                "gh",
+                "issue",
+                "create",
+                "--title",
+                issue_plan.title,
+                "--body-file",
+                body_file,
+            ]
+            for label in issue_plan.labels:
+                cmd.extend(["--label", label])
+            if milestone_name:
+                cmd.extend(["--milestone", milestone_name])
+            result = run_checked(cmd, cwd=REPO_ROOT, env=env)
+            url = result.stdout.strip()
+            return {
+                "number": int(url.rstrip("/").split("/")[-1]),
+                "title": issue_plan.title,
+                "url": url,
+            }
+
+        cmd = [
+            "gh",
+            "issue",
+            "edit",
+            str(existing_issue["number"]),
+            "--title",
+            issue_plan.title,
+            "--body-file",
+            body_file,
+        ]
+        existing_labels = issue_labels(existing_issue)
+        for label in issue_plan.labels:
+            if label not in existing_labels:
+                cmd.extend(["--add-label", label])
+        if milestone_name:
+            cmd.extend(["--milestone", milestone_name])
+        run_checked(cmd, cwd=REPO_ROOT, env=env)
+        return {
+            "number": int(existing_issue["number"]),
+            "title": issue_plan.title,
+            "url": existing_issue["url"],
+        }
+    finally:
+        try:
+            os.unlink(body_file)
+        except OSError:
+            pass
+
+
+def delete_milestone(repo: str, number: int, env: dict[str, str]) -> None:
+    run_checked(
+        ["gh", "api", f"repos/{repo}/milestones/{number}", "-X", "DELETE"],
+        cwd=REPO_ROOT,
+        env=env,
+    )
+
+
+def cleanup_legacy_state(
+    discussion: dict[str, Any],
+    execution: ExecutionState,
+    repo: str,
+    env: dict[str, str],
+) -> None:
+    for comment_id in execution.stale_ack_comment_ids + execution.stale_planned_comment_ids:
+        delete_discussion_comment(comment_id, env)
+    for number in execution.orphan_milestone_numbers:
+        delete_milestone(repo, number, env)
+
+
+def endorse_title(title: str) -> str:
+    if "[idea][endorsed]" in title:
+        return title
+    if "[idea]" not in title:
+        return title
+    return title.replace("[idea]", "[idea][endorsed]", 1)
+
+
+def resolve_discussion_number(args: argparse.Namespace, env: dict[str, str]) -> int | None:
+    if args.discussion_number is not None:
+        return args.discussion_number
+
+    event_path = env.get("GITHUB_EVENT_PATH")
+    if not event_path:
+        return None
+    payload = json.loads(Path(event_path).read_text(encoding="utf-8"))
+    discussion = payload.get("discussion")
+    if isinstance(discussion, dict) and isinstance(discussion.get("number"), int):
+        return int(discussion["number"])
+    return None
+
+
+def comment_is_approved(args: argparse.Namespace, env: dict[str, str], owner: str) -> bool:
+    if args.discussion_number is not None:
+        return True
+
+    event_path = env.get("GITHUB_EVENT_PATH")
+    if not event_path:
+        raise PlannerError("discussion number is required when not running from GitHub Actions")
+
+    payload = json.loads(Path(event_path).read_text(encoding="utf-8"))
+    comment = payload.get("comment") or {}
+    discussion = payload.get("discussion") or {}
+    author = (comment.get("user") or {}).get("login", "")
+    title = str(discussion.get("title", ""))
+    body = str(comment.get("body", ""))
+
+    if author != owner:
+        log(f"Skipping discussion comment from non-owner '{author}'")
+        return False
+    if "[idea]" not in title:
+        log(f"Skipping discussion #{discussion.get('number')} because it is not an [idea] discussion")
+        return False
+    if not APPROVAL_PATTERN.search(body):
+        log(f"Skipping discussion #{discussion.get('number')} because no approval keyword was found")
+        return False
+    return True
+
+
+def main() -> int:
+    args = parse_args()
+    env = dict(os.environ)
+    owner, name = repo_owner_name(env)
+    number = resolve_discussion_number(args, env)
+    if number is None:
+        raise PlannerError("could not determine discussion number")
+
+    if not comment_is_approved(args, env, owner):
+        return 0
+
+    discussion = fetch_discussion(owner, name, number, env)
+    repo = f"{owner}/{name}"
+    existing_issues = fetch_existing_issues(env)
+
+    catalog = load_label_catalog(CATALOG_FILE)
+    raw_output = load_plan_output(args, discussion, catalog, env)
+    validated = validate_output(raw_output, env)
+    normalized = normalize_plan(validated, discussion, catalog)
+    execution = build_execution_state(
+        discussion,
+        normalized,
+        existing_issues,
+        fetch_existing_milestones(repo, env),
+    )
+    if execution.already_planned and not args.dry_run:
+        log(f"Discussion #{number} already has all planned issues; nothing to do")
+        return 0
+
+    if args.dry_run:
+        print(json.dumps(serialize_plan(normalized), indent=2, ensure_ascii=False))
+        return 0
+
+    labels_needed = unique_preserving_order(
+        [label for issue in normalized.issues for label in issue.labels]
+    )
+    repo_labels = fetch_repo_labels(repo, env)
+    ensure_catalog_labels(labels_needed, catalog, repo_labels, env)
+
+    cleanup_legacy_state(discussion, execution, repo, env)
+
+    if execution.ack_comment is None:
+        add_discussion_comment(discussion["id"], compose_ack_comment(number, env), env)
+
+    milestone = create_or_reuse_milestone(repo, number, normalized, execution, env)
+    resolved_issues = [
+        ensure_issue(item.issue, item.existing_issue, normalized.milestone_name, env)
+        for item in execution.issues
+    ]
+    if not resolved_issues:
+        raise PlannerError(f"planner produced zero issues for discussion #{number}")
+
+    fresh_execution = build_execution_state(
+        discussion=fetch_discussion(owner, name, number, env),
+        plan=normalized,
+        existing_issues=fetch_existing_issues(env),
+        existing_milestones=fetch_existing_milestones(repo, env),
+    )
+    for comment_id in fresh_execution.stale_ack_comment_ids:
+        delete_discussion_comment(comment_id, env)
+    if fresh_execution.ack_comment is not None:
+        delete_discussion_comment(str(fresh_execution.ack_comment["id"]), env)
+    for comment_id in fresh_execution.stale_planned_comment_ids:
+        delete_discussion_comment(comment_id, env)
+    if fresh_execution.planned_comment is not None:
+        delete_discussion_comment(str(fresh_execution.planned_comment["id"]), env)
+
+    add_discussion_comment(
+        discussion["id"],
+        compose_summary_comment(number, resolved_issues, milestone, env),
+        env,
+    )
+
+    new_title = endorse_title(str(discussion["title"]))
+    if new_title != discussion["title"]:
+        update_discussion_title(discussion["id"], new_title, env)
+
+    log(f"Planned discussion #{number} into {len(resolved_issues)} issue(s)")
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except PlannerError as error:
+        print(f"error: {error}", file=sys.stderr)
+        raise SystemExit(1)
