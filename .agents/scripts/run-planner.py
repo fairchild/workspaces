@@ -773,8 +773,22 @@ mutation($discId: ID!, $title: String!) {
     discussion { id title }
   }
 }
-"""
+    """
     graphql(mutation, env, discId=discussion_id, title=title)
+
+
+def maybe_update_discussion_title(discussion_id: str, title: str, env: dict[str, str]) -> bool:
+    try:
+        update_discussion_title(discussion_id, title, env)
+        return True
+    except PlannerError as error:
+        if "Resource not accessible by integration" in str(error):
+            log(
+                "Skipping discussion title update because the GitHub Actions token "
+                "cannot retitle discussions in this repository"
+            )
+            return False
+        raise
 
 
 def create_or_reuse_milestone(
@@ -988,6 +1002,9 @@ def main() -> int:
         fetch_existing_milestones(repo, env),
     )
     if execution.already_planned and not args.dry_run:
+        new_title = endorse_title(str(discussion["title"]))
+        if new_title != discussion["title"]:
+            maybe_update_discussion_title(discussion["id"], new_title, env)
         log(f"Discussion #{number} already has all planned issues; nothing to do")
         return 0
 
@@ -1037,7 +1054,7 @@ def main() -> int:
 
     new_title = endorse_title(str(discussion["title"]))
     if new_title != discussion["title"]:
-        update_discussion_title(discussion["id"], new_title, env)
+        maybe_update_discussion_title(discussion["id"], new_title, env)
 
     log(f"Planned discussion #{number} into {len(resolved_issues)} issue(s)")
     return 0
