@@ -6,10 +6,6 @@ import WorkspaceManagerCore
 
 @Suite("SidebarWorkspaceController")
 struct SidebarViewTests {
-    private struct CleanupError: LocalizedError {
-        var errorDescription: String? { "cleanup failed" }
-    }
-
     @Test("Preferred repo favors selected workspace source repo")
     func preferredRepoFavorsSelectedWorkspaceSourceRepo() throws {
         let repoA = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))
@@ -61,44 +57,19 @@ struct SidebarViewTests {
         #expect(preferredRepo?.id == repoA.id)
     }
 
-    @Test("Remote cleanup helper returns nil after successful delete")
-    func remoteCleanupHelperReturnsNilAfterSuccessfulDelete() async throws {
-        let sandboxID = "sandbox-123"
-        let recordedSandboxID = LockedBox<String?>(nil)
+    @Test("Preferred repo ignores backend sessions and falls back")
+    func preferredRepoIgnoresBackendSession() throws {
+        let repoA = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))
+        let repoB = Repo(name: "beta", localPath: URL(fileURLWithPath: "/tmp/beta"))
 
-        let cleanupError = await SidebarWorkspaceController.cleanupRemoteSandboxAfterFailedPersistence(
-            sandboxId: sandboxID,
-            deleteSandbox: { requestedSandboxID in
-                await recordedSandboxID.set(requestedSandboxID)
-            }
+        let preferredRepo = SidebarWorkspaceController.preferredRepoForNewWorkspace(
+            selectedWorkspace: nil,
+            activeSessionKey: .backendSession(providerID: "lume", instanceID: "vm-123"),
+            repos: [repoA, repoB],
+            normalizeRepoPath: { $0.standardizedFileURL.resolvingSymlinksInPath().path }
         )
 
-        #expect(cleanupError == nil)
-        #expect(await recordedSandboxID.value == sandboxID)
-    }
-
-    @Test("Remote cleanup helper returns thrown delete error")
-    func remoteCleanupHelperReturnsThrownDeleteError() async throws {
-        let cleanupError = await SidebarWorkspaceController.cleanupRemoteSandboxAfterFailedPersistence(
-            sandboxId: "sandbox-123",
-            deleteSandbox: { _ in
-                throw CleanupError()
-            }
-        )
-
-        #expect(cleanupError is CleanupError)
-    }
-
-    @Test("Remote cleanup message appends cleanup failure to existing persistence error")
-    func remoteCleanupMessageAppendsCleanupFailure() {
-        let message = SidebarWorkspaceController.remoteWorkspacePersistenceFailureMessage(
-            existingMessage: "Failed to save remote workspace: write failed",
-            sandboxId: "sandbox-123",
-            cleanupError: CleanupError()
-        )
-
-        #expect(message.contains("Failed to save remote workspace: write failed"))
-        #expect(message.contains("Cleanup also failed for remote workspace 'sandbox-123': cleanup failed"))
+        #expect(preferredRepo?.id == repoA.id)
     }
 
     @Test("Local creation message matches progress phase")
@@ -108,21 +79,5 @@ struct SidebarViewTests {
         #expect(SidebarWorkspaceController.localCreationMessage(for: .creatingBranch) == "Creating branch...")
         #expect(SidebarWorkspaceController.localCreationMessage(for: .runningSetupScript) == "Running setup script...")
         #expect(SidebarWorkspaceController.localCreationMessage(for: .finished) == "Finishing workspace...")
-    }
-}
-
-private actor LockedBox<Value: Sendable> {
-    private var storage: Value
-
-    init(_ storage: Value) {
-        self.storage = storage
-    }
-
-    func set(_ newValue: Value) {
-        storage = newValue
-    }
-
-    var value: Value {
-        storage
     }
 }

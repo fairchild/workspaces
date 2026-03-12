@@ -24,6 +24,8 @@ DEFAULT_OUTPUT_DIR="$REPO_ROOT/output/window"
 OUTPUT_PATH=""
 ACTIVATE_APP=false
 LATEST_PATH=""
+CAPTURE_RETRIES=5
+CAPTURE_RETRY_DELAY_SECONDS=1
 
 log() {
     echo "[$(date +%H:%M:%S)] $*"
@@ -141,29 +143,32 @@ SWIFT
     echo "$win_id"
 }
 
-capture_window() {
-    local win_id="$1"
-    screencapture -x -l "$win_id" "$OUTPUT_PATH" || fail "window capture failed"
-
-    if [[ "$OUTPUT_PATH" != "$LATEST_PATH" ]]; then
-        cp "$OUTPUT_PATH" "$LATEST_PATH"
-    fi
-}
-
 main() {
     parse_args "$@"
     resolve_output_paths
     ensure_dependencies
     activate_if_requested
 
-    local win_id
-    win_id="$(read_window_id)"
+    local attempt win_id
+    for ((attempt = 1; attempt <= CAPTURE_RETRIES; attempt++)); do
+        win_id="$(read_window_id)"
+        if screencapture -x -l "$win_id" "$OUTPUT_PATH"; then
+            if [[ "$OUTPUT_PATH" != "$LATEST_PATH" ]]; then
+                cp "$OUTPUT_PATH" "$LATEST_PATH"
+            fi
+            log "Captured window id $win_id"
+            log "Screenshot: $OUTPUT_PATH"
+            log "Latest: $LATEST_PATH"
+            return 0
+        fi
 
-    capture_window "$win_id"
+        if (( attempt < CAPTURE_RETRIES )); then
+            log "Capture attempt $attempt/$CAPTURE_RETRIES failed for window id $win_id; retrying..."
+            sleep "$CAPTURE_RETRY_DELAY_SECONDS"
+        fi
+    done
 
-    log "Captured window id $win_id"
-    log "Screenshot: $OUTPUT_PATH"
-    log "Latest: $LATEST_PATH"
+    fail "window capture failed after $CAPTURE_RETRIES attempts"
 }
 
 main "$@"

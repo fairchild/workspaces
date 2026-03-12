@@ -49,8 +49,8 @@ struct MainWindowViewState {
     var didApplyFixtureWebBootstrap = false
     var didResolveInitialSurface = false
     var openInEditorErrorMessage: String?
-    var remoteErrorMessage: String?
-    var connectingSandboxId: String?
+    var workspaceOperationErrorMessage: String?
+    var connectingWorkspaceID: UUID?
 }
 
 enum MainWindowOpenInEditorContextKey: Equatable {

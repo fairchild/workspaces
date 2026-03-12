@@ -272,7 +272,7 @@ private struct WorkspaceRemoteMetadataPayload: Codable, Equatable, Sendable {
 }
 
 @Model
-public final class Workspace: @unchecked Sendable {
+public final class Workspace {
     public var id: UUID
     public var name: String
     public var path: String  // Store as String, convert to URL when needed
@@ -287,6 +287,9 @@ public final class Workspace: @unchecked Sendable {
 
     /// Remote instance ID (nil for local workspaces)
     public var remoteId: String?
+
+    /// Provider-specific metadata encoded as JSON.
+    public var backendMetadataRaw: String = ""
 
     /// Backend-specific metadata encoded as JSON; empty string means no metadata.
     public var remoteMetadataJSON: String = ""
@@ -364,6 +367,7 @@ public final class Workspace: @unchecked Sendable {
         gitBranch: String? = nil,
         backendIdentifier: String = "local",
         remoteId: String? = nil,
+        backendMetadataRaw: String = "",
         remoteMetadataJSON: String = ""
     ) {
         self.id = id
@@ -376,7 +380,34 @@ public final class Workspace: @unchecked Sendable {
         self.gitBranch = gitBranch
         self.backendIdentifier = backendIdentifier
         self.remoteId = remoteId
+        self.backendMetadataRaw = backendMetadataRaw
         self.remoteMetadataJSON = remoteMetadataJSON
+    }
+
+    public func decodeBackendMetadata<T: Decodable>(_ type: T.Type) -> T? {
+        guard !backendMetadataRaw.isEmpty,
+            let data = backendMetadataRaw.data(using: .utf8)
+        else {
+            return nil
+        }
+
+        return try? JSONDecoder().decode(T.self, from: data)
+    }
+
+    public func encodeBackendMetadata<T: Encodable>(_ metadata: T?) {
+        guard let metadata else {
+            backendMetadataRaw = ""
+            return
+        }
+
+        guard let data = try? JSONEncoder().encode(metadata),
+            let rawValue = String(data: data, encoding: .utf8)
+        else {
+            backendMetadataRaw = ""
+            return
+        }
+
+        backendMetadataRaw = rawValue
     }
 
     private var remoteMetadataPayload: WorkspaceRemoteMetadataPayload? {
@@ -420,12 +451,14 @@ public enum WebSourceOwnershipScope: Hashable, Codable, Sendable {
 }
 
 public enum WorkspaceStatus: String, Codable, CaseIterable, Sendable {
+    case provisioning
     case active
     case stopped
     case archived
 
     public var label: String {
         switch self {
+        case .provisioning: return "Provisioning"
         case .active: return "Active"
         case .stopped: return "Stopped"
         case .archived: return "Archived"

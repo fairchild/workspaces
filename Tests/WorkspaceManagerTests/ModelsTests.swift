@@ -74,6 +74,62 @@ struct ModelsTests {
                 #expect(decoded == status)
             }
         }
+
+        @Test("Includes provisioning label")
+        func provisioningLabel() {
+            #expect(WorkspaceStatus.provisioning.label == "Provisioning")
+        }
+    }
+
+    @Suite("WorkspaceMetadata")
+    struct WorkspaceMetadataTests {
+        @Test("Backend metadata round-trips through JSON storage")
+        func backendMetadataRoundTrip() {
+            let repo = Repo(name: "repo", localPath: URL(fileURLWithPath: "/tmp/repo"))
+            let workspace = Workspace(
+                name: "feature",
+                path: URL(fileURLWithPath: "/tmp/workspaces/feature"),
+                sourceRepo: repo
+            )
+            let metadata = LumeWorkspaceMetadata(
+                vmName: "repo-feature-1234",
+                storagePath: "/tmp/lume-storage/workspace-vms",
+                guestOS: .macOS,
+                sharedHostPath: workspace.path,
+                desktopSupported: true,
+                profileKey: "tahoe-26.2-xcode-26.2",
+                profileDisplayName: "macOS Tahoe 26.2 + Xcode 26.2",
+                imageReference: "macos-tahoe-xcode:26.2",
+                baseVMName: "workspaces-validated-base-macos-tahoe-26-2-xcode-26-2",
+                baseSourceKind: .pulledImage
+            )
+
+            workspace.encodeBackendMetadata(metadata)
+            let decoded = workspace.decodeBackendMetadata(LumeWorkspaceMetadata.self)
+
+            #expect(decoded == metadata)
+        }
+
+        @Test("Clearing backend metadata empties raw storage")
+        func clearingBackendMetadataClearsRawValue() {
+            let repo = Repo(name: "repo", localPath: URL(fileURLWithPath: "/tmp/repo"))
+            let workspace = Workspace(
+                name: "feature",
+                path: URL(fileURLWithPath: "/tmp/workspaces/feature"),
+                sourceRepo: repo
+            )
+
+            workspace.encodeBackendMetadata(
+                LumeWorkspaceMetadata(
+                    vmName: "repo-feature-1234",
+                    guestOS: .linux,
+                    sharedHostPath: workspace.path
+                )
+            )
+            workspace.encodeBackendMetadata(Optional<LumeWorkspaceMetadata>.none)
+
+            #expect(workspace.backendMetadataRaw.isEmpty)
+        }
     }
 
     @Suite("RemoteWorkspaceMetadata")

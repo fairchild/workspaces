@@ -10,6 +10,8 @@ import SwiftUI
 import WorkspaceManagerCore
 
 struct SettingsView: View {
+    @Environment(\.lumeRuntimeService) private var lumeRuntimeService
+
     @AppStorage("workspacesRoot") private var workspacesRootPath: String = ""
     @AppStorage(TerminalMultiplexingMode.storageKey)
     private var terminalMultiplexingModeRawValue: String = TerminalMultiplexingMode.defaultValue.rawValue
@@ -21,6 +23,10 @@ struct SettingsView: View {
     @State private var commandLineToolFeedback: String?
     @State private var commandLineToolFeedbackIsError = false
     @ObservedObject private var notificationCoordinator = NotificationCoordinator.shared
+    @State private var runtimeSnapshot: LumeRuntimeSnapshot?
+    @State private var runtimeActionLabel: String?
+    @State private var runtimeErrorMessage: String?
+    @State private var isRunningRuntimeAction = false
 
     private let commandLineToolService: CommandLineToolService
 
@@ -219,6 +225,7 @@ struct SettingsView: View {
             } header: {
                 Text("Terminal")
             }
+
             Section {
                 VStack(alignment: .leading, spacing: 10) {
                     Toggle("Enable real-time notifications", isOn: $notificationsEnabled)
@@ -229,6 +236,136 @@ struct SettingsView: View {
                 }
             } header: {
                 Text("Notifications")
+            }
+
+            Section {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Lume Runtime")
+                        .font(.headline)
+
+                    runtimeRow(
+                        label: "Status",
+                        value: runtimeSnapshot?.state.label ?? "Checking..."
+                    )
+                    runtimeRow(
+                        label: "CLI",
+                        value: runtimeSnapshot?.executablePath ?? "Not installed"
+                    )
+                    runtimeRow(
+                        label: "Daemon",
+                        value: daemonStatusText
+                    )
+                    runtimeRow(
+                        label: "Host Profile",
+                        value: runtimeSnapshot?.hostProfile?.displayName ?? "Unavailable"
+                    )
+                    runtimeRow(
+                        label: "Default macOS VM",
+                        value: runtimeSnapshot?.defaultMacOSImage?.profileDisplayName
+                            ?? runtimeSnapshot?.defaultMacOSImageError
+                            ?? "Unavailable"
+                    )
+                    runtimeRow(
+                        label: "Base macOS VM",
+                        value: runtimeSnapshot?.baseVM?.profile.displayName ?? "Unavailable"
+                    )
+                    runtimeRow(
+                        label: "Base VM Status",
+                        value: runtimeSnapshot?.baseVM?.status.label ?? "Unavailable"
+                    )
+                    runtimeRow(
+                        label: "Base VM Name",
+                        value: runtimeSnapshot?.baseVM?.profile.vmName ?? "Unavailable"
+                    )
+                    runtimeRow(
+                        label: "Base VM Source",
+                        value: runtimeSnapshot?.baseVM?.sourceKind?.label
+                            ?? runtimeSnapshot?.baseVM?.profile.preferredSourceKind.label
+                            ?? "Unavailable"
+                    )
+                    runtimeRow(
+                        label: "LaunchAgent",
+                        value: runtimeSnapshot?.launchAgentPath ?? "Unavailable"
+                    )
+
+                    if let reason = runtimeSnapshot?.reason {
+                        Text(reason)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    if let baseReason = runtimeSnapshot?.baseVM?.reason {
+                        Text(baseReason)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    if let runtimeActionLabel {
+                        HStack(spacing: 8) {
+                            ProgressView()
+                                .controlSize(.small)
+                            Text(runtimeActionLabel)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    HStack(spacing: 10) {
+                        Button("Verify") {
+                            runVerify()
+                        }
+                        .disabled(isRunningRuntimeAction)
+
+                        Button("Repair") {
+                            runRepair()
+                        }
+                        .disabled(isRunningRuntimeAction)
+
+                        Button("Reinstall") {
+                            runReinstall()
+                        }
+                        .disabled(isRunningRuntimeAction)
+                    }
+
+                    HStack(spacing: 10) {
+                        Button("Prepare Base VM") {
+                            runPrepareBaseVM()
+                        }
+                        .disabled(
+                            isRunningRuntimeAction
+                                || runtimeSnapshot?.state == .unsupportedHost
+                        )
+
+                        Button("Delete Base VM") {
+                            runDeleteBaseVM()
+                        }
+                        .disabled(
+                            isRunningRuntimeAction
+                                || runtimeSnapshot?.baseVM == nil
+                        )
+
+                        Button("Refresh") {
+                            Task { @MainActor in
+                                await refreshRuntimeSnapshot()
+                            }
+                        }
+                        .disabled(isRunningRuntimeAction)
+                    }
+
+                    HStack(spacing: 10) {
+                        Button("Open Info Log") {
+                            openLog(at: runtimeSnapshot?.infoLogPath)
+                        }
+                        .disabled(runtimeSnapshot == nil)
+
+                        Button("Open Error Log") {
+                            openLog(at: runtimeSnapshot?.errorLogPath)
+                        }
+                        .disabled(runtimeSnapshot == nil)
+                    }
+                }
+            } header: {
+                Text("VM Runtime")
             }
 
             Section {
@@ -243,7 +380,7 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 520, height: 540)
+        .frame(width: 560, height: 700)
         .onAppear {
             refreshCommandLineToolStatus()
             notificationCoordinator.loadStoredAuth()
@@ -266,6 +403,128 @@ struct SettingsView: View {
             case .failure(let error):
                 print("Folder picker error: \(error)")
             }
+        }
+        .task {
+            await refreshRuntimeSnapshot()
+        }
+        .alert(
+            "Could Not Update VM Runtime",
+            isPresented: Binding(
+                get: { runtimeErrorMessage != nil },
+                set: { if !$0 { runtimeErrorMessage = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {
+                runtimeErrorMessage = nil
+            }
+        } message: {
+            Text(runtimeErrorMessage ?? "Unknown error.")
+        }
+    }
+
+    private var daemonStatusText: String {
+        guard let runtimeSnapshot else { return "Checking..." }
+        return runtimeSnapshot.daemonReachable ? "Reachable" : "Unavailable"
+    }
+
+    private func runtimeRow(label: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.system(.body, design: .monospaced))
+                .textSelection(.enabled)
+        }
+    }
+
+    @MainActor
+    private func refreshRuntimeSnapshot() async {
+        runtimeSnapshot = await lumeRuntimeService.snapshot()
+    }
+
+    private func runVerify() {
+        Task { @MainActor in
+            await runRuntimeAction(label: "Verifying Lume runtime...") {
+                try await lumeRuntimeService.verifyInstallation(progress: nil)
+            }
+        }
+    }
+
+    private func runRepair() {
+        Task { @MainActor in
+            await runRuntimeAction(label: "Repairing Lume runtime...") {
+                try await lumeRuntimeService.repairInstallation(progress: nil)
+            }
+        }
+    }
+
+    private func runReinstall() {
+        Task { @MainActor in
+            await runRuntimeAction(label: "Reinstalling Lume runtime...") {
+                let snapshot = await lumeRuntimeService.snapshot()
+                switch snapshot.state {
+                case .setupRequired:
+                    return try await lumeRuntimeService.installIfNeeded(progress: nil)
+                case .unsupportedHost:
+                    throw LumeRuntimeError.unsupportedHost(
+                        snapshot.reason ?? "Lume is unsupported on this Mac."
+                    )
+                default:
+                    return try await lumeRuntimeService.repairInstallation(progress: nil)
+                }
+            }
+        }
+    }
+
+    private func runPrepareBaseVM() {
+        Task { @MainActor in
+            await runRuntimeAction(label: "Preparing base macOS VM...") {
+                _ = try await lumeRuntimeService.ensureBaseVMReady(progress: nil)
+                return await lumeRuntimeService.snapshot()
+            }
+        }
+    }
+
+    private func runDeleteBaseVM() {
+        Task { @MainActor in
+            await runRuntimeAction(label: "Deleting base macOS VM...") {
+                try await lumeRuntimeService.deleteBaseVM()
+            }
+        }
+    }
+
+    @MainActor
+    private func runRuntimeAction(
+        label: String,
+        operation: @escaping () async throws -> LumeRuntimeSnapshot
+    ) async {
+        isRunningRuntimeAction = true
+        runtimeActionLabel = label
+        defer {
+            isRunningRuntimeAction = false
+            runtimeActionLabel = nil
+        }
+
+        do {
+            runtimeSnapshot = try await operation()
+        } catch {
+            runtimeErrorMessage = error.localizedDescription
+            runtimeSnapshot = await lumeRuntimeService.snapshot()
+        }
+    }
+
+    private func openLog(at path: String?) {
+        guard let path, !path.isEmpty else {
+            runtimeErrorMessage = "No log path is available."
+            return
+        }
+
+        let logURL = URL(fileURLWithPath: path)
+        if FileManager.default.fileExists(atPath: logURL.path) {
+            NSWorkspace.shared.open(logURL)
+        } else {
+            runtimeErrorMessage = "The log file does not exist yet at \(path)."
         }
     }
 

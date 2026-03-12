@@ -1,0 +1,38 @@
+//
+//  AppRuntimeDependencies.swift
+//  WorkspaceManager
+//
+//  Runtime service wiring, including deterministic UI-fixture overrides.
+//
+
+import Foundation
+import WorkspaceManagerCore
+
+struct AppRuntimeDependencies {
+    let lumeRuntimeService: any LumeRuntimeServiceProtocol
+    let workspaceProviderRegistry: WorkspaceProviderRegistry
+
+    static func resolved(
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> AppRuntimeDependencies {
+        if UIFixtureLumeEnvironment.isEnabled(environment: environment) {
+            let runtimeService = UIFixtureLumeRuntimeService()
+            return AppRuntimeDependencies(
+                lumeRuntimeService: runtimeService,
+                workspaceProviderRegistry: WorkspaceProviderRegistry(
+                    providers: [
+                        LocalWorkspaceProvider(),
+                        UIFixtureDaytonaWorkspaceProvider(),
+                        UIFixtureLumeWorkspaceProvider(runtimeService: runtimeService),
+                    ]
+                )
+            )
+        }
+
+        let runtimeService: any LumeRuntimeServiceProtocol = LumeRuntimeService.shared
+        return AppRuntimeDependencies(
+            lumeRuntimeService: runtimeService,
+            workspaceProviderRegistry: .live
+        )
+    }
+}

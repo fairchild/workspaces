@@ -115,27 +115,53 @@ ws_activate_app() {
 }
 
 ws_get_window_geometry() {
+    local attempts=10
+    local delay_seconds=1
+    local attempt
     local window_info
-    window_info="$(osascript -e '
-tell application "System Events"
-    tell process "WorkspaceManager"
-        set w to window 1
-        set pos to position of w
-        set sz to size of w
-        return (item 1 of pos as text) & "," & (item 2 of pos as text) & "," & (item 1 of sz as text) & "," & (item 2 of sz as text)
-    end tell
-end tell
-')" || {
-        ws_log "ERROR: unable to read window geometry."
-        ws_permissions_hint
-        return 1
-    }
 
-    IFS=',' read -r WIN_X WIN_Y WIN_W WIN_H <<< "$window_info"
-    if [[ -z "$WIN_X" || -z "$WIN_Y" || -z "$WIN_W" || -z "$WIN_H" ]]; then
-        ws_log "ERROR: invalid window geometry output: '$window_info'"
-        return 1
-    fi
+    for ((attempt = 1; attempt <= attempts; attempt++)); do
+        if window_info="$(
+            swift - <<'SWIFT'
+import CoreGraphics
+import Foundation
+
+let ownerCandidates: Set<String> = ["Workspaces", "WorkspaceManager"]
+let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+let windows = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] ?? []
+
+for window in windows {
+    let owner = window[kCGWindowOwnerName as String] as? String ?? ""
+    let layer = window[kCGWindowLayer as String] as? Int ?? 1
+    guard ownerCandidates.contains(owner), layer == 0 else { continue }
+
+    if let bounds = window[kCGWindowBounds as String] as? [String: Any],
+       let x = bounds["X"] as? Double,
+       let y = bounds["Y"] as? Double,
+       let width = bounds["Width"] as? Double,
+       let height = bounds["Height"] as? Double {
+        print("\(Int(x.rounded())),\(Int(y.rounded())),\(Int(width.rounded())),\(Int(height.rounded()))")
+        exit(0)
+    }
+}
+
+exit(1)
+SWIFT
+        )"; then
+            IFS=',' read -r WIN_X WIN_Y WIN_W WIN_H <<< "$window_info"
+            if [[ -n "$WIN_X" && -n "$WIN_Y" && -n "$WIN_W" && -n "$WIN_H" ]]; then
+                return 0
+            fi
+        fi
+
+        if (( attempt < attempts )); then
+            sleep "$delay_seconds"
+        fi
+    done
+
+    ws_log "ERROR: unable to read window geometry."
+    ws_permissions_hint
+    return 1
 }
 
 ws_compute_click_points() {
@@ -209,13 +235,29 @@ ws_take_screenshot() {
 }
 
 ws_get_window_id() {
-    WIN_ID="$(osascript -e '
-tell application "System Events"
-    tell process "WorkspaceManager"
-        return id of window 1
-    end tell
-end tell
-')" || {
+    WIN_ID="$(
+        swift - <<'SWIFT'
+import CoreGraphics
+import Foundation
+
+let ownerCandidates: Set<String> = ["Workspaces", "WorkspaceManager"]
+let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+let windows = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] ?? []
+
+for window in windows {
+    let owner = window[kCGWindowOwnerName as String] as? String ?? ""
+    let layer = window[kCGWindowLayer as String] as? Int ?? 1
+    guard ownerCandidates.contains(owner), layer == 0 else { continue }
+
+    if let windowID = window[kCGWindowNumber as String] as? Int {
+        print(windowID)
+        exit(0)
+    }
+}
+
+exit(1)
+SWIFT
+    )" || {
         ws_log "ERROR: unable to read WorkspaceManager window id."
         ws_permissions_hint
         return 1

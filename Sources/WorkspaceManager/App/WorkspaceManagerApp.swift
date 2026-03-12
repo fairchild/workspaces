@@ -19,6 +19,7 @@ struct WorkspaceManagerApp: App {
     @FocusedValue(\.toggleInspectorAction) private var toggleInspectorAction
     @FocusedValue(\.toggleTerminalPanelAction) private var toggleTerminalPanelAction
     @FocusedValue(\.openInEditorAction) private var openInEditorAction
+    private let appRuntimeDependencies = AppRuntimeDependencies.resolved()
 
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([Repo.self, Workspace.self, WebSource.self])
@@ -44,7 +45,9 @@ struct WorkspaceManagerApp: App {
 
     var body: some Scene {
         WindowGroup {
-            MainWindowRootView()
+            MainWindowRootView(appRuntimeDependencies: appRuntimeDependencies)
+                .environment(\.lumeRuntimeService, appRuntimeDependencies.lumeRuntimeService)
+                .environment(\.workspaceProviderRegistry, appRuntimeDependencies.workspaceProviderRegistry)
                 .frame(minWidth: 1000, minHeight: 700)
         }
         .modelContainer(sharedModelContainer)
@@ -101,6 +104,8 @@ struct WorkspaceManagerApp: App {
 
         Settings {
             SettingsView()
+                .environment(\.lumeRuntimeService, appRuntimeDependencies.lumeRuntimeService)
+                .environment(\.workspaceProviderRegistry, appRuntimeDependencies.workspaceProviderRegistry)
         }
     }
 }
@@ -256,15 +261,30 @@ private func seedUIFixtureDataIfNeeded(in context: ModelContext) {
 }
 
 private struct MainWindowRootView: View {
+    private let appRuntimeDependencies: AppRuntimeDependencies
     @State private var deepLinkState = WorkspaceDeepLinkState()
     @SceneStorage(MainWindowLastSurface.storageKey) private var lastSurfaceRawValue = ""
     @StateObject private var hostTerminalState = HostTerminalStateStore()
+    @StateObject private var lumeSetupCoordinator: LumeSetupCoordinator
+    @StateObject private var hostLumeSmokeAutomation: HostLumeSmokeAutomationController
+
+    init(appRuntimeDependencies: AppRuntimeDependencies) {
+        self.appRuntimeDependencies = appRuntimeDependencies
+        _lumeSetupCoordinator = StateObject(
+            wrappedValue: LumeSetupCoordinator(runtimeService: appRuntimeDependencies.lumeRuntimeService)
+        )
+        _hostLumeSmokeAutomation = StateObject(
+            wrappedValue: HostLumeSmokeAutomationController()
+        )
+    }
 
     var body: some View {
         ContentView(
             deepLinkState: $deepLinkState,
             lastSurfaceRawValue: $lastSurfaceRawValue,
-            hostTerminalState: hostTerminalState
+            hostTerminalState: hostTerminalState,
+            lumeSetupCoordinator: lumeSetupCoordinator,
+            hostLumeSmokeAutomation: hostLumeSmokeAutomation
         )
         .onOpenURL { url in
             if deepLinkState.enqueue(url: url) {
@@ -283,6 +303,30 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var windowObserver: Any?
     private static let noActivateOnLaunchEnvKey = "WORKSPACES_NO_ACTIVATE_ON_LAUNCH"
+    private static let appVariantEnvKey = "WORKSPACES_APP_VARIANT"
+
+    private enum AppVariant {
+        case standard
+        case development
+
+        var dockBadgeLabel: String? {
+            switch self {
+            case .standard:
+                return nil
+            case .development:
+                return "DEV"
+            }
+        }
+
+        var windowSubtitle: String? {
+            switch self {
+            case .standard:
+                return nil
+            case .development:
+                return "Development Build"
+            }
+        }
+    }
 
     private var isCI: Bool {
         ProcessInfo.processInfo.environment["CI"] != nil
@@ -309,10 +353,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         // Applying after activation-policy setup avoids Dock showing the generic executable icon.
         applyApplicationIconIfAvailable()
+        applyVariantPresentationIfNeeded()
 
         // Register existing windows with focus manager
         for window in NSApp.windows {
             TerminalFocusManager.shared.registerWindow(window)
+            applyVariantPresentation(to: window)
         }
 
         // Observe new window creation to register with focus manager
@@ -325,6 +371,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             Task { @MainActor in
                 if let window {
                     TerminalFocusManager.shared.registerWindow(window)
+                    self.applyVariantPresentation(to: window)
                 }
             }
         }
@@ -380,6 +427,30 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private func applyVariantPresentationIfNeeded() {
+        let variant = appVariant
+        NSApp.dockTile.badgeLabel = variant.dockBadgeLabel
+        NSApp.dockTile.display()
+    }
+
+    private func applyVariantPresentation(to window: NSWindow) {
+        let variant = appVariant
+        window.subtitle = variant.windowSubtitle ?? ""
+    }
+
+    private var appVariant: AppVariant {
+        if let rawValue = ProcessInfo.processInfo.environment[Self.appVariantEnvKey]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased(),
+            !rawValue.isEmpty
+        {
+            return rawValue == "dev" ? .development : .standard
+        }
+
+        let executablePath = Bundle.main.executablePath ?? ""
+        return executablePath.contains("/.build/") ? .development : .standard
+    }
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         // Keep the app alive after the last window closes. This avoids
         // unexpected app termination when a user closes a terminal/window.
@@ -416,12 +487,16 @@ private struct WorkspaceProcessMonitorKey: EnvironmentKey {
     static let defaultValue: any WorkspaceProcessMonitorProtocol = WorkspaceProcessMonitor()
 }
 
+private struct LumeRuntimeServiceKey: EnvironmentKey {
+    static let defaultValue: any LumeRuntimeServiceProtocol = LumeRuntimeService.shared
+}
+
 private struct ExternalEditorServiceKey: EnvironmentKey {
     nonisolated(unsafe) static let defaultValue: any ExternalEditorServiceProtocol = ExternalEditorService.shared
 }
 
-private struct RemoteBackendRegistryKey: EnvironmentKey {
-    static let defaultValue: any RemoteBackendRegistryProtocol = RemoteBackendRegistry.shared
+private struct WorkspaceProviderRegistryKey: EnvironmentKey {
+    static let defaultValue = WorkspaceProviderRegistry.live
 }
 
 extension EnvironmentValues {
@@ -440,14 +515,19 @@ extension EnvironmentValues {
         set { self[WorkspaceProcessMonitorKey.self] = newValue }
     }
 
+    var lumeRuntimeService: any LumeRuntimeServiceProtocol {
+        get { self[LumeRuntimeServiceKey.self] }
+        set { self[LumeRuntimeServiceKey.self] = newValue }
+    }
+
     var externalEditorService: any ExternalEditorServiceProtocol {
         get { self[ExternalEditorServiceKey.self] }
         set { self[ExternalEditorServiceKey.self] = newValue }
     }
 
-    var remoteBackendRegistry: any RemoteBackendRegistryProtocol {
-        get { self[RemoteBackendRegistryKey.self] }
-        set { self[RemoteBackendRegistryKey.self] = newValue }
+    var workspaceProviderRegistry: WorkspaceProviderRegistry {
+        get { self[WorkspaceProviderRegistryKey.self] }
+        set { self[WorkspaceProviderRegistryKey.self] = newValue }
     }
 }
 

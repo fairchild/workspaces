@@ -83,3 +83,19 @@ swift run WorkspaceManager
 - Ghostty C API is pinned by commit in `scripts/build-ghosttykit.sh`.
 - `Frameworks/` is generated output and should not be committed.
 - The app currently uses surface/runtime config only (font size, command, env, cwd).
+
+## Lume Validation
+
+For the Lume first-use setup flow, fixture evidence capture, and real-host VM validation, use:
+
+- `docs/development/lume-validation.md`
+- `docs/development/lume-recreate-runbook.md`
+
+That runbook covers:
+
+- the canonical fixture screenshot flow
+- the real-host validation checklist
+- current prerequisites and expected blockers
+- artifact and log locations
+- the exact clean-slate recreation path
+- the known-good bridged-network workaround

@@ -5,7 +5,7 @@
 
 import Foundation
 import SwiftData
-import WorkspaceManagerCore
+@preconcurrency import WorkspaceManagerCore
 
 @MainActor
 struct SidebarWorkspaceController {
@@ -22,7 +22,7 @@ struct SidebarWorkspaceController {
 
     let modelContext: ModelContext
     let workspaceService: any WorkspaceServiceProtocol
-    let remoteBackendRegistry: any RemoteBackendRegistryProtocol
+    let workspaceProviderRegistry: WorkspaceProviderRegistry
 
     nonisolated static func preferredRepoForNewWorkspace(
         selectedWorkspace: Workspace?,
@@ -46,41 +46,6 @@ struct SidebarWorkspaceController {
         return repos.first
     }
 
-    nonisolated static func cleanupRemoteSandboxAfterFailedPersistence(
-        sandboxId: String,
-        deleteSandbox: @Sendable (String) async throws -> Void
-    ) async -> Error? {
-        do {
-            try await deleteSandbox(sandboxId)
-            return nil
-        } catch {
-            return error
-        }
-    }
-
-    nonisolated static func remoteWorkspacePersistenceFailureMessage(
-        existingMessage: String?,
-        cleanupMessage: String
-    ) -> String {
-        if let existingMessage, !existingMessage.isEmpty {
-            return "\(existingMessage)\n\n\(cleanupMessage)"
-        }
-
-        return cleanupMessage
-    }
-
-    nonisolated static func remoteWorkspacePersistenceFailureMessage(
-        existingMessage: String?,
-        sandboxId: String,
-        cleanupError: Error
-    ) -> String {
-        remoteWorkspacePersistenceFailureMessage(
-            existingMessage: existingMessage,
-            cleanupMessage:
-                "Cleanup also failed for remote workspace '\(sandboxId)': \(cleanupError.localizedDescription)"
-        )
-    }
-
     nonisolated static func localCreationMessage(for phase: WorkspaceCreationPhase) -> String {
         switch phase {
         case .preparing:
@@ -98,33 +63,78 @@ struct SidebarWorkspaceController {
 
     func createWorkspace(
         from repo: Repo,
-        request: NewWorkspaceRequest,
-        progress: WorkspaceCreationProgressHandler? = nil
+        name: String,
+        providerID: String,
+        guestOS: WorkspaceGuestOS? = nil,
+        progress: WorkspaceProviderProgressHandler? = nil,
+        onPersisted: (@MainActor @Sendable (HostLumeSmokeWorkspaceRecord) async -> Void)? = nil
     ) async throws -> Workspace {
-        switch request.backend {
-        case .local:
-            return try await createLocalWorkspace(from: repo, name: request.name, progress: progress)
-        case .daytona:
-            return try await createDaytonaWorkspace(from: repo, name: request.name)
-        case .sshHost(let sshRequest):
-            return try createSSHWorkspace(from: repo, name: request.name, request: sshRequest)
+        guard let provider = workspaceProviderRegistry.provider(for: providerID) else {
+            throw ControllerError.message("Workspace provider '\(providerID)' is not registered.")
+        }
+
+        var persistedWorkspace: Workspace?
+        let request = WorkspaceProviderCreationRequest(
+            repoName: repo.name,
+            repoLocalURL: repo.localURL,
+            repoRemoteURL: repo.remoteURL,
+            workspaceName: name,
+            guestOS: guestOS
+        )
+
+        do {
+            let finalResult = try await provider.createWorkspace(
+                request: request,
+                workspaceService: workspaceService,
+                progress: progress,
+                persist: { partialResult in
+                    try await MainActor.run {
+                        try upsertWorkspace(
+                            from: partialResult,
+                            repo: repo,
+                            existingWorkspace: &persistedWorkspace
+                        )
+                    }
+                    await onPersisted?(HostLumeSmokeWorkspaceRecord(result: partialResult))
+                }
+            )
+
+            try upsertWorkspace(
+                from: finalResult,
+                repo: repo,
+                existingWorkspace: &persistedWorkspace
+            )
+            await onPersisted?(HostLumeSmokeWorkspaceRecord(result: finalResult))
+
+            guard let persistedWorkspace else {
+                throw ControllerError.message("Failed to create workspace record.")
+            }
+
+            return persistedWorkspace
+        } catch {
+            if let persistedWorkspace {
+                modelContext.delete(persistedWorkspace)
+                do {
+                    try saveModelContext(action: "revert failed workspace creation")
+                } catch {
+                    modelContext.rollback()
+                }
+            }
+            throw error
         }
     }
 
     func deleteWorkspace(_ workspace: Workspace, deleteFiles: Bool) async throws {
-        if workspace.isRemote {
-            let backend = try remoteBackend(for: workspace)
-            if backend.runtimeCapabilities.supportsDelete {
-                let remoteId = try requiredRemoteIdentifier(for: workspace)
-                let provisionableBackend = try provisioningBackend(
-                    identifier: workspace.backendIdentifier,
-                    requiresDelete: true,
-                    operation: "deleting remote workspaces"
-                )
-                try await provisionableBackend.deleteSandbox(sandboxId: remoteId)
-            }
+        let workspaceURL = workspace.workspaceURL
+
+        if workspace.backendIdentifier == LocalWorkspaceProvider.identifier {
+            try await workspaceService.deleteWorkspace(at: workspaceURL, deleteFiles: deleteFiles)
         } else {
-            try await workspaceService.deleteWorkspace(at: workspace.workspaceURL, deleteFiles: deleteFiles)
+            let provider = try provider(for: workspace)
+            try await provider.deleteWorkspace(WorkspaceProviderTarget(workspace))
+            if provider.descriptor.usesHostWorkspaceFiles {
+                try await workspaceService.deleteWorkspace(at: workspaceURL, deleteFiles: deleteFiles)
+            }
         }
 
         modelContext.delete(workspace)
@@ -132,243 +142,65 @@ struct SidebarWorkspaceController {
     }
 
     func stop(_ workspace: Workspace) async throws {
-        let backend = try startStopBackend(for: workspace, operation: "stopping remote workspaces")
-        let remoteId = try requiredRemoteIdentifier(for: workspace)
-        try await backend.stopSandbox(sandboxId: remoteId)
+        let provider = try provider(for: workspace)
+        try await provider.stopWorkspace(WorkspaceProviderTarget(workspace))
         workspace.status = .stopped
-        try saveModelContext(action: "stop remote workspace")
+        try saveModelContext(action: "stop workspace")
     }
 
     func start(_ workspace: Workspace) async throws {
-        let backend = try startStopBackend(for: workspace, operation: "starting remote workspaces")
-        let remoteId = try requiredRemoteIdentifier(for: workspace)
-        _ = try await backend.startSandbox(sandboxId: remoteId)
+        let provider = try provider(for: workspace)
+        try await provider.startWorkspace(WorkspaceProviderTarget(workspace))
         workspace.status = .active
-        try saveModelContext(action: "start remote workspace")
+        try saveModelContext(action: "start workspace")
     }
 
     func archive(_ workspace: Workspace) async throws {
-        let backend = try archivableBackend(for: workspace, operation: "archiving remote workspaces")
-        let remoteId = try requiredRemoteIdentifier(for: workspace)
-        try await backend.archiveSandbox(sandboxId: remoteId)
+        let provider = try provider(for: workspace)
+        try await provider.archiveWorkspace(WorkspaceProviderTarget(workspace))
         workspace.status = .archived
-        try saveModelContext(action: "archive remote workspace")
+        try saveModelContext(action: "archive workspace")
     }
 
-    private func createLocalWorkspace(
-        from repo: Repo,
-        name: String,
-        progress: WorkspaceCreationProgressHandler? = nil
-    ) async throws -> Workspace {
-        let info = try await workspaceService.createWorkspace(
-            repoName: repo.name,
-            repoLocalURL: repo.localURL,
-            name: name,
-            progress: progress
-        )
-
-        let workspace = Workspace(
-            name: info.name,
-            path: info.path,
-            sourceRepo: repo,
-            gitBranch: info.gitBranch
-        )
-        modelContext.insert(workspace)
-
-        do {
-            try saveModelContext(action: "save workspace")
-            return workspace
-        } catch {
-            Self.cleanupWorkspaceDirectoryAfterFailedPersistence(info.path)
-            throw error
-        }
-    }
-
-    private func createDaytonaWorkspace(
-        from repo: Repo,
-        name: String
-    ) async throws -> Workspace {
-        let backend = try provisioningBackend(
-            identifier: DaytonaBackend.identifier,
-            requiresCreate: true,
-            operation: "creating Daytona workspaces"
-        )
-
-        guard await backend.healthCheck() else {
-            throw BackendError.notAvailable("Daytona")
-        }
-
-        let info = try await backend.createSandbox(name: name, cloneURL: repo.remoteURL)
-        let workspace = Workspace(
-            name: name,
-            path: FileManager.default.temporaryDirectory,
-            sourceRepo: repo,
-            backendIdentifier: DaytonaBackend.identifier,
-            remoteId: info.sandboxId
-        )
-        modelContext.insert(workspace)
-
-        do {
-            try saveModelContext(action: "save remote workspace")
-            return workspace
-        } catch {
-            if let cleanupError = await Self.cleanupRemoteSandboxAfterFailedPersistence(
-                sandboxId: info.sandboxId,
-                deleteSandbox: { sandboxId in
-                    try await backend.deleteSandbox(sandboxId: sandboxId)
-                }
-            ) {
-                NSLog(
-                    "[RemoteBackend] Failed to clean up workspace %@ after persistence failure: %@",
-                    info.sandboxId,
-                    cleanupError.localizedDescription
-                )
-                throw ControllerError.message(
-                    Self.remoteWorkspacePersistenceFailureMessage(
-                        existingMessage: error.localizedDescription,
-                        sandboxId: info.sandboxId,
-                        cleanupError: cleanupError
-                    )
-                )
-            }
-            throw error
-        }
-    }
-
-    private func createSSHWorkspace(
-        from repo: Repo,
-        name: String,
-        request: SSHHostWorkspaceRequest
-    ) throws -> Workspace {
-        let sanitizedName = WorkspaceService.sanitizeWorkspaceNameComponent(name)
-        guard WorkspaceService.isValidWorkspaceNameComponent(sanitizedName) else {
-            throw WorkspaceError.invalidName(name: name)
-        }
-        guard (1...65535).contains(request.ssh.port) else {
-            throw RemoteWorkspaceError.invalidSSHConfiguration(
-                "port must be between 1 and 65535"
+    private func upsertWorkspace(
+        from result: WorkspaceProviderCreationResult,
+        repo: Repo,
+        existingWorkspace: inout Workspace?
+    ) throws {
+        if let existingWorkspace {
+            existingWorkspace.name = result.name
+            existingWorkspace.path = result.path.path
+            existingWorkspace.gitBranch = result.gitBranch
+            existingWorkspace.status = result.status
+            existingWorkspace.backendIdentifier = result.backendIdentifier
+            existingWorkspace.remoteId = result.remoteId
+            existingWorkspace.backendMetadataRaw = result.backendMetadataRaw
+        } else {
+            let workspace = Workspace(
+                name: result.name,
+                path: result.path,
+                sourceRepo: repo,
+                status: result.status,
+                gitBranch: result.gitBranch,
+                backendIdentifier: result.backendIdentifier,
+                remoteId: result.remoteId,
+                backendMetadataRaw: result.backendMetadataRaw
             )
+            modelContext.insert(workspace)
+            existingWorkspace = workspace
         }
 
-        guard remoteBackendRegistry.backend(for: SSHBackend.identifier) != nil else {
+        try saveModelContext(action: "save workspace")
+    }
+
+    private func provider(for workspace: Workspace) throws -> any WorkspaceProviderProtocol {
+        guard let provider = workspaceProviderRegistry.provider(for: workspace) else {
             throw ControllerError.message(
-                RemoteWorkspaceError.backendNotRegistered(SSHBackend.identifier).localizedDescription
+                "No workspace provider is registered for '\(workspace.backendIdentifier)'."
             )
         }
 
-        let trimmedRemoteURL = repo.remoteURL?.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmedRemoteURL?.isEmpty == false else {
-            throw ControllerError.message(RemoteWorkspaceError.missingRemoteURL.localizedDescription)
-        }
-
-        let workspace = Workspace(
-            name: name,
-            path: FileManager.default.temporaryDirectory,
-            sourceRepo: repo,
-            backendIdentifier: SSHBackend.identifier,
-            remoteId: UUID().uuidString
-        )
-        workspace.sshMetadata = request.ssh
-        workspace.composeMetadata = request.compose
-
-        modelContext.insert(workspace)
-        try saveModelContext(action: "save SSH workspace")
-        return workspace
-    }
-
-    private func remoteBackend(for identifier: String) throws -> any RemoteBackendProtocol {
-        guard let backend = remoteBackendRegistry.backend(for: identifier) else {
-            throw ControllerError.message(
-                RemoteWorkspaceError.backendNotRegistered(identifier).localizedDescription
-            )
-        }
-        return backend
-    }
-
-    private func remoteBackend(for workspace: Workspace) throws -> any RemoteBackendProtocol {
-        try remoteBackend(for: workspace.backendIdentifier)
-    }
-
-    private func provisioningBackend(
-        identifier: String,
-        requiresCreate: Bool = false,
-        requiresDelete: Bool = false,
-        operation: String
-    ) throws -> any ProvisionCapable {
-        let backend = try remoteBackend(for: identifier)
-        let capabilities = backend.runtimeCapabilities
-
-        guard
-            (!requiresCreate || capabilities.supportsCreate)
-                && (!requiresDelete || capabilities.supportsDelete)
-        else {
-            throw ControllerError.message(
-                RemoteBackendCapabilityError.unsupportedOperation(
-                    backendIdentifier: identifier,
-                    operation: operation
-                ).localizedDescription
-            )
-        }
-
-        guard let provisionableBackend = backend as? any ProvisionCapable else {
-            throw ControllerError.message(
-                RemoteBackendCapabilityError.unsupportedOperation(
-                    backendIdentifier: identifier,
-                    operation: operation
-                ).localizedDescription
-            )
-        }
-
-        return provisionableBackend
-    }
-
-    private func startStopBackend(
-        for workspace: Workspace,
-        operation: String
-    ) throws -> any StartStopCapable {
-        let backend = try remoteBackend(for: workspace)
-        guard backend.runtimeCapabilities.supportsStartStop,
-            let startStopBackend = backend as? any StartStopCapable
-        else {
-            throw ControllerError.message(
-                RemoteBackendCapabilityError.unsupportedOperation(
-                    backendIdentifier: workspace.backendIdentifier,
-                    operation: operation
-                ).localizedDescription
-            )
-        }
-
-        return startStopBackend
-    }
-
-    private func archivableBackend(
-        for workspace: Workspace,
-        operation: String
-    ) throws -> any Archivable {
-        let backend = try remoteBackend(for: workspace)
-        guard backend.runtimeCapabilities.supportsArchive,
-            let archivableBackend = backend as? any Archivable
-        else {
-            throw ControllerError.message(
-                RemoteBackendCapabilityError.unsupportedOperation(
-                    backendIdentifier: workspace.backendIdentifier,
-                    operation: operation
-                ).localizedDescription
-            )
-        }
-
-        return archivableBackend
-    }
-
-    private func requiredRemoteIdentifier(for workspace: Workspace) throws -> String {
-        guard
-            let remoteId = workspace.remoteId?.trimmingCharacters(in: .whitespacesAndNewlines),
-            !remoteId.isEmpty
-        else {
-            throw RemoteWorkspaceError.missingRemoteIdentifier
-        }
-
-        return remoteId
+        return provider
     }
 
     private func saveModelContext(action: String) throws {
