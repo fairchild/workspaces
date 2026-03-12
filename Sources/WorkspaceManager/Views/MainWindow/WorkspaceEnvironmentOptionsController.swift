@@ -105,14 +105,6 @@ struct WorkspaceEnvironmentOptionsController {
             }
         }
 
-        for provider in registry.providers {
-            let providerID = provider.descriptor.id
-            guard resolvedAvailability[providerID] == nil else { continue }
-            resolvedAvailability[providerID] = .unavailable(
-                "Timed out checking \(provider.descriptor.displayName) availability."
-            )
-        }
-
         return resolvedAvailability
     }
 
