@@ -30,7 +30,7 @@ print_status() {
 
         # Check if the runner listener is alive
         local listener_pid
-        listener_pid="$(pgrep -f "$dir/bin/Runner.Listener" 2>/dev/null || true)"
+        listener_pid="$(pgrep -f "$dir/.*Runner.Listener" 2>/dev/null || true)"
 
         if [[ -z "$listener_pid" ]]; then
             printf "${red}●${reset} ${bold}%-24s${reset} ${dim}(%s)${reset}  offline\n" "$name" "$repo"
@@ -39,7 +39,7 @@ print_status() {
 
         # Check if a worker is currently active (= job running)
         local worker_pid
-        worker_pid="$(pgrep -f "$dir/bin/Runner.Worker" 2>/dev/null || true)"
+        worker_pid="$(pgrep -f "$dir/.*Runner.Worker" 2>/dev/null || true)"
 
         if [[ -n "$worker_pid" ]]; then
             # Find the job name from the runner log
