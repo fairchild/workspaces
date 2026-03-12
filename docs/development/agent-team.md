@@ -116,6 +116,7 @@ Peter Planner stays separate because it is event-driven and uses a different pla
 - **Shell safety** — event context passed via env vars, body content via temp files
 - **Catalog-backed labels** — Peter can only use repo-managed labels from `.agents/config/peter-planner.toml`, with alias normalization for common CI/platform terms
 - **Idempotent planning markers** — planner comments, milestone descriptions, and issue bodies carry machine markers so retries reuse existing artifacts instead of leaking duplicates
+- **Discussion token override** — `permissions.discussions: write` is enough for comments, issues, and milestones, but GitHub's built-in Actions token still cannot retitle discussions via `updateDiscussion` in this repo. `agent-peter.yml` therefore prefers the repo secret `PETER_DISCUSSION_TOKEN` when present, and the repo's default Actions workflow permission should stay at `write`
 
 ## Vision: Autonomous Development
 
