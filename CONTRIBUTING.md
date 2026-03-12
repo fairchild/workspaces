@@ -109,11 +109,75 @@ workspaces/
 
 ## Self-Hosted CI Runners
 
-CI runs on a self-hosted macOS runner. The app auto-detects CI (via the standard `CI` env var) and uses `.accessory` activation policy so it never steals focus or appears in the dock. If you write a script that launches the app headlessly, set `WORKSPACES_NO_ACTIVATE_ON_LAUNCH=1`:
+CI runs on self-hosted macOS runners on developer machines. Three runners are registered:
+
+| Runner | Repo | Location |
+|--------|------|----------|
+| blue-workspaces | workspaces | `~/.local/share/actions-runner-workspaces` |
+| blue | services | `~/.local/share/actions-runner` |
+| blue-code-cadence | code-cadence | `~/.local/share/actions-runner-code-cadence` |
+
+### Focus stealing prevention
+
+The app auto-detects CI (via the standard `CI` env var) and uses `.accessory` activation policy — no dock icon, no Cmd+Tab, no focus steal. Three activation modes:
+
+| Mode | Activation Policy | Behavior |
+|------|-------------------|----------|
+| Normal launch | `.regular` + `activate()` | Dock + Cmd+Tab + foreground |
+| `--no-activate` | `.regular`, skip `activate()` | Dock + Cmd+Tab, stays behind |
+| CI (`CI=true`) | `.accessory` | Invisible |
+
+If you write a script that launches the app headlessly, set `WORKSPACES_NO_ACTIVATE_ON_LAUNCH=1`:
 
 ```bash
 WORKSPACES_NO_ACTIVATE_ON_LAUNCH=1 swift run WorkspaceManager
 ```
+
+### CI visibility setup
+
+A SwiftBar menu bar plugin shows live runner status so you know when CI is active on your machine.
+
+**One-time setup:**
+
+```bash
+# 1. Install SwiftBar
+brew install --cask swiftbar
+
+# 2. Configure SwiftBar to use a plugin folder (e.g. ~/swiftbar)
+#    Open SwiftBar preferences and set the plugin folder
+
+# 3. Symlink the menu bar plugin
+ln -s "$(pwd)/scripts/runner-ci-menubar.5s.sh" ~/swiftbar/
+
+# 4. Install runner activity hooks (writes to all runners' .env files)
+./scripts/install-runner-hooks.sh
+
+# 5. Restart runners to pick up hooks (wait for in-flight jobs to finish)
+#    The install script prints restart commands for each runner
+```
+
+**What you'll see:**
+
+- Menu bar shows `CI` with a status icon (gray checkmark = idle, orange hammer = running)
+- Click to expand: per-runner status, recent activity log
+- Hooks log every job start/complete to `~/.local/share/runner-activity.log`
+
+**CLI status check** (no SwiftBar needed):
+
+```bash
+./scripts/runner-status.sh          # snapshot
+./scripts/runner-status.sh --watch  # live 5s refresh
+```
+
+### Runner scripts reference
+
+| Script | Purpose |
+|--------|---------|
+| `runner-status.sh` | CLI status of all runners, WorkspaceManager processes, recent jobs |
+| `runner-ci-menubar.5s.sh` | SwiftBar plugin (symlink into plugin folder) |
+| `runner-notify-start.sh` | Runner hook: logs job start to activity log |
+| `runner-notify-complete.sh` | Runner hook: logs job completion to activity log |
+| `install-runner-hooks.sh` | Installs hooks on all runners (copies scripts, updates .env) |
 
 ## Agent Self-Verification
 
