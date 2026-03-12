@@ -1,0 +1,79 @@
+{
+  "generated_at": "2026-03-12T06:31:21.520469Z",
+  "window_days": 30,
+  "funnel": {
+    "ideas": 4,
+    "approved": 1,
+    "planned": 1,
+    "active": 1,
+    "merged": 0,
+    "stalled": 0
+  },
+  "lead_times": {
+    "idea_to_approved_days": 0.9416782407407407,
+    "approved_to_planned_days": 0.09950231481481482,
+    "planned_to_first_pr_days": 0.06269675925925926,
+    "first_pr_to_merged_days": null
+  },
+  "ci": {
+    "window_days": 30,
+    "window_start": "2026-02-10T06:31:21.520469Z",
+    "completed_runs": 492,
+    "failure_runs": 49,
+    "failure_rate": 9.959349593495935,
+    "rerun_runs": 0,
+    "rerun_rate": 0.0,
+    "top_failing_workflows": [
+      {
+        "workflow_name": "CI",
+        "failures": 39
+      },
+      {
+        "workflow_name": "Release",
+        "failures": 5
+      },
+      {
+        "workflow_name": "Agent: Peter Planner",
+        "failures": 3
+      },
+      {
+        "workflow_name": "Perf Validation",
+        "failures": 1
+      },
+      {
+        "workflow_name": "Agent Ideation",
+        "failures": 1
+      }
+    ]
+  },
+  "perf": {
+    "available": true,
+    "latest_timestamp": "2026-02-15T18:24:45-0800",
+    "freshness_days": 24.17125602394676,
+    "metrics": {
+      "launch_to_first_prompt": {
+        "latest_median_ms": 159.01,
+        "previous_median_ms": 249.61,
+        "delta_percent": -36.296622731461085,
+        "target_ms": 250.0,
+        "status": "pass"
+      },
+      "repo_hydration": {
+        "latest_median_ms": 1.12,
+        "previous_median_ms": 2.59,
+        "delta_percent": -56.75675675675676,
+        "target_ms": 25.0,
+        "status": "pass"
+      },
+      "repo_click_to_focus": {
+        "latest_median_ms": 159.2,
+        "previous_median_ms": 167.02,
+        "delta_percent": -4.682074003113412,
+        "target_ms": 250.0,
+        "status": "pass"
+      }
+    }
+  },
+  "stale_items": [],
+  "breaches": []
+}

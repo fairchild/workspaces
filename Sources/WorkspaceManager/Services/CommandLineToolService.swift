@@ -484,6 +484,12 @@ struct CommandLineToolService {
             bundleURL.pathExtension == "app"
                 ? bundleURL
                     .appendingPathComponent("Contents", isDirectory: true)
+                    .appendingPathComponent("Helpers", isDirectory: true)
+                    .appendingPathComponent(commandName, isDirectory: false)
+                : nil,
+            bundleURL.pathExtension == "app"
+                ? bundleURL
+                    .appendingPathComponent("Contents", isDirectory: true)
                     .appendingPathComponent("MacOS", isDirectory: true)
                     .appendingPathComponent(commandName, isDirectory: false)
                 : nil,

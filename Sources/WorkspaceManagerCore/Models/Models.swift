@@ -193,44 +193,86 @@ public struct ComposeWorkspaceMetadata: Codable, Equatable, Sendable {
 }
 
 private struct WorkspaceRemoteMetadataPayload: Codable, Equatable, Sendable {
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case ssh
+        case kubernetes
+        case compose
+    }
+
     enum Kind: String, Codable, Sendable {
         case ssh
         case kubernetes
         case compose
     }
 
-    let kind: Kind
     var ssh: SSHWorkspaceMetadata?
     var kubernetes: KubernetesWorkspaceMetadata?
     var compose: ComposeWorkspaceMetadata?
 
-    static func ssh(_ metadata: SSHWorkspaceMetadata) -> Self {
-        Self(kind: .ssh, ssh: metadata)
-    }
-
-    static func kubernetes(_ metadata: KubernetesWorkspaceMetadata) -> Self {
-        Self(kind: .kubernetes, kubernetes: metadata)
-    }
-
-    static func compose(_ metadata: ComposeWorkspaceMetadata) -> Self {
-        Self(kind: .compose, compose: metadata)
-    }
-
-    private init(
-        kind: Kind,
+    init(
         ssh: SSHWorkspaceMetadata? = nil,
         kubernetes: KubernetesWorkspaceMetadata? = nil,
         compose: ComposeWorkspaceMetadata? = nil
     ) {
-        self.kind = kind
         self.ssh = ssh
         self.kubernetes = kubernetes
         self.compose = compose
     }
+
+    var isEmpty: Bool {
+        ssh == nil && kubernetes == nil && compose == nil
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let ssh = try container.decodeIfPresent(SSHWorkspaceMetadata.self, forKey: .ssh)
+        let kubernetes = try container.decodeIfPresent(
+            KubernetesWorkspaceMetadata.self,
+            forKey: .kubernetes
+        )
+        let compose = try container.decodeIfPresent(
+            ComposeWorkspaceMetadata.self,
+            forKey: .compose
+        )
+
+        if ssh != nil || kubernetes != nil || compose != nil {
+            self.init(ssh: ssh, kubernetes: kubernetes, compose: compose)
+            return
+        }
+
+        if container.contains(.kind) {
+            let kind = try container.decode(Kind.self, forKey: .kind)
+            switch kind {
+            case .ssh:
+                self.init(
+                    ssh: ssh
+                )
+            case .kubernetes:
+                self.init(
+                    kubernetes: kubernetes
+                )
+            case .compose:
+                self.init(
+                    compose: compose
+                )
+            }
+            return
+        }
+
+        self.init()
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(ssh, forKey: .ssh)
+        try container.encodeIfPresent(kubernetes, forKey: .kubernetes)
+        try container.encodeIfPresent(compose, forKey: .compose)
+    }
 }
 
 @Model
-public final class Workspace {
+public final class Workspace: @unchecked Sendable {
     public var id: UUID
     public var name: String
     public var path: String  // Store as String, convert to URL when needed
@@ -256,8 +298,27 @@ public final class Workspace {
         URL(fileURLWithPath: path)
     }
 
+    public var localDirectoryURL: URL? {
+        guard !isRemote else { return nil }
+        return workspaceURL
+    }
+
     public var isRemote: Bool {
         backendIdentifier != "local"
+    }
+
+    public var remoteSessionRequest: RemoteWorkspaceSessionRequest {
+        RemoteWorkspaceSessionRequest(
+            workspaceID: id,
+            name: name,
+            backendIdentifier: backendIdentifier,
+            remoteId: remoteId,
+            status: status,
+            repoName: sourceRepo?.name,
+            repoRemoteURL: sourceRepo?.remoteURL,
+            sshMetadata: sshMetadata,
+            composeMetadata: composeMetadata
+        )
     }
 
     public var status: WorkspaceStatus {
@@ -267,31 +328,28 @@ public final class Workspace {
 
     public var sshMetadata: SSHWorkspaceMetadata? {
         get {
-            guard let payload = remoteMetadataPayload, payload.kind == .ssh else { return nil }
-            return payload.ssh
+            remoteMetadataPayload?.ssh
         }
         set {
-            setRemoteMetadata(newValue.map(WorkspaceRemoteMetadataPayload.ssh), for: .ssh)
+            updateRemoteMetadata { $0.ssh = newValue }
         }
     }
 
     public var kubernetesMetadata: KubernetesWorkspaceMetadata? {
         get {
-            guard let payload = remoteMetadataPayload, payload.kind == .kubernetes else { return nil }
-            return payload.kubernetes
+            remoteMetadataPayload?.kubernetes
         }
         set {
-            setRemoteMetadata(newValue.map(WorkspaceRemoteMetadataPayload.kubernetes), for: .kubernetes)
+            updateRemoteMetadata { $0.kubernetes = newValue }
         }
     }
 
     public var composeMetadata: ComposeWorkspaceMetadata? {
         get {
-            guard let payload = remoteMetadataPayload, payload.kind == .compose else { return nil }
-            return payload.compose
+            remoteMetadataPayload?.compose
         }
         set {
-            setRemoteMetadata(newValue.map(WorkspaceRemoteMetadataPayload.compose), for: .compose)
+            updateRemoteMetadata { $0.compose = newValue }
         }
     }
 
@@ -325,7 +383,10 @@ public final class Workspace {
         get {
             let trimmedJSON = remoteMetadataJSON.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmedJSON.isEmpty, let data = trimmedJSON.data(using: .utf8) else { return nil }
-            return try? JSONDecoder().decode(WorkspaceRemoteMetadataPayload.self, from: data)
+            guard let payload = try? JSONDecoder().decode(WorkspaceRemoteMetadataPayload.self, from: data) else {
+                return nil
+            }
+            return payload.isEmpty ? nil : payload
         }
         set {
             guard let newValue else {
@@ -345,18 +406,10 @@ public final class Workspace {
         }
     }
 
-    private func setRemoteMetadata(
-        _ payload: WorkspaceRemoteMetadataPayload?,
-        for kind: WorkspaceRemoteMetadataPayload.Kind
-    ) {
-        guard let payload else {
-            if remoteMetadataPayload?.kind == kind {
-                remoteMetadataPayload = nil
-            }
-            return
-        }
-
-        remoteMetadataPayload = payload
+    private func updateRemoteMetadata(_ update: (inout WorkspaceRemoteMetadataPayload) -> Void) {
+        var payload = remoteMetadataPayload ?? WorkspaceRemoteMetadataPayload()
+        update(&payload)
+        remoteMetadataPayload = payload.isEmpty ? nil : payload
     }
 }
 

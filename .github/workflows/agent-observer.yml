@@ -1,0 +1,44 @@
+name: "Agent: Observer"
+
+on:
+  schedule:
+    - cron: "30 13 * * 1"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Generate the report and preview any breach-triggered idea without creating it"
+        type: boolean
+        default: false
+
+permissions:
+  actions: read
+  contents: read
+  discussions: write
+  issues: read
+  pull-requests: read
+
+concurrency:
+  group: agent-observer
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 50
+
+      - uses: astral-sh/setup-uv@v7
+
+      - name: Preview ops report
+        run: uv run ./scripts/ops-report.py --days 30 --dry-run --open-idea-on-breach
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Open ops idea on breach
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.dry_run != true }}
+        run: uv run ./scripts/ops-report.py --days 30 --open-idea-on-breach
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

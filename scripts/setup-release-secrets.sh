@@ -8,6 +8,7 @@
 # Secrets (sensitive):
 #   - APPLE_DEVELOPER_ID_CERT_BASE64
 #   - APPLE_DEVELOPER_ID_CERT_PASSWORD
+#   - APPLE_DEVELOPER_ID_PROVISIONING_PROFILE_BASE64
 #   - APPLE_APP_PASSWORD
 #
 # Variables (non-sensitive):
@@ -23,12 +24,14 @@
 #
 # Usage (interactive):
 #   ./scripts/setup-release-secrets.sh \
-#     --p12-path ~/.config/apple/Developer_ID_Application_LKVN4J3C6C.p12
+#     --p12-path ~/.config/apple/Developer_ID_Application_LKVN4J3C6C.p12 \
+#     --profile-path ~/.config/apple/workspaces.provisionprofile
 #
 # Usage (non-interactive):
 #   P12_PASSWORD='...' APPLE_ID='...' APPLE_APP_PASSWORD='...' \
 #   ./scripts/setup-release-secrets.sh \
 #     --p12-path ~/.config/apple/Developer_ID_Application_LKVN4J3C6C.p12 \
+#     --profile-path ~/.config/apple/workspaces.provisionprofile \
 #     --team-id LKVN4J3C6C \
 #     --non-interactive \
 #     --run-release \
@@ -40,11 +43,15 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VERIFY_SCRIPT="$SCRIPT_DIR/verify-p12.sh"
+PLIST_BUDDY="/usr/libexec/PlistBuddy"
 
 DEFAULT_TEAM_ID="LKVN4J3C6C"
 DEFAULT_P12_PATH="$HOME/.config/apple/Developer_ID_Application_LKVN4J3C6C.p12"
+DEFAULT_PROFILE_PATH="$HOME/.config/apple/workspaces.provisionprofile"
+EXPECTED_BUNDLE_ID="com.cloudcompute.workspaces"
 
 P12_PATH="${P12:-$DEFAULT_P12_PATH}"
+PROFILE_PATH="${PROVISIONING_PROFILE_PATH:-$DEFAULT_PROFILE_PATH}"
 TEAM_ID="${APPLE_TEAM_ID:-$DEFAULT_TEAM_ID}"
 APPLE_ID_VALUE="${APPLE_ID:-}"
 APPLE_APP_PASSWORD_VALUE="${APPLE_APP_PASSWORD:-}"
@@ -62,6 +69,7 @@ setup-release-secrets.sh - Configure GitHub release secrets from a verified p12
 
 Options:
   --p12-path PATH         Path to Developer ID Application .p12
+  --profile-path PATH     Path to Developer ID provisioning profile
   --team-id TEAM          Apple Team ID (default: LKVN4J3C6C)
   --apple-id EMAIL        Apple ID for notarization
   --app-password PASS     App-specific password for notarization
@@ -74,10 +82,11 @@ Options:
   --help                  Show this help
 
 Env alternatives:
-  P12, P12_PASSWORD, APPLE_ID, APPLE_APP_PASSWORD, APPLE_TEAM_ID
+  P12, P12_PASSWORD, PROVISIONING_PROFILE_PATH, APPLE_ID, APPLE_APP_PASSWORD, APPLE_TEAM_ID
 
 Defaults:
   p12 path: ~/.config/apple/Developer_ID_Application_LKVN4J3C6C.p12
+  profile path: ~/.config/apple/workspaces.provisionprofile
 EOF
 }
 
@@ -92,6 +101,51 @@ fail() {
 
 require_cmd() {
     command -v "$1" >/dev/null 2>&1 || fail "Required command not found: $1"
+}
+
+plist_print() {
+    local plist_path="$1"
+    local key_path="$2"
+    "$PLIST_BUDDY" -c "Print :$key_path" "$plist_path" 2>/dev/null || true
+}
+
+plist_array_values() {
+    local plist_path="$1"
+    local key_path="$2"
+    local index=0
+    local value=""
+
+    while value="$("$PLIST_BUDDY" -c "Print :$key_path:$index" "$plist_path" 2>/dev/null)"; do
+        printf '%s\n' "$value"
+        index=$((index + 1))
+    done
+}
+
+pattern_matches_value() {
+    local value="$1"
+    local pattern="$2"
+
+    if [[ "$pattern" == *"*" ]]; then
+        local prefix="${pattern%\*}"
+        [[ "$value" == "$prefix"* ]]
+        return
+    fi
+
+    [[ "$value" == "$pattern" ]]
+}
+
+array_authorizes_value() {
+    local expected="$1"
+    shift
+
+    local item=""
+    for item in "$@"; do
+        if pattern_matches_value "$expected" "$item"; then
+            return 0
+        fi
+    done
+
+    return 1
 }
 
 have_secret() {
@@ -132,6 +186,11 @@ while [[ $# -gt 0 ]]; do
         --team-id)
             [[ $# -ge 2 ]] || fail "--team-id requires a value"
             TEAM_ID="$2"
+            shift 2
+            ;;
+        --profile-path)
+            [[ $# -ge 2 ]] || fail "--profile-path requires a value"
+            PROFILE_PATH="$2"
             shift 2
             ;;
         --apple-id)
@@ -191,6 +250,7 @@ gh auth status >/dev/null
 
 NEED_CERT_B64=false
 NEED_CERT_PASSWORD=false
+NEED_PROFILE_B64=false
 NEED_APP_PASSWORD=false
 NEED_APPLE_ID_VAR=false
 NEED_TEAM_ID_VAR=false
@@ -200,6 +260,9 @@ if [[ "$FORCE" == true ]] || ! have_secret "APPLE_DEVELOPER_ID_CERT_BASE64"; the
 fi
 if [[ "$FORCE" == true ]] || ! have_secret "APPLE_DEVELOPER_ID_CERT_PASSWORD"; then
     NEED_CERT_PASSWORD=true
+fi
+if [[ "$FORCE" == true ]] || ! have_secret "APPLE_DEVELOPER_ID_PROVISIONING_PROFILE_BASE64"; then
+    NEED_PROFILE_B64=true
 fi
 if [[ "$FORCE" == true ]] || ! have_secret "APPLE_APP_PASSWORD"; then
     NEED_APP_PASSWORD=true
@@ -239,6 +302,49 @@ if [[ "$NEED_CERT_SETUP" == true ]]; then
     log "p12 verification passed"
 fi
 
+if [[ "$NEED_PROFILE_B64" == true ]]; then
+    require_cmd security
+    [[ -x "$PLIST_BUDDY" ]] || fail "PlistBuddy not found at $PLIST_BUDDY"
+    [[ -n "$PROFILE_PATH" ]] || fail "Missing provisioning profile path. Use --profile-path or set PROVISIONING_PROFILE_PATH=/path/to/profile.provisionprofile."
+    PROFILE_PATH="${PROFILE_PATH/#\~/$HOME}"
+    PROFILE_PATH="$(cd "$(dirname "$PROFILE_PATH")" && pwd)/$(basename "$PROFILE_PATH")"
+    [[ -f "$PROFILE_PATH" ]] || fail "Provisioning profile not found: $PROFILE_PATH (default is $DEFAULT_PROFILE_PATH)"
+
+    PROFILE_PLIST="$(mktemp)"
+    if ! security cms -D -i "$PROFILE_PATH" >"$PROFILE_PLIST"; then
+        rm -f "$PROFILE_PLIST"
+        fail "Failed to decode provisioning profile: $PROFILE_PATH"
+    fi
+
+    PROFILE_PLATFORM="$(plist_print "$PROFILE_PLIST" "Platform:0")"
+    [[ "$PROFILE_PLATFORM" == "OSX" ]] || fail "Provisioning profile platform must be OSX for macOS release builds (got ${PROFILE_PLATFORM:-<missing>})"
+
+    PROFILE_APPLICATION_IDENTIFIER="$(plist_print "$PROFILE_PLIST" "Entitlements:application-identifier")"
+    if [[ -z "$PROFILE_APPLICATION_IDENTIFIER" ]]; then
+        PROFILE_APPLICATION_IDENTIFIER="$(plist_print "$PROFILE_PLIST" "Entitlements:com.apple.application-identifier")"
+    fi
+    [[ -n "$PROFILE_APPLICATION_IDENTIFIER" ]] || fail "Provisioning profile is missing application-identifier entitlement"
+
+    PROFILE_PREFIX="${PROFILE_APPLICATION_IDENTIFIER%%.*}"
+    [[ "$PROFILE_PREFIX" != "$PROFILE_APPLICATION_IDENTIFIER" ]] || fail "Provisioning profile application-identifier is malformed: $PROFILE_APPLICATION_IDENTIFIER"
+
+    EXPECTED_APPLICATION_IDENTIFIER="$PROFILE_PREFIX.$EXPECTED_BUNDLE_ID"
+    EXPECTED_KEYCHAIN_GROUP="$PROFILE_PREFIX.$EXPECTED_BUNDLE_ID"
+    pattern_matches_value "$EXPECTED_APPLICATION_IDENTIFIER" "$PROFILE_APPLICATION_IDENTIFIER" \
+        || fail "Provisioning profile does not authorize bundle identifier $EXPECTED_BUNDLE_ID"
+
+    PROFILE_KEYCHAIN_GROUPS=()
+    while IFS= read -r keychain_group; do
+        PROFILE_KEYCHAIN_GROUPS+=("$keychain_group")
+    done < <(plist_array_values "$PROFILE_PLIST" "Entitlements:keychain-access-groups")
+    (( ${#PROFILE_KEYCHAIN_GROUPS[@]} > 0 )) || fail "Provisioning profile is missing keychain-access-groups"
+
+    array_authorizes_value "$EXPECTED_KEYCHAIN_GROUP" "${PROFILE_KEYCHAIN_GROUPS[@]}" \
+        || fail "Provisioning profile does not authorize keychain group $EXPECTED_KEYCHAIN_GROUP"
+
+    rm -f "$PROFILE_PLIST"
+fi
+
 if [[ "$NEED_APPLE_ID_VAR" == true ]]; then
     if [[ "$NON_INTERACTIVE" == true ]]; then
         [[ -n "$APPLE_ID_VALUE" ]] || fail "APPLE_ID/--apple-id is required in non-interactive mode."
@@ -263,9 +369,13 @@ if [[ "$NEED_TEAM_ID_VAR" == true ]]; then
 fi
 
 TMP_B64=""
+TMP_PROFILE_B64=""
 cleanup() {
     if [[ -n "$TMP_B64" ]]; then
         rm -f "$TMP_B64"
+    fi
+    if [[ -n "$TMP_PROFILE_B64" ]]; then
+        rm -f "$TMP_PROFILE_B64"
     fi
 }
 trap cleanup EXIT
@@ -276,6 +386,15 @@ if [[ "$NEED_CERT_B64" == true ]]; then
         base64 -i "$P12_PATH" > "$TMP_B64"
     else
         base64 "$P12_PATH" > "$TMP_B64"
+    fi
+fi
+
+if [[ "$NEED_PROFILE_B64" == true ]]; then
+    TMP_PROFILE_B64="$(mktemp)"
+    if base64 -i "$PROFILE_PATH" >/dev/null 2>&1; then
+        base64 -i "$PROFILE_PATH" > "$TMP_PROFILE_B64"
+    else
+        base64 "$PROFILE_PATH" > "$TMP_PROFILE_B64"
     fi
 fi
 
@@ -293,6 +412,13 @@ if [[ "$NEED_CERT_PASSWORD" == true ]]; then
     log "Set secret APPLE_DEVELOPER_ID_CERT_PASSWORD"
 else
     log "Skip secret APPLE_DEVELOPER_ID_CERT_PASSWORD (already set)"
+fi
+
+if [[ "$NEED_PROFILE_B64" == true ]]; then
+    gh secret set APPLE_DEVELOPER_ID_PROVISIONING_PROFILE_BASE64 < "$TMP_PROFILE_B64"
+    log "Set secret APPLE_DEVELOPER_ID_PROVISIONING_PROFILE_BASE64"
+else
+    log "Skip secret APPLE_DEVELOPER_ID_PROVISIONING_PROFILE_BASE64 (already set)"
 fi
 
 if [[ "$NEED_APP_PASSWORD" == true ]]; then

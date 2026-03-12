@@ -22,10 +22,20 @@ public struct RemoteSandboxStatus: Decodable, Sendable {
     public let state: String
 }
 
-public actor DaytonaBackend: RemoteBackendProtocol {
+public actor DaytonaBackend: ProvisionCapable, StartStopCapable, Archivable, Listable {
+    public nonisolated static let identifier = "daytona"
     public static let shared = DaytonaBackend()
 
-    public nonisolated var identifier: String { "daytona" }
+    public nonisolated var identifier: String { Self.identifier }
+    public nonisolated var runtimeCapabilities: RuntimeCapabilities {
+        RuntimeCapabilities(
+            supportsCreate: true,
+            supportsDelete: true,
+            supportsStartStop: true,
+            supportsArchive: true,
+            supportsList: true
+        )
+    }
 
     private let scriptPath: String
 
@@ -50,14 +60,28 @@ public actor DaytonaBackend: RemoteBackendProtocol {
             } ?? "scripts/daytona-sandbox-manager.py"
     }
 
-    public func isAvailable() async -> Bool {
+    public func healthCheck() async -> Bool {
         guard ProcessInfo.processInfo.environment["DAYTONA_API_KEY"] != nil else {
             return false
         }
-        return (try? await resolveUV()) != nil
+        return resolveUV() != nil
     }
 
     // MARK: - Sandbox Lifecycle
+
+    public func openSession(for request: RemoteWorkspaceSessionRequest) async throws -> RemoteSandboxInfo {
+        guard let sandboxId = request.remoteId?.trimmingCharacters(in: .whitespacesAndNewlines), !sandboxId.isEmpty
+        else {
+            throw RemoteWorkspaceError.missingRemoteIdentifier
+        }
+
+        switch request.status {
+        case .active:
+            return try await resolveCommand(sandboxId: sandboxId)
+        case .stopped, .archived:
+            return try await startSandbox(sandboxId: sandboxId)
+        }
+    }
 
     public func createSandbox(name: String, cloneURL: String? = nil) async throws -> RemoteSandboxInfo {
         var args = ["create", "--name", name]
@@ -67,7 +91,7 @@ public actor DaytonaBackend: RemoteBackendProtocol {
         return try await runCommand(args)
     }
 
-    public func getSSHCommand(sandboxId: String) async throws -> RemoteSandboxInfo {
+    public func resolveCommand(sandboxId: String) async throws -> RemoteSandboxInfo {
         try await runCommand(["ssh-command", "--sandbox-id", sandboxId])
     }
 
@@ -94,7 +118,9 @@ public actor DaytonaBackend: RemoteBackendProtocol {
     // MARK: - Private
 
     private func runCommand<T: Decodable>(_ args: [String]) async throws -> T {
-        let uvPath = try await resolveUV()
+        guard let uvPath = resolveUV() else {
+            throw DaytonaError.uvNotFound
+        }
 
         let result = try await ProcessRunner.run(
             executable: uvPath,
@@ -117,7 +143,7 @@ public actor DaytonaBackend: RemoteBackendProtocol {
         return try decoder.decode(T.self, from: data)
     }
 
-    private func resolveUV() async throws -> String {
+    private func resolveUV() -> String? {
         let candidates = [
             "/opt/homebrew/bin/uv",
             "/usr/local/bin/uv",
@@ -129,15 +155,17 @@ public actor DaytonaBackend: RemoteBackendProtocol {
             }
         }
 
-        let result = try await ProcessRunner.run(
-            executable: "/usr/bin/which",
-            arguments: ["uv"]
-        )
-        let path = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard result.success, !path.isEmpty else {
-            throw DaytonaError.uvNotFound
+        let fallbackPath =
+            ProcessInfo.processInfo.environment["PATH"]
+            ?? "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        for dir in fallbackPath.split(separator: ":") {
+            let candidate = URL(fileURLWithPath: String(dir)).appendingPathComponent("uv").path
+            if FileManager.default.isExecutableFile(atPath: candidate) {
+                return candidate
+            }
         }
-        return path
+
+        return nil
     }
 }
 

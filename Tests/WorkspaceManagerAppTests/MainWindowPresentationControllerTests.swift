@@ -117,6 +117,26 @@ struct MainWindowPresentationControllerTests {
         }
     }
 
+    @Test("Open in editor target ignores remote workspace selections")
+    func openInEditorTargetIgnoresRemoteWorkspaceSelections() {
+        let repo = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))
+        let workspace = Workspace(
+            name: "cloud-feature",
+            path: URL(fileURLWithPath: "/tmp/alpha/workspaces/cloud-feature"),
+            sourceRepo: repo,
+            backendIdentifier: SSHBackend.identifier,
+            remoteId: "remote-123"
+        )
+
+        let target = controller.openInEditorTarget(
+            selectedCodePreview: nil,
+            selectedWorkspace: workspace,
+            selectedRepo: nil
+        )
+
+        #expect(target == nil)
+    }
+
     @Test("Open in editor context key tracks current selection type")
     func openInEditorContextKeyTracksSelectionType() {
         let repo = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))
