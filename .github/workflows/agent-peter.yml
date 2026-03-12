@@ -28,12 +28,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 50
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v4
+        uses: astral-sh/setup-uv@v7
 
       - name: Check auth
         run: |
@@ -166,7 +166,7 @@ jobs:
           THREAD="Discussion to plan:
           $(cat /tmp/discussion.json)"
 
-          npx @anthropic-ai/claude-code --print \
+          npx --yes @anthropic-ai/claude-code --print \
             --system-prompt "$(cat .agents/prompts/peter-planner.md)" \
             --append-system-prompt "$THREAD" \
             "Read this approved discussion and break it into actionable GitHub Issues. Output ONLY the JSON block as specified in your prompt." \
