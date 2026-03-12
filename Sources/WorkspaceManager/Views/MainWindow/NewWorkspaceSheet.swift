@@ -230,7 +230,8 @@ struct NewWorkspaceSheet: View {
     }
 
     private func updateNameSource(for value: String) {
-        nameSource = value.trimmingCharacters(in: .whitespacesAndNewlines) == generatedName
+        nameSource =
+            value.trimmingCharacters(in: .whitespacesAndNewlines) == generatedName
             ? .generatedDefault
             : .manual
     }
