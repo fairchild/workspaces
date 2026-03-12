@@ -2,6 +2,12 @@ name: Tart UI Smoke
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - codex/**
+    paths:
+      - .github/workflows/tart-ui-smoke.yml
+      - scripts/runner.sh
 
 jobs:
   smoke:

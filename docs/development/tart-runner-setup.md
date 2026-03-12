@@ -78,6 +78,8 @@ Confirm there is an online runner whose labels include `tart-ui`.
 
 The repo includes a manual smoke workflow at `.github/workflows/tart-ui-smoke.yml`.
 
+Before the workflow lands on `main`, pushes to `codex/**` branches that touch the workflow or `scripts/runner.sh` will also trigger the smoke run so the lane can be validated pre-merge.
+
 ```bash
 gh workflow run tart-ui-smoke.yml --ref <branch-with-workflow>
 gh run watch --exit-status "$(gh run list --workflow tart-ui-smoke.yml --limit 1 --json databaseId --jq '.[0].databaseId')"
