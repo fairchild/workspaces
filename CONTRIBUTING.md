@@ -107,6 +107,14 @@ workspaces/
 3. Run local checks (`swift test`, `swift build`, lint when relevant).
 4. Include a concise summary of behavior changes and verification results in the PR.
 
+## Self-Hosted CI Runners
+
+CI runs on a self-hosted macOS runner. The app auto-detects CI (via the standard `CI` env var) and uses `.accessory` activation policy so it never steals focus or appears in the dock. If you write a script that launches the app headlessly, set `WORKSPACES_NO_ACTIVATE_ON_LAUNCH=1`:
+
+```bash
+WORKSPACES_NO_ACTIVATE_ON_LAUNCH=1 swift run WorkspaceManager
+```
+
 ## Agent Self-Verification
 
 A bundled [tart-gui-automation](.agents/skills/tart-gui-automation/) skill lets Claude Code (or any coding agent) build and launch the app in an ephemeral Tart macOS VM, capture screenshots, and verify UI behavior without touching the host. See the CLAUDE.md "Dev Verification Practice" section for the workflow.
