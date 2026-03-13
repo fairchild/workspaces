@@ -33,6 +33,9 @@ validator = load_module(
     "validate_agent_output",
     REPO_ROOT / ".agents" / "scripts" / "validate-agent-output.py",
 )
+run_contributor = load_module(
+    "run_contributor", REPO_ROOT / ".agents" / "scripts" / "run-contributor.py"
+)
 CATALOG = run_planner.load_label_catalog(REPO_ROOT / ".agents" / "config" / "peter-planner.toml")
 
 
@@ -350,6 +353,148 @@ class RunPlannerTests(unittest.TestCase):
             self.assertEqual(raw_output, fixture)
         finally:
             fixture_path.unlink(missing_ok=True)
+
+
+class RunContributorTests(unittest.TestCase):
+    def test_extract_persona_from_april_prompt(self) -> None:
+        prompt = REPO_ROOT / ".agents" / "prompts" / "april-clearwater.md"
+        self.assertEqual(run_contributor.extract_persona(prompt), "April Clearwater")
+
+    def test_extract_persona_from_plat_prompt(self) -> None:
+        prompt = REPO_ROOT / ".agents" / "prompts" / "plat-ironwood.md"
+        self.assertEqual(run_contributor.extract_persona(prompt), "Plat Ironwood")
+
+    def test_find_agent_threads_pr_review(self) -> None:
+        data = {
+            "data": {
+                "repository": {
+                    "pullRequests": {
+                        "nodes": [
+                            {
+                                "number": 94,
+                                "title": "Fix startup slowness",
+                                "reviews": {
+                                    "nodes": [
+                                        {
+                                            "body": "*April Clearwater, Application Lead*\n\nLooks good.",
+                                            "author": {"login": "github-actions[bot]"},
+                                            "submittedAt": "2026-03-13T06:19:00Z",
+                                        },
+                                        {
+                                            "body": "Thanks for the review!",
+                                            "author": {"login": "fairchild"},
+                                            "submittedAt": "2026-03-13T07:00:00Z",
+                                        },
+                                    ]
+                                },
+                                "comments": {"nodes": []},
+                            }
+                        ]
+                    },
+                    "issues": {"nodes": []},
+                    "discussions": {"nodes": []},
+                }
+            }
+        }
+        threads = run_contributor._find_agent_threads(data, ["*April Clearwater", "*Proposed by April Clearwater"])
+        self.assertEqual(len(threads), 1)
+        self.assertEqual(threads[0]["kind"], "PR")
+        self.assertEqual(threads[0]["number"], 94)
+        self.assertEqual(len(threads[0]["replies"]), 1)
+        self.assertEqual(threads[0]["replies"][0]["author"], "fairchild")
+
+    def test_find_agent_threads_discussion_proposed(self) -> None:
+        data = {
+            "data": {
+                "repository": {
+                    "pullRequests": {"nodes": []},
+                    "issues": {"nodes": []},
+                    "discussions": {
+                        "nodes": [
+                            {
+                                "number": 42,
+                                "title": "[idea] Quick switcher",
+                                "body": "*Proposed by April Clearwater, Application Lead*\n\nWe should add...",
+                                "createdAt": "2026-03-12T10:00:00Z",
+                                "comments": {
+                                    "nodes": [
+                                        {
+                                            "body": "Great idea, +1",
+                                            "author": {"login": "fairchild"},
+                                            "createdAt": "2026-03-12T12:00:00Z",
+                                        }
+                                    ]
+                                },
+                            }
+                        ]
+                    },
+                }
+            }
+        }
+        threads = run_contributor._find_agent_threads(data, ["*April Clearwater", "*Proposed by April Clearwater"])
+        self.assertEqual(len(threads), 1)
+        self.assertEqual(threads[0]["kind"], "Discussion (proposed)")
+        self.assertEqual(len(threads[0]["replies"]), 1)
+
+    def test_find_agent_threads_empty_when_no_activity(self) -> None:
+        data = {
+            "data": {
+                "repository": {
+                    "pullRequests": {"nodes": []},
+                    "issues": {"nodes": []},
+                    "discussions": {"nodes": []},
+                }
+            }
+        }
+        threads = run_contributor._find_agent_threads(data, ["*April Clearwater", "*Proposed by April Clearwater"])
+        self.assertEqual(threads, [])
+
+    def test_find_agent_threads_only_last_action_per_thread(self) -> None:
+        data = {
+            "data": {
+                "repository": {
+                    "pullRequests": {"nodes": []},
+                    "issues": {
+                        "nodes": [
+                            {
+                                "number": 10,
+                                "title": "Some issue",
+                                "comments": {
+                                    "nodes": [
+                                        {
+                                            "body": "*Plat Ironwood*\n\nFirst take.",
+                                            "author": {"login": "github-actions[bot]"},
+                                            "createdAt": "2026-03-11T10:00:00Z",
+                                        },
+                                        {
+                                            "body": "I disagree.",
+                                            "author": {"login": "fairchild"},
+                                            "createdAt": "2026-03-11T12:00:00Z",
+                                        },
+                                        {
+                                            "body": "*Plat Ironwood*\n\nRevised take.",
+                                            "author": {"login": "github-actions[bot]"},
+                                            "createdAt": "2026-03-12T10:00:00Z",
+                                        },
+                                        {
+                                            "body": "Looks good now.",
+                                            "author": {"login": "fairchild"},
+                                            "createdAt": "2026-03-12T12:00:00Z",
+                                        },
+                                    ]
+                                },
+                            }
+                        ]
+                    },
+                    "discussions": {"nodes": []},
+                }
+            }
+        }
+        threads = run_contributor._find_agent_threads(data, ["*Plat Ironwood", "*Proposed by Plat Ironwood"])
+        self.assertEqual(len(threads), 1)
+        self.assertIn("Revised take", threads[0]["agent_item"]["body"])
+        self.assertEqual(len(threads[0]["replies"]), 1)
+        self.assertIn("Looks good now", threads[0]["replies"][0]["body"])
 
 
 if __name__ == "__main__":

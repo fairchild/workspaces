@@ -130,6 +130,203 @@ def repo_owner_name(env: dict[str, str]) -> tuple[str, str]:
     return data["owner"]["login"], data["name"]
 
 
+def extract_persona(prompt_file: Path) -> str:
+    """Extract persona name from the prompt file heading."""
+    try:
+        for line in prompt_file.read_text().splitlines():
+            if line.startswith("# "):
+                return line[2:].split("—")[0].split("–")[0].strip()
+    except OSError:
+        pass
+    return ""
+
+
+HISTORY_QUERY = """
+query($owner: String!, $name: String!) {
+  repository(owner: $owner, name: $name) {
+    pullRequests(first: 10, orderBy: {field: UPDATED_AT, direction: DESC}) {
+      nodes {
+        number title
+        reviews(last: 20) {
+          nodes { body author { login } submittedAt }
+        }
+        comments(last: 20) {
+          nodes { body author { login } createdAt }
+        }
+      }
+    }
+    issues(first: 10, orderBy: {field: UPDATED_AT, direction: DESC}, states: [OPEN]) {
+      nodes {
+        number title
+        comments(last: 20) {
+          nodes { body author { login } createdAt }
+        }
+      }
+    }
+    discussions(first: 20, states: OPEN) {
+      nodes {
+        number title body createdAt
+        comments(last: 10) {
+          nodes { body author { login } createdAt }
+        }
+      }
+    }
+  }
+}
+"""
+
+
+def _has_persona(text: str, markers: list[str]) -> bool:
+    return any(m in text for m in markers)
+
+
+def _find_agent_threads(data: dict, markers: list[str]) -> list[dict]:
+    """Find threads where the agent acted, returning the last action + replies."""
+    threads: list[dict] = []
+    repo = data.get("data", {}).get("repository", {})
+
+    for pr in repo.get("pullRequests", {}).get("nodes", []):
+        items: list[dict] = []
+        for r in pr.get("reviews", {}).get("nodes", []):
+            items.append({
+                "body": r.get("body", ""),
+                "author": (r.get("author") or {}).get("login", ""),
+                "time": r.get("submittedAt", ""),
+            })
+        for c in pr.get("comments", {}).get("nodes", []):
+            items.append({
+                "body": c.get("body", ""),
+                "author": (c.get("author") or {}).get("login", ""),
+                "time": c.get("createdAt", ""),
+            })
+        items.sort(key=lambda x: x["time"])
+        agent_indices = [i for i, x in enumerate(items) if _has_persona(x["body"], markers)]
+        if not agent_indices:
+            continue
+        last = agent_indices[-1]
+        threads.append({
+            "kind": "PR",
+            "number": pr["number"],
+            "title": pr["title"],
+            "agent_item": items[last],
+            "replies": items[last + 1:],
+        })
+
+    for issue in repo.get("issues", {}).get("nodes", []):
+        items = [
+            {
+                "body": c.get("body", ""),
+                "author": (c.get("author") or {}).get("login", ""),
+                "time": c.get("createdAt", ""),
+            }
+            for c in issue.get("comments", {}).get("nodes", [])
+        ]
+        agent_indices = [i for i, x in enumerate(items) if _has_persona(x["body"], markers)]
+        if not agent_indices:
+            continue
+        last = agent_indices[-1]
+        threads.append({
+            "kind": "Issue",
+            "number": issue["number"],
+            "title": issue["title"],
+            "agent_item": items[last],
+            "replies": items[last + 1:],
+        })
+
+    for disc in repo.get("discussions", {}).get("nodes", []):
+        disc_body = disc.get("body", "")
+        items = [
+            {
+                "body": c.get("body", ""),
+                "author": (c.get("author") or {}).get("login", ""),
+                "time": c.get("createdAt", ""),
+            }
+            for c in disc.get("comments", {}).get("nodes", [])
+        ]
+        if _has_persona(disc_body, markers):
+            threads.append({
+                "kind": "Discussion (proposed)",
+                "number": disc["number"],
+                "title": disc["title"],
+                "agent_item": {
+                    "body": disc_body,
+                    "author": "",
+                    "time": disc.get("createdAt", ""),
+                },
+                "replies": items,
+            })
+            continue
+        agent_indices = [i for i, x in enumerate(items) if _has_persona(x["body"], markers)]
+        if not agent_indices:
+            continue
+        last = agent_indices[-1]
+        threads.append({
+            "kind": "Discussion",
+            "number": disc["number"],
+            "title": disc["title"],
+            "agent_item": items[last],
+            "replies": items[last + 1:],
+        })
+
+    threads.sort(key=lambda t: t["agent_item"]["time"], reverse=True)
+    return threads
+
+
+def _format_thread(t: dict) -> str:
+    """Format a single agent activity thread."""
+    excerpt = t["agent_item"]["body"][:500].replace("\n", "\n    ")
+    lines = [
+        f"  {t['kind']} #{t['number']} — {t['title']}",
+        f"    You wrote ({t['agent_item']['time']}):",
+        f"    {excerpt}",
+    ]
+    if t["replies"]:
+        lines.append("    Replies since:")
+        for r in t["replies"][:5]:
+            r_text = r["body"][:300].replace("\n", "\n      ")
+            lines.append(f"    - {r['author']} ({r['time']}): {r_text}")
+    else:
+        lines.append("    No replies yet.")
+    return "\n".join(lines)
+
+
+def gather_agent_history(
+    persona: str, owner: str, name: str, env: dict[str, str],
+) -> str:
+    """Find the agent's most recent actions and any replies since."""
+    if not persona:
+        return ""
+
+    log(f"Gathering recent history for {persona}")
+    raw = run_optional(
+        [
+            "gh", "api", "graphql",
+            "-f", f"query={HISTORY_QUERY}",
+            "-f", f"owner={owner}",
+            "-f", f"name={name}",
+        ],
+        timeout=GITHUB_API_TIMEOUT,
+        cwd=REPO_ROOT,
+        env=env,
+        default="{}",
+    )
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return ""
+
+    markers = [f"*{persona}", f"*Proposed by {persona}"]
+    threads = _find_agent_threads(data, markers)
+    if not threads:
+        return ""
+
+    formatted = "\n\n".join(_format_thread(t) for t in threads[:3])
+    return (
+        f"Your last actions as {persona} and what happened since:\n\n"
+        f"{formatted}"
+    )
+
+
 def gather_backlog_state() -> str:
     lines: list[str] = []
     for path in sorted((REPO_ROOT / "backlog").glob("*.md")):
@@ -145,7 +342,7 @@ def gather_backlog_state() -> str:
     return "\n".join(lines)
 
 
-def gather_context(env: dict[str, str]) -> str:
+def gather_context(env: dict[str, str], persona: str = "") -> str:
     log("Gathering context")
     owner, name = repo_owner_name(env)
 
@@ -236,18 +433,18 @@ query($owner: String!, $name: String!) {
     ).rstrip()
 
     backlog_state = gather_backlog_state()
-    return (
-        "Recent commits (last 2 weeks):\n"
-        f"{recent_commits}\n\n"
-        "Open discussions:\n"
-        f"{discussions}\n\n"
-        "Open issues:\n"
-        f"{open_issues}\n\n"
-        "Open PRs:\n"
-        f"{open_prs}\n\n"
-        "Backlog state:\n"
-        f"{backlog_state}"
-    )
+    history = gather_agent_history(persona, owner, name, env)
+
+    sections = [
+        f"Recent commits (last 2 weeks):\n{recent_commits}",
+        f"Open discussions:\n{discussions}",
+        f"Open issues:\n{open_issues}",
+        f"Open PRs:\n{open_prs}",
+        f"Backlog state:\n{backlog_state}",
+    ]
+    if history:
+        sections.append(history)
+    return "\n\n".join(sections)
 
 
 def run_claude(prompt_file: Path, context: str, env: dict[str, str], *, mode: str = "cli") -> str:
@@ -410,7 +607,8 @@ def main() -> int:
     require_env("GH_TOKEN")
     env = dict(os.environ)
 
-    context = gather_context(env)
+    persona = extract_persona(prompt_file)
+    context = gather_context(env, persona=persona)
     raw_output = run_claude(prompt_file, context, env, mode=args.mode)
     exit_code, validated_json, error_text = validate_output(raw_output, env)
 
