@@ -83,7 +83,7 @@ struct MainSelectionCoordinator {
         switch activeSession.key {
         case .backendSession(let providerID, let instanceID):
             return repos.flatMap(\.workspaces).first {
-                $0.backendIdentifier == providerID && $0.remoteId == instanceID
+                $0.backendIdentifier == providerID && $0.terminalSessionIdentifier == instanceID
             }
         case .hostPath(let path):
             let normalizedPath = normalizePath(path)

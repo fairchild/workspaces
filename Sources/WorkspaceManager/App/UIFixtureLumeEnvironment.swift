@@ -365,7 +365,7 @@ actor UIFixtureLumeWorkspaceProvider: WorkspaceProviderProtocol {
     nonisolated func sessionKey(for workspace: WorkspaceProviderTarget) -> HostTerminalSessionKey {
         .backendSession(
             providerID: LumeWorkspaceProvider.identifier,
-            instanceID: workspace.remoteId ?? workspace.id.uuidString
+            instanceID: workspace.terminalSessionIdentifier
         )
     }
 
@@ -552,7 +552,7 @@ struct UIFixtureDaytonaWorkspaceProvider: WorkspaceProviderProtocol {
     func sessionKey(for workspace: WorkspaceProviderTarget) -> HostTerminalSessionKey {
         .backendSession(
             providerID: DaytonaWorkspaceProvider.identifier,
-            instanceID: workspace.remoteId ?? workspace.id.uuidString
+            instanceID: workspace.terminalSessionIdentifier
         )
     }
 

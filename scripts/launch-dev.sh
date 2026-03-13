@@ -402,6 +402,11 @@ write_diagnostics_bundle() {
 
 print_launch_plan() {
     log "Launching: $DEBUG_BINARY"
+    if [[ "$NO_ACTIVATE_ON_LAUNCH" == true ]]; then
+        log "Launch mode: shared-desktop-safe (--no-activate)"
+    else
+        log "Launch mode: interactive (activation allowed)"
+    fi
     if [[ ${#ENV_VARS[@]} -gt 0 ]]; then
         log "Environment overrides:"
         for entry in "${ENV_VARS[@]}"; do
@@ -512,6 +517,9 @@ launch_background() {
     log "Verified executable path: $DEBUG_BINARY"
     log "Verified visible window id: $WINDOW_ID"
     log "Log file: $LOG_PATH"
+    if [[ "$NO_ACTIVATE_ON_LAUNCH" == true ]]; then
+        log "Shared-desktop follow-up: capture with ./scripts/capture-window.sh while leaving the app in the background."
+    fi
 }
 
 launch_foreground() {

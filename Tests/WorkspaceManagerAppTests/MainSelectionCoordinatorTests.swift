@@ -21,7 +21,8 @@ struct MainSelectionCoordinatorTests {
             path: URL(fileURLWithPath: "/tmp/workspaces/lume"),
             sourceRepo: repo,
             backendIdentifier: LumeWorkspaceProvider.identifier,
-            remoteId: "vm-123"
+            remoteId: "vm-123",
+            sessionRoutingID: "lume-route-123"
         )
         let daytonaWorkspace = Workspace(
             name: "daytona",
@@ -33,7 +34,7 @@ struct MainSelectionCoordinatorTests {
         repo.workspaces = [localWorkspace, lumeWorkspace, daytonaWorkspace]
 
         let activeSession = HostTerminalSession(
-            key: .backendSession(providerID: LumeWorkspaceProvider.identifier, instanceID: "vm-123"),
+            key: .backendSession(providerID: LumeWorkspaceProvider.identifier, instanceID: "lume-route-123"),
             directory: URL(fileURLWithPath: "/tmp/workspaces/lume"),
             customCommand: "/usr/local/bin/lume ssh vm-123"
         )

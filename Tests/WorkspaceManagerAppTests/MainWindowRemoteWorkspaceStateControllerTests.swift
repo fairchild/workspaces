@@ -14,14 +14,14 @@ struct MainWindowRemoteWorkspaceStateControllerTests {
 
         let decision = controller.selectionDecision(
             for: workspace,
-            connectingSandboxID: nil
+            connectingRoutingID: nil
         )
 
         switch decision {
         case .beginConnection(let pendingSelection):
             #expect(pendingSelection.workspaceID == workspace.id)
             #expect(pendingSelection.workspaceName == workspace.name)
-            #expect(pendingSelection.sandboxID == workspace.remoteId)
+            #expect(pendingSelection.routingID == workspace.terminalSessionIdentifier)
         case .ignoreInFlightConnection:
             Issue.record("Expected remote selection to begin a connection when idle")
         }
@@ -33,12 +33,12 @@ struct MainWindowRemoteWorkspaceStateControllerTests {
 
         let decision = controller.selectionDecision(
             for: workspace,
-            connectingSandboxID: "sandbox-in-flight"
+            connectingRoutingID: "sandbox-in-flight"
         )
 
         switch decision {
-        case .ignoreInFlightConnection(let sandboxID):
-            #expect(sandboxID == "sandbox-in-flight")
+        case .ignoreInFlightConnection(let routingID):
+            #expect(routingID == "sandbox-in-flight")
         case .beginConnection:
             Issue.record("Expected selection to ignore clicks while another connection is in flight")
         }
@@ -49,18 +49,18 @@ struct MainWindowRemoteWorkspaceStateControllerTests {
         let workspace = makeRemoteWorkspace()
         let pendingSelection = MainWindowPendingRemoteWorkspaceSelection(
             workspace: workspace,
-            sandboxID: workspace.remoteId ?? ""
+            routingID: workspace.terminalSessionIdentifier
         )
 
         #expect(
             controller.shouldAcceptCompletion(
-                sandboxID: workspace.remoteId ?? "",
+                routingID: workspace.terminalSessionIdentifier,
                 pendingSelection: pendingSelection
             )
         )
         #expect(
             !controller.shouldAcceptCompletion(
-                sandboxID: "different-sandbox",
+                routingID: "different-sandbox",
                 pendingSelection: pendingSelection
             )
         )

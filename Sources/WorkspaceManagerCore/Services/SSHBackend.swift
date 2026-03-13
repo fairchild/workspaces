@@ -8,18 +8,18 @@
 import Foundation
 
 public struct SSHSessionPlan: Sendable, Equatable {
-    public let remoteId: String
+    public let routingID: String
     public let workingDirectory: String
     public let bootstrapArguments: [String]
     public let interactiveCommand: String
 
     public init(
-        remoteId: String,
+        routingID: String,
         workingDirectory: String,
         bootstrapArguments: [String],
         interactiveCommand: String
     ) {
-        self.remoteId = remoteId
+        self.routingID = routingID
         self.workingDirectory = workingDirectory
         self.bootstrapArguments = bootstrapArguments
         self.interactiveCommand = interactiveCommand
@@ -85,7 +85,7 @@ public actor SSHBackend: RemoteBackendProtocol {
         }
 
         return RemoteSandboxInfo(
-            sandboxId: plan.remoteId,
+            sandboxId: plan.routingID,
             sshCommand: plan.interactiveCommand
         )
     }
@@ -94,8 +94,8 @@ public actor SSHBackend: RemoteBackendProtocol {
         for request: RemoteWorkspaceSessionRequest,
         sshExecutable: String = "/usr/bin/ssh"
     ) throws -> SSHSessionPlan {
-        guard let remoteId = request.remoteId?.trimmingCharacters(in: .whitespacesAndNewlines), !remoteId.isEmpty
-        else {
+        let routingID = request.sessionRoutingID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !routingID.isEmpty else {
             throw RemoteWorkspaceError.missingRemoteIdentifier
         }
 
@@ -129,7 +129,7 @@ public actor SSHBackend: RemoteBackendProtocol {
         let destination = connectionTarget(for: ssh)
 
         return SSHSessionPlan(
-            remoteId: remoteId,
+            routingID: routingID,
             workingDirectory: workingDirectory,
             bootstrapArguments: sshOptions + [destination, "sh", "-lc", bootstrapScript],
             interactiveCommand: ([sshExecutable] + sshOptions + ["-t", destination, "sh", "-lc", interactiveScript])

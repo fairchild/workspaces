@@ -13,7 +13,7 @@ import Testing
 @Suite("LocalBackend")
 struct LocalBackendTests {
 
-    private func makeTempWorkspace() throws -> (Workspace, Repo, URL) {
+    private func makeTempWorkspace() throws -> (Workspace, LocalWorkspaceContext, Repo, URL) {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("LocalBackendTest-\(UUID().uuidString)")
         let wsDir = tempDir.appendingPathComponent("ws")
@@ -21,7 +21,8 @@ struct LocalBackendTests {
 
         let repo = Repo(name: "test-repo", localPath: tempDir)
         let workspace = Workspace(name: "test-ws", path: wsDir, sourceRepo: repo)
-        return (workspace, repo, tempDir)
+        let context = try #require(workspace.localWorkspaceContext)
+        return (workspace, context, repo, tempDir)
     }
 
     @Test("initialize creates workspace directory")
@@ -35,30 +36,31 @@ struct LocalBackendTests {
         let workspace = Workspace(name: "new-ws", path: wsDir, sourceRepo: repo)
 
         let backend = LocalBackend()
-        try await backend.initialize(workspace: workspace)
+        let context = try #require(workspace.localWorkspaceContext)
+        try await backend.initialize(workspace: context)
 
         #expect(FileManager.default.fileExists(atPath: wsDir.path))
     }
 
     @Test("isRunning always returns true")
     func isRunningReturnsTrue() async throws {
-        let (workspace, _, tempDir) = try makeTempWorkspace()
+        let (_, context, _, tempDir) = try makeTempWorkspace()
         defer { try? FileManager.default.removeItem(at: tempDir) }
 
         let backend = LocalBackend()
-        let running = await backend.isRunning(workspace: workspace)
+        let running = await backend.isRunning(workspace: context)
         #expect(running)
     }
 
     @Test("execute runs simple command and captures output")
     func executeRunsCommand() async throws {
-        let (workspace, _, tempDir) = try makeTempWorkspace()
+        let (_, context, _, tempDir) = try makeTempWorkspace()
         defer { try? FileManager.default.removeItem(at: tempDir) }
 
         let backend = LocalBackend()
         let result = try await backend.execute(
             command: ["/bin/echo", "hello world"],
-            in: workspace
+            in: context
         )
 
         #expect(result.success)
@@ -67,13 +69,13 @@ struct LocalBackendTests {
 
     @Test("execute resolves relative command via PATH")
     func executeResolvesRelativeCommand() async throws {
-        let (workspace, _, tempDir) = try makeTempWorkspace()
+        let (_, context, _, tempDir) = try makeTempWorkspace()
         defer { try? FileManager.default.removeItem(at: tempDir) }
 
         let backend = LocalBackend()
         let result = try await backend.execute(
             command: ["echo", "resolved"],
-            in: workspace
+            in: context
         )
 
         #expect(result.success)
@@ -82,19 +84,19 @@ struct LocalBackendTests {
 
     @Test("execute throws on empty command")
     func executeThrowsOnEmptyCommand() async throws {
-        let (workspace, _, tempDir) = try makeTempWorkspace()
+        let (_, context, _, tempDir) = try makeTempWorkspace()
         defer { try? FileManager.default.removeItem(at: tempDir) }
 
         let backend = LocalBackend()
 
         await #expect(throws: BackendError.self) {
-            _ = try await backend.execute(command: [], in: workspace)
+            _ = try await backend.execute(command: [], in: context)
         }
     }
 
     @Test("execute throws commandNotFound for nonexistent binary")
     func executeThrowsCommandNotFound() async throws {
-        let (workspace, _, tempDir) = try makeTempWorkspace()
+        let (_, context, _, tempDir) = try makeTempWorkspace()
         defer { try? FileManager.default.removeItem(at: tempDir) }
 
         let backend = LocalBackend()
@@ -102,20 +104,20 @@ struct LocalBackendTests {
         await #expect(throws: BackendError.self) {
             _ = try await backend.execute(
                 command: ["definitely-not-a-real-command-xyz"],
-                in: workspace
+                in: context
             )
         }
     }
 
     @Test("execute merges custom environment variables")
     func executeMergesEnvironment() async throws {
-        let (workspace, _, tempDir) = try makeTempWorkspace()
+        let (_, context, _, tempDir) = try makeTempWorkspace()
         defer { try? FileManager.default.removeItem(at: tempDir) }
 
         let backend = LocalBackend()
         let result = try await backend.execute(
             command: ["/bin/bash", "-c", "echo $MY_TEST_VAR"],
-            in: workspace,
+            in: context,
             environment: ["MY_TEST_VAR": "custom_value"]
         )
 
@@ -125,21 +127,21 @@ struct LocalBackendTests {
 
     @Test("hostPath returns workspace URL")
     func hostPathReturnsURL() async throws {
-        let (workspace, _, tempDir) = try makeTempWorkspace()
+        let (workspace, context, _, tempDir) = try makeTempWorkspace()
         defer { try? FileManager.default.removeItem(at: tempDir) }
 
         let backend = LocalBackend()
-        let path = await backend.hostPath(for: workspace)
+        let path = await backend.hostPath(for: context)
         #expect(path == workspace.workspaceURL)
     }
 
     @Test("createTerminal succeeds for an existing workspace directory")
     func createTerminalSucceedsForExistingWorkspace() async throws {
-        let (workspace, _, tempDir) = try makeTempWorkspace()
+        let (_, context, _, tempDir) = try makeTempWorkspace()
         defer { try? FileManager.default.removeItem(at: tempDir) }
 
         let backend = LocalBackend()
-        let terminal = try await backend.createTerminal(for: workspace)
+        let terminal = try await backend.createTerminal(for: context)
         terminal.close()
     }
 
@@ -154,8 +156,9 @@ struct LocalBackendTests {
         let workspace = Workspace(name: "test-ws", path: missingWSDir, sourceRepo: repo)
 
         let backend = LocalBackend()
+        let context = try #require(workspace.localWorkspaceContext)
         await #expect(throws: BackendError.self) {
-            _ = try await backend.createTerminal(for: workspace)
+            _ = try await backend.createTerminal(for: context)
         }
     }
 }

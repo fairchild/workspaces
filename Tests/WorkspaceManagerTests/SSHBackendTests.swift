@@ -20,7 +20,7 @@ struct SSHBackendTests {
         let plan = try SSHBackend.sessionPlan(for: request, sshExecutable: "/usr/bin/ssh")
         let bootstrapScript = try #require(plan.bootstrapArguments.last)
 
-        #expect(plan.remoteId == "remote-123")
+        #expect(plan.routingID == "remote-123")
         #expect(plan.workingDirectory == "/srv/workspaces/feature-a")
         #expect(plan.bootstrapArguments.contains("alice@ssh.example.com"))
         #expect(bootstrapScript.contains("/srv/workspaces/feature-a"))
@@ -41,6 +41,7 @@ struct SSHBackendTests {
             name: "Feature/A",
             backendIdentifier: SSHBackend.identifier,
             remoteId: "remote-123",
+            sessionRoutingID: "remote-123",
             status: .active,
             repoName: "Acme API",
             repoRemoteURL: "git@github.com:acme/api.git",
@@ -189,7 +190,8 @@ struct SSHBackendTests {
             path: URL(fileURLWithPath: "/tmp/api/workspaces/feature-a"),
             sourceRepo: repo,
             backendIdentifier: SSHBackend.identifier,
-            remoteId: "remote-123"
+            remoteId: "remote-123",
+            sessionRoutingID: "remote-123"
         )
         workspace.sshMetadata = ssh
         workspace.composeMetadata = compose

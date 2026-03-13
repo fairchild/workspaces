@@ -9,62 +9,18 @@ import GhosttyKit
 
 @MainActor
 final class GhosttyAppManager: NSObject {
-    enum SplitActionKind: String {
-        case newSplit = "new_split"
-        case gotoSplit = "goto_split"
-        case resizeSplit = "resize_split"
-        case equalizeSplits = "equalize_splits"
-    }
-
-    enum SplitDirection: Int {
-        case right = 0
-        case down = 1
-        case left = 2
-        case up = 3
-    }
-
-    enum SplitFocusDirection: Int {
-        case previous = 0
-        case next = 1
-        case up = 2
-        case left = 3
-        case down = 4
-        case right = 5
-    }
-
-    enum SplitResizeDirection: Int {
-        case up = 0
-        case down = 1
-        case left = 2
-        case right = 3
-    }
-
-    struct SplitActionRequest {
-        let kind: SplitActionKind
-        let directionRawValue: Int?
-        let amount: Int?
-
-        var splitDirection: SplitDirection? {
-            guard let directionRawValue else { return nil }
-            return SplitDirection(rawValue: directionRawValue)
-        }
-
-        var focusDirection: SplitFocusDirection? {
-            guard let directionRawValue else { return nil }
-            return SplitFocusDirection(rawValue: directionRawValue)
-        }
-
-        var resizeDirection: SplitResizeDirection? {
-            guard let directionRawValue else { return nil }
-            return SplitResizeDirection(rawValue: directionRawValue)
-        }
-    }
+    typealias SplitActionKind = GhosttyRuntimeActionBridge.SplitActionKind
+    typealias SplitDirection = GhosttyRuntimeActionBridge.SplitDirection
+    typealias SplitFocusDirection = GhosttyRuntimeActionBridge.SplitFocusDirection
+    typealias SplitResizeDirection = GhosttyRuntimeActionBridge.SplitResizeDirection
+    typealias SplitActionRequest = GhosttyRuntimeActionBridge.SplitActionRequest
 
     static let shared = GhosttyAppManager()
-    nonisolated static let splitActionNotification = Notification.Name("WorkspaceManager.Ghostty.SplitActionRequested")
-    nonisolated static let splitActionKindUserInfoKey = "kind"
-    nonisolated static let splitActionDirectionUserInfoKey = "directionRawValue"
-    nonisolated static let splitActionAmountUserInfoKey = "amount"
+    nonisolated static let splitActionNotification = GhosttyRuntimeActionBridge.splitActionNotification
+    nonisolated static let splitActionKindUserInfoKey = GhosttyRuntimeActionBridge.splitActionKindUserInfoKey
+    nonisolated static let splitActionDirectionUserInfoKey =
+        GhosttyRuntimeActionBridge.splitActionDirectionUserInfoKey
+    nonisolated static let splitActionAmountUserInfoKey = GhosttyRuntimeActionBridge.splitActionAmountUserInfoKey
 
     private(set) var app: ghostty_app_t?
     private var config: ghostty_config_t?
@@ -154,12 +110,17 @@ final class GhosttyAppManager: NSObject {
 
     func applyColorScheme(_ colorScheme: ghostty_color_scheme_e) {
         guard let app else { return }
-        if let currentColorScheme, GhosttyAppearanceSync.isEqual(currentColorScheme, colorScheme) {
+        guard
+            let colorSchemeToApply = GhosttyAppearanceSync.nextColorScheme(
+                resolvedColorScheme: colorScheme,
+                currentColorScheme: currentColorScheme
+            )
+        else {
             return
         }
 
-        ghostty_app_set_color_scheme(app, colorScheme)
-        currentColorScheme = colorScheme
+        ghostty_app_set_color_scheme(app, colorSchemeToApply)
+        currentColorScheme = colorSchemeToApply
     }
 
     @objc private func keyboardSelectionDidChange(_ notification: Notification) {
@@ -190,6 +151,15 @@ final class GhosttyAppManager: NSObject {
         }
 
         return ghostty_surface_userdata(surface)
+    }
+
+    private static func surfaceAddress(from target: ghostty_target_s) -> UInt? {
+        surfaceUserdata(from: target).map { UInt(bitPattern: $0) }
+    }
+
+    private static func surfaceView(from address: UInt?) -> GhosttySurfaceView? {
+        guard let address else { return nil }
+        return surfaceView(from: UnsafeMutableRawPointer(bitPattern: address))
     }
 
     private static func surfaceView(from target: ghostty_target_s) -> GhosttySurfaceView? {
@@ -227,118 +197,18 @@ final class GhosttyAppManager: NSObject {
     }
 
     private static func action(_ app: ghostty_app_t, target: ghostty_target_s, action: ghostty_action_s) -> Bool {
-        guard let sourceSurfaceUserdata = surfaceUserdata(from: target) else { return false }
-
-        switch action.tag {
-        case GHOSTTY_ACTION_NEW_SPLIT:
-            let directionRawValue = Int(action.action.new_split.rawValue)
-            postSplitAction(
-                kind: .newSplit,
-                directionRawValue: directionRawValue,
-                sourceSurfaceUserdata: sourceSurfaceUserdata
-            )
-            NSLog("[GhosttyAppManager] action=new_split direction=%d", directionRawValue)
-            return true
-
-        case GHOSTTY_ACTION_GOTO_SPLIT:
-            let directionRawValue = Int(action.action.goto_split.rawValue)
-            postSplitAction(
-                kind: .gotoSplit,
-                directionRawValue: directionRawValue,
-                sourceSurfaceUserdata: sourceSurfaceUserdata
-            )
-            NSLog("[GhosttyAppManager] action=goto_split direction=%d", directionRawValue)
-            return true
-
-        case GHOSTTY_ACTION_RESIZE_SPLIT:
-            let directionRawValue = Int(action.action.resize_split.direction.rawValue)
-            let amount = Int(action.action.resize_split.amount)
-            postSplitAction(
-                kind: .resizeSplit,
-                directionRawValue: directionRawValue,
-                amount: amount,
-                sourceSurfaceUserdata: sourceSurfaceUserdata
-            )
-            NSLog(
-                "[GhosttyAppManager] action=resize_split direction=%d amount=%d",
-                directionRawValue,
-                amount
-            )
-            return true
-
-        case GHOSTTY_ACTION_EQUALIZE_SPLITS:
-            postSplitAction(
-                kind: .equalizeSplits,
-                directionRawValue: nil,
-                amount: nil,
-                sourceSurfaceUserdata: sourceSurfaceUserdata
-            )
-            NSLog("[GhosttyAppManager] action=equalize_splits")
-            return true
-
-        case GHOSTTY_ACTION_SET_TITLE:
-            let title = action.action.set_title.title.flatMap { String(cString: $0) } ?? ""
-            runOnMainAsync {
-                guard let surfaceView = surfaceView(from: sourceSurfaceUserdata) else { return }
-                surfaceView.updateTerminalTitle(title)
-            }
-            return true
-
-        case GHOSTTY_ACTION_PWD:
-            let pwd = action.action.pwd.pwd.flatMap { String(cString: $0) }
-            runOnMainAsync {
-                guard let surfaceView = surfaceView(from: sourceSurfaceUserdata) else { return }
-                surfaceView.updateWorkingDirectory(pwd)
-            }
-            return true
-
-        default:
-            return false
-        }
-    }
-
-    nonisolated static func splitActionRequest(from notification: Notification) -> SplitActionRequest? {
-        guard let userInfo = notification.userInfo,
-            let kindRawValue = userInfo[splitActionKindUserInfoKey] as? String,
-            let kind = SplitActionKind(rawValue: kindRawValue)
-        else {
-            return nil
-        }
-
-        let directionRawValue = userInfo[splitActionDirectionUserInfoKey] as? Int
-        let amount = userInfo[splitActionAmountUserInfoKey] as? Int
-        return SplitActionRequest(
-            kind: kind,
-            directionRawValue: directionRawValue,
-            amount: amount
+        _ = app
+        return GhosttyRuntimeActionBridge.handle(
+            target: target,
+            action: action,
+            resolveSurfaceAddress: surfaceAddress(from:),
+            resolveSurfaceView: surfaceView(from:),
+            runOnMainAsync: runOnMainAsync(_:)
         )
     }
 
-    private static func postSplitAction(
-        kind: SplitActionKind,
-        directionRawValue: Int?,
-        amount: Int? = nil,
-        sourceSurfaceUserdata: UnsafeMutableRawPointer?
-    ) {
-        runOnMainAsync {
-            guard let sourceSurfaceView = surfaceView(from: sourceSurfaceUserdata) else { return }
-
-            var userInfo: [String: Any] = [
-                splitActionKindUserInfoKey: kind.rawValue
-            ]
-            if let directionRawValue {
-                userInfo[splitActionDirectionUserInfoKey] = directionRawValue
-            }
-            if let amount {
-                userInfo[splitActionAmountUserInfoKey] = amount
-            }
-
-            NotificationCenter.default.post(
-                name: GhosttyAppManager.splitActionNotification,
-                object: sourceSurfaceView,
-                userInfo: userInfo
-            )
-        }
+    nonisolated static func splitActionRequest(from notification: Notification) -> SplitActionRequest? {
+        GhosttyRuntimeActionBridge.splitActionRequest(from: notification)
     }
 
     private static func readClipboard(
