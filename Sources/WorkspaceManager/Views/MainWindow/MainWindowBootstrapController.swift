@@ -83,6 +83,18 @@ struct MainWindowBootstrapController {
         return repos.first
     }
 
+    func shouldPerfAutoOpenNewWorkspace(
+        environment: [String: String],
+        didRun: Bool,
+        pendingRequest: WorkspaceDeepLink?
+    ) -> Bool {
+        guard environment["WORKSPACES_PERF_AUTO_SELECT_FIRST_REPO"] == "1" else { return false }
+        guard environment["WORKSPACES_PERF_AUTO_OPEN_NEW_WORKSPACE"] == "1" else { return false }
+        guard !didRun else { return false }
+        guard pendingRequest == nil else { return false }
+        return true
+    }
+
     func previewBootstrapDecision(
         didApply: Bool,
         pendingRequest: WorkspaceDeepLink?,

@@ -9,6 +9,7 @@ Current refinement-gate latency metrics:
 1. `launch_to_first_prompt`
 2. `repo_hydration`
 3. `repo_click_to_focus`
+4. `new_workspace_sheet_ready`
 
 These are emitted from production code via `PerformanceSignposts`:
 - `Sources/WorkspaceManager/Diagnostics/PerformanceSignposts.swift`
@@ -82,6 +83,74 @@ This env flag triggers one repo selection through the normal `handleRepoSelectio
 
 - It is **off by default**.
 - It does **not** change normal app behavior when unset.
+
+For the deferred New Workspace path, pair it with:
+
+- `WORKSPACES_PERF_AUTO_OPEN_NEW_WORKSPACE=1`
+
+That second flag is also off by default. When both flags are set, automation opens the normal landing-path New Workspace flow once after launch so the sheet-open cost can be measured without changing behavior for normal runs.
+
+## New Workspace sheet benchmark workflow
+
+Use the dedicated runner when you need to quantify the deferred sheet-open path:
+
+```bash
+./scripts/new-workspace-perf.sh 5 12
+```
+
+Arguments:
+
+- arg1 = number of runs (default `5`)
+- arg2 = seconds to keep app alive per run (default `12`)
+
+What it does:
+
+1. Kills any existing debug `WorkspaceManager` process.
+2. Launches the app with:
+   - `WORKSPACES_PERF_AUTO_SELECT_FIRST_REPO=1`
+   - `WORKSPACES_PERF_AUTO_OPEN_NEW_WORKSPACE=1`
+3. Collects `[Perf]` metric log lines for:
+   - `new_workspace_sheet_ready`
+   - `workspace_provider_availability_refresh`
+   - `lume_runtime_snapshot_refresh`
+   - the emitted Lume submetrics
+4. Produces `summary.txt` and `summary.json` with min/median/mean/max.
+
+Output location:
+
+- `/tmp/workspaces-new-workspace-perf-<timestamp>/`
+- key files:
+  - `run-<n>.log`
+  - `perf-lines.log`
+  - `summary.txt`
+  - `summary.json`
+
+Recommended evidence loop for this startup-probing work:
+
+1. Run `./scripts/perf-baseline.sh 5 8` on the pre-fix baseline commit.
+2. Run `./scripts/perf-baseline.sh 5 8` on the current branch.
+3. Run `./scripts/new-workspace-perf.sh 5 12` on the current branch.
+4. Keep machine, run count, and data-root shape constant across local comparisons.
+5. Capture median, mean, min, max, plus the launch delta percent in a dated report.
+
+## Installed-build validation workflow
+
+Use an installed app pass as validation evidence after the local repeated runs:
+
+```bash
+./scripts/install-local.sh --no-open
+```
+
+Then launch the installed app and capture local logs:
+
+```bash
+log stream --style compact --predicate 'eventMessage CONTAINS "[Perf]"'
+```
+
+Notes:
+
+- Treat the installed run as a spot check, not the main statistical baseline.
+- If local unsigned installs do not expose the expected `[Perf]` lines through unified logging, record that limitation explicitly in the report instead of fabricating timing data. The repeated local debug-run benchmarks remain the primary quantitative source of truth.
 
 ## Manual benchmark workflow (optional)
 

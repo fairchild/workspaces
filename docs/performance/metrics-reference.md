@@ -98,6 +98,51 @@ sequenceDiagram
     Content->>Perf: endRepoClickToFocusedInputIfNeeded(outcome)
 ```
 
+### `new_workspace_sheet_ready`
+
+What it measures:
+- Time from a user-initiated New Workspace action to the sheet being ready for interaction after provider/runtime refresh work finishes.
+
+Start event:
+- `PerformanceSignposts.beginNewWorkspaceSheetReady(trigger:)` at the two production entry points:
+  - `SidebarView.prepareNewWorkspaceSheet(for:)`
+  - `ContentView.presentNewWorkspaceFromLanding(_:)`
+
+End event:
+- `PerformanceSignposts.endNewWorkspaceSheetReadyIfNeeded(attemptID:outcome:)` after the environment options refresh work completes and the sheet presentation state is set.
+
+Why it matters:
+- This isolates the deferred cost that was moved off app launch so startup can stay responsive without hiding the user-facing cost of opening the sheet.
+
+Trigger field:
+- `trigger=sidebar|landing`
+
+Outcome field:
+- `outcome=success|superseded`
+- `superseded` means a second sheet-open attempt replaced the first before the first one completed; the old interval is closed and should not be treated as a successful ready signal.
+
+Notes:
+- This metric is intentionally not in `metrics-history.csv` or the shared dashboard yet. Use the dedicated benchmark script and dated reports until the signal proves stable enough to gate routinely.
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant Sidebar as "Sidebar or Landing UI"
+    participant Perf as "PerformanceSignposts"
+    participant Options as "WorkspaceEnvironmentOptionsController"
+    participant Lume as "LumeRuntimeService"
+    participant Sheet as "NewWorkspaceSheet"
+
+    User->>Sidebar: Open New Workspace
+    Sidebar->>Perf: beginNewWorkspaceSheetReady(trigger)
+    Sidebar->>Options: refresh provider availability
+    Options-->>Sidebar: providers ready
+    Sidebar->>Lume: snapshot()
+    Lume-->>Sidebar: runtime snapshot ready
+    Sidebar->>Sheet: set sheet presentation state
+    Sidebar->>Perf: endNewWorkspaceSheetReadyIfNeeded(outcome=success)
+```
+
 ### `open_in_editor_launch`
 
 What it measures:

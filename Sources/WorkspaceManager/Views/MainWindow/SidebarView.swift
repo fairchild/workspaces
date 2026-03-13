@@ -221,11 +221,7 @@ struct SidebarView: View {
                 }
             }
             .task {
-                if await seedFixtureProviderStateIfNeeded() {
-                    return
-                }
-                await refreshProviderAvailability()
-                await refreshLumeRuntimeSnapshot()
+                _ = await seedFixtureProviderStateIfNeeded()
                 await maybeDriveHostLumeSmokeAutomation()
             }
             .onChange(of: errorMessage) { _, message in
@@ -678,7 +674,7 @@ struct SidebarView: View {
                 let intercepted = try await lumeSetupCoordinator.prepareIfNeeded(
                     for: .createWorkspace(name: name, guestOS: effectiveGuestOS ?? .macOS)
                 ) {
-                    await refreshLumeRuntimeSnapshot()
+                    await refreshLumeRuntimeSnapshot(trigger: "workspace_create_after_setup")
                     await createWorkspaceAfterSetup(
                         from: repo,
                         name: name,
@@ -852,7 +848,7 @@ struct SidebarView: View {
                     let intercepted = try await lumeSetupCoordinator.prepareIfNeeded(
                         for: .startWorkspace(workspaceName: workspace.name)
                     ) {
-                        await refreshLumeRuntimeSnapshot()
+                        await refreshLumeRuntimeSnapshot(trigger: "workspace_start_after_setup")
                         await performStartAfterSetup(workspace)
                     }
                     if intercepted {
@@ -906,7 +902,7 @@ struct SidebarView: View {
                     let intercepted = try await lumeSetupCoordinator.prepareIfNeeded(
                         for: .openDesktop(workspaceName: workspace.name)
                     ) {
-                        await refreshLumeRuntimeSnapshot()
+                        await refreshLumeRuntimeSnapshot(trigger: "workspace_desktop_after_setup")
                         await openDesktopAfterSetup(workspace)
                     }
                     if intercepted {
@@ -979,11 +975,16 @@ struct SidebarView: View {
 
     @MainActor
     private func prepareNewWorkspaceSheet(for repo: Repo) async {
-        if providerAvailabilityIsPending {
-            await refreshProviderAvailability()
+        let attemptID = PerformanceSignposts.beginNewWorkspaceSheetReady(trigger: "sidebar")
+        defer {
+            PerformanceSignposts.endNewWorkspaceSheetReadyIfNeeded(
+                attemptID: attemptID,
+                outcome: "success"
+            )
         }
 
-        await refreshLumeRuntimeSnapshot()
+        await refreshProviderAvailability(trigger: "sidebar_sheet_open")
+        await refreshLumeRuntimeSnapshot(trigger: "sidebar_sheet_open")
 
         newWorkspaceSheetContext = NewWorkspaceSheetContext(repo: repo)
     }
@@ -1135,13 +1136,6 @@ struct SidebarView: View {
         workspaceProviderRegistry.provider(for: providerID)?.descriptor.displayName ?? providerID
     }
 
-    private var providerAvailabilityIsPending: Bool {
-        workspaceEnvironmentOptionsController.providerAvailabilityIsPending(
-            providerAvailabilityByID: providerAvailabilityByID,
-            registry: workspaceProviderRegistry
-        )
-    }
-
     private var providerAvailabilityRefreshSignature: String {
         workspaceEnvironmentOptionsController.providerAvailabilityRefreshSignature(
             providerAvailabilityByID: providerAvailabilityByID,
@@ -1176,7 +1170,7 @@ struct SidebarView: View {
     }
 
     @MainActor
-    private func refreshProviderAvailability() async {
+    private func refreshProviderAvailability(trigger: String) async {
         isRefreshingProviderAvailability = true
         defer {
             isRefreshingProviderAvailability = false
@@ -1184,14 +1178,17 @@ struct SidebarView: View {
 
         providerAvailabilityByID = await workspaceEnvironmentOptionsController.refreshProviderAvailability(
             registry: workspaceProviderRegistry,
-            existingAvailabilityByID: providerAvailabilityByID
+            existingAvailabilityByID: providerAvailabilityByID,
+            trigger: trigger
         )
     }
 
     @MainActor
-    private func refreshLumeRuntimeSnapshot() async {
+    private func refreshLumeRuntimeSnapshot(trigger: String) async {
         lumeRuntimeSnapshot = await workspaceEnvironmentOptionsController.refreshLumeRuntimeSnapshot(
-            runtimeService: lumeRuntimeService
+            runtimeService: lumeRuntimeService,
+            existingSnapshot: lumeRuntimeSnapshot,
+            trigger: trigger
         )
     }
 

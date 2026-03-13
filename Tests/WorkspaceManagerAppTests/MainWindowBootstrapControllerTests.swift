@@ -122,6 +122,50 @@ struct MainWindowBootstrapControllerTests {
         #expect(skippedBecausePendingDeepLink == nil)
     }
 
+    @Test("Perf auto open New Workspace is gated behind both perf flags and idle state")
+    func perfAutoOpenNewWorkspaceHonorsFlags() {
+        #expect(
+            controller.shouldPerfAutoOpenNewWorkspace(
+                environment: ["WORKSPACES_PERF_AUTO_SELECT_FIRST_REPO": "1"],
+                didRun: false,
+                pendingRequest: nil
+            ) == false
+        )
+
+        #expect(
+            controller.shouldPerfAutoOpenNewWorkspace(
+                environment: [
+                    "WORKSPACES_PERF_AUTO_SELECT_FIRST_REPO": "1",
+                    "WORKSPACES_PERF_AUTO_OPEN_NEW_WORKSPACE": "1",
+                ],
+                didRun: false,
+                pendingRequest: nil
+            ) == true
+        )
+
+        #expect(
+            controller.shouldPerfAutoOpenNewWorkspace(
+                environment: [
+                    "WORKSPACES_PERF_AUTO_SELECT_FIRST_REPO": "1",
+                    "WORKSPACES_PERF_AUTO_OPEN_NEW_WORKSPACE": "1",
+                ],
+                didRun: true,
+                pendingRequest: nil
+            ) == false
+        )
+
+        #expect(
+            controller.shouldPerfAutoOpenNewWorkspace(
+                environment: [
+                    "WORKSPACES_PERF_AUTO_SELECT_FIRST_REPO": "1",
+                    "WORKSPACES_PERF_AUTO_OPEN_NEW_WORKSPACE": "1",
+                ],
+                didRun: false,
+                pendingRequest: makeDeepLink(cwd: "/tmp/alpha")
+            ) == false
+        )
+    }
+
     @Test("Preview bootstrap applies resolved file selection")
     func previewBootstrapAppliesResolvedSelection() throws {
         let fileManager = FileManager.default

@@ -38,6 +38,7 @@ struct ContentView: View {
     @State private var isRefreshingProviderAvailability = false
     @State private var lumeRuntimeSnapshot: LumeRuntimeSnapshot? =
         UIFixtureLumeEnvironment.initialRuntimeSnapshot()
+    @State private var didScheduleInitialWorkspaceStatusSync = false
     @StateObject private var rightPaneStateStore = RightPaneStateStore()
     @StateObject private var webSurfaceStore = WebSurfaceStore()
     @StateObject private var terminalFocusCoordinator = TerminalFocusCoordinator()
@@ -412,15 +413,11 @@ struct ContentView: View {
                 }
                 notificationCoordinator.loadStoredAuth()
                 Task { @MainActor in
-                    if await seedLandingProviderStateIfNeeded() {
-                        return
-                    }
-                    await refreshLandingProviderAvailability()
-                    await refreshLandingRuntimeSnapshot()
+                    _ = await seedLandingProviderStateIfNeeded()
                 }
             }
             .task {
-                await syncWorkspaceStatuses()
+                await performDeferredStartupWorkspaceStatusSync()
             }
             .onDisappear {
                 ShortcutRoutingPolicy.shared.setOverride(nil, for: AppChromeShortcut.openInEditor.chord)
@@ -654,15 +651,21 @@ struct ContentView: View {
 
     @MainActor
     private func presentNewWorkspaceFromLanding(_ repo: Repo) async {
+        let attemptID = PerformanceSignposts.beginNewWorkspaceSheetReady(trigger: "landing")
+        defer {
+            PerformanceSignposts.endNewWorkspaceSheetReadyIfNeeded(
+                attemptID: attemptID,
+                outcome: "success"
+            )
+        }
+
         if await seedLandingProviderStateIfNeeded() {
             repoForNewWorkspaceFromLanding = repo
             return
         }
 
-        if landingProviderAvailabilityIsPending {
-            await refreshLandingProviderAvailability()
-        }
-        await refreshLandingRuntimeSnapshot()
+        await refreshLandingProviderAvailability(trigger: "landing_sheet_open")
+        await refreshLandingRuntimeSnapshot(trigger: "landing_sheet_open")
         repoForNewWorkspaceFromLanding = repo
     }
 
@@ -787,11 +790,26 @@ struct ContentView: View {
             return false
 
         case .perfAutoSelect(let repo):
+            let shouldAutoOpenNewWorkspace = bootstrapController.shouldPerfAutoOpenNewWorkspace(
+                environment: ProcessInfo.processInfo.environment,
+                didRun: viewState.didRunPerfAutoOpenNewWorkspace,
+                pendingRequest: deepLinkState.pendingRequest
+            )
             viewState.didRunPerfAutoSelection = true
+            if shouldAutoOpenNewWorkspace {
+                viewState.didRunPerfAutoOpenNewWorkspace = true
+            }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                 Task { @MainActor in
                     viewState.didResolveInitialSurface = true
                     handleRepoTerminalSelection(repo)
+                    guard shouldAutoOpenNewWorkspace else { return }
+
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                        Task { @MainActor in
+                            await presentNewWorkspaceFromLanding(repo)
+                        }
+                    }
                 }
             }
             return false
@@ -1364,17 +1382,36 @@ struct ContentView: View {
     }
 
     @MainActor
-    private func syncWorkspaceStatuses() async {
+    private func performDeferredStartupWorkspaceStatusSync() async {
+        guard !didScheduleInitialWorkspaceStatusSync else { return }
+        didScheduleInitialWorkspaceStatusSync = true
+
+        // Give the first window render a head start before remote status sync begins.
+        try? await Task.sleep(for: .seconds(2))
+        guard !Task.isCancelled else { return }
+
+        await syncWorkspaceStatuses(trigger: "launch_deferred")
+    }
+
+    @MainActor
+    private func syncWorkspaceStatuses(trigger: String) async {
+        let syncStartedAt = Date()
         let nonLocalWorkspaces = repos.flatMap(\.workspaces).filter {
             $0.backendIdentifier != LocalWorkspaceProvider.identifier && $0.remoteId != nil
         }
         guard !nonLocalWorkspaces.isEmpty else { return }
 
         var changed = false
+        var changedCount = 0
+        var hadFailure = false
         let groupedWorkspaces = Dictionary(grouping: nonLocalWorkspaces, by: \.backendIdentifier)
 
         for (providerID, providerWorkspaces) in groupedWorkspaces {
             guard let provider = workspaceProviderRegistry.provider(for: providerID) else { continue }
+
+            let providerSyncStartedAt = Date()
+            var providerChangedCount = 0
+            var outcome = "success"
 
             do {
                 let snapshots = try await provider.syncStatuses(
@@ -1397,20 +1434,44 @@ struct ContentView: View {
                         )
                         workspace.status = newStatus
                         changed = true
+                        changedCount += 1
+                        providerChangedCount += 1
                     }
                 }
             } catch {
+                outcome = "failure"
+                hadFailure = true
                 NSLog(
                     "[WorkspaceProvider] Failed to sync %@ workspace statuses: %@",
                     providerID,
                     error.localizedDescription
                 )
             }
+
+            NSLog(
+                "[Perf] metric=workspace_status_sync_provider duration_ms=%.2f trigger=%@ provider=%@ workspace_count=%ld changed_count=%ld outcome=%@",
+                Date().timeIntervalSince(providerSyncStartedAt) * 1000,
+                trigger,
+                providerID,
+                providerWorkspaces.count,
+                providerChangedCount,
+                outcome
+            )
         }
 
         if changed {
             try? modelContext.save()
         }
+
+        NSLog(
+            "[Perf] metric=workspace_status_sync duration_ms=%.2f trigger=%@ providers=%ld workspace_count=%ld changed_count=%ld outcome=%@",
+            Date().timeIntervalSince(syncStartedAt) * 1000,
+            trigger,
+            groupedWorkspaces.count,
+            nonLocalWorkspaces.count,
+            changedCount,
+            hadFailure ? "partial_failure" : "success"
+        )
     }
 
     @MainActor
@@ -1757,13 +1818,6 @@ struct ContentView: View {
         return URL(fileURLWithPath: expanded).standardizedFileURL.resolvingSymlinksInPath().path
     }
 
-    private var landingProviderAvailabilityIsPending: Bool {
-        workspaceEnvironmentOptionsController.providerAvailabilityIsPending(
-            providerAvailabilityByID: providerAvailabilityByID,
-            registry: workspaceProviderRegistry
-        )
-    }
-
     @MainActor
     private func seedLandingProviderStateIfNeeded() async -> Bool {
         guard
@@ -1780,7 +1834,7 @@ struct ContentView: View {
     }
 
     @MainActor
-    private func refreshLandingProviderAvailability() async {
+    private func refreshLandingProviderAvailability(trigger: String) async {
         isRefreshingProviderAvailability = true
         defer {
             isRefreshingProviderAvailability = false
@@ -1788,14 +1842,17 @@ struct ContentView: View {
 
         providerAvailabilityByID = await workspaceEnvironmentOptionsController.refreshProviderAvailability(
             registry: workspaceProviderRegistry,
-            existingAvailabilityByID: providerAvailabilityByID
+            existingAvailabilityByID: providerAvailabilityByID,
+            trigger: trigger
         )
     }
 
     @MainActor
-    private func refreshLandingRuntimeSnapshot() async {
+    private func refreshLandingRuntimeSnapshot(trigger: String) async {
         lumeRuntimeSnapshot = await workspaceEnvironmentOptionsController.refreshLumeRuntimeSnapshot(
-            runtimeService: lumeRuntimeService
+            runtimeService: lumeRuntimeService,
+            existingSnapshot: lumeRuntimeSnapshot,
+            trigger: trigger
         )
     }
 
