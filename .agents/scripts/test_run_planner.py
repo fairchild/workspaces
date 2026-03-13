@@ -289,12 +289,6 @@ class RunPlannerTests(unittest.TestCase):
             )
         )
 
-    def test_claude_timeout_seconds_honors_override(self) -> None:
-        self.assertEqual(
-            run_planner.claude_timeout_seconds({"PETER_PLANNER_CLAUDE_TIMEOUT_SECONDS": "45"}),
-            45,
-        )
-
     def test_run_checked_surfaces_timeout_as_planner_error(self) -> None:
         with mock.patch.object(
             run_planner.subprocess,

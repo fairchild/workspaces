@@ -24,8 +24,12 @@ PLANNER_TASK = (
     "Read this approved discussion and break it into actionable GitHub Issues. "
     "Output ONLY the JSON block as specified in your prompt."
 )
-DEFAULT_CLAUDE_TIMEOUT_SECONDS = 300
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+# Timeouts (seconds) — every external call must declare its budget
+GITHUB_API_TIMEOUT = 30
+CLAUDE_TIMEOUT = 300
+VALIDATION_TIMEOUT = 30
 PROMPT_FILE = REPO_ROOT / ".agents" / "prompts" / "peter-planner.md"
 VALIDATOR_SCRIPT = REPO_ROOT / ".agents" / "scripts" / "validate-agent-output.py"
 CATALOG_FILE = REPO_ROOT / ".agents" / "config" / "peter-planner.toml"
@@ -147,10 +151,10 @@ def log(message: str) -> None:
 def run_checked(
     cmd: list[str],
     *,
+    timeout: int,
     cwd: Path | None = None,
     env: dict[str, str] | None = None,
     input: str | None = None,
-    timeout: int | None = None,
 ) -> subprocess.CompletedProcess[str]:
     try:
         result = subprocess.run(
@@ -173,30 +177,17 @@ def run_checked(
     return result
 
 
-def claude_timeout_seconds(env: dict[str, str]) -> int:
-    raw_value = env.get("PETER_PLANNER_CLAUDE_TIMEOUT_SECONDS", "").strip()
-    if not raw_value:
-        return DEFAULT_CLAUDE_TIMEOUT_SECONDS
-    try:
-        value = int(raw_value)
-    except ValueError as exc:
-        raise PlannerError(
-            "PETER_PLANNER_CLAUDE_TIMEOUT_SECONDS must be a positive integer"
-        ) from exc
-    if value <= 0:
-        raise PlannerError(
-            "PETER_PLANNER_CLAUDE_TIMEOUT_SECONDS must be a positive integer"
-        )
-    return value
-
-
 def current_branch() -> str:
-    result = subprocess.run(
-        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-        cwd=REPO_ROOT,
-        capture_output=True,
-        text=True,
-    )
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=GITHUB_API_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired:
+        return "unknown"
     if result.returncode == 0 and result.stdout.strip():
         return result.stdout.strip()
     return "unknown"
@@ -209,6 +200,7 @@ def repo_owner_name(env: dict[str, str]) -> tuple[str, str]:
 
     result = run_checked(
         ["gh", "repo", "view", "--json", "owner,name"],
+        timeout=GITHUB_API_TIMEOUT,
         cwd=REPO_ROOT,
         env=env,
     )
@@ -234,7 +226,7 @@ def graphql(query: str, env: dict[str, str], **variables: Any) -> dict[str, Any]
             cmd.extend(["-F", f"{key}={value}"])
         else:
             cmd.extend(["-f", f"{key}={value}"])
-    result = run_checked(cmd, cwd=REPO_ROOT, env=env)
+    result = run_checked(cmd, timeout=GITHUB_API_TIMEOUT, cwd=REPO_ROOT, env=env)
     data = json.loads(result.stdout)
     if "errors" in data:
         raise PlannerError(f"graphql error: {data['errors']}")
@@ -449,14 +441,18 @@ def compose_milestone_description(discussion_url: str, discussion_number: int) -
 
 
 def validate_output(raw_output: str, env: dict[str, str]) -> dict[str, Any]:
-    result = subprocess.run(
-        ["uv", "run", str(VALIDATOR_SCRIPT)],
-        input=raw_output,
-        capture_output=True,
-        text=True,
-        cwd=REPO_ROOT,
-        env=env,
-    )
+    try:
+        result = subprocess.run(
+            ["uv", "run", str(VALIDATOR_SCRIPT)],
+            input=raw_output,
+            capture_output=True,
+            text=True,
+            cwd=REPO_ROOT,
+            env=env,
+            timeout=VALIDATION_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise PlannerError(f"validation timed out after {exc.timeout}s") from exc
     if result.returncode != 0:
         raise PlannerError(
             f"failed to validate Peter Planner output: {(result.stderr or raw_output).strip()}"
@@ -570,6 +566,7 @@ query($owner: String!, $name: String!, $num: Int!) {
 def fetch_repo_labels(repo: str, env: dict[str, str]) -> dict[str, dict[str, Any]]:
     result = run_checked(
         ["gh", "label", "list", "--limit", "200", "--json", "name,color,description"],
+        timeout=GITHUB_API_TIMEOUT,
         cwd=REPO_ROOT,
         env=env,
     )
@@ -589,6 +586,7 @@ def fetch_existing_issues(env: dict[str, str]) -> list[dict[str, Any]]:
             "--json",
             "number,title,body,url,labels,milestone,state",
         ],
+        timeout=GITHUB_API_TIMEOUT,
         cwd=REPO_ROOT,
         env=env,
     )
@@ -598,6 +596,7 @@ def fetch_existing_issues(env: dict[str, str]) -> list[dict[str, Any]]:
 def fetch_existing_milestones(repo: str, env: dict[str, str]) -> list[dict[str, Any]]:
     result = run_checked(
         ["gh", "api", f"repos/{repo}/milestones?state=all&per_page=100"],
+        timeout=GITHUB_API_TIMEOUT,
         cwd=REPO_ROOT,
         env=env,
     )
@@ -628,6 +627,7 @@ def ensure_catalog_labels(
                 "-f",
                 f"description={spec.description}",
             ],
+            timeout=GITHUB_API_TIMEOUT,
             cwd=REPO_ROOT,
             env=env,
         )
@@ -643,8 +643,6 @@ def run_claude(
     discussion: dict[str, Any],
     catalog: LabelCatalog,
     env: dict[str, str],
-    *,
-    timeout_seconds: int,
 ) -> str:
     label_summary = "\n".join(f"- {label}" for label in catalog.labels)
     prompt_context = (
@@ -665,9 +663,9 @@ def run_claude(
             prompt_context,
             PLANNER_TASK,
         ],
+        timeout=CLAUDE_TIMEOUT,
         cwd=REPO_ROOT,
         env=env,
-        timeout=timeout_seconds,
     ).stdout
 
 
@@ -684,14 +682,8 @@ def load_plan_output(
         log(f"Using planner output fixture from {plan_file}")
         return plan_file.read_text(encoding="utf-8")
 
-    timeout_seconds = claude_timeout_seconds(env)
-    log(f"Running Claude Code with timeout={timeout_seconds}s")
-    return run_claude(
-        discussion,
-        catalog,
-        env,
-        timeout_seconds=timeout_seconds,
-    )
+    log(f"Running Claude Code with timeout={CLAUDE_TIMEOUT}s")
+    return run_claude(discussion, catalog, env)
 
 
 def fetch_issue_marker_map(
@@ -908,25 +900,29 @@ def create_or_reuse_milestone(
     if execution.existing_milestone is not None:
         return execution.existing_milestone
 
-    result = subprocess.run(
-        [
-            "gh",
-            "api",
-            f"repos/{repo}/milestones",
-            "-X",
-            "POST",
-            "-f",
-            f"title={plan.milestone_name}",
-            "-f",
-            "state=open",
-            "-f",
-            f"description={plan.milestone_description}",
-        ],
-        cwd=REPO_ROOT,
-        env=env,
-        capture_output=True,
-        text=True,
-    )
+    try:
+        result = subprocess.run(
+            [
+                "gh",
+                "api",
+                f"repos/{repo}/milestones",
+                "-X",
+                "POST",
+                "-f",
+                f"title={plan.milestone_name}",
+                "-f",
+                "state=open",
+                "-f",
+                f"description={plan.milestone_description}",
+            ],
+            cwd=REPO_ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=GITHUB_API_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise PlannerError(f"milestone creation timed out after {exc.timeout}s") from exc
     if result.returncode != 0:
         error_text = (result.stderr or result.stdout).strip()
         if "already_exists" not in error_text and "already exists" not in error_text:
@@ -975,7 +971,7 @@ def ensure_issue(
                 cmd.extend(["--label", label])
             if milestone_name:
                 cmd.extend(["--milestone", milestone_name])
-            result = run_checked(cmd, cwd=REPO_ROOT, env=env)
+            result = run_checked(cmd, timeout=GITHUB_API_TIMEOUT, cwd=REPO_ROOT, env=env)
             url = result.stdout.strip()
             return {
                 "number": int(url.rstrip("/").split("/")[-1]),
@@ -999,7 +995,7 @@ def ensure_issue(
                 cmd.extend(["--add-label", label])
         if milestone_name:
             cmd.extend(["--milestone", milestone_name])
-        run_checked(cmd, cwd=REPO_ROOT, env=env)
+        run_checked(cmd, timeout=GITHUB_API_TIMEOUT, cwd=REPO_ROOT, env=env)
         return {
             "number": int(existing_issue["number"]),
             "title": issue_plan.title,
@@ -1015,6 +1011,7 @@ def ensure_issue(
 def delete_milestone(repo: str, number: int, env: dict[str, str]) -> None:
     run_checked(
         ["gh", "api", f"repos/{repo}/milestones/{number}", "-X", "DELETE"],
+        timeout=GITHUB_API_TIMEOUT,
         cwd=REPO_ROOT,
         env=env,
     )
