@@ -1851,6 +1851,7 @@ struct ContentView: View {
     private func refreshLandingRuntimeSnapshot(trigger: String) async {
         lumeRuntimeSnapshot = await workspaceEnvironmentOptionsController.refreshLumeRuntimeSnapshot(
             runtimeService: lumeRuntimeService,
+            existingSnapshot: lumeRuntimeSnapshot,
             trigger: trigger
         )
     }

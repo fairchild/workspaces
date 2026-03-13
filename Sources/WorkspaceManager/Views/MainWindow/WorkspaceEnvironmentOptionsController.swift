@@ -7,6 +7,11 @@ struct WorkspaceEnvironmentFixtureState {
 }
 
 struct WorkspaceEnvironmentOptionsController {
+    private struct SnapshotRefreshResult {
+        let snapshot: LumeRuntimeSnapshot?
+        let timedOut: Bool
+    }
+
     func providerAvailabilityIsPending(
         providerAvailabilityByID: [String: WorkspaceProviderAvailability],
         registry: WorkspaceProviderRegistry
@@ -72,6 +77,8 @@ struct WorkspaceEnvironmentOptionsController {
 
         return WorkspaceEnvironmentFixtureState(
             providerAvailabilityByID: UIFixtureLumeEnvironment.initialProviderAvailabilityByID(),
+            // Fixture mode keeps the full snapshot path so CI automation fails
+            // deterministically instead of degrading to a timed-out placeholder.
             lumeRuntimeSnapshot: await runtimeService.snapshot()
         )
     }
@@ -121,16 +128,29 @@ struct WorkspaceEnvironmentOptionsController {
 
     func refreshLumeRuntimeSnapshot(
         runtimeService: any LumeRuntimeServiceProtocol,
-        trigger: String
+        existingSnapshot: LumeRuntimeSnapshot?,
+        trigger: String,
+        timeoutNanoseconds: UInt64 = 5_000_000_000
     ) async -> LumeRuntimeSnapshot? {
         let refreshStartedAt = Date()
-        let snapshot = await runtimeService.snapshot()
+        let refreshResult = await snapshotWithTimeout(
+            runtimeService: runtimeService,
+            timeoutNanoseconds: timeoutNanoseconds
+        )
+        let snapshot = refreshResult.snapshot ?? existingSnapshot
+        let outcome =
+            if refreshResult.timedOut {
+                existingSnapshot == nil ? "timeout" : "timeout_fallback"
+            } else {
+                "success"
+            }
         NSLog(
-            "[Perf] metric=lume_runtime_snapshot_refresh duration_ms=%.2f trigger=%@ state=%@ base_vm_status=%@",
+            "[Perf] metric=lume_runtime_snapshot_refresh duration_ms=%.2f trigger=%@ outcome=%@ state=%@ base_vm_status=%@",
             Date().timeIntervalSince(refreshStartedAt) * 1000,
             trigger,
-            snapshot.state.rawValue,
-            snapshot.baseVM?.status.rawValue ?? "none"
+            outcome,
+            snapshot?.state.rawValue ?? "pending",
+            snapshot?.baseVM?.status.rawValue ?? "none"
         )
         return snapshot
     }
@@ -506,6 +526,33 @@ struct WorkspaceEnvironmentOptionsController {
             }
 
             return .unavailable("Timed out checking \(displayName) availability.")
+        }
+    }
+
+    private func snapshotWithTimeout(
+        runtimeService: any LumeRuntimeServiceProtocol,
+        timeoutNanoseconds: UInt64
+    ) async -> SnapshotRefreshResult {
+        await withTaskGroup(of: SnapshotRefreshResult.self) { group in
+            group.addTask {
+                SnapshotRefreshResult(
+                    snapshot: await runtimeService.snapshot(),
+                    timedOut: false
+                )
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: timeoutNanoseconds)
+                return SnapshotRefreshResult(snapshot: nil, timedOut: true)
+            }
+
+            let firstResult =
+                await group.next()
+                ?? SnapshotRefreshResult(
+                    snapshot: nil,
+                    timedOut: true
+                )
+            group.cancelAll()
+            return firstResult
         }
     }
 }

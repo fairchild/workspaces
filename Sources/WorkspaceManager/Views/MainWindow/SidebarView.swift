@@ -1187,6 +1187,7 @@ struct SidebarView: View {
     private func refreshLumeRuntimeSnapshot(trigger: String) async {
         lumeRuntimeSnapshot = await workspaceEnvironmentOptionsController.refreshLumeRuntimeSnapshot(
             runtimeService: lumeRuntimeService,
+            existingSnapshot: lumeRuntimeSnapshot,
             trigger: trigger
         )
     }

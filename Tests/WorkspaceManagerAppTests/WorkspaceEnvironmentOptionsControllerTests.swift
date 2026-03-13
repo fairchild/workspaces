@@ -8,6 +8,65 @@ import WorkspaceManagerCore
 struct WorkspaceEnvironmentOptionsControllerTests {
     private let controller = WorkspaceEnvironmentOptionsController()
 
+    private actor MockLumeRuntimeService: LumeRuntimeServiceProtocol {
+        let snapshotDelayNanoseconds: UInt64
+        let snapshotValue: LumeRuntimeSnapshot
+
+        init(snapshotDelayNanoseconds: UInt64, snapshotValue: LumeRuntimeSnapshot) {
+            self.snapshotDelayNanoseconds = snapshotDelayNanoseconds
+            self.snapshotValue = snapshotValue
+        }
+
+        func snapshot() async -> LumeRuntimeSnapshot {
+            try? await Task.sleep(nanoseconds: snapshotDelayNanoseconds)
+            return snapshotValue
+        }
+
+        func baseVMSnapshot() async -> LumeBaseVMSnapshot? { snapshotValue.baseVM }
+        func hostProfile() async throws -> LumeHostProfile {
+            snapshotValue.hostProfile
+                ?? LumeHostProfile(
+                    architecture: "arm64",
+                    macOSFamily: .tahoe,
+                    macOSVersion: "26.2",
+                    xcodeVersion: "26.2",
+                    developerDirectory: "/Applications/Xcode.app/Contents/Developer"
+                )
+        }
+        func defaultMacOSImageResolution() async throws -> LumeImageResolution {
+            if let snapshotImage = snapshotValue.defaultMacOSImage {
+                return snapshotImage
+            }
+
+            guard let macOSCatalogEntry = LumeRuntimeService.imageCatalog.first(where: { $0.guestOS == .macOS }) else {
+                fatalError("Expected a macOS image catalog entry for tests")
+            }
+
+            return LumeImageResolution(
+                hostProfile: try await hostProfile(),
+                entry: macOSCatalogEntry,
+                matchKind: .exact
+            )
+        }
+        func installIfNeeded(progress: LumeRuntimeProgressHandler?) async throws -> LumeRuntimeSnapshot {
+            snapshotValue
+        }
+        func verifyInstallation(progress: LumeRuntimeProgressHandler?) async throws -> LumeRuntimeSnapshot {
+            snapshotValue
+        }
+        func repairInstallation(progress: LumeRuntimeProgressHandler?) async throws -> LumeRuntimeSnapshot {
+            snapshotValue
+        }
+        func ensureBaseVMReady(progress: WorkspaceProviderProgressHandler?) async throws -> LumeBaseVMSnapshot {
+            guard let baseVM = snapshotValue.baseVM else {
+                fatalError("Expected base VM in mock runtime service")
+            }
+            return baseVM
+        }
+        func deleteBaseVM() async throws -> LumeRuntimeSnapshot { snapshotValue }
+        func executablePath() async throws -> String { snapshotValue.executablePath ?? "/tmp/lume" }
+    }
+
     @Test("Nil snapshot keeps the default macOS base summary")
     func nilSnapshotKeepsDefaultMacOSSummary() throws {
         let option = try macOSOption(snapshot: nil)
@@ -115,6 +174,43 @@ struct WorkspaceEnvironmentOptionsControllerTests {
         let linuxOption = try linuxVMOption(snapshot: snapshot)
         #expect(!linuxOption.isAvailable)
         #expect(linuxOption.availabilityReason == "Lume requires Apple Silicon.")
+    }
+
+    @Test("Lume snapshot refresh returns the latest snapshot before timeout")
+    func lumeSnapshotRefreshReturnsLatestSnapshot() async throws {
+        let expectedSnapshot = try makeSnapshot(state: .ready)
+        let service = MockLumeRuntimeService(
+            snapshotDelayNanoseconds: 5_000_000,
+            snapshotValue: expectedSnapshot
+        )
+
+        let refreshedSnapshot = await controller.refreshLumeRuntimeSnapshot(
+            runtimeService: service,
+            existingSnapshot: nil,
+            trigger: "test",
+            timeoutNanoseconds: 100_000_000
+        )
+
+        #expect(refreshedSnapshot == expectedSnapshot)
+    }
+
+    @Test("Lume snapshot refresh keeps the previous snapshot on timeout")
+    func lumeSnapshotRefreshFallsBackToExistingSnapshotOnTimeout() async throws {
+        let existingSnapshot = try makeSnapshot(state: .repairRequired)
+        let latestSnapshot = try makeSnapshot(state: .ready)
+        let service = MockLumeRuntimeService(
+            snapshotDelayNanoseconds: 100_000_000,
+            snapshotValue: latestSnapshot
+        )
+
+        let refreshedSnapshot = await controller.refreshLumeRuntimeSnapshot(
+            runtimeService: service,
+            existingSnapshot: existingSnapshot,
+            trigger: "test",
+            timeoutNanoseconds: 5_000_000
+        )
+
+        #expect(refreshedSnapshot == existingSnapshot)
     }
 
     private func macOSOption(snapshot: LumeRuntimeSnapshot?) throws -> WorkspaceEnvironmentSheetOption {
