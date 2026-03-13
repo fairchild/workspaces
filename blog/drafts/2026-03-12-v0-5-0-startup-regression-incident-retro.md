@@ -40,7 +40,7 @@ First, we allowed optional capability discovery to sit on the critical path for 
 
 Second, our existing performance instrumentation did not cover the new launch-time work. We had signposts for other flows, but not for provider refresh, Lume snapshot collection, daemon reachability checks, host profile detection, or remote status sync. That made it harder to identify the culprit quickly from an installed build.
 
-Third, our release validation was too development-centric. We did not have a hard requirement to validate startup behavior in an installed release on another machine before publishing.
+Third, our release validation was too development-centric. We did not have a thorough release quality check for a full release and changelog publication. We also did not have a hard requirement to validate startup behavior in an installed release on another machine before publishing.
 
 ## Detection And Investigation
 
@@ -49,6 +49,8 @@ The regression was detected after installing the released app and observing that
 A review of the `v0.5.0` changes showed that milestone work to avoid blocking startup on notification auth restore was useful, but it did not address the more expensive runtime probing path. Static review of the shipped launch flow pointed to eager Lume/provider/status checks as the highest-confidence cause of the slowdown.
 
 We chose not to add telemetry. Instead, the right response is better local diagnostics, clearer startup budgets, and release validation that reflects real installed usage.
+
+This incident also exposed a process gap: we treated release creation and changelog publication as the end of the work instead of the final step after a higher-confidence quality pass. For full releases, that is backwards. Publication should come after an extra round of targeted validation, not before it.
 
 ## Immediate Fix
 
@@ -68,12 +70,15 @@ These are the engineering standards this incident reinforces:
 2. Any new startup-path work must ship with explicit timing instrumentation.
 3. Release validation must cover installed builds, not only local development builds.
 4. Local diagnostics must be good enough that we can understand a slow installed build without adding telemetry.
-5. Low current stakes are not a reason to cut corners. They are an opportunity to build the habits we want when the stakes are high.
+5. Full releases and changelog publication need a deliberate release-quality gate with a little extra testing before publication.
+6. Low current stakes are not a reason to cut corners. They are an opportunity to build the habits we want when the stakes are high.
 
 ## Follow-Up Work
 
 - Add an explicit local diagnostics export flow to the app.
 - Add installed-build startup validation to the release checklist.
+- Define an explicit full-release quality check before publishing a changelog and release assets.
+- Add a short extra validation pass for release candidates, focused on startup, install, launch, and other high-risk user-facing flows.
 - Define a startup performance budget and treat regressions against it as release blockers.
 - Confirm the fix on an installed build before publishing this retro and closing the incident.
 
