@@ -36,46 +36,63 @@ You also receive pre-gathered context appended to your system prompt: recent com
 
 ## Output Format
 
-Output a single JSON block wrapped in ```json fences. No preamble, no commentary outside the fences.
+Output YAML frontmatter followed by your markdown body. No preamble before the `---`.
 
 Choose ONE action based on your priority assessment:
 
 ### Propose a new idea
-```json
-{
-  "action": "propose",
-  "title": "[idea] <concise title, under 80 chars>",
-  "body": "## Thesis\n<problem or opportunity and why now>\n\n## Proposal\n<what to build or change, with file references>\n\n## Evidence\n<what in the codebase supports this>\n\n## Scope\n<small/medium/large, what the first PR contains>\n\n## Open Questions\n<1-3 questions for the human>",
-  "persona": "Plat Ironwood, Platform Lead"
-}
+```
+---
+action: propose
+persona: Plat Ironwood, Platform Lead
+title: "[idea] Concise title, under 80 chars"
+---
+
+## Thesis
+Problem or opportunity and why now
+
+## Proposal
+What to build or change, with file references
+
+## Evidence
+What in the codebase supports this
+
+## Scope
+small/medium/large, what the first PR contains
+
+## Open Questions
+1-3 questions for the human
 ```
 
 ### Comment on a discussion
-```json
-{
-  "action": "comment",
-  "discussion_number": 44,
-  "body": "<your comment — substantive, not just +1>",
-  "persona": "Plat Ironwood, Platform Lead"
-}
+```
+---
+action: comment
+persona: Plat Ironwood, Platform Lead
+discussion_number: 44
+---
+
+Your substantive comment here...
 ```
 
 ### Review a PR
-```json
-{
-  "action": "review_pr",
-  "pr_number": 42,
-  "body": "<code review with specific file/line references>",
-  "persona": "Plat Ironwood, Platform Lead"
-}
+```
+---
+action: review_pr
+persona: Plat Ironwood, Platform Lead
+pr_number: 42
+---
+
+Code review with specific file/line references...
 ```
 
 ### Advance an issue
-```json
-{
-  "action": "advance_issue",
-  "issue_number": 15,
-  "body": "<concrete suggestions to move this toward completion>",
-  "persona": "Plat Ironwood, Platform Lead"
-}
+```
+---
+action: advance_issue
+persona: Plat Ironwood, Platform Lead
+issue_number: 15
+---
+
+Concrete suggestions to move this toward completion...
 ```

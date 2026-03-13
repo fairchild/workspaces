@@ -22,7 +22,12 @@ from typing import Any
 
 PLANNER_TASK = (
     "Read this approved discussion and break it into actionable GitHub Issues. "
-    "Output ONLY the JSON block as specified in your prompt."
+    "Output your response using YAML frontmatter as specified in your prompt."
+)
+PLANNER_TASK_CLI = (
+    "You are running as an automated planner. Read this approved discussion and "
+    "break it into actionable GitHub Issues. Output your response using YAML "
+    "frontmatter as specified in your prompt."
 )
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -141,6 +146,7 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         help="Use saved planner output instead of invoking Claude Code",
     )
+    parser.add_argument("--mode", choices=["cli", "print"], default="cli")
     return parser.parse_args()
 
 
@@ -643,6 +649,8 @@ def run_claude(
     discussion: dict[str, Any],
     catalog: LabelCatalog,
     env: dict[str, str],
+    *,
+    mode: str = "cli",
 ) -> str:
     label_summary = "\n".join(f"- {label}" for label in catalog.labels)
     prompt_context = (
@@ -651,22 +659,27 @@ def run_claude(
         "Allowed labels:\n"
         f"{label_summary}"
     )
-    return run_checked(
-        [
-            "npx",
-            "--yes",
-            "@anthropic-ai/claude-code",
-            "--print",
-            "--system-prompt",
-            PROMPT_FILE.read_text(encoding="utf-8"),
-            "--append-system-prompt",
-            prompt_context,
-            PLANNER_TASK,
-        ],
-        timeout=CLAUDE_TIMEOUT,
-        cwd=REPO_ROOT,
-        env=env,
-    ).stdout
+    task = PLANNER_TASK_CLI if mode == "cli" else PLANNER_TASK
+    cmd = [
+        "npx",
+        "--yes",
+        "@anthropic-ai/claude-code",
+        "--print",
+        "--system-prompt",
+        PROMPT_FILE.read_text(encoding="utf-8"),
+        "--append-system-prompt",
+        prompt_context,
+    ]
+    timeout = CLAUDE_TIMEOUT
+    if mode == "cli":
+        cmd.extend([
+            "--permission-mode", "bypassPermissions",
+            "--tools", "Bash(gh:*)",
+            "--max-budget-usd", "0.50",
+        ])
+        timeout = 600
+    cmd.append(task)
+    return run_checked(cmd, timeout=timeout, cwd=REPO_ROOT, env=env).stdout
 
 
 def load_plan_output(
@@ -682,8 +695,9 @@ def load_plan_output(
         log(f"Using planner output fixture from {plan_file}")
         return plan_file.read_text(encoding="utf-8")
 
-    log(f"Running Claude Code with timeout={CLAUDE_TIMEOUT}s")
-    return run_claude(discussion, catalog, env)
+    mode = getattr(args, "mode", "cli")
+    log(f"Running Claude Code (mode={mode})")
+    return run_claude(discussion, catalog, env, mode=mode)
 
 
 def fetch_issue_marker_map(

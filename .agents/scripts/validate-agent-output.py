@@ -3,21 +3,37 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""Validate and extract JSON output from agent responses.
+"""Validate and extract structured output from agent responses.
 
-Reads agent output from stdin, extracts JSON from ```json fences,
-validates required fields, optionally checks for duplicate discussions.
+Reads agent output from stdin, extracts data from YAML frontmatter
+(preferred) or ```json fences (fallback), validates required fields,
+optionally checks for duplicate discussions.
 
 Usage:
     cat response.txt | ./validate-agent-output.py [--check-dedup]
 """
 
+import importlib.util
 import json
 import re
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any
+
+
+def _load_frontmatter_parser():
+    spec = importlib.util.spec_from_file_location(
+        "parse_frontmatter",
+        Path(__file__).parent / "parse-frontmatter.py",
+    )
+    module = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    spec.loader.exec_module(module)
+    return module
+
+
+_fm = _load_frontmatter_parser()
 
 REQUIRED_FIELDS: dict[str, list[str]] = {
     "propose": ["title", "body", "persona"],
@@ -37,6 +53,32 @@ def extract_json(text: str) -> dict:
     match = re.search(r"```json\s*\n(.*?)\n\s*```", text, re.DOTALL)
     raw = match.group(1) if match else text.strip()
     return json.loads(raw)
+
+
+def extract_structured(text: str) -> dict:
+    """Extract structured data from YAML frontmatter or ```json fences."""
+    stripped = text.strip()
+    if stripped.startswith("---"):
+        try:
+            documents = _fm.parse_multi_document(stripped)
+            if len(documents) > 1 and documents[0][0].get("action") == "plan":
+                header, _ = documents[0]
+                issues = []
+                for metadata, body in documents[1:]:
+                    issue = dict(metadata)
+                    issue["body"] = body
+                    issues.append(issue)
+                result = dict(header)
+                result["issues"] = issues
+                return result
+            metadata, body = documents[0]
+            if body:
+                metadata["body"] = body
+            return metadata
+        except (ValueError, IndexError):
+            pass
+
+    return extract_json(stripped)
 
 
 def normalize_title(title: str) -> str:
@@ -134,9 +176,9 @@ def main() -> None:
         sys.exit(1)
 
     try:
-        data = extract_json(text)
-    except (json.JSONDecodeError, AttributeError) as e:
-        print(f"error: failed to parse JSON: {e}", file=sys.stderr)
+        data = extract_structured(text)
+    except (json.JSONDecodeError, ValueError, AttributeError) as e:
+        print(f"error: failed to parse output: {e}", file=sys.stderr)
         print(f"raw input (first 500 chars): {text[:500]}", file=sys.stderr)
         sys.exit(1)
 

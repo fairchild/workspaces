@@ -35,22 +35,39 @@ When 3+ issues are needed, derive `milestone_name` directly from the discussion 
 
 ## Output Format
 
-Output a single JSON block wrapped in ```json fences. No preamble, no commentary outside the fences.
+Output multi-document YAML frontmatter. First document is the plan header, each subsequent document is an issue. No preamble before the first `---`.
 
-```json
-{
-  "action": "plan",
-  "discussion_number": 44,
-  "milestone_name": null,
-  "issues": [
-    {
-      "title": "<clear, actionable issue title>",
-      "body": "## Context\n<link to discussion, brief summary>\n\n## What to do\n<specific changes with file references>\n\n## Acceptance criteria\n- [ ] <testable criterion>\n- [ ] <testable criterion>",
-      "labels": ["enhancement"],
-      "priority": 1
-    }
-  ]
-}
+```
+---
+action: plan
+discussion_number: 44
+milestone_name: null
+---
+
+---
+title: "Clear, actionable issue title"
+labels: [enhancement]
+priority: 1
+---
+
+## Context
+Link to discussion, brief summary
+
+## What to do
+Specific changes with file references
+
+## Acceptance criteria
+- [ ] Testable criterion
+- [ ] Testable criterion
+
+---
+title: "Second issue title"
+labels: [enhancement, "area: ui"]
+priority: 2
+---
+
+## Context
+...
 ```
 
 Set `milestone_name` to a short descriptive name when creating 3+ issues. Leave `null` for 1-2 issues.

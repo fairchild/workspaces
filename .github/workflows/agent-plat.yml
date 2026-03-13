@@ -33,6 +33,7 @@ jobs:
       - name: Run contributor
         run: |
           ARGS=(--prompt-file .agents/prompts/plat-ironwood.md)
+          ARGS+=(--mode cli)
           if [ "$DRY_RUN" = "true" ]; then
             ARGS+=(--dry-run)
           fi
