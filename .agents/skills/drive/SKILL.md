@@ -49,6 +49,7 @@ Read these repo sources before acting:
 - If the milestone already has a good plan, audit it against the latest repo and GitHub state and reuse only what is still true.
 - If reality drifted, rewrite the plan before touching code.
 - Decide PR shape as part of the plan: one PR, one PR per issue, or a stacked series.
+- If the work is performance-sensitive and no usable baseline metrics were supplied with the task, add an early baseline-capture step to the plan before making code changes.
 
 ### 3. Execute issues one at a time
 
@@ -62,12 +63,20 @@ Read these repo sources before acting:
 - Run the smallest relevant local checks first.
 - When workflows, CI, runners, or UI automation change, validate on the real lane for this repo, including Tart when applicable.
 - Present evidence in issue and PR updates instead of only saying that something worked.
+- For UI-affecting work, treat visual evidence as a delivery gate: attach proof from the exact commit under review to the PR itself before asking for review or calling it ready.
+- Minimum UI evidence: at least one rendered screenshot or equivalent visual artifact, the exact verification commands used, and a linked log or artifact path. If the behavior is interactive, include a second screenshot or short recording.
+- For performance-sensitive work, include before/after metrics in the PR from the same or clearly described workload and environment, and note the delta instead of only reporting the final number.
+- If baseline metrics were not provided up front, gather them before changing code whenever feasible so the final PR can compare the merged result against a real pre-change baseline.
+- If the comparison is not like-for-like, say so explicitly. If a metric is missing, regresses meaningfully, or crosses a target boundary, call that out directly instead of burying it.
+- If visual evidence cannot be produced, mark the work `blocked on evidence`, explain why in the PR and issue, and do not merge unless the user explicitly accepts shipping without that proof.
 
 ### 5. Manage PRs and review
 
 - If issues are independent, prefer separate issue-sized PRs.
 - If later issues build directly on earlier branches, use stacked PRs and say where each PR sits in the stack.
 - If one consolidated PR is the better plan, explain that explicitly in issue updates and the PR summary.
+- Before requesting review, confirm the PR description or comments include the required evidence links for any UI-affecting work.
+- Before requesting review on performance-sensitive work, confirm the PR includes baseline metrics, final metrics, and a short comparison note describing any meaningful change or explaining why the numbers are not directly comparable.
 - Request review with stack context, then address review comments one by one through code changes, direct explanation, or a tracked backlog item.
 
 ### 6. Close out the milestone
@@ -88,5 +97,7 @@ Read these repo sources before acting:
 - Always plan first. No `/drive` execution starts with coding.
 - Always work from latest GitHub state, even if the milestone already contains a plan.
 - Never assume issues are still open, PRs are absent, or runner state is unchanged.
+- Never treat local-only screenshots or logs as sufficient PR evidence for UI-affecting work.
+- Never treat a final perf number without a baseline or comparison note as sufficient performance evidence for performance-sensitive work.
 - Keep milestone, issue, and PR comments aligned so another agent can resume without rediscovering the whole story.
 - When execution uncovers work that should not block the milestone, capture it in `backlog/` rather than hiding it in a PR comment.

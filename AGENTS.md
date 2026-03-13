@@ -89,6 +89,13 @@ Verify your work visually, then present evidence to the user. Don't just say it 
 - **Self-verify**: Use Tart VMs (`/tart-gui-automation`) to build, launch, and screenshot the app in an isolated environment.
 - **Present evidence**: Open HTML artifacts in the browser (`open <path>`), render screenshots inline in chat, and show test output. The user should see the proof without asking twice.
 - **Tests are evidence too**: Run `swift test` and show the summary. Green tests are necessary but not sufficient — visual confirmation of UI changes is expected.
+- **Treat visual proof as a merge gate for UI work**: For changes that affect UI, terminal behavior, keyboard handling, sidebar behavior, windowing, launch flow, or visual appearance, do not request review, call the PR ready, or merge until the PR itself contains visual evidence from the exact commit under review.
+- **Minimum PR evidence for UI work**: Include at least one rendered screenshot or equivalent visual artifact in the PR description or comments, the exact verification commands used, and a linked log or artifact path. If the change affects interaction, include a second screenshot or short recording that proves the result.
+- **Capture performance baselines early when work is performance-sensitive**: For changes that could affect launch time, terminal responsiveness, repo loading, focus restoration, rendering cost, or other user-visible performance, gather baseline metrics before making changes unless equivalent baseline data is already provided as input to the task.
+- **Compare before and after on the same footing**: Re-run the same performance measurement at the end of the work with the same or clearly described workload, environment, and metric source, then include before/after/delta in the PR discussion.
+- **Call out meaningful performance changes explicitly**: If a like-for-like comparison shows a meaningful delta, a target boundary crossing, or missing metrics, say so directly in the PR and final summary. If the comparison is not like-for-like, state that it is not directly comparable rather than implying confidence.
+- **Blocked evidence is an explicit state**: If you cannot produce visual evidence, say so clearly in the PR and in chat as `blocked on evidence`, explain why, and do not merge unless the user explicitly approves shipping without that proof.
+- **Do not rely on local-only proof**: Local screenshots, logs, and perf results are useful during development, but they are not sufficient close-out evidence unless they are attached to or clearly linked from the PR discussion.
 
 ## High-Signal Lessons
 
