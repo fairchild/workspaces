@@ -18,8 +18,14 @@ from pathlib import Path
 
 CLAUDE_TASK = (
     "Check what needs attention first (open PRs, in-progress issues, recent discussion "
-    "comments), then propose a new idea only if nothing else needs you. Output ONLY the "
-    "JSON block as specified in your prompt."
+    "comments), then propose a new idea only if nothing else needs you. Output your "
+    "response using YAML frontmatter as specified in your prompt."
+)
+CLAUDE_TASK_CLI = (
+    "You are running as an automated contributor. Check what needs attention "
+    "(open PRs, in-progress issues, recent discussion comments), then act on "
+    "the highest-priority item. Output your response using YAML frontmatter "
+    "as specified in your prompt."
 )
 REPO_ROOT = Path(__file__).resolve().parents[2]
 GH_DISCUSS_SCRIPT = REPO_ROOT / ".agents" / "skills" / "gh-discuss" / "scripts" / "gh-discuss.py"
@@ -35,6 +41,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--prompt-file", required=True, type=Path)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--mode", choices=["cli", "print"], default="cli")
     return parser.parse_args()
 
 
@@ -241,23 +248,29 @@ query($owner: String!, $name: String!) {
     )
 
 
-def run_claude(prompt_file: Path, context: str, env: dict[str, str]) -> str:
-    log(f"Running Claude Code with {prompt_file}")
-    return run_checked(
-        [
-            "npx",
-            "@anthropic-ai/claude-code",
-            "--print",
-            "--system-prompt",
-            prompt_file.read_text(),
-            "--append-system-prompt",
-            context,
-            CLAUDE_TASK,
-        ],
-        timeout=CLAUDE_TIMEOUT,
-        cwd=REPO_ROOT,
-        env=env,
-    ).stdout
+def run_claude(prompt_file: Path, context: str, env: dict[str, str], *, mode: str = "cli") -> str:
+    log(f"Running Claude Code with {prompt_file} (mode={mode})")
+    task = CLAUDE_TASK_CLI if mode == "cli" else CLAUDE_TASK
+    cmd = [
+        "npx",
+        "--yes",
+        "@anthropic-ai/claude-code",
+        "--print",
+        "--system-prompt",
+        prompt_file.read_text(),
+        "--append-system-prompt",
+        context,
+    ]
+    timeout = CLAUDE_TIMEOUT
+    if mode == "cli":
+        cmd.extend([
+            "--permission-mode", "bypassPermissions",
+            "--tools", "Read,Grep,Glob,Bash(git:*),Bash(gh:*),Bash(uv:*)",
+            "--max-budget-usd", "1.00",
+        ])
+        timeout = 600
+    cmd.append(task)
+    return run_checked(cmd, timeout=timeout, cwd=REPO_ROOT, env=env).stdout
 
 
 def validate_output(raw_output: str, env: dict[str, str]) -> tuple[int, str | None, str]:
@@ -396,7 +409,7 @@ def main() -> int:
     env = dict(os.environ)
 
     context = gather_context(env)
-    raw_output = run_claude(prompt_file, context, env)
+    raw_output = run_claude(prompt_file, context, env, mode=args.mode)
     exit_code, validated_json, error_text = validate_output(raw_output, env)
 
     if exit_code == 2 and error_text.startswith("duplicate:"):

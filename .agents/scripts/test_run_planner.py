@@ -301,7 +301,22 @@ class RunPlannerTests(unittest.TestCase):
 
     def test_load_plan_output_uses_fixture_file_without_claude(self) -> None:
         discussion = self.make_discussion()
-        fixture = '{"action":"plan","discussion_number":43,"milestone_name":null,"issues":[{"title":"Audit runners","body":"## Context\\nBody","labels":["ci"],"priority":1}]}'
+        fixture = (
+            "---\n"
+            "action: plan\n"
+            "discussion_number: 43\n"
+            "milestone_name: null\n"
+            "---\n"
+            "\n"
+            "---\n"
+            "title: Audit runners\n"
+            "labels: [ci]\n"
+            "priority: 1\n"
+            "---\n"
+            "\n"
+            "## Context\n"
+            "Body"
+        )
         with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
             handle.write(fixture)
             fixture_path = Path(handle.name)
@@ -309,6 +324,7 @@ class RunPlannerTests(unittest.TestCase):
             discussion_number=43,
             dry_run=True,
             plan_file=fixture_path,
+            mode="cli",
         )
         try:
             with mock.patch.object(run_planner, "run_claude", side_effect=AssertionError("should not run")):
