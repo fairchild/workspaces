@@ -126,6 +126,22 @@ struct NotificationCoordinatorTests {
         try? await Task.sleep(for: .milliseconds(20))
     }
 
+    private func waitForAuthState(
+        _ expectedState: NotificationAuthState,
+        coordinator: NotificationCoordinator,
+        timeoutMilliseconds: Int = 250
+    ) async {
+        let attempts = max(timeoutMilliseconds / 10, 1)
+        for _ in 0..<attempts {
+            if coordinator.authState == expectedState {
+                return
+            }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+
+        Issue.record("Timed out waiting for auth state \(String(describing: expectedState)).")
+    }
+
     // MARK: - parseJWTExpiry
 
     @Test("parseJWTExpiry decodes exp claim from valid JWT")
@@ -239,14 +255,22 @@ struct NotificationCoordinatorTests {
     }
 
     @Test("loadStoredAuth restores signed-in state from injected credentials")
-    func loadStoredAuthRestoresSignedInState() {
+    func loadStoredAuthRestoresSignedInState() async {
         let coordinator = makeCoordinator(
             credentialStore: MockNotificationCredentialStore(
-                values: [NotificationConstants.keychainLoginKey: "local-test-user"]
+                values: [
+                    NotificationConstants.keychainLoginKey: "local-test-user",
+                    NotificationConstants.keychainJWTKey:
+                        "eyJhbGciOiJIUzI1NiJ9.eyJleHAiOjQxMDI0NDQ4MDB9.sig",
+                ]
             )
         )
 
         coordinator.loadStoredAuth()
+        await waitForAuthState(
+            .signedIn(login: "local-test-user"),
+            coordinator: coordinator
+        )
 
         #expect(coordinator.authState == .signedIn(login: "local-test-user"))
     }

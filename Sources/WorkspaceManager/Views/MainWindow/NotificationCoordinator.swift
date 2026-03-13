@@ -39,6 +39,29 @@ struct KeychainNotificationCredentialStore: NotificationCredentialStoreProtocol 
 final class NotificationCoordinator: NotificationCoordinatorProtocol, ObservableObject {
     static let shared = NotificationCoordinator()
 
+    private struct StoredAuthSnapshot: Sendable {
+        let login: String?
+        let jwtExpiry: Date?
+    }
+
+    private actor StoredAuthLoader {
+        func loadSnapshot(
+            from credentialStore: any NotificationCredentialStoreProtocol
+        ) -> StoredAuthSnapshot {
+            let login = try? credentialStore.loadString(
+                key: NotificationConstants.keychainLoginKey
+            )
+            let jwt = try? credentialStore.loadString(
+                key: NotificationConstants.keychainJWTKey
+            )
+
+            return StoredAuthSnapshot(
+                login: login,
+                jwtExpiry: jwt.flatMap(NotificationCoordinator.parseJWTExpiry)
+            )
+        }
+    }
+
     @Published private(set) var authState: NotificationAuthState = .signedOut
     @Published private(set) var isStreamConnected = false
     @Published private(set) var events: [WebhookEvent] = []
@@ -52,12 +75,14 @@ final class NotificationCoordinator: NotificationCoordinatorProtocol, Observable
     private var connectionPollingTask: Task<Void, Never>?
     private var refreshTask: Task<Void, Never>?
     private var jwtRefreshTask: Task<Bool, Never>?
+    private var storedAuthLoadTask: Task<Void, Never>?
     private var currentRemoteURL: String?
     private var seenEventIDs: Set<String> = []
     private let credentialStore: any NotificationCredentialStoreProtocol
     private let userDefaults: UserDefaults
     private static let maxEvents = 100
     private static let refreshMargin: TimeInterval = 15 * 60
+    private static let storedAuthLoader = StoredAuthLoader()
 
     init(
         eventStreamService: any EventStreamServiceProtocol = EventStreamService(),
@@ -76,19 +101,13 @@ final class NotificationCoordinator: NotificationCoordinatorProtocol, Observable
     }
 
     func loadStoredAuth() {
-        guard
-            let login = try? credentialStore.loadString(
-                key: NotificationConstants.keychainLoginKey)
-        else {
-            return
-        }
+        storedAuthLoadTask?.cancel()
 
-        authState = .signedIn(login: login)
-
-        if jwtNeedsRefresh() {
-            Task { await refreshStoredJWTOrSignOut() }
-        } else {
-            scheduleRefresh()
+        let credentialStore = self.credentialStore
+        storedAuthLoadTask = Task { [weak self] in
+            let snapshot = await Self.storedAuthLoader.loadSnapshot(from: credentialStore)
+            guard !Task.isCancelled else { return }
+            self?.applyStoredAuthSnapshot(snapshot)
         }
     }
 
@@ -134,6 +153,8 @@ final class NotificationCoordinator: NotificationCoordinatorProtocol, Observable
 
     func signOut() {
         currentDeviceAuth = nil
+        storedAuthLoadTask?.cancel()
+        storedAuthLoadTask = nil
         refreshTask?.cancel()
         refreshTask = nil
         jwtRefreshTask?.cancel()
@@ -297,7 +318,7 @@ final class NotificationCoordinator: NotificationCoordinatorProtocol, Observable
                     jwt: session.jwt, login: session.login
                 )
                 log.info("JWT refreshed, expires \(session.expiresAt)")
-                scheduleRefresh()
+                scheduleRefresh(expiresAt: session.expiresAt)
                 return true
             } catch {
                 log.error("JWT refresh failed: \(error.localizedDescription)")
@@ -333,9 +354,12 @@ final class NotificationCoordinator: NotificationCoordinatorProtocol, Observable
     }
 
     private func scheduleRefresh() {
-        refreshTask?.cancel()
-
         guard let expiresAt = jwtExpiry() else { return }
+        scheduleRefresh(expiresAt: expiresAt)
+    }
+
+    private func scheduleRefresh(expiresAt: Date) {
+        refreshTask?.cancel()
 
         let delay = max(
             expiresAt.timeIntervalSinceNow - Self.refreshMargin, 0
@@ -404,7 +428,25 @@ final class NotificationCoordinator: NotificationCoordinatorProtocol, Observable
         return Self.parseJWTExpiry(jwt)
     }
 
-    static func parseJWTExpiry(_ jwt: String) -> Date? {
+    private func applyStoredAuthSnapshot(_ snapshot: StoredAuthSnapshot) {
+        storedAuthLoadTask = nil
+
+        guard let login = snapshot.login else {
+            return
+        }
+
+        authState = .signedIn(login: login)
+
+        if let jwtExpiry = snapshot.jwtExpiry,
+            jwtExpiry.timeIntervalSinceNow >= Self.refreshMargin
+        {
+            scheduleRefresh(expiresAt: jwtExpiry)
+        } else {
+            Task { await refreshStoredJWTOrSignOut() }
+        }
+    }
+
+    nonisolated static func parseJWTExpiry(_ jwt: String) -> Date? {
         let parts = jwt.split(separator: ".")
         guard parts.count >= 2 else { return nil }
 
