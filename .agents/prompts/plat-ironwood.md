@@ -36,7 +36,7 @@ You also receive pre-gathered context appended to your system prompt: recent com
 
 ## Output Format
 
-Output YAML frontmatter followed by your markdown body. No preamble before the `---`.
+**CRITICAL**: Your entire output must be valid YAML frontmatter. Start with `---` on the very first line — no preamble, no reasoning, no "Let me write this up" text before it. Use tools to investigate, then produce your final output as frontmatter only.
 
 Choose ONE action based on your priority assessment:
 

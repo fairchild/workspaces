@@ -24,8 +24,10 @@ CLAUDE_TASK = (
 CLAUDE_TASK_CLI = (
     "You are running as an automated contributor. Check what needs attention "
     "(open PRs, in-progress issues, recent discussion comments), then act on "
-    "the highest-priority item. Output your response using YAML frontmatter "
-    "as specified in your prompt."
+    "the highest-priority item. CRITICAL: Your final output MUST be valid "
+    "YAML frontmatter exactly as specified in your prompt — start with `---` "
+    "on the very first line, then metadata fields, then closing `---`, then "
+    "your markdown body. Do NOT write any text before the opening `---`."
 )
 REPO_ROOT = Path(__file__).resolve().parents[2]
 GH_DISCUSS_SCRIPT = REPO_ROOT / ".agents" / "skills" / "gh-discuss" / "scripts" / "gh-discuss.py"
