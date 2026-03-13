@@ -884,7 +884,16 @@ public actor LumeRuntimeService: LumeRuntimeServiceProtocol {
         manifest: LumeValidatedBaseManifest?
     ) async -> LumeBaseVMSnapshot? {
         let inspectionStartedAt = Date()
-        let snapshot: LumeBaseVMSnapshot?
+        var snapshot: LumeBaseVMSnapshot?
+        defer {
+            NSLog(
+                "[Perf] metric=lume_runtime_base_vm_inspection duration_ms=%.2f vm_name=%@ status=%@",
+                Date().timeIntervalSince(inspectionStartedAt) * 1000,
+                profile.vmName,
+                snapshot?.status.rawValue ?? "none"
+            )
+        }
+
         do {
             let details = try await getVM(named: profile.vmName, storagePath: profile.storagePath)
             let sourceKind = manifest?.sourceKind ?? profile.preferredSourceKind
@@ -938,12 +947,6 @@ public actor LumeRuntimeService: LumeRuntimeServiceProtocol {
                     vmStatus: nil,
                     reason: error.localizedDescription
                 )
-                NSLog(
-                    "[Perf] metric=lume_runtime_base_vm_inspection duration_ms=%.2f vm_name=%@ status=%@",
-                    Date().timeIntervalSince(inspectionStartedAt) * 1000,
-                    profile.vmName,
-                    snapshot?.status.rawValue ?? "none"
-                )
                 return snapshot
             }
 
@@ -958,12 +961,6 @@ public actor LumeRuntimeService: LumeRuntimeServiceProtocol {
                     vmStatus: nil,
                     reason: "A stale validated base macOS VM directory exists on disk, but Lume cannot resolve it."
                 )
-                NSLog(
-                    "[Perf] metric=lume_runtime_base_vm_inspection duration_ms=%.2f vm_name=%@ status=%@",
-                    Date().timeIntervalSince(inspectionStartedAt) * 1000,
-                    profile.vmName,
-                    snapshot?.status.rawValue ?? "none"
-                )
                 return snapshot
             }
 
@@ -977,13 +974,6 @@ public actor LumeRuntimeService: LumeRuntimeServiceProtocol {
                     : "No local base macOS VM exists yet for \(profile.displayName)."
             )
         }
-
-        NSLog(
-            "[Perf] metric=lume_runtime_base_vm_inspection duration_ms=%.2f vm_name=%@ status=%@",
-            Date().timeIntervalSince(inspectionStartedAt) * 1000,
-            profile.vmName,
-            snapshot?.status.rawValue ?? "none"
-        )
 
         return snapshot
     }
@@ -1414,6 +1404,8 @@ public actor LumeRuntimeService: LumeRuntimeServiceProtocol {
         if await requestSucceeds(path: "/host/status") {
             reachable = true
         } else {
+            // `requestSucceeds` uses a 10-second request timeout, so the two-probe fallback here
+            // can legitimately take up to about 20 seconds when the daemon is down or filtered.
             reachable = await requestSucceeds(path: "/vms")
         }
 

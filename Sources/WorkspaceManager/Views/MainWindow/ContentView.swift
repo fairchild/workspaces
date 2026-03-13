@@ -1363,6 +1363,7 @@ struct ContentView: View {
         guard !didScheduleInitialWorkspaceStatusSync else { return }
         didScheduleInitialWorkspaceStatusSync = true
 
+        // Give the first window render a head start before remote status sync begins.
         try? await Task.sleep(for: .seconds(2))
         guard !Task.isCancelled else { return }
 
