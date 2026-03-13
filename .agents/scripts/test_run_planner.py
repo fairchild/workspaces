@@ -48,6 +48,24 @@ class ValidateAgentOutputTests(unittest.TestCase):
                 }
             )
 
+    def test_extract_structured_skips_preamble_before_frontmatter(self) -> None:
+        text = (
+            "Now I have enough context. Let me write up a review.\n"
+            "\n"
+            "---\n"
+            "action: review_pr\n"
+            "persona: April Clearwater, Application Lead\n"
+            "pr_number: 94\n"
+            "---\n"
+            "\n"
+            "## Great PR\n"
+            "Looks good to me."
+        )
+        data = validator.extract_structured(text)
+        self.assertEqual(data["action"], "review_pr")
+        self.assertEqual(data["pr_number"], 94)
+        self.assertIn("Looks good to me", data["body"])
+
     def test_plan_rejects_duplicate_issue_titles(self) -> None:
         with self.assertRaises(validator.ValidationError):
             validator.validate_data(

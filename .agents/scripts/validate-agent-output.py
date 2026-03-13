@@ -55,28 +55,49 @@ def extract_json(text: str) -> dict:
     return json.loads(raw)
 
 
+def _try_frontmatter(text: str) -> dict | None:
+    """Attempt frontmatter parse, returning dict or None on failure."""
+    try:
+        documents = _fm.parse_multi_document(text)
+        if len(documents) > 1 and documents[0][0].get("action") == "plan":
+            header, _ = documents[0]
+            issues = []
+            for metadata, body in documents[1:]:
+                issue = dict(metadata)
+                issue["body"] = body
+                issues.append(issue)
+            result = dict(header)
+            result["issues"] = issues
+            return result
+        metadata, body = documents[0]
+        if body:
+            metadata["body"] = body
+        return metadata
+    except (ValueError, IndexError):
+        return None
+
+
 def extract_structured(text: str) -> dict:
-    """Extract structured data from YAML frontmatter or ```json fences."""
+    """Extract structured data from YAML frontmatter or ```json fences.
+
+    In CLI agentic mode, Claude may emit reasoning text before the
+    frontmatter block.  We first try parsing from the start, then scan
+    for the first ``---`` boundary in the body.
+    """
     stripped = text.strip()
+
+    # Fast path: text starts with frontmatter
     if stripped.startswith("---"):
-        try:
-            documents = _fm.parse_multi_document(stripped)
-            if len(documents) > 1 and documents[0][0].get("action") == "plan":
-                header, _ = documents[0]
-                issues = []
-                for metadata, body in documents[1:]:
-                    issue = dict(metadata)
-                    issue["body"] = body
-                    issues.append(issue)
-                result = dict(header)
-                result["issues"] = issues
-                return result
-            metadata, body = documents[0]
-            if body:
-                metadata["body"] = body
-            return metadata
-        except (ValueError, IndexError):
-            pass
+        result = _try_frontmatter(stripped)
+        if result is not None:
+            return result
+
+    # Scan for frontmatter after preamble (CLI agentic mode)
+    idx = stripped.find("\n---\n")
+    if idx != -1:
+        result = _try_frontmatter(stripped[idx + 1:])
+        if result is not None:
+            return result
 
     return extract_json(stripped)
 
