@@ -25,6 +25,11 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 GH_DISCUSS_SCRIPT = REPO_ROOT / ".agents" / "skills" / "gh-discuss" / "scripts" / "gh-discuss.py"
 VALIDATOR_SCRIPT = REPO_ROOT / ".agents" / "scripts" / "validate-agent-output.py"
 
+# Timeouts (seconds) — every external call must declare its budget
+GITHUB_API_TIMEOUT = 30
+CLAUDE_TIMEOUT = 300
+VALIDATION_TIMEOUT = 30
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -48,18 +53,25 @@ def log(message: str) -> None:
 def run_checked(
     cmd: list[str],
     *,
+    timeout: int,
     cwd: Path | None = None,
     env: dict[str, str] | None = None,
     input: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    result = subprocess.run(
-        cmd,
-        input=input,
-        capture_output=True,
-        text=True,
-        env=env,
-        cwd=cwd,
-    )
+    try:
+        result = subprocess.run(
+            cmd,
+            input=input,
+            capture_output=True,
+            text=True,
+            env=env,
+            cwd=cwd,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        command = " ".join(cmd)
+        print(f"error: command timed out after {exc.timeout}s: {command}", file=sys.stderr)
+        sys.exit(1)
     if result.returncode != 0:
         command = " ".join(cmd)
         print(f"error: command failed: {command}", file=sys.stderr)
@@ -72,17 +84,22 @@ def run_checked(
 def run_optional(
     cmd: list[str],
     *,
+    timeout: int,
     cwd: Path | None = None,
     env: dict[str, str] | None = None,
     default: str,
 ) -> str:
-    result = subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        env=env,
-        cwd=cwd,
-    )
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            env=env,
+            cwd=cwd,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return default
     if result.returncode != 0:
         return default
     return result.stdout
@@ -96,6 +113,7 @@ def repo_owner_name(env: dict[str, str]) -> tuple[str, str]:
 
     result = run_checked(
         ["gh", "repo", "view", "--json", "owner,name"],
+        timeout=GITHUB_API_TIMEOUT,
         cwd=REPO_ROOT,
         env=env,
     )
@@ -124,6 +142,7 @@ def gather_context(env: dict[str, str]) -> str:
 
     recent_commits = run_checked(
         ["git", "log", "--oneline", "--since=2 weeks ago"],
+        timeout=GITHUB_API_TIMEOUT,
         cwd=REPO_ROOT,
         env=env,
     ).stdout.rstrip()
@@ -165,6 +184,7 @@ query($owner: String!, $name: String!) {
                 '\\(.body[:200] | gsub(\\"\\n\\";\\" \\"))") | join(""))"'
             ),
         ],
+        timeout=GITHUB_API_TIMEOUT,
         cwd=REPO_ROOT,
         env=env,
         default="",
@@ -182,6 +202,7 @@ query($owner: String!, $name: String!) {
             "--json",
             "number,title,state,labels,assignees",
         ],
+        timeout=GITHUB_API_TIMEOUT,
         cwd=REPO_ROOT,
         env=env,
         default="[]\n",
@@ -199,6 +220,7 @@ query($owner: String!, $name: String!) {
             "--json",
             "number,title,author,isDraft,reviewDecision",
         ],
+        timeout=GITHUB_API_TIMEOUT,
         cwd=REPO_ROOT,
         env=env,
         default="[]\n",
@@ -232,6 +254,7 @@ def run_claude(prompt_file: Path, context: str, env: dict[str, str]) -> str:
             context,
             CLAUDE_TASK,
         ],
+        timeout=CLAUDE_TIMEOUT,
         cwd=REPO_ROOT,
         env=env,
     ).stdout
@@ -239,14 +262,19 @@ def run_claude(prompt_file: Path, context: str, env: dict[str, str]) -> str:
 
 def validate_output(raw_output: str, env: dict[str, str]) -> tuple[int, str | None, str]:
     log("Validating agent output")
-    result = subprocess.run(
-        ["uv", "run", str(VALIDATOR_SCRIPT), "--check-dedup"],
-        input=raw_output,
-        capture_output=True,
-        text=True,
-        env=env,
-        cwd=REPO_ROOT,
-    )
+    try:
+        result = subprocess.run(
+            ["uv", "run", str(VALIDATOR_SCRIPT), "--check-dedup"],
+            input=raw_output,
+            capture_output=True,
+            text=True,
+            env=env,
+            cwd=REPO_ROOT,
+            timeout=VALIDATION_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired:
+        print("error: validation timed out", file=sys.stderr)
+        return 1, None, "validation timed out"
     if result.returncode == 0:
         return 0, result.stdout, result.stderr
     error_text = result.stderr.strip()
@@ -288,6 +316,7 @@ def route_action(validated_json: str, dry_run: bool, env: dict[str, str]) -> int
                 "--category",
                 "General",
             ],
+            timeout=GITHUB_API_TIMEOUT,
             cwd=REPO_ROOT,
             env=env,
         )
@@ -303,6 +332,7 @@ def route_action(validated_json: str, dry_run: bool, env: dict[str, str]) -> int
                 str(data["discussion_number"]),
                 body,
             ],
+            timeout=GITHUB_API_TIMEOUT,
             cwd=REPO_ROOT,
             env=env,
         )
@@ -324,6 +354,7 @@ def route_action(validated_json: str, dry_run: bool, env: dict[str, str]) -> int
                     "--body-file",
                     body_file,
                 ],
+                timeout=GITHUB_API_TIMEOUT,
                 cwd=REPO_ROOT,
                 env=env,
             )
@@ -338,6 +369,7 @@ def route_action(validated_json: str, dry_run: bool, env: dict[str, str]) -> int
                     "--body-file",
                     body_file,
                 ],
+                timeout=GITHUB_API_TIMEOUT,
                 cwd=REPO_ROOT,
                 env=env,
             )
