@@ -975,6 +975,14 @@ struct SidebarView: View {
 
     @MainActor
     private func prepareNewWorkspaceSheet(for repo: Repo) async {
+        let attemptID = PerformanceSignposts.beginNewWorkspaceSheetReady(trigger: "sidebar")
+        defer {
+            PerformanceSignposts.endNewWorkspaceSheetReadyIfNeeded(
+                attemptID: attemptID,
+                outcome: "success"
+            )
+        }
+
         await refreshProviderAvailability(trigger: "sidebar_sheet_open")
         await refreshLumeRuntimeSnapshot(trigger: "sidebar_sheet_open")
 

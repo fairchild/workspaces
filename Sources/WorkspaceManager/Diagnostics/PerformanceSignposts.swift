@@ -10,10 +10,18 @@ import OSLog
 
 enum PerformanceSignposts {
     #if DEBUG
+        typealias NewWorkspaceSheetMetricObserver = (_ phase: String, _ fields: [String: String]) -> Void
         typealias OpenInEditorMetricObserver = (_ phase: String, _ fields: [String: String]) -> Void
     #endif
 
     private struct ActiveInterval {
+        let state: OSSignpostIntervalState
+        let startedAt: ContinuousClock.Instant
+    }
+
+    private struct ActiveNewWorkspaceSheetInterval {
+        let attemptID: UUID
+        let trigger: String
         let state: OSSignpostIntervalState
         let startedAt: ContinuousClock.Instant
     }
@@ -33,8 +41,10 @@ enum PerformanceSignposts {
     nonisolated(unsafe) private static var webViewInitializationInterval: ActiveInterval?
     nonisolated(unsafe) private static var webFirstLoadInterval: ActiveInterval?
     nonisolated(unsafe) private static var webFirstLoadSourceID: UUID?
+    nonisolated(unsafe) private static var newWorkspaceSheetInterval: ActiveNewWorkspaceSheetInterval?
     nonisolated(unsafe) private static var openInEditorIntervals: [UUID: ActiveInterval] = [:]
     #if DEBUG
+        nonisolated(unsafe) private static var newWorkspaceSheetMetricObserver: NewWorkspaceSheetMetricObserver?
         nonisolated(unsafe) private static var openInEditorMetricObserver: OpenInEditorMetricObserver?
     #endif
 
@@ -220,6 +230,95 @@ enum PerformanceSignposts {
         )
     }
 
+    @discardableResult
+    static func beginNewWorkspaceSheetReady(trigger: String) -> UUID {
+        let attemptID = UUID()
+        var supersededInterval: ActiveNewWorkspaceSheetInterval?
+
+        lock.lock()
+        supersededInterval = newWorkspaceSheetInterval
+        if let supersededInterval {
+            signposter.endInterval("NewWorkspaceSheetReady", supersededInterval.state)
+        }
+
+        let state = signposter.beginInterval("NewWorkspaceSheetReady")
+        newWorkspaceSheetInterval = ActiveNewWorkspaceSheetInterval(
+            attemptID: attemptID,
+            trigger: trigger,
+            state: state,
+            startedAt: clock.now
+        )
+        lock.unlock()
+
+        if let supersededInterval {
+            let durationMs = milliseconds(since: supersededInterval.startedAt)
+            let fields = [
+                "metric": "new_workspace_sheet_ready",
+                "status": "completed",
+                "attempt": supersededInterval.attemptID.uuidString,
+                "trigger": supersededInterval.trigger,
+                "outcome": "superseded",
+                "duration_ms": String(format: "%.2f", durationMs),
+            ]
+            emitPerfLog(
+                "[Perf] metric=new_workspace_sheet_ready duration_ms=%.2f attempt=%@ trigger=%@ outcome=superseded",
+                durationMs,
+                supersededInterval.attemptID.uuidString,
+                supersededInterval.trigger
+            )
+            emitNewWorkspaceSheetMetricEvent(phase: "completed", fields: fields)
+        }
+
+        let fields = [
+            "metric": "new_workspace_sheet_ready",
+            "status": "started",
+            "attempt": attemptID.uuidString,
+            "trigger": trigger,
+        ]
+        emitPerfLog(
+            "[Perf] metric=new_workspace_sheet_ready status=started attempt=%@ trigger=%@",
+            attemptID.uuidString,
+            trigger
+        )
+        emitNewWorkspaceSheetMetricEvent(phase: "started", fields: fields)
+
+        return attemptID
+    }
+
+    static func endNewWorkspaceSheetReadyIfNeeded(attemptID: UUID, outcome: String) {
+        let interval: ActiveNewWorkspaceSheetInterval?
+
+        lock.lock()
+        if let activeInterval = newWorkspaceSheetInterval, activeInterval.attemptID == attemptID {
+            interval = activeInterval
+            newWorkspaceSheetInterval = nil
+        } else {
+            interval = nil
+        }
+        lock.unlock()
+
+        guard let interval else { return }
+
+        signposter.endInterval("NewWorkspaceSheetReady", interval.state)
+        let durationMs = milliseconds(since: interval.startedAt)
+        let fields = [
+            "metric": "new_workspace_sheet_ready",
+            "status": "completed",
+            "attempt": interval.attemptID.uuidString,
+            "trigger": interval.trigger,
+            "outcome": outcome,
+            "duration_ms": String(format: "%.2f", durationMs),
+        ]
+        emitPerfLog(
+            "[Perf] metric=new_workspace_sheet_ready duration_ms=%.2f attempt=%@ trigger=%@ outcome=%@",
+            durationMs,
+            interval.attemptID.uuidString,
+            interval.trigger,
+            outcome
+        )
+        emitNewWorkspaceSheetMetricEvent(phase: "completed", fields: fields)
+    }
+
     static func beginOpenInEditorLaunch(
         attemptID: UUID,
         trigger: String,
@@ -312,6 +411,12 @@ enum PerformanceSignposts {
     }
 
     #if DEBUG
+        static func setNewWorkspaceSheetMetricObserver(_ observer: NewWorkspaceSheetMetricObserver?) {
+            lock.lock()
+            newWorkspaceSheetMetricObserver = observer
+            lock.unlock()
+        }
+
         static func setOpenInEditorMetricObserver(_ observer: OpenInEditorMetricObserver?) {
             lock.lock()
             openInEditorMetricObserver = observer
@@ -323,6 +428,19 @@ enum PerformanceSignposts {
         withVaList(args) { pointer in
             NSLogv(String(describing: format), pointer)
         }
+    }
+
+    private static func emitNewWorkspaceSheetMetricEvent(phase: String, fields: [String: String]) {
+        #if DEBUG
+            let observer: NewWorkspaceSheetMetricObserver?
+            lock.lock()
+            observer = newWorkspaceSheetMetricObserver
+            lock.unlock()
+            observer?(phase, fields)
+        #else
+            _ = phase
+            _ = fields
+        #endif
     }
 
     private static func emitOpenInEditorMetricEvent(phase: String, fields: [String: String]) {

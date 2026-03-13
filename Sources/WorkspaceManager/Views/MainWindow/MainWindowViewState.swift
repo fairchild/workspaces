@@ -45,6 +45,7 @@ struct MainWindowViewState {
     var isRightPaneVisible = false
     var columnVisibility: NavigationSplitViewVisibility = .all
     var didRunPerfAutoSelection = false
+    var didRunPerfAutoOpenNewWorkspace = false
     var didApplyFixturePreviewBootstrap = false
     var didApplyFixtureWebBootstrap = false
     var didResolveInitialSurface = false

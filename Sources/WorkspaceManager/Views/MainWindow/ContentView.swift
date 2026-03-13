@@ -651,6 +651,14 @@ struct ContentView: View {
 
     @MainActor
     private func presentNewWorkspaceFromLanding(_ repo: Repo) async {
+        let attemptID = PerformanceSignposts.beginNewWorkspaceSheetReady(trigger: "landing")
+        defer {
+            PerformanceSignposts.endNewWorkspaceSheetReadyIfNeeded(
+                attemptID: attemptID,
+                outcome: "success"
+            )
+        }
+
         if await seedLandingProviderStateIfNeeded() {
             repoForNewWorkspaceFromLanding = repo
             return
@@ -782,11 +790,26 @@ struct ContentView: View {
             return false
 
         case .perfAutoSelect(let repo):
+            let shouldAutoOpenNewWorkspace = bootstrapController.shouldPerfAutoOpenNewWorkspace(
+                environment: ProcessInfo.processInfo.environment,
+                didRun: viewState.didRunPerfAutoOpenNewWorkspace,
+                pendingRequest: deepLinkState.pendingRequest
+            )
             viewState.didRunPerfAutoSelection = true
+            if shouldAutoOpenNewWorkspace {
+                viewState.didRunPerfAutoOpenNewWorkspace = true
+            }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                 Task { @MainActor in
                     viewState.didResolveInitialSurface = true
                     handleRepoTerminalSelection(repo)
+                    guard shouldAutoOpenNewWorkspace else { return }
+
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                        Task { @MainActor in
+                            await presentNewWorkspaceFromLanding(repo)
+                        }
+                    }
                 }
             }
             return false
