@@ -79,8 +79,10 @@ struct WorkspaceEnvironmentOptionsController {
     func refreshProviderAvailability(
         registry: WorkspaceProviderRegistry,
         existingAvailabilityByID: [String: WorkspaceProviderAvailability],
+        trigger: String,
         timeoutNanoseconds: UInt64 = 5_000_000_000
     ) async -> [String: WorkspaceProviderAvailability] {
+        let refreshStartedAt = Date()
         var resolvedAvailability = existingAvailabilityByID
         if resolvedAvailability[LocalWorkspaceProvider.identifier] == nil {
             resolvedAvailability[LocalWorkspaceProvider.identifier] = .available
@@ -105,13 +107,32 @@ struct WorkspaceEnvironmentOptionsController {
             }
         }
 
+        let unavailableCount = resolvedAvailability.values.filter { !$0.isAvailable }.count
+        NSLog(
+            "[Perf] metric=workspace_provider_availability_refresh duration_ms=%.2f trigger=%@ providers=%ld unavailable_count=%ld",
+            Date().timeIntervalSince(refreshStartedAt) * 1000,
+            trigger,
+            registry.providers.count,
+            unavailableCount
+        )
+
         return resolvedAvailability
     }
 
     func refreshLumeRuntimeSnapshot(
-        runtimeService: any LumeRuntimeServiceProtocol
+        runtimeService: any LumeRuntimeServiceProtocol,
+        trigger: String
     ) async -> LumeRuntimeSnapshot? {
-        await runtimeService.snapshot()
+        let refreshStartedAt = Date()
+        let snapshot = await runtimeService.snapshot()
+        NSLog(
+            "[Perf] metric=lume_runtime_snapshot_refresh duration_ms=%.2f trigger=%@ state=%@ base_vm_status=%@",
+            Date().timeIntervalSince(refreshStartedAt) * 1000,
+            trigger,
+            snapshot.state.rawValue,
+            snapshot.baseVM?.status.rawValue ?? "none"
+        )
+        return snapshot
     }
 
     func environmentOptions(

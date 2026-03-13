@@ -460,6 +460,7 @@ public actor LumeRuntimeService: LumeRuntimeServiceProtocol {
     }
 
     public func snapshot() async -> LumeRuntimeSnapshot {
+        let snapshotStartedAt = Date()
         let launchAgentPath = launchAgentURL.path
         let executablePath = await executablePathIfInstalled()
         let launchAgentInstalled = fileManager.fileExists(atPath: launchAgentPath)
@@ -539,7 +540,7 @@ public actor LumeRuntimeService: LumeRuntimeServiceProtocol {
             baseVM = nil
         }
 
-        return LumeRuntimeSnapshot(
+        let snapshot = LumeRuntimeSnapshot(
             state: state,
             reason: reason,
             executablePath: executablePath,
@@ -553,6 +554,16 @@ public actor LumeRuntimeService: LumeRuntimeServiceProtocol {
             infoLogPath: infoLogPath,
             errorLogPath: errorLogPath
         )
+
+        NSLog(
+            "[Perf] metric=lume_runtime_snapshot duration_ms=%.2f state=%@ daemon_reachable=%@ base_vm_status=%@",
+            Date().timeIntervalSince(snapshotStartedAt) * 1000,
+            snapshot.state.rawValue,
+            daemonReachable ? "true" : "false",
+            snapshot.baseVM?.status.rawValue ?? "none"
+        )
+
+        return snapshot
     }
 
     public func baseVMSnapshot() async -> LumeBaseVMSnapshot? {
@@ -560,21 +571,38 @@ public actor LumeRuntimeService: LumeRuntimeServiceProtocol {
     }
 
     public func hostProfile() async throws -> LumeHostProfile {
-        try LumeHostProfile.parse(
-            architecture: ProcessInfo.processInfo.machineArchitecture,
-            swVersOutput: try await commandOutput(
-                executable: "/usr/bin/sw_vers",
-                arguments: ["-productVersion"]
-            ),
-            xcodebuildOutput: try? await commandOutput(
-                executable: "/usr/bin/xcodebuild",
-                arguments: ["-version"]
-            ),
-            developerDirectoryOutput: try? await commandOutput(
-                executable: "/usr/bin/xcode-select",
-                arguments: ["-p"]
+        let hostProfileStartedAt = Date()
+        do {
+            let profile = try LumeHostProfile.parse(
+                architecture: ProcessInfo.processInfo.machineArchitecture,
+                swVersOutput: try await commandOutput(
+                    executable: "/usr/bin/sw_vers",
+                    arguments: ["-productVersion"]
+                ),
+                xcodebuildOutput: try? await commandOutput(
+                    executable: "/usr/bin/xcodebuild",
+                    arguments: ["-version"]
+                ),
+                developerDirectoryOutput: try? await commandOutput(
+                    executable: "/usr/bin/xcode-select",
+                    arguments: ["-p"]
+                )
             )
-        )
+
+            NSLog(
+                "[Perf] metric=lume_runtime_host_profile duration_ms=%.2f outcome=success macos_family=%@ xcode=%@",
+                Date().timeIntervalSince(hostProfileStartedAt) * 1000,
+                profile.macOSFamily.rawValue,
+                profile.xcodeVersion == nil ? "absent" : "present"
+            )
+            return profile
+        } catch {
+            NSLog(
+                "[Perf] metric=lume_runtime_host_profile duration_ms=%.2f outcome=failure",
+                Date().timeIntervalSince(hostProfileStartedAt) * 1000
+            )
+            throw error
+        }
     }
 
     public func defaultMacOSImageResolution() async throws -> LumeImageResolution {
@@ -855,6 +883,8 @@ public actor LumeRuntimeService: LumeRuntimeServiceProtocol {
         profile: LumeBaseVMProfile,
         manifest: LumeValidatedBaseManifest?
     ) async -> LumeBaseVMSnapshot? {
+        let inspectionStartedAt = Date()
+        let snapshot: LumeBaseVMSnapshot?
         do {
             let details = try await getVM(named: profile.vmName, storagePath: profile.storagePath)
             let sourceKind = manifest?.sourceKind ?? profile.preferredSourceKind
@@ -865,7 +895,7 @@ public actor LumeRuntimeService: LumeRuntimeServiceProtocol {
                 )
             switch details.status {
             case "running":
-                return LumeBaseVMSnapshot(
+                snapshot = LumeBaseVMSnapshot(
                     profile: profile,
                     status: validationReason == nil ? .ready : .repairRequired,
                     sourceKind: sourceKind,
@@ -874,7 +904,7 @@ public actor LumeRuntimeService: LumeRuntimeServiceProtocol {
                         ?? "The validated base macOS VM is running. Workspaces will stop it before cloning."
                 )
             case "stopped":
-                return LumeBaseVMSnapshot(
+                snapshot = LumeBaseVMSnapshot(
                     profile: profile,
                     status: validationReason == nil ? .ready : .repairRequired,
                     sourceKind: sourceKind,
@@ -883,7 +913,7 @@ public actor LumeRuntimeService: LumeRuntimeServiceProtocol {
                         ?? "Fast macOS VM clones are ready."
                 )
             case "provisioning", "provisioning (stale)":
-                return LumeBaseVMSnapshot(
+                snapshot = LumeBaseVMSnapshot(
                     profile: profile,
                     status: .preparing,
                     sourceKind: sourceKind,
@@ -891,7 +921,7 @@ public actor LumeRuntimeService: LumeRuntimeServiceProtocol {
                     reason: "The prepared base macOS VM is still being provisioned."
                 )
             default:
-                return LumeBaseVMSnapshot(
+                snapshot = LumeBaseVMSnapshot(
                     profile: profile,
                     status: .repairRequired,
                     sourceKind: sourceKind,
@@ -901,29 +931,43 @@ public actor LumeRuntimeService: LumeRuntimeServiceProtocol {
             }
         } catch {
             guard shouldTreatAsMissingVM(error) else {
-                return LumeBaseVMSnapshot(
+                snapshot = LumeBaseVMSnapshot(
                     profile: profile,
                     status: .repairRequired,
                     sourceKind: manifest?.sourceKind ?? profile.preferredSourceKind,
                     vmStatus: nil,
                     reason: error.localizedDescription
                 )
+                NSLog(
+                    "[Perf] metric=lume_runtime_base_vm_inspection duration_ms=%.2f vm_name=%@ status=%@",
+                    Date().timeIntervalSince(inspectionStartedAt) * 1000,
+                    profile.vmName,
+                    snapshot?.status.rawValue ?? "none"
+                )
+                return snapshot
             }
 
             if await validatedBaseService.vmDirectoryExists(
                 vmName: profile.vmName,
                 storagePath: profile.storagePath
             ) {
-                return LumeBaseVMSnapshot(
+                snapshot = LumeBaseVMSnapshot(
                     profile: profile,
                     status: .repairRequired,
                     sourceKind: manifest?.sourceKind ?? profile.preferredSourceKind,
                     vmStatus: nil,
                     reason: "A stale validated base macOS VM directory exists on disk, but Lume cannot resolve it."
                 )
+                NSLog(
+                    "[Perf] metric=lume_runtime_base_vm_inspection duration_ms=%.2f vm_name=%@ status=%@",
+                    Date().timeIntervalSince(inspectionStartedAt) * 1000,
+                    profile.vmName,
+                    snapshot?.status.rawValue ?? "none"
+                )
+                return snapshot
             }
 
-            return LumeBaseVMSnapshot(
+            snapshot = LumeBaseVMSnapshot(
                 profile: profile,
                 status: .missing,
                 sourceKind: manifest?.sourceKind,
@@ -933,6 +977,15 @@ public actor LumeRuntimeService: LumeRuntimeServiceProtocol {
                     : "No local base macOS VM exists yet for \(profile.displayName)."
             )
         }
+
+        NSLog(
+            "[Perf] metric=lume_runtime_base_vm_inspection duration_ms=%.2f vm_name=%@ status=%@",
+            Date().timeIntervalSince(inspectionStartedAt) * 1000,
+            profile.vmName,
+            snapshot?.status.rawValue ?? "none"
+        )
+
+        return snapshot
     }
 
     private func waitForBaseVMReady(
@@ -1356,11 +1409,21 @@ public actor LumeRuntimeService: LumeRuntimeServiceProtocol {
     }
 
     private func daemonIsReachable() async -> Bool {
+        let reachabilityStartedAt = Date()
+        let reachable: Bool
         if await requestSucceeds(path: "/host/status") {
-            return true
+            reachable = true
+        } else {
+            reachable = await requestSucceeds(path: "/vms")
         }
 
-        return await requestSucceeds(path: "/vms")
+        NSLog(
+            "[Perf] metric=lume_runtime_daemon_reachability duration_ms=%.2f outcome=%@",
+            Date().timeIntervalSince(reachabilityStartedAt) * 1000,
+            reachable ? "reachable" : "unreachable"
+        )
+
+        return reachable
     }
 
     private func requestSucceeds(path: String) async -> Bool {
@@ -1467,12 +1530,25 @@ public actor LumeRuntimeService: LumeRuntimeServiceProtocol {
     }
 
     private func commandOutput(executable: String, arguments: [String]) async throws -> String {
+        let commandStartedAt = Date()
         let result = try await ProcessRunner.run(executable: executable, arguments: arguments)
         guard result.success else {
+            NSLog(
+                "[Perf] metric=lume_runtime_host_command duration_ms=%.2f executable=%@ outcome=failure exit_code=%ld",
+                Date().timeIntervalSince(commandStartedAt) * 1000,
+                URL(fileURLWithPath: executable).lastPathComponent,
+                Int(result.exitCode)
+            )
             throw LumeRuntimeError.invalidHostProfile(
                 result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
             )
         }
+        NSLog(
+            "[Perf] metric=lume_runtime_host_command duration_ms=%.2f executable=%@ outcome=success exit_code=%ld",
+            Date().timeIntervalSince(commandStartedAt) * 1000,
+            URL(fileURLWithPath: executable).lastPathComponent,
+            Int(result.exitCode)
+        )
         return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
