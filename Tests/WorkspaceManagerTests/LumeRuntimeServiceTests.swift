@@ -5,6 +5,8 @@ import Testing
 
 @Suite("LumeRuntimeService")
 struct LumeRuntimeServiceTests {
+    private let imageCatalog = LumeImageCatalog.default
+
     @Test("Host profile parsing detects Tahoe and Xcode")
     func hostProfileParsing() throws {
         let profile = try LumeHostProfile.parse(
@@ -31,7 +33,7 @@ struct LumeRuntimeServiceTests {
             developerDirectory: "/Applications/Xcode.app/Contents/Developer"
         )
 
-        let resolution = try LumeRuntimeService.resolveDefaultMacOSImage(for: profile)
+        let resolution = try imageCatalog.resolveDefaultMacOSImage(for: profile)
 
         #expect(resolution.matchKind == .exact)
         #expect(resolution.entry.imageReference == "macos-tahoe-xcode:26.2")
@@ -48,7 +50,7 @@ struct LumeRuntimeServiceTests {
             developerDirectory: "/Applications/Xcode.app/Contents/Developer"
         )
 
-        let resolution = try LumeRuntimeService.resolveDefaultMacOSImage(for: profile)
+        let resolution = try imageCatalog.resolveDefaultMacOSImage(for: profile)
 
         #expect(resolution.matchKind == .nearestSameFamily)
         #expect(resolution.entry.imageReference == "macos-tahoe-xcode:26.2")
@@ -65,7 +67,7 @@ struct LumeRuntimeServiceTests {
         )
 
         do {
-            _ = try LumeRuntimeService.resolveDefaultMacOSImage(for: profile)
+            _ = try imageCatalog.resolveDefaultMacOSImage(for: profile)
             Issue.record("Expected image resolution to fail for an unsupported macOS family.")
         } catch {
             #expect(error.localizedDescription.contains("Choose Linux VM instead"))
@@ -81,9 +83,9 @@ struct LumeRuntimeServiceTests {
             xcodeVersion: "26.2",
             developerDirectory: "/Applications/Xcode.app/Contents/Developer"
         )
-        let resolution = try LumeRuntimeService.resolveDefaultMacOSImage(for: profile)
+        let resolution = try imageCatalog.resolveDefaultMacOSImage(for: profile)
 
-        let baseProfile = LumeRuntimeService.resolveBaseVMProfile(
+        let baseProfile = LumeValidatedBaseService.resolveBaseVMProfile(
             hostProfile: profile,
             imageResolution: resolution
         )
@@ -104,7 +106,7 @@ struct LumeRuntimeServiceTests {
             developerDirectory: "/Applications/Xcode.app/Contents/Developer"
         )
 
-        let baseProfile = LumeRuntimeService.resolveBaseVMProfile(
+        let baseProfile = LumeValidatedBaseService.resolveBaseVMProfile(
             hostProfile: profile,
             imageResolution: nil
         )

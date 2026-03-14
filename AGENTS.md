@@ -155,6 +155,13 @@ swift run     # Run
 | Workspace lifecycle | Sources/WorkspaceManagerCore/Services/WorkspaceService.swift |
 | Service protocols | Sources/WorkspaceManagerCore/Services/Protocols.swift |
 | Backend abstraction | Sources/WorkspaceManagerCore/Services/LocalBackend.swift |
+| Lume runtime setup | Sources/WorkspaceManagerCore/Services/LumeRuntimeService.swift |
+| Lume workspace orchestration | Sources/WorkspaceManagerCore/Services/LumeWorkspaceProvider.swift |
+| Lume daemon transport | Sources/WorkspaceManagerCore/Services/LumeHTTPClient.swift |
+| Lume CLI runner | Sources/WorkspaceManagerCore/Services/LumeCLIRunner.swift |
+| Lume image catalog | Sources/WorkspaceManagerCore/Services/LumeImageCatalog.swift |
+| Lume VM status normalization | Sources/WorkspaceManagerCore/Services/LumeVMStatus.swift |
+| Lume error heuristics | Sources/WorkspaceManagerCore/Services/LumeErrorHeuristics.swift |
 | Main layout | Sources/WorkspaceManager/Views/MainWindow/ContentView.swift |
 | Terminal wrapper | Sources/WorkspaceManager/Views/Components/TerminalView.swift |
 | Sidebar (repos/workspaces) | Sources/WorkspaceManager/Views/MainWindow/SidebarView.swift |

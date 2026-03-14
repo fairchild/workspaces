@@ -56,8 +56,7 @@ public actor LumeWorkspaceProvider: WorkspaceProviderProtocol {
         usesHostWorkspaceFiles: true
     )
 
-    private let baseURL: URL
-    private let urlSession: URLSession
+    private let httpClient: LumeHTTPClient
     private let runtimeService: any LumeRuntimeServiceProtocol
     private let validatedBaseService: LumeValidatedBaseService
     private let fileManager = FileManager.default
@@ -80,8 +79,8 @@ public actor LumeWorkspaceProvider: WorkspaceProviderProtocol {
         runtimeService: any LumeRuntimeServiceProtocol = LumeRuntimeService.shared,
         validatedBaseService: LumeValidatedBaseService = .shared
     ) {
-        self.baseURL = baseURL
-        self.urlSession = urlSession
+        self.httpClient = LumeHTTPClient(baseURL: baseURL)
+        _ = urlSession
         self.runtimeService = runtimeService
         self.validatedBaseService = validatedBaseService
     }
@@ -210,12 +209,7 @@ public actor LumeWorkspaceProvider: WorkspaceProviderProtocol {
                     timeout: provisioningTimeout,
                     progressMessage: progress,
                     condition: { details in
-                        switch details.status {
-                        case "provisioning", "provisioning (stale)":
-                            return false
-                        default:
-                            return true
-                        }
+                        !details.normalizedStatus.isProvisioning
                     }
                 )
             }
@@ -235,7 +229,7 @@ public actor LumeWorkspaceProvider: WorkspaceProviderProtocol {
                 timeout: startupTimeout,
                 progressMessage: progress,
                 condition: { details in
-                    details.status == "running" && details.sshAvailable == true
+                    details.normalizedStatus.isRunning && details.sshAvailable == true
                 }
             )
 
@@ -274,7 +268,7 @@ public actor LumeWorkspaceProvider: WorkspaceProviderProtocol {
             timeout: startupTimeout,
             progressMessage: nil,
             condition: { details in
-                details.status == "running" && details.sshAvailable == true
+                details.normalizedStatus.isRunning && details.sshAvailable == true
             }
         )
 
@@ -298,7 +292,7 @@ public actor LumeWorkspaceProvider: WorkspaceProviderProtocol {
             timeout: startupTimeout,
             progressMessage: nil,
             condition: { details in
-                details.status == "running" && details.vncURL != nil
+                details.normalizedStatus.isRunning && details.vncURL != nil
             }
         )
 
@@ -345,11 +339,11 @@ public actor LumeWorkspaceProvider: WorkspaceProviderProtocol {
                 snapshots.append(
                     WorkspaceProviderStatusSnapshot(
                         remoteId: remoteId,
-                        status: Self.mapStatus(details.status)
+                        status: details.normalizedStatus.workspaceStatus
                     )
                 )
             } catch {
-                if shouldTreatAsMissingVM(error) {
+                if LumeErrorHeuristics.shouldTreatAsMissingVM(error) {
                     snapshots.append(
                         WorkspaceProviderStatusSnapshot(
                             remoteId: remoteId,
@@ -392,14 +386,14 @@ public actor LumeWorkspaceProvider: WorkspaceProviderProtocol {
         guestOS: WorkspaceGuestOS
     ) async throws {
         let details = try await getVM(named: vmName, storagePath: storagePath)
-        guard details.status != "provisioning", details.status != "provisioning (stale)" else {
+        guard !details.normalizedStatus.isProvisioning else {
             _ = try await waitForVM(
                 named: vmName,
                 storagePath: storagePath,
                 timeout: provisioningTimeout,
                 progressMessage: nil,
                 condition: { details in
-                    details.status != "provisioning" && details.status != "provisioning (stale)"
+                    !details.normalizedStatus.isProvisioning
                 }
             )
             return try await ensureVMIsRunning(
@@ -410,7 +404,7 @@ public actor LumeWorkspaceProvider: WorkspaceProviderProtocol {
             )
         }
 
-        if details.status != "running" {
+        if !details.normalizedStatus.isRunning {
             if guestOS == .macOS {
                 try await runMacOSVMWithCLI(
                     named: vmName,
@@ -505,12 +499,7 @@ public actor LumeWorkspaceProvider: WorkspaceProviderProtocol {
                 timeout: provisioningTimeout,
                 progressMessage: progressMessage,
                 condition: { details in
-                    switch details.status {
-                    case "provisioning", "provisioning (stale)":
-                        return false
-                    default:
-                        return true
-                    }
+                    !details.normalizedStatus.isProvisioning
                 }
             )
         } catch {
@@ -537,10 +526,7 @@ public actor LumeWorkspaceProvider: WorkspaceProviderProtocol {
         storagePath: String,
         progressMessage: WorkspaceProviderProgressHandler?
     ) async throws {
-        let executablePath = try await runtimeService.executablePath()
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: executablePath)
-        process.arguments = [
+        let result = try await lumeRunner().runStreaming(arguments: [
             "create",
             vmName,
             "--os", WorkspaceGuestOS.macOS.rawValue,
@@ -553,41 +539,15 @@ public actor LumeWorkspaceProvider: WorkspaceProviderProtocol {
             "--storage", storagePath,
             "--network", defaultNetwork,
             "--no-display",
-        ]
-        process.currentDirectoryURL = fileManager.homeDirectoryForCurrentUser
-
-        var environment = ProcessInfo.processInfo.environment
-        if environment["TERM"]?.isEmpty != false {
-            environment["TERM"] = "xterm-256color"
-        }
-        process.environment = environment
-
-        let outputPipe = Pipe()
-        process.standardOutput = outputPipe
-        process.standardError = outputPipe
-
-        let outputHandle = outputPipe.fileHandleForReading
-        var transcriptLines: [String] = []
-
-        try process.run()
-        defer {
-            try? outputHandle.close()
-        }
-
-        for try await line in outputHandle.bytes.lines {
-            transcriptLines.append(line)
+        ]) { line in
             if let message = Self.cliProvisioningMessage(for: line) {
                 await progressMessage?(message)
             }
         }
-
-        process.waitUntilExit()
-
-        guard process.terminationStatus == 0 else {
-            let transcript = transcriptLines.joined(separator: "\n")
+        guard result.exitCode == 0 else {
             throw WorkspaceProviderError.unavailable(
                 Self.cliProvisioningFailureMessage(
-                    from: transcript,
+                    from: result.transcript,
                     vmName: vmName
                 )
             )
@@ -635,7 +595,6 @@ public actor LumeWorkspaceProvider: WorkspaceProviderProtocol {
         storagePath: String?,
         sharedHostPath: String
     ) async throws {
-        let executablePath = try await runtimeService.executablePath()
         var arguments = [
             "run",
             vmName,
@@ -649,34 +608,9 @@ public actor LumeWorkspaceProvider: WorkspaceProviderProtocol {
 
         let logURL = fileManager.temporaryDirectory
             .appendingPathComponent("workspaces-lume-run-\(vmName).log", isDirectory: false)
-        let launcher = Process()
-        launcher.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
-        launcher.currentDirectoryURL = fileManager.homeDirectoryForCurrentUser
-        launcher.arguments =
-            [
-                "-c",
-                """
-                import pathlib, subprocess, sys
-                log_path = pathlib.Path(sys.argv[1])
-                log_path.parent.mkdir(parents=True, exist_ok=True)
-                with log_path.open("ab") as stream:
-                    subprocess.Popen(
-                        sys.argv[2:],
-                        stdin=subprocess.DEVNULL,
-                        stdout=stream,
-                        stderr=subprocess.STDOUT,
-                        start_new_session=True,
-                    )
-                """,
-                logURL.path,
-                executablePath,
-            ] + arguments
-        launcher.standardInput = nil
-
-        try launcher.run()
-        launcher.waitUntilExit()
-
-        guard launcher.terminationStatus == 0 else {
+        do {
+            try await lumeRunner().launchDetached(arguments: arguments, logURL: logURL)
+        } catch {
             throw WorkspaceProviderError.unavailable("Failed to launch detached macOS VM '\(vmName)'.")
         }
     }
@@ -715,37 +649,25 @@ public actor LumeWorkspaceProvider: WorkspaceProviderProtocol {
     }
 
     private func stopVMWithCLI(named vmName: String, storagePath: String?) async throws {
-        let executablePath = try await runtimeService.executablePath()
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: executablePath)
         var arguments = ["stop", vmName]
         if let storagePath {
             arguments.append(contentsOf: ["--storage", storagePath])
         }
-        process.arguments = arguments
-        process.currentDirectoryURL = fileManager.homeDirectoryForCurrentUser
-        try process.run()
-        process.waitUntilExit()
+        let result = try await lumeRunner().run(arguments: arguments)
 
-        guard process.terminationStatus == 0 else {
+        guard result.success else {
             throw WorkspaceProviderError.unavailable("Failed to stop macOS VM '\(vmName)'.")
         }
     }
 
     private func deleteVMWithCLI(named vmName: String, storagePath: String?) async throws {
-        let executablePath = try await runtimeService.executablePath()
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: executablePath)
         var arguments = ["delete", vmName, "--force"]
         if let storagePath {
             arguments.append(contentsOf: ["--storage", storagePath])
         }
-        process.arguments = arguments
-        process.currentDirectoryURL = fileManager.homeDirectoryForCurrentUser
-        try process.run()
-        process.waitUntilExit()
+        let result = try await lumeRunner().run(arguments: arguments)
 
-        guard process.terminationStatus == 0 else {
+        guard result.success else {
             throw WorkspaceProviderError.unavailable("Failed to delete macOS VM '\(vmName)'.")
         }
     }
@@ -776,12 +698,8 @@ public actor LumeWorkspaceProvider: WorkspaceProviderProtocol {
     }
 
     private func getVMViaCLI(named vmName: String, storagePath: String) async throws -> LumeVMDetails {
-        let executablePath = try await runtimeService.executablePath()
-        let result = try await ProcessRunner.run(
-            executable: executablePath,
-            arguments: ["get", vmName, "--storage", storagePath, "-f", "json"],
-            currentDirectory: fileManager.homeDirectoryForCurrentUser,
-            environment: ProcessInfo.processInfo.environment
+        let result = try await lumeRunner().run(
+            arguments: ["get", vmName, "--storage", storagePath, "-f", "json"]
         )
 
         guard result.success else {
@@ -820,7 +738,7 @@ public actor LumeWorkspaceProvider: WorkspaceProviderProtocol {
                     throw WorkspaceProviderError.unavailable(asyncCreationFailureMessage)
                 }
 
-                if shouldTreatAsMissingVM(error), lastDetails == nil {
+                if LumeErrorHeuristics.shouldTreatAsMissingVM(error), lastDetails == nil {
                     try await Task.sleep(nanoseconds: 500_000_000)
                     continue
                 }
@@ -839,7 +757,7 @@ public actor LumeWorkspaceProvider: WorkspaceProviderProtocol {
             try await Task.sleep(nanoseconds: pollIntervalNanoseconds)
         }
 
-        let status = lastDetails?.status ?? "unknown"
+        let status = lastDetails?.normalizedStatus.rawValue ?? "unknown"
         throw WorkspaceProviderError.unavailable(
             "Timed out waiting for Lume VM '\(vmName)' to become ready (last status: \(status))."
         )
@@ -847,14 +765,14 @@ public actor LumeWorkspaceProvider: WorkspaceProviderProtocol {
 
     private func statusMessage(for details: LumeVMDetails) -> String? {
         let logTail: String?
-        if details.status == "provisioning" || details.status == "provisioning (stale)" {
+        if details.normalizedStatus.isProvisioning {
             logTail = readDaemonLogTail()
         } else {
             logTail = nil
         }
 
         return LumeProgressMessageBuilder.message(
-            status: details.status,
+            status: details.normalizedStatus,
             guestOS: details.os,
             provisioningOperation: details.provisioningOperation,
             sshAvailable: details.sshAvailable,
@@ -932,130 +850,16 @@ public actor LumeWorkspaceProvider: WorkspaceProviderProtocol {
         queryItems: [URLQueryItem] = [],
         body: Body?
     ) async throws -> Response {
-        guard let url = endpointURL(for: path, queryItems: queryItems) else {
-            throw WorkspaceProviderError.unavailable("Invalid Lume endpoint path: \(path)")
+        do {
+            return try await httpClient.request(
+                method: method,
+                path: path,
+                queryItems: queryItems,
+                body: body
+            )
+        } catch {
+            throw WorkspaceProviderError.unavailable(error.localizedDescription)
         }
-        let encodedBody = try body.map { try JSONEncoder().encode($0) }
-        let (data, statusCode) = try await sendCurlRequest(
-            method: method,
-            url: url,
-            body: encodedBody
-        )
-
-        guard (200...299).contains(statusCode) else {
-            if let apiError = try? JSONDecoder().decode(LumeAPIError.self, from: data) {
-                throw WorkspaceProviderError.unavailable(apiError.message)
-            }
-
-            let message = String(data: data, encoding: .utf8) ?? "HTTP \(statusCode)"
-            throw WorkspaceProviderError.unavailable(message)
-        }
-
-        if Response.self == LumeEmptyResponse.self {
-            return LumeEmptyResponse() as! Response
-        }
-
-        if data.isEmpty {
-            throw WorkspaceProviderError.unavailable("Lume returned an empty response.")
-        }
-
-        return try JSONDecoder().decode(Response.self, from: data)
-    }
-
-    private func sendCurlRequest(
-        method: String,
-        url: URL,
-        body: Data?
-    ) async throws -> (Data, Int) {
-        let statusMarker = "__LUME_HTTP_STATUS__:"
-        var arguments = [
-            "--silent",
-            "--show-error",
-            "--request", method,
-            "--url", url.absoluteString,
-            "--max-time", "30",
-            "--header", "Connection: close",
-            "--write-out", "\n\(statusMarker)%{http_code}",
-        ]
-
-        var temporaryBodyURL: URL?
-        if let body {
-            let bodyURL = fileManager.temporaryDirectory
-                .appendingPathComponent("lume-request-\(UUID().uuidString).json")
-            try body.write(to: bodyURL, options: .atomic)
-            temporaryBodyURL = bodyURL
-            arguments += [
-                "--header", "Content-Type: application/json",
-                "--data-binary", "@\(bodyURL.path)",
-            ]
-        }
-
-        defer {
-            if let temporaryBodyURL {
-                try? fileManager.removeItem(at: temporaryBodyURL)
-            }
-        }
-
-        let result = try await ProcessRunner.run(
-            executable: "/usr/bin/curl",
-            arguments: arguments,
-            environment: ProcessInfo.processInfo.environment
-        )
-
-        guard result.success else {
-            let message =
-                [result.stderr, result.stdout]
-                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .first(where: { !$0.isEmpty })
-                ?? "curl exited with status \(result.exitCode)"
-            throw WorkspaceProviderError.unavailable(message)
-        }
-
-        let output = result.stdout
-        guard let markerRange = output.range(of: statusMarker, options: .backwards) else {
-            throw WorkspaceProviderError.unavailable("Lume curl response did not include an HTTP status.")
-        }
-
-        let bodyString = String(output[..<markerRange.lowerBound])
-        let statusString = output[markerRange.upperBound...].trimmingCharacters(
-            in: .whitespacesAndNewlines
-        )
-        guard let statusCode = Int(statusString) else {
-            throw WorkspaceProviderError.unavailable("Lume curl response returned an invalid HTTP status.")
-        }
-
-        return (Data(bodyString.utf8), statusCode)
-    }
-
-    private func endpointURL(for path: String, queryItems: [URLQueryItem] = []) -> URL? {
-        let components =
-            path
-            .split(separator: "/")
-            .map(String.init)
-            .filter { !$0.isEmpty }
-
-        guard !components.isEmpty else {
-            if queryItems.isEmpty {
-                return baseURL
-            }
-            guard var baseComponents = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
-                return nil
-            }
-            baseComponents.queryItems = queryItems
-            return baseComponents.url
-        }
-
-        let url = components.reduce(baseURL) { partialURL, component in
-            partialURL.appendingPathComponent(component, isDirectory: false)
-        }
-        guard !queryItems.isEmpty else {
-            return url
-        }
-        guard var resolvedComponents = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
-            return nil
-        }
-        resolvedComponents.queryItems = queryItems
-        return resolvedComponents.url
     }
 
     private func cleanupWorkspaceDirectory(_ workspaceURL: URL) {
@@ -1103,18 +907,6 @@ public actor LumeWorkspaceProvider: WorkspaceProviderProtocol {
         return collapsed.isEmpty ? "workspace" : collapsed
     }
 
-    private func shouldFallbackToStockMacOSProvisioning(for error: Error) -> Bool {
-        guard case .unavailable(let message)? = error as? WorkspaceProviderError else {
-            return false
-        }
-
-        let normalized = message.lowercased()
-        return normalized.contains("fetch image manifest from registry")
-            || normalized.contains("fetch authentication token from registry")
-            || normalized.contains("denied")
-            || normalized.contains("not found")
-    }
-
     private func isRecoverableMacOSImageResolutionError(_ error: Error) -> Bool {
         guard let runtimeError = error as? LumeRuntimeError else {
             return false
@@ -1126,17 +918,6 @@ public actor LumeWorkspaceProvider: WorkspaceProviderProtocol {
         case .unsupportedHost, .invalidHostProfile, .installationFailed, .verificationFailed, .baseVMFailed:
             return false
         }
-    }
-
-    private func shouldTreatAsMissingVM(_ error: Error) -> Bool {
-        guard case .unavailable(let message)? = error as? WorkspaceProviderError else {
-            return false
-        }
-
-        let normalized = message.lowercased()
-        return normalized.contains("not found")
-            || normalized.contains("no vm")
-            || normalized.contains("does not exist")
     }
 
     private func fallbackMacOSMetadata(
@@ -1176,28 +957,19 @@ public actor LumeWorkspaceProvider: WorkspaceProviderProtocol {
         )
     }
 
+    private func lumeRunner() async throws -> LumeCLIRunner {
+        LumeCLIRunner(
+            executablePath: try await runtimeService.executablePath(),
+            currentDirectory: fileManager.homeDirectoryForCurrentUser
+        )
+    }
+
     static func mapStatus(_ rawValue: String) -> WorkspaceStatus {
-        switch rawValue {
-        case "running":
-            return .active
-        case "stopped":
-            return .stopped
-        case "provisioning", "provisioning (stale)":
-            return .provisioning
-        default:
-            return .archived
-        }
+        LumeVMStatus(rawValue: rawValue).workspaceStatus
     }
 
     static func shouldRetryMacOSProvisioningWithCLI(for error: Error) -> Bool {
-        guard case .unavailable(let message)? = error as? WorkspaceProviderError else {
-            return false
-        }
-
-        let normalized = message.lowercased()
-        return normalized.contains("restore image catalog failed to load")
-            || normalized.contains("installation service returned an unexpected error")
-            || normalized.contains("virtual machine not found")
+        LumeErrorHeuristics.shouldRetryMacOSProvisioningWithCLI(error)
     }
 
     static func cliProvisioningMessage(for line: String) -> String? {
@@ -1313,6 +1085,10 @@ private struct LumeVMDetails: Decodable, Sendable {
     let sshAvailable: Bool?
     let vncURL: URL?
 
+    var normalizedStatus: LumeVMStatus {
+        LumeVMStatus(rawValue: status)
+    }
+
     private enum CodingKeys: String, CodingKey {
         case name
         case status
@@ -1346,20 +1122,16 @@ private struct LumeMessageResponse: Decodable {
     let message: String
 }
 
-private struct LumeAPIError: Decodable {
-    let message: String
-}
-
 struct LumeProgressMessageBuilder {
     static func message(
-        status: String,
+        status: LumeVMStatus,
         guestOS: String?,
         provisioningOperation: String?,
         sshAvailable: Bool?,
         logTail: String?
     ) -> String? {
         switch status {
-        case "provisioning", "provisioning (stale)":
+        case .provisioning, .provisioningStale:
             if let detailedMessage = provisioningMessage(
                 guestOS: guestOS,
                 provisioningOperation: provisioningOperation,
@@ -1376,7 +1148,7 @@ struct LumeProgressMessageBuilder {
             }
             return "Provisioning VM..."
 
-        case "running":
+        case .running:
             guard sshAvailable != true else { return nil }
             if guestOS == WorkspaceGuestOS.macOS.rawValue {
                 return "Booting macOS and waiting for SSH..."
@@ -1446,4 +1218,4 @@ struct LumeProgressMessageBuilder {
 }
 
 private struct LumeEmptyBody: Encodable {}
-private struct LumeEmptyResponse: Decodable {}
+private struct LumeEmptyResponse: LumeHTTPEmptyResponse {}

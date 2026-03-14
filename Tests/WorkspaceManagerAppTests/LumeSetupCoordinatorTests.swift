@@ -122,7 +122,7 @@ struct LumeSetupCoordinatorTests {
     private func makeDefaultImageResolution() -> LumeImageResolution {
         LumeImageResolution(
             hostProfile: makeHostProfile(),
-            entry: LumeRuntimeService.imageCatalog[0],
+            entry: LumeImageCatalog.default.entries[0],
             matchKind: .exact
         )
     }

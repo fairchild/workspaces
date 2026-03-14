@@ -66,7 +66,7 @@ struct WorkspaceProviderTests {
     @Test("Lume progress messaging surfaces macOS download, install, and boot phases")
     func lumeProgressMessaging() {
         let downloadMessage = LumeProgressMessageBuilder.message(
-            status: "provisioning",
+            status: .provisioning,
             guestOS: WorkspaceGuestOS.macOS.rawValue,
             provisioningOperation: "ipsw_install",
             sshAvailable: nil,
@@ -75,7 +75,7 @@ struct WorkspaceProviderTests {
         #expect(downloadMessage == "Downloading macOS image... 99%")
 
         let installMessage = LumeProgressMessageBuilder.message(
-            status: "provisioning",
+            status: .provisioning,
             guestOS: WorkspaceGuestOS.macOS.rawValue,
             provisioningOperation: "ipsw_install",
             sshAvailable: nil,
@@ -89,7 +89,7 @@ struct WorkspaceProviderTests {
         #expect(installMessage == "Installing macOS... 12%")
 
         let bootMessage = LumeProgressMessageBuilder.message(
-            status: "running",
+            status: .running,
             guestOS: WorkspaceGuestOS.macOS.rawValue,
             provisioningOperation: nil,
             sshAvailable: false,
@@ -98,13 +98,42 @@ struct WorkspaceProviderTests {
         #expect(bootMessage == "Booting macOS and waiting for SSH...")
 
         let linuxBootMessage = LumeProgressMessageBuilder.message(
-            status: "running",
+            status: .running,
             guestOS: WorkspaceGuestOS.linux.rawValue,
             provisioningOperation: nil,
             sshAvailable: false,
             logTail: nil
         )
         #expect(linuxBootMessage == "Booting Linux VM and waiting for SSH...")
+    }
+
+    @Test("Lume VM status normalization covers known and unknown states")
+    func lumeVMStatusNormalization() {
+        #expect(LumeVMStatus(rawValue: "running") == .running)
+        #expect(LumeVMStatus(rawValue: "stopped") == .stopped)
+        #expect(LumeVMStatus(rawValue: "provisioning") == .provisioning)
+        #expect(LumeVMStatus(rawValue: "provisioning (stale)") == .provisioningStale)
+        #expect(LumeVMStatus(rawValue: "missing") == .missing)
+        #expect(LumeVMStatus(rawValue: "mystery").workspaceStatus == .archived)
+    }
+
+    @Test("Lume error heuristics classify fallback and missing VM messages")
+    func lumeErrorHeuristics() {
+        #expect(
+            LumeErrorHeuristics.shouldFallbackToStockImage(
+                WorkspaceProviderError.unavailable("Fetch image manifest from registry failed.")
+            )
+        )
+        #expect(
+            LumeErrorHeuristics.shouldTreatAsMissingVM(
+                WorkspaceProviderError.unavailable("Virtual machine does not exist.")
+            )
+        )
+        #expect(
+            !LumeErrorHeuristics.shouldTreatAsMissingVM(
+                WorkspaceProviderError.unavailable("A different Lume failure")
+            )
+        )
     }
 
     @Test("Lume retries stock macOS provisioning with CLI for daemon async create failures")

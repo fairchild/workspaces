@@ -37,8 +37,8 @@ enum UIFixtureLumeEnvironment {
             xcodeVersion: "26.2",
             developerDirectory: "/Applications/Xcode.app/Contents/Developer"
         )
-        let imageResolution = try? LumeRuntimeService.resolveDefaultMacOSImage(for: hostProfile)
-        let baseProfile = LumeRuntimeService.resolveBaseVMProfile(
+        let imageResolution = try? LumeImageCatalog.default.resolveDefaultMacOSImage(for: hostProfile)
+        let baseProfile = LumeValidatedBaseService.resolveBaseVMProfile(
             hostProfile: hostProfile,
             imageResolution: imageResolution
         )
@@ -103,7 +103,7 @@ actor UIFixtureLumeRuntimeService: LumeRuntimeServiceProtocol {
             developerDirectoryOutput: "/Applications/Xcode.app/Contents/Developer"
         )
         self.hostProfile = hostProfile
-        self.imageResolution = try! LumeRuntimeService.resolveDefaultMacOSImage(for: hostProfile)
+        self.imageResolution = try! LumeImageCatalog.default.resolveDefaultMacOSImage(for: hostProfile)
 
         try? fileManager.createDirectory(at: root, withIntermediateDirectories: true)
         Self.seedArtifactFiles(
@@ -120,7 +120,7 @@ actor UIFixtureLumeRuntimeService: LumeRuntimeServiceProtocol {
     func snapshot() async -> LumeRuntimeSnapshot {
         let isInstalled = state == .ready || state == .verifying || state == .installing
         let isDaemonReachable = state == .ready || state == .verifying
-        let baseProfile = LumeRuntimeService.resolveBaseVMProfile(
+        let baseProfile = LumeValidatedBaseService.resolveBaseVMProfile(
             hostProfile: hostProfile,
             imageResolution: imageResolution
         )

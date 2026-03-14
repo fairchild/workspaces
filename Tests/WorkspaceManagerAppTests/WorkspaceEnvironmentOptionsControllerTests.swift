@@ -38,7 +38,7 @@ struct WorkspaceEnvironmentOptionsControllerTests {
                 return snapshotImage
             }
 
-            guard let macOSCatalogEntry = LumeRuntimeService.imageCatalog.first(where: { $0.guestOS == .macOS }) else {
+            guard let macOSCatalogEntry = LumeImageCatalog.default.entries.first(where: { $0.guestOS == .macOS }) else {
                 fatalError("Expected a macOS image catalog entry for tests")
             }
 
@@ -303,7 +303,7 @@ struct WorkspaceEnvironmentOptionsControllerTests {
 
     private func makeDefaultImageResolution() throws -> LumeImageResolution {
         let macOSCatalogEntry = try #require(
-            LumeRuntimeService.imageCatalog.first { $0.guestOS == .macOS }
+            LumeImageCatalog.default.entries.first { $0.guestOS == .macOS }
         )
 
         return LumeImageResolution(
