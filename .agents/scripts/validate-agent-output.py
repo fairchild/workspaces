@@ -39,7 +39,6 @@ REQUIRED_FIELDS: dict[str, list[str]] = {
     "propose": ["title", "body", "persona"],
     "comment": ["discussion_number", "body", "persona"],
     "review_pr": ["pr_number", "body", "persona"],
-    "advance_issue": ["issue_number", "body", "persona"],
     "plan": ["discussion_number", "issues"],
 }
 

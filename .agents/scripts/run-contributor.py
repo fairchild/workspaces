@@ -17,17 +17,18 @@ from pathlib import Path
 
 
 CLAUDE_TASK = (
-    "Check what needs attention first (open PRs, in-progress issues, recent discussion "
-    "comments), then propose a new idea only if nothing else needs you. Output your "
-    "response using YAML frontmatter as specified in your prompt."
+    "Check what needs attention: open PRs to review, then discussions to "
+    "participate in or propose. Output your response using YAML frontmatter "
+    "as specified in your prompt."
 )
 CLAUDE_TASK_CLI = (
-    "You are running as an automated contributor. Check what needs attention "
-    "(open PRs, in-progress issues, recent discussion comments), then act on "
-    "the highest-priority item. CRITICAL: Your final output MUST be valid "
-    "YAML frontmatter exactly as specified in your prompt — start with `---` "
-    "on the very first line, then metadata fields, then closing `---`, then "
-    "your markdown body. Do NOT write any text before the opening `---`."
+    "You are running as an automated contributor. Check for open PRs to "
+    "review, then participate in discussions — comment on an existing one or "
+    "propose a new idea. Do NOT comment on issues. CRITICAL: Your final "
+    "output MUST be valid YAML frontmatter exactly as specified in your "
+    "prompt — start with `---` on the very first line, then metadata fields, "
+    "then closing `---`, then your markdown body. Do NOT write any text "
+    "before the opening `---`."
 )
 REPO_ROOT = Path(__file__).resolve().parents[2]
 GH_DISCUSS_SCRIPT = REPO_ROOT / ".agents" / "skills" / "gh-discuss" / "scripts" / "gh-discuss.py"
@@ -563,21 +564,6 @@ def route_action(validated_json: str, dry_run: bool, env: dict[str, str]) -> int
                     "review",
                     str(data["pr_number"]),
                     "--comment",
-                    "--body-file",
-                    body_file,
-                ],
-                timeout=GITHUB_API_TIMEOUT,
-                cwd=REPO_ROOT,
-                env=env,
-            )
-            return 0
-        if action == "advance_issue":
-            run_checked(
-                [
-                    "gh",
-                    "issue",
-                    "comment",
-                    str(data["issue_number"]),
                     "--body-file",
                     body_file,
                 ],
