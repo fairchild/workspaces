@@ -28,15 +28,21 @@ def load_module(name: str, path: Path):
     return module
 
 
-run_planner = load_module("run_planner", REPO_ROOT / ".agents" / "scripts" / "run-planner.py")
+run_planner = load_module(
+    "run_planner",
+    REPO_ROOT / ".agents" / "skills" / "peter-planner" / "scripts" / "run-planner.py",
+)
 validator = load_module(
     "validate_agent_output",
-    REPO_ROOT / ".agents" / "scripts" / "validate-agent-output.py",
+    REPO_ROOT / ".agents" / "skills" / "cofounder-contributor" / "scripts" / "validate-agent-output.py",
 )
 run_contributor = load_module(
-    "run_contributor", REPO_ROOT / ".agents" / "scripts" / "run-contributor.py"
+    "run_contributor",
+    REPO_ROOT / ".agents" / "skills" / "cofounder-contributor" / "scripts" / "run-contributor.py",
 )
-CATALOG = run_planner.load_label_catalog(REPO_ROOT / ".agents" / "config" / "peter-planner.toml")
+CATALOG = run_planner.load_label_catalog(
+    REPO_ROOT / ".agents" / "skills" / "peter-planner" / "config" / "peter-planner.toml"
+)
 
 
 class ValidateAgentOutputTests(unittest.TestCase):
@@ -357,11 +363,25 @@ class RunPlannerTests(unittest.TestCase):
 
 class RunContributorTests(unittest.TestCase):
     def test_extract_persona_from_april_prompt(self) -> None:
-        prompt = REPO_ROOT / ".agents" / "prompts" / "april-clearwater.md"
+        prompt = (
+            REPO_ROOT
+            / ".agents"
+            / "skills"
+            / "cofounder-contributor"
+            / "references"
+            / "april-clearwater.md"
+        )
         self.assertEqual(run_contributor.extract_persona(prompt), "April Clearwater")
 
     def test_extract_persona_from_plat_prompt(self) -> None:
-        prompt = REPO_ROOT / ".agents" / "prompts" / "plat-ironwood.md"
+        prompt = (
+            REPO_ROOT
+            / ".agents"
+            / "skills"
+            / "cofounder-contributor"
+            / "references"
+            / "plat-ironwood.md"
+        )
         self.assertEqual(run_contributor.extract_persona(prompt), "Plat Ironwood")
 
     def test_find_agent_threads_pr_review(self) -> None:

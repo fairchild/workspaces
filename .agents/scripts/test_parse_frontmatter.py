@@ -25,7 +25,10 @@ def load_module(name: str, path: Path):
     return module
 
 
-fm = load_module("parse_frontmatter", REPO_ROOT / ".agents" / "scripts" / "parse-frontmatter.py")
+fm = load_module(
+    "parse_frontmatter",
+    REPO_ROOT / ".agents" / "skills" / "cofounder-contributor" / "scripts" / "parse-frontmatter.py",
+)
 
 
 class ParseFrontmatterTests(unittest.TestCase):

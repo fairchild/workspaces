@@ -79,16 +79,24 @@ The reply can include modifications — Peter reads the full thread and incorpor
 
 ## Files
 
+Prompt, runtime, and compatibility responsibilities now split cleanly:
+
+- `.agents/skills/` holds the reusable workflow packages, prompt references, and runtime scripts
+- `.agents/scripts/` keeps compatibility entrypoints for older automation paths
+
 | File | Purpose |
 |------|---------|
-| `.agents/prompts/april-clearwater.md` | April's persona and instructions |
-| `.agents/prompts/plat-ironwood.md` | Plat's persona and instructions |
-| `.agents/prompts/peter-planner.md` | Planner instructions |
+| `.agents/skills/cofounder-contributor/SKILL.md` | Shared contributor skill for April and Plat |
+| `.agents/skills/cofounder-contributor/references/` | Persona prompt resources for April and Plat |
+| `.agents/skills/cofounder-contributor/scripts/run-contributor.py` | Contributor runtime source of truth |
+| `.agents/skills/peter-planner/SKILL.md` | Planner skill for endorsed discussion → issues/milestone |
+| `.agents/skills/peter-planner/references/peter-planner.md` | Planner prompt resource |
+| `.agents/skills/peter-planner/config/peter-planner.toml` | Allowed planner labels + alias mapping |
+| `.agents/skills/peter-planner/scripts/run-planner.py` | Planner runtime source of truth |
+| `.agents/scripts/run-contributor.py` | Compatibility shim for existing automation |
+| `.agents/scripts/run-planner.py` | Compatibility shim for existing automation |
+| `.agents/scripts/validate-agent-output.py` | Compatibility shim for shared validation |
 | `.agents/skills/drive/SKILL.md` | Manual milestone execution workflow after planning |
-| `.agents/config/peter-planner.toml` | Allowed planner labels + alias mapping |
-| `.agents/scripts/run-contributor.py` | Shared runtime for contributor agents |
-| `.agents/scripts/run-planner.py` | Shared runtime for Peter's planning workflow |
-| `.agents/scripts/validate-agent-output.py` | Output validation + dedup checking |
 | `scripts/ops-report.py` | Deterministic GitHub + perf reporting for the ops loop |
 | `fixtures/ops-report/` | Checked-in replay packs for Observer dry runs and tests |
 | `docs/ops/` | Checked-in ops timeline, snapshot JSON, and dashboard |
@@ -107,20 +115,24 @@ April, Plat, and Peter now use thin workflow wrappers. Their workflow YAML keeps
 - concurrency
 - checkout and tool setup
 
-The shared contributor behavior lives in `.agents/scripts/run-contributor.py`:
+The shared contributor behavior now lives in `.agents/skills/cofounder-contributor/scripts/run-contributor.py`:
 
 1. gather repo and GitHub context
-2. run Claude Code with the agent prompt
-3. validate JSON output through `validate-agent-output.py`
+2. run Claude Code with the selected persona prompt
+3. validate YAML frontmatter output through the shared validator
 4. either pretty-print validated JSON for dry runs or route the action back into GitHub
 
-Peter Planner stays separate because it is event-driven and uses a different planning schema, but its workflow now delegates the orchestration to `.agents/scripts/run-planner.py`:
+April and Plat workflows now invoke the skill runtime directly. The old `.agents/scripts/run-contributor.py` path remains only as a compatibility shim for any external callers that still depend on it.
+
+Peter Planner stays separate because it is event-driven and uses a different planning schema, but its runtime source of truth now lives in `.agents/skills/peter-planner/scripts/run-planner.py`:
 
 1. resolve manual dispatch vs owner approval comments
 2. fetch discussion, labels, issues, and milestones
 3. run Claude with the planner prompt
 4. validate + normalize the plan (labels, milestone naming, markers)
 5. reconcile retries, create or reuse GitHub artifacts, and update the discussion
+
+The Peter workflow now invokes the skill runtime directly. The old `.agents/scripts/run-planner.py` path remains only as a compatibility shim for any external callers that still depend on it.
 
 Observer is deterministic rather than model-driven. Its workflow delegates to `scripts/ops-report.py`:
 
@@ -133,12 +145,12 @@ For manual dry runs, `scripts/ops-report.py` also accepts `--fixtures-dir fixtur
 
 ## Reliability
 
-- **JSON output format** — agents output structured JSON in code fences, validated before posting (replaces fragile sed-based delimiter parsing)
+- **YAML frontmatter output format** — agents output structured YAML frontmatter, validated before posting, with JSON fences retained only as a fallback parser path
 - **Dedup checking** — proposed titles are compared against open discussions before posting
 - **GraphQL for Discussions** — GitHub REST API doesn't support Discussions; all queries use GraphQL
 - **Early filtering** — planner workflow skips non-owner comments at the job level (no wasted compute)
 - **Shell safety** — event context passed via env vars, body content via temp files
-- **Catalog-backed labels** — Peter can only use repo-managed labels from `.agents/config/peter-planner.toml`, with alias normalization for common CI/platform terms
+- **Catalog-backed labels** — Peter can only use repo-managed labels from `.agents/skills/peter-planner/config/peter-planner.toml`, with alias normalization for common CI/platform terms
 - **Idempotent planning markers** — planner comments, milestone descriptions, and issue bodies carry machine markers so retries reuse existing artifacts instead of leaking duplicates
 - **Discussion token override** — `permissions.discussions: write` is enough for comments, issues, and milestones, but GitHub's built-in Actions token still cannot retitle discussions via `updateDiscussion` in this repo. `agent-peter.yml` therefore prefers the repo secret `PETER_DISCUSSION_TOKEN` when present, and the repo's default Actions workflow permission should stay at `write`
 - **Simple operational memory** — GitHub stays the raw event source; `docs/ops/` stores small checked-in snapshots and dashboards instead of introducing a separate analytics service or database in v1

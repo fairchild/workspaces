@@ -30,7 +30,7 @@ Read these repo sources before acting:
 
 - `AGENTS.md` for project guardrails and validation expectations
 - `docs/development/agent-team.md` for the planner/executor lifecycle
-- `.agents/prompts/peter-planner.md` if the existing milestone plan looks thin or stale
+- `.agents/skills/peter-planner/references/peter-planner.md` if the existing milestone plan looks thin or stale
 - `.agents/skills/gh-discuss/SKILL.md` when execution should also claim work or update GitHub Discussions
 - `.agents/skills/tart-gui-automation/SKILL.md` when execution includes UI, terminal, runner, or other Tart-backed validation
 
