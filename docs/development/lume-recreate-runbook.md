@@ -203,11 +203,15 @@ Current useful helper profile for post-setup guest recovery:
 
 - `config/lume/unattended/tahoe-workspaces-v18-official-run-bootstrap-ssh.yml`
 
-Current full-flow Tahoe override used by standalone rebuilds:
+Current default bridged Tahoe override used by standalone rebuilds:
 
-- `config/lume/unattended/tahoe-workspaces-v23.yml`
+- `config/lume/unattended/tahoe-workspaces-bridged-v27.yml`
 
-That profile is a resume helper, not the full stock-install preset. It assumes the guest can already reach the login screen and Terminal.
+Current NAT Tahoe override:
+
+- `config/lume/unattended/tahoe-workspaces-v26.yml`
+
+The bridged profile is the default full-flow stock-install path. Use the NAT profile only when you intentionally need the older network path for comparison or recovery.
 
 If the standalone validator is already green, skip ahead to [Step 4](#step-4-run-the-base-with-bridged-networking). You do not need to recreate the base again just to repro the known-good path.
 
@@ -267,7 +271,7 @@ Expected result:
 Observed credentials during manual recovery:
 
 - VNC / guest login user: `lume`
-- guest password: `lume`
+- guest password: `lumesetup26`
 
 Evidence for the working GUI path:
 
@@ -285,7 +289,7 @@ Known-good command:
 ~/.local/bin/lume ssh workspaces-validated-base-macos-tahoe-26-2-xcode-26-2 \
   'echo BASE_OK && whoami && hostname && ipconfig getifaddr en0' \
   --user lume \
-  --password lume \
+  --password lumesetup26 \
   --storage "$HOME/Library/Application Support/WorkspaceManager/LumeStorage/validated-bases"
 ```
 

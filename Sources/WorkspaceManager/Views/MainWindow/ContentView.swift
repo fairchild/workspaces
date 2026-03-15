@@ -15,7 +15,7 @@ struct ContentView: View {
     @Binding var deepLinkState: WorkspaceDeepLinkState
     @Binding var lastSurfaceRawValue: String
     @ObservedObject var hostTerminalState: HostTerminalStateStore
-    @ObservedObject var lumeSetupCoordinator: LumeSetupCoordinator
+    @ObservedObject var workspaceProviderSetupCoordinator: WorkspaceProviderSetupCoordinator
     @ObservedObject var hostLumeSmokeAutomation: HostLumeSmokeAutomationController
     @Query(sort: \Repo.addedAt, order: .reverse) private var repos: [Repo]
     @Query(sort: \WebSource.addedAt, order: .reverse) private var webSources: [WebSource]
@@ -329,7 +329,7 @@ struct ContentView: View {
                     webSourceCreationTarget = target
                 },
                 onWorkspaceCreated: handleWorkspaceCreated,
-                lumeSetupCoordinator: lumeSetupCoordinator,
+                workspaceProviderSetupCoordinator: workspaceProviderSetupCoordinator,
                 hostLumeSmokeAutomation: hostLumeSmokeAutomation
             )
             .navigationSplitViewColumnWidth(min: 200, ideal: 260, max: 350)
@@ -501,63 +501,63 @@ struct ContentView: View {
                 Text(viewState.workspaceOperationErrorMessage ?? "Unknown error.")
             }
             .alert(
-                "Could Not Set Up macOS VM Support",
+                "Could Not Complete Provider Setup",
                 isPresented: Binding(
-                    get: { lumeSetupCoordinator.errorMessage != nil },
-                    set: { if !$0 { lumeSetupCoordinator.clearError() } }
+                    get: { workspaceProviderSetupCoordinator.errorMessage != nil },
+                    set: { if !$0 { workspaceProviderSetupCoordinator.clearError() } }
                 )
             ) {
-                Button("OK", role: .cancel) { lumeSetupCoordinator.clearError() }
+                Button("OK", role: .cancel) { workspaceProviderSetupCoordinator.clearError() }
             } message: {
-                Text(lumeSetupCoordinator.errorMessage ?? "Unknown error.")
+                Text(workspaceProviderSetupCoordinator.errorMessage ?? "Unknown error.")
             }
             .sheet(
                 item: Binding(
-                    get: { lumeSetupCoordinator.confirmationRequest },
+                    get: { workspaceProviderSetupCoordinator.confirmationRequest },
                     set: { request in
                         if request == nil {
-                            lumeSetupCoordinator.cancelPendingAction()
+                            workspaceProviderSetupCoordinator.cancelPendingAction()
                         }
                     }
                 )
             ) { request in
-                LumeSetupConfirmationSheet(
+                WorkspaceProviderSetupConfirmationSheet(
                     request: request,
                     onConfirm: {
-                        lumeSetupCoordinator.confirmAndContinue()
+                        workspaceProviderSetupCoordinator.confirmAndContinue()
                     },
                     onCancel: {
-                        lumeSetupCoordinator.cancelPendingAction()
+                        workspaceProviderSetupCoordinator.cancelPendingAction()
                     }
                 )
             }
             .sheet(
                 item: Binding(
-                    get: { lumeSetupCoordinator.progressPresentation },
+                    get: { workspaceProviderSetupCoordinator.progressPresentation },
                     set: { _ in }
                 )
             ) { presentation in
-                LumeSetupProgressSheet(presentation: presentation)
+                WorkspaceProviderSetupProgressSheet(presentation: presentation)
                     .interactiveDismissDisabled(true)
             }
-            .onChange(of: lumeSetupCoordinator.confirmationRequest) { _, request in
+            .onChange(of: workspaceProviderSetupCoordinator.confirmationRequest) { _, request in
                 guard let request else { return }
                 Task { @MainActor in
                     await hostLumeSmokeAutomation.noteSetupConfirmationPresented(request)
                     if hostLumeSmokeAutomation.isEnabled {
                         DispatchQueue.main.async {
-                            lumeSetupCoordinator.confirmAndContinue()
+                            workspaceProviderSetupCoordinator.confirmAndContinue()
                         }
                     }
                 }
             }
-            .onChange(of: lumeSetupCoordinator.progressPresentation?.step) { _, step in
-                guard let step else { return }
+            .onChange(of: workspaceProviderSetupCoordinator.progressPresentation) { _, presentation in
+                guard let presentation else { return }
                 Task { @MainActor in
-                    await hostLumeSmokeAutomation.noteSetupStepChanged(step)
+                    await hostLumeSmokeAutomation.noteSetupStepChanged(presentation)
                 }
             }
-            .onChange(of: lumeSetupCoordinator.errorMessage) { _, message in
+            .onChange(of: workspaceProviderSetupCoordinator.errorMessage) { _, message in
                 guard let message else { return }
                 Task { @MainActor in
                     await hostLumeSmokeAutomation.noteFailure(
@@ -1082,20 +1082,19 @@ struct ContentView: View {
         }
 
         Task { @MainActor in
-            if provider.descriptor.id == LumeWorkspaceProvider.identifier {
-                do {
-                    let intercepted = try await lumeSetupCoordinator.prepareIfNeeded(
-                        for: .openTerminal(workspaceName: workspace.name)
-                    ) {
-                        await connectToProviderBackedWorkspace(workspace, provider: provider)
-                    }
-                    if intercepted {
-                        return
-                    }
-                } catch {
-                    viewState.workspaceOperationErrorMessage = error.localizedDescription
+            do {
+                let intercepted = try await workspaceProviderSetupCoordinator.prepareIfNeeded(
+                    provider: provider,
+                    action: .openTerminal(workspaceName: workspace.name)
+                ) {
+                    await connectToProviderBackedWorkspace(workspace, provider: provider)
+                }
+                if intercepted {
                     return
                 }
+            } catch {
+                viewState.workspaceOperationErrorMessage = error.localizedDescription
+                return
             }
 
             await connectToProviderBackedWorkspace(workspace, provider: provider)
@@ -1170,29 +1169,30 @@ struct ContentView: View {
         guestOS: WorkspaceGuestOS?
     ) async {
         do {
-            let effectiveGuestOS =
-                providerID == LumeWorkspaceProvider.identifier ? (guestOS ?? .macOS) : guestOS
+            guard let provider = workspaceProviderRegistry.provider(for: providerID) else {
+                landingErrorMessage = "Workspace provider '\(providerID)' is not registered."
+                return
+            }
 
-            if providerID == LumeWorkspaceProvider.identifier {
-                let intercepted = try await lumeSetupCoordinator.prepareIfNeeded(
-                    for: .createWorkspace(name: name, guestOS: effectiveGuestOS ?? .macOS)
-                ) {
-                    do {
-                        try await createWorkspaceFromLanding(
-                            repo: repo,
-                            name: name,
-                            nameSource: nameSource,
-                            providerID: providerID,
-                            guestOS: effectiveGuestOS,
-                            skipSetup: true
-                        )
-                    } catch {
-                        landingErrorMessage = "Failed to create workspace: \(error.localizedDescription)"
-                    }
+            let intercepted = try await workspaceProviderSetupCoordinator.prepareIfNeeded(
+                provider: provider,
+                action: .createWorkspace(name: name, guestOS: guestOS)
+            ) {
+                do {
+                    try await createWorkspaceFromLanding(
+                        repo: repo,
+                        name: name,
+                        nameSource: nameSource,
+                        providerID: providerID,
+                        guestOS: guestOS,
+                        skipSetup: true
+                    )
+                } catch {
+                    landingErrorMessage = "Failed to create workspace: \(error.localizedDescription)"
                 }
-                if intercepted {
-                    return
-                }
+            }
+            if intercepted {
+                return
             }
 
             try await createWorkspaceFromLanding(
@@ -1200,7 +1200,7 @@ struct ContentView: View {
                 name: name,
                 nameSource: nameSource,
                 providerID: providerID,
-                guestOS: effectiveGuestOS,
+                guestOS: guestOS,
                 skipSetup: true
             )
         } catch {
@@ -1483,20 +1483,19 @@ struct ContentView: View {
         }
 
         Task { @MainActor in
-            if provider.descriptor.id == LumeWorkspaceProvider.identifier {
-                do {
-                    let intercepted = try await lumeSetupCoordinator.prepareIfNeeded(
-                        for: .openDesktop(workspaceName: workspace.name)
-                    ) {
-                        await openDesktopAfterSetup(workspace, provider: provider)
-                    }
-                    if intercepted {
-                        return
-                    }
-                } catch {
-                    viewState.workspaceOperationErrorMessage = error.localizedDescription
+            do {
+                let intercepted = try await workspaceProviderSetupCoordinator.prepareIfNeeded(
+                    provider: provider,
+                    action: .openDesktop(workspaceName: workspace.name)
+                ) {
+                    await openDesktopAfterSetup(workspace, provider: provider)
+                }
+                if intercepted {
                     return
                 }
+            } catch {
+                viewState.workspaceOperationErrorMessage = error.localizedDescription
+                return
             }
 
             await openDesktopAfterSetup(workspace, provider: provider)
@@ -2052,7 +2051,7 @@ private struct ContentViewPreviewHost: View {
     @State private var deepLinkState = WorkspaceDeepLinkState()
     @State private var lastSurfaceRawValue = ""
     @StateObject private var hostTerminalState = HostTerminalStateStore()
-    @StateObject private var lumeSetupCoordinator = LumeSetupCoordinator()
+    @StateObject private var workspaceProviderSetupCoordinator = WorkspaceProviderSetupCoordinator()
     @StateObject private var hostLumeSmokeAutomation = HostLumeSmokeAutomationController(
         environment: [:]
     )
@@ -2062,7 +2061,7 @@ private struct ContentViewPreviewHost: View {
             deepLinkState: $deepLinkState,
             lastSurfaceRawValue: $lastSurfaceRawValue,
             hostTerminalState: hostTerminalState,
-            lumeSetupCoordinator: lumeSetupCoordinator,
+            workspaceProviderSetupCoordinator: workspaceProviderSetupCoordinator,
             hostLumeSmokeAutomation: hostLumeSmokeAutomation
         )
     }

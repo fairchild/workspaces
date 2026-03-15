@@ -309,9 +309,10 @@ final class HostLumeSmokeAutomationController: ObservableObject {
         )
     }
 
-    func noteSetupConfirmationPresented(_ request: LumeSetupConfirmationRequest) async {
+    func noteSetupConfirmationPresented(_ request: WorkspaceProviderSetupConfirmationRequest) async {
         guard isEnabled else { return }
-        let signature = "\(request.runtimeState.rawValue)|\(request.action.summary)"
+        guard request.providerID == LumeWorkspaceProvider.identifier else { return }
+        let signature = "\(request.state ?? "unknown")|\(request.action.summary)"
         guard signature != lastSetupConfirmationSignature else { return }
         lastSetupConfirmationSignature = signature
 
@@ -326,7 +327,7 @@ final class HostLumeSmokeAutomationController: ObservableObject {
                 providerID: LumeWorkspaceProvider.identifier,
                 remoteID: nil,
                 workspaceStatus: nil,
-                runtimeState: request.runtimeState.rawValue,
+                runtimeState: request.state,
                 setupStep: nil,
                 phaseMessage: nil,
                 message: request.title,
@@ -336,9 +337,11 @@ final class HostLumeSmokeAutomationController: ObservableObject {
         )
     }
 
-    func noteSetupStepChanged(_ step: LumeRuntimeSetupStep) async {
-        guard isEnabled, step.rawValue != lastSetupStepRawValue else { return }
-        lastSetupStepRawValue = step.rawValue
+    func noteSetupStepChanged(_ presentation: WorkspaceProviderSetupProgressPresentation) async {
+        guard isEnabled, presentation.providerID == LumeWorkspaceProvider.identifier else { return }
+        let step = presentation.step
+        guard step.id != lastSetupStepRawValue else { return }
+        lastSetupStepRawValue = step.id
 
         await emit(
             .init(
@@ -352,7 +355,7 @@ final class HostLumeSmokeAutomationController: ObservableObject {
                 remoteID: nil,
                 workspaceStatus: nil,
                 runtimeState: nil,
-                setupStep: step.rawValue,
+                setupStep: step.id,
                 phaseMessage: step.label,
                 message: nil,
                 recoveryHints: nil,

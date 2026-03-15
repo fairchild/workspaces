@@ -135,7 +135,8 @@ Workspaces can override Lume's built-in unattended preset when a host-specific s
 Current override policy:
 
 - Workspaces keeps a versioned set of Tahoe profiles under [config/lume/unattended/](../../config/lume/unattended/)
-- the current full-flow Tahoe override is [tahoe-workspaces-v23.yml](../../config/lume/unattended/tahoe-workspaces-v23.yml)
+- the current default bridged Tahoe override is [tahoe-workspaces-bridged-v27.yml](../../config/lume/unattended/tahoe-workspaces-bridged-v27.yml)
+- the current NAT Tahoe override is [tahoe-workspaces-v26.yml](../../config/lume/unattended/tahoe-workspaces-v26.yml)
 - fallback is still the upstream preset name, for example `preset:tahoe`
 - the override set is consumed by the standalone validator and recovery path only
 - the current from-scratch recovery helper is [tahoe-workspaces-v18-official-run-bootstrap-ssh.yml](../../config/lume/unattended/tahoe-workspaces-v18-official-run-bootstrap-ssh.yml)

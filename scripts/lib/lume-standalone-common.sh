@@ -11,9 +11,10 @@ LUME_STANDALONE_DEFAULT_PREPARING_SLEEP_SECONDS="${LUME_STANDALONE_DEFAULT_PREPA
 LUME_STANDALONE_DEFAULT_RUNNING_SLEEP_SECONDS="${LUME_STANDALONE_DEFAULT_RUNNING_SLEEP_SECONDS:-15}"
 LUME_STANDALONE_DEFAULT_PREPARE_RETRIES="${LUME_STANDALONE_DEFAULT_PREPARE_RETRIES:-3}"
 LUME_STANDALONE_MIN_FREE_GB="${LUME_STANDALONE_MIN_FREE_GB:-70}"
-LUME_STANDALONE_RUN_NETWORK="${LUME_STANDALONE_RUN_NETWORK:-bridged:en0}"
+export LUME_STANDALONE_RUN_NETWORK="${LUME_STANDALONE_RUN_NETWORK:-bridged:en0}"
+export LUME_STANDALONE_PREPARE_NETWORK="${LUME_STANDALONE_PREPARE_NETWORK:-$LUME_STANDALONE_RUN_NETWORK}"
 LUME_STANDALONE_SSH_USER="${LUME_STANDALONE_SSH_USER:-lume}"
-LUME_STANDALONE_SSH_PASSWORD="${LUME_STANDALONE_SSH_PASSWORD:-lume}"
+LUME_STANDALONE_SSH_PASSWORD="${LUME_STANDALONE_SSH_PASSWORD:-lumesetup26}"
 
 lume_standalone_log() {
     echo "[$(date +%H:%M:%S)] $*"
@@ -232,29 +233,43 @@ lume_standalone_import_legacy_base() {
 }
 
 lume_standalone_resolve_unattended_config() {
-    local versioned_override_path default_override_path
+    local network_profile versioned_override_path default_override_path
+    network_profile=""
+    case "${LUME_STANDALONE_PREPARE_NETWORK:-}" in
+        bridged:*) network_profile="bridged" ;;
+        nat) network_profile="nat" ;;
+    esac
     versioned_override_path="$(
-        python3 - "$REPO_ROOT/config/lume/unattended" "${LUME_STANDALONE_MACOS_FAMILY}" <<'PY'
+        python3 - "$REPO_ROOT/config/lume/unattended" "${LUME_STANDALONE_MACOS_FAMILY}" "$network_profile" <<'PY'
 from pathlib import Path
 import re
 import sys
 
 directory = Path(sys.argv[1])
 family = sys.argv[2]
-pattern = re.compile(rf"^{re.escape(family)}-workspaces-v(\d+)\.yml$")
+network_profile = sys.argv[3]
 
-matches = []
-for path in directory.iterdir():
-    if not path.is_file():
-        continue
-    match = pattern.match(path.name)
-    if not match:
-        continue
-    matches.append((int(match.group(1)), path))
+patterns = []
+if network_profile:
+    patterns.append(
+        re.compile(rf"^{re.escape(family)}-workspaces-{re.escape(network_profile)}-v(\d+)\.yml$")
+    )
+patterns.append(re.compile(rf"^{re.escape(family)}-workspaces-v(\d+)\.yml$"))
 
-if matches:
-    matches.sort()
-    print(matches[-1][1])
+for pattern in patterns:
+    matches = []
+    for path in directory.iterdir():
+        if not path.is_file():
+            continue
+        match = pattern.match(path.name)
+        if not match:
+            continue
+        matches.append((int(match.group(1)), path))
+
+    if matches:
+        matches.sort()
+        print(matches[-1][1])
+        break
 PY
     )"
     default_override_path="$REPO_ROOT/config/lume/unattended/${LUME_STANDALONE_MACOS_FAMILY}-workspaces.yml"
@@ -581,7 +596,7 @@ spawn /usr/bin/ssh \
   -o ConnectTimeout=20 \
   -o PreferredAuthentications=password \
   -o PubkeyAuthentication=no \
-  ${user}@${host} -- ${cmd}
+  ${user}@${host} sh -lc $cmd
 
 expect {
   -re "(?i)are you sure you want to continue connecting" {
@@ -599,6 +614,43 @@ expect {
   }
 }
 EXPECT
+}
+
+lume_standalone_write_vm_snapshot() {
+    local output_path="$1"
+    local vm_name="$2"
+    local status="$3"
+    local ip_address="$4"
+    local ssh_available="$5"
+    local vnc_url="${6:-}"
+
+    python3 - "$output_path" "$vm_name" "$status" "$ip_address" "$ssh_available" "$vnc_url" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+output_path = Path(sys.argv[1])
+vm_name, status, ip_address, ssh_available, vnc_url = sys.argv[2:]
+
+payload = {}
+if output_path.exists():
+    try:
+        payload = json.loads(output_path.read_text())
+    except Exception:
+        payload = {}
+
+if not isinstance(payload, dict):
+    payload = {}
+
+payload["name"] = vm_name
+payload["status"] = status if status and status != "null" else None
+payload["ipAddress"] = ip_address if ip_address and ip_address != "null" else None
+payload["sshAvailable"] = ssh_available if ssh_available and ssh_available != "null" else None
+if vnc_url and vnc_url != "null":
+    payload["vncUrl"] = vnc_url
+
+output_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+PY
 }
 
 lume_standalone_exec_remote() {
@@ -784,6 +836,35 @@ lume_standalone_discover_bridged_ip() {
     return 1
 }
 
+lume_standalone_best_vm_ip() {
+    local vm_name="$1"
+    local storage_path="$2"
+    local snapshot_path="${3:-}"
+    local cli_json="${4:-}"
+    local daemon_json="${5:-}"
+    local ip=""
+
+    if [[ -n "$snapshot_path" && -f "$snapshot_path" ]]; then
+        ip="$(lume_standalone_json_field "$snapshot_path" "ipAddress")"
+    fi
+    if [[ -z "$ip" || "$ip" == "null" ]] && [[ -n "$daemon_json" && -f "$daemon_json" ]]; then
+        ip="$(lume_standalone_json_field "$daemon_json" "ipAddress")"
+    fi
+    if [[ -z "$ip" || "$ip" == "null" ]] && [[ -n "$cli_json" && -f "$cli_json" ]]; then
+        ip="$(lume_standalone_json_field "$cli_json" "0.ipAddress")"
+    fi
+    if [[ -z "$ip" || "$ip" == "null" ]]; then
+        ip="$(lume_standalone_discover_bridged_ip "$vm_name" "$storage_path" || true)"
+    fi
+
+    if [[ -n "$ip" && "$ip" != "null" ]]; then
+        echo "$ip"
+        return 0
+    fi
+
+    return 1
+}
+
 lume_standalone_wait_for_vm_ssh() {
     local vm_name="$1"
     local storage_path="$2"
@@ -831,6 +912,11 @@ lume_standalone_wait_for_vm_ssh() {
         [[ "$cli_ok" == true ]] && cli_ssh_available="$(lume_standalone_json_field "$cli_json" "0.sshAvailable")"
         [[ "$daemon_ok" == true ]] && daemon_ip="$(lume_standalone_json_field "$daemon_json" "ipAddress")"
         [[ "$daemon_ok" == true ]] && daemon_ssh_available="$(lume_standalone_json_field "$daemon_json" "sshAvailable")"
+        local cli_vnc_url daemon_vnc_url
+        cli_vnc_url=""
+        daemon_vnc_url=""
+        [[ "$cli_ok" == true ]] && cli_vnc_url="$(lume_standalone_json_field "$cli_json" "0.vncUrl")"
+        [[ "$daemon_ok" == true ]] && daemon_vnc_url="$(lume_standalone_json_field "$daemon_json" "vncUrl")"
 
         status="${daemon_status:-$cli_status}"
         ip="${daemon_ip:-}"
@@ -847,6 +933,13 @@ lume_standalone_wait_for_vm_ssh() {
             if [[ -z "$ip" || "$ip" == "null" ]]; then
                 ip="$(lume_standalone_discover_bridged_ip "$vm_name" "$storage_path" || true)"
             fi
+            lume_standalone_write_vm_snapshot \
+                "$daemon_snapshot_path" \
+                "$vm_name" \
+                "$status" \
+                "$ip" \
+                "$ssh_available" \
+                "${daemon_vnc_url:-$cli_vnc_url}"
 
             if lume_standalone_exec_remote \
                 "$vm_name" \

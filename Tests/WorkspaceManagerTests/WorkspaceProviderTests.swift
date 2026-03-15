@@ -54,6 +54,19 @@ struct WorkspaceProviderTests {
         #expect(lume.descriptor.supportedGuestOS == [.macOS, .linux])
     }
 
+    @Test("Only the Lume provider currently exposes setup capability")
+    func providerSetupCapabilityConformance() throws {
+        let registry = WorkspaceProviderRegistry.live
+
+        let local = try #require(registry.provider(for: LocalWorkspaceProvider.identifier))
+        let daytona = try #require(registry.provider(for: DaytonaWorkspaceProvider.identifier))
+        let lume = try #require(registry.provider(for: LumeWorkspaceProvider.identifier))
+
+        #expect((local as? any WorkspaceProviderSetupCapable) == nil)
+        #expect((daytona as? any WorkspaceProviderSetupCapable) == nil)
+        #expect((lume as? any WorkspaceProviderSetupCapable) != nil)
+    }
+
     @Test("Lume status mapping covers running, stopped, provisioning, and missing")
     func lumeStatusMapping() {
         #expect(LumeWorkspaceProvider.mapStatus("running") == .active)
@@ -176,5 +189,26 @@ struct WorkspaceProviderTests {
                 for: "[2026-03-09T03:43:43Z] INFO: Starting unattended Setup Assistant automation"
             ) == "Configuring macOS..."
         )
+    }
+
+    @Test("Lume bridged reachability extracts interface and matching ARP IP")
+    func lumeBridgedReachabilityParsing() {
+        #expect(LumeBridgedVMReachability.bridgedInterface(from: "bridged:en0") == "en0")
+        #expect(LumeBridgedVMReachability.bridgedInterface(from: "nat") == nil)
+
+        let arpOutput =
+            """
+            ? (192.168.8.100) at e:cf:3c:8a:f7:bd on en0 ifscope [ethernet]
+            ? (192.168.8.100) at ea:4:3c:6e:f5:71 on en5 ifscope [ethernet]
+            ? (192.168.8.122) at 0:e:58:7f:28:2a on en0 ifscope [ethernet]
+            """
+
+        let resolvedIP = LumeBridgedVMReachability.ipAddress(
+            forMACAddress: "0e:cf:3c:8a:f7:bd",
+            interfaceName: "en0",
+            arpOutput: arpOutput
+        )
+
+        #expect(resolvedIP == "192.168.8.100")
     }
 }

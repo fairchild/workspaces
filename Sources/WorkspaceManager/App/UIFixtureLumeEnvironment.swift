@@ -535,6 +535,105 @@ actor UIFixtureLumeWorkspaceProvider: WorkspaceProviderProtocol {
     }
 }
 
+extension UIFixtureLumeWorkspaceProvider: WorkspaceProviderSetupCapable {
+    func setupRequirement(
+        for action: WorkspaceProviderSetupAction
+    ) async throws -> WorkspaceProviderSetupRequirement? {
+        let snapshot = await runtimeService.snapshot()
+
+        switch snapshot.state {
+        case .ready:
+            return nil
+        case .setupRequired, .repairRequired:
+            let title =
+                if snapshot.state == .repairRequired {
+                    "Repair macOS VM Support"
+                } else {
+                    "Set Up macOS VM Support"
+                }
+            let primaryButtonTitle =
+                if snapshot.state == .repairRequired {
+                    "Repair Lume and Continue"
+                } else {
+                    "Install Lume and Continue"
+                }
+
+            return .confirmation(
+                WorkspaceProviderSetupConfirmation(
+                    providerID: descriptor.id,
+                    providerDisplayName: descriptor.displayName,
+                    state: snapshot.state.rawValue,
+                    title: title,
+                    primaryButtonTitle: primaryButtonTitle,
+                    introductoryText: [
+                        "Lume is an MIT open-source VM runtime that uses Apple's native Virtualization Framework to run macOS and Linux VMs at near-native speed on Apple Silicon.",
+                        "Workspaces needs it so it can create VM-backed workspaces, open an in-app terminal with `lume ssh`, and launch full desktop access via VNC.",
+                    ],
+                    learnMoreLabel: "Learn more about Lume",
+                    learnMoreURL: URL(
+                        string: "https://cua.ai/docs/lume/guide/getting-started/introduction"
+                    ),
+                    explanatoryStepsTitle: "What Workspaces will do",
+                    explanatorySteps: [
+                        "Install the official Lume CLI in ~/.local/bin",
+                        "Install and load the user LaunchAgent on localhost:7777",
+                        "Verify the daemon is healthy",
+                        "Continue: \(action.summary)",
+                    ],
+                    supplementaryText: snapshot.defaultMacOSImage.map {
+                        "Default macOS VM: \($0.profileDisplayName)"
+                    }
+                        ?? snapshot.hostProfile.map {
+                            "Default macOS VM: \($0.displayName)"
+                        },
+                    footerText:
+                        "This is a one-time setup on this Mac. No admin access is required. After setup finishes, Workspaces will continue automatically.",
+                    progressTitle: "Preparing macOS VM Support",
+                    progressBody:
+                        "Workspaces is setting up the local Lume runtime and will continue automatically when it is ready.",
+                    initialProgress: WorkspaceProviderSetupProgress(
+                        id: LumeRuntimeSetupStep.checkingHost.rawValue,
+                        label: LumeRuntimeSetupStep.checkingHost.label
+                    )
+                )
+            )
+        case .unsupportedHost:
+            throw LumeRuntimeError.unsupportedHost(
+                snapshot.reason ?? "Lume is unsupported on this Mac."
+            )
+        case .installing, .verifying:
+            return .alreadyInProgress
+        }
+    }
+
+    func performSetup(progress: WorkspaceProviderSetupProgressHandler?) async throws {
+        let snapshot = await runtimeService.snapshot()
+        let progressHandler: LumeRuntimeProgressHandler = { step in
+            await progress?(
+                WorkspaceProviderSetupProgress(
+                    id: step.rawValue,
+                    label: step.label
+                )
+            )
+        }
+
+        switch snapshot.state {
+        case .setupRequired:
+            _ = try await runtimeService.installIfNeeded(progress: progressHandler)
+        case .repairRequired:
+            _ = try await runtimeService.repairInstallation(progress: progressHandler)
+        case .ready:
+            _ = try await runtimeService.verifyInstallation(progress: progressHandler)
+        case .unsupportedHost:
+            throw LumeRuntimeError.unsupportedHost(
+                snapshot.reason ?? "Lume is unsupported on this Mac."
+            )
+        case .installing, .verifying:
+            break
+        }
+    }
+}
+
 struct UIFixtureDaytonaWorkspaceProvider: WorkspaceProviderProtocol {
     let descriptor = WorkspaceProviderDescriptor(
         id: DaytonaWorkspaceProvider.identifier,

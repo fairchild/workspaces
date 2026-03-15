@@ -71,6 +71,8 @@ summary_path.write_text(
             f"- Storage path: {payload.get('storagePath') or 'unknown'}",
             f"- Base state: {payload.get('baseState') or 'unknown'}",
             f"- Base source: {payload.get('baseSource') or 'unknown'}",
+            f"- Base prep network: {__import__('os').environ.get('LUME_STANDALONE_PREPARE_NETWORK', 'unknown')}",
+            f"- Runtime network: {__import__('os').environ.get('LUME_STANDALONE_RUN_NETWORK', 'unknown')}",
             f"- Unattended config: {payload.get('unattendedConfig') or 'unknown'}",
             f"- Unattended debug dir: {payload.get('unattendedDebugDir') or 'none'}",
             f"- Base verified at: {payload.get('baseVerifiedAt') or 'unknown'}",

@@ -81,6 +81,8 @@ Standalone Lume preflight passed.
 - Base source: $LUME_STANDALONE_BASE_SOURCE
 - Base storage: $LUME_STANDALONE_BASE_STORAGE_PATH
 - Smoke storage: $LUME_STANDALONE_SMOKE_STORAGE_PATH
+- Base prep network: $LUME_STANDALONE_PREPARE_NETWORK
+- Runtime network: $LUME_STANDALONE_RUN_NETWORK
 - Unattended profile: $LUME_STANDALONE_UNATTENDED_CONFIG_LABEL
 - Lume binary: $LUME_BIN
 - Free disk under validated base storage: ${free_gb}GB

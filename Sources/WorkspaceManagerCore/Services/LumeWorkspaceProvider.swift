@@ -59,6 +59,7 @@ public actor LumeWorkspaceProvider: WorkspaceProviderProtocol {
     private let httpClient: LumeHTTPClient
     private let runtimeService: any LumeRuntimeServiceProtocol
     private let validatedBaseService: LumeValidatedBaseService
+    private let bridgedReachability = LumeBridgedVMReachability()
     private let fileManager = FileManager.default
 
     private let provisioningTimeout: TimeInterval = 60 * 30
@@ -443,17 +444,19 @@ public actor LumeWorkspaceProvider: WorkspaceProviderProtocol {
         to vmName: String,
         destinationStoragePath: String
     ) async throws {
-        let request = LumeCloneVMRequest(
-            name: sourceVMName,
-            newName: vmName,
-            sourceLocation: sourceStoragePath,
-            destLocation: destinationStoragePath
+        let result = try await lumeRunner().run(
+            arguments: [
+                "clone",
+                sourceVMName,
+                vmName,
+                "--source-storage", sourceStoragePath,
+                "--dest-storage", destinationStoragePath,
+            ]
         )
-        let _: LumeCloneVMResponse = try await sendRequest(
-            method: "POST",
-            path: "/vms/clone",
-            body: request
-        )
+
+        guard result.success else {
+            throw WorkspaceProviderError.unavailable("Failed to clone prepared base macOS VM '\(sourceVMName)'.")
+        }
     }
 
     private func createMacOSVM(
@@ -728,11 +731,28 @@ public actor LumeWorkspaceProvider: WorkspaceProviderProtocol {
     ) async throws -> LumeVMDetails {
         let deadline = Date().addingTimeInterval(timeout)
         var lastDetails: LumeVMDetails?
+        var lastReachabilityRefreshAt: Date?
 
         while Date() < deadline {
             let details: LumeVMDetails
             do {
-                details = try await getVM(named: vmName, storagePath: storagePath)
+                var resolvedDetails = try await getVM(named: vmName, storagePath: storagePath)
+                if let storagePath,
+                    shouldRefreshBridgedReachability(for: resolvedDetails),
+                    shouldAttemptReachabilityRefresh(lastAttemptAt: lastReachabilityRefreshAt)
+                {
+                    if let snapshot = await bridgedReachability.resolve(
+                        vmName: vmName,
+                        storagePath: storagePath,
+                        networkMode: resolvedDetails.networkMode,
+                        existingIPAddress: resolvedDetails.ipAddress,
+                        existingSSHAvailable: resolvedDetails.sshAvailable
+                    ) {
+                        resolvedDetails = resolvedDetails.applying(snapshot: snapshot)
+                    }
+                    lastReachabilityRefreshAt = Date()
+                }
+                details = resolvedDetails
             } catch {
                 if let asyncCreationFailureMessage = asyncCreationFailureMessage(for: vmName) {
                     throw WorkspaceProviderError.unavailable(asyncCreationFailureMessage)
@@ -761,6 +781,17 @@ public actor LumeWorkspaceProvider: WorkspaceProviderProtocol {
         throw WorkspaceProviderError.unavailable(
             "Timed out waiting for Lume VM '\(vmName)' to become ready (last status: \(status))."
         )
+    }
+
+    private func shouldRefreshBridgedReachability(for details: LumeVMDetails) -> Bool {
+        details.normalizedStatus.isRunning
+            && LumeBridgedVMReachability.bridgedInterface(from: details.networkMode) != nil
+            && (details.ipAddress == nil || details.sshAvailable != true)
+    }
+
+    private func shouldAttemptReachabilityRefresh(lastAttemptAt: Date?) -> Bool {
+        guard let lastAttemptAt else { return true }
+        return Date().timeIntervalSince(lastAttemptAt) >= 5
     }
 
     private func statusMessage(for details: LumeVMDetails) -> String? {
@@ -1054,13 +1085,6 @@ private struct LumePullImageRequest: Encodable {
     let storage: String?
 }
 
-private struct LumeCloneVMRequest: Encodable {
-    let name: String
-    let newName: String
-    let sourceLocation: String?
-    let destLocation: String?
-}
-
 private struct LumeRunVMRequest: Encodable {
     let noDisplay: Bool
     let storage: String?
@@ -1080,6 +1104,7 @@ private struct LumeVMDetails: Decodable, Sendable {
     let name: String
     let status: String
     let os: String?
+    let networkMode: String?
     let provisioningOperation: String?
     let ipAddress: String?
     let sshAvailable: Bool?
@@ -1093,10 +1118,24 @@ private struct LumeVMDetails: Decodable, Sendable {
         case name
         case status
         case os
+        case networkMode
         case provisioningOperation
         case ipAddress
         case sshAvailable
         case vncURL = "vncUrl"
+    }
+
+    func applying(snapshot: LumeBridgedReachabilitySnapshot) -> LumeVMDetails {
+        LumeVMDetails(
+            name: name,
+            status: status,
+            os: os,
+            networkMode: networkMode,
+            provisioningOperation: provisioningOperation,
+            ipAddress: snapshot.ipAddress ?? ipAddress,
+            sshAvailable: snapshot.sshAvailable ?? sshAvailable,
+            vncURL: vncURL
+        )
     }
 }
 
@@ -1110,12 +1149,6 @@ private struct LumePullImageResponse: Decodable {
     let message: String
     let image: String
     let name: String
-}
-
-private struct LumeCloneVMResponse: Decodable {
-    let message: String
-    let source: String
-    let destination: String
 }
 
 private struct LumeMessageResponse: Decodable {
@@ -1214,6 +1247,105 @@ struct LumeProgressMessageBuilder {
         }
 
         return String(text[valueRange])
+    }
+}
+
+extension LumeWorkspaceProvider: WorkspaceProviderSetupCapable {
+    public func setupRequirement(
+        for action: WorkspaceProviderSetupAction
+    ) async throws -> WorkspaceProviderSetupRequirement? {
+        let snapshot = await runtimeService.snapshot()
+
+        switch snapshot.state {
+        case .ready:
+            return nil
+        case .setupRequired, .repairRequired:
+            let title =
+                if snapshot.state == .repairRequired {
+                    "Repair macOS VM Support"
+                } else {
+                    "Set Up macOS VM Support"
+                }
+            let primaryButtonTitle =
+                if snapshot.state == .repairRequired {
+                    "Repair Lume and Continue"
+                } else {
+                    "Install Lume and Continue"
+                }
+
+            return .confirmation(
+                WorkspaceProviderSetupConfirmation(
+                    providerID: descriptor.id,
+                    providerDisplayName: descriptor.displayName,
+                    state: snapshot.state.rawValue,
+                    title: title,
+                    primaryButtonTitle: primaryButtonTitle,
+                    introductoryText: [
+                        "Lume is an MIT open-source VM runtime that uses Apple's native Virtualization Framework to run macOS and Linux VMs at near-native speed on Apple Silicon.",
+                        "Workspaces needs it so it can create VM-backed workspaces, open an in-app terminal with `lume ssh`, and launch full desktop access via VNC.",
+                    ],
+                    learnMoreLabel: "Learn more about Lume",
+                    learnMoreURL: URL(
+                        string: "https://cua.ai/docs/lume/guide/getting-started/introduction"
+                    ),
+                    explanatoryStepsTitle: "What Workspaces will do",
+                    explanatorySteps: [
+                        "Install the official Lume CLI in ~/.local/bin",
+                        "Install and load the user LaunchAgent on localhost:7777",
+                        "Verify the daemon is healthy",
+                        "Continue: \(action.summary)",
+                    ],
+                    supplementaryText: snapshot.defaultMacOSImage.map {
+                        "Default macOS VM: \($0.profileDisplayName)"
+                    }
+                        ?? snapshot.hostProfile.map {
+                            "Default macOS VM: \($0.displayName)"
+                        },
+                    footerText:
+                        "This is a one-time setup on this Mac. No admin access is required. After setup finishes, Workspaces will continue automatically.",
+                    progressTitle: "Preparing macOS VM Support",
+                    progressBody:
+                        "Workspaces is setting up the local Lume runtime and will continue automatically when it is ready.",
+                    initialProgress: WorkspaceProviderSetupProgress(
+                        id: LumeRuntimeSetupStep.checkingHost.rawValue,
+                        label: LumeRuntimeSetupStep.checkingHost.label
+                    )
+                )
+            )
+        case .unsupportedHost:
+            throw LumeRuntimeError.unsupportedHost(
+                snapshot.reason ?? "Lume is unsupported on this Mac."
+            )
+        case .installing, .verifying:
+            return .alreadyInProgress
+        }
+    }
+
+    public func performSetup(progress: WorkspaceProviderSetupProgressHandler?) async throws {
+        let setupSnapshot = await runtimeService.snapshot()
+        let progressHandler: LumeRuntimeProgressHandler = { step in
+            await progress?(
+                WorkspaceProviderSetupProgress(
+                    id: step.rawValue,
+                    label: step.label
+                )
+            )
+        }
+
+        switch setupSnapshot.state {
+        case .setupRequired:
+            _ = try await runtimeService.installIfNeeded(progress: progressHandler)
+        case .repairRequired:
+            _ = try await runtimeService.repairInstallation(progress: progressHandler)
+        case .ready:
+            _ = try await runtimeService.verifyInstallation(progress: progressHandler)
+        case .unsupportedHost:
+            throw LumeRuntimeError.unsupportedHost(
+                setupSnapshot.reason ?? "Lume is unsupported on this Mac."
+            )
+        case .installing, .verifying:
+            break
+        }
     }
 }
 

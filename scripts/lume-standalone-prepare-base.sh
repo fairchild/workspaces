@@ -86,7 +86,7 @@ prepare_from_stock() {
     lume_standalone_set_status
     lume_standalone_log \
         "Preparing validated base from stock macOS install using unattended profile '$LUME_STANDALONE_UNATTENDED_CONFIG_LABEL'."
-    TERM="${TERM:-xterm-256color}" "$LUME_BIN" create "$LUME_STANDALONE_BASE_VM_NAME" \
+    if TERM="${TERM:-xterm-256color}" "$LUME_BIN" create "$LUME_STANDALONE_BASE_VM_NAME" \
         --os macos \
         --cpu 4 \
         --memory 8GB \
@@ -95,11 +95,42 @@ prepare_from_stock() {
         --ipsw latest \
         --unattended "$LUME_STANDALONE_UNATTENDED_CONFIG_PATH" \
         --storage "$LUME_STANDALONE_BASE_STORAGE_PATH" \
-        --network nat \
+        --network "$LUME_STANDALONE_PREPARE_NETWORK" \
         --no-display \
         --debug \
         --debug-dir "$UNATTENDED_DEBUG_DIR" \
         >"$PREPARE_LOG" 2>&1
+    then
+        return 0
+    fi
+
+    if stock_prepare_error_completed_successfully "$PREPARE_LOG"; then
+        lume_standalone_log \
+            "Stock base preparation reported a post-completion error; reusing the prepared VM and continuing to verification."
+        return 0
+    fi
+
+    return 1
+}
+
+stock_prepare_error_completed_successfully() {
+    local log_path="$1"
+    local vm_get_path="$LUME_STANDALONE_RUN_DIR/base-get-after-stock-prepare-error.json"
+    local vm_status=""
+
+    grep -q "Unattended setup completed successfully" "$log_path" || return 1
+    grep -q "Health check passed" "$log_path" || return 1
+    grep -q "Post-SSH commands completed" "$log_path" || return 1
+
+    if ! "$LUME_BIN" get "$LUME_STANDALONE_BASE_VM_NAME" \
+        --storage "$LUME_STANDALONE_BASE_STORAGE_PATH" \
+        -f json >"$vm_get_path" 2>/dev/null
+    then
+        return 1
+    fi
+
+    vm_status="$(lume_standalone_json_field "$vm_get_path" "0.status")"
+    [[ "$vm_status" == "stopped" || "$vm_status" == "running" ]]
 }
 
 stock_prepare_error_is_retryable() {

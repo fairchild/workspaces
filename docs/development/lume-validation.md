@@ -101,10 +101,13 @@ Contract:
   - with `state = "ready"` for the current `hostProfileKey`
 - stock Tahoe base preparation now relies on the versioned Workspaces profiles under:
   - `config/lume/unattended/`
-- the current full-flow Tahoe override is:
-  - `config/lume/unattended/tahoe-workspaces-v23.yml`
+- the current default bridged Tahoe override is:
+  - `config/lume/unattended/tahoe-workspaces-bridged-v27.yml`
+- the current NAT Tahoe override is:
+  - `config/lume/unattended/tahoe-workspaces-v26.yml`
 - the current recreate-from-scratch recovery helper is:
   - `config/lume/unattended/tahoe-workspaces-v18-official-run-bootstrap-ssh.yml`
+- stock base preparation uses `LUME_STANDALONE_PREPARE_NETWORK` and defaults it to the same value as `LUME_STANDALONE_RUN_NETWORK` (`bridged:en0` unless overridden)
 
 Upstream Lume local-build note:
 
