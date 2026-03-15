@@ -442,21 +442,19 @@ def find_prs_awaiting_rereview(
 
 
 def detect_bot_login(env: dict[str, str]) -> str:
-    """Detect the bot login for the current GH_TOKEN.
-
-    For GitHub App installation tokens, /app returns the app metadata.
-    The bot login is the app slug + [bot] suffix.
-    """
-    raw = run_optional(
-        ["gh", "api", "/app", "--jq", ".slug"],
+    """Detect the bot login from GH_APP_SLUG env var or GH_TOKEN /user endpoint."""
+    app_slug = env.get("GH_APP_SLUG", "").strip()
+    if app_slug:
+        return f"{app_slug}[bot]"
+    # Fallback: try /user (works for PATs)
+    login = run_optional(
+        ["gh", "api", "/user", "--jq", ".login"],
         timeout=GITHUB_API_TIMEOUT,
         cwd=REPO_ROOT,
         env=env,
         default="",
     ).strip()
-    if raw:
-        return f"{raw}[bot]"
-    return ""
+    return login
 
 
 def gather_context(env: dict[str, str], persona: str = "", bot_login: str = "") -> str:
@@ -680,6 +678,7 @@ def route_action(validated_json: str, dry_run: bool, env: dict[str, str]) -> int
             verdict = str(data.get("verdict", "")).lower()
             review_flag = {
                 "approve": "--approve",
+                "approve_with_followups": "--approve",
                 "request_changes": "--request-changes",
             }.get(verdict, "--comment")
             run_checked(

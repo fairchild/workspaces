@@ -49,3 +49,4 @@ jobs:
           DRY_RUN: ${{ inputs.dry_run || false }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_APP_SLUG: workspace-agents
