@@ -162,26 +162,60 @@ struct WorkspaceEnvironmentOptionsController {
         isRefreshingProviderAvailability: Bool,
         lumeRuntimeSnapshot: LumeRuntimeSnapshot?
     ) -> [WorkspaceEnvironmentSheetOption] {
-        [
+        registry.providers.flatMap { provider in
+            let descriptor = provider.descriptor
+            let guestOSOptions =
+                descriptor.supportedGuestOS.isEmpty
+                ? [WorkspaceGuestOS?.none]
+                : descriptor.supportedGuestOS.map(Optional.some)
+
+            return guestOSOptions.compactMap { guestOS in
+                environmentOption(
+                    for: descriptor,
+                    guestOS: guestOS,
+                    repo: repo,
+                    providerAvailabilityByID: providerAvailabilityByID,
+                    isRefreshingProviderAvailability: isRefreshingProviderAvailability,
+                    lumeRuntimeSnapshot: lumeRuntimeSnapshot
+                )
+            }
+        }
+    }
+
+    private func environmentOption(
+        for descriptor: WorkspaceProviderDescriptor,
+        guestOS: WorkspaceGuestOS?,
+        repo: Repo,
+        providerAvailabilityByID: [String: WorkspaceProviderAvailability],
+        isRefreshingProviderAvailability: Bool,
+        lumeRuntimeSnapshot: LumeRuntimeSnapshot?
+    ) -> WorkspaceEnvironmentSheetOption? {
+        switch (descriptor.id, guestOS) {
+        case (LocalWorkspaceProvider.identifier, nil):
             localEnvironmentOption(
                 for: repo,
-                registry: registry,
+                descriptor: descriptor,
                 providerAvailabilityByID: providerAvailabilityByID,
                 isRefreshingProviderAvailability: isRefreshingProviderAvailability
-            ),
+            )
+        case (DaytonaWorkspaceProvider.identifier, .linux):
             cloudLinuxEnvironmentOption(
                 for: repo,
-                registry: registry,
+                descriptor: descriptor,
                 providerAvailabilityByID: providerAvailabilityByID,
                 isRefreshingProviderAvailability: isRefreshingProviderAvailability
-            ),
+            )
+        case (LumeWorkspaceProvider.identifier, .macOS):
             macOSEnvironmentOption(
                 lumeRuntimeSnapshot: lumeRuntimeSnapshot
-            ),
+            )
+        case (LumeWorkspaceProvider.identifier, .linux):
             linuxVMEnvironmentOption(
                 lumeRuntimeSnapshot: lumeRuntimeSnapshot
-            ),
-        ]
+            )
+        default:
+            nil
+        }
     }
 
     private func landingAvailability(
@@ -214,30 +248,21 @@ struct WorkspaceEnvironmentOptionsController {
 
     private func localEnvironmentOption(
         for repo: Repo,
-        registry: WorkspaceProviderRegistry,
+        descriptor: WorkspaceProviderDescriptor,
         providerAvailabilityByID: [String: WorkspaceProviderAvailability],
         isRefreshingProviderAvailability: Bool
     ) -> WorkspaceEnvironmentSheetOption {
-        let descriptor = registry.provider(for: LocalWorkspaceProvider.identifier)?.descriptor
-        let resolvedDescriptor =
-            descriptor
-            ?? WorkspaceProviderDescriptor(
-                id: LocalWorkspaceProvider.identifier,
-                displayName: "Local",
-                description: "Create a local workspace copy on this Mac."
-            )
         let availability = landingAvailability(
-            for: resolvedDescriptor,
+            for: descriptor,
             repo: repo,
             providerAvailabilityByID: providerAvailabilityByID,
             isRefreshingProviderAvailability: isRefreshingProviderAvailability
         )
 
         return WorkspaceEnvironmentSheetOption(
-            kind: .local,
             title: "Local",
             subtitle: "Create a local workspace copy on this Mac",
-            description: descriptor?.description ?? "Create a local workspace copy on this Mac.",
+            description: descriptor.description,
             iconName: "plus.rectangle.on.folder.fill",
             providerID: LocalWorkspaceProvider.identifier,
             guestOS: nil,
@@ -249,31 +274,21 @@ struct WorkspaceEnvironmentOptionsController {
 
     private func cloudLinuxEnvironmentOption(
         for repo: Repo,
-        registry: WorkspaceProviderRegistry,
+        descriptor: WorkspaceProviderDescriptor,
         providerAvailabilityByID: [String: WorkspaceProviderAvailability],
         isRefreshingProviderAvailability: Bool
     ) -> WorkspaceEnvironmentSheetOption {
-        let descriptor = registry.provider(for: DaytonaWorkspaceProvider.identifier)?.descriptor
-        let resolvedDescriptor =
-            descriptor
-            ?? WorkspaceProviderDescriptor(
-                id: DaytonaWorkspaceProvider.identifier,
-                displayName: "Cloud Linux",
-                description: "Create a cloud Linux workspace."
-            )
         let availability = landingAvailability(
-            for: resolvedDescriptor,
+            for: descriptor,
             repo: repo,
             providerAvailabilityByID: providerAvailabilityByID,
             isRefreshingProviderAvailability: isRefreshingProviderAvailability
         )
 
         return WorkspaceEnvironmentSheetOption(
-            kind: .cloudLinux,
             title: "Cloud Linux",
             subtitle: "Runs in Daytona cloud infrastructure",
-            description: descriptor?.description
-                ?? "Create a cloud Linux workspace managed by Daytona.",
+            description: descriptor.description,
             iconName: "cloud.fill",
             providerID: DaytonaWorkspaceProvider.identifier,
             guestOS: .linux,
@@ -304,7 +319,6 @@ struct WorkspaceEnvironmentOptionsController {
         }
 
         return WorkspaceEnvironmentSheetOption(
-            kind: .macOSVM,
             title: "macOS VM",
             subtitle: macOSBaseSummary(snapshot: lumeRuntimeSnapshot),
             description: macOSEnvironmentDescription(snapshot: lumeRuntimeSnapshot),
@@ -323,7 +337,6 @@ struct WorkspaceEnvironmentOptionsController {
         let availability = lumeEnvironmentAvailability(snapshot: lumeRuntimeSnapshot)
 
         return WorkspaceEnvironmentSheetOption(
-            kind: .linuxVM,
             title: "Linux VM",
             subtitle: "Runs in a local Linux VM on this Mac",
             description: linuxVMEnvironmentDescription(snapshot: lumeRuntimeSnapshot),

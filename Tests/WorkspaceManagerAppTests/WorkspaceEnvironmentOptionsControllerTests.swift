@@ -7,6 +7,13 @@ import WorkspaceManagerCore
 @Suite("WorkspaceEnvironmentOptionsController")
 struct WorkspaceEnvironmentOptionsControllerTests {
     private let controller = WorkspaceEnvironmentOptionsController()
+    private let currentRegistry = WorkspaceProviderRegistry(
+        providers: [
+            LocalWorkspaceProvider(),
+            DaytonaWorkspaceProvider(),
+            LumeWorkspaceProvider(),
+        ]
+    )
 
     private actor MockLumeRuntimeService: LumeRuntimeServiceProtocol {
         let snapshotDelayNanoseconds: UInt64
@@ -176,6 +183,60 @@ struct WorkspaceEnvironmentOptionsControllerTests {
         #expect(linuxOption.availabilityReason == "Lume requires Apple Silicon.")
     }
 
+    @Test("Environment options follow registry and guest OS order")
+    func environmentOptionsFollowRegistryOrder() {
+        let options = environmentOptions(snapshot: nil)
+
+        #expect(
+            options.map(\.id)
+                == [
+                    WorkspaceEnvironmentSheetOption.selectionID(
+                        providerID: LocalWorkspaceProvider.identifier,
+                        guestOS: nil
+                    ),
+                    WorkspaceEnvironmentSheetOption.selectionID(
+                        providerID: DaytonaWorkspaceProvider.identifier,
+                        guestOS: .linux
+                    ),
+                    WorkspaceEnvironmentSheetOption.selectionID(
+                        providerID: LumeWorkspaceProvider.identifier,
+                        guestOS: .macOS
+                    ),
+                    WorkspaceEnvironmentSheetOption.selectionID(
+                        providerID: LumeWorkspaceProvider.identifier,
+                        guestOS: .linux
+                    ),
+                ]
+        )
+    }
+
+    @Test("Removing Lume from the registry removes Lume environment options")
+    func removingLumeFromRegistryRemovesLumeOptions() {
+        let registry = WorkspaceProviderRegistry(
+            providers: [
+                LocalWorkspaceProvider(),
+                DaytonaWorkspaceProvider(),
+            ]
+        )
+
+        let options = environmentOptions(snapshot: nil, registry: registry)
+
+        #expect(
+            options.map(\.id)
+                == [
+                    WorkspaceEnvironmentSheetOption.selectionID(
+                        providerID: LocalWorkspaceProvider.identifier,
+                        guestOS: nil
+                    ),
+                    WorkspaceEnvironmentSheetOption.selectionID(
+                        providerID: DaytonaWorkspaceProvider.identifier,
+                        guestOS: .linux
+                    ),
+                ]
+        )
+        #expect(options.allSatisfy { $0.providerID != LumeWorkspaceProvider.identifier })
+    }
+
     @Test("Lume snapshot refresh returns the latest snapshot before timeout")
     func lumeSnapshotRefreshReturnsLatestSnapshot() async throws {
         let expectedSnapshot = try makeSnapshot(state: .ready)
@@ -214,21 +275,45 @@ struct WorkspaceEnvironmentOptionsControllerTests {
     }
 
     private func macOSOption(snapshot: LumeRuntimeSnapshot?) throws -> WorkspaceEnvironmentSheetOption {
-        try #require(environmentOptions(snapshot: snapshot).first { $0.kind == .macOSVM })
+        try option(
+            providerID: LumeWorkspaceProvider.identifier,
+            guestOS: .macOS,
+            snapshot: snapshot
+        )
     }
 
     private func linuxVMOption(snapshot: LumeRuntimeSnapshot?) throws -> WorkspaceEnvironmentSheetOption {
-        try #require(environmentOptions(snapshot: snapshot).first { $0.kind == .linuxVM })
+        try option(
+            providerID: LumeWorkspaceProvider.identifier,
+            guestOS: .linux,
+            snapshot: snapshot
+        )
     }
 
-    private func environmentOptions(snapshot: LumeRuntimeSnapshot?) -> [WorkspaceEnvironmentSheetOption] {
+    private func option(
+        providerID: String,
+        guestOS: WorkspaceGuestOS?,
+        snapshot: LumeRuntimeSnapshot?,
+        registry: WorkspaceProviderRegistry? = nil
+    ) throws -> WorkspaceEnvironmentSheetOption {
+        try #require(
+            environmentOptions(snapshot: snapshot, registry: registry).first {
+                $0.providerID == providerID && $0.guestOS == guestOS
+            }
+        )
+    }
+
+    private func environmentOptions(
+        snapshot: LumeRuntimeSnapshot?,
+        registry: WorkspaceProviderRegistry? = nil
+    ) -> [WorkspaceEnvironmentSheetOption] {
         controller.environmentOptions(
             for: Repo(
                 name: "alpha",
                 localPath: URL(fileURLWithPath: "/tmp/alpha"),
                 remoteURL: "https://github.com/example/alpha.git"
             ),
-            registry: WorkspaceProviderRegistry(providers: []),
+            registry: registry ?? currentRegistry,
             providerAvailabilityByID: [:],
             isRefreshingProviderAvailability: false,
             lumeRuntimeSnapshot: snapshot
