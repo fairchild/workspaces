@@ -557,13 +557,18 @@ def route_action(validated_json: str, dry_run: bool, env: dict[str, str]) -> int
 
     try:
         if action == "review_pr":
+            verdict = str(data.get("verdict", "")).lower()
+            review_flag = {
+                "approve": "--approve",
+                "request_changes": "--request-changes",
+            }.get(verdict, "--comment")
             run_checked(
                 [
                     "gh",
                     "pr",
                     "review",
                     str(data["pr_number"]),
-                    "--comment",
+                    review_flag,
                     "--body-file",
                     body_file,
                 ],
