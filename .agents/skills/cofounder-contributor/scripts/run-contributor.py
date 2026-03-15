@@ -22,8 +22,10 @@ CLAUDE_TASK = (
     "as specified in your prompt."
 )
 CLAUDE_TASK_CLI = (
-    "You are running as an automated contributor. Check for open PRs to "
-    "review, then participate in discussions — comment on an existing one or "
+    "You are running as an automated contributor. FIRST check if any PRs "
+    "need your follow-up review (you reviewed but didn't approve, and new "
+    "commits were pushed since). Then check for other open PRs to review, "
+    "then participate in discussions — comment on an existing one or "
     "propose a new idea. Do NOT comment on issues. CRITICAL: Your final "
     "output MUST be valid YAML frontmatter exactly as specified in your "
     "prompt — start with `---` on the very first line, then metadata fields, "
@@ -55,6 +57,15 @@ def require_env(name: str) -> str:
         return value
     print(f"error: required environment variable {name} is not set", file=sys.stderr)
     sys.exit(1)
+
+
+def normalize_provider_env(env: dict[str, str]) -> dict[str, str]:
+    normalized = dict(env)
+    if not normalized.get("OPENAI_API_KEY"):
+        fallback = normalized.get("GITHUB_CODESPACES_OPENAI_API_KEY", "").strip()
+        if fallback:
+            normalized["OPENAI_API_KEY"] = fallback
+    return normalized
 
 
 def log(message: str) -> None:
@@ -344,7 +355,93 @@ def gather_backlog_state() -> str:
     return "\n".join(lines)
 
 
-def gather_context(env: dict[str, str], persona: str = "") -> str:
+PENDING_REVIEWS_QUERY = """
+query($owner: String!, $name: String!) {
+  repository(owner: $owner, name: $name) {
+    pullRequests(first: 20, states: [OPEN], orderBy: {field: UPDATED_AT, direction: DESC}) {
+      nodes {
+        number
+        title
+        commits(last: 1) {
+          nodes {
+            commit { committedDate }
+          }
+        }
+        reviews(last: 50) {
+          nodes {
+            author { login }
+            state
+            submittedAt
+          }
+        }
+      }
+    }
+  }
+}
+"""
+
+
+def find_prs_awaiting_rereview(
+    env: dict[str, str], owner: str, name: str, bot_login: str,
+) -> str:
+    """Find open PRs where this agent reviewed but didn't approve and new commits exist."""
+    raw = run_optional(
+        [
+            "gh", "api", "graphql",
+            "-f", f"query={PENDING_REVIEWS_QUERY}",
+            "-f", f"owner={owner}",
+            "-f", f"name={name}",
+        ],
+        timeout=GITHUB_API_TIMEOUT,
+        cwd=REPO_ROOT,
+        env=env,
+        default="{}",
+    )
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return ""
+
+    prs = data.get("data", {}).get("repository", {}).get("pullRequests", {}).get("nodes", [])
+    awaiting: list[str] = []
+
+    for pr in prs:
+        reviews = pr.get("reviews", {}).get("nodes", [])
+        agent_reviews = [
+            r for r in reviews
+            if (r.get("author") or {}).get("login", "") == bot_login
+        ]
+        if not agent_reviews:
+            continue
+
+        latest_agent_review = max(agent_reviews, key=lambda r: r.get("submittedAt", ""))
+        if latest_agent_review.get("state") == "APPROVED":
+            continue
+
+        commits = pr.get("commits", {}).get("nodes", [])
+        if not commits:
+            continue
+        latest_commit_date = commits[0].get("commit", {}).get("committedDate", "")
+        review_date = latest_agent_review.get("submittedAt", "")
+
+        if latest_commit_date > review_date:
+            awaiting.append(
+                f"  PR #{pr['number']} — {pr['title']}\n"
+                f"    Your review: {latest_agent_review['state']} at {review_date}\n"
+                f"    Latest commit: {latest_commit_date} (pushed AFTER your review)"
+            )
+
+    if not awaiting:
+        return ""
+
+    return (
+        "PRIORITY — PRs awaiting your re-review (you reviewed but didn't approve, "
+        "and the author has pushed new commits since):\n\n"
+        + "\n\n".join(awaiting)
+    )
+
+
+def gather_context(env: dict[str, str], persona: str = "", bot_login: str = "") -> str:
     log("Gathering context")
     owner, name = repo_owner_name(env)
 
@@ -436,14 +533,18 @@ query($owner: String!, $name: String!) {
 
     backlog_state = gather_backlog_state()
     history = gather_agent_history(persona, owner, name, env)
+    pending_reviews = find_prs_awaiting_rereview(env, owner, name, bot_login) if bot_login else ""
 
-    sections = [
+    sections = []
+    if pending_reviews:
+        sections.append(pending_reviews)
+    sections.extend([
         f"Recent commits (last 2 weeks):\n{recent_commits}",
         f"Open discussions:\n{discussions}",
         f"Open issues:\n{open_issues}",
         f"Open PRs:\n{open_prs}",
         f"Backlog state:\n{backlog_state}",
-    ]
+    ])
     if history:
         sections.append(history)
     return "\n\n".join(sections)
@@ -597,10 +698,19 @@ def main() -> int:
 
     require_env("CLAUDE_CODE_OAUTH_TOKEN")
     require_env("GH_TOKEN")
-    env = dict(os.environ)
+    env = normalize_provider_env(dict(os.environ))
 
     persona = extract_persona(prompt_file)
-    context = gather_context(env, persona=persona)
+    bot_login = run_optional(
+        ["gh", "api", "user", "--jq", ".login"],
+        timeout=GITHUB_API_TIMEOUT,
+        cwd=REPO_ROOT,
+        env=env,
+        default="",
+    ).strip()
+    if bot_login:
+        log(f"Authenticated as {bot_login}")
+    context = gather_context(env, persona=persona, bot_login=bot_login)
     raw_output = run_claude(prompt_file, context, env, mode=args.mode)
     exit_code, validated_json, error_text = validate_output(raw_output, env)
 
