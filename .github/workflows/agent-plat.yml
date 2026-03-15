@@ -4,6 +4,7 @@ on:
   schedule:
     - cron: '30 14 * * 1,3,5'  # Mon/Wed/Fri second (7:30am PT)
     - cron: '0 14 * * 2,4'     # Tue/Thu first (7:00am PT)
+    - cron: '30 16,20,0 * * 0,6' # Weekends every other hour offset (9:30am/1:30pm/5:30pm PT)
   workflow_dispatch:
     inputs:
       dry_run:
