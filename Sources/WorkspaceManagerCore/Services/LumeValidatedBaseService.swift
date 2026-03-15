@@ -84,7 +84,25 @@ public actor LumeValidatedBaseService {
         hostProfile: LumeHostProfile,
         imageResolution: LumeImageResolution?
     ) -> LumeBaseVMProfile {
+        Self.resolveBaseVMProfile(
+            hostProfile: hostProfile,
+            imageResolution: imageResolution,
+            storageRootURL: storageRootURL
+        )
+    }
+
+    public nonisolated static func resolveBaseVMProfile(
+        hostProfile: LumeHostProfile,
+        imageResolution: LumeImageResolution?,
+        storageRootURL: URL = defaultStorageRootURL(fileManager: .default)
+    ) -> LumeBaseVMProfile {
         let baseIdentifier = Self.sanitizeNameComponent(hostProfile.profileKey)
+
+        let storagePath =
+            storageRootURL
+            .appendingPathComponent("validated-bases", isDirectory: true)
+            .path
+
         if let imageResolution {
             return LumeBaseVMProfile(
                 vmName: "workspaces-validated-base-macos-\(baseIdentifier)",
@@ -92,7 +110,7 @@ public actor LumeValidatedBaseService {
                 displayName: imageResolution.profileDisplayName,
                 imageReference: imageResolution.entry.imageReference,
                 preferredSourceKind: .pulledImage,
-                storagePath: validatedBaseStorageDirectoryURL.path
+                storagePath: storagePath
             )
         }
 
@@ -102,7 +120,7 @@ public actor LumeValidatedBaseService {
             displayName: "\(hostProfile.displayName) (stock macOS base)",
             imageReference: nil,
             preferredSourceKind: .stockPrepared,
-            storagePath: validatedBaseStorageDirectoryURL.path
+            storagePath: storagePath
         )
     }
 

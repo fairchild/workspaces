@@ -9,16 +9,6 @@ import SwiftUI
 import WorkspaceManagerCore
 
 struct WorkspaceEnvironmentSheetOption: Identifiable {
-    enum Kind: String, Identifiable {
-        case local
-        case cloudLinux
-        case macOSVM
-        case linuxVM
-
-        var id: String { rawValue }
-    }
-
-    let kind: Kind
     let title: String
     let subtitle: String
     let description: String
@@ -29,7 +19,16 @@ struct WorkspaceEnvironmentSheetOption: Identifiable {
     let statusText: String?
     let availabilityReason: String?
 
-    var id: String { kind.rawValue }
+    var id: String {
+        Self.selectionID(providerID: providerID, guestOS: guestOS)
+    }
+
+    static func selectionID(providerID: String, guestOS: WorkspaceGuestOS?) -> String {
+        if let guestOS {
+            return "\(providerID):\(guestOS.rawValue)"
+        }
+        return providerID
+    }
 }
 
 struct NewWorkspaceSheet: View {
@@ -40,7 +39,10 @@ struct NewWorkspaceSheet: View {
 
     @Environment(\.dismiss) private var dismiss
     @State private var name = ""
-    @State private var selectedEnvironmentID = WorkspaceEnvironmentSheetOption.Kind.local.rawValue
+    @State private var selectedEnvironmentID = WorkspaceEnvironmentSheetOption.selectionID(
+        providerID: LocalWorkspaceProvider.identifier,
+        guestOS: nil
+    )
     @State private var generatedName = ""
     @State private var isCreating = false
     @State private var nameSource: WorkspaceNameSource = .generatedDefault
@@ -86,21 +88,10 @@ struct NewWorkspaceSheet: View {
     }
 
     private var preferredInitialEnvironmentID: String? {
-        if UIFixtureLumeEnvironment.isEnabled(),
-            let macOSVMOption = environmentOptions.first(where: {
-                $0.kind == .macOSVM && $0.isAvailable
-            })
-        {
-            return macOSVMOption.id
-        }
-
-        if let localOption = environmentOptions.first(where: {
-            $0.kind == .local && $0.isAvailable
-        }) {
-            return localOption.id
-        }
-
-        return environmentOptions.first(where: \.isAvailable)?.id
+        Self.preferredInitialEnvironmentID(
+            for: environmentOptions,
+            fixtureEnabled: UIFixtureLumeEnvironment.isEnabled()
+        )
     }
 
     var body: some View {
@@ -234,6 +225,31 @@ struct NewWorkspaceSheet: View {
             value.trimmingCharacters(in: .whitespacesAndNewlines) == generatedName
             ? .generatedDefault
             : .manual
+    }
+
+    static func preferredInitialEnvironmentID(
+        for environmentOptions: [WorkspaceEnvironmentSheetOption],
+        fixtureEnabled: Bool
+    ) -> String? {
+        if fixtureEnabled,
+            let macOSVMOption = environmentOptions.first(where: {
+                $0.isAvailable
+                    && $0.providerID == LumeWorkspaceProvider.identifier
+                    && $0.guestOS == .macOS
+            })
+        {
+            return macOSVMOption.id
+        }
+
+        if let localOption = environmentOptions.first(where: {
+            $0.isAvailable
+                && $0.providerID == LocalWorkspaceProvider.identifier
+                && $0.guestOS == nil
+        }) {
+            return localOption.id
+        }
+
+        return environmentOptions.first(where: \.isAvailable)?.id
     }
 }
 

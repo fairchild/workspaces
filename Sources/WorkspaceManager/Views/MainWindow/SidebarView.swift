@@ -43,7 +43,7 @@ struct SidebarView: View {
     let onWebSourceSelected: (WebSource) -> Void
     let onRequestWebSourceCreation: (WebSourceCreationTarget) -> Void
     let onWorkspaceCreated: () -> Void
-    let lumeSetupCoordinator: LumeSetupCoordinator
+    let workspaceProviderSetupCoordinator: WorkspaceProviderSetupCoordinator
     let hostLumeSmokeAutomation: HostLumeSmokeAutomationController
 
     @AppStorage(SidebarRepoSortMode.storageKey)
@@ -666,31 +666,33 @@ struct SidebarView: View {
         providerID: String,
         guestOS: WorkspaceGuestOS? = nil
     ) async {
-        let effectiveGuestOS =
-            providerID == LumeWorkspaceProvider.identifier ? (guestOS ?? .macOS) : guestOS
+        guard let provider = workspaceProviderRegistry.provider(for: providerID) else {
+            errorMessage = "Workspace provider '\(providerID)' is not registered."
+            showingError = true
+            return
+        }
 
-        if providerID == LumeWorkspaceProvider.identifier {
-            do {
-                let intercepted = try await lumeSetupCoordinator.prepareIfNeeded(
-                    for: .createWorkspace(name: name, guestOS: effectiveGuestOS ?? .macOS)
-                ) {
-                    await refreshLumeRuntimeSnapshot(trigger: "workspace_create_after_setup")
-                    await createWorkspaceAfterSetup(
-                        from: repo,
-                        name: name,
-                        nameSource: nameSource,
-                        providerID: providerID,
-                        guestOS: effectiveGuestOS
-                    )
-                }
-                if intercepted {
-                    return
-                }
-            } catch {
-                errorMessage = error.localizedDescription
-                showingError = true
+        do {
+            let intercepted = try await workspaceProviderSetupCoordinator.prepareIfNeeded(
+                provider: provider,
+                action: .createWorkspace(name: name, guestOS: guestOS)
+            ) {
+                await refreshLumeRuntimeSnapshot(trigger: "workspace_create_after_setup")
+                await createWorkspaceAfterSetup(
+                    from: repo,
+                    name: name,
+                    nameSource: nameSource,
+                    providerID: providerID,
+                    guestOS: guestOS
+                )
+            }
+            if intercepted {
                 return
             }
+        } catch {
+            errorMessage = error.localizedDescription
+            showingError = true
+            return
         }
 
         await createWorkspaceAfterSetup(
@@ -698,7 +700,7 @@ struct SidebarView: View {
             name: name,
             nameSource: nameSource,
             providerID: providerID,
-            guestOS: effectiveGuestOS
+            guestOS: guestOS
         )
     }
 
@@ -843,22 +845,27 @@ struct SidebarView: View {
 
     private func performStart(_ workspace: Workspace) {
         Task { @MainActor in
-            if workspace.backendIdentifier == LumeWorkspaceProvider.identifier {
-                do {
-                    let intercepted = try await lumeSetupCoordinator.prepareIfNeeded(
-                        for: .startWorkspace(workspaceName: workspace.name)
-                    ) {
-                        await refreshLumeRuntimeSnapshot(trigger: "workspace_start_after_setup")
-                        await performStartAfterSetup(workspace)
-                    }
-                    if intercepted {
-                        return
-                    }
-                } catch {
-                    errorMessage = error.localizedDescription
-                    showingError = true
+            guard let provider = workspaceProviderRegistry.provider(for: workspace) else {
+                errorMessage = "No workspace provider is registered for '\(workspace.backendIdentifier)'."
+                showingError = true
+                return
+            }
+
+            do {
+                let intercepted = try await workspaceProviderSetupCoordinator.prepareIfNeeded(
+                    provider: provider,
+                    action: .startWorkspace(workspaceName: workspace.name)
+                ) {
+                    await refreshLumeRuntimeSnapshot(trigger: "workspace_start_after_setup")
+                    await performStartAfterSetup(workspace)
+                }
+                if intercepted {
                     return
                 }
+            } catch {
+                errorMessage = error.localizedDescription
+                showingError = true
+                return
             }
 
             await performStartAfterSetup(workspace)
@@ -897,22 +904,27 @@ struct SidebarView: View {
 
     private func openDesktop(for workspace: Workspace) {
         Task { @MainActor in
-            if workspace.backendIdentifier == LumeWorkspaceProvider.identifier {
-                do {
-                    let intercepted = try await lumeSetupCoordinator.prepareIfNeeded(
-                        for: .openDesktop(workspaceName: workspace.name)
-                    ) {
-                        await refreshLumeRuntimeSnapshot(trigger: "workspace_desktop_after_setup")
-                        await openDesktopAfterSetup(workspace)
-                    }
-                    if intercepted {
-                        return
-                    }
-                } catch {
-                    errorMessage = error.localizedDescription
-                    showingError = true
+            guard let provider = workspaceProviderRegistry.provider(for: workspace) else {
+                errorMessage = "No workspace provider is registered for '\(workspace.backendIdentifier)'."
+                showingError = true
+                return
+            }
+
+            do {
+                let intercepted = try await workspaceProviderSetupCoordinator.prepareIfNeeded(
+                    provider: provider,
+                    action: .openDesktop(workspaceName: workspace.name)
+                ) {
+                    await refreshLumeRuntimeSnapshot(trigger: "workspace_desktop_after_setup")
+                    await openDesktopAfterSetup(workspace)
+                }
+                if intercepted {
                     return
                 }
+            } catch {
+                errorMessage = error.localizedDescription
+                showingError = true
+                return
             }
 
             await openDesktopAfterSetup(workspace)

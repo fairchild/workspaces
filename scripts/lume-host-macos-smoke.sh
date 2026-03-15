@@ -132,11 +132,13 @@ cleanup_success_artifacts() {
     fi
 
     if [[ -n "$WORKSPACE_PATH" && -d "$WORKSPACE_PATH" ]]; then
-        rm -rf "$WORKSPACE_PATH"
+        chmod -R u+w "$WORKSPACE_PATH" >/dev/null 2>&1 || true
+        rm -rf "$WORKSPACE_PATH" >/dev/null 2>&1 || true
     fi
 
     if [[ -n "$SMOKE_REPO_PATH" && -d "$SMOKE_REPO_PATH" ]]; then
-        rm -rf "$SMOKE_REPO_PATH"
+        chmod -R u+w "$SMOKE_REPO_PATH" >/dev/null 2>&1 || true
+        rm -rf "$SMOKE_REPO_PATH" >/dev/null 2>&1 || true
     fi
 }
 
@@ -420,7 +422,11 @@ run_ssh_probe() {
         if [[ -n "${VM_STORAGE_PATH:-}" ]]; then
             ssh_args+=("--storage" "$VM_STORAGE_PATH")
         fi
-        ssh_args+=("--user" "lume" "--password" "lume" "printf WORKSPACES_LUME_SMOKE_OK")
+        ssh_args+=(
+            "--user" "$LUME_STANDALONE_SSH_USER"
+            "--password" "$LUME_STANDALONE_SSH_PASSWORD"
+            "printf WORKSPACES_LUME_SMOKE_OK"
+        )
 
         if "$lume_bin" "${ssh_args[@]}" >"$SSH_PROBE_PATH" 2>&1; then
             if grep -q "WORKSPACES_LUME_SMOKE_OK" "$SSH_PROBE_PATH"; then

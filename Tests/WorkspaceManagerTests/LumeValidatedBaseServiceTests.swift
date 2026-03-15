@@ -22,7 +22,7 @@ struct LumeValidatedBaseServiceTests {
             xcodeVersion: "26.2",
             developerDirectory: "/Applications/Xcode.app/Contents/Developer"
         )
-        let imageResolution = try LumeRuntimeService.resolveDefaultMacOSImage(for: hostProfile)
+        let imageResolution = try LumeImageCatalog.default.resolveDefaultMacOSImage(for: hostProfile)
 
         let baseProfile = await service.resolveBaseVMProfile(
             hostProfile: hostProfile,

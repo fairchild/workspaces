@@ -62,7 +62,8 @@ For real-host Lume validation:
    - only the standalone validator may mark a base ready, via `~/Library/Application Support/WorkspaceManager/LumeValidatedBases/<vmName>.json`
 6. Workspaces-owned unattended overrides for stock base prep live under:
    - `config/lume/unattended/`
-   - current full-flow Tahoe override: `config/lume/unattended/tahoe-workspaces-v23.yml`
+   - current default bridged Tahoe override: `config/lume/unattended/tahoe-workspaces-bridged-v27.yml`
+   - current NAT Tahoe override: `config/lume/unattended/tahoe-workspaces-v26.yml`
    - current from-scratch recovery helper: `config/lume/unattended/tahoe-workspaces-v18-official-run-bootstrap-ssh.yml`
 7. Upstream Lume local-testing note:
    - do not point the standalone validator at raw `libs/lume/.build/debug/lume`
@@ -155,6 +156,13 @@ swift run     # Run
 | Workspace lifecycle | Sources/WorkspaceManagerCore/Services/WorkspaceService.swift |
 | Service protocols | Sources/WorkspaceManagerCore/Services/Protocols.swift |
 | Backend abstraction | Sources/WorkspaceManagerCore/Services/LocalBackend.swift |
+| Lume runtime setup | Sources/WorkspaceManagerCore/Services/LumeRuntimeService.swift |
+| Lume workspace orchestration | Sources/WorkspaceManagerCore/Services/LumeWorkspaceProvider.swift |
+| Lume daemon transport | Sources/WorkspaceManagerCore/Services/LumeHTTPClient.swift |
+| Lume CLI runner | Sources/WorkspaceManagerCore/Services/LumeCLIRunner.swift |
+| Lume image catalog | Sources/WorkspaceManagerCore/Services/LumeImageCatalog.swift |
+| Lume VM status normalization | Sources/WorkspaceManagerCore/Services/LumeVMStatus.swift |
+| Lume error heuristics | Sources/WorkspaceManagerCore/Services/LumeErrorHeuristics.swift |
 | Main layout | Sources/WorkspaceManager/Views/MainWindow/ContentView.swift |
 | Terminal wrapper | Sources/WorkspaceManager/Views/Components/TerminalView.swift |
 | Sidebar (repos/workspaces) | Sources/WorkspaceManager/Views/MainWindow/SidebarView.swift |

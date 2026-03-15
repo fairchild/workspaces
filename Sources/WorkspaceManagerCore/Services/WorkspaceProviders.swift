@@ -155,6 +155,96 @@ public struct WorkspaceProviderCreationResult: Sendable {
     }
 }
 
+public enum WorkspaceProviderSetupAction: Sendable, Equatable {
+    case createWorkspace(name: String, guestOS: WorkspaceGuestOS?)
+    case openTerminal(workspaceName: String)
+    case openDesktop(workspaceName: String)
+    case startWorkspace(workspaceName: String)
+
+    public var summary: String {
+        switch self {
+        case .createWorkspace(let name, let guestOS):
+            if let guestOS {
+                return "Create \(guestOS.label) workspace '\(name)'"
+            }
+            return "Create workspace '\(name)'"
+        case .openTerminal(let workspaceName):
+            return "Open terminal for '\(workspaceName)'"
+        case .openDesktop(let workspaceName):
+            return "Open desktop for '\(workspaceName)'"
+        case .startWorkspace(let workspaceName):
+            return "Start '\(workspaceName)'"
+        }
+    }
+}
+
+public struct WorkspaceProviderSetupProgress: Sendable, Equatable {
+    public let id: String
+    public let label: String
+
+    public init(id: String, label: String) {
+        self.id = id
+        self.label = label
+    }
+}
+
+public struct WorkspaceProviderSetupConfirmation: Sendable, Equatable {
+    public let providerID: String
+    public let providerDisplayName: String
+    public let state: String?
+    public let title: String
+    public let primaryButtonTitle: String
+    public let introductoryText: [String]
+    public let learnMoreLabel: String?
+    public let learnMoreURL: URL?
+    public let explanatoryStepsTitle: String
+    public let explanatorySteps: [String]
+    public let supplementaryText: String?
+    public let footerText: String
+    public let progressTitle: String
+    public let progressBody: String
+    public let initialProgress: WorkspaceProviderSetupProgress
+
+    public init(
+        providerID: String,
+        providerDisplayName: String,
+        state: String?,
+        title: String,
+        primaryButtonTitle: String,
+        introductoryText: [String],
+        learnMoreLabel: String?,
+        learnMoreURL: URL?,
+        explanatoryStepsTitle: String,
+        explanatorySteps: [String],
+        supplementaryText: String?,
+        footerText: String,
+        progressTitle: String,
+        progressBody: String,
+        initialProgress: WorkspaceProviderSetupProgress
+    ) {
+        self.providerID = providerID
+        self.providerDisplayName = providerDisplayName
+        self.state = state
+        self.title = title
+        self.primaryButtonTitle = primaryButtonTitle
+        self.introductoryText = introductoryText
+        self.learnMoreLabel = learnMoreLabel
+        self.learnMoreURL = learnMoreURL
+        self.explanatoryStepsTitle = explanatoryStepsTitle
+        self.explanatorySteps = explanatorySteps
+        self.supplementaryText = supplementaryText
+        self.footerText = footerText
+        self.progressTitle = progressTitle
+        self.progressBody = progressBody
+        self.initialProgress = initialProgress
+    }
+}
+
+public enum WorkspaceProviderSetupRequirement: Sendable, Equatable {
+    case confirmation(WorkspaceProviderSetupConfirmation)
+    case alreadyInProgress
+}
+
 public struct WorkspaceProviderStatusSnapshot: Sendable, Equatable {
     public let remoteId: String
     public let status: WorkspaceStatus
@@ -259,6 +349,8 @@ public typealias WorkspaceProviderPersistenceHandler =
     @MainActor @Sendable (
         WorkspaceProviderCreationResult
     ) async throws -> Void
+public typealias WorkspaceProviderSetupProgressHandler =
+    @MainActor @Sendable (WorkspaceProviderSetupProgress) async -> Void
 
 @preconcurrency public protocol WorkspaceProviderProtocol: Sendable {
     var descriptor: WorkspaceProviderDescriptor { get }
@@ -278,6 +370,13 @@ public typealias WorkspaceProviderPersistenceHandler =
     func archiveWorkspace(_ workspace: WorkspaceProviderTarget) async throws
     func deleteWorkspace(_ workspace: WorkspaceProviderTarget) async throws
     func syncStatuses(for workspaces: [WorkspaceProviderTarget]) async throws -> [WorkspaceProviderStatusSnapshot]
+}
+
+@preconcurrency public protocol WorkspaceProviderSetupCapable: WorkspaceProviderProtocol {
+    func setupRequirement(
+        for action: WorkspaceProviderSetupAction
+    ) async throws -> WorkspaceProviderSetupRequirement?
+    func performSetup(progress: WorkspaceProviderSetupProgressHandler?) async throws
 }
 
 extension WorkspaceProviderProtocol {

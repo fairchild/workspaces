@@ -200,66 +200,6 @@ public struct LumeHostProfile: Sendable, Equatable {
     }
 }
 
-public enum LumeImageMatchKind: String, Sendable, Equatable {
-    case exact
-    case nearestSameFamily
-}
-
-public struct LumeImageCatalogEntry: Sendable, Equatable {
-    public let guestOS: WorkspaceGuestOS
-    public let macOSFamily: LumeMacOSFamily
-    public let xcodeVersion: String?
-    public let imageReference: String
-    public let registry: String
-    public let organization: String
-    public let displayLabel: String
-    public let supportTier: String
-
-    public init(
-        guestOS: WorkspaceGuestOS,
-        macOSFamily: LumeMacOSFamily,
-        xcodeVersion: String?,
-        imageReference: String,
-        registry: String,
-        organization: String,
-        displayLabel: String,
-        supportTier: String = "stable"
-    ) {
-        self.guestOS = guestOS
-        self.macOSFamily = macOSFamily
-        self.xcodeVersion = xcodeVersion
-        self.imageReference = imageReference
-        self.registry = registry
-        self.organization = organization
-        self.displayLabel = displayLabel
-        self.supportTier = supportTier
-    }
-}
-
-public struct LumeImageResolution: Sendable, Equatable {
-    public let hostProfile: LumeHostProfile
-    public let entry: LumeImageCatalogEntry
-    public let matchKind: LumeImageMatchKind
-
-    public init(
-        hostProfile: LumeHostProfile,
-        entry: LumeImageCatalogEntry,
-        matchKind: LumeImageMatchKind
-    ) {
-        self.hostProfile = hostProfile
-        self.entry = entry
-        self.matchKind = matchKind
-    }
-
-    public var profileKey: String {
-        hostProfile.profileKey
-    }
-
-    public var profileDisplayName: String {
-        entry.displayLabel
-    }
-}
-
 public enum LumeBaseVMSourceKind: String, Codable, Sendable, Equatable {
     case pulledImage
     case stockPrepared
@@ -421,7 +361,8 @@ public protocol LumeRuntimeServiceProtocol: Sendable {
 public actor LumeRuntimeService: LumeRuntimeServiceProtocol {
     public static let shared = LumeRuntimeService()
 
-    private let baseURL: URL
+    private let httpClient: LumeHTTPClient
+    private let imageCatalog: LumeImageCatalog
     private let installerURL: URL
     private let urlSession: URLSession
     private let fileManager: FileManager
@@ -448,11 +389,13 @@ public actor LumeRuntimeService: LumeRuntimeServiceProtocol {
         installerURL: URL = URL(
             string: "https://raw.githubusercontent.com/trycua/cua/main/libs/lume/scripts/install.sh"
         )!,
+        imageCatalog: LumeImageCatalog = .default,
         urlSession: URLSession = .shared,
         fileManager: FileManager = .default,
         validatedBaseService: LumeValidatedBaseService = .shared
     ) {
-        self.baseURL = baseURL
+        self.httpClient = LumeHTTPClient(baseURL: baseURL)
+        self.imageCatalog = imageCatalog
         self.installerURL = installerURL
         self.urlSession = urlSession
         self.fileManager = fileManager
@@ -480,7 +423,7 @@ public actor LumeRuntimeService: LumeRuntimeServiceProtocol {
         var defaultMacOSImageError: String?
         if let hostProfile {
             do {
-                defaultMacOSImage = try Self.resolveDefaultMacOSImage(for: hostProfile)
+                defaultMacOSImage = try imageCatalog.resolveDefaultMacOSImage(for: hostProfile)
             } catch {
                 defaultMacOSImageError = error.localizedDescription
             }
@@ -607,7 +550,7 @@ public actor LumeRuntimeService: LumeRuntimeServiceProtocol {
 
     public func defaultMacOSImageResolution() async throws -> LumeImageResolution {
         let hostProfile = try await hostProfile()
-        return try Self.resolveDefaultMacOSImage(for: hostProfile)
+        return try imageCatalog.resolveDefaultMacOSImage(for: hostProfile)
     }
 
     public func installIfNeeded(progress: LumeRuntimeProgressHandler?) async throws -> LumeRuntimeSnapshot {
@@ -702,7 +645,7 @@ public actor LumeRuntimeService: LumeRuntimeServiceProtocol {
 
         switch existingSnapshot.status {
         case .ready:
-            if existingSnapshot.vmStatus == "running" {
+            if existingSnapshot.normalizedVMStatus == .running {
                 await progress?("Stopping validated base macOS VM...")
                 try await stopVM(named: profile.vmName)
                 existingSnapshot = try await waitForBaseVMReady(
@@ -777,108 +720,6 @@ public actor LumeRuntimeService: LumeRuntimeServiceProtocol {
         return try await verifyInstallation(progress: progress)
     }
 
-    public nonisolated static func resolveDefaultMacOSImage(
-        for hostProfile: LumeHostProfile,
-        catalog: [LumeImageCatalogEntry] = LumeRuntimeService.imageCatalog
-    ) throws -> LumeImageResolution {
-        let sameFamilyEntries = catalog.filter {
-            $0.guestOS == .macOS && $0.macOSFamily == hostProfile.macOSFamily
-        }
-
-        guard !sameFamilyEntries.isEmpty else {
-            throw LumeRuntimeError.imageUnavailable(
-                "No macOS VM image is available yet for \(hostProfile.macOSFamily.label). Choose Linux VM instead."
-            )
-        }
-
-        if let xcodeVersion = hostProfile.xcodeVersion,
-            let exactEntry = sameFamilyEntries.first(where: { $0.xcodeVersion == xcodeVersion })
-        {
-            return LumeImageResolution(
-                hostProfile: hostProfile,
-                entry: exactEntry,
-                matchKind: .exact
-            )
-        }
-
-        let nearestEntry = Self.selectNearestSameFamilyEntry(
-            candidates: sameFamilyEntries,
-            hostXcodeVersion: hostProfile.xcodeVersion
-        )
-
-        return LumeImageResolution(
-            hostProfile: hostProfile,
-            entry: nearestEntry,
-            matchKind: .nearestSameFamily
-        )
-    }
-
-    private nonisolated static func selectNearestSameFamilyEntry(
-        candidates: [LumeImageCatalogEntry],
-        hostXcodeVersion: String?
-    ) -> LumeImageCatalogEntry {
-        guard let hostVersion = hostXcodeVersion.flatMap(VersionNumber.init) else {
-            return
-                candidates
-                .sorted { lhs, rhs in
-                    (VersionNumber(lhs.xcodeVersion) ?? .zero) > (VersionNumber(rhs.xcodeVersion) ?? .zero)
-                }
-                .first ?? candidates[0]
-        }
-
-        return candidates.min { lhs, rhs in
-            Self.versionDistance(
-                from: VersionNumber(lhs.xcodeVersion),
-                to: hostVersion
-            )
-                < Self.versionDistance(
-                    from: VersionNumber(rhs.xcodeVersion),
-                    to: hostVersion
-                )
-        } ?? candidates[0]
-    }
-
-    private nonisolated static func versionDistance(
-        from candidate: VersionNumber?,
-        to host: VersionNumber
-    ) -> Int {
-        guard let candidate else { return Int.max }
-        let lhs = candidate.normalizedSegments(count: 3)
-        let rhs = host.normalizedSegments(count: 3)
-        return abs(lhs[0] - rhs[0]) * 10_000
-            + abs(lhs[1] - rhs[1]) * 100
-            + abs(lhs[2] - rhs[2])
-    }
-
-    public nonisolated static func resolveBaseVMProfile(
-        hostProfile: LumeHostProfile,
-        imageResolution: LumeImageResolution?
-    ) -> LumeBaseVMProfile {
-        let baseIdentifier = LumeValidatedBaseService.sanitizeNameComponent(hostProfile.profileKey)
-        let storagePath = LumeValidatedBaseService.defaultStorageRootURL(fileManager: .default)
-            .appendingPathComponent("validated-bases", isDirectory: true)
-            .path
-        if let imageResolution {
-            return LumeBaseVMProfile(
-                vmName: "workspaces-validated-base-macos-\(baseIdentifier)",
-                profileKey: hostProfile.profileKey,
-                displayName: imageResolution.profileDisplayName,
-                imageReference: imageResolution.entry.imageReference,
-                preferredSourceKind: .pulledImage,
-                storagePath: storagePath
-            )
-        }
-
-        return LumeBaseVMProfile(
-            vmName: "workspaces-validated-base-macos-\(baseIdentifier)",
-            profileKey: hostProfile.profileKey,
-            displayName: "\(hostProfile.displayName) (stock macOS base)",
-            imageReference: nil,
-            preferredSourceKind: .stockPrepared,
-            storagePath: storagePath
-        )
-    }
-
     private func inspectBaseVM(
         profile: LumeBaseVMProfile,
         manifest: LumeValidatedBaseManifest?
@@ -902,8 +743,8 @@ public actor LumeRuntimeService: LumeRuntimeServiceProtocol {
                     for: manifest,
                     expectedProfileKey: profile.profileKey
                 )
-            switch details.status {
-            case "running":
+            switch details.normalizedStatus {
+            case .running:
                 snapshot = LumeBaseVMSnapshot(
                     profile: profile,
                     status: validationReason == nil ? .ready : .repairRequired,
@@ -912,7 +753,7 @@ public actor LumeRuntimeService: LumeRuntimeServiceProtocol {
                     reason: validationReason
                         ?? "The validated base macOS VM is running. Workspaces will stop it before cloning."
                 )
-            case "stopped":
+            case .stopped:
                 snapshot = LumeBaseVMSnapshot(
                     profile: profile,
                     status: validationReason == nil ? .ready : .repairRequired,
@@ -921,7 +762,7 @@ public actor LumeRuntimeService: LumeRuntimeServiceProtocol {
                     reason: validationReason
                         ?? "Fast macOS VM clones are ready."
                 )
-            case "provisioning", "provisioning (stale)":
+            case .provisioning, .provisioningStale:
                 snapshot = LumeBaseVMSnapshot(
                     profile: profile,
                     status: .preparing,
@@ -939,7 +780,7 @@ public actor LumeRuntimeService: LumeRuntimeServiceProtocol {
                 )
             }
         } catch {
-            guard shouldTreatAsMissingVM(error) else {
+            guard LumeErrorHeuristics.shouldTreatAsMissingVM(error) else {
                 snapshot = LumeBaseVMSnapshot(
                     profile: profile,
                     status: .repairRequired,
@@ -996,7 +837,7 @@ public actor LumeRuntimeService: LumeRuntimeServiceProtocol {
                 lastSnapshot = snapshot
                 switch snapshot.status {
                 case .ready:
-                    if snapshot.vmStatus == "running" {
+                    if snapshot.normalizedVMStatus == .running {
                         await progress?("Stopping prepared base macOS VM...")
                         try await stopVM(named: profile.vmName, storagePath: profile.storagePath)
                     } else {
@@ -1050,10 +891,7 @@ public actor LumeRuntimeService: LumeRuntimeServiceProtocol {
         hostProfile: LumeHostProfile,
         progress: WorkspaceProviderProgressHandler?
     ) async throws {
-        let executablePath = try await executablePath()
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: executablePath)
-        process.arguments = [
+        let result = try await lumeRunner().runStreaming(arguments: [
             "create",
             profile.vmName,
             "--os", WorkspaceGuestOS.macOS.rawValue,
@@ -1065,41 +903,15 @@ public actor LumeRuntimeService: LumeRuntimeServiceProtocol {
             "--unattended", hostProfile.macOSFamily.rawValue,
             "--network", defaultNetwork,
             "--no-display",
-        ]
-        process.currentDirectoryURL = fileManager.homeDirectoryForCurrentUser
-
-        var environment = ProcessInfo.processInfo.environment
-        if environment["TERM"]?.isEmpty != false {
-            environment["TERM"] = "xterm-256color"
-        }
-        process.environment = environment
-
-        let outputPipe = Pipe()
-        process.standardOutput = outputPipe
-        process.standardError = outputPipe
-
-        let outputHandle = outputPipe.fileHandleForReading
-        var transcriptLines: [String] = []
-
-        try process.run()
-        defer {
-            try? outputHandle.close()
-        }
-
-        for try await line in outputHandle.bytes.lines {
-            transcriptLines.append(line)
+        ]) { line in
             if let message = LumeWorkspaceProvider.cliProvisioningMessage(for: line) {
                 await progress?(message)
             }
         }
-
-        process.waitUntilExit()
-
-        guard process.terminationStatus == 0 else {
-            let transcript = transcriptLines.joined(separator: "\n")
+        guard result.exitCode == 0 else {
             throw LumeRuntimeError.baseVMFailed(
                 LumeWorkspaceProvider.cliProvisioningFailureMessage(
-                    from: transcript,
+                    from: result.transcript,
                     vmName: profile.vmName
                 )
             )
@@ -1110,7 +922,7 @@ public actor LumeRuntimeService: LumeRuntimeServiceProtocol {
         profile: LumeBaseVMProfile,
         currentSnapshot: LumeBaseVMSnapshot
     ) async throws {
-        if currentSnapshot.vmStatus == "running" {
+        if currentSnapshot.normalizedVMStatus == .running {
             try await stopVM(named: profile.vmName, storagePath: profile.storagePath)
         }
 
@@ -1138,12 +950,8 @@ public actor LumeRuntimeService: LumeRuntimeServiceProtocol {
     }
 
     private func getVMViaCLI(named vmName: String, storagePath: String) async throws -> LumeRuntimeVMDetails {
-        let executablePath = try await executablePath()
-        let result = try await ProcessRunner.run(
-            executable: executablePath,
-            arguments: ["get", vmName, "--storage", storagePath, "-f", "json"],
-            currentDirectory: fileManager.homeDirectoryForCurrentUser,
-            environment: ProcessInfo.processInfo.environment
+        let result = try await lumeRunner().run(
+            arguments: ["get", vmName, "--storage", storagePath, "-f", "json"]
         )
 
         guard result.success else {
@@ -1186,115 +994,16 @@ public actor LumeRuntimeService: LumeRuntimeServiceProtocol {
         queryItems: [URLQueryItem] = [],
         body: Body?
     ) async throws -> Response {
-        guard let url = endpointURL(for: path, queryItems: queryItems) else {
-            throw LumeRuntimeError.baseVMFailed("Invalid Lume endpoint path: \(path)")
+        do {
+            return try await httpClient.request(
+                method: method,
+                path: path,
+                queryItems: queryItems,
+                body: body
+            )
+        } catch {
+            throw LumeRuntimeError.baseVMFailed(error.localizedDescription)
         }
-
-        let encodedBody = try body.map { try JSONEncoder().encode($0) }
-        let (data, statusCode) = try await sendCurlRequest(
-            method: method,
-            url: url,
-            body: encodedBody
-        )
-
-        guard (200...299).contains(statusCode) else {
-            if let apiError = try? JSONDecoder().decode(LumeRuntimeAPIError.self, from: data) {
-                throw LumeRuntimeError.baseVMFailed(apiError.message)
-            }
-
-            let message = String(data: data, encoding: .utf8) ?? "HTTP \(statusCode)"
-            throw LumeRuntimeError.baseVMFailed(message)
-        }
-
-        if Response.self == LumeRuntimeEmptyResponse.self {
-            return LumeRuntimeEmptyResponse() as! Response
-        }
-
-        if data.isEmpty {
-            throw LumeRuntimeError.baseVMFailed("Lume returned an empty response.")
-        }
-
-        return try JSONDecoder().decode(Response.self, from: data)
-    }
-
-    private func sendCurlRequest(
-        method: String,
-        url: URL,
-        body: Data?
-    ) async throws -> (Data, Int) {
-        let statusMarker = "__LUME_HTTP_STATUS__:"
-        var arguments = [
-            "--silent",
-            "--show-error",
-            "--request", method,
-            "--url", url.absoluteString,
-            "--max-time", "30",
-            "--header", "Connection: close",
-            "--write-out", "\n\(statusMarker)%{http_code}",
-        ]
-
-        var temporaryBodyURL: URL?
-        if let body {
-            let bodyURL = fileManager.temporaryDirectory
-                .appendingPathComponent("lume-request-\(UUID().uuidString).json")
-            try body.write(to: bodyURL, options: .atomic)
-            temporaryBodyURL = bodyURL
-            arguments += [
-                "--header", "Content-Type: application/json",
-                "--data-binary", "@\(bodyURL.path)",
-            ]
-        }
-
-        defer {
-            if let temporaryBodyURL {
-                try? fileManager.removeItem(at: temporaryBodyURL)
-            }
-        }
-
-        let result = try await ProcessRunner.run(
-            executable: "/usr/bin/curl",
-            arguments: arguments,
-            environment: ProcessInfo.processInfo.environment
-        )
-
-        guard result.success else {
-            let message =
-                [result.stderr, result.stdout]
-                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .first(where: { !$0.isEmpty })
-                ?? "curl exited with status \(result.exitCode)"
-            throw LumeRuntimeError.baseVMFailed(message)
-        }
-
-        let output = result.stdout
-        guard let markerRange = output.range(of: statusMarker, options: .backwards) else {
-            throw LumeRuntimeError.baseVMFailed("Lume curl response did not include an HTTP status.")
-        }
-
-        let bodyString = String(output[..<markerRange.lowerBound])
-        let statusString = output[markerRange.upperBound...].trimmingCharacters(
-            in: .whitespacesAndNewlines
-        )
-        guard let statusCode = Int(statusString) else {
-            throw LumeRuntimeError.baseVMFailed("Lume curl response returned an invalid HTTP status.")
-        }
-
-        return (Data(bodyString.utf8), statusCode)
-    }
-
-    private func shouldFallbackToStockBasePreparation(for error: Error) -> Bool {
-        let message = error.localizedDescription.lowercased()
-        return message.contains("fetch image manifest from registry")
-            || message.contains("fetch authentication token from registry")
-            || message.contains("denied")
-            || message.contains("not found")
-    }
-
-    private func shouldTreatAsMissingVM(_ error: Error) -> Bool {
-        let message = error.localizedDescription.lowercased()
-        return message.contains("not found")
-            || message.contains("no vm")
-            || message.contains("does not exist")
     }
 
     private func persistBaseManifest(
@@ -1419,66 +1128,7 @@ public actor LumeRuntimeService: LumeRuntimeServiceProtocol {
     }
 
     private func requestSucceeds(path: String) async -> Bool {
-        do {
-            _ = try await sendRawRequest(method: "GET", path: path)
-            return true
-        } catch {
-            return false
-        }
-    }
-
-    private func sendRawRequest(method: String, path: String) async throws -> (Data, HTTPURLResponse) {
-        guard let url = endpointURL(for: path) else {
-            throw LumeRuntimeError.verificationFailed("Invalid Lume endpoint path: \(path)")
-        }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = method
-        request.timeoutInterval = 10
-
-        let (data, response) = try await urlSession.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw LumeRuntimeError.verificationFailed("Invalid response from the Lume daemon.")
-        }
-
-        guard (200...299).contains(httpResponse.statusCode) else {
-            let message = String(data: data, encoding: .utf8) ?? "HTTP \(httpResponse.statusCode)"
-            throw LumeRuntimeError.verificationFailed(message)
-        }
-
-        return (data, httpResponse)
-    }
-
-    private func endpointURL(for path: String, queryItems: [URLQueryItem] = []) -> URL? {
-        let components =
-            path
-            .split(separator: "/")
-            .map(String.init)
-            .filter { !$0.isEmpty }
-
-        guard !components.isEmpty else {
-            if queryItems.isEmpty {
-                return baseURL
-            }
-
-            guard var baseComponents = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
-                return nil
-            }
-            baseComponents.queryItems = queryItems
-            return baseComponents.url
-        }
-
-        let url = components.reduce(baseURL) { partialURL, component in
-            partialURL.appendingPathComponent(component, isDirectory: false)
-        }
-        guard !queryItems.isEmpty else {
-            return url
-        }
-        guard var resolvedComponents = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
-            return nil
-        }
-        resolvedComponents.queryItems = queryItems
-        return resolvedComponents.url
+        await httpClient.requestSucceeds(path: path, urlSession: urlSession)
     }
 
     private func executablePathIfInstalled() async -> String? {
@@ -1544,41 +1194,18 @@ public actor LumeRuntimeService: LumeRuntimeServiceProtocol {
         return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    private func lumeRunner() async throws -> LumeCLIRunner {
+        LumeCLIRunner(
+            executablePath: try await executablePath(),
+            currentDirectory: fileManager.homeDirectoryForCurrentUser
+        )
+    }
+
     private var launchAgentURL: URL {
         fileManager.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/LaunchAgents", isDirectory: true)
             .appendingPathComponent(launchAgentName, isDirectory: false)
     }
-
-    public nonisolated static let imageCatalog: [LumeImageCatalogEntry] = [
-        LumeImageCatalogEntry(
-            guestOS: .macOS,
-            macOSFamily: .tahoe,
-            xcodeVersion: "26.2",
-            imageReference: "macos-tahoe-xcode:26.2",
-            registry: "ghcr.io",
-            organization: "workspacemanager",
-            displayLabel: "macOS Tahoe 26.2 + Xcode 26.2"
-        ),
-        LumeImageCatalogEntry(
-            guestOS: .macOS,
-            macOSFamily: .tahoe,
-            xcodeVersion: "26.0",
-            imageReference: "macos-tahoe-xcode:26.0",
-            registry: "ghcr.io",
-            organization: "workspacemanager",
-            displayLabel: "macOS Tahoe 26.0 + Xcode 26.0"
-        ),
-        LumeImageCatalogEntry(
-            guestOS: .macOS,
-            macOSFamily: .sequoia,
-            xcodeVersion: "16.4",
-            imageReference: "macos-sequoia-xcode:16.4",
-            registry: "ghcr.io",
-            organization: "workspacemanager",
-            displayLabel: "macOS Sequoia 15 + Xcode 16.4"
-        ),
-    ]
 }
 
 private struct LumeRuntimePullImageRequest: Encodable {
@@ -1599,6 +1226,10 @@ private struct LumeRuntimeVMDetails: Decodable, Sendable {
     let provisioningOperation: String?
     let ipAddress: String?
     let sshAvailable: Bool?
+
+    var normalizedStatus: LumeVMStatus {
+        LumeVMStatus(rawValue: status)
+    }
 }
 
 private struct LumeRuntimePullImageResponse: Decodable {
@@ -1611,53 +1242,8 @@ private struct LumeRuntimeMessageResponse: Decodable {
     let message: String
 }
 
-private struct LumeRuntimeAPIError: Decodable {
-    let message: String
-}
-
-private struct LumeRuntimeEmptyResponse: Decodable {}
+private struct LumeRuntimeEmptyResponse: LumeHTTPEmptyResponse {}
 private struct LumeRuntimeEmptyBody: Encodable {}
-
-public struct VersionNumber: Sendable, Equatable, Comparable {
-    public static let zero = VersionNumber(segments: [0, 0, 0])
-
-    public let segments: [Int]
-
-    public init?(_ rawValue: String?) {
-        guard let rawValue else { return nil }
-        let cleaned = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !cleaned.isEmpty else { return nil }
-
-        let segments =
-            cleaned
-            .split(separator: ".")
-            .compactMap { Int($0) }
-        guard !segments.isEmpty else { return nil }
-        self.segments = segments
-    }
-
-    private init(segments: [Int]) {
-        self.segments = segments
-    }
-
-    public func normalizedSegments(count: Int) -> [Int] {
-        if segments.count >= count {
-            return Array(segments.prefix(count))
-        }
-        return segments + Array(repeating: 0, count: count - segments.count)
-    }
-
-    public static func < (lhs: VersionNumber, rhs: VersionNumber) -> Bool {
-        let lhsSegments = lhs.normalizedSegments(count: max(lhs.segments.count, rhs.segments.count))
-        let rhsSegments = rhs.normalizedSegments(count: max(lhs.segments.count, rhs.segments.count))
-        for index in lhsSegments.indices {
-            if lhsSegments[index] != rhsSegments[index] {
-                return lhsSegments[index] < rhsSegments[index]
-            }
-        }
-        return false
-    }
-}
 
 extension ProcessInfo {
     fileprivate var machineArchitecture: String {

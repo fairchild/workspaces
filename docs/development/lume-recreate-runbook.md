@@ -67,6 +67,7 @@ Why this matters:
 - NAT on this host repeatedly produced only link-local `169.254.x.x` guest addresses.
 - The official signed Lume binary is still the correct runtime surface, but NAT alone was not enough.
 - Bridged networking was the first path that yielded stable guest IPs and successful SSH.
+- The shipped app now reaches this same runtime through `LumeHTTPClient` and `LumeCLIRunner`; this runbook intentionally uses raw daemon calls and direct SSH so runtime proof stays separate from app orchestration.
 
 ## Clean-Slate Reset
 
@@ -174,7 +175,7 @@ Use a separate port so this investigation does not interfere with the normal Wor
 
 ```bash
 tmux new-session -d -s codex-lume-daemon-official \
-  "cd /Users/fairchild/.codex/worktrees/55bd/workspaces && \
+  "cd /path/to/workspaces && \
    ~/.local/bin/lume serve --port 7778 2>&1 | tee '.dev-data/logs/codex-lume-daemon-official.log'"
 ```
 
@@ -202,11 +203,15 @@ Current useful helper profile for post-setup guest recovery:
 
 - `config/lume/unattended/tahoe-workspaces-v18-official-run-bootstrap-ssh.yml`
 
-Current full-flow Tahoe override used by standalone rebuilds:
+Current default bridged Tahoe override used by standalone rebuilds:
 
-- `config/lume/unattended/tahoe-workspaces-v23.yml`
+- `config/lume/unattended/tahoe-workspaces-bridged-v27.yml`
 
-That profile is a resume helper, not the full stock-install preset. It assumes the guest can already reach the login screen and Terminal.
+Current NAT Tahoe override:
+
+- `config/lume/unattended/tahoe-workspaces-v26.yml`
+
+The bridged profile is the default full-flow stock-install path. Use the NAT profile only when you intentionally need the older network path for comparison or recovery.
 
 If the standalone validator is already green, skip ahead to [Step 4](#step-4-run-the-base-with-bridged-networking). You do not need to recreate the base again just to repro the known-good path.
 
@@ -218,14 +223,14 @@ Stop any existing run first:
 curl -sS -X POST \
   'http://127.0.0.1:7778/lume/vms/workspaces-validated-base-macos-tahoe-26-2-xcode-26-2/stop' \
   -H 'Content-Type: application/json' \
-  --data '{"storage":"/Users/fairchild/Library/Application Support/WorkspaceManager/LumeStorage/validated-bases"}'
+  --data "{\"storage\":\"$HOME/Library/Application Support/WorkspaceManager/LumeStorage/validated-bases\"}"
 ```
 
 Then run with an explicit bridged override:
 
 ```bash
 curl -sS --json '{
-  "storage":"/Users/fairchild/Library/Application Support/WorkspaceManager/LumeStorage/validated-bases",
+  "storage":"'"$HOME"'/Library/Application Support/WorkspaceManager/LumeStorage/validated-bases",
   "noDisplay":true,
   "network":"bridged:en0"
 }' \
@@ -266,15 +271,15 @@ Expected result:
 Observed credentials during manual recovery:
 
 - VNC / guest login user: `lume`
-- guest password: `lume`
+- guest password: `lumesetup26`
 
 Evidence for the working GUI path:
 
-- `/Users/fairchild/.codex/worktrees/55bd/workspaces/output/lume-standalone/20260311-101900-open-system-settings/03-opened.png`
-- `/Users/fairchild/.codex/worktrees/55bd/workspaces/output/lume-standalone/20260311-103000-settings-search-click2/03-typed.png`
-- `/Users/fairchild/.codex/worktrees/55bd/workspaces/output/lume-standalone/20260311-103400-settings-remote-login-click/02-after-click.png`
-- `/Users/fairchild/.codex/worktrees/55bd/workspaces/output/lume-standalone/20260311-104000-remote-login-toggle/00-start.png`
-- `/Users/fairchild/.codex/worktrees/55bd/workspaces/output/lume-standalone/20260311-104000-remote-login-toggle/01-after-toggle.png`
+- `output/lume-standalone/20260311-101900-open-system-settings/03-opened.png`
+- `output/lume-standalone/20260311-103000-settings-search-click2/03-typed.png`
+- `output/lume-standalone/20260311-103400-settings-remote-login-click/02-after-click.png`
+- `output/lume-standalone/20260311-104000-remote-login-toggle/00-start.png`
+- `output/lume-standalone/20260311-104000-remote-login-toggle/01-after-toggle.png`
 
 ## Step 6: Verify The Base Over SSH
 
@@ -284,8 +289,8 @@ Known-good command:
 ~/.local/bin/lume ssh workspaces-validated-base-macos-tahoe-26-2-xcode-26-2 \
   'echo BASE_OK && whoami && hostname && ipconfig getifaddr en0' \
   --user lume \
-  --password lume \
-  --storage '/Users/fairchild/Library/Application Support/WorkspaceManager/LumeStorage/validated-bases'
+  --password lumesetup26 \
+  --storage "$HOME/Library/Application Support/WorkspaceManager/LumeStorage/validated-bases"
 ```
 
 Expected:
@@ -312,8 +317,8 @@ Clone the base:
 curl -sS --json "{
   \"name\":\"workspaces-validated-base-macos-tahoe-26-2-xcode-26-2\",
   \"newName\":\"$CLONE\",
-  \"sourceLocation\":\"/Users/fairchild/Library/Application Support/WorkspaceManager/LumeStorage/validated-bases\",
-  \"destLocation\":\"/Users/fairchild/Library/Application Support/WorkspaceManager/LumeStorage/validated-bases\"
+  \"sourceLocation\":\"$HOME/Library/Application Support/WorkspaceManager/LumeStorage/validated-bases\",
+  \"destLocation\":\"$HOME/Library/Application Support/WorkspaceManager/LumeStorage/validated-bases\"
 }" \
   'http://127.0.0.1:7778/lume/vms/clone'
 ```
@@ -322,7 +327,7 @@ Run the clone:
 
 ```bash
 curl -sS --json "{
-  \"storage\":\"/Users/fairchild/Library/Application Support/WorkspaceManager/LumeStorage/validated-bases\",
+  \"storage\":\"$HOME/Library/Application Support/WorkspaceManager/LumeStorage/validated-bases\",
   \"noDisplay\":true,
   \"network\":\"bridged:en0\",
   \"sharedDirectories\":[
@@ -341,23 +346,11 @@ Then:
 Known-good direct SSH proof:
 
 ```bash
-python3 - <<'PY'
-import paramiko
-
-host = "REPLACE_WITH_CLONE_IP"
-user = "lume"
-password = "lume"
-cmd = 'echo CLONE_OK && whoami && hostname && ipconfig getifaddr en0 && ls "/Volumes/My Shared Files" && cat "/Volumes/My Shared Files/marker.txt"'
-
-client = paramiko.SSHClient()
-client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-client.connect(hostname=host, username=user, password=password, timeout=20)
-stdin, stdout, stderr = client.exec_command(cmd, timeout=30)
-print(stdout.read().decode())
-print(stderr.read().decode())
-client.close()
-PY
+ssh lume@REPLACE_WITH_CLONE_IP \
+  'echo CLONE_OK && whoami && hostname && ipconfig getifaddr en0 && ls "/Volumes/My Shared Files" && cat "/Volumes/My Shared Files/marker.txt"'
 ```
+
+Enter password `lume` at the prompt unless you have already arranged passwordless access during the investigation.
 
 Expected:
 
@@ -376,10 +369,11 @@ Stop and delete the clone:
 curl -sS -X POST \
   "http://127.0.0.1:7778/lume/vms/$CLONE/stop" \
   -H 'Content-Type: application/json' \
-  --data '{"storage":"/Users/fairchild/Library/Application Support/WorkspaceManager/LumeStorage/validated-bases"}'
+  --data "{\"storage\":\"$HOME/Library/Application Support/WorkspaceManager/LumeStorage/validated-bases\"}"
 
-curl -sS -X DELETE \
-  "http://127.0.0.1:7778/lume/vms/$CLONE?storage=%2FUsers%2Ffairchild%2FLibrary%2FApplication%20Support%2FWorkspaceManager%2FLumeStorage%2Fvalidated-bases"
+curl -G -sS -X DELETE \
+  --data-urlencode "storage=$HOME/Library/Application Support/WorkspaceManager/LumeStorage/validated-bases" \
+  "http://127.0.0.1:7778/lume/vms/$CLONE"
 ```
 
 Then remove the temp shared directory manually.
@@ -477,7 +471,7 @@ What to do:
 
 ```bash
 ~/.local/bin/lume get workspaces-validated-base-macos-tahoe-26-2-xcode-26-2 \
-  --storage '/Users/fairchild/Library/Application Support/WorkspaceManager/LumeStorage/validated-bases' \
+  --storage "$HOME/Library/Application Support/WorkspaceManager/LumeStorage/validated-bases" \
   -f json
 ```
 
@@ -545,7 +539,7 @@ What to do:
 
 ```bash
 tmux new-session -d -s codex-lume-daemon-official \
-  "cd /Users/fairchild/.codex/worktrees/55bd/workspaces && \
+  "cd /path/to/workspaces && \
    ~/.local/bin/lume serve --port 7778 2>&1 | tee '.dev-data/logs/codex-lume-daemon-official.log'"
 ```
 

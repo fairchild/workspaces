@@ -109,7 +109,13 @@ main() {
     fi
 
     local clone_ip
-    clone_ip="$(lume_standalone_json_field "$LUME_STANDALONE_RUN_DIR/clone-get-running.json" "ipAddress")"
+    clone_ip="$(lume_standalone_best_vm_ip \
+        "$CLONE_NAME" \
+        "$LUME_STANDALONE_BASE_STORAGE_PATH" \
+        "$LUME_STANDALONE_RUN_DIR/clone-get-running.json" \
+        "$LUME_STANDALONE_RUN_DIR/.tmp-${CLONE_NAME}-cli.json" \
+        "$LUME_STANDALONE_RUN_DIR/.tmp-${CLONE_NAME}-daemon.json" \
+        || true)"
 
     if ! lume_standalone_exec_remote \
         "$CLONE_NAME" \

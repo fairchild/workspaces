@@ -54,6 +54,19 @@ struct WorkspaceProviderTests {
         #expect(lume.descriptor.supportedGuestOS == [.macOS, .linux])
     }
 
+    @Test("Only the Lume provider currently exposes setup capability")
+    func providerSetupCapabilityConformance() throws {
+        let registry = WorkspaceProviderRegistry.live
+
+        let local = try #require(registry.provider(for: LocalWorkspaceProvider.identifier))
+        let daytona = try #require(registry.provider(for: DaytonaWorkspaceProvider.identifier))
+        let lume = try #require(registry.provider(for: LumeWorkspaceProvider.identifier))
+
+        #expect((local as? any WorkspaceProviderSetupCapable) == nil)
+        #expect((daytona as? any WorkspaceProviderSetupCapable) == nil)
+        #expect((lume as? any WorkspaceProviderSetupCapable) != nil)
+    }
+
     @Test("Lume status mapping covers running, stopped, provisioning, and missing")
     func lumeStatusMapping() {
         #expect(LumeWorkspaceProvider.mapStatus("running") == .active)
@@ -66,7 +79,7 @@ struct WorkspaceProviderTests {
     @Test("Lume progress messaging surfaces macOS download, install, and boot phases")
     func lumeProgressMessaging() {
         let downloadMessage = LumeProgressMessageBuilder.message(
-            status: "provisioning",
+            status: .provisioning,
             guestOS: WorkspaceGuestOS.macOS.rawValue,
             provisioningOperation: "ipsw_install",
             sshAvailable: nil,
@@ -75,7 +88,7 @@ struct WorkspaceProviderTests {
         #expect(downloadMessage == "Downloading macOS image... 99%")
 
         let installMessage = LumeProgressMessageBuilder.message(
-            status: "provisioning",
+            status: .provisioning,
             guestOS: WorkspaceGuestOS.macOS.rawValue,
             provisioningOperation: "ipsw_install",
             sshAvailable: nil,
@@ -89,7 +102,7 @@ struct WorkspaceProviderTests {
         #expect(installMessage == "Installing macOS... 12%")
 
         let bootMessage = LumeProgressMessageBuilder.message(
-            status: "running",
+            status: .running,
             guestOS: WorkspaceGuestOS.macOS.rawValue,
             provisioningOperation: nil,
             sshAvailable: false,
@@ -98,13 +111,42 @@ struct WorkspaceProviderTests {
         #expect(bootMessage == "Booting macOS and waiting for SSH...")
 
         let linuxBootMessage = LumeProgressMessageBuilder.message(
-            status: "running",
+            status: .running,
             guestOS: WorkspaceGuestOS.linux.rawValue,
             provisioningOperation: nil,
             sshAvailable: false,
             logTail: nil
         )
         #expect(linuxBootMessage == "Booting Linux VM and waiting for SSH...")
+    }
+
+    @Test("Lume VM status normalization covers known and unknown states")
+    func lumeVMStatusNormalization() {
+        #expect(LumeVMStatus(rawValue: "running") == .running)
+        #expect(LumeVMStatus(rawValue: "stopped") == .stopped)
+        #expect(LumeVMStatus(rawValue: "provisioning") == .provisioning)
+        #expect(LumeVMStatus(rawValue: "provisioning (stale)") == .provisioningStale)
+        #expect(LumeVMStatus(rawValue: "missing") == .missing)
+        #expect(LumeVMStatus(rawValue: "mystery").workspaceStatus == .archived)
+    }
+
+    @Test("Lume error heuristics classify fallback and missing VM messages")
+    func lumeErrorHeuristics() {
+        #expect(
+            LumeErrorHeuristics.shouldFallbackToStockImage(
+                WorkspaceProviderError.unavailable("Fetch image manifest from registry failed.")
+            )
+        )
+        #expect(
+            LumeErrorHeuristics.shouldTreatAsMissingVM(
+                WorkspaceProviderError.unavailable("Virtual machine does not exist.")
+            )
+        )
+        #expect(
+            !LumeErrorHeuristics.shouldTreatAsMissingVM(
+                WorkspaceProviderError.unavailable("A different Lume failure")
+            )
+        )
     }
 
     @Test("Lume retries stock macOS provisioning with CLI for daemon async create failures")
@@ -147,5 +189,26 @@ struct WorkspaceProviderTests {
                 for: "[2026-03-09T03:43:43Z] INFO: Starting unattended Setup Assistant automation"
             ) == "Configuring macOS..."
         )
+    }
+
+    @Test("Lume bridged reachability extracts interface and matching ARP IP")
+    func lumeBridgedReachabilityParsing() {
+        #expect(LumeBridgedVMReachability.bridgedInterface(from: "bridged:en0") == "en0")
+        #expect(LumeBridgedVMReachability.bridgedInterface(from: "nat") == nil)
+
+        let arpOutput =
+            """
+            ? (192.168.8.100) at e:cf:3c:8a:f7:bd on en0 ifscope [ethernet]
+            ? (192.168.8.100) at ea:4:3c:6e:f5:71 on en5 ifscope [ethernet]
+            ? (192.168.8.122) at 0:e:58:7f:28:2a on en0 ifscope [ethernet]
+            """
+
+        let resolvedIP = LumeBridgedVMReachability.ipAddress(
+            forMACAddress: "0e:cf:3c:8a:f7:bd",
+            interfaceName: "en0",
+            arpOutput: arpOutput
+        )
+
+        #expect(resolvedIP == "192.168.8.100")
     }
 }

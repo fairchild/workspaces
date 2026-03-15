@@ -265,14 +265,11 @@ private struct MainWindowRootView: View {
     @State private var deepLinkState = WorkspaceDeepLinkState()
     @SceneStorage(MainWindowLastSurface.storageKey) private var lastSurfaceRawValue = ""
     @StateObject private var hostTerminalState = HostTerminalStateStore()
-    @StateObject private var lumeSetupCoordinator: LumeSetupCoordinator
+    @StateObject private var workspaceProviderSetupCoordinator = WorkspaceProviderSetupCoordinator()
     @StateObject private var hostLumeSmokeAutomation: HostLumeSmokeAutomationController
 
     init(appRuntimeDependencies: AppRuntimeDependencies) {
         self.appRuntimeDependencies = appRuntimeDependencies
-        _lumeSetupCoordinator = StateObject(
-            wrappedValue: LumeSetupCoordinator(runtimeService: appRuntimeDependencies.lumeRuntimeService)
-        )
         _hostLumeSmokeAutomation = StateObject(
             wrappedValue: HostLumeSmokeAutomationController()
         )
@@ -283,7 +280,7 @@ private struct MainWindowRootView: View {
             deepLinkState: $deepLinkState,
             lastSurfaceRawValue: $lastSurfaceRawValue,
             hostTerminalState: hostTerminalState,
-            lumeSetupCoordinator: lumeSetupCoordinator,
+            workspaceProviderSetupCoordinator: workspaceProviderSetupCoordinator,
             hostLumeSmokeAutomation: hostLumeSmokeAutomation
         )
         .onOpenURL { url in

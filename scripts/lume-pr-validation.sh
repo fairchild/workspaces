@@ -202,7 +202,7 @@ main() {
     pushd "$REPO_ROOT" >/dev/null
     run_and_log build-ghosttykit ./scripts/build-ghosttykit.sh || true
     run_and_log swift-build swift build || true
-    run_and_log swift-tests swift test --filter 'LumeValidatedBaseServiceTests|LumeRuntimeServiceTests|HostLumeSmokeAutomationTests|ModelsTests|WorkspaceProviderTests|LumeSetupCoordinatorTests' || true
+    run_and_log swift-tests swift test --filter 'LumeValidatedBaseServiceTests|LumeRuntimeServiceTests|HostLumeSmokeAutomationTests|ModelsTests|WorkspaceProviderTests|WorkspaceProviderSetupCoordinatorTests' || true
     run_and_log dev-smoke ./scripts/dev-smoke.sh --no-build || true
     run_and_log ui-smoke ./scripts/ui-smoke.sh || true
     run_and_log host-preflight ./scripts/lume-host-preflight.sh --no-build || true

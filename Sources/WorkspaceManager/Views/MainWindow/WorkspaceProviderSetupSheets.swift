@@ -1,18 +1,14 @@
 //
-//  LumeSetupSheets.swift
+//  WorkspaceProviderSetupSheets.swift
 //  WorkspaceManager
 //
-//  UI for first-use Lume setup and repair.
+//  UI for provider-owned first-use setup and repair.
 //
 
 import SwiftUI
 
-struct LumeSetupConfirmationSheet: View {
-    private let lumeDocsURL = URL(
-        string: "https://cua.ai/docs/lume/guide/getting-started/introduction"
-    )!
-
-    let request: LumeSetupConfirmationRequest
+struct WorkspaceProviderSetupConfirmationSheet: View {
+    let request: WorkspaceProviderSetupConfirmationRequest
     let onConfirm: () -> Void
     let onCancel: () -> Void
 
@@ -22,22 +18,21 @@ struct LumeSetupConfirmationSheet: View {
                 Text(request.title)
                     .font(.title2.weight(.semibold))
 
-                Text(
-                    "Lume is an MIT open-source VM runtime that uses Apple's native Virtualization Framework to run macOS and Linux VMs at near-native speed on Apple Silicon."
-                )
-                .foregroundStyle(.secondary)
+                ForEach(Array(request.introductoryText.enumerated()), id: \.offset) { _, paragraph in
+                    Text(paragraph)
+                        .foregroundStyle(.secondary)
+                }
 
-                Text(
-                    "Workspaces needs it so it can create VM-backed workspaces, open an in-app terminal with `lume ssh`, and launch full desktop access via VNC."
-                )
-                .foregroundStyle(.secondary)
-
-                Link("Learn more about Lume", destination: lumeDocsURL)
-                    .font(.callout)
+                if let learnMoreLabel = request.learnMoreLabel,
+                    let learnMoreURL = request.learnMoreURL
+                {
+                    Link(learnMoreLabel, destination: learnMoreURL)
+                        .font(.callout)
+                }
             }
 
             VStack(alignment: .leading, spacing: 10) {
-                Text("What Workspaces will do")
+                Text(request.explanatoryStepsTitle)
                     .font(.headline)
 
                 ForEach(Array(request.explanatorySteps.enumerated()), id: \.offset) { index, step in
@@ -50,17 +45,15 @@ struct LumeSetupConfirmationSheet: View {
                 }
             }
 
-            if let hostMatchDescription = request.hostMatchDescription {
-                Text(hostMatchDescription)
+            if let supplementaryText = request.supplementaryText {
+                Text(supplementaryText)
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
 
-            Text(
-                "This is a one-time setup on this Mac. No admin access is required. After setup finishes, Workspaces will continue automatically."
-            )
-            .font(.callout)
-            .foregroundStyle(.secondary)
+            Text(request.footerText)
+                .font(.callout)
+                .foregroundStyle(.secondary)
 
             HStack {
                 Button("Cancel", role: .cancel, action: onCancel)
@@ -75,12 +68,12 @@ struct LumeSetupConfirmationSheet: View {
     }
 }
 
-struct LumeSetupProgressSheet: View {
-    let presentation: LumeSetupProgressPresentation
+struct WorkspaceProviderSetupProgressSheet: View {
+    let presentation: WorkspaceProviderSetupProgressPresentation
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Text("Preparing macOS VM Support")
+            Text(presentation.title)
                 .font(.title2.weight(.semibold))
 
             Text(presentation.action.summary)
@@ -93,7 +86,7 @@ struct LumeSetupProgressSheet: View {
                     .font(.headline)
             }
 
-            Text("Workspaces is setting up the local Lume runtime and will continue automatically when it is ready.")
+            Text(presentation.bodyText)
                 .foregroundStyle(.secondary)
         }
         .padding(24)

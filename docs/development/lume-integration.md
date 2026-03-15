@@ -10,7 +10,7 @@ Read this when you need to answer any of these questions:
 - how the standalone validator and the Swift app relate
 - which unattended profile is used for stock Tahoe base preparation
 
-For the broader provider model, see [../vm-provider-architecture.md](/Users/fairchild/.codex/worktrees/55bd/workspaces/docs/vm-provider-architecture.md). For the runnable validation steps, see [lume-validation.md](/Users/fairchild/.codex/worktrees/55bd/workspaces/docs/development/lume-validation.md). For the exact recreate-from-scratch and troubleshooting workflow, see [lume-recreate-runbook.md](/Users/fairchild/.codex/worktrees/55bd/workspaces/docs/development/lume-recreate-runbook.md).
+For the broader provider model, see [../vm-provider-architecture.md](../vm-provider-architecture.md). For the runnable validation steps, see [lume-validation.md](./lume-validation.md). For the exact recreate-from-scratch and troubleshooting workflow, see [lume-recreate-runbook.md](./lume-recreate-runbook.md).
 
 ## High-Level Contract
 
@@ -24,9 +24,15 @@ Workspaces treats Lume as an external runtime.
 flowchart LR
     User["User picks macOS VM"] --> App["Workspaces app"]
     App --> Runtime["LumeRuntimeService"]
+    Runtime --> Catalog["LumeImageCatalog"]
     Runtime --> Base["Validated base manifest"]
+    Runtime --> Transport["LumeHTTPClient"]
     Base -->|ready only| Provider["LumeWorkspaceProvider"]
-    Provider -->|clone + run| Lume["Lume CLI / daemon"]
+    Provider --> Transport
+    Provider --> Runner["LumeCLIRunner"]
+    Provider --> Normalizers["LumeVMStatus + LumeErrorHeuristics"]
+    Transport -->|daemon requests| Lume["Lume CLI / daemon"]
+    Runner -->|CLI fallbacks / detached run| Lume
 
     Validator["Standalone validator"] -->|prepare / verify / clone-smoke| Lume
     Validator -->|writes| Base
@@ -37,11 +43,25 @@ flowchart LR
 | Concern | Owner | Notes |
 | --- | --- | --- |
 | Install Lume CLI, verify daemon, show repair flow | Swift app | First-use setup and Settings UI |
-| Detect host profile and resolve default image | Swift runtime | Shared with standalone scripts by convention |
+| Detect host profile and resolve default image | Swift runtime + `LumeImageCatalog` | Shared with standalone scripts by convention |
 | Prove a base can boot, get IP, and accept SSH | Standalone validator | This is a hard gate |
 | Mark a base `ready` | Standalone validator only | The app never self-certifies a base |
 | Clone base into a workspace VM | Swift app | Fast path only |
 | Fall back to slow stock macOS install | Standalone validator | Used to prepare a base, not a normal workspace |
+
+## Swift Runtime Surfaces
+
+The shipped app now keeps the Lume-specific responsibilities on smaller, typed seams instead of duplicating transport and subprocess logic inside the two main actors.
+
+| Type | Responsibility |
+| --- | --- |
+| `LumeRuntimeService` | install/repair flow, daemon health, host profile, validated-base inspection |
+| `LumeWorkspaceProvider` | workspace lifecycle orchestration, shared-dir launch specs, status sync |
+| `LumeHTTPClient` | canonical `/lume/...` URL construction plus daemon request/response handling |
+| `LumeCLIRunner` | shared `lume` subprocess execution, streaming CLI transcripts, detached macOS `lume run` launch |
+| `LumeImageCatalog` | host-profile to golden-image resolution |
+| `LumeVMStatus` | normalized VM lifecycle states (`running`, `stopped`, `provisioning`, etc.) |
+| `LumeErrorHeuristics` | shared missing-VM and fallback/retry message classification |
 
 ## Validated Base Contract
 
@@ -114,11 +134,12 @@ Workspaces can override Lume's built-in unattended preset when a host-specific s
 
 Current override policy:
 
-- Workspaces keeps a versioned set of Tahoe profiles under [config/lume/unattended/](/Users/fairchild/.codex/worktrees/55bd/workspaces/config/lume/unattended/)
-- the current full-flow Tahoe override is [tahoe-workspaces-v23.yml](/Users/fairchild/.codex/worktrees/55bd/workspaces/config/lume/unattended/tahoe-workspaces-v23.yml)
+- Workspaces keeps a versioned set of Tahoe profiles under [config/lume/unattended/](../../config/lume/unattended/)
+- the current default bridged Tahoe override is [tahoe-workspaces-bridged-v27.yml](../../config/lume/unattended/tahoe-workspaces-bridged-v27.yml)
+- the current NAT Tahoe override is [tahoe-workspaces-v26.yml](../../config/lume/unattended/tahoe-workspaces-v26.yml)
 - fallback is still the upstream preset name, for example `preset:tahoe`
 - the override set is consumed by the standalone validator and recovery path only
-- the current from-scratch recovery helper is [tahoe-workspaces-v18-official-run-bootstrap-ssh.yml](/Users/fairchild/.codex/worktrees/55bd/workspaces/config/lume/unattended/tahoe-workspaces-v18-official-run-bootstrap-ssh.yml)
+- the current from-scratch recovery helper is [tahoe-workspaces-v18-official-run-bootstrap-ssh.yml](../../config/lume/unattended/tahoe-workspaces-v18-official-run-bootstrap-ssh.yml)
 
 The important current-state detail is that the old `Screen Time` issue is no longer the main blocker. The meaningful runtime behavior now depends on:
 
@@ -179,7 +200,7 @@ Operationally, that means:
 - bridged guest IP plus direct SSH is the current source of truth
 - daemon-side `null` IP must not be treated as immediate guest failure on this path
 
-For the exact commands and troubleshooting sequence, use [lume-recreate-runbook.md](/Users/fairchild/.codex/worktrees/55bd/workspaces/docs/development/lume-recreate-runbook.md).
+For the exact commands and troubleshooting sequence, use [lume-recreate-runbook.md](./lume-recreate-runbook.md).
 
 ## Current Operational Workaround
 
@@ -225,7 +246,8 @@ The Swift app must follow these rules:
 - it should treat a missing or invalid base as an actionable setup/runtime condition
 - it should create workspace VMs only in `workspace-vms/`, unless same-storage clone reuse is required to preserve a known-good fast path on this host
 - it should fall back to CLI `lume get --storage ... -f json` when daemon VM lookup fails for custom storage
-- it should use detached CLI `lume run` for macOS clone boot so VM lifetime is not tied to the app process
+- it should use the shared `LumeCLIRunner` detached `lume run` path for macOS clone boot; the shipped app no longer depends on a Python detacher
+- it should normalize daemon/CLI VM lifecycle strings through `LumeVMStatus` and classify shared retry/missing-VM messages through `LumeErrorHeuristics`
 
 That keeps the app fast-path small:
 

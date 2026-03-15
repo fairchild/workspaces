@@ -10,9 +10,9 @@ Use it for two different jobs:
 
 If you only need repeatable UI evidence, use the fixture flow first. If you need to validate the actual runtime integration, run the standalone Lume gate first, then the app-backed real-host flow.
 
-Current-state integration details live in [lume-integration.md](/Users/fairchild/.codex/worktrees/55bd/workspaces/docs/development/lume-integration.md).
+Current-state integration details live in [lume-integration.md](./lume-integration.md).
 
-If you need the exact from-scratch recreation path and the current troubleshooting playbook, start with [lume-recreate-runbook.md](/Users/fairchild/.codex/worktrees/55bd/workspaces/docs/development/lume-recreate-runbook.md).
+If you need the exact from-scratch recreation path and the current troubleshooting playbook, start with [lume-recreate-runbook.md](./lume-recreate-runbook.md).
 
 ## Known-Good Evidence
 
@@ -101,10 +101,13 @@ Contract:
   - with `state = "ready"` for the current `hostProfileKey`
 - stock Tahoe base preparation now relies on the versioned Workspaces profiles under:
   - `config/lume/unattended/`
-- the current full-flow Tahoe override is:
-  - `config/lume/unattended/tahoe-workspaces-v23.yml`
+- the current default bridged Tahoe override is:
+  - `config/lume/unattended/tahoe-workspaces-bridged-v27.yml`
+- the current NAT Tahoe override is:
+  - `config/lume/unattended/tahoe-workspaces-v26.yml`
 - the current recreate-from-scratch recovery helper is:
   - `config/lume/unattended/tahoe-workspaces-v18-official-run-bootstrap-ssh.yml`
+- stock base preparation uses `LUME_STANDALONE_PREPARE_NETWORK` and defaults it to the same value as `LUME_STANDALONE_RUN_NETWORK` (`bridged:en0` unless overridden)
 
 Upstream Lume local-build note:
 
@@ -119,6 +122,19 @@ Use this rule:
 
 - changing UI, setup wording, progress states, or action resumption: run the fixture flow
 - changing runtime detection, installation, daemon verification, image resolution, VM lifecycle, or desktop launch: run fixture plus standalone Lume validation, then real-host validation
+
+## Swift App Runtime Surfaces
+
+When the real app path is under test, these are the active seams:
+
+| Type | Responsibility |
+| --- | --- |
+| `LumeRuntimeService` | install/repair flow, daemon health, base inspection |
+| `LumeWorkspaceProvider` | workspace VM lifecycle and launch orchestration |
+| `LumeHTTPClient` | shared daemon transport and endpoint building |
+| `LumeCLIRunner` | shared `lume` CLI execution and detached macOS `run` launch |
+| `LumeImageCatalog` | host-profile image resolution |
+| `LumeVMStatus` / `LumeErrorHeuristics` | normalized status and retry/missing-VM classification |
 
 ## Fixture UI E2E
 
@@ -200,7 +216,7 @@ If you are validating an upstream Lume patch locally, use:
 ```bash
 INSTALL_DIR="/tmp/lume-upstream-test/bin" \
   TERM=xterm-256color \
-  /Users/fairchild/code/github/cua/libs/lume/scripts/install-local.sh --no-background-service
+  /path/to/cua/libs/lume/scripts/install-local.sh --no-background-service
 
 tmux new-session -d -s codex-lume-daemon \
   "/tmp/lume-upstream-test/bin/lume serve --port 7777"
@@ -238,7 +254,7 @@ Do not treat a Workspaces macOS VM smoke failure as meaningful until this standa
 Current known-good runtime note:
 
 - the presently proven recovery path uses the official signed Lume daemon plus a bridged runtime override
-- if you are trying to recreate or debug the working base+clone flow, use [lume-recreate-runbook.md](/Users/fairchild/.codex/worktrees/55bd/workspaces/docs/development/lume-recreate-runbook.md) instead of assuming the old NAT-only path is still sufficient
+- if you are trying to recreate or debug the working base+clone flow, use [lume-recreate-runbook.md](./lume-recreate-runbook.md) instead of assuming the old NAT-only path is still sufficient
 
 ### Known-good manual recovery path
 
@@ -256,7 +272,7 @@ Important:
 
 - daemon `ipAddress` and `sshAvailable` were historically unreliable on this bridged path
 - a bridged guest IP plus direct SSH is the current runtime source of truth
-- if you need the exact commands, use [lume-recreate-runbook.md](/Users/fairchild/.codex/worktrees/55bd/workspaces/docs/development/lume-recreate-runbook.md)
+- if you need the exact commands, use [lume-recreate-runbook.md](./lume-recreate-runbook.md)
 
 ### Automated real-host smoke
 
@@ -419,7 +435,7 @@ Typical causes:
 - daemon is not reachable on `localhost:7777`
 - the host-matched golden image is not published or not reachable
 
-If what you actually need is to recreate the currently working base+clone path, do not start here. Use [lume-recreate-runbook.md](/Users/fairchild/.codex/worktrees/55bd/workspaces/docs/development/lume-recreate-runbook.md) and the dedicated daemon on port `7778`.
+If what you actually need is to recreate the currently working base+clone path, do not start here. Use [lume-recreate-runbook.md](./lume-recreate-runbook.md) and the dedicated daemon on port `7778`.
 
 ### `GET /lume/vms/:name` fails for a VM in custom storage, but CLI `lume get --storage ...` works
 
