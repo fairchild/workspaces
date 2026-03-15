@@ -7,6 +7,8 @@ struct WorkspaceEnvironmentFixtureState {
 }
 
 struct WorkspaceEnvironmentOptionsController {
+    private static let probeTimeoutNanoseconds: UInt64 = 5_000_000_000
+
     private struct SnapshotRefreshResult {
         let snapshot: LumeRuntimeSnapshot?
         let timedOut: Bool
@@ -87,7 +89,7 @@ struct WorkspaceEnvironmentOptionsController {
         registry: WorkspaceProviderRegistry,
         existingAvailabilityByID: [String: WorkspaceProviderAvailability],
         trigger: String,
-        timeoutNanoseconds: UInt64 = 5_000_000_000
+        timeoutNanoseconds: UInt64 = probeTimeoutNanoseconds
     ) async -> [String: WorkspaceProviderAvailability] {
         let refreshStartedAt = Date()
         var resolvedAvailability = existingAvailabilityByID
@@ -130,7 +132,7 @@ struct WorkspaceEnvironmentOptionsController {
         runtimeService: any LumeRuntimeServiceProtocol,
         existingSnapshot: LumeRuntimeSnapshot?,
         trigger: String,
-        timeoutNanoseconds: UInt64 = 5_000_000_000
+        timeoutNanoseconds: UInt64 = probeTimeoutNanoseconds
     ) async -> LumeRuntimeSnapshot? {
         let refreshStartedAt = Date()
         let refreshResult = await snapshotWithTimeout(
@@ -542,6 +544,10 @@ struct WorkspaceEnvironmentOptionsController {
         }
     }
 
+    // Note: snapshot() has no per-step internal timeouts. If a subprocess
+    // (e.g. xcodebuild -version) hangs at the OS level, this outer timeout
+    // fires but the underlying task stays alive until cancellation propagates.
+    // See #107 for follow-up.
     private func snapshotWithTimeout(
         runtimeService: any LumeRuntimeServiceProtocol,
         timeoutNanoseconds: UInt64
