@@ -441,6 +441,24 @@ def find_prs_awaiting_rereview(
     )
 
 
+def detect_bot_login(env: dict[str, str]) -> str:
+    """Detect the bot login for the current GH_TOKEN.
+
+    For GitHub App installation tokens, /app returns the app metadata.
+    The bot login is the app slug + [bot] suffix.
+    """
+    raw = run_optional(
+        ["gh", "api", "/app", "--jq", ".slug"],
+        timeout=GITHUB_API_TIMEOUT,
+        cwd=REPO_ROOT,
+        env=env,
+        default="",
+    ).strip()
+    if raw:
+        return f"{raw}[bot]"
+    return ""
+
+
 def gather_context(env: dict[str, str], persona: str = "", bot_login: str = "") -> str:
     log("Gathering context")
     owner, name = repo_owner_name(env)
@@ -701,13 +719,7 @@ def main() -> int:
     env = normalize_provider_env(dict(os.environ))
 
     persona = extract_persona(prompt_file)
-    bot_login = run_optional(
-        ["gh", "api", "user", "--jq", ".login"],
-        timeout=GITHUB_API_TIMEOUT,
-        cwd=REPO_ROOT,
-        env=env,
-        default="",
-    ).strip()
+    bot_login = detect_bot_login(env)
     if bot_login:
         log(f"Authenticated as {bot_login}")
     context = gather_context(env, persona=persona, bot_login=bot_login)
