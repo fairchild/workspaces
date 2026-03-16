@@ -46,6 +46,9 @@ __pycache__/
 # Node/Bun (Cloudflare Worker)
 node_modules/
 
+# Papers (keep README.md, ignore binaries)
+docs/papers/*.pdf
+
 # macOS
 .DS_Store
 *.swp
