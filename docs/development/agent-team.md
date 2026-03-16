@@ -153,6 +153,7 @@ For manual dry runs, `scripts/ops-report.py` also accepts `--fixtures-dir fixtur
 - **Catalog-backed labels** — Peter can only use repo-managed labels from `.agents/skills/peter-planner/config/peter-planner.toml`, with alias normalization for common CI/platform terms
 - **Idempotent planning markers** — planner comments, milestone descriptions, and issue bodies carry machine markers so retries reuse existing artifacts instead of leaking duplicates
 - **Discussion token override** — `permissions.discussions: write` is enough for comments, issues, and milestones, but GitHub's built-in Actions token still cannot retitle discussions via `updateDiscussion` in this repo. `agent-peter.yml` therefore prefers the repo secret `PETER_DISCUSSION_TOKEN` when present, and the repo's default Actions workflow permission should stay at `write`
+- **OpenAI env compatibility** — agent runtimes treat `OPENAI_API_KEY` as the canonical provider variable and fall back to `GITHUB_CODESPACES_OPENAI_API_KEY` when present so local Codespaces-oriented `.env` files can still work without changing the runtime contract
 - **Simple operational memory** — GitHub stays the raw event source; `docs/ops/` stores small checked-in snapshots and dashboards instead of introducing a separate analytics service or database in v1
 - **Replay fixtures stay separate from memory** — Observer scenario packs live in `fixtures/ops-report/` so synthetic dry-run inputs do not get confused with the real operational snapshots in `docs/ops/`
 

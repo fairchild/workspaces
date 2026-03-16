@@ -155,6 +155,15 @@ def log(message: str) -> None:
     print(f"[run-planner] {message}", file=sys.stderr)
 
 
+def normalize_provider_env(env: dict[str, str]) -> dict[str, str]:
+    normalized = dict(env)
+    if not normalized.get("OPENAI_API_KEY"):
+        fallback = normalized.get("GITHUB_CODESPACES_OPENAI_API_KEY", "").strip()
+        if fallback:
+            normalized["OPENAI_API_KEY"] = fallback
+    return normalized
+
+
 def run_checked(
     cmd: list[str],
     *,
@@ -1095,7 +1104,7 @@ def comment_is_approved(args: argparse.Namespace, env: dict[str, str], owner: st
 
 def main() -> int:
     args = parse_args()
-    env = dict(os.environ)
+    env = normalize_provider_env(dict(os.environ))
     owner, name = repo_owner_name(env)
     number = resolve_discussion_number(args, env)
     if number is None:

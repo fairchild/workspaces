@@ -362,6 +362,31 @@ class RunPlannerTests(unittest.TestCase):
 
 
 class RunContributorTests(unittest.TestCase):
+    def test_normalize_provider_env_prefers_openai_api_key(self) -> None:
+        env = run_contributor.normalize_provider_env(
+            {
+                "OPENAI_API_KEY": "primary-key",
+                "GITHUB_CODESPACES_OPENAI_API_KEY": "fallback-key",
+            }
+        )
+        self.assertEqual(env["OPENAI_API_KEY"], "primary-key")
+
+    def test_normalize_provider_env_falls_back_to_codespaces_key(self) -> None:
+        env = run_contributor.normalize_provider_env(
+            {
+                "GITHUB_CODESPACES_OPENAI_API_KEY": "fallback-key",
+            }
+        )
+        self.assertEqual(env["OPENAI_API_KEY"], "fallback-key")
+
+    def test_planner_normalize_provider_env_falls_back_to_codespaces_key(self) -> None:
+        env = run_planner.normalize_provider_env(
+            {
+                "GITHUB_CODESPACES_OPENAI_API_KEY": "fallback-key",
+            }
+        )
+        self.assertEqual(env["OPENAI_API_KEY"], "fallback-key")
+
     def test_extract_persona_from_april_prompt(self) -> None:
         prompt = (
             REPO_ROOT

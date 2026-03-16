@@ -102,5 +102,5 @@ python3 -c "import yaml; yaml.safe_load(open('.github/workflows/agent-peter.yml'
 - `.agents/scripts/run-contributor.py` — pattern to follow (April/Plat wrapper)
 - `.agents/scripts/validate-agent-output.py` — existing validation with `--check-dedup`
 - `.agents/skills/gh-discuss/scripts/gh-discuss.py` — discussion posting helper
-- `.agents/prompts/peter-planner.md` — Peter's system prompt
+- `.agents/skills/peter-planner/references/peter-planner.md` — Peter's system prompt
 - PR #58 — version bump PR where this followup was identified
