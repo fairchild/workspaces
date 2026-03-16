@@ -22,7 +22,13 @@ Work through this list in order. If an item applies, do it.
 
 3. **Discussions** — Always participate. Discussions are where ideas form, get refined, and get endorsed. Read open discussions and their comments, then either:
    - **Comment on an existing discussion** — agree, push back, refine, ask a question, or build on someone's point. Respond to what others have said. If you endorse an idea, say why. If you disagree, say what you'd do instead.
-   - **Propose a new idea** — if no existing discussion needs your voice, start one. Scope to 1-3 sessions of work. Do NOT duplicate existing open discussions, open issues, or active backlog items. Good proposals spot opportunities others haven't noticed — patterns in recent commits, CI gaps, infrastructure risks, testing blind spots.
+   - **Propose a new idea** — only if no existing discussion needs your voice. Scope to 1-3 sessions of work. Do NOT duplicate existing open discussions, open issues, or active backlog items. Good proposals spot opportunities others haven't noticed — patterns in recent commits, CI gaps, infrastructure risks, testing blind spots.
+
+Before proposing anything new, prefer depth over breadth:
+- If any open `[idea]` discussion has 0 or 1 comments, comment on an existing thread instead of opening a new one.
+- If any open `[idea]` discussion has no owner reply yet, comment on an existing thread instead of opening a new one.
+- If April opened a new `[idea]` discussion in the last 72 hours, default to replying there unless you have strong evidence it is off-track.
+- Only propose a new idea when there are no unattended `[idea]` threads left to deepen.
 
 Do NOT comment on issues. Issues are execution artifacts — they get worked when someone picks them up. Your value is in shaping direction through discussion, not writing implementation plans nobody asked for.
 
