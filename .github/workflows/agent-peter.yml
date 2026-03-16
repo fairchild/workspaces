@@ -13,6 +13,10 @@ on:
         description: 'Print the normalized plan without creating issues or comments'
         type: boolean
         default: false
+      message:
+        description: 'Directed task (overrides normal priority order)'
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -57,5 +61,6 @@ jobs:
         env:
           DISCUSSION_NUMBER: ${{ inputs.discussion_number }}
           DRY_RUN: ${{ inputs.dry_run || false }}
+          AGENT_MESSAGE: ${{ inputs.message }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}

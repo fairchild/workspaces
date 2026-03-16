@@ -48,6 +48,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--prompt-file", required=True, type=Path)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--mode", choices=["cli", "print"], default="cli")
+    parser.add_argument("--message", type=str, default="",
+                        help="Directed task — overrides periodic priority order")
     return parser.parse_args()
 
 
@@ -566,9 +568,23 @@ query($owner: String!, $name: String!) {
     return "\n\n".join(sections)
 
 
-def run_claude(prompt_file: Path, context: str, env: dict[str, str], *, mode: str = "cli") -> str:
+def run_claude(
+    prompt_file: Path, context: str, env: dict[str, str],
+    *, mode: str = "cli", message: str = "",
+) -> str:
     log(f"Running Claude Code with {prompt_file} (mode={mode})")
-    task = CLAUDE_TASK_CLI if mode == "cli" else CLAUDE_TASK
+    if message:
+        log(f"Directed task: {message[:80]}")
+        task = (
+            f"DIRECTED TASK (highest priority — do this instead of your normal priority "
+            f"order): {message}\n\n"
+            f"CRITICAL: Your final output MUST be valid YAML frontmatter exactly as "
+            f"specified in your prompt — start with `---` on the very first line, then "
+            f"metadata fields, then closing `---`, then your markdown body. Do NOT write "
+            f"any text before the opening `---`."
+        )
+    else:
+        task = CLAUDE_TASK_CLI if mode == "cli" else CLAUDE_TASK
     cmd = [
         "npx",
         "--yes",
@@ -722,7 +738,7 @@ def main() -> int:
     if bot_login:
         log(f"Authenticated as {bot_login}")
     context = gather_context(env, persona=persona, bot_login=bot_login)
-    raw_output = run_claude(prompt_file, context, env, mode=args.mode)
+    raw_output = run_claude(prompt_file, context, env, mode=args.mode, message=args.message)
     exit_code, validated_json, error_text = validate_output(raw_output, env)
 
     if exit_code == 2 and error_text.startswith("duplicate:"):
