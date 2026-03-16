@@ -1,6 +1,6 @@
 # Agent Team
 
-Workspaces has a founding team of AI agents that propose improvements, review each other's work, and plan approved ideas into actionable issues. The goal is autonomous development with human approval gating — the repo advances itself, guided by the owner.
+Workspaces has a founding team of AI agents that propose improvements, review each other's work, plan approved ideas into actionable issues, and now pick up explicitly approved issues into PRs. The goal is autonomous development with human approval gating — the repo advances itself, guided by the owner.
 
 ## Team
 
@@ -26,9 +26,10 @@ Daily (weekdays, alternating who goes first, 30 min offset):
   Agent wakes up
     │
     1. Check open PRs → give code review
-    2. Check in-progress issues → suggest next steps
-    3. Read new discussion comments → react
-    4. If nothing needs attention → propose new [idea]
+    2. Check own open PRs / claimed issues → keep them moving
+    3. Check execution-approved ready issues → claim one and open/update a PR
+    4. Read new discussion comments → react
+    5. If nothing needs attention → propose new [idea]
     │
     Post to GitHub Discussions
     │
@@ -39,7 +40,17 @@ Daily (weekdays, alternating who goes first, 30 min offset):
     2. Reads full thread + owner's modifications
     3. Creates Issue(s) or Milestone + Issues
     4. Links discussion ↔ issues
-    5. Marks [idea][endorsed]
+    5. Posts a summary comment with the milestone link and execution approval instructions
+    6. Marks [idea][endorsed]
+    │
+  Owner reacts 👍 on Peter's summary comment
+    │
+  Next April / Plat wake-up
+    1. Re-review open PRs they are blocking
+    2. Review other open PRs
+    3. Continue their own PRs / claimed issues
+    4. Claim the highest-priority ready approved issue
+    5. Push a branch + open/update a PR
     │
   Observer (weekly)
     1. Reads idea/issue/PR/workflow history
@@ -73,7 +84,8 @@ The reply can include modifications — Peter reads the full thread and incorpor
 
 ```
 [idea] New proposal          → open, awaiting review
-[idea][endorsed] Approved    → planned into issues, work can begin
+[idea][endorsed] Approved    → planned into issues
+[idea][endorsed] + 👍 on Peter summary → execution-approved, work can begin
 [shipped] Completed          → closed after delivery
 ```
 
@@ -122,6 +134,8 @@ The shared contributor behavior now lives in `.agents/skills/cofounder-contribut
 3. validate YAML frontmatter output through the shared validator
 4. either pretty-print validated JSON for dry runs or route the action back into GitHub
 
+When Peter has already planned a discussion, execution approval lives on Peter's summary comment. A 👍 reaction from the repo owner is the signal April and Plat look for before they claim a linked `agent:task` issue.
+
 April and Plat workflows now invoke the skill runtime directly. The old `.agents/scripts/run-contributor.py` path remains only as a compatibility shim for any external callers that still depend on it.
 
 Peter Planner stays separate because it is event-driven and uses a different planning schema, but its runtime source of truth now lives in `.agents/skills/peter-planner/scripts/run-planner.py`:
@@ -168,9 +182,9 @@ Agents propose ideas and review each other's work. Human approves. Planner creat
 Add persistent memory so agents build context across sessions — what shipped, what worked, what didn't. They stop re-proposing similar ideas and develop a sense of project trajectory.
 
 ### Phase 3: Execute
-Approved and planned issues get picked up by agents that create branches, write code, open PRs. Human reviews PRs.
+Approved and planned issues get picked up by April and Plat after the owner reacts 👍 on Peter's summary comment. They create branches, write code, open PRs, and keep open PRs moving to closure. Human reviews PRs and remains the only merge authority.
 
-The current repo-local bridge for this phase is the `$drive` skill: it resolves a live milestone, refreshes or rewrites the execution plan from current GitHub state, then drives the milestone issue by issue.
+The `$drive` skill remains the manual bridge for milestone-wide execution, but the standing contributor workflows can now autonomously pick up a single approved issue at their scheduled wake-up.
 
 ### Phase 4: Evaluate
 After work ships, agents assess impact — did the change improve the codebase? Did tests pass? Did performance hold? Evaluation feeds back into ideation priorities.

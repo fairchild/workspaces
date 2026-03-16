@@ -4,7 +4,8 @@ description: >-
   Run the cofounder contributor workflow for this repo's standing personas.
   Use when you want April Clearwater or Plat Ironwood to sweep open PRs,
   discussions, and issues, then produce one structured action: proposal,
-  discussion comment, PR review, or issue-advancing comment.
+  discussion comment, PR review, or issue execution that pushes a branch
+  and opens or updates a PR.
 ---
 
 # Cofounder Contributor
@@ -28,7 +29,7 @@ Use this skill to run the shared contributor runtime with one of the repo's cofo
 2. Gather current repo and GitHub context.
 3. Run Claude Code with the persona and appended context.
 4. Validate the YAML frontmatter output.
-5. Route the result back into GitHub as a proposal, discussion comment, PR review, or issue comment.
+5. Route the result back into GitHub as a proposal, discussion comment, PR review, or issue execution with branch/PR management.
 
 ## Usage
 

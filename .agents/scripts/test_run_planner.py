@@ -37,6 +37,10 @@ validator = load_module(
     "validate_agent_output",
     REPO_ROOT / ".agents" / "skills" / "peter-planner" / "scripts" / "validate-agent-output.py",
 )
+contributor_validator = load_module(
+    "cofounder_validate_agent_output",
+    REPO_ROOT / ".agents" / "skills" / "cofounder-contributor" / "scripts" / "validate-agent-output.py",
+)
 run_contributor = load_module(
     "run_contributor",
     REPO_ROOT / ".agents" / "skills" / "cofounder-contributor" / "scripts" / "run-contributor.py",
@@ -151,6 +155,19 @@ class ValidateAgentOutputTests(unittest.TestCase):
                 }
             )
 
+    def test_contributor_execute_issue_requires_positive_issue_number(self) -> None:
+        with self.assertRaises(contributor_validator.ValidationError):
+            contributor_validator.validate_data(
+                {
+                    "action": "execute_issue",
+                    "persona": "April Clearwater, Application Lead",
+                    "issue_number": 0,
+                    "pr_title": "Fix issue",
+                    "commit_message": "Fix issue",
+                    "body": "## Summary\n- Updated code",
+                }
+            )
+
 
 class RunPlannerTests(unittest.TestCase):
     def make_discussion(self, number: int = 43, title: str | None = None, comments=None):
@@ -241,14 +258,25 @@ class RunPlannerTests(unittest.TestCase):
             "https://github.com/fairchild/workspaces/discussions/43",
             43,
             "audit-runners",
+            priority=1,
             blocked_by=[101],
             requested_evidence=["swift test --filter WorkspaceProviders"],
         )
+        self.assertIn("- Priority: 1", body)
         self.assertIn("- Ship this issue as one PR.", body)
         self.assertIn("## Blocked By", body)
         self.assertIn("- #101", body)
         self.assertIn("## Requested Evidence", body)
         self.assertIn("swift test --filter WorkspaceProviders", body)
+
+    def test_compose_summary_comment_invites_execution_reaction(self) -> None:
+        comment = run_planner.compose_summary_comment(
+            43,
+            [{"number": 101, "title": "Audit runners"}],
+            None,
+            {"GITHUB_REPOSITORY": "fairchild/workspaces"},
+        )
+        self.assertIn("React with 👍 on this comment", comment)
 
     def test_build_execution_state_reuses_marked_issue_and_milestone(self) -> None:
         discussion = self.make_discussion(
@@ -275,6 +303,7 @@ class RunPlannerTests(unittest.TestCase):
                     discussion["url"],
                     discussion["number"],
                     plan.issues[0].slug,
+                    priority=plan.issues[0].priority,
                     blocked_by=plan.issues[0].blocked_by,
                     requested_evidence=plan.issues[0].requested_evidence,
                 ),
@@ -289,6 +318,7 @@ class RunPlannerTests(unittest.TestCase):
                     discussion["url"],
                     discussion["number"],
                     plan.issues[1].slug,
+                    priority=plan.issues[1].priority,
                     blocked_by=plan.issues[1].blocked_by,
                     requested_evidence=plan.issues[1].requested_evidence,
                 ),
@@ -303,6 +333,7 @@ class RunPlannerTests(unittest.TestCase):
                     discussion["url"],
                     discussion["number"],
                     plan.issues[2].slug,
+                    priority=plan.issues[2].priority,
                     blocked_by=plan.issues[2].blocked_by,
                     requested_evidence=plan.issues[2].requested_evidence,
                 ),
@@ -391,6 +422,7 @@ class RunPlannerTests(unittest.TestCase):
                     discussion["url"],
                     discussion["number"],
                     plan.issues[0].slug,
+                    priority=plan.issues[0].priority,
                     blocked_by=plan.issues[0].blocked_by,
                     requested_evidence=plan.issues[0].requested_evidence,
                 ),
@@ -761,6 +793,89 @@ class RunContributorTests(unittest.TestCase):
         validated_json = '{"action":"comment","discussion_number":111}'
         blocked = run_contributor.maybe_block_new_proposal(validated_json, [{"number": 111}])
         self.assertIsNone(blocked)
+
+    def test_discussion_execution_status_requires_owner_thumbs_up(self) -> None:
+        discussion = {
+            "number": 110,
+            "comments": {
+                "nodes": [
+                    {
+                        "id": "planned",
+                        "body": run_planner.comment_marker(110, "planned"),
+                        "createdAt": "2026-03-16T08:00:00Z",
+                        "reactionGroups": [
+                            {
+                                "content": "THUMBS_UP",
+                                "users": {"nodes": [{"login": "fairchild"}]},
+                            }
+                        ],
+                    }
+                ]
+            },
+        }
+        approved, reason = run_contributor.discussion_execution_status(discussion, 110, "fairchild")
+        self.assertTrue(approved)
+        self.assertIn("owner reacted 👍", reason)
+
+    def test_classify_execution_work_surfaces_ready_issue(self) -> None:
+        issue_body = run_planner.compose_issue_body_with_metadata(
+            "## Context\nBody",
+            "https://github.com/fairchild/workspaces/discussions/110",
+            110,
+            "fix-status-color",
+            priority=1,
+            blocked_by=[],
+            requested_evidence=["swift test --filter NewWorkspaceSheetTests"],
+        )
+        issues = [
+            {
+                "number": 116,
+                "title": "Fix environment status color semantics in NewWorkspaceSheet",
+                "url": "https://github.com/fairchild/workspaces/issues/116",
+                "body": issue_body,
+                "labels": {"nodes": [{"name": "agent:task"}]},
+                "comments": {"nodes": []},
+            }
+        ]
+        pull_requests: list[dict[str, object]] = []
+        discussions = [
+            {
+                "number": 110,
+                "comments": {
+                    "nodes": [
+                        {
+                            "id": "planned",
+                            "body": run_planner.comment_marker(110, "planned"),
+                            "createdAt": "2026-03-16T08:00:00Z",
+                            "reactionGroups": [
+                                {
+                                    "content": "THUMBS_UP",
+                                    "users": {"nodes": [{"login": "fairchild"}]},
+                                }
+                            ],
+                        }
+                    ]
+                },
+            }
+        ]
+        classified = run_contributor.classify_execution_work(
+            issues,
+            pull_requests,
+            discussions,
+            issue_states={116: "OPEN"},
+            owner_login="fairchild",
+            persona="April Clearwater",
+            bot_login="april-clearwater[bot]",
+        )
+        self.assertEqual(len(classified["ready_issues"]), 1)
+        self.assertEqual(classified["ready_issues"][0]["issue_number"], 116)
+
+    def test_extract_pr_issue_reference_reads_pr_marker(self) -> None:
+        issue_number, agent = run_contributor.extract_pr_issue_reference(
+            "Closes #116\n\n<!-- contributor:issue=116;agent=april-clearwater -->"
+        )
+        self.assertEqual(issue_number, 116)
+        self.assertEqual(agent, "april-clearwater")
 
 
 if __name__ == "__main__":
