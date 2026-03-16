@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from unittest import mock
 from pathlib import Path
 
@@ -540,6 +541,86 @@ class RunContributorTests(unittest.TestCase):
         self.assertIn("Revised take", threads[0]["agent_item"]["body"])
         self.assertEqual(len(threads[0]["replies"]), 1)
         self.assertIn("Looks good now", threads[0]["replies"][0]["body"])
+
+    def test_find_discussions_needing_engagement_prefers_recent_other_agent_thread(self) -> None:
+        now = datetime(2026, 3, 16, 0, 0, tzinfo=timezone.utc)
+        discussions = [
+            {
+                "number": 111,
+                "title": "[idea] Split release workflow",
+                "body": "*Proposed by Plat Ironwood, Platform Lead*\n\nIdea body",
+                "createdAt": "2026-03-15T20:46:59Z",
+                "comments": {
+                    "nodes": [],
+                    "totalCount": 0,
+                },
+            },
+            {
+                "number": 109,
+                "title": "[idea] Fix remote workspace identity",
+                "body": "*Proposed by April Clearwater, Application Lead*\n\nIdea body",
+                "createdAt": "2026-03-15T16:25:01Z",
+                "comments": {
+                    "nodes": [],
+                    "totalCount": 0,
+                },
+            },
+        ]
+        candidates = run_contributor.find_discussions_needing_engagement(
+            discussions,
+            owner_login="fairchild",
+            persona="April Clearwater",
+            now=now,
+        )
+        self.assertEqual(candidates[0]["number"], 111)
+        self.assertIn("Plat Ironwood opened this", candidates[0]["reasons"][0])
+
+    def test_find_discussions_needing_engagement_marks_low_comment_and_missing_owner_reply(self) -> None:
+        now = datetime(2026, 3, 16, 0, 0, tzinfo=timezone.utc)
+        discussions = [
+            {
+                "number": 110,
+                "title": "[idea] Fix environment status color semantics",
+                "body": "*Proposed by April Clearwater, Application Lead*\n\nIdea body",
+                "createdAt": "2026-03-15T16:49:20Z",
+                "comments": {
+                    "nodes": [
+                        {
+                            "body": "One comment",
+                            "author": {"login": "workspace-agents"},
+                            "createdAt": "2026-03-15T18:00:00Z",
+                        }
+                    ],
+                    "totalCount": 1,
+                },
+            }
+        ]
+        candidates = run_contributor.find_discussions_needing_engagement(
+            discussions,
+            owner_login="fairchild",
+            persona="April Clearwater",
+            now=now,
+        )
+        self.assertEqual(candidates[0]["number"], 110)
+        self.assertIn("only 1 comment", candidates[0]["reasons"])
+        self.assertIn("no owner reply yet", candidates[0]["reasons"])
+
+    def test_maybe_block_new_proposal_returns_top_candidate(self) -> None:
+        validated_json = '{"action":"propose","title":"[idea] New thread"}'
+        candidates = [
+            {
+                "number": 111,
+                "title": "[idea] Split release workflow",
+                "reasons": ["0 comments", "no owner reply yet"],
+            }
+        ]
+        blocked = run_contributor.maybe_block_new_proposal(validated_json, candidates)
+        self.assertEqual(blocked["number"], 111)
+
+    def test_maybe_block_new_proposal_ignores_comment_action(self) -> None:
+        validated_json = '{"action":"comment","discussion_number":111}'
+        blocked = run_contributor.maybe_block_new_proposal(validated_json, [{"number": 111}])
+        self.assertIsNone(blocked)
 
 
 if __name__ == "__main__":

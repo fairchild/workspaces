@@ -10,9 +10,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 
@@ -41,6 +43,8 @@ VALIDATOR_SCRIPT = SKILL_ROOT / "scripts" / "validate-agent-output.py"
 GITHUB_API_TIMEOUT = 30
 CLAUDE_TIMEOUT = 300
 VALIDATION_TIMEOUT = 30
+ENGAGEMENT_RECENT_HOURS = 72
+LOW_COMMENT_THRESHOLD = 1
 
 
 def parse_args() -> argparse.Namespace:
@@ -459,7 +463,174 @@ def detect_bot_login(env: dict[str, str]) -> str:
     return login
 
 
-def gather_context(env: dict[str, str], persona: str = "", bot_login: str = "") -> str:
+def _parse_timestamp(value: str) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _normalize_login(login: str) -> str:
+    return login.removesuffix("[bot]").strip().casefold()
+
+
+def _extract_proposed_persona(body: str) -> str:
+    match = re.search(r"\*Proposed by ([^*\n]+)\*", body)
+    if not match:
+        return ""
+    return match.group(1).split(",", 1)[0].strip()
+
+
+def _is_idea_discussion(title: str) -> bool:
+    return "[idea]" in title.casefold()
+
+
+def format_open_discussions(discussions: list[dict[str, object]]) -> str:
+    lines: list[str] = []
+    for disc in discussions:
+        comments = disc.get("comments", {})
+        comment_nodes = comments.get("nodes", []) if isinstance(comments, dict) else []
+        comment_count = comments.get("totalCount", len(comment_nodes)) if isinstance(comments, dict) else 0
+        category = disc.get("category", {})
+        category_name = category.get("name", "Unknown") if isinstance(category, dict) else "Unknown"
+        line = (
+            f"#{disc.get('number')} [{category_name}] {disc.get('title')} "
+            f"({comment_count} comments)"
+        )
+        previews: list[str] = []
+        for comment in comment_nodes[:2]:
+            author = (comment.get("author") or {}).get("login", "unknown")
+            body = str(comment.get("body", "")).replace("\n", " ")[:200]
+            previews.append(f"  -> {author}: {body}")
+        if previews:
+            line = f"{line}\n" + "\n".join(previews)
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def find_discussions_needing_engagement(
+    discussions: list[dict[str, object]],
+    *,
+    owner_login: str,
+    persona: str,
+    now: datetime | None = None,
+) -> list[dict[str, object]]:
+    if now is None:
+        now = datetime.now(timezone.utc)
+
+    owner = _normalize_login(owner_login)
+    current_persona = persona.casefold()
+    candidates: list[dict[str, object]] = []
+
+    for disc in discussions:
+        title = str(disc.get("title", ""))
+        if not _is_idea_discussion(title):
+            continue
+
+        body = str(disc.get("body", ""))
+        comments = disc.get("comments", {})
+        comment_nodes = comments.get("nodes", []) if isinstance(comments, dict) else []
+        comment_count = comments.get("totalCount", len(comment_nodes)) if isinstance(comments, dict) else 0
+        proposed_by = _extract_proposed_persona(body)
+        created_at = _parse_timestamp(str(disc.get("createdAt", "")))
+        age = now - created_at if created_at is not None else None
+        owner_replied = any(
+            _normalize_login((comment.get("author") or {}).get("login", "")) == owner
+            for comment in comment_nodes
+        )
+        other_agent_recent = bool(
+            proposed_by
+            and proposed_by.casefold() != current_persona
+            and age is not None
+            and age <= timedelta(hours=ENGAGEMENT_RECENT_HOURS)
+        )
+
+        reasons: list[str] = []
+        if other_agent_recent:
+            age_hours = max(1, int(age.total_seconds() // 3600)) if age is not None else ENGAGEMENT_RECENT_HOURS
+            reasons.append(f"{proposed_by} opened this {age_hours}h ago")
+        if comment_count == 0:
+            reasons.append("0 comments")
+        elif comment_count <= LOW_COMMENT_THRESHOLD:
+            reasons.append("only 1 comment")
+        if not owner_replied:
+            reasons.append("no owner reply yet")
+
+        if not reasons:
+            continue
+
+        if other_agent_recent:
+            priority = 0
+        elif comment_count <= LOW_COMMENT_THRESHOLD:
+            priority = 1
+        else:
+            priority = 2
+
+        sort_timestamp = created_at.timestamp() if created_at is not None else 0.0
+        candidates.append(
+            {
+                "number": disc.get("number"),
+                "title": title,
+                "proposed_by": proposed_by,
+                "comment_count": comment_count,
+                "owner_replied": owner_replied,
+                "reasons": reasons,
+                "priority": priority,
+                "sort_timestamp": sort_timestamp,
+            }
+        )
+
+    candidates.sort(
+        key=lambda item: (
+            int(item["priority"]),
+            int(item["comment_count"]),
+            -float(item["sort_timestamp"]),
+        )
+    )
+    return candidates
+
+
+def format_engagement_candidates(candidates: list[dict[str, object]]) -> str:
+    if not candidates:
+        return ""
+
+    lines = ["PRIORITY — discussions needing engagement before new proposals:\n"]
+    for candidate in candidates[:5]:
+        reasons = ", ".join(str(reason) for reason in candidate["reasons"])
+        lines.append(
+            f"  Discussion #{candidate['number']} — {candidate['title']}\n"
+            f"    Reasons: {reasons}"
+        )
+    return "\n".join(lines)
+
+
+def build_engagement_retry_message(candidate: dict[str, object]) -> str:
+    reasons = ", ".join(str(reason) for reason in candidate["reasons"])
+    return (
+        "Do not propose a new discussion. Comment on the existing discussion "
+        f"#{candidate['number']} instead and help move that thread forward. "
+        f"It needs engagement because: {reasons}. Respond to the existing thesis, "
+        "refine the scope, or ask one concrete question that advances the thread."
+    )
+
+
+def maybe_block_new_proposal(
+    validated_json: str,
+    engagement_candidates: list[dict[str, object]],
+) -> dict[str, object] | None:
+    data = json.loads(validated_json)
+    if data.get("action") != "propose" or not engagement_candidates:
+        return None
+    return engagement_candidates[0]
+
+
+def gather_context(
+    env: dict[str, str],
+    persona: str = "",
+    bot_login: str = "",
+) -> tuple[str, list[dict[str, object]]]:
     log("Gathering context")
     owner, name = repo_owner_name(env)
 
@@ -473,13 +644,13 @@ def gather_context(env: dict[str, str], persona: str = "", bot_login: str = "") 
     discussions_query = """
 query($owner: String!, $name: String!) {
   repository(owner: $owner, name: $name) {
-    discussions(first: 30, states: OPEN) {
+    discussions(first: 30, states: OPEN, orderBy: {field: UPDATED_AT, direction: DESC}) {
       nodes {
-        number title
+        number title body createdAt updatedAt
         category { name }
         author { login }
         comments(first: 5) {
-          nodes { body author { login } }
+          nodes { body author { login } createdAt }
           totalCount
         }
       }
@@ -487,7 +658,7 @@ query($owner: String!, $name: String!) {
   }
 }
 """
-    discussions = run_optional(
+    discussions_raw = run_optional(
         [
             "gh",
             "api",
@@ -498,20 +669,29 @@ query($owner: String!, $name: String!) {
             f"owner={owner}",
             "-f",
             f"name={name}",
-            "--jq",
-            (
-                '.data.repository.discussions.nodes[] | '
-                '"#\\(.number) [\\(.category.name)] \\(.title) '
-                '(\\(.comments.totalCount) comments)'
-                '\\(.comments.nodes[:2] | map("\\n  -> \\(.author.login): '
-                '\\(.body[:200] | gsub(\\"\\n\\";\\" \\"))") | join(""))"'
-            ),
         ],
         timeout=GITHUB_API_TIMEOUT,
         cwd=REPO_ROOT,
         env=env,
         default="",
     ).rstrip()
+    try:
+        discussions_data = json.loads(discussions_raw) if discussions_raw else {}
+    except json.JSONDecodeError:
+        discussions_data = {}
+    discussion_nodes = (
+        discussions_data.get("data", {})
+        .get("repository", {})
+        .get("discussions", {})
+        .get("nodes", [])
+    )
+    discussions = format_open_discussions(discussion_nodes)
+    engagement_candidates = find_discussions_needing_engagement(
+        discussion_nodes,
+        owner_login=owner,
+        persona=persona,
+    )
+    engagement_summary = format_engagement_candidates(engagement_candidates)
 
     open_issues = run_optional(
         [
@@ -556,6 +736,8 @@ query($owner: String!, $name: String!) {
     sections = []
     if pending_reviews:
         sections.append(pending_reviews)
+    if engagement_summary:
+        sections.append(engagement_summary)
     sections.extend([
         f"Recent commits (last 2 weeks):\n{recent_commits}",
         f"Open discussions:\n{discussions}",
@@ -565,7 +747,7 @@ query($owner: String!, $name: String!) {
     ])
     if history:
         sections.append(history)
-    return "\n\n".join(sections)
+    return "\n\n".join(sections), engagement_candidates
 
 
 def run_claude(
@@ -737,7 +919,7 @@ def main() -> int:
     bot_login = detect_bot_login(env)
     if bot_login:
         log(f"Authenticated as {bot_login}")
-    context = gather_context(env, persona=persona, bot_login=bot_login)
+    context, engagement_candidates = gather_context(env, persona=persona, bot_login=bot_login)
     raw_output = run_claude(prompt_file, context, env, mode=args.mode, message=args.message)
     exit_code, validated_json, error_text = validate_output(raw_output, env)
 
@@ -748,6 +930,35 @@ def main() -> int:
         print("--- Raw output ---", file=sys.stderr)
         print(raw_output, file=sys.stderr)
         return 1
+
+    if not args.message:
+        blocked_candidate = maybe_block_new_proposal(validated_json, engagement_candidates)
+        if blocked_candidate is not None:
+            log(
+                "Blocking new proposal because existing discussions need engagement: "
+                f"#{blocked_candidate['number']}"
+            )
+            retry_message = build_engagement_retry_message(blocked_candidate)
+            raw_output = run_claude(
+                prompt_file,
+                context,
+                env,
+                mode=args.mode,
+                message=retry_message,
+            )
+            exit_code, validated_json, error_text = validate_output(raw_output, env)
+            if exit_code != 0 or validated_json is None:
+                print("--- Raw output ---", file=sys.stderr)
+                print(raw_output, file=sys.stderr)
+                return 1
+            if json.loads(validated_json).get("action") == "propose":
+                print(
+                    "error: contributor proposed a new idea despite engagement policy",
+                    file=sys.stderr,
+                )
+                print("--- Raw output ---", file=sys.stderr)
+                print(raw_output, file=sys.stderr)
+                return 1
 
     result = route_action(validated_json, args.dry_run, env)
     if result == 0:
