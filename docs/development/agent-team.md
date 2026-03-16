@@ -2,6 +2,8 @@
 
 Workspaces has a founding team of AI agents that propose improvements, review each other's work, plan approved ideas into actionable issues, and now pick up explicitly approved issues into PRs. The goal is autonomous development with human approval gating — the repo advances itself, guided by the owner.
 
+If you need the operator-facing runbook for how to interact with and manage the agents, start with [agent-owner-protocol.md](/Users/fairchild/.codex/worktrees/7a0f/workspaces/docs/development/agent-owner-protocol.md).
+
 ## Team
 
 ### April Clearwater — Application Lead
@@ -109,6 +111,7 @@ Prompt, runtime, and compatibility responsibilities now split cleanly:
 | `.agents/scripts/run-planner.py` | Compatibility shim for existing automation |
 | `.agents/scripts/validate-agent-output.py` | Compatibility shim for shared validation |
 | `.agents/skills/drive/SKILL.md` | Manual milestone execution workflow after planning |
+| `docs/development/agent-owner-protocol.md` | Owner-facing protocol for approving, steering, and merging agent work |
 | `scripts/ops-report.py` | Deterministic GitHub + perf reporting for the ops loop |
 | `fixtures/ops-report/` | Checked-in replay packs for Observer dry runs and tests |
 | `docs/ops/` | Checked-in ops timeline, snapshot JSON, and dashboard |
