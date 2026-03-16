@@ -47,6 +47,7 @@ CLAUDE_TIMEOUT = 300
 VALIDATION_TIMEOUT = 30
 ENGAGEMENT_RECENT_HOURS = 72
 LOW_COMMENT_THRESHOLD = 1
+STALE_CLAIM_HOURS = 24
 
 
 def parse_args() -> argparse.Namespace:
@@ -463,6 +464,9 @@ CLOSING_REFERENCE_RE = re.compile(
     r"(?im)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(?P<number>\d+)\b"
 )
 EXECUTION_PRIORITY_RE = re.compile(r"(?m)^- Priority:\s*(?P<priority>\d+)\s*$")
+AGENT_READY_LABEL = "agent:ready"
+AGENT_READY_LABEL_COLOR = "5319e7"
+AGENT_READY_LABEL_DESCRIPTION = "Execution-approved and ready for an automated contributor to claim"
 AGENT_CLAIM_LABEL = "agent:claimed"
 AGENT_CLAIM_LABEL_COLOR = "1d76db"
 AGENT_CLAIM_LABEL_DESCRIPTION = "Currently being executed by an automated contributor"
@@ -615,6 +619,22 @@ def discussion_execution_status(
     if planned_comment_has_owner_approval(planned_comment, owner_login):
         return True, f"owner reacted 👍 on Peter summary comment in discussion #{discussion_number}"
     return False, f"awaiting owner 👍 on Peter summary comment in discussion #{discussion_number}"
+
+
+def claim_is_stale(
+    claim: dict[str, str] | None,
+    *,
+    has_open_pr: bool,
+    now: datetime | None = None,
+) -> bool:
+    if claim is None or has_open_pr:
+        return False
+    if now is None:
+        now = datetime.now(timezone.utc)
+    created_at = _parse_timestamp(claim.get("createdAt", ""))
+    if created_at is None:
+        return False
+    return now - created_at >= timedelta(hours=STALE_CLAIM_HOURS)
 
 
 def find_prs_awaiting_rereview(
@@ -904,11 +924,6 @@ def classify_execution_work(
 ) -> dict[str, list[dict[str, object]]]:
     current_agent = persona_slug(persona)
     normalized_bot = _normalize_login(bot_login)
-    discussion_map = {
-        int(discussion["number"]): discussion
-        for discussion in discussions
-        if discussion.get("number") is not None
-    }
     issue_pr_map: dict[int, list[dict[str, object]]] = {}
     for pr in pull_requests:
         issue_number, marker_agent = extract_pr_issue_reference(str(pr.get("body", "")))
@@ -932,9 +947,10 @@ def classify_execution_work(
     ready_issues: list[dict[str, object]] = []
 
     for issue in issues:
-        if AGENT_CLAIM_LABEL not in issue_label_names(issue) and "agent:task" not in issue_label_names(issue):
+        labels = issue_label_names(issue)
+        if AGENT_CLAIM_LABEL not in labels and AGENT_READY_LABEL not in labels and "agent:task" not in labels:
             continue
-        if "agent:task" not in issue_label_names(issue):
+        if "agent:task" not in labels:
             continue
 
         issue_number = int(issue["number"])
@@ -948,14 +964,13 @@ def classify_execution_work(
             for blocker in blocked_by
             if issue_states.get(blocker, "OPEN").upper() != "CLOSED"
         ]
-        approved, approval_reason = discussion_execution_status(
-            discussion_map.get(discussion_number) if discussion_number is not None else None,
-            discussion_number,
-            owner_login,
-        )
         latest_claim = latest_issue_claim(issue_number, issue.get("comments", {}))
         claim_agent = latest_claim.get("agent") if latest_claim else None
         linked_prs = issue_pr_map.get(issue_number, [])
+        stale_claim = claim_is_stale(latest_claim, has_open_pr=bool(linked_prs))
+        if stale_claim:
+            latest_claim = None
+            claim_agent = None
         own_pr = next(
             (
                 pr
@@ -977,7 +992,11 @@ def classify_execution_work(
             "priority": priority,
             "blocked_by": blocked_by,
             "requested_evidence": requested_evidence,
-            "approval_reason": approval_reason,
+            "approval_reason": (
+                f"{AGENT_READY_LABEL} label present"
+                if AGENT_READY_LABEL in labels
+                else f"waiting for {AGENT_READY_LABEL} label"
+            ),
             "claim_branch": latest_claim.get("branch") if latest_claim else "",
             "claim_agent": claim_agent or "",
         }
@@ -999,11 +1018,11 @@ def classify_execution_work(
             claimed_issues.append(item)
             continue
 
-        if not approved or blockers or linked_prs:
+        if AGENT_READY_LABEL not in labels or blockers or linked_prs:
             continue
         if latest_claim is not None and claim_agent and claim_agent != current_agent:
             continue
-        if AGENT_CLAIM_LABEL in issue_label_names(issue) and latest_claim is None:
+        if AGENT_CLAIM_LABEL in labels and latest_claim is None:
             continue
 
         ready_issues.append(item)
@@ -1310,6 +1329,10 @@ def ensure_claim_label(env: dict[str, str]) -> None:
     )
 
 
+def issue_label_presence(issue: dict[str, object]) -> set[str]:
+    return issue_label_names(issue)
+
+
 def claim_marker(issue_number: int, persona: str, branch: str) -> str:
     return (
         f"<!-- contributor:issue={issue_number};status=claimed;"
@@ -1380,12 +1403,7 @@ def find_issue_execution_state(
 
     current_agent = persona_slug(persona)
     normalized_bot = _normalize_login(bot_login)
-    discussion_number = extract_issue_discussion_number(str(issue.get("body", "")))
-    discussion_map = {
-        int(discussion["number"]): discussion
-        for discussion in work_state["discussions"]
-        if discussion.get("number") is not None
-    }
+    labels = issue_label_presence(issue)
     linked_prs: list[dict[str, object]] = []
     for pr in work_state["pull_requests"]:
         linked_issue, marker_agent = extract_pr_issue_reference(str(pr.get("body", "")))
@@ -1414,11 +1432,6 @@ def find_issue_execution_state(
         None,
     )
     other_pr = next((pr for pr in linked_prs if pr is not own_pr), None)
-    approved, approval_reason = discussion_execution_status(
-        discussion_map.get(discussion_number) if discussion_number is not None else None,
-        discussion_number,
-        owner,
-    )
     blocked_by = extract_blocked_by(str(issue.get("body", "")))
     blockers = [
         blocker
@@ -1426,13 +1439,21 @@ def find_issue_execution_state(
         if issue_states.get(blocker, "OPEN").upper() != "CLOSED"
     ]
     latest_claim = latest_issue_claim(issue_number, issue.get("comments", {}))
+    stale_claim = claim_is_stale(latest_claim, has_open_pr=bool(linked_prs))
+    if stale_claim:
+        latest_claim = None
     return {
         "issue": issue,
-        "approved": approved,
-        "approval_reason": approval_reason,
+        "approved": AGENT_READY_LABEL in labels,
+        "approval_reason": (
+            f"{AGENT_READY_LABEL} label present"
+            if AGENT_READY_LABEL in labels
+            else f"issue #{issue_number} is missing {AGENT_READY_LABEL}"
+        ),
         "blockers": blockers,
         "requested_evidence": extract_requested_evidence(str(issue.get("body", ""))),
         "latest_claim": latest_claim,
+        "stale_claim": stale_claim,
         "own_pr": own_pr,
         "other_pr": other_pr,
     }
@@ -1443,17 +1464,16 @@ def ensure_issue_claimed(
     persona: str,
     branch: str,
     latest_claim: dict[str, str] | None,
+    current_labels: set[str],
     env: dict[str, str],
 ) -> None:
     if latest_claim is not None and latest_claim.get("agent") == persona_slug(persona) and latest_claim.get("branch") == branch:
         return
     ensure_claim_label(env)
-    run_checked(
-        ["gh", "issue", "edit", str(issue_number), "--add-label", AGENT_CLAIM_LABEL],
-        timeout=GITHUB_API_TIMEOUT,
-        cwd=REPO_ROOT,
-        env=env,
-    )
+    cmd = ["gh", "issue", "edit", str(issue_number), "--add-label", AGENT_CLAIM_LABEL]
+    if AGENT_READY_LABEL in current_labels:
+        cmd.extend(["--remove-label", AGENT_READY_LABEL])
+    run_checked(cmd, timeout=GITHUB_API_TIMEOUT, cwd=REPO_ROOT, env=env)
     run_checked(
         ["gh", "issue", "comment", str(issue_number), "--body", compose_claim_comment(issue_number, persona, branch)],
         timeout=GITHUB_API_TIMEOUT,
@@ -1613,6 +1633,7 @@ def route_action(validated_json: str, dry_run: bool, env: dict[str, str]) -> int
                     persona,
                     branch,
                     latest_claim if isinstance(latest_claim, dict) else None,
+                    issue_label_presence(state["issue"]),
                     env,
                 )
 

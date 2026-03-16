@@ -42,6 +42,10 @@ jobs:
           fetch-depth: 50
           token: ${{ steps.app-token.outputs.token }}
       - uses: astral-sh/setup-uv@v7
+      - name: Sync execution state
+        run: uv run .agents/skills/cofounder-contributor/scripts/sync-execution-state.py
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
       - name: Run contributor
         run: |
           ARGS=(--prompt-file .agents/skills/cofounder-contributor/references/plat-ironwood.md)

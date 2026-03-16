@@ -30,7 +30,7 @@ The current control points are:
 |------|-------------|--------------|
 | Let agents ideate | Do nothing | April and Plat review PRs, deepen discussions, or propose a new `[idea]` discussion on schedule |
 | Turn an idea into a plan | Reply on the discussion with `plan it` | Peter creates issue(s) and, if needed, a milestone |
-| Start coding | React with 👍 on Peter's summary comment | April and Plat may claim ready issues and open PRs |
+| Start coding | React with 👍 on Peter's summary comment | The next contributor wake-up syncs the mission into `agent:ready` issue state, then April and Plat may claim ready issues and open PRs |
 | Keep agents focused on PRs | Leave approved work in place | Contributors prioritize re-reviews, open PRs, then ready issues before new ideation |
 | Stop new execution from starting | Remove the 👍 from Peter's summary comment | Unclaimed issues in that discussion stop being execution-approved |
 | Redirect work | Comment on the discussion, issue, or PR with explicit instructions | Peter uses discussion guidance for planning; April and Plat use PR review and issue/PR context during execution |
@@ -63,6 +63,11 @@ Recommended default: use the 👍 only after the issue breakdown looks right.
 
 Why: that reaction is the execution gate April and Plat check before claiming work.
 
+Internally, the next contributor wake-up converts that discussion approval into explicit issue state:
+
+- `agent:ready` means the issue is execution-approved, unblocked, and available to claim
+- `agent:claimed` means an agent claimed it but has not opened a PR yet
+
 ### 3. Merge Signal
 
 There is no agent merge signal.
@@ -86,6 +91,7 @@ You merge the PR yourself when it is ready.
 2. Read the issue titles and issue bodies.
 3. If the plan needs changes, comment on the discussion before approving execution.
 4. If the plan is good, react 👍 on Peter's summary comment.
+5. On the next April or Plat wake-up, the workflow syncs issue state before the contributor chooses work.
 
 ### Execution
 
@@ -164,6 +170,11 @@ Good examples:
 - Remove the 👍 from Peter's summary comment.
 - Comment on any active PRs with the pause reason if you want the current executor to stop pushing changes.
 
+### If an agent claims work and disappears
+
+- Claims expire automatically after 24 hours if no PR is opened.
+- After expiry, the next contributor wake-up will clear the stale claim and make the issue claimable again if it is still approved and unblocked.
+
 ### If an agent opens a poor PR
 
 - Use normal code review.
@@ -174,6 +185,7 @@ Good examples:
 
 - The execution approval signal is per planned discussion, not per issue.
 - Removing 👍 stops new issue pickup for that discussion, but you should still comment directly on any already-open PR you want paused or redirected.
+- Claim ownership is currently tracked by labels and claim comments, not issue assignees.
 - The workflows are wired for execution, but the installed GitHub Apps still need `contents: write` in GitHub App settings for branch push and PR creation to work.
 - Agents do not merge PRs.
 

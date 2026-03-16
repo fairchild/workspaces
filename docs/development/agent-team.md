@@ -47,6 +47,11 @@ Daily (weekdays, alternating who goes first, 30 min offset):
     │
   Owner reacts 👍 on Peter's summary comment
     │
+  Execution-state sync (next contributor wake-up)
+    1. Applies `agent:ready` to approved, unblocked issues with no active PR/claim
+    2. Applies `agent:claimed` to actively claimed issues
+    3. Expires claim-only issues after 24h if no PR was opened
+    │
   Next April / Plat wake-up
     1. Re-review open PRs they are blocking
     2. Review other open PRs
@@ -87,7 +92,9 @@ The reply can include modifications — Peter reads the full thread and incorpor
 ```
 [idea] New proposal          → open, awaiting review
 [idea][endorsed] Approved    → planned into issues
-[idea][endorsed] + 👍 on Peter summary → execution-approved, work can begin
+[idea][endorsed] + 👍 on Peter summary → execution-approved
+`agent:ready` issue          → ready for a contributor to claim
+`agent:claimed` issue        → claimed, awaiting PR or claim expiry
 [shipped] Completed          → closed after delivery
 ```
 
@@ -103,6 +110,7 @@ Prompt, runtime, and compatibility responsibilities now split cleanly:
 | `.agents/skills/cofounder-contributor/SKILL.md` | Shared contributor skill for April and Plat |
 | `.agents/skills/cofounder-contributor/references/` | Persona prompt resources for April and Plat |
 | `.agents/skills/cofounder-contributor/scripts/run-contributor.py` | Contributor runtime source of truth |
+| `.agents/skills/cofounder-contributor/scripts/sync-execution-state.py` | Syncs discussion approval into `agent:ready` / `agent:claimed` issue state |
 | `.agents/skills/peter-planner/SKILL.md` | Planner skill for endorsed discussion → issues/milestone |
 | `.agents/skills/peter-planner/references/peter-planner.md` | Planner prompt resource |
 | `.agents/skills/peter-planner/config/peter-planner.toml` | Allowed planner labels + alias mapping |
@@ -130,14 +138,15 @@ April, Plat, and Peter now use thin workflow wrappers. Their workflow YAML keeps
 - concurrency
 - checkout and tool setup
 
-The shared contributor behavior now lives in `.agents/skills/cofounder-contributor/scripts/run-contributor.py`:
+The shared contributor behavior now lives in `.agents/skills/cofounder-contributor/scripts/run-contributor.py` plus the execution-state sync script:
 
-1. gather repo and GitHub context
-2. run Claude Code with the selected persona prompt
-3. validate YAML frontmatter output through the shared validator
-4. either pretty-print validated JSON for dry runs or route the action back into GitHub
+1. sync `agent:ready` / `agent:claimed` from discussion approval, blockers, open PRs, and stale claims
+2. gather repo and GitHub context
+3. run Claude Code with the selected persona prompt
+4. validate YAML frontmatter output through the shared validator
+5. either pretty-print validated JSON for dry runs or route the action back into GitHub
 
-When Peter has already planned a discussion, execution approval lives on Peter's summary comment. A 👍 reaction from the repo owner is the signal April and Plat look for before they claim a linked `agent:task` issue.
+When Peter has already planned a discussion, execution approval lives on Peter's summary comment. A 👍 reaction from the repo owner is the mission-level signal. The sync step turns that into explicit per-issue `agent:ready` state, and expires `agent:claimed` issues after 24 hours when no PR exists.
 
 April and Plat workflows now invoke the skill runtime directly. The old `.agents/scripts/run-contributor.py` path remains only as a compatibility shim for any external callers that still depend on it.
 
@@ -169,6 +178,8 @@ For manual dry runs, `scripts/ops-report.py` also accepts `--fixtures-dir fixtur
 - **Shell safety** — event context passed via env vars, body content via temp files
 - **Catalog-backed labels** — Peter can only use repo-managed labels from `.agents/skills/peter-planner/config/peter-planner.toml`, with alias normalization for common CI/platform terms
 - **Idempotent planning markers** — planner comments, milestone descriptions, and issue bodies carry machine markers so retries reuse existing artifacts instead of leaking duplicates
+- **Explicit execution-state labels** — contributor workflows translate mission approval into `agent:ready` and `agent:claimed`, so execution no longer depends on contributors reparsing discussion reactions on every decision
+- **Stale-claim recovery** — claims without a PR automatically expire after 24 hours and return to `agent:ready` on the next sync pass
 - **Discussion token override** — `permissions.discussions: write` is enough for comments, issues, and milestones, but GitHub's built-in Actions token still cannot retitle discussions via `updateDiscussion` in this repo. `agent-peter.yml` therefore prefers the repo secret `PETER_DISCUSSION_TOKEN` when present, and the repo's default Actions workflow permission should stay at `write`
 - **OpenAI env compatibility** — agent runtimes treat `OPENAI_API_KEY` as the canonical provider variable and fall back to `GITHUB_CODESPACES_OPENAI_API_KEY` when present so local Codespaces-oriented `.env` files can still work without changing the runtime contract
 - **Simple operational memory** — GitHub stays the raw event source; `docs/ops/` stores small checked-in snapshots and dashboards instead of introducing a separate analytics service or database in v1

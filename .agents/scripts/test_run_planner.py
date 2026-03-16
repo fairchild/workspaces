@@ -45,6 +45,10 @@ run_contributor = load_module(
     "run_contributor",
     REPO_ROOT / ".agents" / "skills" / "cofounder-contributor" / "scripts" / "run-contributor.py",
 )
+sync_execution_state = load_module(
+    "sync_execution_state",
+    REPO_ROOT / ".agents" / "skills" / "cofounder-contributor" / "scripts" / "sync-execution-state.py",
+)
 CATALOG = run_planner.load_label_catalog(
     REPO_ROOT / ".agents" / "skills" / "peter-planner" / "config" / "peter-planner.toml"
 )
@@ -833,13 +837,53 @@ class RunContributorTests(unittest.TestCase):
                 "title": "Fix environment status color semantics in NewWorkspaceSheet",
                 "url": "https://github.com/fairchild/workspaces/issues/116",
                 "body": issue_body,
-                "labels": {"nodes": [{"name": "agent:task"}]},
+                "labels": {"nodes": [{"name": "agent:task"}, {"name": "agent:ready"}]},
                 "comments": {"nodes": []},
             }
         ]
         pull_requests: list[dict[str, object]] = []
-        discussions = [
-            {
+        discussions: list[dict[str, object]] = []
+        classified = run_contributor.classify_execution_work(
+            issues,
+            pull_requests,
+            discussions,
+            issue_states={116: "OPEN"},
+            owner_login="fairchild",
+            persona="April Clearwater",
+            bot_login="april-clearwater[bot]",
+        )
+        self.assertEqual(len(classified["ready_issues"]), 1)
+        self.assertEqual(classified["ready_issues"][0]["issue_number"], 116)
+        self.assertEqual(classified["ready_issues"][0]["approval_reason"], "agent:ready label present")
+
+    def test_claim_is_stale_after_24_hours_without_pr(self) -> None:
+        claim = {
+            "agent": "april-clearwater",
+            "branch": "codex/april-clearwater-issue-116-fix-status",
+            "status": "claimed",
+            "createdAt": "2026-03-15T08:00:00Z",
+        }
+        now = datetime(2026, 3, 16, 8, 0, tzinfo=timezone.utc)
+        self.assertTrue(run_contributor.claim_is_stale(claim, has_open_pr=False, now=now))
+        self.assertFalse(run_contributor.claim_is_stale(claim, has_open_pr=True, now=now))
+
+    def test_sync_desired_execution_labels_returns_ready_for_approved_unblocked_issue(self) -> None:
+        issue_body = run_planner.compose_issue_body_with_metadata(
+            "## Context\nBody",
+            "https://github.com/fairchild/workspaces/discussions/110",
+            110,
+            "fix-status-color",
+            priority=1,
+            blocked_by=[],
+            requested_evidence=["swift test --filter NewWorkspaceSheetTests"],
+        )
+        issue = {
+            "number": 116,
+            "body": issue_body,
+            "comments": {"nodes": []},
+        }
+        discussions = {
+            110: {
                 "number": 110,
                 "comments": {
                     "nodes": [
@@ -857,18 +901,75 @@ class RunContributorTests(unittest.TestCase):
                     ]
                 },
             }
-        ]
-        classified = run_contributor.classify_execution_work(
-            issues,
-            pull_requests,
-            discussions,
+        }
+        labels, reason = sync_execution_state.desired_execution_labels(
+            issue,
+            discussions=discussions,
             issue_states={116: "OPEN"},
+            open_pr_issue_numbers=set(),
             owner_login="fairchild",
-            persona="April Clearwater",
-            bot_login="april-clearwater[bot]",
+            now=datetime(2026, 3, 16, 9, 0, tzinfo=timezone.utc),
         )
-        self.assertEqual(len(classified["ready_issues"]), 1)
-        self.assertEqual(classified["ready_issues"][0]["issue_number"], 116)
+        self.assertEqual(labels, {sync_execution_state.AGENT_READY_LABEL})
+        self.assertEqual(reason, "execution-approved and ready")
+
+    def test_sync_desired_execution_labels_expires_stale_claim(self) -> None:
+        issue_body = run_planner.compose_issue_body_with_metadata(
+            "## Context\nBody",
+            "https://github.com/fairchild/workspaces/discussions/110",
+            110,
+            "fix-status-color",
+            priority=1,
+            blocked_by=[],
+            requested_evidence=["swift test --filter NewWorkspaceSheetTests"],
+        )
+        issue = {
+            "number": 116,
+            "body": issue_body,
+            "comments": {
+                "nodes": [
+                    {
+                        "body": (
+                            "*April Clearwater, Application Lead*\n\n"
+                            "Claiming this issue.\n\n"
+                            "<!-- contributor:issue=116;status=claimed;"
+                            "agent=april-clearwater;branch=codex/april-clearwater-issue-116-fix-status -->"
+                        ),
+                        "createdAt": "2026-03-15T08:00:00Z",
+                    }
+                ]
+            },
+        }
+        discussions = {
+            110: {
+                "number": 110,
+                "comments": {
+                    "nodes": [
+                        {
+                            "id": "planned",
+                            "body": run_planner.comment_marker(110, "planned"),
+                            "createdAt": "2026-03-16T08:00:00Z",
+                            "reactionGroups": [
+                                {
+                                    "content": "THUMBS_UP",
+                                    "users": {"nodes": [{"login": "fairchild"}]},
+                                }
+                            ],
+                        }
+                    ]
+                },
+            }
+        }
+        labels, reason = sync_execution_state.desired_execution_labels(
+            issue,
+            discussions=discussions,
+            issue_states={116: "OPEN"},
+            open_pr_issue_numbers=set(),
+            owner_login="fairchild",
+            now=datetime(2026, 3, 16, 9, 0, tzinfo=timezone.utc),
+        )
+        self.assertEqual(labels, {sync_execution_state.AGENT_READY_LABEL})
+        self.assertEqual(reason, "execution-approved and ready")
 
     def test_extract_pr_issue_reference_reads_pr_marker(self) -> None:
         issue_number, agent = run_contributor.extract_pr_issue_reference(

@@ -20,6 +20,7 @@ Use this skill to run the shared contributor runtime with one of the repo's cofo
 ## Runtime
 
 - `scripts/run-contributor.py`
+- `scripts/sync-execution-state.py`
 - `scripts/validate-agent-output.py`
 - `scripts/parse-frontmatter.py`
 
@@ -27,9 +28,10 @@ Use this skill to run the shared contributor runtime with one of the repo's cofo
 
 1. Load the selected persona prompt.
 2. Gather current repo and GitHub context.
-3. Run Claude Code with the persona and appended context.
-4. Validate the YAML frontmatter output.
-5. Route the result back into GitHub as a proposal, discussion comment, PR review, or issue execution with branch/PR management.
+3. Sync execution-state labels (`agent:ready`, `agent:claimed`) from discussion approval, blockers, open PRs, and stale claims.
+4. Run Claude Code with the persona and appended context.
+5. Validate the YAML frontmatter output.
+6. Route the result back into GitHub as a proposal, discussion comment, PR review, or issue execution with branch/PR management.
 
 ## Usage
 
