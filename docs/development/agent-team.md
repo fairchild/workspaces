@@ -1,6 +1,8 @@
 # Agent Team
 
-Workspaces has a founding team of AI agents that propose improvements, review each other's work, and plan approved ideas into actionable issues. The goal is autonomous development with human approval gating — the repo advances itself, guided by the owner.
+Workspaces has a founding team of AI agents that propose improvements, review each other's work, plan approved ideas into actionable issues, and now pick up explicitly approved issues into PRs. The goal is autonomous development with human approval gating — the repo advances itself, guided by the owner.
+
+If you need the operator-facing runbook for how to interact with and manage the agents, start with [agent-owner-protocol.md](/Users/fairchild/.codex/worktrees/7a0f/workspaces/docs/development/agent-owner-protocol.md).
 
 ## Team
 
@@ -26,9 +28,10 @@ Daily (weekdays, alternating who goes first, 30 min offset):
   Agent wakes up
     │
     1. Check open PRs → give code review
-    2. Check in-progress issues → suggest next steps
-    3. Read new discussion comments → react
-    4. If nothing needs attention → propose new [idea]
+    2. Check own open PRs / claimed issues → keep them moving
+    3. Check execution-approved ready issues → claim one and open/update a PR
+    4. Read new discussion comments → react
+    5. If nothing needs attention → propose new [idea]
     │
     Post to GitHub Discussions
     │
@@ -39,7 +42,22 @@ Daily (weekdays, alternating who goes first, 30 min offset):
     2. Reads full thread + owner's modifications
     3. Creates Issue(s) or Milestone + Issues
     4. Links discussion ↔ issues
-    5. Marks [idea][endorsed]
+    5. Posts a summary comment with the milestone link and execution approval instructions
+    6. Marks [idea][endorsed]
+    │
+  Owner reacts 👍 on Peter's summary comment
+    │
+  Execution-state sync (next contributor wake-up)
+    1. Applies `agent:ready` to approved, unblocked issues with no active PR/claim
+    2. Applies `agent:claimed` to actively claimed issues
+    3. Expires claim-only issues after 24h if no PR was opened
+    │
+  Next April / Plat wake-up
+    1. Re-review open PRs they are blocking
+    2. Review other open PRs
+    3. Continue their own PRs / claimed issues
+    4. Claim the highest-priority ready approved issue
+    5. Push a branch + open/update a PR
     │
   Observer (weekly)
     1. Reads idea/issue/PR/workflow history
@@ -73,7 +91,10 @@ The reply can include modifications — Peter reads the full thread and incorpor
 
 ```
 [idea] New proposal          → open, awaiting review
-[idea][endorsed] Approved    → planned into issues, work can begin
+[idea][endorsed] Approved    → planned into issues
+[idea][endorsed] + 👍 on Peter summary → execution-approved
+`agent:ready` issue          → ready for a contributor to claim
+`agent:claimed` issue        → claimed, awaiting PR or claim expiry
 [shipped] Completed          → closed after delivery
 ```
 
@@ -89,6 +110,7 @@ Prompt, runtime, and compatibility responsibilities now split cleanly:
 | `.agents/skills/cofounder-contributor/SKILL.md` | Shared contributor skill for April and Plat |
 | `.agents/skills/cofounder-contributor/references/` | Persona prompt resources for April and Plat |
 | `.agents/skills/cofounder-contributor/scripts/run-contributor.py` | Contributor runtime source of truth |
+| `.agents/skills/cofounder-contributor/scripts/sync-execution-state.py` | Syncs discussion approval into `agent:ready` / `agent:claimed` issue state |
 | `.agents/skills/peter-planner/SKILL.md` | Planner skill for endorsed discussion → issues/milestone |
 | `.agents/skills/peter-planner/references/peter-planner.md` | Planner prompt resource |
 | `.agents/skills/peter-planner/config/peter-planner.toml` | Allowed planner labels + alias mapping |
@@ -97,6 +119,7 @@ Prompt, runtime, and compatibility responsibilities now split cleanly:
 | `.agents/scripts/run-planner.py` | Compatibility shim for existing automation |
 | `.agents/scripts/validate-agent-output.py` | Compatibility shim for shared validation |
 | `.agents/skills/drive/SKILL.md` | Manual milestone execution workflow after planning |
+| `docs/development/agent-owner-protocol.md` | Owner-facing protocol for approving, steering, and merging agent work |
 | `scripts/ops-report.py` | Deterministic GitHub + perf reporting for the ops loop |
 | `fixtures/ops-report/` | Checked-in replay packs for Observer dry runs and tests |
 | `docs/ops/` | Checked-in ops timeline, snapshot JSON, and dashboard |
@@ -115,12 +138,15 @@ April, Plat, and Peter now use thin workflow wrappers. Their workflow YAML keeps
 - concurrency
 - checkout and tool setup
 
-The shared contributor behavior now lives in `.agents/skills/cofounder-contributor/scripts/run-contributor.py`:
+The shared contributor behavior now lives in `.agents/skills/cofounder-contributor/scripts/run-contributor.py` plus the execution-state sync script:
 
-1. gather repo and GitHub context
-2. run Claude Code with the selected persona prompt
-3. validate YAML frontmatter output through the shared validator
-4. either pretty-print validated JSON for dry runs or route the action back into GitHub
+1. sync `agent:ready` / `agent:claimed` from discussion approval, blockers, open PRs, and stale claims
+2. gather repo and GitHub context
+3. run Claude Code with the selected persona prompt
+4. validate YAML frontmatter output through the shared validator
+5. either pretty-print validated JSON for dry runs or route the action back into GitHub
+
+When Peter has already planned a discussion, execution approval lives on Peter's summary comment. A 👍 reaction from the repo owner is the mission-level signal. The sync step turns that into explicit per-issue `agent:ready` state, and expires `agent:claimed` issues after 24 hours when no PR exists.
 
 April and Plat workflows now invoke the skill runtime directly. The old `.agents/scripts/run-contributor.py` path remains only as a compatibility shim for any external callers that still depend on it.
 
@@ -152,6 +178,8 @@ For manual dry runs, `scripts/ops-report.py` also accepts `--fixtures-dir fixtur
 - **Shell safety** — event context passed via env vars, body content via temp files
 - **Catalog-backed labels** — Peter can only use repo-managed labels from `.agents/skills/peter-planner/config/peter-planner.toml`, with alias normalization for common CI/platform terms
 - **Idempotent planning markers** — planner comments, milestone descriptions, and issue bodies carry machine markers so retries reuse existing artifacts instead of leaking duplicates
+- **Explicit execution-state labels** — contributor workflows translate mission approval into `agent:ready` and `agent:claimed`, so execution no longer depends on contributors reparsing discussion reactions on every decision
+- **Stale-claim recovery** — claims without a PR automatically expire after 24 hours and return to `agent:ready` on the next sync pass
 - **Discussion token override** — `permissions.discussions: write` is enough for comments, issues, and milestones, but GitHub's built-in Actions token still cannot retitle discussions via `updateDiscussion` in this repo. `agent-peter.yml` therefore prefers the repo secret `PETER_DISCUSSION_TOKEN` when present, and the repo's default Actions workflow permission should stay at `write`
 - **OpenAI env compatibility** — agent runtimes treat `OPENAI_API_KEY` as the canonical provider variable and fall back to `GITHUB_CODESPACES_OPENAI_API_KEY` when present so local Codespaces-oriented `.env` files can still work without changing the runtime contract
 - **Simple operational memory** — GitHub stays the raw event source; `docs/ops/` stores small checked-in snapshots and dashboards instead of introducing a separate analytics service or database in v1
@@ -168,9 +196,9 @@ Agents propose ideas and review each other's work. Human approves. Planner creat
 Add persistent memory so agents build context across sessions — what shipped, what worked, what didn't. They stop re-proposing similar ideas and develop a sense of project trajectory.
 
 ### Phase 3: Execute
-Approved and planned issues get picked up by agents that create branches, write code, open PRs. Human reviews PRs.
+Approved and planned issues get picked up by April and Plat after the owner reacts 👍 on Peter's summary comment. They create branches, write code, open PRs, and keep open PRs moving to closure. Human reviews PRs and remains the only merge authority.
 
-The current repo-local bridge for this phase is the `$drive` skill: it resolves a live milestone, refreshes or rewrites the execution plan from current GitHub state, then drives the milestone issue by issue.
+The `$drive` skill remains the manual bridge for milestone-wide execution, but the standing contributor workflows can now autonomously pick up a single approved issue at their scheduled wake-up.
 
 ### Phase 4: Evaluate
 After work ships, agents assess impact — did the change improve the codebase? Did tests pass? Did performance hold? Evaluation feeds back into ideation priorities.

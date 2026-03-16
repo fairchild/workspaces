@@ -17,7 +17,7 @@ on:
         default: ''
 
 permissions:
-  contents: read
+  contents: write
   discussions: write
   issues: write
   pull-requests: write
@@ -28,19 +28,24 @@ concurrency:
 
 jobs:
   run:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    runs-on: macos-17
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v5
-        with:
-          fetch-depth: 50
-      - uses: astral-sh/setup-uv@v7
       - name: Generate app token
         id: app-token
         uses: actions/create-github-app-token@v2
         with:
           app-id: ${{ secrets.WORKSPACE_AGENTS_APP_ID }}
           private-key: ${{ secrets.WORKSPACE_AGENTS_PRIVATE_KEY }}
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 50
+          token: ${{ steps.app-token.outputs.token }}
+      - uses: astral-sh/setup-uv@v7
+      - name: Sync execution state
+        run: uv run .agents/skills/cofounder-contributor/scripts/sync-execution-state.py
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
       - name: Run contributor
         run: |
           ARGS=(--prompt-file .agents/skills/cofounder-contributor/references/plat-ironwood.md)

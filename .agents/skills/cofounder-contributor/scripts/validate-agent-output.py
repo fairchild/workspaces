@@ -39,6 +39,7 @@ REQUIRED_FIELDS: dict[str, list[str]] = {
     "propose": ["title", "body", "persona"],
     "comment": ["discussion_number", "body", "persona"],
     "review_pr": ["pr_number", "body", "persona"],
+    "execute_issue": ["issue_number", "pr_title", "commit_message", "body", "persona"],
     "plan": ["discussion_number", "issues"],
 }
 
@@ -185,6 +186,13 @@ def validate_data(data: dict[str, Any]) -> dict[str, Any]:
         title = require_non_empty_string(data.get("title"), "title")
         if not title.startswith("[idea]"):
             data["title"] = f"[idea] {title}"
+
+    if action == "execute_issue":
+        data["pr_title"] = require_non_empty_string(data.get("pr_title"), "pr_title")
+        data["commit_message"] = require_non_empty_string(data.get("commit_message"), "commit_message")
+        issue_number = data.get("issue_number")
+        if not isinstance(issue_number, int) or issue_number <= 0:
+            raise ValidationError("field 'issue_number' must be a positive integer")
 
     return data
 

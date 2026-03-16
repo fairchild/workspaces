@@ -438,6 +438,12 @@ def compose_summary_comment(
         lines.append(f"- #{issue['number']} — {issue['title']}")
     if milestone is not None:
         lines.extend(["", f"Milestone: [{milestone['title']}]({milestone['html_url']})"])
+    lines.extend(
+        [
+            "",
+            "React with 👍 on this comment when you're ready for April or Plat to start execution.",
+        ]
+    )
     return "\n".join(lines)
 
 
@@ -447,6 +453,7 @@ def compose_issue_body(body: str, discussion_url: str, discussion_number: int, s
         discussion_url,
         discussion_number,
         slug,
+        priority=None,
         blocked_by=[],
         requested_evidence=[],
     )
@@ -458,10 +465,14 @@ def compose_issue_body_with_metadata(
     discussion_number: int,
     slug: str,
     *,
+    priority: int | None = None,
     blocked_by: list[int],
     requested_evidence: list[str],
 ) -> str:
-    lines = [body.rstrip(), "", "## Execution", "- Ship this issue as one PR."]
+    lines = [body.rstrip(), "", "## Execution"]
+    if priority is not None:
+        lines.append(f"- Priority: {priority}")
+    lines.append("- Ship this issue as one PR.")
     lines.extend(["", "## Blocked By"])
     if blocked_by:
         lines.extend(f"- #{number}" for number in blocked_by)
@@ -1084,6 +1095,7 @@ def ensure_issue(
                 discussion_url=discussion_url,
                 discussion_number=discussion_number,
                 slug=issue_plan.slug,
+                priority=issue_plan.priority,
                 blocked_by=blocked_by_numbers,
                 requested_evidence=issue_plan.requested_evidence,
             )

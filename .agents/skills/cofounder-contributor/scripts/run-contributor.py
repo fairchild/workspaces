@@ -19,20 +19,22 @@ from pathlib import Path
 
 
 CLAUDE_TASK = (
-    "Check what needs attention: open PRs to review, then discussions to "
-    "participate in or propose. Output your response using YAML frontmatter "
-    "as specified in your prompt."
+    "Check what needs attention: open PRs to review, then your own open PRs "
+    "or claimed issues to advance, then execution-approved issues to pick up, "
+    "then discussions to participate in or propose. Output your response "
+    "using YAML frontmatter as specified in your prompt."
 )
 CLAUDE_TASK_CLI = (
     "You are running as an automated contributor. FIRST check if any PRs "
     "need your follow-up review (you reviewed but didn't approve, and new "
-    "commits were pushed since). Then check for other open PRs to review, "
-    "then participate in discussions — comment on an existing one or "
-    "propose a new idea. Do NOT comment on issues. CRITICAL: Your final "
-    "output MUST be valid YAML frontmatter exactly as specified in your "
-    "prompt — start with `---` on the very first line, then metadata fields, "
-    "then closing `---`, then your markdown body. Do NOT write any text "
-    "before the opening `---`."
+    "commits were pushed since). Then review other open PRs, then continue "
+    "your own open PRs or claimed issues, then claim an execution-approved "
+    "ready issue if one exists, then participate in discussions — comment on "
+    "an existing one or propose a new idea. CRITICAL: Your final output MUST "
+    "be valid YAML frontmatter exactly as specified in your prompt — start "
+    "with `---` on the very first line, then metadata fields, then closing "
+    "`---`, then your markdown body. Do NOT write any text before the "
+    "opening `---`."
 )
 REPO_ROOT = Path(__file__).resolve().parents[4]
 SKILL_ROOT = Path(__file__).resolve().parents[1]
@@ -45,6 +47,7 @@ CLAUDE_TIMEOUT = 300
 VALIDATION_TIMEOUT = 30
 ENGAGEMENT_RECENT_HOURS = 72
 LOW_COMMENT_THRESHOLD = 1
+STALE_CLAIM_HOURS = 24
 
 
 def parse_args() -> argparse.Namespace:
@@ -361,13 +364,65 @@ def gather_backlog_state() -> str:
     return "\n".join(lines)
 
 
-PENDING_REVIEWS_QUERY = """
+WORK_STATE_QUERY = """
 query($owner: String!, $name: String!) {
   repository(owner: $owner, name: $name) {
-    pullRequests(first: 20, states: [OPEN], orderBy: {field: UPDATED_AT, direction: DESC}) {
+    discussions(first: 30, states: OPEN, orderBy: {field: UPDATED_AT, direction: DESC}) {
+      nodes {
+        id
+        number
+        title
+        body
+        createdAt
+        updatedAt
+        category { name }
+        author { login }
+        comments(last: 20) {
+          nodes {
+            id
+            body
+            createdAt
+            author { login }
+            reactionGroups {
+              content
+              users(first: 20) {
+                nodes { login }
+              }
+            }
+          }
+          totalCount
+        }
+      }
+    }
+    issues(first: 50, states: OPEN, orderBy: {field: UPDATED_AT, direction: DESC}) {
       nodes {
         number
         title
+        url
+        body
+        state
+        labels(first: 20) {
+          nodes { name }
+        }
+        comments(last: 20) {
+          nodes {
+            body
+            createdAt
+            author { login }
+          }
+        }
+      }
+    }
+    pullRequests(first: 30, states: [OPEN], orderBy: {field: UPDATED_AT, direction: DESC}) {
+      nodes {
+        number
+        title
+        url
+        body
+        isDraft
+        reviewDecision
+        headRefName
+        author { login }
         commits(last: 1) {
           nodes {
             commit { committedDate }
@@ -380,51 +435,230 @@ query($owner: String!, $name: String!) {
             submittedAt
           }
         }
+        comments(last: 20) {
+          nodes {
+            author { login }
+            body
+            createdAt
+          }
+        }
       }
     }
   }
 }
 """
 
+TASK_ISSUE_MARKER_RE = re.compile(
+    r"<!-- peter-planner:discussion=(?P<number>\d+);issue=(?P<slug>[a-z0-9-]+) -->"
+)
+PETER_PLANNED_MARKER_RE = re.compile(
+    r"<!-- peter-planner:discussion=(?P<number>\d+);status=planned -->"
+)
+CLAIM_MARKER_RE = re.compile(
+    r"<!-- contributor:issue=(?P<number>\d+);status=(?P<status>[a-z_]+);agent=(?P<agent>[a-z0-9-]+);branch=(?P<branch>[^>\n]+) -->"
+)
+PR_MARKER_RE = re.compile(
+    r"<!-- contributor:issue=(?P<number>\d+);agent=(?P<agent>[a-z0-9-]+) -->"
+)
+CLOSING_REFERENCE_RE = re.compile(
+    r"(?im)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(?P<number>\d+)\b"
+)
+EXECUTION_PRIORITY_RE = re.compile(r"(?m)^- Priority:\s*(?P<priority>\d+)\s*$")
+AGENT_READY_LABEL = "agent:ready"
+AGENT_READY_LABEL_COLOR = "5319e7"
+AGENT_READY_LABEL_DESCRIPTION = "Execution-approved and ready for an automated contributor to claim"
+AGENT_CLAIM_LABEL = "agent:claimed"
+AGENT_CLAIM_LABEL_COLOR = "1d76db"
+AGENT_CLAIM_LABEL_DESCRIPTION = "Currently being executed by an automated contributor"
+
+
+def persona_slug(persona: str) -> str:
+    base = persona.split(",", 1)[0].strip().casefold()
+    slug = re.sub(r"[^a-z0-9]+", "-", base).strip("-")
+    return slug or "agent"
+
+
+def short_persona_name(persona: str) -> str:
+    return persona.split(",", 1)[0].strip() or persona.strip()
+
+
+def issue_label_names(issue: dict[str, object]) -> set[str]:
+    labels = issue.get("labels", {})
+    nodes = labels.get("nodes", []) if isinstance(labels, dict) else []
+    return {
+        str(label.get("name", "")).strip()
+        for label in nodes
+        if isinstance(label, dict) and str(label.get("name", "")).strip()
+    }
+
+
+def markdown_section(body: str, heading: str) -> str:
+    pattern = rf"(?ms)^## {re.escape(heading)}\n(.*?)(?=^## |\n---\n|\Z)"
+    match = re.search(pattern, body)
+    if not match:
+        return ""
+    return match.group(1).strip()
+
+
+def extract_issue_discussion_number(body: str) -> int | None:
+    match = TASK_ISSUE_MARKER_RE.search(body)
+    if not match:
+        return None
+    return int(match.group("number"))
+
+
+def extract_execution_priority(body: str) -> int | None:
+    match = EXECUTION_PRIORITY_RE.search(markdown_section(body, "Execution"))
+    if not match:
+        return None
+    return int(match.group("priority"))
+
+
+def extract_blocked_by(body: str) -> list[int]:
+    blocked_section = markdown_section(body, "Blocked By")
+    blocked = [int(number) for number in re.findall(r"#(\d+)", blocked_section)]
+    return list(dict.fromkeys(blocked))
+
+
+def extract_requested_evidence(body: str) -> list[str]:
+    evidence_section = markdown_section(body, "Requested Evidence")
+    return [
+        line[2:].strip()
+        for line in evidence_section.splitlines()
+        if line.strip().startswith("- ") and line[2:].strip().lower() != "none"
+    ]
+
+
+def latest_issue_claim(issue_number: int, comments: dict[str, object]) -> dict[str, str] | None:
+    nodes = comments.get("nodes", []) if isinstance(comments, dict) else []
+    claims: list[dict[str, str]] = []
+    for comment in nodes:
+        if not isinstance(comment, dict):
+            continue
+        match = CLAIM_MARKER_RE.search(str(comment.get("body", "")))
+        if not match or int(match.group("number")) != issue_number:
+            continue
+        claims.append(
+            {
+                "agent": match.group("agent"),
+                "branch": match.group("branch").strip(),
+                "status": match.group("status"),
+                "createdAt": str(comment.get("createdAt", "")),
+            }
+        )
+    if not claims:
+        return None
+    return max(claims, key=lambda item: item.get("createdAt", ""))
+
+
+def extract_pr_issue_reference(body: str) -> tuple[int | None, str | None]:
+    marker = PR_MARKER_RE.search(body)
+    if marker:
+        return int(marker.group("number")), marker.group("agent")
+    close_ref = CLOSING_REFERENCE_RE.search(body)
+    if close_ref:
+        return int(close_ref.group("number")), None
+    return None, None
+
+
+def latest_planned_comment(
+    discussion: dict[str, object] | None,
+    discussion_number: int,
+) -> dict[str, object] | None:
+    if discussion is None:
+        return None
+    comments = discussion.get("comments", {})
+    nodes = comments.get("nodes", []) if isinstance(comments, dict) else []
+    planned: list[dict[str, object]] = []
+    for comment in nodes:
+        if not isinstance(comment, dict):
+            continue
+        match = PETER_PLANNED_MARKER_RE.search(str(comment.get("body", "")))
+        if match and int(match.group("number")) == discussion_number:
+            planned.append(comment)
+    if not planned:
+        return None
+    return max(planned, key=lambda item: str(item.get("createdAt", "")))
+
+
+def planned_comment_has_owner_approval(
+    comment: dict[str, object] | None,
+    owner_login: str,
+) -> bool:
+    if comment is None:
+        return False
+    owner = _normalize_login(owner_login)
+    for reaction_group in comment.get("reactionGroups", []) or []:
+        if not isinstance(reaction_group, dict):
+            continue
+        if reaction_group.get("content") != "THUMBS_UP":
+            continue
+        users = reaction_group.get("users", {})
+        nodes = users.get("nodes", []) if isinstance(users, dict) else []
+        if any(
+            _normalize_login(str(user.get("login", ""))) == owner
+            for user in nodes
+            if isinstance(user, dict)
+        ):
+            return True
+    return False
+
+
+def discussion_execution_status(
+    discussion: dict[str, object] | None,
+    discussion_number: int | None,
+    owner_login: str,
+) -> tuple[bool, str]:
+    if discussion_number is None:
+        return False, "missing Peter planner marker"
+    if discussion is None:
+        return False, f"linked discussion #{discussion_number} not found"
+    planned_comment = latest_planned_comment(discussion, discussion_number)
+    if planned_comment is None:
+        return False, f"discussion #{discussion_number} has no Peter summary comment yet"
+    if planned_comment_has_owner_approval(planned_comment, owner_login):
+        return True, f"owner reacted 👍 on Peter summary comment in discussion #{discussion_number}"
+    return False, f"awaiting owner 👍 on Peter summary comment in discussion #{discussion_number}"
+
+
+def claim_is_stale(
+    claim: dict[str, str] | None,
+    *,
+    has_open_pr: bool,
+    now: datetime | None = None,
+) -> bool:
+    if claim is None or has_open_pr:
+        return False
+    if now is None:
+        now = datetime.now(timezone.utc)
+    created_at = _parse_timestamp(claim.get("createdAt", ""))
+    if created_at is None:
+        return False
+    return now - created_at >= timedelta(hours=STALE_CLAIM_HOURS)
+
 
 def find_prs_awaiting_rereview(
-    env: dict[str, str], owner: str, name: str, bot_login: str,
+    pull_requests: list[dict[str, object]],
+    bot_login: str,
 ) -> str:
     """Find open PRs where this agent reviewed but didn't approve and new commits exist."""
-    raw = run_optional(
-        [
-            "gh", "api", "graphql",
-            "-f", f"query={PENDING_REVIEWS_QUERY}",
-            "-f", f"owner={owner}",
-            "-f", f"name={name}",
-        ],
-        timeout=GITHUB_API_TIMEOUT,
-        cwd=REPO_ROOT,
-        env=env,
-        default="{}",
-    )
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError:
-        return ""
-
-    prs = data.get("data", {}).get("repository", {}).get("pullRequests", {}).get("nodes", [])
     awaiting: list[str] = []
 
-    for pr in prs:
-        reviews = pr.get("reviews", {}).get("nodes", [])
+    for pr in pull_requests:
+        reviews = (pr.get("reviews") or {}).get("nodes", [])
         agent_reviews = [
-            r for r in reviews
-            if (r.get("author") or {}).get("login", "") == bot_login
+            review
+            for review in reviews
+            if _normalize_login((review.get("author") or {}).get("login", "")) == _normalize_login(bot_login)
         ]
         if not agent_reviews:
             continue
 
-        latest_agent_review = max(agent_reviews, key=lambda r: r.get("submittedAt", ""))
+        latest_agent_review = max(agent_reviews, key=lambda review: review.get("submittedAt", ""))
         if latest_agent_review.get("state") == "APPROVED":
             continue
 
-        commits = pr.get("commits", {}).get("nodes", [])
+        commits = (pr.get("commits") or {}).get("nodes", [])
         if not commits:
             continue
         latest_commit_date = commits[0].get("commit", {}).get("committedDate", "")
@@ -616,6 +850,274 @@ def build_engagement_retry_message(candidate: dict[str, object]) -> str:
     )
 
 
+def format_issue_list_for_context(issues: list[dict[str, object]]) -> str:
+    payload = [
+        {
+            "number": issue.get("number"),
+            "title": issue.get("title"),
+            "labels": sorted(issue_label_names(issue)),
+            "url": issue.get("url"),
+        }
+        for issue in issues
+    ]
+    return json.dumps(payload, indent=2, ensure_ascii=False)
+
+
+def format_pr_list_for_context(pull_requests: list[dict[str, object]]) -> str:
+    payload = [
+        {
+            "number": pr.get("number"),
+            "title": pr.get("title"),
+            "author": (pr.get("author") or {}).get("login", ""),
+            "isDraft": pr.get("isDraft"),
+            "reviewDecision": pr.get("reviewDecision"),
+            "headRefName": pr.get("headRefName"),
+            "url": pr.get("url"),
+        }
+        for pr in pull_requests
+    ]
+    return json.dumps(payload, indent=2, ensure_ascii=False)
+
+
+def fetch_issue_state_map(env: dict[str, str]) -> dict[int, str]:
+    raw = run_optional(
+        [
+            "gh",
+            "issue",
+            "list",
+            "--state",
+            "all",
+            "--limit",
+            "200",
+            "--json",
+            "number,state",
+        ],
+        timeout=GITHUB_API_TIMEOUT,
+        cwd=REPO_ROOT,
+        env=env,
+        default="[]",
+    )
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return {int(item["number"]): str(item["state"]) for item in data}
+
+
+def summarize_requested_evidence(requested_evidence: list[str]) -> str:
+    if not requested_evidence:
+        return "Follow the repo evidence bar for the touched surfaces."
+    preview = requested_evidence[:2]
+    suffix = " ..." if len(requested_evidence) > 2 else ""
+    return "; ".join(preview) + suffix
+
+
+def classify_execution_work(
+    issues: list[dict[str, object]],
+    pull_requests: list[dict[str, object]],
+    discussions: list[dict[str, object]],
+    issue_states: dict[int, str],
+    *,
+    owner_login: str,
+    persona: str,
+    bot_login: str,
+) -> dict[str, list[dict[str, object]]]:
+    current_agent = persona_slug(persona)
+    normalized_bot = _normalize_login(bot_login)
+    issue_pr_map: dict[int, list[dict[str, object]]] = {}
+    for pr in pull_requests:
+        issue_number, marker_agent = extract_pr_issue_reference(str(pr.get("body", "")))
+        if issue_number is None:
+            continue
+        author_login = str((pr.get("author") or {}).get("login", ""))
+        issue_pr_map.setdefault(issue_number, []).append(
+            {
+                "number": pr.get("number"),
+                "title": pr.get("title"),
+                "url": pr.get("url"),
+                "author_login": author_login,
+                "reviewDecision": pr.get("reviewDecision"),
+                "headRefName": pr.get("headRefName"),
+                "agent": marker_agent or (current_agent if _normalize_login(author_login) == normalized_bot else ""),
+            }
+        )
+
+    own_open_prs: list[dict[str, object]] = []
+    claimed_issues: list[dict[str, object]] = []
+    ready_issues: list[dict[str, object]] = []
+
+    for issue in issues:
+        labels = issue_label_names(issue)
+        if AGENT_CLAIM_LABEL not in labels and AGENT_READY_LABEL not in labels and "agent:task" not in labels:
+            continue
+        if "agent:task" not in labels:
+            continue
+
+        issue_number = int(issue["number"])
+        body = str(issue.get("body", ""))
+        discussion_number = extract_issue_discussion_number(body)
+        priority = extract_execution_priority(body)
+        blocked_by = extract_blocked_by(body)
+        requested_evidence = extract_requested_evidence(body)
+        blockers = [
+            blocker
+            for blocker in blocked_by
+            if issue_states.get(blocker, "OPEN").upper() != "CLOSED"
+        ]
+        latest_claim = latest_issue_claim(issue_number, issue.get("comments", {}))
+        claim_agent = latest_claim.get("agent") if latest_claim else None
+        linked_prs = issue_pr_map.get(issue_number, [])
+        stale_claim = claim_is_stale(latest_claim, has_open_pr=bool(linked_prs))
+        if stale_claim:
+            latest_claim = None
+            claim_agent = None
+        own_pr = next(
+            (
+                pr
+                for pr in linked_prs
+                if pr["agent"] == current_agent
+                or (
+                    not pr["agent"]
+                    and _normalize_login(str(pr["author_login"])) == normalized_bot
+                )
+            ),
+            None,
+        )
+
+        item = {
+            "issue_number": issue_number,
+            "title": issue.get("title"),
+            "url": issue.get("url"),
+            "discussion_number": discussion_number,
+            "priority": priority,
+            "blocked_by": blocked_by,
+            "requested_evidence": requested_evidence,
+            "approval_reason": (
+                f"{AGENT_READY_LABEL} label present"
+                if AGENT_READY_LABEL in labels
+                else f"waiting for {AGENT_READY_LABEL} label"
+            ),
+            "claim_branch": latest_claim.get("branch") if latest_claim else "",
+            "claim_agent": claim_agent or "",
+        }
+
+        if own_pr is not None:
+            own_open_prs.append(
+                {
+                    **item,
+                    "pr_number": own_pr["number"],
+                    "pr_title": own_pr["title"],
+                    "pr_url": own_pr["url"],
+                    "pr_branch": own_pr["headRefName"],
+                    "review_decision": own_pr["reviewDecision"] or "REVIEW_REQUIRED",
+                }
+            )
+            continue
+
+        if latest_claim is not None and claim_agent == current_agent:
+            claimed_issues.append(item)
+            continue
+
+        if AGENT_READY_LABEL not in labels or blockers or linked_prs:
+            continue
+        if latest_claim is not None and claim_agent and claim_agent != current_agent:
+            continue
+        if AGENT_CLAIM_LABEL in labels and latest_claim is None:
+            continue
+
+        ready_issues.append(item)
+
+    def sort_key(item: dict[str, object]) -> tuple[int, int]:
+        priority = int(item["priority"]) if item.get("priority") is not None else 9999
+        return priority, int(item["issue_number"])
+
+    own_open_prs.sort(key=sort_key)
+    claimed_issues.sort(key=sort_key)
+    ready_issues.sort(key=sort_key)
+    return {
+        "own_open_prs": own_open_prs,
+        "claimed_issues": claimed_issues,
+        "ready_issues": ready_issues,
+    }
+
+
+def format_own_open_prs(items: list[dict[str, object]]) -> str:
+    if not items:
+        return ""
+    lines = ["PRIORITY — your open PRs to advance after reviews:\n"]
+    for item in items[:5]:
+        lines.append(
+            f"  PR #{item['pr_number']} — {item['pr_title']}\n"
+            f"    Issue: #{item['issue_number']} | Review decision: {item['review_decision']} | Branch: {item['pr_branch']}"
+        )
+    return "\n".join(lines)
+
+
+def format_claimed_issues(items: list[dict[str, object]]) -> str:
+    if not items:
+        return ""
+    lines = ["PRIORITY — issues you already claimed and should keep moving:\n"]
+    for item in items[:5]:
+        priority = item.get("priority")
+        priority_text = f"Priority {priority}" if priority is not None else "Priority unrecorded"
+        lines.append(
+            f"  Issue #{item['issue_number']} — {item['title']}\n"
+            f"    {priority_text} | Branch: {item['claim_branch'] or 'not recorded'}\n"
+            f"    Requested evidence: {summarize_requested_evidence(list(item['requested_evidence']))}"
+        )
+    return "\n".join(lines)
+
+
+def format_ready_issues(items: list[dict[str, object]]) -> str:
+    if not items:
+        return ""
+    lines = ["PRIORITY — execution-approved issues ready to claim if no PR work is waiting:\n"]
+    for item in items[:5]:
+        priority = item.get("priority")
+        priority_text = f"Priority {priority}" if priority is not None else "Priority unrecorded"
+        discussion = (
+            f"discussion #{item['discussion_number']}"
+            if item.get("discussion_number") is not None
+            else "linked discussion unavailable"
+        )
+        lines.append(
+            f"  Issue #{item['issue_number']} — {item['title']}\n"
+            f"    {priority_text} | Approval: {item['approval_reason']} | From {discussion}\n"
+            f"    Requested evidence: {summarize_requested_evidence(list(item['requested_evidence']))}"
+        )
+    return "\n".join(lines)
+
+
+def fetch_work_state(owner: str, name: str, env: dict[str, str]) -> dict[str, list[dict[str, object]]]:
+    raw = run_optional(
+        [
+            "gh",
+            "api",
+            "graphql",
+            "-f",
+            f"query={WORK_STATE_QUERY}",
+            "-f",
+            f"owner={owner}",
+            "-f",
+            f"name={name}",
+        ],
+        timeout=GITHUB_API_TIMEOUT,
+        cwd=REPO_ROOT,
+        env=env,
+        default="{}",
+    )
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return {"discussions": [], "issues": [], "pull_requests": []}
+    repository = data.get("data", {}).get("repository", {})
+    return {
+        "discussions": repository.get("discussions", {}).get("nodes", []),
+        "issues": repository.get("issues", {}).get("nodes", []),
+        "pull_requests": repository.get("pullRequests", {}).get("nodes", []),
+    }
+
+
 def maybe_block_new_proposal(
     validated_json: str,
     engagement_candidates: list[dict[str, object]],
@@ -641,50 +1143,8 @@ def gather_context(
         env=env,
     ).stdout.rstrip()
 
-    discussions_query = """
-query($owner: String!, $name: String!) {
-  repository(owner: $owner, name: $name) {
-    discussions(first: 30, states: OPEN, orderBy: {field: UPDATED_AT, direction: DESC}) {
-      nodes {
-        number title body createdAt updatedAt
-        category { name }
-        author { login }
-        comments(first: 5) {
-          nodes { body author { login } createdAt }
-          totalCount
-        }
-      }
-    }
-  }
-}
-"""
-    discussions_raw = run_optional(
-        [
-            "gh",
-            "api",
-            "graphql",
-            "-f",
-            f"query={discussions_query}",
-            "-f",
-            f"owner={owner}",
-            "-f",
-            f"name={name}",
-        ],
-        timeout=GITHUB_API_TIMEOUT,
-        cwd=REPO_ROOT,
-        env=env,
-        default="",
-    ).rstrip()
-    try:
-        discussions_data = json.loads(discussions_raw) if discussions_raw else {}
-    except json.JSONDecodeError:
-        discussions_data = {}
-    discussion_nodes = (
-        discussions_data.get("data", {})
-        .get("repository", {})
-        .get("discussions", {})
-        .get("nodes", [])
-    )
+    work_state = fetch_work_state(owner, name, env)
+    discussion_nodes = work_state["discussions"]
     discussions = format_open_discussions(discussion_nodes)
     engagement_candidates = find_discussions_needing_engagement(
         discussion_nodes,
@@ -692,50 +1152,35 @@ query($owner: String!, $name: String!) {
         persona=persona,
     )
     engagement_summary = format_engagement_candidates(engagement_candidates)
-
-    open_issues = run_optional(
-        [
-            "gh",
-            "issue",
-            "list",
-            "--state",
-            "open",
-            "--limit",
-            "20",
-            "--json",
-            "number,title,state,labels,assignees",
-        ],
-        timeout=GITHUB_API_TIMEOUT,
-        cwd=REPO_ROOT,
-        env=env,
-        default="[]\n",
-    ).rstrip()
-
-    open_prs = run_optional(
-        [
-            "gh",
-            "pr",
-            "list",
-            "--state",
-            "open",
-            "--limit",
-            "10",
-            "--json",
-            "number,title,author,isDraft,reviewDecision",
-        ],
-        timeout=GITHUB_API_TIMEOUT,
-        cwd=REPO_ROOT,
-        env=env,
-        default="[]\n",
-    ).rstrip()
+    open_issues = format_issue_list_for_context(work_state["issues"])
+    open_prs = format_pr_list_for_context(work_state["pull_requests"])
 
     backlog_state = gather_backlog_state()
     history = gather_agent_history(persona, owner, name, env)
-    pending_reviews = find_prs_awaiting_rereview(env, owner, name, bot_login) if bot_login else ""
+    issue_states = fetch_issue_state_map(env)
+    execution_state = classify_execution_work(
+        work_state["issues"],
+        work_state["pull_requests"],
+        discussion_nodes,
+        issue_states,
+        owner_login=owner,
+        persona=persona,
+        bot_login=bot_login,
+    )
+    pending_reviews = find_prs_awaiting_rereview(work_state["pull_requests"], bot_login) if bot_login else ""
+    own_open_prs = format_own_open_prs(execution_state["own_open_prs"])
+    claimed_issues = format_claimed_issues(execution_state["claimed_issues"])
+    ready_issues = format_ready_issues(execution_state["ready_issues"])
 
     sections = []
     if pending_reviews:
         sections.append(pending_reviews)
+    if own_open_prs:
+        sections.append(own_open_prs)
+    if claimed_issues:
+        sections.append(claimed_issues)
+    if ready_issues:
+        sections.append(ready_issues)
     if engagement_summary:
         sections.append(engagement_summary)
     sections.extend([
@@ -781,10 +1226,11 @@ def run_claude(
     if mode == "cli":
         cmd.extend([
             "--permission-mode", "bypassPermissions",
-            "--tools", "Read,Grep,Glob,Bash(git:*),Bash(gh:*),Bash(uv:*)",
-            "--max-budget-usd", "1.00",
+            "--tools",
+            "Read,Grep,Glob,Edit,Write,MultiEdit,Bash(git:*),Bash(gh:*),Bash(uv:*),Bash(swift:*),Bash(mise:*),Bash(./scripts/*),Bash(xcodebuild:*)",
+            "--max-budget-usd", "2.50",
         ])
-        timeout = 600
+        timeout = 1200
     cmd.append(task)
     return run_checked(cmd, timeout=timeout, cwd=REPO_ROOT, env=env).stdout
 
@@ -820,6 +1266,222 @@ def build_body(data: dict[str, object]) -> str:
     return f"*{persona}*\n\n{body}"
 
 
+def default_branch(env: dict[str, str]) -> str:
+    branch = run_optional(
+        ["gh", "repo", "view", "--json", "defaultBranchRef", "--jq", ".defaultBranchRef.name"],
+        timeout=GITHUB_API_TIMEOUT,
+        cwd=REPO_ROOT,
+        env=env,
+        default="main",
+    ).strip()
+    return branch or "main"
+
+
+def current_branch(env: dict[str, str]) -> str:
+    return run_optional(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+        timeout=GITHUB_API_TIMEOUT,
+        cwd=REPO_ROOT,
+        env=env,
+        default="HEAD",
+    ).strip() or "HEAD"
+
+
+def slugify(value: str, *, max_length: int = 48) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", value.casefold()).strip("-")
+    if not slug:
+        return "task"
+    return slug[:max_length].rstrip("-") or "task"
+
+
+def branch_name_for_issue(persona: str, issue_number: int, issue_title: str) -> str:
+    return f"codex/{persona_slug(persona)}-issue-{issue_number}-{slugify(issue_title)}"
+
+
+def ensure_claim_label(env: dict[str, str]) -> None:
+    labels = run_optional(
+        ["gh", "label", "list", "--limit", "200", "--json", "name"],
+        timeout=GITHUB_API_TIMEOUT,
+        cwd=REPO_ROOT,
+        env=env,
+        default="[]",
+    )
+    try:
+        existing = {item["name"] for item in json.loads(labels)}
+    except json.JSONDecodeError:
+        existing = set()
+    if AGENT_CLAIM_LABEL in existing:
+        return
+    run_checked(
+        [
+            "gh",
+            "label",
+            "create",
+            AGENT_CLAIM_LABEL,
+            "--color",
+            AGENT_CLAIM_LABEL_COLOR,
+            "--description",
+            AGENT_CLAIM_LABEL_DESCRIPTION,
+        ],
+        timeout=GITHUB_API_TIMEOUT,
+        cwd=REPO_ROOT,
+        env=env,
+    )
+
+
+def issue_label_presence(issue: dict[str, object]) -> set[str]:
+    return issue_label_names(issue)
+
+
+def claim_marker(issue_number: int, persona: str, branch: str) -> str:
+    return (
+        f"<!-- contributor:issue={issue_number};status=claimed;"
+        f"agent={persona_slug(persona)};branch={branch} -->"
+    )
+
+
+def compose_claim_comment(issue_number: int, persona: str, branch: str) -> str:
+    return (
+        f"*{persona}*\n\n"
+        f"Claiming this issue for execution on `{branch}`.\n\n"
+        f"{claim_marker(issue_number, persona, branch)}"
+    )
+
+
+def pr_marker(issue_number: int, persona: str) -> str:
+    return f"<!-- contributor:issue={issue_number};agent={persona_slug(persona)} -->"
+
+
+def compose_pr_body(
+    issue_number: int,
+    persona: str,
+    summary_body: str,
+) -> str:
+    return (
+        f"*{persona}*\n\n"
+        f"{summary_body.strip()}\n\n"
+        f"Closes #{issue_number}\n\n"
+        f"{pr_marker(issue_number, persona)}"
+    )
+
+
+def compose_pr_update_comment(persona: str, summary_body: str) -> str:
+    return f"*{persona}*\n\n{summary_body.strip()}"
+
+
+def set_git_identity(env: dict[str, str], persona: str, bot_login: str) -> None:
+    user_name = bot_login or short_persona_name(persona)
+    user_email = f"{persona_slug(persona)}@users.noreply.github.com"
+    run_checked(["git", "config", "user.name", user_name], timeout=GITHUB_API_TIMEOUT, cwd=REPO_ROOT, env=env)
+    run_checked(["git", "config", "user.email", user_email], timeout=GITHUB_API_TIMEOUT, cwd=REPO_ROOT, env=env)
+
+
+def working_tree_dirty(env: dict[str, str]) -> bool:
+    status = run_optional(
+        ["git", "status", "--porcelain"],
+        timeout=GITHUB_API_TIMEOUT,
+        cwd=REPO_ROOT,
+        env=env,
+        default="",
+    )
+    return bool(status.strip())
+
+
+def find_issue_execution_state(
+    issue_number: int,
+    env: dict[str, str],
+    *,
+    persona: str,
+    bot_login: str,
+) -> dict[str, object] | None:
+    owner, name = repo_owner_name(env)
+    work_state = fetch_work_state(owner, name, env)
+    issue_states = fetch_issue_state_map(env)
+    issue = next((item for item in work_state["issues"] if int(item["number"]) == issue_number), None)
+    if issue is None:
+        return None
+
+    current_agent = persona_slug(persona)
+    normalized_bot = _normalize_login(bot_login)
+    labels = issue_label_presence(issue)
+    linked_prs: list[dict[str, object]] = []
+    for pr in work_state["pull_requests"]:
+        linked_issue, marker_agent = extract_pr_issue_reference(str(pr.get("body", "")))
+        if linked_issue != issue_number:
+            continue
+        author_login = str((pr.get("author") or {}).get("login", ""))
+        linked_prs.append(
+            {
+                "number": pr.get("number"),
+                "title": pr.get("title"),
+                "url": pr.get("url"),
+                "headRefName": pr.get("headRefName"),
+                "reviewDecision": pr.get("reviewDecision"),
+                "author_login": author_login,
+                "agent": marker_agent or (current_agent if _normalize_login(author_login) == normalized_bot else ""),
+            }
+        )
+
+    own_pr = next(
+        (
+            pr
+            for pr in linked_prs
+            if pr["agent"] == current_agent
+            or (not pr["agent"] and _normalize_login(str(pr["author_login"])) == normalized_bot)
+        ),
+        None,
+    )
+    other_pr = next((pr for pr in linked_prs if pr is not own_pr), None)
+    blocked_by = extract_blocked_by(str(issue.get("body", "")))
+    blockers = [
+        blocker
+        for blocker in blocked_by
+        if issue_states.get(blocker, "OPEN").upper() != "CLOSED"
+    ]
+    latest_claim = latest_issue_claim(issue_number, issue.get("comments", {}))
+    stale_claim = claim_is_stale(latest_claim, has_open_pr=bool(linked_prs))
+    if stale_claim:
+        latest_claim = None
+    return {
+        "issue": issue,
+        "approved": AGENT_READY_LABEL in labels,
+        "approval_reason": (
+            f"{AGENT_READY_LABEL} label present"
+            if AGENT_READY_LABEL in labels
+            else f"issue #{issue_number} is missing {AGENT_READY_LABEL}"
+        ),
+        "blockers": blockers,
+        "requested_evidence": extract_requested_evidence(str(issue.get("body", ""))),
+        "latest_claim": latest_claim,
+        "stale_claim": stale_claim,
+        "own_pr": own_pr,
+        "other_pr": other_pr,
+    }
+
+
+def ensure_issue_claimed(
+    issue_number: int,
+    persona: str,
+    branch: str,
+    latest_claim: dict[str, str] | None,
+    current_labels: set[str],
+    env: dict[str, str],
+) -> None:
+    if latest_claim is not None and latest_claim.get("agent") == persona_slug(persona) and latest_claim.get("branch") == branch:
+        return
+    ensure_claim_label(env)
+    cmd = ["gh", "issue", "edit", str(issue_number), "--add-label", AGENT_CLAIM_LABEL]
+    if AGENT_READY_LABEL in current_labels:
+        cmd.extend(["--remove-label", AGENT_READY_LABEL])
+    run_checked(cmd, timeout=GITHUB_API_TIMEOUT, cwd=REPO_ROOT, env=env)
+    run_checked(
+        ["gh", "issue", "comment", str(issue_number), "--body", compose_claim_comment(issue_number, persona, branch)],
+        timeout=GITHUB_API_TIMEOUT,
+        cwd=REPO_ROOT,
+        env=env,
+    )
+
+
 def route_action(validated_json: str, dry_run: bool, env: dict[str, str]) -> int:
     data = json.loads(validated_json)
     action = data["action"]
@@ -830,7 +1492,7 @@ def route_action(validated_json: str, dry_run: bool, env: dict[str, str]) -> int
         return 0
 
     log(f"Routing action {action}")
-    body = build_body(data)
+    body = build_body(data) if action != "execute_issue" else ""
 
     if action == "propose":
         run_checked(
@@ -888,6 +1550,146 @@ def route_action(validated_json: str, dry_run: bool, env: dict[str, str]) -> int
                     review_flag,
                     "--body-file",
                     body_file,
+                ],
+                timeout=GITHUB_API_TIMEOUT,
+                cwd=REPO_ROOT,
+                env=env,
+            )
+            return 0
+        if action == "execute_issue":
+            persona = str(data.get("persona", ""))
+            bot_login = detect_bot_login(env)
+            issue_number = int(data["issue_number"])
+            state = find_issue_execution_state(
+                issue_number,
+                env,
+                persona=persona,
+                bot_login=bot_login,
+            )
+            if state is None:
+                print(f"error: issue #{issue_number} is not available for execution", file=sys.stderr)
+                return 1
+
+            own_pr = state.get("own_pr")
+            other_pr = state.get("other_pr")
+            if own_pr is None and not bool(state.get("approved")):
+                print(
+                    f"error: issue #{issue_number} is not execution-approved ({state.get('approval_reason')})",
+                    file=sys.stderr,
+                )
+                return 1
+            if own_pr is None and state.get("blockers"):
+                print(
+                    f"error: issue #{issue_number} is still blocked by {state['blockers']}",
+                    file=sys.stderr,
+                )
+                return 1
+            if other_pr is not None:
+                print(
+                    f"error: issue #{issue_number} already has open PR #{other_pr['number']} by another agent",
+                    file=sys.stderr,
+                )
+                return 1
+
+            latest_claim = state.get("latest_claim")
+            if (
+                own_pr is None
+                and latest_claim is not None
+                and latest_claim.get("agent")
+                and latest_claim.get("agent") != persona_slug(persona)
+            ):
+                print(
+                    f"error: issue #{issue_number} is already claimed by {latest_claim['agent']}",
+                    file=sys.stderr,
+                )
+                return 1
+
+            branch = current_branch(env)
+            if own_pr is not None:
+                expected_branch = str(own_pr.get("headRefName", ""))
+                if branch != expected_branch:
+                    print(
+                        f"error: issue #{issue_number} already has PR #{own_pr['number']} on "
+                        f"branch '{expected_branch}'. Check out that branch before editing.",
+                        file=sys.stderr,
+                    )
+                    return 1
+            else:
+                default = default_branch(env)
+                if branch in {"HEAD", "", default, "main", "master"}:
+                    branch = branch_name_for_issue(
+                        persona,
+                        issue_number,
+                        str(state["issue"].get("title", f"issue-{issue_number}")),
+                    )
+                    run_checked(
+                        ["git", "checkout", "-b", branch],
+                        timeout=GITHUB_API_TIMEOUT,
+                        cwd=REPO_ROOT,
+                        env=env,
+                    )
+                ensure_issue_claimed(
+                    issue_number,
+                    persona,
+                    branch,
+                    latest_claim if isinstance(latest_claim, dict) else None,
+                    issue_label_presence(state["issue"]),
+                    env,
+                )
+
+            if not working_tree_dirty(env):
+                print(
+                    f"error: execute_issue selected for #{issue_number} but no file changes were made",
+                    file=sys.stderr,
+                )
+                return 1
+
+            set_git_identity(env, persona, bot_login)
+            run_checked(["git", "add", "-A"], timeout=GITHUB_API_TIMEOUT, cwd=REPO_ROOT, env=env)
+            run_checked(
+                ["git", "commit", "-m", str(data["commit_message"]).strip()],
+                timeout=GITHUB_API_TIMEOUT,
+                cwd=REPO_ROOT,
+                env=env,
+            )
+            run_checked(
+                ["git", "push", "--set-upstream", "origin", branch],
+                timeout=GITHUB_API_TIMEOUT,
+                cwd=REPO_ROOT,
+                env=env,
+            )
+
+            summary_body = str(data.get("body", "")).strip()
+            if own_pr is not None:
+                run_checked(
+                    [
+                        "gh",
+                        "pr",
+                        "comment",
+                        str(own_pr["number"]),
+                        "--body",
+                        compose_pr_update_comment(persona, summary_body),
+                    ],
+                    timeout=GITHUB_API_TIMEOUT,
+                    cwd=REPO_ROOT,
+                    env=env,
+                )
+                return 0
+
+            pr_body = compose_pr_body(issue_number, persona, summary_body)
+            run_checked(
+                [
+                    "gh",
+                    "pr",
+                    "create",
+                    "--base",
+                    default_branch(env),
+                    "--head",
+                    branch,
+                    "--title",
+                    str(data["pr_title"]).strip(),
+                    "--body",
+                    pr_body,
                 ],
                 timeout=GITHUB_API_TIMEOUT,
                 cwd=REPO_ROOT,
