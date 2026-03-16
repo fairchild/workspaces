@@ -103,7 +103,8 @@ class NormalizedIssue:
     labels: list[str]
     priority: int
     slug: str
-    body_with_marker: str
+    blocked_by: list[int]
+    requested_evidence: list[str]
 
 
 @dataclass(frozen=True)
@@ -441,12 +442,45 @@ def compose_summary_comment(
 
 
 def compose_issue_body(body: str, discussion_url: str, discussion_number: int, slug: str) -> str:
-    return (
-        f"{body.rstrip()}\n\n"
-        "---\n"
-        f"*Planned from [discussion #{discussion_number}]({discussion_url}) by Peter Planner.*\n"
-        f"{issue_marker(discussion_number, slug)}"
+    return compose_issue_body_with_metadata(
+        body,
+        discussion_url,
+        discussion_number,
+        slug,
+        blocked_by=[],
+        requested_evidence=[],
     )
+
+
+def compose_issue_body_with_metadata(
+    body: str,
+    discussion_url: str,
+    discussion_number: int,
+    slug: str,
+    *,
+    blocked_by: list[int],
+    requested_evidence: list[str],
+) -> str:
+    lines = [body.rstrip(), "", "## Execution", "- Ship this issue as one PR."]
+    lines.extend(["", "## Blocked By"])
+    if blocked_by:
+        lines.extend(f"- #{number}" for number in blocked_by)
+    else:
+        lines.append("- none")
+    lines.extend(["", "## Requested Evidence"])
+    if requested_evidence:
+        lines.extend(f"- {item}" for item in requested_evidence)
+    else:
+        lines.append("- Follow the repo evidence bar for the touched surfaces.")
+    lines.extend(
+        [
+            "",
+            "---",
+            f"*Planned from [discussion #{discussion_number}]({discussion_url}) by Peter Planner.*",
+            issue_marker(discussion_number, slug),
+        ]
+    )
+    return "\n".join(lines)
 
 
 def compose_milestone_description(discussion_url: str, discussion_number: int) -> str:
@@ -484,6 +518,69 @@ def normalize_labels(raw_labels: list[str] | None, catalog: LabelCatalog) -> lis
     return unique_preserving_order(labels)
 
 
+def normalize_blocked_by(raw_blocked_by: list[Any] | None, issue_title: str) -> list[int]:
+    if raw_blocked_by is None:
+        return []
+    if not isinstance(raw_blocked_by, list):
+        raise PlannerError(f"issue '{issue_title}' has invalid blocked_by field")
+    normalized: list[int] = []
+    for item in raw_blocked_by:
+        if not isinstance(item, int) or item <= 0:
+            raise PlannerError(
+                f"issue '{issue_title}' blocked_by values must be positive integers"
+            )
+        normalized.append(item)
+    return unique_preserving_order(normalized)
+
+
+def normalize_requested_evidence(
+    raw_requested_evidence: list[Any] | None,
+    issue_title: str,
+) -> list[str]:
+    if raw_requested_evidence is None or not isinstance(raw_requested_evidence, list):
+        raise PlannerError(f"issue '{issue_title}' is missing requested_evidence")
+    normalized: list[str] = []
+    for item in raw_requested_evidence:
+        if not isinstance(item, str) or not item.strip():
+            raise PlannerError(
+                f"issue '{issue_title}' requested_evidence entries must be non-empty strings"
+            )
+        normalized.append(item.strip())
+    if not normalized:
+        raise PlannerError(f"issue '{issue_title}' must request at least one evidence item")
+    return unique_preserving_order(normalized)
+
+
+def validate_plan_dependencies(issues: list[NormalizedIssue]) -> None:
+    priorities = {issue.priority for issue in issues}
+    if len(priorities) != len(issues):
+        raise PlannerError("planner returned duplicate issue priorities")
+    for issue in issues:
+        for blocker in issue.blocked_by:
+            if blocker in priorities and blocker >= issue.priority:
+                raise PlannerError(
+                    f"issue '{issue.title}' cannot be blocked by same-or-later plan priority {blocker}"
+                )
+
+
+def resolve_blocked_by_numbers(
+    issue_plan: NormalizedIssue,
+    resolved_by_priority: dict[int, int],
+    plan_priorities: set[int],
+) -> list[int]:
+    blocked_numbers: list[int] = []
+    for blocker in issue_plan.blocked_by:
+        if blocker in resolved_by_priority:
+            blocked_numbers.append(resolved_by_priority[blocker])
+            continue
+        if blocker in plan_priorities:
+            raise PlannerError(
+                f"issue '{issue_plan.title}' references unresolved plan priority {blocker}"
+            )
+        blocked_numbers.append(blocker)
+    return unique_preserving_order(blocked_numbers)
+
+
 def normalize_plan(
     data: dict[str, Any],
     discussion: dict[str, Any],
@@ -508,14 +605,14 @@ def normalize_plan(
                 labels=normalize_labels(item.get("labels"), catalog),
                 priority=int(item.get("priority", 99)),
                 slug=slug,
-                body_with_marker=compose_issue_body(
-                    body,
-                    discussion["url"],
-                    int(discussion["number"]),
-                    slug,
+                blocked_by=normalize_blocked_by(item.get("blocked_by"), title),
+                requested_evidence=normalize_requested_evidence(
+                    item.get("requested_evidence"),
+                    title,
                 ),
             )
         )
+    validate_plan_dependencies(normalized_issues)
 
     return NormalizedPlan(
         discussion_number=int(discussion["number"]),
@@ -542,7 +639,8 @@ def serialize_plan(plan: NormalizedPlan) -> dict[str, Any]:
                 "labels": issue.labels,
                 "priority": issue.priority,
                 "slug": issue.slug,
-                "body_with_marker": issue.body_with_marker,
+                "blocked_by": issue.blocked_by,
+                "requested_evidence": issue.requested_evidence,
             }
             for issue in plan.issues
         ],
@@ -974,10 +1072,22 @@ def ensure_issue(
     issue_plan: NormalizedIssue,
     existing_issue: dict[str, Any] | None,
     milestone_name: str | None,
+    discussion_url: str,
+    discussion_number: int,
+    blocked_by_numbers: list[int],
     env: dict[str, str],
 ) -> dict[str, Any]:
     with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
-        handle.write(issue_plan.body_with_marker)
+        handle.write(
+            compose_issue_body_with_metadata(
+                issue_plan.body,
+                discussion_url=discussion_url,
+                discussion_number=discussion_number,
+                slug=issue_plan.slug,
+                blocked_by=blocked_by_numbers,
+                requested_evidence=issue_plan.requested_evidence,
+            )
+        )
         body_file = handle.name
 
     try:
@@ -1160,10 +1270,26 @@ def main() -> int:
         add_discussion_comment(discussion["id"], compose_ack_comment(number, env), env)
 
     milestone = create_or_reuse_milestone(repo, number, normalized, execution, env)
-    resolved_issues = [
-        ensure_issue(item.issue, item.existing_issue, normalized.milestone_name, env)
-        for item in execution.issues
-    ]
+    plan_priorities = {issue.priority for issue in normalized.issues}
+    resolved_by_priority: dict[int, int] = {}
+    resolved_issues: list[dict[str, Any]] = []
+    for item in execution.issues:
+        blocked_by_numbers = resolve_blocked_by_numbers(
+            item.issue,
+            resolved_by_priority,
+            plan_priorities,
+        )
+        resolved_issue = ensure_issue(
+            item.issue,
+            item.existing_issue,
+            normalized.milestone_name,
+            normalized.discussion_url,
+            normalized.discussion_number,
+            blocked_by_numbers,
+            env,
+        )
+        resolved_by_priority[item.issue.priority] = int(resolved_issue["number"])
+        resolved_issues.append(resolved_issue)
     if not resolved_issues:
         raise PlannerError(f"planner produced zero issues for discussion #{number}")
 

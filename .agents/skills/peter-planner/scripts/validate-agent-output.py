@@ -148,6 +148,7 @@ def validate_plan(data: dict[str, Any]) -> None:
         raise ValidationError("field 'issues' must be a non-empty list")
 
     seen_titles: set[str] = set()
+    seen_priorities: set[int] = set()
     for index, issue in enumerate(issues, start=1):
         if not isinstance(issue, dict):
             raise ValidationError(f"issue #{index} must be an object")
@@ -160,11 +161,33 @@ def validate_plan(data: dict[str, Any]) -> None:
             raise ValidationError(f"duplicate issue title in plan: '{title}'")
         seen_titles.add(title_key)
 
+        priority = issue.get("priority")
+        if not isinstance(priority, int) or priority <= 0:
+            raise ValidationError(f"field 'issues[{index}].priority' must be a positive integer")
+        if priority in seen_priorities:
+            raise ValidationError(f"duplicate issue priority in plan: '{priority}'")
+        seen_priorities.add(priority)
+
         labels = issue.get("labels")
-        if labels is None:
-            continue
-        if not isinstance(labels, list) or any(not isinstance(label, str) or not label.strip() for label in labels):
+        if labels is not None and (
+            not isinstance(labels, list)
+            or any(not isinstance(label, str) or not label.strip() for label in labels)
+        ):
             raise ValidationError(f"field 'issues[{index}].labels' must be a list of non-empty strings")
+
+        blocked_by = issue.get("blocked_by", [])
+        if not isinstance(blocked_by, list) or any(not isinstance(value, int) or value <= 0 for value in blocked_by):
+            raise ValidationError(f"field 'issues[{index}].blocked_by' must be a list of positive integers")
+
+        requested_evidence = issue.get("requested_evidence")
+        if (
+            not isinstance(requested_evidence, list)
+            or not requested_evidence
+            or any(not isinstance(value, str) or not value.strip() for value in requested_evidence)
+        ):
+            raise ValidationError(
+                f"field 'issues[{index}].requested_evidence' must be a non-empty list of strings"
+            )
 
 
 def validate_data(data: dict[str, Any]) -> dict[str, Any]:
