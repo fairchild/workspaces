@@ -35,7 +35,7 @@ run_planner = load_module(
 )
 validator = load_module(
     "validate_agent_output",
-    REPO_ROOT / ".agents" / "skills" / "cofounder-contributor" / "scripts" / "validate-agent-output.py",
+    REPO_ROOT / ".agents" / "skills" / "peter-planner" / "scripts" / "validate-agent-output.py",
 )
 run_contributor = load_module(
     "run_contributor",
@@ -84,8 +84,69 @@ class ValidateAgentOutputTests(unittest.TestCase):
                     "discussion_number": 43,
                     "milestone_name": None,
                     "issues": [
-                        {"title": "One", "body": "A", "labels": ["enhancement"]},
-                        {"title": "one", "body": "B", "labels": ["enhancement"]},
+                        {
+                            "title": "One",
+                            "body": "A",
+                            "labels": ["enhancement"],
+                            "priority": 1,
+                            "blocked_by": [],
+                            "requested_evidence": ["swift test"],
+                        },
+                        {
+                            "title": "one",
+                            "body": "B",
+                            "labels": ["enhancement"],
+                            "priority": 2,
+                            "blocked_by": [],
+                            "requested_evidence": ["swift test"],
+                        },
+                    ],
+                }
+            )
+
+    def test_plan_requires_requested_evidence(self) -> None:
+        with self.assertRaises(validator.ValidationError):
+            validator.validate_data(
+                {
+                    "action": "plan",
+                    "discussion_number": 43,
+                    "milestone_name": None,
+                    "issues": [
+                        {
+                            "title": "One",
+                            "body": "A",
+                            "labels": ["enhancement"],
+                            "priority": 1,
+                            "blocked_by": [],
+                        }
+                    ],
+                }
+            )
+
+    def test_plan_rejects_duplicate_priorities(self) -> None:
+        with self.assertRaises(validator.ValidationError):
+            validator.validate_data(
+                {
+                    "action": "plan",
+                    "discussion_number": 43,
+                    "milestone_name": None,
+                    "issues": [
+                        {
+                            "title": "One",
+                            "body": "A",
+                            "labels": ["enhancement"],
+                            "priority": 1,
+                            "blocked_by": [],
+                            "requested_evidence": ["swift test"],
+                        },
+                        {
+                            "title": "Two",
+                            "body": "B",
+                            "labels": ["enhancement"],
+                            "priority": 1,
+                            "blocked_by": [],
+                            "requested_evidence": ["swift test"],
+                        },
                     ],
                 }
             )
@@ -102,8 +163,9 @@ class RunPlannerTests(unittest.TestCase):
             "comments": {"nodes": comments or []},
         }
 
-    def make_plan(self, issue_titles: list[str], discussion=None):
+    def make_plan(self, issue_titles: list[str], discussion=None, blocked_by_map=None):
         discussion = discussion or self.make_discussion()
+        blocked_by_map = blocked_by_map or {}
         return run_planner.normalize_plan(
             {
                 "action": "plan",
@@ -115,6 +177,8 @@ class RunPlannerTests(unittest.TestCase):
                         "body": f"## Context\n{title}",
                         "labels": ["ci"] if index == 0 else ["ui"],
                         "priority": index + 1,
+                        "blocked_by": blocked_by_map.get(index + 1, []),
+                        "requested_evidence": [f"Evidence for {title}"],
                     }
                     for index, title in enumerate(issue_titles)
                 ],
@@ -138,6 +202,54 @@ class RunPlannerTests(unittest.TestCase):
             "Isolate intrusive CI jobs onto a Tart VM runner lane",
         )
 
+    def test_normalize_plan_preserves_blocked_by_and_requested_evidence(self) -> None:
+        discussion = self.make_discussion()
+        plan = self.make_plan(
+            ["One", "Two"],
+            discussion=discussion,
+            blocked_by_map={2: [1]},
+        )
+        self.assertEqual(plan.issues[1].blocked_by, [1])
+        self.assertEqual(plan.issues[1].requested_evidence, ["Evidence for Two"])
+
+    def test_resolve_blocked_by_numbers_maps_plan_priorities(self) -> None:
+        discussion = self.make_discussion()
+        plan = self.make_plan(
+            ["One", "Two"],
+            discussion=discussion,
+            blocked_by_map={2: [1]},
+        )
+        blocked = run_planner.resolve_blocked_by_numbers(
+            plan.issues[1],
+            resolved_by_priority={1: 101},
+            plan_priorities={1, 2},
+        )
+        self.assertEqual(blocked, [101])
+
+    def test_normalize_plan_rejects_same_or_later_plan_blockers(self) -> None:
+        discussion = self.make_discussion()
+        with self.assertRaises(run_planner.PlannerError):
+            self.make_plan(
+                ["One", "Two"],
+                discussion=discussion,
+                blocked_by_map={1: [2]},
+            )
+
+    def test_compose_issue_body_renders_blocked_by_and_requested_evidence(self) -> None:
+        body = run_planner.compose_issue_body_with_metadata(
+            "## Context\nBody",
+            "https://github.com/fairchild/workspaces/discussions/43",
+            43,
+            "audit-runners",
+            blocked_by=[101],
+            requested_evidence=["swift test --filter WorkspaceProviders"],
+        )
+        self.assertIn("- Ship this issue as one PR.", body)
+        self.assertIn("## Blocked By", body)
+        self.assertIn("- #101", body)
+        self.assertIn("## Requested Evidence", body)
+        self.assertIn("swift test --filter WorkspaceProviders", body)
+
     def test_build_execution_state_reuses_marked_issue_and_milestone(self) -> None:
         discussion = self.make_discussion(
             comments=[
@@ -158,21 +270,42 @@ class RunPlannerTests(unittest.TestCase):
             {
                 "number": 101,
                 "title": plan.issues[0].title,
-                "body": plan.issues[0].body_with_marker,
+                "body": run_planner.compose_issue_body_with_metadata(
+                    plan.issues[0].body,
+                    discussion["url"],
+                    discussion["number"],
+                    plan.issues[0].slug,
+                    blocked_by=plan.issues[0].blocked_by,
+                    requested_evidence=plan.issues[0].requested_evidence,
+                ),
                 "url": "https://github.com/fairchild/workspaces/issues/101",
                 "labels": [],
             },
             {
                 "number": 102,
                 "title": plan.issues[1].title,
-                "body": plan.issues[1].body_with_marker,
+                "body": run_planner.compose_issue_body_with_metadata(
+                    plan.issues[1].body,
+                    discussion["url"],
+                    discussion["number"],
+                    plan.issues[1].slug,
+                    blocked_by=plan.issues[1].blocked_by,
+                    requested_evidence=plan.issues[1].requested_evidence,
+                ),
                 "url": "https://github.com/fairchild/workspaces/issues/102",
                 "labels": [],
             },
             {
                 "number": 103,
                 "title": plan.issues[2].title,
-                "body": plan.issues[2].body_with_marker,
+                "body": run_planner.compose_issue_body_with_metadata(
+                    plan.issues[2].body,
+                    discussion["url"],
+                    discussion["number"],
+                    plan.issues[2].slug,
+                    blocked_by=plan.issues[2].blocked_by,
+                    requested_evidence=plan.issues[2].requested_evidence,
+                ),
                 "url": "https://github.com/fairchild/workspaces/issues/103",
                 "labels": [],
             },
@@ -253,7 +386,14 @@ class RunPlannerTests(unittest.TestCase):
             {
                 "number": 101,
                 "title": plan.issues[0].title,
-                "body": plan.issues[0].body_with_marker,
+                "body": run_planner.compose_issue_body_with_metadata(
+                    plan.issues[0].body,
+                    discussion["url"],
+                    discussion["number"],
+                    plan.issues[0].slug,
+                    blocked_by=plan.issues[0].blocked_by,
+                    requested_evidence=plan.issues[0].requested_evidence,
+                ),
                 "url": "https://github.com/fairchild/workspaces/issues/101",
                 "labels": [],
             }
