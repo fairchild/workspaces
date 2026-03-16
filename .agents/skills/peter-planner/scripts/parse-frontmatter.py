@@ -19,7 +19,7 @@ import re
 from typing import Any
 
 
-Value = str | int | bool | None | list[str]
+Value = str | int | bool | None | list[Any]
 
 
 def _parse_yaml_value(raw: str) -> Value:
@@ -80,14 +80,39 @@ def _parse_inline_list(content: str) -> list[str]:
 def _parse_yaml_subset(text: str) -> dict[str, Any]:
     """Parse simple ``key: value`` YAML lines into a dict."""
     result: dict[str, Any] = {}
-    for line in text.splitlines():
+    lines = text.splitlines()
+    index = 0
+    while index < len(lines):
+        line = lines[index]
         stripped = line.strip()
         if not stripped:
+            index += 1
             continue
         match = re.match(r"^([\w][\w_]*)\s*:\s*(.*)", stripped)
         if not match:
             raise ValueError(f"invalid YAML line: {stripped!r}")
-        result[match.group(1)] = _parse_yaml_value(match.group(2))
+        key = match.group(1)
+        raw_value = match.group(2)
+        if raw_value:
+            result[key] = _parse_yaml_value(raw_value)
+            index += 1
+            continue
+
+        items: list[Any] = []
+        index += 1
+        while index < len(lines):
+            candidate = lines[index]
+            candidate_stripped = candidate.strip()
+            if not candidate_stripped:
+                index += 1
+                continue
+            item_match = re.match(r"^\s*-\s+(.*)", candidate)
+            if item_match:
+                items.append(_parse_yaml_value(item_match.group(1)))
+                index += 1
+                continue
+            break
+        result[key] = items if items else ""
     return result
 
 
@@ -96,16 +121,16 @@ def _is_frontmatter_boundary(lines: list[str], index: int) -> bool:
 
     Requires at least one ``key: value`` line before the next ``---`` closer.
     """
-    has_yaml = False
+    candidate_lines: list[str] = []
     for j in range(index + 1, len(lines)):
         stripped = lines[j].strip()
         if stripped == "---":
-            return has_yaml
-        if not stripped:
-            continue
-        if not re.match(r"^[\w][\w_]*\s*:", stripped):
-            return False
-        has_yaml = True
+            try:
+                metadata = _parse_yaml_subset("\n".join(candidate_lines))
+            except ValueError:
+                return False
+            return bool(metadata)
+        candidate_lines.append(lines[j])
     return False
 
 

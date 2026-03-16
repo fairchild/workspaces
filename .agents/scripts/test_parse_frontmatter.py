@@ -107,6 +107,21 @@ class ParseFrontmatterTests(unittest.TestCase):
         metadata, _ = fm.parse_frontmatter(text)
         self.assertEqual(metadata["labels"], ["enhancement"])
 
+    def test_block_list_values(self) -> None:
+        text = (
+            "---\n"
+            "blocked_by:\n"
+            "  - 1\n"
+            "  - 2\n"
+            "requested_evidence:\n"
+            '  - "swift test"\n'
+            '  - "screenshot"\n'
+            "---\n"
+        )
+        metadata, _ = fm.parse_frontmatter(text)
+        self.assertEqual(metadata["blocked_by"], [1, 2])
+        self.assertEqual(metadata["requested_evidence"], ["swift test", "screenshot"])
+
 
 class ParseMultiDocumentTests(unittest.TestCase):
     def test_peter_planner_format(self) -> None:
@@ -155,6 +170,35 @@ class ParseMultiDocumentTests(unittest.TestCase):
         self.assertEqual(issue2_meta["labels"], ["enhancement", "area: ui"])
         self.assertEqual(issue2_meta["priority"], 2)
         self.assertIn("Body two", issue2_body)
+
+    def test_multi_document_with_block_list_metadata(self) -> None:
+        text = (
+            "---\n"
+            "action: plan\n"
+            "discussion_number: 110\n"
+            "milestone_name: null\n"
+            "---\n"
+            "\n"
+            "---\n"
+            'title: "Issue title"\n'
+            'labels: [enhancement, "area: ui"]\n'
+            "priority: 1\n"
+            "blocked_by:\n"
+            "  - 7\n"
+            "requested_evidence:\n"
+            '  - "swift build"\n'
+            '  - "swift test"\n'
+            "---\n"
+            "\n"
+            "## Context\n"
+            "Body\n"
+        )
+        docs = fm.parse_multi_document(text)
+        self.assertEqual(len(docs), 2)
+        issue_meta, issue_body = docs[1]
+        self.assertEqual(issue_meta["blocked_by"], [7])
+        self.assertEqual(issue_meta["requested_evidence"], ["swift build", "swift test"])
+        self.assertIn("Body", issue_body)
 
     def test_single_document_via_multi(self) -> None:
         text = "---\naction: comment\n---\n\nBody text"
