@@ -523,7 +523,7 @@ def main() -> int:
                 f"Issue #{issue['number']} -> {sorted(desired_labels) or ['-']} "
                 f"({reason})"
             )
-        if desired_labels == {AGENT_READY_LABEL}:
+        if AGENT_CLAIM_LABEL not in desired_labels and AGENT_REVIEW_LABEL not in desired_labels:
             for assignee in issue_bot_assignees(issue):
                 unassign_issue(int(issue["number"]), assignee, dry_run=args.dry_run, env=env)
 
