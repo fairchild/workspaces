@@ -1481,19 +1481,23 @@ def ensure_issue_claimed(
     env: dict[str, str],
     bot_login: str = "",
 ) -> None:
-    if latest_claim is not None and latest_claim.get("agent") == persona_slug(persona) and latest_claim.get("branch") == branch:
-        return
-    ensure_claim_label(env)
-    cmd = ["gh", "issue", "edit", str(issue_number), "--add-label", AGENT_CLAIM_LABEL]
-    if AGENT_READY_LABEL in current_labels:
-        cmd.extend(["--remove-label", AGENT_READY_LABEL])
-    run_checked(cmd, timeout=GITHUB_API_TIMEOUT, cwd=REPO_ROOT, env=env)
-    run_checked(
-        ["gh", "issue", "comment", str(issue_number), "--body", compose_claim_comment(issue_number, persona, branch)],
-        timeout=GITHUB_API_TIMEOUT,
-        cwd=REPO_ROOT,
-        env=env,
+    already_claimed = (
+        latest_claim is not None
+        and latest_claim.get("agent") == persona_slug(persona)
+        and latest_claim.get("branch") == branch
     )
+    if not already_claimed:
+        ensure_claim_label(env)
+        cmd = ["gh", "issue", "edit", str(issue_number), "--add-label", AGENT_CLAIM_LABEL]
+        if AGENT_READY_LABEL in current_labels:
+            cmd.extend(["--remove-label", AGENT_READY_LABEL])
+        run_checked(cmd, timeout=GITHUB_API_TIMEOUT, cwd=REPO_ROOT, env=env)
+        run_checked(
+            ["gh", "issue", "comment", str(issue_number), "--body", compose_claim_comment(issue_number, persona, branch)],
+            timeout=GITHUB_API_TIMEOUT,
+            cwd=REPO_ROOT,
+            env=env,
+        )
     if bot_login:
         run_checked(
             ["gh", "issue", "edit", str(issue_number), "--add-assignee", bot_login],
