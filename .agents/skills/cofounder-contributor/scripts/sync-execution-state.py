@@ -341,14 +341,17 @@ def planned_comment_has_owner_approval(
     return False
 
 
-def ensure_label(env: dict[str, str], name: str, color: str, description: str) -> None:
+def fetch_existing_labels(env: dict[str, str]) -> set[str]:
     result = run_checked(
         ["gh", "label", "list", "--limit", "200", "--json", "name"],
         timeout=GITHUB_API_TIMEOUT,
         cwd=REPO_ROOT,
         env=env,
     )
-    existing = {item["name"] for item in json.loads(result.stdout)}
+    return {item["name"] for item in json.loads(result.stdout)}
+
+
+def ensure_label(existing: set[str], env: dict[str, str], name: str, color: str, description: str) -> None:
     if name in existing:
         return
     run_checked(
@@ -366,6 +369,7 @@ def ensure_label(env: dict[str, str], name: str, color: str, description: str) -
         cwd=REPO_ROOT,
         env=env,
     )
+    existing.add(name)
 
 
 def desired_execution_labels(
@@ -481,9 +485,10 @@ def main() -> int:
     issue_states = fetch_issue_state_map(env)
     now = datetime.now(timezone.utc)
 
-    ensure_label(env, AGENT_READY_LABEL, AGENT_READY_LABEL_COLOR, AGENT_READY_LABEL_DESCRIPTION)
-    ensure_label(env, AGENT_CLAIM_LABEL, AGENT_CLAIM_LABEL_COLOR, AGENT_CLAIM_LABEL_DESCRIPTION)
-    ensure_label(env, AGENT_REVIEW_LABEL, AGENT_REVIEW_LABEL_COLOR, AGENT_REVIEW_LABEL_DESCRIPTION)
+    existing_labels = fetch_existing_labels(env)
+    ensure_label(existing_labels, env, AGENT_READY_LABEL, AGENT_READY_LABEL_COLOR, AGENT_READY_LABEL_DESCRIPTION)
+    ensure_label(existing_labels, env, AGENT_CLAIM_LABEL, AGENT_CLAIM_LABEL_COLOR, AGENT_CLAIM_LABEL_DESCRIPTION)
+    ensure_label(existing_labels, env, AGENT_REVIEW_LABEL, AGENT_REVIEW_LABEL_COLOR, AGENT_REVIEW_LABEL_DESCRIPTION)
 
     discussions = {
         int(discussion["number"]): discussion

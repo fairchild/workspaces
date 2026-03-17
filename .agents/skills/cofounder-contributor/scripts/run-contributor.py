@@ -1301,19 +1301,24 @@ def branch_name_for_issue(persona: str, issue_number: int, issue_title: str) -> 
     return f"codex/{persona_slug(persona)}-issue-{issue_number}-{slugify(issue_title)}"
 
 
+_label_cache: set[str] | None = None
+
+
 def ensure_label_exists(env: dict[str, str], name: str, color: str, description: str) -> None:
-    labels = run_optional(
-        ["gh", "label", "list", "--limit", "200", "--json", "name"],
-        timeout=GITHUB_API_TIMEOUT,
-        cwd=REPO_ROOT,
-        env=env,
-        default="[]",
-    )
-    try:
-        existing = {item["name"] for item in json.loads(labels)}
-    except json.JSONDecodeError:
-        existing = set()
-    if name in existing:
+    global _label_cache
+    if _label_cache is None:
+        labels = run_optional(
+            ["gh", "label", "list", "--limit", "200", "--json", "name"],
+            timeout=GITHUB_API_TIMEOUT,
+            cwd=REPO_ROOT,
+            env=env,
+            default="[]",
+        )
+        try:
+            _label_cache = {item["name"] for item in json.loads(labels)}
+        except json.JSONDecodeError:
+            _label_cache = set()
+    if name in _label_cache:
         return
     run_checked(
         [
@@ -1330,6 +1335,7 @@ def ensure_label_exists(env: dict[str, str], name: str, color: str, description:
         cwd=REPO_ROOT,
         env=env,
     )
+    _label_cache.add(name)
 
 
 def ensure_claim_label(env: dict[str, str]) -> None:
