@@ -470,6 +470,9 @@ AGENT_READY_LABEL_DESCRIPTION = "Execution-approved and ready for an automated c
 AGENT_CLAIM_LABEL = "agent:claimed"
 AGENT_CLAIM_LABEL_COLOR = "1d76db"
 AGENT_CLAIM_LABEL_DESCRIPTION = "Currently being executed by an automated contributor"
+AGENT_MERGEABLE_LABEL = "agent:mergeable"
+AGENT_MERGEABLE_LABEL_COLOR = "0e8a16"
+AGENT_MERGEABLE_LABEL_DESCRIPTION = "Agent-approved, ready for owner merge"
 
 
 def persona_slug(persona: str) -> str:
@@ -1298,7 +1301,7 @@ def branch_name_for_issue(persona: str, issue_number: int, issue_title: str) -> 
     return f"codex/{persona_slug(persona)}-issue-{issue_number}-{slugify(issue_title)}"
 
 
-def ensure_claim_label(env: dict[str, str]) -> None:
+def ensure_label_exists(env: dict[str, str], name: str, color: str, description: str) -> None:
     labels = run_optional(
         ["gh", "label", "list", "--limit", "200", "--json", "name"],
         timeout=GITHUB_API_TIMEOUT,
@@ -1310,23 +1313,27 @@ def ensure_claim_label(env: dict[str, str]) -> None:
         existing = {item["name"] for item in json.loads(labels)}
     except json.JSONDecodeError:
         existing = set()
-    if AGENT_CLAIM_LABEL in existing:
+    if name in existing:
         return
     run_checked(
         [
             "gh",
             "label",
             "create",
-            AGENT_CLAIM_LABEL,
+            name,
             "--color",
-            AGENT_CLAIM_LABEL_COLOR,
+            color,
             "--description",
-            AGENT_CLAIM_LABEL_DESCRIPTION,
+            description,
         ],
         timeout=GITHUB_API_TIMEOUT,
         cwd=REPO_ROOT,
         env=env,
     )
+
+
+def ensure_claim_label(env: dict[str, str]) -> None:
+    ensure_label_exists(env, AGENT_CLAIM_LABEL, AGENT_CLAIM_LABEL_COLOR, AGENT_CLAIM_LABEL_DESCRIPTION)
 
 
 def issue_label_presence(issue: dict[str, object]) -> set[str]:
@@ -1466,6 +1473,7 @@ def ensure_issue_claimed(
     latest_claim: dict[str, str] | None,
     current_labels: set[str],
     env: dict[str, str],
+    bot_login: str = "",
 ) -> None:
     if latest_claim is not None and latest_claim.get("agent") == persona_slug(persona) and latest_claim.get("branch") == branch:
         return
@@ -1480,6 +1488,45 @@ def ensure_issue_claimed(
         cwd=REPO_ROOT,
         env=env,
     )
+    if bot_login:
+        run_checked(
+            ["gh", "issue", "edit", str(issue_number), "--add-assignee", bot_login],
+            timeout=GITHUB_API_TIMEOUT,
+            cwd=REPO_ROOT,
+            env=env,
+        )
+
+
+def _update_mergeable_label(pr_number: int, verdict: str, env: dict[str, str]) -> None:
+    """Add agent:mergeable on approve, remove on request_changes."""
+    if verdict not in ("approve", "approve_with_followups", "request_changes"):
+        return
+    pr_body = run_optional(
+        ["gh", "pr", "view", str(pr_number), "--json", "body", "--jq", ".body"],
+        timeout=GITHUB_API_TIMEOUT,
+        cwd=REPO_ROOT,
+        env=env,
+        default="",
+    )
+    linked_issue, _ = extract_pr_issue_reference(pr_body)
+    if linked_issue is None:
+        return
+    if verdict in ("approve", "approve_with_followups"):
+        ensure_label_exists(env, AGENT_MERGEABLE_LABEL, AGENT_MERGEABLE_LABEL_COLOR, AGENT_MERGEABLE_LABEL_DESCRIPTION)
+        run_checked(
+            ["gh", "issue", "edit", str(linked_issue), "--add-label", AGENT_MERGEABLE_LABEL],
+            timeout=GITHUB_API_TIMEOUT,
+            cwd=REPO_ROOT,
+            env=env,
+        )
+    else:
+        run_optional(
+            ["gh", "issue", "edit", str(linked_issue), "--remove-label", AGENT_MERGEABLE_LABEL],
+            timeout=GITHUB_API_TIMEOUT,
+            cwd=REPO_ROOT,
+            env=env,
+            default="",
+        )
 
 
 def route_action(validated_json: str, dry_run: bool, env: dict[str, str]) -> int:
@@ -1555,6 +1602,7 @@ def route_action(validated_json: str, dry_run: bool, env: dict[str, str]) -> int
                 cwd=REPO_ROOT,
                 env=env,
             )
+            _update_mergeable_label(int(data["pr_number"]), verdict, env)
             return 0
         if action == "execute_issue":
             persona = str(data.get("persona", ""))
@@ -1635,6 +1683,7 @@ def route_action(validated_json: str, dry_run: bool, env: dict[str, str]) -> int
                     latest_claim if isinstance(latest_claim, dict) else None,
                     issue_label_presence(state["issue"]),
                     env,
+                    bot_login=bot_login or "",
                 )
 
             if not working_tree_dirty(env):

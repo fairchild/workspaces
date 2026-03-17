@@ -35,6 +35,7 @@ The current control points are:
 | Stop new execution from starting | Remove the 👍 from Peter's summary comment | Unclaimed issues in that discussion stop being execution-approved |
 | Redirect work | Comment on the discussion, issue, or PR with explicit instructions | Peter uses discussion guidance for planning; April and Plat use PR review and issue/PR context during execution |
 | Stop a bad PR from landing | Request changes or leave review comments | Agents should work the PR to closure, but they do not merge |
+| See what's ready to merge | Filter issues by `agent:mergeable` | An agent approved the PR; review and merge at your discretion |
 | Ship the change | Merge the PR yourself | `main` only moves when you do it |
 
 ## Exact Signals
@@ -66,7 +67,9 @@ Why: that reaction is the execution gate April and Plat check before claiming wo
 Internally, the next contributor wake-up converts that discussion approval into explicit issue state:
 
 - `agent:ready` means the issue is execution-approved, unblocked, and available to claim
-- `agent:claimed` means an agent claimed it but has not opened a PR yet
+- `agent:claimed` means an agent claimed it and is assigned to work it toward a PR
+- `agent:review` means the issue has an open PR awaiting review
+- `agent:mergeable` means an agent reviewed and approved the PR — ready for your merge
 
 ### 3. Merge Signal
 
@@ -185,7 +188,7 @@ Good examples:
 
 - The execution approval signal is per planned discussion, not per issue.
 - Removing 👍 stops new issue pickup for that discussion, but you should still comment directly on any already-open PR you want paused or redirected.
-- Claim ownership is currently tracked by labels and claim comments, not issue assignees.
+- Claim ownership is tracked by labels, claim comments, and GitHub issue assignments. Agents assign themselves when claiming an issue and are unassigned when claims expire.
 - The workflows are wired for execution, but the installed GitHub Apps still need `contents: write` in GitHub App settings for branch push and PR creation to work.
 - Agents do not merge PRs.
 
