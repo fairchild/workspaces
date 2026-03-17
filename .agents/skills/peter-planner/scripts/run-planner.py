@@ -441,6 +441,8 @@ def compose_summary_comment(
     lines.extend(
         [
             "",
+            "Each issue's `Requested Evidence` section is a required PR accounting contract. The executor PR must mirror those items in `## Evidence Status`.",
+            "",
             "React with 👍 on this comment when you're ready for April or Plat to start execution.",
         ]
     )

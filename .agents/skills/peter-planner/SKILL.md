@@ -47,3 +47,4 @@ uv run .agents/skills/peter-planner/scripts/run-planner.py --discussion-number 4
 - Keep issue scope to one focused session per issue.
 - When 3+ issues are needed, derive the milestone name from the discussion title.
 - Preserve planner markers so retries reuse existing artifacts instead of leaking duplicates.
+- Treat `requested_evidence` as the required PR evidence contract for each issue, not optional guidance.

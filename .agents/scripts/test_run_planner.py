@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import subprocess
 import sys
 import tempfile
@@ -977,6 +978,148 @@ class RunContributorTests(unittest.TestCase):
         )
         self.assertEqual(issue_number, 116)
         self.assertEqual(agent, "april-clearwater")
+
+    def test_validate_evidence_accounting_accepts_complete_and_blocked_entries(self) -> None:
+        body = (
+            "## Summary\n"
+            "- Updated the status severity mapping\n\n"
+            "## Evidence Status\n"
+            "- [complete] swift test --filter NewWorkspaceSheetTests -- `swift test --filter NewWorkspaceSheetTests`\n"
+            "- [blocked] Screenshot of NewWorkspaceSheet from the exact commit under review -- Linux runner cannot launch the macOS app\n\n"
+            "## Validation\n"
+            "- `swift test --filter NewWorkspaceSheetTests`\n"
+            "- blocked on evidence: Linux runner cannot capture the requested macOS screenshot\n"
+        )
+        accounting, errors = run_contributor.validate_evidence_accounting(
+            body,
+            [
+                "swift test --filter NewWorkspaceSheetTests",
+                "Screenshot of NewWorkspaceSheet from the exact commit under review",
+            ],
+        )
+        self.assertEqual(errors, [])
+        self.assertEqual(
+            accounting["complete_items"],
+            ["swift test --filter NewWorkspaceSheetTests"],
+        )
+        self.assertEqual(
+            accounting["blocked_items"],
+            ["Screenshot of NewWorkspaceSheet from the exact commit under review"],
+        )
+
+    def test_validate_evidence_accounting_rejects_missing_requested_item(self) -> None:
+        body = (
+            "## Summary\n"
+            "- Updated the status severity mapping\n\n"
+            "## Evidence Status\n"
+            "- [complete] swift test --filter NewWorkspaceSheetTests -- `swift test --filter NewWorkspaceSheetTests`\n\n"
+            "## Validation\n"
+            "- `swift test --filter NewWorkspaceSheetTests`\n"
+        )
+        _, errors = run_contributor.validate_evidence_accounting(
+            body,
+            [
+                "swift test --filter NewWorkspaceSheetTests",
+                "Screenshot of NewWorkspaceSheet from the exact commit under review",
+            ],
+        )
+        self.assertEqual(len(errors), 1)
+        self.assertIn("missing:", errors[0])
+        self.assertIn(
+            "Screenshot of NewWorkspaceSheet from the exact commit under review",
+            errors[0],
+        )
+
+    def test_validate_evidence_accounting_requires_blocked_on_evidence_language(self) -> None:
+        body = (
+            "## Summary\n"
+            "- Updated the status severity mapping\n\n"
+            "## Evidence Status\n"
+            "- [blocked] Screenshot of NewWorkspaceSheet from the exact commit under review -- Linux runner cannot launch the macOS app\n\n"
+            "## Validation\n"
+            "- `swift test --filter NewWorkspaceSheetTests`\n"
+        )
+        _, errors = run_contributor.validate_evidence_accounting(
+            body,
+            ["Screenshot of NewWorkspaceSheet from the exact commit under review"],
+        )
+        self.assertEqual(len(errors), 1)
+        self.assertIn("blocked on evidence", errors[0])
+
+    def test_review_evidence_gate_requires_request_changes_for_blocked_evidence(self) -> None:
+        body = (
+            "## Summary\n"
+            "- Updated the status severity mapping\n\n"
+            "## Evidence Status\n"
+            "- [blocked] Screenshot of NewWorkspaceSheet from the exact commit under review -- Linux runner cannot launch the macOS app\n\n"
+            "## Validation\n"
+            "- blocked on evidence: Linux runner cannot capture the requested macOS screenshot\n"
+        )
+        accounting, errors = run_contributor.validate_evidence_accounting(
+            body,
+            ["Screenshot of NewWorkspaceSheet from the exact commit under review"],
+        )
+        gate_error = run_contributor.review_evidence_gate_error(
+            "approve_with_followups",
+            accounting,
+            errors,
+        )
+        self.assertIsNotNone(gate_error)
+        self.assertIn("request_changes", gate_error)
+
+    def test_format_pr_list_for_context_includes_evidence_summary(self) -> None:
+        issue_body = run_planner.compose_issue_body_with_metadata(
+            "## Context\nBody",
+            "https://github.com/fairchild/workspaces/discussions/110",
+            110,
+            "fix-status-color",
+            priority=1,
+            blocked_by=[],
+            requested_evidence=[
+                "swift test --filter NewWorkspaceSheetTests",
+                "Screenshot of NewWorkspaceSheet from the exact commit under review",
+            ],
+        )
+        pr_body = (
+            "*April Clearwater, Application Lead*\n\n"
+            "## Summary\n"
+            "- Updated the status severity mapping\n\n"
+            "## Evidence Status\n"
+            "- [complete] swift test --filter NewWorkspaceSheetTests -- `swift test --filter NewWorkspaceSheetTests`\n"
+            "- [blocked] Screenshot of NewWorkspaceSheet from the exact commit under review -- Linux runner cannot launch the macOS app\n\n"
+            "## Validation\n"
+            "- `swift test --filter NewWorkspaceSheetTests`\n"
+            "- blocked on evidence: Linux runner cannot capture the requested macOS screenshot\n\n"
+            "Closes #116\n\n"
+            "<!-- contributor:issue=116;agent=april-clearwater -->"
+        )
+        payload = json.loads(
+            run_contributor.format_pr_list_for_context(
+                [
+                    {
+                        "number": 119,
+                        "title": "Fix environment status color semantics in NewWorkspaceSheet",
+                        "author": {"login": "app/april-clearwater"},
+                        "isDraft": False,
+                        "reviewDecision": "REVIEW_REQUIRED",
+                        "headRefName": "codex/april-clearwater-issue-116-fix-status",
+                        "url": "https://github.com/fairchild/workspaces/pull/119",
+                        "body": pr_body,
+                    }
+                ],
+                [
+                    {
+                        "number": 116,
+                        "body": issue_body,
+                    }
+                ],
+            )
+        )
+        self.assertEqual(payload[0]["linkedIssue"], 116)
+        self.assertEqual(payload[0]["evidenceSummary"]["requested"], 2)
+        self.assertEqual(payload[0]["evidenceSummary"]["complete"], 1)
+        self.assertEqual(payload[0]["evidenceSummary"]["blocked"], 1)
+        self.assertEqual(payload[0]["evidenceSummary"]["missing"], 0)
 
 
 if __name__ == "__main__":

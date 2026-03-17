@@ -103,6 +103,7 @@ You merge the PR yourself when it is ready.
 3. Then they review other open PRs.
 4. Then they continue their own open PRs or claimed issues.
 5. Then they claim the highest-priority ready approved issue and open or update one PR per issue.
+6. Their PR body must account for every issue `Requested Evidence` item in `## Evidence Status`, marking each one as `complete` or `blocked`.
 
 ### Merge
 
@@ -134,6 +135,7 @@ Good examples:
 - `plan it, but keep this to one PR`
 - `plan it, but the UI work should wait until after the isolation fix`
 - `plan it, but require screenshots in the requested evidence`
+- `plan it, but keep requested evidence to one screenshot and one targeted test`
 
 ### Best place to give execution direction
 
@@ -144,6 +146,7 @@ Good examples:
 - `Request changes: keep the enum in the controller, not the view`
 - `Please add a test that covers the degraded status`
 - `Blocked on evidence until the PR includes a screenshot from the reviewed commit`
+- `Keep this PR in request-changes until the Evidence Status section is fully complete`
 
 ### Best place to stop or narrow work
 
@@ -183,14 +186,17 @@ Good examples:
 - Use normal code review.
 - Request changes with exact guidance.
 - Keep the feedback on the PR, not in a new side discussion.
+- If requested evidence is still missing or blocked, treat the PR as not ready unless you intentionally decide to merge anyway.
 
 ## Current Limitations
 
 - The execution approval signal is per planned discussion, not per issue.
 - Removing 👍 stops new issue pickup for that discussion, but you should still comment directly on any already-open PR you want paused or redirected.
 - Claim ownership is tracked by labels, claim comments, and GitHub issue assignments. Agents assign themselves when claiming an issue and are unassigned when claims expire.
+- `Requested Evidence` is a required-by-default PR evidence contract; the current status of each item lives in the PR body's `## Evidence Status` section.
 - The workflows are wired for execution, but the installed GitHub Apps still need `contents: write` in GitHub App settings for branch push and PR creation to work.
 - Agents do not merge PRs.
+- Evidence waivers are manual today. If you choose to merge despite blocked evidence, do it explicitly in the PR conversation and on your own judgment.
 
 ## Suggested Default Protocol
 

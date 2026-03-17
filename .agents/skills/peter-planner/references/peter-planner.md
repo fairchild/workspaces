@@ -38,7 +38,16 @@ Use `blocked_by` as the single dependency field:
 - Use real GitHub issue numbers only when the blocker already exists outside this new plan
 - Use `[]` when the issue is ready immediately
 
-`requested_evidence` should describe the concrete proof the coding agent should attach to the PR or issue update, such as test commands, screenshots, artifact paths, or before/after perf data.
+`requested_evidence` is the required-by-default PR evidence contract for that issue. It should describe the concrete proof the coding agent must account for in the PR's `## Evidence Status` section, such as test commands, screenshots, artifact paths, or before/after perf data.
+
+Evidence planning rules:
+- Keep `requested_evidence` short and concrete. Usually 2-4 items is enough.
+- Derive it from the repo evidence bar plus the discussion context.
+- For UI or visual work, request screenshots from the exact commit under review. Add before/after only when visual correction is the point of the issue.
+- For behavior or logic work, request the targeted test command or exact verification command.
+- For workflow or automation work, request the successful run URL plus the relevant log or artifact proof.
+- For performance-sensitive work, request before/after measurements on the same workload.
+- Avoid vague items like `verify manually` unless the repo genuinely has no stronger proof path.
 
 ## Scoping Rules
 
@@ -67,8 +76,8 @@ labels: [enhancement]
 priority: 1
 blocked_by: []
 requested_evidence:
-  - "Relevant swift test command(s)"
-  - "Any screenshots, logs, or perf comparisons the PR should include"
+  - "Relevant swift test command(s) the PR must account for"
+  - "Any screenshots, logs, or perf comparisons the PR must account for in Evidence Status"
 ---
 
 ## Context
