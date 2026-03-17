@@ -81,7 +81,9 @@ struct NewWorkspaceSheetTests {
     private func makeOption(
         providerID: String,
         guestOS: WorkspaceGuestOS?,
-        isAvailable: Bool = true
+        isAvailable: Bool = true,
+        statusText: String? = nil,
+        statusSeverity: EnvironmentStatusSeverity? = nil
     ) -> WorkspaceEnvironmentSheetOption {
         WorkspaceEnvironmentSheetOption(
             title: "Option",
@@ -91,8 +93,18 @@ struct NewWorkspaceSheetTests {
             providerID: providerID,
             guestOS: guestOS,
             isAvailable: isAvailable,
-            statusText: nil,
+            statusText: statusText,
+            statusSeverity: statusSeverity,
             availabilityReason: isAvailable ? nil : "Unavailable"
         )
+    }
+
+    @Test("Status severity maps correctly for all environment status variants")
+    func statusSeverityMapsCorrectlyForAllVariants() {
+        #expect(makeOption(providerID: "x", guestOS: nil, statusSeverity: .good).statusSeverity == .good)
+        #expect(makeOption(providerID: "x", guestOS: nil, statusSeverity: .neutral).statusSeverity == .neutral)
+        #expect(makeOption(providerID: "x", guestOS: nil, statusSeverity: .warning).statusSeverity == .warning)
+        #expect(makeOption(providerID: "x", guestOS: nil, statusSeverity: .error).statusSeverity == .error)
+        #expect(makeOption(providerID: "x", guestOS: nil, statusSeverity: nil).statusSeverity == nil)
     }
 }
