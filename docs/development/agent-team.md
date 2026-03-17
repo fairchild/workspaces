@@ -201,7 +201,7 @@ Agents propose ideas and review each other's work. Human approves. Planner creat
 Add persistent memory so agents build context across sessions — what shipped, what worked, what didn't. They stop re-proposing similar ideas and develop a sense of project trajectory.
 
 ### Phase 3: Execute
-Approved and planned issues get picked up by April and Plat after the owner reacts 👍 on Peter's summary comment. They create branches, write code, open PRs, and keep open PRs moving to closure. Human reviews PRs and remains the only merge authority.
+Approved and planned issues get picked up by April and Plat after the owner reacts 👍 on Peter's summary comment. They create branches, write code, open PRs, and keep open PRs moving to closure. Peter defines the requested evidence for each issue, and the PR body must account for that evidence before review can clear. Human reviews PRs and remains the only merge authority.
 
 The `$drive` skill remains the manual bridge for milestone-wide execution, but the standing contributor workflows can now autonomously pick up a single approved issue at their scheduled wake-up.
 

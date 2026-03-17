@@ -21,7 +21,9 @@ from pathlib import Path
 CLAUDE_TASK = (
     "Check what needs attention: open PRs to review, then your own open PRs "
     "or claimed issues to advance, then execution-approved issues to pick up, "
-    "then discussions to participate in or propose. Output your response "
+    "then discussions to participate in or propose. When you execute an issue, "
+    "the PR body must account for every requested evidence item in `## Evidence Status`. "
+    "When you review a PR, approvals are only allowed if requested evidence is fully accounted for and unblocked. Output your response "
     "using YAML frontmatter as specified in your prompt."
 )
 CLAUDE_TASK_CLI = (
@@ -30,7 +32,9 @@ CLAUDE_TASK_CLI = (
     "commits were pushed since). Then review other open PRs, then continue "
     "your own open PRs or claimed issues, then claim an execution-approved "
     "ready issue if one exists, then participate in discussions — comment on "
-    "an existing one or propose a new idea. CRITICAL: Your final output MUST "
+    "an existing one or propose a new idea. CRITICAL: execution PRs must mirror "
+    "every requested evidence item in `## Evidence Status`, and reviews must not "
+    "approve PRs with missing or blocked requested evidence. Your final output MUST "
     "be valid YAML frontmatter exactly as specified in your prompt — start "
     "with `---` on the very first line, then metadata fields, then closing "
     "`---`, then your markdown body. Do NOT write any text before the "
@@ -463,6 +467,9 @@ PR_MARKER_RE = re.compile(
 CLOSING_REFERENCE_RE = re.compile(
     r"(?im)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(?P<number>\d+)\b"
 )
+EVIDENCE_STATUS_LINE_RE = re.compile(
+    r"^- \[(?P<status>complete|blocked)\] (?P<item>.+?) -- (?P<detail>.+)$"
+)
 EXECUTION_PRIORITY_RE = re.compile(r"(?m)^- Priority:\s*(?P<priority>\d+)\s*$")
 AGENT_READY_LABEL = "agent:ready"
 AGENT_READY_LABEL_COLOR = "5319e7"
@@ -503,6 +510,10 @@ def markdown_section(body: str, heading: str) -> str:
     return match.group(1).strip()
 
 
+def has_markdown_section(body: str, heading: str) -> bool:
+    return re.search(rf"(?m)^## {re.escape(heading)}\s*$", body) is not None
+
+
 def extract_issue_discussion_number(body: str) -> int | None:
     match = TASK_ISSUE_MARKER_RE.search(body)
     if not match:
@@ -530,6 +541,112 @@ def extract_requested_evidence(body: str) -> list[str]:
         for line in evidence_section.splitlines()
         if line.strip().startswith("- ") and line[2:].strip().lower() != "none"
     ]
+
+
+def extract_evidence_status_entries(body: str) -> dict[str, object]:
+    section_present = has_markdown_section(body, "Evidence Status")
+    evidence_section = markdown_section(body, "Evidence Status")
+    entries: dict[str, dict[str, str]] = {}
+    invalid_lines: list[str] = []
+    duplicate_items: list[str] = []
+
+    for raw_line in evidence_section.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if not line.startswith("- "):
+            invalid_lines.append(line)
+            continue
+        match = EVIDENCE_STATUS_LINE_RE.match(line)
+        if not match:
+            invalid_lines.append(line)
+            continue
+        item = match.group("item").strip()
+        if item in entries:
+            duplicate_items.append(item)
+            continue
+        entries[item] = {
+            "status": match.group("status"),
+            "detail": match.group("detail").strip(),
+        }
+
+    return {
+        "section_present": section_present,
+        "entries": entries,
+        "invalid_lines": invalid_lines,
+        "duplicate_items": duplicate_items,
+    }
+
+
+def evaluate_evidence_accounting(body: str, requested_evidence: list[str]) -> dict[str, object]:
+    parsed = extract_evidence_status_entries(body)
+    entries = parsed["entries"]
+    missing_items = [item for item in requested_evidence if item not in entries]
+    blocked_items = [
+        item
+        for item in requested_evidence
+        if item in entries and entries[item]["status"] == "blocked"
+    ]
+    complete_items = [
+        item
+        for item in requested_evidence
+        if item in entries and entries[item]["status"] == "complete"
+    ]
+    unexpected_items = [item for item in entries if item not in requested_evidence]
+    return {
+        **parsed,
+        "missing_items": missing_items,
+        "blocked_items": blocked_items,
+        "complete_items": complete_items,
+        "unexpected_items": unexpected_items,
+        "blocked_on_evidence": "blocked on evidence" in body.casefold(),
+    }
+
+
+def validate_evidence_accounting(body: str, requested_evidence: list[str]) -> tuple[dict[str, object], list[str]]:
+    accounting = evaluate_evidence_accounting(body, requested_evidence)
+    errors: list[str] = []
+    if not accounting["section_present"]:
+        errors.append("missing required '## Evidence Status' section")
+    invalid_lines = accounting["invalid_lines"]
+    if invalid_lines:
+        preview = "; ".join(str(line) for line in invalid_lines[:3])
+        errors.append(
+            "malformed Evidence Status entries; expected "
+            "'- [complete|blocked] <requested_evidence item> -- <proof note>' "
+            f"(examples: {preview})"
+        )
+    duplicate_items = accounting["duplicate_items"]
+    if duplicate_items:
+        preview = ", ".join(str(item) for item in duplicate_items[:3])
+        errors.append(f"duplicate Evidence Status entries for: {preview}")
+    missing_items = accounting["missing_items"]
+    if missing_items:
+        preview = "; ".join(str(item) for item in missing_items[:3])
+        errors.append(
+            "PR body must account for every requested evidence item exactly; "
+            f"missing: {preview}"
+        )
+    if accounting["blocked_items"] and not accounting["blocked_on_evidence"]:
+        errors.append(
+            "blocked evidence entries require 'blocked on evidence' language in the Validation section"
+        )
+    return accounting, errors
+
+
+def review_evidence_gate_error(verdict: str, accounting: dict[str, object], errors: list[str]) -> str | None:
+    if verdict == "request_changes":
+        return None
+    if errors:
+        return "; ".join(errors)
+    blocked_items = accounting["blocked_items"]
+    if blocked_items:
+        preview = "; ".join(str(item) for item in blocked_items[:3])
+        return (
+            "requested evidence is still blocked and review must stay in request_changes; "
+            f"blocked: {preview}"
+        )
+    return None
 
 
 def latest_issue_claim(issue_number: int, comments: dict[str, object]) -> dict[str, str] | None:
@@ -866,9 +983,20 @@ def format_issue_list_for_context(issues: list[dict[str, object]]) -> str:
     return json.dumps(payload, indent=2, ensure_ascii=False)
 
 
-def format_pr_list_for_context(pull_requests: list[dict[str, object]]) -> str:
-    payload = [
-        {
+def format_pr_list_for_context(
+    pull_requests: list[dict[str, object]],
+    issues: list[dict[str, object]],
+) -> str:
+    issue_map = {
+        int(issue["number"]): issue
+        for issue in issues
+        if issue.get("number") is not None
+    }
+    payload: list[dict[str, object]] = []
+    for pr in pull_requests:
+        pr_body = str(pr.get("body", ""))
+        issue_number, _ = extract_pr_issue_reference(pr_body)
+        entry: dict[str, object] = {
             "number": pr.get("number"),
             "title": pr.get("title"),
             "author": (pr.get("author") or {}).get("login", ""),
@@ -877,8 +1005,19 @@ def format_pr_list_for_context(pull_requests: list[dict[str, object]]) -> str:
             "headRefName": pr.get("headRefName"),
             "url": pr.get("url"),
         }
-        for pr in pull_requests
-    ]
+        if issue_number is not None:
+            issue_body = str(issue_map.get(issue_number, {}).get("body", ""))
+            requested_evidence = extract_requested_evidence(issue_body)
+            accounting = evaluate_evidence_accounting(pr_body, requested_evidence)
+            entry["linkedIssue"] = issue_number
+            entry["evidenceSummary"] = {
+                "requested": len(requested_evidence),
+                "complete": len(accounting["complete_items"]),
+                "blocked": len(accounting["blocked_items"]),
+                "missing": len(accounting["missing_items"]),
+                "malformed": len(accounting["invalid_lines"]),
+            }
+        payload.append(entry)
     return json.dumps(payload, indent=2, ensure_ascii=False)
 
 
@@ -1156,7 +1295,7 @@ def gather_context(
     )
     engagement_summary = format_engagement_candidates(engagement_candidates)
     open_issues = format_issue_list_for_context(work_state["issues"])
-    open_prs = format_pr_list_for_context(work_state["pull_requests"])
+    open_prs = format_pr_list_for_context(work_state["pull_requests"], work_state["issues"])
 
     backlog_state = gather_backlog_state()
     history = gather_agent_history(persona, owner, name, env)
@@ -1378,10 +1517,6 @@ def compose_pr_body(
     )
 
 
-def compose_pr_update_comment(persona: str, summary_body: str) -> str:
-    return f"*{persona}*\n\n{summary_body.strip()}"
-
-
 def set_git_identity(env: dict[str, str], persona: str, bot_login: str) -> None:
     user_name = bot_login or short_persona_name(persona)
     user_email = f"{persona_slug(persona)}@users.noreply.github.com"
@@ -1469,6 +1604,32 @@ def find_issue_execution_state(
         "stale_claim": stale_claim,
         "own_pr": own_pr,
         "other_pr": other_pr,
+    }
+
+
+def find_pr_review_state(pr_number: int, env: dict[str, str]) -> dict[str, object] | None:
+    owner, name = repo_owner_name(env)
+    work_state = fetch_work_state(owner, name, env)
+    pr = next((item for item in work_state["pull_requests"] if int(item["number"]) == pr_number), None)
+    if pr is None:
+        return None
+
+    issue_number, _ = extract_pr_issue_reference(str(pr.get("body", "")))
+    issue = None
+    requested_evidence: list[str] = []
+    if issue_number is not None:
+        issue = next((item for item in work_state["issues"] if int(item["number"]) == issue_number), None)
+        if issue is not None:
+            requested_evidence = extract_requested_evidence(str(issue.get("body", "")))
+
+    accounting, errors = validate_evidence_accounting(str(pr.get("body", "")), requested_evidence)
+    return {
+        "pr": pr,
+        "issue_number": issue_number,
+        "issue": issue,
+        "requested_evidence": requested_evidence,
+        "evidence_accounting": accounting,
+        "evidence_errors": errors,
     }
 
 
@@ -1593,6 +1754,20 @@ def route_action(validated_json: str, dry_run: bool, env: dict[str, str]) -> int
     try:
         if action == "review_pr":
             verdict = str(data.get("verdict", "")).lower()
+            pr_number = int(data["pr_number"])
+            review_state = find_pr_review_state(pr_number, env)
+            if review_state is not None:
+                evidence_gate_error = review_evidence_gate_error(
+                    verdict,
+                    review_state["evidence_accounting"],
+                    review_state["evidence_errors"],
+                )
+                if evidence_gate_error is not None:
+                    print(
+                        f"error: PR #{pr_number} cannot be reviewed with verdict '{verdict}': {evidence_gate_error}",
+                        file=sys.stderr,
+                    )
+                    return 1
             review_flag = {
                 "approve": "--approve",
                 "approve_with_followups": "--approve",
@@ -1662,6 +1837,18 @@ def route_action(validated_json: str, dry_run: bool, env: dict[str, str]) -> int
                 )
                 return 1
 
+            summary_body = str(data.get("body", "")).strip()
+            requested_evidence = list(state.get("requested_evidence", []))
+            _, evidence_errors = validate_evidence_accounting(summary_body, requested_evidence)
+            if evidence_errors:
+                print(
+                    "error: PR body evidence accounting is incomplete: "
+                    + "; ".join(evidence_errors),
+                    file=sys.stderr,
+                )
+                return 1
+            pr_body = compose_pr_body(issue_number, persona, summary_body)
+
             branch = current_branch(env)
             if own_pr is not None:
                 expected_branch = str(own_pr.get("headRefName", ""))
@@ -1718,16 +1905,17 @@ def route_action(validated_json: str, dry_run: bool, env: dict[str, str]) -> int
                 env=env,
             )
 
-            summary_body = str(data.get("body", "")).strip()
             if own_pr is not None:
                 run_checked(
                     [
                         "gh",
                         "pr",
-                        "comment",
+                        "edit",
                         str(own_pr["number"]),
+                        "--title",
+                        str(data["pr_title"]).strip(),
                         "--body",
-                        compose_pr_update_comment(persona, summary_body),
+                        pr_body,
                     ],
                     timeout=GITHUB_API_TIMEOUT,
                     cwd=REPO_ROOT,
@@ -1735,7 +1923,6 @@ def route_action(validated_json: str, dry_run: bool, env: dict[str, str]) -> int
                 )
                 return 0
 
-            pr_body = compose_pr_body(issue_number, persona, summary_body)
             run_checked(
                 [
                     "gh",

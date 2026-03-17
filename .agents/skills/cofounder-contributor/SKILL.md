@@ -56,3 +56,4 @@ uv run .agents/skills/cofounder-contributor/scripts/run-contributor.py \
 - Produce exactly one action.
 - Keep the final output valid YAML frontmatter with no preamble.
 - Deduplicate new ideas before posting them.
+- Treat issue `requested_evidence` as required PR accounting: execution PRs must include `## Evidence Status`, and approval reviews cannot pass while requested evidence is missing or blocked.

@@ -63,7 +63,11 @@ If you choose this action, you must have already edited the code during this run
 - If the issue already has your open PR, check out that PR branch before editing.
 - Otherwise create or switch to a branch named `codex/april-clearwater-issue-<number>-<slug>` before editing.
 - Run the most relevant validation you can from the issue's requested evidence.
-- If you cannot gather a requested artifact in this environment, say `blocked on evidence` in the Validation section.
+- `## Evidence Status` is required in the PR body.
+- Mirror every issue `requested_evidence` item using the exact issue text and one of these forms:
+  - `- [complete] <requested_evidence item> -- <artifact, command, link, or short proof note>`
+  - `- [blocked] <requested_evidence item> -- <concrete reason it could not be produced>`
+- If any evidence item is blocked, say `blocked on evidence` in the Validation section.
 
 ```
 ---
@@ -78,6 +82,10 @@ commit_message: "Fix environment status color semantics in NewWorkspaceSheet"
 - High-level explanation of what changed
 - Key files touched and why
 
+## Evidence Status
+- [complete] Exact requested evidence item text -- proof note
+- [blocked] Exact requested evidence item text -- why it could not be produced here
+
 ## Validation
 - `swift test ...`
 - `blocked on evidence: <reason>` if needed
@@ -88,7 +96,13 @@ commit_message: "Fix environment status color semantics in NewWorkspaceSheet"
 
 ### Review a PR
 
-Lead with your decision, then explain. Use GitHub suggestion blocks for small fixes. For larger changes, open a PR against the author's branch.
+Lead with your decision, then explain. Use `gh pr view <number>` and `gh issue view <linked-issue>` to compare the issue's `requested_evidence` against the PR's `## Evidence Status` section before deciding. Use GitHub suggestion blocks for small fixes. For larger changes, open a PR against the author's branch.
+
+Review rules:
+- If any requested evidence item is missing from `## Evidence Status`, verdict must be `request_changes`.
+- If all evidence items are accounted for but one or more are `[blocked]`, you may still review the code, but verdict must stay `request_changes`.
+- Only use `approve` or `approve_with_followups` when the evidence contract is fully accounted for and unblocked.
+- Separate code-quality feedback from evidence-gate feedback in your review body.
 
 ```
 ---
@@ -98,9 +112,13 @@ pr_number: 42
 verdict: approve | approve_with_followups | request_changes
 ---
 
-**Verdict: Approve with follow-ups** (or Approve / Request changes: <reason>)
+**Verdict: Request changes: screenshot evidence still blocked** (or Approve / Approve with follow-ups / Request changes: <reason>)
 
+## Code Review
 What's good, what needs attention, specific file/line references.
+
+## Evidence Gate
+- Requested evidence status, missing items, or blocked items that keep the PR from approval.
 
 For small fixes, use GitHub code suggestions:
 ` ```suggestion
