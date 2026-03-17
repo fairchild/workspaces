@@ -58,6 +58,9 @@ query($owner: String!, $name: String!) {
             createdAt
           }
         }
+        assignees(first: 5) {
+          nodes { login }
+        }
       }
     }
     pullRequests(first: 50, states: [OPEN], orderBy: {field: UPDATED_AT, direction: DESC}) {
@@ -89,6 +92,9 @@ AGENT_READY_LABEL_DESCRIPTION = "Execution-approved and ready for an automated c
 AGENT_CLAIM_LABEL = "agent:claimed"
 AGENT_CLAIM_LABEL_COLOR = "1d76db"
 AGENT_CLAIM_LABEL_DESCRIPTION = "Currently being executed by an automated contributor"
+AGENT_REVIEW_LABEL = "agent:review"
+AGENT_REVIEW_LABEL_COLOR = "fbca04"
+AGENT_REVIEW_LABEL_DESCRIPTION = "PR opened, awaiting review"
 
 
 def parse_args() -> argparse.Namespace:
@@ -335,14 +341,17 @@ def planned_comment_has_owner_approval(
     return False
 
 
-def ensure_label(env: dict[str, str], name: str, color: str, description: str) -> None:
+def fetch_existing_labels(env: dict[str, str]) -> set[str]:
     result = run_checked(
         ["gh", "label", "list", "--limit", "200", "--json", "name"],
         timeout=GITHUB_API_TIMEOUT,
         cwd=REPO_ROOT,
         env=env,
     )
-    existing = {item["name"] for item in json.loads(result.stdout)}
+    return {item["name"] for item in json.loads(result.stdout)}
+
+
+def ensure_label(existing: set[str], env: dict[str, str], name: str, color: str, description: str) -> None:
     if name in existing:
         return
     run_checked(
@@ -360,6 +369,7 @@ def ensure_label(env: dict[str, str], name: str, color: str, description: str) -
         cwd=REPO_ROOT,
         env=env,
     )
+    existing.add(name)
 
 
 def desired_execution_labels(
@@ -394,7 +404,8 @@ def desired_execution_labels(
 
     has_open_pr = issue_number in open_pr_issue_numbers
     if has_open_pr:
-        return labels, "open PR already exists"
+        labels.add(AGENT_REVIEW_LABEL)
+        return labels, "open PR, awaiting review"
 
     latest_claim = latest_issue_claim(issue_number, issue.get("comments", {}))
     if latest_claim is not None and not claim_is_stale(latest_claim, has_open_pr=False, now=now):
@@ -413,7 +424,7 @@ def sync_issue_labels(
     dry_run: bool,
     env: dict[str, str],
 ) -> bool:
-    managed = {AGENT_READY_LABEL, AGENT_CLAIM_LABEL}
+    managed = {AGENT_READY_LABEL, AGENT_CLAIM_LABEL, AGENT_REVIEW_LABEL}
     add_labels = sorted(desired_labels - current_labels)
     remove_labels = sorted((current_labels & managed) - desired_labels)
     if not add_labels and not remove_labels:
@@ -436,6 +447,35 @@ def sync_issue_labels(
     return True
 
 
+def issue_bot_assignees(issue: dict[str, object]) -> list[str]:
+    assignees = issue.get("assignees", {})
+    nodes = assignees.get("nodes", []) if isinstance(assignees, dict) else []
+    return [
+        str(node.get("login", ""))
+        for node in nodes
+        if isinstance(node, dict) and str(node.get("login", "")).endswith("[bot]")
+    ]
+
+
+def unassign_issue(
+    issue_number: int,
+    login: str,
+    *,
+    dry_run: bool,
+    env: dict[str, str],
+) -> None:
+    if dry_run:
+        log(f"Dry run: would unassign {login} from #{issue_number}")
+        return
+    run_checked(
+        ["gh", "issue", "edit", str(issue_number), "--remove-assignee", login],
+        timeout=GITHUB_API_TIMEOUT,
+        cwd=REPO_ROOT,
+        env=env,
+    )
+    log(f"Unassigned {login} from #{issue_number} (stale claim)")
+
+
 def main() -> int:
     args = parse_args()
     require_env("GH_TOKEN")
@@ -445,8 +485,10 @@ def main() -> int:
     issue_states = fetch_issue_state_map(env)
     now = datetime.now(timezone.utc)
 
-    ensure_label(env, AGENT_READY_LABEL, AGENT_READY_LABEL_COLOR, AGENT_READY_LABEL_DESCRIPTION)
-    ensure_label(env, AGENT_CLAIM_LABEL, AGENT_CLAIM_LABEL_COLOR, AGENT_CLAIM_LABEL_DESCRIPTION)
+    existing_labels = fetch_existing_labels(env)
+    ensure_label(existing_labels, env, AGENT_READY_LABEL, AGENT_READY_LABEL_COLOR, AGENT_READY_LABEL_DESCRIPTION)
+    ensure_label(existing_labels, env, AGENT_CLAIM_LABEL, AGENT_CLAIM_LABEL_COLOR, AGENT_CLAIM_LABEL_DESCRIPTION)
+    ensure_label(existing_labels, env, AGENT_REVIEW_LABEL, AGENT_REVIEW_LABEL_COLOR, AGENT_REVIEW_LABEL_DESCRIPTION)
 
     discussions = {
         int(discussion["number"]): discussion
@@ -486,6 +528,9 @@ def main() -> int:
                 f"Issue #{issue['number']} -> {sorted(desired_labels) or ['-']} "
                 f"({reason})"
             )
+        if AGENT_CLAIM_LABEL not in desired_labels and AGENT_REVIEW_LABEL not in desired_labels:
+            for assignee in issue_bot_assignees(issue):
+                unassign_issue(int(issue["number"]), assignee, dry_run=args.dry_run, env=env)
 
     log(f"Execution-state sync complete; updated {updated} issue(s)")
     return 0

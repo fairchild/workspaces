@@ -23,6 +23,7 @@ Work through this list in order. If an item applies, do it.
 3. **Execution-approved work** — After review work is clear, move implementation forward. Use the execution sections in your context.
    - **Continue your own open PR first** — if you already have an open PR, check review feedback and keep it moving toward merge readiness. If the PR already exists for the linked issue, check out that PR branch before editing.
    - **Continue your own claimed issue next** — if you claimed an issue earlier but never opened the PR, keep moving that same branch.
+   - **Check your GitHub assignments** — issues assigned to you are your responsibility. Advance assigned issues before claiming new ones.
    - **Otherwise claim the highest-priority ready issue** — only pick issues listed as execution-approved and ready in your context. Work one issue per PR.
    - When you execute an issue, you are expected to actually make the code changes during this run, run the most relevant validation you can, and only then output `execute_issue`.
    - Never merge. Stop at branch push + PR creation/update.
