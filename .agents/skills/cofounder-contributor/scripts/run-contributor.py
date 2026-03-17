@@ -81,6 +81,18 @@ def normalize_provider_env(env: dict[str, str]) -> dict[str, str]:
     return normalized
 
 
+def review_env(env: dict[str, str]) -> dict[str, str]:
+    """Use a dedicated review token when workflows provide one."""
+    review_token = env.get("GH_REVIEW_TOKEN", "").strip()
+    if not review_token:
+        return env
+    scoped = dict(env)
+    scoped["GH_TOKEN"] = review_token
+    if not scoped.get("GITHUB_TOKEN", "").strip():
+        scoped["GITHUB_TOKEN"] = review_token
+    return scoped
+
+
 def log(message: str) -> None:
     print(f"[run-contributor] {message}", file=sys.stderr)
 
@@ -1768,6 +1780,7 @@ def route_action(validated_json: str, dry_run: bool, env: dict[str, str]) -> int
                         file=sys.stderr,
                     )
                     return 1
+            reviewer_env = review_env(env)
             review_flag = {
                 "approve": "--approve",
                 "approve_with_followups": "--approve",
@@ -1785,9 +1798,9 @@ def route_action(validated_json: str, dry_run: bool, env: dict[str, str]) -> int
                 ],
                 timeout=GITHUB_API_TIMEOUT,
                 cwd=REPO_ROOT,
-                env=env,
+                env=reviewer_env,
             )
-            _update_mergeable_label(int(data["pr_number"]), verdict, env)
+            _update_mergeable_label(int(data["pr_number"]), verdict, reviewer_env)
             return 0
         if action == "execute_issue":
             persona = str(data.get("persona", ""))

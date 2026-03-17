@@ -63,4 +63,5 @@ jobs:
           AGENT_MESSAGE: ${{ inputs.message }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_REVIEW_TOKEN: ${{ github.token }}
           GH_APP_SLUG: april-clearwater

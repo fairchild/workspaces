@@ -557,6 +557,20 @@ class RunContributorTests(unittest.TestCase):
         )
         self.assertEqual(env["OPENAI_API_KEY"], "fallback-key")
 
+    def test_review_env_prefers_dedicated_review_token(self) -> None:
+        env = run_contributor.review_env(
+            {
+                "GH_TOKEN": "app-token",
+                "GH_REVIEW_TOKEN": "review-token",
+            }
+        )
+        self.assertEqual(env["GH_TOKEN"], "review-token")
+        self.assertEqual(env["GITHUB_TOKEN"], "review-token")
+
+    def test_review_env_returns_original_env_without_dedicated_review_token(self) -> None:
+        env = {"GH_TOKEN": "app-token"}
+        self.assertIs(run_contributor.review_env(env), env)
+
     def test_planner_normalize_provider_env_falls_back_to_codespaces_key(self) -> None:
         env = run_planner.normalize_provider_env(
             {
@@ -1120,6 +1134,37 @@ class RunContributorTests(unittest.TestCase):
         self.assertEqual(payload[0]["evidenceSummary"]["complete"], 1)
         self.assertEqual(payload[0]["evidenceSummary"]["blocked"], 1)
         self.assertEqual(payload[0]["evidenceSummary"]["missing"], 0)
+
+    def test_route_action_review_uses_dedicated_review_token(self) -> None:
+        validated_json = json.dumps(
+            {
+                "action": "review_pr",
+                "persona": "Plat Ironwood",
+                "pr_number": 119,
+                "verdict": "request_changes",
+                "body": "## Findings\n- Missing evidence status",
+            }
+        )
+        env = {
+            "GH_TOKEN": "app-token",
+            "GH_REVIEW_TOKEN": "review-token",
+        }
+
+        with (
+            mock.patch.object(run_contributor, "find_pr_review_state", return_value=None),
+            mock.patch.object(run_contributor, "run_checked") as run_checked,
+            mock.patch.object(run_contributor, "_update_mergeable_label") as update_mergeable_label,
+        ):
+            run_checked.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+
+            result = run_contributor.route_action(validated_json, False, env)
+
+        self.assertEqual(result, 0)
+        _, kwargs = run_checked.call_args
+        self.assertEqual(kwargs["env"]["GH_TOKEN"], "review-token")
+        self.assertEqual(kwargs["env"]["GITHUB_TOKEN"], "review-token")
+        mergeable_args, _ = update_mergeable_label.call_args
+        self.assertEqual(mergeable_args[2]["GH_TOKEN"], "review-token")
 
 
 if __name__ == "__main__":
