@@ -557,19 +557,20 @@ class RunContributorTests(unittest.TestCase):
         )
         self.assertEqual(env["OPENAI_API_KEY"], "fallback-key")
 
-    def test_review_env_prefers_dedicated_review_token(self) -> None:
-        env = run_contributor.review_env(
+    def test_fallback_review_env_prefers_dedicated_review_token(self) -> None:
+        env = run_contributor.fallback_review_env(
             {
                 "GH_TOKEN": "app-token",
                 "GH_REVIEW_TOKEN": "review-token",
+                "GITHUB_TOKEN": "stale-token",
             }
         )
         self.assertEqual(env["GH_TOKEN"], "review-token")
         self.assertEqual(env["GITHUB_TOKEN"], "review-token")
 
-    def test_review_env_returns_original_env_without_dedicated_review_token(self) -> None:
+    def test_fallback_review_env_returns_original_env_without_dedicated_review_token(self) -> None:
         env = {"GH_TOKEN": "app-token"}
-        self.assertIs(run_contributor.review_env(env), env)
+        self.assertIs(run_contributor.fallback_review_env(env), env)
 
     def test_should_retry_review_with_fallback_only_on_integration_error(self) -> None:
         env = {
@@ -591,6 +592,32 @@ class RunContributorTests(unittest.TestCase):
             stderr="pull request review body is invalid",
         )
         self.assertFalse(run_contributor.should_retry_review_with_fallback(non_retry, env))
+
+    def test_should_retry_review_with_fallback_skips_successful_reviews(self) -> None:
+        env = {
+            "GH_TOKEN": "app-token",
+            "GH_REVIEW_TOKEN": "review-token",
+        }
+        success = subprocess.CompletedProcess(
+            args=["gh", "pr", "review"],
+            returncode=0,
+            stdout="",
+            stderr="",
+        )
+        self.assertFalse(run_contributor.should_retry_review_with_fallback(success, env))
+
+    def test_should_retry_review_with_fallback_skips_when_tokens_match(self) -> None:
+        env = {
+            "GH_TOKEN": "same-token",
+            "GH_REVIEW_TOKEN": "same-token",
+        }
+        failing = subprocess.CompletedProcess(
+            args=["gh", "pr", "review"],
+            returncode=1,
+            stdout="",
+            stderr="GraphQL: Resource not accessible by integration (addPullRequestReview)",
+        )
+        self.assertFalse(run_contributor.should_retry_review_with_fallback(failing, env))
 
     def test_planner_normalize_provider_env_falls_back_to_codespaces_key(self) -> None:
         env = run_planner.normalize_provider_env(

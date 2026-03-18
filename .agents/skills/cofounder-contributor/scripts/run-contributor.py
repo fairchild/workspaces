@@ -81,15 +81,14 @@ def normalize_provider_env(env: dict[str, str]) -> dict[str, str]:
     return normalized
 
 
-def review_env(env: dict[str, str]) -> dict[str, str]:
-    """Use a dedicated review token when workflows provide one."""
+def fallback_review_env(env: dict[str, str]) -> dict[str, str]:
+    """Build the workflow-token fallback env for PR reviews."""
     review_token = env.get("GH_REVIEW_TOKEN", "").strip()
     if not review_token:
         return env
     scoped = dict(env)
     scoped["GH_TOKEN"] = review_token
-    if not scoped.get("GITHUB_TOKEN", "").strip():
-        scoped["GITHUB_TOKEN"] = review_token
+    scoped["GITHUB_TOKEN"] = review_token
     return scoped
 
 
@@ -109,7 +108,7 @@ def should_retry_review_with_fallback(
     )
     return (
         "Resource not accessible by integration" in combined
-        or "addPullRequestReview" in combined
+        and "addPullRequestReview" in combined
     )
 
 
@@ -125,7 +124,7 @@ def submit_pr_review(
     )
     used_env = env
     if result.returncode != 0 and should_retry_review_with_fallback(result, env):
-        fallback_env = review_env(env)
+        fallback_env = fallback_review_env(env)
         if fallback_env is not env:
             log("App-token review failed; retrying with workflow review token")
             result = run_result(
