@@ -188,13 +188,20 @@ Good examples:
 - Keep the feedback on the PR, not in a new side discussion.
 - If requested evidence is still missing or blocked, treat the PR as not ready unless you intentionally decide to merge anyway.
 
+## If Native App Reviews Break
+
+- Workflow `permissions:` only affect the built-in `GITHUB_TOKEN`. They do not grant pull request review authority to GitHub App installation tokens.
+- Update the affected GitHub App in GitHub settings so the repository permissions include `pull_requests: write`, `contents: write`, `issues: write`, `discussions: write`, and `metadata: read`.
+- After saving the permission change, re-approve the app installation for `fairchild/workspaces`. Existing installations do not pick up new permissions until you do.
+- Run the manual `GitHub App Review Smoke` workflow against a disposable PR before relying on app-native reviews again.
+
 ## Current Limitations
 
 - The execution approval signal is per planned discussion, not per issue.
 - Removing 👍 stops new issue pickup for that discussion, but you should still comment directly on any already-open PR you want paused or redirected.
 - Claim ownership is tracked by labels, claim comments, and GitHub issue assignments. Agents assign themselves when claiming an issue and are unassigned when claims expire.
 - `Requested Evidence` is a required-by-default PR evidence contract; the current status of each item lives in the PR body's `## Evidence Status` section.
-- The workflows are wired for execution, but the installed GitHub Apps still need `contents: write` in GitHub App settings for branch push and PR creation to work.
+- GitHub App permission changes and installation reapproval are manual GitHub web UI steps today.
 - Agents do not merge PRs.
 - Evidence waivers are manual today. If you choose to merge despite blocked evidence, do it explicitly in the PR conversation and on your own judgment.
 

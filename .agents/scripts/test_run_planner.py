@@ -557,68 +557,6 @@ class RunContributorTests(unittest.TestCase):
         )
         self.assertEqual(env["OPENAI_API_KEY"], "fallback-key")
 
-    def test_fallback_review_env_prefers_dedicated_review_token(self) -> None:
-        env = run_contributor.fallback_review_env(
-            {
-                "GH_TOKEN": "app-token",
-                "GH_REVIEW_TOKEN": "review-token",
-                "GITHUB_TOKEN": "stale-token",
-            }
-        )
-        self.assertEqual(env["GH_TOKEN"], "review-token")
-        self.assertEqual(env["GITHUB_TOKEN"], "review-token")
-
-    def test_fallback_review_env_returns_original_env_without_dedicated_review_token(self) -> None:
-        env = {"GH_TOKEN": "app-token"}
-        self.assertIs(run_contributor.fallback_review_env(env), env)
-
-    def test_should_retry_review_with_fallback_only_on_integration_error(self) -> None:
-        env = {
-            "GH_TOKEN": "app-token",
-            "GH_REVIEW_TOKEN": "review-token",
-        }
-        failing = subprocess.CompletedProcess(
-            args=["gh", "pr", "review"],
-            returncode=1,
-            stdout="",
-            stderr="GraphQL: Resource not accessible by integration (addPullRequestReview)",
-        )
-        self.assertTrue(run_contributor.should_retry_review_with_fallback(failing, env))
-
-        non_retry = subprocess.CompletedProcess(
-            args=["gh", "pr", "review"],
-            returncode=1,
-            stdout="",
-            stderr="pull request review body is invalid",
-        )
-        self.assertFalse(run_contributor.should_retry_review_with_fallback(non_retry, env))
-
-    def test_should_retry_review_with_fallback_skips_successful_reviews(self) -> None:
-        env = {
-            "GH_TOKEN": "app-token",
-            "GH_REVIEW_TOKEN": "review-token",
-        }
-        success = subprocess.CompletedProcess(
-            args=["gh", "pr", "review"],
-            returncode=0,
-            stdout="",
-            stderr="",
-        )
-        self.assertFalse(run_contributor.should_retry_review_with_fallback(success, env))
-
-    def test_should_retry_review_with_fallback_skips_when_tokens_match(self) -> None:
-        env = {
-            "GH_TOKEN": "same-token",
-            "GH_REVIEW_TOKEN": "same-token",
-        }
-        failing = subprocess.CompletedProcess(
-            args=["gh", "pr", "review"],
-            returncode=1,
-            stdout="",
-            stderr="GraphQL: Resource not accessible by integration (addPullRequestReview)",
-        )
-        self.assertFalse(run_contributor.should_retry_review_with_fallback(failing, env))
-
     def test_planner_normalize_provider_env_falls_back_to_codespaces_key(self) -> None:
         env = run_planner.normalize_provider_env(
             {
@@ -1291,7 +1229,7 @@ class RunContributorTests(unittest.TestCase):
         self.assertEqual(payload[0]["evidenceSummary"]["blocked"], 1)
         self.assertEqual(payload[0]["evidenceSummary"]["missing"], 0)
 
-    def test_route_action_review_prefers_app_token_when_successful(self) -> None:
+    def test_route_action_review_uses_app_token(self) -> None:
         validated_json = json.dumps(
             {
                 "action": "review_pr",
@@ -1303,67 +1241,22 @@ class RunContributorTests(unittest.TestCase):
         )
         env = {
             "GH_TOKEN": "app-token",
-            "GH_REVIEW_TOKEN": "review-token",
         }
 
         with (
             mock.patch.object(run_contributor, "find_pr_review_state", return_value=None),
-            mock.patch.object(run_contributor, "run_result") as run_result,
+            mock.patch.object(run_contributor, "run_checked") as run_checked,
             mock.patch.object(run_contributor, "_update_mergeable_label") as update_mergeable_label,
         ):
-            run_result.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+            run_checked.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
 
             result = run_contributor.route_action(validated_json, False, env)
 
         self.assertEqual(result, 0)
-        _, kwargs = run_result.call_args
+        _, kwargs = run_checked.call_args
         self.assertEqual(kwargs["env"]["GH_TOKEN"], "app-token")
         mergeable_args, _ = update_mergeable_label.call_args
         self.assertEqual(mergeable_args[2]["GH_TOKEN"], "app-token")
-
-    def test_route_action_review_retries_with_dedicated_review_token(self) -> None:
-        validated_json = json.dumps(
-            {
-                "action": "review_pr",
-                "persona": "Plat Ironwood",
-                "pr_number": 119,
-                "verdict": "request_changes",
-                "body": "## Findings\n- Missing evidence status",
-            }
-        )
-        env = {
-            "GH_TOKEN": "app-token",
-            "GH_REVIEW_TOKEN": "review-token",
-        }
-        app_failure = subprocess.CompletedProcess(
-            args=["gh", "pr", "review"],
-            returncode=1,
-            stdout="",
-            stderr="GraphQL: Resource not accessible by integration (addPullRequestReview)",
-        )
-        fallback_success = subprocess.CompletedProcess(
-            args=["gh", "pr", "review"],
-            returncode=0,
-            stdout="",
-            stderr="",
-        )
-
-        with (
-            mock.patch.object(run_contributor, "find_pr_review_state", return_value=None),
-            mock.patch.object(run_contributor, "run_result", side_effect=[app_failure, fallback_success]) as run_result,
-            mock.patch.object(run_contributor, "_update_mergeable_label") as update_mergeable_label,
-        ):
-            result = run_contributor.route_action(validated_json, False, env)
-
-        self.assertEqual(result, 0)
-        self.assertEqual(run_result.call_count, 2)
-        first_kwargs = run_result.call_args_list[0].kwargs
-        second_kwargs = run_result.call_args_list[1].kwargs
-        self.assertEqual(first_kwargs["env"]["GH_TOKEN"], "app-token")
-        self.assertEqual(second_kwargs["env"]["GH_TOKEN"], "review-token")
-        self.assertEqual(second_kwargs["env"]["GITHUB_TOKEN"], "review-token")
-        mergeable_args, _ = update_mergeable_label.call_args
-        self.assertEqual(mergeable_args[2]["GH_TOKEN"], "review-token")
 
 
 if __name__ == "__main__":
