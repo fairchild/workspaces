@@ -341,6 +341,37 @@ Current passing aggregate bundle:
 
 - `output/lume-pr-validation/20260311-194047`
 
+### Preparing PR evidence
+
+Once a host-smoke bundle has passed, use the prep helper to package the exact
+files you need for the PR discussion:
+
+```bash
+./scripts/lume-pr-evidence-prep.sh --pr 123
+```
+
+Or target a specific host-smoke run explicitly:
+
+```bash
+./scripts/lume-pr-evidence-prep.sh \
+  --pr 123 \
+  --host-smoke-dir output/lume-host-smoke/20260317-200226
+```
+
+The script verifies the bundle is complete, then writes:
+
+- `pr-<number>-evidence-comment.md` — ready-to-paste PR comment text
+- `pr-<number>-evidence.zip` — screenshots plus the supporting logs
+- `pr-<number>-evidence-README.md` — semi-manual upload steps
+
+Semi-manual upload flow:
+
+1. Open the PR in GitHub.
+2. Paste the generated comment into a new PR comment.
+3. Drag `01-launch.png`, `02-final.png`, and the generated zip into that comment.
+4. Copy the resulting attachment URLs into the PR body's `Evidence links:` section.
+5. Clear `Blocked on evidence` once the PR itself contains the uploaded files.
+
 Automation launch note:
 
 - `lume-host-preflight.sh` and `lume-host-macos-smoke.sh` now foreground the app by default for deterministic event capture
