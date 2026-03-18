@@ -27,42 +27,11 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  check-runner:
-    # Lightweight probe: is the Lume macOS runner online?
-    # Uses the app token because the default GITHUB_TOKEN may lack
-    # permission to list self-hosted runners.
-    runs-on: ubuntu-latest
-    timeout-minutes: 2
-    outputs:
-      runner: ${{ steps.pick.outputs.runner }}
-      is_macos: ${{ steps.pick.outputs.is_macos }}
-    steps:
-      - name: Generate app token
-        id: app-token
-        uses: actions/create-github-app-token@v2
-        with:
-          app-id: ${{ secrets.APRIL_APP_ID }}
-          private-key: ${{ secrets.APRIL_PRIVATE_KEY }}
-      - name: Check lume-macos runner availability
-        id: pick
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-        run: |
-          STATUS=$(gh api repos/${{ github.repository }}/actions/runners \
-            --jq '.runners[] | select(.labels[].name == "lume-macos") | .status' 2>/dev/null || echo "unknown")
-          if [ "$STATUS" = "online" ]; then
-            echo "runner=[\"self-hosted\", \"lume-macos\"]" >> "$GITHUB_OUTPUT"
-            echo "is_macos=true" >> "$GITHUB_OUTPUT"
-            echo "Lume runner is online — using [self-hosted, lume-macos]"
-          else
-            echo "runner=\"ubuntu-latest\"" >> "$GITHUB_OUTPUT"
-            echo "is_macos=false" >> "$GITHUB_OUTPUT"
-            echo "Lume runner is offline ($STATUS) — falling back to ubuntu-latest"
-          fi
-
   run:
-    needs: check-runner
-    runs-on: ${{ fromJSON(needs.check-runner.outputs.runner) }}
+    # Contributor automation stays on the broadly available hosted lane until
+    # we have a hosted coordinator that can safely promote work onto the Lume
+    # runner without probe-then-queue races.
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     outputs:
       needs_macos_evidence: ${{ steps.contributor.outputs.needs_macos_evidence }}
@@ -104,15 +73,10 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           GH_APP_SLUG: april-clearwater
 
-  # Evidence fallback: only runs when the main job ran on ubuntu (Lume was
-  # offline) but somehow came back online before this job starts.  In practice
-  # this is rare — if Lume was offline for `run`, it's likely still offline.
-  # The job will simply stay queued until the runner appears or the workflow
-  # times out, which is acceptable.
   evidence:
-    needs: [check-runner, run]
-    if: needs.check-runner.outputs.is_macos == 'false' && needs.run.outputs.needs_macos_evidence == 'true'
-    runs-on: [self-hosted, lume-macos]
+    needs: run
+    if: needs.run.outputs.needs_macos_evidence == 'true'
+    runs-on: [self-hosted, tart-ui]
     timeout-minutes: 20
     permissions:
       contents: read

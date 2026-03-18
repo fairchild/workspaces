@@ -1,6 +1,6 @@
 # Lume Runner Setup
 
-Use this runbook to provision the `[self-hosted, lume-macos]` runner lane inside a Lume macOS VM for agent workflows that need macOS capabilities (swift build/test, screenshots).
+Use this runbook to provision the `[self-hosted, lume-macos]` runner lane inside a Lume macOS VM for manual validation and future agent workflows that need macOS capabilities (swift build/test, screenshots). The scheduled April workflow still runs on `ubuntu-latest` until a hosted coordinator can safely promote work onto the Lume lane without probe/queue races.
 
 ## Host prerequisites
 
@@ -46,57 +46,9 @@ done
 
 **Known issue**: `lume get` may show `ip: -` even when the VM is reachable. Wait the full 60 seconds — bridged IP discovery is slow but SSH works once the guest boots.
 
-## 3. Register the runner
+## 3. Harden the guest and install tools
 
-Generate a one-time registration token:
-
-```bash
-RUNNER_REGISTRATION_TOKEN=$(
-  gh api -X POST repos/fairchild/workspaces/actions/runners/registration-token \
-    --jq .token
-)
-```
-
-Configure and start the runner inside the guest:
-
-```bash
-lume ssh "$LUME_VM" \
-  --user lume --password lumesetup26 \
-  --storage "$LUME_STORAGE/workspace-vms" \
-  --timeout 120 \
-  "bash -lc '
-    set -euo pipefail
-    RUNNER_DIR=\$HOME/.local/share/actions-runner-lume
-    RUNNER_VERSION=2.332.0
-    mkdir -p \$RUNNER_DIR
-    curl -sL \"https://github.com/actions/runner/releases/download/v\${RUNNER_VERSION}/actions-runner-osx-arm64-\${RUNNER_VERSION}.tar.gz\" | tar xz -C \$RUNNER_DIR
-    cd \$RUNNER_DIR
-    ./config.sh \
-      --url \"https://github.com/fairchild/workspaces\" \
-      --token \"${RUNNER_REGISTRATION_TOKEN}\" \
-      --name \"lume-runner\" \
-      --labels \"lume-macos\" \
-      --unattended \
-      --replace
-    ./svc.sh install
-    ./svc.sh start
-    sleep 3
-    ./svc.sh status
-  '"
-```
-
-## 4. Verify the runner is online
-
-```bash
-gh api repos/fairchild/workspaces/actions/runners \
-  --jq '.runners[] | select(.labels[].name == "lume-macos") | {name, status}'
-```
-
-Confirm there is an online runner with `lume-macos` label.
-
-## 5. Harden and install tools
-
-Run this immediately after registration. It sets up passwordless sudo (required for CLT install and service management), disables macOS auto-updates (prevents silent OS upgrades that invalidate Xcode/CLT), and installs tools the agent needs.
+Run this before registration so the guest is usable before GitHub can dispatch work onto it. It sets up passwordless sudo (required for CLT install and service management), disables macOS auto-updates (prevents silent OS upgrades that invalidate Xcode/CLT), and installs tools the agent needs.
 
 ```bash
 lume ssh "$LUME_VM" \
@@ -137,6 +89,54 @@ lume ssh "$LUME_VM" \
     sudo -n true && echo \"sudo: passwordless\"
   '"
 ```
+
+## 4. Register the runner
+
+Generate a one-time registration token:
+
+```bash
+RUNNER_REGISTRATION_TOKEN=$(
+  gh api -X POST repos/fairchild/workspaces/actions/runners/registration-token \
+    --jq .token
+)
+```
+
+Configure and start the runner inside the guest:
+
+```bash
+lume ssh "$LUME_VM" \
+  --user lume --password lumesetup26 \
+  --storage "$LUME_STORAGE/workspace-vms" \
+  --timeout 120 \
+  "bash -lc '
+    set -euo pipefail
+    RUNNER_DIR=\$HOME/.local/share/actions-runner-lume
+    RUNNER_VERSION=2.332.0
+    mkdir -p \$RUNNER_DIR
+    curl -sL \"https://github.com/actions/runner/releases/download/v\${RUNNER_VERSION}/actions-runner-osx-arm64-\${RUNNER_VERSION}.tar.gz\" | tar xz -C \$RUNNER_DIR
+    cd \$RUNNER_DIR
+    ./config.sh \
+      --url \"https://github.com/fairchild/workspaces\" \
+      --token \"${RUNNER_REGISTRATION_TOKEN}\" \
+      --name \"lume-runner\" \
+      --labels \"lume-macos\" \
+      --unattended \
+      --replace
+    ./svc.sh install
+    ./svc.sh start
+    sleep 3
+    ./svc.sh status
+  '"
+```
+
+## 5. Verify the runner is online
+
+```bash
+gh api repos/fairchild/workspaces/actions/runners \
+  --jq '[.runners[] | select(.labels[].name == "lume-macos" and .status == "online")] | .[] | {name, status}'
+```
+
+Confirm there is an online runner with `lume-macos` label.
 
 ## Day-two operations
 
@@ -203,7 +203,7 @@ Password: `lumesetup26`
 
 The validated base has Remote Login enabled, but if the guest OS auto-updated, SSH may need re-enabling. Connect via VNC and toggle Remote Login in System Settings > General > Sharing.
 
-To prevent this: disable auto-updates immediately after provisioning (see "Post-provision hardening" above).
+To prevent this: disable auto-updates before registration (see step 3 above).
 
 ### `sudo` fails with "a terminal is required to read the password"
 
