@@ -103,6 +103,7 @@ jobs:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           GH_APP_SLUG: april-clearwater
+          EVIDENCE_UPLOAD_TOKEN: ${{ secrets.EVIDENCE_UPLOAD_TOKEN }}
 
   # Evidence fallback: only runs when the main job ran on ubuntu (Lume was
   # offline) but somehow came back online before this job starts.  In practice
@@ -160,6 +161,20 @@ jobs:
         run: |
           set -o pipefail
           ./scripts/dev-smoke.sh --no-build 2>&1 | tee dev-smoke-output.txt
+      - name: Upload evidence to R2
+        if: hashFiles('output/**/*.png') != ''
+        run: |
+          for f in output/**/*.png; do
+            [ -f "$f" ] || continue
+            SLUG=$(basename "$f" .png)
+            uv run scripts/upload-evidence.py "$f" \
+              --repo workspaces \
+              --pr "${{ needs.run.outputs.pr_branch }}" \
+              --name "$SLUG" \
+              --breadcrumb || true
+          done
+        env:
+          EVIDENCE_UPLOAD_TOKEN: ${{ secrets.EVIDENCE_UPLOAD_TOKEN }}
       - name: Reconcile pending-ci evidence
         if: always()
         shell: bash
