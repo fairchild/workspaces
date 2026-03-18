@@ -21,8 +21,8 @@ from pathlib import Path
 CLAUDE_TASK = (
     "Check what needs attention: open PRs to review, then your own open PRs "
     "or claimed issues to advance, then execution-approved issues to pick up, "
-    "then discussions to participate in or propose. When you execute an issue, "
-    "the PR body must account for every requested evidence item in `## Evidence Status`. "
+    "then discussions to participate in or propose. When you execute an issue or advance your own PR, "
+    "reference requested evidence by index in frontmatter and let the runtime render `## Evidence Status`. "
     "When you review a PR, approvals are only allowed if requested evidence is fully accounted for and unblocked. Output your response "
     "using YAML frontmatter as specified in your prompt."
 )
@@ -32,8 +32,9 @@ CLAUDE_TASK_CLI = (
     "commits were pushed since). Then review other open PRs, then continue "
     "your own open PRs or claimed issues, then claim an execution-approved "
     "ready issue if one exists, then participate in discussions — comment on "
-    "an existing one or propose a new idea. CRITICAL: execution PRs must mirror "
-    "every requested evidence item in `## Evidence Status`, and reviews must not "
+    "an existing one or propose a new idea. CRITICAL: when you execute an issue or advance your own PR, "
+    "use the requested evidence indexes from context in frontmatter and let the runtime render "
+    "`## Evidence Status`; reviews must not "
     "approve PRs with missing or blocked requested evidence. Your final output MUST "
     "be valid YAML frontmatter exactly as specified in your prompt — start "
     "with `---` on the very first line, then metadata fields, then closing "
@@ -435,6 +436,7 @@ query($owner: String!, $name: String!) {
         reviews(last: 50) {
           nodes {
             author { login }
+            body
             state
             submittedAt
           }
@@ -469,6 +471,9 @@ CLOSING_REFERENCE_RE = re.compile(
 )
 EVIDENCE_STATUS_LINE_RE = re.compile(
     r"^- \[(?P<status>complete|blocked|pending-ci)\] (?P<item>.+?) -- (?P<detail>.+)$"
+)
+STRUCTURED_EVIDENCE_UPDATE_RE = re.compile(
+    r"^(?P<index>\d+)\s*--\s*(?P<detail>.+)$"
 )
 EXECUTION_PRIORITY_RE = re.compile(r"(?m)^- Priority:\s*(?P<priority>\d+)\s*$")
 AGENT_READY_LABEL = "agent:ready"
@@ -512,6 +517,29 @@ def markdown_section(body: str, heading: str) -> str:
 
 def has_markdown_section(body: str, heading: str) -> bool:
     return re.search(rf"(?m)^## {re.escape(heading)}\s*$", body) is not None
+
+
+def strip_markdown_section(body: str, heading: str) -> str:
+    pattern = rf"(?ms)^## {re.escape(heading)}\n.*?(?=^## |\n---\n|\Z)"
+    stripped = re.sub(pattern, "", body).strip()
+    return re.sub(r"\n{3,}", "\n\n", stripped)
+
+
+def insert_markdown_section(
+    body: str,
+    heading: str,
+    content: str,
+    *,
+    before_heading: str | None = None,
+) -> str:
+    section = f"## {heading}\n{content.strip()}".rstrip()
+    cleaned = strip_markdown_section(body.strip(), heading).strip()
+    if before_heading and has_markdown_section(cleaned, before_heading):
+        pattern = rf"(?m)^## {re.escape(before_heading)}\s*$"
+        return re.sub(pattern, f"{section}\n\n## {before_heading}", cleaned, count=1)
+    if cleaned:
+        return f"{cleaned}\n\n{section}"
+    return section
 
 
 def extract_issue_discussion_number(body: str) -> int | None:
@@ -691,6 +719,112 @@ def validate_evidence_accounting(body: str, requested_evidence: list[str]) -> tu
             "pending-ci evidence entries require 'blocked on evidence' language in the Validation section"
         )
     return accounting, errors
+
+
+def parse_structured_evidence_updates(
+    entries: object,
+    *,
+    requested_evidence: list[str],
+    status: str,
+    field_name: str,
+    used_indexes: set[int],
+) -> tuple[list[dict[str, object]], list[str]]:
+    errors: list[str] = []
+    parsed: list[dict[str, object]] = []
+    if entries is None:
+        return parsed, errors
+    if not isinstance(entries, list):
+        return parsed, [f"field '{field_name}' must be a list"]
+
+    for raw_entry in entries:
+        text = str(raw_entry).strip()
+        match = STRUCTURED_EVIDENCE_UPDATE_RE.match(text)
+        if not match:
+            errors.append(
+                f"{field_name} entries must use '<requested_evidence index> -- <proof note>' (got: {text})"
+            )
+            continue
+        index = int(match.group("index"))
+        if index < 1 or index > len(requested_evidence):
+            errors.append(
+                f"{field_name} index {index} is out of range for {len(requested_evidence)} requested evidence items"
+            )
+            continue
+        if index in used_indexes:
+            errors.append(f"requested evidence index {index} was listed more than once")
+            continue
+        used_indexes.add(index)
+        parsed.append(
+            {
+                "index": index,
+                "item": requested_evidence[index - 1],
+                "status": status,
+                "detail": match.group("detail").strip(),
+            }
+        )
+    return parsed, errors
+
+
+def render_execution_summary_body(
+    summary_body: str,
+    *,
+    requested_evidence: list[str],
+    evidence_complete: object,
+    evidence_blocked: object,
+    evidence_pending_ci: object,
+) -> tuple[str, list[str]]:
+    used_indexes: set[int] = set()
+    complete_entries, errors = parse_structured_evidence_updates(
+        evidence_complete,
+        requested_evidence=requested_evidence,
+        status="complete",
+        field_name="evidence_complete",
+        used_indexes=used_indexes,
+    )
+    blocked_entries, blocked_errors = parse_structured_evidence_updates(
+        evidence_blocked,
+        requested_evidence=requested_evidence,
+        status="blocked",
+        field_name="evidence_blocked",
+        used_indexes=used_indexes,
+    )
+    pending_ci_entries, pending_ci_errors = parse_structured_evidence_updates(
+        evidence_pending_ci,
+        requested_evidence=requested_evidence,
+        status="pending-ci",
+        field_name="evidence_pending_ci",
+        used_indexes=used_indexes,
+    )
+    errors.extend(blocked_errors)
+    errors.extend(pending_ci_errors)
+    if errors:
+        return summary_body, errors
+
+    evidence_map = {
+        int(entry["index"]): entry
+        for entry in complete_entries + blocked_entries + pending_ci_entries
+    }
+    evidence_lines = [
+        f"- [{entry['status']}] {entry['item']} -- {entry['detail']}"
+        for index, entry in sorted(evidence_map.items())
+    ]
+
+    rendered = insert_markdown_section(
+        summary_body,
+        "Evidence Status",
+        "\n".join(evidence_lines),
+        before_heading="Validation",
+    )
+    blocked_like_entries = blocked_entries + pending_ci_entries
+    if blocked_like_entries and "blocked on evidence" not in rendered.casefold():
+        blocked_note = "; ".join(str(entry["detail"]) for entry in blocked_like_entries)
+        validation = markdown_section(rendered, "Validation")
+        if validation:
+            validation = f"{validation.rstrip()}\n- blocked on evidence: {blocked_note}"
+        else:
+            validation = f"- blocked on evidence: {blocked_note}"
+        rendered = insert_markdown_section(rendered, "Validation", validation, before_heading="Risks")
+    return rendered, []
 
 
 def review_evidence_gate_error(verdict: str, accounting: dict[str, object], errors: list[str]) -> str | None:
@@ -1230,6 +1364,78 @@ def summarize_requested_evidence(requested_evidence: list[str]) -> str:
     return "; ".join(preview) + suffix
 
 
+def format_requested_evidence_numbered(
+    requested_evidence: list[str],
+    *,
+    indent: str,
+) -> str:
+    if not requested_evidence:
+        return f"{indent}Requested evidence: none recorded"
+    lines = [f"{indent}Requested evidence by index:"]
+    for index, item in enumerate(requested_evidence, start=1):
+        lines.append(f"{indent}  [{index}] {item}")
+    return "\n".join(lines)
+
+
+def latest_external_review(
+    pr: dict[str, object],
+    *,
+    normalized_bot: str,
+) -> dict[str, str] | None:
+    reviews = (pr.get("reviews") or {}).get("nodes", [])
+    external_reviews = [
+        review
+        for review in reviews
+        if _normalize_login((review.get("author") or {}).get("login", "")) != normalized_bot
+        and str(review.get("body", "")).strip()
+    ]
+    if not external_reviews:
+        return None
+    latest = max(external_reviews, key=lambda review: review.get("submittedAt", ""))
+    return {
+        "author": str((latest.get("author") or {}).get("login", "")),
+        "state": str(latest.get("state", "")),
+        "submittedAt": str(latest.get("submittedAt", "")),
+        "body": str(latest.get("body", "")).strip(),
+    }
+
+
+def format_review_excerpt(review: dict[str, str] | None, *, indent: str) -> str:
+    if review is None:
+        return f"{indent}Latest external review: none"
+    excerpt = " ".join(review["body"].split())
+    if len(excerpt) > 280:
+        excerpt = excerpt[:277].rstrip() + "..."
+    return (
+        f"{indent}Latest external review: {review['author']} ({review['state']}) at {review['submittedAt']}\n"
+        f"{indent}  {excerpt}"
+    )
+
+
+def summarize_evidence_accounting_by_index(accounting: dict[str, object], requested_evidence: list[str]) -> str:
+    if not requested_evidence:
+        return "Current PR evidence: none requested"
+
+    def indexes(items: list[str]) -> str:
+        if not items:
+            return "-"
+        positions = [
+            str(index)
+            for index, item in enumerate(requested_evidence, start=1)
+            if item in items
+        ]
+        return ", ".join(positions) if positions else "-"
+
+    malformed = accounting.get("invalid_lines", [])
+    return (
+        "Current PR evidence: "
+        f"complete [{indexes(list(accounting['complete_items']))}], "
+        f"blocked [{indexes(list(accounting['blocked_items']))}], "
+        f"missing [{indexes(list(accounting['missing_items']))}], "
+        f"malformed {len(malformed)}"
+    )
+
+
 def classify_execution_work(
     issues: list[dict[str, object]],
     pull_requests: list[dict[str, object]],
@@ -1253,9 +1459,12 @@ def classify_execution_work(
                 "number": pr.get("number"),
                 "title": pr.get("title"),
                 "url": pr.get("url"),
+                "body": pr.get("body", ""),
                 "author_login": author_login,
                 "reviewDecision": pr.get("reviewDecision"),
                 "headRefName": pr.get("headRefName"),
+                "reviews": pr.get("reviews", {}),
+                "comments": pr.get("comments", {}),
                 "agent": marker_agent or (current_agent if _normalize_login(author_login) == normalized_bot else ""),
             }
         )
@@ -1320,6 +1529,7 @@ def classify_execution_work(
         }
 
         if own_pr is not None:
+            accounting = evaluate_evidence_accounting(str(own_pr.get("body", "")), requested_evidence)
             own_open_prs.append(
                 {
                     **item,
@@ -1328,6 +1538,11 @@ def classify_execution_work(
                     "pr_url": own_pr["url"],
                     "pr_branch": own_pr["headRefName"],
                     "review_decision": own_pr["reviewDecision"] or "REVIEW_REQUIRED",
+                    "evidence_accounting": accounting,
+                    "latest_external_review": latest_external_review(
+                        own_pr,
+                        normalized_bot=normalized_bot,
+                    ),
                 }
             )
             continue
@@ -1368,6 +1583,21 @@ def format_own_open_prs(items: list[dict[str, object]]) -> str:
             f"  PR #{item['pr_number']} — {item['pr_title']}\n"
             f"    Issue: #{item['issue_number']} | Review decision: {item['review_decision']} | Branch: {item['pr_branch']}"
         )
+        lines.append(
+            format_requested_evidence_numbered(
+                list(item["requested_evidence"]),
+                indent="    ",
+            )
+        )
+        lines.append(
+            f"    {summarize_evidence_accounting_by_index(item['evidence_accounting'], list(item['requested_evidence']))}"
+        )
+        lines.append(
+            format_review_excerpt(
+                item.get("latest_external_review"),
+                indent="    ",
+            )
+        )
     return "\n".join(lines)
 
 
@@ -1381,7 +1611,13 @@ def format_claimed_issues(items: list[dict[str, object]]) -> str:
         lines.append(
             f"  Issue #{item['issue_number']} — {item['title']}\n"
             f"    {priority_text} | Branch: {item['claim_branch'] or 'not recorded'}\n"
-            f"    Requested evidence: {summarize_requested_evidence(list(item['requested_evidence']))}"
+            f"    Requested evidence summary: {summarize_requested_evidence(list(item['requested_evidence']))}"
+        )
+        lines.append(
+            format_requested_evidence_numbered(
+                list(item["requested_evidence"]),
+                indent="    ",
+            )
         )
     return "\n".join(lines)
 
@@ -1401,7 +1637,13 @@ def format_ready_issues(items: list[dict[str, object]]) -> str:
         lines.append(
             f"  Issue #{item['issue_number']} — {item['title']}\n"
             f"    {priority_text} | Approval: {item['approval_reason']} | From {discussion}\n"
-            f"    Requested evidence: {summarize_requested_evidence(list(item['requested_evidence']))}"
+            f"    Requested evidence summary: {summarize_requested_evidence(list(item['requested_evidence']))}"
+        )
+        lines.append(
+            format_requested_evidence_numbered(
+                list(item["requested_evidence"]),
+                indent="    ",
+            )
         )
     return "\n".join(lines)
 
@@ -1693,6 +1935,28 @@ def compose_pr_body(
     )
 
 
+def build_execution_summary_body(
+    data: dict[str, object],
+    *,
+    requested_evidence: list[str],
+) -> tuple[str, list[str]]:
+    summary_body = str(data.get("body", "")).strip()
+    use_structured = (
+        data.get("action") == "advance_pr"
+        or "evidence_complete" in data
+        or "evidence_blocked" in data
+    )
+    if not use_structured:
+        return summary_body, []
+    return render_execution_summary_body(
+        summary_body,
+        requested_evidence=requested_evidence,
+        evidence_complete=data.get("evidence_complete"),
+        evidence_blocked=data.get("evidence_blocked"),
+        evidence_pending_ci=data.get("evidence_pending_ci"),
+    )
+
+
 def set_git_identity(env: dict[str, str], persona: str, bot_login: str) -> None:
     user_name = bot_login or short_persona_name(persona)
     user_email = f"{persona_slug(persona)}@users.noreply.github.com"
@@ -1880,7 +2144,6 @@ def _update_mergeable_label(pr_number: int, verdict: str, env: dict[str, str]) -
             default="",
         )
 
-
 def _write_github_outputs(
     needs_evidence: bool,
     needs_screenshot_evidence: bool,
@@ -1905,6 +2168,199 @@ def _write_github_outputs(
         f"test_commands={test_commands}"
     )
 
+def route_execution_action(
+    data: dict[str, object],
+    env: dict[str, str],
+    *,
+    require_existing_pr: bool,
+) -> int:
+    persona = str(data.get("persona", ""))
+    bot_login = detect_bot_login(env)
+    issue_number = int(data["issue_number"])
+    state = find_issue_execution_state(
+        issue_number,
+        env,
+        persona=persona,
+        bot_login=bot_login,
+    )
+    if state is None:
+        print(f"error: issue #{issue_number} is not available for execution", file=sys.stderr)
+        return 1
+
+    own_pr = state.get("own_pr")
+    other_pr = state.get("other_pr")
+    if require_existing_pr:
+        if own_pr is None:
+            print(
+                f"error: issue #{issue_number} has no open PR owned by {persona_slug(persona)} to advance",
+                file=sys.stderr,
+            )
+            return 1
+        if int(data["pr_number"]) != int(own_pr["number"]):
+            print(
+                f"error: issue #{issue_number} is linked to PR #{own_pr['number']}, not PR #{data['pr_number']}",
+                file=sys.stderr,
+            )
+            return 1
+
+    if own_pr is None and not bool(state.get("approved")):
+        print(
+            f"error: issue #{issue_number} is not execution-approved ({state.get('approval_reason')})",
+            file=sys.stderr,
+        )
+        return 1
+    if own_pr is None and state.get("blockers"):
+        print(
+            f"error: issue #{issue_number} is still blocked by {state['blockers']}",
+            file=sys.stderr,
+        )
+        return 1
+    if other_pr is not None:
+        print(
+            f"error: issue #{issue_number} already has open PR #{other_pr['number']} by another agent",
+            file=sys.stderr,
+        )
+        return 1
+
+    latest_claim = state.get("latest_claim")
+    if (
+        own_pr is None
+        and latest_claim is not None
+        and latest_claim.get("agent")
+        and latest_claim.get("agent") != persona_slug(persona)
+    ):
+        print(
+            f"error: issue #{issue_number} is already claimed by {latest_claim['agent']}",
+            file=sys.stderr,
+        )
+        return 1
+
+    requested_evidence = list(state.get("requested_evidence", []))
+    summary_body, summary_errors = build_execution_summary_body(
+        data,
+        requested_evidence=requested_evidence,
+    )
+    if summary_errors:
+        print(
+            "error: PR body evidence accounting is incomplete: "
+            + "; ".join(summary_errors),
+            file=sys.stderr,
+        )
+        return 1
+
+    _, evidence_errors = validate_evidence_accounting(summary_body, requested_evidence)
+    if evidence_errors:
+        print(
+            "error: PR body evidence accounting is incomplete: "
+            + "; ".join(evidence_errors),
+            file=sys.stderr,
+        )
+        return 1
+    pr_body = compose_pr_body(issue_number, persona, summary_body)
+
+    branch = current_branch(env)
+    if own_pr is not None:
+        expected_branch = str(own_pr.get("headRefName", ""))
+        if branch != expected_branch:
+            print(
+                f"error: issue #{issue_number} already has PR #{own_pr['number']} on "
+                f"branch '{expected_branch}'. Check out that branch before editing.",
+                file=sys.stderr,
+            )
+            return 1
+    else:
+        default = default_branch(env)
+        if branch in {"HEAD", "", default, "main", "master"}:
+            branch = branch_name_for_issue(
+                persona,
+                issue_number,
+                str(state["issue"].get("title", f"issue-{issue_number}")),
+            )
+            run_checked(
+                ["git", "checkout", "-b", branch],
+                timeout=GITHUB_API_TIMEOUT,
+                cwd=REPO_ROOT,
+                env=env,
+            )
+        ensure_issue_claimed(
+            issue_number,
+            persona,
+            branch,
+            latest_claim if isinstance(latest_claim, dict) else None,
+            issue_label_presence(state["issue"]),
+            env,
+            bot_login=bot_login or "",
+        )
+
+    if not working_tree_dirty(env):
+        print(
+            f"error: {data['action']} selected for #{issue_number} but no file changes were made",
+            file=sys.stderr,
+        )
+        return 1
+
+    set_git_identity(env, persona, bot_login)
+    run_checked(["git", "add", "-A"], timeout=GITHUB_API_TIMEOUT, cwd=REPO_ROOT, env=env)
+    run_checked(
+        ["git", "commit", "-m", str(data["commit_message"]).strip()],
+        timeout=GITHUB_API_TIMEOUT,
+        cwd=REPO_ROOT,
+        env=env,
+    )
+    run_checked(
+        ["git", "push", "--set-upstream", "origin", branch],
+        timeout=GITHUB_API_TIMEOUT,
+        cwd=REPO_ROOT,
+        env=env,
+    )
+
+    evidence_needed = _needs_macos_evidence(requested_evidence)
+    screenshot_evidence_needed = _needs_screenshot_evidence(requested_evidence)
+    test_commands = _extract_test_commands(requested_evidence)
+    _write_github_outputs(
+        evidence_needed,
+        screenshot_evidence_needed,
+        branch,
+        test_commands,
+    )
+
+    if own_pr is not None:
+        run_checked(
+            [
+                "gh",
+                "pr",
+                "edit",
+                str(own_pr["number"]),
+                "--title",
+                str(data["pr_title"]).strip(),
+                "--body",
+                pr_body,
+            ],
+            timeout=GITHUB_API_TIMEOUT,
+            cwd=REPO_ROOT,
+            env=env,
+        )
+        return 0
+
+    run_checked(
+        [
+            "gh",
+            "pr",
+            "create",
+            "--base",
+            default_branch(env),
+            "--head",
+            branch,
+            "--title",
+            str(data["pr_title"]).strip(),
+            "--body",
+            pr_body,
+        ],
+        timeout=GITHUB_API_TIMEOUT,
+        cwd=REPO_ROOT,
+        env=env,
+    )
+    return 0
 
 def route_action(validated_json: str, dry_run: bool, env: dict[str, str]) -> int:
     data = json.loads(validated_json)
@@ -1916,7 +2372,7 @@ def route_action(validated_json: str, dry_run: bool, env: dict[str, str]) -> int
         return 0
 
     log(f"Routing action {action}")
-    body = build_body(data) if action != "execute_issue" else ""
+    body = build_body(data) if action not in {"execute_issue", "advance_pr"} else ""
 
     if action == "propose":
         run_checked(
@@ -1997,168 +2453,9 @@ def route_action(validated_json: str, dry_run: bool, env: dict[str, str]) -> int
             _update_mergeable_label(int(data["pr_number"]), verdict, env)
             return 0
         if action == "execute_issue":
-            persona = str(data.get("persona", ""))
-            bot_login = detect_bot_login(env)
-            issue_number = int(data["issue_number"])
-            state = find_issue_execution_state(
-                issue_number,
-                env,
-                persona=persona,
-                bot_login=bot_login,
-            )
-            if state is None:
-                print(f"error: issue #{issue_number} is not available for execution", file=sys.stderr)
-                return 1
-
-            own_pr = state.get("own_pr")
-            other_pr = state.get("other_pr")
-            if own_pr is None and not bool(state.get("approved")):
-                print(
-                    f"error: issue #{issue_number} is not execution-approved ({state.get('approval_reason')})",
-                    file=sys.stderr,
-                )
-                return 1
-            if own_pr is None and state.get("blockers"):
-                print(
-                    f"error: issue #{issue_number} is still blocked by {state['blockers']}",
-                    file=sys.stderr,
-                )
-                return 1
-            if other_pr is not None:
-                print(
-                    f"error: issue #{issue_number} already has open PR #{other_pr['number']} by another agent",
-                    file=sys.stderr,
-                )
-                return 1
-
-            latest_claim = state.get("latest_claim")
-            if (
-                own_pr is None
-                and latest_claim is not None
-                and latest_claim.get("agent")
-                and latest_claim.get("agent") != persona_slug(persona)
-            ):
-                print(
-                    f"error: issue #{issue_number} is already claimed by {latest_claim['agent']}",
-                    file=sys.stderr,
-                )
-                return 1
-
-            summary_body = str(data.get("body", "")).strip()
-            requested_evidence = list(state.get("requested_evidence", []))
-            _, evidence_errors = validate_evidence_accounting(summary_body, requested_evidence)
-            if evidence_errors:
-                print(
-                    "error: PR body evidence accounting is incomplete: "
-                    + "; ".join(evidence_errors),
-                    file=sys.stderr,
-                )
-                return 1
-            pr_body = compose_pr_body(issue_number, persona, summary_body)
-
-            branch = current_branch(env)
-            if own_pr is not None:
-                expected_branch = str(own_pr.get("headRefName", ""))
-                if branch != expected_branch:
-                    print(
-                        f"error: issue #{issue_number} already has PR #{own_pr['number']} on "
-                        f"branch '{expected_branch}'. Check out that branch before editing.",
-                        file=sys.stderr,
-                    )
-                    return 1
-            else:
-                default = default_branch(env)
-                if branch in {"HEAD", "", default, "main", "master"}:
-                    branch = branch_name_for_issue(
-                        persona,
-                        issue_number,
-                        str(state["issue"].get("title", f"issue-{issue_number}")),
-                    )
-                    run_checked(
-                        ["git", "checkout", "-b", branch],
-                        timeout=GITHUB_API_TIMEOUT,
-                        cwd=REPO_ROOT,
-                        env=env,
-                    )
-                ensure_issue_claimed(
-                    issue_number,
-                    persona,
-                    branch,
-                    latest_claim if isinstance(latest_claim, dict) else None,
-                    issue_label_presence(state["issue"]),
-                    env,
-                    bot_login=bot_login or "",
-                )
-
-            if not working_tree_dirty(env):
-                print(
-                    f"error: execute_issue selected for #{issue_number} but no file changes were made",
-                    file=sys.stderr,
-                )
-                return 1
-
-            set_git_identity(env, persona, bot_login)
-            run_checked(["git", "add", "-A"], timeout=GITHUB_API_TIMEOUT, cwd=REPO_ROOT, env=env)
-            run_checked(
-                ["git", "commit", "-m", str(data["commit_message"]).strip()],
-                timeout=GITHUB_API_TIMEOUT,
-                cwd=REPO_ROOT,
-                env=env,
-            )
-            run_checked(
-                ["git", "push", "--set-upstream", "origin", branch],
-                timeout=GITHUB_API_TIMEOUT,
-                cwd=REPO_ROOT,
-                env=env,
-            )
-
-            evidence_needed = _needs_macos_evidence(requested_evidence)
-            screenshot_evidence_needed = _needs_screenshot_evidence(requested_evidence)
-            test_commands = _extract_test_commands(requested_evidence)
-            _write_github_outputs(
-                evidence_needed,
-                screenshot_evidence_needed,
-                branch,
-                test_commands,
-            )
-
-            if own_pr is not None:
-                run_checked(
-                    [
-                        "gh",
-                        "pr",
-                        "edit",
-                        str(own_pr["number"]),
-                        "--title",
-                        str(data["pr_title"]).strip(),
-                        "--body",
-                        pr_body,
-                    ],
-                    timeout=GITHUB_API_TIMEOUT,
-                    cwd=REPO_ROOT,
-                    env=env,
-                )
-                return 0
-
-            run_checked(
-                [
-                    "gh",
-                    "pr",
-                    "create",
-                    "--base",
-                    default_branch(env),
-                    "--head",
-                    branch,
-                    "--title",
-                    str(data["pr_title"]).strip(),
-                    "--body",
-                    pr_body,
-                ],
-                timeout=GITHUB_API_TIMEOUT,
-                cwd=REPO_ROOT,
-                env=env,
-            )
-            return 0
+            return route_execution_action(data, env, require_existing_pr=False)
+        if action == "advance_pr":
+            return route_execution_action(data, env, require_existing_pr=True)
     finally:
         try:
             os.unlink(body_file)
