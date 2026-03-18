@@ -657,6 +657,8 @@ def evaluate_evidence_accounting(body: str, requested_evidence: list[str]) -> di
 
 
 def validate_evidence_accounting(body: str, requested_evidence: list[str]) -> tuple[dict[str, object], list[str]]:
+    if not requested_evidence:
+        return evaluate_evidence_accounting(body, []), []
     accounting = evaluate_evidence_accounting(body, requested_evidence)
     errors: list[str] = []
     if not accounting["section_present"]:

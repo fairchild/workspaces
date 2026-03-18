@@ -80,6 +80,12 @@ jobs:
       contents: read
       pull-requests: write
     steps:
+      - name: Generate app token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.WORKSPACE_AGENTS_APP_ID }}
+          private-key: ${{ secrets.WORKSPACE_AGENTS_PRIVATE_KEY }}
       - uses: actions/checkout@v5
         with:
           ref: ${{ needs.run.outputs.pr_branch }}
@@ -90,11 +96,12 @@ jobs:
         run: ./scripts/build-ghosttykit.sh
       - name: Build app
         id: build
+        if: steps.ghosttykit.outcome == 'success'
         continue-on-error: true
         run: swift build
       - name: Run requested tests
         id: tests
-        if: needs.run.outputs.test_commands_json != '[]'
+        if: steps.build.outcome == 'success' && needs.run.outputs.test_commands_json != '[]'
         continue-on-error: true
         shell: bash
         env:
@@ -116,7 +123,7 @@ jobs:
           done < .ci-test-commands.txt
       - name: Capture evidence
         id: smoke
-        if: needs.run.outputs.needs_screenshot_evidence == 'true'
+        if: steps.build.outcome == 'success' && needs.run.outputs.needs_screenshot_evidence == 'true'
         continue-on-error: true
         shell: bash
         run: |
@@ -126,7 +133,7 @@ jobs:
         if: always()
         shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           PR_BRANCH: ${{ needs.run.outputs.pr_branch }}
           BUILD_SUCCEEDED: ${{ steps.ghosttykit.outcome == 'success' && steps.build.outcome == 'success' }}
           TESTS_SUCCEEDED: ${{ needs.run.outputs.test_commands_json == '[]' || steps.tests.outcome == 'success' }}
