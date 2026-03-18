@@ -73,6 +73,7 @@ For real-host Lume validation:
    - `docs/development/lume-integration.md`
    - `docs/development/lume-validation.md`
    - `docs/development/lume-recreate-runbook.md`
+   - `docs/development/lume-runner-setup.md`
 
 Launcher contract:
 - `launch-dev.sh` should only report success once the debug process is still alive and a visible app window exists.
@@ -100,7 +101,7 @@ Verify your work visually, then present evidence to the user. Don't just say it 
 
 ## High-Signal Lessons
 
-- **Never use bare `self-hosted` for workflows in this repo.** Use GitHub-hosted macOS (`macos-17`) for generic build/test jobs, `[self-hosted, tart-ui]` for UI/perf automation, and `[self-hosted, signing-host]` for release/signing/notarization.
+- **Never use bare `self-hosted` for workflows in this repo.** Use GitHub-hosted macOS (`macos-17`) for generic build/test jobs, `[self-hosted, tart-ui]` for UI/perf automation, `[self-hosted, lume-macos]` for agent execution (preferred, with ubuntu-latest fallback), and `[self-hosted, signing-host]` for release/signing/notarization.
 - **Keep terminal surfaces nearly chrome-free.** Repo overview pages can carry metadata and actions, but terminal views should default to the canvas with minimal surrounding UI.
 - **Prefer quiet discoverability over persistent controls.** Avoid right-click-only primary actions, but also avoid always-visible sidebar affordances that add noise. Hover-visible scoped actions are usually the right compromise.
 - **Persist selection state by stable IDs, not live SwiftData objects.** Restore and fallback logic should resolve models late and validate them against current data before selection.

@@ -10,7 +10,7 @@ Read this when you need to answer any of these questions:
 - how the standalone validator and the Swift app relate
 - which unattended profile is used for stock Tahoe base preparation
 
-For the broader provider model, see [../vm-provider-architecture.md](../vm-provider-architecture.md). For the runnable validation steps, see [lume-validation.md](./lume-validation.md). For the exact recreate-from-scratch and troubleshooting workflow, see [lume-recreate-runbook.md](./lume-recreate-runbook.md).
+For the broader provider model, see [../vm-provider-architecture.md](../vm-provider-architecture.md). For the runnable validation steps, see [lume-validation.md](./lume-validation.md). For the exact recreate-from-scratch and troubleshooting workflow, see [lume-recreate-runbook.md](./lume-recreate-runbook.md). For running GitHub Actions runners inside Lume VMs, see [lume-runner-setup.md](./lume-runner-setup.md).
 
 ## High-Level Contract
 

@@ -1007,6 +1007,32 @@ class RunContributorTests(unittest.TestCase):
             ["Screenshot of NewWorkspaceSheet from the exact commit under review"],
         )
 
+    def test_validate_evidence_accounting_accepts_pending_ci_entries(self) -> None:
+        body = (
+            "## Summary\n"
+            "- Updated the status severity mapping\n\n"
+            "## Evidence Status\n"
+            "- [pending-ci] swift test --filter NewWorkspaceSheetTests -- self-hosted macOS CI will run this command\n"
+            "- [pending-ci] Screenshot of NewWorkspaceSheet from the exact commit under review -- self-hosted macOS CI will capture this\n\n"
+            "## Validation\n"
+            "- blocked on evidence: macOS-only evidence is deferred to CI\n"
+        )
+        accounting, errors = run_contributor.validate_evidence_accounting(
+            body,
+            [
+                "swift test --filter NewWorkspaceSheetTests",
+                "Screenshot of NewWorkspaceSheet from the exact commit under review",
+            ],
+        )
+        self.assertEqual(errors, [])
+        self.assertEqual(
+            accounting["pending_ci_items"],
+            [
+                "swift test --filter NewWorkspaceSheetTests",
+                "Screenshot of NewWorkspaceSheet from the exact commit under review",
+            ],
+        )
+
     def test_validate_evidence_accounting_rejects_missing_requested_item(self) -> None:
         body = (
             "## Summary\n"
@@ -1067,6 +1093,88 @@ class RunContributorTests(unittest.TestCase):
         self.assertIsNotNone(gate_error)
         self.assertIn("request_changes", gate_error)
 
+    def test_extract_test_commands_preserves_explicit_swift_test_commands(self) -> None:
+        commands = run_contributor._extract_test_commands(
+            [
+                "swift test --filter WorkspaceProviders",
+                "swift test --filter NewWorkspaceSheetTests",
+                "Screenshot of NewWorkspaceSheet from the exact commit under review",
+            ]
+        )
+        self.assertEqual(
+            commands,
+            [
+                "swift test --filter WorkspaceProviders",
+                "swift test --filter NewWorkspaceSheetTests",
+            ],
+        )
+
+    def test_needs_macos_evidence_for_screenshot_only_requests(self) -> None:
+        self.assertTrue(
+            run_contributor._needs_macos_evidence(
+                ["Screenshot of NewWorkspaceSheet from the exact commit under review"]
+            )
+        )
+
+    def test_reconcile_pending_ci_evidence_marks_successful_items_complete(self) -> None:
+        body = (
+            "## Summary\n"
+            "- Updated the status severity mapping\n\n"
+            "## Evidence Status\n"
+            "- [pending-ci] swift build -- self-hosted macOS CI will run this command\n"
+            "- [pending-ci] swift test --filter WorkspaceProviders -- self-hosted macOS CI will run this command\n"
+            "- [pending-ci] Screenshot of NewWorkspaceSheet from the exact commit under review -- self-hosted macOS CI will capture this\n\n"
+            "## Validation\n"
+            "- blocked on evidence: macOS-only evidence is deferred to CI\n"
+        )
+        reconciled = run_contributor.reconcile_pending_ci_evidence(
+            body,
+            build_succeeded=True,
+            tests_succeeded=True,
+            smoke_succeeded=True,
+        )
+        accounting, errors = run_contributor.validate_evidence_accounting(
+            reconciled,
+            [
+                "swift build",
+                "swift test --filter WorkspaceProviders",
+                "Screenshot of NewWorkspaceSheet from the exact commit under review",
+            ],
+        )
+        self.assertEqual(errors, [])
+        self.assertEqual(accounting["pending_ci_items"], [])
+        self.assertEqual(accounting["blocked_items"], [])
+        self.assertEqual(
+            accounting["complete_items"],
+            [
+                "swift build",
+                "swift test --filter WorkspaceProviders",
+                "Screenshot of NewWorkspaceSheet from the exact commit under review",
+            ],
+        )
+
+    def test_reconcile_pending_ci_evidence_marks_failed_tests_blocked(self) -> None:
+        body = (
+            "## Summary\n"
+            "- Updated the status severity mapping\n\n"
+            "## Evidence Status\n"
+            "- [pending-ci] swift test --filter WorkspaceProviders -- self-hosted macOS CI will run this command\n\n"
+            "## Validation\n"
+            "- blocked on evidence: macOS-only evidence is deferred to CI\n"
+        )
+        reconciled = run_contributor.reconcile_pending_ci_evidence(
+            body,
+            build_succeeded=True,
+            tests_succeeded=False,
+            smoke_succeeded=True,
+        )
+        accounting, errors = run_contributor.validate_evidence_accounting(
+            reconciled,
+            ["swift test --filter WorkspaceProviders"],
+        )
+        self.assertEqual(accounting["blocked_items"], ["swift test --filter WorkspaceProviders"])
+        self.assertEqual(errors, [])
+
     def test_format_pr_list_for_context_includes_evidence_summary(self) -> None:
         issue_body = run_planner.compose_issue_body_with_metadata(
             "## Context\nBody",
@@ -1120,6 +1228,35 @@ class RunContributorTests(unittest.TestCase):
         self.assertEqual(payload[0]["evidenceSummary"]["complete"], 1)
         self.assertEqual(payload[0]["evidenceSummary"]["blocked"], 1)
         self.assertEqual(payload[0]["evidenceSummary"]["missing"], 0)
+
+    def test_route_action_review_uses_app_token(self) -> None:
+        validated_json = json.dumps(
+            {
+                "action": "review_pr",
+                "persona": "Plat Ironwood",
+                "pr_number": 119,
+                "verdict": "request_changes",
+                "body": "## Findings\n- Missing evidence status",
+            }
+        )
+        env = {
+            "GH_TOKEN": "app-token",
+        }
+
+        with (
+            mock.patch.object(run_contributor, "find_pr_review_state", return_value=None),
+            mock.patch.object(run_contributor, "run_checked") as run_checked,
+            mock.patch.object(run_contributor, "_update_mergeable_label") as update_mergeable_label,
+        ):
+            run_checked.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+
+            result = run_contributor.route_action(validated_json, False, env)
+
+        self.assertEqual(result, 0)
+        _, kwargs = run_checked.call_args
+        self.assertEqual(kwargs["env"]["GH_TOKEN"], "app-token")
+        mergeable_args, _ = update_mergeable_label.call_args
+        self.assertEqual(mergeable_args[2]["GH_TOKEN"], "app-token")
 
 
 if __name__ == "__main__":
