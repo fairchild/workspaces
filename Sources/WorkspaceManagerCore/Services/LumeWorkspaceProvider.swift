@@ -18,6 +18,7 @@ public struct LumeWorkspaceMetadata: Codable, Sendable, Equatable {
     public let imageReference: String?
     public let baseVMName: String?
     public let baseSourceKind: LumeBaseVMSourceKind?
+    public let launchLogPath: String?
 
     public init(
         vmName: String,
@@ -29,7 +30,8 @@ public struct LumeWorkspaceMetadata: Codable, Sendable, Equatable {
         profileDisplayName: String? = nil,
         imageReference: String? = nil,
         baseVMName: String? = nil,
-        baseSourceKind: LumeBaseVMSourceKind? = nil
+        baseSourceKind: LumeBaseVMSourceKind? = nil,
+        launchLogPath: String? = nil
     ) {
         self.vmName = vmName
         self.storagePath = storagePath
@@ -41,6 +43,7 @@ public struct LumeWorkspaceMetadata: Codable, Sendable, Equatable {
         self.imageReference = imageReference
         self.baseVMName = baseVMName
         self.baseSourceKind = baseSourceKind
+        self.launchLogPath = launchLogPath
     }
 }
 
@@ -150,7 +153,7 @@ public actor LumeWorkspaceProvider: WorkspaceProviderProtocol {
             guard let resolvedMetadata = metadata else {
                 throw WorkspaceProviderError.unavailable("Failed to prepare Lume workspace metadata.")
             }
-            var activeMetadata = resolvedMetadata
+            var activeMetadata = metadataWithDetachedLaunchLogPath(resolvedMetadata)
             let provisionalResult = WorkspaceProviderCreationResult(
                 name: info.name,
                 path: info.path,
@@ -171,7 +174,7 @@ public actor LumeWorkspaceProvider: WorkspaceProviderProtocol {
                     sharedHostPath: info.path.path,
                     baseSnapshot: preparedBase
                 )
-                activeMetadata = preparedMetadata
+                activeMetadata = metadataWithDetachedLaunchLogPath(preparedMetadata)
                 // Keep macOS clones in the validated-base storage for now.
                 // Same-storage clone+boot is the known-good fast path on this host,
                 // and the recreate runbook documents the current limitation.
@@ -609,10 +612,14 @@ public actor LumeWorkspaceProvider: WorkspaceProviderProtocol {
             arguments.insert(contentsOf: ["--storage", storagePath], at: 2)
         }
 
-        let logURL = fileManager.temporaryDirectory
-            .appendingPathComponent("workspaces-lume-run-\(vmName).log", isDirectory: false)
+        let logURL = detachedLaunchLogURL(for: vmName)
         do {
             try await lumeRunner().launchDetached(arguments: arguments, logURL: logURL)
+            NSLog(
+                "[LumeCLIRunner] action=launch_detached vm=%@ log=%@",
+                vmName,
+                logURL.path
+            )
         } catch {
             throw WorkspaceProviderError.unavailable("Failed to launch detached macOS VM '\(vmName)'.")
         }
@@ -986,6 +993,33 @@ public actor LumeWorkspaceProvider: WorkspaceProviderProtocol {
             baseVMName: baseSnapshot?.profile.vmName,
             baseSourceKind: baseSnapshot?.sourceKind ?? baseSnapshot?.profile.preferredSourceKind
         )
+    }
+
+    private func metadataWithDetachedLaunchLogPath(
+        _ metadata: LumeWorkspaceMetadata
+    ) -> LumeWorkspaceMetadata {
+        guard metadata.guestOS == .macOS else {
+            return metadata
+        }
+
+        return LumeWorkspaceMetadata(
+            vmName: metadata.vmName,
+            storagePath: metadata.storagePath,
+            guestOS: metadata.guestOS,
+            sharedHostPath: metadata.sharedHostPath,
+            desktopSupported: metadata.desktopSupported,
+            profileKey: metadata.profileKey,
+            profileDisplayName: metadata.profileDisplayName,
+            imageReference: metadata.imageReference,
+            baseVMName: metadata.baseVMName,
+            baseSourceKind: metadata.baseSourceKind,
+            launchLogPath: detachedLaunchLogURL(for: metadata.vmName).path
+        )
+    }
+
+    private func detachedLaunchLogURL(for vmName: String) -> URL {
+        fileManager.temporaryDirectory
+            .appendingPathComponent("workspaces-lume-run-\(vmName).log", isDirectory: false)
     }
 
     private func lumeRunner() async throws -> LumeCLIRunner {

@@ -94,6 +94,10 @@ struct SidebarView: View {
         SidebarRepoSortController()
     }
 
+    private var workspaceProviderSetupActionRunner: WorkspaceProviderSetupActionRunner {
+        WorkspaceProviderSetupActionRunner(coordinator: workspaceProviderSetupCoordinator)
+    }
+
     private let workspaceEnvironmentOptionsController = WorkspaceEnvironmentOptionsController()
 
     private var repoSortMode: SidebarRepoSortMode {
@@ -673,7 +677,7 @@ struct SidebarView: View {
         }
 
         do {
-            let intercepted = try await workspaceProviderSetupCoordinator.prepareIfNeeded(
+            try await workspaceProviderSetupActionRunner.run(
                 provider: provider,
                 action: .createWorkspace(name: name, guestOS: guestOS)
             ) {
@@ -685,23 +689,19 @@ struct SidebarView: View {
                     providerID: providerID,
                     guestOS: guestOS
                 )
-            }
-            if intercepted {
-                return
+            } perform: {
+                await createWorkspaceAfterSetup(
+                    from: repo,
+                    name: name,
+                    nameSource: nameSource,
+                    providerID: providerID,
+                    guestOS: guestOS
+                )
             }
         } catch {
             errorMessage = error.localizedDescription
             showingError = true
-            return
         }
-
-        await createWorkspaceAfterSetup(
-            from: repo,
-            name: name,
-            nameSource: nameSource,
-            providerID: providerID,
-            guestOS: guestOS
-        )
     }
 
     @MainActor
@@ -852,23 +852,17 @@ struct SidebarView: View {
             }
 
             do {
-                let intercepted = try await workspaceProviderSetupCoordinator.prepareIfNeeded(
+                try await workspaceProviderSetupActionRunner.run(
                     provider: provider,
                     action: .startWorkspace(workspaceName: workspace.name)
                 ) {
                     await refreshLumeRuntimeSnapshot(trigger: "workspace_start_after_setup")
                     await performStartAfterSetup(workspace)
                 }
-                if intercepted {
-                    return
-                }
             } catch {
                 errorMessage = error.localizedDescription
                 showingError = true
-                return
             }
-
-            await performStartAfterSetup(workspace)
         }
     }
 
@@ -911,23 +905,17 @@ struct SidebarView: View {
             }
 
             do {
-                let intercepted = try await workspaceProviderSetupCoordinator.prepareIfNeeded(
+                try await workspaceProviderSetupActionRunner.run(
                     provider: provider,
                     action: .openDesktop(workspaceName: workspace.name)
                 ) {
                     await refreshLumeRuntimeSnapshot(trigger: "workspace_desktop_after_setup")
                     await openDesktopAfterSetup(workspace)
                 }
-                if intercepted {
-                    return
-                }
             } catch {
                 errorMessage = error.localizedDescription
                 showingError = true
-                return
             }
-
-            await openDesktopAfterSetup(workspace)
         }
     }
 

@@ -313,12 +313,15 @@ Each run includes:
 
 - `events.jsonl`
 - `launch.log`
+- `detached-launch.log`
 - `01-launch.png`
 - `02-final.png`
 - `lume_daemon.log`
 - `lume_daemon.error.log`
 - `ssh-probe.txt`
 - `summary.md`
+
+`detached-launch.log` is copied from the exact `lume run` invocation used to boot the VM.
 
 Current passing host-smoke bundle:
 

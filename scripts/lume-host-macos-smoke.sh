@@ -35,6 +35,7 @@ VM_STORAGE_PATH=""
 REMOTE_ID=""
 SSH_PROBE_PATH=""
 LUME_VALIDATED_BASE_STORAGE=""
+DETACHED_LAUNCH_LOG_PATH=""
 
 log() {
     echo "[$(date +%H:%M:%S)] $*"
@@ -118,6 +119,10 @@ copy_supporting_logs() {
     if [[ -f /tmp/lume_daemon.error.log ]]; then
         cp /tmp/lume_daemon.error.log "$RUN_DIR/lume_daemon.error.log"
     fi
+
+    if [[ -n "$DETACHED_LAUNCH_LOG_PATH" && -f "$DETACHED_LAUNCH_LOG_PATH" ]]; then
+        cp "$DETACHED_LAUNCH_LOG_PATH" "$RUN_DIR/detached-launch.log"
+    fi
 }
 
 cleanup_success_artifacts() {
@@ -196,6 +201,8 @@ write_summary() {
 - Elapsed seconds: $elapsed_seconds
 - Events: $RUN_DIR/events.jsonl
 - Launch log: ${LAUNCH_LOG_PATH:-unknown}
+- Detached launch log source: ${DETACHED_LAUNCH_LOG_PATH:-unknown}
+- Detached launch log artifact: $RUN_DIR/detached-launch.log
 - SSH probe: ${SSH_PROBE_PATH:-unknown}
 EOF
 }
@@ -207,6 +214,7 @@ refresh_state_from_events() {
         REMOTE_ID="${remote_id:-$REMOTE_ID}"
         VM_NAME="${vm_name:-$VM_NAME}"
         VM_STORAGE_PATH="${vm_storage_path:-$VM_STORAGE_PATH}"
+        DETACHED_LAUNCH_LOG_PATH="${launch_log_path:-$DETACHED_LAUNCH_LOG_PATH}"
     fi
 }
 
@@ -365,6 +373,7 @@ state = {
     "provider_id": "",
     "vm_name": "",
     "vm_storage_path": "",
+    "launch_log_path": "",
     "last_event_type": "",
 }
 
@@ -387,6 +396,8 @@ if path.exists():
             state["vm_name"] = lume_metadata["vmName"]
         if lume_metadata.get("storagePath"):
             state["vm_storage_path"] = lume_metadata["storagePath"]
+        if lume_metadata.get("launchLogPath"):
+            state["launch_log_path"] = lume_metadata["launchLogPath"]
         if event.get("type") == "failure":
             state["status"] = "failure"
             state["failure_message"] = event.get("message", "")
