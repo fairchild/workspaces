@@ -1,6 +1,6 @@
 # Lume Runner Setup
 
-Use this runbook to provision the `[self-hosted, lume-macos]` runner lane inside a Lume macOS VM for manual validation and future agent workflows that need macOS capabilities (swift build/test, screenshots). The scheduled April workflow still runs on `ubuntu-latest` until a hosted coordinator can safely promote work onto the Lume lane without probe/queue races.
+Use this runbook to provision the `[self-hosted, lume-macos]` runner lane inside a Lume macOS VM for agent workflows that need macOS capabilities (swift build/test, screenshots).
 
 ## Host prerequisites
 
