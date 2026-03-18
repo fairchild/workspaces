@@ -578,26 +578,73 @@ def extract_evidence_status_entries(body: str) -> dict[str, object]:
     }
 
 
+def _normalize_evidence_key(text: str) -> str:
+    """Normalize an evidence item for fuzzy comparison.
+
+    Strips backticks, collapses whitespace, lowercases, and removes trailing
+    punctuation so that minor agent paraphrasing still matches.
+    """
+    t = text.strip().strip("`").strip()
+    t = re.sub(r"\s+", " ", t).casefold()
+    t = t.rstrip(".,;:)")
+    return t
+
+
+def _match_evidence_entry(
+    requested_item: str,
+    entries: dict[str, dict[str, str]],
+) -> str | None:
+    """Find the entry key that matches a requested evidence item.
+
+    Tries exact match first, then normalized match, then substring containment.
+    Returns the matching entry key or None.
+    """
+    if requested_item in entries:
+        return requested_item
+    norm_req = _normalize_evidence_key(requested_item)
+    for entry_key in entries:
+        if _normalize_evidence_key(entry_key) == norm_req:
+            return entry_key
+    # Substring: if the normalized entry contains most of the requested key words
+    req_words = set(norm_req.split())
+    for entry_key in entries:
+        entry_words = set(_normalize_evidence_key(entry_key).split())
+        if req_words and entry_words:
+            overlap = len(req_words & entry_words) / len(req_words)
+            if overlap >= 0.7:
+                return entry_key
+    return None
+
+
 def evaluate_evidence_accounting(body: str, requested_evidence: list[str]) -> dict[str, object]:
     parsed = extract_evidence_status_entries(body)
     entries = parsed["entries"]
-    missing_items = [item for item in requested_evidence if item not in entries]
+
+    # Build a mapping from requested item -> matched entry key (fuzzy)
+    matched: dict[str, str] = {}
+    for item in requested_evidence:
+        match = _match_evidence_entry(item, entries)
+        if match is not None:
+            matched[item] = match
+
+    missing_items = [item for item in requested_evidence if item not in matched]
     blocked_items = [
         item
         for item in requested_evidence
-        if item in entries and entries[item]["status"] == "blocked"
+        if item in matched and entries[matched[item]]["status"] == "blocked"
     ]
     pending_ci_items = [
         item
         for item in requested_evidence
-        if item in entries and entries[item]["status"] == "pending-ci"
+        if item in matched and entries[matched[item]]["status"] == "pending-ci"
     ]
     complete_items = [
         item
         for item in requested_evidence
-        if item in entries and entries[item]["status"] == "complete"
+        if item in matched and entries[matched[item]]["status"] == "complete"
     ]
-    unexpected_items = [item for item in entries if item not in requested_evidence]
+    matched_keys = set(matched.values())
+    unexpected_items = [item for item in entries if item not in matched_keys]
     return {
         **parsed,
         "missing_items": missing_items,
