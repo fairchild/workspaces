@@ -81,70 +81,6 @@ def normalize_provider_env(env: dict[str, str]) -> dict[str, str]:
     return normalized
 
 
-def fallback_review_env(env: dict[str, str]) -> dict[str, str]:
-    """Build the workflow-token fallback env for PR reviews."""
-    review_token = env.get("GH_REVIEW_TOKEN", "").strip()
-    if not review_token:
-        return env
-    scoped = dict(env)
-    scoped["GH_TOKEN"] = review_token
-    scoped["GITHUB_TOKEN"] = review_token
-    return scoped
-
-
-def should_retry_review_with_fallback(
-    result: subprocess.CompletedProcess[str],
-    env: dict[str, str],
-) -> bool:
-    review_token = env.get("GH_REVIEW_TOKEN", "").strip()
-    if not review_token or review_token == env.get("GH_TOKEN", "").strip():
-        return False
-    if result.returncode == 0:
-        return False
-    combined = "\n".join(
-        part.strip()
-        for part in (result.stdout, result.stderr)
-        if part and part.strip()
-    )
-    return (
-        "Resource not accessible by integration" in combined
-        and "addPullRequestReview" in combined
-    )
-
-
-def submit_pr_review(
-    cmd: list[str],
-    env: dict[str, str],
-) -> dict[str, str] | None:
-    result = run_result(
-        cmd,
-        timeout=GITHUB_API_TIMEOUT,
-        cwd=REPO_ROOT,
-        env=env,
-    )
-    used_env = env
-    if result.returncode != 0 and should_retry_review_with_fallback(result, env):
-        fallback_env = fallback_review_env(env)
-        if fallback_env is not env:
-            log("App-token review failed; retrying with workflow review token")
-            result = run_result(
-                cmd,
-                timeout=GITHUB_API_TIMEOUT,
-                cwd=REPO_ROOT,
-                env=fallback_env,
-            )
-            used_env = fallback_env
-    if result.returncode != 0:
-        command = " ".join(cmd)
-        print(f"error: command failed: {command}", file=sys.stderr)
-        if result.stderr.strip():
-            print(result.stderr.strip(), file=sys.stderr)
-        elif result.stdout.strip():
-            print(result.stdout.strip(), file=sys.stderr)
-        return None
-    return used_env
-
-
 def log(message: str) -> None:
     print(f"[run-contributor] {message}", file=sys.stderr)
 
@@ -178,30 +114,6 @@ def run_checked(
             print(result.stderr.strip(), file=sys.stderr)
         sys.exit(result.returncode or 1)
     return result
-
-
-def run_result(
-    cmd: list[str],
-    *,
-    timeout: int,
-    cwd: Path | None = None,
-    env: dict[str, str] | None = None,
-    input: str | None = None,
-) -> subprocess.CompletedProcess[str]:
-    try:
-        return subprocess.run(
-            cmd,
-            input=input,
-            capture_output=True,
-            text=True,
-            env=env,
-            cwd=cwd,
-            timeout=timeout,
-        )
-    except subprocess.TimeoutExpired as exc:
-        command = " ".join(cmd)
-        print(f"error: command timed out after {exc.timeout}s: {command}", file=sys.stderr)
-        sys.exit(1)
 
 
 def run_optional(
@@ -2006,10 +1918,13 @@ def route_action(validated_json: str, dry_run: bool, env: dict[str, str]) -> int
                 "--body-file",
                 body_file,
             ]
-            reviewer_env = submit_pr_review(review_cmd, env)
-            if reviewer_env is None:
-                return 1
-            _update_mergeable_label(int(data["pr_number"]), verdict, reviewer_env)
+            run_checked(
+                review_cmd,
+                timeout=GITHUB_API_TIMEOUT,
+                cwd=REPO_ROOT,
+                env=env,
+            )
+            _update_mergeable_label(int(data["pr_number"]), verdict, env)
             return 0
         if action == "execute_issue":
             persona = str(data.get("persona", ""))
