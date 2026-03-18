@@ -67,7 +67,9 @@ If you choose this action, you must have already edited the code during this run
 - Mirror every issue `requested_evidence` item using the exact issue text and one of these forms:
   - `- [complete] <requested_evidence item> -- <artifact, command, link, or short proof note>`
   - `- [blocked] <requested_evidence item> -- <concrete reason it could not be produced>`
-- If any evidence item is blocked, say `blocked on evidence` in the Validation section.
+  - `- [pending-ci] <requested_evidence item> -- <what the CI evidence job will produce>`
+- Use `[pending-ci]` for evidence that requires macOS (builds, tests, screenshots) — the CI evidence job on the self-hosted Mac runner will produce it automatically.
+- If any evidence item is blocked or pending-ci, say `blocked on evidence` in the Validation section.
 
 ```
 ---
@@ -85,6 +87,7 @@ commit_message: "Fix environment status color semantics in NewWorkspaceSheet"
 ## Evidence Status
 - [complete] Exact requested evidence item text -- proof note
 - [blocked] Exact requested evidence item text -- why it could not be produced here
+- [pending-ci] Exact requested evidence item text -- CI evidence job will run swift test / capture screenshots
 
 ## Validation
 - `swift test ...`

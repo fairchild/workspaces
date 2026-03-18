@@ -468,7 +468,7 @@ CLOSING_REFERENCE_RE = re.compile(
     r"(?im)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(?P<number>\d+)\b"
 )
 EVIDENCE_STATUS_LINE_RE = re.compile(
-    r"^- \[(?P<status>complete|blocked)\] (?P<item>.+?) -- (?P<detail>.+)$"
+    r"^- \[(?P<status>complete|blocked|pending-ci)\] (?P<item>.+?) -- (?P<detail>.+)$"
 )
 EXECUTION_PRIORITY_RE = re.compile(r"(?m)^- Priority:\s*(?P<priority>\d+)\s*$")
 AGENT_READY_LABEL = "agent:ready"
@@ -587,6 +587,11 @@ def evaluate_evidence_accounting(body: str, requested_evidence: list[str]) -> di
         for item in requested_evidence
         if item in entries and entries[item]["status"] == "blocked"
     ]
+    pending_ci_items = [
+        item
+        for item in requested_evidence
+        if item in entries and entries[item]["status"] == "pending-ci"
+    ]
     complete_items = [
         item
         for item in requested_evidence
@@ -597,6 +602,7 @@ def evaluate_evidence_accounting(body: str, requested_evidence: list[str]) -> di
         **parsed,
         "missing_items": missing_items,
         "blocked_items": blocked_items,
+        "pending_ci_items": pending_ci_items,
         "complete_items": complete_items,
         "unexpected_items": unexpected_items,
         "blocked_on_evidence": "blocked on evidence" in body.casefold(),
@@ -613,7 +619,7 @@ def validate_evidence_accounting(body: str, requested_evidence: list[str]) -> tu
         preview = "; ".join(str(line) for line in invalid_lines[:3])
         errors.append(
             "malformed Evidence Status entries; expected "
-            "'- [complete|blocked] <requested_evidence item> -- <proof note>' "
+            "'- [complete|blocked|pending-ci] <requested_evidence item> -- <proof note>' "
             f"(examples: {preview})"
         )
     duplicate_items = accounting["duplicate_items"]
@@ -631,6 +637,10 @@ def validate_evidence_accounting(body: str, requested_evidence: list[str]) -> tu
         errors.append(
             "blocked evidence entries require 'blocked on evidence' language in the Validation section"
         )
+    if accounting["pending_ci_items"] and not accounting["blocked_on_evidence"]:
+        errors.append(
+            "pending-ci evidence entries require 'blocked on evidence' language in the Validation section"
+        )
     return accounting, errors
 
 
@@ -645,6 +655,13 @@ def review_evidence_gate_error(verdict: str, accounting: dict[str, object], erro
         return (
             "requested evidence is still blocked and review must stay in request_changes; "
             f"blocked: {preview}"
+        )
+    pending_ci_items = accounting.get("pending_ci_items", [])
+    if pending_ci_items:
+        preview = "; ".join(str(item) for item in pending_ci_items[:3])
+        return (
+            "requested evidence is pending CI and review must stay in request_changes; "
+            f"pending-ci: {preview}"
         )
     return None
 
@@ -1700,6 +1717,50 @@ def _update_mergeable_label(pr_number: int, verdict: str, env: dict[str, str]) -
         )
 
 
+def _changed_files_in_head(env: dict[str, str]) -> list[str]:
+    """Return files changed in the most recent commit."""
+    result = subprocess.run(
+        ["git", "diff", "--name-only", "HEAD~1", "HEAD"],
+        capture_output=True, text=True, timeout=GITHUB_API_TIMEOUT, cwd=REPO_ROOT,
+        env=env,
+    )
+    if result.returncode != 0:
+        return []
+    return [f for f in result.stdout.strip().splitlines() if f]
+
+
+def _needs_macos_evidence(changed: list[str]) -> bool:
+    """Return True if any changed file requires a macOS build to validate."""
+    macos_prefixes = ("Sources/", "Tests/", "Package.swift")
+    return any(f.startswith(macos_prefixes) for f in changed)
+
+
+def _extract_test_filter(requested_evidence: list[str]) -> str:
+    """Extract a swift test filter from requested evidence items, if any."""
+    for item in requested_evidence:
+        for token in item.split():
+            if "Test" in token and not token.startswith("http"):
+                return token.rstrip(".,;:)")
+    return ""
+
+
+def _write_github_outputs(
+    needs_evidence: bool,
+    branch: str,
+    test_filter: str,
+) -> None:
+    """Write outputs to $GITHUB_OUTPUT for downstream workflow jobs."""
+    output_file = os.environ.get("GITHUB_OUTPUT", "")
+    if not output_file:
+        log("GITHUB_OUTPUT not set; skipping output emission")
+        return
+    with open(output_file, "a") as f:
+        f.write(f"needs_macos_evidence={str(needs_evidence).lower()}\n")
+        f.write(f"pr_branch={branch}\n")
+        f.write(f"test_filter={test_filter}\n")
+    log(f"Emitted outputs: needs_macos_evidence={needs_evidence}, pr_branch={branch}, test_filter={test_filter}")
+
+
 def route_action(validated_json: str, dry_run: bool, env: dict[str, str]) -> int:
     data = json.loads(validated_json)
     action = data["action"]
@@ -1904,6 +1965,11 @@ def route_action(validated_json: str, dry_run: bool, env: dict[str, str]) -> int
                 cwd=REPO_ROOT,
                 env=env,
             )
+
+            changed = _changed_files_in_head(env)
+            evidence_needed = _needs_macos_evidence(changed)
+            test_filter = _extract_test_filter(requested_evidence)
+            _write_github_outputs(evidence_needed, branch, test_filter)
 
             if own_pr is not None:
                 run_checked(

@@ -31,6 +31,10 @@ jobs:
     # Contributor automation is CLI-only; keep it on the broadly available hosted lane.
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    outputs:
+      needs_macos_evidence: ${{ steps.contributor.outputs.needs_macos_evidence }}
+      pr_branch: ${{ steps.contributor.outputs.pr_branch }}
+      test_filter: ${{ steps.contributor.outputs.test_filter }}
     steps:
       - name: Generate app token
         id: app-token
@@ -48,6 +52,7 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
       - name: Run contributor
+        id: contributor
         run: |
           ARGS=(--prompt-file .agents/skills/cofounder-contributor/references/plat-ironwood.md)
           ARGS+=(--mode cli)
@@ -64,3 +69,35 @@ jobs:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           GH_APP_SLUG: workspace-agents
+
+  evidence:
+    needs: run
+    if: needs.run.outputs.needs_macos_evidence == 'true'
+    runs-on: [self-hosted, tart-ui]
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.run.outputs.pr_branch }}
+          fetch-depth: 50
+      - name: Build GhosttyKit
+        run: ./scripts/build-ghosttykit.sh
+      - name: Build app
+        run: swift build
+      - name: Run targeted tests
+        if: needs.run.outputs.test_filter != ''
+        run: swift test --filter '${{ needs.run.outputs.test_filter }}' 2>&1 | tee test-output.txt || true
+      - name: Run all tests (no filter specified)
+        if: needs.run.outputs.test_filter == ''
+        run: swift test 2>&1 | tee test-output.txt || true
+      - name: Capture evidence
+        run: ./scripts/dev-smoke.sh --no-build 2>&1 | head -100 || true
+      - name: Upload evidence artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidence-${{ github.run_id }}
+          path: |
+            output/
+            test-output.txt
