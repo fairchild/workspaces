@@ -145,6 +145,7 @@ swift run     # Run
 | Notifications / webhooks | docs/development/notifications.md | - |
 | Debug an issue | docs/development/troubleshooting.md | - |
 | Terminal keyboard focus | docs/development/solution-terminal-keyboard.md | - |
+| Lume runner / evidence store | docs/development/lume-runner-setup.md | - |
 | Roadmap/planning | backlog/ROADMAP.md | - |
 | Deferred work items | backlog/*.md | - |
 
