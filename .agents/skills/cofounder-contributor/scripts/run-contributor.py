@@ -666,6 +666,100 @@ def review_evidence_gate_error(verdict: str, accounting: dict[str, object], erro
     return None
 
 
+def _normalize_evidence_item(item: str) -> str:
+    return item.strip().strip("`").strip()
+
+
+def _evidence_item_kind(item: str) -> str:
+    normalized = _normalize_evidence_item(item).casefold()
+    if normalized.startswith("swift test"):
+        return "test"
+    if normalized.startswith("swift build"):
+        return "build"
+    if "screenshot" in normalized or "screen recording" in normalized:
+        return "screenshot"
+    return "other"
+
+
+def _needs_macos_evidence(requested_evidence: list[str]) -> bool:
+    """Return True if requested evidence includes macOS-only proof."""
+    return any(_evidence_item_kind(item) != "other" for item in requested_evidence)
+
+
+def _needs_screenshot_evidence(requested_evidence: list[str]) -> bool:
+    return any(_evidence_item_kind(item) == "screenshot" for item in requested_evidence)
+
+
+def _extract_test_commands(requested_evidence: list[str]) -> list[str]:
+    return [
+        _normalize_evidence_item(item)
+        for item in requested_evidence
+        if _evidence_item_kind(item) == "test"
+    ]
+
+
+def _pending_ci_resolution(
+    item: str,
+    *,
+    build_succeeded: bool,
+    tests_succeeded: bool,
+    smoke_succeeded: bool,
+) -> tuple[str, str]:
+    kind = _evidence_item_kind(item)
+    normalized = _normalize_evidence_item(item)
+
+    if kind == "build":
+        if build_succeeded:
+            return "complete", "`swift build` succeeded on self-hosted macOS CI"
+        return "blocked", "self-hosted macOS CI `swift build` failed; see workflow logs"
+    if kind == "test":
+        if tests_succeeded:
+            return "complete", f"`{normalized}` succeeded on self-hosted macOS CI"
+        return "blocked", f"self-hosted macOS CI `{normalized}` failed; see test-output.txt"
+    if kind == "screenshot":
+        if smoke_succeeded:
+            return "complete", "captured on self-hosted macOS CI; see workflow artifacts"
+        return "blocked", "self-hosted macOS CI screenshot capture failed; see dev-smoke-output.txt"
+    return "blocked", "self-hosted macOS CI cannot reconcile this evidence item automatically"
+
+
+def reconcile_pending_ci_evidence(
+    body: str,
+    *,
+    build_succeeded: bool,
+    tests_succeeded: bool,
+    smoke_succeeded: bool,
+) -> str:
+    """Resolve pending-ci evidence lines after the macOS evidence job finishes."""
+    lines = body.splitlines()
+    updated: list[str] = []
+    in_evidence_status = False
+
+    for line in lines:
+        if line.startswith("## "):
+            in_evidence_status = line.strip() == "## Evidence Status"
+            updated.append(line)
+            continue
+        if in_evidence_status:
+            match = EVIDENCE_STATUS_LINE_RE.match(line)
+            if match and match.group("status") == "pending-ci":
+                item = match.group("item").strip()
+                status, detail = _pending_ci_resolution(
+                    item,
+                    build_succeeded=build_succeeded,
+                    tests_succeeded=tests_succeeded,
+                    smoke_succeeded=smoke_succeeded,
+                )
+                updated.append(f"- [{status}] {item} -- {detail}")
+                continue
+        updated.append(line)
+
+    reconciled = "\n".join(updated)
+    if body.endswith("\n"):
+        reconciled += "\n"
+    return reconciled
+
+
 def latest_issue_claim(issue_number: int, comments: dict[str, object]) -> dict[str, str] | None:
     nodes = comments.get("nodes", []) if isinstance(comments, dict) else []
     claims: list[dict[str, str]] = []
@@ -1717,37 +1811,11 @@ def _update_mergeable_label(pr_number: int, verdict: str, env: dict[str, str]) -
         )
 
 
-def _changed_files_in_head(env: dict[str, str]) -> list[str]:
-    """Return files changed in the most recent commit."""
-    result = subprocess.run(
-        ["git", "diff", "--name-only", "HEAD~1", "HEAD"],
-        capture_output=True, text=True, timeout=GITHUB_API_TIMEOUT, cwd=REPO_ROOT,
-        env=env,
-    )
-    if result.returncode != 0:
-        return []
-    return [f for f in result.stdout.strip().splitlines() if f]
-
-
-def _needs_macos_evidence(changed: list[str]) -> bool:
-    """Return True if any changed file requires a macOS build to validate."""
-    macos_prefixes = ("Sources/", "Tests/", "Package.swift")
-    return any(f.startswith(macos_prefixes) for f in changed)
-
-
-def _extract_test_filter(requested_evidence: list[str]) -> str:
-    """Extract a swift test filter from requested evidence items, if any."""
-    for item in requested_evidence:
-        for token in item.split():
-            if "Test" in token and not token.startswith("http"):
-                return token.rstrip(".,;:)")
-    return ""
-
-
 def _write_github_outputs(
     needs_evidence: bool,
+    needs_screenshot_evidence: bool,
     branch: str,
-    test_filter: str,
+    test_commands: list[str],
 ) -> None:
     """Write outputs to $GITHUB_OUTPUT for downstream workflow jobs."""
     output_file = os.environ.get("GITHUB_OUTPUT", "")
@@ -1756,9 +1824,16 @@ def _write_github_outputs(
         return
     with open(output_file, "a") as f:
         f.write(f"needs_macos_evidence={str(needs_evidence).lower()}\n")
+        f.write(f"needs_screenshot_evidence={str(needs_screenshot_evidence).lower()}\n")
         f.write(f"pr_branch={branch}\n")
-        f.write(f"test_filter={test_filter}\n")
-    log(f"Emitted outputs: needs_macos_evidence={needs_evidence}, pr_branch={branch}, test_filter={test_filter}")
+        f.write(f"test_commands_json={json.dumps(test_commands, separators=(',', ':'))}\n")
+    log(
+        "Emitted outputs: "
+        f"needs_macos_evidence={needs_evidence}, "
+        f"needs_screenshot_evidence={needs_screenshot_evidence}, "
+        f"pr_branch={branch}, "
+        f"test_commands={test_commands}"
+    )
 
 
 def route_action(validated_json: str, dry_run: bool, env: dict[str, str]) -> int:
@@ -1966,10 +2041,15 @@ def route_action(validated_json: str, dry_run: bool, env: dict[str, str]) -> int
                 env=env,
             )
 
-            changed = _changed_files_in_head(env)
-            evidence_needed = _needs_macos_evidence(changed)
-            test_filter = _extract_test_filter(requested_evidence)
-            _write_github_outputs(evidence_needed, branch, test_filter)
+            evidence_needed = _needs_macos_evidence(requested_evidence)
+            screenshot_evidence_needed = _needs_screenshot_evidence(requested_evidence)
+            test_commands = _extract_test_commands(requested_evidence)
+            _write_github_outputs(
+                evidence_needed,
+                screenshot_evidence_needed,
+                branch,
+                test_commands,
+            )
 
             if own_pr is not None:
                 run_checked(
