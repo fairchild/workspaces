@@ -270,6 +270,7 @@ struct WorkspaceEnvironmentOptionsController {
             guestOS: nil,
             isAvailable: availability.isAvailable,
             statusText: nil,
+            statusSeverity: nil,
             availabilityReason: availability.reason
         )
     }
@@ -296,6 +297,7 @@ struct WorkspaceEnvironmentOptionsController {
             guestOS: .linux,
             isAvailable: availability.isAvailable,
             statusText: nil,
+            statusSeverity: nil,
             availabilityReason: availability.reason
         )
     }
@@ -329,6 +331,7 @@ struct WorkspaceEnvironmentOptionsController {
             guestOS: .macOS,
             isAvailable: isAvailable,
             statusText: macOSRuntimeStatusText(snapshot: lumeRuntimeSnapshot),
+            statusSeverity: macOSRuntimeStatusSeverity(snapshot: lumeRuntimeSnapshot),
             availabilityReason: availabilityReason
         )
     }
@@ -347,6 +350,7 @@ struct WorkspaceEnvironmentOptionsController {
             guestOS: .linux,
             isAvailable: availability.isAvailable,
             statusText: lumeRuntimeStatusText(snapshot: lumeRuntimeSnapshot),
+            statusSeverity: lumeRuntimeStatusSeverity(snapshot: lumeRuntimeSnapshot),
             availabilityReason: availability.reason
         )
     }
@@ -383,6 +387,22 @@ struct WorkspaceEnvironmentOptionsController {
         }
     }
 
+    private func lumeRuntimeStatusSeverity(snapshot: LumeRuntimeSnapshot?) -> EnvironmentStatusSeverity? {
+        guard let snapshot else { return nil }
+        switch snapshot.state {
+        case .setupRequired:
+            return .warning
+        case .repairRequired:
+            return .error
+        case .ready:
+            return .neutral
+        case .installing, .verifying:
+            return .neutral
+        case .unsupportedHost:
+            return nil
+        }
+    }
+
     private func macOSRuntimeStatusText(snapshot: LumeRuntimeSnapshot?) -> String? {
         if let snapshot, snapshot.state != .ready {
             return lumeRuntimeStatusText(snapshot: snapshot)
@@ -413,6 +433,35 @@ struct WorkspaceEnvironmentOptionsController {
         }
 
         return lumeRuntimeStatusText(snapshot: snapshot)
+    }
+
+    private func macOSRuntimeStatusSeverity(snapshot: LumeRuntimeSnapshot?) -> EnvironmentStatusSeverity? {
+        if let snapshot, snapshot.state != .ready {
+            return lumeRuntimeStatusSeverity(snapshot: snapshot)
+        }
+
+        if let baseSnapshot = snapshot?.baseVM {
+            switch baseSnapshot.status {
+            case .ready:
+                return .good
+            case .preparing:
+                return .neutral
+            case .missing:
+                return .neutral
+            case .repairRequired:
+                return .warning
+            }
+        }
+
+        if let snapshot,
+            snapshot.state == .ready,
+            snapshot.defaultMacOSImage == nil,
+            snapshot.defaultMacOSImageError != nil
+        {
+            return .neutral
+        }
+
+        return lumeRuntimeStatusSeverity(snapshot: snapshot)
     }
 
     private func macOSEnvironmentDescription(snapshot: LumeRuntimeSnapshot?) -> String {

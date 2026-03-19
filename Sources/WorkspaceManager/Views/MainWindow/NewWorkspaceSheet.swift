@@ -8,6 +8,20 @@
 import SwiftUI
 import WorkspaceManagerCore
 
+/// Semantic severity for the status badge shown in an environment selection row.
+enum EnvironmentStatusSeverity {
+    /// Best-state indicator — rendered in accent color (green). Use for "Fast clone ready".
+    case good
+    /// Informational or in-progress — rendered in secondary. Use for "Installing", "Verifying",
+    /// "Preparing base", or any status that is transient and expected.
+    case neutral
+    /// Needs attention but not blocking selection — rendered in orange. Use for
+    /// "Setup required" or "Repair base VM".
+    case warning
+    /// Blocking failure — rendered in red. Use for "Repair required" (broken Lume runtime).
+    case error
+}
+
 struct WorkspaceEnvironmentSheetOption: Identifiable {
     let title: String
     let subtitle: String
@@ -17,6 +31,7 @@ struct WorkspaceEnvironmentSheetOption: Identifiable {
     let guestOS: WorkspaceGuestOS?
     let isAvailable: Bool
     let statusText: String?
+    let statusSeverity: EnvironmentStatusSeverity?
     let availabilityReason: String?
 
     var id: String {
@@ -308,9 +323,12 @@ private struct EnvironmentSelectionRow: View {
     }
 
     private var statusColor: Color {
-        if option.statusText == "Ready" {
-            return .secondary
+        switch option.statusSeverity {
+        case .good: return .accentColor
+        case .neutral: return .secondary
+        case .warning: return .orange
+        case .error: return .red
+        case nil: return .secondary
         }
-        return .orange
     }
 }

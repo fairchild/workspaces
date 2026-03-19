@@ -80,6 +80,7 @@ struct WorkspaceEnvironmentOptionsControllerTests {
 
         #expect(option.subtitle == "Matches this Mac by default")
         #expect(option.statusText == nil)
+        #expect(option.statusSeverity == nil)
         #expect(option.availabilityReason == nil)
     }
 
@@ -89,10 +90,12 @@ struct WorkspaceEnvironmentOptionsControllerTests {
 
         let macOSOption = try macOSOption(snapshot: snapshot)
         #expect(macOSOption.statusText == "Setup required")
+        #expect(macOSOption.statusSeverity == .warning)
         #expect(macOSOption.description.contains("install and verify Lume automatically"))
 
         let linuxOption = try linuxVMOption(snapshot: snapshot)
         #expect(linuxOption.statusText == "Setup required")
+        #expect(linuxOption.statusSeverity == .warning)
         #expect(linuxOption.description.contains("install and verify Lume automatically"))
     }
 
@@ -102,10 +105,12 @@ struct WorkspaceEnvironmentOptionsControllerTests {
 
         let macOSOption = try macOSOption(snapshot: snapshot)
         #expect(macOSOption.statusText == "Repair required")
+        #expect(macOSOption.statusSeverity == .error)
         #expect(macOSOption.description.contains("repair the local VM runtime automatically"))
 
         let linuxOption = try linuxVMOption(snapshot: snapshot)
         #expect(linuxOption.statusText == "Repair required")
+        #expect(linuxOption.statusSeverity == .error)
         #expect(linuxOption.description.contains("repair the local VM runtime automatically"))
     }
 
@@ -120,8 +125,37 @@ struct WorkspaceEnvironmentOptionsControllerTests {
         )
 
         #expect(option.statusText == "Fast clone ready")
+        #expect(option.statusSeverity == .good)
         #expect(option.subtitle == "Fast clone ready: \(baseSnapshot.profile.displayName)")
         #expect(option.description.contains("faster macOS workspace start"))
+    }
+
+    @Test("Preparing base VM shows neutral status severity")
+    func preparingBaseVMShowsNeutralSeverity() throws {
+        let baseSnapshot = makeBaseSnapshot(status: .preparing)
+        let option = try macOSOption(
+            snapshot: makeSnapshot(
+                state: .ready,
+                baseVM: baseSnapshot
+            )
+        )
+
+        #expect(option.statusText == "Preparing base")
+        #expect(option.statusSeverity == .neutral)
+    }
+
+    @Test("Repair required base VM shows warning status severity")
+    func repairRequiredBaseVMShowsWarningSeverity() throws {
+        let baseSnapshot = makeBaseSnapshot(status: .repairRequired)
+        let option = try macOSOption(
+            snapshot: makeSnapshot(
+                state: .ready,
+                baseVM: baseSnapshot
+            )
+        )
+
+        #expect(option.statusText == "Repair base VM")
+        #expect(option.statusSeverity == .warning)
     }
 
     @Test("Missing stock base snapshot reports one-time preparation and a non-blocking reason")
@@ -140,6 +174,7 @@ struct WorkspaceEnvironmentOptionsControllerTests {
         )
 
         #expect(option.statusText == "Prepares base on first use")
+        #expect(option.statusSeverity == .neutral)
         #expect(option.subtitle == "Needs one-time base preparation")
         #expect(option.description.contains("prepare a stock macOS base VM once"))
         #if arch(arm64)
@@ -158,6 +193,7 @@ struct WorkspaceEnvironmentOptionsControllerTests {
         )
 
         #expect(option.statusText == "Stock macOS")
+        #expect(option.statusSeverity == .neutral)
         #expect(option.description.contains("fall back to stock macOS setup automatically"))
         #if arch(arm64)
             #expect(
