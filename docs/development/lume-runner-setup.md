@@ -119,6 +119,9 @@ lume ssh "$LUME_VM" \
     eval \"\$(/opt/homebrew/bin/brew shellenv)\"
     brew install gh
 
+    # Install Node.js (required by Claude Code CLI via npx)
+    brew install node
+
     # Install uv (Python package manager for agent scripts)
     curl -LsSf https://astral.sh/uv/install.sh | sh
 
@@ -132,11 +135,32 @@ lume ssh "$LUME_VM" \
     echo \"Done. Verifying...\"
     swift --version 2>&1 | head -1
     git --version
+    node --version
+    npx --version
     /opt/homebrew/bin/gh --version | head -1
     \$HOME/.local/bin/uv --version
     sudo -n true && echo \"sudo: passwordless\"
   '"
 ```
+
+## 6. Configure the runner environment
+
+The GitHub Actions runner inherits a minimal `PATH` that does not include Homebrew or uv. Add them to the runner's `.env` file so all jobs see the full toolchain:
+
+```bash
+lume ssh "$LUME_VM" \
+  --user lume --password lumesetup26 \
+  --storage "$LUME_STORAGE/workspace-vms" \
+  --timeout 15 \
+  "bash -lc '
+    RUNNER_DIR=\$HOME/.local/share/actions-runner-lume
+    echo \"PATH=/opt/homebrew/bin:/opt/homebrew/sbin:\$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin\" >> \$RUNNER_DIR/.env
+    echo \"HOMEBREW_PREFIX=/opt/homebrew\" >> \$RUNNER_DIR/.env
+    cd \$RUNNER_DIR && ./svc.sh stop && ./svc.sh start
+  '"
+```
+
+Without this, jobs will fail with `FileNotFoundError: 'gh'` or `'npx'` because those binaries live under `/opt/homebrew/bin` and `~/.local/bin`.
 
 ## Day-two operations
 
@@ -275,6 +299,71 @@ Restart the service:
 lume ssh "$LUME_VM" ... "bash -lc 'cd ~/.local/share/actions-runner-lume && ./svc.sh stop && ./svc.sh start'"
 ```
 
+## Evidence store (R2)
+
+Agents running on this runner can upload screenshots and other evidence to an R2-backed image store at `evidence.cloudcompute.com`. This gives them public URLs for embedding images inline in PR body markdown.
+
+### Architecture
+
+```
+Agent captures screenshot
+  → scripts/upload-evidence.py PUT with bearer token
+    → Cloudflare Worker (evidence-store)
+      → R2 bucket (evidence-screenshots)
+        → public URL returned
+          → embedded in PR body as ![screenshot](url)
+```
+
+All reads go through the Worker — the R2 bucket has no direct public access. The Worker adds `Content-Type`, `Cache-Control: public, max-age=31536000, immutable`, and CORS headers.
+
+### Infrastructure
+
+| Component | Location |
+|-----------|----------|
+| Worker source | `infra/cloudflare-evidence-store/` |
+| Worker URL | `https://evidence.cloudcompute.com` |
+| R2 bucket | `evidence-screenshots` |
+| Upload script | `scripts/upload-evidence.py` |
+| Upload auth | `EVIDENCE_UPLOAD_TOKEN` (bearer token) |
+
+### Upload usage
+
+```bash
+EVIDENCE_UPLOAD_TOKEN=<token> uv run scripts/upload-evidence.py screenshot.png \
+  --repo workspaces \
+  --pr 142 \
+  --name sidebar-toggle \
+  --breadcrumb
+```
+
+Output: `https://evidence.cloudcompute.com/workspaces/pr-142/20260318-153022-sidebar-toggle.png`
+
+The `--breadcrumb` flag copies the file to `~/Desktop/` and appends to `~/Desktop/april-runs.log`.
+
+### Secrets
+
+| Secret | Where | Purpose |
+|--------|-------|---------|
+| `EVIDENCE_UPLOAD_TOKEN` | Cloudflare Worker secret + GitHub repo secret | Bearer token for upload auth |
+
+To rotate:
+
+```bash
+TOKEN=$(openssl rand -hex 32)
+cd infra/cloudflare-evidence-store && wrangler secret put EVIDENCE_UPLOAD_TOKEN <<< "$TOKEN"
+gh secret set EVIDENCE_UPLOAD_TOKEN --repo fairchild/workspaces --body "$TOKEN"
+```
+
+### Deployment
+
+```bash
+cd infra/cloudflare-evidence-store
+npm install
+wrangler deploy
+```
+
+DNS is automatic via `custom_domain = true` — same pattern as `webhooks.cloudcompute.com`.
+
 ## Credentials
 
 | Item | Value |
@@ -284,3 +373,4 @@ lume ssh "$LUME_VM" ... "bash -lc 'cd ~/.local/share/actions-runner-lume && ./sv
 | Runner dir | `~/.local/share/actions-runner-lume` |
 | Runner label | `lume-macos` |
 | Network | `bridged:en0` |
+| Evidence store | `https://evidence.cloudcompute.com` |
