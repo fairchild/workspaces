@@ -59,6 +59,10 @@ struct ContentView: View {
         LaunchRepositoryService(modelContext: modelContext)
     }
 
+    private var workspaceProviderSetupActionRunner: WorkspaceProviderSetupActionRunner {
+        WorkspaceProviderSetupActionRunner(coordinator: workspaceProviderSetupCoordinator)
+    }
+
     private var sessionPresentation: HostTerminalSessionPresentation {
         hostTerminalState.sessionPresentation
     }
@@ -1083,21 +1087,15 @@ struct ContentView: View {
 
         Task { @MainActor in
             do {
-                let intercepted = try await workspaceProviderSetupCoordinator.prepareIfNeeded(
+                try await workspaceProviderSetupActionRunner.run(
                     provider: provider,
                     action: .openTerminal(workspaceName: workspace.name)
                 ) {
                     await connectToProviderBackedWorkspace(workspace, provider: provider)
                 }
-                if intercepted {
-                    return
-                }
             } catch {
                 viewState.workspaceOperationErrorMessage = error.localizedDescription
-                return
             }
-
-            await connectToProviderBackedWorkspace(workspace, provider: provider)
         }
     }
 
@@ -1174,7 +1172,7 @@ struct ContentView: View {
                 return
             }
 
-            let intercepted = try await workspaceProviderSetupCoordinator.prepareIfNeeded(
+            try await workspaceProviderSetupActionRunner.run(
                 provider: provider,
                 action: .createWorkspace(name: name, guestOS: guestOS)
             ) {
@@ -1190,19 +1188,20 @@ struct ContentView: View {
                 } catch {
                     landingErrorMessage = "Failed to create workspace: \(error.localizedDescription)"
                 }
+            } perform: {
+                do {
+                    try await createWorkspaceFromLanding(
+                        repo: repo,
+                        name: name,
+                        nameSource: nameSource,
+                        providerID: providerID,
+                        guestOS: guestOS,
+                        skipSetup: true
+                    )
+                } catch {
+                    landingErrorMessage = "Failed to create workspace: \(error.localizedDescription)"
+                }
             }
-            if intercepted {
-                return
-            }
-
-            try await createWorkspaceFromLanding(
-                repo: repo,
-                name: name,
-                nameSource: nameSource,
-                providerID: providerID,
-                guestOS: guestOS,
-                skipSetup: true
-            )
         } catch {
             landingErrorMessage = "Failed to create workspace: \(error.localizedDescription)"
         }
@@ -1484,21 +1483,15 @@ struct ContentView: View {
 
         Task { @MainActor in
             do {
-                let intercepted = try await workspaceProviderSetupCoordinator.prepareIfNeeded(
+                try await workspaceProviderSetupActionRunner.run(
                     provider: provider,
                     action: .openDesktop(workspaceName: workspace.name)
                 ) {
                     await openDesktopAfterSetup(workspace, provider: provider)
                 }
-                if intercepted {
-                    return
-                }
             } catch {
                 viewState.workspaceOperationErrorMessage = error.localizedDescription
-                return
             }
-
-            await openDesktopAfterSetup(workspace, provider: provider)
         }
     }
 

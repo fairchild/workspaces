@@ -273,6 +273,62 @@ struct WorkspaceEnvironmentOptionsControllerTests {
         #expect(options.allSatisfy { $0.providerID != LumeWorkspaceProvider.identifier })
     }
 
+    @Test("Unknown provider registrations fall back to generic environment options")
+    func unknownProviderRegistrationsFallBackToGenericOptions() throws {
+        let registry = WorkspaceProviderRegistry(
+            providers: [
+                LocalWorkspaceProvider(),
+                MockDescriptorProvider(
+                    descriptor: WorkspaceProviderDescriptor(
+                        id: "custom-host",
+                        displayName: "Custom Host",
+                        description: "Runs a custom host-backed environment.",
+                        usesHostWorkspaceFiles: true
+                    )
+                ),
+                MockDescriptorProvider(
+                    descriptor: WorkspaceProviderDescriptor(
+                        id: "custom-remote",
+                        displayName: "Custom Remote",
+                        description: "Runs custom remote guests.",
+                        supportedGuestOS: [.linux, .macOS],
+                        supportsDesktop: true,
+                        requiresRemoteRepository: true
+                    )
+                ),
+            ]
+        )
+
+        let options = environmentOptions(snapshot: nil, registry: registry)
+
+        let customHost = try #require(
+            options.first {
+                $0.providerID == "custom-host" && $0.guestOS == nil
+            }
+        )
+        #expect(customHost.title == "Custom Host")
+        #expect(customHost.subtitle == "Runs on this Mac with host files")
+        #expect(customHost.iconName == "plus.rectangle.on.folder.fill")
+
+        let customLinux = try #require(
+            options.first {
+                $0.providerID == "custom-remote" && $0.guestOS == .linux
+            }
+        )
+        #expect(customLinux.title == "Custom Remote Linux")
+        #expect(customLinux.subtitle == "Runs Linux via Custom Remote")
+        #expect(customLinux.iconName == "cloud.fill")
+
+        let customMacOS = try #require(
+            options.first {
+                $0.providerID == "custom-remote" && $0.guestOS == .macOS
+            }
+        )
+        #expect(customMacOS.title == "Custom Remote macOS")
+        #expect(customMacOS.subtitle == "Runs macOS via Custom Remote")
+        #expect(customMacOS.iconName == "desktopcomputer")
+    }
+
     @Test("Lume snapshot refresh returns the latest snapshot before timeout")
     func lumeSnapshotRefreshReturnsLatestSnapshot() async throws {
         let expectedSnapshot = try makeSnapshot(state: .ready)
@@ -432,5 +488,34 @@ struct WorkspaceEnvironmentOptionsControllerTests {
             entry: macOSCatalogEntry,
             matchKind: .exact
         )
+    }
+}
+
+private actor MockDescriptorProvider: WorkspaceProviderProtocol {
+    nonisolated let descriptor: WorkspaceProviderDescriptor
+
+    init(descriptor: WorkspaceProviderDescriptor) {
+        self.descriptor = descriptor
+    }
+
+    func availability() async -> WorkspaceProviderAvailability {
+        .available
+    }
+
+    nonisolated func sessionKey(for workspace: WorkspaceProviderTarget) -> HostTerminalSessionKey {
+        .backendSession(providerID: descriptor.id, instanceID: workspace.terminalSessionIdentifier)
+    }
+
+    func createWorkspace(
+        request: WorkspaceProviderCreationRequest,
+        workspaceService: any WorkspaceServiceProtocol,
+        progress: WorkspaceProviderProgressHandler?,
+        persist: WorkspaceProviderPersistenceHandler?
+    ) async throws -> WorkspaceProviderCreationResult {
+        throw WorkspaceProviderError.unavailable("Not used in this test.")
+    }
+
+    func terminalLaunchSpec(for workspace: WorkspaceProviderTarget) async throws -> TerminalLaunchSpec {
+        throw WorkspaceProviderError.unavailable("Not used in this test.")
     }
 }

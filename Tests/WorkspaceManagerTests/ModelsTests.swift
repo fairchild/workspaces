@@ -101,7 +101,8 @@ struct ModelsTests {
                 profileDisplayName: "macOS Tahoe 26.2 + Xcode 26.2",
                 imageReference: "macos-tahoe-xcode:26.2",
                 baseVMName: "workspaces-validated-base-macos-tahoe-26-2-xcode-26-2",
-                baseSourceKind: .pulledImage
+                baseSourceKind: .pulledImage,
+                launchLogPath: "/tmp/workspaces-lume-run-repo-feature-1234.log"
             )
 
             workspace.encodeBackendMetadata(metadata)

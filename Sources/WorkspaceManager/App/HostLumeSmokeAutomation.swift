@@ -59,6 +59,7 @@ struct HostLumeSmokeLumeMetadataRecord: Codable, Sendable, Equatable {
     let imageReference: String?
     let baseVMName: String?
     let baseSourceKind: String?
+    let launchLogPath: String?
 
     init(metadata: LumeWorkspaceMetadata) {
         vmName = metadata.vmName
@@ -71,6 +72,7 @@ struct HostLumeSmokeLumeMetadataRecord: Codable, Sendable, Equatable {
         imageReference = metadata.imageReference
         baseVMName = metadata.baseVMName
         baseSourceKind = metadata.baseSourceKind?.rawValue
+        launchLogPath = metadata.launchLogPath
     }
 }
 

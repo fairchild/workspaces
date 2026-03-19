@@ -280,6 +280,21 @@ Full contract and troubleshooting details:
 - Current passing bundle:
   - `./output/lume-pr-validation/20260311-194047/`
 
+16. `./scripts/lume-pr-evidence-prep.sh`
+- Prepares a GitHub-ready evidence bundle from a passing host-smoke run.
+- Verifies the host-smoke bundle has:
+  - `workspace_active` in `events.jsonl`
+  - `launchLogPath` in `events.jsonl`
+  - the detached-launch marker in `launch.log`
+  - a successful `WORKSPACES_LUME_SMOKE_OK` SSH probe
+- Writes:
+  - a ready-to-paste PR comment template
+  - a zip containing the screenshots and supporting logs
+  - a short upload README with the semi-manual GitHub steps
+- Typical usage:
+  - `./scripts/lume-pr-evidence-prep.sh --pr 123`
+  - `./scripts/lume-pr-evidence-prep.sh --pr 123 --host-smoke-dir ./output/lume-host-smoke/20260317-200226`
+
 ## Legacy UI Scripts
 
 Older exploratory UI scripts are archived under:

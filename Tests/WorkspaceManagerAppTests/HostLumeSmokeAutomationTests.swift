@@ -44,7 +44,8 @@ struct HostLumeSmokeAutomationTests {
             profileDisplayName: "Tahoe 26.2 + Xcode 26.2",
             imageReference: "ghcr.io/workspaces/tahoe-26.2-xcode-26.2",
             baseVMName: "workspaces-validated-base-macos-tahoe-26-2-xcode-26-2",
-            baseSourceKind: .pulledImage
+            baseSourceKind: .pulledImage,
+            launchLogPath: "/tmp/workspaces-lume-run-repo-smoke-1234.log"
         )
         let metadataRaw = String(data: try JSONEncoder().encode(metadata), encoding: .utf8) ?? ""
 
@@ -67,6 +68,7 @@ struct HostLumeSmokeAutomationTests {
         #expect(record.lumeMetadata?.profileDisplayName == "Tahoe 26.2 + Xcode 26.2")
         #expect(record.lumeMetadata?.baseVMName == "workspaces-validated-base-macos-tahoe-26-2-xcode-26-2")
         #expect(record.lumeMetadata?.baseSourceKind == "pulledImage")
+        #expect(record.lumeMetadata?.launchLogPath == "/tmp/workspaces-lume-run-repo-smoke-1234.log")
     }
 
     @Test("Recovery hints point to VM runtime and logs for Lume failures")

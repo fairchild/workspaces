@@ -216,7 +216,13 @@ struct WorkspaceEnvironmentOptionsController {
                 lumeRuntimeSnapshot: lumeRuntimeSnapshot
             )
         default:
-            nil
+            genericEnvironmentOption(
+                for: descriptor,
+                guestOS: guestOS,
+                repo: repo,
+                providerAvailabilityByID: providerAvailabilityByID,
+                isRefreshingProviderAvailability: isRefreshingProviderAvailability
+            )
         }
     }
 
@@ -353,6 +359,83 @@ struct WorkspaceEnvironmentOptionsController {
             statusSeverity: lumeRuntimeStatusSeverity(snapshot: lumeRuntimeSnapshot),
             availabilityReason: availability.reason
         )
+    }
+
+    private func genericEnvironmentOption(
+        for descriptor: WorkspaceProviderDescriptor,
+        guestOS: WorkspaceGuestOS?,
+        repo: Repo,
+        providerAvailabilityByID: [String: WorkspaceProviderAvailability],
+        isRefreshingProviderAvailability: Bool
+    ) -> WorkspaceEnvironmentSheetOption {
+        let availability = landingAvailability(
+            for: descriptor,
+            repo: repo,
+            providerAvailabilityByID: providerAvailabilityByID,
+            isRefreshingProviderAvailability: isRefreshingProviderAvailability
+        )
+
+        return WorkspaceEnvironmentSheetOption(
+            title: genericEnvironmentTitle(for: descriptor, guestOS: guestOS),
+            subtitle: genericEnvironmentSubtitle(for: descriptor, guestOS: guestOS),
+            description: descriptor.description,
+            iconName: genericEnvironmentIcon(for: descriptor, guestOS: guestOS),
+            providerID: descriptor.id,
+            guestOS: guestOS,
+            isAvailable: availability.isAvailable,
+            statusText: nil,
+            availabilityReason: availability.reason
+        )
+    }
+
+    private func genericEnvironmentTitle(
+        for descriptor: WorkspaceProviderDescriptor,
+        guestOS: WorkspaceGuestOS?
+    ) -> String {
+        guard let guestOS else {
+            return descriptor.displayName
+        }
+
+        return "\(descriptor.displayName) \(guestOS.label)"
+    }
+
+    private func genericEnvironmentSubtitle(
+        for descriptor: WorkspaceProviderDescriptor,
+        guestOS: WorkspaceGuestOS?
+    ) -> String {
+        guard let guestOS else {
+            if descriptor.usesHostWorkspaceFiles {
+                return "Runs on this Mac with host files"
+            }
+            if descriptor.requiresRemoteRepository {
+                return "Requires a repository with a remote origin"
+            }
+            return "Available through \(descriptor.displayName)"
+        }
+
+        if descriptor.requiresRemoteRepository {
+            return "Runs \(guestOS.label) via \(descriptor.displayName)"
+        }
+        if descriptor.usesHostWorkspaceFiles {
+            return "Runs \(guestOS.label) on this Mac"
+        }
+        return "\(guestOS.label) environment via \(descriptor.displayName)"
+    }
+
+    private func genericEnvironmentIcon(
+        for descriptor: WorkspaceProviderDescriptor,
+        guestOS: WorkspaceGuestOS?
+    ) -> String {
+        switch guestOS {
+        case .macOS:
+            return "desktopcomputer"
+        case .linux:
+            return descriptor.requiresRemoteRepository ? "cloud.fill" : "server.rack"
+        case nil:
+            return descriptor.usesHostWorkspaceFiles
+                ? "plus.rectangle.on.folder.fill"
+                : "square.stack.3d.up.fill"
+        }
     }
 
     private func lumeEnvironmentAvailability(
