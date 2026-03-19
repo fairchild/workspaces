@@ -39,19 +39,38 @@ fi
 echo "Waiting for Screen Sharing to connect..."
 sleep 3
 
-echo "Typing login password..."
-osascript -e '
+echo "Enabling control mode and typing login password..."
+osascript <<APPLESCRIPT
 tell application "Screen Sharing" to activate
 delay 1
+
 tell application "System Events"
     tell process "Screen Sharing"
+        -- Enable control mode via the toolbar's "Control" toggle.
+        -- Screen Sharing starts in observe-only mode; keystrokes are
+        -- silently dropped unless control is enabled first.
+        try
+            -- Try clicking the Control toolbar button (mouse cursor icon)
+            click checkbox 1 of toolbar 1 of window 1
+            delay 0.5
+        on error
+            -- If the toolbar item isn't a checkbox, try the menu instead
+            try
+                click menu item "Use Shared Control" of menu "Connection" of menu bar 1
+                delay 0.5
+            end try
+        end try
+
+        -- Click inside the window to focus the VM's password field
         click window 1
         delay 0.5
     end tell
-    keystroke "'"$GUEST_PASSWORD"'"
+
+    -- Type the password and submit
+    keystroke "$GUEST_PASSWORD"
     delay 0.3
     keystroke return
 end tell
-'
+APPLESCRIPT
 
 echo "Done. Check Screen Sharing window — should be at the desktop."
