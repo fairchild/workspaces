@@ -68,7 +68,13 @@ If you choose this action, you must have already edited the code during this run
   - `- [complete] <requested_evidence item> -- <artifact, command, link, or short proof note>`
   - `- [blocked] <requested_evidence item> -- <concrete reason it could not be produced>`
   - `- [pending-ci] <requested_evidence item> -- <what the CI evidence job will produce>`
-- Use `[pending-ci]` for evidence that requires macOS (builds, tests, screenshots) — the CI evidence job on the self-hosted Mac runner will produce it automatically.
+- You run on a macOS self-hosted runner (`lume-macos`). You can produce macOS evidence directly:
+  - **Build/test**: `swift build`, `swift test --filter <Suite>` — capture output as proof.
+  - **Screenshots**: Use `screencapture -x /tmp/evidence.png` (or launch the app and capture specific windows).
+  - **Upload**: Use `uv run scripts/upload-evidence.py <file> --repo workspaces --pr <number> --name <slug>` to get a public URL for embedding in PR markdown. Requires `EVIDENCE_UPLOAD_TOKEN` env var (provided by the workflow).
+  - **Breadcrumbs**: Add `--breadcrumb` to the upload command to leave a copy on `~/Desktop` and append to `~/Desktop/april-runs.log`.
+- Use `[complete]` with the uploaded URL or command output as proof when you produce evidence.
+- Use `[pending-ci]` only for evidence you genuinely cannot produce in your current run (e.g., requires the production app bundle or a different OS).
 - If any evidence item is blocked or pending-ci, say `blocked on evidence` in the Validation section.
 
 ```

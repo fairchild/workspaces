@@ -88,16 +88,32 @@ Canonical reference:
 
 Verify your work visually, then present evidence to the user. Don't just say it works — prove it.
 
-- **Self-verify**: Use Tart VMs (`/tart-gui-automation`) to build, launch, and screenshot the app in an isolated environment.
-- **Present evidence**: Open HTML artifacts in the browser (`open <path>`), render screenshots inline in chat, and show test output. The user should see the proof without asking twice.
-- **Tests are evidence too**: Run `swift test` and show the summary. Green tests are necessary but not sufficient — visual confirmation of UI changes is expected.
-- **Treat visual proof as a merge gate for UI work**: For changes that affect UI, terminal behavior, keyboard handling, sidebar behavior, windowing, launch flow, or visual appearance, do not request review, call the PR ready, or merge until the PR itself contains visual evidence from the exact commit under review.
-- **Minimum PR evidence for UI work**: Include at least one rendered screenshot or equivalent visual artifact in the PR description or comments, the exact verification commands used, and a linked log or artifact path. If the change affects interaction, include a second screenshot or short recording that proves the result.
-- **Capture performance baselines early when work is performance-sensitive**: For changes that could affect launch time, terminal responsiveness, repo loading, focus restoration, rendering cost, or other user-visible performance, gather baseline metrics before making changes unless equivalent baseline data is already provided as input to the task.
-- **Compare before and after on the same footing**: Re-run the same performance measurement at the end of the work with the same or clearly described workload, environment, and metric source, then include before/after/delta in the PR discussion.
-- **Call out meaningful performance changes explicitly**: If a like-for-like comparison shows a meaningful delta, a target boundary crossing, or missing metrics, say so directly in the PR and final summary. If the comparison is not like-for-like, state that it is not directly comparable rather than implying confidence.
-- **Blocked evidence is an explicit state**: If you cannot produce visual evidence, say so clearly in the PR and in chat as `blocked on evidence`, explain why, and do not merge unless the user explicitly approves shipping without that proof.
-- **Do not rely on local-only proof**: Local screenshots, logs, and perf results are useful during development, but they are not sufficient close-out evidence unless they are attached to or clearly linked from the PR discussion.
+### Execution environment
+
+Agent workflows run on a macOS VM (`[self-hosted, lume-macos]`) with `swift`, `git`, `gh`, `uv`, and `node` available. You can build, test, capture screenshots, and upload evidence directly — you are not limited to ubuntu. See `docs/development/lume-runner-setup.md` for runner details.
+
+### Capturing and uploading evidence
+
+```bash
+# Capture a screenshot
+screencapture -x /tmp/evidence.png
+
+# Upload and get a public URL for PR markdown
+uv run scripts/upload-evidence.py /tmp/evidence.png \
+  --repo workspaces --pr <number> --name <slug> --breadcrumb
+```
+
+Uploads go to an R2-backed store at `https://evidence.cloudcompute.com/`. URLs are public and render inline in GitHub markdown. The `--breadcrumb` flag copies to `~/Desktop` and appends to `~/Desktop/april-runs.log`. Requires `EVIDENCE_UPLOAD_TOKEN` env var (provided by the workflow). See `docs/development/lume-runner-setup.md#evidence-store-r2` for architecture and secrets.
+
+### Rules
+
+- **Visual proof is a merge gate for UI work.** Do not call a PR ready until it contains evidence from the exact commit under review: at least one screenshot, the verification commands used, and a linked artifact path.
+- **Tests are necessary but not sufficient.** Run `swift test` and show the summary — but visual confirmation of UI changes is still expected.
+- **Use `[complete]` with proof.** When you produce evidence, mark the item `[complete]` with the URL or command output.
+- **`[pending-ci]` is a last resort.** You run on macOS — only use `[pending-ci]` for evidence that genuinely requires something you don't have (e.g., production app bundle, different OS).
+- **Blocked evidence is an explicit state.** Say `blocked on evidence` in the PR, explain why, and do not merge without explicit approval.
+- **No local-only proof.** Screenshots and logs must be uploaded or linked from the PR discussion, not just referenced from a local path.
+- **Performance-sensitive changes need baselines.** Gather before metrics, re-run after, include before/after/delta in the PR. Call out meaningful deltas explicitly.
 
 ## High-Signal Lessons
 
@@ -176,7 +192,9 @@ swift run     # Run
 | JWT session exchange | Sources/WorkspaceManagerCore/Services/NotificationSessionService.swift |
 | Keychain storage | Sources/WorkspaceManagerCore/Services/KeychainHelper.swift |
 | Webhook event model | Sources/WorkspaceManagerCore/Models/WebhookEvent.swift |
-| Cloudflare Worker (infra) | infra/cloudflare-webhook-relay/ |
+| Cloudflare Worker (webhooks) | infra/cloudflare-webhook-relay/ |
+| Cloudflare Worker (evidence) | infra/cloudflare-evidence-store/ |
+| Evidence upload script | scripts/upload-evidence.py |
 | Tests | Tests/WorkspaceManagerTests/ |
 
 ## Key Patterns

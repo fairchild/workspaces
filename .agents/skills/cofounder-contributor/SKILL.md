@@ -50,6 +50,23 @@ uv run .agents/skills/cofounder-contributor/scripts/run-contributor.py \
   --prompt-file .agents/skills/cofounder-contributor/references/plat-ironwood.md
 ```
 
+## Evidence upload
+
+When running on the `lume-macos` runner (macOS VM), agents can capture and upload screenshots as PR evidence:
+
+```bash
+# Capture a screenshot
+screencapture -x /tmp/evidence.png
+
+# Upload and get a public URL for PR markdown
+EVIDENCE_UPLOAD_TOKEN=<token> uv run scripts/upload-evidence.py /tmp/evidence.png \
+  --repo workspaces --pr <number> --name <slug> --breadcrumb
+```
+
+The upload script returns a URL like `https://evidence.cloudcompute.com/workspaces/pr-142/20260318-sidebar-toggle.png` that renders inline in GitHub markdown. The `--breadcrumb` flag leaves a copy on `~/Desktop` and appends to `~/Desktop/april-runs.log`.
+
+See `docs/development/lume-runner-setup.md` for full details on the R2 evidence store architecture.
+
 ## Guardrails
 
 - Work through the persona priority order instead of freelancing.
