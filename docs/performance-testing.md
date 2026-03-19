@@ -31,6 +31,7 @@ Use the scripted baseline runner:
 
 ```bash
 ./scripts/perf-baseline.sh 5 8
+./scripts/perf-baseline.sh 5 8 --launch-mode activate
 ```
 
 To persist results and generate a visual trend dashboard:
@@ -43,6 +44,7 @@ Arguments:
 
 - arg1 = number of runs (default `5`)
 - arg2 = seconds to keep app alive per run (default `8`)
+- `--launch-mode no-activate|activate` controls whether the app launches in shared-desktop-safe no-activate mode or normal activation mode. Default is `no-activate`.
 
 What it does:
 
@@ -96,12 +98,14 @@ Use the dedicated runner when you need to quantify the deferred sheet-open path:
 
 ```bash
 ./scripts/new-workspace-perf.sh 5 12
+./scripts/new-workspace-perf.sh 5 12 --launch-mode activate
 ```
 
 Arguments:
 
 - arg1 = number of runs (default `5`)
 - arg2 = seconds to keep app alive per run (default `12`)
+- `--launch-mode no-activate|activate` controls whether the app launches in shared-desktop-safe no-activate mode or normal activation mode. Default is `no-activate`.
 
 What it does:
 

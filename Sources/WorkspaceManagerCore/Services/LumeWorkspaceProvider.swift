@@ -49,15 +49,17 @@ public struct LumeWorkspaceMetadata: Codable, Sendable, Equatable {
 
 public actor LumeWorkspaceProvider: WorkspaceProviderProtocol {
     public static let identifier = "lume"
-
-    public nonisolated let descriptor = WorkspaceProviderDescriptor(
+    public static let providerDescriptor = WorkspaceProviderDescriptor(
         id: LumeWorkspaceProvider.identifier,
         displayName: "Lume VM",
         description: "Create a local VM-backed workspace with host-shared files.",
+        sheetStatusPolicy: .deferred,
         supportedGuestOS: [.macOS, .linux],
         supportsDesktop: true,
         usesHostWorkspaceFiles: true
     )
+
+    public nonisolated let descriptor = LumeWorkspaceProvider.providerDescriptor
 
     private let httpClient: LumeHTTPClient
     private let runtimeService: any LumeRuntimeServiceProtocol

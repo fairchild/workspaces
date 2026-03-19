@@ -29,10 +29,38 @@ struct AppRuntimeDependencies {
             )
         }
 
-        let runtimeService: any LumeRuntimeServiceProtocol = LumeRuntimeService.shared
+        let runtimeService: any LumeRuntimeServiceProtocol = DeferredLumeRuntimeService {
+            LumeRuntimeService.shared
+        }
         return AppRuntimeDependencies(
             lumeRuntimeService: runtimeService,
-            workspaceProviderRegistry: .live
+            workspaceProviderRegistry: WorkspaceProviderRegistry(
+                providers: [
+                    LocalWorkspaceProvider(),
+                    DeferredWorkspaceProvider(
+                        descriptor: DaytonaWorkspaceProvider.providerDescriptor,
+                        sessionKeyProvider: { workspace in
+                            .backendSession(
+                                providerID: DaytonaWorkspaceProvider.identifier,
+                                instanceID: workspace.terminalSessionIdentifier
+                            )
+                        }
+                    ) {
+                        DaytonaWorkspaceProvider()
+                    },
+                    DeferredWorkspaceProvider(
+                        descriptor: LumeWorkspaceProvider.providerDescriptor,
+                        sessionKeyProvider: { workspace in
+                            .backendSession(
+                                providerID: LumeWorkspaceProvider.identifier,
+                                instanceID: workspace.terminalSessionIdentifier
+                            )
+                        }
+                    ) {
+                        LumeWorkspaceProvider(runtimeService: runtimeService)
+                    },
+                ]
+            )
         )
     }
 }

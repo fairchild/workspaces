@@ -25,6 +25,8 @@ enum TerminalPaneChromePolicy: Equatable, Sendable {
 final class HostTerminalSurfaceStore {
     private var surfaces: [UUID: GhosttySurfaceView] = [:]
     private var sessionIDsBySurfaceIdentity: [ObjectIdentifier: UUID] = [:]
+    var onSurfaceCreated: (@MainActor (UUID) -> Void)?
+    var onSurfaceInvalidated: (@MainActor (UUID) -> Void)?
 
     func view(
         for session: HostTerminalSession,
@@ -32,6 +34,10 @@ final class HostTerminalSurfaceStore {
         contextMenuProvider: (() -> NSMenu?)? = nil
     ) -> GhosttySurfaceView {
         if let existing = surfaces[session.id] {
+            InvestigationDiagnostics.emitFocus(
+                phase: "surface_store_reused",
+                fields: ["session_id": session.id.uuidString]
+            )
             sessionIDsBySurfaceIdentity[ObjectIdentifier(existing)] = session.id
             existing.contextMenuProvider = contextMenuProvider
             return existing
@@ -60,12 +66,25 @@ final class HostTerminalSurfaceStore {
         surfaces[session.id] = created
         sessionIDsBySurfaceIdentity[ObjectIdentifier(created)] = session.id
         created.contextMenuProvider = contextMenuProvider
+        InvestigationDiagnostics.emitFocus(
+            phase: "surface_store_created",
+            fields: [
+                "session_id": session.id.uuidString,
+                "command_mode": session.customCommand == nil ? "directory" : "custom",
+            ]
+        )
+        onSurfaceCreated?(session.id)
 
         return created
     }
 
     func terminal(for sessionID: UUID) -> GhosttySurfaceView? {
-        surfaces[sessionID]
+        let terminal = surfaces[sessionID]
+        InvestigationDiagnostics.emitFocus(
+            phase: terminal == nil ? "surface_store_lookup_miss" : "surface_store_lookup_hit",
+            fields: ["session_id": sessionID.uuidString]
+        )
+        return terminal
     }
 
     func sessionID(for terminal: GhosttySurfaceView) -> UUID? {
@@ -76,6 +95,7 @@ final class HostTerminalSurfaceStore {
         if let removed = surfaces.removeValue(forKey: sessionID) {
             sessionIDsBySurfaceIdentity.removeValue(forKey: ObjectIdentifier(removed))
         }
+        onSurfaceInvalidated?(sessionID)
     }
 }
 

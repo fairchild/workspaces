@@ -1,9 +1,78 @@
 import Foundation
 import WorkspaceManagerCore
 
-struct WorkspaceEnvironmentFixtureState {
-    let providerAvailabilityByID: [String: WorkspaceProviderAvailability]
-    let lumeRuntimeSnapshot: LumeRuntimeSnapshot?
+struct WorkspaceProviderSheetState: Sendable, Equatable {
+    let providerID: String
+    let statusPolicy: WorkspaceProviderSheetStatusPolicy
+    let availability: WorkspaceProviderAvailability?
+    let isRefreshing: Bool
+    let detail: WorkspaceProviderSheetDetail
+
+    static func initial(for descriptor: WorkspaceProviderDescriptor) -> Self {
+        WorkspaceProviderSheetState(
+            providerID: descriptor.id,
+            statusPolicy: descriptor.sheetStatusPolicy,
+            availability: descriptor.sheetStatusPolicy == .immediate ? .available : nil,
+            isRefreshing: false,
+            detail: descriptor.id == LumeWorkspaceProvider.identifier ? .lume(snapshot: nil) : .none
+        )
+    }
+
+    func replacing(
+        availability: WorkspaceProviderAvailability? = nil,
+        isRefreshing: Bool? = nil,
+        detail: WorkspaceProviderSheetDetail? = nil
+    ) -> Self {
+        WorkspaceProviderSheetState(
+            providerID: providerID,
+            statusPolicy: statusPolicy,
+            availability: availability ?? self.availability,
+            isRefreshing: isRefreshing ?? self.isRefreshing,
+            detail: detail ?? self.detail
+        )
+    }
+}
+
+enum WorkspaceProviderSheetDetail: Sendable, Equatable {
+    case none
+    case lume(snapshot: LumeRuntimeSnapshot?)
+
+    var lumeRuntimeSnapshot: LumeRuntimeSnapshot? {
+        switch self {
+        case .none:
+            return nil
+        case .lume(let snapshot):
+            return snapshot
+        }
+    }
+}
+
+struct WorkspaceEnvironmentSheetState: Sendable, Equatable {
+    let providerStatesByID: [String: WorkspaceProviderSheetState]
+
+    static let empty = WorkspaceEnvironmentSheetState(providerStatesByID: [:])
+
+    func providerState(for descriptor: WorkspaceProviderDescriptor) -> WorkspaceProviderSheetState {
+        providerStatesByID[descriptor.id] ?? WorkspaceProviderSheetState.initial(for: descriptor)
+    }
+
+    func updating(_ state: WorkspaceProviderSheetState) -> Self {
+        var providerStatesByID = self.providerStatesByID
+        providerStatesByID[state.providerID] = state
+        return WorkspaceEnvironmentSheetState(providerStatesByID: providerStatesByID)
+    }
+
+    var providerAvailabilityByID: [String: WorkspaceProviderAvailability] {
+        providerStatesByID.reduce(into: [:]) { partialResult, entry in
+            if let availability = entry.value.availability {
+                partialResult[entry.key] = availability
+            }
+        }
+    }
+
+    var lumeRuntimeSnapshot: LumeRuntimeSnapshot? {
+        providerStatesByID[LumeWorkspaceProvider.identifier]?.detail.lumeRuntimeSnapshot
+    }
 }
 
 struct WorkspaceEnvironmentOptionsController {
@@ -14,75 +83,119 @@ struct WorkspaceEnvironmentOptionsController {
         let timedOut: Bool
     }
 
-    func providerAvailabilityIsPending(
-        providerAvailabilityByID: [String: WorkspaceProviderAvailability],
+    func prepareSheetStateForPresentation(
+        existingState: WorkspaceEnvironmentSheetState,
         registry: WorkspaceProviderRegistry
-    ) -> Bool {
-        registry.providers.contains { provider in
-            providerAvailabilityByID[provider.descriptor.id] == nil
-        }
-    }
+    ) -> WorkspaceEnvironmentSheetState {
+        var resolvedState = mergedSheetState(existingState: existingState, registry: registry)
 
-    func providerAvailabilityRefreshSignature(
-        providerAvailabilityByID: [String: WorkspaceProviderAvailability],
-        registry: WorkspaceProviderRegistry
-    ) -> String {
-        registry.providers
-            .map(\.descriptor.id)
-            .sorted()
-            .map { providerID in
-                guard let availability = providerAvailabilityByID[providerID] else {
-                    return "\(providerID):pending"
+        for provider in registry.providers {
+            let descriptor = provider.descriptor
+            var providerState = resolvedState.providerState(for: descriptor)
+
+            switch descriptor.sheetStatusPolicy {
+            case .immediate:
+                providerState = providerState.replacing(
+                    availability: providerState.availability ?? .available,
+                    isRefreshing: false
+                )
+            case .deferred:
+                if providerState.availability == nil {
+                    providerState = providerState.replacing(isRefreshing: true)
                 }
-                return "\(providerID):\(availability.isAvailable):\(availability.reason ?? "")"
             }
-            .joined(separator: "|")
-    }
 
-    func lumeRuntimeRefreshSignature(snapshot: LumeRuntimeSnapshot?) -> String {
-        guard let snapshot else {
-            return "snapshot:pending"
+            resolvedState = resolvedState.updating(providerState)
         }
 
-        return [
-            snapshot.state.rawValue,
-            snapshot.reason ?? "",
-            snapshot.defaultMacOSImage?.entry.imageReference ?? "",
-            snapshot.defaultMacOSImageError ?? "",
-        ]
-        .joined(separator: "|")
-    }
-
-    func newWorkspaceSheetRefreshID(
-        for repo: Repo,
-        providerAvailabilityByID: [String: WorkspaceProviderAvailability],
-        registry: WorkspaceProviderRegistry,
-        lumeRuntimeSnapshot: LumeRuntimeSnapshot?,
-        isCreating: Bool
-    ) -> String {
-        [
-            repo.id.uuidString,
-            providerAvailabilityRefreshSignature(
-                providerAvailabilityByID: providerAvailabilityByID,
-                registry: registry
-            ),
-            lumeRuntimeRefreshSignature(snapshot: lumeRuntimeSnapshot),
-            isCreating ? "creating" : "idle",
-        ]
-        .joined(separator: "::")
+        return resolvedState
     }
 
     func seedFixtureStateIfNeeded(
+        registry: WorkspaceProviderRegistry,
         runtimeService: any LumeRuntimeServiceProtocol
-    ) async -> WorkspaceEnvironmentFixtureState? {
+    ) async -> WorkspaceEnvironmentSheetState? {
         guard UIFixtureLumeEnvironment.isEnabled() else { return nil }
 
-        return WorkspaceEnvironmentFixtureState(
-            providerAvailabilityByID: UIFixtureLumeEnvironment.initialProviderAvailabilityByID(),
-            // Fixture mode keeps the full snapshot path so CI automation fails
-            // deterministically instead of degrading to a timed-out placeholder.
-            lumeRuntimeSnapshot: await runtimeService.snapshot()
+        let snapshot = await runtimeService.snapshot()
+        var resolvedState = prepareSheetStateForPresentation(
+            existingState: .empty,
+            registry: registry
         )
+
+        for provider in registry.providers {
+            var providerState = resolvedState.providerState(for: provider.descriptor).replacing(
+                availability: .available,
+                isRefreshing: false
+            )
+
+            if provider.descriptor.id == LumeWorkspaceProvider.identifier {
+                providerState = providerState.replacing(detail: .lume(snapshot: snapshot))
+            }
+
+            resolvedState = resolvedState.updating(providerState)
+        }
+
+        return resolvedState
+    }
+
+    func refreshSheetState(
+        registry: WorkspaceProviderRegistry,
+        runtimeService: any LumeRuntimeServiceProtocol,
+        existingState: WorkspaceEnvironmentSheetState,
+        trigger: String,
+        timeoutNanoseconds: UInt64 = probeTimeoutNanoseconds
+    ) async -> WorkspaceEnvironmentSheetState {
+        var resolvedState = prepareSheetStateForPresentation(
+            existingState: existingState,
+            registry: registry
+        )
+
+        let deferredProviders = registry.providers.filter { $0.descriptor.sheetStatusPolicy == .deferred }
+        let deferredRegistry = WorkspaceProviderRegistry(providers: deferredProviders)
+        let deferredAvailabilityByID = await refreshProviderAvailability(
+            registry: deferredRegistry,
+            existingAvailabilityByID: resolvedState.providerAvailabilityByID,
+            trigger: trigger,
+            timeoutNanoseconds: timeoutNanoseconds
+        )
+
+        for provider in registry.providers {
+            let descriptor = provider.descriptor
+            var providerState = resolvedState.providerState(for: descriptor)
+
+            switch descriptor.sheetStatusPolicy {
+            case .immediate:
+                providerState = providerState.replacing(
+                    availability: providerState.availability ?? .available,
+                    isRefreshing: false
+                )
+            case .deferred:
+                providerState = providerState.replacing(
+                    availability: deferredAvailabilityByID[descriptor.id],
+                    isRefreshing: false
+                )
+            }
+
+            resolvedState = resolvedState.updating(providerState)
+        }
+
+        if registry.provider(for: LumeWorkspaceProvider.identifier) != nil {
+            let snapshot = await refreshLumeRuntimeSnapshot(
+                runtimeService: runtimeService,
+                existingSnapshot: resolvedState.lumeRuntimeSnapshot,
+                trigger: trigger,
+                timeoutNanoseconds: timeoutNanoseconds
+            )
+            let descriptor = LumeWorkspaceProvider.providerDescriptor
+            let providerState = resolvedState.providerState(for: descriptor).replacing(
+                isRefreshing: false,
+                detail: .lume(snapshot: snapshot)
+            )
+            resolvedState = resolvedState.updating(providerState)
+        }
+
+        return resolvedState
     }
 
     func refreshProviderAvailability(
@@ -160,9 +273,7 @@ struct WorkspaceEnvironmentOptionsController {
     func environmentOptions(
         for repo: Repo,
         registry: WorkspaceProviderRegistry,
-        providerAvailabilityByID: [String: WorkspaceProviderAvailability],
-        isRefreshingProviderAvailability: Bool,
-        lumeRuntimeSnapshot: LumeRuntimeSnapshot?
+        sheetState: WorkspaceEnvironmentSheetState
     ) -> [WorkspaceEnvironmentSheetOption] {
         registry.providers.flatMap { provider in
             let descriptor = provider.descriptor
@@ -176,11 +287,20 @@ struct WorkspaceEnvironmentOptionsController {
                     for: descriptor,
                     guestOS: guestOS,
                     repo: repo,
-                    providerAvailabilityByID: providerAvailabilityByID,
-                    isRefreshingProviderAvailability: isRefreshingProviderAvailability,
-                    lumeRuntimeSnapshot: lumeRuntimeSnapshot
+                    sheetState: sheetState
                 )
             }
+        }
+    }
+
+    private func mergedSheetState(
+        existingState: WorkspaceEnvironmentSheetState,
+        registry: WorkspaceProviderRegistry
+    ) -> WorkspaceEnvironmentSheetState {
+        registry.providers.reduce(into: WorkspaceEnvironmentSheetState.empty) { partialResult, provider in
+            let descriptor = provider.descriptor
+            let existingProviderState = existingState.providerStatesByID[descriptor.id]
+            partialResult = partialResult.updating(existingProviderState ?? .initial(for: descriptor))
         }
     }
 
@@ -188,40 +308,35 @@ struct WorkspaceEnvironmentOptionsController {
         for descriptor: WorkspaceProviderDescriptor,
         guestOS: WorkspaceGuestOS?,
         repo: Repo,
-        providerAvailabilityByID: [String: WorkspaceProviderAvailability],
-        isRefreshingProviderAvailability: Bool,
-        lumeRuntimeSnapshot: LumeRuntimeSnapshot?
+        sheetState: WorkspaceEnvironmentSheetState
     ) -> WorkspaceEnvironmentSheetOption? {
         switch (descriptor.id, guestOS) {
         case (LocalWorkspaceProvider.identifier, nil):
             localEnvironmentOption(
                 for: repo,
                 descriptor: descriptor,
-                providerAvailabilityByID: providerAvailabilityByID,
-                isRefreshingProviderAvailability: isRefreshingProviderAvailability
+                sheetState: sheetState
             )
         case (DaytonaWorkspaceProvider.identifier, .linux):
             cloudLinuxEnvironmentOption(
                 for: repo,
                 descriptor: descriptor,
-                providerAvailabilityByID: providerAvailabilityByID,
-                isRefreshingProviderAvailability: isRefreshingProviderAvailability
+                sheetState: sheetState
             )
         case (LumeWorkspaceProvider.identifier, .macOS):
             macOSEnvironmentOption(
-                lumeRuntimeSnapshot: lumeRuntimeSnapshot
+                providerState: sheetState.providerState(for: descriptor)
             )
         case (LumeWorkspaceProvider.identifier, .linux):
             linuxVMEnvironmentOption(
-                lumeRuntimeSnapshot: lumeRuntimeSnapshot
+                providerState: sheetState.providerState(for: descriptor)
             )
         default:
             genericEnvironmentOption(
                 for: descriptor,
                 guestOS: guestOS,
                 repo: repo,
-                providerAvailabilityByID: providerAvailabilityByID,
-                isRefreshingProviderAvailability: isRefreshingProviderAvailability
+                sheetState: sheetState
             )
         }
     }
@@ -229,15 +344,16 @@ struct WorkspaceEnvironmentOptionsController {
     private func landingAvailability(
         for descriptor: WorkspaceProviderDescriptor,
         repo: Repo,
-        providerAvailabilityByID: [String: WorkspaceProviderAvailability],
-        isRefreshingProviderAvailability: Bool
+        sheetState: WorkspaceEnvironmentSheetState
     ) -> WorkspaceProviderAvailability {
+        let providerState = sheetState.providerState(for: descriptor)
+
         let baseAvailability: WorkspaceProviderAvailability
-        if let resolvedAvailability = providerAvailabilityByID[descriptor.id] {
+        if let resolvedAvailability = providerState.availability {
             baseAvailability = resolvedAvailability
-        } else if descriptor.id == LocalWorkspaceProvider.identifier {
+        } else if descriptor.sheetStatusPolicy == .immediate {
             baseAvailability = .available
-        } else if isRefreshingProviderAvailability {
+        } else if providerState.isRefreshing {
             baseAvailability = .unavailable("Checking provider availability...")
         } else {
             baseAvailability = .unavailable("Timed out checking provider availability.")
@@ -257,14 +373,12 @@ struct WorkspaceEnvironmentOptionsController {
     private func localEnvironmentOption(
         for repo: Repo,
         descriptor: WorkspaceProviderDescriptor,
-        providerAvailabilityByID: [String: WorkspaceProviderAvailability],
-        isRefreshingProviderAvailability: Bool
+        sheetState: WorkspaceEnvironmentSheetState
     ) -> WorkspaceEnvironmentSheetOption {
         let availability = landingAvailability(
             for: descriptor,
             repo: repo,
-            providerAvailabilityByID: providerAvailabilityByID,
-            isRefreshingProviderAvailability: isRefreshingProviderAvailability
+            sheetState: sheetState
         )
 
         return WorkspaceEnvironmentSheetOption(
@@ -284,15 +398,14 @@ struct WorkspaceEnvironmentOptionsController {
     private func cloudLinuxEnvironmentOption(
         for repo: Repo,
         descriptor: WorkspaceProviderDescriptor,
-        providerAvailabilityByID: [String: WorkspaceProviderAvailability],
-        isRefreshingProviderAvailability: Bool
+        sheetState: WorkspaceEnvironmentSheetState
     ) -> WorkspaceEnvironmentSheetOption {
         let availability = landingAvailability(
             for: descriptor,
             repo: repo,
-            providerAvailabilityByID: providerAvailabilityByID,
-            isRefreshingProviderAvailability: isRefreshingProviderAvailability
+            sheetState: sheetState
         )
+        let providerState = sheetState.providerState(for: descriptor)
 
         return WorkspaceEnvironmentSheetOption(
             title: "Cloud Linux",
@@ -302,61 +415,62 @@ struct WorkspaceEnvironmentOptionsController {
             providerID: DaytonaWorkspaceProvider.identifier,
             guestOS: .linux,
             isAvailable: availability.isAvailable,
-            statusText: nil,
+            statusText: providerState.isRefreshing && providerState.availability == nil
+                ? "Checking cloud runtime" : nil,
             statusSeverity: nil,
             availabilityReason: availability.reason
         )
     }
 
     private func macOSEnvironmentOption(
-        lumeRuntimeSnapshot: LumeRuntimeSnapshot?
+        providerState: WorkspaceProviderSheetState
     ) -> WorkspaceEnvironmentSheetOption {
-        let baseAvailability = lumeEnvironmentAvailability(snapshot: lumeRuntimeSnapshot)
+        let snapshot = providerState.detail.lumeRuntimeSnapshot
+        let baseAvailability = lumeEnvironmentAvailability(providerState: providerState)
 
         let isAvailable: Bool
         let availabilityReason: String?
         if !baseAvailability.isAvailable {
             isAvailable = false
             availabilityReason = baseAvailability.reason
-        } else if let snapshot = lumeRuntimeSnapshot,
-            snapshot.state == .unsupportedHost
-        {
+        } else if let snapshot, snapshot.state == .unsupportedHost {
             isAvailable = false
             availabilityReason = snapshot.reason
         } else {
             isAvailable = true
-            availabilityReason = nonBlockingMacOSAvailabilityReason(snapshot: lumeRuntimeSnapshot)
+            availabilityReason = nonBlockingMacOSAvailabilityReason(snapshot: snapshot)
         }
 
         return WorkspaceEnvironmentSheetOption(
             title: "macOS VM",
-            subtitle: macOSBaseSummary(snapshot: lumeRuntimeSnapshot),
-            description: macOSEnvironmentDescription(snapshot: lumeRuntimeSnapshot),
+            subtitle: macOSBaseSummary(snapshot: snapshot),
+            description: macOSEnvironmentDescription(snapshot: snapshot),
             iconName: "desktopcomputer",
             providerID: LumeWorkspaceProvider.identifier,
             guestOS: .macOS,
             isAvailable: isAvailable,
-            statusText: macOSRuntimeStatusText(snapshot: lumeRuntimeSnapshot),
-            statusSeverity: macOSRuntimeStatusSeverity(snapshot: lumeRuntimeSnapshot),
+            statusText: macOSRuntimeStatusText(providerState: providerState),
+            statusSeverity: macOSRuntimeStatusSeverity(snapshot: snapshot),
             availabilityReason: availabilityReason
         )
     }
 
     private func linuxVMEnvironmentOption(
-        lumeRuntimeSnapshot: LumeRuntimeSnapshot?
+        providerState: WorkspaceProviderSheetState
     ) -> WorkspaceEnvironmentSheetOption {
-        let availability = lumeEnvironmentAvailability(snapshot: lumeRuntimeSnapshot)
+        let snapshot = providerState.detail.lumeRuntimeSnapshot
+        let availability = lumeEnvironmentAvailability(providerState: providerState)
 
         return WorkspaceEnvironmentSheetOption(
             title: "Linux VM",
             subtitle: "Runs in a local Linux VM on this Mac",
-            description: linuxVMEnvironmentDescription(snapshot: lumeRuntimeSnapshot),
+            description: linuxVMEnvironmentDescription(snapshot: snapshot),
             iconName: "server.rack",
             providerID: LumeWorkspaceProvider.identifier,
             guestOS: .linux,
             isAvailable: availability.isAvailable,
-            statusText: lumeRuntimeStatusText(snapshot: lumeRuntimeSnapshot),
-            statusSeverity: lumeRuntimeStatusSeverity(snapshot: lumeRuntimeSnapshot),
+            statusText: lumeRuntimeStatusText(providerState: providerState),
+            statusSeverity: lumeRuntimeStatusSeverity(snapshot: snapshot),
             availabilityReason: availability.reason
         )
     }
@@ -365,14 +479,12 @@ struct WorkspaceEnvironmentOptionsController {
         for descriptor: WorkspaceProviderDescriptor,
         guestOS: WorkspaceGuestOS?,
         repo: Repo,
-        providerAvailabilityByID: [String: WorkspaceProviderAvailability],
-        isRefreshingProviderAvailability: Bool
+        sheetState: WorkspaceEnvironmentSheetState
     ) -> WorkspaceEnvironmentSheetOption {
         let availability = landingAvailability(
             for: descriptor,
             repo: repo,
-            providerAvailabilityByID: providerAvailabilityByID,
-            isRefreshingProviderAvailability: isRefreshingProviderAvailability
+            sheetState: sheetState
         )
 
         return WorkspaceEnvironmentSheetOption(
@@ -384,6 +496,7 @@ struct WorkspaceEnvironmentOptionsController {
             guestOS: guestOS,
             isAvailable: availability.isAvailable,
             statusText: nil,
+            statusSeverity: nil,
             availabilityReason: availability.reason
         )
     }
@@ -439,10 +552,23 @@ struct WorkspaceEnvironmentOptionsController {
     }
 
     private func lumeEnvironmentAvailability(
-        snapshot: LumeRuntimeSnapshot?
+        providerState: WorkspaceProviderSheetState
     ) -> WorkspaceProviderAvailability {
+        if let availability = providerState.availability, !availability.isAvailable {
+            return availability
+        }
+
+        let snapshot = providerState.detail.lumeRuntimeSnapshot
         if let snapshot, snapshot.state == .unsupportedHost {
             return .unavailable(snapshot.reason ?? "Lume requires Apple Silicon.")
+        }
+
+        if providerState.isRefreshing && snapshot == nil {
+            return .unavailable("Checking VM runtime...")
+        }
+
+        guard snapshot != nil else {
+            return .unavailable("Timed out checking VM runtime.")
         }
 
         #if arch(arm64)
@@ -452,8 +578,17 @@ struct WorkspaceEnvironmentOptionsController {
         #endif
     }
 
-    private func lumeRuntimeStatusText(snapshot: LumeRuntimeSnapshot?) -> String? {
-        guard let snapshot else { return nil }
+    private func lumeRuntimeStatusText(providerState: WorkspaceProviderSheetState) -> String? {
+        let snapshot = providerState.detail.lumeRuntimeSnapshot
+
+        if providerState.isRefreshing && snapshot == nil {
+            return "Checking runtime"
+        }
+
+        guard let snapshot else {
+            return "Runtime check timed out"
+        }
+
         switch snapshot.state {
         case .setupRequired:
             return "Setup required"
@@ -486,9 +621,14 @@ struct WorkspaceEnvironmentOptionsController {
         }
     }
 
-    private func macOSRuntimeStatusText(snapshot: LumeRuntimeSnapshot?) -> String? {
+    private func macOSRuntimeStatusText(providerState: WorkspaceProviderSheetState) -> String? {
+        let snapshot = providerState.detail.lumeRuntimeSnapshot
+
+        if providerState.isRefreshing && snapshot == nil {
+            return "Checking runtime"
+        }
         if let snapshot, snapshot.state != .ready {
-            return lumeRuntimeStatusText(snapshot: snapshot)
+            return lumeRuntimeStatusText(providerState: providerState)
         }
 
         if let baseSnapshot = snapshot?.baseVM {
@@ -515,7 +655,7 @@ struct WorkspaceEnvironmentOptionsController {
             return "Stock macOS"
         }
 
-        return lumeRuntimeStatusText(snapshot: snapshot)
+        return lumeRuntimeStatusText(providerState: providerState)
     }
 
     private func macOSRuntimeStatusSeverity(snapshot: LumeRuntimeSnapshot?) -> EnvironmentStatusSeverity? {

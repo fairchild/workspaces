@@ -6,20 +6,35 @@ set -euo pipefail
 usage() {
     cat <<'EOF'
 Usage:
-  ./scripts/new-workspace-perf.sh [runs] [sleep_seconds]
+  ./scripts/new-workspace-perf.sh [runs] [sleep_seconds] [--launch-mode no-activate|activate]
 
 Examples:
   ./scripts/new-workspace-perf.sh
   ./scripts/new-workspace-perf.sh 5 12
+  ./scripts/new-workspace-perf.sh 5 12 --launch-mode activate
 EOF
 }
 
 RUNS=5
 SLEEP_SECONDS=12
 POSITIONAL=0
+LAUNCH_MODE="no-activate"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --launch-mode)
+            [[ $# -ge 2 ]] || { echo "--launch-mode requires a value" >&2; usage; exit 1; }
+            LAUNCH_MODE="$2"
+            case "$LAUNCH_MODE" in
+                no-activate|activate) ;;
+                *)
+                    echo "Unsupported launch mode: $LAUNCH_MODE" >&2
+                    usage
+                    exit 1
+                    ;;
+            esac
+            shift 2
+            ;;
         -h|--help)
             usage
             exit 0
@@ -55,9 +70,17 @@ DEBUG_BINARY="$ROOT_DIR/.build/arm64-apple-macosx/debug/WorkspaceManager"
 
 mkdir -p "$OUTPUT_DIR" "$PERF_DATA_DIR"
 
+if [[ ! -x "$DEBUG_BINARY" ]]; then
+    (
+        cd "$ROOT_DIR"
+        swift build --product WorkspaceManager >/dev/null
+    )
+fi
+
 echo "WorkspaceManager New Workspace perf baseline"
 echo "  runs: $RUNS"
 echo "  sleep per run: ${SLEEP_SECONDS}s"
+echo "  launch mode: $LAUNCH_MODE"
 echo "  output: $OUTPUT_DIR"
 echo "  data dir: $PERF_DATA_DIR"
 
@@ -70,11 +93,18 @@ for i in $(seq 1 "$RUNS"); do
 
     (
         cd "$ROOT_DIR"
-        WORKSPACES_DATA_DIR="$PERF_DATA_DIR" \
-        WORKSPACES_NO_ACTIVATE_ON_LAUNCH=1 \
-        WORKSPACES_PERF_AUTO_SELECT_FIRST_REPO=1 \
-        WORKSPACES_PERF_AUTO_OPEN_NEW_WORKSPACE=1 \
-        swift run WorkspaceManager >"$LOG_FILE" 2>&1
+        if [[ "$LAUNCH_MODE" == "no-activate" ]]; then
+            WORKSPACES_DATA_DIR="$PERF_DATA_DIR" \
+            WORKSPACES_NO_ACTIVATE_ON_LAUNCH=1 \
+            WORKSPACES_PERF_AUTO_SELECT_FIRST_REPO=1 \
+            WORKSPACES_PERF_AUTO_OPEN_NEW_WORKSPACE=1 \
+            "$DEBUG_BINARY" >"$LOG_FILE" 2>&1
+        else
+            WORKSPACES_DATA_DIR="$PERF_DATA_DIR" \
+            WORKSPACES_PERF_AUTO_SELECT_FIRST_REPO=1 \
+            WORKSPACES_PERF_AUTO_OPEN_NEW_WORKSPACE=1 \
+            "$DEBUG_BINARY" >"$LOG_FILE" 2>&1
+        fi
     ) &
     APP_PID=$!
 
@@ -93,7 +123,7 @@ ARCH="$(uname -m)"
 MODEL="$(sysctl -n hw.model 2>/dev/null || echo unknown)"
 TIMESTAMP="$(date '+%Y-%m-%dT%H:%M:%S%z')"
 
-python3 - "$OUTPUT_DIR" "$RUNS" "$SLEEP_SECONDS" "$TIMESTAMP" "$OS_VERSION" "$OS_BUILD" "$ARCH" "$MODEL" <<'PY'
+python3 - "$OUTPUT_DIR" "$RUNS" "$SLEEP_SECONDS" "$TIMESTAMP" "$OS_VERSION" "$OS_BUILD" "$ARCH" "$MODEL" "$LAUNCH_MODE" <<'PY'
 import json
 import pathlib
 import re
@@ -108,6 +138,7 @@ os_version = sys.argv[5]
 os_build = sys.argv[6]
 arch = sys.argv[7]
 model = sys.argv[8]
+launch_mode = sys.argv[9]
 
 line_pattern = re.compile(r"metric=([a-z_]+)")
 duration_pattern = re.compile(r"duration_ms=([0-9]+(?:\.[0-9]+)?)")
@@ -181,6 +212,7 @@ summary = {
         "timestamp": timestamp,
         "runs_requested": runs,
         "sleep_seconds": sleep_seconds,
+        "launch_mode": launch_mode,
         "os_version": os_version,
         "os_build": os_build,
         "arch": arch,
@@ -226,6 +258,7 @@ summary_path.write_text("\n".join(summary_lines) + "\n")
 summary_json_path.write_text(json.dumps(summary, indent=2) + "\n")
 
 print(summary_path)
+print(f"launch_mode: {launch_mode}")
 print("\n".join(summary_lines))
 print(f"summary_json={summary_json_path}")
 PY

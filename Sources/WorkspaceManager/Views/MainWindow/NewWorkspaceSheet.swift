@@ -209,6 +209,14 @@ struct NewWorkspaceSheet: View {
             if let preferredInitialEnvironmentID {
                 selectedEnvironmentID = preferredInitialEnvironmentID
             }
+            InvestigationDiagnostics.emitSheet(
+                phase: "sheet_on_appear",
+                fields: [
+                    "repo_id": repo.id.uuidString,
+                    "option_count": "\(environmentOptions.count)",
+                    "selected_environment": selectedEnvironmentID,
+                ]
+            )
         }
         .onChange(of: name) { _, newValue in
             updateNameSource(for: newValue)

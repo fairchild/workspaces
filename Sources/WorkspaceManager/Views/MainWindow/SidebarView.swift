@@ -51,11 +51,7 @@ struct SidebarView: View {
 
     @State private var isAddingRepo = false
     @State private var newWorkspaceSheetContext: NewWorkspaceSheetContext?
-    @State private var providerAvailabilityByID: [String: WorkspaceProviderAvailability] =
-        UIFixtureLumeEnvironment.initialProviderAvailabilityByID()
-    @State private var isRefreshingProviderAvailability = false
-    @State private var lumeRuntimeSnapshot: LumeRuntimeSnapshot? =
-        UIFixtureLumeEnvironment.initialRuntimeSnapshot()
+    @State private var workspaceEnvironmentSheetState = WorkspaceEnvironmentSheetState.empty
 
     // Error alert state
     @State private var errorMessage: String?
@@ -88,6 +84,10 @@ struct SidebarView: View {
             workspaceService: workspaceService,
             workspaceProviderRegistry: workspaceProviderRegistry
         )
+    }
+
+    private var lumeRuntimeSnapshot: LumeRuntimeSnapshot? {
+        workspaceEnvironmentSheetState.lumeRuntimeSnapshot
     }
 
     private var repoSortController: SidebarRepoSortController {
@@ -157,7 +157,6 @@ struct SidebarView: View {
                         )
                     }
                 }
-                .id(newWorkspaceSheetRefreshID(for: context.repo))
             }
             .alert("Error", isPresented: $showingError) {
                 Button("OK", role: .cancel) {}
@@ -681,7 +680,7 @@ struct SidebarView: View {
                 provider: provider,
                 action: .createWorkspace(name: name, guestOS: guestOS)
             ) {
-                await refreshLumeRuntimeSnapshot(trigger: "workspace_create_after_setup")
+                await refreshWorkspaceEnvironmentState(trigger: "workspace_create_after_setup")
                 await createWorkspaceAfterSetup(
                     from: repo,
                     name: name,
@@ -856,7 +855,7 @@ struct SidebarView: View {
                     provider: provider,
                     action: .startWorkspace(workspaceName: workspace.name)
                 ) {
-                    await refreshLumeRuntimeSnapshot(trigger: "workspace_start_after_setup")
+                    await refreshWorkspaceEnvironmentState(trigger: "workspace_start_after_setup")
                     await performStartAfterSetup(workspace)
                 }
             } catch {
@@ -909,7 +908,7 @@ struct SidebarView: View {
                     provider: provider,
                     action: .openDesktop(workspaceName: workspace.name)
                 ) {
-                    await refreshLumeRuntimeSnapshot(trigger: "workspace_desktop_after_setup")
+                    await refreshWorkspaceEnvironmentState(trigger: "workspace_desktop_after_setup")
                     await openDesktopAfterSetup(workspace)
                 }
             } catch {
@@ -975,18 +974,61 @@ struct SidebarView: View {
 
     @MainActor
     private func prepareNewWorkspaceSheet(for repo: Repo) async {
+        InvestigationDiagnostics.emitSheet(
+            phase: "sidebar_sheet_flow_started",
+            fields: ["repo_id": repo.id.uuidString]
+        )
         let attemptID = PerformanceSignposts.beginNewWorkspaceSheetReady(trigger: "sidebar")
-        defer {
+
+        if await seedFixtureProviderStateIfNeeded() {
+            InvestigationDiagnostics.emitSheet(
+                phase: "sidebar_fixture_seeded",
+                fields: ["repo_id": repo.id.uuidString]
+            )
+            newWorkspaceSheetContext = NewWorkspaceSheetContext(repo: repo)
+            InvestigationDiagnostics.emitSheet(
+                phase: "sidebar_sheet_context_set",
+                fields: [
+                    "repo_id": repo.id.uuidString,
+                    "option_count": "\(environmentOptions(for: repo).count)",
+                ]
+            )
             PerformanceSignposts.endNewWorkspaceSheetReadyIfNeeded(
                 attemptID: attemptID,
                 outcome: "success"
             )
+            return
         }
 
-        await refreshProviderAvailability(trigger: "sidebar_sheet_open")
-        await refreshLumeRuntimeSnapshot(trigger: "sidebar_sheet_open")
+        workspaceEnvironmentSheetState = workspaceEnvironmentOptionsController.prepareSheetStateForPresentation(
+            existingState: workspaceEnvironmentSheetState,
+            registry: workspaceProviderRegistry
+        )
 
         newWorkspaceSheetContext = NewWorkspaceSheetContext(repo: repo)
+        InvestigationDiagnostics.emitSheet(
+            phase: "sidebar_sheet_context_set",
+            fields: [
+                "repo_id": repo.id.uuidString,
+                "option_count": "\(environmentOptions(for: repo).count)",
+            ]
+        )
+        PerformanceSignposts.endNewWorkspaceSheetReadyIfNeeded(
+            attemptID: attemptID,
+            outcome: "success"
+        )
+
+        Task { @MainActor in
+            await refreshWorkspaceEnvironmentState(trigger: "sidebar_sheet_open")
+            InvestigationDiagnostics.emitSheet(
+                phase: "sidebar_environment_refresh_completed",
+                fields: [
+                    "repo_id": repo.id.uuidString,
+                    "lume_state": lumeRuntimeSnapshot?.state.rawValue ?? "pending",
+                    "option_count": "\(environmentOptions(for: repo).count)",
+                ]
+            )
+        }
     }
 
     @MainActor
@@ -1136,58 +1178,24 @@ struct SidebarView: View {
         workspaceProviderRegistry.provider(for: providerID)?.descriptor.displayName ?? providerID
     }
 
-    private var providerAvailabilityRefreshSignature: String {
-        workspaceEnvironmentOptionsController.providerAvailabilityRefreshSignature(
-            providerAvailabilityByID: providerAvailabilityByID,
-            registry: workspaceProviderRegistry
-        )
-    }
-
-    private var lumeRuntimeRefreshSignature: String {
-        workspaceEnvironmentOptionsController.lumeRuntimeRefreshSignature(
-            snapshot: lumeRuntimeSnapshot
-        )
-    }
-
-    private func newWorkspaceSheetRefreshID(for repo: Repo) -> String {
-        workspaceEnvironmentOptionsController.newWorkspaceSheetRefreshID(
-            for: repo,
-            providerAvailabilityByID: providerAvailabilityByID,
-            registry: workspaceProviderRegistry,
-            lumeRuntimeSnapshot: lumeRuntimeSnapshot,
-            isCreating: isCreatingWorkspace(for: repo.id)
-        )
-    }
-
     private func environmentOptions(for repo: Repo) -> [WorkspaceEnvironmentSheetOption] {
         workspaceEnvironmentOptionsController.environmentOptions(
             for: repo,
             registry: workspaceProviderRegistry,
-            providerAvailabilityByID: providerAvailabilityByID,
-            isRefreshingProviderAvailability: isRefreshingProviderAvailability,
-            lumeRuntimeSnapshot: lumeRuntimeSnapshot
+            sheetState: workspaceEnvironmentSheetState
         )
     }
 
     @MainActor
-    private func refreshProviderAvailability(trigger: String) async {
-        isRefreshingProviderAvailability = true
-        defer {
-            isRefreshingProviderAvailability = false
-        }
-
-        providerAvailabilityByID = await workspaceEnvironmentOptionsController.refreshProviderAvailability(
+    private func refreshWorkspaceEnvironmentState(trigger: String) async {
+        workspaceEnvironmentSheetState = workspaceEnvironmentOptionsController.prepareSheetStateForPresentation(
+            existingState: workspaceEnvironmentSheetState,
             registry: workspaceProviderRegistry,
-            existingAvailabilityByID: providerAvailabilityByID,
-            trigger: trigger
         )
-    }
-
-    @MainActor
-    private func refreshLumeRuntimeSnapshot(trigger: String) async {
-        lumeRuntimeSnapshot = await workspaceEnvironmentOptionsController.refreshLumeRuntimeSnapshot(
+        workspaceEnvironmentSheetState = await workspaceEnvironmentOptionsController.refreshSheetState(
+            registry: workspaceProviderRegistry,
             runtimeService: lumeRuntimeService,
-            existingSnapshot: lumeRuntimeSnapshot,
+            existingState: workspaceEnvironmentSheetState,
             trigger: trigger
         )
     }
@@ -1196,14 +1204,14 @@ struct SidebarView: View {
     private func seedFixtureProviderStateIfNeeded() async -> Bool {
         guard
             let state = await workspaceEnvironmentOptionsController.seedFixtureStateIfNeeded(
+                registry: workspaceProviderRegistry,
                 runtimeService: lumeRuntimeService
             )
         else {
             return false
         }
 
-        providerAvailabilityByID = state.providerAvailabilityByID
-        lumeRuntimeSnapshot = state.lumeRuntimeSnapshot
+        workspaceEnvironmentSheetState = state
         return true
     }
 

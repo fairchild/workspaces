@@ -52,6 +52,11 @@ public struct WorkspaceProviderAvailability: Sendable, Equatable {
     }
 }
 
+public enum WorkspaceProviderSheetStatusPolicy: Sendable, Equatable {
+    case immediate
+    case deferred
+}
+
 public enum WorkspaceGuestOS: String, CaseIterable, Codable, Sendable, Identifiable {
     case linux
     case macOS = "macos"
@@ -72,6 +77,7 @@ public struct WorkspaceProviderDescriptor: Sendable, Equatable, Identifiable {
     public let id: String
     public let displayName: String
     public let description: String
+    public let sheetStatusPolicy: WorkspaceProviderSheetStatusPolicy
     public let supportedGuestOS: [WorkspaceGuestOS]
     public let supportsDesktop: Bool
     public let supportsArchive: Bool
@@ -82,6 +88,7 @@ public struct WorkspaceProviderDescriptor: Sendable, Equatable, Identifiable {
         id: String,
         displayName: String,
         description: String,
+        sheetStatusPolicy: WorkspaceProviderSheetStatusPolicy = .immediate,
         supportedGuestOS: [WorkspaceGuestOS] = [],
         supportsDesktop: Bool = false,
         supportsArchive: Bool = false,
@@ -91,6 +98,7 @@ public struct WorkspaceProviderDescriptor: Sendable, Equatable, Identifiable {
         self.id = id
         self.displayName = displayName
         self.description = description
+        self.sheetStatusPolicy = sheetStatusPolicy
         self.supportedGuestOS = supportedGuestOS
         self.supportsDesktop = supportsDesktop
         self.supportsArchive = supportsArchive

@@ -9,15 +9,17 @@ import Foundation
 
 public actor DaytonaWorkspaceProvider: WorkspaceProviderProtocol {
     public static let identifier = "daytona"
-
-    public nonisolated let descriptor = WorkspaceProviderDescriptor(
+    public static let providerDescriptor = WorkspaceProviderDescriptor(
         id: DaytonaWorkspaceProvider.identifier,
         displayName: "Daytona",
         description: "Create a cloud Linux workspace and connect over SSH.",
+        sheetStatusPolicy: .deferred,
         supportedGuestOS: [.linux],
         supportsArchive: true,
         requiresRemoteRepository: true
     )
+
+    public nonisolated let descriptor = DaytonaWorkspaceProvider.providerDescriptor
 
     private let backend: any ProvisionCapable & StartStopCapable & Archivable & Listable
 

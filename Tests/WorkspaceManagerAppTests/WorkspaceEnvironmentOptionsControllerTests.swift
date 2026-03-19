@@ -74,14 +74,40 @@ struct WorkspaceEnvironmentOptionsControllerTests {
         func executablePath() async throws -> String { snapshotValue.executablePath ?? "/tmp/lume" }
     }
 
-    @Test("Nil snapshot keeps the default macOS base summary")
-    func nilSnapshotKeepsDefaultMacOSSummary() throws {
-        let option = try macOSOption(snapshot: nil)
+    @Test("Loading Lume state keeps the default macOS base summary while disabled")
+    func loadingLumeStateKeepsDefaultMacOSSummary() throws {
+        let option = try macOSOption(
+            snapshot: nil,
+            lumeAvailability: nil,
+            isRefreshingLume: true
+        )
 
         #expect(option.subtitle == "Matches this Mac by default")
-        #expect(option.statusText == nil)
+        #expect(option.statusText == "Checking runtime")
         #expect(option.statusSeverity == nil)
-        #expect(option.availabilityReason == nil)
+        #expect(option.availabilityReason == "Checking VM runtime...")
+        #expect(!option.isAvailable)
+    }
+
+    @Test("Preparing sheet state keeps local ready and deferred providers loading")
+    func prepareSheetStateMarksDeferredProvidersLoading() {
+        let state = controller.prepareSheetStateForPresentation(
+            existingState: .empty,
+            registry: currentRegistry
+        )
+
+        let localState = state.providerState(for: LocalWorkspaceProvider.providerDescriptor)
+        #expect(localState.availability == .available)
+        #expect(!localState.isRefreshing)
+
+        let daytonaState = state.providerState(for: DaytonaWorkspaceProvider.providerDescriptor)
+        #expect(daytonaState.availability == nil)
+        #expect(daytonaState.isRefreshing)
+
+        let lumeState = state.providerState(for: LumeWorkspaceProvider.providerDescriptor)
+        #expect(lumeState.availability == nil)
+        #expect(lumeState.isRefreshing)
+        #expect(lumeState.detail.lumeRuntimeSnapshot == nil)
     }
 
     @Test("Setup required snapshot surfaces setup messaging for macOS and Linux VM options")
@@ -366,19 +392,31 @@ struct WorkspaceEnvironmentOptionsControllerTests {
         #expect(refreshedSnapshot == existingSnapshot)
     }
 
-    private func macOSOption(snapshot: LumeRuntimeSnapshot?) throws -> WorkspaceEnvironmentSheetOption {
+    private func macOSOption(
+        snapshot: LumeRuntimeSnapshot?,
+        lumeAvailability: WorkspaceProviderAvailability? = .available,
+        isRefreshingLume: Bool = false
+    ) throws -> WorkspaceEnvironmentSheetOption {
         try option(
             providerID: LumeWorkspaceProvider.identifier,
             guestOS: .macOS,
-            snapshot: snapshot
+            snapshot: snapshot,
+            lumeAvailability: lumeAvailability,
+            isRefreshingLume: isRefreshingLume
         )
     }
 
-    private func linuxVMOption(snapshot: LumeRuntimeSnapshot?) throws -> WorkspaceEnvironmentSheetOption {
+    private func linuxVMOption(
+        snapshot: LumeRuntimeSnapshot?,
+        lumeAvailability: WorkspaceProviderAvailability? = .available,
+        isRefreshingLume: Bool = false
+    ) throws -> WorkspaceEnvironmentSheetOption {
         try option(
             providerID: LumeWorkspaceProvider.identifier,
             guestOS: .linux,
-            snapshot: snapshot
+            snapshot: snapshot,
+            lumeAvailability: lumeAvailability,
+            isRefreshingLume: isRefreshingLume
         )
     }
 
@@ -386,10 +424,17 @@ struct WorkspaceEnvironmentOptionsControllerTests {
         providerID: String,
         guestOS: WorkspaceGuestOS?,
         snapshot: LumeRuntimeSnapshot?,
+        lumeAvailability: WorkspaceProviderAvailability? = .available,
+        isRefreshingLume: Bool = false,
         registry: WorkspaceProviderRegistry? = nil
     ) throws -> WorkspaceEnvironmentSheetOption {
         try #require(
-            environmentOptions(snapshot: snapshot, registry: registry).first {
+            environmentOptions(
+                snapshot: snapshot,
+                lumeAvailability: lumeAvailability,
+                isRefreshingLume: isRefreshingLume,
+                registry: registry
+            ).first {
                 $0.providerID == providerID && $0.guestOS == guestOS
             }
         )
@@ -397,6 +442,8 @@ struct WorkspaceEnvironmentOptionsControllerTests {
 
     private func environmentOptions(
         snapshot: LumeRuntimeSnapshot?,
+        lumeAvailability: WorkspaceProviderAvailability? = .available,
+        isRefreshingLume: Bool = false,
         registry: WorkspaceProviderRegistry? = nil
     ) -> [WorkspaceEnvironmentSheetOption] {
         controller.environmentOptions(
@@ -406,10 +453,56 @@ struct WorkspaceEnvironmentOptionsControllerTests {
                 remoteURL: "https://github.com/example/alpha.git"
             ),
             registry: registry ?? currentRegistry,
-            providerAvailabilityByID: [:],
-            isRefreshingProviderAvailability: false,
-            lumeRuntimeSnapshot: snapshot
+            sheetState: sheetState(
+                snapshot: snapshot,
+                lumeAvailability: lumeAvailability,
+                isRefreshingLume: isRefreshingLume,
+                registry: registry ?? currentRegistry
+            )
         )
+    }
+
+    private func sheetState(
+        snapshot: LumeRuntimeSnapshot?,
+        lumeAvailability: WorkspaceProviderAvailability?,
+        isRefreshingLume: Bool,
+        registry: WorkspaceProviderRegistry
+    ) -> WorkspaceEnvironmentSheetState {
+        var providerStatesByID: [String: WorkspaceProviderSheetState] = [:]
+
+        for provider in registry.providers {
+            let descriptor = provider.descriptor
+            switch descriptor.id {
+            case LocalWorkspaceProvider.identifier:
+                providerStatesByID[descriptor.id] = WorkspaceProviderSheetState(
+                    providerID: descriptor.id,
+                    statusPolicy: descriptor.sheetStatusPolicy,
+                    availability: .available,
+                    isRefreshing: false,
+                    detail: .none
+                )
+            case DaytonaWorkspaceProvider.identifier:
+                providerStatesByID[descriptor.id] = WorkspaceProviderSheetState(
+                    providerID: descriptor.id,
+                    statusPolicy: descriptor.sheetStatusPolicy,
+                    availability: .available,
+                    isRefreshing: false,
+                    detail: .none
+                )
+            case LumeWorkspaceProvider.identifier:
+                providerStatesByID[descriptor.id] = WorkspaceProviderSheetState(
+                    providerID: descriptor.id,
+                    statusPolicy: descriptor.sheetStatusPolicy,
+                    availability: lumeAvailability,
+                    isRefreshing: isRefreshingLume,
+                    detail: .lume(snapshot: snapshot)
+                )
+            default:
+                providerStatesByID[descriptor.id] = WorkspaceProviderSheetState.initial(for: descriptor)
+            }
+        }
+
+        return WorkspaceEnvironmentSheetState(providerStatesByID: providerStatesByID)
     }
 
     private func makeSnapshot(

@@ -33,11 +33,7 @@ struct ContentView: View {
     @State private var repoForNewWorkspaceFromLanding: Repo?
     @State private var webSourceCreationTarget: WebSourceCreationTarget?
     @State private var landingErrorMessage: String?
-    @State private var providerAvailabilityByID: [String: WorkspaceProviderAvailability] =
-        UIFixtureLumeEnvironment.initialProviderAvailabilityByID()
-    @State private var isRefreshingProviderAvailability = false
-    @State private var lumeRuntimeSnapshot: LumeRuntimeSnapshot? =
-        UIFixtureLumeEnvironment.initialRuntimeSnapshot()
+    @State private var workspaceEnvironmentSheetState = WorkspaceEnvironmentSheetState.empty
     @State private var didScheduleInitialWorkspaceStatusSync = false
     @StateObject private var rightPaneStateStore = RightPaneStateStore()
     @StateObject private var webSurfaceStore = WebSurfaceStore()
@@ -229,6 +225,10 @@ struct ContentView: View {
         selectedWorkspaceProviderDescriptor?.supportsDesktop == true
     }
 
+    private var lumeRuntimeSnapshot: LumeRuntimeSnapshot? {
+        workspaceEnvironmentSheetState.lumeRuntimeSnapshot
+    }
+
     private var isShowingOpenInEditorError: Binding<Bool> {
         Binding(
             get: { viewState.openInEditorErrorMessage != nil },
@@ -417,7 +417,8 @@ struct ContentView: View {
                 }
                 notificationCoordinator.loadStoredAuth()
                 Task { @MainActor in
-                    _ = await seedLandingProviderStateIfNeeded()
+                    terminalFocusCoordinator.attach(surfaceStore: hostTerminalState.surfaceStore)
+                    _ = await seedLandingWorkspaceEnvironmentStateIfNeeded()
                 }
             }
             .task {
@@ -655,22 +656,60 @@ struct ContentView: View {
 
     @MainActor
     private func presentNewWorkspaceFromLanding(_ repo: Repo) async {
+        InvestigationDiagnostics.emitSheet(
+            phase: "landing_sheet_flow_started",
+            fields: ["repo_id": repo.id.uuidString]
+        )
         let attemptID = PerformanceSignposts.beginNewWorkspaceSheetReady(trigger: "landing")
-        defer {
+
+        if await seedLandingWorkspaceEnvironmentStateIfNeeded() {
+            InvestigationDiagnostics.emitSheet(
+                phase: "landing_fixture_seeded",
+                fields: ["repo_id": repo.id.uuidString]
+            )
+            repoForNewWorkspaceFromLanding = repo
+            InvestigationDiagnostics.emitSheet(
+                phase: "landing_sheet_context_set",
+                fields: [
+                    "repo_id": repo.id.uuidString,
+                    "option_count": "\(environmentOptions(for: repo).count)",
+                ]
+            )
             PerformanceSignposts.endNewWorkspaceSheetReadyIfNeeded(
                 attemptID: attemptID,
                 outcome: "success"
             )
-        }
-
-        if await seedLandingProviderStateIfNeeded() {
-            repoForNewWorkspaceFromLanding = repo
             return
         }
 
-        await refreshLandingProviderAvailability(trigger: "landing_sheet_open")
-        await refreshLandingRuntimeSnapshot(trigger: "landing_sheet_open")
+        workspaceEnvironmentSheetState = workspaceEnvironmentOptionsController.prepareSheetStateForPresentation(
+            existingState: workspaceEnvironmentSheetState,
+            registry: workspaceProviderRegistry
+        )
         repoForNewWorkspaceFromLanding = repo
+        InvestigationDiagnostics.emitSheet(
+            phase: "landing_sheet_context_set",
+            fields: [
+                "repo_id": repo.id.uuidString,
+                "option_count": "\(environmentOptions(for: repo).count)",
+            ]
+        )
+        PerformanceSignposts.endNewWorkspaceSheetReadyIfNeeded(
+            attemptID: attemptID,
+            outcome: "success"
+        )
+
+        Task { @MainActor in
+            await refreshLandingWorkspaceEnvironmentState(trigger: "landing_sheet_open")
+            InvestigationDiagnostics.emitSheet(
+                phase: "landing_environment_refresh_completed",
+                fields: [
+                    "repo_id": repo.id.uuidString,
+                    "lume_state": lumeRuntimeSnapshot?.state.rawValue ?? "pending",
+                    "option_count": "\(environmentOptions(for: repo).count)",
+                ]
+            )
+        }
     }
 
     @MainActor
@@ -961,6 +1000,7 @@ struct ContentView: View {
 
     @MainActor
     private func handleRepoSelection(_ repo: Repo) {
+        terminalFocusCoordinator.cancelPendingFocusRequest(reason: "repo_overview_selected")
         abandonPendingRemoteConnection(reason: "repo_overview_selected")
         markAccessed(repo: repo)
         applyNavigationDestination(.repoOverview(repo))
@@ -979,6 +1019,7 @@ struct ContentView: View {
             inside: repoDirectory
         )
 
+        terminalFocusCoordinator.cancelPendingFocusRequest(reason: "repo_terminal_selected")
         abandonPendingRemoteConnection(reason: "repo_terminal_selected")
         markAccessed(repo: repo)
         applyNavigationDestination(.repoTerminal(repo))
@@ -1001,21 +1042,6 @@ struct ContentView: View {
                 )
             }
         )
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-            Task { @MainActor in
-                terminalFocusCoordinator.requestMainTerminalFocus(
-                    targetSessionID: session.id,
-                    surfaceStore: hostTerminalState.surfaceStore,
-                    activeSessionID: hostTerminalState.activeSessionID,
-                    onTargetFocused: {
-                        terminalFocusCoordinator.completeRepoClickMeasurement(
-                            sessionID: session.id,
-                            outcome: "focused_retry"
-                        )
-                    }
-                )
-            }
-        }
     }
 
     @MainActor
@@ -1026,6 +1052,7 @@ struct ContentView: View {
     @MainActor
     private func handleWorkspaceSelection(_ workspace: Workspace, preferredDirectory: URL?) {
         terminalFocusCoordinator.cancelPendingRepoClickMeasurement(reason: "workspace_selected")
+        terminalFocusCoordinator.cancelPendingFocusRequest(reason: "workspace_selected")
 
         if workspace.backendIdentifier != LocalWorkspaceProvider.identifier {
             handleProviderBackedWorkspaceSelection(workspace)
@@ -1047,15 +1074,6 @@ struct ContentView: View {
                 surfaceStore: hostTerminalState.surfaceStore,
                 activeSessionID: hostTerminalState.activeSessionID
             )
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                Task { @MainActor in
-                    terminalFocusCoordinator.requestMainTerminalFocus(
-                        targetSessionID: session.id,
-                        surfaceStore: hostTerminalState.surfaceStore,
-                        activeSessionID: hostTerminalState.activeSessionID
-                    )
-                }
-            }
         }
 
     }
@@ -1146,6 +1164,7 @@ struct ContentView: View {
     private func handleWebSourceSelection(_ source: WebSource) {
         viewState.connectingWorkspaceID = nil
         terminalFocusCoordinator.cancelPendingRepoClickMeasurement(reason: "web_source_selected")
+        terminalFocusCoordinator.cancelPendingFocusRequest(reason: "web_source_selected")
         abandonPendingRemoteConnection(reason: "web_source_selected")
         applyNavigationDestination(.webView(source))
         webSurfaceStore.cancelPendingRelease()
@@ -1811,39 +1830,30 @@ struct ContentView: View {
     }
 
     @MainActor
-    private func seedLandingProviderStateIfNeeded() async -> Bool {
+    private func seedLandingWorkspaceEnvironmentStateIfNeeded() async -> Bool {
         guard
             let state = await workspaceEnvironmentOptionsController.seedFixtureStateIfNeeded(
+                registry: workspaceProviderRegistry,
                 runtimeService: lumeRuntimeService
             )
         else {
             return false
         }
 
-        providerAvailabilityByID = state.providerAvailabilityByID
-        lumeRuntimeSnapshot = state.lumeRuntimeSnapshot
+        workspaceEnvironmentSheetState = state
         return true
     }
 
     @MainActor
-    private func refreshLandingProviderAvailability(trigger: String) async {
-        isRefreshingProviderAvailability = true
-        defer {
-            isRefreshingProviderAvailability = false
-        }
-
-        providerAvailabilityByID = await workspaceEnvironmentOptionsController.refreshProviderAvailability(
+    private func refreshLandingWorkspaceEnvironmentState(trigger: String) async {
+        workspaceEnvironmentSheetState = workspaceEnvironmentOptionsController.prepareSheetStateForPresentation(
+            existingState: workspaceEnvironmentSheetState,
             registry: workspaceProviderRegistry,
-            existingAvailabilityByID: providerAvailabilityByID,
-            trigger: trigger
         )
-    }
-
-    @MainActor
-    private func refreshLandingRuntimeSnapshot(trigger: String) async {
-        lumeRuntimeSnapshot = await workspaceEnvironmentOptionsController.refreshLumeRuntimeSnapshot(
+        workspaceEnvironmentSheetState = await workspaceEnvironmentOptionsController.refreshSheetState(
+            registry: workspaceProviderRegistry,
             runtimeService: lumeRuntimeService,
-            existingSnapshot: lumeRuntimeSnapshot,
+            existingState: workspaceEnvironmentSheetState,
             trigger: trigger
         )
     }
@@ -1852,9 +1862,7 @@ struct ContentView: View {
         workspaceEnvironmentOptionsController.environmentOptions(
             for: repo,
             registry: workspaceProviderRegistry,
-            providerAvailabilityByID: providerAvailabilityByID,
-            isRefreshingProviderAvailability: isRefreshingProviderAvailability,
-            lumeRuntimeSnapshot: lumeRuntimeSnapshot
+            sheetState: workspaceEnvironmentSheetState
         )
     }
 }

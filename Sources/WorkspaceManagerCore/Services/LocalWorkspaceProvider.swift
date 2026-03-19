@@ -9,13 +9,15 @@ import Foundation
 
 public struct LocalWorkspaceProvider: WorkspaceProviderProtocol {
     public static let identifier = "local"
-
-    public let descriptor = WorkspaceProviderDescriptor(
+    public static let providerDescriptor = WorkspaceProviderDescriptor(
         id: LocalWorkspaceProvider.identifier,
         displayName: "Local",
         description: "Create a normal workspace on the host filesystem.",
+        sheetStatusPolicy: .immediate,
         usesHostWorkspaceFiles: true
     )
+
+    public let descriptor = LocalWorkspaceProvider.providerDescriptor
 
     public init() {}
 
