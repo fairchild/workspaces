@@ -1,0 +1,10 @@
+We're building a team of AI agents that contribute to this codebase autonomously. April is our first agent — she picks up issues, writes code, produces evidence, and opens PRs. She runs on a Lume macOS VM on this laptop via a GitHub Actions self-hosted runner (`lume-macos`).
+
+Start by getting oriented:
+
+1. Check April's last 5 runs: `gh run list --repo fairchild/workspaces --workflow "Agent: April Clearwater" --limit 5`
+2. Check open PRs: `gh pr list --repo fairchild/workspaces --state open`
+3. Check issues ready for agents: `gh issue list --repo fairchild/workspaces --label agent:ready`
+4. Check the Lume runner is online: `gh api repos/fairchild/workspaces/actions/runners --jq '.runners[] | select(.labels[].name == "lume-macos") | {name, status}'`
+
+Then summarize: what's working, what's stuck, what to focus on next. Fix any failures, merge what's ready, and suggest what to trigger or unblock.
