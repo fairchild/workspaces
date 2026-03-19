@@ -62,20 +62,19 @@ If you choose this action, you must have already edited the code during this run
 
 - If the issue already has your open PR, check out that PR branch before editing.
 - Otherwise create or switch to a branch named `codex/april-clearwater-issue-<number>-<slug>` before editing.
-- Run the most relevant validation you can from the issue's requested evidence.
+- **You run on macOS.** Your runner is a macOS VM (`lume-macos`) with `swift`, `git`, `gh`, `uv`, and `node`. You MUST run `swift test` yourself and include the output — do not defer to CI.
+- Actually run `swift test --filter <relevant suite>` during this session. Copy the pass/fail output into your Evidence Status as proof.
+- If an evidence item asks for a screenshot, use `screencapture -x /tmp/evidence.png` then upload:
+  ```
+  uv run scripts/upload-evidence.py /tmp/evidence.png --repo workspaces --pr <number> --name <slug> --breadcrumb
+  ```
+  The upload returns a public URL. Embed it in your PR body as `![description](url)`.
 - `## Evidence Status` is required in the PR body.
 - Mirror every issue `requested_evidence` item using the exact issue text and one of these forms:
   - `- [complete] <requested_evidence item> -- <artifact, command, link, or short proof note>`
   - `- [blocked] <requested_evidence item> -- <concrete reason it could not be produced>`
-  - `- [pending-ci] <requested_evidence item> -- <what the CI evidence job will produce>`
-- You run on a macOS self-hosted runner (`lume-macos`). You can produce macOS evidence directly:
-  - **Build/test**: `swift build`, `swift test --filter <Suite>` — capture output as proof.
-  - **Screenshots**: Use `screencapture -x /tmp/evidence.png` (or launch the app and capture specific windows).
-  - **Upload**: Use `uv run scripts/upload-evidence.py <file> --repo workspaces --pr <number> --name <slug>` to get a public URL for embedding in PR markdown. Requires `EVIDENCE_UPLOAD_TOKEN` env var (provided by the workflow).
-  - **Breadcrumbs**: Add `--breadcrumb` to the upload command to leave a copy on `~/Desktop` and append to `~/Desktop/april-runs.log`.
-- Use `[complete]` with the uploaded URL or command output as proof when you produce evidence.
-- Use `[pending-ci]` only for evidence you genuinely cannot produce in your current run (e.g., requires the production app bundle or a different OS).
-- If any evidence item is blocked or pending-ci, say `blocked on evidence` in the Validation section.
+- Use `[complete]` with actual output or uploaded URL as proof. Do not use `[pending-ci]` — you ARE the CI.
+- If any evidence item is blocked, say `blocked on evidence` in the Validation section.
 
 ```
 ---
@@ -91,12 +90,12 @@ commit_message: "Fix environment status color semantics in NewWorkspaceSheet"
 - Key files touched and why
 
 ## Evidence Status
-- [complete] Exact requested evidence item text -- proof note
+- [complete] Exact requested evidence item text -- proof note or uploaded URL
+- [complete] `swift test --filter SuiteTests` passing -- (paste actual output summary)
 - [blocked] Exact requested evidence item text -- why it could not be produced here
-- [pending-ci] Exact requested evidence item text -- CI evidence job will run swift test / capture screenshots
 
 ## Validation
-- `swift test ...`
+- `swift test --filter <Suite>` — (paste actual pass/fail output)
 - `blocked on evidence: <reason>` if needed
 
 ## Risks

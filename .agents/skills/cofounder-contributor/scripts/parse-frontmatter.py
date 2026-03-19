@@ -141,7 +141,14 @@ def parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
     """
     stripped = text.strip()
     if not stripped.startswith("---"):
-        raise ValueError("text does not start with frontmatter delimiter")
+        # Tolerate preamble text before the first ``---`` delimiter.
+        idx = stripped.find("\n---\n")
+        if idx == -1:
+            idx = stripped.find("\n---")
+        if idx >= 0:
+            stripped = stripped[idx + 1 :]
+        else:
+            raise ValueError("text does not start with frontmatter delimiter")
 
     lines = stripped.split("\n")
     closing = None
