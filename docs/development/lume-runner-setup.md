@@ -162,6 +162,31 @@ lume ssh "$LUME_VM" \
 
 Without this, jobs will fail with `FileNotFoundError: 'gh'` or `'npx'` because those binaries live under `/opt/homebrew/bin` and `~/.local/bin`.
 
+## 7. Disable screen lock and sleep
+
+The VM must never lock its screen or sleep — the runner service depends on the GUI session, and a locked screen prevents screenshot evidence capture. Apply these settings after initial provisioning:
+
+```bash
+lume ssh "$LUME_VM" \
+  --user lume --password lumesetup26 \
+  --storage "$LUME_STORAGE/workspace-vms" \
+  --timeout 15 \
+  "bash -lc '
+    sudo bash -c \"
+      # Auto-login: skip the login screen on boot
+      defaults write /Library/Preferences/com.apple.loginwindow autoLoginUser lume
+      # Disable all sleep (display, system, disk)
+      pmset -a displaysleep 0 sleep 0 disksleep 0
+      # Disable screensaver
+      defaults -currentHost write com.apple.screensaver idleTime 0
+      # Never ask for password on wake
+      defaults write com.apple.screensaver askForPassword -int 0
+    \"
+  '"
+```
+
+**Why this matters**: SSH sessions cannot unlock the macOS lock screen — they run outside the GUI (WindowServer) context. If the VM locks itself, the only recovery path is sending keystrokes through VNC from the host (see "Recovering from a locked screen" below).
+
 ## Day-two operations
 
 Check guest-side runner status:
@@ -198,6 +223,64 @@ cd ~/.local/share/actions-runner-lume
 ./config.sh remove --token <REMOVAL_TOKEN>
 # Re-run step 3
 ```
+
+## Recovering from a stopped VM
+
+If the runner shows `offline` in GitHub, the most common cause is the VM itself is stopped:
+
+```bash
+# Check VM state
+LUME_STORAGE="$HOME/Library/Application Support/WorkspaceManager/LumeStorage"
+lume ls --storage "$LUME_STORAGE/workspace-vms"
+```
+
+If `workspaces-lume-runner` shows `stopped`:
+
+```bash
+# Boot it (the runner service auto-starts via LaunchAgent)
+lume run workspaces-lume-runner \
+  --storage "$LUME_STORAGE/workspace-vms" --no-display &
+
+# Wait for SSH, then verify the runner service started
+sleep 30
+lume ssh workspaces-lume-runner \
+  --user lume --password lumesetup26 \
+  --storage "$LUME_STORAGE/workspace-vms" \
+  --timeout 30 \
+  "bash -lc 'cd ~/.local/share/actions-runner-lume && ./svc.sh status'"
+
+# Confirm GitHub sees it
+gh api repos/fairchild/workspaces/actions/runners \
+  --jq '.runners[] | select(.labels[].name == "lume-macos") | {name, status}'
+```
+
+### Recovering from a locked screen
+
+SSH cannot unlock the macOS lock screen (no WindowServer access). If the VM is locked and you need GUI access:
+
+**From the host, via AppleScript through Screen Sharing:**
+
+```bash
+# Open VNC (password is in the URL — get it from lume ls)
+open "vnc://<password>@127.0.0.1:<port>"
+
+# Type the login password into the lock screen via Screen Sharing
+osascript -e '
+tell application "Screen Sharing" to activate
+delay 1
+tell application "System Events"
+    tell process "Screen Sharing"
+        click window 1
+        delay 0.3
+    end tell
+    keystroke "lumesetup26"
+    delay 0.3
+    keystroke return
+end tell
+'
+```
+
+To prevent this from happening again, apply the no-lock settings from step 7.
 
 ## Troubleshooting
 
