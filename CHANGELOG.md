@@ -1,5 +1,63 @@
 # Changelog
 
+## [0.6.0] - 2026-03-19
+
+### Added
+- switch agent output to YAML frontmatter + add CLI agentic loop mode (#102)
+- add agent history context to contributor runs
+- drop advance_issue, redirect agents to discussions
+- PR reviews lead with verdict and support code suggestions
+- give agents their own GitHub App identities
+- prioritize follow-up reviews when author pushes after agent comment
+- add --message parameter for directed agent tasks
+- normalize OpenAI API key env for Codespaces compatibility
+
+### Fixed
+- grant issues:write to agent workflows and require timeouts on all subprocess calls (#101)
+- handle preamble text before frontmatter in CLI agentic mode
+- strengthen frontmatter format instructions for CLI agentic mode
+- detect bot login via /app endpoint instead of /user
+- map approve_with_followups to --approve and pass GH_APP_SLUG
+- prefer engagement before new agent proposals (#113)
+- run contributor agents on ubuntu hosted runners (#118)
+
+### Other
+- scope macOS CI to build-affecting changes
+- Hide activity tab when notifications are disabled (#80)
+- align backlog with milestone workflow (#85)
+- link lume milestone to backlog (#91)
+- clarify signing-host release lane (#86)
+- Refactor Ghostty runtime handling and workspace environment options (#92)
+- add .agents/MEMORY.md
+- Require PR evidence for UI and performance-sensitive work (#95)
+- Fix startup slowness from eager runtime probing (#94)
+- prioritize discussion participation over solo issue comments
+- add weekend agent schedules (every other hour)
+- move agent scripts into skill directories
+- Harden Lume runtime seams (#103)
+- add remote runtime expansion plan to backlog
+- gitignore paper PDFs and add papers README with sources
+- Make Peter issues agent actionable (#114)
+- Fix Peter frontmatter parsing for block-list metadata (#115)
+- Add contributor execution flow
+- Add agent owner protocol
+- Sync issue readiness for contributors
+- Add agent:review and agent:mergeable labels with assignment tracking (#120)
+- Require PR evidence accounting for agent work
+- Enable agents to produce macOS evidence via CI job
+- Fix agent CI evidence flow
+- Run April on Lume macOS VM with ubuntu fallback (#128)
+- Prefer app token for agent PR reviews (#122)
+- Restore native GitHub App reviews (#125)
+- Run April on Lume macOS VM with ubuntu fallback (#130)
+- Add fuzzy evidence matching and CI reconciliation (#126)
+- Add R2 evidence store and harden April's macOS execution (#133)
+- Fix evidence gate edge cases and simplify April workflow (#132)
+- Fix environment status color semantics in NewWorkspaceSheet (#119)
+- Close provider setup validation gaps for milestone 5 (#123)
+- Add /april command for agent team coordination (#134)
+- defer workspace runtime readiness and record release baseline
+
 ## [0.5.0] - 2026-03-12
 
 ### Added
