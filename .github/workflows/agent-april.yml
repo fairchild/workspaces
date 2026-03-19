@@ -28,9 +28,7 @@ concurrency:
 
 jobs:
   check-runner:
-    # Lightweight probe: is the Lume macOS runner online?
-    # Uses the app token because the default GITHUB_TOKEN may lack
-    # permission to list self-hosted runners.
+    # Prefer the Lume macOS VM when it's online; fall back to ubuntu-latest.
     runs-on: ubuntu-latest
     timeout-minutes: 2
     outputs:
@@ -105,20 +103,25 @@ jobs:
           GH_APP_SLUG: april-clearwater
           EVIDENCE_UPLOAD_TOKEN: ${{ secrets.EVIDENCE_UPLOAD_TOKEN }}
 
-  # Evidence fallback: only runs when the main job ran on ubuntu (Lume was
-  # offline) but somehow came back online before this job starts.  In practice
-  # this is rare — if Lume was offline for `run`, it's likely still offline.
-  # The job will simply stay queued until the runner appears or the workflow
-  # times out, which is acceptable.
+  # Evidence fallback: only needed when the run job used Ubuntu (no macOS
+  # toolchain) but the work requires macOS evidence (build/test/screenshot).
+  # When the run job already ran on macOS, evidence can be produced there
+  # and this job is skipped.
   evidence:
     needs: [check-runner, run]
     if: needs.check-runner.outputs.is_macos == 'false' && needs.run.outputs.needs_macos_evidence == 'true'
-    runs-on: [self-hosted, lume-macos]
+    runs-on: [self-hosted, tart-ui]
     timeout-minutes: 20
     permissions:
       contents: read
       pull-requests: write
     steps:
+      - name: Generate app token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.APRIL_APP_ID }}
+          private-key: ${{ secrets.APRIL_PRIVATE_KEY }}
       - uses: actions/checkout@v5
         with:
           ref: ${{ needs.run.outputs.pr_branch }}
@@ -129,11 +132,12 @@ jobs:
         run: ./scripts/build-ghosttykit.sh
       - name: Build app
         id: build
+        if: steps.ghosttykit.outcome == 'success'
         continue-on-error: true
         run: swift build
       - name: Run requested tests
         id: tests
-        if: needs.run.outputs.test_commands_json != '[]'
+        if: steps.build.outcome == 'success' && needs.run.outputs.test_commands_json != '[]'
         continue-on-error: true
         shell: bash
         env:
@@ -155,7 +159,7 @@ jobs:
           done < .ci-test-commands.txt
       - name: Capture evidence
         id: smoke
-        if: needs.run.outputs.needs_screenshot_evidence == 'true'
+        if: steps.build.outcome == 'success' && needs.run.outputs.needs_screenshot_evidence == 'true'
         continue-on-error: true
         shell: bash
         run: |
@@ -179,7 +183,7 @@ jobs:
         if: always()
         shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           PR_BRANCH: ${{ needs.run.outputs.pr_branch }}
           BUILD_SUCCEEDED: ${{ steps.ghosttykit.outcome == 'success' && steps.build.outcome == 'success' }}
           TESTS_SUCCEEDED: ${{ needs.run.outputs.test_commands_json == '[]' || steps.tests.outcome == 'success' }}
