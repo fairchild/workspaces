@@ -49,6 +49,7 @@ struct WorkspaceEnvironmentSheetOption: Identifiable {
 struct NewWorkspaceSheet: View {
     let repo: Repo
     let environmentOptions: [WorkspaceEnvironmentSheetOption]
+    let isPreparingEnvironmentOptions: Bool
     let isCreateDisabled: Bool
     let onCreate: (String, WorkspaceNameSource, String, WorkspaceGuestOS?) -> Void
 
@@ -133,6 +134,11 @@ struct NewWorkspaceSheet: View {
             .padding(.bottom, 16)
 
             Divider()
+
+            if isPreparingEnvironmentOptions {
+                preparationBanner
+                Divider()
+            }
 
             Form {
                 TextField("Workspace Name", text: $name)
@@ -221,6 +227,32 @@ struct NewWorkspaceSheet: View {
         .onChange(of: name) { _, newValue in
             updateNameSource(for: newValue)
         }
+    }
+
+    private var preparationBanner: some View {
+        HStack(alignment: .top, spacing: 10) {
+            ProgressView()
+                .controlSize(.small)
+                .padding(.top, 2)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Checking workspace environments...")
+                    .font(.callout.weight(.semibold))
+
+                Text(
+                    "Provider availability and VM runtime details are still loading. "
+                        + "You can keep typing while the options update."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 12)
+        .background(Color.secondary.opacity(0.06))
     }
 
     private var iconName: String {

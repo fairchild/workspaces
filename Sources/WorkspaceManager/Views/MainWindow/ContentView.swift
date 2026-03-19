@@ -31,6 +31,7 @@ struct ContentView: View {
 
     @State private var viewState = MainWindowViewState()
     @State private var repoForNewWorkspaceFromLanding: Repo?
+    @State private var isPreparingLandingNewWorkspaceSheet = false
     @State private var webSourceCreationTarget: WebSourceCreationTarget?
     @State private var landingErrorMessage: String?
     @State private var workspaceEnvironmentSheetState = WorkspaceEnvironmentSheetState.empty
@@ -601,6 +602,7 @@ struct ContentView: View {
                 NewWorkspaceSheet(
                     repo: repo,
                     environmentOptions: environmentOptions(for: repo),
+                    isPreparingEnvironmentOptions: isPreparingLandingNewWorkspaceSheet,
                     isCreateDisabled: false
                 ) { name, nameSource, providerID, guestOS in
                     Task { @MainActor in
@@ -679,7 +681,6 @@ struct ContentView: View {
                 attemptID: attemptID,
                 outcome: "success"
             )
-            return
         }
 
         workspaceEnvironmentSheetState = workspaceEnvironmentOptionsController.prepareSheetStateForPresentation(
@@ -687,6 +688,7 @@ struct ContentView: View {
             registry: workspaceProviderRegistry
         )
         repoForNewWorkspaceFromLanding = repo
+        isPreparingLandingNewWorkspaceSheet = true
         InvestigationDiagnostics.emitSheet(
             phase: "landing_sheet_context_set",
             fields: [
@@ -700,6 +702,9 @@ struct ContentView: View {
         )
 
         Task { @MainActor in
+            defer {
+                isPreparingLandingNewWorkspaceSheet = false
+            }
             await refreshLandingWorkspaceEnvironmentState(trigger: "landing_sheet_open")
             InvestigationDiagnostics.emitSheet(
                 phase: "landing_environment_refresh_completed",
