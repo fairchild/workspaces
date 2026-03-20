@@ -89,6 +89,86 @@ class ParseFrontmatterTests(unittest.TestCase):
         metadata, body = fm.parse_frontmatter(text)
         self.assertEqual(metadata["persona"], "April Clearwater, Application Lead")
 
+    def test_multiline_quoted_string(self) -> None:
+        text = (
+            "---\n"
+            "action: execute_issue\n"
+            'commit_message: "Fix something\n'
+            "\n"
+            "More details about the fix.\n"
+            "\n"
+            'Fixes #42"\n'
+            "issue_number: 42\n"
+            "---\n"
+            "\n"
+            "Body"
+        )
+        metadata, body = fm.parse_frontmatter(text)
+        self.assertEqual(metadata["action"], "execute_issue")
+        self.assertIn("Fix something", metadata["commit_message"])
+        self.assertIn("More details", metadata["commit_message"])
+        self.assertIn("Fixes #42", metadata["commit_message"])
+        self.assertEqual(metadata["issue_number"], 42)
+        self.assertEqual(body, "Body")
+
+    def test_multiline_quoted_string_with_preamble(self) -> None:
+        text = (
+            "The implementation is complete.\n"
+            "\n"
+            "---\n"
+            "action: execute_issue\n"
+            "persona: April Clearwater\n"
+            "issue_number: 116\n"
+            'pr_title: "Fix status colors"\n'
+            'commit_message: "Fix status colors\n'
+            "\n"
+            "Add severity enum.\n"
+            "\n"
+            'Fixes #116"\n'
+            "---\n"
+            "\n"
+            "## Summary\n"
+            "\n"
+            "Details here."
+        )
+        metadata, body = fm.parse_frontmatter(text)
+        self.assertEqual(metadata["action"], "execute_issue")
+        self.assertEqual(metadata["issue_number"], 116)
+        self.assertIn("Fix status colors", metadata["commit_message"])
+        self.assertIn("Fixes #116", metadata["commit_message"])
+        self.assertIn("Summary", body)
+
+    def test_multiline_with_escaped_quotes(self) -> None:
+        """Escaped quotes inside a multi-line string must not close it early."""
+        text = (
+            "---\n"
+            'commit_message: "He said \\"hello\\"\n'
+            'and then \\"goodbye\\""\n'
+            "issue_number: 1\n"
+            "---\n"
+        )
+        metadata, _ = fm.parse_frontmatter(text)
+        self.assertIn('said \\"hello\\"', metadata["commit_message"])
+        self.assertIn('goodbye\\"', metadata["commit_message"])
+        self.assertEqual(metadata["issue_number"], 1)
+
+    def test_unterminated_multiline_raises(self) -> None:
+        """A multi-line quoted string that never closes must raise."""
+        text = (
+            "---\n"
+            'commit_message: "This never closes\n'
+            "more text\n"
+            "---\n"
+        )
+        with self.assertRaises(ValueError):
+            fm.parse_frontmatter(text)
+
+    def test_closed_quote_with_trailing_whitespace(self) -> None:
+        """Trailing whitespace after a closing quote must not trigger multi-line."""
+        text = '---\ntitle: "hello world"  \n---\n'
+        metadata, _ = fm.parse_frontmatter(text)
+        self.assertEqual(metadata["title"], "hello world")
+
     def test_no_frontmatter_raises(self) -> None:
         with self.assertRaises(ValueError):
             fm.parse_frontmatter("just plain text")
