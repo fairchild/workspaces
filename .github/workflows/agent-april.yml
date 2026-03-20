@@ -110,7 +110,7 @@ jobs:
   evidence:
     needs: [check-runner, run]
     if: needs.check-runner.outputs.is_macos == 'false' && needs.run.outputs.needs_macos_evidence == 'true'
-    runs-on: [self-hosted, tart-ui]
+    runs-on: [self-hosted, lume-macos]
     timeout-minutes: 20
     permissions:
       contents: read

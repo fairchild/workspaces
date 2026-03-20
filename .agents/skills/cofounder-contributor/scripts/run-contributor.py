@@ -1836,12 +1836,17 @@ def ensure_issue_claimed(
             env=env,
         )
     if bot_login:
-        run_checked(
+        # GitHub Apps (bot users) often cannot be assigned to issues.
+        # Use run_optional so a failed assignment doesn't block execution.
+        result = run_optional(
             ["gh", "issue", "edit", str(issue_number), "--add-assignee", bot_login],
             timeout=GITHUB_API_TIMEOUT,
             cwd=REPO_ROOT,
             env=env,
+            default="",
         )
+        if not result:
+            log(f"Could not assign {bot_login} to #{issue_number} (bot accounts cannot be assignees); skipping")
 
 
 def _update_mergeable_label(pr_number: int, verdict: str, env: dict[str, str]) -> None:
