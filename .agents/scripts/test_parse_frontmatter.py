@@ -89,6 +89,55 @@ class ParseFrontmatterTests(unittest.TestCase):
         metadata, body = fm.parse_frontmatter(text)
         self.assertEqual(metadata["persona"], "April Clearwater, Application Lead")
 
+    def test_multiline_quoted_string(self) -> None:
+        text = (
+            "---\n"
+            "action: execute_issue\n"
+            'commit_message: "Fix something\n'
+            "\n"
+            "More details about the fix.\n"
+            "\n"
+            'Fixes #42"\n'
+            "issue_number: 42\n"
+            "---\n"
+            "\n"
+            "Body"
+        )
+        metadata, body = fm.parse_frontmatter(text)
+        self.assertEqual(metadata["action"], "execute_issue")
+        self.assertIn("Fix something", metadata["commit_message"])
+        self.assertIn("More details", metadata["commit_message"])
+        self.assertIn("Fixes #42", metadata["commit_message"])
+        self.assertEqual(metadata["issue_number"], 42)
+        self.assertEqual(body, "Body")
+
+    def test_multiline_quoted_string_with_preamble(self) -> None:
+        text = (
+            "The implementation is complete.\n"
+            "\n"
+            "---\n"
+            "action: execute_issue\n"
+            "persona: April Clearwater\n"
+            "issue_number: 116\n"
+            'pr_title: "Fix status colors"\n'
+            'commit_message: "Fix status colors\n'
+            "\n"
+            "Add severity enum.\n"
+            "\n"
+            'Fixes #116"\n'
+            "---\n"
+            "\n"
+            "## Summary\n"
+            "\n"
+            "Details here."
+        )
+        metadata, body = fm.parse_frontmatter(text)
+        self.assertEqual(metadata["action"], "execute_issue")
+        self.assertEqual(metadata["issue_number"], 116)
+        self.assertIn("Fix status colors", metadata["commit_message"])
+        self.assertIn("Fixes #116", metadata["commit_message"])
+        self.assertIn("Summary", body)
+
     def test_no_frontmatter_raises(self) -> None:
         with self.assertRaises(ValueError):
             fm.parse_frontmatter("just plain text")

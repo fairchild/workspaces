@@ -78,7 +78,12 @@ def _parse_inline_list(content: str) -> list[str]:
 
 
 def _parse_yaml_subset(text: str) -> dict[str, Any]:
-    """Parse simple ``key: value`` YAML lines into a dict."""
+    """Parse simple ``key: value`` YAML lines into a dict.
+
+    Supports multi-line quoted strings: if a value starts with ``"`` but
+    does not close on the same line, subsequent lines are collected until
+    the closing ``"`` is found.
+    """
     result: dict[str, Any] = {}
     lines = text.splitlines()
     index = 0
@@ -94,6 +99,24 @@ def _parse_yaml_subset(text: str) -> dict[str, Any]:
         key = match.group(1)
         raw_value = match.group(2)
         if raw_value:
+            # Check for multi-line quoted string (opens with " but doesn't close)
+            if (
+                raw_value.startswith('"')
+                and not raw_value.endswith('"')
+            ):
+                collected = [raw_value[1:]]  # strip opening quote
+                index += 1
+                while index < len(lines):
+                    cont_line = lines[index]
+                    if cont_line.rstrip().endswith('"'):
+                        collected.append(cont_line.rstrip()[:-1])  # strip closing quote
+                        index += 1
+                        break
+                    collected.append(cont_line)
+                    index += 1
+                result[key] = "\n".join(collected)
+                continue
+
             result[key] = _parse_yaml_value(raw_value)
             index += 1
             continue
