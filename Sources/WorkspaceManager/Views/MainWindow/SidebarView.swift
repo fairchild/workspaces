@@ -68,6 +68,7 @@ struct SidebarView: View {
     @State private var workspaceAction: WorkspaceActionState?
     @State private var workspaceCreationStatusByRepoID: [UUID: WorkspaceCreationStatus] = [:]
     @State private var repoLastAccessedSnapshotByID: [UUID: Date] = [:]
+    @State private var isPreparingNewWorkspaceSheet = false
 
     private var isUIFixtureMode: Bool {
         ProcessInfo.processInfo.environment["WORKSPACES_UI_FIXTURE"] == "1"
@@ -145,6 +146,7 @@ struct SidebarView: View {
                 NewWorkspaceSheet(
                     repo: context.repo,
                     environmentOptions: environmentOptions(for: context.repo),
+                    isPreparingEnvironmentOptions: isPreparingNewWorkspaceSheet,
                     isCreateDisabled: isCreatingWorkspace(for: context.repo.id)
                 ) { name, nameSource, providerID, guestOS in
                     Task { @MainActor in
@@ -1006,6 +1008,7 @@ struct SidebarView: View {
         )
 
         newWorkspaceSheetContext = NewWorkspaceSheetContext(repo: repo)
+        isPreparingNewWorkspaceSheet = true
         InvestigationDiagnostics.emitSheet(
             phase: "sidebar_sheet_context_set",
             fields: [
@@ -1019,6 +1022,9 @@ struct SidebarView: View {
         )
 
         Task { @MainActor in
+            defer {
+                isPreparingNewWorkspaceSheet = false
+            }
             await refreshWorkspaceEnvironmentState(trigger: "sidebar_sheet_open")
             InvestigationDiagnostics.emitSheet(
                 phase: "sidebar_environment_refresh_completed",
