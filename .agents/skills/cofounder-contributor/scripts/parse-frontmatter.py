@@ -77,82 +77,95 @@ def _parse_inline_list(content: str) -> list[str]:
     return items
 
 
-def _is_closed_quote(s: str) -> bool:
+def _ends_with_unescaped_quote(s: str) -> bool:
     """Return True if *s* ends with an unescaped ``"``."""
     if not s.endswith('"'):
         return False
-    # Count consecutive backslashes immediately before the final quote.
     preceding = s[:-1]
     n_backslashes = len(preceding) - len(preceding.rstrip("\\"))
     return n_backslashes % 2 == 0
 
 
+def _collect_multiline_quoted(
+    opening: str, lines: list[str], index: int, key: str
+) -> tuple[str, int]:
+    """Collect a multi-line quoted string value.
+
+    *opening* is the first line's content after the ``"`` opener.
+    Reads continuation lines from *lines* starting at *index* until a
+    line ending with an unescaped ``"`` is found.
+
+    Returns ``(collected_value, next_index)``.
+    """
+    parts = [opening]
+    while index < len(lines):
+        rstripped = lines[index].rstrip()
+        if _ends_with_unescaped_quote(rstripped):
+            parts.append(rstripped[:-1])
+            return "\n".join(parts), index + 1
+        parts.append(lines[index])
+        index += 1
+    raise ValueError(f"unterminated multi-line quoted string for key {key!r}")
+
+
+def _collect_block_list(lines: list[str], index: int) -> tuple[list[Any], int]:
+    """Collect indented ``- value`` items into a list.
+
+    Returns ``(items, next_index)``.
+    """
+    items: list[Any] = []
+    while index < len(lines):
+        if not lines[index].strip():
+            index += 1
+            continue
+        item_match = re.match(r"^\s*-\s+(.*)", lines[index])
+        if not item_match:
+            break
+        items.append(_parse_yaml_value(item_match.group(1)))
+        index += 1
+    return items, index
+
+
 def _parse_yaml_subset(text: str) -> dict[str, Any]:
     """Parse simple ``key: value`` YAML lines into a dict.
 
-    Supports multi-line quoted strings: if a value starts with ``"`` but
-    does not close on the same line, subsequent lines are collected until
-    the closing ``"`` is found.
+    Supports single-line values, multi-line quoted strings, and
+    block lists (``- item``).
     """
     result: dict[str, Any] = {}
     lines = text.splitlines()
     index = 0
     while index < len(lines):
-        line = lines[index]
-        stripped = line.strip()
+        stripped = lines[index].strip()
         if not stripped:
             index += 1
             continue
+
         match = re.match(r"^([\w][\w_]*)\s*:\s*(.*)", stripped)
         if not match:
             raise ValueError(f"invalid YAML line: {stripped!r}")
+
         key = match.group(1)
         raw_value = match.group(2)
-        if raw_value:
-            # Check for multi-line quoted string (opens with " but doesn't close).
-            # Strip trailing whitespace so `key: "value"  ` isn't mistaken for
-            # an unclosed quote.
-            trimmed = raw_value.rstrip()
-            if trimmed.startswith('"') and not _is_closed_quote(trimmed):
-                collected = [trimmed[1:]]  # strip opening quote
-                index += 1
-                found_close = False
-                while index < len(lines):
-                    cont_line = lines[index]
-                    rstripped = cont_line.rstrip()
-                    if _is_closed_quote(rstripped):
-                        collected.append(rstripped[:-1])  # strip closing quote
-                        index += 1
-                        found_close = True
-                        break
-                    collected.append(cont_line)
-                    index += 1
-                if not found_close:
-                    raise ValueError(
-                        f"unterminated multi-line quoted string for key {key!r}"
-                    )
-                result[key] = "\n".join(collected)
-                continue
+        index += 1
 
-            result[key] = _parse_yaml_value(raw_value)
-            index += 1
+        if not raw_value:
+            # No inline value — expect a block list on subsequent lines.
+            items, index = _collect_block_list(lines, index)
+            result[key] = items if items else ""
             continue
 
-        items: list[Any] = []
-        index += 1
-        while index < len(lines):
-            candidate = lines[index]
-            candidate_stripped = candidate.strip()
-            if not candidate_stripped:
-                index += 1
-                continue
-            item_match = re.match(r"^\s*-\s+(.*)", candidate)
-            if item_match:
-                items.append(_parse_yaml_value(item_match.group(1)))
-                index += 1
-                continue
-            break
-        result[key] = items if items else ""
+        # Check for multi-line quoted string (opens with " but doesn't
+        # close on this line).  rstrip so trailing whitespace after a
+        # closing quote doesn't falsely trigger multi-line mode.
+        trimmed = raw_value.rstrip()
+        if trimmed.startswith('"') and not _ends_with_unescaped_quote(trimmed):
+            result[key], index = _collect_multiline_quoted(
+                trimmed[1:], lines, index, key
+            )
+            continue
+
+        result[key] = _parse_yaml_value(raw_value)
     return result
 
 
