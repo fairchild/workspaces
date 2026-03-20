@@ -138,6 +138,37 @@ class ParseFrontmatterTests(unittest.TestCase):
         self.assertIn("Fixes #116", metadata["commit_message"])
         self.assertIn("Summary", body)
 
+    def test_multiline_with_escaped_quotes(self) -> None:
+        """Escaped quotes inside a multi-line string must not close it early."""
+        text = (
+            "---\n"
+            'commit_message: "He said \\"hello\\"\n'
+            'and then \\"goodbye\\""\n'
+            "issue_number: 1\n"
+            "---\n"
+        )
+        metadata, _ = fm.parse_frontmatter(text)
+        self.assertIn('said \\"hello\\"', metadata["commit_message"])
+        self.assertIn('goodbye\\"', metadata["commit_message"])
+        self.assertEqual(metadata["issue_number"], 1)
+
+    def test_unterminated_multiline_raises(self) -> None:
+        """A multi-line quoted string that never closes must raise."""
+        text = (
+            "---\n"
+            'commit_message: "This never closes\n'
+            "more text\n"
+            "---\n"
+        )
+        with self.assertRaises(ValueError):
+            fm.parse_frontmatter(text)
+
+    def test_closed_quote_with_trailing_whitespace(self) -> None:
+        """Trailing whitespace after a closing quote must not trigger multi-line."""
+        text = '---\ntitle: "hello world"  \n---\n'
+        metadata, _ = fm.parse_frontmatter(text)
+        self.assertEqual(metadata["title"], "hello world")
+
     def test_no_frontmatter_raises(self) -> None:
         with self.assertRaises(ValueError):
             fm.parse_frontmatter("just plain text")

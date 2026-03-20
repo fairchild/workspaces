@@ -77,6 +77,16 @@ def _parse_inline_list(content: str) -> list[str]:
     return items
 
 
+def _is_closed_quote(s: str) -> bool:
+    """Return True if *s* ends with an unescaped ``"``."""
+    if not s.endswith('"'):
+        return False
+    # Count consecutive backslashes immediately before the final quote.
+    preceding = s[:-1]
+    n_backslashes = len(preceding) - len(preceding.rstrip("\\"))
+    return n_backslashes % 2 == 0
+
+
 def _parse_yaml_subset(text: str) -> dict[str, Any]:
     """Parse simple ``key: value`` YAML lines into a dict.
 
@@ -99,21 +109,28 @@ def _parse_yaml_subset(text: str) -> dict[str, Any]:
         key = match.group(1)
         raw_value = match.group(2)
         if raw_value:
-            # Check for multi-line quoted string (opens with " but doesn't close)
-            if (
-                raw_value.startswith('"')
-                and not raw_value.endswith('"')
-            ):
-                collected = [raw_value[1:]]  # strip opening quote
+            # Check for multi-line quoted string (opens with " but doesn't close).
+            # Strip trailing whitespace so `key: "value"  ` isn't mistaken for
+            # an unclosed quote.
+            trimmed = raw_value.rstrip()
+            if trimmed.startswith('"') and not _is_closed_quote(trimmed):
+                collected = [trimmed[1:]]  # strip opening quote
                 index += 1
+                found_close = False
                 while index < len(lines):
                     cont_line = lines[index]
-                    if cont_line.rstrip().endswith('"'):
-                        collected.append(cont_line.rstrip()[:-1])  # strip closing quote
+                    rstripped = cont_line.rstrip()
+                    if _is_closed_quote(rstripped):
+                        collected.append(rstripped[:-1])  # strip closing quote
                         index += 1
+                        found_close = True
                         break
                     collected.append(cont_line)
                     index += 1
+                if not found_close:
+                    raise ValueError(
+                        f"unterminated multi-line quoted string for key {key!r}"
+                    )
                 result[key] = "\n".join(collected)
                 continue
 
