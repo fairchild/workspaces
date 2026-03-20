@@ -126,6 +126,7 @@ jobs:
         with:
           ref: ${{ needs.run.outputs.pr_branch }}
           fetch-depth: 50
+      - uses: astral-sh/setup-uv@v7
       - name: Build GhosttyKit
         id: ghosttykit
         continue-on-error: true
@@ -165,32 +166,61 @@ jobs:
         run: |
           set -o pipefail
           ./scripts/dev-smoke.sh --no-build 2>&1 | tee dev-smoke-output.txt
-      - name: Upload evidence to R2
-        if: hashFiles('output/**/*.png') != ''
+      - name: Resolve PR number
+        id: pr
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PR_BRANCH: ${{ needs.run.outputs.pr_branch }}
         run: |
-          for f in output/**/*.png; do
-            [ -f "$f" ] || continue
-            SLUG=$(basename "$f" .png)
-            uv run scripts/upload-evidence.py "$f" \
-              --repo workspaces \
-              --pr "${{ needs.run.outputs.pr_branch }}" \
-              --name "$SLUG" \
-              --breadcrumb || true
-          done
+          set -euo pipefail
+          PR_NUMBER=$(gh pr list --head "$PR_BRANCH" --json number --jq '.[0].number')
+          if [ -z "$PR_NUMBER" ] || [ "$PR_NUMBER" = "null" ]; then
+            echo "Could not resolve a PR number for branch: $PR_BRANCH" >&2
+            exit 1
+          fi
+          echo "number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+      - name: Upload screenshot evidence to R2
+        id: upload
+        if: steps.smoke.outcome == 'success' && needs.run.outputs.needs_screenshot_evidence == 'true'
+        shell: bash
         env:
           EVIDENCE_UPLOAD_TOKEN: ${{ secrets.EVIDENCE_UPLOAD_TOKEN }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob globstar
+          files=(output/**/*.png)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "No PNG evidence files found under output/" >&2
+            exit 1
+          fi
+
+          : > uploaded-screenshot-urls.tsv
+          count=0
+          for f in "${files[@]}"; do
+            slug=$(basename "$f" .png)
+            url=$(uv run scripts/upload-evidence.py "$f" \
+              --repo workspaces \
+              --pr "$PR_NUMBER" \
+              --name "$slug" \
+              --breadcrumb)
+            printf '%s\t%s\n' "$slug" "$url" >> uploaded-screenshot-urls.tsv
+            count=$((count + 1))
+          done
+          echo "count=$count" >> "$GITHUB_OUTPUT"
       - name: Reconcile pending-ci evidence
         if: always()
         shell: bash
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          PR_BRANCH: ${{ needs.run.outputs.pr_branch }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
           BUILD_SUCCEEDED: ${{ steps.ghosttykit.outcome == 'success' && steps.build.outcome == 'success' }}
           TESTS_SUCCEEDED: ${{ needs.run.outputs.test_commands_json == '[]' || steps.tests.outcome == 'success' }}
           SMOKE_SUCCEEDED: ${{ needs.run.outputs.needs_screenshot_evidence != 'true' || steps.smoke.outcome == 'success' }}
+          SCREENSHOT_UPLOAD_SUCCEEDED: ${{ needs.run.outputs.needs_screenshot_evidence != 'true' || steps.upload.outcome == 'success' }}
         run: |
           set -euo pipefail
-          PR_NUMBER=$(gh pr list --head "$PR_BRANCH" --json number --jq '.[0].number')
           gh pr view "$PR_NUMBER" --json body --jq '.body' > pr-body.md
           python3 - <<'PY'
           import importlib.util
@@ -204,11 +234,22 @@ jobs:
           spec.loader.exec_module(module)
 
           body_path = Path("pr-body.md")
+          uploaded_urls: list[tuple[str, str]] = []
+          uploaded_urls_path = Path("uploaded-screenshot-urls.tsv")
+          if uploaded_urls_path.exists():
+              for line in uploaded_urls_path.read_text().splitlines():
+                  if not line.strip():
+                      continue
+                  label, url = line.split("\t", 1)
+                  uploaded_urls.append((label, url))
+
           reconciled = module.reconcile_pending_ci_evidence(
               body_path.read_text(),
               build_succeeded=os.environ["BUILD_SUCCEEDED"] == "true",
               tests_succeeded=os.environ["TESTS_SUCCEEDED"] == "true",
               smoke_succeeded=os.environ["SMOKE_SUCCEEDED"] == "true",
+              screenshot_upload_succeeded=os.environ["SCREENSHOT_UPLOAD_SUCCEEDED"] == "true",
+              screenshot_urls=uploaded_urls,
           )
           body_path.write_text(reconciled)
           PY
@@ -230,6 +271,8 @@ jobs:
           BUILD_OUTCOME: ${{ steps.build.outcome }}
           TESTS_OUTCOME: ${{ steps.tests.outcome }}
           SMOKE_OUTCOME: ${{ steps.smoke.outcome }}
+          UPLOAD_OUTCOME: ${{ steps.upload.outcome }}
+          UPLOADED_SCREENSHOT_COUNT: ${{ steps.upload.outputs.count }}
           TEST_COMMANDS_JSON: ${{ needs.run.outputs.test_commands_json }}
           NEEDS_SCREENSHOT_EVIDENCE: ${{ needs.run.outputs.needs_screenshot_evidence }}
         run: |
@@ -242,7 +285,13 @@ jobs:
             echo "Requested test evidence failed"
             exit 1
           fi
-          if [ "$NEEDS_SCREENSHOT_EVIDENCE" = "true" ] && [ "$SMOKE_OUTCOME" != "success" ]; then
-            echo "Screenshot evidence failed"
-            exit 1
+          if [ "$NEEDS_SCREENSHOT_EVIDENCE" = "true" ]; then
+            if [ "$SMOKE_OUTCOME" != "success" ]; then
+              echo "Screenshot evidence failed"
+              exit 1
+            fi
+            if [ "$UPLOAD_OUTCOME" != "success" ] || [ "${UPLOADED_SCREENSHOT_COUNT:-0}" -lt 1 ]; then
+              echo "Screenshot evidence upload failed"
+              exit 1
+            fi
           fi

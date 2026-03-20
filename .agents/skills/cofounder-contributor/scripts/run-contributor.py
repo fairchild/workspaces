@@ -747,15 +747,22 @@ def _extract_test_commands(requested_evidence: list[str]) -> list[str]:
     ]
 
 
+def _format_uploaded_evidence_links(uploaded_urls: list[tuple[str, str]]) -> str:
+    return ", ".join(f"[{label}]({url})" for label, url in uploaded_urls)
+
+
 def _pending_ci_resolution(
     item: str,
     *,
     build_succeeded: bool,
     tests_succeeded: bool,
     smoke_succeeded: bool,
+    screenshot_upload_succeeded: bool = False,
+    screenshot_urls: list[tuple[str, str]] | None = None,
 ) -> tuple[str, str]:
     kind = _evidence_item_kind(item)
     normalized = _normalize_evidence_item(item)
+    uploaded_screenshot_urls = screenshot_urls or []
 
     if kind == "build":
         if build_succeeded:
@@ -767,7 +774,12 @@ def _pending_ci_resolution(
         return "blocked", f"self-hosted macOS CI `{normalized}` failed; see test-output.txt"
     if kind == "screenshot":
         if smoke_succeeded:
-            return "complete", "captured on self-hosted macOS CI; see workflow artifacts"
+            if screenshot_upload_succeeded and uploaded_screenshot_urls:
+                links = _format_uploaded_evidence_links(uploaded_screenshot_urls)
+                return "complete", f"captured on self-hosted macOS CI: {links}"
+            if screenshot_upload_succeeded:
+                return "blocked", "self-hosted macOS CI captured screenshots but no R2 URLs were recorded; see workflow artifacts"
+            return "blocked", "self-hosted macOS CI captured screenshots but R2 upload failed; see workflow artifacts"
         return "blocked", "self-hosted macOS CI screenshot capture failed; see dev-smoke-output.txt"
     return "blocked", "self-hosted macOS CI cannot reconcile this evidence item automatically"
 
@@ -778,6 +790,8 @@ def reconcile_pending_ci_evidence(
     build_succeeded: bool,
     tests_succeeded: bool,
     smoke_succeeded: bool,
+    screenshot_upload_succeeded: bool = False,
+    screenshot_urls: list[tuple[str, str]] | None = None,
 ) -> str:
     """Resolve pending-ci evidence lines after the macOS evidence job finishes."""
     lines = body.splitlines()
@@ -798,6 +812,8 @@ def reconcile_pending_ci_evidence(
                     build_succeeded=build_succeeded,
                     tests_succeeded=tests_succeeded,
                     smoke_succeeded=smoke_succeeded,
+                    screenshot_upload_succeeded=screenshot_upload_succeeded,
+                    screenshot_urls=screenshot_urls,
                 )
                 updated.append(f"- [{status}] {item} -- {detail}")
                 continue
