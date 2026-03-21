@@ -226,7 +226,7 @@ def normalize_title_key(title: str) -> str:
 
 
 def agent_header(repo: RepoInfo) -> str:
-    return f"**Agent**: `{repo.name}-observer` | **Branch**: `{current_branch()}`"
+    return f"**Agent**: `{repo.name}-oliver-obever` | **Branch**: `{current_branch()}`"
 
 
 def repo_info(env: dict[str, str]) -> RepoInfo:

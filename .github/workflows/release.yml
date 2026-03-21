@@ -53,6 +53,11 @@ jobs:
             exit 1
           fi
 
+      - name: Release preflight — verify CI passed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/release-preflight.sh "${GITHUB_SHA}" "${GITHUB_REPOSITORY}"
+
       - name: Validate release secrets
         env:
           APPLE_DEVELOPER_ID_CERT_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_CERT_BASE64 }}
