@@ -13,6 +13,17 @@ This directory contains build/release helpers plus UI test utilities.
 - Fixture packs live under `./fixtures/ops-report/`.
   - `docs/ops/` remains reserved for real checked-in snapshots from live data.
 
+## Codespaces Claude Worker
+
+- `uv run --script ./scripts/codespaces-claude-launch.py --help`
+  - Shows the runner-side CLI that creates a Codespace, uploads a request file, and launches the repo's in-Codespace Claude worker.
+- `uv run --script ./scripts/test_codespaces_claude_launch.py`
+  - Runs stdlib tests for the launcher path.
+- `./scripts/codespaces-claude-worker.sh --help`
+  - Shows the Codespace-side Claude runner contract.
+- Full operator documentation:
+  - `./docs/development/codespaces-claude-worker.md`
+
 ## Release Helpers
 
 - `./scripts/release-version.sh`
