@@ -1180,6 +1180,26 @@ class RunContributorTests(unittest.TestCase):
         self.assertTrue(any("empty detail" in line for line in accounting["invalid_lines"]))
         self.assertTrue(any("malformed hidden evidence metadata" in error for error in errors))
 
+    def test_validate_evidence_accounting_flags_non_numeric_structured_metadata_version(self) -> None:
+        body = (
+            "## Summary\n"
+            "- Updated the status severity mapping\n\n"
+            "<!-- evidence-status:vbogus\n"
+            "{\n"
+            '  "entries": []\n'
+            "}\n"
+            "-->\n\n"
+            "## Evidence Status\n"
+            "- [complete] swift test --filter WorkspaceManagerAppTests.NewWorkspaceSheetTests -- `swift test --filter WorkspaceManagerAppTests.NewWorkspaceSheetTests`\n"
+        )
+        accounting, errors = run_contributor.validate_evidence_accounting(
+            body,
+            ["swift test --filter WorkspaceManagerAppTests.NewWorkspaceSheetTests"],
+        )
+        self.assertEqual(accounting["source"], "structured-invalid")
+        self.assertTrue(any("not a valid integer" in line for line in accounting["invalid_lines"]))
+        self.assertTrue(any("malformed hidden evidence metadata" in error for error in errors))
+
     def test_validate_evidence_accounting_flags_structured_item_mismatch(self) -> None:
         body = (
             "## Summary\n"
@@ -1410,6 +1430,39 @@ class RunContributorTests(unittest.TestCase):
             ["swift test --filter WorkspaceManagerTests.WorkspaceProviderTests"],
         )
         self.assertEqual(accounting["source"], "structured")
+
+    def test_reconcile_pending_ci_evidence_ignores_non_numeric_metadata_version(self) -> None:
+        body = (
+            "## Summary\n"
+            "- Updated the status severity mapping\n\n"
+            "<!-- evidence-status:vbogus\n"
+            "{\n"
+            '  "entries": [\n'
+            "    {\n"
+            '      "index": 1,\n'
+            '      "item": "swift test --filter WorkspaceManagerTests.WorkspaceProviderTests",\n'
+            '      "status": "pending-ci",\n'
+            '      "detail": "self-hosted macOS CI will run this command"\n'
+            "    }\n"
+            "  ]\n"
+            "}\n"
+            "-->\n\n"
+            "## Evidence Status\n"
+            "- [pending-ci] swift test --filter WorkspaceManagerTests.WorkspaceProviderTests -- self-hosted macOS CI will run this command\n\n"
+            "## Validation\n"
+            "- blocked on evidence: macOS-only evidence is deferred to CI\n"
+        )
+        reconciled = run_contributor.reconcile_pending_ci_evidence(
+            body,
+            build_succeeded=True,
+            tests_succeeded=True,
+            smoke_succeeded=True,
+            test_output="$ swift test --filter WorkspaceManagerTests.WorkspaceProviderTests\nok\n",
+        )
+        self.assertIn(
+            "- [complete] swift test --filter WorkspaceManagerTests.WorkspaceProviderTests -- `swift test --filter WorkspaceManagerTests.WorkspaceProviderTests` succeeded on self-hosted macOS CI",
+            reconciled,
+        )
 
     def test_reconcile_pending_ci_evidence_preserves_invalid_metadata_entries(self) -> None:
         body = (

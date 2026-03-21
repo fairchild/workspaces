@@ -475,7 +475,7 @@ EVIDENCE_STATUS_LINE_RE = re.compile(
     r"^- \[(?P<status>complete|blocked|pending-ci)\] (?P<item>.+?)\s+(?:--|—|–)\s+(?P<detail>.+)$"
 )
 EVIDENCE_METADATA_RE = re.compile(
-    r"^<!-- evidence-status:v(?P<version>\d+)\n(?P<payload>.*?)\n-->[ \t]*(?:\n|$)",
+    r"^<!-- evidence-status:v(?P<version>[^\n]+)\n(?P<payload>.*?)\n-->[ \t]*(?:\n|$)",
     re.MULTILINE | re.DOTALL,
 )
 STRUCTURED_EVIDENCE_UPDATE_RE = re.compile(
@@ -597,7 +597,13 @@ def _latest_evidence_metadata_match(body: str) -> re.Match[str] | None:
 
 def _extract_evidence_metadata(body: str) -> dict[str, object] | None:
     match = _latest_evidence_metadata_match(body)
-    if not match or int(match.group("version")) != EVIDENCE_METADATA_VERSION:
+    if not match:
+        return None
+    try:
+        version = int(match.group("version"))
+    except (TypeError, ValueError):
+        return None
+    if version != EVIDENCE_METADATA_VERSION:
         return None
     try:
         payload = json.loads(match.group("payload"))
@@ -638,7 +644,17 @@ def _structured_evidence_entries(
     match = _latest_evidence_metadata_match(body)
     if match is None:
         return None
-    if int(match.group("version")) != EVIDENCE_METADATA_VERSION:
+    try:
+        version = int(match.group("version"))
+    except (TypeError, ValueError):
+        return {
+            "section_present": has_markdown_section(body, "Evidence Status"),
+            "entries": {},
+            "invalid_lines": [f"metadata version '{match.group('version')}' is not a valid integer"],
+            "duplicate_items": [],
+            "source": "structured-invalid",
+        }
+    if version != EVIDENCE_METADATA_VERSION:
         return None
     try:
         payload = json.loads(match.group("payload"))
