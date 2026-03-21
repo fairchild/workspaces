@@ -74,7 +74,7 @@ issue_number: 116
 pr_title: "Fix environment status color semantics in NewWorkspaceSheet"
 commit_message: "Address PR feedback for environment status color semantics"
 evidence_complete:
-  - "2 -- `swift test --filter NewWorkspaceSheetTests` passes with the new status severity cases."
+  - "2 -- `swift test --filter WorkspaceManagerAppTests.NewWorkspaceSheetTests` passes with the new status severity cases."
 evidence_blocked:
   - "1 -- Linux runner cannot launch the macOS app to capture the requested NewWorkspaceSheet screenshot."
   - "3 -- This run cannot capture a prior broken-state screenshot from before the PR branch without a separate before-state checkout."
@@ -128,7 +128,7 @@ pr_title: "Fix environment status color semantics in NewWorkspaceSheet"
 commit_message: "Fix environment status color semantics in NewWorkspaceSheet"
 evidence_complete:
   - "1 -- https://pub-fbb4f68177a14b93a78b0b240f7f74b0.r2.dev/workspaces/119/status-sheet.png"
-  - "2 -- `swift test --filter NewWorkspaceSheetTests` passed: 4 tests, 0 failures"
+  - "2 -- `swift test --filter WorkspaceManagerAppTests.NewWorkspaceSheetTests` passed: 4 tests, 0 failures"
 evidence_blocked:
   - "3 -- This run cannot capture the pre-fix screenshot without checking out a broken baseline separately."
 ---

@@ -12,6 +12,7 @@ import json
 import os
 import platform
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -471,7 +472,10 @@ CLOSING_REFERENCE_RE = re.compile(
     r"(?im)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(?P<number>\d+)\b"
 )
 EVIDENCE_STATUS_LINE_RE = re.compile(
-    r"^- \[(?P<status>complete|blocked|pending-ci)\] (?P<item>.+?) -- (?P<detail>.+)$"
+    r"^- \[(?P<status>complete|blocked|pending-ci)\] (?P<item>.+?)\s+(?:--|—|–)\s+(?P<detail>.+)$"
+)
+EVIDENCE_METADATA_RE = re.compile(
+    r"(?ms)^<!-- evidence-status:v(?P<version>\d+)\n(?P<payload>.*?)\n-->\s*"
 )
 STRUCTURED_EVIDENCE_UPDATE_RE = re.compile(
     r"^(?P<index>\d+)\s*--\s*(?P<detail>.+)$"
@@ -486,6 +490,9 @@ AGENT_CLAIM_LABEL_DESCRIPTION = "Currently being executed by an automated contri
 AGENT_MERGEABLE_LABEL = "agent:mergeable"
 AGENT_MERGEABLE_LABEL_COLOR = "0e8a16"
 AGENT_MERGEABLE_LABEL_DESCRIPTION = "Agent-approved, ready for owner merge"
+EVIDENCE_METADATA_VERSION = 1
+EVIDENCE_FALLBACK_SENTENCE = "Follow the repo evidence bar for the touched surfaces."
+SWIFT_TEST_NO_MATCH_TEXT = "No matching test cases were run"
 
 
 def persona_slug(persona: str) -> str:
@@ -568,8 +575,93 @@ def extract_requested_evidence(body: str) -> list[str]:
     return [
         line[2:].strip()
         for line in evidence_section.splitlines()
-        if line.strip().startswith("- ") and line[2:].strip().lower() != "none"
+        if line.strip().startswith("- ")
+        and line[2:].strip().lower() != "none"
+        and line[2:].strip() != EVIDENCE_FALLBACK_SENTENCE
     ]
+
+
+def _strip_evidence_metadata(body: str) -> str:
+    stripped = EVIDENCE_METADATA_RE.sub("", body, count=1).strip()
+    return re.sub(r"\n{3,}", "\n\n", stripped)
+
+
+def _extract_evidence_metadata(body: str) -> dict[str, object] | None:
+    match = EVIDENCE_METADATA_RE.search(body)
+    if not match or int(match.group("version")) != EVIDENCE_METADATA_VERSION:
+        return None
+    try:
+        payload = json.loads(match.group("payload"))
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return payload
+
+
+def _insert_evidence_metadata(body: str, payload: dict[str, object]) -> str:
+    metadata = (
+        f"<!-- evidence-status:v{EVIDENCE_METADATA_VERSION}\n"
+        f"{json.dumps(payload, indent=2, ensure_ascii=False)}\n"
+        f"-->"
+    )
+    cleaned = _strip_evidence_metadata(body).strip()
+    pattern = r"(?m)^## Evidence Status\s*$"
+    if re.search(pattern, cleaned):
+        return re.sub(pattern, f"{metadata}\n\n## Evidence Status", cleaned, count=1)
+    if cleaned:
+        return f"{cleaned}\n\n{metadata}"
+    return metadata
+
+
+def _explicit_evidence_contract(requested_evidence: list[str]) -> bool:
+    return bool(requested_evidence)
+
+
+def _structured_evidence_entries(
+    body: str,
+    requested_evidence: list[str],
+) -> dict[str, object] | None:
+    if not _explicit_evidence_contract(requested_evidence):
+        return None
+    payload = _extract_evidence_metadata(body)
+    if payload is None:
+        return None
+    raw_entries = payload.get("entries")
+    if not isinstance(raw_entries, list):
+        return None
+
+    entries: dict[str, dict[str, str]] = {}
+    duplicate_items: list[str] = []
+    for raw_entry in raw_entries:
+        if not isinstance(raw_entry, dict):
+            return None
+        try:
+            index = int(raw_entry["index"])
+        except (KeyError, TypeError, ValueError):
+            return None
+        if index < 1 or index > len(requested_evidence):
+            return None
+        status = str(raw_entry.get("status", "")).strip()
+        detail = str(raw_entry.get("detail", "")).strip()
+        if status not in {"complete", "blocked", "pending-ci"} or not detail:
+            return None
+        item = requested_evidence[index - 1]
+        if item in entries:
+            duplicate_items.append(item)
+            continue
+        entries[item] = {
+            "status": status,
+            "detail": detail,
+        }
+
+    return {
+        "section_present": has_markdown_section(body, "Evidence Status"),
+        "entries": entries,
+        "invalid_lines": [],
+        "duplicate_items": duplicate_items,
+        "source": "structured",
+    }
 
 
 def extract_evidence_status_entries(body: str) -> dict[str, object]:
@@ -604,6 +696,7 @@ def extract_evidence_status_entries(body: str) -> dict[str, object]:
         "entries": entries,
         "invalid_lines": invalid_lines,
         "duplicate_items": duplicate_items,
+        "source": "markdown",
     }
 
 
@@ -646,15 +739,38 @@ def _match_evidence_entry(
 
 
 def evaluate_evidence_accounting(body: str, requested_evidence: list[str]) -> dict[str, object]:
-    parsed = extract_evidence_status_entries(body)
+    if not _explicit_evidence_contract(requested_evidence):
+        return {
+            "section_present": has_markdown_section(body, "Evidence Status"),
+            "entries": {},
+            "invalid_lines": [],
+            "duplicate_items": [],
+            "source": "none",
+            "missing_items": [],
+            "blocked_items": [],
+            "pending_ci_items": [],
+            "complete_items": [],
+            "unexpected_items": [],
+            "blocked_on_evidence": "blocked on evidence" in body.casefold(),
+            "contract_required": False,
+        }
+
+    parsed = _structured_evidence_entries(body, requested_evidence) or extract_evidence_status_entries(body)
     entries = parsed["entries"]
 
     # Build a mapping from requested item -> matched entry key (fuzzy)
     matched: dict[str, str] = {}
-    for item in requested_evidence:
-        match = _match_evidence_entry(item, entries)
-        if match is not None:
-            matched[item] = match
+    if parsed["source"] == "structured":
+        matched = {
+            item: item
+            for item in requested_evidence
+            if item in entries
+        }
+    else:
+        for item in requested_evidence:
+            match = _match_evidence_entry(item, entries)
+            if match is not None:
+                matched[item] = match
 
     missing_items = [item for item in requested_evidence if item not in matched]
     blocked_items = [
@@ -682,6 +798,7 @@ def evaluate_evidence_accounting(body: str, requested_evidence: list[str]) -> di
         "complete_items": complete_items,
         "unexpected_items": unexpected_items,
         "blocked_on_evidence": "blocked on evidence" in body.casefold(),
+        "contract_required": True,
     }
 
 
@@ -774,6 +891,9 @@ def render_execution_summary_body(
     evidence_blocked: object,
     evidence_pending_ci: object,
 ) -> tuple[str, list[str]]:
+    if not _explicit_evidence_contract(requested_evidence):
+        return summary_body, []
+
     used_indexes: set[int] = set()
     complete_entries, errors = parse_structured_evidence_updates(
         evidence_complete,
@@ -809,12 +929,27 @@ def render_execution_summary_body(
         f"- [{entry['status']}] {entry['item']} -- {entry['detail']}"
         for index, entry in sorted(evidence_map.items())
     ]
+    structured_entries = [
+        {
+            "index": entry["index"],
+            "item": entry["item"],
+            "status": entry["status"],
+            "detail": entry["detail"],
+        }
+        for _, entry in sorted(evidence_map.items())
+    ]
 
     rendered = insert_markdown_section(
-        summary_body,
+        _strip_evidence_metadata(summary_body),
         "Evidence Status",
         "\n".join(evidence_lines),
         before_heading="Validation",
+    )
+    rendered = _insert_evidence_metadata(
+        rendered,
+        {
+            "entries": structured_entries,
+        },
     )
     blocked_like_entries = blocked_entries + pending_ci_entries
     if blocked_like_entries and "blocked on evidence" not in rendered.casefold():
@@ -882,8 +1017,102 @@ def _extract_test_commands(requested_evidence: list[str]) -> list[str]:
     ]
 
 
+def _swift_test_filter_selector(command: str) -> str | None:
+    try:
+        parts = shlex.split(command)
+    except ValueError:
+        return None
+    if len(parts) < 4 or parts[:2] != ["swift", "test"]:
+        return None
+    for index, part in enumerate(parts[2:], start=2):
+        if part == "--filter" and index + 1 < len(parts):
+            return parts[index + 1]
+        if part.startswith("--filter="):
+            return part.split("=", 1)[1]
+    return None
+
+
+def _selector_matches_test_list(selector: str, listed_tests: list[str]) -> bool:
+    try:
+        pattern = re.compile(selector)
+    except re.error:
+        return False
+    return any(pattern.search(specifier) for specifier in listed_tests)
+
+
+def _listed_swift_tests(env: dict[str, str]) -> list[str]:
+    output = run_optional(
+        ["swift", "test", "list"],
+        timeout=GITHUB_API_TIMEOUT,
+        cwd=REPO_ROOT,
+        env=env,
+        default="",
+    )
+    return [
+        line.strip()
+        for line in output.splitlines()
+        if line.strip() and "." in line and "/" in line
+    ]
+
+
+def validate_requested_test_commands(
+    requested_evidence: list[str],
+    env: dict[str, str],
+) -> list[str]:
+    commands = _extract_test_commands(requested_evidence)
+    swift_filter_commands = [
+        command
+        for command in commands
+        if _swift_test_filter_selector(command) is not None
+    ]
+    if not swift_filter_commands:
+        return []
+
+    listed_tests = _listed_swift_tests(env)
+    if not listed_tests:
+        return ["`swift test list` did not return any Swift Testing specifiers to validate requested evidence."]
+
+    errors: list[str] = []
+    for command in swift_filter_commands:
+        selector = _swift_test_filter_selector(command)
+        if selector is None:
+            continue
+        if not _selector_matches_test_list(selector, listed_tests):
+            errors.append(
+                f"requested test evidence `{command}` does not match any `swift test list` specifier; "
+                "use a target-qualified selector such as "
+                "`swift test --filter 'WorkspaceManagerTests.WorkspaceProviderTests'`"
+            )
+    return errors
+
+
 def _format_uploaded_evidence_links(uploaded_urls: list[tuple[str, str]]) -> str:
     return ", ".join(f"[{label}]({url})" for label, url in uploaded_urls)
+
+
+def _test_output_by_command(test_output: str) -> dict[str, str]:
+    sections: dict[str, list[str]] = {}
+    current_command: str | None = None
+    for raw_line in test_output.splitlines():
+        if raw_line.startswith("$ "):
+            current_command = raw_line[2:].strip()
+            sections.setdefault(current_command, [])
+            continue
+        if current_command is not None:
+            sections[current_command].append(raw_line)
+    return {
+        command: "\n".join(lines)
+        for command, lines in sections.items()
+    }
+
+
+def _test_output_has_no_matching_tests(command: str, test_output: str) -> bool:
+    if not test_output:
+        return False
+    command_output = _test_output_by_command(test_output).get(command)
+    if command_output is None:
+        return SWIFT_TEST_NO_MATCH_TEXT in test_output
+    return SWIFT_TEST_NO_MATCH_TEXT in command_output
 
 
 def _pending_ci_resolution(
@@ -892,6 +1121,7 @@ def _pending_ci_resolution(
     build_succeeded: bool,
     tests_succeeded: bool,
     smoke_succeeded: bool,
+    test_output: str = "",
     screenshot_upload_succeeded: bool = False,
     screenshot_urls: list[tuple[str, str]] | None = None,
 ) -> tuple[str, str]:
@@ -905,6 +1135,8 @@ def _pending_ci_resolution(
         return "blocked", "self-hosted macOS CI `swift build` failed; see workflow logs"
     if kind == "test":
         if tests_succeeded:
+            if _test_output_has_no_matching_tests(normalized, test_output):
+                return "blocked", f"self-hosted macOS CI `{normalized}` matched no tests; see test-output.txt"
             return "complete", f"`{normalized}` succeeded on self-hosted macOS CI"
         return "blocked", f"self-hosted macOS CI `{normalized}` failed; see test-output.txt"
     if kind == "screenshot":
@@ -925,10 +1157,51 @@ def reconcile_pending_ci_evidence(
     build_succeeded: bool,
     tests_succeeded: bool,
     smoke_succeeded: bool,
+    test_output: str = "",
     screenshot_upload_succeeded: bool = False,
     screenshot_urls: list[tuple[str, str]] | None = None,
 ) -> str:
     """Resolve pending-ci evidence lines after the macOS evidence job finishes."""
+    metadata = _extract_evidence_metadata(body)
+    if isinstance(metadata, dict) and isinstance(metadata.get("entries"), list):
+        updated_entries: list[dict[str, object]] = []
+        for raw_entry in metadata["entries"]:
+            if not isinstance(raw_entry, dict):
+                continue
+            entry = dict(raw_entry)
+            if str(entry.get("status", "")).strip() == "pending-ci":
+                status, detail = _pending_ci_resolution(
+                    str(entry.get("item", "")).strip(),
+                    build_succeeded=build_succeeded,
+                    tests_succeeded=tests_succeeded,
+                    smoke_succeeded=smoke_succeeded,
+                    test_output=test_output,
+                    screenshot_upload_succeeded=screenshot_upload_succeeded,
+                    screenshot_urls=screenshot_urls,
+                )
+                entry["status"] = status
+                entry["detail"] = detail
+            updated_entries.append(entry)
+
+        reconciled = insert_markdown_section(
+            _strip_evidence_metadata(body),
+            "Evidence Status",
+            "\n".join(
+                f"- [{str(entry.get('status', '')).strip()}] {str(entry.get('item', '')).strip()} -- {str(entry.get('detail', '')).strip()}"
+                for entry in sorted(updated_entries, key=lambda entry: int(entry.get("index", 0)))
+            ),
+            before_heading="Validation",
+        )
+        reconciled = _insert_evidence_metadata(
+            reconciled,
+            {
+                "entries": updated_entries,
+            },
+        )
+        if body.endswith("\n"):
+            reconciled += "\n"
+        return reconciled
+
     lines = body.splitlines()
     updated: list[str] = []
     in_evidence_status = False
@@ -947,6 +1220,7 @@ def reconcile_pending_ci_evidence(
                     build_succeeded=build_succeeded,
                     tests_succeeded=tests_succeeded,
                     smoke_succeeded=smoke_succeeded,
+                    test_output=test_output,
                     screenshot_upload_succeeded=screenshot_upload_succeeded,
                     screenshot_urls=screenshot_urls,
                 )
@@ -1321,13 +1595,22 @@ def format_pr_list_for_context(
             requested_evidence = extract_requested_evidence(issue_body)
             accounting = evaluate_evidence_accounting(pr_body, requested_evidence)
             entry["linkedIssue"] = issue_number
-            entry["evidenceSummary"] = {
-                "requested": len(requested_evidence),
-                "complete": len(accounting["complete_items"]),
-                "blocked": len(accounting["blocked_items"]),
-                "missing": len(accounting["missing_items"]),
-                "malformed": len(accounting["invalid_lines"]),
-            }
+            if _explicit_evidence_contract(requested_evidence):
+                summary: dict[str, object] = {
+                    "contract": "explicit",
+                    "requested": len(requested_evidence),
+                    "complete": len(accounting["complete_items"]),
+                    "blocked": len(accounting["blocked_items"]),
+                    "missing": len(accounting["missing_items"]),
+                    "source": accounting["source"],
+                }
+                if accounting["source"] == "markdown":
+                    summary["malformed"] = len(accounting["invalid_lines"])
+                entry["evidenceSummary"] = summary
+            else:
+                entry["evidenceSummary"] = {
+                    "contract": "none",
+                }
         payload.append(entry)
     return json.dumps(payload, indent=2, ensure_ascii=False)
 
@@ -1359,7 +1642,7 @@ def fetch_issue_state_map(env: dict[str, str]) -> dict[int, str]:
 
 def summarize_requested_evidence(requested_evidence: list[str]) -> str:
     if not requested_evidence:
-        return "Follow the repo evidence bar for the touched surfaces."
+        return "Evidence contract: none"
     preview = requested_evidence[:2]
     suffix = " ..." if len(requested_evidence) > 2 else ""
     return "; ".join(preview) + suffix
@@ -1371,7 +1654,7 @@ def format_requested_evidence_numbered(
     indent: str,
 ) -> str:
     if not requested_evidence:
-        return f"{indent}Requested evidence: none recorded"
+        return f"{indent}Evidence contract: none"
     lines = [f"{indent}Requested evidence by index:"]
     for index, item in enumerate(requested_evidence, start=1):
         lines.append(f"{indent}  [{index}] {item}")
@@ -1415,7 +1698,7 @@ def format_review_excerpt(review: dict[str, str] | None, *, indent: str) -> str:
 
 def summarize_evidence_accounting_by_index(accounting: dict[str, object], requested_evidence: list[str]) -> str:
     if not requested_evidence:
-        return "Current PR evidence: none requested"
+        return "Evidence contract: none"
 
     def indexes(items: list[str]) -> str:
         if not items:
@@ -1427,14 +1710,16 @@ def summarize_evidence_accounting_by_index(accounting: dict[str, object], reques
         ]
         return ", ".join(positions) if positions else "-"
 
-    malformed = accounting.get("invalid_lines", [])
-    return (
+    summary = (
         "Current PR evidence: "
         f"complete [{indexes(list(accounting['complete_items']))}], "
         f"blocked [{indexes(list(accounting['blocked_items']))}], "
-        f"missing [{indexes(list(accounting['missing_items']))}], "
-        f"malformed {len(malformed)}"
+        f"missing [{indexes(list(accounting['missing_items']))}]"
     )
+    malformed = accounting.get("invalid_lines", [])
+    if accounting.get("source") == "markdown":
+        return f"{summary}, malformed {len(malformed)}"
+    return summary
 
 
 def classify_execution_work(
@@ -1694,9 +1979,9 @@ def runner_platform_note() -> str:
     if platform.system() == "Darwin":
         return "Runner platform: macOS"
     return (
-        "Runner platform: Linux (Swift toolchain unavailable for macOS targets; "
+        "Runner platform: Linux (Swift toolchain unavailable for native app targets; "
         "use evidence_pending_ci for build/test/screenshot items — "
-        "the downstream macOS evidence job will resolve them)"
+        "the downstream evidence job will resolve them)"
     )
 
 
@@ -1958,6 +2243,7 @@ def build_execution_summary_body(
         data.get("action") == "advance_pr"
         or "evidence_complete" in data
         or "evidence_blocked" in data
+        or "evidence_pending_ci" in data
     )
     if not use_structured:
         return summary_body, []
@@ -2225,6 +2511,14 @@ def route_execution_action(
     if own_pr is None and state.get("blockers"):
         print(
             f"error: issue #{issue_number} is still blocked by {state['blockers']}",
+            file=sys.stderr,
+        )
+        return 1
+
+    test_command_errors = validate_requested_test_commands(requested_evidence, env)
+    if test_command_errors:
+        print(
+            "error: requested test evidence is invalid: " + "; ".join(test_command_errors),
             file=sys.stderr,
         )
         return 1
