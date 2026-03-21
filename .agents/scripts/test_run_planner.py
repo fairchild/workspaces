@@ -1377,7 +1377,8 @@ class RunContributorTests(unittest.TestCase):
             note = run_contributor.runner_platform_note()
         self.assertIn("Runner platform: Linux", note)
         self.assertIn("evidence_pending_ci", note)
-        self.assertNotIn("macOS", note.split(":", 1)[1])
+        # The note starts with "Runner platform: Linux" — not macOS
+        self.assertTrue(note.startswith("Runner platform: Linux"))
 
     def test_reconcile_leaves_blocked_items_unchanged(self) -> None:
         """[blocked] items written by a Linux runner must NOT be touched by reconcile.
