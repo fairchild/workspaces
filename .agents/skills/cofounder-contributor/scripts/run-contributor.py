@@ -1582,7 +1582,8 @@ def format_own_open_prs(items: list[dict[str, object]]) -> str:
     for item in items[:5]:
         lines.append(
             f"  PR #{item['pr_number']} — {item['pr_title']}\n"
-            f"    Issue: #{item['issue_number']} | Review decision: {item['review_decision']} | Branch: {item['pr_branch']}"
+            f"    Issue: #{item['issue_number']} | Review decision: {item['review_decision']} | Branch: {item['pr_branch']}\n"
+            f"    IMPORTANT: `git checkout {item['pr_branch']}` before editing — the runtime rejects commits on the wrong branch."
         )
         lines.append(
             format_requested_evidence_numbered(

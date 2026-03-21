@@ -1336,6 +1336,231 @@ class RunContributorTests(unittest.TestCase):
         self.assertIn("[1] Screenshot of NewWorkspaceSheet from the exact commit under review", rendered)
         self.assertIn("missing [1, 3]", rendered)
         self.assertIn("Latest external review: github-actions (CHANGES_REQUESTED)", rendered)
+        self.assertIn("git checkout codex/april-clearwater-issue-116-fix-status", rendered)
+
+    def test_format_own_open_prs_includes_branch_checkout_reminder(self) -> None:
+        rendered = run_contributor.format_own_open_prs(
+            [
+                {
+                    "pr_number": 119,
+                    "pr_title": "Fix status color",
+                    "issue_number": 116,
+                    "review_decision": "REVIEW_REQUIRED",
+                    "pr_branch": "codex/april-issue-116",
+                    "requested_evidence": [],
+                    "evidence_accounting": {
+                        "complete_items": [],
+                        "blocked_items": [],
+                        "missing_items": [],
+                        "invalid_lines": [],
+                    },
+                    "latest_external_review": None,
+                }
+            ]
+        )
+        self.assertIn("git checkout codex/april-issue-116", rendered)
+        self.assertIn("rejects commits on the wrong branch", rendered)
+
+    def test_format_own_open_prs_empty(self) -> None:
+        self.assertEqual(run_contributor.format_own_open_prs([]), "")
+
+    def test_classify_execution_work_detects_own_pr_by_marker(self) -> None:
+        """Own-PR detection: PR body contains the contributor marker for the current persona."""
+        issue_body = run_planner.compose_issue_body_with_metadata(
+            "## Context\nBody",
+            "https://github.com/fairchild/workspaces/discussions/110",
+            110,
+            "fix-status-color",
+            priority=1,
+            blocked_by=[],
+            requested_evidence=["swift test"],
+        )
+        pr_body = run_contributor.compose_pr_body(116, "April Clearwater", "## Summary\n- Fixed color")
+        issues = [
+            {
+                "number": 116,
+                "title": "Fix status color",
+                "url": "https://github.com/fairchild/workspaces/issues/116",
+                "body": issue_body,
+                "labels": {"nodes": [{"name": "agent:task"}, {"name": "agent:ready"}]},
+                "comments": {"nodes": []},
+            }
+        ]
+        pull_requests = [
+            {
+                "number": 119,
+                "title": "Fix status color",
+                "url": "https://github.com/fairchild/workspaces/pulls/119",
+                "body": pr_body,
+                "author": {"login": "april-clearwater[bot]"},
+                "reviewDecision": "REVIEW_REQUIRED",
+                "headRefName": "codex/april-clearwater-issue-116-fix-status",
+                "reviews": {"nodes": []},
+                "comments": {"nodes": []},
+            }
+        ]
+        classified = run_contributor.classify_execution_work(
+            issues,
+            pull_requests,
+            [],
+            issue_states={116: "OPEN"},
+            owner_login="fairchild",
+            persona="April Clearwater",
+            bot_login="april-clearwater[bot]",
+        )
+        self.assertEqual(len(classified["own_open_prs"]), 1)
+        self.assertEqual(classified["own_open_prs"][0]["pr_number"], 119)
+        self.assertEqual(classified["own_open_prs"][0]["pr_branch"], "codex/april-clearwater-issue-116-fix-status")
+        self.assertEqual(classified["ready_issues"], [])
+        self.assertEqual(classified["claimed_issues"], [])
+
+    def test_classify_execution_work_detects_own_pr_by_bot_login(self) -> None:
+        """Own-PR fallback: no marker in body, but author login matches bot_login."""
+        issue_body = run_planner.compose_issue_body_with_metadata(
+            "## Context\nBody",
+            "https://github.com/fairchild/workspaces/discussions/110",
+            110,
+            "fix-status-color",
+            priority=1,
+            blocked_by=[],
+            requested_evidence=["swift test"],
+        )
+        # PR body uses Closes #N but no contributor marker
+        pr_body = "## Summary\n- Fixed color\n\nCloses #116"
+        issues = [
+            {
+                "number": 116,
+                "title": "Fix status color",
+                "url": "https://github.com/fairchild/workspaces/issues/116",
+                "body": issue_body,
+                "labels": {"nodes": [{"name": "agent:task"}, {"name": "agent:ready"}]},
+                "comments": {"nodes": []},
+            }
+        ]
+        pull_requests = [
+            {
+                "number": 120,
+                "title": "Fix status color",
+                "url": "https://github.com/fairchild/workspaces/pulls/120",
+                "body": pr_body,
+                "author": {"login": "april-clearwater[bot]"},
+                "reviewDecision": None,
+                "headRefName": "codex/april-issue-116",
+                "reviews": {"nodes": []},
+                "comments": {"nodes": []},
+            }
+        ]
+        classified = run_contributor.classify_execution_work(
+            issues,
+            pull_requests,
+            [],
+            issue_states={116: "OPEN"},
+            owner_login="fairchild",
+            persona="April Clearwater",
+            bot_login="april-clearwater[bot]",
+        )
+        self.assertEqual(len(classified["own_open_prs"]), 1)
+        self.assertEqual(classified["own_open_prs"][0]["pr_number"], 120)
+
+    def test_classify_execution_work_other_agents_pr_not_own(self) -> None:
+        """A PR authored by a different agent should not appear in own_open_prs."""
+        issue_body = run_planner.compose_issue_body_with_metadata(
+            "## Context\nBody",
+            "https://github.com/fairchild/workspaces/discussions/110",
+            110,
+            "fix-status-color",
+            priority=1,
+            blocked_by=[],
+            requested_evidence=["swift test"],
+        )
+        # PR marker belongs to plat-ironwood, not april-clearwater
+        pr_body = (
+            "## Summary\n- Fixed color\n\nCloses #116\n\n"
+            "<!-- contributor:issue=116;agent=plat-ironwood -->"
+        )
+        issues = [
+            {
+                "number": 116,
+                "title": "Fix status color",
+                "url": "https://github.com/fairchild/workspaces/issues/116",
+                "body": issue_body,
+                "labels": {"nodes": [{"name": "agent:task"}, {"name": "agent:ready"}]},
+                "comments": {"nodes": []},
+            }
+        ]
+        pull_requests = [
+            {
+                "number": 121,
+                "title": "Fix status color",
+                "url": "https://github.com/fairchild/workspaces/pulls/121",
+                "body": pr_body,
+                "author": {"login": "plat-ironwood[bot]"},
+                "reviewDecision": None,
+                "headRefName": "codex/plat-issue-116",
+                "reviews": {"nodes": []},
+                "comments": {"nodes": []},
+            }
+        ]
+        classified = run_contributor.classify_execution_work(
+            issues,
+            pull_requests,
+            [],
+            issue_states={116: "OPEN"},
+            owner_login="fairchild",
+            persona="April Clearwater",
+            bot_login="april-clearwater[bot]",
+        )
+        # Not in own_open_prs because it belongs to a different agent
+        self.assertEqual(classified["own_open_prs"], [])
+        # Issue has a linked PR by another agent, so it should NOT be in ready_issues
+        self.assertEqual(classified["ready_issues"], [])
+
+    def test_classify_execution_work_claimed_issue_without_pr(self) -> None:
+        """An issue claimed by the current agent without a linked PR goes into claimed_issues."""
+        issue_body = run_planner.compose_issue_body_with_metadata(
+            "## Context\nBody",
+            "https://github.com/fairchild/workspaces/discussions/110",
+            110,
+            "fix-status-color",
+            priority=1,
+            blocked_by=[],
+            requested_evidence=["swift test"],
+        )
+        claim_comment = (
+            "<!-- contributor:issue=116;status=claimed;agent=april-clearwater;branch=codex/april-issue-116 -->\n"
+            "Claimed issue #116 on branch `codex/april-issue-116`."
+        )
+        issues = [
+            {
+                "number": 116,
+                "title": "Fix status color",
+                "url": "https://github.com/fairchild/workspaces/issues/116",
+                "body": issue_body,
+                "labels": {"nodes": [{"name": "agent:task"}, {"name": "agent:ready"}, {"name": "agent:claimed"}]},
+                "comments": {
+                    "nodes": [
+                        {
+                            "body": claim_comment,
+                            "createdAt": "2026-03-20T12:00:00Z",
+                            "author": {"login": "april-clearwater[bot]"},
+                        }
+                    ]
+                },
+            }
+        ]
+        classified = run_contributor.classify_execution_work(
+            issues,
+            [],
+            [],
+            issue_states={116: "OPEN"},
+            owner_login="fairchild",
+            persona="April Clearwater",
+            bot_login="april-clearwater[bot]",
+        )
+        self.assertEqual(len(classified["claimed_issues"]), 1)
+        self.assertEqual(classified["claimed_issues"][0]["issue_number"], 116)
+        self.assertEqual(classified["own_open_prs"], [])
+        self.assertEqual(classified["ready_issues"], [])
 
     def test_route_action_review_uses_app_token(self) -> None:
         validated_json = json.dumps(
