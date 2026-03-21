@@ -149,12 +149,31 @@ jobs:
             exit "$status"
           fi
 
-          reviews_json=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews")
-          review_author=$(printf '%s' "$reviews_json" | jq -r --arg marker "$marker" 'map(select((.body // "") | contains($marker))) | last | .user.login // empty')
-          review_state=$(printf '%s' "$reviews_json" | jq -r --arg marker "$marker" 'map(select((.body // "") | contains($marker))) | last | .state // empty')
+          review_author=""
+          review_state=""
+          reviews_json="[]"
+
+          # GitHub can take a moment to surface a freshly-submitted review in
+          # the pull request reviews list, so retry before treating it as a
+          # failure.
+          for attempt in $(seq 1 10); do
+            reviews_json=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews")
+            review_author=$(printf '%s' "$reviews_json" | jq -r --arg marker "$marker" 'map(select((.body // "") | contains($marker))) | last | .user.login // empty')
+            review_state=$(printf '%s' "$reviews_json" | jq -r --arg marker "$marker" 'map(select((.body // "") | contains($marker))) | last | .state // empty')
+
+            if [ -n "$review_author" ] && [ -n "$review_state" ]; then
+              break
+            fi
+
+            if [ "$attempt" -lt 10 ]; then
+              echo "Smoke review not visible yet; retrying ($attempt/10)..."
+              sleep 2
+            fi
+          done
 
           if [ -z "$review_author" ] || [ -z "$review_state" ]; then
             echo "Unable to find the smoke review after submission." >&2
+            printf '%s\n' "$reviews_json" | jq 'map({user: .user.login, state: .state, submitted_at: .submitted_at, body: (.body // "")}) | last'
             exit 1
           fi
 
