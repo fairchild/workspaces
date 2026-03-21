@@ -191,6 +191,37 @@ struct WorkspaceProviderTests {
         )
     }
 
+    @Test("setupRequirement followed by performSetup issues only one snapshot probe")
+    func setupRequirementCachesSnapshotForPerformSetup() async throws {
+        let runtimeService = SpyLumeRuntimeService(state: .setupRequired)
+        let provider = LumeWorkspaceProvider(
+            baseURL: URL(string: "http://localhost:7777/lume/")!,
+            runtimeService: runtimeService
+        )
+
+        // Simulate the full confirm-and-continue flow: setupRequirement then performSetup.
+        _ = try await provider.setupRequirement(for: .createWorkspace(name: "vm", guestOS: .macOS))
+        try? await provider.performSetup(progress: nil)
+
+        let callCount = await runtimeService.snapshotCallCount
+        #expect(callCount == 1, "Expected exactly one snapshot() probe; got \(callCount)")
+    }
+
+    @Test("performSetup without prior setupRequirement still probes snapshot")
+    func performSetupWithoutCacheFallsBackToFreshProbe() async throws {
+        let runtimeService = SpyLumeRuntimeService(state: .setupRequired)
+        let provider = LumeWorkspaceProvider(
+            baseURL: URL(string: "http://localhost:7777/lume/")!,
+            runtimeService: runtimeService
+        )
+
+        // Call performSetup directly — no prior setupRequirement.
+        try? await provider.performSetup(progress: nil)
+
+        let callCount = await runtimeService.snapshotCallCount
+        #expect(callCount == 1, "Expected exactly one snapshot() probe from performSetup fallback; got \(callCount)")
+    }
+
     @Test("Lume bridged reachability extracts interface and matching ARP IP")
     func lumeBridgedReachabilityParsing() {
         #expect(LumeBridgedVMReachability.bridgedInterface(from: "bridged:en0") == "en0")
@@ -210,5 +241,84 @@ struct WorkspaceProviderTests {
         )
 
         #expect(resolvedIP == "192.168.8.100")
+    }
+}
+
+// MARK: - Test helpers
+
+/// Minimal LumeRuntimeServiceProtocol spy that counts snapshot() calls and
+/// stubs install/verify/repair to return without error.
+private actor SpyLumeRuntimeService: LumeRuntimeServiceProtocol {
+    private(set) var snapshotCallCount = 0
+    private let fixedState: LumeRuntimeState
+
+    init(state: LumeRuntimeState) {
+        self.fixedState = state
+    }
+
+    func snapshot() async -> LumeRuntimeSnapshot {
+        snapshotCallCount += 1
+        return LumeRuntimeSnapshot(
+            state: fixedState,
+            executablePath: nil,
+            launchAgentPath: "/tmp/lume.plist",
+            launchAgentInstalled: false,
+            daemonReachable: false,
+            hostProfile: nil,
+            defaultMacOSImage: nil,
+            defaultMacOSImageError: nil,
+            infoLogPath: "/tmp/lume.log",
+            errorLogPath: "/tmp/lume.error.log"
+        )
+    }
+
+    func baseVMSnapshot() async -> LumeBaseVMSnapshot? { nil }
+
+    func hostProfile() async throws -> LumeHostProfile {
+        throw LumeRuntimeError.unsupportedHost("spy")
+    }
+
+    func defaultMacOSImageResolution() async throws -> LumeImageResolution {
+        throw LumeRuntimeError.imageUnavailable("spy")
+    }
+
+    func installIfNeeded(progress: LumeRuntimeProgressHandler?) async throws -> LumeRuntimeSnapshot {
+        stubbedSnapshot()
+    }
+
+    func verifyInstallation(progress: LumeRuntimeProgressHandler?) async throws -> LumeRuntimeSnapshot {
+        stubbedSnapshot()
+    }
+
+    func repairInstallation(progress: LumeRuntimeProgressHandler?) async throws -> LumeRuntimeSnapshot {
+        stubbedSnapshot()
+    }
+
+    func ensureBaseVMReady(progress: WorkspaceProviderProgressHandler?) async throws -> LumeBaseVMSnapshot {
+        throw LumeRuntimeError.baseVMFailed("spy")
+    }
+
+    func deleteBaseVM() async throws -> LumeRuntimeSnapshot {
+        stubbedSnapshot()
+    }
+
+    func executablePath() async throws -> String {
+        throw LumeRuntimeError.unsupportedHost("spy")
+    }
+
+    /// Returns a snapshot value without incrementing the call counter.
+    private func stubbedSnapshot() -> LumeRuntimeSnapshot {
+        LumeRuntimeSnapshot(
+            state: fixedState,
+            executablePath: nil,
+            launchAgentPath: "/tmp/lume.plist",
+            launchAgentInstalled: false,
+            daemonReachable: false,
+            hostProfile: nil,
+            defaultMacOSImage: nil,
+            defaultMacOSImageError: nil,
+            infoLogPath: "/tmp/lume.log",
+            errorLogPath: "/tmp/lume.error.log"
+        )
     }
 }
