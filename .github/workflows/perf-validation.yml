@@ -45,7 +45,7 @@ jobs:
         run: swift build
 
       - name: Capture perf baseline
-        run: ./scripts/perf-baseline.sh 3 6 --record
+        run: ./scripts/perf-baseline.sh 3 6 --record --assert-budget
 
       - name: Collect perf artifacts
         if: always()
