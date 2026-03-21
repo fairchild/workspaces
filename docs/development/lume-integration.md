@@ -158,6 +158,78 @@ When validating a local upstream Lume patch on this Mac:
 
 This note exists because the raw SwiftPM output has behaved differently from the locally installed binary during VM validation on this host.
 
+## Daemon Reliability
+
+The Lume daemon (`com.trycua.lume_daemon`) must be running for CI, agent workflows, and the app's VM features to work. Without a keepalive mechanism, daemon outages are silent — CI jobs queue indefinitely on the `lume-macos` runner.
+
+### LaunchAgent with KeepAlive
+
+The daemon is managed by a LaunchAgent at `~/Library/LaunchAgents/com.trycua.lume_daemon.plist`:
+
+```xml
+<key>KeepAlive</key>
+<true/>
+<key>RunAtLoad</key>
+<true/>
+```
+
+`KeepAlive` tells launchd to restart the process if it exits for any reason. `RunAtLoad` starts it on login. This replaces the previous approach of running the daemon in a detached tmux session, which had no crash recovery.
+
+The plist points at the **installed** binary (`~/.local/share/lume/lume.app/Contents/MacOS/lume`), not a debug build. Using a debug build from a local upstream clone (`libs/lume/.build/debug/lume`) caused reliability issues previously — the installed signed binary is the only supported daemon binary.
+
+### Ensure script
+
+`scripts/lume-ensure-daemon.sh` is an idempotent health-check that self-heals the daemon:
+
+1. **Fast path**: `GET /lume/host/status` responds → exit 0
+2. **Load**: LaunchAgent plist exists → `launchctl load` → wait up to 15s
+3. **Create**: plist missing → write it with `KeepAlive` → load → wait
+4. **Direct start**: all else fails → `nohup lume serve` as fallback
+
+Call it anywhere a healthy daemon is a precondition:
+
+```bash
+# mise task
+mise run dev-lume-ensure
+
+# CI pre-step in a workflow
+- name: Ensure Lume daemon
+  run: ./scripts/lume-ensure-daemon.sh
+
+# cron watchdog (every 5 minutes)
+*/5 * * * * /path/to/scripts/lume-ensure-daemon.sh LUME_QUIET=1
+```
+
+### Diagnosing daemon issues
+
+```bash
+# Is the daemon responding?
+curl -sf http://127.0.0.1:7777/lume/host/status
+
+# Is the LaunchAgent loaded?
+launchctl list | grep lume
+
+# What process is serving port 7777?
+lsof -nP -iTCP:7777 -sTCP:LISTEN
+
+# Daemon logs
+tail -50 /tmp/lume_daemon.log
+tail -50 /tmp/lume_daemon.error.log
+
+# Nuclear recovery: unload, reload
+launchctl unload ~/Library/LaunchAgents/com.trycua.lume_daemon.plist
+launchctl load ~/Library/LaunchAgents/com.trycua.lume_daemon.plist
+```
+
+### Common failure modes
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| CI jobs stuck in `queued` | Daemon down, runner offline | `mise run dev-lume-ensure` |
+| Daemon running but wrong binary | Stale tmux session with debug build | Kill tmux, reload LaunchAgent |
+| LaunchAgent plist missing | Upstream `install-local.sh --no-background-service` removed it | `./scripts/lume-ensure-daemon.sh` recreates it |
+| Port 7777 in use by something else | Conflicting process | `lsof -nP -iTCP:7777` to identify, kill it |
+
 ## Failure Artifacts
 
 Standalone validation artifacts live under:
