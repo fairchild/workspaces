@@ -191,12 +191,34 @@ sequenceDiagram
     end
 ```
 
+## Enforced Budget Targets
+
+Three core startup metrics have enforced budget targets. These are not suggestions — `perf-baseline.sh --assert-budget` exits 1 when any of them is exceeded, making the measurement an active gate rather than a passive record.
+
+| Metric | Budget |
+|---|---:|
+| `launch_to_first_prompt` | <= 250 ms |
+| `repo_hydration` | <= 25 ms |
+| `repo_click_to_focus` | <= 250 ms |
+
+To run with enforcement locally:
+
+```bash
+./scripts/perf-baseline.sh 3 6 --record --assert-budget
+```
+
+The `--assert-budget` flag is composable with `--record` so a single invocation can both update history and enforce the gate. A budget breach prints each violation with the measured value, the budget limit, and the overage, then exits nonzero.
+
+CI enforcement: the `perf-validation.yml` scheduled run passes `--assert-budget` so a breach shows up as a red workflow run rather than a silent artifact. Because `Upload perf artifacts` runs with `if: always()`, artifact collection survives failures and the dashboard is still updated.
+
+Release blocking: once the release quality gate (issue #98) lands, `perf-validation` will be a required check on the release SHA. Until then, a failing daily cron run is the signal.
+
 ## Interpreting Dashboard Changes
 
 1. Small run-to-run movement is normal (scheduler/window focus variance).
 2. Regressions to investigate:
 - sustained increases over multiple recorded runs
-- crossing target thresholds
+- crossing target thresholds (will also fail `--assert-budget`)
 - sudden jump with no corresponding product change
 3. Compare with context:
 - repo count discovered/imported

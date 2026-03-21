@@ -7,23 +7,26 @@ set -euo pipefail
 usage() {
     cat <<'EOF'
 Usage:
-  ./scripts/perf-baseline.sh [runs] [sleep_seconds] [--record] [--launch-mode no-activate|activate]
+  ./scripts/perf-baseline.sh [runs] [sleep_seconds] [--record] [--assert-budget] [--launch-mode no-activate|activate]
 
 Examples:
   ./scripts/perf-baseline.sh
   ./scripts/perf-baseline.sh 5 8
   ./scripts/perf-baseline.sh 5 8 --record
+  ./scripts/perf-baseline.sh 5 8 --record --assert-budget
   ./scripts/perf-baseline.sh 5 8 --launch-mode activate
 
 Notes:
   - --record appends results to docs/performance/metrics-history.csv
   - --record regenerates docs/performance/dashboard.md
+  - --assert-budget exits 1 if any tracked metric exceeds its budget (composable with --record)
 EOF
 }
 
 RUNS=5
 SLEEP_SECONDS=8
 RECORD=0
+ASSERT_BUDGET=0
 POSITIONAL=0
 LAUNCH_MODE="no-activate"
 
@@ -31,6 +34,10 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --record)
             RECORD=1
+            shift
+            ;;
+        --assert-budget)
+            ASSERT_BUDGET=1
             shift
             ;;
         --launch-mode)
@@ -134,7 +141,7 @@ ARCH="$(uname -m)"
 MODEL="$(sysctl -n hw.model 2>/dev/null || echo unknown)"
 TIMESTAMP="$(date '+%Y-%m-%dT%H:%M:%S%z')"
 
-python3 - "$OUTPUT_DIR" "$ROOT_DIR" "$RUNS" "$SLEEP_SECONDS" "$RECORD" "$TIMESTAMP" "$OS_VERSION" "$OS_BUILD" "$ARCH" "$MODEL" "$LAUNCH_MODE" <<'PY'
+python3 - "$OUTPUT_DIR" "$ROOT_DIR" "$RUNS" "$SLEEP_SECONDS" "$RECORD" "$TIMESTAMP" "$OS_VERSION" "$OS_BUILD" "$ARCH" "$MODEL" "$LAUNCH_MODE" "$ASSERT_BUDGET" <<'PY'
 import csv
 from datetime import datetime
 import json
@@ -154,6 +161,7 @@ os_build = sys.argv[8]
 arch = sys.argv[9]
 model = sys.argv[10]
 launch_mode = sys.argv[11]
+assert_budget = int(sys.argv[12]) == 1
 
 duration_pattern = re.compile(r"metric=([a-z_]+) duration_ms=([0-9]+(?:\.[0-9]+)?)")
 hydration_meta_pattern = re.compile(
@@ -261,8 +269,33 @@ print(f"launch_mode: {launch_mode}")
 print("\n".join(summary_lines))
 print(f"summary_json={summary_json_path}")
 
+metric_specs = [
+    ("launch_to_first_prompt_median_ms", "launch_to_first_prompt", 250.0),
+    ("repo_hydration_median_ms",         "repo_hydration",          25.0),
+    ("repo_click_to_focus_median_ms",    "repo_click_to_focus",    250.0),
+]
+
+budget_exit_code = 0
+if assert_budget:
+    violations = []
+    for median_key, metric_name, target in metric_specs:
+        val = summary[metric_name]["median"] if summary[metric_name] else None
+        if val is not None and val > target:
+            over = val - target
+            pct = (over / target) * 100.0
+            violations.append(
+                f"  FAIL  {metric_name}: {val:.2f} ms  (budget <= {target:.0f} ms, over by {over:+.2f} ms / {pct:+.1f}%)"
+            )
+    if violations:
+        print("\nBudget violations:")
+        for v in violations:
+            print(v)
+        budget_exit_code = 1
+    else:
+        print("\nAll metrics within budget.")
+
 if not record:
-    sys.exit(0)
+    sys.exit(budget_exit_code)
 
 perf_dir = root_dir / "docs" / "performance"
 perf_dir.mkdir(parents=True, exist_ok=True)
@@ -327,12 +360,6 @@ rows = []
 with history_csv_path.open(newline="") as f:
     reader = csv.DictReader(f)
     rows = list(reader)
-
-metric_specs = [
-    ("launch_to_first_prompt_median_ms", "launch_to_first_prompt", 250.0),
-    ("repo_hydration_median_ms", "repo_hydration", 25.0),
-    ("repo_click_to_focus_median_ms", "repo_click_to_focus", 250.0),
-]
 
 def parse_float(value):
     try:
@@ -483,4 +510,6 @@ dashboard_path.write_text("\n".join(dashboard_lines) + "\n")
 print(f"history_csv={history_csv_path}")
 print(f"dashboard_md={dashboard_path}")
 print(f"latest_json={latest_json_path}")
+
+sys.exit(budget_exit_code)
 PY
