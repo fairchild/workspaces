@@ -187,6 +187,9 @@ Activation-driving shortcut smoke:
 - Intentionally not shared-desktop-safe. Use it only when foreground input is acceptable, or move to Tart/Lume / a separate user session.
 
 If you use `mise`, equivalent convenience tasks are:
+- `mise run build-ghosttykit`
+- `mise run build`
+- `mise run test`
 - `mise run dev-launch`
 - `mise run dev-watch`
 - `mise run dev-smoke`
