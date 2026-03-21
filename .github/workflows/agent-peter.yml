@@ -44,7 +44,7 @@ jobs:
 
       - name: Generate app token
         id: app-token
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.WORKSPACE_AGENTS_APP_ID }}
           private-key: ${{ secrets.WORKSPACE_AGENTS_PRIVATE_KEY }}
