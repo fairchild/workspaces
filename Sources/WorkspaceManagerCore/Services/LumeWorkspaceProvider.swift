@@ -79,6 +79,11 @@ public actor LumeWorkspaceProvider: WorkspaceProviderProtocol {
     private let daemonInfoLogPath = "/tmp/lume_daemon.log"
     private let daemonErrorLogPath = "/tmp/lume_daemon.error.log"
 
+    /// Snapshot captured during `setupRequirement(for:)` so that the
+    /// immediately following `performSetup(progress:)` call can reuse it
+    /// without issuing a second probe to the Lume daemon.
+    private var cachedSetupSnapshot: LumeRuntimeSnapshot?
+
     public init(
         baseURL: URL = URL(string: "http://localhost:7777/lume/")!,
         urlSession: URLSession = .shared,
@@ -1291,6 +1296,7 @@ extension LumeWorkspaceProvider: WorkspaceProviderSetupCapable {
         for action: WorkspaceProviderSetupAction
     ) async throws -> WorkspaceProviderSetupRequirement? {
         let snapshot = await runtimeService.snapshot()
+        cachedSetupSnapshot = snapshot
 
         switch snapshot.state {
         case .ready:
@@ -1358,7 +1364,17 @@ extension LumeWorkspaceProvider: WorkspaceProviderSetupCapable {
     }
 
     public func performSetup(progress: WorkspaceProviderSetupProgressHandler?) async throws {
-        let setupSnapshot = await runtimeService.snapshot()
+        // Consume the snapshot from setupRequirement(for:) if available — avoids
+        // a second round-trip to the Lume daemon when called as part of the normal
+        // confirm-and-continue flow. Fall back to a fresh probe otherwise (e.g.
+        // when performSetup is called directly in tests or repair paths).
+        let setupSnapshot: LumeRuntimeSnapshot
+        if let cached = cachedSetupSnapshot {
+            setupSnapshot = cached
+            cachedSetupSnapshot = nil
+        } else {
+            setupSnapshot = await runtimeService.snapshot()
+        }
         let progressHandler: LumeRuntimeProgressHandler = { step in
             await progress?(
                 WorkspaceProviderSetupProgress(

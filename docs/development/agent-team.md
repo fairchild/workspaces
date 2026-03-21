@@ -15,7 +15,7 @@ Focuses on CI/CD, agent infrastructure, distribution, notifications, testing. Th
 ### Peter Planner
 Converts approved ideas into GitHub Issues and Milestones. Activated when the owner approves a proposal.
 
-### Observer
+### Oliver Obever — Observer
 Gathers operational evidence from GitHub and the checked-in perf snapshots. Runs weekly, updates the ops timeline, and may open a focused `[idea] [ops] ...` discussion when thresholds are breached. For local validation, the same runtime can replay checked-in scenario packs from `fixtures/ops-report/` without touching GitHub.
 
 All agents share core principles: quality over speed, hardening over feature expansion, calm/clean/intuitive UX without compromise.
@@ -60,7 +60,7 @@ Daily (weekdays, alternating who goes first, 30 min offset):
     4. Claim the highest-priority ready approved issue
     5. Push a branch + open/update a PR
     │
-  Observer (weekly)
+  Oliver Obever (weekly)
     1. Reads idea/issue/PR/workflow history
     2. Summarizes the closed loop into docs/ops artifacts
     3. Opens one [idea] [ops] discussion only if a threshold breach needs attention
@@ -78,7 +78,7 @@ Daily (weekdays, alternating who goes first, 30 min offset):
 
 The 30-minute offset means the second agent sees the first's output and can comment on it.
 
-Observer runs separately once a week on Monday at 13:30 UTC to evaluate loop health and evidence trends.
+Oliver Obever runs separately once a week on Monday at 13:30 UTC to evaluate loop health and evidence trends.
 
 ### On-Demand Mentions
 
@@ -136,14 +136,14 @@ Prompt, runtime, and compatibility responsibilities now split cleanly:
 | `.agents/skills/drive/SKILL.md` | Manual milestone execution workflow after planning |
 | `docs/development/agent-owner-protocol.md` | Owner-facing protocol for approving, steering, and merging agent work |
 | `scripts/ops-report.py` | Deterministic GitHub + perf reporting for the ops loop |
-| `fixtures/ops-report/` | Checked-in replay packs for Observer dry runs and tests |
+| `fixtures/ops-report/` | Checked-in replay packs for Oliver Obever dry runs and tests |
 | `docs/ops/` | Checked-in ops timeline, snapshot JSON, and dashboard |
 | `.github/workflows/agent-april.yml` | April's cron workflow |
 | `.github/workflows/agent-plat.yml` | Plat's cron workflow |
 | `.github/workflows/agent-peter.yml` | Event-triggered planner workflow |
 | `.github/workflows/agent-mention.yml` | `@april` / `@plat` / `@peter` mention-triggered workflow |
 | `.github/workflows/_evidence.yml` | Reusable evidence workflow (build, test, screenshot, reconcile) |
-| `.github/workflows/agent-observer.yml` | Weekly deterministic ops observer workflow |
+| `.github/workflows/agent-oliver.yml` | Weekly deterministic ops observer workflow |
 
 ## Runtime Layout
 
@@ -177,7 +177,7 @@ Peter Planner stays separate because it is event-driven and uses a different pla
 
 The Peter workflow now invokes the skill runtime directly. The old `.agents/scripts/run-planner.py` path remains only as a compatibility shim for any external callers that still depend on it.
 
-Observer is deterministic rather than model-driven. Its workflow delegates to `scripts/ops-report.py`:
+Oliver Obever is deterministic rather than model-driven. Its workflow delegates to `scripts/ops-report.py`:
 
 1. fetch idea discussions, issues, PRs, workflow runs, and perf snapshots
 2. build `docs/ops/` style artifacts (`timeline.csv`, `latest-summary.json`, `dashboard.md`)
@@ -202,7 +202,7 @@ For manual dry runs, `scripts/ops-report.py` also accepts `--fixtures-dir fixtur
 - **Discussion token override** — `permissions.discussions: write` is enough for comments, issues, and milestones, but GitHub's built-in Actions token still cannot retitle discussions via `updateDiscussion` in this repo. `agent-peter.yml` therefore prefers the repo secret `PETER_DISCUSSION_TOKEN` when present, and the repo's default Actions workflow permission should stay at `write`
 - **OpenAI env compatibility** — agent runtimes treat `OPENAI_API_KEY` as the canonical provider variable and fall back to `GITHUB_CODESPACES_OPENAI_API_KEY` when present so local Codespaces-oriented `.env` files can still work without changing the runtime contract
 - **Simple operational memory** — GitHub stays the raw event source; `docs/ops/` stores small checked-in snapshots and dashboards instead of introducing a separate analytics service or database in v1
-- **Replay fixtures stay separate from memory** — Observer scenario packs live in `fixtures/ops-report/` so synthetic dry-run inputs do not get confused with the real operational snapshots in `docs/ops/`
+- **Replay fixtures stay separate from memory** — Oliver Obever scenario packs live in `fixtures/ops-report/` so synthetic dry-run inputs do not get confused with the real operational snapshots in `docs/ops/`
 
 ## Vision: Autonomous Development
 

@@ -1,6 +1,18 @@
 [tools]
 zig = "0.15.2"
 
+[tasks.build-ghosttykit]
+description = "Build GhosttyKit.xcframework (required once or after pin changes)."
+run = "./scripts/build-ghosttykit.sh"
+
+[tasks.build]
+description = "Build the WorkspaceManager app."
+run = "swift build"
+
+[tasks.test]
+description = "Run the test suite."
+run = "swift test"
+
 [tasks."dev-launch"]
 description = "Launch the debug app and require a visible window."
 run = "./scripts/launch-dev.sh"

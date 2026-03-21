@@ -135,6 +135,11 @@ Uploads go to an R2-backed store at `https://evidence.cloudcompute.com/`. URLs a
 swift build   # Build
 swift test    # Test
 swift run     # Run
+
+# Or via mise:
+mise run build-ghosttykit  # Build GhosttyKit
+mise run build             # Build
+mise run test              # Test
 ```
 
 ## Python Script Preference
