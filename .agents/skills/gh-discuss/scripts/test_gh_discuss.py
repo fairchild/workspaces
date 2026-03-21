@@ -21,10 +21,19 @@ import tempfile
 import traceback
 from pathlib import Path
 
-# Import the module under test by path
-sys.path.insert(0, str(Path(__file__).parent))
-import importlib
-gh_discuss = importlib.import_module("gh-discuss")
+# Import the module under test by path (spec_from_file_location handles
+# the hyphenated filename safely across all Python versions).
+import importlib.util
+
+def _load_module(name: str, path: Path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+gh_discuss = _load_module("gh_discuss", Path(__file__).parent / "gh-discuss.py")
 
 
 # ---------------------------------------------------------------------------
