@@ -7,23 +7,26 @@ set -euo pipefail
 usage() {
     cat <<'EOF'
 Usage:
-  ./scripts/perf-baseline.sh [runs] [sleep_seconds] [--record] [--launch-mode no-activate|activate]
+  ./scripts/perf-baseline.sh [runs] [sleep_seconds] [--record] [--assert-budget] [--launch-mode no-activate|activate]
 
 Examples:
   ./scripts/perf-baseline.sh
   ./scripts/perf-baseline.sh 5 8
   ./scripts/perf-baseline.sh 5 8 --record
+  ./scripts/perf-baseline.sh 5 8 --record --assert-budget
   ./scripts/perf-baseline.sh 5 8 --launch-mode activate
 
 Notes:
   - --record appends results to docs/performance/metrics-history.csv
   - --record regenerates docs/performance/dashboard.md
+  - --assert-budget exits nonzero if any metric exceeds its budget target
 EOF
 }
 
 RUNS=5
 SLEEP_SECONDS=8
 RECORD=0
+ASSERT_BUDGET=0
 POSITIONAL=0
 LAUNCH_MODE="no-activate"
 
@@ -31,6 +34,10 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --record)
             RECORD=1
+            shift
+            ;;
+        --assert-budget)
+            ASSERT_BUDGET=1
             shift
             ;;
         --launch-mode)
@@ -93,6 +100,7 @@ echo "  runs: $RUNS"
 echo "  sleep per run: ${SLEEP_SECONDS}s"
 echo "  launch mode: $LAUNCH_MODE"
 echo "  record in repo docs: $RECORD"
+echo "  assert budget: $ASSERT_BUDGET"
 echo "  output: $OUTPUT_DIR"
 echo "  data dir: $PERF_DATA_DIR"
 
@@ -134,7 +142,7 @@ ARCH="$(uname -m)"
 MODEL="$(sysctl -n hw.model 2>/dev/null || echo unknown)"
 TIMESTAMP="$(date '+%Y-%m-%dT%H:%M:%S%z')"
 
-python3 - "$OUTPUT_DIR" "$ROOT_DIR" "$RUNS" "$SLEEP_SECONDS" "$RECORD" "$TIMESTAMP" "$OS_VERSION" "$OS_BUILD" "$ARCH" "$MODEL" "$LAUNCH_MODE" <<'PY'
+python3 - "$OUTPUT_DIR" "$ROOT_DIR" "$RUNS" "$SLEEP_SECONDS" "$RECORD" "$TIMESTAMP" "$OS_VERSION" "$OS_BUILD" "$ARCH" "$MODEL" "$LAUNCH_MODE" "$ASSERT_BUDGET" <<'PY'
 import csv
 from datetime import datetime
 import json
@@ -154,6 +162,7 @@ os_build = sys.argv[8]
 arch = sys.argv[9]
 model = sys.argv[10]
 launch_mode = sys.argv[11]
+assert_budget = int(sys.argv[12]) == 1
 
 duration_pattern = re.compile(r"metric=([a-z_]+) duration_ms=([0-9]+(?:\.[0-9]+)?)")
 hydration_meta_pattern = re.compile(
@@ -261,8 +270,40 @@ print(f"launch_mode: {launch_mode}")
 print("\n".join(summary_lines))
 print(f"summary_json={summary_json_path}")
 
+# Budget targets for the three core metrics (used by both --record dashboard
+# and --assert-budget enforcement).
+budget_specs = [
+    ("launch_to_first_prompt", 250.0),
+    ("repo_hydration", 25.0),
+    ("repo_click_to_focus", 250.0),
+]
+
+budget_exit_code = 0
+if assert_budget:
+    violations = []
+    for metric_name, target in budget_specs:
+        stats = summary.get(metric_name)
+        if stats is None:
+            violations.append(f"  {metric_name}: MISSING (no data collected)")
+            continue
+        median = stats["median"]
+        if median > target:
+            overshoot = median - target
+            violations.append(
+                f"  {metric_name}: {median:.2f} ms (budget {target:.0f} ms, over by {overshoot:.2f} ms)"
+            )
+    if violations:
+        budget_exit_code = 1
+        print("")
+        print("BUDGET VIOLATIONS:")
+        for v in violations:
+            print(v)
+        print("")
+    else:
+        print("\nAll metrics within budget.\n")
+
 if not record:
-    sys.exit(0)
+    sys.exit(budget_exit_code)
 
 perf_dir = root_dir / "docs" / "performance"
 perf_dir.mkdir(parents=True, exist_ok=True)
@@ -329,9 +370,7 @@ with history_csv_path.open(newline="") as f:
     rows = list(reader)
 
 metric_specs = [
-    ("launch_to_first_prompt_median_ms", "launch_to_first_prompt", 250.0),
-    ("repo_hydration_median_ms", "repo_hydration", 25.0),
-    ("repo_click_to_focus_median_ms", "repo_click_to_focus", 250.0),
+    (f"{name}_median_ms", name, target) for name, target in budget_specs
 ]
 
 def parse_float(value):
@@ -483,4 +522,6 @@ dashboard_path.write_text("\n".join(dashboard_lines) + "\n")
 print(f"history_csv={history_csv_path}")
 print(f"dashboard_md={dashboard_path}")
 print(f"latest_json={latest_json_path}")
+
+sys.exit(budget_exit_code)
 PY

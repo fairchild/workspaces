@@ -132,7 +132,7 @@ jobs:
     steps:
       - name: Generate app token
         id: app-token
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.APRIL_APP_ID }}
           private-key: ${{ secrets.APRIL_PRIVATE_KEY }}
@@ -167,7 +167,7 @@ jobs:
     steps:
       - name: Generate app token
         id: app-token
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.APRIL_APP_ID }}
           private-key: ${{ secrets.APRIL_PRIVATE_KEY }}
@@ -244,7 +244,7 @@ jobs:
     steps:
       - name: Generate app token
         id: app-token
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.WORKSPACE_AGENTS_APP_ID }}
           private-key: ${{ secrets.WORKSPACE_AGENTS_PRIVATE_KEY }}
@@ -314,7 +314,7 @@ jobs:
     steps:
       - name: Generate app token
         id: app-token
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.WORKSPACE_AGENTS_APP_ID }}
           private-key: ${{ secrets.WORKSPACE_AGENTS_PRIVATE_KEY }}

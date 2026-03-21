@@ -191,6 +191,18 @@ sequenceDiagram
     end
 ```
 
+## Enforced Budget Targets
+
+The three core startup metrics have enforced performance budgets. When `perf-baseline.sh` is invoked with `--assert-budget`, it exits nonzero if any metric's median exceeds its target.
+
+| Metric | Budget |
+|---|---:|
+| `launch_to_first_prompt` | <= 250 ms |
+| `repo_hydration` | <= 25 ms |
+| `repo_click_to_focus` | <= 250 ms |
+
+These are enforced in the `perf-validation.yml` workflow. A budget breach fails the workflow run. Release blocking via required check status is tracked in #98.
+
 ## Interpreting Dashboard Changes
 
 1. Small run-to-run movement is normal (scheduler/window focus variance).

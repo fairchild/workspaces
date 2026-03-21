@@ -173,6 +173,21 @@ class ValidateAgentOutputTests(unittest.TestCase):
                 }
             )
 
+    def test_contributor_advance_pr_requires_positive_pr_number(self) -> None:
+        with self.assertRaises(contributor_validator.ValidationError):
+            contributor_validator.validate_data(
+                {
+                    "action": "advance_pr",
+                    "persona": "April Clearwater, Application Lead",
+                    "pr_number": 0,
+                    "issue_number": 116,
+                    "pr_title": "Fix issue",
+                    "commit_message": "Fix issue",
+                    "body": "## Summary\n- Updated code",
+                    "evidence_complete": ["1 -- proof"],
+                }
+            )
+
 
 class RunPlannerTests(unittest.TestCase):
     def make_discussion(self, number: int = 43, title: str | None = None, comments=None):
@@ -1072,6 +1087,60 @@ class RunContributorTests(unittest.TestCase):
         self.assertEqual(len(errors), 1)
         self.assertIn("blocked on evidence", errors[0])
 
+    def test_render_execution_summary_body_renders_exact_requested_items_from_indexes(self) -> None:
+        body, errors = run_contributor.render_execution_summary_body(
+            "## Summary\n- Updated the status severity mapping\n\n## Validation\n- `swift test --filter NewWorkspaceSheetTests`\n",
+            requested_evidence=[
+                "Screenshot of NewWorkspaceSheet from the exact commit under review",
+                "swift test --filter NewWorkspaceSheetTests",
+            ],
+            evidence_complete=["2 -- `swift test --filter NewWorkspaceSheetTests`"],
+            evidence_blocked=["1 -- Linux runner cannot launch the macOS app"],
+            evidence_pending_ci=[],
+        )
+        self.assertEqual(errors, [])
+        self.assertIn(
+            "- [complete] swift test --filter NewWorkspaceSheetTests -- `swift test --filter NewWorkspaceSheetTests`",
+            body,
+        )
+        self.assertIn(
+            "- [blocked] Screenshot of NewWorkspaceSheet from the exact commit under review -- Linux runner cannot launch the macOS app",
+            body,
+        )
+        self.assertIn("blocked on evidence: Linux runner cannot launch the macOS app", body)
+
+    def test_render_execution_summary_body_rejects_out_of_range_index(self) -> None:
+        _, errors = run_contributor.render_execution_summary_body(
+            "## Summary\n- Updated the status severity mapping\n",
+            requested_evidence=["swift test --filter NewWorkspaceSheetTests"],
+            evidence_complete=["2 -- `swift test --filter NewWorkspaceSheetTests`"],
+            evidence_blocked=[],
+            evidence_pending_ci=[],
+        )
+        self.assertEqual(len(errors), 1)
+        self.assertIn("out of range", errors[0])
+
+    def test_render_execution_summary_body_supports_pending_ci_from_indexes(self) -> None:
+        body, errors = run_contributor.render_execution_summary_body(
+            "## Summary\n- Updated the status severity mapping\n\n## Validation\n- workflow updated\n",
+            requested_evidence=[
+                "Screenshot of NewWorkspaceSheet from the exact commit under review",
+                "swift test --filter NewWorkspaceSheetTests",
+            ],
+            evidence_complete=[],
+            evidence_blocked=[],
+            evidence_pending_ci=[
+                "1 -- self-hosted macOS CI will capture the screenshot",
+                "2 -- self-hosted macOS CI will run `swift test --filter NewWorkspaceSheetTests`",
+            ],
+        )
+        self.assertEqual(errors, [])
+        self.assertIn(
+            "- [pending-ci] Screenshot of NewWorkspaceSheet from the exact commit under review -- self-hosted macOS CI will capture the screenshot",
+            body,
+        )
+        self.assertIn("blocked on evidence: self-hosted macOS CI will capture the screenshot", body)
+
     def test_review_evidence_gate_requires_request_changes_for_blocked_evidence(self) -> None:
         body = (
             "## Summary\n"
@@ -1132,6 +1201,8 @@ class RunContributorTests(unittest.TestCase):
             build_succeeded=True,
             tests_succeeded=True,
             smoke_succeeded=True,
+            screenshot_upload_succeeded=True,
+            screenshot_urls=[("NewWorkspaceSheet", "https://example.test/evidence.png")],
         )
         accounting, errors = run_contributor.validate_evidence_accounting(
             reconciled,
@@ -1229,6 +1300,43 @@ class RunContributorTests(unittest.TestCase):
         self.assertEqual(payload[0]["evidenceSummary"]["blocked"], 1)
         self.assertEqual(payload[0]["evidenceSummary"]["missing"], 0)
 
+    def test_format_own_open_prs_includes_evidence_delta_and_latest_review(self) -> None:
+        rendered = run_contributor.format_own_open_prs(
+            [
+                {
+                    "pr_number": 119,
+                    "pr_title": "Fix environment status color semantics in NewWorkspaceSheet",
+                    "issue_number": 116,
+                    "review_decision": "CHANGES_REQUESTED",
+                    "pr_branch": "codex/april-clearwater-issue-116-fix-status",
+                    "requested_evidence": [
+                        "Screenshot of NewWorkspaceSheet from the exact commit under review",
+                        "swift test --filter NewWorkspaceSheetTests",
+                        "Before screenshot showing the broken state",
+                    ],
+                    "evidence_accounting": {
+                        "complete_items": ["swift test --filter NewWorkspaceSheetTests"],
+                        "blocked_items": [],
+                        "missing_items": [
+                            "Screenshot of NewWorkspaceSheet from the exact commit under review",
+                            "Before screenshot showing the broken state",
+                        ],
+                        "invalid_lines": [],
+                    },
+                    "latest_external_review": {
+                        "author": "github-actions",
+                        "state": "CHANGES_REQUESTED",
+                        "submittedAt": "2026-03-17T14:00:39Z",
+                        "body": "Please add the missing evidence accounting before approval.",
+                    },
+                }
+            ]
+        )
+        self.assertIn("Requested evidence by index", rendered)
+        self.assertIn("[1] Screenshot of NewWorkspaceSheet from the exact commit under review", rendered)
+        self.assertIn("missing [1, 3]", rendered)
+        self.assertIn("Latest external review: github-actions (CHANGES_REQUESTED)", rendered)
+
     def test_route_action_review_uses_app_token(self) -> None:
         validated_json = json.dumps(
             {
@@ -1257,6 +1365,74 @@ class RunContributorTests(unittest.TestCase):
         self.assertEqual(kwargs["env"]["GH_TOKEN"], "app-token")
         mergeable_args, _ = update_mergeable_label.call_args
         self.assertEqual(mergeable_args[2]["GH_TOKEN"], "app-token")
+
+
+    def test_runner_platform_note_macos(self) -> None:
+        with mock.patch("platform.system", return_value="Darwin"):
+            note = run_contributor.runner_platform_note()
+        self.assertEqual(note, "Runner platform: macOS")
+
+    def test_runner_platform_note_linux(self) -> None:
+        with mock.patch("platform.system", return_value="Linux"):
+            note = run_contributor.runner_platform_note()
+        self.assertIn("Runner platform: Linux", note)
+        self.assertIn("evidence_pending_ci", note)
+        # The note starts with "Runner platform: Linux" — not macOS
+        self.assertTrue(note.startswith("Runner platform: Linux"))
+
+    def test_reconcile_leaves_blocked_items_unchanged(self) -> None:
+        """[blocked] items written by a Linux runner must NOT be touched by reconcile.
+
+        The reconcile step only resolves [pending-ci] lines. Demonstrating this
+        ensures we don't accidentally silently pass a PR with legitimately blocked
+        evidence after the macOS evidence job runs.
+        """
+        body = (
+            "## Evidence Status\n"
+            "- [blocked] swift build -- cannot build macOS targets on Linux\n\n"
+            "## Validation\n"
+            "- blocked on evidence: Linux runner cannot build Swift\n"
+        )
+        reconciled = run_contributor.reconcile_pending_ci_evidence(
+            body,
+            build_succeeded=True,
+            tests_succeeded=True,
+            smoke_succeeded=True,
+        )
+        self.assertIn("- [blocked] swift build", reconciled)
+        self.assertNotIn("[complete]", reconciled)
+
+    def test_linux_runner_pending_ci_resolves_correctly(self) -> None:
+        """[pending-ci] items written by a Linux runner ARE resolved by the macOS evidence job.
+
+        This is the correct path: Linux runner writes evidence_pending_ci for
+        build/test items; macOS evidence job calls reconcile_pending_ci_evidence
+        and replaces them with [complete] or [blocked].
+        """
+        body = (
+            "## Evidence Status\n"
+            "- [pending-ci] swift build -- self-hosted macOS CI will build this\n"
+            "- [pending-ci] swift test --filter RunPlannerTests -- self-hosted macOS CI will run this\n\n"
+            "## Validation\n"
+            "- blocked on evidence: macOS-only evidence deferred to CI\n"
+        )
+        reconciled = run_contributor.reconcile_pending_ci_evidence(
+            body,
+            build_succeeded=True,
+            tests_succeeded=True,
+            smoke_succeeded=True,
+        )
+        accounting, errors = run_contributor.validate_evidence_accounting(
+            reconciled,
+            ["swift build", "swift test --filter RunPlannerTests"],
+        )
+        self.assertEqual(errors, [])
+        self.assertEqual(accounting["pending_ci_items"], [])
+        self.assertEqual(accounting["blocked_items"], [])
+        self.assertEqual(
+            accounting["complete_items"],
+            ["swift build", "swift test --filter RunPlannerTests"],
+        )
 
 
 if __name__ == "__main__":

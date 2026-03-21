@@ -40,6 +40,7 @@ REQUIRED_FIELDS: dict[str, list[str]] = {
     "comment": ["discussion_number", "body", "persona"],
     "review_pr": ["pr_number", "body", "persona"],
     "execute_issue": ["issue_number", "pr_title", "commit_message", "body", "persona"],
+    "advance_pr": ["pr_number", "issue_number", "pr_title", "commit_message", "body", "persona"],
     "plan": ["discussion_number", "issues"],
 }
 
@@ -139,6 +140,19 @@ def require_non_empty_string(value: Any, field_name: str) -> str:
     return value.strip()
 
 
+def validate_string_list(value: Any, field_name: str) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValidationError(f"field '{field_name}' must be a list of non-empty strings")
+    normalized: list[str] = []
+    for index, item in enumerate(value, start=1):
+        if not isinstance(item, str) or not item.strip():
+            raise ValidationError(f"field '{field_name}[{index}]' must be a non-empty string")
+        normalized.append(item.strip())
+    return normalized
+
+
 def validate_plan(data: dict[str, Any]) -> None:
     milestone_name = data.get("milestone_name")
     if milestone_name is not None and (not isinstance(milestone_name, str) or not milestone_name.strip()):
@@ -187,12 +201,19 @@ def validate_data(data: dict[str, Any]) -> dict[str, Any]:
         if not title.startswith("[idea]"):
             data["title"] = f"[idea] {title}"
 
-    if action == "execute_issue":
+    if action in {"execute_issue", "advance_pr"}:
         data["pr_title"] = require_non_empty_string(data.get("pr_title"), "pr_title")
         data["commit_message"] = require_non_empty_string(data.get("commit_message"), "commit_message")
         issue_number = data.get("issue_number")
         if not isinstance(issue_number, int) or issue_number <= 0:
             raise ValidationError("field 'issue_number' must be a positive integer")
+        data["evidence_complete"] = validate_string_list(data.get("evidence_complete"), "evidence_complete")
+        data["evidence_blocked"] = validate_string_list(data.get("evidence_blocked"), "evidence_blocked")
+        data["evidence_pending_ci"] = validate_string_list(data.get("evidence_pending_ci"), "evidence_pending_ci")
+        if action == "advance_pr":
+            pr_number = data.get("pr_number")
+            if not isinstance(pr_number, int) or pr_number <= 0:
+                raise ValidationError("field 'pr_number' must be a positive integer")
 
     return data
 
