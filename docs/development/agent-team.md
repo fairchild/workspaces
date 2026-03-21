@@ -80,6 +80,18 @@ The 30-minute offset means the second agent sees the first's output and can comm
 
 Oliver Obever runs separately once a week on Monday at 13:30 UTC to evaluate loop health and evidence trends.
 
+### On-Demand Mentions
+
+Mention an agent by name in any issue or PR comment to summon them:
+
+- `@april` — April Clearwater responds with her Application/UI perspective
+- `@plat` — Plat Ironwood responds with his Platform/CI perspective
+- `@peter` — Peter Planner redirects to Discussions (his planning workflow operates there)
+
+Mention-triggered runs use the same contributor runtime with a directed message (`--message`), which overrides the normal priority order. The agent focuses on what was asked. Multiple agents can be mentioned in the same comment and will run in parallel.
+
+Mention runs use separate concurrency groups (`agent-april-mention`, etc.) so they don't interfere with scheduled cron runs.
+
 ### Approval Keywords
 
 Reply to any `[idea]` discussion with one of these to trigger Peter Planner:
@@ -129,6 +141,8 @@ Prompt, runtime, and compatibility responsibilities now split cleanly:
 | `.github/workflows/agent-april.yml` | April's cron workflow |
 | `.github/workflows/agent-plat.yml` | Plat's cron workflow |
 | `.github/workflows/agent-peter.yml` | Event-triggered planner workflow |
+| `.github/workflows/agent-mention.yml` | `@april` / `@plat` / `@peter` mention-triggered workflow |
+| `.github/workflows/_evidence.yml` | Reusable evidence workflow (build, test, screenshot, reconcile) |
 | `.github/workflows/agent-oliver.yml` | Weekly deterministic ops observer workflow |
 
 ## Runtime Layout

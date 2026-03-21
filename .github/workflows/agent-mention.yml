@@ -1,0 +1,333 @@
+name: "Agent: Mention Response"
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  pull_request_review:
+    types: [submitted]
+
+permissions:
+  contents: write
+  discussions: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  detect:
+    # Determine which agents were mentioned and extract event context.
+    # The top-level if guard avoids spinning up a runner for every comment —
+    # only run when at least one agent name appears after an @ sign.
+    runs-on: ubuntu-latest
+    if: >-
+      !endsWith(github.event.sender.login, '[bot]') && (
+        contains(github.event.comment.body || github.event.review.body || '', '@april') ||
+        contains(github.event.comment.body || github.event.review.body || '', '@plat') ||
+        contains(github.event.comment.body || github.event.review.body || '', '@peter')
+      )
+    timeout-minutes: 2
+    outputs:
+      april: ${{ steps.check.outputs.april }}
+      plat: ${{ steps.check.outputs.plat }}
+      peter: ${{ steps.check.outputs.peter }}
+      comment_body: ${{ steps.context.outputs.body }}
+      comment_author: ${{ steps.context.outputs.author }}
+      target_number: ${{ steps.context.outputs.number }}
+      target_title: ${{ steps.context.outputs.title }}
+      target_type: ${{ steps.context.outputs.type }}
+    steps:
+      - name: Extract event context
+        id: context
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          # issue_comment (covers both issues and PRs)
+          IC_BODY: ${{ github.event.comment.body }}
+          IC_AUTHOR: ${{ github.event.comment.user.login }}
+          IC_NUMBER: ${{ github.event.issue.number }}
+          IC_TITLE: ${{ github.event.issue.title }}
+          IC_IS_PR: ${{ github.event.issue.pull_request && 'true' || 'false' }}
+          # pull_request_review_comment
+          PRRC_BODY: ${{ github.event.comment.body }}
+          PRRC_AUTHOR: ${{ github.event.comment.user.login }}
+          PRRC_NUMBER: ${{ github.event.pull_request.number }}
+          PRRC_TITLE: ${{ github.event.pull_request.title }}
+          # pull_request_review
+          PRR_BODY: ${{ github.event.review.body }}
+          PRR_AUTHOR: ${{ github.event.review.user.login }}
+          PRR_NUMBER: ${{ github.event.pull_request.number }}
+          PRR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          set -euo pipefail
+          case "$EVENT_NAME" in
+            issue_comment)
+              printf '%s' "$IC_BODY" > /tmp/comment_body.txt
+              echo "author=$IC_AUTHOR" >> "$GITHUB_OUTPUT"
+              echo "number=$IC_NUMBER" >> "$GITHUB_OUTPUT"
+              echo "title=$IC_TITLE" >> "$GITHUB_OUTPUT"
+              if [ "$IC_IS_PR" = "true" ]; then
+                echo "type=PR" >> "$GITHUB_OUTPUT"
+              else
+                echo "type=issue" >> "$GITHUB_OUTPUT"
+              fi
+              ;;
+            pull_request_review_comment)
+              printf '%s' "$PRRC_BODY" > /tmp/comment_body.txt
+              echo "author=$PRRC_AUTHOR" >> "$GITHUB_OUTPUT"
+              echo "number=$PRRC_NUMBER" >> "$GITHUB_OUTPUT"
+              echo "title=$PRRC_TITLE" >> "$GITHUB_OUTPUT"
+              echo "type=PR" >> "$GITHUB_OUTPUT"
+              ;;
+            pull_request_review)
+              printf '%s' "$PRR_BODY" > /tmp/comment_body.txt
+              echo "author=$PRR_AUTHOR" >> "$GITHUB_OUTPUT"
+              echo "number=$PRR_NUMBER" >> "$GITHUB_OUTPUT"
+              echo "title=$PRR_TITLE" >> "$GITHUB_OUTPUT"
+              echo "type=PR" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "::error::Unsupported event type: $EVENT_NAME"
+              exit 1
+              ;;
+          esac
+          # Multiline body output
+          {
+            echo "body<<__MENTION_BODY_DELIM_a9f3e7__"
+            cat /tmp/comment_body.txt
+            echo ""
+            echo "__MENTION_BODY_DELIM_a9f3e7__"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Check for agent mentions
+        id: check
+        env:
+          BODY: ${{ steps.context.outputs.body }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          LOWER=$(printf '%s' "$BODY" | tr '[:upper:]' '[:lower:]')
+          # Word-boundary match: @name followed by end-of-string, whitespace, or punctuation.
+          # Prevents @platform from matching @plat, @aprilsmith from matching @april, etc.
+          check_mention() {
+            local name="$1"
+            if printf '%s' "$LOWER" | grep -qP "(^|\\s|[^a-z0-9])@${name}(\\s|[^a-z0-9]|$)"; then
+              echo "${name}=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "${name}=false" >> "$GITHUB_OUTPUT"
+            fi
+          }
+          check_mention april
+          check_mention plat
+          check_mention peter
+
+  # ── April Clearwater ────────────────────────────────────────────────
+  april-check-runner:
+    needs: detect
+    if: needs.detect.outputs.april == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      runner: ${{ steps.pick.outputs.runner }}
+      is_macos: ${{ steps.pick.outputs.is_macos }}
+    steps:
+      - name: Generate app token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.APRIL_APP_ID }}
+          private-key: ${{ secrets.APRIL_PRIVATE_KEY }}
+      - name: Check lume-macos runner availability
+        id: pick
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          STATUS=$(gh api repos/${{ github.repository }}/actions/runners \
+            --jq '.runners[] | select(.labels[].name == "lume-macos") | .status' 2>/dev/null || echo "unknown")
+          if [ "$STATUS" = "online" ]; then
+            echo "runner=[\"self-hosted\", \"lume-macos\"]" >> "$GITHUB_OUTPUT"
+            echo "is_macos=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "runner=\"ubuntu-latest\"" >> "$GITHUB_OUTPUT"
+            echo "is_macos=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  april:
+    needs: [detect, april-check-runner]
+    if: needs.detect.outputs.april == 'true'
+    runs-on: ${{ fromJSON(needs.april-check-runner.outputs.runner) }}
+    timeout-minutes: 30
+    concurrency:
+      group: agent-april-mention
+      cancel-in-progress: false
+    outputs:
+      needs_macos_evidence: ${{ steps.contributor.outputs.needs_macos_evidence }}
+      needs_screenshot_evidence: ${{ steps.contributor.outputs.needs_screenshot_evidence }}
+      pr_branch: ${{ steps.contributor.outputs.pr_branch }}
+      test_commands_json: ${{ steps.contributor.outputs.test_commands_json }}
+    steps:
+      - name: Generate app token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.APRIL_APP_ID }}
+          private-key: ${{ secrets.APRIL_PRIVATE_KEY }}
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 50
+          token: ${{ steps.app-token.outputs.token }}
+      - uses: astral-sh/setup-uv@v7
+      - name: Build directed message
+        id: message
+        env:
+          COMMENT_BODY: ${{ needs.detect.outputs.comment_body }}
+          COMMENT_AUTHOR: ${{ needs.detect.outputs.comment_author }}
+          TARGET_NUMBER: ${{ needs.detect.outputs.target_number }}
+          TARGET_TITLE: ${{ needs.detect.outputs.target_title }}
+          TARGET_TYPE: ${{ needs.detect.outputs.target_type }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TYPE_LOWER="${TARGET_TYPE,,}"
+          {
+            printf '@%s mentioned you in %s #%s ("%s"):\n' "$COMMENT_AUTHOR" "$TARGET_TYPE" "$TARGET_NUMBER" "$TARGET_TITLE"
+            echo ""
+            echo "---"
+            printf '%s\n' "$COMMENT_BODY"
+            echo "---"
+            echo ""
+            printf 'Respond to this request in the context of %s #%s.\n' "$TARGET_TYPE" "$TARGET_NUMBER"
+            echo "Focus on what was asked — do not follow your normal priority order."
+            printf 'Use `gh %s comment %s --body-file /tmp/reply.md` to post your response.\n' "$TYPE_LOWER" "$TARGET_NUMBER"
+          } > /tmp/directed-message.txt
+      - name: Run contributor
+        id: contributor
+        run: |
+          ARGS=(--prompt-file .agents/skills/cofounder-contributor/references/april-clearwater.md)
+          ARGS+=(--mode cli)
+          ARGS+=(--message "$(cat /tmp/directed-message.txt)")
+          uv run .agents/skills/cofounder-contributor/scripts/run-contributor.py "${ARGS[@]}"
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_APP_SLUG: april-clearwater
+          EVIDENCE_UPLOAD_TOKEN: ${{ secrets.EVIDENCE_UPLOAD_TOKEN }}
+
+  april-evidence:
+    needs: [april-check-runner, april]
+    if: needs.april-check-runner.outputs.is_macos == 'false' && needs.april.outputs.needs_macos_evidence == 'true'
+    uses: ./.github/workflows/_evidence.yml
+    with:
+      pr_branch: ${{ needs.april.outputs.pr_branch }}
+      test_commands_json: ${{ needs.april.outputs.test_commands_json }}
+      needs_screenshot_evidence: ${{ needs.april.outputs.needs_screenshot_evidence == 'true' }}
+      upload_screenshots: true
+      artifact_name: april-evidence
+    secrets:
+      APP_ID: ${{ secrets.APRIL_APP_ID }}
+      PRIVATE_KEY: ${{ secrets.APRIL_PRIVATE_KEY }}
+      EVIDENCE_UPLOAD_TOKEN: ${{ secrets.EVIDENCE_UPLOAD_TOKEN }}
+
+  # ── Plat Ironwood ───────────────────────────────────────────────────
+  plat:
+    needs: detect
+    if: needs.detect.outputs.plat == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      group: agent-plat-mention
+      cancel-in-progress: false
+    outputs:
+      needs_macos_evidence: ${{ steps.contributor.outputs.needs_macos_evidence }}
+      needs_screenshot_evidence: ${{ steps.contributor.outputs.needs_screenshot_evidence }}
+      pr_branch: ${{ steps.contributor.outputs.pr_branch }}
+      test_commands_json: ${{ steps.contributor.outputs.test_commands_json }}
+    steps:
+      - name: Generate app token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.WORKSPACE_AGENTS_APP_ID }}
+          private-key: ${{ secrets.WORKSPACE_AGENTS_PRIVATE_KEY }}
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 50
+          token: ${{ steps.app-token.outputs.token }}
+      - uses: astral-sh/setup-uv@v7
+      - name: Build directed message
+        id: message
+        env:
+          COMMENT_BODY: ${{ needs.detect.outputs.comment_body }}
+          COMMENT_AUTHOR: ${{ needs.detect.outputs.comment_author }}
+          TARGET_NUMBER: ${{ needs.detect.outputs.target_number }}
+          TARGET_TITLE: ${{ needs.detect.outputs.target_title }}
+          TARGET_TYPE: ${{ needs.detect.outputs.target_type }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TYPE_LOWER="${TARGET_TYPE,,}"
+          {
+            printf '@%s mentioned you in %s #%s ("%s"):\n' "$COMMENT_AUTHOR" "$TARGET_TYPE" "$TARGET_NUMBER" "$TARGET_TITLE"
+            echo ""
+            echo "---"
+            printf '%s\n' "$COMMENT_BODY"
+            echo "---"
+            echo ""
+            printf 'Respond to this request in the context of %s #%s.\n' "$TARGET_TYPE" "$TARGET_NUMBER"
+            echo "Focus on what was asked — do not follow your normal priority order."
+            printf 'Use `gh %s comment %s --body-file /tmp/reply.md` to post your response.\n' "$TYPE_LOWER" "$TARGET_NUMBER"
+          } > /tmp/directed-message.txt
+      - name: Run contributor
+        id: contributor
+        run: |
+          ARGS=(--prompt-file .agents/skills/cofounder-contributor/references/plat-ironwood.md)
+          ARGS+=(--mode cli)
+          ARGS+=(--message "$(cat /tmp/directed-message.txt)")
+          uv run .agents/skills/cofounder-contributor/scripts/run-contributor.py "${ARGS[@]}"
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_APP_SLUG: workspace-agents
+
+  plat-evidence:
+    needs: plat
+    if: needs.plat.outputs.needs_macos_evidence == 'true'
+    uses: ./.github/workflows/_evidence.yml
+    with:
+      pr_branch: ${{ needs.plat.outputs.pr_branch }}
+      test_commands_json: ${{ needs.plat.outputs.test_commands_json }}
+      needs_screenshot_evidence: ${{ needs.plat.outputs.needs_screenshot_evidence == 'true' }}
+      upload_screenshots: false
+      artifact_name: plat-evidence
+    secrets:
+      APP_ID: ${{ secrets.WORKSPACE_AGENTS_APP_ID }}
+      PRIVATE_KEY: ${{ secrets.WORKSPACE_AGENTS_PRIVATE_KEY }}
+
+  # ── Peter Planner ───────────────────────────────────────────────────
+  peter:
+    needs: detect
+    if: needs.detect.outputs.peter == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    concurrency:
+      group: agent-peter-mention
+      cancel-in-progress: false
+    steps:
+      - name: Generate app token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.WORKSPACE_AGENTS_APP_ID }}
+          private-key: ${{ secrets.WORKSPACE_AGENTS_PRIVATE_KEY }}
+      - name: Reply with redirect
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          TARGET_NUMBER: ${{ needs.detect.outputs.target_number }}
+          TARGET_TYPE: ${{ needs.detect.outputs.target_type }}
+        run: |
+          set -euo pipefail
+          BODY="👋 Peter Planner here. I work on planning — converting approved \`[idea]\` discussions into actionable issues and milestones. Mention me in a **Discussion** where you'd like me to plan, or use \`workflow_dispatch\` on the \`agent-peter\` workflow to trigger planning for a specific discussion."
+          if [ "$TARGET_TYPE" = "PR" ]; then
+            gh pr comment "$TARGET_NUMBER" --body "$BODY"
+          else
+            gh issue comment "$TARGET_NUMBER" --body "$BODY"
+          fi
