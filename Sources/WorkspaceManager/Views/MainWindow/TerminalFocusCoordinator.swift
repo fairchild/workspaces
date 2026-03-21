@@ -13,6 +13,7 @@ final class TerminalFocusCoordinator: ObservableObject {
 
     private weak var attachedSurfaceStore: HostTerminalSurfaceStore?
     private var pendingRepoFocusMeasurementSessionID: UUID?
+    private var pendingWorkspaceFocusMeasurementSessionID: UUID?
     private var pendingFocusRequest: PendingFocusRequest?
 
     init() {
@@ -130,6 +131,41 @@ final class TerminalFocusCoordinator: ObservableObject {
         )
     }
 
+    func beginWorkspaceClickMeasurement(sessionID: UUID, workspacePath: String) {
+        if let pendingSessionID = pendingWorkspaceFocusMeasurementSessionID,
+            pendingSessionID != sessionID
+        {
+            PerformanceSignposts.cancelWorkspaceClickToFocusedInputIfNeeded(
+                sessionID: pendingSessionID,
+                reason: "replaced_by_new_workspace_click"
+            )
+        }
+
+        pendingWorkspaceFocusMeasurementSessionID = sessionID
+        PerformanceSignposts.beginWorkspaceClickToFocusedInput(
+            sessionID: sessionID,
+            workspacePath: workspacePath
+        )
+    }
+
+    func completeWorkspaceClickMeasurement(sessionID: UUID, outcome: String) {
+        guard pendingWorkspaceFocusMeasurementSessionID == sessionID else { return }
+        pendingWorkspaceFocusMeasurementSessionID = nil
+        PerformanceSignposts.endWorkspaceClickToFocusedInputIfNeeded(
+            sessionID: sessionID,
+            outcome: outcome
+        )
+    }
+
+    func cancelPendingWorkspaceClickMeasurement(reason: String) {
+        guard let sessionID = pendingWorkspaceFocusMeasurementSessionID else { return }
+        pendingWorkspaceFocusMeasurementSessionID = nil
+        PerformanceSignposts.cancelWorkspaceClickToFocusedInputIfNeeded(
+            sessionID: sessionID,
+            reason: reason
+        )
+    }
+
     func cancelPendingFocusRequest(reason: String) {
         guard let pendingFocusRequest else { return }
         self.pendingFocusRequest = nil
@@ -142,6 +178,9 @@ final class TerminalFocusCoordinator: ObservableObject {
         )
         if pendingRepoFocusMeasurementSessionID == pendingFocusRequest.sessionID {
             cancelPendingRepoClickMeasurement(reason: reason)
+        }
+        if pendingWorkspaceFocusMeasurementSessionID == pendingFocusRequest.sessionID {
+            cancelPendingWorkspaceClickMeasurement(reason: reason)
         }
     }
 
@@ -164,8 +203,19 @@ final class TerminalFocusCoordinator: ObservableObject {
         }
 
         InvestigationDiagnostics.emitFocus(
+            phase: "focus_surface_resolution",
+            fields: focusFields.merging(["sub_span": "focus_surface_resolution"]) { _, new in new }
+        )
+        InvestigationDiagnostics.emitFocus(
             phase: "coordinator_target_terminal_resolved",
             fields: focusFields
+        )
+        InvestigationDiagnostics.emitFocus(
+            phase: "focus_request_to_first_responder",
+            fields: focusFields.merging([
+                "sub_span": "focus_request_to_first_responder",
+                "status": "started",
+            ]) { _, new in new }
         )
         TerminalFocusManager.shared.requestFocus(
             for: terminal,
@@ -174,6 +224,13 @@ final class TerminalFocusCoordinator: ObservableObject {
                 guard let self else { return }
                 guard self.pendingFocusRequest?.sessionID == pendingFocusRequest.sessionID else { return }
                 self.pendingFocusRequest = nil
+                InvestigationDiagnostics.emitFocus(
+                    phase: "focus_request_to_first_responder",
+                    fields: focusFields.merging([
+                        "sub_span": "focus_request_to_first_responder",
+                        "status": "completed",
+                    ]) { _, new in new }
+                )
                 InvestigationDiagnostics.emitFocus(
                     phase: "coordinator_target_focused",
                     fields: focusFields
