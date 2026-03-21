@@ -159,6 +159,7 @@ jobs:
               build_succeeded=os.environ["BUILD_SUCCEEDED"] == "true",
               tests_succeeded=os.environ["TESTS_SUCCEEDED"] == "true",
               smoke_succeeded=os.environ["SMOKE_SUCCEEDED"] == "true",
+              test_output=Path("test-output.txt").read_text() if Path("test-output.txt").exists() else "",
           )
           body_path.write_text(reconciled)
           PY
