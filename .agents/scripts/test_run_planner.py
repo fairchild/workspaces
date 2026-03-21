@@ -1367,5 +1367,72 @@ class RunContributorTests(unittest.TestCase):
         self.assertEqual(mergeable_args[2]["GH_TOKEN"], "app-token")
 
 
+    def test_runner_platform_note_macos(self) -> None:
+        with mock.patch("platform.system", return_value="Darwin"):
+            note = run_contributor.runner_platform_note()
+        self.assertEqual(note, "Runner platform: macOS")
+
+    def test_runner_platform_note_linux(self) -> None:
+        with mock.patch("platform.system", return_value="Linux"):
+            note = run_contributor.runner_platform_note()
+        self.assertIn("Runner platform: Linux", note)
+        self.assertIn("evidence_pending_ci", note)
+        self.assertNotIn("macOS", note.split(":", 1)[1])
+
+    def test_reconcile_leaves_blocked_items_unchanged(self) -> None:
+        """[blocked] items written by a Linux runner must NOT be touched by reconcile.
+
+        The reconcile step only resolves [pending-ci] lines. Demonstrating this
+        ensures we don't accidentally silently pass a PR with legitimately blocked
+        evidence after the macOS evidence job runs.
+        """
+        body = (
+            "## Evidence Status\n"
+            "- [blocked] swift build -- cannot build macOS targets on Linux\n\n"
+            "## Validation\n"
+            "- blocked on evidence: Linux runner cannot build Swift\n"
+        )
+        reconciled = run_contributor.reconcile_pending_ci_evidence(
+            body,
+            build_succeeded=True,
+            tests_succeeded=True,
+            smoke_succeeded=True,
+        )
+        self.assertIn("- [blocked] swift build", reconciled)
+        self.assertNotIn("[complete]", reconciled)
+
+    def test_linux_runner_pending_ci_resolves_correctly(self) -> None:
+        """[pending-ci] items written by a Linux runner ARE resolved by the macOS evidence job.
+
+        This is the correct path: Linux runner writes evidence_pending_ci for
+        build/test items; macOS evidence job calls reconcile_pending_ci_evidence
+        and replaces them with [complete] or [blocked].
+        """
+        body = (
+            "## Evidence Status\n"
+            "- [pending-ci] swift build -- self-hosted macOS CI will build this\n"
+            "- [pending-ci] swift test --filter RunPlannerTests -- self-hosted macOS CI will run this\n\n"
+            "## Validation\n"
+            "- blocked on evidence: macOS-only evidence deferred to CI\n"
+        )
+        reconciled = run_contributor.reconcile_pending_ci_evidence(
+            body,
+            build_succeeded=True,
+            tests_succeeded=True,
+            smoke_succeeded=True,
+        )
+        accounting, errors = run_contributor.validate_evidence_accounting(
+            reconciled,
+            ["swift build", "swift test --filter RunPlannerTests"],
+        )
+        self.assertEqual(errors, [])
+        self.assertEqual(accounting["pending_ci_items"], [])
+        self.assertEqual(accounting["blocked_items"], [])
+        self.assertEqual(
+            accounting["complete_items"],
+            ["swift build", "swift test --filter RunPlannerTests"],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

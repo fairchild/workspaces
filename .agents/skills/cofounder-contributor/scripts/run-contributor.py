@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import platform
 import re
 import subprocess
 import sys
@@ -1688,6 +1689,17 @@ def maybe_block_new_proposal(
     return engagement_candidates[0]
 
 
+def runner_platform_note() -> str:
+    """Return a one-line context hint about the runner's platform and evidence capabilities."""
+    if platform.system() == "Darwin":
+        return "Runner platform: macOS"
+    return (
+        "Runner platform: Linux (Swift toolchain unavailable for macOS targets; "
+        "use evidence_pending_ci for build/test/screenshot items — "
+        "the downstream macOS evidence job will resolve them)"
+    )
+
+
 def gather_context(
     env: dict[str, str],
     persona: str = "",
@@ -1733,6 +1745,7 @@ def gather_context(
     ready_issues = format_ready_issues(execution_state["ready_issues"])
 
     sections = []
+    sections.append(runner_platform_note())
     if pending_reviews:
         sections.append(pending_reviews)
     if own_open_prs:

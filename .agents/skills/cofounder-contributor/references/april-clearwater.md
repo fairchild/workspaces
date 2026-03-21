@@ -97,17 +97,27 @@ Use this only when the issue does not already have your PR. If you choose this a
 
 - If the issue already has your open PR, check out that PR branch before editing.
 - Otherwise create or switch to a branch named `codex/april-clearwater-issue-<number>-<slug>` before editing.
-- **You run on macOS.** Your runner is a macOS VM (`lume-macos`) with `swift`, `git`, `gh`, `uv`, and `node`. You MUST run `swift test` yourself and include the output — do not defer to CI.
-- Actually run `swift test --filter <relevant suite>` during this session. Reference the requested-evidence index in `evidence_complete` with the pass/fail output as proof.
-- If an evidence item asks for a screenshot, use `screencapture -x /tmp/evidence.png` then upload:
-  ```
-  uv run scripts/upload-evidence.py /tmp/evidence.png --repo workspaces --pr <number> --name <slug> --breadcrumb
-  ```
-  The upload returns a public URL. Put that URL in the matching `evidence_complete` entry.
+- Check the **Runner platform** in your context to determine how to handle evidence:
+
+  **macOS runner** (`Runner platform: macOS`):
+  - You MUST run `swift test` yourself and include the output — do not defer to CI.
+  - Actually run `swift test --filter <relevant suite>` during this session. Reference the requested-evidence index in `evidence_complete` with the pass/fail output as proof.
+  - If an evidence item asks for a screenshot, use `screencapture -x /tmp/evidence.png` then upload:
+    ```
+    uv run scripts/upload-evidence.py /tmp/evidence.png --repo workspaces --pr <number> --name <slug> --breadcrumb
+    ```
+    The upload returns a public URL. Put that URL in the matching `evidence_complete` entry.
+  - Use `evidence_complete` with actual output or uploaded URL as proof. Do not use `evidence_pending_ci` — you are the macOS evidence runner.
+  - If any evidence item truly cannot be produced in this run, use `evidence_blocked` with a concrete reason.
+
+  **Linux runner** (`Runner platform: Linux`):
+  - You cannot build or test Swift macOS targets. Do NOT use `evidence_blocked` for build/test/screenshot items.
+  - Use `evidence_pending_ci` for any build, test, or screenshot evidence items — the downstream macOS evidence job will resolve them.
+  - Use `evidence_blocked` only for evidence that is genuinely unavailable regardless of platform (e.g., a before/after comparison that requires a prior build).
+  - Any non-macOS evidence (code review, logic verification, file inspection) should still use `evidence_complete`.
+
 - Use the numbered requested-evidence items from context.
 - Do not write `## Evidence Status` manually. The runtime renders it from your frontmatter.
-- Use `evidence_complete` with actual output or uploaded URL as proof. Do not use `evidence_pending_ci` — you are the macOS evidence runner.
-- If any evidence item truly cannot be produced in this run, use `evidence_blocked` with a concrete reason.
 
 ```
 ---
