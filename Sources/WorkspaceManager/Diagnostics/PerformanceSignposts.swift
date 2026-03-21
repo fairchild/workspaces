@@ -7,6 +7,7 @@
 
 import Foundation
 import OSLog
+import WorkspaceManagerCore
 
 enum PerformanceSignposts {
     #if DEBUG
@@ -81,6 +82,7 @@ enum PerformanceSignposts {
             durationMs,
             trigger
         )
+        recordDiagnostic(metric: "launch_to_first_prompt", durationMs: durationMs, labels: ["trigger": trigger])
     }
 
     static func beginRepoHydration(rootPath: String) {
@@ -111,6 +113,11 @@ enum PerformanceSignposts {
             durationMs,
             discoveredCount,
             importedCount
+        )
+        recordDiagnostic(
+            metric: "repo_hydration",
+            durationMs: durationMs,
+            labels: ["discovered": "\(discoveredCount)", "imported": "\(importedCount)"]
         )
     }
 
@@ -461,5 +468,15 @@ enum PerformanceSignposts {
         let components = duration.components
         return Double(components.seconds) * 1_000
             + Double(components.attoseconds) / 1_000_000_000_000_000
+    }
+
+    private static func recordDiagnostic(metric: String, durationMs: Double, labels: [String: String]) {
+        Task.detached {
+            await StartupDiagnosticsStore.shared.record(
+                metric: metric,
+                durationMs: durationMs,
+                labels: labels
+            )
+        }
     }
 }

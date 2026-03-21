@@ -230,12 +230,22 @@ struct WorkspaceEnvironmentOptionsController {
         }
 
         let unavailableCount = resolvedAvailability.values.filter { !$0.isAvailable }.count
+        let durationMs = Date().timeIntervalSince(refreshStartedAt) * 1000
         NSLog(
             "[Perf] metric=workspace_provider_availability_refresh duration_ms=%.2f trigger=%@ providers=%ld unavailable_count=%ld",
-            Date().timeIntervalSince(refreshStartedAt) * 1000,
+            durationMs,
             trigger,
             registry.providers.count,
             unavailableCount
+        )
+        await StartupDiagnosticsStore.shared.record(
+            metric: "workspace_provider_availability_refresh",
+            durationMs: durationMs,
+            labels: [
+                "trigger": trigger,
+                "providers": "\(registry.providers.count)",
+                "unavailable_count": "\(unavailableCount)",
+            ]
         )
 
         return resolvedAvailability
@@ -259,13 +269,24 @@ struct WorkspaceEnvironmentOptionsController {
             } else {
                 "success"
             }
+        let durationMs = Date().timeIntervalSince(refreshStartedAt) * 1000
         NSLog(
             "[Perf] metric=lume_runtime_snapshot_refresh duration_ms=%.2f trigger=%@ outcome=%@ state=%@ base_vm_status=%@",
-            Date().timeIntervalSince(refreshStartedAt) * 1000,
+            durationMs,
             trigger,
             outcome,
             snapshot?.state.rawValue ?? "pending",
             snapshot?.baseVM?.status.rawValue ?? "none"
+        )
+        await StartupDiagnosticsStore.shared.record(
+            metric: "lume_runtime_snapshot_refresh",
+            durationMs: durationMs,
+            labels: [
+                "trigger": trigger,
+                "outcome": outcome,
+                "state": snapshot?.state.rawValue ?? "pending",
+                "base_vm_status": snapshot?.baseVM?.status.rawValue ?? "none",
+            ]
         )
         return snapshot
     }

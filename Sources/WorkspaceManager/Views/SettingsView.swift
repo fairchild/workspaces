@@ -27,6 +27,8 @@ struct SettingsView: View {
     @State private var runtimeActionLabel: String?
     @State private var runtimeErrorMessage: String?
     @State private var isRunningRuntimeAction = false
+    @State private var diagnosticsFeedback: String?
+    @State private var diagnosticsFeedbackIsError = false
 
     private let commandLineToolService: CommandLineToolService
 
@@ -369,6 +371,29 @@ struct SettingsView: View {
             }
 
             Section {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Startup Diagnostics")
+                        .font(.headline)
+
+                    Text("Export recent startup performance events as a JSON file for troubleshooting.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    Button("Export Startup Diagnostics") {
+                        exportDiagnostics()
+                    }
+
+                    if let diagnosticsFeedback {
+                        Text(diagnosticsFeedback)
+                            .font(.caption)
+                            .foregroundStyle(diagnosticsFeedbackIsError ? .red : .secondary)
+                    }
+                }
+            } header: {
+                Text("Diagnostics")
+            }
+
+            Section {
                 HStack {
                     Text("Version")
                     Spacer()
@@ -695,6 +720,35 @@ struct SettingsView: View {
         NSPasteboard.general.setString(setupCommand, forType: .string)
         commandLineToolFeedbackIsError = false
         commandLineToolFeedback = "Copied the setup command."
+    }
+
+    private func exportDiagnostics() {
+        Task { @MainActor in
+            let bundle = await StartupDiagnosticsStore.shared.export()
+
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            encoder.dateEncodingStrategy = .iso8601
+
+            do {
+                let data = try encoder.encode(bundle)
+                let formatter = ISO8601DateFormatter()
+                formatter.formatOptions = [.withInternetDateTime]
+                let timestamp = formatter.string(from: Date())
+                    .replacingOccurrences(of: ":", with: "-")
+                let filename = "workspaces-diagnostics-\(timestamp).json"
+                let desktopURL = FileManager.default.homeDirectoryForCurrentUser
+                    .appendingPathComponent("Desktop")
+                    .appendingPathComponent(filename)
+
+                try data.write(to: desktopURL, options: .atomic)
+                diagnosticsFeedbackIsError = false
+                diagnosticsFeedback = "Saved to Desktop"
+            } catch {
+                diagnosticsFeedbackIsError = true
+                diagnosticsFeedback = error.localizedDescription
+            }
+        }
     }
 
     private static var versionString: String {
