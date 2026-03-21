@@ -1042,6 +1042,17 @@ class RunContributorTests(unittest.TestCase):
             ["swift test --filter WorkspaceManagerAppTests.NewWorkspaceSheetTests"],
         )
 
+    def test_extract_requested_evidence_ignores_fallback_sentence_case_insensitively(self) -> None:
+        body = (
+            "## Requested Evidence\n"
+            "- FOLLOW THE REPO EVIDENCE BAR FOR THE TOUCHED SURFACES.\n"
+            "- swift test --filter WorkspaceManagerTests.WorkspaceProviderTests\n"
+        )
+        self.assertEqual(
+            run_contributor.extract_requested_evidence(body),
+            ["swift test --filter WorkspaceManagerTests.WorkspaceProviderTests"],
+        )
+
     def test_validate_evidence_accounting_accepts_pending_ci_entries(self) -> None:
         body = (
             "## Summary\n"
@@ -1139,6 +1150,63 @@ class RunContributorTests(unittest.TestCase):
         self.assertEqual(validation_errors, [])
         self.assertEqual(accounting["source"], "structured")
 
+    def test_validate_evidence_accounting_flags_invalid_structured_metadata(self) -> None:
+        body = (
+            "## Summary\n"
+            "- Updated the status severity mapping\n\n"
+            "<!-- evidence-status:v1\n"
+            "{\n"
+            '  "entries": [\n'
+            "    {\n"
+            '      "index": 1,\n'
+            '      "item": "swift test --filter WorkspaceManagerAppTests.NewWorkspaceSheetTests",\n'
+            '      "status": "complete",\n'
+            '      "detail": ""\n'
+            "    }\n"
+            "  ]\n"
+            "}\n"
+            "-->\n\n"
+            "## Evidence Status\n"
+            "- [complete] swift test --filter WorkspaceManagerAppTests.NewWorkspaceSheetTests -- `swift test --filter WorkspaceManagerAppTests.NewWorkspaceSheetTests`\n\n"
+            "## Validation\n"
+            "- `swift test --filter WorkspaceManagerAppTests.NewWorkspaceSheetTests`\n"
+        )
+        accounting, errors = run_contributor.validate_evidence_accounting(
+            body,
+            ["swift test --filter WorkspaceManagerAppTests.NewWorkspaceSheetTests"],
+        )
+        self.assertEqual(accounting["source"], "structured-invalid")
+        self.assertEqual(accounting["missing_items"], ["swift test --filter WorkspaceManagerAppTests.NewWorkspaceSheetTests"])
+        self.assertTrue(any("empty detail" in line for line in accounting["invalid_lines"]))
+        self.assertTrue(any("malformed hidden evidence metadata" in error for error in errors))
+
+    def test_validate_evidence_accounting_flags_structured_item_mismatch(self) -> None:
+        body = (
+            "## Summary\n"
+            "- Updated the status severity mapping\n\n"
+            "<!-- evidence-status:v1\n"
+            "{\n"
+            '  "entries": [\n'
+            "    {\n"
+            '      "index": 1,\n'
+            '      "item": "swift test --filter WorkspaceManagerTests.OtherTests",\n'
+            '      "status": "complete",\n'
+            '      "detail": "`swift test --filter WorkspaceManagerTests.OtherTests`"\n'
+            "    }\n"
+            "  ]\n"
+            "}\n"
+            "-->\n\n"
+            "## Evidence Status\n"
+            "- [complete] swift test --filter WorkspaceManagerTests.OtherTests -- `swift test --filter WorkspaceManagerTests.OtherTests`\n"
+        )
+        accounting, errors = run_contributor.validate_evidence_accounting(
+            body,
+            ["swift test --filter WorkspaceManagerTests.WorkspaceProviderTests"],
+        )
+        self.assertEqual(accounting["source"], "structured-invalid")
+        self.assertTrue(any("does not match requested evidence index" in line for line in accounting["invalid_lines"]))
+        self.assertTrue(any("missing:" in error for error in errors))
+
     def test_render_execution_summary_body_rejects_out_of_range_index(self) -> None:
         _, errors = run_contributor.render_execution_summary_body(
             "## Summary\n- Updated the status severity mapping\n",
@@ -1226,6 +1294,18 @@ class RunContributorTests(unittest.TestCase):
             run_contributor,
             "_listed_swift_tests",
             return_value=["WorkspaceManagerTests.WorkspaceProviderTests/registryExposesLiveProviders()"],
+        ):
+            errors = run_contributor.validate_requested_test_commands(
+                ["swift test --filter WorkspaceManagerTests.WorkspaceProviderTests"],
+                env={},
+            )
+        self.assertEqual(errors, [])
+
+    def test_validate_requested_test_commands_skips_preflight_when_test_list_is_unavailable(self) -> None:
+        with mock.patch.object(
+            run_contributor,
+            "_listed_swift_tests",
+            return_value=[],
         ):
             errors = run_contributor.validate_requested_test_commands(
                 ["swift test --filter WorkspaceManagerTests.WorkspaceProviderTests"],
@@ -1330,6 +1410,62 @@ class RunContributorTests(unittest.TestCase):
             ["swift test --filter WorkspaceManagerTests.WorkspaceProviderTests"],
         )
         self.assertEqual(accounting["source"], "structured")
+
+    def test_reconcile_pending_ci_evidence_preserves_invalid_metadata_entries(self) -> None:
+        body = (
+            "## Summary\n"
+            "- Updated the status severity mapping\n\n"
+            "<!-- evidence-status:v1\n"
+            "{\n"
+            '  "entries": [\n'
+            '    "legacy-entry",\n'
+            "    {\n"
+            '      "index": 1,\n'
+            '      "item": "swift test --filter WorkspaceManagerTests.WorkspaceProviderTests",\n'
+            '      "status": "pending-ci",\n'
+            '      "detail": "self-hosted macOS CI will run this command"\n'
+            "    }\n"
+            "  ]\n"
+            "}\n"
+            "-->\n\n"
+            "## Evidence Status\n"
+            "- [pending-ci] swift test --filter WorkspaceManagerTests.WorkspaceProviderTests -- self-hosted macOS CI will run this command\n\n"
+            "## Validation\n"
+            "- blocked on evidence: macOS-only evidence is deferred to CI\n"
+        )
+        reconciled = run_contributor.reconcile_pending_ci_evidence(
+            body,
+            build_succeeded=True,
+            tests_succeeded=True,
+            smoke_succeeded=True,
+            test_output="$ swift test --filter WorkspaceManagerTests.WorkspaceProviderTests\nok\n",
+        )
+        metadata = run_contributor._extract_evidence_metadata(reconciled)
+        self.assertIsNotNone(metadata)
+        self.assertEqual(metadata["entries"][0], "legacy-entry")
+        self.assertEqual(metadata["entries"][1]["status"], "complete")
+
+    def test_insert_evidence_metadata_is_idempotent(self) -> None:
+        body = (
+            "## Summary\n"
+            "- Updated the status severity mapping\n\n"
+            "## Evidence Status\n"
+            "- [complete] swift build -- `swift build`\n"
+        )
+        payload = {
+            "entries": [
+                {
+                    "index": 1,
+                    "item": "swift build",
+                    "status": "complete",
+                    "detail": "`swift build`",
+                }
+            ]
+        }
+        once = run_contributor._insert_evidence_metadata(body, payload)
+        twice = run_contributor._insert_evidence_metadata(once, payload)
+        self.assertEqual(twice.count("<!-- evidence-status:v1"), 1)
+        self.assertEqual(run_contributor._extract_evidence_metadata(twice), payload)
 
     def test_format_pr_list_for_context_includes_evidence_summary(self) -> None:
         issue_body = run_planner.compose_issue_body_with_metadata(

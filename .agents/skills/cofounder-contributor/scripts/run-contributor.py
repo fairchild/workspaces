@@ -475,7 +475,8 @@ EVIDENCE_STATUS_LINE_RE = re.compile(
     r"^- \[(?P<status>complete|blocked|pending-ci)\] (?P<item>.+?)\s+(?:--|—|–)\s+(?P<detail>.+)$"
 )
 EVIDENCE_METADATA_RE = re.compile(
-    r"(?ms)^<!-- evidence-status:v(?P<version>\d+)\n(?P<payload>.*?)\n-->\s*"
+    r"^<!-- evidence-status:v(?P<version>\d+)\n(?P<payload>.*?)\n-->[ \t]*(?:\n|$)",
+    re.MULTILINE | re.DOTALL,
 )
 STRUCTURED_EVIDENCE_UPDATE_RE = re.compile(
     r"^(?P<index>\d+)\s*--\s*(?P<detail>.+)$"
@@ -572,22 +573,30 @@ def extract_blocked_by(body: str) -> list[int]:
 
 def extract_requested_evidence(body: str) -> list[str]:
     evidence_section = markdown_section(body, "Requested Evidence")
+    fallback_sentence = EVIDENCE_FALLBACK_SENTENCE.casefold()
     return [
         line[2:].strip()
         for line in evidence_section.splitlines()
         if line.strip().startswith("- ")
         and line[2:].strip().lower() != "none"
-        and line[2:].strip() != EVIDENCE_FALLBACK_SENTENCE
+        and line[2:].strip().casefold() != fallback_sentence
     ]
 
 
 def _strip_evidence_metadata(body: str) -> str:
-    stripped = EVIDENCE_METADATA_RE.sub("", body, count=1).strip()
+    stripped = EVIDENCE_METADATA_RE.sub("", body).strip()
     return re.sub(r"\n{3,}", "\n\n", stripped)
 
 
+def _latest_evidence_metadata_match(body: str) -> re.Match[str] | None:
+    matches = list(EVIDENCE_METADATA_RE.finditer(body))
+    if not matches:
+        return None
+    return matches[-1]
+
+
 def _extract_evidence_metadata(body: str) -> dict[str, object] | None:
-    match = EVIDENCE_METADATA_RE.search(body)
+    match = _latest_evidence_metadata_match(body)
     if not match or int(match.group("version")) != EVIDENCE_METADATA_VERSION:
         return None
     try:
@@ -615,6 +624,8 @@ def _insert_evidence_metadata(body: str, payload: dict[str, object]) -> str:
 
 
 def _explicit_evidence_contract(requested_evidence: list[str]) -> bool:
+    # `extract_requested_evidence()` strips planner boilerplate such as the
+    # legacy fallback sentence, so any remaining entry is an explicit contract.
     return bool(requested_evidence)
 
 
@@ -624,29 +635,71 @@ def _structured_evidence_entries(
 ) -> dict[str, object] | None:
     if not _explicit_evidence_contract(requested_evidence):
         return None
-    payload = _extract_evidence_metadata(body)
-    if payload is None:
+    match = _latest_evidence_metadata_match(body)
+    if match is None:
         return None
+    if int(match.group("version")) != EVIDENCE_METADATA_VERSION:
+        return None
+    try:
+        payload = json.loads(match.group("payload"))
+    except json.JSONDecodeError as exc:
+        return {
+            "section_present": has_markdown_section(body, "Evidence Status"),
+            "entries": {},
+            "invalid_lines": [f"metadata payload is not valid JSON: {exc.msg}"],
+            "duplicate_items": [],
+            "source": "structured-invalid",
+        }
+    if not isinstance(payload, dict):
+        return {
+            "section_present": has_markdown_section(body, "Evidence Status"),
+            "entries": {},
+            "invalid_lines": ["metadata payload must be a JSON object"],
+            "duplicate_items": [],
+            "source": "structured-invalid",
+        }
     raw_entries = payload.get("entries")
     if not isinstance(raw_entries, list):
-        return None
+        return {
+            "section_present": has_markdown_section(body, "Evidence Status"),
+            "entries": {},
+            "invalid_lines": ["metadata payload must contain an 'entries' list"],
+            "duplicate_items": [],
+            "source": "structured-invalid",
+        }
 
     entries: dict[str, dict[str, str]] = {}
     duplicate_items: list[str] = []
-    for raw_entry in raw_entries:
+    invalid_lines: list[str] = []
+    for position, raw_entry in enumerate(raw_entries, start=1):
         if not isinstance(raw_entry, dict):
-            return None
+            invalid_lines.append(f"entry {position} is not an object")
+            continue
         try:
             index = int(raw_entry["index"])
         except (KeyError, TypeError, ValueError):
-            return None
+            invalid_lines.append(f"entry {position} is missing a valid integer index")
+            continue
         if index < 1 or index > len(requested_evidence):
-            return None
+            invalid_lines.append(
+                f"entry {position} index {index} is out of range for {len(requested_evidence)} requested items"
+            )
+            continue
         status = str(raw_entry.get("status", "")).strip()
         detail = str(raw_entry.get("detail", "")).strip()
-        if status not in {"complete", "blocked", "pending-ci"} or not detail:
-            return None
+        if status not in {"complete", "blocked", "pending-ci"}:
+            invalid_lines.append(f"entry {position} has invalid status '{status}'")
+            continue
+        if not detail:
+            invalid_lines.append(f"entry {position} has an empty detail")
+            continue
         item = requested_evidence[index - 1]
+        stored_item = raw_entry.get("item")
+        if stored_item is not None and str(stored_item).strip() != item:
+            invalid_lines.append(
+                f"entry {position} item does not match requested evidence index {index}"
+            )
+            continue
         if item in entries:
             duplicate_items.append(item)
             continue
@@ -657,10 +710,10 @@ def _structured_evidence_entries(
 
     return {
         "section_present": has_markdown_section(body, "Evidence Status"),
-        "entries": entries,
-        "invalid_lines": [],
+        "entries": {} if invalid_lines else entries,
+        "invalid_lines": invalid_lines,
         "duplicate_items": duplicate_items,
-        "source": "structured",
+        "source": "structured-invalid" if invalid_lines else "structured",
     }
 
 
@@ -812,11 +865,14 @@ def validate_evidence_accounting(body: str, requested_evidence: list[str]) -> tu
     invalid_lines = accounting["invalid_lines"]
     if invalid_lines:
         preview = "; ".join(str(line) for line in invalid_lines[:3])
-        errors.append(
-            "malformed Evidence Status entries; expected "
-            "'- [complete|blocked|pending-ci] <requested_evidence item> -- <proof note>' "
-            f"(examples: {preview})"
-        )
+        if accounting["source"] == "structured-invalid":
+            errors.append(f"malformed hidden evidence metadata: {preview}")
+        else:
+            errors.append(
+                "malformed Evidence Status entries; expected "
+                "'- [complete|blocked|pending-ci] <requested_evidence item> -- <proof note>' "
+                f"(examples: {preview})"
+            )
     duplicate_items = accounting["duplicate_items"]
     if duplicate_items:
         preview = ", ".join(str(item) for item in duplicate_items[:3])
@@ -1070,7 +1126,11 @@ def validate_requested_test_commands(
 
     listed_tests = _listed_swift_tests(env)
     if not listed_tests:
-        return ["`swift test list` did not return any Swift Testing specifiers to validate requested evidence."]
+        log(
+            "skipping `swift test list` evidence selector preflight because no Swift Testing "
+            "specifiers were returned; the project may need to build first"
+        )
+        return []
 
     errors: list[str] = []
     for command in swift_filter_commands:
@@ -1094,6 +1154,9 @@ def _test_output_by_command(test_output: str) -> dict[str, str]:
     sections: dict[str, list[str]] = {}
     current_command: str | None = None
     for raw_line in test_output.splitlines():
+        # The evidence workflows record command boundaries as `$ <command>` lines
+        # in `test-output.txt`; parse those blocks before falling back to a
+        # whole-file no-match scan.
         if raw_line.startswith("$ "):
             current_command = raw_line[2:].strip()
             sections.setdefault(current_command, [])
@@ -1164,9 +1227,11 @@ def reconcile_pending_ci_evidence(
     """Resolve pending-ci evidence lines after the macOS evidence job finishes."""
     metadata = _extract_evidence_metadata(body)
     if isinstance(metadata, dict) and isinstance(metadata.get("entries"), list):
-        updated_entries: list[dict[str, object]] = []
+        updated_entries: list[object] = []
+        rendered_entries: list[dict[str, object]] = []
         for raw_entry in metadata["entries"]:
             if not isinstance(raw_entry, dict):
+                updated_entries.append(raw_entry)
                 continue
             entry = dict(raw_entry)
             if str(entry.get("status", "")).strip() == "pending-ci":
@@ -1182,16 +1247,36 @@ def reconcile_pending_ci_evidence(
                 entry["status"] = status
                 entry["detail"] = detail
             updated_entries.append(entry)
+            try:
+                index = int(entry["index"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            item = str(entry.get("item", "")).strip()
+            status = str(entry.get("status", "")).strip()
+            detail = str(entry.get("detail", "")).strip()
+            if index < 1 or not item or status not in {"complete", "blocked", "pending-ci"} or not detail:
+                continue
+            rendered_entries.append(
+                {
+                    "index": index,
+                    "item": item,
+                    "status": status,
+                    "detail": detail,
+                }
+            )
 
-        reconciled = insert_markdown_section(
-            _strip_evidence_metadata(body),
-            "Evidence Status",
-            "\n".join(
-                f"- [{str(entry.get('status', '')).strip()}] {str(entry.get('item', '')).strip()} -- {str(entry.get('detail', '')).strip()}"
-                for entry in sorted(updated_entries, key=lambda entry: int(entry.get("index", 0)))
-            ),
-            before_heading="Validation",
-        )
+        if rendered_entries:
+            reconciled = insert_markdown_section(
+                _strip_evidence_metadata(body),
+                "Evidence Status",
+                "\n".join(
+                    f"- [{str(entry.get('status', '')).strip()}] {str(entry.get('item', '')).strip()} -- {str(entry.get('detail', '')).strip()}"
+                    for entry in sorted(rendered_entries, key=lambda entry: int(entry["index"]))
+                ),
+                before_heading="Validation",
+            )
+        else:
+            reconciled = body
         reconciled = _insert_evidence_metadata(
             reconciled,
             {
@@ -1719,6 +1804,8 @@ def summarize_evidence_accounting_by_index(accounting: dict[str, object], reques
     malformed = accounting.get("invalid_lines", [])
     if accounting.get("source") == "markdown":
         return f"{summary}, malformed {len(malformed)}"
+    if accounting.get("source") == "structured-invalid":
+        return f"{summary}, metadata invalid"
     return summary
 
 
@@ -2515,6 +2602,7 @@ def route_execution_action(
         )
         return 1
 
+    requested_evidence = list(state.get("requested_evidence", []))
     test_command_errors = validate_requested_test_commands(requested_evidence, env)
     if test_command_errors:
         print(
@@ -2542,7 +2630,6 @@ def route_execution_action(
         )
         return 1
 
-    requested_evidence = list(state.get("requested_evidence", []))
     summary_body, summary_errors = build_execution_summary_body(
         data,
         requested_evidence=requested_evidence,
