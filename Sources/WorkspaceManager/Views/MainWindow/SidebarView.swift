@@ -91,9 +91,7 @@ struct SidebarView: View {
         workspaceEnvironmentSheetState.lumeRuntimeSnapshot
     }
 
-    private var repoSortController: SidebarRepoSortController {
-        SidebarRepoSortController()
-    }
+    @State private var repoSortController = SidebarRepoSortController()
 
     private var workspaceProviderSetupActionRunner: WorkspaceProviderSetupActionRunner {
         WorkspaceProviderSetupActionRunner(coordinator: workspaceProviderSetupCoordinator)
