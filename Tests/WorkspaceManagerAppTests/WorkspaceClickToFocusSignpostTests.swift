@@ -1,6 +1,6 @@
 //
-//  PerformanceSignpostsTests.swift
-//  WorkspaceManagerTests
+//  WorkspaceClickToFocusSignpostTests.swift
+//  WorkspaceManagerAppTests
 //
 //  Tests for workspace_click_to_focus metric lifecycle.
 //
@@ -29,7 +29,6 @@ struct WorkspaceClickToFocusSignpostTests {
             sessionID: sessionID,
             workspacePath: "/tmp/test-workspace"
         )
-        // Clean up the interval
         PerformanceSignposts.cancelWorkspaceClickToFocusedInputIfNeeded(
             sessionID: sessionID,
             reason: "test_cleanup"
@@ -101,7 +100,6 @@ struct WorkspaceClickToFocusSignpostTests {
             sessionID: secondSession,
             workspacePath: "/tmp/workspace-b"
         )
-        // Clean up second interval
         PerformanceSignposts.cancelWorkspaceClickToFocusedInputIfNeeded(
             sessionID: secondSession,
             reason: "test_cleanup"
@@ -148,17 +146,14 @@ struct WorkspaceClickToFocusSignpostTests {
             sessionID: activeSession,
             workspacePath: "/tmp/test-workspace"
         )
-        // Try to cancel a different session
         PerformanceSignposts.cancelWorkspaceClickToFocusedInputIfNeeded(
             sessionID: UUID(),
             reason: "wrong_session"
         )
 
-        // Only the started event should exist, no completed/cancelled
         let completedEvents = captured.filter { $0.fields["status"] == "completed" }
         #expect(completedEvents.isEmpty)
 
-        // Clean up
         PerformanceSignposts.cancelWorkspaceClickToFocusedInputIfNeeded(
             sessionID: activeSession,
             reason: "test_cleanup"
