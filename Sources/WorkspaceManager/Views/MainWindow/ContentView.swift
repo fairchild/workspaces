@@ -9,6 +9,12 @@ import AppKit
 import SwiftData
 import SwiftUI
 import WorkspaceManagerCore
+import os.log
+
+private let creationLog = Logger(
+    subsystem: "com.cloudcompute.workspaces",
+    category: "WorkspaceCreation"
+)
 
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
@@ -1255,6 +1261,9 @@ struct ContentView: View {
         guestOS: WorkspaceGuestOS?,
         skipSetup: Bool
     ) async throws {
+        creationLog.info(
+            "createWorkspaceFromLanding: repo=\(repo.name) provider=\(providerID) skipSetup=\(skipSetup)"
+        )
         let controller = SidebarWorkspaceController(
             modelContext: modelContext,
             workspaceService: workspaceService,
@@ -1269,6 +1278,7 @@ struct ContentView: View {
             progress: { _ in },
             onPersisted: nil
         )
+        creationLog.info("createWorkspaceFromLanding: workspace created successfully")
 
         if skipSetup {
             abandonPendingRemoteConnection(reason: "workspace_created")
@@ -1388,7 +1398,16 @@ struct ContentView: View {
             do {
                 try modelContext.save()
             } catch {
-                modelContext.rollback()
+                if modelContext.insertedModelsArray.isEmpty {
+                    creationLog.warning(
+                        "saveAccessTimestampChanges: save failed, rolling back (no pending inserts)"
+                    )
+                    modelContext.rollback()
+                } else {
+                    creationLog.error(
+                        "saveAccessTimestampChanges: save failed with \(modelContext.insertedModelsArray.count) pending inserts — skipping rollback to preserve workspace creation"
+                    )
+                }
             }
         }
     }
