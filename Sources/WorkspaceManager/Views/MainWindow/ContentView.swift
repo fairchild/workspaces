@@ -1074,10 +1074,20 @@ struct ContentView: View {
                 key: .hostPath(workspaceDirectory.path),
                 directory: launchDirectory
             )
+            terminalFocusCoordinator.beginWorkspaceClickMeasurement(
+                sessionID: session.id,
+                workspacePath: workspaceDirectory.path
+            )
             terminalFocusCoordinator.requestMainTerminalFocus(
                 targetSessionID: session.id,
                 surfaceStore: hostTerminalState.surfaceStore,
-                activeSessionID: hostTerminalState.activeSessionID
+                activeSessionID: hostTerminalState.activeSessionID,
+                onTargetFocused: {
+                    terminalFocusCoordinator.completeWorkspaceClickMeasurement(
+                        sessionID: session.id,
+                        outcome: "focused"
+                    )
+                }
             )
         }
 

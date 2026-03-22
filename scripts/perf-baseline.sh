@@ -174,6 +174,7 @@ metric_order = [
     "launch_to_first_prompt",
     "repo_hydration",
     "repo_click_to_focus",
+    "workspace_click_to_focus",
 ]
 metrics = {name: [] for name in metric_order}
 discovered_values = []
@@ -325,9 +326,11 @@ fieldnames = [
     "launch_to_first_prompt_median_ms",
     "repo_hydration_median_ms",
     "repo_click_to_focus_median_ms",
+    "workspace_click_to_focus_median_ms",
     "launch_to_first_prompt_mean_ms",
     "repo_hydration_mean_ms",
     "repo_click_to_focus_mean_ms",
+    "workspace_click_to_focus_mean_ms",
     "activation_to_first_prompt_median_ms",
 ]
 
@@ -344,9 +347,11 @@ record_row = {
     "launch_to_first_prompt_median_ms": summary["launch_to_first_prompt"]["median"] if summary["launch_to_first_prompt"] else "",
     "repo_hydration_median_ms": summary["repo_hydration"]["median"] if summary["repo_hydration"] else "",
     "repo_click_to_focus_median_ms": summary["repo_click_to_focus"]["median"] if summary["repo_click_to_focus"] else "",
+    "workspace_click_to_focus_median_ms": summary["workspace_click_to_focus"]["median"] if summary["workspace_click_to_focus"] else "",
     "launch_to_first_prompt_mean_ms": summary["launch_to_first_prompt"]["mean"] if summary["launch_to_first_prompt"] else "",
     "repo_hydration_mean_ms": summary["repo_hydration"]["mean"] if summary["repo_hydration"] else "",
     "repo_click_to_focus_mean_ms": summary["repo_click_to_focus"]["mean"] if summary["repo_click_to_focus"] else "",
+    "workspace_click_to_focus_mean_ms": summary["workspace_click_to_focus"]["mean"] if summary["workspace_click_to_focus"] else "",
     "activation_to_first_prompt_median_ms": summary["metadata"]["activation_to_first_prompt_median_ms"] or "",
 }
 
@@ -474,17 +479,19 @@ else:
 dashboard_lines.append("")
 dashboard_lines.append("## Trend (Last 10 Runs)")
 dashboard_lines.append("")
-dashboard_lines.append("| Timestamp | Launch (ms) | Hydration (ms) | Click-to-Focus (ms) |")
-dashboard_lines.append("|---|---:|---:|---:|")
+dashboard_lines.append("| Timestamp | Launch (ms) | Hydration (ms) | Repo Click-to-Focus (ms) | Workspace Click-to-Focus (ms) |")
+dashboard_lines.append("|---|---:|---:|---:|---:|")
 for row in window:
     launch_value = parse_float(row.get("launch_to_first_prompt_median_ms"))
     hydration_value = parse_float(row.get("repo_hydration_median_ms"))
     click_value = parse_float(row.get("repo_click_to_focus_median_ms"))
+    ws_click_value = parse_float(row.get("workspace_click_to_focus_median_ms"))
     dashboard_lines.append(
         f"| {row['timestamp']} | "
         f"{fmt_ms(launch_value)} | "
         f"{fmt_ms(hydration_value)} | "
-        f"{fmt_ms(click_value)} |"
+        f"{fmt_ms(click_value)} | "
+        f"{fmt_ms(ws_click_value)} |"
     )
 
 dashboard_lines.append("")
@@ -515,6 +522,7 @@ dashboard_lines.append("")
 dashboard_lines.append("- `launch_to_first_prompt`: launch init -> first terminal focus success (ready to type)")
 dashboard_lines.append("- `repo_hydration`: auto-discovery/import pass for `~/code` repos")
 dashboard_lines.append("- `repo_click_to_focus`: repo row click -> focused terminal session restore")
+dashboard_lines.append("- `workspace_click_to_focus`: workspace row click -> focused terminal session restore")
 dashboard_lines.append("- Detailed flow diagrams: `./metrics-reference.md`")
 
 dashboard_path.write_text("\n".join(dashboard_lines) + "\n")
