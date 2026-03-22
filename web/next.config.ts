@@ -4,7 +4,8 @@ const nextConfig: NextConfig = {
 	serverExternalPackages: [
 		"chat",
 		"@chat-adapter/state-memory",
-		"better-sqlite3",
+		"@libsql/client",
+		"libsql",
 	],
 	images: {
 		remotePatterns: [

@@ -1,15 +1,19 @@
-import fs from "node:fs";
-import path from "node:path";
+import { createClient } from "@libsql/client";
 import { betterAuth } from "better-auth";
-import Database from "better-sqlite3";
+import { LibsqlDialect } from "./libsql-dialect";
 
-const dbDir = path.join(process.cwd(), "data");
-if (!fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true });
+const turso = createClient({
+	url: process.env.TURSO_DATABASE_URL ?? "file:data/auth.db",
+	authToken: process.env.TURSO_AUTH_TOKEN,
+});
 
 export const auth = betterAuth({
 	secret: process.env.BETTER_AUTH_SECRET,
 	baseURL: process.env.BETTER_AUTH_URL ?? "http://localhost:3000",
-	database: new Database(path.join(dbDir, "auth.db")),
+	database: {
+		dialect: new LibsqlDialect({ client: turso }),
+		type: "sqlite",
+	},
 	socialProviders: {
 		github: {
 			clientId: process.env.GITHUB_WEB_WORKSPACES_CLIENT_ID ?? "",

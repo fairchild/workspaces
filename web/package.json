@@ -12,9 +12,10 @@
 	},
 	"dependencies": {
 		"@chat-adapter/state-memory": "^4.20.2",
+		"@libsql/client": "^0.17.2",
 		"better-auth": "^1.5.6",
-		"better-sqlite3": "^12.8.0",
 		"chat": "latest",
+		"kysely": "^0.28.14",
 		"next": "^15",
 		"react": "^19",
 		"react-dom": "^19"
@@ -24,7 +25,6 @@
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^1",
-		"@types/better-sqlite3": "^7.6.13",
 		"@types/node": "^22",
 		"@types/react": "^19",
 		"@types/react-dom": "^19",
