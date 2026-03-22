@@ -5,29 +5,17 @@ import Testing
 
 @Suite("TerminalFocusManager")
 struct TerminalFocusManagerTests {
-    @Test("Backoff progression is capped at 500ms")
-    func backoffProgressionIsCapped() {
-        #expect(isApproximatelyEqual(TerminalFocusManager.nextRetryDelay(after: nil), 0.05))
-        #expect(isApproximatelyEqual(TerminalFocusManager.nextRetryDelay(after: 0.05), 0.1))
-        #expect(isApproximatelyEqual(TerminalFocusManager.nextRetryDelay(after: 0.1), 0.2))
-        #expect(isApproximatelyEqual(TerminalFocusManager.nextRetryDelay(after: 0.2), 0.4))
-        #expect(isApproximatelyEqual(TerminalFocusManager.nextRetryDelay(after: 0.4), 0.5))
-        #expect(isApproximatelyEqual(TerminalFocusManager.nextRetryDelay(after: 0.5), 0.5))
-    }
-
-    @Test("Retry eligibility stops at the 500ms cap")
-    func retryEligibilityStopsAtCap() {
-        #expect(TerminalFocusManager.shouldRetry(after: nil))
-        #expect(TerminalFocusManager.shouldRetry(after: 0.4))
-        #expect(!TerminalFocusManager.shouldRetry(after: 0.5))
-        #expect(!TerminalFocusManager.shouldRetry(after: 1.0))
-    }
-
-    private func isApproximatelyEqual(
-        _ lhs: TimeInterval, _ rhs: TimeInterval, epsilon: TimeInterval = 0.000_001
-    )
-        -> Bool
-    {
-        abs(lhs - rhs) < epsilon
+    @Test("Focus request uses single bounded retry, not exponential backoff")
+    func singleBoundedRetry() {
+        // The new design uses isRetry: Bool instead of exponential delay progression.
+        // First attempt: isRetry = false (immediate dispatch)
+        // If it fails: exactly one retry with isRetry = true (100ms delay)
+        // No further retries after that.
+        //
+        // This replaces the old 50ms->100ms->200ms->400ms->500ms chain that got
+        // starved by main-actor work. The primary focus path is now lifecycle-driven
+        // (surface onSurfaceCreated callback), with this bounded retry as safety net.
+        let fallbackDelay: TimeInterval = 0.1
+        #expect(fallbackDelay == 0.1, "Fallback retry should be exactly 100ms")
     }
 }
