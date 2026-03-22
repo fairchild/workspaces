@@ -783,18 +783,10 @@ def main() -> None:
     # Build prompt and generate commentary
     system_msg, user_msg = build_prompt(data)
 
-    if args.dry_run and args.fixtures_dir:
-        # In fixture + dry-run mode, don't call the API — show the prompt
-        log("Fixture dry-run — showing prompt instead of calling API")
+    if args.fixtures_dir or args.dry_run:
+        # Fixture mode or dry-run: show the prompt, skip API and posting
+        log("Dry-run — showing prompt instead of calling API")
         commentary = f"[DRY RUN — PROMPT BELOW]\n\n{user_msg}"
-    else:
-        api_key = env.get("ANTHROPIC_API_KEY", "")
-        if not api_key:
-            raise CarlError("ANTHROPIC_API_KEY environment variable is required")
-        log(f"Calling Claude ({args.model})...")
-        commentary = call_claude(system_msg, user_msg, model=args.model, api_key=api_key)
-
-    if args.dry_run:
         result = {
             "posted": False,
             "dry_run": True,
@@ -805,6 +797,12 @@ def main() -> None:
         }
         output_result(result, json_output=args.json_output)
         return
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        raise CarlError("ANTHROPIC_API_KEY environment variable is required")
+    log(f"Calling Claude ({args.model})...")
+    commentary = call_claude(system_msg, user_msg, model=args.model, api_key=api_key)
 
     # Append watermark and post
     timestamp = now_utc().strftime("%Y-%m-%dT%H:%M:%SZ")
