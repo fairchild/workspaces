@@ -9,6 +9,11 @@ import AppKit
 
 /// Manages focus for terminal views within a window.
 /// Uses NotificationCenter instead of window delegate so SwiftUI window behavior stays intact.
+///
+/// Focus ownership: TerminalFocusCoordinator is the single entry point for all focus
+/// restoration flows. This manager handles the low-level NSWindow first-responder mechanics
+/// with a single bounded fallback retry (no exponential backoff). App activation is handled
+/// exclusively by the coordinator — this manager never calls NSApp.activate.
 @MainActor
 final class TerminalFocusManager: NSObject {
 
@@ -24,7 +29,11 @@ final class TerminalFocusManager: NSObject {
     private var pendingFocusWork: DispatchWorkItem?
 
     var onWindowDidBecomeKey: (@MainActor () -> Void)?
+    var onAppDidBecomeActive: (@MainActor () -> Void)?
     var shouldSkipWindowFocusRestore: (@MainActor () -> Bool)?
+
+    /// Maximum single-retry delay. Replaces the exponential backoff chain.
+    private static let fallbackRetryDelay: TimeInterval = 0.1
 
     // MARK: - Window Registration
 
@@ -55,26 +64,25 @@ final class TerminalFocusManager: NSObject {
 
     // MARK: - Focus Management
 
-    /// Request focus for a terminal with retry logic.
-    /// Retries with exponential backoff starting at 50ms, capped at 500ms.
+    /// Request focus for a terminal with a single bounded fallback retry.
+    ///
+    /// The primary focus path is lifecycle-driven: the coordinator fires focus when the
+    /// surface's `onSurfaceCreated` callback signals readiness. This method attempts
+    /// `makeFirstResponder` immediately and, if it fails, retries exactly once after
+    /// `fallbackRetryDelay` (100ms). No exponential backoff.
     func requestFocus(
         for terminal: NSView,
-        delay: TimeInterval? = nil,
-        activateApp: Bool = false,
+        isRetry: Bool = false,
         onFocused: (() -> Void)? = nil
     ) {
         InvestigationDiagnostics.emitFocus(
             phase: "focus_request_enqueued",
             fields: [
-                "activate_app": activateApp ? "true" : "false",
-                "delay_ms": Self.delayFieldValue(delay),
+                "is_retry": isRetry ? "true" : "false",
                 "had_pending_work": pendingFocusWork == nil ? "false" : "true",
             ]
         )
         pendingFocusWork?.cancel()
-
-        let nextDelay = Self.nextRetryDelay(after: delay)
-        let shouldRetry = Self.shouldRetry(after: delay)
 
         let work = DispatchWorkItem { [weak self, weak terminal] in
             Task { @MainActor in
@@ -82,51 +90,33 @@ final class TerminalFocusManager: NSObject {
 
                 guard let window = terminal.window else {
                     InvestigationDiagnostics.emitFocus(
-                        phase: shouldRetry
-                            ? "focus_request_missing_window_retry"
-                            : "focus_request_missing_window_terminal_lost",
+                        phase: isRetry
+                            ? "focus_request_missing_window_terminal_lost"
+                            : "focus_request_missing_window_retry",
                         fields: [
-                            "activate_app": activateApp ? "true" : "false",
-                            "delay_ms": Self.delayFieldValue(delay),
-                            "next_delay_ms": Self.delayFieldValue(nextDelay),
+                            "is_retry": isRetry ? "true" : "false"
                         ]
                     )
-                    if shouldRetry {
-                        self.requestFocus(
-                            for: terminal,
-                            delay: nextDelay,
-                            activateApp: activateApp,
-                            onFocused: onFocused
-                        )
+                    if !isRetry {
+                        self.scheduleFallbackRetry(for: terminal, onFocused: onFocused)
                     }
                     return
                 }
 
-                if activateApp {
+                // When the app is inactive or the window isn't key, record intent
+                // but don't force first-responder — the coordinator will re-drive
+                // focus when the window becomes key.
+                if !NSApp.isActive || !window.isKeyWindow {
                     InvestigationDiagnostics.emitFocus(
-                        phase: "focus_request_activate_app",
+                        phase: "focus_request_inactive_skip",
                         fields: [
-                            "delay_ms": Self.delayFieldValue(delay),
+                            "is_retry": isRetry ? "true" : "false",
                             "window_key": window.isKeyWindow ? "true" : "false",
                             "app_active": NSApp.isActive ? "true" : "false",
                         ]
                     )
-                    NSApp.activate(ignoringOtherApps: true)
-                    window.makeKeyAndOrderFront(nil)
-                } else {
-                    // Keep focus intent without stealing foreground when app is inactive.
-                    if !NSApp.isActive || !window.isKeyWindow {
-                        InvestigationDiagnostics.emitFocus(
-                            phase: "focus_request_inactive_skip",
-                            fields: [
-                                "delay_ms": Self.delayFieldValue(delay),
-                                "window_key": window.isKeyWindow ? "true" : "false",
-                                "app_active": NSApp.isActive ? "true" : "false",
-                            ]
-                        )
-                        self.focusedTerminal = terminal
-                        return
-                    }
+                    self.focusedTerminal = terminal
+                    return
                 }
 
                 if let oldFocused = self.focusedTerminal, oldFocused !== terminal {
@@ -136,7 +126,7 @@ final class TerminalFocusManager: NSObject {
                 InvestigationDiagnostics.emitFocus(
                     phase: "focus_request_make_first_responder",
                     fields: [
-                        "delay_ms": Self.delayFieldValue(delay),
+                        "is_retry": isRetry ? "true" : "false",
                         "window_key": window.isKeyWindow ? "true" : "false",
                         "app_active": NSApp.isActive ? "true" : "false",
                     ]
@@ -147,32 +137,26 @@ final class TerminalFocusManager: NSObject {
                     InvestigationDiagnostics.emitFocus(
                         phase: "focus_request_succeeded",
                         fields: [
-                            "delay_ms": Self.delayFieldValue(delay),
+                            "is_retry": isRetry ? "true" : "false",
                             "window_key": window.isKeyWindow ? "true" : "false",
                         ]
                     )
                     PerformanceSignposts.endLaunchToFirstPromptIfNeeded(trigger: "terminal_focus")
                     onFocused?()
-                } else if shouldRetry {
+                } else if !isRetry {
                     InvestigationDiagnostics.emitFocus(
                         phase: "focus_request_failed_retry",
                         fields: [
-                            "delay_ms": Self.delayFieldValue(delay),
-                            "next_delay_ms": Self.delayFieldValue(nextDelay),
+                            "is_retry": "false",
                             "window_key": window.isKeyWindow ? "true" : "false",
                         ]
                     )
-                    self.requestFocus(
-                        for: terminal,
-                        delay: nextDelay,
-                        activateApp: activateApp,
-                        onFocused: onFocused
-                    )
+                    self.scheduleFallbackRetry(for: terminal, onFocused: onFocused)
                 } else {
                     InvestigationDiagnostics.emitFocus(
                         phase: "focus_request_failed_terminal",
                         fields: [
-                            "delay_ms": Self.delayFieldValue(delay),
+                            "is_retry": "true",
                             "window_key": window.isKeyWindow ? "true" : "false",
                         ]
                     )
@@ -182,22 +166,21 @@ final class TerminalFocusManager: NSObject {
 
         pendingFocusWork = work
 
-        if let delay {
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+        if isRetry {
+            DispatchQueue.main.asyncAfter(
+                deadline: .now() + Self.fallbackRetryDelay,
+                execute: work
+            )
         } else {
             DispatchQueue.main.async(execute: work)
         }
     }
 
-    nonisolated static func nextRetryDelay(after delay: TimeInterval?) -> TimeInterval {
-        if let delay {
-            return min(delay * 2, 0.5)
-        }
-        return 0.05
-    }
-
-    nonisolated static func shouldRetry(after delay: TimeInterval?) -> Bool {
-        (delay ?? 0) < 0.5
+    private func scheduleFallbackRetry(
+        for terminal: NSView,
+        onFocused: (() -> Void)?
+    ) {
+        requestFocus(for: terminal, isRetry: true, onFocused: onFocused)
     }
 
     // MARK: - Focus State Synchronization
@@ -225,14 +208,15 @@ final class TerminalFocusManager: NSObject {
             ]
         )
 
-        let shouldSkipFocusedTerminalRestore = shouldSkipWindowFocusRestore?() == true
-        if !shouldSkipFocusedTerminalRestore,
+        // Let the coordinator handle focus if it has a pending request.
+        // Only self-restore when the coordinator is idle AND the window's
+        // first responder is the window itself (meaning nothing else claimed focus).
+        let coordinatorHasPending = shouldSkipWindowFocusRestore?() == true
+        if !coordinatorHasPending,
             window.firstResponder === window,
             let terminal = focusedTerminal
         {
-            Task { @MainActor in
-                self.requestFocus(for: terminal, activateApp: false)
-            }
+            requestFocus(for: terminal)
         }
 
         onWindowDidBecomeKey?()
@@ -260,8 +244,4 @@ final class TerminalFocusManager: NSObject {
         }
     }
 
-    private nonisolated static func delayFieldValue(_ delay: TimeInterval?) -> String {
-        guard let delay else { return "0.00" }
-        return String(format: "%.2f", delay * 1000)
-    }
 }
