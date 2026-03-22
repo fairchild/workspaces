@@ -105,11 +105,10 @@ def run_checked(
     cmd: list[str],
     *,
     cwd: Path | None = None,
-    env: dict[str, str] | None = None,
     input: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     result = subprocess.run(
-        cmd, capture_output=True, text=True, cwd=cwd, env=env, input=input,
+        cmd, capture_output=True, text=True, cwd=cwd, input=input,
     )
     if result.returncode != 0:
         command = " ".join(cmd)
@@ -129,7 +128,7 @@ def load_json_file(path: Path) -> Any:
         raise CarlError(f"invalid JSON in {path}: {error}") from error
 
 
-def graphql(query: str, env: dict[str, str], **variables: Any) -> dict[str, Any]:
+def graphql(query: str, **variables: Any) -> dict[str, Any]:
     cmd = ["gh", "api", "graphql", "-f", f"query={query}"]
     for key, value in variables.items():
         if value is None:
@@ -140,7 +139,7 @@ def graphql(query: str, env: dict[str, str], **variables: Any) -> dict[str, Any]
             cmd.extend(["-F", f"{key}={value}"])
         else:
             cmd.extend(["-f", f"{key}={value}"])
-    result = run_checked(cmd, cwd=REPO_ROOT, env=env)
+    result = run_checked(cmd, cwd=REPO_ROOT)
     data = json.loads(result.stdout)
     if "errors" in data:
         raise CarlError(f"graphql error: {data['errors']}")
@@ -169,13 +168,13 @@ def now_utc() -> datetime:
 # ---------------------------------------------------------------------------
 
 
-def repo_info(env: dict[str, str]) -> RepoInfo:
-    slug = env.get("GITHUB_REPOSITORY", "").strip()
+def repo_info() -> RepoInfo:
+    slug = os.environ.get("GITHUB_REPOSITORY", "").strip()
     if slug and "/" in slug:
         owner, name = slug.split("/", 1)
     else:
         result = run_checked(
-            ["gh", "repo", "view", "--json", "owner,name"], cwd=REPO_ROOT, env=env,
+            ["gh", "repo", "view", "--json", "owner,name"], cwd=REPO_ROOT,
         )
         data = json.loads(result.stdout)
         owner, name = data["owner"]["login"], data["name"]
@@ -190,7 +189,7 @@ query($owner: String!, $name: String!) {
   }
 }
 """
-    data = graphql(query, env, owner=owner, name=name)
+    data = graphql(query, owner=owner, name=name)
     repo = data["data"]["repository"]
     category_ids = {
         node["slug"].lower(): node["id"]
@@ -210,7 +209,7 @@ query($owner: String!, $name: String!) {
 
 
 def find_commentary_thread(
-    repo: RepoInfo, env: dict[str, str],
+    repo: RepoInfo,
 ) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
     """Search for the Carl Community discussion thread. Returns (thread, comments)."""
     query = """
@@ -239,7 +238,7 @@ query($owner: String!, $name: String!, $after: String) {
 """
     cursor: str | None = None
     while True:
-        data = graphql(query, env, owner=repo.owner, name=repo.name, after=cursor)
+        data = graphql(query, owner=repo.owner, name=repo.name, after=cursor)
         page = data["data"]["repository"]["discussions"]
         for disc in page["nodes"]:
             if disc["title"].strip().lower() == THREAD_TITLE.lower():
@@ -250,7 +249,7 @@ query($owner: String!, $name: String!, $after: String) {
         cursor = page["pageInfo"]["endCursor"]
 
 
-def create_commentary_thread(repo: RepoInfo, env: dict[str, str]) -> dict[str, Any]:
+def create_commentary_thread(repo: RepoInfo) -> dict[str, Any]:
     """Create the Carl Community discussion thread."""
     cat_id = repo.category_ids.get(PREFERRED_CATEGORY)
     if not cat_id:
@@ -278,7 +277,7 @@ mutation($repoId: ID!, $catId: ID!, $title: String!, $body: String!) {
         "what shipped, what's in progress, and what's coming up."
     )
     data = graphql(
-        mutation, env,
+        mutation,
         repoId=repo.repository_id,
         catId=cat_id,
         title=THREAD_TITLE,
@@ -288,15 +287,15 @@ mutation($repoId: ID!, $catId: ID!, $title: String!, $body: String!) {
 
 
 def find_or_create_thread(
-    repo: RepoInfo, env: dict[str, str],
+    repo: RepoInfo,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Find existing thread or create one. Returns (thread, comments)."""
-    thread, comments = find_commentary_thread(repo, env)
+    thread, comments = find_commentary_thread(repo)
     if thread:
         log(f"Found thread #{thread['number']}: {thread['url']}")
         return thread, comments
     log("No existing thread found — creating one")
-    thread = create_commentary_thread(repo, env)
+    thread = create_commentary_thread(repo)
     log(f"Created thread #{thread['number']}: {thread['url']}")
     return thread, []
 
@@ -326,7 +325,7 @@ def extract_watermark(comments: list[dict[str, Any]]) -> datetime:
 # ---------------------------------------------------------------------------
 
 
-def fetch_discussions(repo: RepoInfo, env: dict[str, str]) -> list[dict[str, Any]]:
+def fetch_discussions(repo: RepoInfo) -> list[dict[str, Any]]:
     query = """
 query($owner: String!, $name: String!, $after: String) {
   repository(owner: $owner, name: $name) {
@@ -350,7 +349,7 @@ query($owner: String!, $name: String!, $after: String) {
     discussions: list[dict[str, Any]] = []
     cursor: str | None = None
     while True:
-        data = graphql(query, env, owner=repo.owner, name=repo.name, after=cursor)
+        data = graphql(query, owner=repo.owner, name=repo.name, after=cursor)
         page = data["data"]["repository"]["discussions"]
         discussions.extend(page["nodes"])
         if not page["pageInfo"]["hasNextPage"]:
@@ -358,38 +357,38 @@ query($owner: String!, $name: String!, $after: String) {
         cursor = page["pageInfo"]["endCursor"]
 
 
-def fetch_issues(env: dict[str, str]) -> list[dict[str, Any]]:
+def fetch_issues() -> list[dict[str, Any]]:
     result = run_checked(
         [
             "gh", "issue", "list", "--state", "all", "--limit", "200",
             "--json",
             "number,title,state,createdAt,updatedAt,closedAt,labels,milestone,assignees",
         ],
-        cwd=REPO_ROOT, env=env,
+        cwd=REPO_ROOT,
     )
     return json.loads(result.stdout)
 
 
-def fetch_prs(env: dict[str, str]) -> list[dict[str, Any]]:
+def fetch_prs() -> list[dict[str, Any]]:
     result = run_checked(
         [
             "gh", "pr", "list", "--state", "all", "--limit", "200",
             "--json",
             "number,title,state,createdAt,updatedAt,mergedAt,url,author,reviewDecision",
         ],
-        cwd=REPO_ROOT, env=env,
+        cwd=REPO_ROOT,
     )
     return json.loads(result.stdout)
 
 
-def fetch_runs(env: dict[str, str]) -> list[dict[str, Any]]:
+def fetch_runs() -> list[dict[str, Any]]:
     result = run_checked(
         [
             "gh", "run", "list", "--limit", "100",
             "--json",
             "conclusion,createdAt,displayTitle,name,status,url,workflowName",
         ],
-        cwd=REPO_ROOT, env=env,
+        cwd=REPO_ROOT,
     )
     return json.loads(result.stdout)
 
@@ -638,7 +637,7 @@ def call_claude(
 # ---------------------------------------------------------------------------
 
 
-def post_comment(discussion_id: str, body: str, env: dict[str, str]) -> None:
+def post_comment(discussion_id: str, body: str) -> None:
     mutation = """
 mutation($discId: ID!, $body: String!) {
   addDiscussionComment(input: {
@@ -649,7 +648,7 @@ mutation($discId: ID!, $body: String!) {
   }
 }
 """
-    graphql(mutation, env, discId=discussion_id, body=body)
+    graphql(mutation, discId=discussion_id, body=body)
 
 
 # ---------------------------------------------------------------------------
@@ -737,7 +736,6 @@ def output_result(
 
 def main() -> None:
     args = parse_args()
-    env = {**os.environ}
 
     if args.fixtures_dir:
         fixture_path = args.fixtures_dir
@@ -747,8 +745,8 @@ def main() -> None:
         data = load_fixture_inputs(fixture_path)
     else:
         log("Fetching live data from GitHub")
-        repo = repo_info(env)
-        thread, comments = find_or_create_thread(repo, env)
+        repo = repo_info()
+        thread, comments = find_or_create_thread(repo)
         watermark = extract_watermark(comments)
 
         log("Gathering activity data...")
@@ -756,10 +754,10 @@ def main() -> None:
             repo=repo,
             thread=thread,
             thread_comments=comments,
-            discussions=fetch_discussions(repo, env),
-            issues=fetch_issues(env),
-            prs=fetch_prs(env),
-            runs=fetch_runs(env),
+            discussions=fetch_discussions(repo),
+            issues=fetch_issues(),
+            prs=fetch_prs(),
+            runs=fetch_runs(),
             git_log=fetch_git_log(watermark),
             watermark=watermark,
         )
@@ -812,7 +810,7 @@ def main() -> None:
         raise CarlError("No thread available for posting")
 
     log(f"Posting to thread #{data.thread['number']}...")
-    post_comment(data.thread["id"], body, env)
+    post_comment(data.thread["id"], body)
     log("Posted successfully")
 
     result = {
