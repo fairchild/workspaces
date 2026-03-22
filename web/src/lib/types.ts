@@ -4,7 +4,8 @@ export type WorkspaceStatus =
 	| "stopped"
 	| "archived";
 
-export type GitFileStatus = "M" | "A" | "D" | "?" | "R";
+/** Mirrors Swift `GitStatus` raw values from Models.swift */
+export type GitStatus = "M" | "A" | "D" | "?" | "R";
 
 export interface Repo {
 	id: string;
@@ -15,6 +16,7 @@ export interface Repo {
 	lastAccessedAt: string;
 }
 
+/** Subset of Swift Workspace model — flattens sourceRepo relationship into repoId/repoName */
 export interface Workspace {
 	id: string;
 	name: string;
@@ -30,7 +32,7 @@ export interface Workspace {
 
 export interface GitChange {
 	path: string;
-	status: GitFileStatus;
+	status: GitStatus;
 }
 
 export interface WebhookEvent {

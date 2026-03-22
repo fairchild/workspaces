@@ -1,5 +1,7 @@
 import { getSession } from "@/lib/auth-server";
+import Image from "next/image";
 import { redirect } from "next/navigation";
+import { SignOutButton } from "./components/sign-out-button";
 import styles from "./layout.module.css";
 
 export default async function DashboardLayout({
@@ -16,7 +18,7 @@ export default async function DashboardLayout({
 				<span className={styles.brand}>Spaces</span>
 				<div className={styles.user}>
 					{session.user.image && (
-						<img
+						<Image
 							src={session.user.image}
 							alt=""
 							className={styles.avatar}
@@ -25,6 +27,7 @@ export default async function DashboardLayout({
 						/>
 					)}
 					<span className={styles.userName}>{session.user.name}</span>
+					<SignOutButton />
 				</div>
 			</header>
 			{children}

@@ -19,11 +19,22 @@ async function verifySignature(
 	signature: string | null,
 ): Promise<boolean> {
 	const secret = process.env.GITHUB_WEB_WORKSPACES_WEBHOOK_SECRET;
-	if (!secret) return true; // skip verification if no secret configured
+	if (!secret) {
+		if (process.env.NODE_ENV === "production") {
+			console.warn(
+				"[webhooks] GITHUB_WEB_WORKSPACES_WEBHOOK_SECRET is not set — rejecting all webhooks",
+			);
+			return false;
+		}
+		return true;
+	}
 	if (!signature) return false;
 
+	const sigBuf = Buffer.from(signature);
 	const expected = `sha256=${crypto.createHmac("sha256", secret).update(body).digest("hex")}`;
-	return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
+	const expectedBuf = Buffer.from(expected);
+	if (sigBuf.length !== expectedBuf.length) return false;
+	return crypto.timingSafeEqual(sigBuf, expectedBuf);
 }
 
 function summarize(

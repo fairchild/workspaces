@@ -1,13 +1,10 @@
 import styles from "./main-panel.module.css";
 
-export function MainPanel({ userName }: { userName: string }) {
+export function MainPanel() {
 	return (
 		<div className={styles.panel}>
 			<div className={styles.welcome}>
-				<h2 className={styles.greeting}>
-					Hello, <span className={styles.name}>{userName}</span>
-				</h2>
-				<p className={styles.subtitle}>Your workspace overview</p>
+				<h2 className={styles.greeting}>Your workspace overview</h2>
 			</div>
 
 			<div className={styles.grid}>
