@@ -82,6 +82,7 @@ struct NewWorkspaceSheetTests {
         providerID: String,
         guestOS: WorkspaceGuestOS?,
         isAvailable: Bool = true,
+        isLoading: Bool = false,
         statusText: String? = nil,
         statusSeverity: EnvironmentStatusSeverity? = nil
     ) -> WorkspaceEnvironmentSheetOption {
@@ -93,6 +94,7 @@ struct NewWorkspaceSheetTests {
             providerID: providerID,
             guestOS: guestOS,
             isAvailable: isAvailable,
+            isLoading: isLoading,
             statusText: statusText,
             statusSeverity: statusSeverity,
             availabilityReason: isAvailable ? nil : "Unavailable"
