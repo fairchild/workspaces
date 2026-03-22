@@ -6,6 +6,12 @@
 import Foundation
 import SwiftData
 @preconcurrency import WorkspaceManagerCore
+import os.log
+
+private let log = Logger(
+    subsystem: "com.cloudcompute.workspaces",
+    category: "WorkspaceCreation"
+)
 
 @MainActor
 struct SidebarWorkspaceController {
@@ -83,6 +89,10 @@ struct SidebarWorkspaceController {
             includeOnDiskDirectories: provider.descriptor.usesHostWorkspaceFiles
         )
 
+        log.info(
+            "createWorkspace: starting provider=\(providerID) repo=\(repo.name) name=\(reservation.resolvedName)"
+        )
+
         var persistedWorkspace: Workspace?
         let request = WorkspaceProviderCreationRequest(
             repoName: repo.name,
@@ -93,11 +103,13 @@ struct SidebarWorkspaceController {
         )
 
         do {
+            log.info("createWorkspace: calling provider.createWorkspace")
             let finalResult = try await provider.createWorkspace(
                 request: request,
                 workspaceService: workspaceService,
                 progress: progress,
                 persist: { partialResult in
+                    log.info("createWorkspace: persist handler called, hopping to MainActor")
                     try await MainActor.run {
                         try upsertWorkspace(
                             from: partialResult,
@@ -105,15 +117,18 @@ struct SidebarWorkspaceController {
                             existingWorkspace: &persistedWorkspace
                         )
                     }
+                    log.info("createWorkspace: persist handler upsert complete")
                     await onPersisted?(HostLumeSmokeWorkspaceRecord(result: partialResult))
                 }
             )
 
+            log.info("createWorkspace: provider returned, calling final upsertWorkspace")
             try upsertWorkspace(
                 from: finalResult,
                 repo: repo,
                 existingWorkspace: &persistedWorkspace
             )
+            log.info("createWorkspace: final upsert complete")
             await onPersisted?(HostLumeSmokeWorkspaceRecord(result: finalResult))
 
             guard let persistedWorkspace else {
@@ -121,6 +136,7 @@ struct SidebarWorkspaceController {
             }
 
             await Self.nameReservationStore.release(reservation)
+            log.info("createWorkspace: success, returning workspace")
             return persistedWorkspace
         } catch {
             if let persistedWorkspace {
@@ -273,8 +289,11 @@ struct SidebarWorkspaceController {
 
     private func saveModelContext(action: String) throws {
         do {
+            log.debug("saveModelContext: \(action)")
             try modelContext.save()
+            log.debug("saveModelContext: \(action) succeeded")
         } catch {
+            log.error("saveModelContext: \(action) failed: \(error.localizedDescription)")
             modelContext.rollback()
             throw ControllerError.message("Failed to \(action): \(error.localizedDescription)")
         }
