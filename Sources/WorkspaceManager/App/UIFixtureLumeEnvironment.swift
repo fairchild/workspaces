@@ -333,10 +333,6 @@ actor UIFixtureLumeWorkspaceProvider: WorkspaceProviderProtocol {
     private let workspacesRoot: URL
     private let stepDelayNanoseconds: UInt64 = 450_000_000
     private var statusesByRemoteID: [String: WorkspaceStatus] = [:]
-    /// Snapshot captured during `setupRequirement(for:)` — reused by
-    /// `performSetup(progress:)` to avoid a redundant daemon probe.
-    private var cachedSetupSnapshot: LumeRuntimeSnapshot?
-
     nonisolated let descriptor = WorkspaceProviderDescriptor(
         id: LumeWorkspaceProvider.identifier,
         displayName: "Lume VM",
@@ -543,7 +539,6 @@ extension UIFixtureLumeWorkspaceProvider: WorkspaceProviderSetupCapable {
         for action: WorkspaceProviderSetupAction
     ) async throws -> WorkspaceProviderSetupRequirement? {
         let snapshot = await runtimeService.snapshot()
-        cachedSetupSnapshot = snapshot
 
         switch snapshot.state {
         case .ready:
@@ -611,15 +606,7 @@ extension UIFixtureLumeWorkspaceProvider: WorkspaceProviderSetupCapable {
     }
 
     func performSetup(progress: WorkspaceProviderSetupProgressHandler?) async throws {
-        // Consume the snapshot captured in setupRequirement(for:) to avoid a
-        // redundant daemon probe in the normal confirm-and-continue flow.
-        let snapshot: LumeRuntimeSnapshot
-        if let cached = cachedSetupSnapshot {
-            snapshot = cached
-            cachedSetupSnapshot = nil
-        } else {
-            snapshot = await runtimeService.snapshot()
-        }
+        let snapshot = await runtimeService.snapshot()
         let progressHandler: LumeRuntimeProgressHandler = { step in
             await progress?(
                 WorkspaceProviderSetupProgress(
