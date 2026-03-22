@@ -6,10 +6,9 @@ import WorkspaceManagerCore
 
 @Suite("SidebarRepoSortController")
 struct SidebarRepoSortControllerTests {
-    private let controller = SidebarRepoSortController()
-
     @Test("Alphabetical sort orders repos by name")
     func alphabeticalSortOrdersReposByName() {
+        let controller = SidebarRepoSortController()
         let zed = Repo(name: "zed", localPath: URL(fileURLWithPath: "/tmp/zed"))
         let alpha = Repo(name: "Alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))
         let beta = Repo(name: "beta", localPath: URL(fileURLWithPath: "/tmp/beta"))
@@ -25,6 +24,7 @@ struct SidebarRepoSortControllerTests {
 
     @Test("Last accessed sort uses a stable snapshot until refreshed")
     func lastAccessedSortUsesStableSnapshot() {
+        var controller = SidebarRepoSortController()
         let alpha = Repo(
             name: "alpha",
             localPath: URL(fileURLWithPath: "/tmp/alpha"),
@@ -50,6 +50,7 @@ struct SidebarRepoSortControllerTests {
 
     @Test("Repos missing from the snapshot fall to the bottom alphabetically")
     func reposMissingFromSnapshotFallToBottom() {
+        var controller = SidebarRepoSortController()
         let alpha = Repo(
             name: "alpha",
             localPath: URL(fileURLWithPath: "/tmp/alpha"),

@@ -27,8 +27,20 @@ enum SidebarRepoSortMode: String, CaseIterable, Identifiable {
 }
 
 struct SidebarRepoSortController {
-    func snapshot(for repos: [Repo]) -> [UUID: Date] {
-        Dictionary(uniqueKeysWithValues: repos.map { ($0.id, $0.lastAccessedAt) })
+    private var cachedSnapshot: [UUID: Date] = [:]
+    private var lastRepoIDSet: Set<UUID> = []
+
+    mutating func snapshot(for repos: [Repo]) -> [UUID: Date] {
+        let repoIDs = Set(repos.map(\.id))
+        if repoIDs != lastRepoIDSet {
+            lastRepoIDSet = repoIDs
+            cachedSnapshot = Dictionary(uniqueKeysWithValues: repos.map { ($0.id, $0.lastAccessedAt) })
+        } else {
+            for repo in repos {
+                cachedSnapshot[repo.id] = repo.lastAccessedAt
+            }
+        }
+        return cachedSnapshot
     }
 
     func sortedRepos(
