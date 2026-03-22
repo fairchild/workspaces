@@ -407,23 +407,6 @@ def fetch_git_log(since: datetime) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Filtering
-# ---------------------------------------------------------------------------
-
-
-def filter_since(items: list[dict[str, Any]], since: datetime, time_fields: list[str]) -> list[dict[str, Any]]:
-    """Keep items where any of the time_fields is after `since`."""
-    result = []
-    for item in items:
-        for field_name in time_fields:
-            ts = parse_datetime(item.get(field_name))
-            if ts and ts > since:
-                result.append(item)
-                break
-    return result
-
-
-# ---------------------------------------------------------------------------
 # Activity scoring
 # ---------------------------------------------------------------------------
 
@@ -774,9 +757,9 @@ def main() -> None:
             thread=thread,
             thread_comments=comments,
             discussions=fetch_discussions(repo, env),
-            issues=filter_since(fetch_issues(env), watermark, ["createdAt", "updatedAt", "closedAt"]),
-            prs=filter_since(fetch_prs(env), watermark, ["createdAt", "updatedAt", "mergedAt"]),
-            runs=filter_since(fetch_runs(env), watermark, ["createdAt"]),
+            issues=fetch_issues(env),
+            prs=fetch_prs(env),
+            runs=fetch_runs(env),
             git_log=fetch_git_log(watermark),
             watermark=watermark,
         )
