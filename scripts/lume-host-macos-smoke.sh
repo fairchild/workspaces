@@ -125,7 +125,7 @@ copy_supporting_logs() {
     fi
 }
 
-cleanup_success_artifacts() {
+cleanup_vm() {
     local lume_bin="$HOME/.local/bin/lume"
     if [[ -n "$VM_NAME" && -x "$lume_bin" ]]; then
         local -a lume_args=()
@@ -135,7 +135,9 @@ cleanup_success_artifacts() {
         "$lume_bin" stop "$VM_NAME" "${lume_args[@]}" >/dev/null 2>&1 || true
         "$lume_bin" delete "$VM_NAME" "${lume_args[@]}" --force >/dev/null 2>&1 || true
     fi
+}
 
+cleanup_success_artifacts() {
     if [[ -n "$WORKSPACE_PATH" && -d "$WORKSPACE_PATH" ]]; then
         chmod -R u+w "$WORKSPACE_PATH" >/dev/null 2>&1 || true
         rm -rf "$WORKSPACE_PATH" >/dev/null 2>&1 || true
@@ -228,6 +230,7 @@ finalize_and_exit() {
     refresh_state_from_events
     copy_supporting_logs
 
+    cleanup_vm
     if [[ "$RUN_STATUS" == "passed" ]]; then
         cleanup_success_artifacts
     fi
