@@ -1,11 +1,11 @@
 ---
-status: pending
+status: done
 category: plan
-pr: null
-branch: null
-score: null
-retro_summary: null
-completed: null
+pr: 188
+branch: worktree-webui
+score: 4
+retro_summary: "Phase 2 web dashboard delivered — auth, layout, webhooks, and Turso DB. Scope evolved from landing page to full dashboard."
+completed: 2026-03-22
 ---
 
 # Landing Page

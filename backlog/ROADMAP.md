@@ -214,7 +214,8 @@ Planning note:
 ### Icebox (P3)
 
 - Sparkle auto-update: `backlog/sparkle-autoupdate-plan.md`
-- landing page / marketing site: `backlog/landing-page.md`
+- landing page / marketing site: completed in PR #188, moved to `backlog/done/landing-page.md`
+- web dashboard Phase 3 follow-ups: `backlog/web-dashboard-phase3-followups.md`
 - internal skills/task-list work: `backlog/swift-dev-skills-task-list.md`
 
 ---
@@ -284,7 +285,8 @@ This sequence follows the priority rule above: core promise first, dependency cl
 | Isolation strategy options | Plan | P2 | `backlog/isolation-strategies.md` |
 | tmux per-worktree support | Plan | P3 | `backlog/tmux-support_plan.md` |
 | Sparkle auto-update decision record | Plan | P3 | `backlog/sparkle-autoupdate-plan.md` |
-| Landing page | Plan | P3 | `backlog/landing-page.md` |
+| Landing page + web dashboard | Plan | Done | `backlog/done/landing-page.md` |
+| Web dashboard Phase 3 follow-ups | Follow-up | P2 | `backlog/web-dashboard-phase3-followups.md` |
 | Swift dev skills task-list | Task List | P3 | `backlog/swift-dev-skills-task-list.md` |
 
 ---
