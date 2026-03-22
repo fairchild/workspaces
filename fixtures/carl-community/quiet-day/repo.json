@@ -1,0 +1,9 @@
+{
+  "owner": "workspaces",
+  "name": "workspaces",
+  "repository_id": "R_test123",
+  "category_ids": {
+    "show-and-tell": "DC_test_showandtell",
+    "general": "DC_test_general"
+  }
+}
