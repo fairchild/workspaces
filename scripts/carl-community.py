@@ -208,45 +208,15 @@ query($owner: String!, $name: String!) {
 # ---------------------------------------------------------------------------
 
 
-def find_commentary_thread(
-    repo: RepoInfo,
+def extract_thread(
+    discussions: list[dict[str, Any]],
 ) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
-    """Search for the Carl Community discussion thread. Returns (thread, comments)."""
-    query = """
-query($owner: String!, $name: String!, $after: String) {
-  repository(owner: $owner, name: $name) {
-    discussions(first: 50, after: $after, states: OPEN) {
-      pageInfo { hasNextPage endCursor }
-      nodes {
-        id
-        number
-        url
-        title
-        category { slug }
-        comments(last: 10) {
-          nodes {
-            id
-            body
-            createdAt
-            author { login }
-          }
-        }
-      }
-    }
-  }
-}
-"""
-    cursor: str | None = None
-    while True:
-        data = graphql(query, owner=repo.owner, name=repo.name, after=cursor)
-        page = data["data"]["repository"]["discussions"]
-        for disc in page["nodes"]:
-            if disc["title"].strip().lower() == THREAD_TITLE.lower():
-                comments = disc.get("comments", {}).get("nodes", [])
-                return disc, comments
-        if not page["pageInfo"]["hasNextPage"]:
-            return None, []
-        cursor = page["pageInfo"]["endCursor"]
+    """Find the Carl Community thread from an already-fetched discussion list."""
+    for disc in discussions:
+        if disc.get("title", "").strip().lower() == THREAD_TITLE.lower():
+            comments = disc.get("comments", {}).get("nodes", [])
+            return disc, comments
+    return None, []
 
 
 def create_commentary_thread(repo: RepoInfo) -> dict[str, Any]:
@@ -287,10 +257,10 @@ mutation($repoId: ID!, $catId: ID!, $title: String!, $body: String!) {
 
 
 def find_or_create_thread(
-    repo: RepoInfo,
+    repo: RepoInfo, discussions: list[dict[str, Any]],
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Find existing thread or create one. Returns (thread, comments)."""
-    thread, comments = find_commentary_thread(repo)
+    thread, comments = extract_thread(discussions)
     if thread:
         log(f"Found thread #{thread['number']}: {thread['url']}")
         return thread, comments
@@ -746,15 +716,17 @@ def main() -> None:
     else:
         log("Fetching live data from GitHub")
         repo = repo_info()
-        thread, comments = find_or_create_thread(repo)
-        watermark = extract_watermark(comments)
 
         log("Gathering activity data...")
+        discussions = fetch_discussions(repo)
+        thread, comments = find_or_create_thread(repo, discussions)
+        watermark = extract_watermark(comments)
+
         data = ActivityData(
             repo=repo,
             thread=thread,
             thread_comments=comments,
-            discussions=fetch_discussions(repo),
+            discussions=discussions,
             issues=fetch_issues(),
             prs=fetch_prs(),
             runs=fetch_runs(),
