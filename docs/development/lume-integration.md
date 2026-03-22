@@ -213,8 +213,8 @@ launchctl list | grep lume
 lsof -nP -iTCP:7777 -sTCP:LISTEN
 
 # Daemon logs
-tail -50 /tmp/lume_daemon.log
-tail -50 /tmp/lume_daemon.error.log
+tail -50 ~/Library/Logs/lume/daemon.log
+tail -50 ~/Library/Logs/lume/daemon.error.log
 
 # Nuclear recovery: unload, reload
 launchctl unload ~/Library/LaunchAgents/com.trycua.lume_daemon.plist

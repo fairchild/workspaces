@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # ==========================================================================
 # lume-ensure-daemon.sh - Ensure the Lume daemon is running and reachable
 # ==========================================================================
@@ -27,6 +27,7 @@ LAUNCH_AGENT_LABEL="com.trycua.lume_daemon"
 LAUNCH_AGENT_PLIST="$HOME/Library/LaunchAgents/${LAUNCH_AGENT_LABEL}.plist"
 LUME_APP_BIN="$HOME/.local/share/lume/lume.app/Contents/MacOS/lume"
 LUME_BIN="${LUME_BIN:-$HOME/.local/bin/lume}"
+LUME_LOG_DIR="$HOME/Library/Logs/lume"
 
 log() {
     [[ "$QUIET" == "1" ]] && return
@@ -93,6 +94,7 @@ if [[ ! -f "$LAUNCH_AGENT_PLIST" ]]; then
     }
     log "creating LaunchAgent plist at $LAUNCH_AGENT_PLIST"
     mkdir -p "$(dirname "$LAUNCH_AGENT_PLIST")"
+    mkdir -p "$LUME_LOG_DIR"
     cat > "$LAUNCH_AGENT_PLIST" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -112,9 +114,9 @@ if [[ ! -f "$LAUNCH_AGENT_PLIST" ]]; then
     <key>KeepAlive</key>
     <true/>
     <key>StandardOutPath</key>
-    <string>/tmp/lume_daemon.log</string>
+    <string>${LUME_LOG_DIR}/daemon.log</string>
     <key>StandardErrorPath</key>
-    <string>/tmp/lume_daemon.error.log</string>
+    <string>${LUME_LOG_DIR}/daemon.error.log</string>
 </dict>
 </plist>
 PLIST
@@ -132,9 +134,10 @@ LUME_SERVE_BIN="$(resolve_lume_bin)" || {
     err "no lume binary found — install lume first"
     exit 1
 }
+mkdir -p "$LUME_LOG_DIR"
 log "starting daemon directly: $LUME_SERVE_BIN serve --port $PORT"
 nohup "$LUME_SERVE_BIN" serve --port "$PORT" \
-    > /tmp/lume_daemon.log 2> /tmp/lume_daemon.error.log &
+    > "$LUME_LOG_DIR/daemon.log" 2> "$LUME_LOG_DIR/daemon.error.log" &
 
 if wait_for_daemon; then
     log "daemon started directly (not managed by launchd)"
@@ -142,5 +145,5 @@ if wait_for_daemon; then
 fi
 
 err "daemon failed to start after all recovery attempts"
-err "check /tmp/lume_daemon.log and /tmp/lume_daemon.error.log"
+err "check $LUME_LOG_DIR/daemon.log and $LUME_LOG_DIR/daemon.error.log"
 exit 1
