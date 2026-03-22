@@ -12,6 +12,7 @@ Last updated: `2026-03-22T10:29:08-0700`
 
 ## Investigated Delta
 
+- Collection context matters here: the February refinement rows above came from a native-host refinement baseline, while the March incident/recovery rows were gathered in the agent/automation VM lane. Use March-to-March comparisons for current regression tracking unless the February baseline is re-run in the same environment.
 - Portfolio size changed from discovered=18 to discovered=18, but `repo_hydration` only moved -0.19 ms (-13.3%) and remains within the `<= 25 ms` gate.
 - The large regression is concentrated in terminal readiness: `launch_to_first_prompt` changed +136.88 ms (+10.3%) and `repo_click_to_focus` changed +252.94 ms (+29.5%).
 - The post-activation ready-to-type gap changed +285.00 ms (+41.9%), from `681.00 ms` to `966.00 ms`. That points to terminal focus/readiness after activation as the main place the extra time moved.
@@ -53,6 +54,7 @@ current 1110.01 ms (444.0% of target)
 
 - OS: `26.2` (build `25C56`)
 - Hardware: `arm64` / `Mac16,13`
+- Collection environment: March 2026 incident/recovery runs in this dashboard were gathered in the agent/automation VM lane; the February refinement rows came from a native-host baseline.
 - Portfolio context: discovered=18 imported=0
 - Sample setup: runs=5, sleep=8s
 
