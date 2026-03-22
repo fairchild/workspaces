@@ -37,9 +37,18 @@ When changing terminal/keyboard/sidebar behavior, use this loop so future sessio
    - `mise run dev-launch`
    - `mise run dev-watch`
    - `mise run dev-smoke`
+   - `mise run dev-lume-ensure`
    - `mise run dev-lume-preflight`
    - `mise run dev-lume-standalone-validate`
    - `mise run dev-lume-macos-smoke`
+
+For Lume daemon reliability:
+
+1. Before any Lume work, ensure the daemon is up:
+   - `mise run dev-lume-ensure` (idempotent, self-healing)
+   - see `docs/development/lume-integration.md` § "Daemon Reliability" for diagnostics and failure modes
+2. The daemon must run from the **installed** binary, not a debug build
+3. The LaunchAgent has `KeepAlive: true` so launchd restarts it on crash
 
 For real-host Lume validation:
 
@@ -167,6 +176,7 @@ mise run test              # Test
 | Debug an issue | docs/development/troubleshooting.md | - |
 | Terminal keyboard focus | docs/development/solution-terminal-keyboard.md | - |
 | Lume runner / evidence store | docs/development/lume-runner-setup.md | - |
+| Lume daemon reliability | docs/development/lume-integration.md § "Daemon Reliability" | - |
 | Roadmap/planning | backlog/ROADMAP.md | - |
 | Deferred work items | backlog/*.md | - |
 
