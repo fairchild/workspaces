@@ -1,40 +1,20 @@
-import { bot } from "@/lib/bot";
-import { after } from "next/server";
-
+// TODO: re-enable chat bot integration in next PR
 export async function POST(
 	request: Request,
 	{ params }: { params: Promise<{ platform: string }> },
 ): Promise<Response> {
 	const { platform } = await params;
-	const webhookHandler = bot.webhooks[platform as keyof typeof bot.webhooks] as
-		| ((
-				req: Request,
-				opts: { waitUntil: (task: Promise<unknown>) => void },
-		  ) => Promise<Response>)
-		| undefined;
-	if (!webhookHandler) {
-		return new Response(`Unknown platform: ${platform}`, { status: 404 });
-	}
-	return webhookHandler(request, {
-		waitUntil: (task: Promise<unknown>) => after(() => task),
+	return new Response(`webhook handler for ${platform} not yet configured`, {
+		status: 501,
 	});
 }
 
 export async function GET(
-	request: Request,
+	_request: Request,
 	{ params }: { params: Promise<{ platform: string }> },
 ): Promise<Response> {
 	const { platform } = await params;
-	const webhookHandler = bot.webhooks[platform as keyof typeof bot.webhooks] as
-		| ((
-				req: Request,
-				opts: { waitUntil: (task: Promise<unknown>) => void },
-		  ) => Promise<Response>)
-		| undefined;
-	if (!webhookHandler) {
-		return new Response(`Unknown platform: ${platform}`, { status: 404 });
-	}
-	return webhookHandler(request, {
-		waitUntil: (task: Promise<unknown>) => after(() => task),
+	return new Response(`webhook handler for ${platform} not yet configured`, {
+		status: 501,
 	});
 }
