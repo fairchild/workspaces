@@ -30,6 +30,7 @@ struct WorkspaceEnvironmentSheetOption: Identifiable {
     let providerID: String
     let guestOS: WorkspaceGuestOS?
     let isAvailable: Bool
+    let isLoading: Bool
     let statusText: String?
     let statusSeverity: EnvironmentStatusSeverity?
     let availabilityReason: String?
@@ -324,11 +325,16 @@ private struct EnvironmentSelectionRow: View {
                         Text(option.title)
                             .font(.body.weight(.semibold))
 
+                        if option.isLoading {
+                            ProgressView()
+                                .controlSize(.mini)
+                        }
+
                         if let statusText = option.statusText {
                             Text(statusText)
                                 .font(.caption2.weight(.medium))
                                 .foregroundStyle(statusColor)
-                        } else if !option.isAvailable {
+                        } else if !option.isAvailable && !option.isLoading {
                             Text("Unavailable")
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
