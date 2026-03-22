@@ -2,6 +2,12 @@ import AppKit
 import Foundation
 import WorkspaceManagerCore
 
+/// Single entry point for all terminal focus restoration flows.
+///
+/// All focus restoration — startup, selection-driven, window-did-become-key, and
+/// app-did-become-active — routes through this coordinator. App activation
+/// (NSApp.activate) lives here exclusively; TerminalFocusManager handles only
+/// the low-level makeFirstResponder mechanics.
 @MainActor
 final class TerminalFocusCoordinator: ObservableObject {
     private struct PendingFocusRequest {
@@ -13,6 +19,7 @@ final class TerminalFocusCoordinator: ObservableObject {
 
     private weak var attachedSurfaceStore: HostTerminalSurfaceStore?
     private var pendingRepoFocusMeasurementSessionID: UUID?
+    private var pendingWorkspaceFocusMeasurementSessionID: UUID?
     private var pendingFocusRequest: PendingFocusRequest?
 
     init() {
@@ -21,6 +28,9 @@ final class TerminalFocusCoordinator: ObservableObject {
         }
         TerminalFocusManager.shared.onWindowDidBecomeKey = { [weak self] in
             self?.retryPendingFocus(reason: "window_did_become_key")
+        }
+        TerminalFocusManager.shared.onAppDidBecomeActive = { [weak self] in
+            self?.restoreFocusOnAppActivation()
         }
     }
 
@@ -79,7 +89,6 @@ final class TerminalFocusCoordinator: ObservableObject {
         guard let targetSessionID else {
             pendingFocusRequest = nil
             requestFallbackFocus(
-                activateApp: activateApp,
                 surfaceStore: surfaceStore,
                 activeSessionID: activeSessionID
             )
@@ -93,6 +102,18 @@ final class TerminalFocusCoordinator: ObservableObject {
             onTargetFocused: onTargetFocused
         )
         attemptPendingFocus(using: surfaceStore, reason: "request_started")
+    }
+
+    /// Restore focus for the currently tracked terminal when the app becomes active.
+    /// Called from AppDelegate.applicationDidBecomeActive instead of going directly
+    /// through TerminalFocusManager.
+    func restoreFocusOnAppActivation() {
+        if pendingFocusRequest != nil {
+            // Coordinator already has a pending request — let it drive.
+            return
+        }
+        guard let terminal = TerminalFocusManager.shared.focusedTerminal else { return }
+        TerminalFocusManager.shared.requestFocus(for: terminal)
     }
 
     func beginRepoClickMeasurement(sessionID: UUID, repoPath: String) {
@@ -130,6 +151,41 @@ final class TerminalFocusCoordinator: ObservableObject {
         )
     }
 
+    func beginWorkspaceClickMeasurement(sessionID: UUID, workspacePath: String) {
+        if let pendingSessionID = pendingWorkspaceFocusMeasurementSessionID,
+            pendingSessionID != sessionID
+        {
+            PerformanceSignposts.cancelWorkspaceClickToFocusedInputIfNeeded(
+                sessionID: pendingSessionID,
+                reason: "replaced_by_new_workspace_click"
+            )
+        }
+
+        pendingWorkspaceFocusMeasurementSessionID = sessionID
+        PerformanceSignposts.beginWorkspaceClickToFocusedInput(
+            sessionID: sessionID,
+            workspacePath: workspacePath
+        )
+    }
+
+    func completeWorkspaceClickMeasurement(sessionID: UUID, outcome: String) {
+        guard pendingWorkspaceFocusMeasurementSessionID == sessionID else { return }
+        pendingWorkspaceFocusMeasurementSessionID = nil
+        PerformanceSignposts.endWorkspaceClickToFocusedInputIfNeeded(
+            sessionID: sessionID,
+            outcome: outcome
+        )
+    }
+
+    func cancelPendingWorkspaceClickMeasurement(reason: String) {
+        guard let sessionID = pendingWorkspaceFocusMeasurementSessionID else { return }
+        pendingWorkspaceFocusMeasurementSessionID = nil
+        PerformanceSignposts.cancelWorkspaceClickToFocusedInputIfNeeded(
+            sessionID: sessionID,
+            reason: reason
+        )
+    }
+
     func cancelPendingFocusRequest(reason: String) {
         guard let pendingFocusRequest else { return }
         self.pendingFocusRequest = nil
@@ -142,6 +198,9 @@ final class TerminalFocusCoordinator: ObservableObject {
         )
         if pendingRepoFocusMeasurementSessionID == pendingFocusRequest.sessionID {
             cancelPendingRepoClickMeasurement(reason: reason)
+        }
+        if pendingWorkspaceFocusMeasurementSessionID == pendingFocusRequest.sessionID {
+            cancelPendingWorkspaceClickMeasurement(reason: reason)
         }
     }
 
@@ -164,16 +223,33 @@ final class TerminalFocusCoordinator: ObservableObject {
         }
 
         InvestigationDiagnostics.emitFocus(
+            phase: "focus_surface_resolution",
+            fields: focusFields.merging(["sub_span": "focus_surface_resolution"]) { _, new in new }
+        )
+        InvestigationDiagnostics.emitFocus(
             phase: "coordinator_target_terminal_resolved",
             fields: focusFields
         )
+        InvestigationDiagnostics.emitFocus(
+            phase: "focus_request_to_first_responder",
+            fields: focusFields.merging([
+                "sub_span": "focus_request_to_first_responder",
+                "status": "started",
+            ]) { _, new in new }
+        )
         TerminalFocusManager.shared.requestFocus(
             for: terminal,
-            activateApp: pendingFocusRequest.activateApp,
             onFocused: { [weak self] in
                 guard let self else { return }
                 guard self.pendingFocusRequest?.sessionID == pendingFocusRequest.sessionID else { return }
                 self.pendingFocusRequest = nil
+                InvestigationDiagnostics.emitFocus(
+                    phase: "focus_request_to_first_responder",
+                    fields: focusFields.merging([
+                        "sub_span": "focus_request_to_first_responder",
+                        "status": "completed",
+                    ]) { _, new in new }
+                )
                 InvestigationDiagnostics.emitFocus(
                     phase: "coordinator_target_focused",
                     fields: focusFields
@@ -184,13 +260,11 @@ final class TerminalFocusCoordinator: ObservableObject {
     }
 
     private func requestFallbackFocus(
-        activateApp: Bool,
         surfaceStore: HostTerminalSurfaceStore,
         activeSessionID: UUID?
     ) {
         let focusFields = [
-            "activate_app": activateApp ? "true" : "false",
-            "active_session": activeSessionID?.uuidString ?? "none",
+            "active_session": activeSessionID?.uuidString ?? "none"
         ]
 
         if let activeSessionID,
@@ -200,10 +274,7 @@ final class TerminalFocusCoordinator: ObservableObject {
                 phase: "coordinator_active_terminal_resolved",
                 fields: focusFields
             )
-            TerminalFocusManager.shared.requestFocus(
-                for: terminal,
-                activateApp: activateApp
-            )
+            TerminalFocusManager.shared.requestFocus(for: terminal)
             return
         }
 
@@ -212,10 +283,7 @@ final class TerminalFocusCoordinator: ObservableObject {
                 phase: "coordinator_focused_terminal_fallback",
                 fields: focusFields
             )
-            TerminalFocusManager.shared.requestFocus(
-                for: terminal,
-                activateApp: activateApp
-            )
+            TerminalFocusManager.shared.requestFocus(for: terminal)
             return
         }
 

@@ -151,14 +151,35 @@ struct WorkspaceEnvironmentOptionsController {
             registry: registry
         )
 
-        let deferredProviders = registry.providers.filter { $0.descriptor.sheetStatusPolicy == .deferred }
+        let deferredProviders = registry.providers.filter {
+            $0.descriptor.sheetStatusPolicy == .deferred
+        }
         let deferredRegistry = WorkspaceProviderRegistry(providers: deferredProviders)
-        let deferredAvailabilityByID = await refreshProviderAvailability(
+        let needsLumeSnapshot =
+            registry.provider(for: LumeWorkspaceProvider.identifier) != nil
+        let capturedExistingAvailability = resolvedState.providerAvailabilityByID
+        let capturedExistingSnapshot = resolvedState.lumeRuntimeSnapshot
+
+        // Run provider availability and Lume snapshot refresh in parallel
+        // instead of sequentially — avoids stacking two 5s timeout windows.
+        async let availabilityResult = refreshProviderAvailability(
             registry: deferredRegistry,
-            existingAvailabilityByID: resolvedState.providerAvailabilityByID,
+            existingAvailabilityByID: capturedExistingAvailability,
             trigger: trigger,
             timeoutNanoseconds: timeoutNanoseconds
         )
+        async let snapshotResult: LumeRuntimeSnapshot? =
+            needsLumeSnapshot
+            ? refreshLumeRuntimeSnapshot(
+                runtimeService: runtimeService,
+                existingSnapshot: capturedExistingSnapshot,
+                trigger: trigger,
+                timeoutNanoseconds: timeoutNanoseconds
+            )
+            : nil
+
+        let deferredAvailabilityByID = await availabilityResult
+        let lumeSnapshot = await snapshotResult
 
         for provider in registry.providers {
             let descriptor = provider.descriptor
@@ -180,17 +201,11 @@ struct WorkspaceEnvironmentOptionsController {
             resolvedState = resolvedState.updating(providerState)
         }
 
-        if registry.provider(for: LumeWorkspaceProvider.identifier) != nil {
-            let snapshot = await refreshLumeRuntimeSnapshot(
-                runtimeService: runtimeService,
-                existingSnapshot: resolvedState.lumeRuntimeSnapshot,
-                trigger: trigger,
-                timeoutNanoseconds: timeoutNanoseconds
-            )
+        if needsLumeSnapshot {
             let descriptor = LumeWorkspaceProvider.providerDescriptor
             let providerState = resolvedState.providerState(for: descriptor).replacing(
                 isRefreshing: false,
-                detail: .lume(snapshot: snapshot)
+                detail: .lume(snapshot: lumeSnapshot)
             )
             resolvedState = resolvedState.updating(providerState)
         }
@@ -389,6 +404,7 @@ struct WorkspaceEnvironmentOptionsController {
             providerID: LocalWorkspaceProvider.identifier,
             guestOS: nil,
             isAvailable: availability.isAvailable,
+            isLoading: false,
             statusText: nil,
             statusSeverity: nil,
             availabilityReason: availability.reason
@@ -415,6 +431,7 @@ struct WorkspaceEnvironmentOptionsController {
             providerID: DaytonaWorkspaceProvider.identifier,
             guestOS: .linux,
             isAvailable: availability.isAvailable,
+            isLoading: providerState.isRefreshing,
             statusText: providerState.isRefreshing && providerState.availability == nil
                 ? "Checking cloud runtime" : nil,
             statusSeverity: nil,
@@ -449,6 +466,7 @@ struct WorkspaceEnvironmentOptionsController {
             providerID: LumeWorkspaceProvider.identifier,
             guestOS: .macOS,
             isAvailable: isAvailable,
+            isLoading: providerState.isRefreshing,
             statusText: macOSRuntimeStatusText(providerState: providerState),
             statusSeverity: macOSRuntimeStatusSeverity(snapshot: snapshot),
             availabilityReason: availabilityReason
@@ -469,6 +487,7 @@ struct WorkspaceEnvironmentOptionsController {
             providerID: LumeWorkspaceProvider.identifier,
             guestOS: .linux,
             isAvailable: availability.isAvailable,
+            isLoading: providerState.isRefreshing,
             statusText: lumeRuntimeStatusText(providerState: providerState),
             statusSeverity: lumeRuntimeStatusSeverity(snapshot: snapshot),
             availabilityReason: availability.reason
@@ -486,6 +505,7 @@ struct WorkspaceEnvironmentOptionsController {
             repo: repo,
             sheetState: sheetState
         )
+        let providerState = sheetState.providerState(for: descriptor)
 
         return WorkspaceEnvironmentSheetOption(
             title: genericEnvironmentTitle(for: descriptor, guestOS: guestOS),
@@ -495,6 +515,7 @@ struct WorkspaceEnvironmentOptionsController {
             providerID: descriptor.id,
             guestOS: guestOS,
             isAvailable: availability.isAvailable,
+            isLoading: providerState.isRefreshing,
             statusText: nil,
             statusSeverity: nil,
             availabilityReason: availability.reason

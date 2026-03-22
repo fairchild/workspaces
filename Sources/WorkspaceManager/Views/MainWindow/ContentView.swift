@@ -36,6 +36,7 @@ struct ContentView: View {
     @State private var landingErrorMessage: String?
     @State private var workspaceEnvironmentSheetState = WorkspaceEnvironmentSheetState.empty
     @State private var didScheduleInitialWorkspaceStatusSync = false
+    @State private var accessTimestampSaveTask: Task<Void, Never>?
     @StateObject private var rightPaneStateStore = RightPaneStateStore()
     @StateObject private var webSurfaceStore = WebSurfaceStore()
     @StateObject private var terminalFocusCoordinator = TerminalFocusCoordinator()
@@ -45,7 +46,7 @@ struct ContentView: View {
         .resolvingSymlinksInPath()
     private let bootstrapController = MainWindowBootstrapController()
     private let inspectorStateController = InspectorStateController()
-    private let mainSelectionCoordinator = MainSelectionCoordinator()
+    @State private var mainSelectionCoordinator = MainSelectionCoordinator()
     private let navigationStateController = MainWindowNavigationStateController()
     private let surfaceResolutionController = MainWindowSurfaceResolutionController()
     private let presentationController = MainWindowPresentationController()
@@ -76,15 +77,15 @@ struct ContentView: View {
     }
 
     private var currentSelectedWorkspace: Workspace? {
-        mainSelectionCoordinator.workspace(with: viewState.selectedWorkspace?.workspaceID, in: repos)
+        mainSelectionCoordinator.cachedWorkspace(with: viewState.selectedWorkspace?.workspaceID)
     }
 
     private var currentSelectedWebSource: WebSource? {
-        mainSelectionCoordinator.webSource(with: viewState.selectedWebSource?.webSourceID, in: webSources)
+        mainSelectionCoordinator.cachedWebSource(with: viewState.selectedWebSource?.webSourceID)
     }
 
     private var currentSelectedRepoForLanding: Repo? {
-        mainSelectionCoordinator.repo(with: viewState.selectedRepoForLandingID, in: repos)
+        mainSelectionCoordinator.cachedRepo(with: viewState.selectedRepoForLandingID)
     }
 
     private var normalizedRepoPathSnapshot: [String] {
@@ -409,6 +410,7 @@ struct ContentView: View {
     private var splitViewWithLifecycleHandlers: some View {
         splitViewWithToolbar
             .onAppear {
+                mainSelectionCoordinator.rebuildCachesIfNeeded(repos: repos, webSources: webSources)
                 ensureInitialHostSession()
                 resolveSurfaceLifecycle()
                 pruneRightPaneState()
@@ -432,10 +434,12 @@ struct ContentView: View {
                 resolveSurfaceLifecycle()
             }
             .onChange(of: repoIDSnapshot) { _, _ in
+                mainSelectionCoordinator.rebuildCachesIfNeeded(repos: repos, webSources: webSources)
                 reconcileSelectionAfterModelChange()
                 resolveSurfaceLifecycle()
             }
             .onChange(of: workspaceIDSnapshot) { _, _ in
+                mainSelectionCoordinator.rebuildCachesIfNeeded(repos: repos, webSources: webSources)
                 reconcileSelectionAfterModelChange()
                 resolveSurfaceLifecycle()
             }
@@ -443,6 +447,7 @@ struct ContentView: View {
                 hostTerminalState.pruneRepoSessions(validRepoPaths: Set(paths))
             }
             .onChange(of: webSourceIDSnapshot) { _, _ in
+                mainSelectionCoordinator.rebuildCachesIfNeeded(repos: repos, webSources: webSources)
                 reconcileSelectionAfterModelChange()
                 resolveSurfaceLifecycle()
             }
@@ -1074,10 +1079,20 @@ struct ContentView: View {
                 key: .hostPath(workspaceDirectory.path),
                 directory: launchDirectory
             )
+            terminalFocusCoordinator.beginWorkspaceClickMeasurement(
+                sessionID: session.id,
+                workspacePath: workspaceDirectory.path
+            )
             terminalFocusCoordinator.requestMainTerminalFocus(
                 targetSessionID: session.id,
                 surfaceStore: hostTerminalState.surfaceStore,
-                activeSessionID: hostTerminalState.activeSessionID
+                activeSessionID: hostTerminalState.activeSessionID,
+                onTargetFocused: {
+                    terminalFocusCoordinator.completeWorkspaceClickMeasurement(
+                        sessionID: session.id,
+                        outcome: "focused"
+                    )
+                }
             )
         }
 
@@ -1366,10 +1381,15 @@ struct ContentView: View {
 
     @MainActor
     private func saveAccessTimestampChanges() {
-        do {
-            try modelContext.save()
-        } catch {
-            modelContext.rollback()
+        accessTimestampSaveTask?.cancel()
+        accessTimestampSaveTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(500))
+            guard !Task.isCancelled else { return }
+            do {
+                try modelContext.save()
+            } catch {
+                modelContext.rollback()
+            }
         }
     }
     private func handleTerminalProcessExit(sessionID: UUID) {
@@ -1793,14 +1813,11 @@ struct ContentView: View {
     }
 
     private func focusWorkspaceWindow() {
+        // Window activation only — the coordinator drives terminal focus
+        // via requestMainTerminalFocus called from the selection handlers.
         NSApp.activate(ignoringOtherApps: true)
         let window = NSApp.windows.first(where: \.isVisible) ?? NSApp.windows.first
         window?.makeKeyAndOrderFront(nil)
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-            guard let terminal = TerminalFocusManager.shared.focusedTerminal else { return }
-            TerminalFocusManager.shared.requestFocus(for: terminal)
-        }
     }
 
     private func preferredSessionDirectory(_ preferredDirectory: URL?, inside root: URL) -> URL {

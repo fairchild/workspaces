@@ -458,12 +458,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         NSLog("[AppDelegate] applicationDidBecomeActive")
         applyApplicationIconIfAvailable()
         GhosttyAppManager.shared.setFocus(true)
-        // When app becomes active, ensure focused terminal gets focus restored
-        if TerminalFocusManager.shared.shouldSkipWindowFocusRestore?() != true,
-            let terminal = TerminalFocusManager.shared.focusedTerminal
-        {
-            TerminalFocusManager.shared.requestFocus(for: terminal)
-        }
+        // Delegate focus restoration to the coordinator via callback.
+        TerminalFocusManager.shared.onAppDidBecomeActive?()
     }
 
     func applicationDidResignActive(_ notification: Notification) {
