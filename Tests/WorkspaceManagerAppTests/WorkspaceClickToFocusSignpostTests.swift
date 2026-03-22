@@ -13,7 +13,7 @@ import Testing
 @Suite("PerformanceSignposts workspace_click_to_focus", .serialized)
 struct WorkspaceClickToFocusSignpostTests {
     init() {
-        PerformanceSignposts.setWorkspaceClickMetricObserver(nil)
+        PerformanceSignposts.resetWorkspaceClickMetricsForTesting()
     }
 
     @Test("begin emits started event")
@@ -22,7 +22,7 @@ struct WorkspaceClickToFocusSignpostTests {
         PerformanceSignposts.setWorkspaceClickMetricObserver { phase, fields in
             captured.append((phase, fields))
         }
-        defer { PerformanceSignposts.setWorkspaceClickMetricObserver(nil) }
+        defer { PerformanceSignposts.resetWorkspaceClickMetricsForTesting() }
 
         let sessionID = UUID()
         PerformanceSignposts.beginWorkspaceClickToFocusedInput(
@@ -46,7 +46,7 @@ struct WorkspaceClickToFocusSignpostTests {
         PerformanceSignposts.setWorkspaceClickMetricObserver { phase, fields in
             captured.append((phase, fields))
         }
-        defer { PerformanceSignposts.setWorkspaceClickMetricObserver(nil) }
+        defer { PerformanceSignposts.resetWorkspaceClickMetricsForTesting() }
 
         let sessionID = UUID()
         PerformanceSignposts.beginWorkspaceClickToFocusedInput(
@@ -71,7 +71,7 @@ struct WorkspaceClickToFocusSignpostTests {
         PerformanceSignposts.setWorkspaceClickMetricObserver { phase, fields in
             captured.append((phase, fields))
         }
-        defer { PerformanceSignposts.setWorkspaceClickMetricObserver(nil) }
+        defer { PerformanceSignposts.resetWorkspaceClickMetricsForTesting() }
 
         PerformanceSignposts.endWorkspaceClickToFocusedInputIfNeeded(
             sessionID: UUID(),
@@ -87,7 +87,7 @@ struct WorkspaceClickToFocusSignpostTests {
         PerformanceSignposts.setWorkspaceClickMetricObserver { phase, fields in
             captured.append((phase, fields))
         }
-        defer { PerformanceSignposts.setWorkspaceClickMetricObserver(nil) }
+        defer { PerformanceSignposts.resetWorkspaceClickMetricsForTesting() }
 
         let sessionID = UUID()
 
@@ -115,7 +115,7 @@ struct WorkspaceClickToFocusSignpostTests {
         PerformanceSignposts.setWorkspaceClickMetricObserver { phase, fields in
             captured.append((phase, fields))
         }
-        defer { PerformanceSignposts.setWorkspaceClickMetricObserver(nil) }
+        defer { PerformanceSignposts.resetWorkspaceClickMetricsForTesting() }
 
         let sessionID = UUID()
         PerformanceSignposts.beginWorkspaceClickToFocusedInput(
@@ -138,7 +138,7 @@ struct WorkspaceClickToFocusSignpostTests {
         PerformanceSignposts.setWorkspaceClickMetricObserver { phase, fields in
             captured.append((phase, fields))
         }
-        defer { PerformanceSignposts.setWorkspaceClickMetricObserver(nil) }
+        defer { PerformanceSignposts.resetWorkspaceClickMetricsForTesting() }
 
         let activeSession = UUID()
         PerformanceSignposts.beginWorkspaceClickToFocusedInput(

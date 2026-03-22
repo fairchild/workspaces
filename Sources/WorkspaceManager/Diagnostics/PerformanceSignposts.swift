@@ -171,30 +171,33 @@ enum PerformanceSignposts {
     }
 
     static func beginWorkspaceClickToFocusedInput(sessionID: UUID, workspacePath: String) {
-        let existingInterval: ActiveInterval?
         var supersededFields: [String: String]?
-        var supersededDurationMs: Double?
+        var supersededDurationMs: Double = 0
+        let startedFields: [String: String]
 
         lock.lock()
-        existingInterval = workspaceClickIntervals.removeValue(forKey: sessionID)
-        let state = signposter.beginInterval("WorkspaceClickToFocusedInput")
-        workspaceClickIntervals[sessionID] = ActiveInterval(state: state, startedAt: clock.now)
-        lock.unlock()
-
-        if let existing = existingInterval {
+        if let existing = workspaceClickIntervals.removeValue(forKey: sessionID) {
             signposter.endInterval("WorkspaceClickToFocusedInput", existing.state)
-            let durationMs = milliseconds(since: existing.startedAt)
-            supersededDurationMs = durationMs
+            supersededDurationMs = milliseconds(since: existing.startedAt)
             supersededFields = [
                 "metric": "workspace_click_to_focus",
                 "status": "completed",
                 "session": sessionID.uuidString,
                 "outcome": "superseded",
-                "duration_ms": String(format: "%.2f", durationMs),
+                "duration_ms": String(format: "%.2f", supersededDurationMs),
             ]
         }
+        let state = signposter.beginInterval("WorkspaceClickToFocusedInput")
+        workspaceClickIntervals[sessionID] = ActiveInterval(state: state, startedAt: clock.now)
+        startedFields = [
+            "metric": "workspace_click_to_focus",
+            "status": "started",
+            "session": sessionID.uuidString,
+            "path": workspacePath,
+        ]
+        lock.unlock()
 
-        if let supersededFields, let supersededDurationMs {
+        if let supersededFields {
             emitPerfLog(
                 "[Perf] metric=workspace_click_to_focus duration_ms=%.2f session=%@ outcome=superseded",
                 supersededDurationMs,
@@ -203,18 +206,12 @@ enum PerformanceSignposts {
             emitWorkspaceClickMetricEvent(phase: "completed", fields: supersededFields)
         }
 
-        let fields = [
-            "metric": "workspace_click_to_focus",
-            "status": "started",
-            "session": sessionID.uuidString,
-            "path": workspacePath,
-        ]
         emitPerfLog(
             "[Perf] metric=workspace_click_to_focus status=started session=%@ path=%@",
             sessionID.uuidString,
             workspacePath
         )
-        emitWorkspaceClickMetricEvent(phase: "started", fields: fields)
+        emitWorkspaceClickMetricEvent(phase: "started", fields: startedFields)
     }
 
     static func endWorkspaceClickToFocusedInputIfNeeded(sessionID: UUID, outcome: String) {
@@ -514,6 +511,13 @@ enum PerformanceSignposts {
         static func setWorkspaceClickMetricObserver(_ observer: WorkspaceClickMetricObserver?) {
             lock.lock()
             workspaceClickMetricObserver = observer
+            lock.unlock()
+        }
+
+        static func resetWorkspaceClickMetricsForTesting() {
+            lock.lock()
+            workspaceClickIntervals.removeAll()
+            workspaceClickMetricObserver = nil
             lock.unlock()
         }
     #endif
