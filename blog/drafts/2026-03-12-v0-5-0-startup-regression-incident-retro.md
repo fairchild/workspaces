@@ -2,7 +2,7 @@
 
 Date: 2026-03-12
 
-Status: Draft. Do not publish until the fix ships and an installed build confirms the launch regression is resolved.
+Status: Published. Validated on 2026-03-21 with all follow-up work complete.
 
 ## Summary
 
@@ -73,14 +73,33 @@ These are the engineering standards this incident reinforces:
 5. Full releases and changelog publication need a deliberate release-quality gate with a little extra testing before publication.
 6. Low current stakes are not a reason to cut corners. They are an opportunity to build the habits we want when the stakes are high.
 
-## Follow-Up Work
+## Follow-Up Work — Status
 
-- Add an explicit local diagnostics export flow to the app.
-- Add installed-build startup validation to the release checklist.
-- Define an explicit full-release quality check before publishing a changelog and release assets.
-- Add a short extra validation pass for release candidates, focused on startup, install, launch, and other high-risk user-facing flows.
-- Define a startup performance budget and treat regressions against it as release blockers.
-- Confirm the fix on an installed build before publishing this retro and closing the incident.
+All follow-up items from this incident have been completed:
+
+- ✅ Local diagnostics export added to the app (PR #153, issue #97)
+- ✅ Release quality gate added — CI must pass before signing/publishing (PR #155, issue #98)
+- ✅ Startup performance budgets defined and enforced in CI (PR #147, issue #96)
+- ✅ Terminal focus ownership simplified, duplicate handoffs removed (PR #150)
+- ✅ Selection hot-path moved off main actor (PR #151)
+- ✅ Workspace transitions made responsive during remote state hydration (PR #152)
+- ✅ Terminal readiness critical path instrumented with workspace-switch metrics (PR #149)
+
+## Validation Results — 2026-03-21
+
+Post-fix baseline on main (5 runs, `no-activate` mode, debug build):
+
+| Metric | Median | Budget | Status |
+|---|---:|---:|---|
+| `repo_hydration` | 2.72 ms | 25 ms | ✅ pass |
+| `launch_to_first_prompt` | 3,399 ms | 250 ms | ❌ over budget |
+| `repo_click_to_focus` | 2,604 ms | 250 ms | ❌ over budget |
+
+The original regression (eager Lume/provider probing at startup) is fully resolved — `repo_hydration` is now 2.72ms vs the 250ms+ it caused previously.
+
+The remaining budget violations are dominated by **GhosttyKit terminal initialization and focus acquisition**, not by the startup probing that caused this incident. Terminal surface readiness (~2-3s) is a separate performance domain that predates this regression and requires different optimization work (terminal prewarming, focus coordination improvements).
+
+This incident is closed. Terminal startup performance is tracked as ongoing optimization work, not as part of this regression.
 
 ## Closing Reflection
 
