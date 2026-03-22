@@ -171,29 +171,38 @@ enum PerformanceSignposts {
     }
 
     static func beginWorkspaceClickToFocusedInput(sessionID: UUID, workspacePath: String) {
-        lock.lock()
-        defer { lock.unlock() }
+        let existingInterval: ActiveInterval?
+        var supersededFields: [String: String]?
+        var supersededDurationMs: Double?
 
-        if let existing = workspaceClickIntervals.removeValue(forKey: sessionID) {
+        lock.lock()
+        existingInterval = workspaceClickIntervals.removeValue(forKey: sessionID)
+        let state = signposter.beginInterval("WorkspaceClickToFocusedInput")
+        workspaceClickIntervals[sessionID] = ActiveInterval(state: state, startedAt: clock.now)
+        lock.unlock()
+
+        if let existing = existingInterval {
             signposter.endInterval("WorkspaceClickToFocusedInput", existing.state)
             let durationMs = milliseconds(since: existing.startedAt)
-            let fields = [
+            supersededDurationMs = durationMs
+            supersededFields = [
                 "metric": "workspace_click_to_focus",
                 "status": "completed",
                 "session": sessionID.uuidString,
                 "outcome": "superseded",
                 "duration_ms": String(format: "%.2f", durationMs),
             ]
-            emitPerfLog(
-                "[Perf] metric=workspace_click_to_focus duration_ms=%.2f session=%@ outcome=superseded",
-                durationMs,
-                sessionID.uuidString
-            )
-            emitWorkspaceClickMetricEvent(phase: "completed", fields: fields)
         }
 
-        let state = signposter.beginInterval("WorkspaceClickToFocusedInput")
-        workspaceClickIntervals[sessionID] = ActiveInterval(state: state, startedAt: clock.now)
+        if let supersededFields, let supersededDurationMs {
+            emitPerfLog(
+                "[Perf] metric=workspace_click_to_focus duration_ms=%.2f session=%@ outcome=superseded",
+                supersededDurationMs,
+                sessionID.uuidString
+            )
+            emitWorkspaceClickMetricEvent(phase: "completed", fields: supersededFields)
+        }
+
         let fields = [
             "metric": "workspace_click_to_focus",
             "status": "started",

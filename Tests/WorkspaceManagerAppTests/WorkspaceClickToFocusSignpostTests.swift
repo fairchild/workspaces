@@ -81,7 +81,7 @@ struct WorkspaceClickToFocusSignpostTests {
         #expect(captured.isEmpty)
     }
 
-    @Test("supersede closes previous interval")
+    @Test("restarting the same session supersedes the prior interval")
     func supersedeClosesPrevious() async {
         var captured: [(phase: String, fields: [String: String])] = []
         PerformanceSignposts.setWorkspaceClickMetricObserver { phase, fields in
@@ -89,25 +89,24 @@ struct WorkspaceClickToFocusSignpostTests {
         }
         defer { PerformanceSignposts.setWorkspaceClickMetricObserver(nil) }
 
-        let firstSession = UUID()
-        let secondSession = UUID()
+        let sessionID = UUID()
 
         PerformanceSignposts.beginWorkspaceClickToFocusedInput(
-            sessionID: firstSession,
+            sessionID: sessionID,
             workspacePath: "/tmp/workspace-a"
         )
         PerformanceSignposts.beginWorkspaceClickToFocusedInput(
-            sessionID: secondSession,
+            sessionID: sessionID,
             workspacePath: "/tmp/workspace-b"
         )
         PerformanceSignposts.cancelWorkspaceClickToFocusedInputIfNeeded(
-            sessionID: secondSession,
+            sessionID: sessionID,
             reason: "test_cleanup"
         )
 
         let supersededEvents = captured.filter { $0.fields["outcome"] == "superseded" }
         #expect(supersededEvents.count == 1)
-        #expect(supersededEvents.first?.fields["session"] == firstSession.uuidString)
+        #expect(supersededEvents.first?.fields["session"] == sessionID.uuidString)
     }
 
     @Test("cancel closes interval with reason")
