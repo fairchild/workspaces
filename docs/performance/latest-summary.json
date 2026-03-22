@@ -1,28 +1,28 @@
 {
   "launch_to_first_prompt": {
-    "n": 5,
-    "min": 1256.46,
-    "max": 1446.31,
-    "median": 1331.33,
-    "mean": 1339.394
+    "n": 4,
+    "min": 1431.31,
+    "max": 1823.45,
+    "median": 1468.205,
+    "mean": 1547.7925
   },
   "repo_hydration": {
     "n": 5,
-    "min": 1.31,
-    "max": 21.05,
-    "median": 1.43,
-    "mean": 5.348
+    "min": 1.13,
+    "max": 28.64,
+    "median": 1.24,
+    "mean": 6.718
   },
   "repo_click_to_focus": {
-    "n": 5,
-    "min": 810.32,
-    "max": 891.24,
-    "median": 857.07,
-    "mean": 850.522
+    "n": 4,
+    "min": 1065.66,
+    "max": 1205.12,
+    "median": 1110.0100000000002,
+    "mean": 1122.7
   },
   "workspace_click_to_focus": null,
   "metadata": {
-    "timestamp": "2026-03-22T08:50:59-0700",
+    "timestamp": "2026-03-22T10:29:08-0700",
     "runs_requested": 5,
     "sleep_seconds": 8,
     "launch_mode": "no-activate",
@@ -32,6 +32,6 @@
     "model": "Mac16,13",
     "discovered_repos_median": 18,
     "imported_repos_median": 0,
-    "activation_to_first_prompt_median_ms": 681.0
+    "activation_to_first_prompt_median_ms": 966.0
   }
 }

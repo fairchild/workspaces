@@ -1,20 +1,20 @@
 # Performance Dashboard
 
-Last updated: `2026-03-22T08:50:59-0700`
+Last updated: `2026-03-22T10:29:08-0700`
 
 ## Latest Snapshot
 
 | Metric | Median (ms) | Mean (ms) | Target (ms) | Status | Delta vs Previous |
 |---|---:|---:|---:|---|---|
-| `launch_to_first_prompt` | 1331.33 | 1339.39 | <= 250 | fail | -2068.11 ms (-60.8%) |
-| `repo_hydration` | 1.43 | 5.35 | <= 25 | pass | -1.29 ms (-47.4%) |
-| `repo_click_to_focus` | 857.07 | 850.52 | <= 250 | fail | -1746.67 ms (-67.1%) |
+| `launch_to_first_prompt` | 1468.20 | 1547.79 | <= 250 | fail | +136.88 ms (+10.3%) |
+| `repo_hydration` | 1.24 | 6.72 | <= 25 | pass | -0.19 ms (-13.3%) |
+| `repo_click_to_focus` | 1110.01 | 1122.70 | <= 250 | fail | +252.94 ms (+29.5%) |
 
 ## Investigated Delta
 
-- Portfolio size changed from discovered=18 to discovered=18, but `repo_hydration` only moved -1.29 ms (-47.4%) and remains within the `<= 25 ms` gate.
-- The large regression is concentrated in terminal readiness: `launch_to_first_prompt` changed -2068.11 ms (-60.8%) and `repo_click_to_focus` changed -1746.67 ms (-67.1%).
-- The post-activation ready-to-type gap changed -1506.00 ms (-68.9%), from `2187.00 ms` to `681.00 ms`. That points to terminal focus/readiness after activation as the main place the extra time moved.
+- Portfolio size changed from discovered=18 to discovered=18, but `repo_hydration` only moved -0.19 ms (-13.3%) and remains within the `<= 25 ms` gate.
+- The large regression is concentrated in terminal readiness: `launch_to_first_prompt` changed +136.88 ms (+10.3%) and `repo_click_to_focus` changed +252.94 ms (+29.5%).
+- The post-activation ready-to-type gap changed +285.00 ms (+41.9%), from `681.00 ms` to `966.00 ms`. That points to terminal focus/readiness after activation as the main place the extra time moved.
 - Broader release-candidate context, including `activate` and `new_workspace_sheet_ready` measurements, is recorded in `./release-exception-validation-2026-03-19.md`.
 
 ## Trend (Last 10 Runs)
@@ -30,22 +30,23 @@ Last updated: `2026-03-22T08:50:59-0700`
 | 2026-03-19T08:04:45-0700 | 2711.73 | 1.94 | 1898.94 | n/a |
 | 2026-03-21T22:16:15-0700 | 3399.44 | 2.72 | 2603.74 | n/a |
 | 2026-03-22T08:50:59-0700 | 1331.33 | 1.43 | 857.07 | n/a |
+| 2026-03-22T10:29:08-0700 | 1468.20 | 1.24 | 1110.01 | n/a |
 
 ## Visual Bars (Last 10 Run Window)
 
 `launch_to_first_prompt` target <= 250 ms
 
-current 1331.33 ms (532.5% of target)
+current 1468.20 ms (587.3% of target)
 [########################]
 
 `repo_hydration` target <= 25 ms
 
-current 1.43 ms (5.7% of target)
+current 1.24 ms (5.0% of target)
 [#-----------------------]
 
 `repo_click_to_focus` target <= 250 ms
 
-current 857.07 ms (342.8% of target)
+current 1110.01 ms (444.0% of target)
 [########################]
 
 ## Run Context
