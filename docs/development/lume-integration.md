@@ -216,9 +216,9 @@ lsof -nP -iTCP:7777 -sTCP:LISTEN
 tail -50 ~/Library/Logs/lume/daemon.log
 tail -50 ~/Library/Logs/lume/daemon.error.log
 
-# Nuclear recovery: unload, reload
-launchctl unload ~/Library/LaunchAgents/com.trycua.lume_daemon.plist
-launchctl load ~/Library/LaunchAgents/com.trycua.lume_daemon.plist
+# Nuclear recovery: bootout + bootstrap (modern launchctl for macOS 14+)
+launchctl bootout gui/$(id -u)/com.trycua.lume_daemon 2>/dev/null || true
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.trycua.lume_daemon.plist
 ```
 
 ### Common failure modes

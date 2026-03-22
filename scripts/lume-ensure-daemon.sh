@@ -55,6 +55,15 @@ wait_for_daemon() {
     return 1
 }
 
+launchctl_domain() {
+    echo "gui/$(id -u)"
+}
+
+launchctl_bootstrap() {
+    launchctl bootout "$(launchctl_domain)/$LAUNCH_AGENT_LABEL" 2>/dev/null || true
+    launchctl bootstrap "$(launchctl_domain)" "$LAUNCH_AGENT_PLIST"
+}
+
 resolve_lume_bin() {
     if [[ -x "$LUME_APP_BIN" ]]; then
         echo "$LUME_APP_BIN"
@@ -77,8 +86,8 @@ log "daemon not responding on port $PORT, attempting recovery..."
 
 # --- Attempt 1: load existing LaunchAgent ---
 if [[ -f "$LAUNCH_AGENT_PLIST" ]]; then
-    log "LaunchAgent plist exists, loading..."
-    launchctl load "$LAUNCH_AGENT_PLIST" 2>/dev/null || true
+    log "LaunchAgent plist exists, bootstrapping..."
+    launchctl_bootstrap 2>/dev/null || true
     if wait_for_daemon; then
         log "daemon recovered via LaunchAgent"
         exit 0
@@ -121,7 +130,7 @@ if [[ ! -f "$LAUNCH_AGENT_PLIST" ]]; then
 </plist>
 PLIST
 
-    launchctl load "$LAUNCH_AGENT_PLIST" 2>/dev/null || true
+    launchctl_bootstrap 2>/dev/null || true
     if wait_for_daemon; then
         log "daemon started via new LaunchAgent"
         exit 0
