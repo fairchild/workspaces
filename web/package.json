@@ -1,0 +1,27 @@
+{
+	"name": "spaces-web",
+	"version": "0.1.0",
+	"private": true,
+	"packageManager": "pnpm@10.18.3",
+	"scripts": {
+		"dev": "next dev",
+		"build": "next build",
+		"start": "next start",
+		"lint": "biome check .",
+		"typecheck": "tsc --noEmit"
+	},
+	"dependencies": {
+		"@chat-adapter/state-memory": "^4.20.2",
+		"chat": "latest",
+		"next": "^15",
+		"react": "^19",
+		"react-dom": "^19"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^1",
+		"@types/node": "^22",
+		"@types/react": "^19",
+		"@types/react-dom": "^19",
+		"typescript": "^5"
+	}
+}

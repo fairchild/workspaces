@@ -1,0 +1,2 @@
+Placeholder for static assets.
+Add favicon.ico and other assets here.
