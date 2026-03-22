@@ -1,0 +1,45 @@
+.shell {
+	display: flex;
+	flex-direction: column;
+	height: 100vh;
+	height: 100dvh;
+	overflow: hidden;
+}
+
+/* ── Top bar ── */
+
+.topBar {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	height: 48px;
+	padding: 0 1rem;
+	border-bottom: 1px solid var(--border-subtle);
+	background: var(--bg-surface);
+	flex-shrink: 0;
+}
+
+.brand {
+	font-family: var(--font-display), "Georgia", serif;
+	font-size: 1.125rem;
+	font-style: italic;
+	color: var(--text-primary);
+	letter-spacing: -0.02em;
+}
+
+.user {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+}
+
+.avatar {
+	border-radius: 50%;
+	border: 1px solid var(--border);
+}
+
+.userName {
+	font-family: var(--font-mono), ui-monospace, monospace;
+	font-size: 0.75rem;
+	color: var(--text-secondary);
+}

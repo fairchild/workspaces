@@ -1,0 +1,124 @@
+.sidebar {
+	padding: 1rem 0;
+}
+
+.sectionHeader {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 0 1rem;
+	margin-bottom: 0.5rem;
+}
+
+.sectionTitle {
+	font-family: var(--font-mono), ui-monospace, monospace;
+	font-size: 0.6875rem;
+	color: var(--text-secondary);
+	text-transform: uppercase;
+	letter-spacing: 0.08em;
+}
+
+.count {
+	font-family: var(--font-mono), ui-monospace, monospace;
+	font-size: 0.625rem;
+	color: var(--text-tertiary);
+	background: var(--bg-elevated);
+	padding: 0.125rem 0.375rem;
+	border-radius: 4px;
+}
+
+/* ── Row ── */
+
+.list {
+	display: flex;
+	flex-direction: column;
+}
+
+.row {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+	padding: 0.5rem 1rem;
+	cursor: pointer;
+	transition: background 0.15s ease;
+}
+
+.row:hover {
+	background: var(--accent-dim);
+}
+
+.statusDot {
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	flex-shrink: 0;
+}
+
+.statusActive {
+	background: var(--accent);
+	box-shadow: 0 0 4px rgba(166, 255, 223, 0.3);
+}
+
+.statusProvisioning {
+	background: var(--accent);
+	opacity: 0.5;
+	animation: pulse 2s ease-in-out infinite;
+}
+
+.statusStopped {
+	background: var(--text-tertiary);
+}
+
+.statusArchived {
+	background: var(--text-tertiary);
+	opacity: 0.4;
+}
+
+.rowContent {
+	display: flex;
+	flex-direction: column;
+	gap: 0.125rem;
+	min-width: 0;
+}
+
+.rowName {
+	font-family: var(--font-mono), ui-monospace, monospace;
+	font-size: 0.8125rem;
+	color: var(--text-primary);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.rowBranch {
+	font-family: var(--font-mono), ui-monospace, monospace;
+	font-size: 0.6875rem;
+	color: var(--text-tertiary);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+/* ── Empty state ── */
+
+.empty {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 0.75rem;
+	padding: 2rem 1.5rem;
+}
+
+.emptyIcon {
+	font-family: var(--font-mono), ui-monospace, monospace;
+	font-size: 1.5rem;
+	color: var(--text-tertiary);
+}
+
+.emptyText {
+	font-family: var(--font-mono), ui-monospace, monospace;
+	font-size: 0.6875rem;
+	color: var(--text-tertiary);
+	text-align: center;
+	line-height: 1.5;
+}
