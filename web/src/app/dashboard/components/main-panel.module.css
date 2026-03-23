@@ -1,0 +1,98 @@
+.panel {
+	display: flex;
+	flex-direction: column;
+	gap: 2rem;
+	padding: 2rem;
+	max-width: 720px;
+	margin: 0 auto;
+}
+
+/* ── Welcome ── */
+
+.welcome {
+	display: flex;
+	flex-direction: column;
+	gap: 0.375rem;
+	animation: fadeIn 0.6s ease-out both;
+}
+
+.greeting {
+	font-family: var(--font-display), "Georgia", serif;
+	font-size: 1.75rem;
+	font-weight: 400;
+	font-style: italic;
+	color: var(--text-primary);
+	letter-spacing: -0.02em;
+}
+
+.name {
+	color: var(--accent);
+}
+
+.subtitle {
+	font-family: var(--font-mono), ui-monospace, monospace;
+	font-size: 0.75rem;
+	color: var(--text-secondary);
+}
+
+/* ── Stats grid ── */
+
+.grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+	gap: 0.75rem;
+	animation: fadeIn 0.6s ease-out 0.1s both;
+}
+
+.stat {
+	display: flex;
+	flex-direction: column;
+	gap: 0.25rem;
+	padding: 1rem;
+	border: 1px solid var(--border-subtle);
+	border-radius: 8px;
+	background: var(--bg-surface);
+}
+
+.statValue {
+	font-family: var(--font-mono), ui-monospace, monospace;
+	font-size: 1.5rem;
+	color: var(--text-primary);
+}
+
+.statAccent {
+	color: var(--accent);
+}
+
+.statLabel {
+	font-family: var(--font-mono), ui-monospace, monospace;
+	font-size: 0.6875rem;
+	color: var(--text-tertiary);
+	text-transform: uppercase;
+	letter-spacing: 0.06em;
+}
+
+/* ── Hint ── */
+
+.hint {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+	padding: 0.75rem 1rem;
+	border: 1px solid var(--border-subtle);
+	border-radius: 8px;
+	background: var(--accent-dim);
+	animation: fadeIn 0.6s ease-out 0.2s both;
+}
+
+.hintChevron {
+	font-family: var(--font-mono), ui-monospace, monospace;
+	color: var(--accent-muted);
+	font-size: 0.75rem;
+}
+
+.hintText {
+	font-family: var(--font-mono), ui-monospace, monospace;
+	font-size: 0.75rem;
+	color: var(--text-secondary);
+}

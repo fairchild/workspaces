@@ -43,8 +43,10 @@ secrets/
 # Python
 __pycache__/
 
-# Node/Bun (Cloudflare Worker)
+# Node/Bun (Cloudflare Worker, Next.js)
 node_modules/
+.next/
+.vercel/
 
 # Papers (keep README.md, ignore binaries)
 docs/papers/*.pdf
