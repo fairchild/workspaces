@@ -125,10 +125,11 @@ component files and reverting `page.tsx` imports.
 
 ## References
 
-- **Validated prototype:** `infra/spaces-dashboard/prototypes/d-hybrid-dashboard.html` (open in browser to see the target)
+- **Validated prototype:** `prototypes/spaces-dashboard/d-hybrid-dashboard.html` (open in browser to see the target)
+- **Design outcomes:** `prototypes/spaces-dashboard/README.md`
 - **Existing web app:** `.claude/worktrees/webui/web/` (Next.js, pnpm, Better Auth, CSS Modules)
 - **Design tokens:** `web/src/app/globals.css` (all CSS variables, fonts, animations)
 - **Agent structure to discover:** `.agents/skills/*/SKILL.md`, `.agents/MEMORY.md`, `.agents/config/`
-- **LLM architecture exploration:** `infra/spaces-dashboard/prototypes/EXPLORATION-llm-driven-dashboard.md`
+- **LLM architecture exploration:** `prototypes/spaces-dashboard/EXPLORATION-llm-driven-dashboard.md`
 - **Agent team reference:** `docs/development/agent-team.md`
 - **Existing Cloudflare infra:** `infra/cloudflare-webhook-relay/` (auth + events already deployed)
