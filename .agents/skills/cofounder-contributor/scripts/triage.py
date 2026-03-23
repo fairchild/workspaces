@@ -496,6 +496,7 @@ def classify_execution_work(
     owner_login: str,
     persona: str,
     bot_login: str,
+    now: datetime | None = None,
 ) -> dict[str, list[dict[str, object]]]:
     current_agent = persona_slug(persona)
     normalized_bot = _normalize_login(bot_login)
@@ -545,7 +546,7 @@ def classify_execution_work(
         latest_claim = latest_issue_claim(issue_number, issue.get("comments", {}))
         claim_agent = latest_claim.get("agent") if latest_claim else None
         linked_prs = issue_pr_map.get(issue_number, [])
-        stale_claim = claim_is_stale(latest_claim, has_open_pr=bool(linked_prs))
+        stale_claim = claim_is_stale(latest_claim, has_open_pr=bool(linked_prs), now=now)
         if stale_claim:
             latest_claim = None
             claim_agent = None
