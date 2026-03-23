@@ -96,7 +96,7 @@ export async function POST(request: Request): Promise<Response> {
 		timestamp: new Date().toISOString(),
 	};
 
-	pushEvent(event);
+	await pushEvent(event);
 
 	return Response.json({ ok: true });
 }

@@ -1,5 +1,6 @@
 import { getEvents } from "@/lib/events";
 
 export async function GET(): Promise<Response> {
-	return Response.json(getEvents());
+	const events = await getEvents();
+	return Response.json(events);
 }
