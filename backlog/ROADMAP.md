@@ -309,6 +309,16 @@ This sequence follows the priority rule above: core promise first, dependency cl
 
 ---
 
+## Learnings
+
+### 2026-03-22 — Spaces dashboard exploration (#191)
+- Prototyping multiple layout variants as static HTML before committing to a direction saved significant iteration time — owner could compare side-by-side and pick elements from each
+- The `web/` app has a strong design system (Instrument Serif + JetBrains Mono + mint accent); prototypes that didn't match it felt wrong immediately
+- Dashboard needs two levels: global summary across repos + per-repo drill-in with scoped tabs (schedule/skills are per-repo, not global)
+- LLM-driven UI exploration landed on Level 2 (structured JSON decisions, not generated HTML) — industry consensus (CopilotKit, Google A2UI, Vercel AI SDK v6) confirms this
+
+---
+
 ## Verification Notes
 
 Roadmap grounding sources:
