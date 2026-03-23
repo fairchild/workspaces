@@ -305,6 +305,7 @@ This sequence follows the priority rule above: core promise first, dependency cl
 | Web dashboard Phase 3 follow-ups | Follow-up | P2 | `backlog/web-dashboard-phase3-followups.md` |
 | Swift dev skills task-list | Task List | P3 | `backlog/swift-dev-skills-task-list.md` |
 | Workspace creation hang root cause | Follow-up | P0 | `backlog/workspace-creation-hang-root-cause_followup.md` |
+| Spaces agent discovery dashboard | Plan | P2 | `backlog/spaces-agent-discovery-dashboard-plan.md` |
 
 ---
 
