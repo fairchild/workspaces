@@ -286,3 +286,75 @@ This gives you the best of both worlds:
 This approach lets you ship fast (deterministic shell works day one), add intelligence
 incrementally (each slot is independent), and fail gracefully (every LLM feature degrades
 to the deterministic version).
+
+---
+
+## Industry Context & Prior Art
+
+The industry has converged on a taxonomy for LLM-in-the-UI patterns that maps cleanly
+to the levels above. Key frameworks and references:
+
+### CopilotKit's Three Types of Generative UI
+
+CopilotKit defines three levels that match ours almost exactly:
+
+1. **Static Generative UI** — LLM picks which pre-built component to show and fills it
+   with data. Frontend owns all rendering. (= our Level 2)
+2. **Declarative Generative UI** — LLM returns a structured spec (JSON describing cards,
+   lists, charts) and the frontend renders from a component registry. Google's **A2UI**
+   format standardizes this: a flat list of component references with ID-based
+   relationships, easy for LLMs to generate incrementally. (= our Level 2+)
+3. **Open-ended Generative UI** — LLM generates arbitrary HTML/JSX. Flexible but fragile.
+   (= our Level 3)
+
+The industry consensus is that **Declarative** is the production sweet spot.
+
+### Vercel AI SDK (v5/v6)
+
+The dominant TypeScript toolkit (20M+ monthly downloads). The earlier RSC-based `streamUI`
+approach is now paused. Current pattern: LLM makes tool calls, frontend renders custom React
+components based on tool results via `message.parts`. AI SDK 6 adds `ToolLoopAgent` for
+multi-step agent loops.
+
+### Google A2UI
+
+An open declarative format — not executable code. The frontend maintains a catalog of
+trusted components; the agent can only request to render from that catalog. Designed for
+cross-platform interoperability and progressive rendering. This validates the "LLM produces
+JSON decisions, renderer is deterministic" pattern.
+
+### Next.js Partial Prerendering (PPR)
+
+The architectural match for our recommendation:
+
+```
+Static Shell (PPR/SSR) — served from CDN
+  ├── Navigation, chrome, layout grid
+  ├── <Suspense fallback={<Skeleton/>}>
+  │     LLM Layout Decision (Server Component)
+  │       → calls LLM with repo context
+  │       → returns structured slot decisions
+  │       → component registry maps to React components
+  │       → each component fetches its own data
+  └── </Suspense>
+```
+
+This is architecturally identical to "default template with LLM-customized portions."
+Each LLM-filled slot wrapped in Suspense with a skeleton fallback. If the LLM is slow
+or fails, the fallback persists gracefully — which is exactly the behavior we want.
+
+### Key Principle: LLM Selects, Frontend Renders
+
+The converging pattern across all frameworks: the LLM never generates layout or HTML.
+It returns metadata (component name + props/decisions), and the client renders from a
+trusted component registry. This eliminates layout breakage, XSS risk, and
+non-deterministic rendering in one architectural choice.
+
+### References
+
+- [CopilotKit: The Three Types of Generative UI](https://www.copilotkit.ai/blog/the-three-kinds-of-generative-ui)
+- [Vercel AI SDK 6](https://vercel.com/blog/ai-sdk-6)
+- [Google A2UI: Agent-Driven Interfaces](https://developers.googleblog.com/introducing-a2ui-an-open-project-for-agent-driven-interfaces/)
+- [assistant-ui: Generative UI / Tool UI](https://www.assistant-ui.com/docs/guides/ToolUI)
+- [CopilotKit + Google A2UI + AG-UI Integration](https://www.copilotkit.ai/blog/build-with-googles-new-a2ui-spec-agent-user-interfaces-with-a2ui-ag-ui)
+- [The Complete Guide to Generative UI Frameworks in 2026](https://medium.com/@akshaychame2/the-complete-guide-to-generative-ui-frameworks-in-2026-fde71c4fa8cc)
