@@ -1,0 +1,1167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Spaces — Dashboard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@1&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        /* ── Tokens (match web/src/app/globals.css) ── */
+
+        :root {
+            --bg-primary: #0e1117;
+            --bg-surface: #141821;
+            --bg-elevated: #1a1f2e;
+            --bg-grid: #161b26;
+            --border: #242a3a;
+            --border-subtle: #1c2233;
+            --text-primary: #d4dae8;
+            --text-secondary: #5a6580;
+            --text-tertiary: #3a4258;
+            --accent: #a6ffdf;
+            --accent-dim: rgba(166, 255, 223, 0.06);
+            --accent-glow: rgba(166, 255, 223, 0.12);
+            --accent-muted: rgba(166, 255, 223, 0.25);
+            --font-display: "Instrument Serif", "Georgia", serif;
+            --font-mono: "JetBrains Mono", ui-monospace, monospace;
+
+            /* Event accent palette */
+            --ev-pr: #c4a1ff;
+            --ev-pr-bg: rgba(196, 161, 255, 0.1);
+            --ev-discussion: #7eb8ff;
+            --ev-discussion-bg: rgba(126, 184, 255, 0.1);
+            --ev-push: #ffd07e;
+            --ev-push-bg: rgba(255, 208, 126, 0.1);
+            --ev-issue: #ff9e7e;
+            --ev-issue-bg: rgba(255, 158, 126, 0.1);
+        }
+
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        html, body {
+            height: 100%;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            -webkit-font-smoothing: antialiased;
+            overflow: hidden;
+        }
+
+        /* Noise texture */
+        body::before {
+            content: "";
+            position: fixed;
+            inset: 0;
+            opacity: 0.025;
+            background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='256' height='256' filter='url(%23n)' opacity='1'/%3E%3C/svg%3E");
+            background-repeat: repeat;
+            background-size: 256px;
+            pointer-events: none;
+            z-index: 1;
+        }
+
+        /* Scan lines */
+        body::after {
+            content: "";
+            position: fixed;
+            inset: 0;
+            background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.03) 2px, rgba(0,0,0,0.03) 4px);
+            pointer-events: none;
+            z-index: 1;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(8px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        @keyframes pulse {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(166,255,223,0.4), 0 0 4px 1px rgba(166,255,223,0.15); }
+            50% { box-shadow: 0 0 0 4px rgba(166,255,223,0), 0 0 8px 2px rgba(166,255,223,0.08); }
+        }
+
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0; }
+        }
+
+        /* ── Shell ── */
+
+        .shell {
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            height: 100dvh;
+            position: relative;
+            z-index: 2;
+        }
+
+        /* ── Top bar ── */
+
+        .topbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            height: 48px;
+            padding: 0 1rem;
+            border-bottom: 1px solid var(--border-subtle);
+            background: var(--bg-surface);
+            flex-shrink: 0;
+        }
+
+        .topbar-left {
+            display: flex;
+            align-items: center;
+            gap: 1.5rem;
+        }
+
+        .brand {
+            font-family: var(--font-display);
+            font-size: 1.125rem;
+            font-style: italic;
+            color: var(--text-primary);
+            letter-spacing: -0.02em;
+        }
+
+        .topbar-tabs {
+            display: flex;
+            gap: 2px;
+        }
+
+        .topbar-tab {
+            font-family: var(--font-mono);
+            font-size: 0.6875rem;
+            color: var(--text-tertiary);
+            padding: 6px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            border: none;
+            background: none;
+            letter-spacing: 0.04em;
+            transition: all 0.15s;
+        }
+
+        .topbar-tab:hover { color: var(--text-secondary); background: var(--accent-dim); }
+        .topbar-tab.active { color: var(--accent); background: var(--accent-dim); }
+
+        .topbar-right {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .avatar {
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, rgba(166,255,223,0.3), rgba(166,255,223,0.1));
+            border: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: var(--font-mono);
+            font-size: 0.625rem;
+            font-weight: 600;
+            color: var(--accent);
+        }
+
+        .user-name {
+            font-family: var(--font-mono);
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+        }
+
+        /* ── Columns ── */
+
+        .columns {
+            display: grid;
+            grid-template-columns: 240px 1fr 300px;
+            flex: 1;
+            overflow: hidden;
+        }
+
+        .col-left {
+            border-right: 1px solid var(--border-subtle);
+            overflow-y: auto;
+            background: var(--bg-surface);
+        }
+
+        .col-center {
+            overflow-y: auto;
+            background: var(--bg-primary);
+        }
+
+        .col-right {
+            border-left: 1px solid var(--border-subtle);
+            overflow-y: auto;
+            background: var(--bg-surface);
+        }
+
+        /* ── Sidebar ── */
+
+        .sidebar { padding: 1rem 0; }
+
+        .section-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 1rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .section-title {
+            font-family: var(--font-mono);
+            font-size: 0.6875rem;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+        }
+
+        .section-count {
+            font-family: var(--font-mono);
+            font-size: 0.625rem;
+            color: var(--text-tertiary);
+            background: var(--bg-elevated);
+            padding: 0.125rem 0.375rem;
+            border-radius: 4px;
+        }
+
+        .repo-list { display: flex; flex-direction: column; }
+
+        .repo-row {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.5rem 1rem;
+            cursor: pointer;
+            transition: background 0.15s;
+        }
+
+        .repo-row:hover { background: var(--accent-dim); }
+        .repo-row.selected { background: var(--accent-dim); }
+
+        .status-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+
+        .status-dot.has-agents {
+            background: var(--accent);
+            box-shadow: 0 0 4px rgba(166,255,223,0.3);
+        }
+
+        .status-dot.no-agents { background: var(--text-tertiary); }
+
+        .repo-row-content { display: flex; flex-direction: column; gap: 0.125rem; min-width: 0; }
+
+        .repo-name {
+            font-family: var(--font-mono);
+            font-size: 0.8125rem;
+            color: var(--text-primary);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .repo-meta {
+            font-family: var(--font-mono);
+            font-size: 0.6875rem;
+            color: var(--text-tertiary);
+        }
+
+        /* ── Main panel ── */
+
+        .main-panel {
+            padding: 2rem;
+            max-width: 720px;
+            margin: 0 auto;
+            display: flex;
+            flex-direction: column;
+            gap: 1.75rem;
+        }
+
+        .main-greeting {
+            font-family: var(--font-display);
+            font-size: 1.75rem;
+            font-weight: 400;
+            font-style: italic;
+            color: var(--text-primary);
+            letter-spacing: -0.02em;
+            animation: fadeIn 0.6s ease-out both;
+        }
+
+        .main-greeting .repo-accent { color: var(--accent); }
+
+        /* ── Stats row ── */
+
+        .stats-row {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 0.75rem;
+            animation: fadeIn 0.6s ease-out 0.1s both;
+        }
+
+        .stat-card {
+            display: flex;
+            flex-direction: column;
+            gap: 0.25rem;
+            padding: 1rem;
+            border: 1px solid var(--border-subtle);
+            border-radius: 8px;
+            background: var(--bg-surface);
+        }
+
+        .stat-value {
+            font-family: var(--font-mono);
+            font-size: 1.5rem;
+            color: var(--text-primary);
+        }
+
+        .stat-value.accent { color: var(--accent); }
+
+        .stat-label {
+            font-family: var(--font-mono);
+            font-size: 0.6875rem;
+            color: var(--text-tertiary);
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+        }
+
+        .stat-detail {
+            font-family: var(--font-mono);
+            font-size: 0.625rem;
+            color: var(--text-tertiary);
+        }
+
+        /* ── Agent cards ── */
+
+        .agents-section { animation: fadeIn 0.6s ease-out 0.15s both; }
+
+        .agent-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 0.75rem;
+            margin-top: 0.5rem;
+        }
+
+        .agent-card {
+            padding: 1rem;
+            border: 1px solid var(--border-subtle);
+            border-radius: 8px;
+            background: var(--bg-surface);
+            transition: all 0.15s;
+        }
+
+        .agent-card:hover {
+            border-color: var(--border);
+            background: var(--bg-elevated);
+        }
+
+        .agent-name {
+            font-family: var(--font-mono);
+            font-size: 0.8125rem;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .agent-role {
+            font-family: var(--font-mono);
+            font-size: 0.6875rem;
+            color: var(--text-tertiary);
+            margin-top: 0.125rem;
+        }
+
+        .agent-status {
+            display: flex;
+            align-items: center;
+            gap: 0.375rem;
+            margin-top: 0.625rem;
+            font-family: var(--font-mono);
+            font-size: 0.6875rem;
+            color: var(--text-secondary);
+        }
+
+        .agent-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+        }
+
+        .agent-dot.active { background: var(--accent); animation: pulse 3s ease-in-out infinite; }
+        .agent-dot.idle { background: var(--text-tertiary); }
+        .agent-dot.scheduled { background: var(--ev-push); }
+
+        .agent-skills {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            margin-top: 0.5rem;
+        }
+
+        .skill-tag {
+            font-family: var(--font-mono);
+            font-size: 0.5625rem;
+            padding: 0.125rem 0.375rem;
+            border-radius: 3px;
+            background: var(--accent-dim);
+            color: var(--accent-muted);
+            letter-spacing: 0.02em;
+        }
+
+        .agent-last {
+            font-family: var(--font-mono);
+            font-size: 0.625rem;
+            color: var(--text-tertiary);
+            margin-top: 0.625rem;
+            padding-top: 0.5rem;
+            border-top: 1px solid var(--border-subtle);
+            line-height: 1.4;
+        }
+
+        /* ── Pipeline ── */
+
+        .pipeline-section { animation: fadeIn 0.6s ease-out 0.2s both; }
+
+        .pipeline {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 0.5rem;
+            margin-top: 0.5rem;
+        }
+
+        .pipeline-col {
+            background: var(--bg-surface);
+            border: 1px solid var(--border-subtle);
+            border-radius: 8px;
+            padding: 0.75rem;
+        }
+
+        .pipeline-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 0.625rem;
+        }
+
+        .pipeline-label {
+            font-family: var(--font-mono);
+            font-size: 0.625rem;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+        }
+
+        .pipeline-count {
+            font-family: var(--font-mono);
+            font-size: 0.5625rem;
+            color: var(--text-tertiary);
+            background: var(--bg-elevated);
+            padding: 0.0625rem 0.3rem;
+            border-radius: 3px;
+        }
+
+        .pipeline-item {
+            padding: 0.5rem;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border-subtle);
+            border-radius: 6px;
+            margin-bottom: 0.375rem;
+        }
+
+        .pipeline-item-title {
+            font-family: var(--font-mono);
+            font-size: 0.6875rem;
+            color: var(--text-primary);
+            line-height: 1.3;
+        }
+
+        .pipeline-item-assignee {
+            font-family: var(--font-mono);
+            font-size: 0.5625rem;
+            color: var(--text-tertiary);
+            margin-top: 0.25rem;
+        }
+
+        .pipeline-empty {
+            font-family: var(--font-mono);
+            font-size: 0.625rem;
+            color: var(--text-tertiary);
+            text-align: center;
+            padding: 1rem 0;
+        }
+
+        /* ── Schedule view ── */
+
+        .schedule-panel {
+            padding: 2rem;
+            max-width: 720px;
+            margin: 0 auto;
+            animation: fadeIn 0.6s ease-out both;
+        }
+
+        .schedule-heading {
+            font-family: var(--font-display);
+            font-size: 1.75rem;
+            font-style: italic;
+            color: var(--text-primary);
+            letter-spacing: -0.02em;
+            margin-bottom: 0.375rem;
+        }
+
+        .schedule-sub {
+            font-family: var(--font-mono);
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            margin-bottom: 1.5rem;
+        }
+
+        .schedule-grid {
+            display: grid;
+            grid-template-columns: 80px repeat(5, 1fr);
+            gap: 1px;
+            background: var(--border-subtle);
+            border-radius: 8px;
+            overflow: hidden;
+            margin-bottom: 2rem;
+        }
+
+        .sched-cell {
+            padding: 0.75rem;
+            background: var(--bg-surface);
+            font-family: var(--font-mono);
+            font-size: 0.6875rem;
+        }
+
+        .sched-cell.header {
+            background: var(--bg-elevated);
+            color: var(--text-tertiary);
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            font-size: 0.625rem;
+        }
+
+        .sched-cell.time {
+            color: var(--text-secondary);
+            font-weight: 600;
+            background: var(--bg-elevated);
+        }
+
+        .sched-agent {
+            display: flex;
+            align-items: center;
+            gap: 0.375rem;
+        }
+
+        .sched-dot {
+            width: 5px;
+            height: 5px;
+            border-radius: 50%;
+        }
+
+        .sched-dot.app { background: var(--accent); }
+        .sched-dot.platform { background: var(--ev-push); }
+
+        .schedule-note {
+            padding: 0.75rem 1rem;
+            border: 1px solid var(--border-subtle);
+            border-radius: 8px;
+            background: var(--accent-dim);
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .schedule-note-chevron {
+            font-family: var(--font-mono);
+            color: var(--accent-muted);
+            font-size: 0.75rem;
+        }
+
+        .schedule-note-text {
+            font-family: var(--font-mono);
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+        }
+
+        /* ── Skills view ── */
+
+        .skills-panel {
+            padding: 2rem;
+            max-width: 720px;
+            margin: 0 auto;
+            animation: fadeIn 0.6s ease-out both;
+        }
+
+        .skills-heading {
+            font-family: var(--font-display);
+            font-size: 1.75rem;
+            font-style: italic;
+            color: var(--text-primary);
+            letter-spacing: -0.02em;
+            margin-bottom: 0.375rem;
+        }
+
+        .skills-sub {
+            font-family: var(--font-mono);
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            margin-bottom: 1.5rem;
+        }
+
+        .skill-cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 0.75rem;
+        }
+
+        .skill-card {
+            padding: 1rem;
+            border: 1px solid var(--border-subtle);
+            border-radius: 8px;
+            background: var(--bg-surface);
+            transition: all 0.15s;
+        }
+
+        .skill-card:hover {
+            border-color: var(--border);
+            background: var(--bg-elevated);
+        }
+
+        .skill-card-name {
+            font-family: var(--font-mono);
+            font-size: 0.8125rem;
+            font-weight: 600;
+            color: var(--accent);
+        }
+
+        .skill-card-desc {
+            font-family: var(--font-mono);
+            font-size: 0.6875rem;
+            color: var(--text-secondary);
+            line-height: 1.4;
+            margin-top: 0.375rem;
+        }
+
+        .skill-card-used {
+            font-family: var(--font-mono);
+            font-size: 0.625rem;
+            color: var(--text-tertiary);
+            margin-top: 0.625rem;
+            padding-top: 0.5rem;
+            border-top: 1px solid var(--border-subtle);
+        }
+
+        /* ── Activity feed (right panel) ── */
+
+        .activity { padding: 1rem 0; }
+
+        .activity-header {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0 1rem;
+            margin-bottom: 0.75rem;
+        }
+
+        .activity-title {
+            font-family: var(--font-mono);
+            font-size: 0.6875rem;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+        }
+
+        .activity-dot {
+            width: 5px;
+            height: 5px;
+            border-radius: 50%;
+            background: var(--accent);
+            animation: pulse 3s ease-in-out infinite;
+        }
+
+        .activity-list { display: flex; flex-direction: column; }
+
+        .activity-event {
+            display: flex;
+            flex-direction: column;
+            gap: 0.25rem;
+            padding: 0.625rem 1rem;
+            border-bottom: 1px solid var(--border-subtle);
+            transition: background 0.15s;
+        }
+
+        .activity-event:hover { background: var(--accent-dim); }
+
+        .activity-event-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .event-badge {
+            font-family: var(--font-mono);
+            font-size: 0.5625rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            padding: 0.125rem 0.375rem;
+            border-radius: 3px;
+        }
+
+        .event-badge.pr { color: var(--ev-pr); background: var(--ev-pr-bg); }
+        .event-badge.review { color: var(--ev-discussion); background: var(--ev-discussion-bg); }
+        .event-badge.idea { color: var(--ev-push); background: var(--ev-push-bg); }
+        .event-badge.plan { color: var(--ev-issue); background: var(--ev-issue-bg); }
+        .event-badge.ci { color: var(--accent); background: var(--accent-dim); }
+
+        .event-time {
+            font-family: var(--font-mono);
+            font-size: 0.625rem;
+            color: var(--text-tertiary);
+        }
+
+        .event-summary {
+            font-family: var(--font-mono);
+            font-size: 0.75rem;
+            color: var(--text-primary);
+            line-height: 1.4;
+        }
+
+        .event-agent {
+            font-family: var(--font-mono);
+            font-size: 0.625rem;
+            color: var(--text-tertiary);
+        }
+
+        /* ── No-agents state ── */
+
+        .no-agents-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.75rem;
+            padding: 4rem 2rem;
+            animation: fadeIn 0.6s ease-out both;
+        }
+
+        .no-agents-icon {
+            font-family: var(--font-mono);
+            font-size: 1.5rem;
+            color: var(--text-tertiary);
+        }
+
+        .no-agents-title {
+            font-family: var(--font-mono);
+            font-size: 0.8125rem;
+            color: var(--text-secondary);
+        }
+
+        .no-agents-hint {
+            font-family: var(--font-mono);
+            font-size: 0.6875rem;
+            color: var(--text-tertiary);
+        }
+
+        .no-agents-hint code {
+            background: var(--bg-elevated);
+            padding: 0.125rem 0.375rem;
+            border-radius: 3px;
+        }
+
+        /* ── Login ── */
+
+        .login-overlay {
+            position: fixed;
+            inset: 0;
+            z-index: 100;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: var(--bg-primary);
+        }
+
+        .login-overlay.hidden { display: none; }
+
+        .login-card {
+            position: relative;
+            z-index: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 2rem;
+            padding: 3rem 2.5rem;
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            background: var(--bg-surface);
+            min-width: 340px;
+            animation: fadeIn 0.6s ease-out both;
+        }
+
+        .login-wordmark {
+            font-family: var(--font-display);
+            font-size: 2.5rem;
+            font-weight: 400;
+            font-style: italic;
+            color: var(--text-primary);
+            letter-spacing: -0.03em;
+            line-height: 1;
+        }
+
+        .login-subtitle {
+            font-family: var(--font-mono);
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            letter-spacing: 0.02em;
+        }
+
+        .login-btn {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.625rem;
+            width: 100%;
+            padding: 0.75rem 1.5rem;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: var(--bg-elevated);
+            color: var(--text-primary);
+            font-family: var(--font-mono);
+            font-size: 0.8125rem;
+            letter-spacing: 0.02em;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .login-btn:hover {
+            border-color: var(--accent-muted);
+            background: var(--accent-dim);
+            color: var(--accent);
+        }
+
+        .login-btn svg { width: 18px; height: 18px; }
+
+        .login-footer {
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+        }
+
+        .login-footer-dot {
+            width: 5px;
+            height: 5px;
+            border-radius: 50%;
+            background: var(--accent);
+            opacity: 0.4;
+        }
+
+        .login-footer-text {
+            font-family: var(--font-mono);
+            font-size: 0.625rem;
+            color: var(--text-tertiary);
+            letter-spacing: 0.04em;
+        }
+
+        /* ── Responsive ── */
+
+        @media (max-width: 960px) {
+            .columns { grid-template-columns: 220px 1fr; }
+            .col-right { display: none; }
+            .stats-row { grid-template-columns: repeat(2, 1fr); }
+            .pipeline { grid-template-columns: repeat(2, 1fr); }
+        }
+
+        @media (max-width: 640px) {
+            .columns { grid-template-columns: 1fr; }
+            .col-left { display: none; }
+            .stats-row { grid-template-columns: 1fr 1fr; }
+            .pipeline { grid-template-columns: 1fr 1fr; }
+        }
+    </style>
+</head>
+<body>
+
+<!-- Login -->
+<div class="login-overlay" id="login-overlay">
+    <div class="login-card">
+        <div style="display:flex;flex-direction:column;align-items:center;gap:0.5rem;">
+            <h1 class="login-wordmark">Spaces</h1>
+            <p class="login-subtitle">Sign in to your workspace</p>
+        </div>
+        <button class="login-btn" onclick="doLogin()">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0 1 12 6.844a9.59 9.59 0 0 1 2.504.337c1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.02 10.02 0 0 0 22 12.017C22 6.484 17.522 2 12 2Z"/></svg>
+            <span>Continue with GitHub</span>
+        </button>
+        <div class="login-footer">
+            <span class="login-footer-dot"></span>
+            <span class="login-footer-text">spaces.cloudcompute.com</span>
+        </div>
+    </div>
+</div>
+
+<!-- App shell -->
+<div class="shell" id="shell" style="display:none;">
+    <div class="topbar">
+        <div class="topbar-left">
+            <span class="brand">Spaces</span>
+            <div class="topbar-tabs">
+                <button class="topbar-tab active" data-view="dashboard">Dashboard</button>
+                <button class="topbar-tab" data-view="schedule">Schedule</button>
+                <button class="topbar-tab" data-view="skills">Skills</button>
+            </div>
+        </div>
+        <div class="topbar-right">
+            <span class="user-name">fairchild</span>
+            <div class="avatar">F</div>
+        </div>
+    </div>
+
+    <div class="columns">
+        <!-- Sidebar -->
+        <div class="col-left">
+            <div class="sidebar" id="sidebar"></div>
+        </div>
+
+        <!-- Center -->
+        <div class="col-center" id="center-content"></div>
+
+        <!-- Right: Activity -->
+        <div class="col-right">
+            <div class="activity" id="activity-feed"></div>
+        </div>
+    </div>
+</div>
+
+<script>
+(function() {
+    "use strict";
+
+    // ── Mock data ──
+
+    const REPOS = [
+        {
+            name: "workspaces", full: "fairchild/workspaces", hasAgents: true,
+            agents: [
+                { name: "April Clearwater", role: "Application Lead", status: "active", statusText: "Reviewing PR #190", skills: ["UI", "Terminal", "UX"], last: "Opened PR #190 \u2014 workspace creation diagnostics \u00b7 2h" },
+                { name: "Plat Ironwood", role: "Platform Lead", status: "scheduled", statusText: "Next run: 7:30am PT", skills: ["CI/CD", "Infra", "Testing"], last: "Fixed snapshot cache staleness \u00b7 6h" },
+                { name: "Peter Planner", role: "Planner", status: "idle", statusText: "Awaiting ideas", skills: ["Planning", "Milestones"], last: "Created Milestone 7 \u00b7 1d" },
+                { name: "Oliver Obever", role: "Observer", status: "scheduled", statusText: "Monday 1:30pm UTC", skills: ["Ops", "Metrics"], last: "Published weekly report \u00b7 5d" }
+            ],
+            stats: { agents: 4, skills: 5, openPRs: 2, readyIssues: 3 },
+            pipeline: {
+                ready: [{ title: "Startup perf budget alerts", assignee: null }, { title: "Sidebar keyboard nav", assignee: null }, { title: "Terminal scroll anchor", assignee: null }],
+                claimed: [{ title: "Workspace creation diagnostics", assignee: "April" }],
+                review: [{ title: "PR #190: creation diagnostics", assignee: "April" }, { title: "PR #166: snapshot cache fix", assignee: "Plat" }],
+                mergeable: []
+            },
+            activity: [
+                { type: "pr", title: "PR #190: workspace creation diagnostics", agent: "April", time: "2h" },
+                { type: "review", title: "Reviewed PR #166: snapshot cache fix", agent: "Plat", time: "6h" },
+                { type: "plan", title: "Created Milestone 7: Terminal Focus", agent: "Peter", time: "1d" },
+                { type: "idea", title: "[idea] Lume VM snapshot pre-warming", agent: "Plat", time: "2d" },
+                { type: "review", title: "Approved PR #165: parallel refresh", agent: "April", time: "3d" },
+                { type: "ci", title: "CI passed: startup perf budgets", agent: "System", time: "3d" }
+            ]
+        },
+        {
+            name: "homepage", full: "fairchild/homepage", hasAgents: true,
+            agents: [{ name: "April Clearwater", role: "Application Lead", status: "idle", statusText: "No pending work", skills: ["UI", "Design"], last: "Updated hero section \u00b7 4d" }],
+            stats: { agents: 1, skills: 1, openPRs: 0, readyIssues: 1 },
+            pipeline: { ready: [{ title: "Add dark mode toggle", assignee: null }], claimed: [], review: [], mergeable: [] },
+            activity: [{ type: "pr", title: "PR #12: Updated hero section", agent: "April", time: "4d" }]
+        },
+        {
+            name: "dotfiles", full: "fairchild/dotfiles", hasAgents: false,
+            agents: [], stats: { agents: 0, skills: 0, openPRs: 0, readyIssues: 0 },
+            pipeline: { ready: [], claimed: [], review: [], mergeable: [] }, activity: []
+        }
+    ];
+
+    const SKILLS = [
+        { name: "cofounder-contributor", desc: "Runs standing personas with daily wake-up, PR review, issue execution.", usedBy: "April, Plat" },
+        { name: "drive", desc: "Manual milestone execution \u2014 plan, refresh, execute issues one by one.", usedBy: "Owner" },
+        { name: "gh-discuss", desc: "Multi-agent coordination via GitHub Discussions.", usedBy: "All agents" },
+        { name: "peter-planner", desc: "Converts approved [idea] discussions into Issues + Milestones.", usedBy: "Peter" },
+        { name: "tart-gui-automation", desc: "Headless macOS VM GUI automation via Tart/VNC.", usedBy: "April, Plat" }
+    ];
+
+    const SCHEDULE = [
+        { day: "Mon", first: { name: "April", cls: "app" }, second: { name: "Plat", cls: "platform" } },
+        { day: "Tue", first: { name: "Plat", cls: "platform" }, second: { name: "April", cls: "app" } },
+        { day: "Wed", first: { name: "April", cls: "app" }, second: { name: "Plat", cls: "platform" } },
+        { day: "Thu", first: { name: "Plat", cls: "platform" }, second: { name: "April", cls: "app" } },
+        { day: "Fri", first: { name: "April", cls: "app" }, second: { name: "Plat", cls: "platform" } }
+    ];
+
+    let selectedRepo = REPOS[0];
+    let currentView = "dashboard";
+
+    // ── Login ──
+
+    window.doLogin = function() {
+        document.getElementById("login-overlay").classList.add("hidden");
+        document.getElementById("shell").style.display = "flex";
+        renderAll();
+    };
+
+    // ── Tabs ──
+
+    document.querySelectorAll(".topbar-tab").forEach(function(tab) {
+        tab.addEventListener("click", function() {
+            document.querySelectorAll(".topbar-tab").forEach(function(t) { t.classList.remove("active"); });
+            tab.classList.add("active");
+            currentView = tab.dataset.view;
+            renderCenter();
+        });
+    });
+
+    // ── Render ──
+
+    function renderAll() {
+        renderSidebar();
+        renderCenter();
+        renderActivity();
+    }
+
+    function renderSidebar() {
+        var el = document.getElementById("sidebar");
+        var html = '<div class="section-header"><span class="section-title">Repos</span><span class="section-count">' + REPOS.length + '</span></div><div class="repo-list">';
+        REPOS.forEach(function(repo) {
+            html += '<div class="repo-row' + (repo === selectedRepo ? ' selected' : '') + '" data-repo="' + repo.name + '">';
+            html += '<span class="status-dot ' + (repo.hasAgents ? 'has-agents' : 'no-agents') + '"></span>';
+            html += '<div class="repo-row-content"><span class="repo-name">' + repo.name + '</span>';
+            html += '<span class="repo-meta">' + (repo.hasAgents ? repo.stats.agents + ' agent' + (repo.stats.agents !== 1 ? 's' : '') : 'no agents') + '</span>';
+            html += '</div></div>';
+        });
+        html += '</div>';
+        el.innerHTML = html;
+
+        el.querySelectorAll(".repo-row").forEach(function(row) {
+            row.addEventListener("click", function() {
+                var name = row.dataset.repo;
+                selectedRepo = REPOS.find(function(r) { return r.name === name; });
+                renderAll();
+            });
+        });
+    }
+
+    function renderCenter() {
+        var el = document.getElementById("center-content");
+        if (currentView === "schedule") { renderSchedule(el); return; }
+        if (currentView === "skills") { renderSkills(el); return; }
+        renderDashboard(el);
+    }
+
+    function renderDashboard(el) {
+        var repo = selectedRepo;
+        if (!repo.hasAgents) {
+            el.innerHTML = '<div class="main-panel"><h2 class="main-greeting"><span class="repo-accent">' + repo.full + '</span></h2><div class="no-agents-state"><span class="no-agents-icon">&gt;_</span><span class="no-agents-title">No agent setup detected</span><span class="no-agents-hint">Add <code>.agents/</code> and <code>CLAUDE.md</code> to enable</span></div></div>';
+            return;
+        }
+
+        var html = '<div class="main-panel">';
+
+        // Greeting
+        html += '<h2 class="main-greeting"><span class="repo-accent">' + repo.full + '</span></h2>';
+
+        // Stats
+        html += '<div class="stats-row">';
+        html += statCard(repo.stats.agents, "Agents", repo.agents.filter(function(a){return a.status==="active"}).length + " active", true);
+        html += statCard(repo.stats.skills, "Skills", "capabilities", false);
+        html += statCard(repo.stats.openPRs, "Open PRs", "agent-authored", true);
+        html += statCard(repo.stats.readyIssues, "Ready", "queued", false);
+        html += '</div>';
+
+        // Agent grid
+        html += '<div class="agents-section"><div class="section-header"><span class="section-title">Agent Team</span><span class="section-count">' + repo.agents.length + '</span></div><div class="agent-grid">';
+        repo.agents.forEach(function(agent) {
+            html += '<div class="agent-card">';
+            html += '<div class="agent-name">' + agent.name + '</div>';
+            html += '<div class="agent-role">' + agent.role + '</div>';
+            html += '<div class="agent-status"><span class="agent-dot ' + agent.status + '"></span>' + agent.statusText + '</div>';
+            html += '<div class="agent-skills">' + agent.skills.map(function(s){return '<span class="skill-tag">' + s + '</span>';}).join('') + '</div>';
+            html += '<div class="agent-last">' + agent.last + '</div>';
+            html += '</div>';
+        });
+        html += '</div></div>';
+
+        // Pipeline
+        html += '<div class="pipeline-section"><div class="section-header"><span class="section-title">Issue Pipeline</span></div><div class="pipeline">';
+        var cols = [["ready","Ready"],["claimed","Claimed"],["review","In Review"],["mergeable","Mergeable"]];
+        cols.forEach(function(c) {
+            var items = repo.pipeline[c[0]];
+            html += '<div class="pipeline-col"><div class="pipeline-header"><span class="pipeline-label">' + c[1] + '</span><span class="pipeline-count">' + items.length + '</span></div>';
+            if (items.length === 0) { html += '<div class="pipeline-empty">\u2014</div>'; }
+            else { items.forEach(function(item) { html += '<div class="pipeline-item"><div class="pipeline-item-title">' + item.title + '</div>' + (item.assignee ? '<div class="pipeline-item-assignee">' + item.assignee + '</div>' : '') + '</div>'; }); }
+            html += '</div>';
+        });
+        html += '</div></div>';
+
+        html += '</div>';
+        el.innerHTML = html;
+    }
+
+    function statCard(value, label, detail, accent) {
+        return '<div class="stat-card"><span class="stat-value' + (accent ? ' accent' : '') + '">' + value + '</span><span class="stat-label">' + label + '</span><span class="stat-detail">' + detail + '</span></div>';
+    }
+
+    function renderSchedule(el) {
+        var html = '<div class="schedule-panel">';
+        html += '<h2 class="schedule-heading">Agent schedule</h2>';
+        html += '<p class="schedule-sub">Weekday wake-ups with 30-minute offset. Second agent sees first\'s output.</p>';
+
+        html += '<div class="schedule-grid">';
+        html += '<div class="sched-cell header"></div>';
+        SCHEDULE.forEach(function(s) { html += '<div class="sched-cell header">' + s.day + '</div>'; });
+
+        html += '<div class="sched-cell time">7:00 AM</div>';
+        SCHEDULE.forEach(function(s) { html += '<div class="sched-cell"><div class="sched-agent"><span class="sched-dot ' + s.first.cls + '"></span>' + s.first.name + '</div></div>'; });
+
+        html += '<div class="sched-cell time">7:30 AM</div>';
+        SCHEDULE.forEach(function(s) { html += '<div class="sched-cell"><div class="sched-agent"><span class="sched-dot ' + s.second.cls + '"></span>' + s.second.name + '</div></div>'; });
+
+        html += '</div>';
+
+        html += '<div class="schedule-note"><span class="schedule-note-chevron">&gt;</span><span class="schedule-note-text">Oliver Obever runs weekly on Monday at 1:30pm UTC</span></div>';
+        html += '</div>';
+        el.innerHTML = html;
+    }
+
+    function renderSkills(el) {
+        var html = '<div class="skills-panel">';
+        html += '<h2 class="skills-heading">Skill inventory</h2>';
+        html += '<p class="skills-sub">Reusable capabilities discovered in .agents/skills/ across repos.</p>';
+        html += '<div class="skill-cards">';
+        SKILLS.forEach(function(skill) {
+            html += '<div class="skill-card">';
+            html += '<div class="skill-card-name">' + skill.name + '</div>';
+            html += '<div class="skill-card-desc">' + skill.desc + '</div>';
+            html += '<div class="skill-card-used">Used by: ' + skill.usedBy + '</div>';
+            html += '</div>';
+        });
+        html += '</div></div>';
+        el.innerHTML = html;
+    }
+
+    function renderActivity() {
+        var el = document.getElementById("activity-feed");
+        var events = selectedRepo.activity || [];
+        var html = '<div class="activity-header"><span class="activity-title">Activity</span><span class="activity-dot"></span></div>';
+
+        if (events.length === 0) {
+            html += '<div style="font-family:var(--font-mono);font-size:0.6875rem;color:var(--text-tertiary);text-align:center;padding:2rem 1.5rem;">No agent activity yet</div>';
+        } else {
+            html += '<div class="activity-list">';
+            events.forEach(function(ev) {
+                html += '<div class="activity-event"><div class="activity-event-header"><span class="event-badge ' + ev.type + '">' + ev.type.toUpperCase() + '</span><span class="event-time">' + ev.time + '</span></div><span class="event-summary">' + ev.title + '</span><span class="event-agent">' + ev.agent + '</span></div>';
+            });
+            html += '</div>';
+        }
+        el.innerHTML = html;
+    }
+})();
+</script>
+</body>
+</html>
