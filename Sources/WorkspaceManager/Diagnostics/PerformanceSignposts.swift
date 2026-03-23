@@ -7,11 +7,13 @@
 
 import Foundation
 import OSLog
+import WorkspaceManagerCore
 
 enum PerformanceSignposts {
     #if DEBUG
         typealias NewWorkspaceSheetMetricObserver = (_ phase: String, _ fields: [String: String]) -> Void
         typealias OpenInEditorMetricObserver = (_ phase: String, _ fields: [String: String]) -> Void
+        typealias WorkspaceClickMetricObserver = (_ phase: String, _ fields: [String: String]) -> Void
     #endif
 
     private struct ActiveInterval {
@@ -43,9 +45,11 @@ enum PerformanceSignposts {
     nonisolated(unsafe) private static var webFirstLoadSourceID: UUID?
     nonisolated(unsafe) private static var newWorkspaceSheetInterval: ActiveNewWorkspaceSheetInterval?
     nonisolated(unsafe) private static var openInEditorIntervals: [UUID: ActiveInterval] = [:]
+    nonisolated(unsafe) private static var workspaceClickIntervals: [UUID: ActiveInterval] = [:]
     #if DEBUG
         nonisolated(unsafe) private static var newWorkspaceSheetMetricObserver: NewWorkspaceSheetMetricObserver?
         nonisolated(unsafe) private static var openInEditorMetricObserver: OpenInEditorMetricObserver?
+        nonisolated(unsafe) private static var workspaceClickMetricObserver: WorkspaceClickMetricObserver?
     #endif
 
     static func beginLaunchToFirstPromptIfNeeded() {
@@ -81,6 +85,7 @@ enum PerformanceSignposts {
             durationMs,
             trigger
         )
+        recordDiagnostic(metric: "launch_to_first_prompt", durationMs: durationMs, labels: ["trigger": trigger])
     }
 
     static func beginRepoHydration(rootPath: String) {
@@ -111,6 +116,11 @@ enum PerformanceSignposts {
             durationMs,
             discoveredCount,
             importedCount
+        )
+        recordDiagnostic(
+            metric: "repo_hydration",
+            durationMs: durationMs,
+            labels: ["discovered": "\(discoveredCount)", "imported": "\(importedCount)"]
         )
     }
 
@@ -158,6 +168,75 @@ enum PerformanceSignposts {
 
     static func cancelRepoClickToFocusedInputIfNeeded(sessionID: UUID, reason: String) {
         endRepoClickToFocusedInputIfNeeded(sessionID: sessionID, outcome: reason)
+    }
+
+    static func beginWorkspaceClickToFocusedInput(sessionID: UUID, workspacePath: String) {
+        lock.lock()
+        defer { lock.unlock() }
+
+        if let existing = workspaceClickIntervals.removeValue(forKey: sessionID) {
+            signposter.endInterval("WorkspaceClickToFocusedInput", existing.state)
+            let durationMs = milliseconds(since: existing.startedAt)
+            let fields = [
+                "metric": "workspace_click_to_focus",
+                "status": "completed",
+                "session": sessionID.uuidString,
+                "outcome": "superseded",
+                "duration_ms": String(format: "%.2f", durationMs),
+            ]
+            emitPerfLog(
+                "[Perf] metric=workspace_click_to_focus duration_ms=%.2f session=%@ outcome=superseded",
+                durationMs,
+                sessionID.uuidString
+            )
+            emitWorkspaceClickMetricEvent(phase: "completed", fields: fields)
+        }
+
+        let state = signposter.beginInterval("WorkspaceClickToFocusedInput")
+        workspaceClickIntervals[sessionID] = ActiveInterval(state: state, startedAt: clock.now)
+        let fields = [
+            "metric": "workspace_click_to_focus",
+            "status": "started",
+            "session": sessionID.uuidString,
+            "path": workspacePath,
+        ]
+        emitPerfLog(
+            "[Perf] metric=workspace_click_to_focus status=started session=%@ path=%@",
+            sessionID.uuidString,
+            workspacePath
+        )
+        emitWorkspaceClickMetricEvent(phase: "started", fields: fields)
+    }
+
+    static func endWorkspaceClickToFocusedInputIfNeeded(sessionID: UUID, outcome: String) {
+        let interval: ActiveInterval?
+
+        lock.lock()
+        interval = workspaceClickIntervals.removeValue(forKey: sessionID)
+        lock.unlock()
+
+        guard let interval else { return }
+
+        signposter.endInterval("WorkspaceClickToFocusedInput", interval.state)
+        let durationMs = milliseconds(since: interval.startedAt)
+        let fields = [
+            "metric": "workspace_click_to_focus",
+            "status": "completed",
+            "session": sessionID.uuidString,
+            "outcome": outcome,
+            "duration_ms": String(format: "%.2f", durationMs),
+        ]
+        emitPerfLog(
+            "[Perf] metric=workspace_click_to_focus duration_ms=%.2f session=%@ outcome=%@",
+            durationMs,
+            sessionID.uuidString,
+            outcome
+        )
+        emitWorkspaceClickMetricEvent(phase: "completed", fields: fields)
+    }
+
+    static func cancelWorkspaceClickToFocusedInputIfNeeded(sessionID: UUID, reason: String) {
+        endWorkspaceClickToFocusedInputIfNeeded(sessionID: sessionID, outcome: reason)
     }
 
     static func beginWebViewInitializationIfNeeded() {
@@ -422,6 +501,12 @@ enum PerformanceSignposts {
             openInEditorMetricObserver = observer
             lock.unlock()
         }
+
+        static func setWorkspaceClickMetricObserver(_ observer: WorkspaceClickMetricObserver?) {
+            lock.lock()
+            workspaceClickMetricObserver = observer
+            lock.unlock()
+        }
     #endif
 
     private static func emitPerfLog(_ format: StaticString, _ args: CVarArg...) {
@@ -456,10 +541,33 @@ enum PerformanceSignposts {
         #endif
     }
 
+    private static func emitWorkspaceClickMetricEvent(phase: String, fields: [String: String]) {
+        #if DEBUG
+            let observer: WorkspaceClickMetricObserver?
+            lock.lock()
+            observer = workspaceClickMetricObserver
+            lock.unlock()
+            observer?(phase, fields)
+        #else
+            _ = phase
+            _ = fields
+        #endif
+    }
+
     private static func milliseconds(since start: ContinuousClock.Instant) -> Double {
         let duration = start.duration(to: clock.now)
         let components = duration.components
         return Double(components.seconds) * 1_000
             + Double(components.attoseconds) / 1_000_000_000_000_000
+    }
+
+    private static func recordDiagnostic(metric: String, durationMs: Double, labels: [String: String]) {
+        Task.detached {
+            await StartupDiagnosticsStore.shared.record(
+                metric: metric,
+                durationMs: durationMs,
+                labels: labels
+            )
+        }
     }
 }

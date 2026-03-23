@@ -98,6 +98,51 @@ sequenceDiagram
     Content->>Perf: endRepoClickToFocusedInputIfNeeded(outcome)
 ```
 
+### `workspace_click_to_focus`
+
+What it measures:
+- Time from selecting a workspace row to terminal focus being restored for that workspace session.
+
+Start event:
+- `PerformanceSignposts.beginWorkspaceClickToFocusedInput(sessionID:workspacePath:)` in `handleWorkspaceSelection`.
+
+End event:
+- `PerformanceSignposts.endWorkspaceClickToFocusedInputIfNeeded(...)` when focus callback confirms terminal became first responder.
+
+Why it matters:
+- It reflects interaction responsiveness when switching between workspaces, analogous to `repo_click_to_focus` for repo switches.
+
+Sub-spans (emitted via `InvestigationDiagnostics.emitFocus`):
+- `focus_surface_resolution` — from `requestMainTerminalFocus` call to terminal resolved from `surfaceStore.terminal(for:)`
+- `focus_request_to_first_responder` — from `TerminalFocusManager.requestFocus()` call to `makeFirstResponder` success
+
+Notes:
+- Mirrors the `repo_click_to_focus` pattern exactly. Outcome `focused` means focus was successfully restored.
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant Sidebar as "SidebarView"
+    participant Content as "ContentView"
+    participant Session as "HostTerminalStateStore"
+    participant Perf as "PerformanceSignposts"
+    participant Coord as "TerminalFocusCoordinator"
+    participant Focus as "TerminalFocusManager"
+    participant Term as "GhosttySurfaceView"
+
+    User->>Sidebar: click workspace row
+    Sidebar->>Content: onWorkspaceSelected(workspace)
+    Content->>Session: activateSession(workspacePath)
+    Content->>Perf: beginWorkspaceClickToFocusedInput(sessionID, path)
+    Content->>Coord: requestMainTerminalFocus(targetSession)
+    Note over Coord: sub-span: focus_surface_resolution
+    Coord->>Focus: requestFocus(for: terminal)
+    Note over Focus: sub-span: focus_request_to_first_responder
+    Focus->>Term: makeFirstResponder(terminal)
+    Focus-->>Content: onFocused callback
+    Content->>Perf: endWorkspaceClickToFocusedInputIfNeeded(outcome)
+```
+
 ### `new_workspace_sheet_ready`
 
 What it measures:

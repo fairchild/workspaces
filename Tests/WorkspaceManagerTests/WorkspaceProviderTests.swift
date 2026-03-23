@@ -191,35 +191,28 @@ struct WorkspaceProviderTests {
         )
     }
 
-    @Test("setupRequirement followed by performSetup issues only one snapshot probe")
-    func setupRequirementCachesSnapshotForPerformSetup() async throws {
-        let runtimeService = SpyLumeRuntimeService(state: .setupRequired)
+    @Test("performSetup sees fresh state even when runtime changes after setupRequirement")
+    func performSetupAlwaysTakesFreshSnapshot() async throws {
+        // Start as repairRequired, then transition to ready before performSetup runs.
+        let runtimeService = SpyLumeRuntimeService(state: .repairRequired)
         let provider = LumeWorkspaceProvider(
             baseURL: URL(string: "http://localhost:7777/lume/")!,
             runtimeService: runtimeService
         )
 
-        // Simulate the full confirm-and-continue flow: setupRequirement then performSetup.
-        _ = try await provider.setupRequirement(for: .createWorkspace(name: "vm", guestOS: .macOS))
-        try? await provider.performSetup(progress: nil)
-
-        let callCount = await runtimeService.snapshotCallCount
-        #expect(callCount == 1, "Expected exactly one snapshot() probe; got \(callCount)")
-    }
-
-    @Test("performSetup without prior setupRequirement still probes snapshot")
-    func performSetupWithoutCacheFallsBackToFreshProbe() async throws {
-        let runtimeService = SpyLumeRuntimeService(state: .setupRequired)
-        let provider = LumeWorkspaceProvider(
-            baseURL: URL(string: "http://localhost:7777/lume/")!,
-            runtimeService: runtimeService
+        let requirement = try await provider.setupRequirement(
+            for: .createWorkspace(name: "vm", guestOS: .macOS)
         )
+        #expect(requirement != nil, "repairRequired should produce a confirmation")
 
-        // Call performSetup directly — no prior setupRequirement.
+        // Runtime self-heals between setupRequirement and performSetup.
+        await runtimeService.setState(.ready)
+
+        // performSetup must re-probe and see .ready — not act on stale .repairRequired.
         try? await provider.performSetup(progress: nil)
 
         let callCount = await runtimeService.snapshotCallCount
-        #expect(callCount == 1, "Expected exactly one snapshot() probe from performSetup fallback; got \(callCount)")
+        #expect(callCount == 2, "performSetup must take its own fresh snapshot")
     }
 
     @Test("Lume bridged reachability extracts interface and matching ARP IP")
@@ -250,16 +243,20 @@ struct WorkspaceProviderTests {
 /// stubs install/verify/repair to return without error.
 private actor SpyLumeRuntimeService: LumeRuntimeServiceProtocol {
     private(set) var snapshotCallCount = 0
-    private let fixedState: LumeRuntimeState
+    private var currentState: LumeRuntimeState
 
     init(state: LumeRuntimeState) {
-        self.fixedState = state
+        self.currentState = state
+    }
+
+    func setState(_ state: LumeRuntimeState) {
+        currentState = state
     }
 
     func snapshot() async -> LumeRuntimeSnapshot {
         snapshotCallCount += 1
         return LumeRuntimeSnapshot(
-            state: fixedState,
+            state: currentState,
             executablePath: nil,
             launchAgentPath: "/tmp/lume.plist",
             launchAgentInstalled: false,
@@ -309,7 +306,7 @@ private actor SpyLumeRuntimeService: LumeRuntimeServiceProtocol {
     /// Returns a snapshot value without incrementing the call counter.
     private func stubbedSnapshot() -> LumeRuntimeSnapshot {
         LumeRuntimeSnapshot(
-            state: fixedState,
+            state: currentState,
             executablePath: nil,
             launchAgentPath: "/tmp/lume.plist",
             launchAgentInstalled: false,

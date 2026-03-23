@@ -214,7 +214,8 @@ Planning note:
 ### Icebox (P3)
 
 - Sparkle auto-update: `backlog/sparkle-autoupdate-plan.md`
-- landing page / marketing site: `backlog/landing-page.md`
+- landing page / marketing site: completed in PR #188, moved to `backlog/done/landing-page.md`
+- web dashboard Phase 3 follow-ups: `backlog/web-dashboard-phase3-followups.md`
 - internal skills/task-list work: `backlog/swift-dev-skills-task-list.md`
 
 ---
@@ -252,6 +253,22 @@ Theme-to-milestone map:
 
 ---
 
+## Learnings
+
+### 2026-03-22 — Milestone 6: Terminal Readiness Recovery (PRs #162-#165, plus direct merges)
+- **Agent teams work for parallel milestone execution** — 3 Wave 2 teammates (Focus, Selection, Sheet) successfully worked in parallel with clear file ownership boundaries and prescribed merge order
+- **SwiftPM lock contention is the main friction with worktrees** — teammates sharing `.build` directory caused constant test timeouts (exit 144). Future parallel work should consider per-worktree build dirs or sequential test runs
+- **Plan approval mode prevents merge conflicts** — requiring plan review before implementation kept ContentView.swift changes non-overlapping across 3 teammates
+- **Teammates sometimes go idle before committing** — team lead should proactively check worktree state and take over when needed
+- **Debounced persistence works but needs testing under workspace creation** — the "Finishing workspace..." stuck state observed post-milestone needs investigation; may be interaction between debounced save and workspace upsert flow
+- **cachedSetupSnapshot (PR #142) was a premature optimization** — PR #166 removes it because stale state caused correctness issues. One extra daemon probe per setup is acceptable
+
+### 2026-03-22 — Post-Milestone 6: Workspace creation hang (PR #190)
+- **NSLog doesn't flow to unified log in debug builds** — switched to `os.Logger` for reliable debug-build diagnostics. Always use `os.Logger` for new instrumentation.
+- **Debounced save rollback can discard unrelated pending changes** — `modelContext.rollback()` affects ALL pending changes in the context, not just the ones the debounced save cares about. Guard rollbacks when other operations may have pending inserts.
+- **Watchdog timers surface stuck states** — a 30-second watchdog that updates the UI and logs is cheap insurance against indefinite hangs
+---
+
 ## Recommended Milestone Sequence
 
 This sequence follows the priority rule above: core promise first, dependency cleanup second, broader product bets after that.
@@ -284,8 +301,10 @@ This sequence follows the priority rule above: core promise first, dependency cl
 | Isolation strategy options | Plan | P2 | `backlog/isolation-strategies.md` |
 | tmux per-worktree support | Plan | P3 | `backlog/tmux-support_plan.md` |
 | Sparkle auto-update decision record | Plan | P3 | `backlog/sparkle-autoupdate-plan.md` |
-| Landing page | Plan | P3 | `backlog/landing-page.md` |
+| Landing page + web dashboard | Plan | Done | `backlog/done/landing-page.md` |
+| Web dashboard Phase 3 follow-ups | Follow-up | P2 | `backlog/web-dashboard-phase3-followups.md` |
 | Swift dev skills task-list | Task List | P3 | `backlog/swift-dev-skills-task-list.md` |
+| Workspace creation hang root cause | Follow-up | P0 | `backlog/workspace-creation-hang-root-cause_followup.md` |
 
 ---
 

@@ -8,6 +8,12 @@
 import SwiftData
 import SwiftUI
 import WorkspaceManagerCore
+import os.log
+
+private let creationLog = Logger(
+    subsystem: "com.cloudcompute.workspaces",
+    category: "WorkspaceCreation"
+)
 
 struct WorkspaceActionState {
     let workspaceID: UUID
@@ -91,9 +97,7 @@ struct SidebarView: View {
         workspaceEnvironmentSheetState.lumeRuntimeSnapshot
     }
 
-    private var repoSortController: SidebarRepoSortController {
-        SidebarRepoSortController()
-    }
+    @State private var repoSortController = SidebarRepoSortController()
 
     private var workspaceProviderSetupActionRunner: WorkspaceProviderSetupActionRunner {
         WorkspaceProviderSetupActionRunner(coordinator: workspaceProviderSetupCoordinator)
@@ -723,6 +727,23 @@ struct SidebarView: View {
             message: initialCreationMessage(for: providerID)
         )
 
+        creationLog.info(
+            "createWorkspaceAfterSetup: starting repo=\(repo.name) provider=\(providerID)"
+        )
+
+        let watchdog = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(30))
+            guard !Task.isCancelled else { return }
+            let currentPhase = workspaceCreationStatusByRepoID[repoID]?.message ?? "unknown"
+            creationLog.error(
+                "createWorkspaceAfterSetup: WATCHDOG — creation stalled for 30s at phase=\(currentPhase)"
+            )
+            workspaceCreationStatusByRepoID[repoID] = WorkspaceCreationStatus(
+                message: "Creation is taking longer than expected..."
+            )
+        }
+        defer { watchdog.cancel() }
+
         do {
             let workspace = try await workspaceController.createWorkspace(
                 from: repo,
@@ -731,6 +752,7 @@ struct SidebarView: View {
                 providerID: providerID,
                 guestOS: guestOS,
                 progress: { phase in
+                    creationLog.debug("createWorkspaceAfterSetup: progress phase=\(phase)")
                     await MainActor.run {
                         workspaceCreationStatusByRepoID[repoID] = WorkspaceCreationStatus(message: phase)
                     }
@@ -740,6 +762,7 @@ struct SidebarView: View {
                     await hostLumeSmokeAutomation.noteWorkspacePersisted(record)
                 }
             )
+            creationLog.info("createWorkspaceAfterSetup: workspace created, updating selection")
             workspaceCreationStatusByRepoID.removeValue(forKey: repoID)
             onWorkspaceCreated()
             selectedWorkspace = workspace
@@ -747,6 +770,9 @@ struct SidebarView: View {
                 HostLumeSmokeWorkspaceRecord(workspace: workspace)
             )
         } catch {
+            creationLog.error(
+                "createWorkspaceAfterSetup: failed: \(error.localizedDescription)"
+            )
             workspaceCreationStatusByRepoID.removeValue(forKey: repoID)
             let providerName = providerDisplayName(for: providerID)
             errorMessage = "Failed to create \(providerName) workspace: \(error.localizedDescription)"
