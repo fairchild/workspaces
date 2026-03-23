@@ -179,6 +179,7 @@ mise run test              # Test
 | Lume daemon reliability | docs/development/lume-integration.md § "Daemon Reliability" | - |
 | Roadmap/planning | backlog/ROADMAP.md | - |
 | Deferred work items | backlog/*.md | - |
+| Prototypes | prototypes/README.md | - |
 
 ## Code Navigation
 
@@ -266,6 +267,10 @@ Agents coordinate via GitHub Discussions. See `.agents/skills/gh-discuss/SKILL.m
 Quick start: `uv run .agents/skills/gh-discuss/scripts/gh-discuss.py dashboard`
 
 Milestone delivery: use `.agents/skills/drive/SKILL.md` to plan first, refresh the latest milestone state from GitHub, and execute issues to completion one at a time.
+
+## Prototypes
+
+Self-contained HTML prototypes live in `prototypes/<project-name>/`. Each prototype is a standalone file you can open directly in a browser — no build step. Use prototypes to explore layout, interaction, and design system choices before committing to implementation. See `prototypes/README.md` for the index.
 
 ## Don't
 
