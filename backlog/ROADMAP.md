@@ -305,6 +305,17 @@ This sequence follows the priority rule above: core promise first, dependency cl
 | Web dashboard Phase 3 follow-ups | Follow-up | P2 | `backlog/web-dashboard-phase3-followups.md` |
 | Swift dev skills task-list | Task List | P3 | `backlog/swift-dev-skills-task-list.md` |
 | Workspace creation hang root cause | Follow-up | P0 | `backlog/workspace-creation-hang-root-cause_followup.md` |
+| Spaces agent discovery dashboard | Plan | P2 | `backlog/spaces-agent-discovery-dashboard-plan.md` |
+
+---
+
+## Learnings
+
+### 2026-03-22 — Spaces dashboard exploration (#191)
+- Prototyping multiple layout variants as static HTML before committing to a direction saved significant iteration time — owner could compare side-by-side and pick elements from each
+- The `web/` app has a strong design system (Instrument Serif + JetBrains Mono + mint accent); prototypes that didn't match it felt wrong immediately
+- Dashboard needs two levels: global summary across repos + per-repo drill-in with scoped tabs (schedule/skills are per-repo, not global)
+- LLM-driven UI exploration landed on Level 2 (structured JSON decisions, not generated HTML) — industry consensus (CopilotKit, Google A2UI, Vercel AI SDK v6) confirms this
 
 ---
 

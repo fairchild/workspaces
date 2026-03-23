@@ -1,0 +1,785 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Spaces — Team Directory</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+            background: #111113;
+            color: #f5f5f7;
+            -webkit-font-smoothing: antialiased;
+            min-height: 100vh;
+        }
+
+        /* -- Top bar ------------------------------------------------------- */
+
+        .topbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 16px 32px;
+            border-bottom: 1px solid rgba(255,255,255,0.06);
+            background: rgba(255,255,255,0.02);
+            position: sticky;
+            top: 0;
+            z-index: 10;
+            backdrop-filter: blur(20px);
+        }
+
+        .topbar-left {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .logo {
+            font-size: 16px;
+            font-weight: 800;
+            letter-spacing: -0.4px;
+        }
+
+        .topbar-tabs {
+            display: flex;
+            gap: 4px;
+        }
+
+        .tab {
+            padding: 6px 14px;
+            border-radius: 8px;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            color: #a1a1a6;
+            transition: all 0.15s;
+        }
+
+        .tab:hover { background: rgba(255,255,255,0.06); color: #f5f5f7; }
+        .tab.active { background: rgba(125,122,255,0.12); color: #7d7aff; }
+
+        .topbar-right {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .avatar-sm {
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #7d7aff 0%, #5856d6 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            font-weight: 700;
+        }
+
+        /* -- Container ----------------------------------------------------- */
+
+        .container {
+            max-width: 960px;
+            margin: 0 auto;
+            padding: 32px 24px;
+        }
+
+        /* -- Page header --------------------------------------------------- */
+
+        .page-header {
+            margin-bottom: 32px;
+        }
+
+        .page-header h1 {
+            font-size: 28px;
+            font-weight: 800;
+            letter-spacing: -0.8px;
+        }
+
+        .page-header p {
+            font-size: 14px;
+            color: #a1a1a6;
+            margin-top: 6px;
+        }
+
+        /* -- Repo selector chips ------------------------------------------ */
+
+        .repo-chips {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-bottom: 32px;
+        }
+
+        .repo-chip {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 16px;
+            border-radius: 20px;
+            border: 1px solid rgba(255,255,255,0.1);
+            background: rgba(255,255,255,0.03);
+            cursor: pointer;
+            transition: all 0.15s;
+            font-size: 13px;
+            font-weight: 500;
+        }
+
+        .repo-chip:hover {
+            background: rgba(255,255,255,0.06);
+            border-color: rgba(255,255,255,0.15);
+        }
+
+        .repo-chip.selected {
+            background: rgba(125,122,255,0.12);
+            border-color: rgba(125,122,255,0.3);
+            color: #7d7aff;
+        }
+
+        .chip-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+        }
+
+        .chip-dot.has-agents { background: #30d158; }
+        .chip-dot.no-agents { background: #6e6e73; }
+
+        .chip-count {
+            font-size: 11px;
+            color: #a1a1a6;
+        }
+
+        /* -- Agent "people" cards ----------------------------------------- */
+
+        .agent-people-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 16px;
+            margin-bottom: 40px;
+        }
+
+        .person-card {
+            background: rgba(255,255,255,0.03);
+            border: 1px solid rgba(255,255,255,0.06);
+            border-radius: 16px;
+            padding: 24px;
+            transition: all 0.2s;
+        }
+
+        .person-card:hover {
+            background: rgba(255,255,255,0.05);
+            border-color: rgba(255,255,255,0.1);
+            transform: translateY(-2px);
+            box-shadow: 0 8px 24px rgba(0,0,0,0.2);
+        }
+
+        .person-top {
+            display: flex;
+            align-items: flex-start;
+            gap: 14px;
+            margin-bottom: 16px;
+        }
+
+        .person-avatar {
+            width: 48px;
+            height: 48px;
+            border-radius: 14px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+            font-weight: 800;
+            flex-shrink: 0;
+        }
+
+        .person-avatar.app { background: linear-gradient(135deg, #30d158 0%, #00c7be 100%); }
+        .person-avatar.platform { background: linear-gradient(135deg, #ff9f0a 0%, #ff6723 100%); }
+        .person-avatar.planner { background: linear-gradient(135deg, #0a84ff 0%, #5856d6 100%); }
+        .person-avatar.observer { background: linear-gradient(135deg, #bf5af2 0%, #7d7aff 100%); }
+
+        .person-info h3 {
+            font-size: 16px;
+            font-weight: 700;
+            letter-spacing: -0.3px;
+        }
+
+        .person-info .role {
+            font-size: 12px;
+            color: #a1a1a6;
+            margin-top: 2px;
+        }
+
+        .person-status-line {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin-top: 6px;
+            font-size: 12px;
+        }
+
+        .person-status-line .dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+        }
+
+        .dot.active { background: #30d158; animation: pulse 2s ease-in-out infinite; }
+        .dot.idle { background: #6e6e73; }
+        .dot.scheduled { background: #ff9f0a; }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
+
+        .person-body {
+            font-size: 13px;
+            color: #a1a1a6;
+            line-height: 1.5;
+            margin-bottom: 16px;
+        }
+
+        .person-repos {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-bottom: 14px;
+        }
+
+        .repo-tag {
+            font-size: 11px;
+            padding: 3px 10px;
+            border-radius: 6px;
+            background: rgba(125,122,255,0.1);
+            color: #7d7aff;
+            font-weight: 500;
+            font-family: "SF Mono", monospace;
+        }
+
+        .person-skills {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            margin-bottom: 14px;
+        }
+
+        .skill-pill {
+            font-size: 10px;
+            padding: 2px 8px;
+            border-radius: 4px;
+            background: rgba(255,255,255,0.06);
+            color: #a1a1a6;
+            font-weight: 500;
+        }
+
+        .person-timeline {
+            border-top: 1px solid rgba(255,255,255,0.06);
+            padding-top: 12px;
+        }
+
+        .timeline-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 8px;
+            padding: 4px 0;
+        }
+
+        .timeline-dot-col {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            width: 12px;
+            padding-top: 5px;
+        }
+
+        .timeline-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: #6e6e73;
+            flex-shrink: 0;
+        }
+
+        .timeline-line {
+            width: 1px;
+            flex: 1;
+            background: rgba(255,255,255,0.06);
+            min-height: 12px;
+        }
+
+        .timeline-text {
+            font-size: 11px;
+            color: #6e6e73;
+            line-height: 1.4;
+        }
+
+        .timeline-text strong {
+            color: #a1a1a6;
+            font-weight: 600;
+        }
+
+        /* -- Schedule section ---------------------------------------------- */
+
+        .schedule-section {
+            margin-bottom: 40px;
+        }
+
+        .schedule-section h2 {
+            font-size: 18px;
+            font-weight: 700;
+            margin-bottom: 16px;
+        }
+
+        .schedule-grid {
+            display: grid;
+            grid-template-columns: 80px repeat(5, 1fr);
+            gap: 1px;
+            background: rgba(255,255,255,0.04);
+            border-radius: 12px;
+            overflow: hidden;
+        }
+
+        .sched-cell {
+            padding: 10px 12px;
+            background: #111113;
+            font-size: 12px;
+        }
+
+        .sched-cell.header {
+            font-weight: 700;
+            color: #6e6e73;
+            text-transform: uppercase;
+            font-size: 10px;
+            letter-spacing: 0.3px;
+        }
+
+        .sched-cell.day { color: #a1a1a6; font-weight: 600; }
+
+        .sched-agent {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 11px;
+        }
+
+        .sched-mini-avatar {
+            width: 18px;
+            height: 18px;
+            border-radius: 5px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 8px;
+            font-weight: 800;
+        }
+
+        /* -- Skill inventory ---------------------------------------------- */
+
+        .skill-inventory {
+            margin-bottom: 40px;
+        }
+
+        .skill-inventory h2 {
+            font-size: 18px;
+            font-weight: 700;
+            margin-bottom: 16px;
+        }
+
+        .skill-cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 10px;
+        }
+
+        .skill-card {
+            background: rgba(255,255,255,0.03);
+            border: 1px solid rgba(255,255,255,0.06);
+            border-radius: 10px;
+            padding: 14px;
+        }
+
+        .skill-card .name {
+            font-size: 13px;
+            font-weight: 700;
+            font-family: "SF Mono", monospace;
+            color: #7d7aff;
+        }
+
+        .skill-card .desc {
+            font-size: 11px;
+            color: #a1a1a6;
+            margin-top: 4px;
+            line-height: 1.4;
+        }
+
+        .skill-card .used-by {
+            font-size: 10px;
+            color: #6e6e73;
+            margin-top: 8px;
+        }
+
+        /* -- Login --------------------------------------------------------- */
+
+        .login-page {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+        }
+
+        .login-page.hidden { display: none; }
+
+        .login-center {
+            text-align: center;
+            max-width: 400px;
+        }
+
+        .login-center h1 {
+            font-size: 32px;
+            font-weight: 800;
+            letter-spacing: -1px;
+            margin-bottom: 6px;
+        }
+
+        .login-center .tagline {
+            font-size: 15px;
+            color: #a1a1a6;
+            margin-bottom: 32px;
+            line-height: 1.5;
+        }
+
+        .btn-login {
+            background: #f5f5f7;
+            color: #1d1d1f;
+            border: none;
+            padding: 12px 28px;
+            border-radius: 10px;
+            font-size: 14px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: opacity 0.15s;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .btn-login:hover { opacity: 0.85; }
+
+        .btn-login svg { width: 18px; height: 18px; }
+
+        .app-content.hidden { display: none; }
+    </style>
+</head>
+<body>
+
+<!-- Login -->
+<div class="login-page" id="login-page">
+    <div class="login-center">
+        <h1>Spaces</h1>
+        <p class="tagline">Meet the AI agents working across your repos.<br>See who's doing what, right now.</p>
+        <button class="btn-login" onclick="doLogin()">
+            <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+            Sign in with GitHub
+        </button>
+    </div>
+</div>
+
+<!-- App -->
+<div class="app-content hidden" id="app-content">
+
+    <div class="topbar">
+        <div class="topbar-left">
+            <span class="logo">Spaces</span>
+            <div class="topbar-tabs">
+                <div class="tab active" data-view="team">Team</div>
+                <div class="tab" data-view="schedule">Schedule</div>
+                <div class="tab" data-view="skills">Skills</div>
+            </div>
+        </div>
+        <div class="topbar-right">
+            <div class="avatar-sm">F</div>
+        </div>
+    </div>
+
+    <div class="container">
+
+        <!-- Repo filter -->
+        <div class="repo-chips" id="repo-chips"></div>
+
+        <!-- Team view (default) -->
+        <div id="view-team">
+            <div class="page-header">
+                <h1>Your Agent Team</h1>
+                <p>AI agents discovered across your repositories. Each card shows who they are, what they do, and where they operate.</p>
+            </div>
+            <div class="agent-people-grid" id="people-grid"></div>
+        </div>
+
+        <!-- Schedule view -->
+        <div id="view-schedule" style="display:none;">
+            <div class="schedule-section">
+                <h2>Weekly Schedule</h2>
+                <div class="schedule-grid" id="schedule-grid"></div>
+            </div>
+        </div>
+
+        <!-- Skills view -->
+        <div id="view-skills" style="display:none;">
+            <div class="skill-inventory">
+                <h2>Skill Inventory</h2>
+                <p style="font-size:13px;color:#a1a1a6;margin-bottom:16px;">Reusable capabilities discovered in <code>.agents/skills/</code> across repos.</p>
+                <div class="skill-cards" id="skill-cards"></div>
+            </div>
+        </div>
+
+    </div>
+</div>
+
+<script>
+(function() {
+    "use strict";
+
+    // -- Mock data ---------------------------------------------------------
+
+    const AGENTS = [
+        {
+            name: "April Clearwater",
+            role: "Application Lead",
+            avatarClass: "app",
+            initial: "A",
+            status: "active",
+            statusText: "Reviewing PR #190",
+            bio: "Focuses on UI, terminal behavior, workflows, and user experience. Thinks about what the person at the keyboard experiences.",
+            repos: ["workspaces", "homepage"],
+            skills: ["UI", "Terminal", "UX", "Workflows", "Design"],
+            timeline: [
+                { text: "<strong>Opened PR #190</strong> — workspace creation diagnostics", time: "2h" },
+                { text: "Approved PR #165 — parallel provider refresh", time: "3d" },
+                { text: "Proposed [idea]: sidebar keyboard nav", time: "5d" }
+            ]
+        },
+        {
+            name: "Plat Ironwood",
+            role: "Platform Lead",
+            avatarClass: "platform",
+            initial: "P",
+            status: "scheduled",
+            statusText: "Next run: 7:30am PT",
+            bio: "Focuses on CI/CD, agent infrastructure, distribution, notifications, and testing. Thinks about what breaks at 3am.",
+            repos: ["workspaces"],
+            skills: ["CI/CD", "Infrastructure", "Testing", "Distribution", "Notifications"],
+            timeline: [
+                { text: "<strong>Fixed PR #166</strong> — snapshot cache staleness", time: "6h" },
+                { text: "Proposed [idea]: Lume VM snapshot pre-warming", time: "2d" },
+                { text: "Reviewed PR #163 — serialized suite fix", time: "4d" }
+            ]
+        },
+        {
+            name: "Peter Planner",
+            role: "Planner",
+            avatarClass: "planner",
+            initial: "Pp",
+            status: "idle",
+            statusText: "Waiting for approved ideas",
+            bio: "Converts owner-approved ideas into actionable GitHub Issues and Milestones. Methodical, never micro-prescribes implementation.",
+            repos: ["workspaces"],
+            skills: ["Planning", "Issues", "Milestones", "Label Taxonomy"],
+            timeline: [
+                { text: "<strong>Created Milestone 7</strong> — Terminal Focus with 5 issues", time: "1d" },
+                { text: "Linked discussion #42 to issues #149-#153", time: "1d" }
+            ]
+        },
+        {
+            name: "Oliver Obever",
+            role: "Observer",
+            avatarClass: "observer",
+            initial: "O",
+            status: "scheduled",
+            statusText: "Next report: Monday 1:30pm UTC",
+            bio: "Gathers operational evidence from GitHub and perf snapshots. Runs weekly, updates the ops timeline, opens focused [idea][ops] when thresholds breach.",
+            repos: ["workspaces"],
+            skills: ["Ops Reports", "Metrics", "Health Checks", "Evidence"],
+            timeline: [
+                { text: "<strong>Published weekly ops report</strong> — loop health green", time: "5d" },
+                { text: "Flagged startup regression in perf baseline", time: "12d" }
+            ]
+        }
+    ];
+
+    const SKILLS = [
+        { name: "cofounder-contributor", desc: "Runs standing personas (April, Plat) with daily wake-up, PR review, issue execution.", usedBy: "April, Plat", repos: ["workspaces", "homepage"] },
+        { name: "drive", desc: "Manual milestone execution. Plan first, refresh state, execute issues one by one.", usedBy: "Owner", repos: ["workspaces"] },
+        { name: "gh-discuss", desc: "Multi-agent coordination via GitHub Discussions. Dashboard, claim, update, complete.", usedBy: "All agents", repos: ["workspaces"] },
+        { name: "peter-planner", desc: "Converts approved [idea] discussions into Issues + Milestones with evidence contracts.", usedBy: "Peter", repos: ["workspaces"] },
+        { name: "tart-gui-automation", desc: "Headless macOS VM GUI automation via Tart/VNC. Captures, clicks, types, batch ops.", usedBy: "April, Plat", repos: ["workspaces"] }
+    ];
+
+    const SCHEDULE = [
+        { day: "Mon", first: { name: "April", cls: "app" }, second: { name: "Plat", cls: "platform" } },
+        { day: "Tue", first: { name: "Plat", cls: "platform" }, second: { name: "April", cls: "app" } },
+        { day: "Wed", first: { name: "April", cls: "app" }, second: { name: "Plat", cls: "platform" } },
+        { day: "Thu", first: { name: "Plat", cls: "platform" }, second: { name: "April", cls: "app" } },
+        { day: "Fri", first: { name: "April", cls: "app" }, second: { name: "Plat", cls: "platform" } }
+    ];
+
+    const REPOS = [
+        { name: "workspaces", hasAgents: true, agentCount: 4 },
+        { name: "homepage", hasAgents: true, agentCount: 1 },
+        { name: "dotfiles", hasAgents: false, agentCount: 0 }
+    ];
+
+    let selectedRepos = new Set(["workspaces", "homepage"]);
+    let currentView = "team";
+
+    // -- Login -------------------------------------------------------------
+
+    window.doLogin = function() {
+        document.getElementById("login-page").classList.add("hidden");
+        document.getElementById("app-content").classList.remove("hidden");
+        renderAll();
+    };
+
+    // -- Tab switching -----------------------------------------------------
+
+    document.querySelectorAll(".tab").forEach(tab => {
+        tab.addEventListener("click", () => {
+            document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+            tab.classList.add("active");
+            currentView = tab.dataset.view;
+            ["team", "schedule", "skills"].forEach(v => {
+                document.getElementById("view-" + v).style.display = v === currentView ? "" : "none";
+            });
+        });
+    });
+
+    // -- Render ------------------------------------------------------------
+
+    function renderAll() {
+        renderRepoChips();
+        renderPeopleGrid();
+        renderSchedule();
+        renderSkills();
+    }
+
+    function renderRepoChips() {
+        const el = document.getElementById("repo-chips");
+        el.innerHTML = "";
+        REPOS.forEach(repo => {
+            const chip = document.createElement("div");
+            chip.className = "repo-chip" + (selectedRepos.has(repo.name) ? " selected" : "");
+            chip.innerHTML = `
+                <span class="chip-dot ${repo.hasAgents ? "has-agents" : "no-agents"}"></span>
+                ${repo.name}
+                <span class="chip-count">${repo.agentCount} agents</span>
+            `;
+            chip.onclick = () => {
+                if (selectedRepos.has(repo.name)) selectedRepos.delete(repo.name);
+                else selectedRepos.add(repo.name);
+                renderAll();
+            };
+            el.appendChild(chip);
+        });
+    }
+
+    function renderPeopleGrid() {
+        const grid = document.getElementById("people-grid");
+        grid.innerHTML = "";
+        const filtered = AGENTS.filter(a => a.repos.some(r => selectedRepos.has(r)));
+        if (filtered.length === 0) {
+            grid.innerHTML = `<p style="color:#6e6e73;font-size:14px;">No agents found in selected repos.</p>`;
+            return;
+        }
+        filtered.forEach(agent => {
+            const card = document.createElement("div");
+            card.className = "person-card";
+            card.innerHTML = `
+                <div class="person-top">
+                    <div class="person-avatar ${agent.avatarClass}">${agent.initial}</div>
+                    <div class="person-info">
+                        <h3>${agent.name}</h3>
+                        <div class="role">${agent.role}</div>
+                        <div class="person-status-line">
+                            <span class="dot ${agent.status}"></span>
+                            <span style="color:#a1a1a6">${agent.statusText}</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="person-body">${agent.bio}</div>
+                <div class="person-repos">
+                    ${agent.repos.map(r => `<span class="repo-tag">${r}</span>`).join("")}
+                </div>
+                <div class="person-skills">
+                    ${agent.skills.map(s => `<span class="skill-pill">${s}</span>`).join("")}
+                </div>
+                <div class="person-timeline">
+                    ${agent.timeline.map((t, i) => `
+                        <div class="timeline-item">
+                            <div class="timeline-dot-col">
+                                <div class="timeline-dot"></div>
+                                ${i < agent.timeline.length - 1 ? '<div class="timeline-line"></div>' : ''}
+                            </div>
+                            <div class="timeline-text">${t.text} <span style="color:#6e6e73">&middot; ${t.time}</span></div>
+                        </div>
+                    `).join("")}
+                </div>
+            `;
+            grid.appendChild(card);
+        });
+    }
+
+    function renderSchedule() {
+        const grid = document.getElementById("schedule-grid");
+        grid.innerHTML = `
+            <div class="sched-cell header"></div>
+            <div class="sched-cell header">Mon</div>
+            <div class="sched-cell header">Tue</div>
+            <div class="sched-cell header">Wed</div>
+            <div class="sched-cell header">Thu</div>
+            <div class="sched-cell header">Fri</div>
+        `;
+
+        // 7:00am row
+        grid.innerHTML += `<div class="sched-cell day">7:00 AM</div>`;
+        SCHEDULE.forEach(s => {
+            grid.innerHTML += `<div class="sched-cell">
+                <div class="sched-agent">
+                    <span class="sched-mini-avatar person-avatar ${s.first.cls}">${s.first.name[0]}</span>
+                    ${s.first.name}
+                </div>
+            </div>`;
+        });
+
+        // 7:30am row
+        grid.innerHTML += `<div class="sched-cell day">7:30 AM</div>`;
+        SCHEDULE.forEach(s => {
+            grid.innerHTML += `<div class="sched-cell">
+                <div class="sched-agent">
+                    <span class="sched-mini-avatar person-avatar ${s.second.cls}">${s.second.name[0]}</span>
+                    ${s.second.name}
+                </div>
+            </div>`;
+        });
+    }
+
+    function renderSkills() {
+        const el = document.getElementById("skill-cards");
+        el.innerHTML = "";
+        const filtered = SKILLS.filter(s => s.repos.some(r => selectedRepos.has(r)));
+        filtered.forEach(skill => {
+            const card = document.createElement("div");
+            card.className = "skill-card";
+            card.innerHTML = `
+                <div class="name">${skill.name}</div>
+                <div class="desc">${skill.desc}</div>
+                <div class="used-by">Used by: ${skill.usedBy}</div>
+            `;
+            el.appendChild(card);
+        });
+    }
+})();
+</script>
+</body>
+</html>
