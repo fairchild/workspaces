@@ -44,3 +44,4 @@ jobs:
         run: pnpm run build
         env:
           BETTER_AUTH_SECRET: ci-placeholder-secret-for-build-only
+          TURSO_DATABASE_URL: file::memory:
