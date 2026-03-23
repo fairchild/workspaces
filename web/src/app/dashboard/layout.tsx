@@ -1,6 +1,8 @@
 import { getSession } from "@/lib/auth-server";
 import Image from "next/image";
 import { redirect } from "next/navigation";
+
+export const dynamic = "force-dynamic";
 import { SignOutButton } from "./components/sign-out-button";
 import styles from "./layout.module.css";
 
