@@ -1,8 +1,39 @@
-import { db, ensureEventsTable } from "./db";
+import { getDb } from "./db";
 import type { WebhookEvent, WebhookEventType } from "./types";
+
+let migrated = false;
+
+async function ensureEventsTable(): Promise<void> {
+	if (migrated) return;
+	const db = getDb();
+	await db.schema
+		.createTable("webhook_events")
+		.ifNotExists()
+		.addColumn("id", "text", (c) => c.primaryKey())
+		.addColumn("type", "text", (c) => c.notNull())
+		.addColumn("action", "text", (c) => c.notNull().defaultTo(""))
+		.addColumn("summary", "text", (c) => c.notNull().defaultTo(""))
+		.addColumn("repo", "text", (c) => c.notNull().defaultTo("unknown"))
+		.addColumn("timestamp", "text", (c) => c.notNull())
+		.execute();
+	await db.schema
+		.createIndex("idx_webhook_events_timestamp")
+		.ifNotExists()
+		.on("webhook_events")
+		.column("timestamp desc")
+		.execute();
+	await db.schema
+		.createIndex("idx_webhook_events_repo")
+		.ifNotExists()
+		.on("webhook_events")
+		.column("repo")
+		.execute();
+	migrated = true;
+}
 
 export async function pushEvent(event: WebhookEvent): Promise<void> {
 	await ensureEventsTable();
+	const db = getDb();
 	await db
 		.insertInto("webhook_events")
 		.values({
@@ -19,6 +50,7 @@ export async function pushEvent(event: WebhookEvent): Promise<void> {
 
 export async function getEvents(limit = 50): Promise<WebhookEvent[]> {
 	await ensureEventsTable();
+	const db = getDb();
 	const rows = await db
 		.selectFrom("webhook_events")
 		.selectAll()
@@ -42,6 +74,7 @@ export interface EventStats {
 
 export async function getEventStats(): Promise<EventStats> {
 	await ensureEventsTable();
+	const db = getDb();
 	const today = new Date();
 	today.setHours(0, 0, 0, 0);
 	const todayISO = today.toISOString();

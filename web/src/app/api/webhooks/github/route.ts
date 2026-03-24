@@ -2,6 +2,8 @@ import crypto from "node:crypto";
 import { pushEvent } from "@/lib/events";
 import type { WebhookEvent, WebhookEventType } from "@/lib/types";
 
+export const dynamic = "force-dynamic";
+
 const SUPPORTED_EVENTS = new Set<string>([
 	"pull_request",
 	"check_run",

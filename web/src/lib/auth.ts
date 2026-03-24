@@ -1,10 +1,10 @@
 import { betterAuth } from "better-auth";
-import { dialect } from "./db";
+import { getDialect } from "./db";
 
 export const auth = betterAuth({
 	secret: process.env.BETTER_AUTH_SECRET,
 	baseURL: process.env.BETTER_AUTH_URL ?? "http://localhost:3000",
-	database: { dialect, type: "sqlite" },
+	database: { dialect: getDialect(), type: "sqlite" },
 	socialProviders: {
 		github: {
 			clientId: process.env.GITHUB_WEB_WORKSPACES_CLIENT_ID ?? "",
