@@ -20,6 +20,10 @@ jobs:
     # The top-level if guard avoids spinning up a runner for every comment —
     # only run when at least one agent name appears after an @ sign.
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
     if: >-
       !endsWith(github.event.sender.login, '[bot]') && (
         contains(github.event.comment.body || github.event.review.body || '', '@april') ||
@@ -36,6 +40,7 @@ jobs:
       target_number: ${{ steps.context.outputs.number }}
       target_title: ${{ steps.context.outputs.title }}
       target_type: ${{ steps.context.outputs.type }}
+      trusted: ${{ steps.trust.outputs.trusted }}
     steps:
       - name: Extract event context
         id: context
@@ -98,6 +103,34 @@ jobs:
             echo "__MENTION_BODY_DELIM_a9f3e7__"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Gate to trusted actors
+        id: trust
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_API_URL: ${{ github.api_url }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          ACTOR: ${{ github.actor }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          permission="$(
+            curl --silent --show-error --fail \
+              --header "Authorization: Bearer $GH_TOKEN" \
+              --header "Accept: application/vnd.github+json" \
+              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/collaborators/$ACTOR/permission" \
+              | jq -r '.permission' 2>/dev/null || echo "none"
+          )"
+
+          case "$permission" in
+            admin|maintain|write)
+              echo "trusted=true" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "trusted=false" >> "$GITHUB_OUTPUT"
+              echo "Ignoring agent mention from untrusted actor $ACTOR (permission: $permission)"
+              ;;
+          esac
+
       - name: Check for agent mentions
         id: check
         env:
@@ -123,7 +156,7 @@ jobs:
   # ── April Clearwater ────────────────────────────────────────────────
   april-check-runner:
     needs: detect
-    if: needs.detect.outputs.april == 'true'
+    if: needs.detect.outputs.trusted == 'true' && needs.detect.outputs.april == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 2
     outputs:
@@ -153,7 +186,7 @@ jobs:
 
   april:
     needs: [detect, april-check-runner]
-    if: needs.detect.outputs.april == 'true'
+    if: needs.detect.outputs.trusted == 'true' && needs.detect.outputs.april == 'true'
     runs-on: ${{ fromJSON(needs.april-check-runner.outputs.runner) }}
     timeout-minutes: 30
     concurrency:
@@ -230,7 +263,7 @@ jobs:
   # ── Plat Ironwood ───────────────────────────────────────────────────
   plat:
     needs: detect
-    if: needs.detect.outputs.plat == 'true'
+    if: needs.detect.outputs.trusted == 'true' && needs.detect.outputs.plat == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     concurrency:
@@ -305,7 +338,7 @@ jobs:
   # ── Peter Planner ───────────────────────────────────────────────────
   peter:
     needs: detect
-    if: needs.detect.outputs.peter == 'true'
+    if: needs.detect.outputs.trusted == 'true' && needs.detect.outputs.peter == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     concurrency:
