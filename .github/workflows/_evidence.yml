@@ -73,21 +73,60 @@ jobs:
         id: tests
         if: steps.build.outcome == 'success' && inputs.test_commands_json != '[]'
         continue-on-error: true
-        shell: bash
         env:
           TEST_COMMANDS_JSON: ${{ inputs.test_commands_json }}
         run: |
-          set -euo pipefail
-          python3 - <<'PY' > .ci-test-commands.txt
-          import json, os
-          for command in json.loads(os.environ["TEST_COMMANDS_JSON"]):
-              print(command)
+          python3 - <<'PY'
+          import json
+          import os
+          import shlex
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          scripts_dir = Path(".agents/skills/cofounder-contributor/scripts").resolve()
+          sys.path.insert(0, str(scripts_dir))
+
+          import evidence
+
+          commands = json.loads(os.environ["TEST_COMMANDS_JSON"])
+
+          log_path = Path("test-output.txt")
+          with log_path.open("w", encoding="utf-8") as log_file:
+              for command in commands:
+                  argv = evidence.safe_swift_test_command_args(command)
+                  rendered = shlex.join(argv) if argv is not None else command
+                  for stream in (sys.stdout, log_file):
+                      stream.write(f"$ {rendered}\n")
+                      stream.flush()
+
+                  if argv is None:
+                      message = (
+                          "error: unsupported test command from evidence contract: "
+                          f"{command}\n"
+                      )
+                      for stream in (sys.stdout, log_file):
+                          stream.write(message)
+                          stream.flush()
+                      raise SystemExit(1)
+
+                  result = subprocess.run(
+                      argv,
+                      cwd=str(Path.cwd()),
+                      stdout=subprocess.PIPE,
+                      stderr=subprocess.STDOUT,
+                      text=True,
+                  )
+                  if result.stdout:
+                      text = result.stdout
+                      for stream in (sys.stdout, log_file):
+                          stream.write(text)
+                          if not text.endswith("\n"):
+                              stream.write("\n")
+                          stream.flush()
+                  if result.returncode != 0:
+                      raise SystemExit(result.returncode)
           PY
-          : > test-output.txt
-          while IFS= read -r command; do
-            echo "$ $command" | tee -a test-output.txt
-            bash -lc "set -o pipefail; $command 2>&1 | tee -a test-output.txt"
-          done < .ci-test-commands.txt
 
       - name: Capture evidence
         id: smoke
