@@ -19,13 +19,13 @@ jobs:
       run:
         working-directory: web
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@02f6c237bd2518259fed6c71566509edfb3f2b74 # v4
         with:
           version: 10
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: pnpm
@@ -44,4 +44,4 @@ jobs:
         run: pnpm run build
         env:
           BETTER_AUTH_SECRET: ci-placeholder-secret-for-build-only
-          TURSO_DATABASE_URL: file::memory:
+          TURSO_DATABASE_URL: "file::memory:"

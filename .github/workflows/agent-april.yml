@@ -37,7 +37,7 @@ jobs:
     steps:
       - name: Generate app token
         id: app-token
-        uses: actions/create-github-app-token@v3
+        uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859 # v3
         with:
           app-id: ${{ secrets.APRIL_APP_ID }}
           private-key: ${{ secrets.APRIL_PRIVATE_KEY }}
@@ -70,15 +70,15 @@ jobs:
     steps:
       - name: Generate app token
         id: app-token
-        uses: actions/create-github-app-token@v3
+        uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859 # v3
         with:
           app-id: ${{ secrets.APRIL_APP_ID }}
           private-key: ${{ secrets.APRIL_PRIVATE_KEY }}
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           fetch-depth: 50
           token: ${{ steps.app-token.outputs.token }}
-      - uses: astral-sh/setup-uv@v7
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
       - name: Sync execution state
         run: uv run .agents/skills/cofounder-contributor/scripts/sync-execution-state.py
         env:

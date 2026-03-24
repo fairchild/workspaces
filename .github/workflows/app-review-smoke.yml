@@ -44,7 +44,7 @@ jobs:
       - name: Generate April app token
         if: inputs.app_slug == 'april-clearwater'
         id: april-token
-        uses: actions/create-github-app-token@v3
+        uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859 # v3
         with:
           app-id: ${{ secrets.APRIL_APP_ID }}
           private-key: ${{ secrets.APRIL_PRIVATE_KEY }}
@@ -52,7 +52,7 @@ jobs:
       - name: Generate Workspace Agents app token
         if: inputs.app_slug == 'workspace-agents'
         id: workspace-token
-        uses: actions/create-github-app-token@v3
+        uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859 # v3
         with:
           app-id: ${{ secrets.WORKSPACE_AGENTS_APP_ID }}
           private-key: ${{ secrets.WORKSPACE_AGENTS_PRIVATE_KEY }}

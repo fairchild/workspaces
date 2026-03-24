@@ -15,7 +15,12 @@ set -euo pipefail
 
 LUME_STORAGE="$HOME/Library/Application Support/WorkspaceManager/LumeStorage"
 LUME_VM=workspaces-lume-runner
-GUEST_PASSWORD=lumesetup26
+GUEST_PASSWORD="${LUME_GUEST_PASSWORD:-${LUME_STANDALONE_SSH_PASSWORD:-}}"
+
+if [ -z "$GUEST_PASSWORD" ]; then
+  echo "Set LUME_GUEST_PASSWORD (or LUME_STANDALONE_SSH_PASSWORD) before unlocking the runner VM." >&2
+  exit 1
+fi
 
 # Get VNC URL from lume ls
 VNC_URL=$(lume ls --storage "$LUME_STORAGE/workspace-vms" 2>/dev/null \

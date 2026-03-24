@@ -71,11 +71,11 @@ boot_commands:
   - "<delay 2>"
   - "<click_at 754,886>"
   - "<delay 1>"
-  - "<type 'lumesetup26'>"
+  - "<type '__LUME_GUEST_PASSWORD__'>"
   - "<delay 1>"
   - "<click_at 1206,886>"
   - "<delay 1>"
-  - "<type 'lumesetup26'>"
+  - "<type '__LUME_GUEST_PASSWORD__'>"
   - "<delay 1>"
   - "<click_at 1662,1294>"
   - "<delay 2>"
@@ -201,14 +201,14 @@ boot_commands:
 health_check:
   type: ssh
   user: lume
-  password: lumesetup26
+  password: __LUME_GUEST_PASSWORD__
   timeout: 30
   retries: 5
   retry_delay: 10
 
 post_ssh_commands:
-  - "sudo sysadminctl -autologin set -userName lume -password lumesetup26"
-  - "perl -e 'my @k=(125,137,82,35,210,188,221,234,163,185,31);my @p=unpack(q{C*},q{lumesetup26});my @e;for my $i(0..$#p){$e[$i]=$p[$i]^$k[$i%scalar@k]}my $r=scalar@e%12;push@e,(0)x(12-$r) if $r;open my $f,q{>},q{/tmp/kcp};binmode $f;print $f pack(q{C*},@e);close $f'"
+  - "sudo sysadminctl -autologin set -userName lume -password __LUME_GUEST_PASSWORD__"
+  - "perl -e 'my @k=(125,137,82,35,210,188,221,234,163,185,31);my @p=unpack(q{C*},q{__LUME_GUEST_PASSWORD__});my @e;for my $i(0..$#p){$e[$i]=$p[$i]^$k[$i%scalar@k]}my $r=scalar@e%12;push@e,(0)x(12-$r) if $r;open my $f,q{>},q{/tmp/kcp};binmode $f;print $f pack(q{C*},@e);close $f'"
   - "sudo cp /tmp/kcp /etc/kcpassword"
   - "sudo chmod 600 /etc/kcpassword"
   - "rm /tmp/kcp"

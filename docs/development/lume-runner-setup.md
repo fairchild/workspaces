@@ -2,6 +2,19 @@
 
 Use this runbook to provision the `[self-hosted, lume-macos]` runner lane inside a Lume macOS VM for agent workflows that need macOS capabilities (swift build/test, screenshots).
 
+## Secret handling
+
+The unattended profiles in this repo are templates, not ready-to-run secrets. Set a per-host guest password locally and render a local config copy before using any profile that needs auto-login or SSH:
+
+```bash
+export LUME_GUEST_PASSWORD="$(LC_ALL=C tr -dc 'A-Za-z0-9._-' </dev/urandom | head -c 32)"
+RUNNER_UNATTENDED_CONFIG="$(
+  ./scripts/render-lume-unattended-config.sh config/lume/unattended/tahoe-workspaces-v26.yml
+)"
+```
+
+Use a password manager or local shell profile to persist `LUME_GUEST_PASSWORD`. Do not commit rendered configs.
+
 ## Host prerequisites
 
 - Lume CLI installed: `~/.local/bin/lume` (v0.2.85+)
@@ -9,6 +22,7 @@ Use this runbook to provision the `[self-hosted, lume-macos]` runner lane inside
   - Default: `workspaces-validated-base-macos-tahoe-26-2-xcode-26-2`
   - Stored in `~/Library/Application Support/WorkspaceManager/LumeStorage/validated-bases/`
 - GitHub CLI authenticated against `fairchild/workspaces`
+- Prefer NAT-backed runner guests. Keep bridged networking for host-network debugging only.
 
 ## 1. Clone the validated base
 
@@ -29,12 +43,12 @@ lume run "$LUME_VM" \
   --no-display &
 ```
 
-Wait for SSH (the VM gets a bridged IP via DHCP — this takes 30–60 seconds):
+Wait for SSH (this usually takes 30–60 seconds):
 
 ```bash
 for i in $(seq 1 12); do
   if lume ssh "$LUME_VM" "sw_vers" \
-    --user lume --password lumesetup26 \
+    --user lume --password "$LUME_GUEST_PASSWORD" \
     --storage "$LUME_STORAGE/workspace-vms" \
     --timeout 10 2>/dev/null; then
     echo "SSH is up"
@@ -44,7 +58,7 @@ for i in $(seq 1 12); do
 done
 ```
 
-**Known issue**: `lume get` may show `ip: -` even when the VM is reachable. Wait the full 60 seconds — bridged IP discovery is slow but SSH works once the guest boots.
+**Known issue**: `lume get` may show `ip: -` even when the VM is reachable. This is mostly a bridged-mode discovery problem; NAT-backed guests are preferred for runner lanes.
 
 ## 3. Register the runner
 
@@ -61,7 +75,7 @@ Configure and start the runner inside the guest:
 
 ```bash
 lume ssh "$LUME_VM" \
-  --user lume --password lumesetup26 \
+  --user lume --password "$LUME_GUEST_PASSWORD" \
   --storage "$LUME_STORAGE/workspace-vms" \
   --timeout 120 \
   "bash -lc '
@@ -96,18 +110,18 @@ Confirm there is an online runner with `lume-macos` label.
 
 ## 5. Harden and install tools
 
-Run this immediately after registration. It sets up passwordless sudo (required for CLT install and service management), disables macOS auto-updates (prevents silent OS upgrades that invalidate Xcode/CLT), and installs tools the agent needs.
+Run this immediately after registration. It sets up passwordless sudo (required for CLT install and service management), disables macOS auto-updates (prevents silent OS upgrades that invalidate Xcode/CLT), and installs tools the agent needs. This reduces guest hardening, so keep the VM isolated on a private runner lane and prefer NAT over bridged networking.
 
 ```bash
 lume ssh "$LUME_VM" \
-  --user lume --password lumesetup26 \
+  --user lume --password "$LUME_GUEST_PASSWORD" \
   --storage "$LUME_STORAGE/workspace-vms" \
   --timeout 300 \
   "bash -lc '
     set -euo pipefail
 
     # Passwordless sudo (required — lume ssh has no TTY for password prompts)
-    echo \"lumesetup26\" | sudo -S bash -c \"echo \\\"lume ALL=(ALL) NOPASSWD:ALL\\\" > /etc/sudoers.d/lume\"
+    echo \"$LUME_GUEST_PASSWORD\" | sudo -S bash -c \"echo \\\"lume ALL=(ALL) NOPASSWD:ALL\\\" > /etc/sudoers.d/lume\"
 
     # Disable all automatic macOS updates
     sudo defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticCheckEnabled -bool false
@@ -149,7 +163,7 @@ The GitHub Actions runner inherits a minimal `PATH` that does not include Homebr
 
 ```bash
 lume ssh "$LUME_VM" \
-  --user lume --password lumesetup26 \
+  --user lume --password "$LUME_GUEST_PASSWORD" \
   --storage "$LUME_STORAGE/workspace-vms" \
   --timeout 15 \
   "bash -lc '
@@ -164,11 +178,11 @@ Without this, jobs will fail with `FileNotFoundError: 'gh'` or `'npx'` because t
 
 ## 7. Disable screen lock and sleep
 
-The VM must never lock its screen or sleep — the runner service depends on the GUI session, and a locked screen prevents screenshot evidence capture. Apply these settings after initial provisioning:
+The VM must never lock its screen or sleep while it is serving screenshot evidence — the runner service depends on the GUI session, and a locked screen prevents capture. Apply these settings only on the isolated runner VM after initial provisioning:
 
 ```bash
 lume ssh "$LUME_VM" \
-  --user lume --password lumesetup26 \
+  --user lume --password "$LUME_GUEST_PASSWORD" \
   --storage "$LUME_STORAGE/workspace-vms" \
   --timeout 15 \
   "bash -lc '
@@ -193,7 +207,7 @@ Check guest-side runner status:
 
 ```bash
 lume ssh "$LUME_VM" \
-  --user lume --password lumesetup26 \
+  --user lume --password "$LUME_GUEST_PASSWORD" \
   --storage "$LUME_STORAGE/workspace-vms" \
   --timeout 10 \
   "bash -lc 'cd ~/.local/share/actions-runner-lume && ./svc.sh status'"
@@ -203,7 +217,7 @@ Restart the runner:
 
 ```bash
 lume ssh "$LUME_VM" \
-  --user lume --password lumesetup26 \
+  --user lume --password "$LUME_GUEST_PASSWORD" \
   --storage "$LUME_STORAGE/workspace-vms" \
   --timeout 30 \
   "bash -lc 'cd \$HOME/.local/share/actions-runner-lume && ./svc.sh stop && ./svc.sh start'"
@@ -244,7 +258,7 @@ lume run workspaces-lume-runner \
 # Wait for SSH, then verify the runner service started
 sleep 30
 lume ssh workspaces-lume-runner \
-  --user lume --password lumesetup26 \
+  --user lume --password "$LUME_GUEST_PASSWORD" \
   --storage "$LUME_STORAGE/workspace-vms" \
   --timeout 30 \
   "bash -lc 'cd ~/.local/share/actions-runner-lume && ./svc.sh status'"
@@ -258,26 +272,10 @@ gh api repos/fairchild/workspaces/actions/runners \
 
 SSH cannot unlock the macOS lock screen (no WindowServer access). If the VM is locked and you need GUI access:
 
-**From the host, via AppleScript through Screen Sharing:**
+**From the host, via the helper script:**
 
 ```bash
-# Open VNC (password is in the URL — get it from lume ls)
-open "vnc://<password>@127.0.0.1:<port>"
-
-# Type the login password into the lock screen via Screen Sharing
-osascript -e '
-tell application "Screen Sharing" to activate
-delay 1
-tell application "System Events"
-    tell process "Screen Sharing"
-        click window 1
-        delay 0.3
-    end tell
-    keystroke "lumesetup26"
-    delay 0.3
-    keystroke return
-end tell
-'
+./scripts/lume-runner-unlock.sh
 ```
 
 To prevent this from happening again, apply the no-lock settings from step 7.
@@ -304,7 +302,7 @@ The VM's MAC will be on `vmenet0` attached to `bridge100`. You can also open VNC
 ssh -o StrictHostKeyChecking=no lume@<IP_FROM_ARP>
 ```
 
-Password: `lumesetup26`
+Password: your local `LUME_GUEST_PASSWORD`
 
 ### Clone boots but SSH is refused on all IPs
 
@@ -319,7 +317,7 @@ To prevent this: disable auto-updates immediately after provisioning (see "Post-
 1. **Set up passwordless sudo first** via direct SSH with `-t`:
    ```bash
    ssh -t lume@<VM_IP>
-   # then: echo 'lumesetup26' | sudo -S bash -c 'echo "lume ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/lume'
+   # then: echo "$LUME_GUEST_PASSWORD" | sudo -S bash -c 'echo "lume ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/lume'
    ```
 
 2. **Use expect** for non-interactive sudo:
@@ -327,9 +325,9 @@ To prevent this: disable auto-updates immediately after provisioning (see "Post-
    /usr/bin/expect <<'EXPECT'
    spawn ssh -t lume@<VM_IP>
    expect "assword"
-   send "lumesetup26\r"
+   send "$env(LUME_GUEST_PASSWORD)\r"
    expect "%"
-   send "echo 'lumesetup26' | sudo -S <command>\r"
+   send "echo '$env(LUME_GUEST_PASSWORD)' | sudo -S <command>\r"
    expect "%"
    send "exit\r"
    expect eof
@@ -354,7 +352,7 @@ lume ssh "$LUME_VM" ... "bash -lc 'pkill -f Runner.Listener; cd ~/.local/share/a
 
 The clone inherits `networkMode: "bridged:en0"` from the base config. Editing `config.json` to change to `nat` doesn't reliably work — the guest's network interface was configured for bridged during initial setup and may not negotiate NAT correctly.
 
-**Recommendation**: Keep the same network mode as the base. If you need NAT, create a fresh VM with `lume create` and run `lume setup --unattended` with the NAT config (`tahoe-workspaces-v26.yml`).
+**Recommendation**: Prefer a NAT-backed base for runner guests. Keep bridged networking for diagnostics or cases where host-reachability is a hard requirement.
 
 ### Fresh IPSW install fails partway through
 
@@ -364,7 +362,15 @@ The clone inherits `networkMode: "bridged:en0"` from the base config. Editing `c
 
 The v26 NAT config has network panes ("How Do You Connect?", "Your Internet Connection") that require the guest to have network connectivity before proceeding. If the NAT network isn't ready when the automation clicks "Continue", the next screen never appears.
 
-**Workaround**: Use the bridged config (`tahoe-workspaces-bridged-v27.yml`) which skips network panes entirely. Or increase the delay before the "Data & Privacy" wait step.
+**Workaround**: If you genuinely need bridged networking, render a local bridged config copy first and treat it as a debugging-only path:
+
+```bash
+BRIDGED_UNATTENDED_CONFIG="$(
+  ./scripts/render-lume-unattended-config.sh config/lume/unattended/tahoe-workspaces-bridged-v27.yml
+)"
+```
+
+Or increase the delay before the "Data & Privacy" wait step.
 
 ## Runner persistence
 
@@ -452,8 +458,8 @@ DNS is automatic via `custom_domain = true` — same pattern as `webhooks.cloudc
 | Item | Value |
 |------|-------|
 | Guest user | `lume` |
-| Guest password | `lumesetup26` |
+| Guest password | local `LUME_GUEST_PASSWORD` (not committed) |
 | Runner dir | `~/.local/share/actions-runner-lume` |
 | Runner label | `lume-macos` |
-| Network | `bridged:en0` |
+| Network | `nat` preferred; bridged only for diagnostics |
 | Evidence store | `https://evidence.cloudcompute.com` |
