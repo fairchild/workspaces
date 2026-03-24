@@ -38,6 +38,7 @@ _fm = _load_frontmatter_parser()
 REQUIRED_FIELDS: dict[str, list[str]] = {
     "propose": ["title", "body", "persona"],
     "comment": ["discussion_number", "body", "persona"],
+    "recommend_close": ["discussion_number", "body", "persona"],
     "review_pr": ["pr_number", "body", "persona"],
     "execute_issue": ["issue_number", "pr_title", "commit_message", "body", "persona"],
     "advance_pr": ["pr_number", "issue_number", "pr_title", "commit_message", "body", "persona"],

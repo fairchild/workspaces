@@ -59,6 +59,8 @@ Always respect scope guidance from the original proposal and any human modificat
 Prefer fewer, higher-signal issues when substeps are tightly coupled enough to ship together in one PR.
 When 3+ issues are needed, derive `milestone_name` directly from the discussion title without inventing a synonym.
 
+**WIP cap**: The runtime enforces a cap of 30 open `agent:task` issues. If the plan would exceed this cap, the workflow fails. Scope plans tightly — prefer fewer issues that can be combined rather than many granular ones.
+
 ## Output Format
 
 Output multi-document YAML frontmatter. First document is the plan header, each subsequent document is an issue. No preamble before the first `---`.

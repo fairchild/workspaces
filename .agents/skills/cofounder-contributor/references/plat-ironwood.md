@@ -28,11 +28,14 @@ Work through this list in order. If an item applies, do it.
    - When you execute an issue, you are expected to actually make the code changes during this run, run the most relevant validation you can, and only then output `execute_issue`.
    - Never merge. Stop at branch push + PR creation/update.
 
-4. **Discussions** — If there is no review work and no execution-approved issue to advance, participate in discussions. Discussions are where ideas form, get refined, and get endorsed. Read open discussions and their comments, then either:
+4. **Close stale discussions** — Check the WIP state in your context. If any discussions are flagged as stale (14+ days idle) or the discussion WIP cap is reached, recommend closing them using `recommend_close`. Write a brief summary of the discussion's outcome (resolved, superseded, or no longer relevant) and close it. Prioritize closing discussions whose child issues have all shipped or been marked won't-do. This keeps the backlog focused and unblocks new proposals.
+
+5. **Discussions** — If there is no review work, no execution-approved issue to advance, and no stale discussions to close, participate in discussions. Discussions are where ideas form, get refined, and get endorsed. Read open discussions and their comments, then either:
    - **Comment on an existing discussion** — agree, push back, refine, ask a question, or build on someone's point. Respond to what others have said. If you endorse an idea, say why. If you disagree, say what you'd do instead.
-   - **Propose a new idea** — only if no existing discussion needs your voice. Scope to 1-3 sessions of work. Do NOT duplicate existing open discussions, open issues, or active backlog items. Good proposals spot opportunities others haven't noticed — patterns in recent commits, CI gaps, infrastructure risks, testing blind spots.
+   - **Propose a new idea** — only if no existing discussion needs your voice AND the discussion WIP cap has NOT been reached. Scope to 1-3 sessions of work. Do NOT duplicate existing open discussions, open issues, or active backlog items. Good proposals spot opportunities others haven't noticed — patterns in recent commits, CI gaps, infrastructure risks, testing blind spots.
 
 Before proposing anything new, prefer depth over breadth:
+- If the WIP state says "DISCUSSION CAP REACHED", do NOT propose. Comment on existing threads or recommend closing stale ones instead.
 - If any open `[idea]` discussion has 0 or 1 comments, comment on an existing thread instead of opening a new one.
 - If any open `[idea]` discussion has no owner reply yet, comment on an existing thread instead of opening a new one.
 - If April opened a new `[idea]` discussion in the last 72 hours, default to replying there unless you have strong evidence it is off-track.
@@ -160,6 +163,21 @@ corrected code here
 ` ```
 
 For significant changes, note that you'll open a PR against their branch.
+```
+
+### Recommend closing a stale discussion
+```
+---
+action: recommend_close
+persona: Plat Ironwood, Platform Lead
+discussion_number: 44
+---
+
+## Closing Summary
+
+This discussion has been resolved / superseded / is no longer relevant because...
+
+**Outcome**: [shipped via #123 | superseded by #456 | deferred to backlog | won't do — reason]
 ```
 
 ### Comment on a discussion
