@@ -51,10 +51,11 @@ enum DiagnosticReportExporter {
             appVersion: appVersion,
             buildNumber: buildNumber
         )
+        let systemInfo = gatherSystemInfo()
         let report = Report(
             schemaVersion: 1,
             generatedAt: Date(),
-            system: gatherSystemInfo(),
+            system: systemInfo,
             startupDiagnostics: diagnosticsBundle
         )
         let encoder = JSONEncoder()
@@ -63,7 +64,7 @@ enum DiagnosticReportExporter {
         try encoder.encode(report).write(to: tempDir.appendingPathComponent("report.json"))
 
         // system-profile.txt
-        let profile = gatherSystemProfile()
+        let profile = gatherSystemProfile(systemInfo)
         try profile.write(to: tempDir.appendingPathComponent("system-profile.txt"), atomically: true, encoding: .utf8)
 
         // recent-logs.txt (unified log, last 5 minutes)
@@ -97,8 +98,7 @@ enum DiagnosticReportExporter {
         )
     }
 
-    private static func gatherSystemProfile() -> String {
-        let info = gatherSystemInfo()
+    private static func gatherSystemProfile(_ info: SystemInfo) -> String {
         var lines: [String] = []
         lines.append("WorkspaceManager Diagnostic Report")
         lines.append("Generated: \(ISO8601DateFormatter().string(from: Date()))")
@@ -231,8 +231,8 @@ enum DiagnosticReportExporter {
 
         do {
             try process.run()
-            process.waitUntilExit()
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
             return String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
         } catch {
             return nil
