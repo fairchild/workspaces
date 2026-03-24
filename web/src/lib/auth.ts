@@ -9,6 +9,7 @@ export const auth = betterAuth({
 		github: {
 			clientId: process.env.GITHUB_WEB_WORKSPACES_CLIENT_ID ?? "",
 			clientSecret: process.env.GITHUB_WEB_WORKSPACES_CLIENT_SECRET ?? "",
+			scope: ["repo"],
 		},
 	},
 	session: {

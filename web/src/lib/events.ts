@@ -48,15 +48,21 @@ export async function pushEvent(event: WebhookEvent): Promise<void> {
 		.execute();
 }
 
-export async function getEvents(limit = 50): Promise<WebhookEvent[]> {
+export async function getEvents(
+	limit = 50,
+	repo?: string | null,
+): Promise<WebhookEvent[]> {
 	await ensureEventsTable();
 	const db = getDb();
-	const rows = await db
+	let query = db
 		.selectFrom("webhook_events")
 		.selectAll()
 		.orderBy("timestamp", "desc")
-		.limit(limit)
-		.execute();
+		.limit(limit);
+	if (repo) {
+		query = query.where("repo", "=", repo);
+	}
+	const rows = await query.execute();
 	return rows.map((r) => ({
 		id: r.id,
 		type: r.type as WebhookEventType,

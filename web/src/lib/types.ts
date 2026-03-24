@@ -73,3 +73,85 @@ export const WEBHOOK_EVENT_ICONS: Record<WebhookEventType, string> = {
 	issue_comment: "message-circle",
 	workflow_run: "play-circle",
 };
+
+// --- Agent discovery ---
+
+export interface SelectedRepo {
+	owner: string;
+	repo: string;
+	addedAt: string;
+}
+
+export type AgentStatus = "active" | "idle";
+
+export interface Agent {
+	name: string;
+	role: string | null;
+	status: AgentStatus;
+	skills: string[];
+	lastAction: string | null;
+}
+
+export interface Skill {
+	name: string;
+	description: string;
+}
+
+export interface ConfigFile {
+	path: string;
+	description: string;
+}
+
+export interface PipelineIssue {
+	number: number;
+	title: string;
+	labels: string[];
+	assignee: string | null;
+	url: string;
+}
+
+export type PipelineColumn = "ready" | "claimed" | "review" | "mergeable";
+
+export interface Pipeline {
+	ready: PipelineIssue[];
+	claimed: PipelineIssue[];
+	review: PipelineIssue[];
+	mergeable: PipelineIssue[];
+}
+
+export interface AgentDiscoveryResponse {
+	agents: Agent[];
+	skills: Skill[];
+	configFiles: ConfigFile[];
+	pipeline: Pipeline;
+	stats: {
+		agentCount: number;
+		skillCount: number;
+		openPRs: number;
+		readyIssues: number;
+	};
+}
+
+export const PIPELINE_LABELS: Record<PipelineColumn, string> = {
+	ready: "Ready",
+	claimed: "Claimed",
+	review: "Review",
+	mergeable: "Mergeable",
+};
+
+export const PIPELINE_GITHUB_LABELS: Record<PipelineColumn, string> = {
+	ready: "agent:ready",
+	claimed: "agent:claimed",
+	review: "agent:review",
+	mergeable: "agent:mergeable",
+};
+
+export interface GitHubRepo {
+	full_name: string;
+	owner: string;
+	name: string;
+	pushed_at: string;
+	description: string | null;
+	hasAgents?: boolean;
+	agentCount?: number;
+}
