@@ -1557,6 +1557,19 @@ class RunContributorTests(unittest.TestCase):
             )
         self.assertEqual(errors, [])
 
+    def test_validate_requested_test_commands_rejects_non_allowlisted_flags(self) -> None:
+        errors = run_contributor.validate_requested_test_commands(
+            ["swift test --parallel"],
+            env={},
+        )
+        self.assertEqual(
+            errors,
+            [
+                "requested test evidence `swift test --parallel` must use `swift test` or "
+                "`swift test --filter <selector>`; extra flags and shell operators are not allowed"
+            ],
+        )
+
     def test_validate_requested_test_commands_skips_preflight_when_test_list_is_unavailable(self) -> None:
         with mock.patch.object(
             run_contributor,

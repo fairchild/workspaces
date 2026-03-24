@@ -268,10 +268,10 @@ Expected result:
 - `ipconfig getifaddr en0` prints a LAN IP, not `169.254.x.x`
 - if `ipconfig getifaddr en0` is blank, do not keep debugging the app; the guest itself is not network-ready yet
 
-Observed credentials during manual recovery:
+Use the locally configured guest credentials during manual recovery. The repo intentionally does not ship a default password.
 
 - VNC / guest login user: `lume`
-- guest password: `lumesetup26`
+- guest password: local `LUME_GUEST_PASSWORD`
 
 Evidence for the working GUI path:
 
@@ -289,7 +289,7 @@ Known-good command:
 ~/.local/bin/lume ssh workspaces-validated-base-macos-tahoe-26-2-xcode-26-2 \
   'echo BASE_OK && whoami && hostname && ipconfig getifaddr en0' \
   --user lume \
-  --password lumesetup26 \
+  --password "$LUME_GUEST_PASSWORD" \
   --storage "$HOME/Library/Application Support/WorkspaceManager/LumeStorage/validated-bases"
 ```
 
@@ -350,7 +350,7 @@ ssh lume@REPLACE_WITH_CLONE_IP \
   'echo CLONE_OK && whoami && hostname && ipconfig getifaddr en0 && ls "/Volumes/My Shared Files" && cat "/Volumes/My Shared Files/marker.txt"'
 ```
 
-Enter password `lume` at the prompt unless you have already arranged passwordless access during the investigation.
+Enter your local `LUME_GUEST_PASSWORD` at the prompt unless you have already arranged passwordless access during the investigation.
 
 Expected:
 

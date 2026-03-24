@@ -13,10 +13,11 @@ on:
 jobs:
   gate:
     if: |
+      !endsWith(github.event.sender.login, '[bot]') && (
       (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
       (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
       (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
-      (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
+      (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude'))))
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -28,13 +29,32 @@ jobs:
       - name: Gate to trusted actors
         id: trust
         env:
+          EVENT_NAME: ${{ github.event_name }}
           GH_TOKEN: ${{ github.token }}
           GITHUB_API_URL: ${{ github.api_url }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           ACTOR: ${{ github.actor }}
+          COMMENT_ASSOCIATION: ${{ github.event.comment.author_association }}
+          REVIEW_ASSOCIATION: ${{ github.event.review.author_association }}
+          ISSUE_ASSOCIATION: ${{ github.event.issue.author_association }}
         shell: bash
         run: |
           set -euo pipefail
+          case "$EVENT_NAME" in
+            issue_comment|pull_request_review_comment)
+              association="${COMMENT_ASSOCIATION:-NONE}"
+              ;;
+            pull_request_review)
+              association="${REVIEW_ASSOCIATION:-NONE}"
+              ;;
+            issues)
+              association="${ISSUE_ASSOCIATION:-NONE}"
+              ;;
+            *)
+              association="NONE"
+              ;;
+          esac
+
           permission="$(
             curl --silent --show-error --fail \
               --header "Authorization: Bearer $GH_TOKEN" \
@@ -43,14 +63,14 @@ jobs:
               | jq -r '.permission' 2>/dev/null || echo "none"
           )"
 
-          case "$permission" in
-            admin|maintain|write)
+          case "$association:$permission" in
+            OWNER:admin|OWNER:maintain|OWNER:write|MEMBER:admin|MEMBER:maintain|MEMBER:write|COLLABORATOR:admin|COLLABORATOR:maintain|COLLABORATOR:write)
               echo "trusted=true" >> "$GITHUB_OUTPUT"
-              echo "Actor $ACTOR trusted (permission: $permission)"
+              echo "Actor $ACTOR trusted (association: $association, permission: $permission)"
               ;;
             *)
               echo "trusted=false" >> "$GITHUB_OUTPUT"
-              echo "Ignoring @claude request from untrusted actor $ACTOR (permission: $permission)"
+              echo "Ignoring @claude request from untrusted actor $ACTOR (association: $association, permission: $permission)"
               ;;
           esac
 
@@ -67,13 +87,13 @@ jobs:
       actions: read # Required for Claude to read CI results on PRs
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           fetch-depth: 1
 
       - name: Run Claude Code
         id: claude
-        uses: anthropics/claude-code-action@v1
+        uses: anthropics/claude-code-action@18c2b94d83ba2647c1a5e025edb06441c4a7b46e # v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 

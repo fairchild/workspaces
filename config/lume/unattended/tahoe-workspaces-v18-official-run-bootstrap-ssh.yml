@@ -8,7 +8,7 @@ boot_commands:
   - "<wait 'Enter Password', timeout=900>"
   - "<delay 1>"
   - "<capture 'login-screen'>"
-  - "<type 'lumesetup26'>"
+  - "<type '__LUME_GUEST_PASSWORD__'>"
   - "<delay 1>"
   - "<enter>"
   - "<delay 20>"
@@ -30,7 +30,7 @@ boot_commands:
   - "<type 'sudo launchctl bootstrap system /System/Library/LaunchDaemons/ssh.plist', delay=250>"
   - "<enter>"
   - "<delay 3>"
-  - "<type 'lumesetup26', delay=250>"
+  - "<type '__LUME_GUEST_PASSWORD__', delay=250>"
   - "<enter>"
   - "<delay 10>"
   - "<capture 'after-bootstrap-sshd'>"
@@ -43,7 +43,7 @@ boot_commands:
 health_check:
   type: ssh
   user: lume
-  password: lumesetup26
+  password: __LUME_GUEST_PASSWORD__
   timeout: 30
   retries: 8
   retry_delay: 15

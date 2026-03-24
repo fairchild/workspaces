@@ -14,7 +14,7 @@ LUME_STANDALONE_MIN_FREE_GB="${LUME_STANDALONE_MIN_FREE_GB:-70}"
 export LUME_STANDALONE_RUN_NETWORK="${LUME_STANDALONE_RUN_NETWORK:-bridged:en0}"
 export LUME_STANDALONE_PREPARE_NETWORK="${LUME_STANDALONE_PREPARE_NETWORK:-$LUME_STANDALONE_RUN_NETWORK}"
 LUME_STANDALONE_SSH_USER="${LUME_STANDALONE_SSH_USER:-lume}"
-LUME_STANDALONE_SSH_PASSWORD="${LUME_STANDALONE_SSH_PASSWORD:-lumesetup26}"
+LUME_STANDALONE_SSH_PASSWORD="${LUME_STANDALONE_SSH_PASSWORD:-${LUME_GUEST_PASSWORD:-}}"
 
 lume_standalone_log() {
     echo "[$(date +%H:%M:%S)] $*"
@@ -24,6 +24,14 @@ lume_standalone_fail() {
     local message="$1"
     echo "ERROR: $message" >&2
     return 1
+}
+
+lume_standalone_require_guest_password() {
+    if [[ -n "$LUME_STANDALONE_SSH_PASSWORD" ]]; then
+        return
+    fi
+    lume_standalone_fail \
+        "Set LUME_GUEST_PASSWORD (or LUME_STANDALONE_SSH_PASSWORD) before provisioning or probing Lume guests."
 }
 
 lume_standalone_iso8601_now() {
@@ -275,22 +283,42 @@ PY
     default_override_path="$REPO_ROOT/config/lume/unattended/${LUME_STANDALONE_MACOS_FAMILY}-workspaces.yml"
 
     if [[ -n "${LUME_STANDALONE_UNATTENDED_CONFIG_PATH:-}" ]]; then
+        local configured_path="$LUME_STANDALONE_UNATTENDED_CONFIG_PATH"
         if [[ ! -f "$LUME_STANDALONE_UNATTENDED_CONFIG_PATH" ]]; then
             lume_standalone_fail \
                 "Configured unattended profile does not exist: $LUME_STANDALONE_UNATTENDED_CONFIG_PATH"
         fi
-        export LUME_STANDALONE_UNATTENDED_CONFIG_LABEL="${LUME_STANDALONE_UNATTENDED_CONFIG_LABEL:-$LUME_STANDALONE_UNATTENDED_CONFIG_PATH}"
+        if grep -q "__LUME_GUEST_PASSWORD__" "$LUME_STANDALONE_UNATTENDED_CONFIG_PATH"; then
+            lume_standalone_require_guest_password
+            LUME_STANDALONE_UNATTENDED_CONFIG_PATH="$(
+                "$REPO_ROOT/scripts/render-lume-unattended-config.sh" "$LUME_STANDALONE_UNATTENDED_CONFIG_PATH"
+            )"
+        fi
+        export LUME_STANDALONE_UNATTENDED_CONFIG_PATH
+        export LUME_STANDALONE_UNATTENDED_CONFIG_LABEL="${LUME_STANDALONE_UNATTENDED_CONFIG_LABEL:-$configured_path}"
         return
     fi
 
     if [[ -n "$versioned_override_path" ]]; then
         export LUME_STANDALONE_UNATTENDED_CONFIG_PATH="$versioned_override_path"
+        if grep -q "__LUME_GUEST_PASSWORD__" "$LUME_STANDALONE_UNATTENDED_CONFIG_PATH"; then
+            lume_standalone_require_guest_password
+            export LUME_STANDALONE_UNATTENDED_CONFIG_PATH="$(
+                "$REPO_ROOT/scripts/render-lume-unattended-config.sh" "$LUME_STANDALONE_UNATTENDED_CONFIG_PATH"
+            )"
+        fi
         export LUME_STANDALONE_UNATTENDED_CONFIG_LABEL="config/lume/unattended/$(basename "$versioned_override_path")"
         return
     fi
 
     if [[ -f "$default_override_path" ]]; then
         export LUME_STANDALONE_UNATTENDED_CONFIG_PATH="$default_override_path"
+        if grep -q "__LUME_GUEST_PASSWORD__" "$LUME_STANDALONE_UNATTENDED_CONFIG_PATH"; then
+            lume_standalone_require_guest_password
+            export LUME_STANDALONE_UNATTENDED_CONFIG_PATH="$(
+                "$REPO_ROOT/scripts/render-lume-unattended-config.sh" "$LUME_STANDALONE_UNATTENDED_CONFIG_PATH"
+            )"
+        fi
         export LUME_STANDALONE_UNATTENDED_CONFIG_LABEL="config/lume/unattended/$(basename "$default_override_path")"
         return
     fi
@@ -583,6 +611,8 @@ lume_standalone_direct_ssh() {
     local command="$2"
     local output_path="$3"
 
+    lume_standalone_require_guest_password
+
     /usr/bin/expect <<'EXPECT' >"$output_path" 2>&1
 set timeout 120
 set host $env(LUME_STANDALONE_DIRECT_SSH_HOST)
@@ -659,6 +689,8 @@ lume_standalone_exec_remote() {
     local host="$3"
     local command="$4"
     local output_path="$5"
+
+    lume_standalone_require_guest_password
 
     if "$LUME_BIN" ssh \
         "$vm_name" \
