@@ -100,6 +100,7 @@ from evidence import (  # noqa: E402, F401
     review_evidence_gate_error,
     summarize_evidence_accounting_by_index,
     summarize_requested_evidence,
+    safe_swift_test_command_args,
     validate_evidence_accounting,
     validate_requested_test_commands,
 )
@@ -135,14 +136,18 @@ from github_state import (  # noqa: E402, F401
 )
 
 from triage import (  # noqa: E402, F401
+    DISCUSSION_WIP_CAP,
     ENGAGEMENT_RECENT_HOURS,
+    ISSUE_WIP_CAP,
     LOW_COMMENT_THRESHOLD,
     PR_DIFF_MAX_LINES,
+    STALE_DISCUSSION_DAYS,
     _find_agent_threads,
     _has_persona,
     parse_directed_pr_number,
     build_engagement_retry_message,
     classify_execution_work,
+    compute_wip_state,
     find_discussions_needing_engagement,
     find_prs_awaiting_rereview,
     format_claimed_issues,
@@ -153,6 +158,7 @@ from triage import (  # noqa: E402, F401
     format_pr_list_for_context,
     format_ready_issues,
     format_review_excerpt,
+    format_wip_state,
     gather_agent_history,
     gather_backlog_state,
     gather_context,
@@ -197,8 +203,10 @@ CLAUDE_TASK_CLI = (
     "need your follow-up review (you reviewed but didn't approve, and new "
     "commits were pushed since). Then review other open PRs, then continue "
     "your own open PRs or claimed issues, then claim an execution-approved "
-    "ready issue if one exists, then participate in discussions — comment on "
-    "an existing one or propose a new idea. CRITICAL: when you execute an issue or advance your own PR, "
+    "ready issue if one exists, then close stale discussions if the WIP cap "
+    "is near or reached, then participate in discussions — comment on "
+    "an existing one or propose a new idea (but NOT if the discussion WIP "
+    "cap is reached). CRITICAL: when you execute an issue or advance your own PR, "
     "use the requested evidence indexes from context in frontmatter and let the runtime render "
     "`## Evidence Status`; reviews must not "
     "approve PRs with missing or blocked requested evidence. Your final output MUST "
@@ -274,7 +282,12 @@ def main() -> int:
     bot_login = detect_bot_login(env)
     if bot_login:
         log(f"Authenticated as {bot_login}")
-    context, engagement_candidates = gather_context(env, persona=persona, bot_login=bot_login, message=args.message)
+    context, engagement_candidates, wip_state = gather_context(
+        env,
+        persona=persona,
+        bot_login=bot_login,
+        message=args.message,
+    )
     raw_output = run_claude(prompt_file, context, env, mode=args.mode, message=args.message)
     exit_code, validated_json, error_text = validate_output(raw_output, env)
 
@@ -287,7 +300,11 @@ def main() -> int:
         return 1
 
     if not args.message:
-        blocked_candidate = maybe_block_new_proposal(validated_json, engagement_candidates)
+        blocked_candidate = maybe_block_new_proposal(
+            validated_json,
+            engagement_candidates,
+            discussions_at_cap=bool(wip_state.get("discussions_at_cap")),
+        )
         if blocked_candidate is not None:
             log(
                 "Blocking new proposal because existing discussions need engagement: "

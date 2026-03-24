@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.8.1] - 2026-03-24
+
+### Fixed
+- skip CI preflight gate for changelog-only release commits
+
+### Other
+- v0.8.1
+
+## [0.8.1] - 2026-03-24
+
+### Fixed
+- skip CI preflight gate for changelog-only release commits
+
+## [0.8.0] - 2026-03-24
+
+### Added
+- add per-agent health monitoring to ops-report (#199)
+
+### Fixed
+- harden evidence validation with truncated errors and structured classification (#198)
+
+### Other
+- Gate public agent workflows to trusted actors (#202)
+
 ## [0.7.0] - 2026-03-24
 
 ### Added

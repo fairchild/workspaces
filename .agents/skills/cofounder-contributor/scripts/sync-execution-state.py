@@ -19,6 +19,7 @@ from typing import Any
 
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
+GH_DISCUSS_SCRIPT = REPO_ROOT / ".agents" / "skills" / "gh-discuss" / "scripts" / "gh-discuss.py"
 GITHUB_API_TIMEOUT = 30
 STALE_CLAIM_HOURS = 24
 
@@ -33,6 +34,8 @@ query($owner: String!, $name: String!) {
             id
             body
             createdAt
+            author { login }
+            authorAssociation
             reactionGroups {
               content
               users(first: 20) {
@@ -56,6 +59,8 @@ query($owner: String!, $name: String!) {
           nodes {
             body
             createdAt
+            author { login }
+            authorAssociation
           }
         }
         assignees(first: 5) {
@@ -95,6 +100,15 @@ AGENT_CLAIM_LABEL_DESCRIPTION = "Currently being executed by an automated contri
 AGENT_REVIEW_LABEL = "agent:review"
 AGENT_REVIEW_LABEL_COLOR = "fbca04"
 AGENT_REVIEW_LABEL_DESCRIPTION = "PR opened, awaiting review"
+TRUSTED_AUTHOR_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR"}
+TRUSTED_AUTOMATION_LOGINS = {
+    "april-clearwater[bot]",
+    "claude[bot]",
+    "github-actions[bot]",
+    "plat-ironwood[bot]",
+    "workspace-agents",
+    "workspace-agents[bot]",
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -232,6 +246,31 @@ def _normalize_login(login: str) -> str:
     return login.removesuffix("[bot]").strip().casefold()
 
 
+def trusted_automation_logins() -> set[str]:
+    return {login.casefold() for login in TRUSTED_AUTOMATION_LOGINS}
+
+
+def trusted_comment_author(
+    comment: dict[str, object],
+    *,
+    trusted_logins: set[str] | None = None,
+) -> bool:
+    if trusted_logins is None:
+        trusted_logins = trusted_automation_logins()
+
+    author_association = str(comment.get("authorAssociation", "")).upper()
+    if author_association in TRUSTED_AUTHOR_ASSOCIATIONS:
+        return True
+
+    author = comment.get("author")
+    login = ""
+    if isinstance(author, dict):
+        login = str(author.get("login", "")).casefold()
+    elif isinstance(author, str):
+        login = author.casefold()
+    return bool(login and login in trusted_logins)
+
+
 def markdown_section(body: str, heading: str) -> str:
     pattern = rf"(?ms)^## {re.escape(heading)}\n(.*?)(?=^## |\n---\n|\Z)"
     match = re.search(pattern, body)
@@ -253,11 +292,18 @@ def extract_blocked_by(body: str) -> list[int]:
     return list(dict.fromkeys(blocked))
 
 
-def latest_issue_claim(issue_number: int, comments: dict[str, object]) -> dict[str, str] | None:
+def latest_issue_claim(
+    issue_number: int,
+    comments: dict[str, object],
+    *,
+    trusted_logins: set[str] | None = None,
+) -> dict[str, str] | None:
     nodes = comments.get("nodes", []) if isinstance(comments, dict) else []
     claims: list[dict[str, str]] = []
     for comment in nodes:
         if not isinstance(comment, dict):
+            continue
+        if not trusted_comment_author(comment, trusted_logins=trusted_logins):
             continue
         match = CLAIM_MARKER_RE.search(str(comment.get("body", "")))
         if not match or int(match.group("number")) != issue_number:
@@ -301,6 +347,8 @@ def extract_pr_issue_reference(body: str) -> int | None:
 def latest_planned_comment(
     discussion: dict[str, object] | None,
     discussion_number: int,
+    *,
+    trusted_logins: set[str] | None = None,
 ) -> dict[str, object] | None:
     if discussion is None:
         return None
@@ -309,6 +357,8 @@ def latest_planned_comment(
     planned: list[dict[str, object]] = []
     for comment in nodes:
         if not isinstance(comment, dict):
+            continue
+        if not trusted_comment_author(comment, trusted_logins=trusted_logins):
             continue
         match = PETER_PLANNED_MARKER_RE.search(str(comment.get("body", "")))
         if match and int(match.group("number")) == discussion_number:
@@ -382,6 +432,7 @@ def desired_execution_labels(
     now: datetime,
 ) -> tuple[set[str], str]:
     labels: set[str] = set()
+    trusted_logins = trusted_automation_logins()
     issue_number = int(issue["number"])
     body = str(issue.get("body", ""))
     discussion_number = extract_issue_discussion_number(body)
@@ -389,7 +440,11 @@ def desired_execution_labels(
         return labels, "missing Peter marker"
 
     discussion = discussions.get(discussion_number)
-    planned_comment = latest_planned_comment(discussion, discussion_number)
+    planned_comment = latest_planned_comment(
+        discussion,
+        discussion_number,
+        trusted_logins=trusted_logins,
+    )
     if not planned_comment_has_owner_approval(planned_comment, owner_login):
         return labels, "discussion not execution-approved"
 
@@ -407,7 +462,11 @@ def desired_execution_labels(
         labels.add(AGENT_REVIEW_LABEL)
         return labels, "open PR, awaiting review"
 
-    latest_claim = latest_issue_claim(issue_number, issue.get("comments", {}))
+    latest_claim = latest_issue_claim(
+        issue_number,
+        issue.get("comments", {}),
+        trusted_logins=trusted_logins,
+    )
     if latest_claim is not None and not claim_is_stale(latest_claim, has_open_pr=False, now=now):
         labels.add(AGENT_CLAIM_LABEL)
         return labels, f"actively claimed by {latest_claim['agent']}"
@@ -476,6 +535,23 @@ def unassign_issue(
     log(f"Unassigned {login} from #{issue_number} (stale claim)")
 
 
+def fetch_agent_task_issues(env: dict[str, str]) -> list[dict[str, Any]]:
+    """Fetch all agent:task issues (open and closed) with their bodies."""
+    result = run_checked(
+        [
+            "gh", "issue", "list",
+            "--state", "all",
+            "--label", "agent:task",
+            "--limit", "200",
+            "--json", "number,body,state",
+        ],
+        timeout=GITHUB_API_TIMEOUT,
+        cwd=REPO_ROOT,
+        env=env,
+    )
+    return json.loads(result.stdout)
+
+
 def main() -> int:
     args = parse_args()
     require_env("GH_TOKEN")
@@ -532,7 +608,58 @@ def main() -> int:
             for assignee in issue_bot_assignees(issue):
                 unassign_issue(int(issue["number"]), assignee, dry_run=args.dry_run, env=env)
 
-    log(f"Execution-state sync complete; updated {updated} issue(s)")
+    # Auto-close discussions whose Peter-planned issues are all closed.
+    # work_state["issues"] only contains OPEN issues, so we fetch all
+    # agent:task issues (open + closed) to build the complete child map.
+    all_agent_task_issues = fetch_agent_task_issues(env)
+    discussion_child_issues: dict[int, list[int]] = {}
+    for issue in all_agent_task_issues:
+        body = str(issue.get("body", ""))
+        match = TASK_ISSUE_MARKER_RE.search(body)
+        if match:
+            disc_num = int(match.group("number"))
+            discussion_child_issues.setdefault(disc_num, []).append(int(issue["number"]))
+
+    closed_discussions = 0
+    for disc_num, child_numbers in discussion_child_issues.items():
+        if disc_num not in discussions:
+            continue
+        if not child_numbers:
+            continue
+        all_closed = all(
+            str(issue_states.get(num, "OPEN")).upper() == "CLOSED"
+            for num in child_numbers
+        )
+        if not all_closed:
+            continue
+        if args.dry_run:
+            log(f"Dry run: would auto-close discussion #{disc_num} (all {len(child_numbers)} child issues closed)")
+            closed_discussions += 1
+            continue
+        close_body = (
+            f"All planned issues from this discussion have been resolved "
+            f"({', '.join(f'#{n}' for n in sorted(child_numbers))}). "
+            f"Closing automatically."
+        )
+        try:
+            run_checked(
+                ["uv", "run", str(GH_DISCUSS_SCRIPT), "update", str(disc_num), close_body],
+                timeout=GITHUB_API_TIMEOUT,
+                cwd=REPO_ROOT,
+                env=env,
+            )
+            run_checked(
+                ["uv", "run", str(GH_DISCUSS_SCRIPT), "complete", str(disc_num)],
+                timeout=GITHUB_API_TIMEOUT,
+                cwd=REPO_ROOT,
+                env=env,
+            )
+            closed_discussions += 1
+            log(f"Auto-closed discussion #{disc_num} (all {len(child_numbers)} child issues closed)")
+        except SystemExit:
+            log(f"Warning: failed to auto-close discussion #{disc_num}")
+
+    log(f"Execution-state sync complete; updated {updated} issue(s), closed {closed_discussions} discussion(s)")
     return 0
 
 

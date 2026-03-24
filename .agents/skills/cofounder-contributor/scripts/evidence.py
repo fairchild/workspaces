@@ -595,18 +595,38 @@ def _extract_test_commands(requested_evidence: list[str]) -> list[str]:
     ]
 
 
-def _swift_test_filter_selector(command: str) -> str | None:
+def safe_swift_test_command_args(command: str) -> list[str] | None:
     try:
         parts = shlex.split(command)
     except ValueError:
         return None
-    if len(parts) < 4 or parts[:2] != ["swift", "test"]:
+
+    if parts == ["swift", "test"]:
+        return parts
+
+    if len(parts) == 4 and parts[:3] == ["swift", "test", "--filter"] and parts[3].strip():
+        return parts
+
+    if (
+        len(parts) == 3
+        and parts[:2] == ["swift", "test"]
+        and parts[2].startswith("--filter=")
+        and parts[2] != "--filter="
+    ):
+        return parts
+
+    return None
+
+
+def _swift_test_filter_selector(command: str) -> str | None:
+    parts = safe_swift_test_command_args(command)
+    if parts is None or len(parts) < 3:
         return None
-    for index, part in enumerate(parts[2:], start=2):
-        if part == "--filter" and index + 1 < len(parts):
-            return parts[index + 1]
-        if part.startswith("--filter="):
-            return part.split("=", 1)[1]
+
+    if len(parts) == 4 and parts[2] == "--filter":
+        return parts[3]
+    if len(parts) == 3 and parts[2].startswith("--filter="):
+        return parts[2].split("=", 1)[1]
     return None
 
 
@@ -638,13 +658,21 @@ def validate_requested_test_commands(
     env: dict[str, str],
 ) -> list[str]:
     commands = _extract_test_commands(requested_evidence)
+    errors = [
+        "requested test evidence "
+        f"`{command}` must use `swift test` or `swift test --filter <selector>`; "
+        "extra flags and shell operators are not allowed"
+        for command in commands
+        if safe_swift_test_command_args(command) is None
+    ]
+
     swift_filter_commands = [
         command
         for command in commands
         if _swift_test_filter_selector(command) is not None
     ]
     if not swift_filter_commands:
-        return []
+        return errors
 
     # Look up through the entrypoint module to allow mock.patch.object patching.
     _mod = sys.modules.get("run_contributor", sys.modules[__name__])
@@ -654,9 +682,8 @@ def validate_requested_test_commands(
             "skipping `swift test list` evidence selector preflight because no Swift Testing "
             "specifiers were returned; the project may need to build first"
         )
-        return []
+        return errors
 
-    errors: list[str] = []
     for command in swift_filter_commands:
         selector = _swift_test_filter_selector(command)
         if selector is None:

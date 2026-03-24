@@ -32,10 +32,10 @@ query($owner: String!, $name: String!) {
       nodes {
         number title
         reviews(last: 20) {
-          nodes { body author { login } submittedAt }
+          nodes { body author { login } authorAssociation submittedAt }
         }
         comments(last: 20) {
-          nodes { body author { login } createdAt }
+          nodes { body author { login } authorAssociation createdAt }
         }
       }
     }
@@ -43,15 +43,15 @@ query($owner: String!, $name: String!) {
       nodes {
         number title
         comments(last: 20) {
-          nodes { body author { login } createdAt }
+          nodes { body author { login } authorAssociation createdAt }
         }
       }
     }
     discussions(first: 20, states: OPEN) {
       nodes {
-        number title body createdAt
+        number title body createdAt author { login } authorAssociation
         comments(last: 10) {
-          nodes { body author { login } createdAt }
+          nodes { body author { login } authorAssociation createdAt }
         }
       }
     }
@@ -72,12 +72,14 @@ query($owner: String!, $name: String!) {
         updatedAt
         category { name }
         author { login }
+        authorAssociation
         comments(last: 20) {
           nodes {
             id
             body
             createdAt
             author { login }
+            authorAssociation
             reactionGroups {
               content
               users(first: 20) {
@@ -104,6 +106,7 @@ query($owner: String!, $name: String!) {
             body
             createdAt
             author { login }
+            authorAssociation
           }
         }
       }
@@ -126,6 +129,7 @@ query($owner: String!, $name: String!) {
         reviews(last: 50) {
           nodes {
             author { login }
+            authorAssociation
             body
             state
             submittedAt
@@ -134,6 +138,7 @@ query($owner: String!, $name: String!) {
         comments(last: 20) {
           nodes {
             author { login }
+            authorAssociation
             body
             createdAt
           }
@@ -160,6 +165,50 @@ CLOSING_REFERENCE_RE = re.compile(
     r"(?im)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(?P<number>\d+)\b"
 )
 EXECUTION_PRIORITY_RE = re.compile(r"(?m)^- Priority:\s*(?P<priority>\d+)\s*$")
+TRUSTED_AUTHOR_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR"}
+TRUSTED_AUTOMATION_LOGINS = {
+    "april-clearwater[bot]",
+    "claude[bot]",
+    "github-actions[bot]",
+    "plat-ironwood[bot]",
+    "workspace-agents",
+    "workspace-agents[bot]",
+}
+
+
+def trusted_automation_logins(env: dict[str, str] | None = None) -> set[str]:
+    logins = {login.casefold() for login in TRUSTED_AUTOMATION_LOGINS}
+    if env is None:
+        return logins
+
+    app_slug = env.get("GH_APP_SLUG", "").strip()
+    if not app_slug:
+        return logins
+
+    logins.add(app_slug.casefold())
+    logins.add(f"{app_slug}[bot]".casefold())
+    return logins
+
+
+def trusted_comment_author(
+    comment: dict[str, object],
+    *,
+    trusted_logins: set[str] | None = None,
+) -> bool:
+    if trusted_logins is None:
+        trusted_logins = trusted_automation_logins()
+
+    author_association = str(comment.get("authorAssociation", "")).upper()
+    if author_association in TRUSTED_AUTHOR_ASSOCIATIONS:
+        return True
+
+    author = comment.get("author")
+    login = ""
+    if isinstance(author, dict):
+        login = str(author.get("login", "")).casefold()
+    elif isinstance(author, str):
+        login = author.casefold()
+    return bool(login and login in trusted_logins)
 
 
 def repo_owner_name(env: dict[str, str]) -> tuple[str, str]:
@@ -208,11 +257,18 @@ def extract_pr_issue_reference(body: str) -> tuple[int | None, str | None]:
     return None, None
 
 
-def latest_issue_claim(issue_number: int, comments: dict[str, object]) -> dict[str, str] | None:
+def latest_issue_claim(
+    issue_number: int,
+    comments: dict[str, object],
+    *,
+    trusted_logins: set[str] | None = None,
+) -> dict[str, str] | None:
     nodes = comments.get("nodes", []) if isinstance(comments, dict) else []
     claims: list[dict[str, str]] = []
     for comment in nodes:
         if not isinstance(comment, dict):
+            continue
+        if not trusted_comment_author(comment, trusted_logins=trusted_logins):
             continue
         match = CLAIM_MARKER_RE.search(str(comment.get("body", "")))
         if not match or int(match.group("number")) != issue_number:
@@ -233,6 +289,8 @@ def latest_issue_claim(issue_number: int, comments: dict[str, object]) -> dict[s
 def latest_planned_comment(
     discussion: dict[str, object] | None,
     discussion_number: int,
+    *,
+    trusted_logins: set[str] | None = None,
 ) -> dict[str, object] | None:
     if discussion is None:
         return None
@@ -241,6 +299,8 @@ def latest_planned_comment(
     planned: list[dict[str, object]] = []
     for comment in nodes:
         if not isinstance(comment, dict):
+            continue
+        if not trusted_comment_author(comment, trusted_logins=trusted_logins):
             continue
         match = PETER_PLANNED_MARKER_RE.search(str(comment.get("body", "")))
         if match and int(match.group("number")) == discussion_number:
@@ -277,12 +337,18 @@ def discussion_execution_status(
     discussion: dict[str, object] | None,
     discussion_number: int | None,
     owner_login: str,
+    *,
+    trusted_logins: set[str] | None = None,
 ) -> tuple[bool, str]:
     if discussion_number is None:
         return False, "missing Peter planner marker"
     if discussion is None:
         return False, f"linked discussion #{discussion_number} not found"
-    planned_comment = latest_planned_comment(discussion, discussion_number)
+    planned_comment = latest_planned_comment(
+        discussion,
+        discussion_number,
+        trusted_logins=trusted_logins,
+    )
     if planned_comment is None:
         return False, f"discussion #{discussion_number} has no Peter summary comment yet"
     if planned_comment_has_owner_approval(planned_comment, owner_login):
@@ -412,6 +478,9 @@ def find_issue_execution_state(
 
     current_agent = persona_slug(persona)
     normalized_bot = _normalize_login(bot_login)
+    trusted_logins = trusted_automation_logins(env)
+    if bot_login:
+        trusted_logins.add(bot_login.casefold())
     labels = issue_label_presence(issue)
     linked_prs: list[dict[str, object]] = []
     for pr in work_state["pull_requests"]:
@@ -447,7 +516,11 @@ def find_issue_execution_state(
         for blocker in blocked_by
         if issue_states.get(blocker, "OPEN").upper() != "CLOSED"
     ]
-    latest_claim = latest_issue_claim(issue_number, issue.get("comments", {}))
+    latest_claim = latest_issue_claim(
+        issue_number,
+        issue.get("comments", {}),
+        trusted_logins=trusted_logins,
+    )
     stale_claim = claim_is_stale(latest_claim, has_open_pr=bool(linked_prs))
     if stale_claim:
         latest_claim = None

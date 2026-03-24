@@ -53,12 +53,25 @@ case "$CI_RESULT" in
         echo "PASS"
         ;;
     not_found)
-        echo "NOT FOUND"
-        echo "  Warning: CI may not have run if no build-affecting files changed."
-        echo "  Verify manually that no source changes were introduced since last CI run."
-        if [[ "$DRY_RUN" == true ]]; then
-            echo "  (dry-run: continuing)"
+        # Release commits typically only touch CHANGELOG.md and don't trigger CI.
+        # Check if the commit contains any source changes that would need CI.
+        SOURCE_CHANGES=$(gh api "repos/$REPO/commits/$SHA" \
+            --jq '[.files[].filename | select(
+                startswith("Sources/") or
+                startswith("Tests/") or
+                startswith("scripts/build") or
+                startswith("scripts/release") or
+                startswith("scripts/notarize") or
+                . == "Package.swift"
+            )] | length' 2>/dev/null || echo "unknown")
+        if [[ "$SOURCE_CHANGES" == "0" ]]; then
+            echo "SKIPPED (no source changes in commit)"
+        elif [[ "$DRY_RUN" == true ]]; then
+            echo "NOT FOUND (dry-run: continuing)"
         else
+            echo "NOT FOUND"
+            echo "  Warning: CI may not have run but source files were changed."
+            echo "  Verify manually that no regressions were introduced."
             EXIT_CODE=1
         fi
         ;;
