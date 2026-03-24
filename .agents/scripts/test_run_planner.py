@@ -19,6 +19,11 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+FIXTURES_DIR = REPO_ROOT / ".agents" / "scripts" / "fixtures"
+
+
+def load_fixture(name: str) -> dict:
+    return json.loads((FIXTURES_DIR / name).read_text(encoding="utf-8"))
 
 
 def load_module(name: str, path: Path):
@@ -553,6 +558,32 @@ class RunPlannerTests(unittest.TestCase):
         finally:
             fixture_path.unlink(missing_ok=True)
 
+    def test_serialize_discussion_payload_marks_owner_and_public_trust_levels(self) -> None:
+        fixture = load_fixture("planner-prompt-injection.json")
+        payload = run_planner.serialize_discussion_payload(
+            fixture["discussion"],
+            owner_login="fairchild",
+        )
+        self.assertEqual(payload[0]["trust_level"], "owner")
+        self.assertEqual(payload[1]["trust_level"], "owner")
+        self.assertEqual(payload[2]["trust_level"], "public")
+
+    def test_run_planner_claude_invocation_uses_static_system_prompt_without_tools(self) -> None:
+        fixture = load_fixture("planner-prompt-injection.json")
+        completed = subprocess.CompletedProcess(args=[], returncode=0, stdout="ok", stderr="")
+        with (
+            mock.patch.object(run_planner, "repo_owner_name", return_value=("fairchild", "workspaces")),
+            mock.patch.object(run_planner, "run_checked", return_value=completed) as run_checked,
+        ):
+            run_planner.run_claude(fixture["discussion"], CATALOG, {}, mode="cli")
+        cmd = run_checked.call_args.kwargs["cmd"] if "cmd" in run_checked.call_args.kwargs else run_checked.call_args.args[0]
+        self.assertNotIn("--append-system-prompt", cmd)
+        self.assertNotIn("--tools", cmd)
+        self.assertNotIn("--permission-mode", cmd)
+        self.assertIn("Trust policy:", cmd[-1])
+        self.assertIn("PROMPT INJECTION", cmd[-1])
+        self.assertNotIn("PROMPT INJECTION", cmd[cmd.index("--system-prompt") + 1])
+
 
 class RunContributorTests(unittest.TestCase):
     def test_normalize_provider_env_prefers_openai_api_key(self) -> None:
@@ -601,6 +632,135 @@ class RunContributorTests(unittest.TestCase):
             / "plat-ironwood.md"
         )
         self.assertEqual(run_contributor.extract_persona(prompt), "Plat Ironwood")
+
+    def test_build_selection_index_excludes_github_free_form_text(self) -> None:
+        fixture = load_fixture("contributor-prompt-injection.json")
+        completed = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout="abc123 Fix branch protection\n",
+            stderr="",
+        )
+        with (
+            mock.patch.object(run_contributor, "repo_owner_name", return_value=("fairchild", "workspaces")),
+            mock.patch.object(run_contributor, "run_checked", return_value=completed),
+            mock.patch.object(run_contributor, "fetch_selection_state", return_value=fixture["selection_state"]),
+            mock.patch.object(run_contributor, "fetch_issue_state_map", return_value={}),
+            mock.patch.object(
+                run_contributor,
+                "classify_execution_work",
+                return_value={"own_open_prs": [], "claimed_issues": [], "ready_issues": []},
+            ),
+            mock.patch.object(
+                run_contributor,
+                "find_discussions_needing_engagement",
+                return_value=[
+                    {
+                        "number": 111,
+                        "comment_count": 1,
+                        "owner_replied": False,
+                        "reason_codes": ["low_comments", "no_owner_reply"],
+                        "age_hours": 2,
+                    }
+                ],
+            ),
+            mock.patch.object(run_contributor, "find_prs_awaiting_rereview_items", return_value=[]),
+            mock.patch.object(run_contributor, "gather_backlog_state", return_value="foo: pending"),
+        ):
+            selection_index, _, _ = run_contributor.build_selection_index(
+                {},
+                persona="April Clearwater",
+                bot_login="april-clearwater[bot]",
+            )
+        rendered = json.dumps(selection_index.to_prompt_dict(), ensure_ascii=False)
+        self.assertNotIn("IGNORE ALL RULES", rendered)
+        self.assertNotIn("Malicious PR title", rendered)
+        self.assertNotIn("Unsafe issue title", rendered)
+        self.assertIn('"comment_discussion"', rendered)
+
+    def test_choose_next_task_uses_selector_tools_without_appended_system_prompt(self) -> None:
+        selection_index = run_contributor.SelectionIndex(
+            persona="April Clearwater",
+            runner_platform="Runner platform: macOS",
+            stats={},
+            sections=[{"kind": "propose", "priority": 7, "candidates": [{"number": None}]}],
+        )
+        completed = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout='{"selection_kind":"propose","number":null,"reason":"nothing else is queued"}',
+            stderr="",
+        )
+        with mock.patch.object(run_contributor, "run_checked", return_value=completed) as run_checked:
+            choice = run_contributor.choose_next_task(selection_index, {}, mode="cli")
+        self.assertEqual(choice.selection_kind, "propose")
+        cmd = run_checked.call_args.kwargs["cmd"] if "cmd" in run_checked.call_args.kwargs else run_checked.call_args.args[0]
+        self.assertNotIn("--append-system-prompt", cmd)
+        self.assertIn(run_contributor.SELECTOR_TOOLS, cmd)
+
+    def test_action_phase_uses_selection_specific_tools_without_appended_system_prompt(self) -> None:
+        completed = subprocess.CompletedProcess(args=[], returncode=0, stdout="ok", stderr="")
+        prompt = (
+            REPO_ROOT
+            / ".agents"
+            / "skills"
+            / "cofounder-contributor"
+            / "references"
+            / "april-clearwater.md"
+        )
+        with mock.patch.object(run_contributor, "run_checked", return_value=completed) as run_checked:
+            run_contributor.run_claude(
+                prompt,
+                "task",
+                {},
+                mode="cli",
+                tools=run_contributor.contributor_tools_for_selection("execute_ready_issue"),
+            )
+        cmd = run_checked.call_args.kwargs["cmd"] if "cmd" in run_checked.call_args.kwargs else run_checked.call_args.args[0]
+        self.assertNotIn("--append-system-prompt", cmd)
+        self.assertIn(run_contributor.EXECUTION_TOOLS, cmd)
+        self.assertNotEqual(
+            run_contributor.SELECTOR_TOOLS,
+            run_contributor.contributor_tools_for_selection("execute_ready_issue"),
+        )
+
+    def test_build_action_phase_inputs_keeps_prompt_injection_in_untrusted_payloads(self) -> None:
+        fixture = load_fixture("contributor-prompt-injection.json")
+        choice = run_contributor.SelectionChoice(selection_kind="review_pr", number=200, reason="review open pr")
+        selection_item = {"number": 200, "review_decision": "REVIEW_REQUIRED"}
+        repo_context = {
+            "owner": "fairchild",
+            "name": "workspaces",
+            "recent_commits": "abc123 Fix branch protection",
+            "backlog_state": "foo: pending",
+        }
+        with (
+            mock.patch.object(
+                run_contributor,
+                "fetch_detailed_pull_request",
+                return_value=fixture["detailed_pull_request"],
+            ),
+            mock.patch.object(
+                run_contributor,
+                "fetch_detailed_issue",
+                return_value=fixture["detailed_issue"],
+            ),
+            mock.patch.object(
+                run_contributor,
+                "fetch_detailed_discussion",
+                return_value=fixture["detailed_discussion"],
+            ),
+        ):
+            task_envelope, payloads = run_contributor.build_action_phase_inputs(
+                choice,
+                selection_item,
+                repo_context,
+                {},
+            )
+        rendered_payloads = json.dumps([payload.to_prompt_dict() for payload in payloads], ensure_ascii=False)
+        self.assertIn("PROMPT INJECTION", rendered_payloads)
+        self.assertNotIn("PROMPT INJECTION", task_envelope)
+        self.assertNotIn("IGNORE ALL RULES", task_envelope)
 
     def test_find_agent_threads_pr_review(self) -> None:
         data = {

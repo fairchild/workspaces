@@ -454,15 +454,20 @@ def find_discussions_needing_engagement(
         )
 
         reasons: list[str] = []
+        reason_codes: list[str] = []
         if other_agent_recent:
             age_hours = max(1, int(age.total_seconds() // 3600)) if age is not None else ENGAGEMENT_RECENT_HOURS
             reasons.append(f"{proposed_by} opened this {age_hours}h ago")
+            reason_codes.append("recent_other_agent_thread")
         if comment_count == 0:
             reasons.append("0 comments")
+            reason_codes.append("no_comments")
         elif comment_count <= LOW_COMMENT_THRESHOLD:
             reasons.append("only 1 comment")
+            reason_codes.append("low_comments")
         if not owner_replied:
             reasons.append("no owner reply yet")
+            reason_codes.append("no_owner_reply")
 
         if not reasons:
             continue
@@ -483,7 +488,9 @@ def find_discussions_needing_engagement(
                 "comment_count": comment_count,
                 "owner_replied": owner_replied,
                 "reasons": reasons,
+                "reason_codes": reason_codes,
                 "priority": priority,
+                "age_hours": max(0, int(age.total_seconds() // 3600)) if age is not None else None,
                 "sort_timestamp": sort_timestamp,
             }
         )
@@ -533,6 +540,46 @@ def format_issue_list_for_context(issues: list[dict[str, object]]) -> str:
         for issue in issues
     ]
     return json.dumps(payload, indent=2, ensure_ascii=False)
+
+
+def find_prs_awaiting_rereview_items(
+    pull_requests: list[dict[str, object]],
+    bot_login: str,
+) -> list[dict[str, str]]:
+    awaiting: list[dict[str, str]] = []
+
+    for pr in pull_requests:
+        reviews = (pr.get("reviews") or {}).get("nodes", [])
+        agent_reviews = [
+            review
+            for review in reviews
+            if _normalize_login((review.get("author") or {}).get("login", "")) == _normalize_login(bot_login)
+        ]
+        if not agent_reviews:
+            continue
+
+        latest_agent_review = max(agent_reviews, key=lambda review: review.get("submittedAt", ""))
+        if latest_agent_review.get("state") == "APPROVED":
+            continue
+
+        commits = (pr.get("commits") or {}).get("nodes", [])
+        if not commits:
+            continue
+        latest_commit_date = commits[0].get("commit", {}).get("committedDate", "")
+        review_date = latest_agent_review.get("submittedAt", "")
+
+        if latest_commit_date > review_date:
+            awaiting.append(
+                {
+                    "number": str(pr["number"]),
+                    "title": str(pr.get("title", "")),
+                    "review_state": str(latest_agent_review["state"]),
+                    "review_date": str(review_date),
+                    "latest_commit_date": str(latest_commit_date),
+                }
+            )
+
+    return awaiting
 
 
 def format_pr_list_for_context(
@@ -604,34 +651,14 @@ def find_prs_awaiting_rereview(
     pull_requests: list[dict[str, object]],
     bot_login: str,
 ) -> str:
-    awaiting: list[str] = []
-
-    for pr in pull_requests:
-        reviews = (pr.get("reviews") or {}).get("nodes", [])
-        agent_reviews = [
-            review
-            for review in reviews
-            if _normalize_login((review.get("author") or {}).get("login", "")) == _normalize_login(bot_login)
-        ]
-        if not agent_reviews:
-            continue
-
-        latest_agent_review = max(agent_reviews, key=lambda review: review.get("submittedAt", ""))
-        if latest_agent_review.get("state") == "APPROVED":
-            continue
-
-        commits = (pr.get("commits") or {}).get("nodes", [])
-        if not commits:
-            continue
-        latest_commit_date = commits[0].get("commit", {}).get("committedDate", "")
-        review_date = latest_agent_review.get("submittedAt", "")
-
-        if latest_commit_date > review_date:
-            awaiting.append(
-                f"  PR #{pr['number']} — {pr['title']}\n"
-                f"    Your review: {latest_agent_review['state']} at {review_date}\n"
-                f"    Latest commit: {latest_commit_date} (pushed AFTER your review)"
-            )
+    awaiting = [
+        (
+            f"  PR #{item['number']} — {item['title']}\n"
+            f"    Your review: {item['review_state']} at {item['review_date']}\n"
+            f"    Latest commit: {item['latest_commit_date']} (pushed AFTER your review)"
+        )
+        for item in find_prs_awaiting_rereview_items(pull_requests, bot_login)
+    ]
 
     if not awaiting:
         return ""

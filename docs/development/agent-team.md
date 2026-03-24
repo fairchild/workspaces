@@ -158,10 +158,11 @@ April, Plat, and Peter now use thin workflow wrappers. Their workflow YAML keeps
 The shared contributor behavior now lives in `.agents/skills/cofounder-contributor/scripts/run-contributor.py` plus the execution-state sync script:
 
 1. sync `agent:ready` / `agent:claimed` / `agent:review` from discussion approval, blockers, open PRs, and stale claims
-2. gather repo and GitHub context
-3. run Claude Code with the selected persona prompt
-4. validate YAML frontmatter output through the shared validator
-5. either pretty-print validated JSON for dry runs or route the action back into GitHub
+2. build a normalized read-only selection index from repo/GitHub state without exposing raw GitHub text to the privileged selector prompt
+3. run a selector phase to choose the next task from that normalized index
+4. fetch only the chosen target's GitHub payload and pass it to Claude as explicit untrusted data alongside the selected persona prompt
+5. validate YAML frontmatter output through the shared validator
+6. either pretty-print validated JSON for dry runs or route the action back into GitHub
 
 When Peter has already planned a discussion, execution approval lives on Peter's summary comment. A 👍 reaction from the repo owner is the mission-level signal. The sync step turns that into explicit per-issue `agent:ready` state, transitions to `agent:review` when a PR opens, and expires `agent:claimed` issues after 24 hours when no PR exists (including unassigning the agent).
 
@@ -206,6 +207,7 @@ The `recommend_close` action lets contributors close stale discussions with a su
 ## Reliability
 
 - **YAML frontmatter output format** — agents output structured YAML frontmatter, validated before posting, with JSON fences retained only as a fallback parser path
+- **Prompt trust boundary** — PR [#202](https://github.com/fairchild/workspaces/pull/202) gates mention-triggered public workflows to trusted actors, and the scheduled contributor/planner runtimes now keep GitHub-authored text out of privileged prompt space. Raw discussion/comment/review text is passed only as explicit untrusted payload data after task selection.
 - **Dedup checking** — proposed titles are compared against open discussions before posting
 - **GraphQL for Discussions** — GitHub REST API doesn't support Discussions; all queries use GraphQL
 - **Early filtering** — planner workflow skips non-owner comments at the job level (no wasted compute)
