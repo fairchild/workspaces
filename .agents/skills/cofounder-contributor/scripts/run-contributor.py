@@ -100,6 +100,7 @@ from evidence import (  # noqa: E402, F401
     review_evidence_gate_error,
     summarize_evidence_accounting_by_index,
     summarize_requested_evidence,
+    safe_swift_test_command_args,
     validate_evidence_accounting,
     validate_requested_test_commands,
 )
