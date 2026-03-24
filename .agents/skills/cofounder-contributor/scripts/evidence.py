@@ -273,6 +273,9 @@ def evaluate_evidence_accounting(body: str, requested_evidence: list[str]) -> di
             "contract_required": False,
         }
 
+    # _structured_evidence_entries returns a non-None dict even when metadata is malformed
+    # (source="structured-invalid"). The `or` only triggers when there is no hidden metadata
+    # at all, falling back to markdown parsing.
     parsed = _structured_evidence_entries(body, requested_evidence) or extract_evidence_status_entries(body)
     entries = parsed["entries"]
 
@@ -377,7 +380,7 @@ def validate_evidence_accounting(body: str, requested_evidence: list[str]) -> tu
         remaining = len(duplicate_items) - 3
         if remaining > 0:
             parts.append(f"{remaining} more")
-        preview = ", ".join(parts)
+        preview = "; ".join(parts)
         errors.append(f"duplicate Evidence Status entries for: {preview}")
     missing_items = accounting["missing_items"]
     if missing_items:

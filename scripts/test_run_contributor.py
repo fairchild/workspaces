@@ -268,5 +268,25 @@ class EvidenceValidationTests(unittest.TestCase):
         self.assertLess(len(error), 500)
 
 
+    def test_render_then_validate_pending_ci_roundtrip(self) -> None:
+        """Round-trip: render_execution_summary_body with pending-ci entries,
+        then validate_evidence_accounting should not raise format errors."""
+        requested = ["`swift test --filter Foo`", "screenshot of main window"]
+        summary_body = "## Summary\nSome PR description\n\n## Validation\n- looks good\n"
+        rendered, render_errors = run_contributor.render_execution_summary_body(
+            summary_body,
+            requested_evidence=requested,
+            evidence_complete=["1 -- all tests pass"],
+            evidence_blocked=None,
+            evidence_pending_ci=["2 -- CI will capture screenshot"],
+        )
+        self.assertEqual(render_errors, [])
+        # Rendered body should contain "blocked on evidence" language
+        self.assertIn("blocked on evidence", rendered.casefold())
+        # Now validate the rendered body — should have no errors
+        _, validate_errors = run_contributor.validate_evidence_accounting(rendered, requested)
+        self.assertEqual(validate_errors, [], f"Round-trip validation failed: {validate_errors}")
+
+
 if __name__ == "__main__":
     unittest.main()
