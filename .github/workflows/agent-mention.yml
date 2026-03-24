@@ -124,6 +124,7 @@ jobs:
           case "$permission" in
             admin|maintain|write)
               echo "trusted=true" >> "$GITHUB_OUTPUT"
+              echo "Actor $ACTOR trusted (permission: $permission)"
               ;;
             *)
               echo "trusted=false" >> "$GITHUB_OUTPUT"
