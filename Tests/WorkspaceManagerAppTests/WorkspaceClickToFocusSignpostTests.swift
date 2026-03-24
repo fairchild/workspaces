@@ -1,6 +1,6 @@
 //
-//  PerformanceSignpostsTests.swift
-//  WorkspaceManagerTests
+//  WorkspaceClickToFocusSignpostTests.swift
+//  WorkspaceManagerAppTests
 //
 //  Tests for workspace_click_to_focus metric lifecycle.
 //
@@ -13,7 +13,7 @@ import Testing
 @Suite("PerformanceSignposts workspace_click_to_focus", .serialized)
 struct WorkspaceClickToFocusSignpostTests {
     init() {
-        PerformanceSignposts.setWorkspaceClickMetricObserver(nil)
+        PerformanceSignposts.resetWorkspaceClickMetricsForTesting()
     }
 
     @Test("begin emits started event")
@@ -22,14 +22,13 @@ struct WorkspaceClickToFocusSignpostTests {
         PerformanceSignposts.setWorkspaceClickMetricObserver { phase, fields in
             captured.append((phase, fields))
         }
-        defer { PerformanceSignposts.setWorkspaceClickMetricObserver(nil) }
+        defer { PerformanceSignposts.resetWorkspaceClickMetricsForTesting() }
 
         let sessionID = UUID()
         PerformanceSignposts.beginWorkspaceClickToFocusedInput(
             sessionID: sessionID,
             workspacePath: "/tmp/test-workspace"
         )
-        // Clean up the interval
         PerformanceSignposts.cancelWorkspaceClickToFocusedInputIfNeeded(
             sessionID: sessionID,
             reason: "test_cleanup"
@@ -47,7 +46,7 @@ struct WorkspaceClickToFocusSignpostTests {
         PerformanceSignposts.setWorkspaceClickMetricObserver { phase, fields in
             captured.append((phase, fields))
         }
-        defer { PerformanceSignposts.setWorkspaceClickMetricObserver(nil) }
+        defer { PerformanceSignposts.resetWorkspaceClickMetricsForTesting() }
 
         let sessionID = UUID()
         PerformanceSignposts.beginWorkspaceClickToFocusedInput(
@@ -72,7 +71,7 @@ struct WorkspaceClickToFocusSignpostTests {
         PerformanceSignposts.setWorkspaceClickMetricObserver { phase, fields in
             captured.append((phase, fields))
         }
-        defer { PerformanceSignposts.setWorkspaceClickMetricObserver(nil) }
+        defer { PerformanceSignposts.resetWorkspaceClickMetricsForTesting() }
 
         PerformanceSignposts.endWorkspaceClickToFocusedInputIfNeeded(
             sessionID: UUID(),
@@ -82,34 +81,32 @@ struct WorkspaceClickToFocusSignpostTests {
         #expect(captured.isEmpty)
     }
 
-    @Test("supersede closes previous interval")
+    @Test("restarting the same session supersedes the prior interval")
     func supersedeClosesPrevious() async {
         var captured: [(phase: String, fields: [String: String])] = []
         PerformanceSignposts.setWorkspaceClickMetricObserver { phase, fields in
             captured.append((phase, fields))
         }
-        defer { PerformanceSignposts.setWorkspaceClickMetricObserver(nil) }
+        defer { PerformanceSignposts.resetWorkspaceClickMetricsForTesting() }
 
-        let firstSession = UUID()
-        let secondSession = UUID()
+        let sessionID = UUID()
 
         PerformanceSignposts.beginWorkspaceClickToFocusedInput(
-            sessionID: firstSession,
+            sessionID: sessionID,
             workspacePath: "/tmp/workspace-a"
         )
         PerformanceSignposts.beginWorkspaceClickToFocusedInput(
-            sessionID: secondSession,
+            sessionID: sessionID,
             workspacePath: "/tmp/workspace-b"
         )
-        // Clean up second interval
         PerformanceSignposts.cancelWorkspaceClickToFocusedInputIfNeeded(
-            sessionID: secondSession,
+            sessionID: sessionID,
             reason: "test_cleanup"
         )
 
         let supersededEvents = captured.filter { $0.fields["outcome"] == "superseded" }
         #expect(supersededEvents.count == 1)
-        #expect(supersededEvents.first?.fields["session"] == firstSession.uuidString)
+        #expect(supersededEvents.first?.fields["session"] == sessionID.uuidString)
     }
 
     @Test("cancel closes interval with reason")
@@ -118,7 +115,7 @@ struct WorkspaceClickToFocusSignpostTests {
         PerformanceSignposts.setWorkspaceClickMetricObserver { phase, fields in
             captured.append((phase, fields))
         }
-        defer { PerformanceSignposts.setWorkspaceClickMetricObserver(nil) }
+        defer { PerformanceSignposts.resetWorkspaceClickMetricsForTesting() }
 
         let sessionID = UUID()
         PerformanceSignposts.beginWorkspaceClickToFocusedInput(
@@ -141,24 +138,21 @@ struct WorkspaceClickToFocusSignpostTests {
         PerformanceSignposts.setWorkspaceClickMetricObserver { phase, fields in
             captured.append((phase, fields))
         }
-        defer { PerformanceSignposts.setWorkspaceClickMetricObserver(nil) }
+        defer { PerformanceSignposts.resetWorkspaceClickMetricsForTesting() }
 
         let activeSession = UUID()
         PerformanceSignposts.beginWorkspaceClickToFocusedInput(
             sessionID: activeSession,
             workspacePath: "/tmp/test-workspace"
         )
-        // Try to cancel a different session
         PerformanceSignposts.cancelWorkspaceClickToFocusedInputIfNeeded(
             sessionID: UUID(),
             reason: "wrong_session"
         )
 
-        // Only the started event should exist, no completed/cancelled
         let completedEvents = captured.filter { $0.fields["status"] == "completed" }
         #expect(completedEvents.isEmpty)
 
-        // Clean up
         PerformanceSignposts.cancelWorkspaceClickToFocusedInputIfNeeded(
             sessionID: activeSession,
             reason: "test_cleanup"

@@ -1,20 +1,21 @@
 # Performance Dashboard
 
-Last updated: `2026-03-21T22:16:15-0700`
+Last updated: `2026-03-22T10:29:08-0700`
 
 ## Latest Snapshot
 
 | Metric | Median (ms) | Mean (ms) | Target (ms) | Status | Delta vs Previous |
 |---|---:|---:|---:|---|---|
-| `launch_to_first_prompt` | 3399.44 | 3307.36 | <= 250 | fail | +687.71 ms (+25.4%) |
-| `repo_hydration` | 2.72 | 13.98 | <= 25 | pass | +0.78 ms (+40.2%) |
-| `repo_click_to_focus` | 2603.74 | 2474.91 | <= 250 | fail | +704.80 ms (+37.1%) |
+| `launch_to_first_prompt` | 1468.20 | 1547.79 | <= 250 | fail | +136.88 ms (+10.3%) |
+| `repo_hydration` | 1.24 | 6.72 | <= 25 | pass | -0.19 ms (-13.3%) |
+| `repo_click_to_focus` | 1110.01 | 1122.70 | <= 250 | fail | +252.94 ms (+29.5%) |
 
 ## Investigated Delta
 
-- Portfolio size changed from discovered=18 to discovered=18, but `repo_hydration` only moved +0.78 ms (+40.2%) and remains within the `<= 25 ms` gate.
-- The large regression is concentrated in terminal readiness: `launch_to_first_prompt` changed +687.71 ms (+25.4%) and `repo_click_to_focus` changed +704.80 ms (+37.1%).
-- The post-activation ready-to-type gap changed +469.00 ms (+27.3%), from `1718.00 ms` to `2187.00 ms`. That points to terminal focus/readiness after activation as the main place the extra time moved.
+- Collection context matters here: the February refinement rows above came from a native-host refinement baseline, while the March incident/recovery rows were gathered in the agent/automation VM lane. Use March-to-March comparisons for current regression tracking unless the February baseline is re-run in the same environment.
+- Portfolio size changed from discovered=18 to discovered=18, but `repo_hydration` only moved -0.19 ms (-13.3%) and remains within the `<= 25 ms` gate.
+- The large regression is concentrated in terminal readiness: `launch_to_first_prompt` changed +136.88 ms (+10.3%) and `repo_click_to_focus` changed +252.94 ms (+29.5%).
+- The post-activation ready-to-type gap changed +285.00 ms (+41.9%), from `681.00 ms` to `966.00 ms`. That points to terminal focus/readiness after activation as the main place the extra time moved.
 - Broader release-candidate context, including `activate` and `new_workspace_sheet_ready` measurements, is recorded in `./release-exception-validation-2026-03-19.md`.
 
 ## Trend (Last 10 Runs)
@@ -29,28 +30,31 @@ Last updated: `2026-03-21T22:16:15-0700`
 | 2026-03-19T07:53:47-0700 | 1784.48 | 1.39 | 1367.83 | n/a |
 | 2026-03-19T08:04:45-0700 | 2711.73 | 1.94 | 1898.94 | n/a |
 | 2026-03-21T22:16:15-0700 | 3399.44 | 2.72 | 2603.74 | n/a |
+| 2026-03-22T08:50:59-0700 | 1331.33 | 1.43 | 857.07 | n/a |
+| 2026-03-22T10:29:08-0700 | 1468.20 | 1.24 | 1110.01 | n/a |
 
 ## Visual Bars (Last 10 Run Window)
 
 `launch_to_first_prompt` target <= 250 ms
 
-current 3399.44 ms (1359.8% of target)
+current 1468.20 ms (587.3% of target)
 [########################]
 
 `repo_hydration` target <= 25 ms
 
-current 2.72 ms (10.9% of target)
-[###---------------------]
+current 1.24 ms (5.0% of target)
+[#-----------------------]
 
 `repo_click_to_focus` target <= 250 ms
 
-current 2603.74 ms (1041.5% of target)
+current 1110.01 ms (444.0% of target)
 [########################]
 
 ## Run Context
 
 - OS: `26.2` (build `25C56`)
 - Hardware: `arm64` / `Mac16,13`
+- Collection environment: March 2026 incident/recovery runs in this dashboard were gathered in the agent/automation VM lane; the February refinement rows came from a native-host baseline.
 - Portfolio context: discovered=18 imported=0
 - Sample setup: runs=5, sleep=8s
 

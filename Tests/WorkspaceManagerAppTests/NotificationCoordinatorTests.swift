@@ -122,8 +122,22 @@ struct NotificationCoordinatorTests {
         )
     }
 
-    private func flushEventDelivery() async {
-        try? await Task.sleep(for: .milliseconds(20))
+    private func waitForEventCount(
+        _ expectedCount: Int,
+        coordinator: NotificationCoordinator,
+        timeoutMilliseconds: Int = 250
+    ) async {
+        let attempts = max(timeoutMilliseconds / 10, 1)
+        for _ in 0..<attempts {
+            if coordinator.events.count == expectedCount {
+                return
+            }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+
+        Issue.record(
+            "Timed out waiting for \(expectedCount) delivered events. Saw \(coordinator.events.count)."
+        )
     }
 
     private func waitForAuthState(
@@ -345,14 +359,14 @@ struct NotificationCoordinatorTests {
 
         await eventStream.emit(first)
         await eventStream.emit(second)
-        await flushEventDelivery()
+        await waitForEventCount(2, coordinator: coordinator)
 
         #expect(coordinator.events.map(\.id) == ["evt-2", "evt-1"])
         #expect(coordinator.unseenEventCount == 2)
 
         await eventStream.emit(first)
         await eventStream.emit(second)
-        await flushEventDelivery()
+        await waitForEventCount(2, coordinator: coordinator)
 
         #expect(coordinator.events.map(\.id) == ["evt-2", "evt-1"])
         #expect(coordinator.unseenEventCount == 2)
@@ -379,7 +393,7 @@ struct NotificationCoordinatorTests {
 
         let event = makeEvent(id: "evt-1", summary: "PR #1 opened", timestamp: 1_710_000_000)
         await eventStream.emit(event)
-        await flushEventDelivery()
+        await waitForEventCount(1, coordinator: coordinator)
 
         #expect(coordinator.events.map(\.id) == ["evt-1"])
 
@@ -389,7 +403,7 @@ struct NotificationCoordinatorTests {
 
         await coordinator.connectStream(remoteURL: "https://github.com/test-org/repo-a.git")
         await eventStream.emit(event)
-        await flushEventDelivery()
+        await waitForEventCount(1, coordinator: coordinator)
 
         #expect(coordinator.events.map(\.id) == ["evt-1"])
     }
