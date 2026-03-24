@@ -100,6 +100,14 @@ struct WorkspaceManagerApp: App {
             }
 
             SidebarCommands()
+
+            CommandGroup(after: .help) {
+                Button("Export Diagnostic Report...") {
+                    Task {
+                        await DiagnosticReportExporter.exportWithSavePanel()
+                    }
+                }
+            }
         }
 
         Settings {
