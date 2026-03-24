@@ -11,12 +11,53 @@ on:
     types: [submitted]
 
 jobs:
-  claude:
+  gate:
     if: |
       (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
       (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
       (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
       (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+    outputs:
+      trusted: ${{ steps.trust.outputs.trusted }}
+    steps:
+      - name: Gate to trusted actors
+        id: trust
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_API_URL: ${{ github.api_url }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          ACTOR: ${{ github.actor }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          permission="$(
+            curl --silent --show-error --fail \
+              --header "Authorization: Bearer $GH_TOKEN" \
+              --header "Accept: application/vnd.github+json" \
+              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/collaborators/$ACTOR/permission" \
+              | jq -r '.permission' 2>/dev/null || echo "none"
+          )"
+
+          case "$permission" in
+            admin|maintain|write)
+              echo "trusted=true" >> "$GITHUB_OUTPUT"
+              echo "Actor $ACTOR trusted (permission: $permission)"
+              ;;
+            *)
+              echo "trusted=false" >> "$GITHUB_OUTPUT"
+              echo "Ignoring @claude request from untrusted actor $ACTOR (permission: $permission)"
+              ;;
+          esac
+
+  claude:
+    needs: gate
+    if: |
+      needs.gate.outputs.trusted == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -47,4 +88,3 @@ jobs:
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
           # or https://code.claude.com/docs/en/cli-reference for available options
           # claude_args: '--allowed-tools Bash(gh pr:*)'
-

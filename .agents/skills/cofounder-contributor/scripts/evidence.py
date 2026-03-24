@@ -273,6 +273,9 @@ def evaluate_evidence_accounting(body: str, requested_evidence: list[str]) -> di
             "contract_required": False,
         }
 
+    # _structured_evidence_entries returns a non-None dict even when metadata is malformed
+    # (source="structured-invalid"). The `or` only triggers when there is no hidden metadata
+    # at all, falling back to markdown parsing.
     parsed = _structured_evidence_entries(body, requested_evidence) or extract_evidence_status_entries(body)
     entries = parsed["entries"]
 
@@ -319,6 +322,40 @@ def evaluate_evidence_accounting(body: str, requested_evidence: list[str]) -> di
     }
 
 
+def _truncate(text: str, max_len: int = 80) -> str:
+    text = str(text)
+    if len(text) <= max_len:
+        return text
+    return text[: max_len - 3] + "..."
+
+
+def _format_malformed_preview(invalid_lines: list[object], max_shown: int = 2) -> str:
+    parts: list[str] = []
+    for i, line in enumerate(invalid_lines[:max_shown]):
+        parts.append(f'line {i + 1}: "{_truncate(str(line))}"')
+    remaining = len(invalid_lines) - max_shown
+    if remaining > 0:
+        parts.append(f"{remaining} more")
+    return "(" + "; ".join(parts) + ")"
+
+
+def _format_missing_preview(
+    missing_items: list[object], requested_evidence: list[str], max_shown: int = 3,
+) -> str:
+    parts: list[str] = []
+    for item in missing_items[:max_shown]:
+        item_str = str(item)
+        try:
+            idx = requested_evidence.index(item_str) + 1
+        except ValueError:
+            idx = "?"
+        parts.append(f'[{idx}] "{_truncate(item_str)}"')
+    remaining = len(missing_items) - max_shown
+    if remaining > 0:
+        parts.append(f"{remaining} more")
+    return "; ".join(parts)
+
+
 def validate_evidence_accounting(body: str, requested_evidence: list[str]) -> tuple[dict[str, object], list[str]]:
     if not requested_evidence:
         return evaluate_evidence_accounting(body, []), []
@@ -328,22 +365,26 @@ def validate_evidence_accounting(body: str, requested_evidence: list[str]) -> tu
         errors.append("missing required '## Evidence Status' section")
     invalid_lines = accounting["invalid_lines"]
     if invalid_lines:
-        preview = "; ".join(str(line) for line in invalid_lines[:3])
+        preview = _format_malformed_preview(invalid_lines)
         if accounting["source"] == "structured-invalid":
             errors.append(f"malformed hidden evidence metadata: {preview}")
         else:
             errors.append(
                 "malformed Evidence Status entries; expected "
                 "'- [complete|blocked|pending-ci] <requested_evidence item> -- <proof note>' "
-                f"(examples: {preview})"
+                f"{preview}"
             )
     duplicate_items = accounting["duplicate_items"]
     if duplicate_items:
-        preview = ", ".join(str(item) for item in duplicate_items[:3])
+        parts = [f'"{_truncate(str(item))}"' for item in duplicate_items[:3]]
+        remaining = len(duplicate_items) - 3
+        if remaining > 0:
+            parts.append(f"{remaining} more")
+        preview = "; ".join(parts)
         errors.append(f"duplicate Evidence Status entries for: {preview}")
     missing_items = accounting["missing_items"]
     if missing_items:
-        preview = "; ".join(str(item) for item in missing_items[:3])
+        preview = _format_missing_preview(missing_items, requested_evidence)
         errors.append(
             "PR body must account for every requested evidence item exactly; "
             f"missing: {preview}"
@@ -357,6 +398,24 @@ def validate_evidence_accounting(body: str, requested_evidence: list[str]) -> tu
             "pending-ci evidence entries require 'blocked on evidence' language in the Validation section"
         )
     return accounting, errors
+
+
+def classify_evidence_error(error: str) -> str:
+    if error.startswith("missing required '## Evidence Status'"):
+        return "evidence_section_missing"
+    if error.startswith("malformed Evidence Status entries"):
+        return "evidence_format"
+    if error.startswith("malformed hidden evidence metadata"):
+        return "evidence_metadata"
+    if error.startswith("duplicate Evidence Status entries"):
+        return "evidence_duplicate"
+    if "missing:" in error:
+        return "evidence_missing"
+    return "evidence_format"
+
+
+def classify_evidence_errors(errors: list[str]) -> list[dict[str, str]]:
+    return [{"category": classify_evidence_error(e), "message": e} for e in errors]
 
 
 def parse_structured_evidence_updates(
@@ -536,18 +595,38 @@ def _extract_test_commands(requested_evidence: list[str]) -> list[str]:
     ]
 
 
-def _swift_test_filter_selector(command: str) -> str | None:
+def safe_swift_test_command_args(command: str) -> list[str] | None:
     try:
         parts = shlex.split(command)
     except ValueError:
         return None
-    if len(parts) < 4 or parts[:2] != ["swift", "test"]:
+
+    if parts == ["swift", "test"]:
+        return parts
+
+    if len(parts) == 4 and parts[:3] == ["swift", "test", "--filter"] and parts[3].strip():
+        return parts
+
+    if (
+        len(parts) == 3
+        and parts[:2] == ["swift", "test"]
+        and parts[2].startswith("--filter=")
+        and parts[2] != "--filter="
+    ):
+        return parts
+
+    return None
+
+
+def _swift_test_filter_selector(command: str) -> str | None:
+    parts = safe_swift_test_command_args(command)
+    if parts is None or len(parts) < 3:
         return None
-    for index, part in enumerate(parts[2:], start=2):
-        if part == "--filter" and index + 1 < len(parts):
-            return parts[index + 1]
-        if part.startswith("--filter="):
-            return part.split("=", 1)[1]
+
+    if len(parts) == 4 and parts[2] == "--filter":
+        return parts[3]
+    if len(parts) == 3 and parts[2].startswith("--filter="):
+        return parts[2].split("=", 1)[1]
     return None
 
 
@@ -579,13 +658,21 @@ def validate_requested_test_commands(
     env: dict[str, str],
 ) -> list[str]:
     commands = _extract_test_commands(requested_evidence)
+    errors = [
+        "requested test evidence "
+        f"`{command}` must use `swift test` or `swift test --filter <selector>`; "
+        "extra flags and shell operators are not allowed"
+        for command in commands
+        if safe_swift_test_command_args(command) is None
+    ]
+
     swift_filter_commands = [
         command
         for command in commands
         if _swift_test_filter_selector(command) is not None
     ]
     if not swift_filter_commands:
-        return []
+        return errors
 
     # Look up through the entrypoint module to allow mock.patch.object patching.
     _mod = sys.modules.get("run_contributor", sys.modules[__name__])
@@ -595,9 +682,8 @@ def validate_requested_test_commands(
             "skipping `swift test list` evidence selector preflight because no Swift Testing "
             "specifiers were returned; the project may need to build first"
         )
-        return []
+        return errors
 
-    errors: list[str] = []
     for command in swift_filter_commands:
         selector = _swift_test_filter_selector(command)
         if selector is None:

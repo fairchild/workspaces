@@ -1,5 +1,71 @@
 # Changelog
 
+## [0.8.1] - 2026-03-24
+
+### Fixed
+- skip CI preflight gate for changelog-only release commits
+
+### Other
+- v0.8.1
+
+## [0.8.1] - 2026-03-24
+
+### Fixed
+- skip CI preflight gate for changelog-only release commits
+
+## [0.8.0] - 2026-03-24
+
+### Added
+- add per-agent health monitoring to ops-report (#199)
+
+### Fixed
+- harden evidence validation with truncated errors and structured classification (#198)
+
+### Other
+- Gate public agent workflows to trusted actors (#202)
+
+## [0.7.0] - 2026-03-24
+
+### Added
+- upgrade diagnostic export to full report bundle (#197)
+- web: Phase 3 — event persistence, live dashboard, mobile layout (#193)
+- web: Phase 2 — GitHub OAuth, dashboard, webhook activity feed (#188)
+- add exportable local diagnostics for startup regressions (#153)
+- add lume daemon reliability tooling and docs (#161)
+- compact lume-status script and fix smoke VM cleanup (#160)
+- instrument workspace-switch focus metrics (#149)
+- add @agent mention triggers and extract reusable evidence workflow
+- add release quality gate before publishing (#155)
+- enforce startup performance budgets in CI (#147)
+
+### Changed
+- extract contributor runtime into domain modules (#185)
+- move selection persistence off main-actor hot path (#151)
+- parallelize provider availability and Lume snapshot refresh (#152)
+- track activation-to-ready gap in dashboard
+
+### Fixed
+- add web README and set Vercel root directory (#194)
+- add workspace creation diagnostics and guard debounced save rollback (#190)
+- remove stale snapshot cache from setup flow (#106 follow-up) (#166)
+- simplify terminal focus ownership and remove duplicate handoffs (#150)
+- address PR #141 review follow-ups (#154)
+- support multi-line quoted strings in frontmatter parser (#138)
+
+### Other
+- Fix main test suite deadlock and refresh perf baseline (#186)
+- spaces.cloudcompute.com agent discovery dashboard (#191)
+- Add chat sdk skill (#192)
+- Harden contributor evidence contracts (#145)
+- Upgrade create-github-app-token to v3 (#144)
+- Improve contributor own-PR follow-up flow (#141)
+- Reduce redundant snapshot() probes in workspace creation flow
+- Retry app review smoke verification (#140)
+- Show progress while New Workspace loads (#135)
+- Target lume runner for evidence, handle bot assignment (#139)
+- Wire R2 evidence URLs into April workflow (#136)
+- Add runner VM recovery docs and unlock script (#137)
+
 ## [0.6.0] - 2026-03-19
 
 ### Added

@@ -57,9 +57,11 @@ PERF_TARGETS_MS = {
     "repo_click_to_focus": 250.0,
 }
 FAILURE_CONCLUSIONS = {"failure", "timed_out", "startup_failure", "action_required"}
+AGENT_WORKFLOW_PREFIX = "Agent: "
 OPS_IDEA_TITLES = {
     "perf": "[idea] [ops] Investigate performance regression",
     "ci": "[idea] [ops] Stabilize GitHub Actions reliability",
+    "agent": "[idea] [ops] Stabilize individual agent reliability",
     "throughput": "[idea] [ops] Unblock planned work from execution",
 }
 TIMELINE_FIELDS = [
@@ -738,6 +740,29 @@ def summarize_ci(runs: list[dict[str, Any]], days: int, current_time: datetime) 
         str(run.get("workflowName") or run.get("name") or "Unknown")
         for run in failure_runs
     )
+
+    agents: dict[str, dict[str, Any]] = {}
+    by_workflow: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for run in completed_runs:
+        wf = str(run.get("workflowName") or run.get("name") or "Unknown")
+        by_workflow[wf].append(run)
+    for wf_name, wf_runs in by_workflow.items():
+        if not wf_name.startswith(AGENT_WORKFLOW_PREFIX):
+            continue
+        agent_name = wf_name[len(AGENT_WORKFLOW_PREFIX):]
+        agent_total = len(wf_runs)
+        agent_failures = sum(
+            1 for r in wf_runs if str(r.get("conclusion", "")).lower() in FAILURE_CONCLUSIONS
+        )
+        agent_reruns = sum(1 for r in wf_runs if int(r.get("attempt") or 1) > 1)
+        agents[agent_name] = {
+            "completed_runs": agent_total,
+            "failure_runs": agent_failures,
+            "failure_rate": (agent_failures / agent_total * 100.0) if agent_total else 0.0,
+            "rerun_runs": agent_reruns,
+            "rerun_rate": (agent_reruns / agent_total * 100.0) if agent_total else 0.0,
+        }
+
     return {
         "window_days": days,
         "window_start": cutoff.isoformat().replace("+00:00", "Z"),
@@ -750,6 +775,7 @@ def summarize_ci(runs: list[dict[str, Any]], days: int, current_time: datetime) 
             {"workflow_name": name, "failures": count}
             for name, count in workflow_failures.most_common(5)
         ],
+        "agents": agents,
     }
 
 
@@ -892,6 +918,25 @@ def detect_breaches(
             }
         )
 
+    failing_agents = [
+        {"agent": name, **stats}
+        for name, stats in ci.get("agents", {}).items()
+        if stats["completed_runs"] >= 5 and stats["failure_rate"] >= 20.0
+    ]
+    if failing_agents:
+        breaches.append(
+            {
+                "category": "agent",
+                "title": OPS_IDEA_TITLES["agent"],
+                "summary": "Individual agent failure rate crossed the alert threshold",
+                "details": failing_agents,
+                "suggested_direction": (
+                    "Investigate the top failure modes for the flagged agent(s), fix deterministic "
+                    "errors first, and add regression tests before re-enabling automated runs."
+                ),
+            }
+        )
+
     if len(stale) >= 2:
         breaches.append(
             {
@@ -906,7 +951,7 @@ def detect_breaches(
             }
         )
 
-    priority = {"perf": 0, "ci": 1, "throughput": 2}
+    priority = {"perf": 0, "ci": 1, "agent": 2, "throughput": 3}
     return sorted(breaches, key=lambda item: priority[item["category"]])
 
 
@@ -989,6 +1034,25 @@ def render_dashboard(rows: list[dict[str, str]], summary: dict[str, Any]) -> str
             )
     else:
         lines.append("- none in window")
+
+    agents = ci.get("agents", {})
+    lines.extend(["", "## Agent Health", ""])
+    if agents:
+        lines.extend(
+            [
+                "| Agent | Runs | Failures | Rate | Reruns | Rerun Rate |",
+                "|---|---:|---:|---:|---:|---:|",
+            ]
+        )
+        for agent_name in sorted(agents):
+            a = agents[agent_name]
+            lines.append(
+                f"| {agent_name} | {a['completed_runs']} | {a['failure_runs']} | "
+                f"{format_number(a['failure_rate'])}% | {a['rerun_runs']} | "
+                f"{format_number(a['rerun_rate'])}% |"
+            )
+    else:
+        lines.append("- no agent workflows in window")
 
     lines.extend(["", "## Perf Snapshot", ""])
     if perf["available"]:
@@ -1151,6 +1215,13 @@ def affected_entities_lines(breach: dict[str, Any]) -> str:
         items = breach["details"]
         return "\n".join(
             f"- Discussion #{item['discussion_number']} — {item['discussion_title']}"
+            for item in items
+        )
+    if category == "agent":
+        items = breach["details"]
+        return "\n".join(
+            f"- `{item['agent']}` — {format_number(item['failure_rate'])}% failure rate "
+            f"({item['failure_runs']}/{item['completed_runs']} runs)"
             for item in items
         )
     if category == "perf":

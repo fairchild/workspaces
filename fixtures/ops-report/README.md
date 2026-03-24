@@ -34,5 +34,6 @@ Scenarios:
 - `perf-breach`: performance breach candidate
 - `ci-breach`: CI reliability breach candidate
 - `throughput-breach`: stalled planned work breach candidate
+- `agent-breach`: individual agent failure rate breach (aggregate CI stays healthy)
 - `deduped`: breach exists, but an open matching ops idea suppresses creation
 - `cooldown`: breach exists, but a recently closed matching ops idea suppresses creation
