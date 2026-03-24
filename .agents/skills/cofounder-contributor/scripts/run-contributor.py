@@ -125,6 +125,7 @@ from github_state import (  # noqa: E402, F401
     extract_issue_discussion_number,
     extract_pr_issue_reference,
     fetch_issue_state_map,
+    fetch_pr_diff,
     fetch_work_state,
     find_issue_execution_state,
     find_pr_review_state,
@@ -139,9 +140,11 @@ from triage import (  # noqa: E402, F401
     ENGAGEMENT_RECENT_HOURS,
     ISSUE_WIP_CAP,
     LOW_COMMENT_THRESHOLD,
+    PR_DIFF_MAX_LINES,
     STALE_DISCUSSION_DAYS,
     _find_agent_threads,
     _has_persona,
+    parse_directed_pr_number,
     build_engagement_retry_message,
     classify_execution_work,
     compute_wip_state,
@@ -279,7 +282,12 @@ def main() -> int:
     bot_login = detect_bot_login(env)
     if bot_login:
         log(f"Authenticated as {bot_login}")
-    context, engagement_candidates, wip_state = gather_context(env, persona=persona, bot_login=bot_login)
+    context, engagement_candidates, wip_state = gather_context(
+        env,
+        persona=persona,
+        bot_login=bot_login,
+        message=args.message,
+    )
     raw_output = run_claude(prompt_file, context, env, mode=args.mode, message=args.message)
     exit_code, validated_json, error_text = validate_output(raw_output, env)
 

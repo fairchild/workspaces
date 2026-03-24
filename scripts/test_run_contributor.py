@@ -8,9 +8,11 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -286,6 +288,96 @@ class EvidenceValidationTests(unittest.TestCase):
         # Now validate the rendered body — should have no errors
         _, validate_errors = run_contributor.validate_evidence_accounting(rendered, requested)
         self.assertEqual(validate_errors, [], f"Round-trip validation failed: {validate_errors}")
+
+
+class DirectedPRParsingTests(unittest.TestCase):
+    def test_review_pr_hash(self) -> None:
+        self.assertEqual(run_contributor.parse_directed_pr_number("Review PR #198"), 198)
+
+    def test_review_pr_no_hash(self) -> None:
+        self.assertEqual(run_contributor.parse_directed_pr_number("Review PR 198"), 198)
+
+    def test_cr_number(self) -> None:
+        self.assertEqual(run_contributor.parse_directed_pr_number("CR 123"), 123)
+
+    def test_cr_hash(self) -> None:
+        self.assertEqual(run_contributor.parse_directed_pr_number("cr #123"), 123)
+
+    def test_cr_hash_space(self) -> None:
+        self.assertEqual(run_contributor.parse_directed_pr_number("cr # 123"), 123)
+
+    def test_cr_no_space(self) -> None:
+        self.assertEqual(run_contributor.parse_directed_pr_number("CR#456"), 456)
+
+    def test_code_review(self) -> None:
+        self.assertEqual(run_contributor.parse_directed_pr_number("code review 99"), 99)
+
+    def test_re_review(self) -> None:
+        self.assertEqual(run_contributor.parse_directed_pr_number("Re-review PR #185"), 185)
+
+    def test_rereview(self) -> None:
+        self.assertEqual(run_contributor.parse_directed_pr_number("rereview #42"), 42)
+
+    def test_embedded_in_sentence(self) -> None:
+        self.assertEqual(
+            run_contributor.parse_directed_pr_number(
+                "Please review PR #198 — evidence section updated"
+            ),
+            198,
+        )
+
+    def test_no_match(self) -> None:
+        self.assertIsNone(run_contributor.parse_directed_pr_number("Fix the login bug"))
+
+    def test_pr_fallback(self) -> None:
+        self.assertEqual(run_contributor.parse_directed_pr_number("Check PR 55 for issues"), 55)
+
+
+class PrefetchedPRDiffTests(unittest.TestCase):
+    def test_fetch_pr_diff_uses_run_optional_string_contract(self) -> None:
+        def fake_run_optional(
+            cmd: list[str],
+            *,
+            timeout: int,
+            cwd: Path | None = None,
+            env: dict[str, str] | None = None,
+            default: str,
+        ) -> str:
+            self.assertEqual(cmd, ["gh", "pr", "diff", "123"])
+            self.assertEqual(timeout, run_contributor.GITHUB_API_TIMEOUT)
+            self.assertEqual(cwd, run_contributor.REPO_ROOT)
+            self.assertEqual(env, {"GH_TOKEN": "token"})
+            self.assertEqual(default, "")
+            return "line 1\nline 2\nline 3\n"
+
+        with mock.patch("github_state.run_optional", side_effect=fake_run_optional):
+            diff = run_contributor.fetch_pr_diff(123, {"GH_TOKEN": "token"}, max_lines=2)
+
+        self.assertEqual(
+            diff,
+            "line 1\nline 2\n... (truncated — 1 more lines)\n",
+        )
+
+    def test_format_pr_list_includes_directed_pr_diff_outside_open_state(self) -> None:
+        payload = json.loads(
+            run_contributor.format_pr_list_for_context(
+                [],
+                [],
+                pr_diffs={185: "diff text"},
+            )
+        )
+
+        self.assertEqual(
+            payload,
+            [
+                {
+                    "number": 185,
+                    "title": "Directed PR outside open work state",
+                    "state": "not_in_open_work_state",
+                    "diff": "diff text",
+                }
+            ],
+        )
 
 
 if __name__ == "__main__":

@@ -36,6 +36,7 @@ from github_state import (
     extract_issue_discussion_number,
     extract_pr_issue_reference,
     fetch_issue_state_map,
+    fetch_pr_diff,
     fetch_work_state,
     latest_issue_claim,
     repo_owner_name,
@@ -45,10 +46,30 @@ from github_state import (
 
 ENGAGEMENT_RECENT_HOURS = 72
 LOW_COMMENT_THRESHOLD = 1
+PR_DIFF_MAX_LINES = 2000
 DISCUSSION_WIP_CAP = 12
 ISSUE_WIP_CAP = 30
 STALE_DISCUSSION_DAYS = 14
 UNTRUSTED_BODY_NOTE = "[body omitted from untrusted public author]"
+
+_DIRECTED_PR_RE = re.compile(
+    r"(?:re-?review|review|CR|cr|code[\s-]?review)\s*#?\s*(\d+)",
+    re.IGNORECASE,
+)
+
+
+def parse_directed_pr_number(message: str) -> int | None:
+    """Extract a PR number from a directed task message.
+
+    Supports: 'Review PR #198', 'CR 123', 'cr #123', 'cr # 123',
+    'code review 198', 're-review PR #198', etc.
+    """
+    match = _DIRECTED_PR_RE.search(message)
+    if match:
+        return int(match.group(1))
+    # Fallback: 'PR #N' or 'PR N' anywhere
+    fallback = re.search(r"PR\s*#?\s*(\d+)", message, re.IGNORECASE)
+    return int(fallback.group(1)) if fallback else None
 
 
 def _has_persona(text: str, markers: list[str]) -> bool:
@@ -517,18 +538,24 @@ def format_issue_list_for_context(issues: list[dict[str, object]]) -> str:
 def format_pr_list_for_context(
     pull_requests: list[dict[str, object]],
     issues: list[dict[str, object]],
+    *,
+    pr_diffs: dict[int, str] | None = None,
 ) -> str:
     issue_map = {
         int(issue["number"]): issue
         for issue in issues
         if issue.get("number") is not None
     }
+    pr_diffs = pr_diffs or {}
     payload: list[dict[str, object]] = []
+    seen_pr_numbers: set[int] = set()
     for pr in pull_requests:
+        pr_number = int(pr.get("number", 0))
+        seen_pr_numbers.add(pr_number)
         pr_body = str(pr.get("body", ""))
         issue_number, _ = extract_pr_issue_reference(pr_body)
         entry: dict[str, object] = {
-            "number": pr.get("number"),
+            "number": pr_number,
             "title": pr.get("title"),
             "author": (pr.get("author") or {}).get("login", ""),
             "isDraft": pr.get("isDraft"),
@@ -557,7 +584,19 @@ def format_pr_list_for_context(
                 entry["evidenceSummary"] = {
                     "contract": "none",
                 }
+        diff = pr_diffs.get(pr_number, "")
+        if diff:
+            entry["diff"] = diff
         payload.append(entry)
+    for pr_number, diff in sorted(pr_diffs.items()):
+        if pr_number in seen_pr_numbers or not diff:
+            continue
+        payload.append({
+            "number": pr_number,
+            "title": "Directed PR outside open work state",
+            "state": "not_in_open_work_state",
+            "diff": diff,
+        })
     return json.dumps(payload, indent=2, ensure_ascii=False)
 
 
@@ -905,6 +944,7 @@ def gather_context(
     env: dict[str, str],
     persona: str = "",
     bot_login: str = "",
+    message: str = "",
 ) -> tuple[str, list[dict[str, object]], dict[str, object]]:
     log("Gathering context")
     owner, name = repo_owner_name(env)
@@ -932,7 +972,25 @@ def gather_context(
     )
     engagement_summary = format_engagement_candidates(engagement_candidates)
     open_issues = format_issue_list_for_context(work_state["issues"])
-    open_prs = format_pr_list_for_context(work_state["pull_requests"], work_state["issues"])
+
+    # Pre-fetch PR diffs so the agent can review without needing gh CLI access.
+    # All open PRs get diffs at a generous limit — context window can absorb it.
+    directed_pr = parse_directed_pr_number(message) if message else None
+    pr_diffs: dict[int, str] = {}
+    for pr in work_state["pull_requests"]:
+        pr_number = int(pr.get("number", 0))
+        diff = fetch_pr_diff(pr_number, env, max_lines=PR_DIFF_MAX_LINES)
+        if diff:
+            pr_diffs[pr_number] = diff
+    if directed_pr and directed_pr not in pr_diffs:
+        # Directed PR might not be in work_state (e.g., already merged) — fetch anyway
+        diff = fetch_pr_diff(directed_pr, env, max_lines=PR_DIFF_MAX_LINES)
+        if diff:
+            pr_diffs[directed_pr] = diff
+    if pr_diffs:
+        log(f"Pre-fetched diffs for {len(pr_diffs)} PR(s)")
+
+    open_prs = format_pr_list_for_context(work_state["pull_requests"], work_state["issues"], pr_diffs=pr_diffs)
 
     wip_state = compute_wip_state(
         discussion_nodes,
