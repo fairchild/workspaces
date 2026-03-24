@@ -1,0 +1,42 @@
+[
+  {
+    "number": 201,
+    "title": "Tighten split persistence",
+    "body": "<!-- peter-planner:discussion=101;issue=tighten-split-persistence -->",
+    "url": "https://example.test/issues/201",
+    "createdAt": "2026-03-03T10:00:00Z",
+    "updatedAt": "2026-03-10T14:00:00Z",
+    "state": "OPEN",
+    "closedAt": null,
+    "milestone": {
+      "number": 7,
+      "title": "Terminal split polish"
+    },
+    "labels": [
+      {
+        "name": "enhancement"
+      }
+    ],
+    "closedByPullRequestsReferences": []
+  },
+  {
+    "number": 202,
+    "title": "Polish split shortcuts",
+    "body": "<!-- peter-planner:discussion=101;issue=polish-split-shortcuts -->",
+    "url": "https://example.test/issues/202",
+    "createdAt": "2026-03-03T10:05:00Z",
+    "updatedAt": "2026-03-09T17:00:00Z",
+    "state": "OPEN",
+    "closedAt": null,
+    "milestone": {
+      "number": 7,
+      "title": "Terminal split polish"
+    },
+    "labels": [
+      {
+        "name": "enhancement"
+      }
+    ],
+    "closedByPullRequestsReferences": []
+  }
+]
