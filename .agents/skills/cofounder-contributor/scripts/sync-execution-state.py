@@ -19,6 +19,7 @@ from typing import Any
 
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
+GH_DISCUSS_SCRIPT = REPO_ROOT / ".agents" / "skills" / "gh-discuss" / "scripts" / "gh-discuss.py"
 GITHUB_API_TIMEOUT = 30
 STALE_CLAIM_HOURS = 24
 
@@ -534,6 +535,23 @@ def unassign_issue(
     log(f"Unassigned {login} from #{issue_number} (stale claim)")
 
 
+def fetch_agent_task_issues(env: dict[str, str]) -> list[dict[str, Any]]:
+    """Fetch all agent:task issues (open and closed) with their bodies."""
+    result = run_checked(
+        [
+            "gh", "issue", "list",
+            "--state", "all",
+            "--label", "agent:task",
+            "--limit", "200",
+            "--json", "number,body,state",
+        ],
+        timeout=GITHUB_API_TIMEOUT,
+        cwd=REPO_ROOT,
+        env=env,
+    )
+    return json.loads(result.stdout)
+
+
 def main() -> int:
     args = parse_args()
     require_env("GH_TOKEN")
@@ -590,7 +608,58 @@ def main() -> int:
             for assignee in issue_bot_assignees(issue):
                 unassign_issue(int(issue["number"]), assignee, dry_run=args.dry_run, env=env)
 
-    log(f"Execution-state sync complete; updated {updated} issue(s)")
+    # Auto-close discussions whose Peter-planned issues are all closed.
+    # work_state["issues"] only contains OPEN issues, so we fetch all
+    # agent:task issues (open + closed) to build the complete child map.
+    all_agent_task_issues = fetch_agent_task_issues(env)
+    discussion_child_issues: dict[int, list[int]] = {}
+    for issue in all_agent_task_issues:
+        body = str(issue.get("body", ""))
+        match = TASK_ISSUE_MARKER_RE.search(body)
+        if match:
+            disc_num = int(match.group("number"))
+            discussion_child_issues.setdefault(disc_num, []).append(int(issue["number"]))
+
+    closed_discussions = 0
+    for disc_num, child_numbers in discussion_child_issues.items():
+        if disc_num not in discussions:
+            continue
+        if not child_numbers:
+            continue
+        all_closed = all(
+            str(issue_states.get(num, "OPEN")).upper() == "CLOSED"
+            for num in child_numbers
+        )
+        if not all_closed:
+            continue
+        if args.dry_run:
+            log(f"Dry run: would auto-close discussion #{disc_num} (all {len(child_numbers)} child issues closed)")
+            closed_discussions += 1
+            continue
+        close_body = (
+            f"All planned issues from this discussion have been resolved "
+            f"({', '.join(f'#{n}' for n in sorted(child_numbers))}). "
+            f"Closing automatically."
+        )
+        try:
+            run_checked(
+                ["uv", "run", str(GH_DISCUSS_SCRIPT), "update", str(disc_num), close_body],
+                timeout=GITHUB_API_TIMEOUT,
+                cwd=REPO_ROOT,
+                env=env,
+            )
+            run_checked(
+                ["uv", "run", str(GH_DISCUSS_SCRIPT), "complete", str(disc_num)],
+                timeout=GITHUB_API_TIMEOUT,
+                cwd=REPO_ROOT,
+                env=env,
+            )
+            closed_discussions += 1
+            log(f"Auto-closed discussion #{disc_num} (all {len(child_numbers)} child issues closed)")
+        except SystemExit:
+            log(f"Warning: failed to auto-close discussion #{disc_num}")
+
+    log(f"Execution-state sync complete; updated {updated} issue(s), closed {closed_discussions} discussion(s)")
     return 0
 
 

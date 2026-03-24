@@ -186,6 +186,23 @@ Oliver Obever is deterministic rather than model-driven. Its workflow delegates 
 
 For manual dry runs, `scripts/ops-report.py` also accepts `--fixtures-dir fixtures/ops-report/<scenario>` and replays synthetic inputs through the same reporting and breach-selection logic. Those fixture runs never update `docs/ops/` and never create GitHub discussions.
 
+## WIP Caps
+
+The agent team enforces work-in-progress limits to prevent unbounded growth of discussions and issues:
+
+| Metric | Cap | Enforcement |
+|--------|-----|-------------|
+| Open discussions | 12 | Proposals blocked when cap reached; agents redirected to close stale discussions |
+| Open `agent:task` issues | 30 | Peter Planner refuses plans that would exceed cap |
+| Stale discussion threshold | 14 days idle | Flagged in agent context; prioritized for closure |
+
+When caps are reached:
+- Contributors cannot propose new `[idea]` discussions — they must comment on existing threads or use `recommend_close` to close stale ones
+- Peter Planner cannot create new issues — existing issues must be closed (shipped or won't-do) first
+- `sync-execution-state.py` auto-closes discussions whose Peter-planned child issues are all resolved
+
+The `recommend_close` action lets contributors close stale discussions with a summary comment explaining the outcome (shipped, superseded, deferred, or won't-do).
+
 ## Reliability
 
 - **YAML frontmatter output format** — agents output structured YAML frontmatter, validated before posting, with JSON fences retained only as a fallback parser path

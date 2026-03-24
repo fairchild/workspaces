@@ -45,6 +45,9 @@ from github_state import (
 
 ENGAGEMENT_RECENT_HOURS = 72
 LOW_COMMENT_THRESHOLD = 1
+DISCUSSION_WIP_CAP = 12
+ISSUE_WIP_CAP = 30
+STALE_DISCUSSION_DAYS = 14
 UNTRUSTED_BODY_NOTE = "[body omitted from untrusted public author]"
 
 
@@ -280,6 +283,79 @@ def _extract_proposed_persona(body: str) -> str:
 
 def _is_idea_discussion(title: str) -> bool:
     return "[idea]" in title.casefold()
+
+
+def compute_wip_state(
+    discussions: list[dict[str, object]],
+    issues: list[dict[str, object]],
+    *,
+    owner_login: str,
+    now: datetime | None = None,
+) -> dict[str, object]:
+    if now is None:
+        now = datetime.now(timezone.utc)
+    owner = _normalize_login(owner_login)
+
+    open_discussions = len(discussions)
+    open_agent_issues = sum(
+        1 for issue in issues
+        if "agent:task" in issue_label_names(issue)
+    )
+
+    stale: list[dict[str, object]] = []
+    for disc in discussions:
+        if not _is_idea_discussion(str(disc.get("title", ""))):
+            continue
+        comments = disc.get("comments", {})
+        comment_nodes = comments.get("nodes", []) if isinstance(comments, dict) else []
+        last_activity = _parse_timestamp(str(disc.get("createdAt", "")))
+        for comment in comment_nodes:
+            ts = _parse_timestamp(str(comment.get("createdAt", "")))
+            if ts is not None and (last_activity is None or ts > last_activity):
+                last_activity = ts
+        owner_replied = any(
+            _normalize_login((comment.get("author") or {}).get("login", "")) == owner
+            for comment in comment_nodes
+        )
+        if last_activity is not None and (now - last_activity).days >= STALE_DISCUSSION_DAYS:
+            stale.append({
+                "number": disc.get("number"),
+                "title": disc.get("title"),
+                "days_stale": (now - last_activity).days,
+                "owner_replied": owner_replied,
+            })
+
+    return {
+        "open_discussions": open_discussions,
+        "open_agent_issues": open_agent_issues,
+        "discussions_at_cap": open_discussions >= DISCUSSION_WIP_CAP,
+        "issues_at_cap": open_agent_issues >= ISSUE_WIP_CAP,
+        "stale_discussions": stale,
+        "discussion_cap": DISCUSSION_WIP_CAP,
+        "issue_cap": ISSUE_WIP_CAP,
+    }
+
+
+def format_wip_state(wip: dict[str, object]) -> str:
+    lines = [
+        f"WIP state: {wip['open_discussions']}/{wip['discussion_cap']} open discussions, "
+        f"{wip['open_agent_issues']}/{wip['issue_cap']} open agent:task issues"
+    ]
+    if wip["discussions_at_cap"]:
+        lines.append(
+            "DISCUSSION CAP REACHED — close or resolve existing discussions before proposing new ones."
+        )
+    if wip["issues_at_cap"]:
+        lines.append(
+            "ISSUE CAP REACHED — close existing issues (ship PRs or mark won't-do) before planning new ones."
+        )
+    stale = list(wip.get("stale_discussions") or [])
+    if stale:
+        stale_items = ", ".join(
+            f"#{s['number']} ({s['days_stale']}d)" for s in stale
+        )
+        lines.append(f"Stale discussions ({STALE_DISCUSSION_DAYS}+ days idle): {stale_items}")
+    return "\n".join(lines)
 
 
 def format_open_discussions(
@@ -793,11 +869,26 @@ def format_ready_issues(items: list[dict[str, object]]) -> str:
 def maybe_block_new_proposal(
     validated_json: str,
     engagement_candidates: list[dict[str, object]],
+    *,
+    discussions_at_cap: bool = False,
 ) -> dict[str, object] | None:
     data = json.loads(validated_json)
-    if data.get("action") != "propose" or not engagement_candidates:
+    if data.get("action") != "propose":
         return None
-    return engagement_candidates[0]
+    if engagement_candidates:
+        return engagement_candidates[0]
+    if discussions_at_cap:
+        return {
+            "number": 0,
+            "title": "WIP cap reached",
+            "proposed_by": "",
+            "comment_count": 0,
+            "owner_replied": False,
+            "reasons": ["discussion WIP cap reached — close existing discussions first"],
+            "priority": 0,
+            "sort_timestamp": 0.0,
+        }
+    return None
 
 
 def runner_platform_note() -> str:
@@ -814,7 +905,7 @@ def gather_context(
     env: dict[str, str],
     persona: str = "",
     bot_login: str = "",
-) -> tuple[str, list[dict[str, object]]]:
+) -> tuple[str, list[dict[str, object]], dict[str, object]]:
     log("Gathering context")
     owner, name = repo_owner_name(env)
 
@@ -843,6 +934,13 @@ def gather_context(
     open_issues = format_issue_list_for_context(work_state["issues"])
     open_prs = format_pr_list_for_context(work_state["pull_requests"], work_state["issues"])
 
+    wip_state = compute_wip_state(
+        discussion_nodes,
+        work_state["issues"],
+        owner_login=owner,
+    )
+    wip_summary = format_wip_state(wip_state)
+
     backlog_state = gather_backlog_state()
     history = gather_agent_history(
         persona,
@@ -869,6 +967,7 @@ def gather_context(
 
     sections = []
     sections.append(runner_platform_note())
+    sections.append(wip_summary)
     if pending_reviews:
         sections.append(pending_reviews)
     if own_open_prs:
@@ -888,4 +987,4 @@ def gather_context(
     ])
     if history:
         sections.append(history)
-    return "\n\n".join(sections), engagement_candidates
+    return "\n\n".join(sections), engagement_candidates, wip_state

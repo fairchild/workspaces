@@ -585,6 +585,34 @@ def route_action(validated_json: str, dry_run: bool, env: dict[str, str]) -> int
         )
         return 0
 
+    if action == "recommend_close":
+        run_checked(
+            [
+                "uv",
+                "run",
+                str(GH_DISCUSS_SCRIPT),
+                "update",
+                str(data["discussion_number"]),
+                body,
+            ],
+            timeout=GITHUB_API_TIMEOUT,
+            cwd=REPO_ROOT,
+            env=env,
+        )
+        run_checked(
+            [
+                "uv",
+                "run",
+                str(GH_DISCUSS_SCRIPT),
+                "complete",
+                str(data["discussion_number"]),
+            ],
+            timeout=GITHUB_API_TIMEOUT,
+            cwd=REPO_ROOT,
+            env=env,
+        )
+        return 0
+
     with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
         handle.write(body)
         body_file = handle.name

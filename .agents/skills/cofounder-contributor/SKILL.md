@@ -67,10 +67,29 @@ The upload script returns a URL like `https://evidence.cloudcompute.com/workspac
 
 See `docs/development/lume-runner-setup.md` for full details on the R2 evidence store architecture.
 
+## WIP Caps
+
+The runtime enforces work-in-progress limits to keep the backlog focused:
+
+- **Discussion cap**: 12 open discussions. When reached, agents cannot propose new ideas — they must close stale discussions or comment on existing ones first.
+- **Issue cap**: 30 open `agent:task` issues. Peter Planner refuses to create issues that would exceed this cap.
+- **Stale threshold**: Discussions idle for 14+ days are flagged as stale and prioritized for closure.
+- **Auto-close**: `sync-execution-state.py` automatically closes discussions whose Peter-planned child issues are all resolved.
+
+## Actions
+
+Available actions: `advance_pr`, `execute_issue`, `review_pr`, `comment`, `recommend_close`, `propose`.
+
+The `recommend_close` action posts a closing summary comment on a stale discussion and closes it. Use it when:
+- A discussion's child issues have all shipped or been marked won't-do
+- A discussion has been superseded by a newer proposal
+- A discussion has been idle for 14+ days with no path forward
+
 ## Guardrails
 
 - Work through the persona priority order instead of freelancing.
 - Produce exactly one action.
 - Keep the final output valid YAML frontmatter with no preamble.
 - Deduplicate new ideas before posting them.
+- Respect WIP caps: do not propose when the discussion cap is reached.
 - Treat issue `requested_evidence` as required PR accounting: execution PRs must include `## Evidence Status`, and approval reviews cannot pass while requested evidence is missing or blocked.
