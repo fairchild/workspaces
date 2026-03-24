@@ -1872,6 +1872,7 @@ class RunContributorTests(unittest.TestCase):
             owner_login="fairchild",
             persona="April Clearwater",
             bot_login="april-clearwater[bot]",
+            now=datetime(2026, 3, 20, 13, 0, tzinfo=timezone.utc),
         )
         self.assertEqual(len(classified["claimed_issues"]), 1)
         self.assertEqual(classified["claimed_issues"][0]["issue_number"], 116)
