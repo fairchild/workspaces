@@ -25,6 +25,7 @@ jobs:
       issues: read
       pull-requests: read
     if: >-
+      vars.MENTION_AUTOMATIONS_ENABLED != 'false' &&
       !endsWith(github.event.sender.login, '[bot]') && (
         contains(github.event.comment.body || github.event.review.body || '', '@april') ||
         contains(github.event.comment.body || github.event.review.body || '', '@plat') ||
