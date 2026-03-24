@@ -1,6 +1,7 @@
 "use client";
 
 import type { WebhookEvent, WebhookEventType } from "@/lib/types";
+import { useCallback, useEffect, useState } from "react";
 import styles from "./activity-feed.module.css";
 
 const EVENT_COLORS: Record<WebhookEventType, string> = {
@@ -54,11 +55,39 @@ function EventRow({ event }: { event: WebhookEvent }) {
 	);
 }
 
-export function ActivityFeed({ events }: { events: WebhookEvent[] }) {
+const POLL_INTERVAL = 10_000;
+
+interface ActivityFeedProps {
+	filterRepo?: string | null;
+}
+
+export function ActivityFeed({ filterRepo }: ActivityFeedProps) {
+	const [events, setEvents] = useState<WebhookEvent[]>([]);
+
+	const fetchEvents = useCallback(async () => {
+		try {
+			const url = filterRepo
+				? `/api/events?repo=${encodeURIComponent(filterRepo)}`
+				: "/api/events";
+			const res = await fetch(url);
+			if (res.ok) setEvents(await res.json());
+		} catch {
+			// Silently retry on next poll
+		}
+	}, [filterRepo]);
+
+	useEffect(() => {
+		fetchEvents();
+		const id = setInterval(fetchEvents, POLL_INTERVAL);
+		return () => clearInterval(id);
+	}, [fetchEvents]);
+
 	return (
 		<div className={styles.feed}>
 			<div className={styles.header}>
-				<span className={styles.title}>Activity</span>
+				<span className={styles.title}>
+					Activity{filterRepo ? ` — ${filterRepo.split("/").pop()}` : ""}
+				</span>
 				<span className={styles.dot} />
 			</div>
 

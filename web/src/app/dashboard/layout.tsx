@@ -14,6 +14,9 @@ export default async function DashboardLayout({
 	const session = await getSession();
 	if (!session) redirect("/sign-in");
 
+	const { hasUserRepos } = await import("@/lib/repos");
+	if (!(await hasUserRepos(session.user.id))) redirect("/setup");
+
 	return (
 		<div className={styles.shell}>
 			<header className={styles.topBar}>
