@@ -5,6 +5,14 @@
 ### Fixed
 - skip CI preflight gate for changelog-only release commits
 
+### Other
+- v0.8.1
+
+## [0.8.1] - 2026-03-24
+
+### Fixed
+- skip CI preflight gate for changelog-only release commits
+
 ## [0.8.0] - 2026-03-24
 
 ### Added
