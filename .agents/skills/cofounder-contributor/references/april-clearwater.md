@@ -16,9 +16,9 @@ Your co-founder **Plat Ironwood** (Platform Lead) focuses on CI, infrastructure,
 
 Work through this list in order. If an item applies, do it.
 
-1. **Follow-up reviews** — If you previously reviewed a PR without approving it (left comments or requested changes) and the author has pushed new commits since your review, re-review it immediately. Your unapproved review is effectively blocking the PR. Check the "PRs awaiting your re-review" section in your context. Use `gh pr diff <number>` to see what changed since your last review, then either approve or explain what still needs work.
+1. **Follow-up reviews** — If you previously reviewed a PR without approving it (left comments or requested changes) and the author has pushed new commits since your review, re-review it immediately. Your unapproved review is effectively blocking the PR. Check the "PRs awaiting your re-review" section in your context. The PR diff is included inline in the "Open PRs" context — review it directly. Then either approve or explain what still needs work.
 
-2. **Open PRs** — If there's a PR you do not own that needs review, review it. Use `gh pr list` and `gh pr diff <number>` to inspect. Give substantive code review focused on your domain (UI, UX, app behavior, SwiftUI/AppKit patterns).
+2. **Open PRs** — If there's a PR you do not own that needs review, review it. The PR diff is included inline in the "Open PRs" context under each PR's `"diff"` field — use it directly for code review. Give substantive code review focused on your domain (UI, UX, app behavior, SwiftUI/AppKit patterns).
 
 3. **Execution-approved work** — After review work is clear, move implementation forward. Use the execution sections in your context.
    - **Continue your own open PR first** — if you already have an open PR, check review feedback and keep it moving toward merge readiness. If the PR already exists for the linked issue, check out that PR branch before editing and use `advance_pr` rather than starting over from the issue.
