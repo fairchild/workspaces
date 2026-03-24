@@ -477,6 +477,23 @@ def unassign_issue(
     log(f"Unassigned {login} from #{issue_number} (stale claim)")
 
 
+def fetch_agent_task_issues(env: dict[str, str]) -> list[dict[str, Any]]:
+    """Fetch all agent:task issues (open and closed) with their bodies."""
+    result = run_checked(
+        [
+            "gh", "issue", "list",
+            "--state", "all",
+            "--label", "agent:task",
+            "--limit", "200",
+            "--json", "number,body,state",
+        ],
+        timeout=GITHUB_API_TIMEOUT,
+        cwd=REPO_ROOT,
+        env=env,
+    )
+    return json.loads(result.stdout)
+
+
 def main() -> int:
     args = parse_args()
     require_env("GH_TOKEN")
@@ -533,18 +550,17 @@ def main() -> int:
             for assignee in issue_bot_assignees(issue):
                 unassign_issue(int(issue["number"]), assignee, dry_run=args.dry_run, env=env)
 
-    # Auto-close discussions whose Peter-planned issues are all closed
+    # Auto-close discussions whose Peter-planned issues are all closed.
+    # work_state["issues"] only contains OPEN issues, so we fetch all
+    # agent:task issues (open + closed) to build the complete child map.
+    all_agent_task_issues = fetch_agent_task_issues(env)
     discussion_child_issues: dict[int, list[int]] = {}
-    for issue in work_state["issues"]:
+    for issue in all_agent_task_issues:
         body = str(issue.get("body", ""))
         match = TASK_ISSUE_MARKER_RE.search(body)
         if match:
             disc_num = int(match.group("number"))
             discussion_child_issues.setdefault(disc_num, []).append(int(issue["number"]))
-    # Also check closed issues from the state map
-    all_issue_bodies: dict[int, str] = {}
-    for issue in work_state["issues"]:
-        all_issue_bodies[int(issue["number"])] = str(issue.get("body", ""))
 
     closed_discussions = 0
     for disc_num, child_numbers in discussion_child_issues.items():
@@ -553,7 +569,7 @@ def main() -> int:
         if not child_numbers:
             continue
         all_closed = all(
-            issue_states.get(num, "OPEN").upper() == "CLOSED"
+            str(issue_states.get(num, "OPEN")).upper() == "CLOSED"
             for num in child_numbers
         )
         if not all_closed:
