@@ -1,7 +1,6 @@
 "use client";
 
 import type { WebhookEvent, WebhookEventType } from "@/lib/types";
-import { useCallback, useEffect, useState } from "react";
 import styles from "./activity-feed.module.css";
 
 const EVENT_COLORS: Record<WebhookEventType, string> = {
@@ -55,26 +54,7 @@ function EventRow({ event }: { event: WebhookEvent }) {
 	);
 }
 
-const POLL_INTERVAL = 10_000;
-
-export function ActivityFeed() {
-	const [events, setEvents] = useState<WebhookEvent[]>([]);
-
-	const fetchEvents = useCallback(async () => {
-		try {
-			const res = await fetch("/api/events");
-			if (res.ok) setEvents(await res.json());
-		} catch {
-			// Silently retry on next poll
-		}
-	}, []);
-
-	useEffect(() => {
-		fetchEvents();
-		const id = setInterval(fetchEvents, POLL_INTERVAL);
-		return () => clearInterval(id);
-	}, [fetchEvents]);
-
+export function ActivityFeed({ events }: { events: WebhookEvent[] }) {
 	return (
 		<div className={styles.feed}>
 			<div className={styles.header}>
