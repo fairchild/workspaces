@@ -396,8 +396,10 @@ def format_pr_list_for_context(
     }
     pr_diffs = pr_diffs or {}
     payload: list[dict[str, object]] = []
+    seen_pr_numbers: set[int] = set()
     for pr in pull_requests:
         pr_number = int(pr.get("number", 0))
+        seen_pr_numbers.add(pr_number)
         pr_body = str(pr.get("body", ""))
         issue_number, _ = extract_pr_issue_reference(pr_body)
         entry: dict[str, object] = {
@@ -434,6 +436,15 @@ def format_pr_list_for_context(
         if diff:
             entry["diff"] = diff
         payload.append(entry)
+    for pr_number, diff in sorted(pr_diffs.items()):
+        if pr_number in seen_pr_numbers or not diff:
+            continue
+        payload.append({
+            "number": pr_number,
+            "title": "Directed PR outside open work state",
+            "state": "not_in_open_work_state",
+            "diff": diff,
+        })
     return json.dumps(payload, indent=2, ensure_ascii=False)
 
 

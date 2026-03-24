@@ -470,17 +470,22 @@ def find_issue_execution_state(
 
 
 def fetch_pr_diff(pr_number: int, env: dict[str, str], *, max_lines: int = 500) -> str:
-    result = run_optional(
+    diff = run_optional(
         ["gh", "pr", "diff", str(pr_number)],
         timeout=GITHUB_API_TIMEOUT,
+        cwd=REPO_ROOT,
         env=env,
+        default="",
     )
-    if result is None or result.returncode != 0:
+    if not diff:
         return ""
-    lines = result.stdout.splitlines(keepends=True)
+    lines = diff.splitlines(keepends=True)
     if len(lines) <= max_lines:
-        return result.stdout
-    return "".join(lines[:max_lines]) + f"\n... (truncated — {len(lines) - max_lines} more lines)\n"
+        return diff
+    truncated = "".join(lines[:max_lines])
+    if not truncated.endswith("\n"):
+        truncated += "\n"
+    return truncated + f"... (truncated — {len(lines) - max_lines} more lines)\n"
 
 
 def find_pr_review_state(pr_number: int, env: dict[str, str]) -> dict[str, object] | None:
