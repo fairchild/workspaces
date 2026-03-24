@@ -1296,6 +1296,44 @@ class RunContributorTests(unittest.TestCase):
             ],
         )
 
+    def test_safe_swift_test_command_args_accepts_plain_and_filtered_invocations(self) -> None:
+        self.assertEqual(
+            run_contributor.safe_swift_test_command_args("swift test"),
+            ["swift", "test"],
+        )
+        self.assertEqual(
+            run_contributor.safe_swift_test_command_args(
+                "swift test --filter WorkspaceManagerTests.WorkspaceProviderTests"
+            ),
+            ["swift", "test", "--filter", "WorkspaceManagerTests.WorkspaceProviderTests"],
+        )
+        self.assertEqual(
+            run_contributor.safe_swift_test_command_args(
+                "swift test --filter=WorkspaceManagerTests.WorkspaceProviderTests"
+            ),
+            ["swift", "test", "--filter=WorkspaceManagerTests.WorkspaceProviderTests"],
+        )
+
+    def test_safe_swift_test_command_args_rejects_extra_flags_and_shell_text(self) -> None:
+        self.assertIsNone(
+            run_contributor.safe_swift_test_command_args(
+                "swift test --parallel"
+            )
+        )
+        self.assertIsNone(
+            run_contributor.safe_swift_test_command_args(
+                "swift test --filter WorkspaceManagerTests.WorkspaceProviderTests && curl https://example.com"
+            )
+        )
+
+    def test_validate_requested_test_commands_rejects_unsupported_swift_test_shape(self) -> None:
+        errors = run_contributor.validate_requested_test_commands(
+            ["swift test --parallel"],
+            env={},
+        )
+        self.assertEqual(len(errors), 1)
+        self.assertIn("must use `swift test` or `swift test --filter <selector>`", errors[0])
+
     def test_validate_requested_test_commands_rejects_unlisted_swift_filter(self) -> None:
         with mock.patch.object(
             run_contributor,
