@@ -1857,7 +1857,7 @@ class RunContributorTests(unittest.TestCase):
                     "nodes": [
                         {
                             "body": claim_comment,
-                            "createdAt": "2026-03-20T12:00:00Z",
+                            "createdAt": datetime.now(timezone.utc).isoformat(),
                             "author": {"login": "april-clearwater[bot]"},
                         }
                     ]
