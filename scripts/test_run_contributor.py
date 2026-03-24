@@ -288,5 +288,48 @@ class EvidenceValidationTests(unittest.TestCase):
         self.assertEqual(validate_errors, [], f"Round-trip validation failed: {validate_errors}")
 
 
+class DirectedPRParsingTests(unittest.TestCase):
+    def test_review_pr_hash(self) -> None:
+        self.assertEqual(run_contributor.parse_directed_pr_number("Review PR #198"), 198)
+
+    def test_review_pr_no_hash(self) -> None:
+        self.assertEqual(run_contributor.parse_directed_pr_number("Review PR 198"), 198)
+
+    def test_cr_number(self) -> None:
+        self.assertEqual(run_contributor.parse_directed_pr_number("CR 123"), 123)
+
+    def test_cr_hash(self) -> None:
+        self.assertEqual(run_contributor.parse_directed_pr_number("cr #123"), 123)
+
+    def test_cr_hash_space(self) -> None:
+        self.assertEqual(run_contributor.parse_directed_pr_number("cr # 123"), 123)
+
+    def test_cr_no_space(self) -> None:
+        self.assertEqual(run_contributor.parse_directed_pr_number("CR#456"), 456)
+
+    def test_code_review(self) -> None:
+        self.assertEqual(run_contributor.parse_directed_pr_number("code review 99"), 99)
+
+    def test_re_review(self) -> None:
+        self.assertEqual(run_contributor.parse_directed_pr_number("Re-review PR #185"), 185)
+
+    def test_rereview(self) -> None:
+        self.assertEqual(run_contributor.parse_directed_pr_number("rereview #42"), 42)
+
+    def test_embedded_in_sentence(self) -> None:
+        self.assertEqual(
+            run_contributor.parse_directed_pr_number(
+                "Please review PR #198 — evidence section updated"
+            ),
+            198,
+        )
+
+    def test_no_match(self) -> None:
+        self.assertIsNone(run_contributor.parse_directed_pr_number("Fix the login bug"))
+
+    def test_pr_fallback(self) -> None:
+        self.assertEqual(run_contributor.parse_directed_pr_number("Check PR 55 for issues"), 55)
+
+
 if __name__ == "__main__":
     unittest.main()
