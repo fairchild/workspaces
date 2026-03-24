@@ -50,9 +50,7 @@ concurrency:
 
 jobs:
   build-and-test:
-    # Generic build/lint/test runs on GitHub-hosted macOS so routine CI never
-    # depends on the interactive desktop or the dedicated self-hosted lanes.
-    runs-on: macos-17
+    runs-on: [self-hosted, signing-host]
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v5
