@@ -137,7 +137,6 @@ from github_state import (  # noqa: E402, F401
 from triage import (  # noqa: E402, F401
     ENGAGEMENT_RECENT_HOURS,
     LOW_COMMENT_THRESHOLD,
-    PR_DIFF_FOCUSED_MAX_LINES,
     PR_DIFF_MAX_LINES,
     _find_agent_threads,
     _has_persona,

@@ -44,8 +44,7 @@ from github_state import (
 
 ENGAGEMENT_RECENT_HOURS = 72
 LOW_COMMENT_THRESHOLD = 1
-PR_DIFF_MAX_LINES = 500
-PR_DIFF_FOCUSED_MAX_LINES = 2000
+PR_DIFF_MAX_LINES = 2000
 
 _DIRECTED_PR_RE = re.compile(
     r"(?:re-?review|review|CR|cr|code[\s-]?review)\s*#?\s*(\d+)",
@@ -778,20 +777,17 @@ def gather_context(
     open_issues = format_issue_list_for_context(work_state["issues"])
 
     # Pre-fetch PR diffs so the agent can review without needing gh CLI access.
-    # Directed tasks get a higher line limit for the target PR.
+    # All open PRs get diffs at a generous limit — context window can absorb it.
     directed_pr = parse_directed_pr_number(message) if message else None
     pr_diffs: dict[int, str] = {}
     for pr in work_state["pull_requests"]:
         pr_number = int(pr.get("number", 0))
-        if pr_number == directed_pr:
-            diff = fetch_pr_diff(pr_number, env, max_lines=PR_DIFF_FOCUSED_MAX_LINES)
-        else:
-            diff = fetch_pr_diff(pr_number, env, max_lines=PR_DIFF_MAX_LINES)
+        diff = fetch_pr_diff(pr_number, env, max_lines=PR_DIFF_MAX_LINES)
         if diff:
             pr_diffs[pr_number] = diff
     if directed_pr and directed_pr not in pr_diffs:
-        # PR might not be in work_state (e.g., already merged) — try fetching anyway
-        diff = fetch_pr_diff(directed_pr, env, max_lines=PR_DIFF_FOCUSED_MAX_LINES)
+        # Directed PR might not be in work_state (e.g., already merged) — fetch anyway
+        diff = fetch_pr_diff(directed_pr, env, max_lines=PR_DIFF_MAX_LINES)
         if diff:
             pr_diffs[directed_pr] = diff
     if pr_diffs:
