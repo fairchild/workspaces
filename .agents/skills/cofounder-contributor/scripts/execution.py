@@ -49,9 +49,42 @@ from github_state import (
     extract_pr_issue_reference,
     find_issue_execution_state,
     find_pr_review_state,
+    repo_owner_name,
 )
 
 _label_cache: set[str] | None = None
+
+
+def _dismiss_own_blocking_reviews(pr_number: int, bot_login: str, env: dict[str, str]) -> None:
+    """Dismiss prior CHANGES_REQUESTED reviews from this bot before approving."""
+    owner, name = repo_owner_name(env)
+    raw = run_optional(
+        [
+            "gh", "api", f"repos/{owner}/{name}/pulls/{pr_number}/reviews",
+            "--jq", f'[.[] | select(.user.login == "{bot_login}" and .state == "CHANGES_REQUESTED") | .id] | .[]',
+        ],
+        timeout=GITHUB_API_TIMEOUT,
+        cwd=REPO_ROOT,
+        env=env,
+        default="",
+    )
+    for review_id in raw.strip().splitlines():
+        review_id = review_id.strip()
+        if not review_id:
+            continue
+        run_optional(
+            [
+                "gh", "api", f"repos/{owner}/{name}/pulls/{pr_number}/reviews/{review_id}/dismissals",
+                "-X", "PUT",
+                "-f", "message=Superseded by subsequent approval from the same reviewer.",
+                "-f", "event=DISMISS",
+            ],
+            timeout=GITHUB_API_TIMEOUT,
+            cwd=REPO_ROOT,
+            env=env,
+            default="",
+        )
+        log(f"Dismissed prior CHANGES_REQUESTED review {review_id} on PR #{pr_number}")
 
 
 def ensure_label_exists(env: dict[str, str], name: str, color: str, description: str) -> None:
@@ -583,6 +616,10 @@ def route_action(validated_json: str, dry_run: bool, env: dict[str, str]) -> int
                 cwd=REPO_ROOT,
                 env=env,
             )
+            if review_flag == "--approve":
+                bot = detect_bot_login(env)
+                if bot:
+                    _dismiss_own_blocking_reviews(pr_number, bot, env)
             _mod._update_mergeable_label(int(data["pr_number"]), verdict, env)
             return 0
         if action == "execute_issue":
