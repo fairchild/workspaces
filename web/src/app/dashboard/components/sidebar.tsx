@@ -1,57 +1,40 @@
 "use client";
 
-import type { Workspace, WorkspaceStatus } from "@/lib/types";
-import { WORKSPACE_STATUS_LABELS } from "@/lib/types";
 import styles from "./sidebar.module.css";
 
-const STATUS_INDICATOR: Record<WorkspaceStatus, string> = {
-	active: styles.statusActive,
-	provisioning: styles.statusProvisioning,
-	stopped: styles.statusStopped,
-	archived: styles.statusArchived,
-};
-
-function WorkspaceRow({ workspace }: { workspace: Workspace }) {
+function RepoRow({ repo }: { repo: string }) {
 	return (
 		<div className={styles.row}>
-			<span
-				className={`${styles.statusDot} ${STATUS_INDICATOR[workspace.status]}`}
-				title={WORKSPACE_STATUS_LABELS[workspace.status]}
-			/>
+			<span className={`${styles.statusDot} ${styles.statusActive}`} />
 			<div className={styles.rowContent}>
-				<span className={styles.rowName}>{workspace.name}</span>
-				{workspace.gitBranch && (
-					<span className={styles.rowBranch}>{workspace.gitBranch}</span>
-				)}
+				<span className={styles.rowName}>
+					{repo.includes("/") ? repo.split("/")[1] : repo}
+				</span>
+				<span className={styles.rowBranch}>{repo}</span>
 			</div>
 		</div>
 	);
 }
 
-// Placeholder data until webhook integration
-const PLACEHOLDER_WORKSPACES: Workspace[] = [];
-
-export function Sidebar() {
-	const workspaces = PLACEHOLDER_WORKSPACES;
-
+export function Sidebar({ repos }: { repos: string[] }) {
 	return (
 		<div className={styles.sidebar}>
 			<div className={styles.sectionHeader}>
-				<span className={styles.sectionTitle}>Workspaces</span>
-				<span className={styles.count}>{workspaces.length}</span>
+				<span className={styles.sectionTitle}>Repos</span>
+				<span className={styles.count}>{repos.length}</span>
 			</div>
 
-			{workspaces.length === 0 ? (
+			{repos.length === 0 ? (
 				<div className={styles.empty}>
 					<span className={styles.emptyIcon}>&gt;_</span>
 					<span className={styles.emptyText}>
-						Workspaces will appear here when GitHub events arrive
+						Repos will appear here when GitHub events arrive
 					</span>
 				</div>
 			) : (
 				<div className={styles.list}>
-					{workspaces.map((ws) => (
-						<WorkspaceRow key={ws.id} workspace={ws} />
+					{repos.map((repo) => (
+						<RepoRow key={repo} repo={repo} />
 					))}
 				</div>
 			)}

@@ -1,6 +1,9 @@
+"use client";
+
+import type { EventStats } from "@/lib/events";
 import styles from "./main-panel.module.css";
 
-export function MainPanel() {
+export function MainPanel({ stats }: { stats: EventStats | null }) {
 	return (
 		<div className={styles.panel}>
 			<div className={styles.welcome}>
@@ -8,18 +11,25 @@ export function MainPanel() {
 			</div>
 
 			<div className={styles.grid}>
-				<StatCard label="Active" value="—" accent />
-				<StatCard label="Stopped" value="—" />
-				<StatCard label="Events today" value="—" />
-				<StatCard label="Repos" value="—" />
+				<StatCard
+					label="Events today"
+					value={stats ? String(stats.eventsToday) : "—"}
+					accent
+				/>
+				<StatCard
+					label="Repos"
+					value={stats ? String(stats.repos.length) : "—"}
+				/>
 			</div>
 
-			<div className={styles.hint}>
-				<span className={styles.hintChevron}>&gt;</span>
-				<span className={styles.hintText}>
-					Configure GitHub webhooks to start receiving events
-				</span>
-			</div>
+			{stats && stats.repos.length === 0 && (
+				<div className={styles.hint}>
+					<span className={styles.hintChevron}>&gt;</span>
+					<span className={styles.hintText}>
+						Configure GitHub webhooks to start receiving events
+					</span>
+				</div>
+			)}
 		</div>
 	);
 }
