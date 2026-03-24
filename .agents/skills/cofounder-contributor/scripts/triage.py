@@ -72,6 +72,22 @@ def parse_directed_pr_number(message: str) -> int | None:
     return int(fallback.group(1)) if fallback else None
 
 
+def inline_pr_diff_policy(
+    pr: dict[str, object],
+    *,
+    trusted_logins: set[str] | None = None,
+    directed_pr: int | None = None,
+) -> tuple[bool, str | None]:
+    pr_number = int(pr.get("number", 0))
+    if directed_pr is not None and pr_number == directed_pr:
+        return True, None
+    if bool(pr.get("isCrossRepository")):
+        return False, "cross_repository"
+    if trusted_comment_author(pr, trusted_logins=trusted_logins):
+        return True, None
+    return False, "untrusted_pr_source"
+
+
 def _has_persona(text: str, markers: list[str]) -> bool:
     return any(m in text for m in markers)
 
@@ -587,6 +603,7 @@ def format_pr_list_for_context(
     issues: list[dict[str, object]],
     *,
     pr_diffs: dict[int, str] | None = None,
+    pr_diff_omissions: dict[int, str] | None = None,
 ) -> str:
     issue_map = {
         int(issue["number"]): issue
@@ -594,6 +611,7 @@ def format_pr_list_for_context(
         if issue.get("number") is not None
     }
     pr_diffs = pr_diffs or {}
+    pr_diff_omissions = pr_diff_omissions or {}
     payload: list[dict[str, object]] = []
     seen_pr_numbers: set[int] = set()
     for pr in pull_requests:
@@ -605,7 +623,9 @@ def format_pr_list_for_context(
             "number": pr_number,
             "title": pr.get("title"),
             "author": (pr.get("author") or {}).get("login", ""),
+            "authorAssociation": pr.get("authorAssociation"),
             "isDraft": pr.get("isDraft"),
+            "isCrossRepository": pr.get("isCrossRepository"),
             "reviewDecision": pr.get("reviewDecision"),
             "headRefName": pr.get("headRefName"),
             "url": pr.get("url"),
@@ -634,6 +654,9 @@ def format_pr_list_for_context(
         diff = pr_diffs.get(pr_number, "")
         if diff:
             entry["diff"] = diff
+        omission_reason = pr_diff_omissions.get(pr_number)
+        if omission_reason:
+            entry["diffOmittedReason"] = omission_reason
         payload.append(entry)
     for pr_number, diff in sorted(pr_diffs.items()):
         if pr_number in seen_pr_numbers or not diff:
@@ -642,6 +665,7 @@ def format_pr_list_for_context(
             "number": pr_number,
             "title": "Directed PR outside open work state",
             "state": "not_in_open_work_state",
+            "diffTrust": "explicitly_directed",
             "diff": diff,
         })
     return json.dumps(payload, indent=2, ensure_ascii=False)
@@ -1001,11 +1025,22 @@ def gather_context(
     open_issues = format_issue_list_for_context(work_state["issues"])
 
     # Pre-fetch PR diffs so the agent can review without needing gh CLI access.
-    # All open PRs get diffs at a generous limit — context window can absorb it.
+    # Only trusted same-repo PRs get scheduled inline diffs. Directed reviews may
+    # include an otherwise-untrusted diff because a trusted human explicitly asked.
     directed_pr = parse_directed_pr_number(message) if message else None
     pr_diffs: dict[int, str] = {}
+    pr_diff_omissions: dict[int, str] = {}
     for pr in work_state["pull_requests"]:
         pr_number = int(pr.get("number", 0))
+        should_inline, omission_reason = inline_pr_diff_policy(
+            pr,
+            trusted_logins=trusted_logins,
+            directed_pr=directed_pr,
+        )
+        if not should_inline:
+            if omission_reason:
+                pr_diff_omissions[pr_number] = omission_reason
+            continue
         diff = fetch_pr_diff(pr_number, env, max_lines=PR_DIFF_MAX_LINES)
         if diff:
             pr_diffs[pr_number] = diff
@@ -1016,8 +1051,15 @@ def gather_context(
             pr_diffs[directed_pr] = diff
     if pr_diffs:
         log(f"Pre-fetched diffs for {len(pr_diffs)} PR(s)")
+    if pr_diff_omissions:
+        log(f"Omitted inline diffs for {len(pr_diff_omissions)} untrusted PR(s)")
 
-    open_prs = format_pr_list_for_context(work_state["pull_requests"], work_state["issues"], pr_diffs=pr_diffs)
+    open_prs = format_pr_list_for_context(
+        work_state["pull_requests"],
+        work_state["issues"],
+        pr_diffs=pr_diffs,
+        pr_diff_omissions=pr_diff_omissions,
+    )
 
     wip_state = compute_wip_state(
         discussion_nodes,

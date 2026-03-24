@@ -374,10 +374,79 @@ class PrefetchedPRDiffTests(unittest.TestCase):
                     "number": 185,
                     "title": "Directed PR outside open work state",
                     "state": "not_in_open_work_state",
+                    "diffTrust": "explicitly_directed",
                     "diff": "diff text",
                 }
             ],
         )
+
+    def test_inline_pr_diff_policy_allows_trusted_same_repo_prs(self) -> None:
+        allowed, reason = run_contributor.inline_pr_diff_policy(
+            {
+                "number": 12,
+                "isCrossRepository": False,
+                "authorAssociation": "MEMBER",
+                "author": {"login": "fairchild"},
+            },
+            trusted_logins={"april-clearwater[bot]"},
+        )
+
+        self.assertTrue(allowed)
+        self.assertIsNone(reason)
+
+    def test_inline_pr_diff_policy_omits_untrusted_cross_repo_prs(self) -> None:
+        allowed, reason = run_contributor.inline_pr_diff_policy(
+            {
+                "number": 12,
+                "isCrossRepository": True,
+                "authorAssociation": "CONTRIBUTOR",
+                "author": {"login": "external-user"},
+            },
+            trusted_logins={"april-clearwater[bot]"},
+        )
+
+        self.assertFalse(allowed)
+        self.assertEqual(reason, "cross_repository")
+
+    def test_inline_pr_diff_policy_allows_directed_untrusted_pr(self) -> None:
+        allowed, reason = run_contributor.inline_pr_diff_policy(
+            {
+                "number": 12,
+                "isCrossRepository": True,
+                "authorAssociation": "CONTRIBUTOR",
+                "author": {"login": "external-user"},
+            },
+            trusted_logins={"april-clearwater[bot]"},
+            directed_pr=12,
+        )
+
+        self.assertTrue(allowed)
+        self.assertIsNone(reason)
+
+    def test_format_pr_list_marks_omitted_untrusted_diff(self) -> None:
+        payload = json.loads(
+            run_contributor.format_pr_list_for_context(
+                [
+                    {
+                        "number": 44,
+                        "title": "PR from fork",
+                        "author": {"login": "external-user"},
+                        "authorAssociation": "CONTRIBUTOR",
+                        "isDraft": False,
+                        "isCrossRepository": True,
+                        "reviewDecision": "REVIEW_REQUIRED",
+                        "headRefName": "external/fork-branch",
+                        "url": "https://example.com/pr/44",
+                        "body": "",
+                    }
+                ],
+                [],
+                pr_diff_omissions={44: "cross_repository"},
+            )
+        )
+
+        self.assertEqual(payload[0]["diffOmittedReason"], "cross_repository")
+        self.assertNotIn("diff", payload[0])
 
 
 if __name__ == "__main__":

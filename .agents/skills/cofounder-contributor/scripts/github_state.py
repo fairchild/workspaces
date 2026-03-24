@@ -119,9 +119,11 @@ query($owner: String!, $name: String!) {
         url
         body
         isDraft
+        isCrossRepository
         reviewDecision
         headRefName
         author { login }
+        authorAssociation
         commits(last: 1) {
           nodes {
             commit { committedDate }
