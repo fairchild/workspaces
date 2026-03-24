@@ -33,6 +33,8 @@ query($owner: String!, $name: String!) {
             id
             body
             createdAt
+            author { login }
+            authorAssociation
             reactionGroups {
               content
               users(first: 20) {
@@ -56,6 +58,8 @@ query($owner: String!, $name: String!) {
           nodes {
             body
             createdAt
+            author { login }
+            authorAssociation
           }
         }
         assignees(first: 5) {
@@ -95,6 +99,15 @@ AGENT_CLAIM_LABEL_DESCRIPTION = "Currently being executed by an automated contri
 AGENT_REVIEW_LABEL = "agent:review"
 AGENT_REVIEW_LABEL_COLOR = "fbca04"
 AGENT_REVIEW_LABEL_DESCRIPTION = "PR opened, awaiting review"
+TRUSTED_AUTHOR_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR"}
+TRUSTED_AUTOMATION_LOGINS = {
+    "april-clearwater[bot]",
+    "claude[bot]",
+    "github-actions[bot]",
+    "plat-ironwood[bot]",
+    "workspace-agents",
+    "workspace-agents[bot]",
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -232,6 +245,31 @@ def _normalize_login(login: str) -> str:
     return login.removesuffix("[bot]").strip().casefold()
 
 
+def trusted_automation_logins() -> set[str]:
+    return {login.casefold() for login in TRUSTED_AUTOMATION_LOGINS}
+
+
+def trusted_comment_author(
+    comment: dict[str, object],
+    *,
+    trusted_logins: set[str] | None = None,
+) -> bool:
+    if trusted_logins is None:
+        trusted_logins = trusted_automation_logins()
+
+    author_association = str(comment.get("authorAssociation", "")).upper()
+    if author_association in TRUSTED_AUTHOR_ASSOCIATIONS:
+        return True
+
+    author = comment.get("author")
+    login = ""
+    if isinstance(author, dict):
+        login = str(author.get("login", "")).casefold()
+    elif isinstance(author, str):
+        login = author.casefold()
+    return bool(login and login in trusted_logins)
+
+
 def markdown_section(body: str, heading: str) -> str:
     pattern = rf"(?ms)^## {re.escape(heading)}\n(.*?)(?=^## |\n---\n|\Z)"
     match = re.search(pattern, body)
@@ -253,11 +291,18 @@ def extract_blocked_by(body: str) -> list[int]:
     return list(dict.fromkeys(blocked))
 
 
-def latest_issue_claim(issue_number: int, comments: dict[str, object]) -> dict[str, str] | None:
+def latest_issue_claim(
+    issue_number: int,
+    comments: dict[str, object],
+    *,
+    trusted_logins: set[str] | None = None,
+) -> dict[str, str] | None:
     nodes = comments.get("nodes", []) if isinstance(comments, dict) else []
     claims: list[dict[str, str]] = []
     for comment in nodes:
         if not isinstance(comment, dict):
+            continue
+        if not trusted_comment_author(comment, trusted_logins=trusted_logins):
             continue
         match = CLAIM_MARKER_RE.search(str(comment.get("body", "")))
         if not match or int(match.group("number")) != issue_number:
@@ -301,6 +346,8 @@ def extract_pr_issue_reference(body: str) -> int | None:
 def latest_planned_comment(
     discussion: dict[str, object] | None,
     discussion_number: int,
+    *,
+    trusted_logins: set[str] | None = None,
 ) -> dict[str, object] | None:
     if discussion is None:
         return None
@@ -309,6 +356,8 @@ def latest_planned_comment(
     planned: list[dict[str, object]] = []
     for comment in nodes:
         if not isinstance(comment, dict):
+            continue
+        if not trusted_comment_author(comment, trusted_logins=trusted_logins):
             continue
         match = PETER_PLANNED_MARKER_RE.search(str(comment.get("body", "")))
         if match and int(match.group("number")) == discussion_number:
@@ -382,6 +431,7 @@ def desired_execution_labels(
     now: datetime,
 ) -> tuple[set[str], str]:
     labels: set[str] = set()
+    trusted_logins = trusted_automation_logins()
     issue_number = int(issue["number"])
     body = str(issue.get("body", ""))
     discussion_number = extract_issue_discussion_number(body)
@@ -389,7 +439,11 @@ def desired_execution_labels(
         return labels, "missing Peter marker"
 
     discussion = discussions.get(discussion_number)
-    planned_comment = latest_planned_comment(discussion, discussion_number)
+    planned_comment = latest_planned_comment(
+        discussion,
+        discussion_number,
+        trusted_logins=trusted_logins,
+    )
     if not planned_comment_has_owner_approval(planned_comment, owner_login):
         return labels, "discussion not execution-approved"
 
@@ -407,7 +461,11 @@ def desired_execution_labels(
         labels.add(AGENT_REVIEW_LABEL)
         return labels, "open PR, awaiting review"
 
-    latest_claim = latest_issue_claim(issue_number, issue.get("comments", {}))
+    latest_claim = latest_issue_claim(
+        issue_number,
+        issue.get("comments", {}),
+        trusted_logins=trusted_logins,
+    )
     if latest_claim is not None and not claim_is_stale(latest_claim, has_open_pr=False, now=now):
         labels.add(AGENT_CLAIM_LABEL)
         return labels, f"actively claimed by {latest_claim['agent']}"

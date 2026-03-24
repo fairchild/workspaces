@@ -39,17 +39,25 @@ from github_state import (
     fetch_work_state,
     latest_issue_claim,
     repo_owner_name,
+    trusted_automation_logins,
+    trusted_comment_author,
 )
 
 ENGAGEMENT_RECENT_HOURS = 72
 LOW_COMMENT_THRESHOLD = 1
+UNTRUSTED_BODY_NOTE = "[body omitted from untrusted public author]"
 
 
 def _has_persona(text: str, markers: list[str]) -> bool:
     return any(m in text for m in markers)
 
 
-def _find_agent_threads(data: dict, markers: list[str]) -> list[dict]:
+def _find_agent_threads(
+    data: dict,
+    markers: list[str],
+    *,
+    trusted_logins: set[str] | None = None,
+) -> list[dict]:
     """Find threads where the agent acted, returning the last action + replies."""
     threads: list[dict] = []
     repo = data.get("data", {}).get("repository", {})
@@ -60,16 +68,23 @@ def _find_agent_threads(data: dict, markers: list[str]) -> list[dict]:
             items.append({
                 "body": r.get("body", ""),
                 "author": (r.get("author") or {}).get("login", ""),
+                "authorAssociation": r.get("authorAssociation", ""),
                 "time": r.get("submittedAt", ""),
             })
         for c in pr.get("comments", {}).get("nodes", []):
             items.append({
                 "body": c.get("body", ""),
                 "author": (c.get("author") or {}).get("login", ""),
+                "authorAssociation": c.get("authorAssociation", ""),
                 "time": c.get("createdAt", ""),
             })
         items.sort(key=lambda x: x["time"])
-        agent_indices = [i for i, x in enumerate(items) if _has_persona(x["body"], markers)]
+        agent_indices = [
+            i
+            for i, x in enumerate(items)
+            if _has_persona(x["body"], markers)
+            and trusted_comment_author(x, trusted_logins=trusted_logins)
+        ]
         if not agent_indices:
             continue
         last = agent_indices[-1]
@@ -86,11 +101,17 @@ def _find_agent_threads(data: dict, markers: list[str]) -> list[dict]:
             {
                 "body": c.get("body", ""),
                 "author": (c.get("author") or {}).get("login", ""),
+                "authorAssociation": c.get("authorAssociation", ""),
                 "time": c.get("createdAt", ""),
             }
             for c in issue.get("comments", {}).get("nodes", [])
         ]
-        agent_indices = [i for i, x in enumerate(items) if _has_persona(x["body"], markers)]
+        agent_indices = [
+            i
+            for i, x in enumerate(items)
+            if _has_persona(x["body"], markers)
+            and trusted_comment_author(x, trusted_logins=trusted_logins)
+        ]
         if not agent_indices:
             continue
         last = agent_indices[-1]
@@ -108,24 +129,35 @@ def _find_agent_threads(data: dict, markers: list[str]) -> list[dict]:
             {
                 "body": c.get("body", ""),
                 "author": (c.get("author") or {}).get("login", ""),
+                "authorAssociation": c.get("authorAssociation", ""),
                 "time": c.get("createdAt", ""),
             }
             for c in disc.get("comments", {}).get("nodes", [])
         ]
-        if _has_persona(disc_body, markers):
+        discussion_item = {
+            "body": disc_body,
+            "author": ((disc.get("author") or {}).get("login", "")),
+            "authorAssociation": disc.get("authorAssociation", ""),
+            "time": disc.get("createdAt", ""),
+        }
+        if _has_persona(disc_body, markers) and trusted_comment_author(
+            discussion_item,
+            trusted_logins=trusted_logins,
+        ):
             threads.append({
                 "kind": "Discussion (proposed)",
                 "number": disc["number"],
                 "title": disc["title"],
-                "agent_item": {
-                    "body": disc_body,
-                    "author": "",
-                    "time": disc.get("createdAt", ""),
-                },
+                "agent_item": discussion_item,
                 "replies": items,
             })
             continue
-        agent_indices = [i for i, x in enumerate(items) if _has_persona(x["body"], markers)]
+        agent_indices = [
+            i
+            for i, x in enumerate(items)
+            if _has_persona(x["body"], markers)
+            and trusted_comment_author(x, trusted_logins=trusted_logins)
+        ]
         if not agent_indices:
             continue
         last = agent_indices[-1]
@@ -141,7 +173,22 @@ def _find_agent_threads(data: dict, markers: list[str]) -> list[dict]:
     return threads
 
 
-def _format_thread(t: dict) -> str:
+def _render_reply_excerpt(
+    item: dict[str, object],
+    *,
+    trusted_logins: set[str] | None = None,
+    limit: int,
+) -> str:
+    if trusted_comment_author(item, trusted_logins=trusted_logins):
+        return str(item.get("body", ""))[:limit].replace("\n", "\n      ")
+    return UNTRUSTED_BODY_NOTE
+
+
+def _format_thread(
+    t: dict,
+    *,
+    trusted_logins: set[str] | None = None,
+) -> str:
     excerpt = t["agent_item"]["body"][:500].replace("\n", "\n    ")
     lines = [
         f"  {t['kind']} #{t['number']} — {t['title']}",
@@ -151,7 +198,11 @@ def _format_thread(t: dict) -> str:
     if t["replies"]:
         lines.append("    Replies since:")
         for r in t["replies"][:5]:
-            r_text = r["body"][:300].replace("\n", "\n      ")
+            r_text = _render_reply_excerpt(
+                r,
+                trusted_logins=trusted_logins,
+                limit=300,
+            )
             lines.append(f"    - {r['author']} ({r['time']}): {r_text}")
     else:
         lines.append("    No replies yet.")
@@ -159,7 +210,12 @@ def _format_thread(t: dict) -> str:
 
 
 def gather_agent_history(
-    persona: str, owner: str, name: str, env: dict[str, str],
+    persona: str,
+    owner: str,
+    name: str,
+    env: dict[str, str],
+    *,
+    bot_login: str = "",
 ) -> str:
     if not persona:
         return ""
@@ -183,11 +239,17 @@ def gather_agent_history(
         return ""
 
     markers = [f"*{persona}", f"*Proposed by {persona}"]
-    threads = _find_agent_threads(data, markers)
+    trusted_logins = trusted_automation_logins(env)
+    if bot_login:
+        trusted_logins.add(bot_login.casefold())
+    threads = _find_agent_threads(data, markers, trusted_logins=trusted_logins)
     if not threads:
         return ""
 
-    formatted = "\n\n".join(_format_thread(t) for t in threads[:3])
+    formatted = "\n\n".join(
+        _format_thread(t, trusted_logins=trusted_logins)
+        for t in threads[:3]
+    )
     return (
         f"Your last actions as {persona} and what happened since:\n\n"
         f"{formatted}"
@@ -220,7 +282,11 @@ def _is_idea_discussion(title: str) -> bool:
     return "[idea]" in title.casefold()
 
 
-def format_open_discussions(discussions: list[dict[str, object]]) -> str:
+def format_open_discussions(
+    discussions: list[dict[str, object]],
+    *,
+    trusted_logins: set[str] | None = None,
+) -> str:
     lines: list[str] = []
     for disc in discussions:
         comments = disc.get("comments", {})
@@ -233,12 +299,22 @@ def format_open_discussions(discussions: list[dict[str, object]]) -> str:
             f"({comment_count} comments)"
         )
         previews: list[str] = []
-        for comment in comment_nodes[:2]:
+        omitted_untrusted = 0
+        for comment in comment_nodes:
+            if not trusted_comment_author(comment, trusted_logins=trusted_logins):
+                omitted_untrusted += 1
+                continue
             author = (comment.get("author") or {}).get("login", "unknown")
             body = str(comment.get("body", "")).replace("\n", " ")[:200]
             previews.append(f"  -> {author}: {body}")
+            if len(previews) == 2:
+                break
         if previews:
             line = f"{line}\n" + "\n".join(previews)
+        if omitted_untrusted:
+            line = (
+                f"{line}\n  -> {omitted_untrusted} untrusted comment preview(s) omitted"
+            )
         lines.append(line)
     return "\n".join(lines)
 
@@ -456,6 +532,7 @@ def latest_external_review(
     pr: dict[str, object],
     *,
     normalized_bot: str,
+    trusted_logins: set[str] | None = None,
 ) -> dict[str, str] | None:
     reviews = (pr.get("reviews") or {}).get("nodes", [])
     external_reviews = [
@@ -467,11 +544,14 @@ def latest_external_review(
     if not external_reviews:
         return None
     latest = max(external_reviews, key=lambda review: review.get("submittedAt", ""))
+    body = str(latest.get("body", "")).strip()
+    if not trusted_comment_author(latest, trusted_logins=trusted_logins):
+        body = "[review body omitted from untrusted public author]"
     return {
         "author": str((latest.get("author") or {}).get("login", "")),
         "state": str(latest.get("state", "")),
         "submittedAt": str(latest.get("submittedAt", "")),
-        "body": str(latest.get("body", "")).strip(),
+        "body": body,
     }
 
 
@@ -496,10 +576,14 @@ def classify_execution_work(
     owner_login: str,
     persona: str,
     bot_login: str,
+    trusted_logins: set[str] | None = None,
     now: datetime | None = None,
 ) -> dict[str, list[dict[str, object]]]:
     current_agent = persona_slug(persona)
     normalized_bot = _normalize_login(bot_login)
+    trusted_actor_logins = set(trusted_logins or trusted_automation_logins())
+    if bot_login:
+        trusted_actor_logins.add(bot_login.casefold())
     issue_pr_map: dict[int, list[dict[str, object]]] = {}
     for pr in pull_requests:
         issue_number, marker_agent = extract_pr_issue_reference(str(pr.get("body", "")))
@@ -543,7 +627,11 @@ def classify_execution_work(
             for blocker in blocked_by
             if issue_states.get(blocker, "OPEN").upper() != "CLOSED"
         ]
-        latest_claim = latest_issue_claim(issue_number, issue.get("comments", {}))
+        latest_claim = latest_issue_claim(
+            issue_number,
+            issue.get("comments", {}),
+            trusted_logins=trusted_actor_logins,
+        )
         claim_agent = latest_claim.get("agent") if latest_claim else None
         linked_prs = issue_pr_map.get(issue_number, [])
         stale_claim = claim_is_stale(latest_claim, has_open_pr=bool(linked_prs), now=now)
@@ -594,6 +682,7 @@ def classify_execution_work(
                     "latest_external_review": latest_external_review(
                         own_pr,
                         normalized_bot=normalized_bot,
+                        trusted_logins=trusted_actor_logins,
                     ),
                 }
             )
@@ -738,7 +827,13 @@ def gather_context(
 
     work_state = fetch_work_state(owner, name, env)
     discussion_nodes = work_state["discussions"]
-    discussions = format_open_discussions(discussion_nodes)
+    trusted_logins = trusted_automation_logins(env)
+    if bot_login:
+        trusted_logins.add(bot_login.casefold())
+    discussions = format_open_discussions(
+        discussion_nodes,
+        trusted_logins=trusted_logins,
+    )
     engagement_candidates = find_discussions_needing_engagement(
         discussion_nodes,
         owner_login=owner,
@@ -749,7 +844,13 @@ def gather_context(
     open_prs = format_pr_list_for_context(work_state["pull_requests"], work_state["issues"])
 
     backlog_state = gather_backlog_state()
-    history = gather_agent_history(persona, owner, name, env)
+    history = gather_agent_history(
+        persona,
+        owner,
+        name,
+        env,
+        bot_login=bot_login,
+    )
     issue_states = fetch_issue_state_map(env)
     execution_state = classify_execution_work(
         work_state["issues"],
@@ -759,6 +860,7 @@ def gather_context(
         owner_login=owner,
         persona=persona,
         bot_login=bot_login,
+        trusted_logins=trusted_logins,
     )
     pending_reviews = find_prs_awaiting_rereview(work_state["pull_requests"], bot_login) if bot_login else ""
     own_open_prs = format_own_open_prs(execution_state["own_open_prs"])
