@@ -50,7 +50,7 @@ concurrency:
 
 jobs:
   build-and-test:
-    runs-on: [self-hosted, signing-host]
+    runs-on: [self-hosted, lume-macos]
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v5
