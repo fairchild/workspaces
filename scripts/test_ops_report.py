@@ -435,5 +435,177 @@ class OpsReportTests(unittest.TestCase):
             self.assertTrue((output_dir / "dashboard.md").is_file())
 
 
+class AgentHealthTests(unittest.TestCase):
+    maxDiff = None
+
+    def fixture_path(self, name: str) -> Path:
+        return FIXTURES_DIR / name
+
+    def load_fixture_report(
+        self,
+        name: str,
+        *,
+        current_time: datetime | None = None,
+    ) -> tuple[ops_report.ReportInputs, list[dict[str, str]], dict[str, object]]:
+        current_time = current_time or datetime(2026, 3, 12, tzinfo=UTC)
+        inputs = ops_report.load_fixture_inputs(self.fixture_path(name))
+        rows, summary = ops_report.build_report(inputs, current_time=current_time, days=30)
+        return inputs, rows, summary
+
+    def test_summarize_ci_per_agent_breakdown(self) -> None:
+        runs = [
+            {"status": "completed", "conclusion": "failure", "createdAt": "2026-03-11T10:00:00Z", "attempt": 1, "workflowName": "Agent: April Clearwater"},
+            {"status": "completed", "conclusion": "success", "createdAt": "2026-03-11T11:00:00Z", "attempt": 1, "workflowName": "Agent: April Clearwater"},
+            {"status": "completed", "conclusion": "failure", "createdAt": "2026-03-11T12:00:00Z", "attempt": 2, "workflowName": "Agent: April Clearwater"},
+            {"status": "completed", "conclusion": "success", "createdAt": "2026-03-11T13:00:00Z", "attempt": 1, "workflowName": "Agent: Peter Planner"},
+            {"status": "completed", "conclusion": "success", "createdAt": "2026-03-11T14:00:00Z", "attempt": 1, "workflowName": "CI"},
+        ]
+        ci = ops_report.summarize_ci(runs, 30, datetime(2026, 3, 12, tzinfo=UTC))
+        self.assertIn("agents", ci)
+        agents = ci["agents"]
+        self.assertIn("April Clearwater", agents)
+        self.assertIn("Peter Planner", agents)
+        april = agents["April Clearwater"]
+        self.assertEqual(april["completed_runs"], 3)
+        self.assertEqual(april["failure_runs"], 2)
+        self.assertAlmostEqual(april["failure_rate"], 66.666, places=2)
+        self.assertEqual(april["rerun_runs"], 1)
+        self.assertAlmostEqual(april["rerun_rate"], 33.333, places=2)
+        peter = agents["Peter Planner"]
+        self.assertEqual(peter["completed_runs"], 1)
+        self.assertEqual(peter["failure_runs"], 0)
+        self.assertAlmostEqual(peter["failure_rate"], 0.0)
+
+    def test_excludes_non_agent_workflows(self) -> None:
+        runs = [
+            {"status": "completed", "conclusion": "success", "createdAt": "2026-03-11T10:00:00Z", "attempt": 1, "workflowName": "CI"},
+            {"status": "completed", "conclusion": "success", "createdAt": "2026-03-11T11:00:00Z", "attempt": 1, "workflowName": "Release"},
+            {"status": "completed", "conclusion": "success", "createdAt": "2026-03-11T12:00:00Z", "attempt": 1, "workflowName": "Agent: Observer"},
+        ]
+        ci = ops_report.summarize_ci(runs, 30, datetime(2026, 3, 12, tzinfo=UTC))
+        agents = ci["agents"]
+        self.assertNotIn("CI", agents)
+        self.assertNotIn("Release", agents)
+        self.assertIn("Observer", agents)
+
+    def test_detect_breaches_agent_breach(self) -> None:
+        ci = {
+            "completed_runs": 20,
+            "failure_rate": 15.0,
+            "rerun_rate": 5.0,
+            "top_failing_workflows": [],
+            "agents": {
+                "April Clearwater": {
+                    "completed_runs": 10,
+                    "failure_runs": 4,
+                    "failure_rate": 40.0,
+                    "rerun_runs": 0,
+                    "rerun_rate": 0.0,
+                },
+            },
+        }
+        perf = {"available": False, "metrics": {}}
+        breaches = ops_report.detect_breaches(perf, ci, [])
+        categories = [b["category"] for b in breaches]
+        self.assertIn("agent", categories)
+        agent_breach = next(b for b in breaches if b["category"] == "agent")
+        self.assertEqual(agent_breach["title"], "[idea] [ops] Stabilize individual agent reliability")
+        self.assertEqual(agent_breach["details"][0]["agent"], "April Clearwater")
+
+    def test_no_agent_breach_below_threshold(self) -> None:
+        ci_low_runs = {
+            "completed_runs": 10,
+            "failure_rate": 10.0,
+            "rerun_rate": 5.0,
+            "top_failing_workflows": [],
+            "agents": {
+                "April Clearwater": {
+                    "completed_runs": 4,
+                    "failure_runs": 3,
+                    "failure_rate": 75.0,
+                    "rerun_runs": 0,
+                    "rerun_rate": 0.0,
+                },
+            },
+        }
+        perf = {"available": False, "metrics": {}}
+        breaches = ops_report.detect_breaches(perf, ci_low_runs, [])
+        self.assertNotIn("agent", [b["category"] for b in breaches])
+
+        ci_low_rate = {
+            "completed_runs": 10,
+            "failure_rate": 10.0,
+            "rerun_rate": 5.0,
+            "top_failing_workflows": [],
+            "agents": {
+                "April Clearwater": {
+                    "completed_runs": 10,
+                    "failure_runs": 1,
+                    "failure_rate": 10.0,
+                    "rerun_runs": 0,
+                    "rerun_rate": 0.0,
+                },
+            },
+        }
+        breaches = ops_report.detect_breaches(perf, ci_low_rate, [])
+        self.assertNotIn("agent", [b["category"] for b in breaches])
+
+    def test_breach_ordering(self) -> None:
+        perf = {
+            "available": True,
+            "metrics": {
+                "launch_to_first_prompt": {
+                    "status": "fail",
+                    "latest_median_ms": 300.0,
+                    "target_ms": 250.0,
+                    "delta_percent": 20.0,
+                }
+            },
+        }
+        ci = {
+            "completed_runs": 20,
+            "failure_rate": 30.0,
+            "rerun_rate": 20.0,
+            "top_failing_workflows": [{"workflow_name": "CI", "failures": 6}],
+            "agents": {
+                "April Clearwater": {
+                    "completed_runs": 5,
+                    "failure_runs": 3,
+                    "failure_rate": 60.0,
+                    "rerun_runs": 0,
+                    "rerun_rate": 0.0,
+                },
+            },
+        }
+        stale = [
+            {"discussion_number": 43, "discussion_title": "One"},
+            {"discussion_number": 44, "discussion_title": "Two"},
+        ]
+        breaches = ops_report.detect_breaches(perf, ci, stale)
+        categories = [b["category"] for b in breaches]
+        self.assertEqual(categories, ["perf", "ci", "agent", "throughput"])
+
+    def test_dashboard_agent_health_table(self) -> None:
+        _, _, summary = self.load_fixture_report("agent-breach")
+        dashboard = ops_report.render_dashboard([], summary)
+        self.assertIn("## Agent Health", dashboard)
+        self.assertIn("| Agent | Runs | Failures | Rate | Reruns | Rerun Rate |", dashboard)
+        self.assertIn("April Clearwater", dashboard)
+        self.assertIn("Peter Planner", dashboard)
+
+    def test_fixture_agent_breach_scenario(self) -> None:
+        current_time = datetime(2026, 3, 12, tzinfo=UTC)
+        inputs, _, summary = self.load_fixture_report("agent-breach", current_time=current_time)
+        breaches = summary["breaches"]
+        categories = [b["category"] for b in breaches]
+        self.assertIn("agent", categories)
+        self.assertNotIn("ci", categories)
+        idea = ops_report.candidate_idea_from_breaches(summary)
+        self.assertIsNotNone(idea)
+        self.assertEqual(idea["title"], "[idea] [ops] Stabilize individual agent reliability")
+        skip_reason = ops_report.should_skip_idea(idea, inputs.discussions, current_time)
+        self.assertIsNone(skip_reason)
+
+
 if __name__ == "__main__":
     unittest.main()
