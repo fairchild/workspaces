@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 from _helpers import (
     AGENT_READY_LABEL,
@@ -142,6 +143,193 @@ query($owner: String!, $name: String!) {
             body
             createdAt
           }
+        }
+      }
+    }
+  }
+}
+"""
+
+SELECTION_STATE_QUERY = """
+query($owner: String!, $name: String!) {
+  repository(owner: $owner, name: $name) {
+    discussions(first: 30, states: OPEN, orderBy: {field: UPDATED_AT, direction: DESC}) {
+      nodes {
+        id
+        number
+        title
+        body
+        createdAt
+        updatedAt
+        category { name }
+        author { login }
+        comments(last: 20) {
+          nodes {
+            id
+            createdAt
+            author { login }
+            reactionGroups {
+              content
+              users(first: 20) {
+                nodes { login }
+              }
+            }
+          }
+          totalCount
+        }
+      }
+    }
+    issues(first: 50, states: OPEN, orderBy: {field: UPDATED_AT, direction: DESC}) {
+      nodes {
+        number
+        title
+        url
+        body
+        state
+        labels(first: 20) {
+          nodes { name }
+        }
+        comments(last: 20) {
+          nodes {
+            body
+            createdAt
+            author { login }
+          }
+        }
+      }
+    }
+    pullRequests(first: 30, states: [OPEN], orderBy: {field: UPDATED_AT, direction: DESC}) {
+      nodes {
+        number
+        title
+        url
+        body
+        isDraft
+        reviewDecision
+        headRefName
+        updatedAt
+        author { login }
+        commits(last: 1) {
+          nodes {
+            commit { committedDate }
+          }
+        }
+        reviews(last: 50) {
+          nodes {
+            author { login }
+            state
+            submittedAt
+          }
+        }
+      }
+    }
+  }
+}
+"""
+
+DETAILED_DISCUSSION_QUERY = """
+query($owner: String!, $name: String!, $num: Int!) {
+  repository(owner: $owner, name: $name) {
+    discussion(number: $num) {
+      id
+      number
+      url
+      title
+      body
+      createdAt
+      updatedAt
+      author {
+        login
+      }
+      authorAssociation
+      comments(first: 100) {
+        nodes {
+          id
+          body
+          createdAt
+          author {
+            login
+          }
+          authorAssociation
+        }
+      }
+    }
+  }
+}
+"""
+
+DETAILED_ISSUE_QUERY = """
+query($owner: String!, $name: String!, $num: Int!) {
+  repository(owner: $owner, name: $name) {
+    issue(number: $num) {
+      number
+      url
+      title
+      body
+      state
+      author {
+        login
+      }
+      authorAssociation
+      labels(first: 20) {
+        nodes { name }
+      }
+      comments(last: 50) {
+        nodes {
+          body
+          createdAt
+          author {
+            login
+          }
+          authorAssociation
+        }
+      }
+    }
+  }
+}
+"""
+
+DETAILED_PULL_REQUEST_QUERY = """
+query($owner: String!, $name: String!, $num: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $num) {
+      number
+      url
+      title
+      body
+      isDraft
+      reviewDecision
+      headRefName
+      createdAt
+      updatedAt
+      author {
+        login
+      }
+      authorAssociation
+      commits(last: 1) {
+        nodes {
+          commit { committedDate }
+        }
+      }
+      reviews(last: 50) {
+        nodes {
+          author {
+            login
+          }
+          authorAssociation
+          body
+          state
+          submittedAt
+        }
+      }
+      comments(last: 50) {
+        nodes {
+          author {
+            login
+          }
+          authorAssociation
+          body
+          createdAt
         }
       }
     }
@@ -408,23 +596,7 @@ def current_branch(env: dict[str, str]) -> str:
 
 
 def fetch_work_state(owner: str, name: str, env: dict[str, str]) -> dict[str, list[dict[str, object]]]:
-    raw = run_optional(
-        [
-            "gh",
-            "api",
-            "graphql",
-            "-f",
-            f"query={WORK_STATE_QUERY}",
-            "-f",
-            f"owner={owner}",
-            "-f",
-            f"name={name}",
-        ],
-        timeout=GITHUB_API_TIMEOUT,
-        cwd=REPO_ROOT,
-        env=env,
-        default="{}",
-    )
+    raw = _run_repository_query(WORK_STATE_QUERY, owner, name, env, default="{}")
     try:
         data = json.loads(raw)
     except json.JSONDecodeError:
@@ -435,6 +607,124 @@ def fetch_work_state(owner: str, name: str, env: dict[str, str]) -> dict[str, li
         "issues": repository.get("issues", {}).get("nodes", []),
         "pull_requests": repository.get("pullRequests", {}).get("nodes", []),
     }
+
+
+def _run_repository_query(
+    query: str,
+    owner: str,
+    name: str,
+    env: dict[str, str],
+    *,
+    default: str = "{}",
+    extra_fields: list[str] | None = None,
+) -> str:
+    cmd = [
+        "gh",
+        "api",
+        "graphql",
+        "-f",
+        f"query={query}",
+        "-f",
+        f"owner={owner}",
+        "-f",
+        f"name={name}",
+    ]
+    if extra_fields:
+        cmd.extend(extra_fields)
+    return run_optional(
+        cmd,
+        timeout=GITHUB_API_TIMEOUT,
+        cwd=REPO_ROOT,
+        env=env,
+        default=default,
+    )
+
+
+def fetch_selection_state(owner: str, name: str, env: dict[str, str]) -> dict[str, list[dict[str, object]]]:
+    raw = _run_repository_query(SELECTION_STATE_QUERY, owner, name, env, default="{}")
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return {"discussions": [], "issues": [], "pull_requests": []}
+    repository = data.get("data", {}).get("repository", {})
+    return {
+        "discussions": repository.get("discussions", {}).get("nodes", []),
+        "issues": repository.get("issues", {}).get("nodes", []),
+        "pull_requests": repository.get("pullRequests", {}).get("nodes", []),
+    }
+
+
+def _fetch_single_node(
+    query: str,
+    owner: str,
+    name: str,
+    env: dict[str, str],
+    *,
+    number: int,
+    key: str,
+) -> dict[str, Any] | None:
+    raw = _run_repository_query(
+        query,
+        owner,
+        name,
+        env,
+        default="{}",
+        extra_fields=["-F", f"num={number}"],
+    )
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    node = data.get("data", {}).get("repository", {}).get(key)
+    return node if isinstance(node, dict) else None
+
+
+def fetch_detailed_discussion(
+    owner: str,
+    name: str,
+    number: int,
+    env: dict[str, str],
+) -> dict[str, Any] | None:
+    return _fetch_single_node(
+        DETAILED_DISCUSSION_QUERY,
+        owner,
+        name,
+        env,
+        number=number,
+        key="discussion",
+    )
+
+
+def fetch_detailed_issue(
+    owner: str,
+    name: str,
+    number: int,
+    env: dict[str, str],
+) -> dict[str, Any] | None:
+    return _fetch_single_node(
+        DETAILED_ISSUE_QUERY,
+        owner,
+        name,
+        env,
+        number=number,
+        key="issue",
+    )
+
+
+def fetch_detailed_pull_request(
+    owner: str,
+    name: str,
+    number: int,
+    env: dict[str, str],
+) -> dict[str, Any] | None:
+    return _fetch_single_node(
+        DETAILED_PULL_REQUEST_QUERY,
+        owner,
+        name,
+        env,
+        number=number,
+        key="pullRequest",
+    )
 
 
 def fetch_issue_state_map(env: dict[str, str]) -> dict[int, str]:
