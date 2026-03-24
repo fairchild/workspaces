@@ -37,6 +37,7 @@ from evidence import (
     _extract_test_commands,
     _needs_macos_evidence,
     _needs_screenshot_evidence,
+    classify_evidence_errors,
     render_execution_summary_body,
     review_evidence_gate_error,
     validate_evidence_accounting,
@@ -316,6 +317,7 @@ def route_execution_action(
     )
     if state is None:
         print(f"error: issue #{issue_number} is not available for execution", file=sys.stderr)
+        log(json.dumps({"error_class": "execution_state", "detail": "issue not available for execution", "issue": issue_number}))
         return 1
 
     own_pr = state.get("own_pr")
@@ -326,12 +328,14 @@ def route_execution_action(
                 f"error: issue #{issue_number} has no open PR owned by {persona_slug(persona)} to advance",
                 file=sys.stderr,
             )
+            log(json.dumps({"error_class": "execution_state", "detail": "no open PR to advance", "issue": issue_number}))
             return 1
         if int(data["pr_number"]) != int(own_pr["number"]):
             print(
                 f"error: issue #{issue_number} is linked to PR #{own_pr['number']}, not PR #{data['pr_number']}",
                 file=sys.stderr,
             )
+            log(json.dumps({"error_class": "execution_conflict", "detail": f"PR mismatch: expected #{own_pr['number']}, got #{data['pr_number']}", "issue": issue_number}))
             return 1
 
     if own_pr is None and not bool(state.get("approved")):
@@ -339,12 +343,14 @@ def route_execution_action(
             f"error: issue #{issue_number} is not execution-approved ({state.get('approval_reason')})",
             file=sys.stderr,
         )
+        log(json.dumps({"error_class": "execution_state", "detail": f"not execution-approved: {state.get('approval_reason')}", "issue": issue_number}))
         return 1
     if own_pr is None and state.get("blockers"):
         print(
             f"error: issue #{issue_number} is still blocked by {state['blockers']}",
             file=sys.stderr,
         )
+        log(json.dumps({"error_class": "execution_blocked", "detail": f"blocked by {state['blockers']}", "issue": issue_number}))
         return 1
 
     requested_evidence = list(state.get("requested_evidence", []))
@@ -354,12 +360,14 @@ def route_execution_action(
             "error: requested test evidence is invalid: " + "; ".join(test_command_errors),
             file=sys.stderr,
         )
+        log(json.dumps({"error_class": "evidence_validation", "detail": "; ".join(test_command_errors), "issue": issue_number}))
         return 1
     if other_pr is not None:
         print(
             f"error: issue #{issue_number} already has open PR #{other_pr['number']} by another agent",
             file=sys.stderr,
         )
+        log(json.dumps({"error_class": "execution_conflict", "detail": f"open PR #{other_pr['number']} by another agent", "issue": issue_number}))
         return 1
 
     latest_claim = state.get("latest_claim")
@@ -373,6 +381,7 @@ def route_execution_action(
             f"error: issue #{issue_number} is already claimed by {latest_claim['agent']}",
             file=sys.stderr,
         )
+        log(json.dumps({"error_class": "execution_conflict", "detail": f"claimed by {latest_claim['agent']}", "issue": issue_number}))
         return 1
 
     summary_body, summary_errors = build_execution_summary_body(
@@ -385,6 +394,7 @@ def route_execution_action(
             + "; ".join(summary_errors),
             file=sys.stderr,
         )
+        log(json.dumps({"error_class": "evidence_validation", "detail": "; ".join(summary_errors), "issue": issue_number}))
         return 1
 
     _, evidence_errors = validate_evidence_accounting(summary_body, requested_evidence)
@@ -394,6 +404,7 @@ def route_execution_action(
             + "; ".join(evidence_errors),
             file=sys.stderr,
         )
+        log(json.dumps({"error_class": "evidence_validation", "detail": "; ".join(evidence_errors), "issue": issue_number}))
         return 1
     pr_body = compose_pr_body(issue_number, persona, summary_body)
 
@@ -406,6 +417,7 @@ def route_execution_action(
                 f"branch '{expected_branch}'. Check out that branch before editing.",
                 file=sys.stderr,
             )
+            log(json.dumps({"error_class": "execution_state", "detail": f"branch mismatch: expected '{expected_branch}'", "issue": issue_number}))
             return 1
     else:
         default = default_branch(env)
@@ -436,6 +448,7 @@ def route_execution_action(
             f"error: {data['action']} selected for #{issue_number} but no file changes were made",
             file=sys.stderr,
         )
+        log(json.dumps({"error_class": "execution_state", "detail": "no file changes", "issue": issue_number}))
         return 1
 
     set_git_identity(env, persona, bot_login)
@@ -595,6 +608,8 @@ def route_action(validated_json: str, dry_run: bool, env: dict[str, str]) -> int
                         f"error: PR #{pr_number} cannot be reviewed with verdict '{verdict}': {evidence_gate_error}",
                         file=sys.stderr,
                     )
+                    categories = [c["category"] for c in classify_evidence_errors(review_state["evidence_errors"])]
+                    log(json.dumps({"error_class": "evidence_gate", "categories": categories, "pr": pr_number, "verdict": verdict}))
                     return 1
             review_flag = {
                 "approve": "--approve",
@@ -633,4 +648,5 @@ def route_action(validated_json: str, dry_run: bool, env: dict[str, str]) -> int
             pass
 
     print(f"error: unknown action: {action}", file=sys.stderr)
+    log(json.dumps({"error_class": "execution_state", "detail": f"unknown action: {action}"}))
     return 1
