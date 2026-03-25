@@ -70,7 +70,13 @@
 	gap: 0.5rem;
 	padding: 0.5rem 1rem;
 	cursor: pointer;
+	border: none;
 	border-left: 3px solid transparent;
+	background: transparent;
+	width: 100%;
+	text-align: left;
+	font: inherit;
+	color: inherit;
 	transition: all 0.15s ease;
 }
 

@@ -69,7 +69,8 @@ interface GHRepo {
 }
 
 export function fetchUserRepos(token: string): Promise<GitHubRepo[]> {
-	return cached("repos", FIVE_MIN, async () => {
+	const keyHash = token.slice(-8);
+	return cached(`repos:${keyHash}`, FIVE_MIN, async () => {
 		const repos = await ghFetch<GHRepo[]>(
 			"/user/repos?sort=pushed&direction=desc&per_page=100",
 			token,
@@ -126,24 +127,26 @@ export function fetchRepoTree(
 
 // --- File content ---
 
-export async function fetchFileContent(
+export function fetchFileContent(
 	token: string,
 	owner: string,
 	repo: string,
 	path: string,
 ): Promise<string> {
-	const res = await fetch(
-		`${GITHUB_API}/repos/${owner}/${repo}/contents/${path}`,
-		{
-			headers: {
-				Authorization: `Bearer ${token}`,
-				Accept: "application/vnd.github.raw+json",
-				"X-GitHub-Api-Version": "2022-11-28",
+	return cached(`file:${owner}/${repo}:${path}`, FIFTEEN_MIN, async () => {
+		const res = await fetch(
+			`${GITHUB_API}/repos/${owner}/${repo}/contents/${path}`,
+			{
+				headers: {
+					Authorization: `Bearer ${token}`,
+					Accept: "application/vnd.github.raw+json",
+					"X-GitHub-Api-Version": "2022-11-28",
+				},
 			},
-		},
-	);
-	if (!res.ok) return "";
-	return res.text();
+		);
+		if (!res.ok) return "";
+		return res.text();
+	});
 }
 
 // --- Issues ---
