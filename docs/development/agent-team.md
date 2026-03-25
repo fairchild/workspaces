@@ -82,15 +82,21 @@ Oliver Obever runs separately once a week on Monday at 13:30 UTC to evaluate loo
 
 ### On-Demand Mentions
 
-Mention an agent by name in any issue or PR comment to summon them:
+Mention an agent by name in any issue or PR comment to queue a maintainer-approved request:
 
 - `@april` — April Clearwater responds with her Application/UI perspective
 - `@plat` — Plat Ironwood responds with his Platform/CI perspective
 - `@peter` — Peter Planner redirects to Discussions (his planning workflow operates there)
+- `@claude` — Claude Code handles one-off repo tasks after maintainer approval
 
-Mention-triggered runs use the same contributor runtime with a directed message (`--message`), which overrides the normal priority order. The agent focuses on what was asked. Multiple agents can be mentioned in the same comment and will run in parallel.
+Public mention requests now run in two phases:
 
-Mention runs use separate concurrency groups (`agent-april-mention`, etc.) so they don't interfere with scheduled cron runs.
+1. `agent-mention.yml` runs on GitHub-hosted Ubuntu, records a structured triage request, and posts a summary comment with the hidden machine-readable payload.
+2. A maintainer applies the `safe-to-run-agent` label to approve execution. `agent-executor.yml` claims the latest pending request for that thread, clears the label, and dispatches the selected agent with only the structured payload.
+
+Public requests must mention exactly one agent. If multiple agents are mentioned, triage rejects the request and asks for a single-agent retry.
+
+Directed contributor runs still use the same contributor runtime with a directed message (`--message`), which overrides the normal priority order. Mention-triggered executor runs use separate concurrency groups (`agent-approved-april-*`, etc.) so they do not interfere with scheduled cron runs.
 
 ### Approval Keywords
 
@@ -141,7 +147,8 @@ Prompt, runtime, and compatibility responsibilities now split cleanly:
 | `.github/workflows/agent-april.yml` | April's cron workflow |
 | `.github/workflows/agent-plat.yml` | Plat's cron workflow |
 | `.github/workflows/agent-peter.yml` | Event-triggered planner workflow |
-| `.github/workflows/agent-mention.yml` | Temporary lockdown shim; direct public mention execution is disabled pending approval-based replacement |
+| `.github/workflows/agent-mention.yml` | Low-privilege public mention triage; records structured requests and posts approval instructions |
+| `.github/workflows/agent-executor.yml` | Label-gated executor for triaged mention requests |
 | `.github/workflows/_evidence.yml` | Reusable evidence workflow (build, test, screenshot, reconcile) |
 | `.github/workflows/agent-oliver.yml` | Weekly deterministic ops observer workflow |
 
@@ -207,7 +214,7 @@ The `recommend_close` action lets contributors close stale discussions with a su
 ## Reliability
 
 - **YAML frontmatter output format** — agents output structured YAML frontmatter, validated before posting, with JSON fences retained only as a fallback parser path
-- **Prompt trust boundary** — direct public mention-triggered execution is currently disabled while the replacement triage-plus-approval flow is built, and the scheduled contributor/planner runtimes keep GitHub-authored text out of privileged prompt space. Raw discussion/comment/review text is passed only as explicit untrusted payload data after task selection.
+- **Prompt trust boundary** — public mentions go through low-privilege triage first. The triage flow posts a structured request comment and the executor runs only after a maintainer applies `safe-to-run-agent`. Raw public comment/title/review text is not injected unchanged into privileged executor prompts; the executor consumes only the structured payload plus repo metadata, and any GitHub content it later inspects remains untrusted data.
 - **Dedup checking** — proposed titles are compared against open discussions before posting
 - **GraphQL for Discussions** — GitHub REST API doesn't support Discussions; all queries use GraphQL
 - **Early filtering** — planner workflow skips non-owner comments at the job level (no wasted compute)
