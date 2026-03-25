@@ -1000,12 +1000,30 @@ def gather_context(
     log("Gathering context")
     owner, name = repo_owner_name(env)
 
-    recent_commits = run_checked(
-        ["git", "log", "--oneline", "--since=2 weeks ago"],
+    recent_commit_count_output = run_checked(
+        ["git", "rev-list", "--count", "--since=2 weeks ago", "HEAD"],
+        timeout=GITHUB_API_TIMEOUT,
+        cwd=REPO_ROOT,
+        env=env,
+    ).stdout.strip()
+    recent_commit_output = run_checked(
+        ["git", "log", "--format=%H%x09%cI", "--since=2 weeks ago", "--max-count=5"],
         timeout=GITHUB_API_TIMEOUT,
         cwd=REPO_ROOT,
         env=env,
     ).stdout.rstrip()
+    recent_commit_lines: list[str] = []
+    for raw_line in recent_commit_output.splitlines():
+        sha, _, committed_at = raw_line.partition("\t")
+        if sha and committed_at:
+            recent_commit_lines.append(f"- {sha} @ {committed_at}")
+    try:
+        recent_commit_count = int(recent_commit_count_output)
+    except ValueError:
+        recent_commit_count = len(recent_commit_lines)
+    commit_summary = "\n".join(
+        [f"Count: {recent_commit_count}"] + recent_commit_lines
+    )
 
     work_state = fetch_work_state(owner, name, env)
     discussion_nodes = work_state["discussions"]
@@ -1106,7 +1124,7 @@ def gather_context(
     if engagement_summary:
         sections.append(engagement_summary)
     sections.extend([
-        f"Recent commits (last 2 weeks):\n{recent_commits}",
+        f"Recent commit summary (last 2 weeks):\n{commit_summary}",
         f"Open discussions:\n{discussions}",
         f"Open issues:\n{open_issues}",
         f"Open PRs:\n{open_prs}",

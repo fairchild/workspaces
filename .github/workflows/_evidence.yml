@@ -1,8 +1,10 @@
 name: "Evidence: Build, Test, and Reconcile"
 
-# Reusable workflow for macOS evidence gathering.
-# Called by agent-april, agent-plat, and agent-mention workflows when
-# the contributor job ran on ubuntu but the work requires macOS evidence.
+# Reusable workflow for post-patch evidence gathering.
+# The gather job runs repo-authored code in an untrusted lane with no persisted
+# git credentials or app/upload secrets. The reconcile job then consumes the
+# artifacts in a trusted lane, updates PR evidence accounting, and uploads
+# screenshots when requested.
 
 on:
   workflow_call:
@@ -22,7 +24,7 @@ on:
         required: false
         type: boolean
         default: false
-        description: "Upload screenshots to R2 (April-style). When false, only runs smoke test."
+        description: "Upload screenshots to R2. When false, the workflow still gathers smoke artifacts."
       artifact_name:
         required: false
         type: string
@@ -43,18 +45,16 @@ jobs:
   gather:
     runs-on: [self-hosted, lume-macos]
     timeout-minutes: 20
+    outputs:
+      build_succeeded: ${{ steps.ghosttykit.outcome == 'success' && steps.build.outcome == 'success' }}
+      tests_succeeded: ${{ inputs.test_commands_json == '[]' || steps.tests.outcome == 'success' }}
+      smoke_succeeded: ${{ !inputs.needs_screenshot_evidence || steps.smoke.outcome == 'success' }}
     steps:
-      - name: Generate app token
-        id: app-token
-        uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859 # v3
-        with:
-          app-id: ${{ secrets.APP_ID }}
-          private-key: ${{ secrets.PRIVATE_KEY }}
-
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           ref: ${{ inputs.pr_branch }}
           fetch-depth: 50
+          persist-credentials: false
 
       - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
 
@@ -137,6 +137,44 @@ jobs:
           set -o pipefail
           ./scripts/dev-smoke.sh --no-build 2>&1 | tee dev-smoke-output.txt
 
+      - name: Upload evidence artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ inputs.artifact_name }}-${{ github.run_id }}
+          if-no-files-found: ignore
+          path: |
+            output/
+            test-output.txt
+            dev-smoke-output.txt
+
+  reconcile:
+    needs: gather
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Generate app token
+        id: app-token
+        uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859 # v3
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.PRIVATE_KEY }}
+
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+
+      - name: Download evidence artifacts
+        if: always()
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact_name }}-${{ github.run_id }}
+          path: evidence-artifacts
+
       - name: Resolve PR number
         id: pr
         shell: bash
@@ -154,7 +192,8 @@ jobs:
 
       - name: Upload screenshot evidence to R2
         id: upload
-        if: inputs.upload_screenshots && steps.smoke.outcome == 'success' && inputs.needs_screenshot_evidence
+        if: inputs.upload_screenshots && inputs.needs_screenshot_evidence
+        continue-on-error: true
         shell: bash
         env:
           EVIDENCE_UPLOAD_TOKEN: ${{ secrets.EVIDENCE_UPLOAD_TOKEN }}
@@ -162,9 +201,9 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s nullglob globstar
-          files=(output/**/*.png)
+          files=(evidence-artifacts/output/**/*.png)
           if [ "${#files[@]}" -eq 0 ]; then
-            echo "No PNG evidence files found under output/" >&2
+            echo "No PNG evidence files found under evidence-artifacts/output/" >&2
             exit 1
           fi
           : > uploaded-screenshot-urls.tsv
@@ -172,28 +211,29 @@ jobs:
           for f in "${files[@]}"; do
             slug=$(basename "$f" .png)
             url=$(uv run scripts/upload-evidence.py "$f" \
-              --repo workspaces --pr "$PR_NUMBER" --name "$slug" --breadcrumb)
+              --repo workspaces --pr "$PR_NUMBER" --name "$slug")
             printf '%s\t%s\n' "$slug" "$url" >> uploaded-screenshot-urls.tsv
             count=$((count + 1))
           done
           echo "count=$count" >> "$GITHUB_OUTPUT"
 
       - name: Reconcile pending-ci evidence
-        if: always()
+        if: always() && steps.pr.outcome == 'success'
         shell: bash
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           PR_NUMBER: ${{ steps.pr.outputs.number }}
-          BUILD_SUCCEEDED: ${{ steps.ghosttykit.outcome == 'success' && steps.build.outcome == 'success' }}
-          TESTS_SUCCEEDED: ${{ inputs.test_commands_json == '[]' || steps.tests.outcome == 'success' }}
-          SMOKE_SUCCEEDED: ${{ !inputs.needs_screenshot_evidence || steps.smoke.outcome == 'success' }}
+          BUILD_SUCCEEDED: ${{ needs.gather.outputs.build_succeeded }}
+          TESTS_SUCCEEDED: ${{ needs.gather.outputs.tests_succeeded }}
+          SMOKE_SUCCEEDED: ${{ needs.gather.outputs.smoke_succeeded }}
           SCREENSHOT_UPLOAD_SUCCEEDED: ${{ !inputs.upload_screenshots || !inputs.needs_screenshot_evidence || steps.upload.outcome == 'success' }}
           UPLOAD_SCREENSHOTS: ${{ inputs.upload_screenshots }}
         run: |
           set -euo pipefail
           gh pr view "$PR_NUMBER" --json body --jq '.body' > pr-body.md
           python3 - <<'PY'
-          import importlib.util, os
+          import importlib.util
+          import os
           from pathlib import Path
 
           module_path = Path(".agents/skills/cofounder-contributor/scripts/run-contributor.py")
@@ -203,11 +243,12 @@ jobs:
           spec.loader.exec_module(module)
 
           body_path = Path("pr-body.md")
+          test_output_path = Path("evidence-artifacts/test-output.txt")
           kwargs = dict(
               build_succeeded=os.environ["BUILD_SUCCEEDED"] == "true",
               tests_succeeded=os.environ["TESTS_SUCCEEDED"] == "true",
               smoke_succeeded=os.environ["SMOKE_SUCCEEDED"] == "true",
-              test_output=Path("test-output.txt").read_text() if Path("test-output.txt").exists() else "",
+              test_output=test_output_path.read_text() if test_output_path.exists() else "",
           )
 
           if os.environ["UPLOAD_SCREENSHOTS"] == "true":
@@ -227,24 +268,14 @@ jobs:
           PY
           gh pr edit "$PR_NUMBER" --body-file pr-body.md
 
-      - name: Upload evidence artifacts
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: ${{ inputs.artifact_name }}-${{ github.run_id }}
-          path: |
-            output/
-            test-output.txt
-            dev-smoke-output.txt
-
       - name: Fail on evidence errors
         if: always()
         shell: bash
         env:
-          GHOSTTYKIT_OUTCOME: ${{ steps.ghosttykit.outcome }}
-          BUILD_OUTCOME: ${{ steps.build.outcome }}
-          TESTS_OUTCOME: ${{ steps.tests.outcome }}
-          SMOKE_OUTCOME: ${{ steps.smoke.outcome }}
+          GATHER_RESULT: ${{ needs.gather.result }}
+          BUILD_SUCCEEDED: ${{ needs.gather.outputs.build_succeeded }}
+          TESTS_SUCCEEDED: ${{ needs.gather.outputs.tests_succeeded }}
+          SMOKE_SUCCEEDED: ${{ needs.gather.outputs.smoke_succeeded }}
           UPLOAD_OUTCOME: ${{ steps.upload.outcome }}
           UPLOADED_SCREENSHOT_COUNT: ${{ steps.upload.outputs.count }}
           TEST_COMMANDS_JSON: ${{ inputs.test_commands_json }}
@@ -252,16 +283,20 @@ jobs:
           UPLOAD_SCREENSHOTS: ${{ inputs.upload_screenshots }}
         run: |
           set -euo pipefail
-          if [ "$GHOSTTYKIT_OUTCOME" != "success" ] || [ "$BUILD_OUTCOME" != "success" ]; then
+          if [ "$GATHER_RESULT" != "success" ]; then
+            echo "Evidence gather job failed unexpectedly"
+            exit 1
+          fi
+          if [ "$BUILD_SUCCEEDED" != "true" ]; then
             echo "Build evidence failed"
             exit 1
           fi
-          if [ "$TEST_COMMANDS_JSON" != "[]" ] && [ "$TESTS_OUTCOME" != "success" ]; then
+          if [ "$TEST_COMMANDS_JSON" != "[]" ] && [ "$TESTS_SUCCEEDED" != "true" ]; then
             echo "Requested test evidence failed"
             exit 1
           fi
           if [ "$NEEDS_SCREENSHOT_EVIDENCE" = "true" ]; then
-            if [ "$SMOKE_OUTCOME" != "success" ]; then
+            if [ "$SMOKE_SUCCEEDED" != "true" ]; then
               echo "Screenshot evidence failed"
               exit 1
             fi
