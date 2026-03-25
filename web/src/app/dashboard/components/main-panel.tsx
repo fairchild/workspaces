@@ -1,5 +1,5 @@
 import type { AgentDiscoveryResponse } from "@/lib/types";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { AgentCard } from "./agent-card";
 import styles from "./main-panel.module.css";
 import { PipelineBoard } from "./pipeline";
@@ -107,6 +107,7 @@ export function MainPanel({
 				<h2 className={styles.repoTitle}>
 					{selectedRepo.owner}/{selectedRepo.repo}
 				</h2>
+				<WebhookStatus owner={selectedRepo.owner} repo={selectedRepo.repo} />
 				<div className={styles.noAgents}>
 					<span className={styles.noAgentsIcon}>&gt;_</span>
 					<span className={styles.noAgentsTitle}>No agent setup detected</span>
@@ -131,6 +132,7 @@ export function MainPanel({
 			<h2 className={styles.repoTitle}>
 				{selectedRepo.owner}/{selectedRepo.repo}
 			</h2>
+			<WebhookStatus owner={selectedRepo.owner} repo={selectedRepo.repo} />
 
 			<SectionHeader
 				label="Overview"
@@ -199,6 +201,57 @@ function StatCard({
 				{value}
 			</span>
 			<span className={styles.statLabel}>{label}</span>
+		</div>
+	);
+}
+
+function formatTimeAgo(timestamp: string): string {
+	const diff = Date.now() - new Date(timestamp).getTime();
+	const mins = Math.floor(diff / 60000);
+	if (mins < 1) return "just now";
+	if (mins < 60) return `${mins}m ago`;
+	const hours = Math.floor(mins / 60);
+	if (hours < 24) return `${hours}h ago`;
+	return `${Math.floor(hours / 24)}d ago`;
+}
+
+function WebhookStatus({ owner, repo }: { owner: string; repo: string }) {
+	const [status, setStatus] = useState<{
+		lastEvent: string | null;
+		connected: boolean;
+	} | null>(null);
+
+	useEffect(() => {
+		fetch(`/api/repos/${owner}/${repo}/webhook-status`)
+			.then((r) => (r.ok ? r.json() : null))
+			.then(setStatus)
+			.catch(() => {});
+	}, [owner, repo]);
+
+	if (!status) return null;
+
+	const appSettingsUrl = "https://github.com/settings/installations";
+
+	return (
+		<div className={styles.webhookStatus}>
+			<span
+				className={`${styles.webhookDot} ${status.connected ? styles.webhookConnected : styles.webhookDisconnected}`}
+			/>
+			<span className={styles.webhookText}>
+				{status.connected && status.lastEvent
+					? `Last event ${formatTimeAgo(status.lastEvent)}`
+					: "No webhook events received"}
+			</span>
+			{!status.connected && (
+				<a
+					href={appSettingsUrl}
+					target="_blank"
+					rel="noopener noreferrer"
+					className={styles.webhookConfigure}
+				>
+					Configure
+				</a>
+			)}
 		</div>
 	);
 }
