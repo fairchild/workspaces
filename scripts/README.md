@@ -226,13 +226,13 @@ If you use `mise`, equivalent convenience tasks are:
   - `./output/lume-standalone/latest/`
   - `./output/lume-standalone/<timestamp>/`
 - Uses the newest Workspaces-owned Tahoe unattended profile or helper when present.
-- Current default bridged Tahoe override:
-  - `./config/lume/unattended/tahoe-workspaces-bridged-v27.yml`
-- Current NAT Tahoe override:
+- Current default NAT Tahoe override:
   - `./config/lume/unattended/tahoe-workspaces-v26.yml`
+- Bridged Tahoe diagnostics override:
+  - `./config/lume/unattended/tahoe-workspaces-bridged-v27.yml`
 - Current recreate-from-scratch helper:
   - `./config/lume/unattended/tahoe-workspaces-v18-official-run-bootstrap-ssh.yml`
-- Stock base preparation uses `LUME_STANDALONE_PREPARE_NETWORK` and defaults it to the same value as `LUME_STANDALONE_RUN_NETWORK` (`bridged:en0` unless overridden).
+- Stock base preparation uses `LUME_STANDALONE_PREPARE_NETWORK` and defaults it to the same value as `LUME_STANDALONE_RUN_NETWORK` (`nat` unless overridden).
 - Captures:
   - `summary.md`
   - `status.json`

@@ -350,9 +350,9 @@ lume ssh "$LUME_VM" ... "bash -lc 'pkill -f Runner.Listener; cd ~/.local/share/a
 
 ### Cloning from a bridged base and booting with NAT doesn't work
 
-The clone inherits `networkMode: "bridged:en0"` from the base config. Editing `config.json` to change to `nat` doesn't reliably work — the guest's network interface was configured for bridged during initial setup and may not negotiate NAT correctly.
+This usually means the validated base was originally prepared with bridged networking. Editing `config.json` to change an already-bridged guest to `nat` doesn't reliably work — the guest's network interface was configured for bridged during initial setup and may not negotiate NAT correctly.
 
-**Recommendation**: Prefer a NAT-backed base for runner guests. Keep bridged networking for diagnostics or cases where host-reachability is a hard requirement.
+**Recommendation**: Rebuild the validated base with the NAT unattended profile, then clone runner guests from that NAT-backed base. Keep bridged networking for diagnostics or cases where host-reachability is a hard requirement.
 
 ### Fresh IPSW install fails partway through
 

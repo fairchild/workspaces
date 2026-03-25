@@ -71,8 +71,8 @@ For real-host Lume validation:
    - only the standalone validator may mark a base ready, via `~/Library/Application Support/WorkspaceManager/LumeValidatedBases/<vmName>.json`
 6. Workspaces-owned unattended overrides for stock base prep live under:
    - `config/lume/unattended/`
-   - current default bridged Tahoe override: `config/lume/unattended/tahoe-workspaces-bridged-v27.yml`
-   - current NAT Tahoe override: `config/lume/unattended/tahoe-workspaces-v26.yml`
+   - current default NAT Tahoe override: `config/lume/unattended/tahoe-workspaces-v26.yml`
+   - bridged Tahoe diagnostics override: `config/lume/unattended/tahoe-workspaces-bridged-v27.yml`
    - current from-scratch recovery helper: `config/lume/unattended/tahoe-workspaces-v18-official-run-bootstrap-ssh.yml`
 7. Upstream Lume local-testing note:
    - do not point the standalone validator at raw `libs/lume/.build/debug/lume`

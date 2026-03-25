@@ -1,84 +1,15 @@
 name: Claude Code
 
 on:
-  issue_comment:
-    types: [created]
-  pull_request_review_comment:
-    types: [created]
-  issues:
-    types: [opened, assigned]
-  pull_request_review:
-    types: [submitted]
+  workflow_dispatch:
+    inputs:
+      prompt:
+        description: 'Manual prompt for Claude Code'
+        required: true
+        type: string
 
 jobs:
-  gate:
-    if: |
-      vars.MENTION_AUTOMATIONS_ENABLED != 'false' &&
-      !endsWith(github.event.sender.login, '[bot]') && (
-      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
-      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
-      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
-      (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude'))))
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      issues: read
-      pull-requests: read
-    outputs:
-      trusted: ${{ steps.trust.outputs.trusted }}
-    steps:
-      - name: Gate to trusted actors
-        id: trust
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          GH_TOKEN: ${{ github.token }}
-          GITHUB_API_URL: ${{ github.api_url }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          ACTOR: ${{ github.actor }}
-          COMMENT_ASSOCIATION: ${{ github.event.comment.author_association }}
-          REVIEW_ASSOCIATION: ${{ github.event.review.author_association }}
-          ISSUE_ASSOCIATION: ${{ github.event.issue.author_association }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          case "$EVENT_NAME" in
-            issue_comment|pull_request_review_comment)
-              association="${COMMENT_ASSOCIATION:-NONE}"
-              ;;
-            pull_request_review)
-              association="${REVIEW_ASSOCIATION:-NONE}"
-              ;;
-            issues)
-              association="${ISSUE_ASSOCIATION:-NONE}"
-              ;;
-            *)
-              association="NONE"
-              ;;
-          esac
-
-          permission="$(
-            curl --silent --show-error --fail \
-              --header "Authorization: Bearer $GH_TOKEN" \
-              --header "Accept: application/vnd.github+json" \
-              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/collaborators/$ACTOR/permission" \
-              | jq -r '.permission' 2>/dev/null || echo "none"
-          )"
-
-          case "$association:$permission" in
-            OWNER:admin|OWNER:maintain|OWNER:write|MEMBER:admin|MEMBER:maintain|MEMBER:write|COLLABORATOR:admin|COLLABORATOR:maintain|COLLABORATOR:write)
-              echo "trusted=true" >> "$GITHUB_OUTPUT"
-              echo "Actor $ACTOR trusted (association: $association, permission: $permission)"
-              ;;
-            *)
-              echo "trusted=false" >> "$GITHUB_OUTPUT"
-              echo "Ignoring @claude request from untrusted actor $ACTOR (association: $association, permission: $permission)"
-              ;;
-          esac
-
   claude:
-    needs: gate
-    if: |
-      needs.gate.outputs.trusted == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -97,15 +28,8 @@ jobs:
         uses: anthropics/claude-code-action@18c2b94d83ba2647c1a5e025edb06441c4a7b46e # v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: ${{ inputs.prompt }}
 
           # This is an optional setting that allows Claude to read CI results on PRs
           additional_permissions: |
             actions: read
-
-          # Optional: Give a custom prompt to Claude. If this is not specified, Claude will perform the instructions specified in the comment that tagged it.
-          # prompt: 'Update the pull request description to include a summary of changes.'
-
-          # Optional: Add claude_args to customize behavior and configuration
-          # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
-          # or https://code.claude.com/docs/en/cli-reference for available options
-          # claude_args: '--allowed-tools Bash(gh pr:*)'

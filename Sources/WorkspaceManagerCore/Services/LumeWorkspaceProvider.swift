@@ -58,6 +58,8 @@ public actor LumeWorkspaceProvider: WorkspaceProviderProtocol {
         supportsDesktop: true,
         usesHostWorkspaceFiles: true
     )
+    static let defaultNetworkMode = "nat"
+    static let defaultMacOSRunNetworkMode = defaultNetworkMode
 
     public nonisolated let descriptor = LumeWorkspaceProvider.providerDescriptor
 
@@ -74,8 +76,8 @@ public actor LumeWorkspaceProvider: WorkspaceProviderProtocol {
     private let defaultMemory = "8GB"
     private let defaultDiskSize = "50GB"
     private let defaultDisplay = "1024x768"
-    private let defaultNetwork = "nat"
-    private let defaultMacOSRunNetwork = "bridged:en0"
+    private let defaultNetwork = LumeWorkspaceProvider.defaultNetworkMode
+    private let defaultMacOSRunNetwork = LumeWorkspaceProvider.defaultMacOSRunNetworkMode
     private let daemonInfoLogPath = "/tmp/lume_daemon.log"
     private let daemonErrorLogPath = "/tmp/lume_daemon.error.log"
 

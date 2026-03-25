@@ -141,7 +141,7 @@ Prompt, runtime, and compatibility responsibilities now split cleanly:
 | `.github/workflows/agent-april.yml` | April's cron workflow |
 | `.github/workflows/agent-plat.yml` | Plat's cron workflow |
 | `.github/workflows/agent-peter.yml` | Event-triggered planner workflow |
-| `.github/workflows/agent-mention.yml` | `@april` / `@plat` / `@peter` mention-triggered workflow |
+| `.github/workflows/agent-mention.yml` | Temporary lockdown shim; direct public mention execution is disabled pending approval-based replacement |
 | `.github/workflows/_evidence.yml` | Reusable evidence workflow (build, test, screenshot, reconcile) |
 | `.github/workflows/agent-oliver.yml` | Weekly deterministic ops observer workflow |
 
@@ -207,7 +207,7 @@ The `recommend_close` action lets contributors close stale discussions with a su
 ## Reliability
 
 - **YAML frontmatter output format** — agents output structured YAML frontmatter, validated before posting, with JSON fences retained only as a fallback parser path
-- **Prompt trust boundary** — PR [#202](https://github.com/fairchild/workspaces/pull/202) gates mention-triggered public workflows to trusted actors, and the scheduled contributor/planner runtimes now keep GitHub-authored text out of privileged prompt space. Raw discussion/comment/review text is passed only as explicit untrusted payload data after task selection.
+- **Prompt trust boundary** — direct public mention-triggered execution is currently disabled while the replacement triage-plus-approval flow is built, and the scheduled contributor/planner runtimes keep GitHub-authored text out of privileged prompt space. Raw discussion/comment/review text is passed only as explicit untrusted payload data after task selection.
 - **Dedup checking** — proposed titles are compared against open discussions before posting
 - **GraphQL for Discussions** — GitHub REST API doesn't support Discussions; all queries use GraphQL
 - **Early filtering** — planner workflow skips non-owner comments at the job level (no wasted compute)

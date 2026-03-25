@@ -172,6 +172,12 @@ struct WorkspaceProviderTests {
         )
     }
 
+    @Test("Lume defaults to NAT for normal VM creation and macOS runtime boots")
+    func lumeDefaultNetworks() {
+        #expect(LumeWorkspaceProvider.defaultNetworkMode == "nat")
+        #expect(LumeWorkspaceProvider.defaultMacOSRunNetworkMode == "nat")
+    }
+
     @Test("Lume CLI progress messaging surfaces macOS download, install, and setup phases")
     func lumeCLIProgressMessaging() {
         #expect(
