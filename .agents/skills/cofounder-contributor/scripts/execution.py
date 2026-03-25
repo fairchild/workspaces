@@ -40,6 +40,7 @@ from evidence import (
     classify_evidence_errors,
     render_execution_summary_body,
     review_evidence_gate_error,
+    synthesize_initial_execution_evidence,
     validate_evidence_accounting,
     validate_requested_test_commands,
 )
@@ -172,20 +173,17 @@ def build_execution_summary_body(
     requested_evidence: list[str],
 ) -> tuple[str, list[str]]:
     summary_body = str(data.get("body", "")).strip()
-    use_structured = (
-        data.get("action") == "advance_pr"
-        or "evidence_complete" in data
-        or "evidence_blocked" in data
-        or "evidence_pending_ci" in data
-    )
-    if not use_structured:
+    if not requested_evidence:
         return summary_body, []
+    evidence_complete, evidence_blocked, evidence_pending_ci = synthesize_initial_execution_evidence(
+        requested_evidence
+    )
     return render_execution_summary_body(
         summary_body,
         requested_evidence=requested_evidence,
-        evidence_complete=data.get("evidence_complete"),
-        evidence_blocked=data.get("evidence_blocked"),
-        evidence_pending_ci=data.get("evidence_pending_ci"),
+        evidence_complete=evidence_complete,
+        evidence_blocked=evidence_blocked,
+        evidence_pending_ci=evidence_pending_ci,
     )
 
 
@@ -433,6 +431,15 @@ def route_execution_action(
                 cwd=REPO_ROOT,
                 env=env,
             )
+    if not working_tree_dirty(env):
+        print(
+            f"error: {data['action']} selected for #{issue_number} but no file changes were made",
+            file=sys.stderr,
+        )
+        log(json.dumps({"error_class": "execution_state", "detail": "no file changes", "issue": issue_number}))
+        return 1
+
+    if own_pr is None:
         ensure_issue_claimed(
             issue_number,
             persona,
@@ -443,18 +450,16 @@ def route_execution_action(
             bot_login=bot_login or "",
         )
 
-    if not working_tree_dirty(env):
-        print(
-            f"error: {data['action']} selected for #{issue_number} but no file changes were made",
-            file=sys.stderr,
-        )
-        log(json.dumps({"error_class": "execution_state", "detail": "no file changes", "issue": issue_number}))
-        return 1
-
     set_git_identity(env, persona, bot_login)
     run_checked(["git", "add", "-A"], timeout=GITHUB_API_TIMEOUT, cwd=REPO_ROOT, env=env)
     run_checked(
         ["git", "commit", "-m", str(data["commit_message"]).strip()],
+        timeout=GITHUB_API_TIMEOUT,
+        cwd=REPO_ROOT,
+        env=env,
+    )
+    run_checked(
+        ["gh", "auth", "setup-git"],
         timeout=GITHUB_API_TIMEOUT,
         cwd=REPO_ROOT,
         env=env,

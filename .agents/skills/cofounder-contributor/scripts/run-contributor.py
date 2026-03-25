@@ -8,10 +8,15 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
+import tarfile
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -114,6 +119,7 @@ from evidence import (  # noqa: E402, F401
     summarize_evidence_accounting_by_index,
     summarize_requested_evidence,
     safe_swift_test_command_args,
+    synthesize_initial_execution_evidence,
     validate_evidence_accounting,
     validate_requested_test_commands,
 )
@@ -260,18 +266,8 @@ DIRECTED_ACTION_TASK = (
 )
 
 SELECTOR_TOOLS = "Read,Grep,Glob"
-READ_ONLY_REVIEW_TOOLS = (
-    "Read,Grep,Glob,"
-    "Bash(git log:*),Bash(git show:*),"
-    "Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr list:*),"
-    "Bash(gh issue view:*),Bash(gh issue list:*)"
-)
-READ_ONLY_DISCUSSION_TOOLS = "Read,Grep,Glob,Bash(git log:*),Bash(git show:*)"
-EXECUTION_TOOLS = (
-    "Read,Grep,Glob,Edit,Write,MultiEdit,"
-    "Bash(git status:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),"
-    "Bash(uv:*),Bash(swift:*),Bash(mise:*),Bash(./scripts/*),Bash(xcodebuild:*)"
-)
+READ_ONLY_MODEL_TOOLS = "Read,Grep,Glob"
+EXECUTION_TOOLS = "Read,Grep,Glob,Edit,Write,MultiEdit"
 
 ALLOWED_SELECTION_KINDS = {
     "review_followup_pr",
@@ -289,6 +285,15 @@ class SelectionChoice:
     selection_kind: str
     number: int | None
     reason: str = ""
+
+
+@dataclass(frozen=True)
+class ScratchPatchArtifact:
+    temp_root: Path
+    baseline_dir: Path
+    scratch_dir: Path
+    changed_files: list[str]
+    patch_text: str
 
 
 def _json_block(text: str) -> dict[str, Any]:
@@ -319,11 +324,224 @@ def parse_selection_output(raw_output: str) -> SelectionChoice:
 
 
 def contributor_tools_for_selection(selection_kind: str) -> str:
-    if selection_kind in {"review_followup_pr", "review_pr"}:
-        return READ_ONLY_REVIEW_TOOLS
     if selection_kind in {"advance_pr", "execute_claimed_issue", "execute_ready_issue"}:
         return EXECUTION_TOOLS
-    return READ_ONLY_DISCUSSION_TOOLS
+    return READ_ONLY_MODEL_TOOLS
+
+
+def selection_uses_isolated_workspace(selection_kind: str) -> bool:
+    return selection_kind in {"advance_pr", "execute_claimed_issue", "execute_ready_issue"}
+
+
+def sanitized_claude_env(env: dict[str, str]) -> dict[str, str]:
+    allowed = {
+        "PATH",
+        "HOME",
+        "USER",
+        "LOGNAME",
+        "SHELL",
+        "TMPDIR",
+        "TMP",
+        "TEMP",
+        "LANG",
+        "LC_ALL",
+        "TERM",
+        "CI",
+        "TZ",
+        "XDG_CACHE_HOME",
+        "NPM_CONFIG_CACHE",
+        "npm_config_cache",
+        "NO_COLOR",
+        "COLORTERM",
+    }
+    sanitized = {
+        key: value
+        for key, value in env.items()
+        if key in allowed and value
+    }
+    claude_token = env.get("CLAUDE_CODE_OAUTH_TOKEN", "").strip()
+    if claude_token:
+        sanitized["CLAUDE_CODE_OAUTH_TOKEN"] = claude_token
+    return sanitized
+
+
+def recent_commit_summary(env: dict[str, str]) -> dict[str, object]:
+    count_output = run_checked(
+        ["git", "rev-list", "--count", "--since=2 weeks ago", "HEAD"],
+        timeout=GITHUB_API_TIMEOUT,
+        cwd=REPO_ROOT,
+        env=env,
+    ).stdout.strip()
+    history_output = run_checked(
+        ["git", "log", "--format=%H%x09%cI", "--since=2 weeks ago", "--max-count=5"],
+        timeout=GITHUB_API_TIMEOUT,
+        cwd=REPO_ROOT,
+        env=env,
+    ).stdout
+    history: list[dict[str, str]] = []
+    for raw_line in history_output.splitlines():
+        sha, _, committed_at = raw_line.partition("\t")
+        if sha and committed_at:
+            history.append({"sha": sha, "committed_at": committed_at})
+    try:
+        count = int(count_output)
+    except ValueError:
+        count = len(history)
+    return {
+        "count": count,
+        "recent": history,
+    }
+
+
+def export_head_tree(destination: Path, env: dict[str, str]) -> None:
+    destination.mkdir(parents=True, exist_ok=True)
+    archive_path = destination.parent / f"{destination.name}.tar"
+    run_checked(
+        ["git", "archive", "--format=tar", "--output", str(archive_path), "HEAD"],
+        timeout=GITHUB_API_TIMEOUT,
+        cwd=REPO_ROOT,
+        env=env,
+    )
+    try:
+        with tarfile.open(archive_path) as archive:
+            try:
+                archive.extractall(destination, filter="data")
+            except TypeError:
+                archive.extractall(destination)
+    finally:
+        archive_path.unlink(missing_ok=True)
+
+
+def create_scratch_workspace(env: dict[str, str]) -> ScratchPatchArtifact:
+    temp_root = Path(tempfile.mkdtemp(prefix="contributor-scratch-"))
+    baseline_dir = temp_root / "baseline"
+    scratch_dir = temp_root / "scratch"
+    export_head_tree(baseline_dir, env)
+    shutil.copytree(baseline_dir, scratch_dir)
+    return ScratchPatchArtifact(
+        temp_root=temp_root,
+        baseline_dir=baseline_dir,
+        scratch_dir=scratch_dir,
+        changed_files=[],
+        patch_text="",
+    )
+
+
+def _tree_files(root: Path) -> dict[str, Path]:
+    files: dict[str, Path] = {}
+    for path in root.rglob("*"):
+        if path.is_file():
+            files[path.relative_to(root).as_posix()] = path
+    return files
+
+
+def _run_binary_diff(cmd: list[str], *, cwd: Path, env: dict[str, str]) -> str:
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            cwd=cwd,
+            env=env,
+            timeout=GITHUB_API_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired as exc:
+        print(f"error: command timed out after {exc.timeout}s: {' '.join(cmd)}", file=sys.stderr)
+        raise SystemExit(1) from exc
+    if result.returncode not in {0, 1}:
+        print(f"error: command failed: {' '.join(cmd)}", file=sys.stderr)
+        if result.stderr.strip():
+            print(result.stderr.strip(), file=sys.stderr)
+        raise SystemExit(result.returncode or 1)
+    return result.stdout
+
+
+def build_scratch_patch_artifact(
+    workspace: ScratchPatchArtifact,
+    env: dict[str, str],
+) -> ScratchPatchArtifact:
+    baseline_files = _tree_files(workspace.baseline_dir)
+    scratch_files = _tree_files(workspace.scratch_dir)
+    changed_files: list[str] = []
+    patch_chunks: list[str] = []
+    shared_root = workspace.temp_root
+
+    for rel_path in sorted(set(baseline_files) | set(scratch_files)):
+        baseline_path = baseline_files.get(rel_path)
+        scratch_path = scratch_files.get(rel_path)
+        if baseline_path is None and scratch_path is not None:
+            chunk = _run_binary_diff(
+                ["git", "diff", "--binary", "--no-index", "--src-prefix=a/", "--dst-prefix=b/", "/dev/null", rel_path],
+                cwd=workspace.scratch_dir,
+                env=env,
+            )
+            changed_files.append(rel_path)
+            patch_chunks.append(chunk)
+            continue
+        if baseline_path is not None and scratch_path is None:
+            chunk = _run_binary_diff(
+                ["git", "diff", "--binary", "--no-index", "--src-prefix=a/", "--dst-prefix=b/", rel_path, "/dev/null"],
+                cwd=workspace.baseline_dir,
+                env=env,
+            )
+            changed_files.append(rel_path)
+            patch_chunks.append(chunk)
+            continue
+        assert baseline_path is not None and scratch_path is not None
+        if (
+            baseline_path.stat().st_mode == scratch_path.stat().st_mode
+            and hashlib.sha256(baseline_path.read_bytes()).digest() == hashlib.sha256(scratch_path.read_bytes()).digest()
+        ):
+            continue
+        chunk = _run_binary_diff(
+            [
+                "git",
+                "diff",
+                "--binary",
+                "--no-index",
+                "--src-prefix=a/",
+                "--dst-prefix=b/",
+                f"baseline/{rel_path}",
+                f"scratch/{rel_path}",
+            ],
+            cwd=shared_root,
+            env=env,
+        )
+        chunk = chunk.replace(f"a/baseline/{rel_path}", f"a/{rel_path}")
+        chunk = chunk.replace(f"b/scratch/{rel_path}", f"b/{rel_path}")
+        changed_files.append(rel_path)
+        patch_chunks.append(chunk)
+
+    return ScratchPatchArtifact(
+        temp_root=workspace.temp_root,
+        baseline_dir=workspace.baseline_dir,
+        scratch_dir=workspace.scratch_dir,
+        changed_files=changed_files,
+        patch_text="".join(patch_chunks),
+    )
+
+
+def apply_scratch_patch_artifact(artifact: ScratchPatchArtifact, env: dict[str, str]) -> None:
+    if not artifact.patch_text.strip():
+        return
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False, suffix=".patch") as handle:
+        handle.write(artifact.patch_text)
+        patch_path = Path(handle.name)
+    try:
+        run_checked(
+            ["git", "apply", "--check", "--binary", str(patch_path)],
+            timeout=GITHUB_API_TIMEOUT,
+            cwd=REPO_ROOT,
+            env=env,
+        )
+        run_checked(
+            ["git", "apply", "--binary", str(patch_path)],
+            timeout=GITHUB_API_TIMEOUT,
+            cwd=REPO_ROOT,
+            env=env,
+        )
+    finally:
+        patch_path.unlink(missing_ok=True)
 
 
 def run_claude(
@@ -335,6 +553,7 @@ def run_claude(
     tools: str | None = None,
     timeout: int | None = None,
     budget: str = "2.50",
+    cwd: Path | None = None,
 ) -> str:
     prompt_text = (
         system_prompt.read_text(encoding="utf-8")
@@ -352,13 +571,12 @@ def run_claude(
     ]
     effective_timeout = timeout or CLAUDE_TIMEOUT
     if mode == "cli":
-        cmd.extend(["--permission-mode", "bypassPermissions"])
         if tools:
             cmd.extend(["--tools", tools])
         cmd.extend(["--max-budget-usd", budget])
         effective_timeout = timeout or 1200
     cmd.append(task)
-    return run_checked(cmd, timeout=effective_timeout, cwd=REPO_ROOT, env=env).stdout
+    return run_checked(cmd, timeout=effective_timeout, cwd=cwd or REPO_ROOT, env=env).stdout
 
 
 def build_reviewable_pr_candidates(
@@ -408,12 +626,7 @@ def build_selection_index(
 ) -> tuple[SelectionIndex, dict[str, dict[int | None, dict[str, object]]], dict[str, object]]:
     log("Building normalized selection index")
     owner, name = repo_owner_name(env)
-    recent_commits = run_checked(
-        ["git", "log", "--oneline", "--since=2 weeks ago"],
-        timeout=GITHUB_API_TIMEOUT,
-        cwd=REPO_ROOT,
-        env=env,
-    ).stdout.rstrip()
+    commit_summary = recent_commit_summary(env)
     selection_state = fetch_selection_state(owner, name, env)
     issue_states = fetch_issue_state_map(env)
     execution_state = classify_execution_work(
@@ -538,7 +751,7 @@ def build_selection_index(
         persona=persona,
         runner_platform=runner_platform_note(),
         stats={
-            "recent_commit_count": len([line for line in recent_commits.splitlines() if line.strip()]),
+            "recent_commit_count": int(commit_summary.get("count", 0)),
             "open_discussion_count": len(selection_state["discussions"]),
             "open_issue_count": len(selection_state["issues"]),
             "open_pr_count": len(selection_state["pull_requests"]),
@@ -549,7 +762,7 @@ def build_selection_index(
     return selection_index, lookup, {
         "owner": owner,
         "name": name,
-        "recent_commits": recent_commits,
+        "recent_commit_summary": commit_summary,
         "backlog_state": backlog_state,
         "selection_state": selection_state,
         "engagement_candidates": engagement_candidates,
@@ -773,7 +986,7 @@ def build_action_phase_inputs(
         "selection_reason": choice.reason,
         "selected_item": selection_item or {},
         "runner_platform": runner_platform_note(),
-        "recent_commits": str(repo_context["recent_commits"]),
+        "recent_commit_summary": repo_context["recent_commit_summary"],
         "backlog_state": str(repo_context["backlog_state"]),
     }
     payloads: list[UntrustedGitHubPayload] = []
@@ -806,6 +1019,25 @@ def build_action_phase_inputs(
         if pr is None:
             raise ValueError(f"pull request #{pr_number} not found")
         payloads.extend(_pull_request_untrusted_payload(pr, owner))
+        if choice.selection_kind in {"review_followup_pr", "review_pr"}:
+            diff_text = fetch_pr_diff(pr_number, env, max_lines=PR_DIFF_MAX_LINES)
+            payloads.append(
+                UntrustedGitHubPayload(
+                    source_type="pull_request_diff",
+                    identifier=f"#{pr_number}",
+                    author_login=str((pr.get("author") or {}).get("login", "")),
+                    trust_level=normalize_trust_level(
+                        str((pr.get("author") or {}).get("login", "")),
+                        owner,
+                        author_association=str(pr.get("authorAssociation", "")),
+                    ),
+                    body=diff_text,
+                    metadata={
+                        "line_limit": PR_DIFF_MAX_LINES,
+                        "diff_omitted_reason": "unavailable" if not diff_text else "",
+                    },
+                )
+            )
         issue_number, _ = extract_pr_issue_reference(str(pr.get("body", "")))
         if issue_number is not None:
             issue = fetch_detailed_issue(owner, name, issue_number, env)
@@ -896,11 +1128,13 @@ def main() -> int:
     require_env("CLAUDE_CODE_OAUTH_TOKEN")
     require_env("GH_TOKEN")
     env = normalize_provider_env(dict(os.environ))
+    claude_env = sanitized_claude_env(env)
 
     persona = extract_persona(prompt_file)
     bot_login = detect_bot_login(env)
     if bot_login:
         log(f"Authenticated as {bot_login}")
+    scratch_workspace: ScratchPatchArtifact | None = None
 
     if args.message:
         directed = parse_directed_message(args.message)
@@ -920,12 +1154,7 @@ def main() -> int:
         repo_context = {
             "owner": repo_owner_name(env)[0],
             "name": repo_owner_name(env)[1],
-            "recent_commits": run_checked(
-                ["git", "log", "--oneline", "--since=2 weeks ago"],
-                timeout=GITHUB_API_TIMEOUT,
-                cwd=REPO_ROOT,
-                env=env,
-            ).stdout.rstrip(),
+            "recent_commit_summary": recent_commit_summary(env),
             "backlog_state": gather_backlog_state(),
         }
     else:
@@ -934,39 +1163,48 @@ def main() -> int:
             persona=persona,
             bot_login=bot_login,
         )
-        choice = validate_selection_choice(
-            choose_next_task(selection_index, env, mode=args.mode),
-            lookup,
-            engagement_candidates=list(repo_context["engagement_candidates"]),
+        choice = SelectionChoice(selection_kind="propose", number=None, reason="")
+        selection_item = {"number": None}
+
+    try:
+        if not args.message:
+            choice = validate_selection_choice(
+                choose_next_task(selection_index, claude_env, mode=args.mode),
+                lookup,
+                engagement_candidates=list(repo_context["engagement_candidates"]),
+            )
+            selection_item = lookup[choice.selection_kind][choice.number]
+            prepare_workspace_for_selection(choice.selection_kind, selection_item, env)
+
+        task_envelope, payloads = build_action_phase_inputs(
+            choice,
+            selection_item,
+            repo_context,
+            env,
+            message=args.message,
         )
-        selection_item = lookup[choice.selection_kind][choice.number]
-        prepare_workspace_for_selection(choice.selection_kind, selection_item, env)
+        claude_cwd = REPO_ROOT
+        if selection_uses_isolated_workspace(choice.selection_kind):
+            scratch_workspace = create_scratch_workspace(env)
+            claude_cwd = scratch_workspace.scratch_dir
+        raw_output = run_claude(
+            prompt_file,
+            phase_task_for_selection(choice, task_envelope, payloads, message=args.message),
+            claude_env,
+            mode=args.mode,
+            tools=contributor_tools_for_selection(choice.selection_kind),
+            cwd=claude_cwd,
+        )
+        exit_code, validated_json, error_text = validate_output(raw_output, env)
 
-    task_envelope, payloads = build_action_phase_inputs(
-        choice,
-        selection_item,
-        repo_context,
-        env,
-        message=args.message,
-    )
-    raw_output = run_claude(
-        prompt_file,
-        phase_task_for_selection(choice, task_envelope, payloads, message=args.message),
-        env,
-        mode=args.mode,
-        tools=contributor_tools_for_selection(choice.selection_kind),
-    )
-    exit_code, validated_json, error_text = validate_output(raw_output, env)
+        if exit_code == 2 and error_text.startswith("duplicate:"):
+            log("Skipping duplicate proposal")
+            return 0
+        if exit_code != 0 or validated_json is None:
+            print("--- Raw output ---", file=sys.stderr)
+            print(raw_output, file=sys.stderr)
+            return 1
 
-    if exit_code == 2 and error_text.startswith("duplicate:"):
-        log("Skipping duplicate proposal")
-        return 0
-    if exit_code != 0 or validated_json is None:
-        print("--- Raw output ---", file=sys.stderr)
-        print(raw_output, file=sys.stderr)
-        return 1
-
-    if not args.message:
         try:
             validate_selected_action(validated_json, choice)
         except ValueError as exc:
@@ -974,11 +1212,18 @@ def main() -> int:
             print("--- Raw output ---", file=sys.stderr)
             print(raw_output, file=sys.stderr)
             return 1
+        if scratch_workspace is not None and not args.dry_run:
+            artifact = build_scratch_patch_artifact(scratch_workspace, env)
+            log(f"Applying scratch patch with {len(artifact.changed_files)} changed files")
+            apply_scratch_patch_artifact(artifact, env)
 
-    result = route_action(validated_json, args.dry_run, env)
-    if result == 0:
-        log("Completed successfully")
-    return result
+        result = route_action(validated_json, args.dry_run, env)
+        if result == 0:
+            log("Completed successfully")
+        return result
+    finally:
+        if scratch_workspace is not None:
+            shutil.rmtree(scratch_workspace.temp_root, ignore_errors=True)
 
 
 if __name__ == "__main__":

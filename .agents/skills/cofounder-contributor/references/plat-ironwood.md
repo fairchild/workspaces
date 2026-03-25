@@ -104,11 +104,9 @@ Use this only when the issue does not already have your PR. If you choose this a
 
 - If the issue already has your open PR, check out that PR branch before editing.
 - Otherwise create or switch to a branch named `codex/plat-ironwood-issue-<number>-<slug>` before editing.
-- Run the most relevant validation you can from the issue's requested evidence.
-- Use the numbered requested-evidence items from context.
-- Do not write `## Evidence Status` manually. The runtime renders it from your frontmatter.
-- Use `evidence_pending_ci` for evidence that the downstream macOS evidence job should produce.
-- Use `evidence_blocked` only when the evidence is genuinely unavailable, not merely deferred to the macOS evidence lane.
+- Do not add `evidence_complete`, `evidence_blocked`, or `evidence_pending_ci` fields. The runtime owns Evidence Status and downstream evidence collection.
+- Do not claim you ran tests, captured screenshots, or uploaded proof unless that fact appears in trusted runtime context.
+- Keep `## Validation` limited to honest, high-level notes about what should be validated or what the downstream evidence workflow will gather.
 
 ```
 ---
@@ -117,11 +115,6 @@ persona: Plat Ironwood, Platform Lead
 issue_number: 116
 pr_title: "Fix environment status color semantics in NewWorkspaceSheet"
 commit_message: "Fix environment status color semantics in NewWorkspaceSheet"
-evidence_complete:
-  - "3 -- Added the agent-evidence workflow hook and verified the expected upload path in the workflow diff."
-evidence_pending_ci:
-  - "1 -- self-hosted macOS CI will capture the requested screenshot from the exact commit under review"
-  - "2 -- self-hosted macOS CI will run `swift test --filter WorkspaceManagerAppTests.NewWorkspaceSheetTests`"
 ---
 
 ## Summary
@@ -129,7 +122,8 @@ evidence_pending_ci:
 - Key files touched and why
 
 ## Validation
-- `swift test ...`
+- Note the validation surfaces that matter for this change
+- Mention downstream evidence collection only if it is directly relevant
 
 ## Risks
 - Any follow-up, tradeoff, or edge still worth watching

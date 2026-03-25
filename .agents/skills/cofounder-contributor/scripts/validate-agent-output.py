@@ -208,9 +208,9 @@ def validate_data(data: dict[str, Any]) -> dict[str, Any]:
         issue_number = data.get("issue_number")
         if not isinstance(issue_number, int) or issue_number <= 0:
             raise ValidationError("field 'issue_number' must be a positive integer")
-        data["evidence_complete"] = validate_string_list(data.get("evidence_complete"), "evidence_complete")
-        data["evidence_blocked"] = validate_string_list(data.get("evidence_blocked"), "evidence_blocked")
-        data["evidence_pending_ci"] = validate_string_list(data.get("evidence_pending_ci"), "evidence_pending_ci")
+        data.pop("evidence_complete", None)
+        data.pop("evidence_blocked", None)
+        data.pop("evidence_pending_ci", None)
         if action == "advance_pr":
             pr_number = data.get("pr_number")
             if not isinstance(pr_number, int) or pr_number <= 0:

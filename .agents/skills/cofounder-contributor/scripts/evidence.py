@@ -595,6 +595,34 @@ def _extract_test_commands(requested_evidence: list[str]) -> list[str]:
     ]
 
 
+def synthesize_initial_execution_evidence(
+    requested_evidence: list[str],
+) -> tuple[list[str], list[str], list[str]]:
+    evidence_complete: list[str] = []
+    evidence_blocked: list[str] = []
+    evidence_pending_ci: list[str] = []
+    for index, item in enumerate(requested_evidence, start=1):
+        normalized = _normalize_evidence_item(item)
+        kind = _evidence_item_kind(item)
+        if kind == "build":
+            evidence_pending_ci.append(
+                f"{index} -- self-hosted macOS evidence workflow will run `{normalized}` from the exact commit under review"
+            )
+        elif kind == "test":
+            evidence_pending_ci.append(
+                f"{index} -- self-hosted macOS evidence workflow will run `{normalized}` from the exact commit under review"
+            )
+        elif kind == "screenshot":
+            evidence_pending_ci.append(
+                f"{index} -- self-hosted macOS evidence workflow will capture this evidence from the exact commit under review"
+            )
+        else:
+            evidence_blocked.append(
+                f"{index} -- automation cannot reconcile this evidence item automatically; owner follow-up required"
+            )
+    return evidence_complete, evidence_blocked, evidence_pending_ci
+
+
 def safe_swift_test_command_args(command: str) -> list[str] | None:
     try:
         parts = shlex.split(command)
