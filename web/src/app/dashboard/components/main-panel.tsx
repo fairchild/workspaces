@@ -1,7 +1,43 @@
 import type { AgentDiscoveryResponse } from "@/lib/types";
+import { useCallback, useState } from "react";
 import { AgentCard } from "./agent-card";
 import styles from "./main-panel.module.css";
 import { PipelineBoard } from "./pipeline";
+
+const STORAGE_KEY = "spaces:collapsed-sections";
+
+function getCollapsedSections(): Set<string> {
+	if (typeof window === "undefined") return new Set();
+	try {
+		const stored = localStorage.getItem(STORAGE_KEY);
+		return stored ? new Set(JSON.parse(stored)) : new Set();
+	} catch {
+		return new Set();
+	}
+}
+
+function useCollapsible(section: string) {
+	const [collapsed, setCollapsed] = useState(() =>
+		getCollapsedSections().has(section),
+	);
+
+	const toggle = useCallback(() => {
+		setCollapsed((prev) => {
+			const next = !prev;
+			try {
+				const sections = getCollapsedSections();
+				if (next) sections.add(section);
+				else sections.delete(section);
+				localStorage.setItem(STORAGE_KEY, JSON.stringify([...sections]));
+			} catch {
+				// localStorage unavailable
+			}
+			return next;
+		});
+	}, [section]);
+
+	return { collapsed, toggle };
+}
 
 interface MainPanelProps {
 	agentData: AgentDiscoveryResponse | null;
@@ -86,6 +122,9 @@ export function MainPanel({
 	if (!agentData) return null;
 
 	const { stats, agents, pipeline } = agentData;
+	const statsSection = useCollapsible("stats");
+	const agentsSection = useCollapsible("agents");
+	const pipelineSection = useCollapsible("pipeline");
 
 	return (
 		<div className={styles.panel}>
@@ -93,29 +132,57 @@ export function MainPanel({
 				{selectedRepo.owner}/{selectedRepo.repo}
 			</h2>
 
-			<div className={styles.grid}>
-				<StatCard label="Agents" value={stats.agentCount} accent />
-				<StatCard label="Skills" value={stats.skillCount} />
-				<StatCard label="Open PRs" value={stats.openPRs} />
-				<StatCard label="Ready Issues" value={stats.readyIssues} />
-			</div>
+			<SectionHeader
+				label="Overview"
+				collapsed={statsSection.collapsed}
+				onToggle={statsSection.toggle}
+			/>
+			{!statsSection.collapsed && (
+				<div className={styles.grid}>
+					<StatCard label="Agents" value={stats.agentCount} accent />
+					<StatCard label="Skills" value={stats.skillCount} />
+					<StatCard label="Open PRs" value={stats.openPRs} />
+					<StatCard label="Ready Issues" value={stats.readyIssues} />
+				</div>
+			)}
 
-			<div className={styles.section}>
-				<span className={styles.sectionLabel}>Agent Team</span>
-			</div>
+			<SectionHeader
+				label="Agent Team"
+				collapsed={agentsSection.collapsed}
+				onToggle={agentsSection.toggle}
+			/>
+			{!agentsSection.collapsed && (
+				<div className={styles.agentGrid}>
+					{agents.map((agent) => (
+						<AgentCard key={agent.name} agent={agent} />
+					))}
+				</div>
+			)}
 
-			<div className={styles.agentGrid}>
-				{agents.map((agent) => (
-					<AgentCard key={agent.name} agent={agent} />
-				))}
-			</div>
-
-			<div className={styles.section}>
-				<span className={styles.sectionLabel}>Issue Pipeline</span>
-			</div>
-
-			<PipelineBoard pipeline={pipeline} />
+			<SectionHeader
+				label="Issue Pipeline"
+				collapsed={pipelineSection.collapsed}
+				onToggle={pipelineSection.toggle}
+			/>
+			{!pipelineSection.collapsed && <PipelineBoard pipeline={pipeline} />}
 		</div>
+	);
+}
+
+function SectionHeader({
+	label,
+	collapsed,
+	onToggle,
+}: { label: string; collapsed: boolean; onToggle: () => void }) {
+	return (
+		<button type="button" className={styles.section} onClick={onToggle}>
+			<span
+				className={`${styles.sectionChevron} ${collapsed ? styles.sectionChevronCollapsed : ""}`}
+			>
+				&#9662;
+			</span>
+			<span className={styles.sectionLabel}>{label}</span>
+		</button>
 	);
 }
 

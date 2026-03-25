@@ -97,8 +97,35 @@
 .section {
 	display: flex;
 	align-items: center;
-	padding-top: 0.5rem;
+	gap: 0.375rem;
+	padding: 0.375rem 0;
+	margin: 0;
+	background: none;
+	border: none;
+	cursor: pointer;
+	color: inherit;
+	font: inherit;
+	width: 100%;
+	text-align: left;
 	animation: fadeIn 0.5s ease-out 0.1s both;
+}
+
+.section:hover .sectionLabel {
+	color: var(--text-secondary);
+}
+
+.section:hover .sectionChevron {
+	color: var(--text-secondary);
+}
+
+.sectionChevron {
+	font-size: 0.5rem;
+	color: var(--text-tertiary);
+	transition: transform 0.15s ease, color 0.15s ease;
+}
+
+.sectionChevronCollapsed {
+	transform: rotate(-90deg);
 }
 
 .sectionLabel {
@@ -107,6 +134,7 @@
 	text-transform: uppercase;
 	letter-spacing: 0.1em;
 	color: var(--text-tertiary);
+	transition: color 0.15s ease;
 }
 
 /* ── Agent grid ── */
