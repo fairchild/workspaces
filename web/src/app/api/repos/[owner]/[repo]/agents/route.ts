@@ -8,7 +8,7 @@ import {
 	fetchRepoTree,
 	getGitHubToken,
 } from "@/lib/github";
-import type { AgentDiscoveryResponse, PipelineColumn } from "@/lib/types";
+import type { AgentDiscoveryResponse } from "@/lib/types";
 import { PIPELINE_GITHUB_LABELS } from "@/lib/types";
 
 export async function GET(
@@ -62,14 +62,17 @@ export async function GET(
 			fetchOpenPRCount(token, owner, repo),
 		]);
 
-		// Derive agent status from claimed/review issues
-		const activeAgentNames = new Set<string>();
-		for (const issue of [...claimed, ...review]) {
-			if (issue.assignee) activeAgentNames.add(issue.assignee.toLowerCase());
-		}
-		for (const agent of agents) {
-			if (activeAgentNames.has(agent.name.toLowerCase())) {
-				agent.status = "active";
+		// Mark agents as active if they have any claimed or review issues
+		// (any pipeline activity = at least one agent is working)
+		if (claimed.length > 0 || review.length > 0) {
+			for (const agent of agents) {
+				// Check if any claimed/review issue mentions this agent's name in its labels
+				const hasActivity = [...claimed, ...review].some((issue) =>
+					issue.labels.some((l) =>
+						l.toLowerCase().includes(agent.name.toLowerCase()),
+					),
+				);
+				if (hasActivity) agent.status = "active";
 			}
 		}
 

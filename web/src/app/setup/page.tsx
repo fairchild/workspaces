@@ -36,6 +36,8 @@ function SetupInner() {
 		Map<string, { hasAgents: boolean; agentCount: number }>
 	>(new Map());
 
+	const [error, setError] = useState<string | null>(null);
+
 	// Fetch GitHub repos
 	useEffect(() => {
 		(async () => {
@@ -44,9 +46,16 @@ function SetupInner() {
 				if (res.ok) {
 					const data: GitHubRepo[] = await res.json();
 					setRepos(data);
+				} else {
+					const body = await res.json().catch(() => ({}));
+					setError(
+						body.needsReauth
+							? "Please sign out and sign back in to grant repository access."
+							: `Failed to load repos: ${body.error ?? res.statusText}`,
+					);
 				}
 			} catch {
-				// Silently handle
+				setError("Failed to connect to GitHub API");
 			} finally {
 				setLoadingRepos(false);
 			}
@@ -69,28 +78,33 @@ function SetupInner() {
 		})();
 	}, [isAddMode]);
 
-	// Lazy-load agent detection in batches
+	// Lazy-load agent detection — only scan repos the user is likely to select (top 20)
 	useEffect(() => {
 		if (repos.length === 0) return;
 
 		let cancelled = false;
+		const toScan = repos.slice(0, 20);
 
-		async function detectAgents(repoList: GitHubRepo[]) {
-			for (let i = 0; i < repoList.length; i += AGENT_BATCH_SIZE) {
+		async function detectAgents() {
+			for (let i = 0; i < toScan.length; i += AGENT_BATCH_SIZE) {
 				if (cancelled) return;
-				const batch = repoList.slice(i, i + AGENT_BATCH_SIZE);
+				const batch = toScan.slice(i, i + AGENT_BATCH_SIZE);
 				const results = await Promise.allSettled(
 					batch.map(async (repo) => {
-						const res = await fetch(
-							`/api/repos/${repo.owner}/${repo.name}/agents`,
-						);
-						if (res.ok) {
-							const data = await res.json();
-							return {
-								key: repo.full_name,
-								hasAgents: (data.stats?.agentCount ?? 0) > 0,
-								agentCount: data.stats?.agentCount ?? 0,
-							};
+						try {
+							const res = await fetch(
+								`/api/repos/${repo.owner}/${repo.name}/agents`,
+							);
+							if (res.ok) {
+								const data = await res.json();
+								return {
+									key: repo.full_name,
+									hasAgents: (data.stats?.agentCount ?? 0) > 0,
+									agentCount: data.stats?.agentCount ?? 0,
+								};
+							}
+						} catch {
+							// Skip repos that fail
 						}
 						return { key: repo.full_name, hasAgents: false, agentCount: 0 };
 					}),
@@ -113,7 +127,7 @@ function SetupInner() {
 			}
 		}
 
-		detectAgents(repos);
+		detectAgents();
 		return () => {
 			cancelled = true;
 		};
@@ -198,6 +212,10 @@ function SetupInner() {
 					<div className={styles.loading}>
 						<span className={styles.loadingDot} />
 						<span className={styles.loadingText}>Loading repositories...</span>
+					</div>
+				) : error ? (
+					<div className={styles.empty}>
+						<span className={styles.emptyText}>{error}</span>
 					</div>
 				) : filtered.length === 0 ? (
 					<div className={styles.empty}>

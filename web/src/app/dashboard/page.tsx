@@ -17,6 +17,7 @@ export default function Dashboard() {
 		null,
 	);
 	const [loading, setLoading] = useState(false);
+	const [error, setError] = useState<string | null>(null);
 
 	// Fetch saved repos on mount
 	useEffect(() => {
@@ -30,16 +31,28 @@ export default function Dashboard() {
 	const fetchAgentData = useCallback(async () => {
 		if (!selectedRepo) {
 			setAgentData(null);
+			setError(null);
 			return;
 		}
 		setLoading(true);
+		setError(null);
 		try {
 			const res = await fetch(
 				`/api/repos/${selectedRepo.owner}/${selectedRepo.repo}/agents`,
 			);
-			if (res.ok) setAgentData(await res.json());
+			if (res.ok) {
+				setAgentData(await res.json());
+			} else {
+				const body = await res.json().catch(() => ({}));
+				setAgentData(null);
+				setError(
+					body.needsReauth
+						? "Please sign out and sign back in to grant repository access."
+						: `Failed to load agent data: ${body.error ?? res.statusText}`,
+				);
+			}
 		} catch {
-			// retry on next select
+			setError("Failed to connect");
 		}
 		setLoading(false);
 	}, [selectedRepo]);
@@ -62,6 +75,7 @@ export default function Dashboard() {
 					agentData={agentData}
 					selectedRepo={selectedRepo}
 					loading={loading}
+					error={error}
 				/>
 			</main>
 			<aside className={styles.right}>

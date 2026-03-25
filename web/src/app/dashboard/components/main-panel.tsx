@@ -7,12 +7,14 @@ interface MainPanelProps {
 	agentData: AgentDiscoveryResponse | null;
 	selectedRepo: { owner: string; repo: string } | null;
 	loading: boolean;
+	error?: string | null;
 }
 
 export function MainPanel({
 	agentData,
 	selectedRepo,
 	loading,
+	error,
 }: MainPanelProps) {
 	if (!selectedRepo) {
 		return (
@@ -35,15 +37,29 @@ export function MainPanel({
 			<div className={styles.panel}>
 				<div className={styles.skeletonHeader} />
 				<div className={styles.grid}>
-					{Array.from({ length: 4 }).map((_, i) => (
-						<div key={`s${_}`} className={styles.skeletonStat} />
+					{["s0", "s1", "s2", "s3"].map((id) => (
+						<div key={id} className={styles.skeletonStat} />
 					))}
 				</div>
 				<div className={styles.skeletonSection} />
 				<div className={styles.agentGrid}>
-					{Array.from({ length: 2 }).map((_, i) => (
-						<div key={`c${_}`} className={styles.skeletonCard} />
+					{["c0", "c1"].map((id) => (
+						<div key={id} className={styles.skeletonCard} />
 					))}
+				</div>
+			</div>
+		);
+	}
+
+	if (error) {
+		return (
+			<div className={styles.panel}>
+				<h2 className={styles.repoTitle}>
+					{selectedRepo.owner}/{selectedRepo.repo}
+				</h2>
+				<div className={styles.noAgents}>
+					<span className={styles.noAgentsIcon}>!</span>
+					<span className={styles.noAgentsTitle}>{error}</span>
 				</div>
 			</div>
 		);
