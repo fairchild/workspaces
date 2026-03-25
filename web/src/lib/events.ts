@@ -73,6 +73,19 @@ export async function getEvents(
 	}));
 }
 
+export async function getLastEventTime(repo: string): Promise<string | null> {
+	await ensureEventsTable();
+	const db = getDb();
+	const row = await db
+		.selectFrom("webhook_events")
+		.select("timestamp")
+		.where("repo", "=", repo)
+		.orderBy("timestamp", "desc")
+		.limit(1)
+		.executeTakeFirst();
+	return row?.timestamp ?? null;
+}
+
 export interface EventStats {
 	eventsToday: number;
 	repos: string[];
