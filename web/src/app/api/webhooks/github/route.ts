@@ -23,19 +23,27 @@ async function verifySignature(
 	const secret = process.env.GITHUB_WEB_WORKSPACES_WEBHOOK_SECRET;
 	if (!secret) {
 		if (process.env.NODE_ENV === "production") {
-			console.warn(
-				"[webhooks] GITHUB_WEB_WORKSPACES_WEBHOOK_SECRET is not set — rejecting all webhooks",
-			);
+			console.warn("[webhooks] WEBHOOK_SECRET is not set — rejecting");
 			return false;
 		}
 		return true;
 	}
-	if (!signature) return false;
+	if (!signature) {
+		console.warn("[webhooks] no signature header");
+		return false;
+	}
+
+	const expected = `sha256=${crypto.createHmac("sha256", secret).update(body).digest("hex")}`;
+
+	if (signature.length !== expected.length) {
+		console.warn(
+			`[webhooks] sig length mismatch: got=${signature.length} expected=${expected.length} secret_len=${secret.length}`,
+		);
+		return false;
+	}
 
 	const sigBuf = Buffer.from(signature);
-	const expected = `sha256=${crypto.createHmac("sha256", secret).update(body).digest("hex")}`;
 	const expectedBuf = Buffer.from(expected);
-	if (sigBuf.length !== expectedBuf.length) return false;
 	return crypto.timingSafeEqual(sigBuf, expectedBuf);
 }
 
