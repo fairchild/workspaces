@@ -42,6 +42,7 @@ export interface WebhookEvent {
 	summary: string;
 	repo: string;
 	timestamp: string;
+	payload?: string;
 }
 
 export type WebhookEventType =
