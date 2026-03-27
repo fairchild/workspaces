@@ -1,4 +1,36 @@
 #!/usr/bin/env bash
-#MISE description="Trust mise config and install tools"
+#MISE description="Trust mise config and install project dependencies"
 set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$REPO_ROOT"
+
+# Trust and install mise-managed tools
 [[ -f .mise.toml ]] && mise trust && mise install
+
+# Install dependencies per lockfile
+install_deps() {
+  local dir="$1"
+  if [[ -f "$dir/bun.lock" ]]; then
+    echo "=> $dir: bun install"
+    (cd "$dir" && bun install)
+  elif [[ -f "$dir/pnpm-lock.yaml" ]]; then
+    echo "=> $dir: pnpm install"
+    (cd "$dir" && pnpm install)
+  elif [[ -f "$dir/package-lock.json" ]]; then
+    echo "=> $dir: npm install"
+    (cd "$dir" && npm install)
+  elif [[ -f "$dir/uv.lock" ]]; then
+    echo "=> $dir: uv sync"
+    (cd "$dir" && uv sync)
+  fi
+}
+
+# Root dependencies
+install_deps "$REPO_ROOT"
+
+# Subdirectory projects (web/, infra/*, etc.)
+for lockfile in "$REPO_ROOT"/*/bun.lock "$REPO_ROOT"/*/pnpm-lock.yaml "$REPO_ROOT"/*/package-lock.json "$REPO_ROOT"/*/uv.lock; do
+  [[ -f "$lockfile" ]] || continue
+  install_deps "$(dirname "$lockfile")"
+done
