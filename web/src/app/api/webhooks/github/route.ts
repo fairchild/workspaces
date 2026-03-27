@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
+import { pushChatMessage } from "@/lib/chat";
 import { pushEvent } from "@/lib/events";
-import type { WebhookEvent, WebhookEventType } from "@/lib/types";
+import type { ChatMessage, WebhookEvent, WebhookEventType } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
@@ -108,5 +109,59 @@ export async function POST(request: Request): Promise<Response> {
 
 	await pushEvent(event);
 
+	// Bridge discussion/discussion_comment webhooks into chat_messages
+	if (eventType === "discussion" || eventType === "discussion_comment") {
+		const chatMsg = extractDiscussionChatMessage(eventType, payload, repo ?? "unknown");
+		if (chatMsg) {
+			await pushChatMessage(chatMsg);
+		}
+	}
+
 	return Response.json({ ok: true });
+}
+
+function extractDiscussionChatMessage(
+	eventType: string,
+	payload: Record<string, unknown>,
+	repo: string,
+): ChatMessage | null {
+	if (eventType === "discussion_comment") {
+		const comment = payload.comment as Record<string, unknown> | undefined;
+		const discussion = payload.discussion as Record<string, unknown> | undefined;
+		if (!comment?.body) return null;
+		const user = comment.user as Record<string, unknown> | undefined;
+		const isBot = String(user?.type ?? "").toLowerCase() === "bot";
+		return {
+			id: `ghdc-${comment.id ?? crypto.randomUUID()}`,
+			repo,
+			author: String(user?.login ?? "unknown"),
+			authorType: isBot ? "bot" : "user",
+			content: String(comment.body),
+			agentTarget: null,
+			discussionId: String(discussion?.node_id ?? ""),
+			discussionUrl: String(comment.html_url ?? discussion?.html_url ?? ""),
+			timestamp: String(comment.created_at ?? new Date().toISOString()),
+		};
+	}
+
+	if (eventType === "discussion") {
+		const discussion = payload.discussion as Record<string, unknown> | undefined;
+		const action = String(payload.action ?? "");
+		if (action !== "created" || !discussion?.body) return null;
+		const user = discussion.user as Record<string, unknown> | undefined;
+		const isBot = String(user?.type ?? "").toLowerCase() === "bot";
+		return {
+			id: `ghd-${discussion.id ?? crypto.randomUUID()}`,
+			repo,
+			author: String(user?.login ?? "unknown"),
+			authorType: isBot ? "bot" : "user",
+			content: String(discussion.body),
+			agentTarget: null,
+			discussionId: String(discussion.node_id ?? ""),
+			discussionUrl: String(discussion.html_url ?? ""),
+			timestamp: String(discussion.created_at ?? new Date().toISOString()),
+		};
+	}
+
+	return null;
 }

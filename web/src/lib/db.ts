@@ -11,8 +11,21 @@ export interface EventsTable {
 	timestamp: string;
 }
 
+export interface ChatMessagesTable {
+	id: string;
+	repo: string;
+	author: string;
+	author_type: string;
+	content: string;
+	agent_target: string | null;
+	discussion_id: string | null;
+	discussion_url: string | null;
+	timestamp: string;
+}
+
 interface Database {
 	webhook_events: EventsTable;
+	chat_messages: ChatMessagesTable;
 }
 
 let _turso: Client | undefined;
