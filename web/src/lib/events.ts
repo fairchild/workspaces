@@ -15,7 +15,17 @@ async function ensureEventsTable(): Promise<void> {
 		.addColumn("summary", "text", (c) => c.notNull().defaultTo(""))
 		.addColumn("repo", "text", (c) => c.notNull().defaultTo("unknown"))
 		.addColumn("timestamp", "text", (c) => c.notNull())
+		.addColumn("payload", "text", (c) => c.notNull().defaultTo("{}"))
 		.execute();
+	// Ensure payload column exists on tables created before this migration
+	try {
+		await db.schema
+			.alterTable("webhook_events")
+			.addColumn("payload", "text", (c) => c.notNull().defaultTo("{}"))
+			.execute();
+	} catch {
+		/* column already exists */
+	}
 	await db.schema
 		.createIndex("idx_webhook_events_timestamp")
 		.ifNotExists()
@@ -43,6 +53,7 @@ export async function pushEvent(event: WebhookEvent): Promise<void> {
 			summary: event.summary,
 			repo: event.repo,
 			timestamp: event.timestamp,
+			payload: event.payload ?? "{}",
 		})
 		.onConflict((oc) => oc.doNothing())
 		.execute();
@@ -56,7 +67,7 @@ export async function getEvents(
 	const db = getDb();
 	let query = db
 		.selectFrom("webhook_events")
-		.selectAll()
+		.select(["id", "type", "action", "summary", "repo", "timestamp"])
 		.orderBy("timestamp", "desc")
 		.limit(limit);
 	if (repo) {
@@ -71,6 +82,26 @@ export async function getEvents(
 		repo: r.repo,
 		timestamp: r.timestamp,
 	}));
+}
+
+export async function getEvent(id: string): Promise<WebhookEvent | null> {
+	await ensureEventsTable();
+	const db = getDb();
+	const row = await db
+		.selectFrom("webhook_events")
+		.selectAll()
+		.where("id", "=", id)
+		.executeTakeFirst();
+	if (!row) return null;
+	return {
+		id: row.id,
+		type: row.type as WebhookEventType,
+		action: row.action,
+		summary: row.summary,
+		repo: row.repo,
+		timestamp: row.timestamp,
+		payload: row.payload,
+	};
 }
 
 export async function getLastEventTime(repo: string): Promise<string | null> {

@@ -3,6 +3,7 @@
 import type { WebhookEvent, WebhookEventType } from "@/lib/types";
 import { useCallback, useEffect, useState } from "react";
 import styles from "./activity-feed.module.css";
+import { EventDetail } from "./event-detail";
 
 const EVENT_COLORS: Record<WebhookEventType, string> = {
 	pull_request: styles.eventPr,
@@ -40,18 +41,43 @@ function formatTime(timestamp: string): string {
 	return `${Math.floor(hours / 24)}d ago`;
 }
 
-function EventRow({ event }: { event: WebhookEvent }) {
+function EventRow({
+	event,
+	isExpanded,
+	showRepo,
+	onToggle,
+}: {
+	event: WebhookEvent;
+	isExpanded: boolean;
+	showRepo: boolean;
+	onToggle: () => void;
+}) {
 	return (
-		<div className={styles.event}>
-			<div className={styles.eventHeader}>
-				<span className={`${styles.eventBadge} ${EVENT_COLORS[event.type]}`}>
-					{EVENT_LABELS[event.type]}
-				</span>
-				<span className={styles.eventTime}>{formatTime(event.timestamp)}</span>
-			</div>
-			<span className={styles.eventSummary}>{event.summary}</span>
-			<span className={styles.eventRepo}>{event.repo}</span>
-		</div>
+		<>
+			<button
+				type="button"
+				className={`${styles.event} ${isExpanded ? styles.eventExpanded : ""}`}
+				onClick={onToggle}
+			>
+				<div className={styles.eventHeader}>
+					<span
+						className={`${styles.eventBadge} ${EVENT_COLORS[event.type]}`}
+					>
+						{EVENT_LABELS[event.type]}
+					</span>
+					<span className={styles.eventTime}>
+						{formatTime(event.timestamp)}
+					</span>
+				</div>
+				<span className={styles.eventSummary}>{event.summary}</span>
+				{showRepo && (
+					<span className={styles.eventRepo}>{event.repo}</span>
+				)}
+			</button>
+			{isExpanded && (
+				<EventDetail eventId={event.id} eventType={event.type} />
+			)}
+		</>
 	);
 }
 
@@ -63,6 +89,7 @@ interface ActivityFeedProps {
 
 export function ActivityFeed({ filterRepo }: ActivityFeedProps) {
 	const [events, setEvents] = useState<WebhookEvent[]>([]);
+	const [expandedId, setExpandedId] = useState<string | null>(null);
 
 	const fetchEvents = useCallback(async () => {
 		try {
@@ -82,6 +109,11 @@ export function ActivityFeed({ filterRepo }: ActivityFeedProps) {
 		return () => clearInterval(id);
 	}, [fetchEvents]);
 
+	// Collapse when repo filter changes
+	useEffect(() => {
+		setExpandedId(null);
+	}, [filterRepo]);
+
 	return (
 		<div className={styles.feed}>
 			<div className={styles.header}>
@@ -100,7 +132,17 @@ export function ActivityFeed({ filterRepo }: ActivityFeedProps) {
 			) : (
 				<div className={styles.list}>
 					{events.map((event) => (
-						<EventRow key={event.id} event={event} />
+						<EventRow
+							key={event.id}
+							event={event}
+							isExpanded={expandedId === event.id}
+							showRepo={!filterRepo}
+							onToggle={() =>
+								setExpandedId((prev) =>
+									prev === event.id ? null : event.id,
+								)
+							}
+						/>
 					))}
 				</div>
 			)}

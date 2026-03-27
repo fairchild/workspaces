@@ -9,6 +9,7 @@ export interface EventsTable {
 	summary: string;
 	repo: string;
 	timestamp: string;
+	payload: string;
 }
 
 interface Database {

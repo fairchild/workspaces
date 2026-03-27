@@ -38,11 +38,22 @@
 	flex-direction: column;
 	gap: 0.25rem;
 	padding: 0.625rem 1rem;
+	border: none;
 	border-bottom: 1px solid var(--border-subtle);
+	background: transparent;
+	width: 100%;
+	text-align: left;
+	font: inherit;
+	color: inherit;
+	cursor: pointer;
 	transition: background 0.15s ease;
 }
 
 .event:hover {
+	background: var(--accent-dim);
+}
+
+.eventExpanded {
 	background: var(--accent-dim);
 }
 
