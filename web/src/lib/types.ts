@@ -139,6 +139,28 @@ export const PIPELINE_LABELS: Record<PipelineColumn, string> = {
 	mergeable: "Mergeable",
 };
 
+// --- Chat ---
+
+export type AuthorType = "user" | "agent" | "bot";
+
+export interface ChatMessage {
+	id: string;
+	repo: string;
+	author: string;
+	authorType: AuthorType;
+	content: string;
+	agentTarget: string | null;
+	discussionId: string | null;
+	discussionUrl: string | null;
+	timestamp: string;
+}
+
+export type TimelineEntryKind = "event" | "chat";
+
+export type TimelineEntry =
+	| (WebhookEvent & { kind: "event" })
+	| (ChatMessage & { kind: "chat" });
+
 export const PIPELINE_GITHUB_LABELS: Record<PipelineColumn, string> = {
 	ready: "agent:ready",
 	claimed: "agent:claimed",
