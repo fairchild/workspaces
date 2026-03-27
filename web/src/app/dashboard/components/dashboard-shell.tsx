@@ -1,17 +1,65 @@
 "use client";
 
 import type { AgentDiscoveryResponse, SelectedRepo } from "@/lib/types";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
+import styles from "../page.module.css";
 import { ActivityFeed } from "./activity-feed";
+import { ChatPlaceholder } from "./chat-placeholder";
 import { MainPanel } from "./main-panel";
 import { Sidebar } from "./sidebar";
-import styles from "../page.module.css";
+
+type TabId = "dashboard" | "chat";
+
+const TABS: { id: TabId; label: string }[] = [
+	{ id: "dashboard", label: "Dashboard" },
+	{ id: "chat", label: "Chat" },
+];
+
+function isValidTab(value: string | undefined): value is TabId {
+	return value === "dashboard" || value === "chat";
+}
 
 interface DashboardShellProps {
 	selectedRepo: { owner: string; repo: string } | null;
+	initialTab?: string;
 }
 
-export function DashboardShell({ selectedRepo }: DashboardShellProps) {
+export function DashboardShell({
+	selectedRepo,
+	initialTab,
+}: DashboardShellProps) {
+	const router = useRouter();
+	const pathname = usePathname();
+	const searchParams = useSearchParams();
+
+	const activeTab: TabId = isValidTab(searchParams.get("tab") ?? undefined)
+		? (searchParams.get("tab") as TabId)
+		: isValidTab(initialTab)
+			? initialTab
+			: "dashboard";
+
+	const [unreadChat, setUnreadChat] = useState(false);
+
+	const setTab = useCallback(
+		(tab: TabId) => {
+			const params = new URLSearchParams(searchParams.toString());
+			if (tab === "dashboard") {
+				params.delete("tab");
+			} else {
+				params.set("tab", tab);
+			}
+			const qs = params.toString();
+			router.replace(`${pathname}${qs ? `?${qs}` : ""}`, { scroll: false });
+		},
+		[pathname, router, searchParams],
+	);
+
+	// Clear unread badge when switching to chat
+	useEffect(() => {
+		if (activeTab === "chat") setUnreadChat(false);
+	}, [activeTab]);
+
 	const [repos, setRepos] = useState<SelectedRepo[]>([]);
 	const [agentData, setAgentData] = useState<AgentDiscoveryResponse | null>(
 		null,
@@ -67,19 +115,36 @@ export function DashboardShell({ selectedRepo }: DashboardShellProps) {
 				<Sidebar repos={repos} selectedRepo={selectedRepo} />
 			</aside>
 			<main className={styles.center}>
-				<MainPanel
-					agentData={agentData}
-					selectedRepo={selectedRepo}
-					loading={loading}
-					error={error}
-				/>
+				<nav className={styles.tabBar}>
+					{TABS.map(({ id, label }) => (
+						<button
+							key={id}
+							type="button"
+							className={`${styles.tab} ${activeTab === id ? styles.tabActive : ""}`}
+							onClick={() => setTab(id)}
+						>
+							{label}
+							{id === "chat" && unreadChat && (
+								<span className={styles.unreadBadge} />
+							)}
+						</button>
+					))}
+				</nav>
+				{activeTab === "dashboard" ? (
+					<MainPanel
+						agentData={agentData}
+						selectedRepo={selectedRepo}
+						loading={loading}
+						error={error}
+					/>
+				) : (
+					<ChatPlaceholder />
+				)}
 			</main>
 			<aside className={styles.right}>
 				<ActivityFeed
 					filterRepo={
-						selectedRepo
-							? `${selectedRepo.owner}/${selectedRepo.repo}`
-							: null
+						selectedRepo ? `${selectedRepo.owner}/${selectedRepo.repo}` : null
 					}
 				/>
 			</aside>

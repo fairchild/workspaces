@@ -12,6 +12,8 @@
 }
 
 .center {
+	display: flex;
+	flex-direction: column;
 	overflow-y: auto;
 	background: var(--bg-primary);
 }
@@ -22,10 +24,54 @@
 	background: var(--bg-surface);
 }
 
-/* ── Tab bar (hidden on desktop) ── */
+/* ── Tab bar ── */
 
 .tabBar {
-	display: none;
+	display: flex;
+	align-items: center;
+	gap: 0;
+	height: 40px;
+	border-bottom: 1px solid var(--border-subtle);
+	background: var(--bg-surface);
+	flex-shrink: 0;
+	padding: 0 1rem;
+}
+
+.tab {
+	position: relative;
+	display: flex;
+	align-items: center;
+	gap: 0.375rem;
+	height: 100%;
+	padding: 0 0.75rem;
+	background: none;
+	border: none;
+	border-bottom: 2px solid transparent;
+	cursor: pointer;
+	font-family: var(--font-mono), ui-monospace, monospace;
+	font-size: 0.6875rem;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+	color: var(--text-tertiary);
+	transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.tab:hover {
+	color: var(--text-secondary);
+}
+
+.tabActive {
+	color: var(--accent);
+	border-bottom-color: var(--accent);
+}
+
+.unreadBadge {
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	background: var(--accent);
+	box-shadow: 0 0 4px rgba(166, 255, 223, 0.4);
+	flex-shrink: 0;
 }
 
 /* ── Responsive: collapse right pane ── */
@@ -38,60 +84,17 @@
 	}
 }
 
-/* ── Responsive: mobile tab bar ── */
+/* ── Responsive: mobile ── */
 @media (max-width: 640px) {
 	.columns {
 		grid-template-columns: 1fr;
 	}
 
-	/* Hide ALL panels by default on mobile */
-	.panel {
+	.left {
 		display: none;
-		border: none;
-	}
-
-	/* Only the active tab's panel is visible */
-	.mobileVisible {
-		display: block;
 	}
 
 	.tabBar {
-		display: flex;
-		align-items: center;
-		justify-content: space-around;
-		height: 56px;
-		border-top: 1px solid var(--border-subtle);
-		background: var(--bg-surface);
-		flex-shrink: 0;
-		padding-bottom: env(safe-area-inset-bottom, 0);
-	}
-
-	.tab {
-		display: flex;
-		flex-direction: column;
-		align-items: center;
-		gap: 0.25rem;
-		padding: 0.375rem 1rem;
-		background: none;
-		border: none;
-		cursor: pointer;
-		color: var(--text-tertiary);
-		font-family: var(--font-mono), ui-monospace, monospace;
-		font-size: 0.625rem;
-		letter-spacing: 0.04em;
-		transition: color 0.15s ease;
-	}
-
-	.tab:hover {
-		color: var(--text-secondary);
-	}
-
-	.tabActive {
-		color: var(--accent);
-	}
-
-	.tabIcon {
-		width: 20px;
-		height: 20px;
+		padding: 0 0.5rem;
 	}
 }
