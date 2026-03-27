@@ -1,5 +1,6 @@
 import { getSession } from "@/lib/auth-server";
 import Image from "next/image";
+import Link from "next/link";
 import { redirect } from "next/navigation";
 
 export const dynamic = "force-dynamic";
@@ -20,7 +21,7 @@ export default async function DashboardLayout({
 	return (
 		<div className={styles.shell}>
 			<header className={styles.topBar}>
-				<span className={styles.brand}>Spaces</span>
+				<Link href="/dashboard" className={styles.brand}>Spaces</Link>
 				<div className={styles.user}>
 					{session.user.image && (
 						<Image

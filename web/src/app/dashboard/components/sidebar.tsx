@@ -8,7 +8,6 @@ import styles from "./sidebar.module.css";
 interface SidebarProps {
 	repos: SelectedRepo[];
 	selectedRepo: { owner: string; repo: string } | null;
-	onSelectRepo: (repo: { owner: string; repo: string } | null) => void;
 }
 
 interface RepoAgentInfo {
@@ -20,18 +19,19 @@ function RepoRow({
 	repo,
 	isSelected,
 	agentInfo,
-	onSelect,
 }: {
 	repo: SelectedRepo;
 	isSelected: boolean;
 	agentInfo: RepoAgentInfo | undefined;
-	onSelect: () => void;
 }) {
+	const href = isSelected
+		? "/dashboard"
+		: `/dashboard/${repo.owner}/${repo.repo}`;
+
 	return (
-		<button
-			type="button"
+		<Link
+			href={href}
 			className={`${styles.row} ${isSelected ? styles.rowSelected : ""}`}
-			onClick={onSelect}
 		>
 			<span
 				className={`${styles.statusDot} ${agentInfo?.hasAgents ? styles.statusActive : styles.statusInactive}`}
@@ -42,11 +42,11 @@ function RepoRow({
 			{agentInfo?.hasAgents && (
 				<span className={styles.agentBadge}>{agentInfo.agentCount}</span>
 			)}
-		</button>
+		</Link>
 	);
 }
 
-export function Sidebar({ repos, selectedRepo, onSelectRepo }: SidebarProps) {
+export function Sidebar({ repos, selectedRepo }: SidebarProps) {
 	const [agentCache, setAgentCache] = useState<Map<string, RepoAgentInfo>>(
 		new Map(),
 	);
@@ -118,16 +118,6 @@ export function Sidebar({ repos, selectedRepo, onSelectRepo }: SidebarProps) {
 								repo={repo}
 								isSelected={isSelected}
 								agentInfo={agentCache.get(key)}
-								onSelect={() =>
-									onSelectRepo(
-										isSelected
-											? null
-											: {
-													owner: repo.owner,
-													repo: repo.repo,
-												},
-									)
-								}
 							/>
 						);
 					})}

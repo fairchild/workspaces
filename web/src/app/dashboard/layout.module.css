@@ -25,6 +25,7 @@
 	font-style: italic;
 	color: var(--text-primary);
 	letter-spacing: -0.02em;
+	text-decoration: none;
 }
 
 .user {
