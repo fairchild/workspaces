@@ -100,6 +100,8 @@ export async function GET(
 			if (err.status === 404)
 				return Response.json({ error: "repo_not_found" }, { status: 404 });
 		}
-		throw err;
+		const message = err instanceof Error ? err.message : "unknown error";
+		console.error("[/api/repos/agents]", message, err);
+		return Response.json({ error: message }, { status: 500 });
 	}
 }
