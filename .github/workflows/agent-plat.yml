@@ -48,6 +48,27 @@ jobs:
           fetch-depth: 50
           persist-credentials: false
           token: ${{ steps.app-token.outputs.token }}
+      - name: Resolve directed PR workspace
+        id: resolve-pr
+        if: inputs.message != ''
+        env:
+          AGENT_MESSAGE: ${{ inputs.message }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$AGENT_MESSAGE" =~ [Pp][Rr][[:space:]]#([0-9]+) ]]; then
+            echo "pr_number=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
+            echo "model_cwd=$GITHUB_WORKSPACE/model-workspace" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Checkout directed PR workspace
+        if: steps.resolve-pr.outputs.pr_number != ''
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: refs/pull/${{ steps.resolve-pr.outputs.pr_number }}/head
+          fetch-depth: 1
+          path: model-workspace
+          persist-credentials: false
+          token: ${{ steps.app-token.outputs.token }}
       - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
       - name: Sync execution state
         run: uv run .agents/skills/cofounder-contributor/scripts/sync-execution-state.py
@@ -71,6 +92,7 @@ jobs:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           GH_APP_SLUG: workspace-agents
+          CONTRIBUTOR_MODEL_CWD: ${{ steps.resolve-pr.outputs.model_cwd }}
 
   evidence:
     needs: run

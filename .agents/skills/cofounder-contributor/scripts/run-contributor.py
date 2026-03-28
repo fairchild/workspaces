@@ -579,6 +579,19 @@ def run_claude(
     return run_checked(cmd, timeout=effective_timeout, cwd=cwd or REPO_ROOT, env=env).stdout
 
 
+def contributor_model_cwd(selection_kind: str, env: dict[str, str]) -> Path:
+    if selection_kind not in {"review_followup_pr", "review_pr"}:
+        return REPO_ROOT
+    override = env.get("CONTRIBUTOR_MODEL_CWD", "").strip()
+    if not override:
+        return REPO_ROOT
+    candidate = Path(override).expanduser()
+    if candidate.is_dir():
+        return candidate
+    log(f"CONTRIBUTOR_MODEL_CWD does not exist: {candidate}; falling back to repo root")
+    return REPO_ROOT
+
+
 def build_reviewable_pr_candidates(
     pull_requests: list[dict[str, object]],
     issues: list[dict[str, object]],
@@ -1183,7 +1196,7 @@ def main() -> int:
             env,
             message=args.message,
         )
-        claude_cwd = REPO_ROOT
+        claude_cwd = contributor_model_cwd(choice.selection_kind, env)
         if selection_uses_isolated_workspace(choice.selection_kind):
             scratch_workspace = create_scratch_workspace(env)
             claude_cwd = scratch_workspace.scratch_dir
