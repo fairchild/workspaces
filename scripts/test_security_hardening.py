@@ -110,6 +110,49 @@ class SecurityHardeningTests(unittest.TestCase):
         self.assertIn("types: [labeled]", on_block)
         self.assertIn("safe-to-run-agent", workflow)
 
+    def test_all_actions_pinned_to_sha(self) -> None:
+        """Every `uses:` reference to a third-party action must be pinned to a full SHA."""
+        workflows_dir = REPO_ROOT / ".github/workflows"
+        floating_refs: list[str] = []
+        tag_pattern = re.compile(
+            r"^\s*uses:\s+(?!\./)(\S+)@([a-z0-9]{40})\b",
+        )
+        uses_pattern = re.compile(r"^\s*uses:\s+(?!\./)(\S+)@(\S+)")
+        for wf in sorted(workflows_dir.glob("*.yml")):
+            for i, line in enumerate(wf.read_text().splitlines(), 1):
+                m = uses_pattern.match(line)
+                if not m:
+                    continue
+                ref = m.group(2)
+                if not re.fullmatch(r"[0-9a-f]{40}", ref):
+                    floating_refs.append(f"{wf.name}:{i}  {m.group(1)}@{ref}")
+        self.assertEqual(
+            floating_refs,
+            [],
+            "Actions with floating (non-SHA) refs found:\n" + "\n".join(floating_refs),
+        )
+
+    def test_ci_workflows_have_explicit_permissions(self) -> None:
+        """CI workflows should declare explicit top-level permissions to limit default token scope."""
+        for name in ("ci.yml", "ci-agents.yml", "web-ci.yml"):
+            workflow = (REPO_ROOT / ".github/workflows" / name).read_text()
+            self.assertIn(
+                "\npermissions:\n",
+                workflow,
+                f"{name} must declare explicit top-level permissions",
+            )
+
+    def test_no_pull_request_target_trigger(self) -> None:
+        """No workflow should use pull_request_target, which runs with write access on untrusted PRs."""
+        workflows_dir = REPO_ROOT / ".github/workflows"
+        for wf in sorted(workflows_dir.glob("*.yml")):
+            content = wf.read_text()
+            self.assertNotIn(
+                "pull_request_target",
+                content,
+                f"{wf.name} must not use pull_request_target trigger",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

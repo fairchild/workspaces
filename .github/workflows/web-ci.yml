@@ -11,6 +11,9 @@ on:
       - "web/**"
       - ".github/workflows/web-ci.yml"
 
+permissions:
+  contents: read
+
 jobs:
   build-test:
     name: Lint, Typecheck & Build
