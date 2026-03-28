@@ -1,6 +1,6 @@
-import { type Client, createClient } from "@libsql/client";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import { type Client, createClient } from "@libsql/client";
 import { Kysely } from "kysely";
 import { LibsqlDialect } from "./libsql-dialect";
 
