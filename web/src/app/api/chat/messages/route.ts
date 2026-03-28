@@ -1,10 +1,10 @@
 import crypto from "node:crypto";
-import { pushChatMessage, getMixedTimeline } from "@/lib/chat";
 import { getSession } from "@/lib/auth-server";
+import { getMixedTimeline, pushChatMessage } from "@/lib/chat";
 import {
-	getGitHubToken,
-	createDiscussion,
 	addDiscussionComment,
+	createDiscussion,
+	getGitHubToken,
 } from "@/lib/github";
 import type { ChatMessage } from "@/lib/types";
 
@@ -41,10 +41,7 @@ export async function POST(request: Request): Promise<Response> {
 
 	const token = await getGitHubToken(session.user.id);
 	if (!token) {
-		return Response.json(
-			{ error: "GitHub token not found" },
-			{ status: 403 },
-		);
+		return Response.json({ error: "GitHub token not found" }, { status: 403 });
 	}
 
 	const messageId = crypto.randomUUID();
