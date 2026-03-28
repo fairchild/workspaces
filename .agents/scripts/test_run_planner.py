@@ -794,6 +794,46 @@ class RunContributorTests(unittest.TestCase):
             run_contributor.contributor_tools_for_selection("execute_ready_issue"),
         )
 
+    def test_run_claude_uses_override_cwd_when_provided(self) -> None:
+        completed = subprocess.CompletedProcess(args=[], returncode=0, stdout="ok", stderr="")
+        prompt = (
+            REPO_ROOT
+            / ".agents"
+            / "skills"
+            / "cofounder-contributor"
+            / "references"
+            / "april-clearwater.md"
+        )
+        override = Path("/tmp/model-workspace")
+        with mock.patch.object(run_contributor, "run_checked", return_value=completed) as run_checked:
+            run_contributor.run_claude(
+                prompt,
+                "task",
+                {},
+                mode="cli",
+                tools=run_contributor.READ_ONLY_MODEL_TOOLS,
+                cwd=override,
+            )
+        self.assertEqual(run_checked.call_args.kwargs["cwd"], override)
+
+    def test_contributor_model_cwd_only_uses_override_for_review_actions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            override = Path(tmpdir)
+            self.assertEqual(
+                run_contributor.contributor_model_cwd(
+                    "review_pr",
+                    {"CONTRIBUTOR_MODEL_CWD": str(override)},
+                ),
+                override,
+            )
+            self.assertEqual(
+                run_contributor.contributor_model_cwd(
+                    "execute_ready_issue",
+                    {"CONTRIBUTOR_MODEL_CWD": str(override)},
+                ),
+                run_contributor.REPO_ROOT,
+            )
+
     def test_build_action_phase_inputs_keeps_prompt_injection_in_untrusted_payloads(self) -> None:
         fixture = load_fixture("contributor-prompt-injection.json")
         choice = run_contributor.SelectionChoice(selection_kind="review_pr", number=200, reason="review open pr")
@@ -2649,6 +2689,23 @@ class RunContributorTests(unittest.TestCase):
             accounting["complete_items"],
             ["swift build", "swift test --filter RunPlannerTests"],
         )
+
+    def test_agent_review_workflows_checkout_pr_head_into_model_workspace(self) -> None:
+        april_workflow = (REPO_ROOT / ".github" / "workflows" / "agent-april.yml").read_text(encoding="utf-8")
+        plat_workflow = (REPO_ROOT / ".github" / "workflows" / "agent-plat.yml").read_text(encoding="utf-8")
+        executor_workflow = (REPO_ROOT / ".github" / "workflows" / "agent-executor.yml").read_text(encoding="utf-8")
+
+        self.assertIn("path: model-workspace", april_workflow)
+        self.assertIn("CONTRIBUTOR_MODEL_CWD", april_workflow)
+        self.assertIn("refs/pull/${{ steps.resolve-pr.outputs.pr_number }}/head", april_workflow)
+
+        self.assertIn("path: model-workspace", plat_workflow)
+        self.assertIn("CONTRIBUTOR_MODEL_CWD", plat_workflow)
+        self.assertIn("refs/pull/${{ steps.resolve-pr.outputs.pr_number }}/head", plat_workflow)
+
+        self.assertIn("path: model-workspace", executor_workflow)
+        self.assertIn("CONTRIBUTOR_MODEL_CWD", executor_workflow)
+        self.assertIn("refs/pull/${{ steps.target-workspace.outputs.pr_number }}/head", executor_workflow)
 
     def test_contributor_and_evidence_workflows_disable_persisted_credentials(self) -> None:
         workflow_paths = [
