@@ -47,6 +47,7 @@ function RepoRow({
 }
 
 export function Sidebar({ repos, selectedRepo }: SidebarProps) {
+	const [collapsed, setCollapsed] = useState(!!selectedRepo);
 	const [agentCache, setAgentCache] = useState<Map<string, RepoAgentInfo>>(
 		new Map(),
 	);
@@ -90,46 +91,72 @@ export function Sidebar({ repos, selectedRepo }: SidebarProps) {
 
 	return (
 		<div className={styles.sidebar}>
-			<div className={styles.sectionHeader}>
-				<span className={styles.sectionTitle}>Repos</span>
+			<button
+				type="button"
+				className={styles.sectionHeader}
+				onClick={() => setCollapsed((c) => !c)}
+			>
+				<div className={styles.sectionLeft}>
+					<span
+						className={`${styles.chevron} ${collapsed ? styles.chevronCollapsed : ""}`}
+					>
+						&#9662;
+					</span>
+					<span className={styles.sectionTitle}>Repos</span>
+					{collapsed && selectedRepo && (
+						<span className={styles.selectedLabel}>
+							{selectedRepo.repo}
+						</span>
+					)}
+				</div>
 				<div className={styles.headerActions}>
 					<span className={styles.count}>{repos.length}</span>
-					<Link href="/setup?add=true" className={styles.addButton}>
+					<Link
+						href="/setup?add=true"
+						className={styles.addButton}
+						onClick={(e) => e.stopPropagation()}
+					>
 						+
 					</Link>
 				</div>
-			</div>
+			</button>
 
-			{repos.length === 0 ? (
-				<div className={styles.empty}>
-					<span className={styles.emptyIcon}>&gt;_</span>
-					<span className={styles.emptyText}>No repositories selected</span>
-				</div>
-			) : (
-				<div className={styles.list}>
-					{repos.map((repo) => {
-						const key = `${repo.owner}/${repo.repo}`;
-						const isSelected =
-							selectedRepo?.owner === repo.owner &&
-							selectedRepo?.repo === repo.repo;
-						return (
-							<RepoRow
-								key={key}
-								repo={repo}
-								isSelected={isSelected}
-								agentInfo={agentCache.get(key)}
-							/>
-						);
-					})}
-				</div>
+			{!collapsed && (
+				<>
+					{repos.length === 0 ? (
+						<div className={styles.empty}>
+							<span className={styles.emptyIcon}>&gt;_</span>
+							<span className={styles.emptyText}>
+								No repositories selected
+							</span>
+						</div>
+					) : (
+						<div className={styles.list}>
+							{repos.map((repo) => {
+								const key = `${repo.owner}/${repo.repo}`;
+								const isSelected =
+									selectedRepo?.owner === repo.owner &&
+									selectedRepo?.repo === repo.repo;
+								return (
+									<RepoRow
+										key={key}
+										repo={repo}
+										isSelected={isSelected}
+										agentInfo={agentCache.get(key)}
+									/>
+								);
+							})}
+						</div>
+					)}
+
+					<div className={styles.addRow}>
+						<Link href="/setup?add=true" className={styles.addRowLink}>
+							<span className={styles.addRowPlus}>+</span>
+							<span className={styles.addRowText}>Add repos</span>
+						</Link>
+					</div>
+				</>
 			)}
-
-			<div className={styles.addRow}>
-				<Link href="/setup?add=true" className={styles.addRowLink}>
-					<span className={styles.addRowPlus}>+</span>
-					<span className={styles.addRowText}>Add repos</span>
-				</Link>
-			</div>
 		</div>
 	);
 }
