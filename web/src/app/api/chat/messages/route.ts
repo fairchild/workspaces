@@ -1,10 +1,11 @@
 import crypto from "node:crypto";
-import { pushChatMessage, getMixedTimeline } from "@/lib/chat";
 import { getSession } from "@/lib/auth-server";
+import { getMixedTimeline, pushChatMessage } from "@/lib/chat";
+import { getEventStats } from "@/lib/events";
 import {
-	getGitHubToken,
-	createDiscussion,
 	addDiscussionComment,
+	createDiscussion,
+	getGitHubToken,
 } from "@/lib/github";
 import type { ChatMessage } from "@/lib/types";
 
@@ -41,10 +42,7 @@ export async function POST(request: Request): Promise<Response> {
 
 	const token = await getGitHubToken(session.user.id);
 	if (!token) {
-		return Response.json(
-			{ error: "GitHub token not found" },
-			{ status: 403 },
-		);
+		return Response.json({ error: "GitHub token not found" }, { status: 403 });
 	}
 
 	const messageId = crypto.randomUUID();
@@ -53,6 +51,18 @@ export async function POST(request: Request): Promise<Response> {
 	let discussionUrl: string | null = null;
 
 	const agentTarget = body.agentName ?? parseAgentMention(body.message);
+
+	// Bot commands: @spaces status, @spaces pipeline, @<agent> status
+	const botResponse = await handleBotCommand(
+		agentTarget,
+		body.message,
+		body.repo,
+		session.user.name ?? session.user.email ?? "you",
+	);
+	if (botResponse) {
+		return Response.json(botResponse);
+	}
+
 	const title = agentTarget
 		? `@${agentTarget}: ${body.message.slice(0, 100)}`
 		: body.message.slice(0, 100);
@@ -128,4 +138,66 @@ export async function GET(request: Request): Promise<Response> {
 function parseAgentMention(message: string): string | null {
 	const match = message.match(/^@(\w[\w-]*)/);
 	return match ? match[1] : null;
+}
+
+function stripMention(message: string): string {
+	return message.replace(/^@\w[\w-]*\s*/, "").trim();
+}
+
+async function handleBotCommand(
+	target: string | null,
+	message: string,
+	repo: string,
+	author: string,
+): Promise<{ messageId: string; botMessageId: string } | null> {
+	if (!target) return null;
+	const command = stripMention(message).toLowerCase();
+
+	let responseContent: string | null = null;
+
+	if (target === "spaces" && /^status$/i.test(command)) {
+		const stats = await getEventStats();
+		const repoList =
+			stats.repos.length > 0
+				? stats.repos.map((r) => `- ${r}`).join("\n")
+				: "No repos tracked yet.";
+		responseContent = `**Active repos:**\n${repoList}\n\nEvents today: ${stats.eventsToday}`;
+	} else if (target === "spaces" && /^pipeline$/i.test(command)) {
+		responseContent =
+			"Pipeline summary is available on the Dashboard tab. Select a repo to view its issue pipeline.";
+	} else if (target !== "spaces" && /^status$/i.test(command)) {
+		responseContent = `Checking status for **@${target}**... No active dispatches found. Use \`@${target} <task>\` to dispatch work.`;
+	} else {
+		return null;
+	}
+
+	const timestamp = new Date().toISOString();
+
+	const userMsg: ChatMessage = {
+		id: crypto.randomUUID(),
+		repo,
+		author,
+		authorType: "user",
+		content: message,
+		agentTarget: target,
+		discussionId: null,
+		discussionUrl: null,
+		timestamp,
+	};
+	await pushChatMessage(userMsg);
+
+	const botMsg: ChatMessage = {
+		id: crypto.randomUUID(),
+		repo,
+		author: "spaces-bot",
+		authorType: "bot",
+		content: responseContent,
+		agentTarget: null,
+		discussionId: null,
+		discussionUrl: null,
+		timestamp: new Date(Date.now() + 1).toISOString(),
+	};
+	await pushChatMessage(botMsg);
+
+	return { messageId: userMsg.id, botMessageId: botMsg.id };
 }

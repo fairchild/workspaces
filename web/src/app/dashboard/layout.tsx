@@ -21,7 +21,9 @@ export default async function DashboardLayout({
 	return (
 		<div className={styles.shell}>
 			<header className={styles.topBar}>
-				<Link href="/dashboard" className={styles.brand}>Spaces</Link>
+				<Link href="/dashboard" className={styles.brand}>
+					Spaces
+				</Link>
 				<div className={styles.user}>
 					{session.user.image && (
 						<Image

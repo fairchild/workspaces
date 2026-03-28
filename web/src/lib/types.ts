@@ -155,6 +155,29 @@ export interface ChatMessage {
 	timestamp: string;
 }
 
+// --- Dispatch ---
+
+export type DispatchStatus =
+	| "pending"
+	| "running"
+	| "pr_opened"
+	| "ci_passed"
+	| "complete"
+	| "failed";
+
+export interface DispatchMetadata {
+	type: "dispatch";
+	taskId: string;
+	agent: string;
+	task: string;
+	issueRef: string | null;
+	repo: string;
+	discussionUrl: string;
+	status: DispatchStatus;
+	branch: string | null;
+	prUrl: string | null;
+}
+
 export type TimelineEntryKind = "event" | "chat";
 
 export type TimelineEntry =

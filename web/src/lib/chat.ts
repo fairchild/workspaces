@@ -83,6 +83,46 @@ export async function getChatMessages(
 	}));
 }
 
+export async function updateChatMessageContent(
+	id: string,
+	content: string,
+): Promise<void> {
+	await ensureChatTable();
+	const db = getDb();
+	await db
+		.updateTable("chat_messages")
+		.set({ content })
+		.where("id", "=", id)
+		.execute();
+}
+
+export async function getChatMessageByDiscussionId(
+	discussionId: string,
+): Promise<ChatMessage | null> {
+	await ensureChatTable();
+	const db = getDb();
+	const row = await db
+		.selectFrom("chat_messages")
+		.selectAll()
+		.where("discussion_id", "=", discussionId)
+		.where("author_type", "=", "bot")
+		.orderBy("timestamp", "desc")
+		.limit(1)
+		.executeTakeFirst();
+	if (!row) return null;
+	return {
+		id: row.id,
+		repo: row.repo,
+		author: row.author,
+		authorType: row.author_type as AuthorType,
+		content: row.content,
+		agentTarget: row.agent_target,
+		discussionId: row.discussion_id,
+		discussionUrl: row.discussion_url,
+		timestamp: row.timestamp,
+	};
+}
+
 export async function getMixedTimeline(
 	repo: string,
 	limit = 50,
@@ -93,14 +133,7 @@ export async function getMixedTimeline(
 
 	let eventsQuery = db
 		.selectFrom("webhook_events")
-		.select([
-			"id",
-			"type",
-			"action",
-			"summary",
-			"repo",
-			"timestamp",
-		])
+		.select(["id", "type", "action", "summary", "repo", "timestamp"])
 		.where("repo", "=", repo)
 		.orderBy("timestamp", "desc")
 		.limit(limit);
@@ -133,33 +166,27 @@ export async function getMixedTimeline(
 	]);
 
 	const timeline: TimelineEntry[] = [
-		...events.map(
-			(e) =>
-				({
-					kind: "event" as const,
-					id: e.id,
-					type: e.type as WebhookEventType,
-					action: e.action,
-					summary: e.summary,
-					repo: e.repo,
-					timestamp: e.timestamp,
-				}),
-		),
-		...messages.map(
-			(m) =>
-				({
-					kind: "chat" as const,
-					id: m.id,
-					repo: m.repo,
-					author: m.author,
-					authorType: m.author_type as AuthorType,
-					content: m.content,
-					agentTarget: m.agent_target,
-					discussionId: m.discussion_id,
-					discussionUrl: m.discussion_url,
-					timestamp: m.timestamp,
-				}),
-		),
+		...events.map((e) => ({
+			kind: "event" as const,
+			id: e.id,
+			type: e.type as WebhookEventType,
+			action: e.action,
+			summary: e.summary,
+			repo: e.repo,
+			timestamp: e.timestamp,
+		})),
+		...messages.map((m) => ({
+			kind: "chat" as const,
+			id: m.id,
+			repo: m.repo,
+			author: m.author,
+			authorType: m.author_type as AuthorType,
+			content: m.content,
+			agentTarget: m.agent_target,
+			discussionId: m.discussion_id,
+			discussionUrl: m.discussion_url,
+			timestamp: m.timestamp,
+		})),
 	];
 
 	timeline.sort((a, b) => (a.timestamp > b.timestamp ? -1 : 1));

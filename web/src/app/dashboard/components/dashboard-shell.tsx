@@ -5,7 +5,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import styles from "../page.module.css";
 import { ActivityFeed } from "./activity-feed";
-import { ChatPlaceholder } from "./chat-placeholder";
+import { ChatPanel } from "./chat-panel";
 import { MainPanel } from "./main-panel";
 import { Sidebar } from "./sidebar";
 
@@ -138,7 +138,10 @@ export function DashboardShell({
 						error={error}
 					/>
 				) : (
-					<ChatPlaceholder />
+					<ChatPanel
+						selectedRepo={selectedRepo}
+						agents={agentData?.agents ?? []}
+					/>
 				)}
 			</main>
 			<aside className={styles.right}>
