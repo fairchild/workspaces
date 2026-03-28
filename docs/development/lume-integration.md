@@ -135,8 +135,8 @@ Workspaces can override Lume's built-in unattended preset when a host-specific s
 Current override policy:
 
 - Workspaces keeps a versioned set of Tahoe profiles under [config/lume/unattended/](../../config/lume/unattended/)
-- the current default bridged Tahoe override is [tahoe-workspaces-bridged-v27.yml](../../config/lume/unattended/tahoe-workspaces-bridged-v27.yml)
-- the current NAT Tahoe override is [tahoe-workspaces-v26.yml](../../config/lume/unattended/tahoe-workspaces-v26.yml)
+- the current default NAT Tahoe override is [tahoe-workspaces-v26.yml](../../config/lume/unattended/tahoe-workspaces-v26.yml)
+- the bridged Tahoe diagnostics override is [tahoe-workspaces-bridged-v27.yml](../../config/lume/unattended/tahoe-workspaces-bridged-v27.yml)
 - fallback is still the upstream preset name, for example `preset:tahoe`
 - the override set is consumed by the standalone validator and recovery path only
 - the current from-scratch recovery helper is [tahoe-workspaces-v18-official-run-bootstrap-ssh.yml](../../config/lume/unattended/tahoe-workspaces-v18-official-run-bootstrap-ssh.yml)
@@ -144,8 +144,9 @@ Current override policy:
 The important current-state detail is that the old `Screen Time` issue is no longer the main blocker. The meaningful runtime behavior now depends on:
 
 - the official signed Lume daemon
-- a bridged runtime override
+- a NAT-backed validated base for normal runs
 - guest-side `Remote Login` enabled through System Settings
+- an explicit bridged override only when debugging host-network reachability
 
 ## Upstream Testing Note
 
@@ -269,18 +270,19 @@ The specific gap is:
 
 Operationally, that means:
 
-- bridged guest IP plus direct SSH is the current source of truth
-- daemon-side `null` IP must not be treated as immediate guest failure on this path
+- NAT is the default network for normal validation and app-managed workspace boots
+- bridged guest IP plus direct SSH remains the fallback source of truth on the diagnostics path
+- daemon-side `null` IP must not be treated as immediate guest failure on the bridged path
 
 For the exact commands and troubleshooting sequence, use [lume-recreate-runbook.md](./lume-recreate-runbook.md).
 
 ## Current Operational Workaround
 
-The currently working recovery path is deliberately narrower than the long-term contract:
+The current diagnostics path is deliberately narrower than the normal NAT-backed contract:
 
 1. use the official installed and signed Lume runtime
 2. run a dedicated daemon on port `7778`
-3. boot the base or clone with `network: "bridged:en0"`
+3. boot the base or clone with `network: "bridged:en0"` only when investigating host-network reachability
 4. enable `Remote Login` through System Settings when the guest first reaches desktop
 5. use guest-side checks and direct SSH as the runtime truth
 6. treat daemon `ipAddress: null` as an observability problem unless guest-side checks also fail

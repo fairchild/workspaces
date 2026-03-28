@@ -239,6 +239,7 @@ curl -sS --json '{
 
 Notes:
 
+- This is a diagnostics-only bridged path. Normal validation and app-managed boots now default to NAT.
 - `en0` is the known-good interface on this host.
 - Lume may still report `"networkMode":"nat"` in `GET /lume/vms/:name`; that reflects persisted config more than effective runtime override.
 - If the daemon returns `ipAddress: null` here, keep going. That is not enough to call the guest unhealthy on this bridged path.

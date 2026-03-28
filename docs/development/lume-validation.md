@@ -101,13 +101,13 @@ Contract:
   - with `state = "ready"` for the current `hostProfileKey`
 - stock Tahoe base preparation now relies on the versioned Workspaces profiles under:
   - `config/lume/unattended/`
-- the current default bridged Tahoe override is:
-  - `config/lume/unattended/tahoe-workspaces-bridged-v27.yml`
-- the current NAT Tahoe override is:
+- the current default NAT Tahoe override is:
   - `config/lume/unattended/tahoe-workspaces-v26.yml`
+- the bridged Tahoe diagnostics override is:
+  - `config/lume/unattended/tahoe-workspaces-bridged-v27.yml`
 - the current recreate-from-scratch recovery helper is:
   - `config/lume/unattended/tahoe-workspaces-v18-official-run-bootstrap-ssh.yml`
-- stock base preparation uses `LUME_STANDALONE_PREPARE_NETWORK` and defaults it to the same value as `LUME_STANDALONE_RUN_NETWORK` (`bridged:en0` unless overridden)
+- stock base preparation uses `LUME_STANDALONE_PREPARE_NETWORK` and defaults it to the same value as `LUME_STANDALONE_RUN_NETWORK` (`nat` unless overridden)
 
 Upstream Lume local-build note:
 
@@ -253,16 +253,16 @@ Do not treat a Workspaces macOS VM smoke failure as meaningful until this standa
 
 Current known-good runtime note:
 
-- the presently proven recovery path uses the official signed Lume daemon plus a bridged runtime override
-- if you are trying to recreate or debug the working base+clone flow, use [lume-recreate-runbook.md](./lume-recreate-runbook.md) instead of assuming the old NAT-only path is still sufficient
+- Workspaces now targets NAT-backed validated bases by default
+- if you are trying to recreate or debug the older bridged host-reachability path, use [lume-recreate-runbook.md](./lume-recreate-runbook.md)
 
 ### Known-good manual recovery path
 
-The current manual proof path is:
+The default manual proof path is:
 
 1. run the official installed Lume daemon on port `7778`
 2. boot the validated base from Workspaces-managed storage
-3. use `network: "bridged:en0"` in the run request
+3. prefer `network: "nat"` unless you are debugging host-network reachability
 4. log in over VNC if needed
 5. enable `Remote Login` in `System Settings -> Sharing`
 6. verify the base with direct SSH
@@ -270,9 +270,9 @@ The current manual proof path is:
 
 Important:
 
-- daemon `ipAddress` and `sshAvailable` were historically unreliable on this bridged path
-- a bridged guest IP plus direct SSH is the current runtime source of truth
-- if you need the exact commands, use [lume-recreate-runbook.md](./lume-recreate-runbook.md)
+- use bridged overrides only for diagnostics or when you specifically need host-network reachability
+- daemon `ipAddress` and `sshAvailable` were historically unreliable on the bridged path
+- if you need the exact bridged-diagnostics commands, use [lume-recreate-runbook.md](./lume-recreate-runbook.md)
 
 ### Automated real-host smoke
 
