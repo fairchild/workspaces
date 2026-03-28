@@ -106,6 +106,7 @@ For VM and provider-backed workspace architecture, see:
 - [docs/development/lume-integration.md](./docs/development/lume-integration.md)
 - [docs/development/lume-validation.md](./docs/development/lume-validation.md)
 - [docs/development/lume-recreate-runbook.md](./docs/development/lume-recreate-runbook.md)
+- [docs/development/codespaces-claude-worker.md](./docs/development/codespaces-claude-worker.md)
 
 The Lume validation flow uses isolated Workspaces-managed VM storage and a standalone validated-base manifest before the app will reuse a macOS base VM.
 
