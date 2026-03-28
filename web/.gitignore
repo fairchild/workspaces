@@ -4,3 +4,7 @@ node_modules/
 .env*.local
 tsconfig.tsbuildinfo
 data/
+e2e/results/
+e2e/evidence/
+playwright-report/
+test-results/
