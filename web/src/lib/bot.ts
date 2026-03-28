@@ -2,6 +2,7 @@ import { createGitHubAdapter } from "@chat-adapter/github";
 import { createMemoryState } from "@chat-adapter/state-memory";
 import { Chat } from "chat";
 import { getEventStats } from "./events";
+import { formatWorkspaceStatusCard, getWorkspaces } from "./workspaces";
 
 let _bot: Chat | undefined;
 
@@ -26,20 +27,27 @@ export function getBot(): Chat {
 		});
 
 		_bot.onNewMention(async (thread) => {
-			const stats = await getEventStats();
-			await thread.post(
-				`Tracking ${stats.repos.length} repo(s) with ${stats.eventsToday} event(s) today.`,
-			);
+			const [stats, workspaces] = await Promise.all([
+				getEventStats(),
+				getWorkspaces(),
+			]);
+			const summary = `Tracking ${stats.repos.length} repo(s) with ${stats.eventsToday} event(s) today.`;
+			const card = formatWorkspaceStatusCard(workspaces);
+			await thread.post(`${summary}\n\n${card}`);
 		});
 
 		_bot.onNewMessage(/status/i, async (thread) => {
-			const stats = await getEventStats();
+			const [stats, workspaces] = await Promise.all([
+				getEventStats(),
+				getWorkspaces(),
+			]);
 			const repoList =
 				stats.repos.length > 0
 					? stats.repos.map((r) => `- ${r}`).join("\n")
 					: "No repos tracked yet.";
+			const card = formatWorkspaceStatusCard(workspaces);
 			await thread.post(
-				`**Active repos:**\n${repoList}\n\nEvents today: ${stats.eventsToday}`,
+				`**Active repos:**\n${repoList}\n\nEvents today: ${stats.eventsToday}\n\n${card}`,
 			);
 		});
 	}
