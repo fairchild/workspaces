@@ -48,17 +48,19 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 180
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           fetch-depth: 1
 
-      - uses: astral-sh/setup-uv@v7
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
 
       - name: Verify gh CLI
         run: gh --version
 
       - name: Launch Codespace Claude worker
+        timeout-minutes: 165
         env:
+          CODESPACES_WORKER_GITHUB_TOKEN: ${{ secrets.CODESPACES_WORKER_GITHUB_TOKEN }}
           GH_TOKEN: ${{ secrets.CODESPACES_WORKER_GITHUB_TOKEN }}
           WORKER_REF: ${{ inputs.ref }}
           WORKER_PROMPT: ${{ inputs.prompt }}

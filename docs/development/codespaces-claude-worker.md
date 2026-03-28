@@ -34,6 +34,8 @@ Account-specific GitHub Codespaces secret:
   - the Codespace-side runner checks for one of these before launching Claude
   - use Codespaces secrets for this, not Actions secrets, so the credential is available inside the created Codespace
 
+Keep the Codespaces secret surface minimal. The worker runs Claude with non-interactive permissions so it can complete autonomous tasks, which means prompt files and repo content must be treated as trusted inputs for this workflow.
+
 ## Workflow Inputs
 
 The manual workflow is [.github/workflows/codespaces-claude-worker.yml](../../.github/workflows/codespaces-claude-worker.yml).
@@ -56,6 +58,11 @@ Tracked control-plane files:
 - [.devcontainer/devcontainer.json](../../.devcontainer/devcontainer.json)
 - [scripts/codespaces-claude-launch.py](../../scripts/codespaces-claude-launch.py)
 - [scripts/codespaces-claude-worker.sh](../../scripts/codespaces-claude-worker.sh)
+
+Operational notes:
+
+- the launcher waits for the `claude` binary to become available after Codespace creation before it starts the worker
+- failed launches delete the created Codespace by default so quota and storage are not left behind; use `keep_running=true` only when you explicitly want to inspect a failed environment
 
 Ephemeral run artifacts inside the Codespace:
 

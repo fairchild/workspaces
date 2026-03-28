@@ -23,6 +23,26 @@ require_command() {
   command -v "$1" >/dev/null 2>&1 || fail "missing required command: $1"
 }
 
+wait_for_command() {
+  local name="$1"
+  local timeout_seconds="${2:-90}"
+  local poll_interval_seconds="${3:-5}"
+  local elapsed=0
+
+  while ((elapsed < timeout_seconds)); do
+    if command -v "$name" >/dev/null 2>&1; then
+      return 0
+    fi
+    if ((elapsed == 0)); then
+      log "waiting for $name to become available"
+    fi
+    sleep "$poll_interval_seconds"
+    elapsed=$((elapsed + poll_interval_seconds))
+  done
+
+  fail "missing required command: $name (waited ${timeout_seconds}s)"
+}
+
 write_json() {
   local path="$1"
   local payload="$2"
@@ -76,7 +96,7 @@ done
 
 require_command git
 require_command python3
-require_command claude
+wait_for_command claude 90 5
 
 if [[ -z "${ANTHROPIC_API_KEY:-}" && -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]]; then
   fail "missing Claude credentials; set ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN in Codespaces secrets"
@@ -122,6 +142,7 @@ PY
 )"
 
 log "starting Claude run $run_id"
+log "request file copied to $request_copy"
 
 set +e
 cat "$request_copy" | claude -p \

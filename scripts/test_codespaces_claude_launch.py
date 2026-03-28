@@ -104,6 +104,96 @@ class CodespacesClaudeLaunchTests(unittest.TestCase):
         )
         self.assertEqual(token, "worker-token")
 
+    def test_wait_for_codespace_exits_early_on_terminal_state(self) -> None:
+        options = self.make_options(ready_timeout_seconds=30, poll_interval_seconds=1)
+        original_get_codespace = launcher.get_codespace
+        original_sleep = launcher.time.sleep
+        try:
+            launcher.get_codespace = lambda *_args, **_kwargs: {"state": "Failed"}
+            launcher.time.sleep = lambda _seconds: None
+            with self.assertRaises(launcher.CodespacesClaudeLaunchError) as exc:
+                launcher.wait_for_codespace(options, "token", "codespace-name")
+            self.assertIn("terminal state=Failed", str(exc.exception))
+        finally:
+            launcher.get_codespace = original_get_codespace
+            launcher.time.sleep = original_sleep
+
+    def test_run_launch_deletes_codespace_after_failed_post_create_step(self) -> None:
+        options = self.make_options(keep_running=False)
+        calls: list[tuple[str, str]] = []
+        originals = {
+            "create_codespace": launcher.create_codespace,
+            "wait_for_codespace": launcher.wait_for_codespace,
+            "ensure_remote_request_dir": launcher.ensure_remote_request_dir,
+            "upload_request": launcher.upload_request,
+            "wait_for_remote_command": launcher.wait_for_remote_command,
+            "launch_remote_worker": launcher.launch_remote_worker,
+            "delete_codespace": launcher.delete_codespace,
+        }
+        try:
+            launcher.create_codespace = lambda *_args, **_kwargs: {"name": "codespace-name"}
+            launcher.wait_for_codespace = lambda *_args, **_kwargs: {
+                "name": "codespace-name",
+                "state": "Available",
+                "web_url": "https://example.test/codespace",
+            }
+            launcher.ensure_remote_request_dir = lambda *_args, **_kwargs: calls.append(
+                ("ensure", "codespace-name")
+            )
+            launcher.upload_request = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                launcher.CodespacesClaudeLaunchError("upload failed")
+            )
+            launcher.wait_for_remote_command = lambda *_args, **_kwargs: calls.append(
+                ("wait", "codespace-name")
+            )
+            launcher.launch_remote_worker = lambda *_args, **_kwargs: calls.append(
+                ("launch", "codespace-name")
+            )
+            launcher.delete_codespace = lambda name, _token: calls.append(("delete", name))
+
+            with self.assertRaises(launcher.CodespacesClaudeLaunchError):
+                launcher.run_launch(options, "token", "prompt\n")
+        finally:
+            for name, value in originals.items():
+                setattr(launcher, name, value)
+
+        self.assertIn(("delete", "codespace-name"), calls)
+
+    def test_run_launch_keeps_codespace_on_failure_when_requested(self) -> None:
+        options = self.make_options(keep_running=True)
+        calls: list[tuple[str, str]] = []
+        originals = {
+            "create_codespace": launcher.create_codespace,
+            "wait_for_codespace": launcher.wait_for_codespace,
+            "ensure_remote_request_dir": launcher.ensure_remote_request_dir,
+            "upload_request": launcher.upload_request,
+            "wait_for_remote_command": launcher.wait_for_remote_command,
+            "launch_remote_worker": launcher.launch_remote_worker,
+            "delete_codespace": launcher.delete_codespace,
+        }
+        try:
+            launcher.create_codespace = lambda *_args, **_kwargs: {"name": "codespace-name"}
+            launcher.wait_for_codespace = lambda *_args, **_kwargs: {
+                "name": "codespace-name",
+                "state": "Available",
+                "web_url": "https://example.test/codespace",
+            }
+            launcher.ensure_remote_request_dir = lambda *_args, **_kwargs: None
+            launcher.upload_request = lambda *_args, **_kwargs: None
+            launcher.wait_for_remote_command = lambda *_args, **_kwargs: None
+            launcher.launch_remote_worker = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                launcher.CodespacesClaudeLaunchError("launch failed")
+            )
+            launcher.delete_codespace = lambda name, _token: calls.append(("delete", name))
+
+            with self.assertRaises(launcher.CodespacesClaudeLaunchError):
+                launcher.run_launch(options, "token", "prompt\n")
+        finally:
+            for name, value in originals.items():
+                setattr(launcher, name, value)
+
+        self.assertEqual(calls, [])
+
 
 if __name__ == "__main__":
     unittest.main()

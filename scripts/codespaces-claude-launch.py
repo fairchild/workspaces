@@ -27,6 +27,14 @@ from urllib import error, request
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_REQUEST_ROOT = ".context/codespaces-claude-worker"
 DEFAULT_API_URL = "https://api.github.com"
+REMOTE_TOOL_READY_TIMEOUT_SECONDS = 90
+TERMINAL_FAILURE_STATES = {
+    "archived",
+    "deleted",
+    "failed",
+    "shutdown",
+    "shutting_down",
+}
 
 
 class CodespacesClaudeLaunchError(RuntimeError):
@@ -279,6 +287,10 @@ def wait_for_codespace(options: LaunchOptions, token: str, codespace_name: str) 
         if state != last_state:
             log(f"codespace {codespace_name} state={state}")
             last_state = state
+        if state.lower() in TERMINAL_FAILURE_STATES:
+            raise CodespacesClaudeLaunchError(
+                f"codespace {codespace_name} entered terminal state={state}"
+            )
         if state.lower() == "available":
             return details
         time.sleep(options.poll_interval_seconds)
@@ -292,18 +304,22 @@ def run_checked(
     *,
     env: dict[str, str],
     input_text: str | None = None,
+    stream_output: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     result = subprocess.run(
         cmd,
         cwd=REPO_ROOT,
-        capture_output=True,
+        capture_output=not stream_output,
         text=True,
         env=env,
         input=input_text,
     )
     if result.returncode != 0:
         rendered = shlex.join(cmd)
-        details = (result.stderr or result.stdout).strip() or "unknown error"
+        if stream_output:
+            details = "see command output above"
+        else:
+            details = (result.stderr or result.stdout).strip() or "unknown error"
         raise CodespacesClaudeLaunchError(f"command failed ({rendered}): {details}")
     return result
 
@@ -328,6 +344,48 @@ def ensure_remote_request_dir(codespace_name: str, paths: RemotePaths, token: st
             f"mkdir -p {shlex.quote(paths.request_dir)}",
         ],
         env=gh_env(token),
+    )
+
+
+def wait_for_remote_command(
+    codespace_name: str,
+    command_name: str,
+    token: str,
+    *,
+    timeout_seconds: int = REMOTE_TOOL_READY_TIMEOUT_SECONDS,
+    poll_interval_seconds: int = 5,
+) -> None:
+    deadline = time.time() + timeout_seconds
+    command = [
+        "gh",
+        "codespace",
+        "ssh",
+        "-c",
+        codespace_name,
+        "--",
+        "bash",
+        "-lc",
+        f"command -v {shlex.quote(command_name)} >/dev/null 2>&1",
+    ]
+    env = gh_env(token)
+    log(
+        f"waiting up to {timeout_seconds}s for {command_name} to become available in {codespace_name}"
+    )
+    while time.time() < deadline:
+        result = subprocess.run(
+            command,
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            env=env,
+            check=False,
+        )
+        if result.returncode == 0:
+            log(f"confirmed {command_name} is available in {codespace_name}")
+            return
+        time.sleep(poll_interval_seconds)
+    raise CodespacesClaudeLaunchError(
+        f"timed out waiting for {command_name} in codespace {codespace_name}"
     )
 
 
@@ -371,12 +429,20 @@ def launch_remote_worker(
             command,
         ],
         env=gh_env(token),
+        stream_output=True,
     )
 
 
 def stop_codespace(codespace_name: str, token: str) -> None:
     run_checked(
         ["gh", "codespace", "stop", "-c", codespace_name],
+        env=gh_env(token),
+    )
+
+
+def delete_codespace(codespace_name: str, token: str) -> None:
+    run_checked(
+        ["gh", "codespace", "delete", "-c", codespace_name, "--force"],
         env=gh_env(token),
     )
 
@@ -398,24 +464,20 @@ def summarize_result(codespace: dict[str, Any], *, stopped: bool, paths: RemoteP
     }
 
 
-def main() -> int:
+def run_launch(options: LaunchOptions, token: str, request_text: str) -> dict[str, Any]:
+    log(f"creating codespace for {options.repo}@{options.ref}")
+    created = create_codespace(options, token)
+    codespace_name = str(created.get("name", "")).strip()
+    if not codespace_name:
+        raise CodespacesClaudeLaunchError("GitHub create codespace response did not include a name")
+
+    paths = remote_paths(options.repo, options.request_root, options.run_id)
+
     try:
-        options = parse_args()
-        require_command("gh")
-        token = resolve_github_token(os.environ)
-        request_text = build_request_markdown(options.prompt, options.prompt_file)
-
-        log(f"creating codespace for {options.repo}@{options.ref}")
-        created = create_codespace(options, token)
-        codespace_name = str(created.get("name", "")).strip()
-        if not codespace_name:
-            raise CodespacesClaudeLaunchError("GitHub create codespace response did not include a name")
-
         codespace = wait_for_codespace(options, token, codespace_name)
-        paths = remote_paths(options.repo, options.request_root, options.run_id)
-
         ensure_remote_request_dir(codespace_name, paths, token)
         upload_request(codespace_name, paths.request_file, request_text, token)
+        wait_for_remote_command(codespace_name, "claude", token)
         launch_remote_worker(codespace_name, paths, options.run_id, options.max_turns, token)
 
         stopped = False
@@ -424,7 +486,24 @@ def main() -> int:
             stop_codespace(codespace_name, token)
             stopped = True
 
-        summary = summarize_result(codespace, stopped=stopped, paths=paths, run_id=options.run_id)
+        return summarize_result(codespace, stopped=stopped, paths=paths, run_id=options.run_id)
+    except Exception:
+        if not options.keep_running:
+            log(f"deleting codespace {codespace_name} after failed launch")
+            try:
+                delete_codespace(codespace_name, token)
+            except CodespacesClaudeLaunchError as cleanup_exc:
+                log(f"warning: failed to delete codespace {codespace_name}: {cleanup_exc}")
+        raise
+
+
+def main() -> int:
+    try:
+        options = parse_args()
+        require_command("gh")
+        token = resolve_github_token(os.environ)
+        request_text = build_request_markdown(options.prompt, options.prompt_file)
+        summary = run_launch(options, token, request_text)
         if options.output_json is not None:
             write_output(options.output_json, summary)
         print(json.dumps(summary, indent=2, sort_keys=True))
