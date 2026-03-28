@@ -3,7 +3,7 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""Regression tests for the PR #215 security lockdown."""
+"""Regression tests for the workflow and Lume security hardening."""
 
 from __future__ import annotations
 
@@ -75,11 +75,19 @@ class SecurityHardeningTests(unittest.TestCase):
             self.assertNotIn("__LUME_GUEST_PASSWORD__", rendered)
             self.assertEqual(stat.S_IMODE(output_path.stat().st_mode), 0o600)
 
-    def test_agent_mentions_workflow_has_no_public_triggers(self) -> None:
+    def test_agent_mentions_workflow_is_public_triage_only(self) -> None:
         workflow = (REPO_ROOT / ".github/workflows/agent-mention.yml").read_text()
-        self.assertIn("workflow_dispatch:", workflow)
-        for trigger in ("issue_comment:", "pull_request_review_comment:", "pull_request_review:"):
-            self.assertNotIn(trigger, workflow)
+        on_block, _ = workflow.split("\npermissions:\n", 1)
+        for trigger in ("issue_comment:", "pull_request_review_comment:", "pull_request_review:", "issues:"):
+            self.assertIn(trigger, on_block)
+        self.assertIn("runs-on: ubuntu-latest", workflow)
+        for secret_name in (
+            "CLAUDE_CODE_OAUTH_TOKEN",
+            "APRIL_PRIVATE_KEY",
+            "WORKSPACE_AGENTS_PRIVATE_KEY",
+            "EVIDENCE_UPLOAD_TOKEN",
+        ):
+            self.assertNotIn(secret_name, workflow)
 
     def test_claude_workflow_is_manual_dispatch_only(self) -> None:
         workflow = (REPO_ROOT / ".github/workflows/claude.yml").read_text()
@@ -93,6 +101,14 @@ class SecurityHardeningTests(unittest.TestCase):
             "issues",
         ):
             self.assertIsNone(re.search(rf"(?m)^  {re.escape(trigger)}:$", on_block))
+
+    def test_agent_executor_is_label_gated(self) -> None:
+        workflow = (REPO_ROOT / ".github/workflows/agent-executor.yml").read_text()
+        on_block, _ = workflow.split("\npermissions:\n", 1)
+        self.assertIn("issues:", on_block)
+        self.assertIn("pull_request:", on_block)
+        self.assertIn("types: [labeled]", on_block)
+        self.assertIn("safe-to-run-agent", workflow)
 
 
 if __name__ == "__main__":
