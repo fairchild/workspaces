@@ -1,27 +1,47 @@
 import { createGitHubAdapter } from "@chat-adapter/github";
+import { type SlackAdapter, createSlackAdapter } from "@chat-adapter/slack";
 import { createMemoryState } from "@chat-adapter/state-memory";
 import { Chat } from "chat";
 import { getEventStats } from "./events";
 
 let _bot: Chat | undefined;
 
+function buildAdapters(): Record<
+	string,
+	ReturnType<typeof createGitHubAdapter> | SlackAdapter
+> {
+	const appId = process.env.GITHUB_APP_ID ?? "";
+	const privateKey = (process.env.GITHUB_PRIVATE_KEY ?? "").replace(
+		/\\n/g,
+		"\n",
+	);
+
+	const adapters: Record<
+		string,
+		ReturnType<typeof createGitHubAdapter> | SlackAdapter
+	> = {
+		github: createGitHubAdapter({
+			appId,
+			privateKey,
+			webhookSecret: process.env.GITHUB_WEBHOOK_SECRET,
+		}),
+	};
+
+	if (process.env.SLACK_BOT_TOKEN) {
+		adapters.slack = createSlackAdapter({
+			botToken: process.env.SLACK_BOT_TOKEN,
+			signingSecret: process.env.SLACK_SIGNING_SECRET,
+		});
+	}
+
+	return adapters;
+}
+
 export function getBot(): Chat {
 	if (!_bot) {
-		const appId = process.env.GITHUB_APP_ID ?? "";
-		const privateKey = (process.env.GITHUB_PRIVATE_KEY ?? "").replace(
-			/\\n/g,
-			"\n",
-		);
-
 		_bot = new Chat({
 			userName: process.env.CHAT_BOT_USERNAME ?? "spaces-bot",
-			adapters: {
-				github: createGitHubAdapter({
-					appId,
-					privateKey,
-					webhookSecret: process.env.GITHUB_WEBHOOK_SECRET,
-				}),
-			},
+			adapters: buildAdapters(),
 			state: createMemoryState(),
 		});
 
@@ -44,4 +64,14 @@ export function getBot(): Chat {
 		});
 	}
 	return _bot;
+}
+
+/** Get the Slack adapter if configured. Returns null when SLACK_BOT_TOKEN is not set. */
+export function getSlackAdapter(): SlackAdapter | null {
+	const bot = getBot();
+	try {
+		return bot.getAdapter("slack") as SlackAdapter;
+	} catch {
+		return null;
+	}
 }

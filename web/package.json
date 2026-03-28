@@ -12,6 +12,7 @@
 	},
 	"dependencies": {
 		"@chat-adapter/github": "^4.23.0",
+		"@chat-adapter/slack": "^4.23.0",
 		"@chat-adapter/state-memory": "^4.23.0",
 		"@libsql/client": "^0.17.2",
 		"@vercel/analytics": "^2.0.1",

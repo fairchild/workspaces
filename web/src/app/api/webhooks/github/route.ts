@@ -1,6 +1,10 @@
 import crypto from "node:crypto";
 import { pushChatMessage } from "@/lib/chat";
 import { pushEvent } from "@/lib/events";
+import {
+	notifyBuildFailure,
+	notifyReviewRequested,
+} from "@/lib/slack-notifications";
 import type { ChatMessage, WebhookEvent, WebhookEventType } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -109,9 +113,43 @@ export async function POST(request: Request): Promise<Response> {
 
 	await pushEvent(event);
 
+	// Slack notifications for build failures and PR review requests
+	if (
+		eventType === "check_run" ||
+		eventType === "check_suite" ||
+		eventType === "workflow_run"
+	) {
+		const run = (payload.check_run ??
+			payload.check_suite ??
+			payload.workflow_run) as Record<string, unknown> | undefined;
+		await notifyBuildFailure(
+			repo ?? "unknown",
+			String(run?.name ?? "build"),
+			String(run?.conclusion ?? ""),
+			String(run?.html_url ?? ""),
+		);
+	}
+	if (eventType === "pull_request" && action === "review_requested") {
+		const pr = payload.pull_request as Record<string, unknown> | undefined;
+		const reviewer = payload.requested_reviewer as
+			| Record<string, unknown>
+			| undefined;
+		await notifyReviewRequested(
+			repo ?? "unknown",
+			Number(pr?.number ?? 0),
+			String(pr?.title ?? ""),
+			String(reviewer?.login ?? "team"),
+			String(pr?.html_url ?? ""),
+		);
+	}
+
 	// Bridge discussion/discussion_comment webhooks into chat_messages
 	if (eventType === "discussion" || eventType === "discussion_comment") {
-		const chatMsg = extractDiscussionChatMessage(eventType, payload, repo ?? "unknown");
+		const chatMsg = extractDiscussionChatMessage(
+			eventType,
+			payload,
+			repo ?? "unknown",
+		);
 		if (chatMsg) {
 			await pushChatMessage(chatMsg);
 		}
@@ -127,7 +165,9 @@ function extractDiscussionChatMessage(
 ): ChatMessage | null {
 	if (eventType === "discussion_comment") {
 		const comment = payload.comment as Record<string, unknown> | undefined;
-		const discussion = payload.discussion as Record<string, unknown> | undefined;
+		const discussion = payload.discussion as
+			| Record<string, unknown>
+			| undefined;
 		if (!comment?.body) return null;
 		const user = comment.user as Record<string, unknown> | undefined;
 		const isBot = String(user?.type ?? "").toLowerCase() === "bot";
@@ -145,7 +185,9 @@ function extractDiscussionChatMessage(
 	}
 
 	if (eventType === "discussion") {
-		const discussion = payload.discussion as Record<string, unknown> | undefined;
+		const discussion = payload.discussion as
+			| Record<string, unknown>
+			| undefined;
 		const action = String(payload.action ?? "");
 		if (action !== "created" || !discussion?.body) return null;
 		const user = discussion.user as Record<string, unknown> | undefined;
