@@ -83,6 +83,46 @@ export async function getChatMessages(
 	}));
 }
 
+export async function updateChatMessageContent(
+	id: string,
+	content: string,
+): Promise<void> {
+	await ensureChatTable();
+	const db = getDb();
+	await db
+		.updateTable("chat_messages")
+		.set({ content })
+		.where("id", "=", id)
+		.execute();
+}
+
+export async function getChatMessageByDiscussionId(
+	discussionId: string,
+): Promise<ChatMessage | null> {
+	await ensureChatTable();
+	const db = getDb();
+	const row = await db
+		.selectFrom("chat_messages")
+		.selectAll()
+		.where("discussion_id", "=", discussionId)
+		.where("author_type", "=", "bot")
+		.orderBy("timestamp", "desc")
+		.limit(1)
+		.executeTakeFirst();
+	if (!row) return null;
+	return {
+		id: row.id,
+		repo: row.repo,
+		author: row.author,
+		authorType: row.author_type as AuthorType,
+		content: row.content,
+		agentTarget: row.agent_target,
+		discussionId: row.discussion_id,
+		discussionUrl: row.discussion_url,
+		timestamp: row.timestamp,
+	};
+}
+
 export async function getMixedTimeline(
 	repo: string,
 	limit = 50,
