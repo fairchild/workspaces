@@ -26,6 +26,15 @@ install_deps() {
   fi
 }
 
+# Install prek pre-commit hooks (idempotent)
+if command -v prek >/dev/null 2>&1 && [[ -f "$REPO_ROOT/prek.toml" ]]; then
+  # Remove legacy core.hooksPath so prek can install into .git/hooks/
+  git config --unset-all --worktree core.hooksPath 2>/dev/null || true
+  git config --unset-all --local core.hooksPath 2>/dev/null || true
+  echo "=> Installing prek hooks"
+  prek install
+fi
+
 # Root dependencies
 install_deps "$REPO_ROOT"
 
