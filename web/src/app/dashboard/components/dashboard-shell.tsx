@@ -5,7 +5,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import styles from "../page.module.css";
 import { ActivityFeed } from "./activity-feed";
-import { ChatPlaceholder } from "./chat-placeholder";
+import { ChatPanel } from "./chat-panel";
 import { MainPanel } from "./main-panel";
 import { Sidebar } from "./sidebar";
 
@@ -58,6 +58,10 @@ export function DashboardShell({
 	// Clear unread badge when switching to chat
 	useEffect(() => {
 		if (activeTab === "chat") setUnreadChat(false);
+	}, [activeTab]);
+
+	const handleNewChatMessage = useCallback(() => {
+		if (activeTab !== "chat") setUnreadChat(true);
 	}, [activeTab]);
 
 	const [repos, setRepos] = useState<SelectedRepo[]>([]);
@@ -138,7 +142,11 @@ export function DashboardShell({
 						error={error}
 					/>
 				) : (
-					<ChatPlaceholder />
+					<ChatPanel
+						selectedRepo={selectedRepo}
+						agents={agentData?.agents ?? []}
+						onNewMessage={handleNewChatMessage}
+					/>
 				)}
 			</main>
 			<aside className={styles.right}>
