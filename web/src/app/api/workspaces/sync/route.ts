@@ -1,6 +1,6 @@
 import { getSession } from "@/lib/auth-server";
-import { getWorkspaces, syncWorkspaces } from "@/lib/workspaces";
 import type { Workspace, WorkspaceStatus } from "@/lib/types";
+import { getWorkspaces, syncWorkspaces } from "@/lib/workspaces";
 
 const SYNC_API_KEY = process.env.WORKSPACE_SYNC_API_KEY;
 
@@ -12,9 +12,7 @@ const VALID_STATUSES: Set<string> = new Set<string>([
 ]);
 
 /** Resolve user ID from API key header or session cookie. */
-async function authenticateRequest(
-	request: Request,
-): Promise<string | null> {
+async function authenticateRequest(request: Request): Promise<string | null> {
 	const authHeader = request.headers.get("authorization");
 	if (authHeader?.startsWith("Bearer ") && SYNC_API_KEY) {
 		const token = authHeader.slice(7);
@@ -40,8 +38,7 @@ function isWorkspace(v: unknown): v is Workspace {
 
 export async function POST(request: Request): Promise<Response> {
 	const userId = await authenticateRequest(request);
-	if (!userId)
-		return Response.json({ error: "unauthorized" }, { status: 401 });
+	if (!userId) return Response.json({ error: "unauthorized" }, { status: 401 });
 
 	let body: unknown;
 	try {
@@ -77,8 +74,7 @@ export async function GET(): Promise<Response> {
 		return Response.json({ error: "unauthorized" }, { status: 401 });
 
 	// User-specific state first, fall back to API-key-synced default
-	const state =
-		getWorkspaces(session.user.id) ?? getWorkspaces("default");
+	const state = getWorkspaces(session.user.id) ?? getWorkspaces("default");
 
 	return Response.json({
 		workspaces: state?.workspaces ?? [],
