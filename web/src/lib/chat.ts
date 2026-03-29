@@ -93,14 +93,7 @@ export async function getMixedTimeline(
 
 	let eventsQuery = db
 		.selectFrom("webhook_events")
-		.select([
-			"id",
-			"type",
-			"action",
-			"summary",
-			"repo",
-			"timestamp",
-		])
+		.select(["id", "type", "action", "summary", "repo", "timestamp"])
 		.where("repo", "=", repo)
 		.orderBy("timestamp", "desc")
 		.limit(limit);
@@ -133,33 +126,27 @@ export async function getMixedTimeline(
 	]);
 
 	const timeline: TimelineEntry[] = [
-		...events.map(
-			(e) =>
-				({
-					kind: "event" as const,
-					id: e.id,
-					type: e.type as WebhookEventType,
-					action: e.action,
-					summary: e.summary,
-					repo: e.repo,
-					timestamp: e.timestamp,
-				}),
-		),
-		...messages.map(
-			(m) =>
-				({
-					kind: "chat" as const,
-					id: m.id,
-					repo: m.repo,
-					author: m.author,
-					authorType: m.author_type as AuthorType,
-					content: m.content,
-					agentTarget: m.agent_target,
-					discussionId: m.discussion_id,
-					discussionUrl: m.discussion_url,
-					timestamp: m.timestamp,
-				}),
-		),
+		...events.map((e) => ({
+			kind: "event" as const,
+			id: e.id,
+			type: e.type as WebhookEventType,
+			action: e.action,
+			summary: e.summary,
+			repo: e.repo,
+			timestamp: e.timestamp,
+		})),
+		...messages.map((m) => ({
+			kind: "chat" as const,
+			id: m.id,
+			repo: m.repo,
+			author: m.author,
+			authorType: m.author_type as AuthorType,
+			content: m.content,
+			agentTarget: m.agent_target,
+			discussionId: m.discussion_id,
+			discussionUrl: m.discussion_url,
+			timestamp: m.timestamp,
+		})),
 	];
 
 	timeline.sort((a, b) => (a.timestamp > b.timestamp ? -1 : 1));

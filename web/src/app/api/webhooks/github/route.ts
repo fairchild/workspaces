@@ -111,7 +111,11 @@ export async function POST(request: Request): Promise<Response> {
 
 	// Bridge discussion/discussion_comment webhooks into chat_messages
 	if (eventType === "discussion" || eventType === "discussion_comment") {
-		const chatMsg = extractDiscussionChatMessage(eventType, payload, repo ?? "unknown");
+		const chatMsg = extractDiscussionChatMessage(
+			eventType,
+			payload,
+			repo ?? "unknown",
+		);
 		if (chatMsg) {
 			await pushChatMessage(chatMsg);
 		}
@@ -127,7 +131,9 @@ function extractDiscussionChatMessage(
 ): ChatMessage | null {
 	if (eventType === "discussion_comment") {
 		const comment = payload.comment as Record<string, unknown> | undefined;
-		const discussion = payload.discussion as Record<string, unknown> | undefined;
+		const discussion = payload.discussion as
+			| Record<string, unknown>
+			| undefined;
 		if (!comment?.body) return null;
 		const user = comment.user as Record<string, unknown> | undefined;
 		const isBot = String(user?.type ?? "").toLowerCase() === "bot";
@@ -145,7 +151,9 @@ function extractDiscussionChatMessage(
 	}
 
 	if (eventType === "discussion") {
-		const discussion = payload.discussion as Record<string, unknown> | undefined;
+		const discussion = payload.discussion as
+			| Record<string, unknown>
+			| undefined;
 		const action = String(payload.action ?? "");
 		if (action !== "created" || !discussion?.body) return null;
 		const user = discussion.user as Record<string, unknown> | undefined;

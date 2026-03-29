@@ -216,7 +216,10 @@ async function ghGraphQL<T>(
 	if (!res.ok) {
 		throw new GitHubApiError(res.status, await res.text());
 	}
-	const json = (await res.json()) as { data?: T; errors?: Array<{ message: string }> };
+	const json = (await res.json()) as {
+		data?: T;
+		errors?: Array<{ message: string }>;
+	};
 	if (json.errors?.length) {
 		throw new GitHubApiError(422, json.errors.map((e) => e.message).join("; "));
 	}
