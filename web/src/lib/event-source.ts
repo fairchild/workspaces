@@ -11,7 +11,10 @@ function num(val: unknown): number {
 	return typeof val === "number" ? val : 0;
 }
 
-export function getSourceUrl(type: WebhookEventType, p: Payload): string | null {
+export function getSourceUrl(
+	type: WebhookEventType,
+	p: Payload,
+): string | null {
 	switch (type) {
 		case "pull_request":
 			return str((p.pull_request as Nested)?.html_url) || null;
@@ -27,9 +30,7 @@ export function getSourceUrl(type: WebhookEventType, p: Payload): string | null 
 			const url = str((p.check_suite as Nested)?.url);
 			if (url) {
 				const repo = p.repository as Nested;
-				return str(repo?.html_url)
-					? `${str(repo?.html_url)}/actions`
-					: null;
+				return str(repo?.html_url) ? `${str(repo?.html_url)}/actions` : null;
 			}
 			return null;
 		}
@@ -93,9 +94,7 @@ export function extractCIDetail(p: Payload): CIDetail | null {
 	const run = (p.workflow_run ?? p.check_run ?? p.check_suite) as Nested;
 	if (!run) return null;
 	const branch =
-		str(run.head_branch) ||
-		str((run.head_sha as Nested)?.ref) ||
-		"";
+		str(run.head_branch) || str((run.head_sha as Nested)?.ref) || "";
 	return {
 		name: str(run.name),
 		conclusion: str(run.conclusion || run.status),

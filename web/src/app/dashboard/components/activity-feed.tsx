@@ -60,9 +60,7 @@ function EventRow({
 				onClick={onToggle}
 			>
 				<div className={styles.eventHeader}>
-					<span
-						className={`${styles.eventBadge} ${EVENT_COLORS[event.type]}`}
-					>
+					<span className={`${styles.eventBadge} ${EVENT_COLORS[event.type]}`}>
 						{EVENT_LABELS[event.type]}
 					</span>
 					<span className={styles.eventTime}>
@@ -70,13 +68,9 @@ function EventRow({
 					</span>
 				</div>
 				<span className={styles.eventSummary}>{event.summary}</span>
-				{showRepo && (
-					<span className={styles.eventRepo}>{event.repo}</span>
-				)}
+				{showRepo && <span className={styles.eventRepo}>{event.repo}</span>}
 			</button>
-			{isExpanded && (
-				<EventDetail eventId={event.id} eventType={event.type} />
-			)}
+			{isExpanded && <EventDetail eventId={event.id} eventType={event.type} />}
 		</>
 	);
 }
@@ -110,6 +104,7 @@ export function ActivityFeed({ filterRepo }: ActivityFeedProps) {
 	}, [fetchEvents]);
 
 	// Collapse when repo filter changes
+	// biome-ignore lint/correctness/useExhaustiveDependencies: intentional reset on filter change
 	useEffect(() => {
 		setExpandedId(null);
 	}, [filterRepo]);
@@ -138,9 +133,7 @@ export function ActivityFeed({ filterRepo }: ActivityFeedProps) {
 							isExpanded={expandedId === event.id}
 							showRepo={!filterRepo}
 							onToggle={() =>
-								setExpandedId((prev) =>
-									prev === event.id ? null : event.id,
-								)
+								setExpandedId((prev) => (prev === event.id ? null : event.id))
 							}
 						/>
 					))}

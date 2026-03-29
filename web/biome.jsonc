@@ -9,6 +9,9 @@
 		"enabled": true,
 		"indentStyle": "tab"
 	},
+	"css": {
+		"parser": { "cssModules": true }
+	},
 	"files": {
 		"ignore": [".next/", "node_modules/"]
 	}

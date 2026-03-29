@@ -127,9 +127,7 @@ function TypeContent({
 function PRContent({ detail }: { detail: PRDetail }) {
 	return (
 		<>
-			{detail.sender && (
-				<div className={styles.sender}>{detail.sender}</div>
-			)}
+			{detail.sender && <div className={styles.sender}>{detail.sender}</div>}
 			<div className={styles.detailTitle}>{detail.title}</div>
 			{detail.body && <div className={styles.body}>{detail.body}</div>}
 			<div className={styles.badges}>
@@ -185,9 +183,7 @@ function CIContent({ detail }: { detail: CIDetail }) {
 function IssueContent({ detail }: { detail: IssueDetail }) {
 	return (
 		<>
-			{detail.sender && (
-				<div className={styles.sender}>{detail.sender}</div>
-			)}
+			{detail.sender && <div className={styles.sender}>{detail.sender}</div>}
 			<div className={styles.detailTitle}>{detail.title}</div>
 			{detail.body && <div className={styles.body}>{detail.body}</div>}
 			{detail.labels.length > 0 && (
@@ -206,9 +202,7 @@ function IssueContent({ detail }: { detail: IssueDetail }) {
 function DiscussionContent({ detail }: { detail: DiscussionDetail }) {
 	return (
 		<>
-			{detail.sender && (
-				<div className={styles.sender}>{detail.sender}</div>
-			)}
+			{detail.sender && <div className={styles.sender}>{detail.sender}</div>}
 			<div className={styles.detailTitle}>{detail.title}</div>
 			{detail.body && <div className={styles.body}>{detail.body}</div>}
 		</>

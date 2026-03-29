@@ -2,10 +2,10 @@
 
 import type { AgentDiscoveryResponse, SelectedRepo } from "@/lib/types";
 import { useCallback, useEffect, useState } from "react";
+import styles from "../page.module.css";
 import { ActivityFeed } from "./activity-feed";
 import { MainPanel } from "./main-panel";
 import { Sidebar } from "./sidebar";
-import styles from "../page.module.css";
 
 interface DashboardShellProps {
 	selectedRepo: { owner: string; repo: string } | null;
@@ -77,9 +77,7 @@ export function DashboardShell({ selectedRepo }: DashboardShellProps) {
 			<aside className={styles.right}>
 				<ActivityFeed
 					filterRepo={
-						selectedRepo
-							? `${selectedRepo.owner}/${selectedRepo.repo}`
-							: null
+						selectedRepo ? `${selectedRepo.owner}/${selectedRepo.repo}` : null
 					}
 				/>
 			</aside>
