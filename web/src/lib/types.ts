@@ -139,6 +139,29 @@ export const PIPELINE_LABELS: Record<PipelineColumn, string> = {
 	mergeable: "Mergeable",
 };
 
+// --- Dispatch ---
+
+export type DispatchStatus =
+	| "pending"
+	| "running"
+	| "pr_opened"
+	| "ci_passed"
+	| "complete"
+	| "failed";
+
+export interface DispatchMetadata {
+	type: "dispatch";
+	taskId: string;
+	agent: string;
+	task: string;
+	issueRef: string | null;
+	repo: string;
+	discussionUrl: string;
+	status: DispatchStatus;
+	branch: string | null;
+	prUrl: string | null;
+}
+
 // --- Chat ---
 
 export type AuthorType = "user" | "agent" | "bot";

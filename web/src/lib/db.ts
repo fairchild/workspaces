@@ -23,9 +23,24 @@ export interface ChatMessagesTable {
 	timestamp: string;
 }
 
+export interface WorkspacesTable {
+	id: string;
+	name: string;
+	path: string;
+	repo_id: string | null;
+	repo_name: string | null;
+	created_at: string;
+	last_accessed_at: string;
+	status: string;
+	git_branch: string | null;
+	backend_identifier: string;
+	synced_at: string;
+}
+
 interface Database {
 	webhook_events: EventsTable;
 	chat_messages: ChatMessagesTable;
+	workspaces: WorkspacesTable;
 }
 
 let _turso: Client | undefined;
