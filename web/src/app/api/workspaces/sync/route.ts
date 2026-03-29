@@ -1,6 +1,10 @@
 import { getSession } from "@/lib/auth-server";
-import type { Workspace, WorkspaceStatus } from "@/lib/types";
-import { getWorkspaces, syncWorkspaces } from "@/lib/workspaces";
+import type { Workspace } from "@/lib/types";
+import {
+	type SyncWorkspaceInput,
+	getWorkspaces,
+	syncWorkspaces,
+} from "@/lib/workspaces";
 
 const SYNC_API_KEY = process.env.WORKSPACE_SYNC_API_KEY;
 
@@ -64,8 +68,8 @@ export async function POST(request: Request): Promise<Response> {
 		}
 	}
 
-	syncWorkspaces(userId, workspaces as Workspace[]);
-	return Response.json({ ok: true, count: workspaces.length });
+	const count = await syncWorkspaces(workspaces as SyncWorkspaceInput[]);
+	return Response.json({ ok: true, count });
 }
 
 export async function GET(): Promise<Response> {
@@ -73,11 +77,7 @@ export async function GET(): Promise<Response> {
 	if (!session)
 		return Response.json({ error: "unauthorized" }, { status: 401 });
 
-	// User-specific state first, fall back to API-key-synced default
-	const state = getWorkspaces(session.user.id) ?? getWorkspaces("default");
+	const workspaces = await getWorkspaces();
 
-	return Response.json({
-		workspaces: state?.workspaces ?? [],
-		syncedAt: state?.syncedAt ?? null,
-	});
+	return Response.json({ workspaces });
 }
