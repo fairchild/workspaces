@@ -1,7 +1,13 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
-const PUBLIC_PATHS = new Set(["/", "/sign-in", "/api/auth", "/api/webhooks"]);
+const PUBLIC_PATHS = new Set([
+	"/",
+	"/sign-in",
+	"/api/auth",
+	"/api/webhooks",
+	"/api/workspaces/sync",
+]);
 
 function isPublic(pathname: string): boolean {
 	if (PUBLIC_PATHS.has(pathname)) return true;
