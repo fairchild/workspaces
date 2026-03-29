@@ -1,0 +1,109 @@
+{
+  "timestamp": "2026-03-29T17:10:14.116Z",
+  "nodeVersion": "v25.6.1",
+  "platform": "darwin arm64",
+  "results": [
+    {
+      "question": "Q1",
+      "title": "Connection pool through multiplexer",
+      "verdict": "PARTIAL",
+      "summary": "pool=1: OK (15ms), pool=2: FAIL (Q1 pool=2 timed out after 20000ms), pool=3: FAIL (skipped (DBOS stuck)), pool=5: FAIL (skipped (DBOS stuck)), pool=10: FAIL (skipped (DBOS stuck))",
+      "details": {
+        "socketMaxConnections": 20,
+        "note": "PGlite socket maxConnections defaults to 1 — root cause of ECONNRESET in the spike",
+        "results": [
+          { "poolSize": 1, "success": true, "durationMs": 15 },
+          { "poolSize": 2, "success": false, "durationMs": 0, "error": "Q1 pool=2 timed out after 20000ms" },
+          { "poolSize": 3, "success": false, "durationMs": 0, "error": "skipped (DBOS stuck)" },
+          { "poolSize": 5, "success": false, "durationMs": 0, "error": "skipped (DBOS stuck)" },
+          { "poolSize": 10, "success": false, "durationMs": 0, "error": "skipped (DBOS stuck)" }
+        ]
+      },
+      "durationMs": 24214
+    },
+    {
+      "question": "Q2",
+      "title": "PGlite supports CREATE SCHEMA dbos",
+      "verdict": "PASS",
+      "summary": "Schema 'dbos' exists with 13 tables",
+      "details": {
+        "schemaExists": true,
+        "tableCount": 13,
+        "tables": [
+          "application_versions", "dbos_migrations", "event_dispatch_kv",
+          "notifications", "operation_outputs", "scheduler_state", "streams",
+          "workflow_events", "workflow_events_history", "workflow_inputs",
+          "workflow_queue", "workflow_schedules", "workflow_status"
+        ]
+      },
+      "durationMs": 131
+    },
+    {
+      "question": "Q3",
+      "title": "LISTEN/NOTIFY through socket",
+      "verdict": "PARTIAL",
+      "summary": "q3a: OK, q3b: FAIL, q3c: FAIL",
+      "details": {
+        "q3a": {
+          "pass": true,
+          "detail": "Raw PGlite: received=true, payload=\"ping\"",
+          "latencyMs": 201
+        },
+        "q3b": {
+          "pass": false,
+          "detail": "Through socket: NOT delivered (pglite-socket has no notification relay code)"
+        },
+        "q3c": {
+          "pass": false,
+          "detail": "Timeout/Error: q3c-on timed out after 10000ms"
+        }
+      },
+      "durationMs": 34618
+    },
+    {
+      "question": "Q4",
+      "title": "PGlite WASM startup time",
+      "verdict": "PASS",
+      "summary": "Cold: 1572ms avg, Warm: 157ms avg, DBOS launch: 84ms avg",
+      "details": {
+        "cold": { "times": [1607, 1449, 1659], "avg": 1572, "min": 1449, "max": 1659 },
+        "warm": { "times": [217, 153, 101], "avg": 157, "min": 101, "max": 217 },
+        "dbosLaunch": { "times": [227, 14, 10], "avg": 84, "min": 10, "max": 227 },
+        "successCriterion": "cold < 5000ms"
+      },
+      "durationMs": 8952
+    },
+    {
+      "question": "Q5",
+      "title": "DBOSClient concurrent access",
+      "verdict": "PASS",
+      "summary": "q5a: OK, q5b: OK, q5c: OK",
+      "details": {
+        "q5a": { "pass": true, "detail": "Listed 7 workflows while DBOS running" },
+        "q5b": { "pass": true, "detail": "recv got: \"from-client\"" },
+        "q5c": { "pass": true, "detail": "3 clients: 8, 8, 8 workflows each" }
+      },
+      "durationMs": 10553
+    },
+    {
+      "question": "Q6",
+      "title": "Step output size performance",
+      "verdict": "PASS",
+      "summary": "100KB is 0.5x baseline (threshold: <5x). 1MB: 43ms",
+      "details": {
+        "baselinePgdataBytes": 28221734,
+        "measurements": [
+          { "sizeLabel": "100B", "durationMs": 24, "pgdataDeltaBytes": 90112 },
+          { "sizeLabel": "1KB", "durationMs": 11, "pgdataDeltaBytes": 0 },
+          { "sizeLabel": "10KB", "durationMs": 6, "pgdataDeltaBytes": 0 },
+          { "sizeLabel": "100KB", "durationMs": 13, "pgdataDeltaBytes": 0 },
+          { "sizeLabel": "500KB", "durationMs": 15, "pgdataDeltaBytes": 16384 },
+          { "sizeLabel": "1MB", "durationMs": 43, "pgdataDeltaBytes": 40960 }
+        ],
+        "ratio100kbVsBaseline": 0.54
+      },
+      "durationMs": 701
+    }
+  ],
+  "totalDurationMs": 80943
+}
