@@ -313,6 +313,12 @@ This sequence follows the priority rule above: core promise first, dependency cl
 
 ## Learnings
 
+### 2026-03-29 — Web local dev reliability (#237)
+- `scripts/setup` must handle lockfile-based dependency installation, not just mise — new worktrees were missing `pnpm install` for `web/`
+- cmux workshop skill already prioritizes `scripts/setup` in its detection table, but the script itself was too minimal to be useful
+- Local SQLite fallback needs `mkdirSync` for the data directory — fresh clones/worktrees hit ENOENT without it
+- Workshop setup should always run `scripts/setup` before starting dev servers — this is documented in the cmux skill but easy to skip
+
 ### 2026-03-22 — Spaces dashboard exploration (#191)
 - Prototyping multiple layout variants as static HTML before committing to a direction saved significant iteration time — owner could compare side-by-side and pick elements from each
 - The `web/` app has a strong design system (Instrument Serif + JetBrains Mono + mint accent); prototypes that didn't match it felt wrong immediately

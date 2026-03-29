@@ -1,3 +1,5 @@
+import { mkdirSync } from "node:fs";
+import { dirname } from "node:path";
 import { type Client, createClient } from "@libsql/client";
 import { Kysely } from "kysely";
 import { LibsqlDialect } from "./libsql-dialect";
@@ -22,10 +24,11 @@ let _db: Kysely<Database> | undefined;
 
 export function getTurso(): Client {
 	if (!_turso) {
-		_turso = createClient({
-			url: process.env.TURSO_DATABASE_URL ?? "file:data/auth.db",
-			authToken: process.env.TURSO_AUTH_TOKEN,
-		});
+		const url = process.env.TURSO_DATABASE_URL ?? "file:data/auth.db";
+		if (url.startsWith("file:")) {
+			mkdirSync(dirname(url.slice(5)), { recursive: true });
+		}
+		_turso = createClient({ url, authToken: process.env.TURSO_AUTH_TOKEN });
 	}
 	return _turso;
 }
