@@ -34,19 +34,24 @@ Performance comparison notes:
 
 ## Evidence
 
-- [ ] Not a UI-affecting change
-- [ ] UI-affecting change with PR-attached evidence from the exact commit under review
+- [ ] Not a testable change (docs-only, config)
+- [ ] Test evidence attached (Playwright report, test output, or equivalent)
+- [ ] UI evidence attached (screenshot or recording from the exact commit under review)
 
-Visual evidence for UI-affecting work must include:
+<!-- Upload evidence: uv run scripts/upload-evidence.py <file> --repo workspaces --pr <number> --name <slug> -->
+<!-- Web tests: cd web && pnpm test:evidence → screenshot playwright-report/index.html -->
+<!-- Swift tests: swift test → screenshot output -->
 
-- at least one rendered screenshot or equivalent visual artifact in this PR
-- the exact verification commands used
-- a linked log or artifact path
-- if interaction changed, a second screenshot or short recording that proves the result
+Evidence for all PRs must include:
+
+- test results: pass/fail summary with command used
+- for UI changes: at least one screenshot or recording proving the result
+- for API/backend changes: test report screenshot or output
+- hosted links (via upload-evidence.py), not local file paths
 
 Evidence links:
 
-- 
+-
 
 ## Blockers
 
