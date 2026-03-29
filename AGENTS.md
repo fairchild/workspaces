@@ -116,8 +116,11 @@ Uploads go to an R2-backed store at `https://evidence.cloudcompute.com/`. URLs a
 
 ### Rules
 
-- **Visual proof is a merge gate for UI work.** Do not call a PR ready until it contains evidence from the exact commit under review: at least one screenshot, the verification commands used, and a linked artifact path.
-- **Tests are necessary but not sufficient.** Run `swift test` and show the summary — but visual confirmation of UI changes is still expected.
+- **Evidence is a merge gate for all PRs.** Do not call a PR ready until it contains evidence from the exact commit under review: test results, screenshots, or both.
+- **Swift PRs**: Run `swift test`, show the summary. For UI changes, also capture a screenshot of the running app.
+- **Web PRs**: Run `cd web && pnpm test`, screenshot the Playwright report (`playwright-report/index.html`), and upload.
+- **API-only changes**: Test output counts as evidence — upload the test report screenshot.
+- **Upload evidence before posting.** Use `uv run scripts/upload-evidence.py <file> --repo workspaces --pr <number> --name <slug>`. Source `~/code/workspaces/.env` for `EVIDENCE_UPLOAD_TOKEN` when uploading locally.
 - **Use `[complete]` with proof.** When you produce evidence, mark the item `[complete]` with the URL or command output.
 - **`[pending-ci]` is a last resort.** You run on macOS — only use `[pending-ci]` for evidence that genuinely requires something you don't have (e.g., production app bundle, different OS).
 - **Blocked evidence is an explicit state.** Say `blocked on evidence` in the PR, explain why, and do not merge without explicit approval.
