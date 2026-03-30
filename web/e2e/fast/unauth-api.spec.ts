@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-test.describe("Unauthenticated API responses @fast", () => {
+test.describe("Unauthenticated API responses", () => {
 	test("POST /api/workspaces/sync without auth returns unauthorized", async ({
 		request,
 	}) => {
