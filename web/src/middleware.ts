@@ -22,6 +22,14 @@ export function middleware(request: NextRequest) {
 
 	if (isPublic(pathname)) return NextResponse.next();
 
+	// Allow unauthenticated access on localhost for dev/evidence screenshots
+	if (
+		process.env.NODE_ENV === "development" &&
+		process.env.DEV_BYPASS_AUTH === "1"
+	) {
+		return NextResponse.next();
+	}
+
 	const sessionCookie =
 		request.cookies.get("better-auth.session_token") ??
 		request.cookies.get("__Secure-better-auth.session_token");

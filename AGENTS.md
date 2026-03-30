@@ -95,37 +95,37 @@ Canonical reference:
 
 ## Evidence-Driven Development
 
-Verify your work visually, then present evidence to the user. Don't just say it works — prove it.
+Evidence is a merge gate. Do not create a PR without it. Follow these steps in order:
 
-### Execution environment
+### Before creating any PR
 
-Agent workflows run on a macOS VM (`[self-hosted, lume-macos]`) with `swift`, `git`, `gh`, `uv`, and `node` available. You can build, test, capture screenshots, and upload evidence directly — you are not limited to ubuntu. See `docs/development/lume-runner-setup.md` for runner details.
-
-### Capturing and uploading evidence
+1. **Run tests** — `swift test` or `cd web && pnpm test`
+2. **Capture evidence** — `./scripts/evidence.sh --pr <number> --name <slug>`
+   - Swift PRs: test summary screenshot; for UI changes, also screenshot the running app
+   - Web PRs: test output or Playwright report screenshot
+   - Web screenshots without auth: start dev server with `DEV_BYPASS_AUTH=1 pnpm dev`
+   - API-only: test output counts — pipe to file, screenshot, upload
+3. **Include evidence URLs in the PR body** — paste into the Evidence section of the template
+4. **Only then create the PR** — do not use `[pending-ci]` unless you genuinely cannot produce evidence locally
 
 ```bash
-# Capture a screenshot
-screencapture -x /tmp/evidence.png
+# One-liner: capture screenshot + upload + print markdown
+./scripts/evidence.sh --pr <number> --name <slug>
 
-# Upload and get a public URL for PR markdown
-uv run scripts/upload-evidence.py /tmp/evidence.png \
-  --repo workspaces --pr <number> --name <slug> --breadcrumb
+# Upload an existing file
+./scripts/evidence.sh --pr <number> --name <slug> --file /tmp/screenshot.png
+
+# Via mise
+mise run evidence -- --pr <number> --name <slug>
 ```
 
-Uploads go to an R2-backed store at `https://evidence.cloudcompute.com/`. URLs are public and render inline in GitHub markdown. The `--breadcrumb` flag copies to `~/Desktop` and appends to `~/Desktop/april-runs.log`. Requires `EVIDENCE_UPLOAD_TOKEN` env var (provided by the workflow). See `docs/development/lume-runner-setup.md#evidence-store-r2` for architecture and secrets.
+The script auto-sources `.env` for `EVIDENCE_UPLOAD_TOKEN`. Uploads go to `https://evidence.cloudcompute.com/`. See `docs/development/lume-runner-setup.md#evidence-store-r2` for architecture.
 
-### Rules
+### Evidence rules
 
-- **Evidence is a merge gate for all PRs.** Do not call a PR ready until it contains evidence from the exact commit under review: test results, screenshots, or both.
-- **Swift PRs**: Run `swift test`, show the summary. For UI changes, also capture a screenshot of the running app.
-- **Web PRs**: Run `cd web && pnpm test`, screenshot the Playwright report (`playwright-report/index.html`), and upload.
-- **API-only changes**: Test output counts as evidence — upload the test report screenshot.
-- **Upload evidence before posting.** Use `uv run scripts/upload-evidence.py <file> --repo workspaces --pr <number> --name <slug>`. Source `~/code/workspaces/.env` for `EVIDENCE_UPLOAD_TOKEN` when uploading locally.
-- **Use `[complete]` with proof.** When you produce evidence, mark the item `[complete]` with the URL or command output.
-- **`[pending-ci]` is a last resort.** You run on macOS — only use `[pending-ci]` for evidence that genuinely requires something you don't have (e.g., production app bundle, different OS).
-- **Blocked evidence is an explicit state.** Say `blocked on evidence` in the PR, explain why, and do not merge without explicit approval.
-- **No local-only proof.** Screenshots and logs must be uploaded or linked from the PR discussion, not just referenced from a local path.
-- **Performance-sensitive changes need baselines.** Gather before metrics, re-run after, include before/after/delta in the PR. Call out meaningful deltas explicitly.
+- **No local-only proof.** Screenshots and logs must be uploaded via `evidence.sh`, not referenced from local paths.
+- **Blocked evidence is an explicit state.** Say `blocked on evidence` in the PR, explain why, and do not merge without approval.
+- **Performance-sensitive changes need baselines.** Before/after/delta in the PR body.
 
 ## High-Signal Lessons
 
@@ -148,10 +148,14 @@ swift build   # Build
 swift test    # Test
 swift run     # Run
 
+# Evidence (required before PRs):
+./scripts/evidence.sh --pr <N> --name <slug>  # Capture + upload screenshot
+
 # Or via mise:
 mise run build-ghosttykit  # Build GhosttyKit
 mise run build             # Build
 mise run test              # Test
+mise run evidence -- --pr <N> --name <slug>  # Evidence
 ```
 
 ## Python Script Preference

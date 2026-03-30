@@ -8,6 +8,12 @@ import { MessageList } from "./message-list";
 
 const POLL_INTERVAL = 5_000;
 
+interface AgentSessionInfo {
+	agentName: string;
+	streamUrl: string;
+	threadId: string;
+}
+
 interface ChatPanelProps {
 	selectedRepo: { owner: string; repo: string } | null;
 	agents: Agent[];
@@ -21,7 +27,12 @@ export function ChatPanel({
 }: ChatPanelProps) {
 	const [entries, setEntries] = useState<TimelineEntry[]>([]);
 	const [loading, setLoading] = useState(false);
+	const [streamingMessage, setStreamingMessage] = useState<{
+		agentName: string;
+		content: string;
+	} | null>(null);
 	const lastCountRef = useRef(0);
+	const abortRef = useRef<AbortController | null>(null);
 
 	const repo = selectedRepo
 		? `${selectedRepo.owner}/${selectedRepo.repo}`
@@ -58,6 +69,81 @@ export function ChatPanel({
 		return () => clearInterval(id);
 	}, [repo, fetchTimeline]);
 
+	// Clean up active stream on unmount
+	useEffect(() => {
+		return () => {
+			abortRef.current?.abort();
+		};
+	}, []);
+
+	const connectToAgentStream = useCallback(
+		async (session: AgentSessionInfo & { message: string }) => {
+			abortRef.current?.abort();
+			const controller = new AbortController();
+			abortRef.current = controller;
+
+			setStreamingMessage({ agentName: session.agentName, content: "" });
+
+			try {
+				const res = await fetch(session.streamUrl, {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({
+						repo,
+						agentName: session.agentName,
+						message: session.message,
+						threadId: session.threadId,
+					}),
+					signal: controller.signal,
+				});
+
+				if (!res.ok || !res.body) {
+					setStreamingMessage(null);
+					return;
+				}
+
+				const reader = res.body.getReader();
+				const decoder = new TextDecoder();
+				let buffer = "";
+
+				while (true) {
+					const { done, value } = await reader.read();
+					if (done) break;
+
+					buffer += decoder.decode(value, { stream: true });
+					const lines = buffer.split("\n");
+					buffer = lines.pop() ?? "";
+
+					for (const line of lines) {
+						if (!line.startsWith("data: ")) continue;
+						try {
+							const chunk = JSON.parse(line.slice(6));
+							if (chunk.type === "text") {
+								setStreamingMessage((prev) =>
+									prev
+										? { ...prev, content: prev.content + chunk.content }
+										: null,
+								);
+							} else if (chunk.type === "done" || chunk.type === "error") {
+								break;
+							}
+						} catch {
+							// skip malformed SSE lines
+						}
+					}
+				}
+			} catch (err) {
+				if (err instanceof DOMException && err.name === "AbortError") return;
+			} finally {
+				setStreamingMessage(null);
+				abortRef.current = null;
+				// Refresh timeline to pick up persisted agent response
+				await fetchTimeline();
+			}
+		},
+		[repo, fetchTimeline],
+	);
+
 	const handleSend = useCallback(
 		async (message: string, agentName?: string) => {
 			if (!repo) return;
@@ -66,12 +152,20 @@ export function ChatPanel({
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({ repo, message, agentName }),
 			});
-			if (res.ok) {
-				// Immediately refetch to show the new message
+			if (!res.ok) return;
+
+			const data = await res.json();
+
+			if (data.agentSession) {
+				// Agent session — connect to SSE stream
+				await fetchTimeline(); // Show the user message first
+				await connectToAgentStream({ ...data.agentSession, message });
+			} else {
+				// Regular message — just refresh
 				await fetchTimeline();
 			}
 		},
-		[repo, fetchTimeline],
+		[repo, fetchTimeline, connectToAgentStream],
 	);
 
 	if (!selectedRepo) {
@@ -87,7 +181,11 @@ export function ChatPanel({
 
 	return (
 		<div className={styles.panel}>
-			<MessageList entries={entries} loading={loading} />
+			<MessageList
+				entries={entries}
+				loading={loading}
+				streamingMessage={streamingMessage}
+			/>
 			<ComposeBar repo={repo as string} agents={agents} onSend={handleSend} />
 		</div>
 	);
