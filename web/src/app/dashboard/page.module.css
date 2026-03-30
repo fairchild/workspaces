@@ -29,8 +29,11 @@
 	align-items: center;
 	gap: 0;
 	border-bottom: 1px solid var(--border-subtle);
-	background: var(--bg-surface);
+	background: var(--bg-primary);
 	flex-shrink: 0;
+	position: sticky;
+	top: 0;
+	z-index: 10;
 }
 
 .tab {
