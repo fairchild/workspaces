@@ -23,7 +23,7 @@ concurrency:
 
 jobs:
   run:
-    if: github.event_name != 'schedule' || vars.AGENT_SCHEDULED_RUNS_ENABLED == 'true'
+    if: github.event_name == 'workflow_dispatch' || vars.AGENT_AUTOMATIONS_ENABLED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
