@@ -67,7 +67,7 @@ if (!info) {
   process.exit(1);
 }
 
-DBOS.setConfig(buildDBOSConfig({ databaseUrl: info.databaseUrl }));
+DBOS.setConfig(buildDBOSConfig({ databaseUrl: info.databaseUrl, mode: info.mode }));
 await DBOS.launch();
 
 try {

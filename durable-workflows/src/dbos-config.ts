@@ -7,14 +7,16 @@ import type { DBOSConfig } from "@dbos-inc/dbos-sdk";
 
 export interface DurableWorkflowsConfig {
   databaseUrl: string;
+  mode?: "embedded" | "external";
   poolSize?: number;
   logLevel?: string;
-  adminPort?: number;
 }
 
 /** Build a DBOS config tuned for PGlite (or external Postgres). */
 export function buildDBOSConfig(opts: DurableWorkflowsConfig): DBOSConfig {
-  const isEmbedded = !process.env.DBOS_DATABASE_URL;
+  const isEmbedded = opts.mode
+    ? opts.mode === "embedded"
+    : !process.env.DBOS_DATABASE_URL;
 
   return {
     systemDatabaseUrl: opts.databaseUrl,
