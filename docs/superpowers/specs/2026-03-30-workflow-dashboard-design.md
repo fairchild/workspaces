@@ -63,6 +63,20 @@ Matches the existing web app in `web/`:
 
 Typography: JetBrains Mono for all UI, Instrument Serif italic for headings. No CSS framework — vanilla CSS with variables.
 
+## Error Display
+
+Failed steps render with a red-tinted card background (`rgba(248,81,73,0.08)`) and a red left border. The error message is shown inline below the step name in a monospace block — no click-to-expand needed for errors, they're always visible. In the step flow, the chain visually breaks at the failure point: the failed step gets a red fill, and subsequent steps render as hollow gray (never ran).
+
+## Empty State
+
+When no workflows exist, the main panel shows centered text: "No workflows yet" in serif italic, with a code snippet below:
+
+```
+npx tsx templates/basic-workflow.ts
+```
+
+The sidebar shows "0 workflows" in secondary text. No loading spinner, no skeleton — just the empty message immediately.
+
 ## Layout
 
 Two-pane: sidebar + main.
@@ -75,7 +89,7 @@ Two-pane: sidebar + main.
 - Click to select
 
 ### Main Panel
-- **Header**: Workflow name (serif italic), full ID, status badge
+- **Header**: Workflow name (serif italic), full ID, status badge, input args (collapsed if >1 line)
 - **Step flow**: Horizontal chain of step chips connected by arrows. Color-coded by state: done (mint fill), running (gold border + pulse), pending (dashed gray), waiting (purple border + pulse)
 - **Step cards**: Vertical list below the flow. Click to expand output. Shows step name, duration, status icon. Expanded view shows JSON output in a code block.
 - **Connection indicator**: Top-right, green dot + "connected" when polling succeeds
@@ -83,7 +97,7 @@ Two-pane: sidebar + main.
 ## Complex Flow Patterns
 
 ### Branching (fan-out / fan-in)
-Steps with `childWorkflowID` trigger a branching view. Parallel children render as vertical lanes side by side. A merge step (the next step in the parent after the fork) renders below with converging lines.
+DBOS steps don't carry an explicit `childWorkflowID`. Detection heuristic: when a step's output is a string that matches another workflow's `workflowID`, that step is a fork point and the matched workflow is the child. The API enriches step data with a `childWorkflows: string[]` array using this cross-reference. Parallel children render as vertical lanes side by side. A merge step (the next step in the parent after the fork) renders below with converging lines.
 
 ### Cycles (agent loops)
 When the same step name appears multiple times (incrementing `functionID`), the dashboard detects a loop. Renders as:
