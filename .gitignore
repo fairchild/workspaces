@@ -51,6 +51,14 @@ node_modules/
 # Papers (keep README.md, ignore binaries)
 docs/papers/*.pdf
 
+# Auto-generated skill artifacts (obra/superpowers, skill-seeker)
+.agents/skills/sandbox/
+.claude/skills/sandbox/
+.pi/skills/sandbox/
+
+# Playwright
+web/playwright-report/
+
 # macOS
 .DS_Store
 *.swp
