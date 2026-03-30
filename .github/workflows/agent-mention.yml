@@ -18,7 +18,7 @@ permissions:
 jobs:
   triage:
     if: >-
-      vars.MENTION_AUTOMATIONS_ENABLED == 'true' &&
+      vars.AGENT_AUTOMATIONS_ENABLED == 'true' &&
       !endsWith(github.event.sender.login, '[bot]') && (
         ((github.event_name == 'issue_comment') && (
           contains(github.event.comment.body || '', '@april') ||
