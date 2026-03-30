@@ -12,6 +12,7 @@ import { resolve } from "node:path";
 export interface ConnectionInfo {
   databaseUrl: string;
   port: number | null;
+  httpPort?: number | null;
   pid: number;
   mode: "embedded" | "external";
 }
