@@ -11,9 +11,14 @@ import { formatTime } from "./timeline-utils";
 interface MessageListProps {
 	entries: TimelineEntry[];
 	loading: boolean;
+	streamingMessage?: { agentName: string; content: string } | null;
 }
 
-export function MessageList({ entries, loading }: MessageListProps) {
+export function MessageList({
+	entries,
+	loading,
+	streamingMessage,
+}: MessageListProps) {
 	const anchorRef = useRef<HTMLDivElement>(null);
 	const containerRef = useRef<HTMLDivElement>(null);
 	const wasAtBottom = useRef(true);
