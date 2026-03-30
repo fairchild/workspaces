@@ -92,6 +92,15 @@ export async function getGitHubToken(userId: string): Promise<string | null> {
 	return accessToken;
 }
 
+// --- GitHub user ---
+
+export function fetchGitHubLogin(token: string): Promise<string> {
+	return cached(`login:${token.slice(-8)}`, FIVE_MIN, async () => {
+		const user = await ghFetch<{ login: string }>("/user", token);
+		return user.login;
+	});
+}
+
 // --- GitHub API helpers ---
 
 async function ghFetch<T>(path: string, token: string): Promise<T> {

@@ -7,6 +7,7 @@ import { getEventStats } from "@/lib/events";
 import {
 	addDiscussionComment,
 	createDiscussion,
+	fetchGitHubLogin,
 	getGitHubToken,
 } from "@/lib/github";
 import { getUserRepos } from "@/lib/repos";
@@ -74,9 +75,13 @@ export async function POST(request: Request): Promise<Response> {
 		return Response.json(botResponse);
 	}
 
-	// Check if the mention targets a known agent persona
+	// Check if the mention targets a known agent persona (restricted to allowed users)
 	if (agentTarget && agentTarget !== "spaces") {
-		const persona = await resolvePersona(token, owner, repo, agentTarget);
+		const login = await fetchGitHubLogin(token);
+		const persona =
+			login === "fairchild"
+				? await resolvePersona(token, owner, repo, agentTarget)
+				: null;
 		if (persona) {
 			// Store the user message immediately
 			const chatMessage: ChatMessage = {
