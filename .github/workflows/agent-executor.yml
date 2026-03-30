@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   claim:
-    if: github.event.label.name == 'safe-to-run-agent'
+    if: github.event.label.name == 'safe-to-run-agent' && vars.MENTION_AUTOMATIONS_ENABLED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
