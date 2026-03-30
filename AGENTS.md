@@ -95,13 +95,18 @@ Canonical reference:
 
 ## Evidence-Driven Development
 
-Verify your work visually, then present evidence to the user. Don't just say it works — prove it.
+Evidence is a merge gate. Do not create a PR without it. Follow these steps in order:
 
-### Execution environment
+### Before creating any PR
 
-Agent workflows run on a macOS VM (`[self-hosted, lume-macos]`) with `swift`, `git`, `gh`, `uv`, and `node` available. You can build, test, capture screenshots, and upload evidence directly — you are not limited to ubuntu. See `docs/development/lume-runner-setup.md` for runner details.
-
-### Capturing and uploading evidence
+1. **Run tests** — `swift test` or `cd web && pnpm test`
+2. **Capture evidence** — `./scripts/evidence.sh --pr <number> --name <slug>`
+   - Swift PRs: test summary screenshot; for UI changes, also screenshot the running app
+   - Web PRs: test output or Playwright report screenshot
+   - Web screenshots without auth: start dev server with `DEV_BYPASS_AUTH=1 pnpm dev`
+   - API-only: test output counts — pipe to file, screenshot, upload
+3. **Include evidence URLs in the PR body** — paste into the Evidence section of the template
+4. **Only then create the PR** — do not use `[pending-ci]` unless you genuinely cannot produce evidence locally
 
 ```bash
 # One-liner: capture screenshot + upload + print markdown
@@ -114,28 +119,13 @@ Agent workflows run on a macOS VM (`[self-hosted, lume-macos]`) with `swift`, `g
 mise run evidence -- --pr <number> --name <slug>
 ```
 
-The script auto-sources `.env` for `EVIDENCE_UPLOAD_TOKEN`. Uploads go to an R2-backed store at `https://evidence.cloudcompute.com/`. URLs are public and render inline in GitHub markdown. See `docs/development/lume-runner-setup.md#evidence-store-r2` for architecture and secrets.
+The script auto-sources `.env` for `EVIDENCE_UPLOAD_TOKEN`. Uploads go to `https://evidence.cloudcompute.com/`. See `docs/development/lume-runner-setup.md#evidence-store-r2` for architecture.
 
-For web evidence screenshots without auth, start the dev server with `DEV_BYPASS_AUTH=1 pnpm dev`.
+### Evidence rules
 
-### PR evidence checklist (follow this order)
-
-1. **Run tests** — `swift test` or `cd web && pnpm test`
-2. **Capture evidence** — `./scripts/evidence.sh --pr <number> --name <slug>`
-   - Swift PRs: screenshot of test summary; for UI changes, also screenshot the running app
-   - Web PRs: screenshot the test output or Playwright report
-   - API-only: test output counts as evidence
-   - For web screenshots without auth: `DEV_BYPASS_AUTH=1 pnpm dev`
-3. **Add evidence URLs to the PR body** — paste the markdown image links into the Evidence section
-4. **Mark items `[complete]`** with the URL or command output
-
-### Rules
-
-- **Evidence is a merge gate for all PRs.** Do not call a PR ready until it contains evidence from the exact commit under review: test results, screenshots, or both.
-- **`[pending-ci]` is a last resort.** You run on macOS — only use `[pending-ci]` for evidence that genuinely requires something you don't have (e.g., production app bundle, different OS).
-- **Blocked evidence is an explicit state.** Say `blocked on evidence` in the PR, explain why, and do not merge without explicit approval.
-- **No local-only proof.** Screenshots and logs must be uploaded or linked from the PR discussion, not just referenced from a local path.
-- **Performance-sensitive changes need baselines.** Gather before metrics, re-run after, include before/after/delta in the PR. Call out meaningful deltas explicitly.
+- **No local-only proof.** Screenshots and logs must be uploaded via `evidence.sh`, not referenced from local paths.
+- **Blocked evidence is an explicit state.** Say `blocked on evidence` in the PR, explain why, and do not merge without approval.
+- **Performance-sensitive changes need baselines.** Before/after/delta in the PR body.
 
 ## High-Signal Lessons
 
@@ -158,7 +148,7 @@ swift build   # Build
 swift test    # Test
 swift run     # Run
 
-# Evidence:
+# Evidence (required before PRs):
 ./scripts/evidence.sh --pr <N> --name <slug>  # Capture + upload screenshot
 
 # Or via mise:
