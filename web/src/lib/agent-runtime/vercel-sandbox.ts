@@ -13,6 +13,10 @@ import type {
 const CONVERSATIONAL_TOOLS = "Read,Glob,Grep,WebFetch";
 const FULL_TOOLS = "Read,Write,Edit,Bash,Glob,Grep,WebFetch";
 
+function stripQuotes(s: string): string {
+	return s.replace(/^["']|["']$/g, "");
+}
+
 /** Credentials passed to every Sandbox.create() and Snapshot.list() call. */
 function getCredentials(): {
 	token?: string;
@@ -115,7 +119,7 @@ export class VercelSandboxProvider implements ComputeProvider, SnapshotCapable {
 			timeout: request.readOnly ? ms("10m") : ms("30m"),
 			resources: { vcpus: 2 },
 			env: {
-				ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY ?? "",
+				ANTHROPIC_API_KEY: stripQuotes(process.env.ANTHROPIC_API_KEY ?? ""),
 				...request.envVars,
 			},
 			networkPolicy: { allow: ALLOWED_DOMAINS },
@@ -129,30 +133,20 @@ export class VercelSandboxProvider implements ComputeProvider, SnapshotCapable {
 		cloneArgs.push(request.cloneUrl, "/vercel/sandbox/repo");
 		await sandbox.runCommand("git", cloneArgs);
 
-		// Write persona system prompt
-		await sandbox.writeFiles([
-			{
-				path: "/vercel/sandbox/persona.md",
-				content: Buffer.from(request.systemPrompt),
-			},
-		]);
-
-		// Start Claude Code as a detached process
+		// Start Claude Code as a detached process.
+		// Claude CLI uses: echo "msg" | claude -p --system-prompt "..." --allowedTools ...
+		// Output goes to a JSONL file for streaming.
 		const tools =
 			request.tools === "conversational" ? CONVERSATIONAL_TOOLS : FULL_TOOLS;
 
+		const escapedPrompt = request.systemPrompt.replace(/"/g, '\\"');
+		const escapedMessage = request.message.replace(/"/g, '\\"');
+
 		await sandbox.runCommand({
-			cmd: "claude",
+			cmd: "bash",
 			args: [
-				"--print",
-				"--output-format",
-				"stream-json",
-				"--system-prompt",
-				"/vercel/sandbox/persona.md",
-				"--allowedTools",
-				tools,
-				"--message",
-				request.message,
+				"-c",
+				`echo "${escapedMessage}" | claude -p --system-prompt "${escapedPrompt}" --allowedTools ${tools} > /vercel/sandbox/agent-output.txt 2>&1`,
 			],
 			cwd: "/vercel/sandbox/repo",
 			detached: true,
@@ -274,7 +268,7 @@ export class VercelSandboxProvider implements ComputeProvider, SnapshotCapable {
 			timeout: ms("10m"),
 			resources: { vcpus: 2 },
 			env: {
-				ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY ?? "",
+				ANTHROPIC_API_KEY: stripQuotes(process.env.ANTHROPIC_API_KEY ?? ""),
 			},
 			networkPolicy: { allow: ALLOWED_DOMAINS },
 		});
