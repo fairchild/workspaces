@@ -3,6 +3,19 @@ interface Env {
   EVIDENCE_UPLOAD_TOKEN: string;
 }
 
+const encoder = new TextEncoder();
+
+function timingSafeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  const aBytes = encoder.encode(a);
+  const bBytes = encoder.encode(b);
+  let result = 0;
+  for (let i = 0; i < aBytes.length; i++) {
+    result |= aBytes[i] ^ bBytes[i];
+  }
+  return result === 0;
+}
+
 const CONTENT_TYPES: Record<string, string> = {
   png: "image/png",
   jpg: "image/jpeg",
@@ -45,7 +58,7 @@ export default {
 
     if (request.method === "PUT" && path) {
       const auth = request.headers.get("Authorization");
-      if (auth !== `Bearer ${env.EVIDENCE_UPLOAD_TOKEN}`) {
+      if (!auth || !timingSafeEqual(auth, `Bearer ${env.EVIDENCE_UPLOAD_TOKEN}`)) {
         return new Response("unauthorized", { status: 401 });
       }
 
@@ -65,8 +78,8 @@ export default {
       return new Response(null, {
         headers: {
           "Access-Control-Allow-Origin": "*",
-          "Access-Control-Allow-Methods": "GET, PUT, OPTIONS",
-          "Access-Control-Allow-Headers": "Authorization, Content-Type",
+          "Access-Control-Allow-Methods": "GET, OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type",
         },
       });
     }
