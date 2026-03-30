@@ -110,7 +110,7 @@ export async function getWorkspaces(
 	}));
 }
 
-function relativeTime(iso: string): string {
+export function relativeTime(iso: string): string {
 	const diff = Date.now() - new Date(iso).getTime();
 	const mins = Math.floor(diff / 60_000);
 	if (mins < 1) return "just now";
