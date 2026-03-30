@@ -429,7 +429,7 @@ async function testQ1(databaseUrl: string): Promise<TestResult> {
     summary: results.map((r) => `pool=${r.poolSize}: ${r.success ? `OK (${r.durationMs}ms)` : `FAIL${r.error ? ` (${r.error.substring(0, 60)})` : ""}`}`).join(", "),
     details: {
       socketMaxConnections: 20,
-      note: "PGlite socket maxConnections defaults to 1 — root cause of ECONNRESET in the spike",
+      note: "Pool>1 deadlocks on PGlite's single-connection serialization layer — independent of socket maxConnections (set to 20 here). ECONNRESET in the spike was a separate issue: socket maxConnections defaulting to 1 (see Q5).",
       results,
     },
     durationMs: Date.now() - t0,
@@ -534,7 +534,11 @@ async function testQ3(db: PGlite, databaseUrl: string): Promise<TestResult> {
         await sleep(300);
         const sendStartOn = Date.now();
         await DBOS.send(handleOn.workflowID, "test-on", "input");
-        const resultOn = await withTimeout(handleOn.getResult(), 10_000, "q3c-on");
+        const resultOn = await withTimeout(
+          handleOn.getResult(),
+          10_000,
+          "q3c-on: useListenNotify=true recv() — socket doesn't relay NOTIFY (proven by Q3b), so message never arrives",
+        );
         const latencyOn = Date.now() - sendStartOn;
 
         sub.q3c = {
@@ -547,7 +551,10 @@ async function testQ3(db: PGlite, databaseUrl: string): Promise<TestResult> {
       "Q3c DBOS notify comparison",
     );
   } catch (err: any) {
-    sub.q3c = { pass: false, detail: `Timeout/Error: ${err.message}` };
+    sub.q3c = {
+      pass: false,
+      detail: `${err.message}. Cause: useListenNotify=true makes DBOS rely on socket NOTIFY for message delivery, but pglite-socket has no notification relay (Q3b proves this). recv() waits for a NOTIFY that never arrives.`,
+    };
   }
 
   const q3aPassed = sub.q3a?.pass ?? false;

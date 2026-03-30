@@ -48,7 +48,7 @@ Results from `scripts/evidence.ts` (see `evidence-report.json` for full data):
 |----------|---------|-------------|
 | Q1: Pool sizes | PARTIAL | pool=1 works (15ms). pool>=2 deadlocks even with maxConnections=20 |
 | Q2: Schema | PASS | DBOS creates `dbos` schema with 13 tables in PGlite |
-| Q3: LISTEN/NOTIFY | PARTIAL | Raw PGlite delivers (201ms). Socket relay: no delivery. DBOS useListenNotify=true with pool=1 hangs (needs 2+ connections) |
+| Q3: LISTEN/NOTIFY | PARTIAL | Raw PGlite delivers (201ms). Socket relay: no delivery. DBOS useListenNotify=true hangs — recv() waits for NOTIFY the socket never relays |
 | Q4: Startup | PASS | Cold: ~1.6s, Warm: ~157ms, DBOS launch: ~84ms |
 | Q5: DBOSClient | PASS | Concurrent clients work with maxConnections=20 |
 | Q6: Payload size | PASS | 100KB at 0.5x baseline. 1MB: 43ms. Minimal pgdata growth |
@@ -60,10 +60,12 @@ Results from `scripts/evidence.ts` (see `evidence-report.json` for full data):
    connections contend on PGlite's serialization layer. This is fundamental,
    not fixable with `maxConnections`.
 
-2. **LISTEN/NOTIFY disabled**: Two independent reasons:
-   - pglite-socket has zero notification relay code (Q3b: socket never delivers)
-   - With pool=1, DBOS can't dedicate a connection to LISTEN (Q3c: hangs)
-   - DBOS falls back to polling automatically when `useListenNotify: false`
+2. **LISTEN/NOTIFY disabled**: pglite-socket has zero notification relay code
+   (Q3b: NOTIFY sent on PGlite never reaches a pg client through the socket).
+   With `useListenNotify: true`, DBOS relies on NOTIFY for message delivery —
+   since the socket never relays it, `recv()` hangs waiting for a notification
+   that never arrives (Q3c: times out after 10s). With `useListenNotify: false`,
+   DBOS falls back to polling automatically and everything works.
 
 3. **maxConnections default is 1**: The socket server's `maxConnections: 1`
    default was the root cause of ECONNRESET errors in early testing. Set to

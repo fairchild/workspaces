@@ -21,12 +21,17 @@ skipped and execution resumes from where it left off.
 # 1. Install (from skill directory)
 cd ~/.claude/skills/durable-workflows && npm install
 
-# 2. Bootstrap embedded Postgres
+# 2. Bootstrap embedded Postgres (runs in foreground — use a background terminal)
 npx tsx scripts/bootstrap.ts
 
-# 3. Write a workflow (copy a template)
+# 3. Copy and run a workflow
 cp templates/basic-workflow.ts my-workflow.ts
+npx tsx my-workflow.ts
 ```
+
+The basic template is runnable out of the box — it reads connection.json from the
+running bootstrap process and executes a sample workflow. Modify the workflow body
+and steps to fit your use case.
 
 ## Core Concepts
 

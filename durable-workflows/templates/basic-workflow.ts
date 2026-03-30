@@ -1,15 +1,16 @@
 /**
  * Basic three-step workflow.
  *
- * Demonstrates the fundamental pattern:
- * 1. All I/O goes in steps (DBOS.runStep)
- * 2. Workflow body is deterministic (no Date.now, Math.random, fetch, etc.)
- * 3. Steps are checkpointed — on crash recovery, completed steps are skipped
+ * Runnable standalone: `npx tsx templates/basic-workflow.ts`
+ * (requires `npm run bootstrap` running in another terminal)
  *
- * Copy this file and modify for your use case.
+ * Copy this file and modify the workflow body and steps for your use case.
+ * The init/run section at the bottom connects to the running PGlite instance.
  */
 
 import { DBOS } from "@dbos-inc/dbos-sdk";
+import { readConnectionInfo } from "../src/db.js";
+import { buildDBOSConfig } from "../src/dbos-config.js";
 
 // --- Steps: all side effects go here ---
 
@@ -19,12 +20,10 @@ async function fetchData(url: string): Promise<string> {
 }
 
 async function processData(raw: string): Promise<Record<string, unknown>> {
-  // Simulate processing
   return { length: raw.length, preview: raw.substring(0, 100) };
 }
 
 async function saveResult(data: Record<string, unknown>): Promise<string> {
-  // Simulate saving to storage
   const id = crypto.randomUUID();
   console.log(`Saved result ${id}:`, data);
   return id;
@@ -59,3 +58,23 @@ async function dataProcessingWorkflow(url: string): Promise<string> {
 export const dataProcessing = DBOS.registerWorkflow(dataProcessingWorkflow, {
   name: "dataProcessing",
 });
+
+// --- Run (when executed directly) ---
+
+const info = readConnectionInfo();
+if (!info) {
+  console.error("No database connection. Run `npm run bootstrap` first.");
+  process.exit(1);
+}
+
+DBOS.setConfig(buildDBOSConfig({ databaseUrl: info.databaseUrl }));
+await DBOS.launch();
+
+try {
+  const handle = await DBOS.startWorkflow(dataProcessing)("https://example.com");
+  console.log(`Started workflow ${handle.workflowID}`);
+  const result = await handle.getResult();
+  console.log(`Result: ${result}`);
+} finally {
+  await DBOS.shutdown();
+}

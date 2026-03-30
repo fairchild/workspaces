@@ -10,7 +10,7 @@
       "summary": "pool=1: OK (15ms), pool=2: FAIL (Q1 pool=2 timed out after 20000ms), pool=3: FAIL (skipped (DBOS stuck)), pool=5: FAIL (skipped (DBOS stuck)), pool=10: FAIL (skipped (DBOS stuck))",
       "details": {
         "socketMaxConnections": 20,
-        "note": "PGlite socket maxConnections defaults to 1 — root cause of ECONNRESET in the spike",
+        "note": "Pool>1 deadlocks on PGlite's single-connection serialization layer — independent of socket maxConnections (set to 20 here). ECONNRESET in the spike was a separate issue: socket maxConnections defaulting to 1 (see Q5).",
         "results": [
           { "poolSize": 1, "success": true, "durationMs": 15 },
           { "poolSize": 2, "success": false, "durationMs": 0, "error": "Q1 pool=2 timed out after 20000ms" },
@@ -55,7 +55,7 @@
         },
         "q3c": {
           "pass": false,
-          "detail": "Timeout/Error: q3c-on timed out after 10000ms"
+          "detail": "q3c-on: useListenNotify=true recv() — socket doesn't relay NOTIFY (proven by Q3b), so message never arrives timed out after 10000ms. Cause: useListenNotify=true makes DBOS rely on socket NOTIFY for message delivery, but pglite-socket has no notification relay (Q3b proves this). recv() waits for a NOTIFY that never arrives."
         }
       },
       "durationMs": 34618

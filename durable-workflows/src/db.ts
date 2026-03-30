@@ -63,6 +63,7 @@ async function startEmbeddedPGlite(): Promise<string> {
     db: pgliteInstance,
     port: 0,
     host: "127.0.0.1",
+    maxConnections: 20, // default=1 causes ECONNRESET when DBOSClient connects (evidence Q5)
   });
 
   await socketServer.start();
