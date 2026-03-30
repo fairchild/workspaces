@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash(gh pr create*)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '⚠️  Evidence check: Have you uploaded evidence with ./scripts/evidence.sh before creating this PR? Evidence is a merge gate — see AGENTS.md § Evidence-Driven Development.'"
+          }
+        ]
+      }
+    ]
+  }
+}
