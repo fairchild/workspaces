@@ -76,7 +76,7 @@ export function DashboardShell({
 		fetch("/api/repos")
 			.then((r) => r.json())
 			.then(setRepos)
-			.catch(() => {});
+			.catch((err) => console.warn("[dashboard] repos fetch failed:", err));
 	}, []);
 
 	// Fetch agent data when selectedRepo changes

@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "node:crypto";
 import { getSession } from "@/lib/auth-server";
 import type { Workspace } from "@/lib/types";
 import {
@@ -7,6 +8,11 @@ import {
 } from "@/lib/workspaces";
 
 const SYNC_API_KEY = process.env.WORKSPACE_SYNC_API_KEY;
+
+function safeEqual(a: string, b: string): boolean {
+	if (a.length !== b.length) return false;
+	return timingSafeEqual(Buffer.from(a), Buffer.from(b));
+}
 
 const VALID_STATUSES: Set<string> = new Set<string>([
 	"provisioning",
@@ -20,7 +26,7 @@ async function authenticateRequest(request: Request): Promise<string | null> {
 	const authHeader = request.headers.get("authorization");
 	if (authHeader?.startsWith("Bearer ") && SYNC_API_KEY) {
 		const token = authHeader.slice(7);
-		if (token === SYNC_API_KEY) return "default";
+		if (safeEqual(token, SYNC_API_KEY)) return "default";
 	}
 
 	const session = await getSession();

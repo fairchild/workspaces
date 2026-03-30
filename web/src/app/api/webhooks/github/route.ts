@@ -114,6 +114,7 @@ export async function POST(request: Request): Promise<Response> {
 		summary: summarize(eventType, action, payload),
 		repo: repo ?? "unknown",
 		timestamp: new Date().toISOString(),
+		payload: body,
 	};
 
 	await pushEvent(event);

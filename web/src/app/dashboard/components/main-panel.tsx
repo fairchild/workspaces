@@ -225,7 +225,9 @@ function WebhookStatus({ owner, repo }: { owner: string; repo: string }) {
 		fetch(`/api/repos/${owner}/${repo}/webhook-status`)
 			.then((r) => (r.ok ? r.json() : null))
 			.then(setStatus)
-			.catch(() => {});
+			.catch((err) =>
+				console.warn("[dashboard] webhook-status fetch failed:", err),
+			);
 	}, [owner, repo]);
 
 	if (!status) return null;
