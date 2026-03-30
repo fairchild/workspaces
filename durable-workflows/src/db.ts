@@ -81,7 +81,7 @@ async function startEmbeddedPGlite(): Promise<string> {
   return databaseUrl;
 }
 
-function writeConnectionInfo(info: ConnectionInfo): void {
+export function writeConnectionInfo(info: ConnectionInfo): void {
   mkdirSync(DBOS_DIR, { recursive: true });
   writeFileSync(CONNECTION_FILE, JSON.stringify(info, null, 2));
 }

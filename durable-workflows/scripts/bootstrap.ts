@@ -6,7 +6,8 @@
  */
 
 import { DBOS } from "@dbos-inc/dbos-sdk";
-import { resolveDatabaseUrl, readConnectionInfo, removeConnectionInfo, isBootstrapAlive, shutdownEmbedded } from "../src/db.js";
+import { resolveDatabaseUrl, readConnectionInfo, removeConnectionInfo, writeConnectionInfo, isBootstrapAlive, shutdownEmbedded } from "../src/db.js";
+import { startHttpServer, type HttpServerHandle } from "../src/http-server.js";
 import { buildDBOSConfig } from "../src/dbos-config.js";
 
 const statusOnly = process.argv.includes("--status");
@@ -40,11 +41,24 @@ async function main() {
   console.log(`  PID: ${info?.pid}`);
   console.log(`  Connection file: .dbos/connection.json`);
 
+  // Start dashboard HTTP server
+  let httpServer: HttpServerHandle | null = null;
+  if (info) {
+    try {
+      httpServer = await startHttpServer(info.databaseUrl);
+      writeConnectionInfo({ ...info, httpPort: httpServer.port });
+      console.log(`  Dashboard: http://127.0.0.1:${httpServer.port}`);
+    } catch (err: any) {
+      console.warn(`  Dashboard server failed: ${err.message}`);
+    }
+  }
+
   // Keep process alive for embedded mode
   if (info?.mode === "embedded") {
     console.log("\nPGlite running. Press Ctrl+C to stop.");
 
     const shutdown = async () => {
+      if (httpServer) await httpServer.close();
       console.log("\nShutting down...");
       await DBOS.shutdown();
       await shutdownEmbedded();
