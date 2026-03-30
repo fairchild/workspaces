@@ -53,25 +53,30 @@ export class ComputeProviderRegistry {
 
 /** Lazy singleton — same pattern as getBot() in bot.ts */
 let _registry: ComputeProviderRegistry | undefined;
+let _registryPromise: Promise<ComputeProviderRegistry> | undefined;
 
-export function getRegistry(): ComputeProviderRegistry {
-	if (!_registry) {
-		// Import providers lazily to avoid circular deps
-		const { VercelSandboxProvider } = require("./vercel-sandbox") as {
-			VercelSandboxProvider: new () => ComputeProvider;
-		};
-		const { DaytonaProvider } = require("./daytona") as {
-			DaytonaProvider: new () => ComputeProvider;
-		};
-		const { GitHubActionsProvider } = require("./github-actions") as {
-			GitHubActionsProvider: new () => ComputeProvider;
-		};
+export async function getRegistry(): Promise<ComputeProviderRegistry> {
+	if (_registry) return _registry;
+	if (_registryPromise) return _registryPromise;
+
+	_registryPromise = (async () => {
+		const [
+			{ VercelSandboxProvider },
+			{ DaytonaProvider },
+			{ GitHubActionsProvider },
+		] = await Promise.all([
+			import("./vercel-sandbox"),
+			import("./daytona"),
+			import("./github-actions"),
+		]);
 
 		_registry = new ComputeProviderRegistry([
 			new VercelSandboxProvider(),
 			new DaytonaProvider(),
 			new GitHubActionsProvider(),
 		]);
-	}
-	return _registry;
+		return _registry;
+	})();
+
+	return _registryPromise;
 }

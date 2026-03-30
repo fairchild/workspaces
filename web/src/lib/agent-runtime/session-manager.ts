@@ -7,17 +7,20 @@ import {
 	updateSessionStatus,
 } from "../agent-sessions";
 import { pushChatMessage } from "../chat";
-import { addDiscussionComment, createDiscussion } from "../github";
+import { addDiscussionComment } from "../github";
 import type { AgentSession, ChatMessage } from "../types";
 import { buildConversationalPrompt, resolvePersona } from "./persona-loader";
 import { type ComputeProviderRegistry, getRegistry } from "./provider-registry";
 import type { StreamChunk } from "./types";
 
 export class SessionManager {
-	private registry: ComputeProviderRegistry;
+	private registry: ComputeProviderRegistry | null = null;
 
-	constructor(registry?: ComputeProviderRegistry) {
-		this.registry = registry ?? getRegistry();
+	private async getProviderRegistry(): Promise<ComputeProviderRegistry> {
+		if (!this.registry) {
+			this.registry = await getRegistry();
+		}
+		return this.registry;
 	}
 
 	/**
@@ -68,7 +71,8 @@ export class SessionManager {
 		if (existing?.computeInstanceId) {
 			// Resume existing session
 			yield { type: "status", content: "Resuming session..." };
-			const provider = this.registry.get(existing.computeBackend);
+			const registry = await this.getProviderRegistry();
+			const provider = registry.get(existing.computeBackend);
 			if (!provider) {
 				yield { type: "error", content: "Compute provider unavailable" };
 				return;
@@ -77,28 +81,25 @@ export class SessionManager {
 			await provider.sendMessage(existing.computeInstanceId, params.message);
 			await updateSessionStatus(existing.id, "streaming");
 
-			const response = await collectResponse(
-				provider.streamOutput(existing.computeInstanceId),
-				(chunk) => chunk,
-			);
-
-			for await (const chunk of response.chunks) {
+			let fullText = "";
+			for await (const chunk of provider.streamOutput(
+				existing.computeInstanceId,
+			)) {
+				if (chunk.type === "text") {
+					fullText += chunk.content;
+				}
 				yield chunk;
 			}
 
 			await updateSessionStatus(existing.id, "active");
 
-			// Persist agent response
-			await this.persistAgentResponse(
-				params,
-				persona.displayName,
-				response.fullText,
-			);
+			await this.persistAgentResponse(params, persona.displayName, fullText);
 			return;
 		}
 
 		// 3. Create new session
-		const provider = this.registry.getDefault();
+		const registry = await this.getProviderRegistry();
+		const provider = registry.getDefault();
 		const availability = await provider.checkAvailability();
 		if (!availability.available) {
 			yield {
@@ -174,7 +175,8 @@ export class SessionManager {
 		const session = await getDbSession(sessionId);
 		if (!session?.computeInstanceId) return;
 
-		const provider = this.registry.get(session.computeBackend);
+		const registry = await this.getProviderRegistry();
+		const provider = registry.get(session.computeBackend);
 		if (provider) {
 			await provider.destroySandbox(session.computeInstanceId);
 		}
@@ -220,30 +222,6 @@ export class SessionManager {
 			}
 		}
 	}
-}
-
-/** Collect stream chunks, forwarding them and accumulating full text. */
-async function collectResponse(
-	stream: AsyncGenerator<StreamChunk>,
-	_onChunk: (chunk: StreamChunk) => StreamChunk,
-): Promise<{ chunks: AsyncGenerator<StreamChunk>; fullText: string }> {
-	const chunks: StreamChunk[] = [];
-	let fullText = "";
-
-	for await (const chunk of stream) {
-		chunks.push(chunk);
-		if (chunk.type === "text") {
-			fullText += chunk.content;
-		}
-	}
-
-	async function* replayChunks(): AsyncGenerator<StreamChunk> {
-		for (const chunk of chunks) {
-			yield chunk;
-		}
-	}
-
-	return { chunks: replayChunks(), fullText };
 }
 
 /** Lazy singleton */

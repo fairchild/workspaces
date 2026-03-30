@@ -82,6 +82,8 @@ async function getOrCreateBaseSnapshot(): Promise<string> {
 
 /** Active sandbox instances keyed by instanceId (sandboxId). */
 const activeSandboxes = new Map<string, Sandbox>();
+/** Tool set per sandbox, set during createSandbox for use in streamOutput. */
+const activeSandboxTools = new Map<string, string>();
 
 export class VercelSandboxProvider implements ComputeProvider, SnapshotCapable {
 	readonly descriptor: ComputeProviderDescriptor = {
@@ -125,7 +127,7 @@ export class VercelSandboxProvider implements ComputeProvider, SnapshotCapable {
 			networkPolicy: { allow: ALLOWED_DOMAINS },
 		});
 
-		// Clone the target repo
+		// Clone the target repo (use token for private repos)
 		const cloneArgs = ["clone", "--depth", "1"];
 		if (request.branch) {
 			cloneArgs.push("--branch", request.branch);
@@ -133,27 +135,34 @@ export class VercelSandboxProvider implements ComputeProvider, SnapshotCapable {
 		cloneArgs.push(request.cloneUrl, "/vercel/sandbox/repo");
 		await sandbox.runCommand("git", cloneArgs);
 
-		// Start Claude Code as a detached process.
-		// Claude CLI uses: echo "msg" | claude -p --system-prompt "..." --allowedTools ...
-		// Output goes to a JSONL file for streaming.
+		const instanceId = sandbox.sandboxId;
 		const tools =
 			request.tools === "conversational" ? CONVERSATIONAL_TOOLS : FULL_TOOLS;
-
-		const escapedPrompt = request.systemPrompt.replace(/"/g, '\\"');
-		const escapedMessage = request.message.replace(/"/g, '\\"');
-
-		await sandbox.runCommand({
-			cmd: "bash",
-			args: [
-				"-c",
-				`echo "${escapedMessage}" | claude -p --system-prompt "${escapedPrompt}" --allowedTools ${tools} > /vercel/sandbox/agent-output.txt 2>&1`,
-			],
-			cwd: "/vercel/sandbox/repo",
-			detached: true,
-		});
-
-		const instanceId = sandbox.sandboxId;
 		activeSandboxes.set(instanceId, sandbox);
+		activeSandboxTools.set(instanceId, tools);
+
+		// Write prompt, message, and a runner script to files.
+		// The runner script avoids shell injection by reading from files
+		// and passing via env var (not shell interpolation).
+		const runnerScript = `#!/bin/bash
+PROMPT=$(cat /vercel/sandbox/system-prompt.txt)
+cat /vercel/sandbox/message.txt | claude -p --system-prompt "$PROMPT" --allowedTools ${tools}
+`;
+
+		await sandbox.writeFiles([
+			{
+				path: "/vercel/sandbox/system-prompt.txt",
+				content: Buffer.from(request.systemPrompt),
+			},
+			{
+				path: "/vercel/sandbox/message.txt",
+				content: Buffer.from(request.message),
+			},
+			{
+				path: "/vercel/sandbox/run-agent.sh",
+				content: Buffer.from(runnerScript),
+			},
+		]);
 
 		return { instanceId, status: "ready" };
 	}
@@ -165,51 +174,27 @@ export class VercelSandboxProvider implements ComputeProvider, SnapshotCapable {
 			return;
 		}
 
-		// Read the stream-json output from Claude's stdout
-		// The detached process writes to stdout which we capture via readFile
-		// For now, poll the output file until the process completes
-		const outputPath = "/vercel/sandbox/agent-output.jsonl";
+		// Run claude synchronously — blocks until response is complete.
+		// The SSE route has a 5-min timeout which is sufficient for conversational queries.
+		const result = await sandbox.runCommand({
+			cmd: "bash",
+			args: ["/vercel/sandbox/run-agent.sh"],
+			cwd: "/vercel/sandbox/repo",
+		});
 
-		// Write a wrapper script that captures claude output to a file
-		// This is needed because detached command stdout isn't directly streamable
-		// TODO: Improve with direct stdout piping when @vercel/sandbox supports it
-		let lastOffset = 0;
-		let done = false;
+		const stdout = await result.stdout();
+		const stderr = await result.stderr();
 
-		while (!done) {
-			try {
-				const buffer = await sandbox.readFileToBuffer({
-					path: outputPath,
-				});
-				if (!buffer) continue;
-				const content = buffer.toString("utf-8");
-				const newContent = content.slice(lastOffset);
-				lastOffset = content.length;
+		if (result.exitCode !== 0) {
+			yield {
+				type: "error",
+				content: stderr.trim() || `Claude exited with code ${result.exitCode}`,
+			};
+			return;
+		}
 
-				if (newContent) {
-					for (const line of newContent.split("\n").filter(Boolean)) {
-						try {
-							const parsed = JSON.parse(line);
-							yield {
-								type: parsed.type ?? "text",
-								content: parsed.content ?? parsed.text ?? line,
-								metadata: parsed,
-							};
-							if (parsed.type === "result") {
-								done = true;
-							}
-						} catch {
-							yield { type: "text", content: line };
-						}
-					}
-				}
-			} catch {
-				// File may not exist yet, or process still starting
-			}
-
-			if (!done) {
-				await new Promise((r) => setTimeout(r, 500));
-			}
+		if (stdout.trim()) {
+			yield { type: "text", content: stdout.trim() };
 		}
 
 		yield { type: "done", content: "" };
@@ -219,27 +204,13 @@ export class VercelSandboxProvider implements ComputeProvider, SnapshotCapable {
 		const sandbox = activeSandboxes.get(instanceId);
 		if (!sandbox) throw new Error(`Sandbox ${instanceId} not found`);
 
-		// Write message to a file and run claude with --resume
+		// Write new message for the next streamOutput call
 		await sandbox.writeFiles([
 			{
-				path: "/vercel/sandbox/next-message.txt",
+				path: "/vercel/sandbox/message.txt",
 				content: Buffer.from(message),
 			},
 		]);
-
-		await sandbox.runCommand({
-			cmd: "claude",
-			args: [
-				"--print",
-				"--output-format",
-				"stream-json",
-				"--resume",
-				"--message",
-				message,
-			],
-			cwd: "/vercel/sandbox/repo",
-			detached: true,
-		});
 	}
 
 	async destroySandbox(instanceId: string): Promise<void> {
@@ -247,6 +218,7 @@ export class VercelSandboxProvider implements ComputeProvider, SnapshotCapable {
 		if (sandbox) {
 			await sandbox.stop();
 			activeSandboxes.delete(instanceId);
+			activeSandboxTools.delete(instanceId);
 		}
 	}
 
