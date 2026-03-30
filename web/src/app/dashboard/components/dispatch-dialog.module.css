@@ -1,0 +1,138 @@
+.backdrop {
+	position: fixed;
+	inset: 0;
+	background: rgba(0, 0, 0, 0.6);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	z-index: 100;
+	animation: fadeIn 0.15s ease-out;
+}
+
+.dialog {
+	width: 100%;
+	max-width: 440px;
+	background: var(--bg-elevated);
+	border: 1px solid var(--border);
+	border-radius: 12px;
+	padding: 1.5rem;
+	display: flex;
+	flex-direction: column;
+	gap: 1.25rem;
+	animation: slideUp 0.2s ease-out;
+}
+
+.title {
+	font-family: var(--font-display), "Georgia", serif;
+	font-size: 1.25rem;
+	font-weight: 400;
+	font-style: italic;
+	color: var(--text-primary);
+	letter-spacing: -0.02em;
+	margin: 0;
+}
+
+/* ── Body fields ── */
+
+.body {
+	display: flex;
+	flex-direction: column;
+	gap: 0.625rem;
+}
+
+.field {
+	display: flex;
+	align-items: baseline;
+	gap: 0.75rem;
+}
+
+.fieldLabel {
+	font-family: var(--font-mono), ui-monospace, monospace;
+	font-size: 0.625rem;
+	color: var(--text-tertiary);
+	text-transform: uppercase;
+	letter-spacing: 0.06em;
+	min-width: 3.5rem;
+	flex-shrink: 0;
+}
+
+.fieldValue {
+	font-family: var(--font-mono), ui-monospace, monospace;
+	font-size: 0.75rem;
+	color: var(--text-primary);
+	line-height: 1.4;
+	word-break: break-word;
+}
+
+.hint {
+	font-family: var(--font-mono), ui-monospace, monospace;
+	font-size: 0.6875rem;
+	color: var(--text-tertiary);
+	line-height: 1.5;
+	margin: 0;
+}
+
+/* ── Actions ── */
+
+.actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: 0.75rem;
+}
+
+.cancelBtn {
+	font-family: var(--font-mono), ui-monospace, monospace;
+	font-size: 0.6875rem;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	padding: 0.5rem 1rem;
+	border-radius: 6px;
+	border: 1px solid var(--border);
+	background: transparent;
+	color: var(--text-secondary);
+	cursor: pointer;
+	transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.cancelBtn:hover:not(:disabled) {
+	color: var(--text-primary);
+	border-color: var(--text-tertiary);
+}
+
+.confirmBtn {
+	font-family: var(--font-mono), ui-monospace, monospace;
+	font-size: 0.6875rem;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	padding: 0.5rem 1.25rem;
+	border-radius: 6px;
+	border: none;
+	background: var(--accent);
+	color: #0e1117;
+	font-weight: 600;
+	cursor: pointer;
+	transition: opacity 0.15s ease;
+}
+
+.confirmBtn:hover:not(:disabled) {
+	opacity: 0.85;
+}
+
+.confirmBtn:disabled,
+.cancelBtn:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
+}
+
+/* ── Animations ── */
+
+@keyframes slideUp {
+	from {
+		opacity: 0;
+		transform: translateY(12px);
+	}
+	to {
+		opacity: 1;
+		transform: translateY(0);
+	}
+}

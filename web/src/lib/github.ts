@@ -196,6 +196,141 @@ export function fetchOpenPRCount(
 	});
 }
 
+// --- Discussions (GraphQL) ---
+
+const GITHUB_GRAPHQL = "https://api.github.com/graphql";
+
+async function ghGraphQL<T>(
+	token: string,
+	query: string,
+	variables: Record<string, unknown>,
+): Promise<T> {
+	const res = await fetch(GITHUB_GRAPHQL, {
+		method: "POST",
+		headers: {
+			Authorization: `Bearer ${token}`,
+			"Content-Type": "application/json",
+		},
+		body: JSON.stringify({ query, variables }),
+	});
+	if (!res.ok) {
+		throw new GitHubApiError(res.status, await res.text());
+	}
+	const json = (await res.json()) as {
+		data?: T;
+		errors?: Array<{ message: string }>;
+	};
+	if (json.errors?.length) {
+		throw new GitHubApiError(422, json.errors.map((e) => e.message).join("; "));
+	}
+	return json.data as T;
+}
+
+export async function getDiscussionCategoryId(
+	token: string,
+	owner: string,
+	repo: string,
+	categoryName = "General",
+): Promise<{ repoId: string; categoryId: string }> {
+	const key = `disc-cat:${owner}/${repo}:${categoryName}`;
+	return cached(key, FIFTEEN_MIN, async () => {
+		const data = await ghGraphQL<{
+			repository: {
+				id: string;
+				discussionCategories: {
+					nodes: Array<{ id: string; name: string }>;
+				};
+			};
+		}>(
+			token,
+			`query($owner: String!, $repo: String!) {
+				repository(owner: $owner, name: $repo) {
+					id
+					discussionCategories(first: 25) {
+						nodes { id name }
+					}
+				}
+			}`,
+			{ owner, repo },
+		);
+		const cat = data.repository.discussionCategories.nodes.find(
+			(c) => c.name === categoryName,
+		);
+		if (!cat) {
+			throw new GitHubApiError(
+				404,
+				`Discussion category "${categoryName}" not found in ${owner}/${repo}`,
+			);
+		}
+		return { repoId: data.repository.id, categoryId: cat.id };
+	});
+}
+
+export interface CreatedDiscussion {
+	id: string;
+	url: string;
+	number: number;
+}
+
+export async function createDiscussion(
+	token: string,
+	owner: string,
+	repo: string,
+	title: string,
+	body: string,
+	categoryName = "General",
+): Promise<CreatedDiscussion> {
+	const { repoId, categoryId } = await getDiscussionCategoryId(
+		token,
+		owner,
+		repo,
+		categoryName,
+	);
+	const data = await ghGraphQL<{
+		createDiscussion: {
+			discussion: { id: string; url: string; number: number };
+		};
+	}>(
+		token,
+		`mutation($input: CreateDiscussionInput!) {
+			createDiscussion(input: $input) {
+				discussion { id url number }
+			}
+		}`,
+		{
+			input: {
+				repositoryId: repoId,
+				categoryId,
+				title,
+				body,
+			},
+		},
+	);
+	const d = data.createDiscussion.discussion;
+	return { id: d.id, url: d.url, number: d.number };
+}
+
+export async function addDiscussionComment(
+	token: string,
+	discussionId: string,
+	body: string,
+): Promise<{ id: string; url: string }> {
+	const data = await ghGraphQL<{
+		addDiscussionComment: {
+			comment: { id: string; url: string };
+		};
+	}>(
+		token,
+		`mutation($input: AddDiscussionCommentInput!) {
+			addDiscussionComment(input: $input) {
+				comment { id url }
+			}
+		}`,
+		{ input: { discussionId, body } },
+	);
+	return data.addDiscussionComment.comment;
+}
+
 // --- Agents dir check ---
 
 export async function checkAgentsDir(
