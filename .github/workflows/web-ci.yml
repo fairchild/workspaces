@@ -53,7 +53,7 @@ jobs:
         run: pnpm test
 
       - name: Install Playwright browsers
-        run: ./node_modules/.bin/playwright install chromium --with-deps
+        run: pnpm exec playwright install chromium --with-deps
 
       - name: E2E fast tests
         run: pnpm run test:e2e:fast
