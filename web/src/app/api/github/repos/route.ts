@@ -17,6 +17,12 @@ export async function GET(): Promise<Response> {
 		const repos = await fetchUserRepos(token);
 		return Response.json(repos);
 	} catch (err) {
+		if (err instanceof GitHubApiError && err.status === 401) {
+			return Response.json(
+				{ error: "token_expired", needsReauth: true },
+				{ status: 401 },
+			);
+		}
 		const message =
 			err instanceof GitHubApiError
 				? `GitHub API ${err.status}`

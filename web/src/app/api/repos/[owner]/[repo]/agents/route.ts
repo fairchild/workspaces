@@ -92,6 +92,11 @@ export async function GET(
 		return Response.json(response);
 	} catch (err) {
 		if (err instanceof GitHubApiError) {
+			if (err.status === 401)
+				return Response.json(
+					{ error: "token_expired", needsReauth: true },
+					{ status: 401 },
+				);
 			if (err.status === 403)
 				return Response.json(
 					{ error: "insufficient_scope", needsReauth: true },
