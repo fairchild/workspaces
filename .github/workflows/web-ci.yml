@@ -48,3 +48,15 @@ jobs:
         env:
           BETTER_AUTH_SECRET: ci-placeholder-secret-for-build-only
           TURSO_DATABASE_URL: "file::memory:"
+
+      - name: Unit tests
+        run: pnpm test
+
+      - name: Install Playwright browsers
+        run: pnpm exec playwright install chromium --with-deps
+
+      - name: E2E fast tests
+        run: pnpm test:e2e:fast
+        env:
+          BETTER_AUTH_SECRET: ci-placeholder-secret-for-build-only
+          TURSO_DATABASE_URL: "file::memory:"
