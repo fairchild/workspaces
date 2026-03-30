@@ -24,9 +24,11 @@ const FIFTEEN_MIN = 15 * 60 * 1000;
 
 // --- Token retrieval + refresh ---
 
-async function refreshAccessToken(
-	refreshToken: string,
-): Promise<{ access_token: string; refresh_token: string; expires_in: number } | null> {
+async function refreshAccessToken(refreshToken: string): Promise<{
+	access_token: string;
+	refresh_token: string;
+	expires_in: number;
+} | null> {
 	const clientId = process.env.GITHUB_WEB_WORKSPACES_CLIENT_ID;
 	const clientSecret = process.env.GITHUB_WEB_WORKSPACES_CLIENT_SECRET;
 	if (!clientId || !clientSecret) return null;
