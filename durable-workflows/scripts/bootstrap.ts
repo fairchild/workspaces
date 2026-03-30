@@ -6,15 +6,24 @@
  */
 
 import { DBOS } from "@dbos-inc/dbos-sdk";
-import { resolveDatabaseUrl, readConnectionInfo, shutdownEmbedded } from "../src/db.js";
+import { resolveDatabaseUrl, readConnectionInfo, removeConnectionInfo, isBootstrapAlive, shutdownEmbedded } from "../src/db.js";
 import { buildDBOSConfig } from "../src/dbos-config.js";
 
 const statusOnly = process.argv.includes("--status");
 
 async function main() {
-  // Check if already running
   const existing = readConnectionInfo();
-  if (existing && statusOnly) {
+
+  if (existing && existing.mode === "embedded") {
+    if (isBootstrapAlive(existing)) {
+      // Already running — print status and exit
+      console.log(`✓ Already running (PID ${existing.pid}, port ${existing.port})`);
+      if (statusOnly) console.log(JSON.stringify(existing, null, 2));
+      process.exit(0);
+    }
+    // Stale connection.json from a dead process — clean up
+    removeConnectionInfo();
+  } else if (existing && statusOnly) {
     console.log(JSON.stringify(existing, null, 2));
     process.exit(0);
   }
@@ -39,6 +48,7 @@ async function main() {
       console.log("\nShutting down...");
       await DBOS.shutdown();
       await shutdownEmbedded();
+      removeConnectionInfo();
       process.exit(0);
     };
 

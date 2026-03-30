@@ -6,7 +6,7 @@
 import { PGlite } from "@electric-sql/pglite";
 import { uuid_ossp } from "@electric-sql/pglite/contrib/uuid_ossp";
 import { PGLiteSocketServer } from "@electric-sql/pglite-socket";
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, unlinkSync, mkdirSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 
 export interface ConnectionInfo {
@@ -83,6 +83,23 @@ async function startEmbeddedPGlite(): Promise<string> {
 function writeConnectionInfo(info: ConnectionInfo): void {
   mkdirSync(DBOS_DIR, { recursive: true });
   writeFileSync(CONNECTION_FILE, JSON.stringify(info, null, 2));
+}
+
+/** Remove connection.json (call on shutdown or stale cleanup). */
+export function removeConnectionInfo(): void {
+  try {
+    unlinkSync(CONNECTION_FILE);
+  } catch {}
+}
+
+/** Check if the PID in connection.json is still alive. */
+export function isBootstrapAlive(info: ConnectionInfo): boolean {
+  try {
+    process.kill(info.pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** Gracefully shut down PGlite and socket server. */

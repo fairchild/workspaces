@@ -5,8 +5,7 @@
  * Usage: npx tsx scripts/shutdown.ts
  */
 
-import { readConnectionInfo, getConnectionFile } from "../src/db.js";
-import { unlinkSync } from "node:fs";
+import { readConnectionInfo, removeConnectionInfo } from "../src/db.js";
 
 async function main() {
   const info = readConnectionInfo();
@@ -28,10 +27,8 @@ async function main() {
   } catch (err: any) {
     if (err.code === "ESRCH") {
       console.log(`Process ${info.pid} not found (already stopped).`);
-      try {
-        unlinkSync(getConnectionFile());
-        console.log("Cleaned up stale connection.json");
-      } catch {}
+      removeConnectionInfo();
+      console.log("Cleaned up stale connection.json");
     } else {
       throw err;
     }
