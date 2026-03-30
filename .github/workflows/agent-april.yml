@@ -28,6 +28,7 @@ concurrency:
 
 jobs:
   check-runner:
+    if: github.event_name != 'schedule' || vars.AGENT_SCHEDULED_RUNS_ENABLED == 'true'
     # Prefer the Lume macOS VM when it's online; fall back to ubuntu-latest.
     runs-on: ubuntu-latest
     timeout-minutes: 2
