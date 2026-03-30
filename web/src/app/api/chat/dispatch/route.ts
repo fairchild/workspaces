@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { getSession } from "@/lib/auth-server";
 import { pushChatMessage } from "@/lib/chat";
+import { formatDispatchBody, parseIssueRef } from "@/lib/chat-utils";
 import { createDiscussion, getGitHubToken } from "@/lib/github";
 import { getUserRepos } from "@/lib/repos";
 import type { ChatMessage, DispatchMetadata } from "@/lib/types";
@@ -131,29 +132,3 @@ export async function POST(request: Request): Promise<Response> {
 	});
 }
 
-function parseIssueRef(task: string): string | null {
-	const match = task.match(/#(\d+)/);
-	return match ? `#${match[1]}` : null;
-}
-
-function formatDispatchBody(
-	agent: string,
-	task: string,
-	issueRef: string | null,
-	taskId: string,
-): string {
-	const lines = [
-		`**Agent:** @${agent}`,
-		`**Task:** ${task}`,
-		`**Task ID:** \`${taskId}\``,
-	];
-	if (issueRef) {
-		lines.push(`**Issue:** ${issueRef}`);
-	}
-	lines.push(
-		"",
-		"---",
-		"*Dispatched from [Spaces](https://spaces.cloudcompute.com) chat*",
-	);
-	return lines.join("\n");
-}

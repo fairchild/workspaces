@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { getSession } from "@/lib/auth-server";
 import { getMixedTimeline, pushChatMessage } from "@/lib/chat";
+import { parseAgentMention, stripMention } from "@/lib/chat-utils";
 import { getEventStats } from "@/lib/events";
 import {
 	addDiscussionComment,
@@ -142,15 +143,6 @@ export async function GET(request: Request): Promise<Response> {
 
 	const timeline = await getMixedTimeline(repo, limit, since);
 	return Response.json(timeline);
-}
-
-function parseAgentMention(message: string): string | null {
-	const match = message.match(/^@(\w[\w-]*)/);
-	return match ? match[1] : null;
-}
-
-function stripMention(message: string): string {
-	return message.replace(/^@\w[\w-]*\s*/, "").trim();
 }
 
 async function handleBotCommand(

@@ -1,6 +1,6 @@
 import { timingSafeEqual } from "node:crypto";
 import { getSession } from "@/lib/auth-server";
-import type { Workspace } from "@/lib/types";
+import { isWorkspace } from "@/lib/workspace-utils";
 import {
 	type SyncWorkspaceInput,
 	getWorkspaces,
@@ -14,13 +14,6 @@ function safeEqual(a: string, b: string): boolean {
 	return timingSafeEqual(Buffer.from(a), Buffer.from(b));
 }
 
-const VALID_STATUSES: Set<string> = new Set<string>([
-	"provisioning",
-	"active",
-	"stopped",
-	"archived",
-]);
-
 /** Resolve user ID from API key header or session cookie. */
 async function authenticateRequest(request: Request): Promise<string | null> {
 	const authHeader = request.headers.get("authorization");
@@ -31,19 +24,6 @@ async function authenticateRequest(request: Request): Promise<string | null> {
 
 	const session = await getSession();
 	return session?.user.id ?? null;
-}
-
-function isWorkspace(v: unknown): v is Workspace {
-	if (typeof v !== "object" || v === null) return false;
-	const o = v as Record<string, unknown>;
-	return (
-		typeof o.id === "string" &&
-		typeof o.name === "string" &&
-		typeof o.path === "string" &&
-		typeof o.status === "string" &&
-		VALID_STATUSES.has(o.status) &&
-		typeof o.backendIdentifier === "string"
-	);
 }
 
 export async function POST(request: Request): Promise<Response> {

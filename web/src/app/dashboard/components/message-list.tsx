@@ -1,5 +1,6 @@
 "use client";
 
+import { dayKey, shouldShowDay } from "@/lib/timeline-utils";
 import type { DispatchMetadata, TimelineEntry } from "@/lib/types";
 import { useEffect, useRef } from "react";
 import { DispatchCard, tryParseDispatchMetadata } from "./dispatch-card";
@@ -10,20 +11,6 @@ import { formatTime } from "./timeline-utils";
 interface MessageListProps {
 	entries: TimelineEntry[];
 	loading: boolean;
-}
-
-function dayKey(timestamp: string): string {
-	return new Date(timestamp).toLocaleDateString("en-US", {
-		month: "short",
-		day: "numeric",
-	});
-}
-
-function shouldShowDay(entries: TimelineEntry[], index: number): boolean {
-	if (index === 0) return true;
-	const prev = entries[index - 1];
-	const curr = entries[index];
-	return dayKey(prev.timestamp) !== dayKey(curr.timestamp);
 }
 
 export function MessageList({ entries, loading }: MessageListProps) {
