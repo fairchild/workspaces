@@ -7,6 +7,7 @@ import {
 	createDiscussion,
 	getGitHubToken,
 } from "@/lib/github";
+import { getUserRepos } from "@/lib/repos";
 import type { ChatMessage } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -37,6 +38,14 @@ export async function POST(request: Request): Promise<Response> {
 		return Response.json(
 			{ error: "repo must be owner/name format" },
 			{ status: 400 },
+		);
+	}
+
+	const userRepos = await getUserRepos(session.user.id);
+	if (!userRepos.some((r) => `${r.owner}/${r.repo}` === body.repo)) {
+		return Response.json(
+			{ error: "repo not in your workspace" },
+			{ status: 403 },
 		);
 	}
 
