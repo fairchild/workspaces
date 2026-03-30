@@ -1,32 +1,45 @@
-import { test } from "@playwright/test";
-
-// TODO: Set up auth fixture for authenticated tests
-// See e2e/full/dashboard.spec.ts for strategy options
+import { expect, test } from "@playwright/test";
 
 test.describe("Chat (authenticated)", () => {
-	test.skip("tab switching updates URL", async ({ page }) => {
-		// TODO: Sign in via auth fixture
-		// 1. Navigate to /dashboard/owner/repo
-		// 2. Verify Dashboard tab is active
-		// 3. Click Chat tab
-		// 4. Verify URL contains ?tab=chat
-		// 5. Verify Chat tab has active styling
-		// 6. Click Dashboard tab
-		// 7. Verify URL no longer contains ?tab=chat
+	test("tab switching updates URL", async ({ page }) => {
+		await page.goto("/dashboard");
+		await expect(page.getByRole("button", { name: "Dashboard" })).toBeVisible();
+
+		// Switch to Chat
+		await page.getByRole("button", { name: "Chat" }).click();
+		await expect(page).toHaveURL(/tab=chat/);
+
+		// Switch back to Dashboard
+		await page.getByRole("button", { name: "Dashboard" }).click();
+		await expect(page).not.toHaveURL(/tab=chat/);
+	});
+
+	test("chat tab shows compose bar", async ({ page }) => {
+		await page.goto("/dashboard?tab=chat");
+		await expect(
+			page.getByPlaceholder("Type a message or @mention an agent"),
+		).toBeVisible();
+		await expect(page.getByRole("button", { name: "Send" })).toBeVisible();
+	});
+
+	test("compose bar shows helper text", async ({ page }) => {
+		await page.goto("/dashboard?tab=chat");
+		await expect(page.getByText("Enter to send")).toBeVisible();
+		await expect(page.getByText("@ to mention agent")).toBeVisible();
 	});
 
 	test.skip("sticky tab bar stays visible while scrolling", async ({
 		page,
 	}) => {
-		// TODO: Sign in via auth fixture
+		// TODO: Needs seeded timeline entries to create scrollable content
 		// 1. Navigate to chat tab with long timeline
 		// 2. Scroll down significantly
-		// 3. Verify tab bar is still visible (position: sticky)
+		// 3. Verify tab bar is still in viewport
 	});
 
 	test.skip("timeline shows day separators", async ({ page }) => {
-		// TODO: Sign in via auth fixture
-		// 1. Navigate to chat tab with messages spanning multiple days
+		// TODO: Needs seeded chat messages spanning multiple days
+		// 1. Navigate to chat tab
 		// 2. Verify .daySeparator elements exist
 		// 3. Verify separator text matches "Mon DD" format
 	});
@@ -34,13 +47,11 @@ test.describe("Chat (authenticated)", () => {
 	test.skip("compose bar @ mention triggers autocomplete", async ({
 		page,
 	}) => {
-		// TODO: Sign in via auth fixture
-		// 1. Navigate to chat tab
-		// 2. Click compose bar textarea
-		// 3. Type "@"
-		// 4. Verify autocomplete dropdown appears with agent names
-		// 5. Type partial agent name to filter
-		// 6. Select an agent
-		// 7. Verify agent chip appears and text is updated
+		// TODO: Needs seeded agents via repo with .agents/ directory
+		// 1. Click compose bar textarea
+		// 2. Type "@"
+		// 3. Verify autocomplete dropdown appears
+		// 4. Select an agent
+		// 5. Verify agent chip appears
 	});
 });

@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-test.describe("Auth redirect @fast", () => {
+test.describe("Auth redirect", () => {
 	test("GET /dashboard without auth redirects to sign-in", async ({
 		page,
 	}) => {

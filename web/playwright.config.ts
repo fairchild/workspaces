@@ -13,7 +13,13 @@ export default defineConfig({
 	},
 	projects: [
 		{
-			name: "chromium",
+			name: "fast",
+			testMatch: "fast/**",
+			use: { ...devices["Desktop Chrome"] },
+		},
+		{
+			name: "full",
+			testMatch: "full/**",
 			use: { ...devices["Desktop Chrome"] },
 		},
 	],
@@ -22,5 +28,8 @@ export default defineConfig({
 		url: "http://localhost:3000",
 		reuseExistingServer: !process.env.CI,
 		timeout: 120_000,
+		env: {
+			DEV_BYPASS_AUTH: "1",
+		},
 	},
 });
