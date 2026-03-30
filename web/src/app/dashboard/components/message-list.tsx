@@ -8,10 +8,15 @@ import styles from "./message-list.module.css";
 import { StatusCard } from "./status-card";
 import { formatTime } from "./timeline-utils";
 
+interface StreamingMessage {
+	agentName: string;
+	content: string;
+}
+
 interface MessageListProps {
 	entries: TimelineEntry[];
 	loading: boolean;
-	streamingMessage?: { agentName: string; content: string } | null;
+	streamingMessage?: StreamingMessage | null;
 }
 
 export function MessageList({
@@ -78,6 +83,23 @@ export function MessageList({
 						)}
 					</div>
 				))}
+				{streamingMessage && (
+					<div className={styles.message}>
+						<div className={styles.messageHeader}>
+							<span
+								className={`${styles.messageAuthor} ${styles.messageAuthorAgent}`}
+							>
+								{streamingMessage.agentName}
+							</span>
+							<span className={styles.messageTime}>now</span>
+						</div>
+						<span className={styles.messageContent}>
+							{streamingMessage.content || (
+								<span className={styles.streamingIndicator}>thinking...</span>
+							)}
+						</span>
+					</div>
+				)}
 			</div>
 			<div ref={anchorRef} className={styles.anchor} />
 		</div>

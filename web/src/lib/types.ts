@@ -201,3 +201,39 @@ export interface GitHubRepo {
 	hasAgents?: boolean;
 	agentCount?: number;
 }
+
+// --- Agent Sessions ---
+
+export type AgentSessionStatus =
+	| "starting"
+	| "active"
+	| "streaming"
+	| "completed"
+	| "failed";
+
+export type ComputeBackendId =
+	| "vercel-sandbox"
+	| "daytona"
+	| "github-actions"
+	| "lume";
+
+export interface AgentSession {
+	id: string;
+	repo: string;
+	agentName: string;
+	computeBackend: ComputeBackendId;
+	computeInstanceId: string | null;
+	threadId: string;
+	discussionId: string | null;
+	status: AgentSessionStatus;
+	createdAt: string;
+	lastActivityAt: string;
+}
+
+export interface AgentPersona {
+	name: string;
+	displayName: string;
+	role: string;
+	personaPath: string;
+	systemPrompt: string;
+}

@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { resolvePersona } from "@/lib/agent-runtime/persona-loader";
 import { getSession } from "@/lib/auth-server";
 import { getMixedTimeline, pushChatMessage } from "@/lib/chat";
 import { parseAgentMention, stripMention } from "@/lib/chat-utils";
@@ -71,6 +72,36 @@ export async function POST(request: Request): Promise<Response> {
 	);
 	if (botResponse) {
 		return Response.json(botResponse);
+	}
+
+	// Check if the mention targets a known agent persona
+	if (agentTarget && agentTarget !== "spaces") {
+		const persona = await resolvePersona(token, owner, repo, agentTarget);
+		if (persona) {
+			// Store the user message immediately
+			const chatMessage: ChatMessage = {
+				id: messageId,
+				repo: body.repo,
+				author: session.user.name ?? session.user.email ?? "you",
+				authorType: "user",
+				content: body.message,
+				agentTarget,
+				discussionId: null,
+				discussionUrl: null,
+				timestamp,
+			};
+			await pushChatMessage(chatMessage);
+
+			// Return session info — client will connect to SSE endpoint
+			return Response.json({
+				messageId,
+				agentSession: {
+					agentName: agentTarget,
+					streamUrl: "/api/chat/agent-stream",
+					threadId: body.parentDiscussionId ?? messageId,
+				},
+			});
+		}
 	}
 
 	const title = agentTarget

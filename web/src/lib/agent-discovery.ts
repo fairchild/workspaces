@@ -1,4 +1,4 @@
-import type { Agent, ConfigFile, Skill } from "./types";
+import type { Agent, AgentPersona, ConfigFile, Skill } from "./types";
 
 interface TreeEntry {
 	path: string;
@@ -93,4 +93,39 @@ export function parseAgentTree(
 	}));
 
 	return { agents, skills, configFiles };
+}
+
+/**
+ * Extract persona-based agents from references/*.md files in the tree.
+ * These use full hyphenated names (e.g. "april-clearwater") to avoid
+ * conflicts with real GitHub users.
+ */
+export function parsePersonaReferences(
+	treeEntries: TreeEntry[],
+	personaContents: Map<string, string>,
+): Agent[] {
+	const personaPattern = /^\.agents\/skills\/[^/]+\/references\/([^/]+)\.md$/;
+	const agents: Agent[] = [];
+
+	for (const entry of treeEntries) {
+		const match = entry.path.match(personaPattern);
+		if (!match || entry.type !== "blob") continue;
+
+		const slug = match[1];
+		const content = personaContents.get(entry.path) ?? "";
+
+		// Extract role from "# Name — Role" heading
+		const roleMatch = content.match(/^#\s+.+?—\s*(.+)$/m);
+		const role = roleMatch ? roleMatch[1].trim() : null;
+
+		agents.push({
+			name: slug,
+			role,
+			status: "idle",
+			skills: [],
+			lastAction: null,
+		});
+	}
+
+	return agents;
 }
