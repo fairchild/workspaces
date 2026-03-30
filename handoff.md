@@ -1,40 +1,43 @@
 # Session Handoff
 
 ## Current Task
-Consolidated and shipped the web chat platform features, fixed production issues, and spun up a follow-on agent for the remaining GitHub 401 bug.
+Cleaned up 10 stale git worktrees, then hardened the `wt.sh` git-worktree skill based on real friction encountered during cleanup.
 
 ## Progress
-- Merged 5 PRs: #187 (Carl agent), #239 (security), #245 (workspace sync), #246 (chat platform consolidation), #248 (tab bar fix), #249 (env var names)
-- PR #250 open — GitHub token refresh to fix Dashboard 401 (agent working in cmux workspace "web-401-fix")
-- All 6 original Kanban tasks trashed, board empty
-- Production verified: landing, auth, dashboard, chat tab, activity feed, compose bar, APIs all working
-- Wrote QA validation plan at `qa.md`
+- Archived 7 merged worktrees via `wt archive`, removed 3 stale detached-HEAD worktrees from .cline/.codex/.claude
+- Deleted 8 local branches and 1 remote branch
+- Shipped 4 commits to dotclaude (all direct to main):
+  - `wt clean` command with two-tier merge detection (git + gh squash-merge detection)
+  - Slash-in-branch-name bug fix for `cmd_archive`
+  - `--delete-branch` flag on archive
+  - `wt list --all` showing worktrees from other tools
+  - `wt done` shell function (archive + cd home from within a worktree) — PR #145
+  - `wt prune` for deleting old archived worktrees
+  - `wt clean --all-sources` for cross-tool worktree cleanup
+- Pruned 23 archived worktrees, reclaimed 3.6GB
+- Dead code removed (`carry_modified_files`), `wt install` implemented
+- Tab completion updated for all new commands
 
 ## Key Decisions
-- **Consolidated 6 PRs into 1** — all touched the same 6 core files, merging individually would have caused 6 rounds of conflict resolution
-- **Session-resume for stalled agents** — `claude --resume <session-id>` preserves conversation context when Kanban agents stall at prompts
-- **Tab bar visible on desktop** — original CSS had `display: none` on desktop, only showing on mobile. Fixed to show on all viewports.
-- **Env var naming** — standardized on `GITHUB_WEB_WORKSPACES_*` prefix to match what's actually configured in Vercel
+- **`wt done` is a shell function, not a script command** — it needs to `cd` the parent shell after archiving, which a subprocess can't do. Same pattern as `wt cd` and `wt home`.
+- **`wt clean --all-sources` uses `git worktree remove --force`** for external worktrees (not archive) since they aren't wt-managed and don't have the archive directory structure.
+- **Two-tier merge detection** — `git merge-base --is-ancestor` for regular merges, `gh pr list --state merged` for squash merges. Falls back to tier 1 if `gh` unavailable.
+- **Direct commits to dotclaude main** for small self-contained changes (prune, --all-sources). PR for larger features (wt done).
 
 ## Next Steps
-1. Merge PR #250 (token refresh) once the web-401-fix agent verifies it
-2. Sign out and back in on production to refresh the OAuth token
-3. Configure `GITHUB_WEB_WORKSPACES_PRIVATE_KEY` in Vercel if not already set (needed for Chat SDK bot)
-4. Run QA validation from `qa.md`
-5. Clean up stale git worktrees (`git worktree prune` + manual cleanup of `.cline/`, `.codex/`, `.worktrees/`)
-6. Delete stale remote branches from closed PRs
+1. The cairo-v3 worktree at `~/conductor/workspaces/workspaces/cairo-v3` is the only remaining worktree — check if `durable-workflows-skill` is still active
+2. Consider adding `wt clean --all-sources` to a periodic maintenance workflow
+3. The `wt apply` command may have the same slash-branch issues we fixed in archive — worth investigating
 
 ## Relevant Files
-- `qa.md` — full QA validation plan
-- `web/src/lib/bot.ts` — merged Chat SDK bot with AI streaming, Slack, status cards
-- `web/src/lib/github.ts` — token retrieval + refresh (in PR #250)
-- `web/src/app/dashboard/page.module.css` — tab bar visibility fix
-- `web/src/app/dashboard/components/dashboard-shell.tsx` — tab switching logic
+- `~/.claude/skills/git-worktree/scripts/wt.sh` — main script (all changes)
+- `~/.claude/skills/git-worktree/scripts/wt.zsh` — shell functions (wt done, tab completion)
+- `~/.claude/skills/git-worktree/SKILL.md` — documentation
 
 ## Open Questions
-- Is `GITHUB_WEB_WORKSPACES_PRIVATE_KEY` set in Vercel? The Chat SDK bot needs it to authenticate as the GitHub App.
-- Should the Kanban agent stall detection be automated via `/loop`? We proved the session-resume technique works but it's manual today.
+- Should `wt prune` be added to a session-end hook for automatic cleanup?
+- Should `--delete-branch` be the default for `wt done` (since "done" implies finality)?
 
 ---
 *Session completed on 2026-03-29*
-*PRs: #245, #246, #248, #249 merged; #250 pending*
+*dotclaude commits: 4d7bae3, 238c49d (PR #145), b34adb4, a3f2a1e*
