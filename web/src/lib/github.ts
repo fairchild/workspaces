@@ -22,15 +22,72 @@ async function cached<T>(
 const FIVE_MIN = 5 * 60 * 1000;
 const FIFTEEN_MIN = 15 * 60 * 1000;
 
-// --- Token retrieval ---
+// --- Token retrieval + refresh ---
+
+async function refreshAccessToken(
+	refreshToken: string,
+): Promise<{ access_token: string; refresh_token: string; expires_in: number } | null> {
+	const clientId = process.env.GITHUB_WEB_WORKSPACES_CLIENT_ID;
+	const clientSecret = process.env.GITHUB_WEB_WORKSPACES_CLIENT_SECRET;
+	if (!clientId || !clientSecret) return null;
+
+	const res = await fetch("https://github.com/login/oauth/access_token", {
+		method: "POST",
+		headers: {
+			Accept: "application/json",
+			"Content-Type": "application/json",
+		},
+		body: JSON.stringify({
+			client_id: clientId,
+			client_secret: clientSecret,
+			grant_type: "refresh_token",
+			refresh_token: refreshToken,
+		}),
+	});
+	if (!res.ok) return null;
+	const data = await res.json();
+	if (data.error) return null;
+	return data;
+}
 
 export async function getGitHubToken(userId: string): Promise<string | null> {
-	const result = await getTurso().execute({
-		sql: "SELECT accessToken FROM account WHERE userId = ? AND providerId = 'github'",
+	const db = getTurso();
+	const result = await db.execute({
+		sql: "SELECT accessToken, refreshToken, accessTokenExpiresAt FROM account WHERE userId = ? AND providerId = 'github'",
 		args: [userId],
 	});
 	if (result.rows.length === 0) return null;
-	return result.rows[0].accessToken as string;
+
+	const row = result.rows[0];
+	const accessToken = row.accessToken as string | null;
+	const refreshToken = row.refreshToken as string | null;
+	const expiresAt = row.accessTokenExpiresAt as string | null;
+
+	// Check if token is expired or expiring within 5 minutes
+	const needsRefresh =
+		expiresAt && new Date(expiresAt).getTime() < Date.now() + 5 * 60 * 1000;
+
+	if (needsRefresh && refreshToken) {
+		const refreshed = await refreshAccessToken(refreshToken);
+		if (refreshed) {
+			const newExpiresAt = new Date(
+				Date.now() + refreshed.expires_in * 1000,
+			).toISOString();
+			await db.execute({
+				sql: "UPDATE account SET accessToken = ?, refreshToken = ?, accessTokenExpiresAt = ? WHERE userId = ? AND providerId = 'github'",
+				args: [
+					refreshed.access_token,
+					refreshed.refresh_token,
+					newExpiresAt,
+					userId,
+				],
+			});
+			return refreshed.access_token;
+		}
+		// Refresh failed — return stale token and let the caller handle the 401
+	}
+
+	return accessToken;
 }
 
 // --- GitHub API helpers ---
