@@ -5,6 +5,7 @@
  */
 
 import { createClient } from "../src/client.js";
+import { readConnectionInfo } from "../src/db.js";
 import type { DBOSClient } from "@dbos-inc/dbos-sdk";
 
 interface DashboardRow {
@@ -47,6 +48,12 @@ function statusIcon(status: string): string {
 async function main() {
   const { json, statuses } = parseArgs();
   const client = await createClient();
+
+  // Print web dashboard URL if available
+  const info = readConnectionInfo();
+  if (info?.httpPort && !json) {
+    console.log(`\n  Web dashboard: http://127.0.0.1:${info.httpPort}\n`);
+  }
 
   try {
     const filter: Record<string, unknown> = { sortDesc: true, limit: 50 };
