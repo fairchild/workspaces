@@ -13,11 +13,10 @@ function buildAdapters(): Record<
 	string,
 	ReturnType<typeof createGitHubAdapter> | SlackAdapter
 > {
-	const appId = process.env.GITHUB_APP_ID ?? "";
-	const privateKey = (process.env.GITHUB_PRIVATE_KEY ?? "").replace(
-		/\\n/g,
-		"\n",
-	);
+	const appId = process.env.GITHUB_WEB_WORKSPACES_APP_ID ?? "";
+	const privateKey = (
+		process.env.GITHUB_WEB_WORKSPACES_PRIVATE_KEY ?? ""
+	).replace(/\\n/g, "\n");
 
 	const adapters: Record<
 		string,
@@ -26,7 +25,7 @@ function buildAdapters(): Record<
 		github: createGitHubAdapter({
 			appId,
 			privateKey,
-			webhookSecret: process.env.GITHUB_WEBHOOK_SECRET,
+			webhookSecret: process.env.GITHUB_WEB_WORKSPACES_WEBHOOK_SECRET,
 		}),
 	};
 
