@@ -1,7 +1,7 @@
 "use client";
 
 import type { Agent } from "@/lib/types";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import styles from "./compose-bar.module.css";
 import { MentionAutocomplete } from "./mention-autocomplete";
 
@@ -23,6 +23,10 @@ export function ComposeBar({
 	const [mentionQuery, setMentionQuery] = useState<string | null>(null);
 	const [sending, setSending] = useState(false);
 	const inputRef = useRef<HTMLTextAreaElement>(null);
+
+	useEffect(() => {
+		inputRef.current?.focus();
+	}, []);
 
 	const handleInput = useCallback((value: string) => {
 		setText(value);
