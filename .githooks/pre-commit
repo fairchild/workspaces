@@ -12,3 +12,10 @@ fi
 
 echo "[pre-commit] Running swift-format lint..."
 swift-format lint --strict --recursive Sources/ Tests/
+
+# Lint staged web files with biome (if any ts/tsx/css/json files changed)
+STAGED_WEB=$(git diff --cached --name-only --diff-filter=ACMR -- 'web/*.ts' 'web/*.tsx' 'web/*.css' 'web/*.json' 'web/**/*.ts' 'web/**/*.tsx' 'web/**/*.css' 'web/**/*.json' 2>/dev/null || true)
+if [ -n "$STAGED_WEB" ]; then
+    echo "[pre-commit] Running biome lint on web/..."
+    pnpm --dir web lint
+fi
