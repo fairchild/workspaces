@@ -22,6 +22,15 @@ export default defineConfig({
 			testMatch: "full/**",
 			use: { ...devices["Desktop Chrome"] },
 		},
+		{
+			name: "demo",
+			testMatch: "demo/**",
+			use: {
+				...devices["Desktop Chrome"],
+				video: "on",
+				viewport: { width: 1280, height: 800 },
+			},
+		},
 	],
 	globalSetup: "./e2e/seed.ts",
 	globalTeardown: "./e2e/teardown.ts",
