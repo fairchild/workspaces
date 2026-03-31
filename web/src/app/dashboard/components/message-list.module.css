@@ -78,6 +78,13 @@
 	color: var(--accent);
 }
 
+/* ── Agent message accent ── */
+
+.messageAgent {
+	border-left: 2px solid var(--accent);
+	padding-left: calc(1rem - 2px);
+}
+
 /* ── Empty state ── */
 
 .empty {
