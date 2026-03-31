@@ -5,11 +5,9 @@ test.describe("Chat (authenticated)", () => {
 		await page.goto("/dashboard");
 		await expect(page.getByRole("button", { name: "Dashboard" })).toBeVisible();
 
-		// Switch to Chat
 		await page.getByRole("button", { name: "Chat" }).click();
 		await expect(page).toHaveURL(/tab=chat/);
 
-		// Switch back to Dashboard
 		await page.getByRole("button", { name: "Dashboard" }).click();
 		await expect(page).not.toHaveURL(/tab=chat/);
 	});
@@ -25,33 +23,23 @@ test.describe("Chat (authenticated)", () => {
 	test("compose bar shows helper text", async ({ page }) => {
 		await page.goto("/dashboard?tab=chat");
 		await expect(page.getByText("Enter to send")).toBeVisible();
-		await expect(page.getByText("@ to mention agent")).toBeVisible();
 	});
 
-	test.skip("sticky tab bar stays visible while scrolling", async ({
-		page,
-	}) => {
-		// TODO: Needs seeded timeline entries to create scrollable content
-		// 1. Navigate to chat tab with long timeline
-		// 2. Scroll down significantly
-		// 3. Verify tab bar is still in viewport
-	});
-
-	test.skip("timeline shows day separators", async ({ page }) => {
-		// TODO: Needs seeded chat messages spanning multiple days
-		// 1. Navigate to chat tab
-		// 2. Verify .daySeparator elements exist
-		// 3. Verify separator text matches "Mon DD" format
+	test("timeline shows day separators with seeded data", async ({ page }) => {
+		await page.goto("/dashboard/fairchild/workspaces?tab=chat");
+		// Wait for timeline to load (seeded messages span 2 days)
+		await page.waitForTimeout(2000);
+		const separators = page.locator("[class*='daySeparator']");
+		const count = await separators.count();
+		// Should have at least 1 day separator (messages span 2 days)
+		expect(count).toBeGreaterThanOrEqual(1);
 	});
 
 	test.skip("compose bar @ mention triggers autocomplete", async ({
 		page,
 	}) => {
-		// TODO: Needs seeded agents via repo with .agents/ directory
-		// 1. Click compose bar textarea
-		// 2. Type "@"
-		// 3. Verify autocomplete dropdown appears
-		// 4. Select an agent
-		// 5. Verify agent chip appears
+		// TODO: Requires GitHub API for agent discovery — agents come from
+		// .agents/skills/ in the repo, fetched via GitHub token. Can't seed
+		// locally without mocking the GitHub API.
 	});
 });

@@ -3,7 +3,11 @@ import { ALLOWED_AGENT_LOGINS } from "@/lib/agent-runtime/config";
 import { resolvePersona } from "@/lib/agent-runtime/persona-loader";
 import { getSession } from "@/lib/auth-server";
 import { getMixedTimeline, pushChatMessage } from "@/lib/chat";
-import { parseAgentMention, stripMention } from "@/lib/chat-utils";
+import {
+	handleBotCommand,
+	parseAgentMention,
+	stripMention,
+} from "@/lib/chat-utils";
 import { getEventStats } from "@/lib/events";
 import {
 	addDiscussionComment,
@@ -66,12 +70,14 @@ export async function POST(request: Request): Promise<Response> {
 	const agentTarget = body.agentName ?? parseAgentMention(body.message);
 
 	// Bot commands: @spaces status, @spaces pipeline, @<agent> status
-	const botResponse = await handleBotCommand(
-		agentTarget,
-		body.message,
-		body.repo,
-		session.user.name ?? session.user.email ?? "you",
-	);
+	const botResponse = await handleBotCommand({
+		target: agentTarget,
+		message: body.message,
+		repo: body.repo,
+		author: session.user.name ?? session.user.email ?? "you",
+		getEventStats,
+		pushChatMessage,
+	});
 	if (botResponse) {
 		return Response.json(botResponse);
 	}
@@ -178,62 +184,4 @@ export async function GET(request: Request): Promise<Response> {
 
 	const timeline = await getMixedTimeline(repo, limit, since);
 	return Response.json(timeline);
-}
-
-async function handleBotCommand(
-	target: string | null,
-	message: string,
-	repo: string,
-	author: string,
-): Promise<{ messageId: string; botMessageId: string } | null> {
-	if (!target) return null;
-	const command = stripMention(message).toLowerCase();
-
-	let responseContent: string | null = null;
-
-	if (target === "spaces" && /^status$/i.test(command)) {
-		const stats = await getEventStats();
-		const repoList =
-			stats.repos.length > 0
-				? stats.repos.map((r) => `- ${r}`).join("\n")
-				: "No repos tracked yet.";
-		responseContent = `**Active repos:**\n${repoList}\n\nEvents today: ${stats.eventsToday}`;
-	} else if (target === "spaces" && /^pipeline$/i.test(command)) {
-		responseContent =
-			"Pipeline summary is available on the Dashboard tab. Select a repo to view its issue pipeline.";
-	} else if (target !== "spaces" && /^status$/i.test(command)) {
-		responseContent = `Checking status for **@${target}**... No active dispatches found. Use \`@${target} <task>\` to dispatch work.`;
-	} else {
-		return null;
-	}
-
-	const timestamp = new Date().toISOString();
-
-	const userMsg: ChatMessage = {
-		id: crypto.randomUUID(),
-		repo,
-		author,
-		authorType: "user",
-		content: message,
-		agentTarget: target,
-		discussionId: null,
-		discussionUrl: null,
-		timestamp,
-	};
-	await pushChatMessage(userMsg);
-
-	const botMsg: ChatMessage = {
-		id: crypto.randomUUID(),
-		repo,
-		author: "spaces-bot",
-		authorType: "bot",
-		content: responseContent,
-		agentTarget: null,
-		discussionId: null,
-		discussionUrl: null,
-		timestamp: new Date(Date.now() + 1).toISOString(),
-	};
-	await pushChatMessage(botMsg);
-
-	return { messageId: userMsg.id, botMessageId: botMsg.id };
 }
