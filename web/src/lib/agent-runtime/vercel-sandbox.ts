@@ -77,8 +77,6 @@ async function resolveBaseSnapshot(): Promise<string> {
 
 /** Active sandbox instances keyed by instanceId (sandboxId). */
 const activeSandboxes = new Map<string, Sandbox>();
-/** Tool set per sandbox, set during createSandbox for use in streamOutput. */
-const activeSandboxTools = new Map<string, string>();
 
 export class VercelSandboxProvider implements ComputeProvider, SnapshotCapable {
 	readonly descriptor: ComputeProviderDescriptor = {
@@ -108,6 +106,13 @@ export class VercelSandboxProvider implements ComputeProvider, SnapshotCapable {
 	}
 
 	async createSandbox(request: SandboxRequest): Promise<SandboxResult> {
+		const apiKey = process.env.ANTHROPIC_API_KEY;
+		if (!apiKey) {
+			throw new Error(
+				"ANTHROPIC_API_KEY is required for agent sandbox sessions",
+			);
+		}
+
 		const baseSnapshotId = await getOrCreateBaseSnapshot();
 
 		const sandbox = await Sandbox.create({
@@ -116,50 +121,54 @@ export class VercelSandboxProvider implements ComputeProvider, SnapshotCapable {
 			timeout: request.readOnly ? ms("10m") : ms("30m"),
 			resources: { vcpus: 2 },
 			env: {
-				ANTHROPIC_API_KEY: stripQuotes(process.env.ANTHROPIC_API_KEY ?? ""),
+				ANTHROPIC_API_KEY: stripQuotes(apiKey),
 				...request.envVars,
 			},
 			networkPolicy: { allow: ALLOWED_DOMAINS },
 		});
 
-		// Clone the target repo (use token for private repos)
-		const cloneArgs = ["clone", "--depth", "1"];
-		if (request.branch) {
-			cloneArgs.push("--branch", request.branch);
-		}
-		cloneArgs.push(request.cloneUrl, "/vercel/sandbox/repo");
-		await sandbox.runCommand("git", cloneArgs);
+		try {
+			// Clone the target repo (use token for private repos)
+			const cloneArgs = ["clone", "--depth", "1"];
+			if (request.branch) {
+				cloneArgs.push("--branch", request.branch);
+			}
+			cloneArgs.push(request.cloneUrl, "/vercel/sandbox/repo");
+			await sandbox.runCommand("git", cloneArgs);
 
-		const instanceId = sandbox.sandboxId;
-		const tools =
-			request.tools === "conversational" ? CONVERSATIONAL_TOOLS : FULL_TOOLS;
-		activeSandboxes.set(instanceId, sandbox);
-		activeSandboxTools.set(instanceId, tools);
+			const instanceId = sandbox.sandboxId;
+			const tools =
+				request.tools === "conversational" ? CONVERSATIONAL_TOOLS : FULL_TOOLS;
 
-		// Write prompt, message, and a runner script to files.
-		// The runner script avoids shell injection by reading from files
-		// and passing via env var (not shell interpolation).
-		const runnerScript = `#!/bin/bash
+			// Write prompt, message, and a runner script to files.
+			// The runner script avoids shell injection by reading from files
+			// and passing via env var (not shell interpolation).
+			const runnerScript = `#!/bin/bash
 PROMPT=$(cat /vercel/sandbox/system-prompt.txt)
 cat /vercel/sandbox/message.txt | claude -p --system-prompt "$PROMPT" --allowedTools ${tools}
 `;
 
-		await sandbox.writeFiles([
-			{
-				path: "/vercel/sandbox/system-prompt.txt",
-				content: Buffer.from(request.systemPrompt),
-			},
-			{
-				path: "/vercel/sandbox/message.txt",
-				content: Buffer.from(request.message),
-			},
-			{
-				path: "/vercel/sandbox/run-agent.sh",
-				content: Buffer.from(runnerScript),
-			},
-		]);
+			await sandbox.writeFiles([
+				{
+					path: "/vercel/sandbox/system-prompt.txt",
+					content: Buffer.from(request.systemPrompt),
+				},
+				{
+					path: "/vercel/sandbox/message.txt",
+					content: Buffer.from(request.message),
+				},
+				{
+					path: "/vercel/sandbox/run-agent.sh",
+					content: Buffer.from(runnerScript),
+				},
+			]);
 
-		return { instanceId, status: "ready" };
+			activeSandboxes.set(instanceId, sandbox);
+			return { instanceId, status: "ready" };
+		} catch (err) {
+			await sandbox.stop().catch(() => {});
+			throw err;
+		}
 	}
 
 	async *streamOutput(instanceId: string): AsyncGenerator<StreamChunk> {
@@ -213,7 +222,6 @@ cat /vercel/sandbox/message.txt | claude -p --system-prompt "$PROMPT" --allowedT
 		if (sandbox) {
 			await sandbox.stop();
 			activeSandboxes.delete(instanceId);
-			activeSandboxTools.delete(instanceId);
 		}
 	}
 

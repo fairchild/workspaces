@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { ALLOWED_AGENT_LOGINS } from "@/lib/agent-runtime/config";
 import { resolvePersona } from "@/lib/agent-runtime/persona-loader";
 import { getSession } from "@/lib/auth-server";
 import { getMixedTimeline, pushChatMessage } from "@/lib/chat";
@@ -76,14 +77,10 @@ export async function POST(request: Request): Promise<Response> {
 	}
 
 	// Check if the mention targets a known agent persona (restricted to allowed users).
-	// Wrapped in try/catch so GitHub API failures don't break normal chat flow.
 	if (agentTarget && agentTarget !== "spaces") {
-		try {
-			const login = await fetchGitHubLogin(token);
-			const persona =
-				login === "fairchild"
-					? await resolvePersona(token, owner, repo, agentTarget)
-					: null;
+		const login = await fetchGitHubLogin(token);
+		if (ALLOWED_AGENT_LOGINS.has(login)) {
+			const persona = await resolvePersona(token, owner, repo, agentTarget);
 			if (persona) {
 				const chatMessage: ChatMessage = {
 					id: messageId,
@@ -107,9 +104,7 @@ export async function POST(request: Request): Promise<Response> {
 					},
 				});
 			}
-		} catch (err) {
-			console.error("[chat] Agent persona resolution failed:", err);
-			// Fall through to normal Discussion creation
+			// Persona not found — fall through to Discussion creation
 		}
 	}
 

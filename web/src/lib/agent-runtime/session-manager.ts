@@ -160,6 +160,11 @@ export class SessionManager {
 			await this.persistAgentResponse(params, persona.displayName, fullText);
 		} catch (err) {
 			await updateSessionStatus(sessionId, "failed");
+			// Clean up any partially-created sandbox
+			const instanceId = (await getDbSession(sessionId))?.computeInstanceId;
+			if (instanceId) {
+				await provider.destroySandbox(instanceId).catch(() => {});
+			}
 			yield {
 				type: "error",
 				content: `Session failed: ${err instanceof Error ? err.message : "Unknown error"}`,

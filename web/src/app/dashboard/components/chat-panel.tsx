@@ -148,7 +148,7 @@ export function ChatPanel({
 
 	const handleSend = useCallback(
 		async (message: string, agentName?: string) => {
-			if (!repo) return;
+			if (!repo || streamingMessage) return;
 			const res = await fetch("/api/chat/messages", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
@@ -167,7 +167,7 @@ export function ChatPanel({
 				await fetchTimeline();
 			}
 		},
-		[repo, fetchTimeline, connectToAgentStream],
+		[repo, fetchTimeline, connectToAgentStream, streamingMessage],
 	);
 
 	if (!selectedRepo) {
