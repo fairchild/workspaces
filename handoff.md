@@ -1,42 +1,40 @@
 # Session Handoff
 
 ## Current Task
-Validated the @agent chat → Vercel Sandbox pipeline end-to-end. Wrote E2E test script, architecture docs, and fixed pre-commit hook gap.
+Chat UX improvement: collapse webhook event noise and make agent chat usable.
 
 ## Progress
-- Picked up orchestrator inbox task for sandbox-testing
-- Explored all agent-runtime files: types, providers, persona-loader, session-manager, DB layer, SSE route
-- Wrote `web/scripts/test-sandbox-e2e.ts` — 14 tests covering provider registry, persona resolution, session persistence, access control
-- Wrote `docs/development/agent-chat-sandbox.md` — architecture docs
-- Fixed `.githooks/pre-commit` to run biome lint on web files (was only running swift-format)
-- Fixed biome lint errors (non-null assertions → assertDefined() guard, formatting)
-- Fixed typecheck errors (optional chaining on property access chains)
-- Both PRs merged (#265, #268)
-- Replied to orchestrator inbox
+- Collapsed consecutive webhook events into expandable grouped rows (PR #271, merged)
+- Reversed timeline sort to ascending (oldest-first) for natural chat flow
+- Added agent message accent bar for visual prominence
+- Caught and fixed a time-range bug during `/reflect` (oldest/newest swapped after sort change)
+- Shipped agent chat runtime: @april-clearwater responds in sandbox (PR #257, merged earlier session)
+- Used Playwright to render before/after evidence screenshots for the PR
 
 ## Key Decisions
-- **assertDefined() over non-null assertions** — biome's noNonNullAssertion rule requires type-narrowing, not `!`
-- **Augment .githooks/pre-commit** — added biome to existing hook rather than switching to prek, since core.hooksPath already points to .githooks/
+- **Group consecutive events, not by type**: Events are grouped by adjacency — any chat message breaks a group. This preserves chronological context while collapsing noise.
+- **Single events render as StatusCard**: Only groups of 2+ collapse. A lone event between chat messages renders normally.
+- **Ascending sort is the right default**: Chat interfaces universally show oldest-at-top, newest-at-bottom with auto-scroll. The previous descending sort was wrong for a chat panel.
+- **Playwright for evidence over screencapture**: Playwright renders mock data into deterministic screenshots. More reliable than capturing live Chrome windows.
 
 ## Next Steps
-1. Browser-test @agent chat on production (spaces.cloudcompute.com)
-2. Run full sandbox lifecycle E2E with Vercel creds (`npx tsx web/scripts/test-sandbox-e2e.ts`)
-3. Reconcile prek.toml vs .githooks — they define the same hooks in two places
-4. Private repo support — pass GitHub token in clone URL
-5. True token streaming — replace synchronous runCommand with Agent SDK
+1. Visual QA on production — verify collapsed events render correctly with live webhook data
+2. Merge PR #262 (Playwright auth fixture) — still open, blocks authenticated E2E tests
+3. Fill in bot command routing TODO stubs (5 tests for @spaces status/pipeline)
+4. Seed test data for remaining E2E placeholders (repo detail, activity feed, day separators)
+5. Consider adding expand-all / collapse-all toggle if event groups get numerous
 
 ## Relevant Files
-- `web/scripts/test-sandbox-e2e.ts` — E2E validation script
-- `docs/development/agent-chat-sandbox.md` — architecture docs
-- `.githooks/pre-commit` — now runs both swift-format and biome
-- `web/src/lib/agent-runtime/` — the system under test
-- `prek.toml` — has biome-web hook that duplicates .githooks logic
+- `web/src/app/dashboard/components/event-group-row.tsx` — collapsed/expandable event group
+- `web/src/app/dashboard/components/event-group-row.module.css` — compact group styling
+- `web/src/app/dashboard/components/message-list.tsx` — `groupEntries()` logic
+- `web/src/app/dashboard/components/status-card.tsx` — exported TYPE_LABEL, TYPE_COLOR
+- `web/src/lib/chat.ts` — ascending timeline sort
 
 ## Open Questions
-- Should prek.toml replace .githooks/pre-commit entirely? Two hook systems is confusing
-- Should full sandbox E2E run in CI? Needs Vercel creds as secrets
-- Should we use Agent SDK instead of CLI for the sandbox provider? (better streaming)
+- DEV_BYPASS_AUTH only covers middleware, not `getSession()` in layout — can't screenshot local dev with auth bypass alone (PR #262 needed)
+- Should collapsed groups show expanded by default if count is small (e.g., 2-3 events)?
 
 ---
 *Session completed on 2026-03-30*
-*PRs: #265 — E2E sandbox testing + docs (merged), #268 — ALLOWED_AGENT_LOGINS rename fix (merged)*
+*PRs: #271 — feat(web): collapse consecutive events in chat timeline*
