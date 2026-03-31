@@ -7,24 +7,21 @@ test.describe("Dashboard (authenticated)", () => {
 		await expect(page.getByRole("button", { name: "Chat" })).toBeVisible();
 	});
 
-	test("shows sidebar with Add repos button", async ({ page }) => {
+	test("shows sidebar with seeded repo", async ({ page }) => {
 		await page.goto("/dashboard");
-		await expect(page.getByText("Add repos")).toBeVisible();
+		await expect(page.getByText("workspaces")).toBeVisible();
 	});
 
-	test.skip("shows repo detail after selecting a repo", async ({ page }) => {
-		// TODO: Needs seeded repos in the database
-		// 1. Navigate to /dashboard
-		// 2. Click a repo in sidebar
-		// 3. Verify agent overview cards render (agents, skills, PRs, issues)
+	test("navigates to repo detail", async ({ page }) => {
+		await page.goto("/dashboard/fairchild/workspaces");
+		await expect(page.getByText("fairchild/workspaces")).toBeVisible();
 	});
 
 	test.skip("activity feed shows webhook events with type badges", async ({
 		page,
 	}) => {
-		// TODO: Needs seeded webhook events in the database
-		// 1. Navigate to /dashboard/owner/repo
-		// 2. Verify activity feed panel is visible on desktop
-		// 3. Verify event cards show CI/PR/PUSH/ISSUE badges
+		// TODO: Activity feed polls /api/events which requires agent discovery
+		// via GitHub API. Seeded DB events exist but the component needs
+		// the full agent/repo context to render correctly.
 	});
 });
