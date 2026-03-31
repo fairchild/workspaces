@@ -1,7 +1,11 @@
 "use client";
 
 import { dayKey } from "@/lib/timeline-utils";
-import type { DispatchMetadata, TimelineEntry, WebhookEvent } from "@/lib/types";
+import type {
+	DispatchMetadata,
+	TimelineEntry,
+	WebhookEvent,
+} from "@/lib/types";
 import { useEffect, useMemo, useRef } from "react";
 import { DispatchCard, tryParseDispatchMetadata } from "./dispatch-card";
 import { EventGroupRow } from "./event-group-row";
@@ -21,9 +25,16 @@ function groupEntries(entries: TimelineEntry[]): GroupedEntry[] {
 	const flushGroup = () => {
 		if (currentGroup.length === 0) return;
 		if (currentGroup.length === 1) {
-			result.push({ kind: "event", entry: { kind: "event", ...currentGroup[0] } });
+			result.push({
+				kind: "event",
+				entry: { kind: "event", ...currentGroup[0] },
+			});
 		} else {
-			result.push({ kind: "event-group", events: currentGroup, key: currentGroup[0].id });
+			result.push({
+				kind: "event-group",
+				events: currentGroup,
+				key: currentGroup[0].id,
+			});
 		}
 		currentGroup = [];
 	};
@@ -78,6 +89,8 @@ export function MessageList({
 		}
 	}, [entries.length]);
 
+	const grouped = useMemo(() => groupEntries(entries), [entries]);
+
 	if (!loading && entries.length === 0) {
 		return (
 			<div className={styles.empty}>
@@ -90,19 +103,28 @@ export function MessageList({
 		);
 	}
 
-	const grouped = useMemo(() => groupEntries(entries), [entries]);
-
 	return (
 		<div className={styles.container} ref={containerRef}>
 			<div className={styles.timeline}>
 				{grouped.map((g, i) => {
-					const key = g.kind === "event-group" ? g.key : g.kind === "event" ? g.entry.id : g.id;
-					const ts = g.kind === "event-group" ? g.events[0].timestamp : g.kind === "event" ? g.entry.timestamp : g.timestamp;
+					const key =
+						g.kind === "event-group"
+							? g.key
+							: g.kind === "event"
+								? g.entry.id
+								: g.id;
+					const ts =
+						g.kind === "event-group"
+							? g.events[0].timestamp
+							: g.kind === "event"
+								? g.entry.timestamp
+								: g.timestamp;
 
 					const prevTs = (() => {
 						if (i === 0) return null;
 						const prev = grouped[i - 1];
-						if (prev.kind === "event-group") return prev.events[prev.events.length - 1].timestamp;
+						if (prev.kind === "event-group")
+							return prev.events[prev.events.length - 1].timestamp;
 						if (prev.kind === "event") return prev.entry.timestamp;
 						return prev.timestamp;
 					})();
@@ -122,7 +144,9 @@ export function MessageList({
 								<StatusCard event={g.entry} />
 							) : g.agentTarget && tryParseDispatchMetadata(g.content) ? (
 								<DispatchCard
-									metadata={tryParseDispatchMetadata(g.content) as DispatchMetadata}
+									metadata={
+										tryParseDispatchMetadata(g.content) as DispatchMetadata
+									}
 								/>
 							) : (
 								<ChatMessageRow message={g} />

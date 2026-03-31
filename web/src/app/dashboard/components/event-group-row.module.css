@@ -1,10 +1,17 @@
 /* ── Collapsed event group ── */
 
 .group {
+	display: block;
+	width: 100%;
 	padding: 0.25rem 1rem;
 	cursor: pointer;
 	user-select: none;
 	transition: background 0.15s ease;
+	background: none;
+	border: none;
+	text-align: left;
+	font: inherit;
+	color: inherit;
 }
 
 .group:hover {

@@ -40,7 +40,11 @@ export function EventGroupRow({ events }: EventGroupRowProps) {
 			: `${formatTime(oldest)} – ${formatTime(newest)}`;
 
 	return (
-		<div className={styles.group} onClick={() => setExpanded(!expanded)}>
+		<button
+			type="button"
+			className={styles.group}
+			onClick={() => setExpanded(!expanded)}
+		>
 			<div className={styles.collapsed}>
 				<span
 					className={`${styles.chevron} ${expanded ? styles.chevronOpen : ""}`}
@@ -66,7 +70,7 @@ export function EventGroupRow({ events }: EventGroupRowProps) {
 					))}
 				</div>
 			)}
-		</div>
+		</button>
 	);
 }
 
@@ -80,9 +84,7 @@ function ExpandedEventItem({ event }: { event: WebhookEvent }) {
 				{TYPE_LABEL[event.type]}
 			</span>
 			<span className={styles.expandedSummary}>{event.summary}</span>
-			<span className={styles.expandedTime}>
-				{formatTime(event.timestamp)}
-			</span>
+			<span className={styles.expandedTime}>{formatTime(event.timestamp)}</span>
 		</div>
 	);
 }
