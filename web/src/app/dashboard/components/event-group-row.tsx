@@ -32,8 +32,8 @@ export function EventGroupRow({ events }: EventGroupRowProps) {
 		});
 	}
 
-	const oldest = events[events.length - 1].timestamp;
-	const newest = events[0].timestamp;
+	const oldest = events[0].timestamp;
+	const newest = events[events.length - 1].timestamp;
 	const timeStr =
 		oldest === newest
 			? formatTime(newest)

@@ -1,6 +1,6 @@
 "use client";
 
-import { dayKey, shouldShowDay } from "@/lib/timeline-utils";
+import { dayKey } from "@/lib/timeline-utils";
 import type { DispatchMetadata, TimelineEntry, WebhookEvent } from "@/lib/types";
 import { useEffect, useMemo, useRef } from "react";
 import { DispatchCard, tryParseDispatchMetadata } from "./dispatch-card";
