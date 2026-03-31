@@ -40,10 +40,24 @@ export interface WorkspacesTable {
 	synced_at: string;
 }
 
+export interface AgentSessionsTable {
+	id: string;
+	repo: string;
+	agent_name: string;
+	compute_backend: string;
+	compute_instance_id: string | null;
+	thread_id: string;
+	discussion_id: string | null;
+	status: string;
+	created_at: string;
+	last_activity_at: string;
+}
+
 interface Database {
 	webhook_events: EventsTable;
 	chat_messages: ChatMessagesTable;
 	workspaces: WorkspacesTable;
+	agent_sessions: AgentSessionsTable;
 }
 
 let _turso: Client | undefined;

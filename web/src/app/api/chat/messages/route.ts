@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { resolvePersona } from "@/lib/agent-runtime/persona-loader";
 import { getSession } from "@/lib/auth-server";
 import { getMixedTimeline, pushChatMessage } from "@/lib/chat";
 import { parseAgentMention, stripMention } from "@/lib/chat-utils";
@@ -6,6 +7,7 @@ import { getEventStats } from "@/lib/events";
 import {
 	addDiscussionComment,
 	createDiscussion,
+	fetchGitHubLogin,
 	getGitHubToken,
 } from "@/lib/github";
 import { getUserRepos } from "@/lib/repos";
@@ -71,6 +73,44 @@ export async function POST(request: Request): Promise<Response> {
 	);
 	if (botResponse) {
 		return Response.json(botResponse);
+	}
+
+	// Check if the mention targets a known agent persona (restricted to allowed users).
+	// Wrapped in try/catch so GitHub API failures don't break normal chat flow.
+	if (agentTarget && agentTarget !== "spaces") {
+		try {
+			const login = await fetchGitHubLogin(token);
+			const persona =
+				login === "fairchild"
+					? await resolvePersona(token, owner, repo, agentTarget)
+					: null;
+			if (persona) {
+				const chatMessage: ChatMessage = {
+					id: messageId,
+					repo: body.repo,
+					author: session.user.name ?? session.user.email ?? "you",
+					authorType: "user",
+					content: body.message,
+					agentTarget,
+					discussionId: null,
+					discussionUrl: null,
+					timestamp,
+				};
+				await pushChatMessage(chatMessage);
+
+				return Response.json({
+					messageId,
+					agentSession: {
+						agentName: agentTarget,
+						streamUrl: "/api/chat/agent-stream",
+						threadId: body.parentDiscussionId ?? messageId,
+					},
+				});
+			}
+		} catch (err) {
+			console.error("[chat] Agent persona resolution failed:", err);
+			// Fall through to normal Discussion creation
+		}
 	}
 
 	const title = agentTarget
