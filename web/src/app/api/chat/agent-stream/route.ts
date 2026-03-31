@@ -1,9 +1,8 @@
+import { ALLOWED_AGENT_LOGINS } from "@/lib/agent-runtime/config";
 import { getSessionManager } from "@/lib/agent-runtime/session-manager";
 import { getSession } from "@/lib/auth-server";
 import { fetchGitHubLogin, getGitHubToken } from "@/lib/github";
 import { getUserRepos } from "@/lib/repos";
-
-const ALLOWED_GITHUB_LOGINS = new Set(["fairchild"]);
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300; // 5 min for Vercel Pro
@@ -52,7 +51,7 @@ export async function POST(request: Request): Promise<Response> {
 	}
 
 	const login = await fetchGitHubLogin(token);
-	if (!ALLOWED_GITHUB_LOGINS.has(login)) {
+	if (!ALLOWED_AGENT_LOGINS.has(login)) {
 		return Response.json(
 			{ error: "Agent sessions are not yet available for your account" },
 			{ status: 403 },
