@@ -88,7 +88,9 @@ function assert(condition: boolean, message: string) {
 
 function assertEqual<T>(actual: T, expected: T, label: string) {
 	if (actual !== expected) {
-		throw new Error(`${label}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
+		throw new Error(
+			`${label}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`,
+		);
 	}
 }
 
@@ -96,6 +98,11 @@ function assertIncludes(haystack: string, needle: string, label: string) {
 	if (!haystack.includes(needle)) {
 		throw new Error(`${label}: expected to include "${needle}"`);
 	}
+}
+
+function assertDefined<T>(value: T | null | undefined, label: string): T {
+	if (value == null) throw new Error(`${label}: expected defined value`);
+	return value;
 }
 
 // ---------------------------------------------------------------------------
@@ -134,24 +141,42 @@ async function testPersonaResolution() {
 	});
 
 	await test("resolvePersona matches by slug", async () => {
-		const persona = await resolvePersona(token, owner, repo, "april-clearwater");
+		const persona = await resolvePersona(
+			token,
+			owner,
+			repo,
+			"april-clearwater",
+		);
 		assert(persona !== null, "expected persona to be found");
-		assertEqual(persona!.name, "april-clearwater", "persona name");
-		assertEqual(persona!.displayName, "April Clearwater", "display name");
-		assert(persona!.role.length > 0, "expected non-empty role");
-		assert(persona!.systemPrompt.length > 0, "expected non-empty system prompt");
+		assertEqual(persona?.name, "april-clearwater", "persona name");
+		assertEqual(persona?.displayName, "April Clearwater", "display name");
+		assert(persona?.role.length > 0, "expected non-empty role");
+		assert(
+			persona?.systemPrompt.length > 0,
+			"expected non-empty system prompt",
+		);
 	});
 
 	await test("resolvePersona returns null for unknown agent", async () => {
-		const persona = await resolvePersona(token, owner, repo, "nonexistent-agent");
+		const persona = await resolvePersona(
+			token,
+			owner,
+			repo,
+			"nonexistent-agent",
+		);
 		assert(persona === null, "expected null for unknown agent");
 	});
 
 	await test("buildConversationalPrompt strips Output Format", async () => {
-		const persona = await resolvePersona(token, owner, repo, "april-clearwater");
-		assert(persona !== null, "expected persona");
+		const persona = await resolvePersona(
+			token,
+			owner,
+			repo,
+			"april-clearwater",
+		);
+		const p = assertDefined(persona, "expected persona");
 
-		const prompt = buildConversationalPrompt(persona!);
+		const prompt = buildConversationalPrompt(p);
 		assert(
 			!prompt.includes("## Output Format"),
 			"should strip Output Format section",
@@ -173,9 +198,7 @@ async function testProviderRegistry() {
 	const { VercelSandboxProvider } = await import(
 		"../src/lib/agent-runtime/vercel-sandbox"
 	);
-	const { DaytonaProvider } = await import(
-		"../src/lib/agent-runtime/daytona"
-	);
+	const { DaytonaProvider } = await import("../src/lib/agent-runtime/daytona");
 	const { GitHubActionsProvider } = await import(
 		"../src/lib/agent-runtime/github-actions"
 	);
@@ -188,7 +211,11 @@ async function testProviderRegistry() {
 
 	await test("default provider is vercel-sandbox", async () => {
 		const provider = registry.getDefault();
-		assertEqual(provider.descriptor.id, "vercel-sandbox", "default provider id");
+		assertEqual(
+			provider.descriptor.id,
+			"vercel-sandbox",
+			"default provider id",
+		);
 	});
 
 	await test("all providers registered", async () => {
@@ -204,7 +231,10 @@ async function testProviderRegistry() {
 		const available = await registry.listAvailable();
 		for (const entry of available) {
 			if (entry.id === "daytona" || entry.id === "github-actions") {
-				assert(!entry.availability.available, `${entry.id} should be unavailable`);
+				assert(
+					!entry.availability.available,
+					`${entry.id} should be unavailable`,
+				);
 			}
 		}
 	});
@@ -213,8 +243,7 @@ async function testProviderRegistry() {
 		const provider = registry.getDefault();
 		const avail = await provider.checkAvailability();
 		const hasCreds =
-			!!process.env.VERCEL_TOKEN ||
-			!!process.env.VERCEL_OIDC_TOKEN;
+			!!process.env.VERCEL_TOKEN || !!process.env.VERCEL_OIDC_TOKEN;
 		assertEqual(avail.available, hasCreds, "vercel availability matches creds");
 	});
 }
@@ -250,21 +279,25 @@ async function testSessionPersistence() {
 
 		const session = await agentSessions.getSession(sessionId);
 		assert(session !== null, "session should exist");
-		assertEqual(session!.id, sessionId, "session id");
-		assertEqual(session!.agentName, "april-clearwater", "agent name");
-		assertEqual(session!.status, "starting", "status");
+		assertEqual(session?.id, sessionId, "session id");
+		assertEqual(session?.agentName, "april-clearwater", "agent name");
+		assertEqual(session?.status, "starting", "status");
 	});
 
 	await test("updateSessionStatus transitions status", async () => {
 		await agentSessions.updateSessionStatus(sessionId, "streaming");
 		const session = await agentSessions.getSession(sessionId);
-		assertEqual(session!.status, "streaming", "status after update");
+		assertEqual(session?.status, "streaming", "status after update");
 	});
 
 	await test("updateComputeInstance sets instance id", async () => {
 		await agentSessions.updateComputeInstance(sessionId, "sbx-test-123");
 		const session = await agentSessions.getSession(sessionId);
-		assertEqual(session!.computeInstanceId, "sbx-test-123", "compute instance id");
+		assertEqual(
+			session?.computeInstanceId,
+			"sbx-test-123",
+			"compute instance id",
+		);
 	});
 
 	await test("getActiveSessionForThread finds active session", async () => {
@@ -275,7 +308,7 @@ async function testSessionPersistence() {
 			"test-thread-1",
 		);
 		assert(session !== null, "should find active session");
-		assertEqual(session!.id, sessionId, "session id");
+		assertEqual(session?.id, sessionId, "session id");
 	});
 
 	await test("getActiveSessionForThread ignores completed sessions", async () => {
@@ -330,8 +363,7 @@ async function testSandboxLifecycle() {
 			repo: "fairchild/workspaces",
 			cloneUrl: "https://github.com/fairchild/workspaces.git",
 			readOnly: true,
-			systemPrompt:
-				"You are a test agent. Answer concisely in one sentence.",
+			systemPrompt: "You are a test agent. Answer concisely in one sentence.",
 			message: "What is the name of this repository? Reply with just the name.",
 			tools: "conversational",
 		});
@@ -343,43 +375,52 @@ async function testSandboxLifecycle() {
 	});
 
 	await test("streamOutput returns agent response", async () => {
-		assert(!!instanceId, "need instanceId from createSandbox");
+		const id = assertDefined(instanceId, "need instanceId from createSandbox");
 
 		let text = "";
 		let gotDone = false;
 
-		for await (const chunk of provider.streamOutput(instanceId!)) {
+		for await (const chunk of provider.streamOutput(id)) {
 			if (chunk.type === "text") text += chunk.content;
 			if (chunk.type === "done") gotDone = true;
-			if (chunk.type === "error") throw new Error(`Stream error: ${chunk.content}`);
+			if (chunk.type === "error")
+				throw new Error(`Stream error: ${chunk.content}`);
 		}
 
 		assert(text.length > 0, "expected non-empty response");
 		assert(gotDone, "expected done chunk");
-		console.log(`    response (${text.length} chars): ${text.slice(0, 120)}...`);
+		console.log(
+			`    response (${text.length} chars): ${text.slice(0, 120)}...`,
+		);
 	});
 
 	await test("sendMessage + streamOutput handles follow-up", async () => {
-		assert(!!instanceId, "need instanceId");
+		const id = assertDefined(instanceId, "need instanceId");
 
-		await provider.sendMessage(instanceId!, "How many source files are in the Sources/ directory? Just the count.");
+		await provider.sendMessage(
+			id,
+			"How many source files are in the Sources/ directory? Just the count.",
+		);
 
 		let text = "";
-		for await (const chunk of provider.streamOutput(instanceId!)) {
+		for await (const chunk of provider.streamOutput(id)) {
 			if (chunk.type === "text") text += chunk.content;
-			if (chunk.type === "error") throw new Error(`Stream error: ${chunk.content}`);
+			if (chunk.type === "error")
+				throw new Error(`Stream error: ${chunk.content}`);
 		}
 
 		assert(text.length > 0, "expected follow-up response");
-		console.log(`    follow-up (${text.length} chars): ${text.slice(0, 120)}...`);
+		console.log(
+			`    follow-up (${text.length} chars): ${text.slice(0, 120)}...`,
+		);
 	});
 
 	await test("destroySandbox cleans up", async () => {
-		assert(!!instanceId, "need instanceId");
-		await provider.destroySandbox(instanceId!);
+		const id = assertDefined(instanceId, "need instanceId");
+		await provider.destroySandbox(id);
 		// Verify it's gone from active instances
 		let errorCaught = false;
-		for await (const chunk of provider.streamOutput(instanceId!)) {
+		for await (const chunk of provider.streamOutput(id)) {
 			if (chunk.type === "error") errorCaught = true;
 		}
 		assert(errorCaught, "expected error after destroy");
@@ -402,19 +443,11 @@ async function testAccessControl() {
 
 		assertIncludes(
 			routeSource,
-			'ALLOWED_GITHUB_LOGINS',
+			"ALLOWED_GITHUB_LOGINS",
 			"has allowlist constant",
 		);
-		assertIncludes(
-			routeSource,
-			'"fairchild"',
-			"fairchild in allowlist",
-		);
-		assertIncludes(
-			routeSource,
-			"status: 403",
-			"returns 403 for unauthorized",
-		);
+		assertIncludes(routeSource, '"fairchild"', "fairchild in allowlist");
+		assertIncludes(routeSource, "status: 403", "returns 403 for unauthorized");
 		assertIncludes(
 			routeSource,
 			"text/event-stream",
@@ -429,7 +462,9 @@ async function testAccessControl() {
 async function main() {
 	console.log("Agent Chat Sandbox — E2E Validation");
 	console.log(`Time: ${new Date().toISOString()}`);
-	console.log(`Mode: ${unitOnly ? "unit-only" : sandboxOnly ? "sandbox-only" : "full"}`);
+	console.log(
+		`Mode: ${unitOnly ? "unit-only" : sandboxOnly ? "sandbox-only" : "full"}`,
+	);
 
 	if (!sandboxOnly) {
 		await testProviderRegistry();
@@ -451,7 +486,9 @@ async function main() {
 	const failed = results.filter((r) => !r.passed).length;
 	const totalTime = results.reduce((sum, r) => sum + r.duration, 0);
 
-	console.log(`  ${passed} passed, ${failed} failed (${Math.round(totalTime)}ms)`);
+	console.log(
+		`  ${passed} passed, ${failed} failed (${Math.round(totalTime)}ms)`,
+	);
 
 	if (failed > 0) {
 		console.log("\n  Failures:");
