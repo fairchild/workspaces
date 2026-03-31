@@ -119,7 +119,7 @@ Evidence is a merge gate. Do not create a PR without it. Follow these steps in o
 mise run evidence -- --pr <number> --name <slug>
 ```
 
-The script auto-sources `.env` for `EVIDENCE_UPLOAD_TOKEN`. Uploads go to `https://evidence.cloudcompute.com/`. See `docs/development/lume-runner-setup.md#evidence-store-r2` for architecture.
+The script auto-sources `.env` for `EVIDENCE_UPLOAD_TOKEN`. Uploads go to `https://evidence.cloudcompute.com/`. See `docs/development/evidence.md` for the full guide.
 
 ### Evidence rules
 
@@ -182,7 +182,8 @@ mise run evidence -- --pr <N> --name <slug>  # Evidence
 | Notifications / webhooks | docs/development/notifications.md | - |
 | Debug an issue | docs/development/troubleshooting.md | - |
 | Terminal keyboard focus | docs/development/solution-terminal-keyboard.md | - |
-| Lume runner / evidence store | docs/development/lume-runner-setup.md | - |
+| Evidence guide | docs/development/evidence.md | - |
+| Lume runner setup | docs/development/lume-runner-setup.md | - |
 | Lume daemon reliability | docs/development/lume-integration.md § "Daemon Reliability" | - |
 | Roadmap/planning | backlog/ROADMAP.md | - |
 | Deferred work items | backlog/*.md | - |
