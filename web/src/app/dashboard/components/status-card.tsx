@@ -2,7 +2,7 @@ import type { WebhookEvent, WebhookEventType } from "@/lib/types";
 import styles from "./status-card.module.css";
 import { formatTime } from "./timeline-utils";
 
-const TYPE_LABEL: Record<WebhookEventType, string> = {
+export const TYPE_LABEL: Record<WebhookEventType, string> = {
 	pull_request: "PR",
 	check_run: "CI",
 	check_suite: "CI",
@@ -16,7 +16,9 @@ const TYPE_LABEL: Record<WebhookEventType, string> = {
 
 type ColorKey = "ci" | "pr" | "push" | "discussion" | "issue";
 
-const TYPE_COLOR: Record<WebhookEventType, ColorKey> = {
+export type { ColorKey };
+
+export const TYPE_COLOR: Record<WebhookEventType, ColorKey> = {
 	pull_request: "pr",
 	check_run: "ci",
 	check_suite: "ci",

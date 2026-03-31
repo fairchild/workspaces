@@ -189,6 +189,6 @@ export async function getMixedTimeline(
 		})),
 	];
 
-	timeline.sort((a, b) => (a.timestamp > b.timestamp ? -1 : 1));
+	timeline.sort((a, b) => (a.timestamp > b.timestamp ? 1 : -1));
 	return timeline.slice(0, limit);
 }
