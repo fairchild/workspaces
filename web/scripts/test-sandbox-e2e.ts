@@ -440,7 +440,7 @@ async function testAccessControl() {
 
 		assertIncludes(
 			routeSource,
-			"ALLOWED_GITHUB_LOGINS",
+			"ALLOWED_AGENT_LOGINS",
 			"has allowlist constant",
 		);
 		assertIncludes(routeSource, '"fairchild"', "fairchild in allowlist");
