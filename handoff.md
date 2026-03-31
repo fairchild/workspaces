@@ -1,43 +1,47 @@
 # Session Handoff
 
 ## Current Task
-Cleaned up 10 stale git worktrees, then hardened the `wt.sh` git-worktree skill based on real friction encountered during cleanup.
+Security review of the repo's public attack surface — GitHub Actions, agent automation, and infrastructure. Identified and mitigated the highest-risk paths.
 
 ## Progress
-- Archived 7 merged worktrees via `wt archive`, removed 3 stale detached-HEAD worktrees from .cline/.codex/.claude
-- Deleted 8 local branches and 1 remote branch
-- Shipped 4 commits to dotclaude (all direct to main):
-  - `wt clean` command with two-tier merge detection (git + gh squash-merge detection)
-  - Slash-in-branch-name bug fix for `cmd_archive`
-  - `--delete-branch` flag on archive
-  - `wt list --all` showing worktrees from other tools
-  - `wt done` shell function (archive + cd home from within a worktree) — PR #145
-  - `wt prune` for deleting old archived worktrees
-  - `wt clean --all-sources` for cross-tool worktree cleanup
-- Pruned 23 archived worktrees, reclaimed 3.6GB
-- Dead code removed (`carry_modified_files`), `wt install` implemented
-- Tab completion updated for all new commands
+- Conducted comprehensive security review across workflows, agent scripts, and Cloudflare Workers
+- Discovered `MENTION_AUTOMATIONS_ENABLED: false` repo variable existed but was not wired into any workflow
+- Traced the full attack chain: public @mention → triage sanitization → label approval → raw payload re-fetch → LLM prompt injection surface
+- Shipped three PRs, all merged:
+  - **#256** — Wire mention kill switch + evidence store timing-safe token comparison + CORS restriction
+  - **#260** — Gate scheduled agent cron runs (superseded by #261)
+  - **#261** — Unified `AGENT_AUTOMATIONS_ENABLED` kill switch across all 6 agent workflows
+- Deployed hardened evidence store to Cloudflare Workers
+- Created single repo variable `AGENT_AUTOMATIONS_ENABLED: false` (deleted the two separate ones)
 
 ## Key Decisions
-- **`wt done` is a shell function, not a script command** — it needs to `cd` the parent shell after archiving, which a subprocess can't do. Same pattern as `wt cd` and `wt home`.
-- **`wt clean --all-sources` uses `git worktree remove --force`** for external worktrees (not archive) since they aren't wt-managed and don't have the archive directory structure.
-- **Two-tier merge detection** — `git merge-base --is-ancestor` for regular merges, `gh pr list --state merged` for squash merges. Falls back to tier 1 if `gh` unavailable.
-- **Direct commits to dotclaude main** for small self-contained changes (prune, --all-sources). PR for larger features (wt done).
+- **One kill switch, not two** — consolidated `MENTION_AUTOMATIONS_ENABLED` and `AGENT_SCHEDULED_RUNS_ENABLED` into `AGENT_AUTOMATIONS_ENABLED`. Simpler to reason about.
+- **Manual dispatch always works** — `workflow_dispatch` bypasses the kill switch so you can still invoke agents on-demand. The gate is `github.event_name == 'workflow_dispatch' || vars.AGENT_AUTOMATIONS_ENABLED == 'true'`.
+- **Peter Planner left ungated** — already owner-gated (`github.event.comment.user.login == github.repository_owner`), so no public user can trigger it.
+- **Evidence store CORS restricted** — PUT removed from preflight since uploads come from CI, not browsers. GET keeps `*` for GitHub markdown rendering.
 
 ## Next Steps
-1. The cairo-v3 worktree at `~/conductor/workspaces/workspaces/cairo-v3` is the only remaining worktree — check if `durable-workflows-skill` is still active
-2. Consider adding `wt clean --all-sources` to a periodic maintenance workflow
-3. The `wt apply` command may have the same slash-branch issues we fixed in archive — worth investigating
+1. **Audit GitHub App permissions** — confirm `APRIL_PRIVATE_KEY` and `WORKSPACE_AGENTS_PRIVATE_KEY` apps can't push directly to main. Branch protection with required reviews is the structural gate.
+2. **Before re-enabling agents**: implement payload scope limiting (don't re-fetch raw GitHub content for mention-triggered runs) and output action allowlisting (mentions should only allow review comments, not code changes)
+3. **Consider per-workflow token scoping** — `EVIDENCE_UPLOAD_TOKEN` and `CLAUDE_CODE_OAUTH_TOKEN` are shared across all agents. Per-agent tokens would reduce blast radius.
+4. **Add rate limiting** to webhook relay `/auth/session` endpoint via Cloudflare rules
 
 ## Relevant Files
-- `~/.claude/skills/git-worktree/scripts/wt.sh` — main script (all changes)
-- `~/.claude/skills/git-worktree/scripts/wt.zsh` — shell functions (wt done, tab completion)
-- `~/.claude/skills/git-worktree/SKILL.md` — documentation
+- `.github/workflows/agent-mention.yml` — public mention triage (gated)
+- `.github/workflows/agent-executor.yml` — label-approved execution (gated)
+- `.github/workflows/agent-april.yml` — April cron (gated)
+- `.github/workflows/agent-plat.yml` — Plat cron (gated)
+- `.github/workflows/agent-carl.yml` — Carl cron (gated, was previously ungated)
+- `.github/workflows/agent-oliver.yml` — Oliver cron (gated)
+- `infra/cloudflare-evidence-store/src/index.ts` — timing-safe auth + CORS fix (deployed)
+- `scripts/agent-triage-request.py` — triage sanitization logic (reviewed, not modified)
+- `.agents/skills/cofounder-contributor/scripts/run-contributor.py` — raw payload fetch path (reviewed, not modified)
 
 ## Open Questions
-- Should `wt prune` be added to a session-end hook for automatic cleanup?
-- Should `--delete-branch` be the default for `wt done` (since "done" implies finality)?
+- Should `CLAUDE_CODE_OAUTH_TOKEN` be rotated now as a precaution?
+- Is there a GitHub App permission audit tool worth running?
+- Should the deferred hardening items become a backlog plan or a GitHub milestone?
 
 ---
-*Session completed on 2026-03-29*
-*dotclaude commits: 4d7bae3, 238c49d (PR #145), b34adb4, a3f2a1e*
+*Session completed on 2026-03-30*
+*PRs: #256, #260, #261 — security hardening and agent kill switch*
