@@ -29,6 +29,10 @@ run = "./scripts/dev-smoke.sh"
 description = "Compact VM status (use --stale to find cleanup candidates)."
 run = "uv run --script ./scripts/lume-status.py"
 
+[tasks."dev-lume-ensure"]
+description = "Ensure Lume daemon is running (idempotent, self-healing)."
+run = "./scripts/lume-ensure-daemon.sh"
+
 [tasks."dev-lume-preflight"]
 description = "Validate this Mac for a real-host Lume macOS VM smoke run."
 run = "./scripts/lume-host-preflight.sh"
