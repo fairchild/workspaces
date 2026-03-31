@@ -36,26 +36,26 @@ const ALLOWED_DOMAINS = [
 	"*.githubusercontent.com",
 ];
 
-/** Module-level cache for base snapshot ID */
-let _baseSnapshotId: string | undefined;
+/** Promise-memoized to prevent duplicate snapshot creation on concurrent requests. */
+let _baseSnapshotPromise: Promise<string> | undefined;
 
-/**
- * Get or create a base snapshot with Claude Code CLI pre-installed.
- * Cached in-memory and reused across sessions for fast warm-start.
- */
-async function getOrCreateBaseSnapshot(): Promise<string> {
-	if (_baseSnapshotId) return _baseSnapshotId;
+function getOrCreateBaseSnapshot(): Promise<string> {
+	if (!_baseSnapshotPromise) {
+		_baseSnapshotPromise = resolveBaseSnapshot().catch((err) => {
+			_baseSnapshotPromise = undefined; // Allow retry on failure
+			throw err;
+		});
+	}
+	return _baseSnapshotPromise;
+}
 
+async function resolveBaseSnapshot(): Promise<string> {
 	// Check existing snapshots for a reusable base
 	const result = await Snapshot.list(getCredentials());
 	const existing = result.json.snapshots.find(
 		(s: { id: string; status: string }) => s.status === "created",
 	);
-	if (existing) {
-		const id = existing.id;
-		_baseSnapshotId = id;
-		return id;
-	}
+	if (existing) return existing.id;
 
 	// Create fresh base: node22 + Claude Code CLI
 	const sandbox = await Sandbox.create({
@@ -71,13 +71,8 @@ async function getOrCreateBaseSnapshot(): Promise<string> {
 		sudo: true,
 	});
 
-	const snapshot = await sandbox.snapshot({
-		expiration: ms("30d"),
-	});
-
-	const id = snapshot.snapshotId;
-	_baseSnapshotId = id;
-	return id;
+	const snapshot = await sandbox.snapshot({ expiration: ms("30d") });
+	return snapshot.snapshotId;
 }
 
 /** Active sandbox instances keyed by instanceId (sandboxId). */

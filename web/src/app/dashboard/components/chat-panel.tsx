@@ -105,8 +105,9 @@ export function ChatPanel({
 				const reader = res.body.getReader();
 				const decoder = new TextDecoder();
 				let buffer = "";
+				let streamDone = false;
 
-				while (true) {
+				while (!streamDone) {
 					const { done, value } = await reader.read();
 					if (done) break;
 
@@ -125,6 +126,7 @@ export function ChatPanel({
 										: null,
 								);
 							} else if (chunk.type === "done" || chunk.type === "error") {
+								streamDone = true;
 								break;
 							}
 						} catch {

@@ -1,4 +1,4 @@
-import type { Agent, AgentPersona, ConfigFile, Skill } from "./types";
+import type { Agent, ConfigFile, Skill } from "./types";
 
 interface TreeEntry {
 	path: string;

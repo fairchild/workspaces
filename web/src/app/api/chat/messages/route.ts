@@ -75,37 +75,41 @@ export async function POST(request: Request): Promise<Response> {
 		return Response.json(botResponse);
 	}
 
-	// Check if the mention targets a known agent persona (restricted to allowed users)
+	// Check if the mention targets a known agent persona (restricted to allowed users).
+	// Wrapped in try/catch so GitHub API failures don't break normal chat flow.
 	if (agentTarget && agentTarget !== "spaces") {
-		const login = await fetchGitHubLogin(token);
-		const persona =
-			login === "fairchild"
-				? await resolvePersona(token, owner, repo, agentTarget)
-				: null;
-		if (persona) {
-			// Store the user message immediately
-			const chatMessage: ChatMessage = {
-				id: messageId,
-				repo: body.repo,
-				author: session.user.name ?? session.user.email ?? "you",
-				authorType: "user",
-				content: body.message,
-				agentTarget,
-				discussionId: null,
-				discussionUrl: null,
-				timestamp,
-			};
-			await pushChatMessage(chatMessage);
+		try {
+			const login = await fetchGitHubLogin(token);
+			const persona =
+				login === "fairchild"
+					? await resolvePersona(token, owner, repo, agentTarget)
+					: null;
+			if (persona) {
+				const chatMessage: ChatMessage = {
+					id: messageId,
+					repo: body.repo,
+					author: session.user.name ?? session.user.email ?? "you",
+					authorType: "user",
+					content: body.message,
+					agentTarget,
+					discussionId: null,
+					discussionUrl: null,
+					timestamp,
+				};
+				await pushChatMessage(chatMessage);
 
-			// Return session info — client will connect to SSE endpoint
-			return Response.json({
-				messageId,
-				agentSession: {
-					agentName: agentTarget,
-					streamUrl: "/api/chat/agent-stream",
-					threadId: body.parentDiscussionId ?? messageId,
-				},
-			});
+				return Response.json({
+					messageId,
+					agentSession: {
+						agentName: agentTarget,
+						streamUrl: "/api/chat/agent-stream",
+						threadId: body.parentDiscussionId ?? messageId,
+					},
+				});
+			}
+		} catch (err) {
+			console.error("[chat] Agent persona resolution failed:", err);
+			// Fall through to normal Discussion creation
 		}
 	}
 
