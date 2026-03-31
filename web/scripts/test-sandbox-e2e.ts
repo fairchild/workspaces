@@ -147,14 +147,11 @@ async function testPersonaResolution() {
 			repo,
 			"april-clearwater",
 		);
-		assert(persona !== null, "expected persona to be found");
-		assertEqual(persona?.name, "april-clearwater", "persona name");
-		assertEqual(persona?.displayName, "April Clearwater", "display name");
-		assert(persona?.role.length > 0, "expected non-empty role");
-		assert(
-			persona?.systemPrompt.length > 0,
-			"expected non-empty system prompt",
-		);
+		const p = assertDefined(persona, "expected persona to be found");
+		assertEqual(p.name, "april-clearwater", "persona name");
+		assertEqual(p.displayName, "April Clearwater", "display name");
+		assert(p.role.length > 0, "expected non-empty role");
+		assert(p.systemPrompt.length > 0, "expected non-empty system prompt");
 	});
 
 	await test("resolvePersona returns null for unknown agent", async () => {
