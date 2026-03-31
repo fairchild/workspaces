@@ -1,47 +1,50 @@
 # Session Handoff
 
 ## Current Task
-Security review of the repo's public attack surface — GitHub Actions, agent automation, and infrastructure. Identified and mitigated the highest-risk paths.
+Built @agent chat with compute backend abstraction for the Spaces web app. Designed, implemented, tested, reviewed, and merged.
 
 ## Progress
-- Conducted comprehensive security review across workflows, agent scripts, and Cloudflare Workers
-- Discovered `MENTION_AUTOMATIONS_ENABLED: false` repo variable existed but was not wired into any workflow
-- Traced the full attack chain: public @mention → triage sanitization → label approval → raw payload re-fetch → LLM prompt injection surface
-- Shipped three PRs, all merged:
-  - **#256** — Wire mention kill switch + evidence store timing-safe token comparison + CORS restriction
-  - **#260** — Gate scheduled agent cron runs (superseded by #261)
-  - **#261** — Unified `AGENT_AUTOMATIONS_ENABLED` kill switch across all 6 agent workflows
-- Deployed hardened evidence store to Cloudflare Workers
-- Created single repo variable `AGENT_AUTOMATIONS_ENABLED: false` (deleted the two separate ones)
+- Explored existing chat system, agent definitions, and GitHub Discussion bridge
+- Collaborative design session: architecture decisions for @mention → agent session flow
+- Implemented ComputeProvider abstraction mirroring Swift WorkspaceProviderProtocol
+- Built Vercel Sandbox provider using `@vercel/sandbox` SDK (Firecracker microVMs)
+- Built persona resolution from `.agents/skills/*/references/*.md` (full hyphenated names)
+- Built session manager, SSE streaming API route, and frontend streaming client
+- E2E smoke test: April Clearwater responded from inside a Vercel Sandbox reading actual repo
+- Reflection found and fixed 6 bugs (file path mismatch, broken streaming, shell injection, wrong CLI flags, buffered streaming, require() in ESM)
+- Code review found and fixed 4 more issues (race condition, missing error handling, SSE client hang, unused import)
+- Access gated to `fairchild` GitHub user
+- Dispatched sandbox-testing agent via cmux orchestrator for next-session follow-up
+- Fixed cmux-orchestrator skill: replaced `claude -p` with interactive mode for agent dispatch
 
 ## Key Decisions
-- **One kill switch, not two** — consolidated `MENTION_AUTOMATIONS_ENABLED` and `AGENT_SCHEDULED_RUNS_ENABLED` into `AGENT_AUTOMATIONS_ENABLED`. Simpler to reason about.
-- **Manual dispatch always works** — `workflow_dispatch` bypasses the kill switch so you can still invoke agents on-demand. The gate is `github.event_name == 'workflow_dispatch' || vars.AGENT_AUTOMATIONS_ENABLED == 'true'`.
-- **Peter Planner left ungated** — already owner-gated (`github.event.comment.user.login == github.repository_owner`), so no public user can trigger it.
-- **Evidence store CORS restricted** — PUT removed from preflight since uploads come from CI, not browsers. GET keeps `*` for GitHub markdown rendering.
+- **Full agent names** (`@april-clearwater` not `@april`) — avoids GitHub user conflicts
+- **Conversational first** — every @mention starts conversational; dispatch is escalation
+- **Vercel Sandbox default** — Firecracker microVMs, swappable via ComputeProvider interface
+- **Synchronous runCommand** over detached+poll — simpler, works within 5-min SSE timeout
+- **Interactive mode for agent dispatch** — `claude -p` is single-shot text only; interactive mode gives full tool access
 
 ## Next Steps
-1. **Audit GitHub App permissions** — confirm `APRIL_PRIVATE_KEY` and `WORKSPACE_AGENTS_PRIVATE_KEY` apps can't push directly to main. Branch protection with required reviews is the structural gate.
-2. **Before re-enabling agents**: implement payload scope limiting (don't re-fetch raw GitHub content for mention-triggered runs) and output action allowlisting (mentions should only allow review comments, not code changes)
-3. **Consider per-workflow token scoping** — `EVIDENCE_UPLOAD_TOKEN` and `CLAUDE_CODE_OAUTH_TOKEN` are shared across all agents. Per-agent tokens would reduce blast radius.
-4. **Add rate limiting** to webhook relay `/auth/session` endpoint via Cloudflare rules
+1. **Browser testing** — add GitHub OAuth callback URL for localhost to test full UI flow
+2. **True token streaming** — replace synchronous runCommand with Agent SDK or stream-json
+3. **Private repo support** — pass GitHub token in clone URL
+4. **Session resume** — in-memory sandbox Map needs Sandbox.get() for cross-request persistence
+5. **Check sandbox-testing agent** in cmux workspace:29 for results
 
 ## Relevant Files
-- `.github/workflows/agent-mention.yml` — public mention triage (gated)
-- `.github/workflows/agent-executor.yml` — label-approved execution (gated)
-- `.github/workflows/agent-april.yml` — April cron (gated)
-- `.github/workflows/agent-plat.yml` — Plat cron (gated)
-- `.github/workflows/agent-carl.yml` — Carl cron (gated, was previously ungated)
-- `.github/workflows/agent-oliver.yml` — Oliver cron (gated)
-- `infra/cloudflare-evidence-store/src/index.ts` — timing-safe auth + CORS fix (deployed)
-- `scripts/agent-triage-request.py` — triage sanitization logic (reviewed, not modified)
-- `.agents/skills/cofounder-contributor/scripts/run-contributor.py` — raw payload fetch path (reviewed, not modified)
+- `web/src/lib/agent-runtime/` — compute provider abstraction (types, registry, vercel-sandbox, session-manager, persona-loader)
+- `web/src/lib/agent-sessions.ts` — Turso DB layer for session tracking
+- `web/src/app/api/chat/agent-stream/route.ts` — SSE streaming endpoint
+- `web/src/app/api/chat/messages/route.ts` — modified to detect agent personas and redirect
+- `web/src/app/dashboard/components/chat-panel.tsx` — SSE client with streaming display
+- `.agents/skills/sandbox/SKILL.md` — Vercel Sandbox SDK reference
+- `~/.claude/skills/cmux-orchestrator/SKILL.md` — fixed agent dispatch pattern
 
 ## Open Questions
-- Should `CLAUDE_CODE_OAUTH_TOKEN` be rotated now as a precaution?
-- Is there a GitHub App permission audit tool worth running?
-- Should the deferred hardening items become a backlog plan or a GitHub milestone?
+- Should we use the Agent SDK instead of CLI for the sandbox provider? (better streaming, programmatic control)
+- How should per-agent memory work across web chat sessions? (Turso vs repo files vs hybrid)
+- Should `@spaces` bot become a persona with its own SKILL.md?
 
 ---
 *Session completed on 2026-03-30*
-*PRs: #256, #260, #261 — security hardening and agent kill switch*
+*PR: #257 — @agent chat with compute backend abstraction (merged)*
