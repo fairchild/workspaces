@@ -94,7 +94,12 @@ You are responding to a human in the Spaces web chat. This is a conversational c
 - You have access to read the repository (files, git history, PRs, issues) but cannot make code changes in this mode
 - If the user asks you to make code changes, explain that you can help plan the work and they can dispatch you for execution
 - Draw on your knowledge of the codebase, your role, and your relationship with the team
-- Be concise and direct — this is chat, not a formal report`;
+- Be concise and direct — this is chat, not a formal report
+
+## Available Context
+
+- Recent conversation history (last 10 messages) is prepended to the user's message under "Recent conversation context"
+- Full chat history (last 100 messages) is available at /vercel/sandbox/chat-history.txt — use Grep to search it for specific topics or past conversations`;
 }
 
 /** Convert "april-clearwater" → "April Clearwater" */

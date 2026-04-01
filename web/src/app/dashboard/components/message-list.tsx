@@ -54,7 +54,16 @@ function groupEntries(entries: TimelineEntry[]): GroupedEntry[] {
 interface StreamingMessage {
 	agentName: string;
 	content: string;
+	status: "sending" | "connecting" | "provisioning" | "thinking" | "streaming";
 }
+
+const STATUS_LABELS: Record<StreamingMessage["status"], string> = {
+	sending: "Sending...",
+	connecting: "Connecting",
+	provisioning: "Starting sandbox...",
+	thinking: "Thinking...",
+	streaming: "",
+};
 
 interface MessageListProps {
 	entries: TimelineEntry[];
@@ -82,12 +91,12 @@ export function MessageList({
 		return () => el.removeEventListener("scroll", handleScroll);
 	}, []);
 
-	// biome-ignore lint/correctness/useExhaustiveDependencies: scroll on new entries
+	// biome-ignore lint/correctness/useExhaustiveDependencies: scroll on new entries or streaming updates
 	useEffect(() => {
 		if (wasAtBottom.current) {
 			anchorRef.current?.scrollIntoView({ behavior: "smooth" });
 		}
-	}, [entries.length]);
+	}, [entries.length, streamingMessage?.content.length]);
 
 	const grouped = useMemo(() => groupEntries(entries), [entries]);
 
@@ -155,7 +164,7 @@ export function MessageList({
 					);
 				})}
 				{streamingMessage && (
-					<div className={styles.message}>
+					<div className={`${styles.message} ${styles.messageAgent}`}>
 						<div className={styles.messageHeader}>
 							<span
 								className={`${styles.messageAuthor} ${styles.messageAuthorAgent}`}
@@ -164,11 +173,18 @@ export function MessageList({
 							</span>
 							<span className={styles.messageTime}>now</span>
 						</div>
-						<span className={styles.messageContent}>
-							{streamingMessage.content || (
-								<span className={styles.streamingIndicator}>thinking...</span>
-							)}
-						</span>
+						{streamingMessage.content ? (
+							<span
+								className={`${styles.messageContent} ${styles.streamingContent}`}
+							>
+								{streamingMessage.content}
+							</span>
+						) : (
+							<span className={styles.streamingIndicator}>
+								{STATUS_LABELS[streamingMessage.status] ||
+									`Connecting to @${streamingMessage.agentName}...`}
+							</span>
+						)}
 					</div>
 				)}
 			</div>

@@ -1,17 +1,25 @@
 import crypto from "node:crypto";
 import {
+	claimSnapshotSession,
 	createSession,
 	getActiveSessionForThread,
 	getSession as getDbSession,
+	getSnapshotSessionForThread,
 	updateComputeInstance,
 	updateSessionStatus,
+	updateSnapshotId,
 } from "../agent-sessions";
-import { pushChatMessage } from "../chat";
+import { getChatMessages, pushChatMessage } from "../chat";
 import { addDiscussionComment } from "../github";
 import type { AgentSession, ChatMessage } from "../types";
 import { buildConversationalPrompt, resolvePersona } from "./persona-loader";
 import { type ComputeProviderRegistry, getRegistry } from "./provider-registry";
-import type { StreamChunk } from "./types";
+import {
+	type ComputeProvider,
+	type ContextMessage,
+	type StreamChunk,
+	isSnapshotCapable,
+} from "./types";
 
 export class SessionManager {
 	private registry: ComputeProviderRegistry | null = null;
@@ -69,8 +77,7 @@ export class SessionManager {
 		);
 
 		if (existing?.computeInstanceId) {
-			// Resume existing session
-			yield { type: "status", content: "Resuming session..." };
+			// Resume existing live session
 			const registry = await this.getProviderRegistry();
 			const provider = registry.get(existing.computeBackend);
 			if (!provider) {
@@ -78,23 +85,111 @@ export class SessionManager {
 				return;
 			}
 
-			await provider.sendMessage(existing.computeInstanceId, params.message);
-			await updateSessionStatus(existing.id, "streaming");
-
-			let fullText = "";
-			for await (const chunk of provider.streamOutput(
-				existing.computeInstanceId,
-			)) {
-				if (chunk.type === "text") {
-					fullText += chunk.content;
-				}
-				yield chunk;
+			// Sandbox may be gone after process restart or timeout
+			let resumed = false;
+			try {
+				await provider.sendMessage(existing.computeInstanceId, params.message);
+				resumed = true;
+			} catch {
+				await updateSessionStatus(existing.id, "completed");
 			}
 
-			await updateSessionStatus(existing.id, "active");
+			if (resumed) {
+				yield { type: "status", content: "Resuming session..." };
+				await updateSessionStatus(existing.id, "streaming");
 
-			await this.persistAgentResponse(params, persona.displayName, fullText);
-			return;
+				let fullText = "";
+				for await (const chunk of provider.streamOutput(
+					existing.computeInstanceId,
+				)) {
+					if (chunk.type === "text") {
+						fullText += chunk.content;
+					}
+					yield chunk;
+				}
+
+				await this.snapshotAndRelease(
+					provider,
+					existing.id,
+					existing.computeInstanceId,
+				);
+
+				await this.persistAgentResponse(params, persona.displayName, fullText);
+				return;
+			}
+			// Sandbox lost — fall through to snapshot restore or fresh session
+		}
+
+		// 2b. Check for snapshotted session to restore
+		const snapshotted = await getSnapshotSessionForThread(
+			params.repo,
+			params.agentName,
+			threadId,
+		);
+
+		if (snapshotted?.snapshotId) {
+			// Atomic claim — only one concurrent request wins
+			const claimed = await claimSnapshotSession(snapshotted.id);
+			if (claimed) {
+				const registry = await this.getProviderRegistry();
+				const provider = registry.get(snapshotted.computeBackend);
+
+				if (provider && isSnapshotCapable(provider)) {
+					yield {
+						type: "status",
+						content: "Restoring previous session...",
+					};
+
+					try {
+						const restored = await provider.restoreSnapshot(
+							snapshotted.snapshotId,
+						);
+						await updateComputeInstance(snapshotted.id, restored.instanceId);
+
+						// Build fresh context for the restored sandbox
+						const { enrichedMessage, chatHistory } =
+							await this.buildConversationContext(params.repo, params.message);
+						await provider.sendMessage(restored.instanceId, enrichedMessage, {
+							chatHistory,
+						});
+
+						yield { type: "status", content: "Agent is thinking..." };
+
+						let fullText = "";
+						for await (const chunk of provider.streamOutput(
+							restored.instanceId,
+						)) {
+							if (chunk.type === "text") {
+								fullText += chunk.content;
+							}
+							yield chunk;
+						}
+
+						await this.snapshotAndRelease(
+							provider,
+							snapshotted.id,
+							restored.instanceId,
+						);
+
+						await this.persistAgentResponse(
+							params,
+							persona.displayName,
+							fullText,
+						);
+						return;
+					} catch (err) {
+						console.warn(
+							"[session-manager] Snapshot restore failed, creating fresh session:",
+							err,
+						);
+						await updateSessionStatus(snapshotted.id, "completed");
+					}
+				} else {
+					// Provider gone — release the claim
+					await updateSessionStatus(snapshotted.id, "completed");
+				}
+			}
+			// Claim lost or provider unavailable — fall through to fresh session
 		}
 
 		// 3. Create new session
@@ -116,6 +211,7 @@ export class SessionManager {
 			agentName: params.agentName,
 			computeBackend: provider.descriptor.id,
 			computeInstanceId: null,
+			snapshotId: null,
 			threadId,
 			discussionId: params.discussionId ?? null,
 			status: "starting",
@@ -130,6 +226,9 @@ export class SessionManager {
 			const conversationalPrompt = buildConversationalPrompt(persona);
 			const cloneUrl = `https://github.com/${params.repo}.git`;
 
+			const { chatHistory, contextMessages } =
+				await this.buildConversationContext(params.repo, params.message);
+
 			const result = await provider.createSandbox({
 				sessionId,
 				repo: params.repo,
@@ -138,6 +237,8 @@ export class SessionManager {
 				systemPrompt: conversationalPrompt,
 				message: params.message,
 				tools: "conversational",
+				contextMessages,
+				chatHistory,
 			});
 
 			await updateComputeInstance(sessionId, result.instanceId);
@@ -154,7 +255,7 @@ export class SessionManager {
 				yield chunk;
 			}
 
-			await updateSessionStatus(sessionId, "active");
+			await this.snapshotAndRelease(provider, sessionId, result.instanceId);
 
 			// Persist agent response
 			await this.persistAgentResponse(params, persona.displayName, fullText);
@@ -186,6 +287,72 @@ export class SessionManager {
 			await provider.destroySandbox(session.computeInstanceId);
 		}
 		await updateSessionStatus(sessionId, "completed");
+	}
+
+	/** Build an enriched message with recent context prepended, plus a chat history string. */
+	private async buildConversationContext(
+		repo: string,
+		currentMessage: string,
+	): Promise<{
+		enrichedMessage: string;
+		chatHistory: string;
+		contextMessages: ContextMessage[];
+	}> {
+		const allMessages = await getChatMessages(repo, 100);
+		const history = allMessages
+			.reverse()
+			.filter((m) => m.content !== currentMessage || m.authorType !== "user");
+
+		const contextMessages: ContextMessage[] = history.slice(-10).map((m) => ({
+			author: m.author,
+			authorType: m.authorType,
+			content: m.content,
+			timestamp: m.timestamp,
+		}));
+
+		let enrichedMessage = currentMessage;
+		if (contextMessages.length) {
+			const contextBlock = contextMessages
+				.map(
+					(m) => `[${m.timestamp}] ${m.author} (${m.authorType}): ${m.content}`,
+				)
+				.join("\n\n");
+			enrichedMessage = `## Recent conversation context\n\n${contextBlock}\n\n---\n\n## Current message\n\n${currentMessage}`;
+		}
+
+		const chatHistory = history
+			.map(
+				(m) => `[${m.timestamp}] ${m.author} (${m.authorType}):\n${m.content}`,
+			)
+			.join("\n\n===\n\n");
+
+		return { enrichedMessage, chatHistory, contextMessages };
+	}
+
+	/**
+	 * Snapshot the sandbox state for later restore, then stop it to free resources.
+	 * Falls back to marking the session "active" if the provider doesn't support snapshots.
+	 */
+	private async snapshotAndRelease(
+		provider: ComputeProvider,
+		sessionId: string,
+		instanceId: string,
+	): Promise<void> {
+		if (isSnapshotCapable(provider)) {
+			try {
+				const snapshotId = await provider.createSnapshot(instanceId);
+				await updateSnapshotId(sessionId, snapshotId);
+				await updateSessionStatus(sessionId, "snapshotted");
+				return;
+			} catch (err) {
+				console.warn(
+					"[session-manager] Snapshot failed, keeping session active:",
+					err,
+				);
+			}
+		}
+		// Non-snapshot provider or snapshot failed — leave sandbox running
+		await updateSessionStatus(sessionId, "active");
 	}
 
 	/** Persist the agent's response as a chat message and bridge to Discussion. */

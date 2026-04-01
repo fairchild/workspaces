@@ -208,6 +208,7 @@ export type AgentSessionStatus =
 	| "starting"
 	| "active"
 	| "streaming"
+	| "snapshotted"
 	| "completed"
 	| "failed";
 
@@ -223,6 +224,7 @@ export interface AgentSession {
 	agentName: string;
 	computeBackend: ComputeBackendId;
 	computeInstanceId: string | null;
+	snapshotId: string | null;
 	threadId: string;
 	discussionId: string | null;
 	status: AgentSessionStatus;

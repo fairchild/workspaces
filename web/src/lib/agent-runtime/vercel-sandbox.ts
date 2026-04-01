@@ -140,6 +140,18 @@ export class VercelSandboxProvider implements ComputeProvider, SnapshotCapable {
 			const tools =
 				request.tools === "conversational" ? CONVERSATIONAL_TOOLS : FULL_TOOLS;
 
+			// Build the message with conversation context prepended
+			let fullMessage = request.message;
+			if (request.contextMessages?.length) {
+				const contextBlock = request.contextMessages
+					.map(
+						(m) =>
+							`[${m.timestamp}] ${m.author} (${m.authorType}): ${m.content}`,
+					)
+					.join("\n\n");
+				fullMessage = `## Recent conversation context\n\n${contextBlock}\n\n---\n\n## Current message\n\n${request.message}`;
+			}
+
 			// Write prompt, message, and a runner script to files.
 			// The runner script avoids shell injection by reading from files
 			// and passing via env var (not shell interpolation).
@@ -148,20 +160,32 @@ PROMPT=$(cat /vercel/sandbox/system-prompt.txt)
 cat /vercel/sandbox/message.txt | claude -p --system-prompt "$PROMPT" --allowedTools ${tools}
 `;
 
-			await sandbox.writeFiles([
+			const filesToWrite: Array<{
+				path: string;
+				content: Buffer;
+			}> = [
 				{
 					path: "/vercel/sandbox/system-prompt.txt",
 					content: Buffer.from(request.systemPrompt),
 				},
 				{
 					path: "/vercel/sandbox/message.txt",
-					content: Buffer.from(request.message),
+					content: Buffer.from(fullMessage),
 				},
 				{
 					path: "/vercel/sandbox/run-agent.sh",
 					content: Buffer.from(runnerScript),
 				},
-			]);
+			];
+
+			if (request.chatHistory) {
+				filesToWrite.push({
+					path: "/vercel/sandbox/chat-history.txt",
+					content: Buffer.from(request.chatHistory),
+				});
+			}
+
+			await sandbox.writeFiles(filesToWrite);
 
 			activeSandboxes.set(instanceId, sandbox);
 			return { instanceId, status: "ready" };
@@ -178,43 +202,57 @@ cat /vercel/sandbox/message.txt | claude -p --system-prompt "$PROMPT" --allowedT
 			return;
 		}
 
-		// Run claude synchronously — blocks until response is complete.
-		// The SSE route has a 5-min timeout which is sufficient for conversational queries.
-		const result = await sandbox.runCommand({
+		// Run in detached mode so we can stream stdout incrementally via logs()
+		const cmd = await sandbox.runCommand({
 			cmd: "bash",
 			args: ["/vercel/sandbox/run-agent.sh"],
 			cwd: "/vercel/sandbox/repo",
+			detached: true,
 		});
 
-		const stdout = await result.stdout();
-		const stderr = await result.stderr();
-
-		if (result.exitCode !== 0) {
-			yield {
-				type: "error",
-				content: stderr.trim() || `Claude exited with code ${result.exitCode}`,
-			};
-			return;
+		let hasOutput = false;
+		for await (const log of cmd.logs()) {
+			if (log.stream === "stdout" && log.data) {
+				hasOutput = true;
+				yield { type: "text", content: log.data };
+			}
 		}
 
-		if (stdout.trim()) {
-			yield { type: "text", content: stdout.trim() };
+		const finished = await cmd.wait();
+		if (finished.exitCode !== 0 && !hasOutput) {
+			const stderr = await finished.stderr();
+			yield {
+				type: "error",
+				content:
+					stderr.trim() || `Claude exited with code ${finished.exitCode}`,
+			};
+			return;
 		}
 
 		yield { type: "done", content: "" };
 	}
 
-	async sendMessage(instanceId: string, message: string): Promise<void> {
+	async sendMessage(
+		instanceId: string,
+		message: string,
+		context?: { chatHistory?: string },
+	): Promise<void> {
 		const sandbox = activeSandboxes.get(instanceId);
 		if (!sandbox) throw new Error(`Sandbox ${instanceId} not found`);
 
-		// Write new message for the next streamOutput call
-		await sandbox.writeFiles([
+		const files: Array<{ path: string; content: Buffer }> = [
 			{
 				path: "/vercel/sandbox/message.txt",
 				content: Buffer.from(message),
 			},
-		]);
+		];
+		if (context?.chatHistory) {
+			files.push({
+				path: "/vercel/sandbox/chat-history.txt",
+				content: Buffer.from(context.chatHistory),
+			});
+		}
+		await sandbox.writeFiles(files);
 	}
 
 	async destroySandbox(instanceId: string): Promise<void> {
@@ -232,6 +270,7 @@ cat /vercel/sandbox/message.txt | claude -p --system-prompt "$PROMPT" --allowedT
 		const snapshot = await sandbox.snapshot({
 			expiration: ms("7d"),
 		});
+		await sandbox.stop();
 		activeSandboxes.delete(instanceId);
 		return snapshot.snapshotId;
 	}

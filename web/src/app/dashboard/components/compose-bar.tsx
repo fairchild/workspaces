@@ -81,12 +81,21 @@ export function ComposeBar({
 		const trimmed = text.trim();
 		if (!trimmed || sending) return;
 
+		const prevText = text;
+		const prevAgent = agentTarget;
+
+		// Clear immediately for snappy feel
+		setText("");
+		setAgentTarget(null);
 		setSending(true);
+		inputRef.current?.focus();
+
 		try {
-			await onSend(trimmed, agentTarget ?? undefined);
-			setText("");
-			setAgentTarget(null);
-			inputRef.current?.focus();
+			await onSend(trimmed, prevAgent ?? undefined);
+		} catch {
+			// Restore on failure
+			setText(prevText);
+			setAgentTarget(prevAgent);
 		} finally {
 			setSending(false);
 		}

@@ -142,8 +142,16 @@
 /* ── Streaming indicator ── */
 
 .streamingIndicator {
+	font-family: var(--font-mono), ui-monospace, monospace;
+	font-size: 0.75rem;
 	color: var(--text-tertiary);
 	animation: pulse 1.5s ease-in-out infinite;
+}
+
+.streamingContent {
+	border-right: 2px solid var(--accent);
+	animation: blink 0.8s step-end infinite;
+	padding-right: 2px;
 }
 
 @keyframes pulse {
@@ -153,6 +161,25 @@
 	}
 	50% {
 		opacity: 1;
+	}
+}
+
+@keyframes blink {
+	50% {
+		border-color: transparent;
+	}
+}
+
+/* ── Optimistic (unconfirmed) message ── */
+
+@keyframes fadeIn {
+	from {
+		opacity: 0;
+		transform: translateY(4px);
+	}
+	to {
+		opacity: 1;
+		transform: translateY(0);
 	}
 }
 
