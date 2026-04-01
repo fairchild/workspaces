@@ -9,7 +9,7 @@ test.describe("Dashboard (authenticated)", () => {
 
 	test("shows sidebar with seeded repo", async ({ page }) => {
 		await page.goto("/dashboard");
-		await expect(page.getByText("workspaces")).toBeVisible();
+		await expect(page.locator("aside").first().getByText("workspaces")).toBeVisible();
 	});
 
 	test("navigates to repo detail", async ({ page }) => {
