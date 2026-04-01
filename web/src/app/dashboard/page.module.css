@@ -3,6 +3,7 @@
 	grid-template-columns: 240px 1fr 300px;
 	flex: 1;
 	overflow: hidden;
+	position: relative;
 }
 
 .left {
@@ -69,10 +70,6 @@
 }
 
 /* ── Collapsed sidebar ── */
-.leftCollapsed {
-	display: none;
-}
-
 .columnsLeftCollapsed {
 	grid-template-columns: 0px 1fr 300px;
 }
@@ -85,10 +82,6 @@
 }
 
 /* ── Collapsed right panel ── */
-.rightCollapsed {
-	display: none;
-}
-
 .columnsRightCollapsed {
 	grid-template-columns: 240px 1fr 0px;
 }
