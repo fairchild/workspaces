@@ -40,6 +40,8 @@ export function DashboardShell({
 			: "dashboard";
 
 	const [unreadChat, setUnreadChat] = useState(false);
+	const [leftCollapsed, setLeftCollapsed] = useState(false);
+	const [rightCollapsed, setRightCollapsed] = useState(false);
 
 	const setTab = useCallback(
 		(tab: TabId) => {
@@ -54,6 +56,30 @@ export function DashboardShell({
 		},
 		[pathname, router, searchParams],
 	);
+
+	// Keyboard shortcuts
+	useEffect(() => {
+		const handleKeyDown = (e: KeyboardEvent) => {
+			if (e.metaKey && e.key === "b" && !e.shiftKey) {
+				e.preventDefault();
+				setLeftCollapsed((v) => !v);
+			}
+			if (e.metaKey && e.shiftKey && e.key === "b") {
+				e.preventDefault();
+				setRightCollapsed((v) => !v);
+			}
+			if (e.metaKey && e.key === "1") {
+				e.preventDefault();
+				setTab("dashboard");
+			}
+			if (e.metaKey && e.key === "2") {
+				e.preventDefault();
+				setTab("chat");
+			}
+		};
+		window.addEventListener("keydown", handleKeyDown);
+		return () => window.removeEventListener("keydown", handleKeyDown);
+	}, [setTab]);
 
 	// Clear unread badge when switching to chat
 	useEffect(() => {
@@ -114,7 +140,33 @@ export function DashboardShell({
 	}, [fetchAgentData]);
 
 	return (
-		<div className={styles.columns}>
+		<div
+			className={[
+				styles.columns,
+				leftCollapsed && styles.columnsLeftCollapsed,
+				rightCollapsed && styles.columnsRightCollapsed,
+				leftCollapsed && rightCollapsed && styles.columnsBothCollapsed,
+			]
+				.filter(Boolean)
+				.join(" ")}
+		>
+			{/* Panel toggle affordances */}
+			<button
+				type="button"
+				className={`${styles.panelToggle} ${leftCollapsed ? styles.leftToggleCollapsed : styles.leftToggle}`}
+				onClick={() => setLeftCollapsed((v) => !v)}
+				title="Toggle sidebar (Cmd+B)"
+			>
+				{leftCollapsed ? "\u25B8" : "\u25C2"}
+			</button>
+			<button
+				type="button"
+				className={`${styles.panelToggle} ${rightCollapsed ? styles.rightToggleCollapsed : styles.rightToggle}`}
+				onClick={() => setRightCollapsed((v) => !v)}
+				title="Toggle activity panel (Cmd+Shift+B)"
+			>
+				{rightCollapsed ? "\u25C2" : "\u25B8"}
+			</button>
 			<aside className={styles.left}>
 				<Sidebar repos={repos} selectedRepo={selectedRepo} />
 			</aside>
