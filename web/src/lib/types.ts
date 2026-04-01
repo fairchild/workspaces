@@ -225,6 +225,7 @@ export interface AgentSession {
 	computeBackend: ComputeBackendId;
 	computeInstanceId: string | null;
 	snapshotId: string | null;
+	claudeSessionId: string | null;
 	threadId: string;
 	discussionId: string | null;
 	status: AgentSessionStatus;

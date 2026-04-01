@@ -155,9 +155,18 @@ export class VercelSandboxProvider implements ComputeProvider, SnapshotCapable {
 			// Write prompt, message, and a runner script to files.
 			// The runner script avoids shell injection by reading from files
 			// and passing via env var (not shell interpolation).
+			// On first run, --session-id creates a named session that persists to disk.
+			// On restore (claude-resume.flag exists), --resume loads the prior session,
+			// giving the agent full memory of its previous reasoning and tool calls.
 			const runnerScript = `#!/bin/bash
 PROMPT=$(cat /vercel/sandbox/system-prompt.txt)
-cat /vercel/sandbox/message.txt | claude -p --system-prompt "$PROMPT" --allowedTools ${tools}
+SESSION_ARGS=""
+if [ -f /vercel/sandbox/claude-resume.flag ]; then
+  SESSION_ARGS="--resume $(cat /vercel/sandbox/claude-session-id.txt)"
+elif [ -f /vercel/sandbox/claude-session-id.txt ]; then
+  SESSION_ARGS="--session-id $(cat /vercel/sandbox/claude-session-id.txt)"
+fi
+cat /vercel/sandbox/message.txt | claude -p $SESSION_ARGS --system-prompt "$PROMPT" --allowedTools ${tools}
 `;
 
 			const filesToWrite: Array<{
@@ -182,6 +191,13 @@ cat /vercel/sandbox/message.txt | claude -p --system-prompt "$PROMPT" --allowedT
 				filesToWrite.push({
 					path: "/vercel/sandbox/chat-history.txt",
 					content: Buffer.from(request.chatHistory),
+				});
+			}
+
+			if (request.claudeSessionId) {
+				filesToWrite.push({
+					path: "/vercel/sandbox/claude-session-id.txt",
+					content: Buffer.from(request.claudeSessionId),
 				});
 			}
 
@@ -235,7 +251,7 @@ cat /vercel/sandbox/message.txt | claude -p --system-prompt "$PROMPT" --allowedT
 	async sendMessage(
 		instanceId: string,
 		message: string,
-		context?: { chatHistory?: string },
+		context?: { chatHistory?: string; claudeSessionId?: string },
 	): Promise<void> {
 		const sandbox = activeSandboxes.get(instanceId);
 		if (!sandbox) throw new Error(`Sandbox ${instanceId} not found`);
@@ -250,6 +266,13 @@ cat /vercel/sandbox/message.txt | claude -p --system-prompt "$PROMPT" --allowedT
 			files.push({
 				path: "/vercel/sandbox/chat-history.txt",
 				content: Buffer.from(context.chatHistory),
+			});
+		}
+		if (context?.claudeSessionId) {
+			// Signal the runner script to use --resume instead of --session-id
+			files.push({
+				path: "/vercel/sandbox/claude-resume.flag",
+				content: Buffer.from("1"),
 			});
 		}
 		await sandbox.writeFiles(files);
