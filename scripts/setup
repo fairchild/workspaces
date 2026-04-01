@@ -5,6 +5,25 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
+# Symlink .env from main worktree if we're in a worktree and missing it
+link_env_from_main() {
+  local git_common git_dir main_wt
+  git_common="$(git rev-parse --git-common-dir 2>/dev/null)" || return 0
+  git_dir="$(git rev-parse --git-dir 2>/dev/null)" || return 0
+  [[ "$git_common" != "$git_dir" ]] || return 0  # not a worktree
+
+  main_wt="$(git worktree list --porcelain | head -1 | sed 's/^worktree //')"
+  [[ -n "$main_wt" ]] || return 0
+
+  for envfile in .env .env.local; do
+    if [[ -f "$main_wt/$envfile" && ! -e "$REPO_ROOT/$envfile" ]]; then
+      echo "=> Symlinking $envfile from main worktree"
+      ln -s "$main_wt/$envfile" "$REPO_ROOT/$envfile"
+    fi
+  done
+}
+link_env_from_main
+
 # Trust and install mise-managed tools
 [[ -f .mise.toml ]] && mise trust && mise install
 
