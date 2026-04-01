@@ -2,7 +2,7 @@
 
 import type { AgentDiscoveryResponse, SelectedRepo } from "@/lib/types";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import styles from "../page.module.css";
 import { ActivityFeed } from "./activity-feed";
 import { ChatPanel } from "./chat-panel";
@@ -86,9 +86,14 @@ export function DashboardShell({
 		if (activeTab === "chat") setUnreadChat(false);
 	}, [activeTab]);
 
-	const handleNewChatMessage = useCallback(() => {
-		if (activeTab !== "chat") setUnreadChat(true);
+	const activeTabRef = useRef(activeTab);
+	useEffect(() => {
+		activeTabRef.current = activeTab;
 	}, [activeTab]);
+
+	const handleNewChatMessage = useCallback(() => {
+		if (activeTabRef.current !== "chat") setUnreadChat(true);
+	}, []);
 
 	const [repos, setRepos] = useState<SelectedRepo[]>([]);
 	const [agentData, setAgentData] = useState<AgentDiscoveryResponse | null>(

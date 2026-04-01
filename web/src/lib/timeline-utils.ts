@@ -1,10 +1,16 @@
 import type { TimelineEntry } from "./types";
 
+const dayKeyCache = new Map<string, string>();
+
 export function dayKey(timestamp: string): string {
-	return new Date(timestamp).toLocaleDateString("en-US", {
+	const cached = dayKeyCache.get(timestamp);
+	if (cached) return cached;
+	const value = new Date(timestamp).toLocaleDateString("en-US", {
 		month: "short",
 		day: "numeric",
 	});
+	dayKeyCache.set(timestamp, value);
+	return value;
 }
 
 export function shouldShowDay(

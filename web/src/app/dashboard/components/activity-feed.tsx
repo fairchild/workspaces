@@ -91,7 +91,16 @@ export function ActivityFeed({ filterRepo }: ActivityFeedProps) {
 				? `/api/events?repo=${encodeURIComponent(filterRepo)}`
 				: "/api/events";
 			const res = await fetch(url);
-			if (res.ok) setEvents(await res.json());
+			if (res.ok) {
+				const data: WebhookEvent[] = await res.json();
+				setEvents((prev) =>
+					prev.length === data.length &&
+					prev[0]?.id === data[0]?.id &&
+					prev[prev.length - 1]?.id === data[data.length - 1]?.id
+						? prev
+						: data,
+				);
+			}
 		} catch {
 			// Silently retry on next poll
 		}

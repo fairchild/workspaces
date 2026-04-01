@@ -1,7 +1,7 @@
 "use client";
 
 import type { Agent } from "@/lib/types";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import styles from "./compose-bar.module.css";
 import { MentionAutocomplete } from "./mention-autocomplete";
 
@@ -12,7 +12,7 @@ interface ComposeBarProps {
 	disabled?: boolean;
 }
 
-export function ComposeBar({
+export const ComposeBar = memo(function ComposeBar({
 	repo,
 	agents,
 	onSend,
@@ -37,12 +37,7 @@ export function ComposeBar({
 		const cursor = textarea.selectionStart;
 		const before = value.slice(0, cursor);
 		const match = before.match(/@(\w*)$/);
-
-		if (match) {
-			setMentionQuery(match[1]);
-		} else {
-			setMentionQuery(null);
-		}
+		setMentionQuery(match ? match[1] : null);
 	}, []);
 
 	const selectAgent = useCallback(
@@ -173,4 +168,4 @@ export function ComposeBar({
 			</span>
 		</div>
 	);
-}
+});

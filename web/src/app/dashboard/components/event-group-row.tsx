@@ -1,7 +1,7 @@
 "use client";
 
 import type { WebhookEvent, WebhookEventType } from "@/lib/types";
-import { useState } from "react";
+import { memo, useState } from "react";
 import styles from "./event-group-row.module.css";
 import { TYPE_COLOR, TYPE_LABEL } from "./status-card";
 import { formatTime } from "./timeline-utils";
@@ -18,7 +18,9 @@ interface EventGroupRowProps {
 	events: WebhookEvent[];
 }
 
-export function EventGroupRow({ events }: EventGroupRowProps) {
+export const EventGroupRow = memo(function EventGroupRow({
+	events,
+}: EventGroupRowProps) {
 	const [expanded, setExpanded] = useState(false);
 
 	const counts = new Map<string, { count: number; color: string }>();
@@ -72,7 +74,7 @@ export function EventGroupRow({ events }: EventGroupRowProps) {
 			)}
 		</button>
 	);
-}
+});
 
 function ExpandedEventItem({ event }: { event: WebhookEvent }) {
 	const color = TYPE_COLOR[event.type];
