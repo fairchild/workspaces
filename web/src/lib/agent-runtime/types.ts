@@ -14,6 +14,14 @@ export interface ComputeProviderAvailability {
 	reason?: string;
 }
 
+/** A recent chat message passed as context to the agent. */
+export interface ContextMessage {
+	author: string;
+	authorType: "user" | "agent" | "bot";
+	content: string;
+	timestamp: string;
+}
+
 /** Request to create a compute sandbox for an agent session. */
 export interface SandboxRequest {
 	sessionId: string;
@@ -25,6 +33,10 @@ export interface SandboxRequest {
 	message: string;
 	tools: "conversational" | "full";
 	envVars?: Record<string, string>;
+	/** Recent messages for inline context (prepended to the user message). */
+	contextMessages?: ContextMessage[];
+	/** Pre-formatted full chat history for a searchable file in the sandbox. */
+	chatHistory?: string;
 }
 
 /** Result from creating a compute sandbox. */
@@ -58,7 +70,11 @@ export interface ComputeProvider {
 	streamOutput(instanceId: string): AsyncGenerator<StreamChunk>;
 
 	/** Send a follow-up message to an existing sandbox session. */
-	sendMessage(instanceId: string, message: string): Promise<void>;
+	sendMessage(
+		instanceId: string,
+		message: string,
+		context?: { chatHistory?: string },
+	): Promise<void>;
 
 	/** Stop and clean up a sandbox. */
 	destroySandbox(instanceId: string): Promise<void>;
@@ -68,4 +84,11 @@ export interface ComputeProvider {
 export interface SnapshotCapable {
 	createSnapshot(instanceId: string): Promise<string>;
 	restoreSnapshot(snapshotId: string): Promise<SandboxResult>;
+}
+
+/** Type guard for providers that support snapshot/restore. */
+export function isSnapshotCapable(
+	provider: ComputeProvider,
+): provider is ComputeProvider & SnapshotCapable {
+	return provider.descriptor.supportsSnapshot;
 }

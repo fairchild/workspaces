@@ -30,6 +30,12 @@ export function ChatPanel({
 	const [streamingMessage, setStreamingMessage] = useState<{
 		agentName: string;
 		content: string;
+		status:
+			| "sending"
+			| "connecting"
+			| "provisioning"
+			| "thinking"
+			| "streaming";
 	} | null>(null);
 	const lastCountRef = useRef(0);
 	const abortRef = useRef<AbortController | null>(null);
@@ -82,7 +88,11 @@ export function ChatPanel({
 			const controller = new AbortController();
 			abortRef.current = controller;
 
-			setStreamingMessage({ agentName: session.agentName, content: "" });
+			setStreamingMessage((prev) => ({
+				agentName: session.agentName,
+				content: "",
+				status: prev?.status === "sending" ? "connecting" : "provisioning",
+			}));
 
 			try {
 				const res = await fetch(session.streamUrl, {
@@ -122,8 +132,19 @@ export function ChatPanel({
 							if (chunk.type === "text") {
 								setStreamingMessage((prev) =>
 									prev
-										? { ...prev, content: prev.content + chunk.content }
+										? {
+												...prev,
+												content: prev.content + chunk.content,
+												status: "streaming",
+											}
 										: null,
+								);
+							} else if (chunk.type === "status") {
+								const s = chunk.content?.includes("Starting")
+									? "provisioning"
+									: "thinking";
+								setStreamingMessage((prev) =>
+									prev ? { ...prev, status: s as typeof prev.status } : null,
 								);
 							} else if (chunk.type === "done" || chunk.type === "error") {
 								streamDone = true;
@@ -149,19 +170,56 @@ export function ChatPanel({
 	const handleSend = useCallback(
 		async (message: string, agentName?: string) => {
 			if (!repo || streamingMessage) return;
-			const res = await fetch("/api/chat/messages", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ repo, message, agentName }),
-			});
-			if (!res.ok) return;
 
-			const data = await res.json();
+			// Optimistic: show message immediately
+			const optimisticEntry: TimelineEntry = {
+				kind: "chat",
+				id: `optimistic-${Date.now()}`,
+				repo,
+				author: "you",
+				authorType: "user",
+				content: message,
+				agentTarget: agentName ?? null,
+				discussionId: null,
+				discussionUrl: null,
+				timestamp: new Date().toISOString(),
+			};
+			setEntries((prev) => [...prev, optimisticEntry]);
+
+			if (agentName) {
+				setStreamingMessage({
+					agentName,
+					content: "",
+					status: "sending",
+				});
+			}
+
+			let data: Record<string, unknown>;
+			try {
+				const res = await fetch("/api/chat/messages", {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ repo, message, agentName }),
+				});
+				if (!res.ok) {
+					setStreamingMessage(null);
+					await fetchTimeline(); // revert optimistic
+					return;
+				}
+				data = await res.json();
+			} catch {
+				setStreamingMessage(null);
+				await fetchTimeline(); // revert optimistic
+				return;
+			}
 
 			if (data.agentSession) {
 				// Agent session — connect to SSE stream
-				await fetchTimeline(); // Show the user message first
-				await connectToAgentStream({ ...data.agentSession, message });
+				await fetchTimeline(); // Replace optimistic with server version
+				await connectToAgentStream({
+					...(data.agentSession as AgentSessionInfo),
+					message,
+				});
 			} else {
 				// Regular message — just refresh
 				await fetchTimeline();
