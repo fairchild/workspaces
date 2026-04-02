@@ -9,6 +9,12 @@ import { StreamingBubble } from "./streaming-bubble";
 
 const POLL_INTERVAL = 5_000;
 
+/** Extract @agent-name from start of message (client-safe, no node:crypto). */
+function parseMention(text: string): string | null {
+	const match = text.match(/^@([a-zA-Z0-9_-]+)/);
+	return match ? match[1] : null;
+}
+
 interface AgentSessionInfo {
 	agentName: string;
 	streamUrl: string;
@@ -222,8 +228,9 @@ export function ChatPanel({
 				});
 			}
 
+			const mentionedAgent = agentName ?? parseMention(message);
 			const parentDiscussionId =
-				agentName && agentThreadRef.current?.agentName === agentName
+				mentionedAgent && agentThreadRef.current?.agentName === mentionedAgent
 					? agentThreadRef.current.threadId
 					: undefined;
 

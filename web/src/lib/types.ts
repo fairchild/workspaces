@@ -216,7 +216,8 @@ export type ComputeBackendId =
 	| "vercel-sandbox"
 	| "daytona"
 	| "github-actions"
-	| "lume";
+	| "lume"
+	| "mock";
 
 export interface AgentSession {
 	id: string;

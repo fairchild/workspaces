@@ -66,6 +66,18 @@ export async function resolvePersona(
 	repo: string,
 	agentName: string,
 ): Promise<AgentPersona | null> {
+	if (process.env.MOCK_AGENT === "1") {
+		return {
+			name: agentName,
+			displayName: agentName
+				.split("-")
+				.map((w) => w[0].toUpperCase() + w.slice(1))
+				.join(" "),
+			role: "assistant",
+			personaPath: `.agents/${agentName}/`,
+			systemPrompt: `You are ${agentName}, a helpful assistant for the ${owner}/${repo} repository.`,
+		};
+	}
 	const personas = await discoverPersonas(token, owner, repo);
 	return personas.find((p) => p.name === agentName) ?? null;
 }
