@@ -26,7 +26,7 @@ function stripQuotes(s: string): string {
  *   result        — final result (ignored; we already streamed the text)
  *   system        — init/status events (ignored)
  */
-function parseStreamJsonLine(line: string): StreamChunk | null {
+export function parseStreamJsonLine(line: string): StreamChunk | null {
 	if (!line.trim()) return null;
 
 	let event: Record<string, unknown>;
