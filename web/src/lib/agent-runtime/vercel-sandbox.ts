@@ -212,7 +212,7 @@ if [ -f /vercel/sandbox/claude-resume.flag ]; then
 elif [ -f /vercel/sandbox/claude-session-id.txt ]; then
   SESSION_ARGS="--session-id $(cat /vercel/sandbox/claude-session-id.txt)"
 fi
-cat /vercel/sandbox/message.txt | claude -p $SESSION_ARGS --system-prompt "$PROMPT" --allowedTools ${tools} --output-format stream-json --verbose
+cat /vercel/sandbox/message.txt | claude -p $SESSION_ARGS --system-prompt "$PROMPT" --allowedTools ${tools}
 `;
 
 			const filesToWrite: Array<{
@@ -272,33 +272,11 @@ cat /vercel/sandbox/message.txt | claude -p $SESSION_ARGS --system-prompt "$PROM
 			detached: true,
 		});
 
-		// Parse stream-json: newline-delimited JSON events from claude CLI.
-		// Buffer partial lines since log chunks may split across JSON boundaries.
 		let hasOutput = false;
-		let buffer = "";
-
 		for await (const log of cmd.logs()) {
-			if (log.stream !== "stdout" || !log.data) continue;
-
-			buffer += log.data;
-			const lines = buffer.split("\n");
-			buffer = lines.pop() ?? "";
-
-			for (const line of lines) {
-				const chunk = parseStreamJsonLine(line);
-				if (chunk) {
-					hasOutput = true;
-					yield chunk;
-				}
-			}
-		}
-
-		// Flush remaining buffer
-		if (buffer.trim()) {
-			const chunk = parseStreamJsonLine(buffer);
-			if (chunk) {
+			if (log.stream === "stdout" && log.data) {
 				hasOutput = true;
-				yield chunk;
+				yield { type: "text", content: log.data };
 			}
 		}
 
