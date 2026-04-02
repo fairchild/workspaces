@@ -43,6 +43,10 @@ export function ChatPanel({
 	const rafRef = useRef<number>(0);
 	const lastCountRef = useRef(0);
 	const abortRef = useRef<AbortController | null>(null);
+	const agentThreadRef = useRef<{
+		agentName: string;
+		threadId: string;
+	} | null>(null);
 
 	const repo = selectedRepo
 		? `${selectedRepo.owner}/${selectedRepo.repo}`
@@ -218,12 +222,22 @@ export function ChatPanel({
 				});
 			}
 
+			const parentDiscussionId =
+				agentName && agentThreadRef.current?.agentName === agentName
+					? agentThreadRef.current.threadId
+					: undefined;
+
 			let data: Record<string, unknown>;
 			try {
 				const res = await fetch("/api/chat/messages", {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({ repo, message, agentName }),
+					body: JSON.stringify({
+						repo,
+						message,
+						agentName,
+						parentDiscussionId,
+					}),
 				});
 				if (!res.ok) {
 					setStreamingMessage(null);
@@ -238,12 +252,13 @@ export function ChatPanel({
 			}
 
 			if (data.agentSession) {
-				// Agent session — connect to SSE stream
+				const session = data.agentSession as AgentSessionInfo;
+				agentThreadRef.current = {
+					agentName: session.agentName,
+					threadId: session.threadId,
+				};
 				await fetchTimeline(); // Replace optimistic with server version
-				await connectToAgentStream({
-					...(data.agentSession as AgentSessionInfo),
-					message,
-				});
+				await connectToAgentStream({ ...session, message });
 			} else {
 				// Regular message — just refresh
 				await fetchTimeline();
