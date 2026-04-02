@@ -17,6 +17,52 @@ function stripQuotes(s: string): string {
 	return s.replace(/^["']|["']$/g, "");
 }
 
+/**
+ * Parse a single line of stream-json output from `claude -p --output-format stream-json --verbose`.
+ *
+ * Event types:
+ *   stream_event  — raw API deltas; we extract text_delta for streaming text
+ *                   and content_block_start for tool_use notifications
+ *   result        — final result (ignored; we already streamed the text)
+ *   system        — init/status events (ignored)
+ */
+function parseStreamJsonLine(line: string): StreamChunk | null {
+	if (!line.trim()) return null;
+
+	let event: Record<string, unknown>;
+	try {
+		event = JSON.parse(line);
+	} catch {
+		// Non-JSON output (e.g., bash error before claude starts)
+		return line.trim() ? { type: "text", content: line } : null;
+	}
+
+	if (event.type === "stream_event") {
+		const inner = event.event as Record<string, unknown> | undefined;
+		if (!inner) return null;
+
+		// Text delta — the main streaming content
+		const delta = inner.delta as Record<string, unknown> | undefined;
+		if (delta?.type === "text_delta" && typeof delta.text === "string") {
+			return { type: "text", content: delta.text };
+		}
+
+		// Tool use start — surface as a status message
+		if (inner.type === "content_block_start") {
+			const block = inner.content_block as Record<string, unknown> | undefined;
+			if (block?.type === "tool_use" && typeof block.name === "string") {
+				return {
+					type: "tool_use",
+					content: block.name,
+					metadata: { tool: block.name },
+				};
+			}
+		}
+	}
+
+	return null;
+}
+
 /** Credentials passed to every Sandbox.create() and Snapshot.list() call. */
 function getCredentials(): {
 	token?: string;
@@ -155,9 +201,18 @@ export class VercelSandboxProvider implements ComputeProvider, SnapshotCapable {
 			// Write prompt, message, and a runner script to files.
 			// The runner script avoids shell injection by reading from files
 			// and passing via env var (not shell interpolation).
+			// On first run, --session-id creates a named session that persists to disk.
+			// On restore (claude-resume.flag exists), --resume loads the prior session,
+			// giving the agent full memory of its previous reasoning and tool calls.
 			const runnerScript = `#!/bin/bash
 PROMPT=$(cat /vercel/sandbox/system-prompt.txt)
-cat /vercel/sandbox/message.txt | claude -p --system-prompt "$PROMPT" --allowedTools ${tools}
+SESSION_ARGS=""
+if [ -f /vercel/sandbox/claude-resume.flag ]; then
+  SESSION_ARGS="--resume $(cat /vercel/sandbox/claude-session-id.txt)"
+elif [ -f /vercel/sandbox/claude-session-id.txt ]; then
+  SESSION_ARGS="--session-id $(cat /vercel/sandbox/claude-session-id.txt)"
+fi
+cat /vercel/sandbox/message.txt | claude -p $SESSION_ARGS --system-prompt "$PROMPT" --allowedTools ${tools} --output-format stream-json --verbose
 `;
 
 			const filesToWrite: Array<{
@@ -182,6 +237,13 @@ cat /vercel/sandbox/message.txt | claude -p --system-prompt "$PROMPT" --allowedT
 				filesToWrite.push({
 					path: "/vercel/sandbox/chat-history.txt",
 					content: Buffer.from(request.chatHistory),
+				});
+			}
+
+			if (request.claudeSessionId) {
+				filesToWrite.push({
+					path: "/vercel/sandbox/claude-session-id.txt",
+					content: Buffer.from(request.claudeSessionId),
 				});
 			}
 
@@ -210,11 +272,33 @@ cat /vercel/sandbox/message.txt | claude -p --system-prompt "$PROMPT" --allowedT
 			detached: true,
 		});
 
+		// Parse stream-json: newline-delimited JSON events from claude CLI.
+		// Buffer partial lines since log chunks may split across JSON boundaries.
 		let hasOutput = false;
+		let buffer = "";
+
 		for await (const log of cmd.logs()) {
-			if (log.stream === "stdout" && log.data) {
+			if (log.stream !== "stdout" || !log.data) continue;
+
+			buffer += log.data;
+			const lines = buffer.split("\n");
+			buffer = lines.pop() ?? "";
+
+			for (const line of lines) {
+				const chunk = parseStreamJsonLine(line);
+				if (chunk) {
+					hasOutput = true;
+					yield chunk;
+				}
+			}
+		}
+
+		// Flush remaining buffer
+		if (buffer.trim()) {
+			const chunk = parseStreamJsonLine(buffer);
+			if (chunk) {
 				hasOutput = true;
-				yield { type: "text", content: log.data };
+				yield chunk;
 			}
 		}
 
@@ -235,7 +319,7 @@ cat /vercel/sandbox/message.txt | claude -p --system-prompt "$PROMPT" --allowedT
 	async sendMessage(
 		instanceId: string,
 		message: string,
-		context?: { chatHistory?: string },
+		context?: { chatHistory?: string; claudeSessionId?: string },
 	): Promise<void> {
 		const sandbox = activeSandboxes.get(instanceId);
 		if (!sandbox) throw new Error(`Sandbox ${instanceId} not found`);
@@ -250,6 +334,13 @@ cat /vercel/sandbox/message.txt | claude -p --system-prompt "$PROMPT" --allowedT
 			files.push({
 				path: "/vercel/sandbox/chat-history.txt",
 				content: Buffer.from(context.chatHistory),
+			});
+		}
+		if (context?.claudeSessionId) {
+			// Signal the runner script to use --resume instead of --session-id
+			files.push({
+				path: "/vercel/sandbox/claude-resume.flag",
+				content: Buffer.from("1"),
 			});
 		}
 		await sandbox.writeFiles(files);

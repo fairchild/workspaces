@@ -47,6 +47,7 @@ export interface AgentSessionsTable {
 	compute_backend: string;
 	compute_instance_id: string | null;
 	snapshot_id: string | null;
+	claude_session_id: string | null;
 	thread_id: string;
 	discussion_id: string | null;
 	status: string;

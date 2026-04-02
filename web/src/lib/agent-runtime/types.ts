@@ -37,6 +37,8 @@ export interface SandboxRequest {
 	contextMessages?: ContextMessage[];
 	/** Pre-formatted full chat history for a searchable file in the sandbox. */
 	chatHistory?: string;
+	/** Claude Code session ID for --session-id flag (enables --resume on follow-ups). */
+	claudeSessionId?: string;
 }
 
 /** Result from creating a compute sandbox. */
@@ -73,7 +75,7 @@ export interface ComputeProvider {
 	sendMessage(
 		instanceId: string,
 		message: string,
-		context?: { chatHistory?: string },
+		context?: { chatHistory?: string; claudeSessionId?: string },
 	): Promise<void>;
 
 	/** Stop and clean up a sandbox. */

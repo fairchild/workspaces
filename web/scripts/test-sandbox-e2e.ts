@@ -268,6 +268,7 @@ async function testSessionPersistence() {
 			computeBackend: "vercel-sandbox",
 			computeInstanceId: null,
 			snapshotId: null,
+			claudeSessionId: null,
 			threadId: "test-thread-1",
 			discussionId: null,
 			status: "starting",

@@ -151,6 +151,7 @@ export class SessionManager {
 							await this.buildConversationContext(params.repo, params.message);
 						await provider.sendMessage(restored.instanceId, enrichedMessage, {
 							chatHistory,
+							claudeSessionId: snapshotted.claudeSessionId ?? undefined,
 						});
 
 						yield { type: "status", content: "Agent is thinking..." };
@@ -205,6 +206,7 @@ export class SessionManager {
 		}
 
 		const sessionId = crypto.randomUUID();
+		const claudeSessionId = crypto.randomUUID();
 		const session: AgentSession = {
 			id: sessionId,
 			repo: params.repo,
@@ -212,6 +214,7 @@ export class SessionManager {
 			computeBackend: provider.descriptor.id,
 			computeInstanceId: null,
 			snapshotId: null,
+			claudeSessionId,
 			threadId,
 			discussionId: params.discussionId ?? null,
 			status: "starting",
@@ -239,6 +242,7 @@ export class SessionManager {
 				tools: "conversational",
 				contextMessages,
 				chatHistory,
+				claudeSessionId,
 			});
 
 			await updateComputeInstance(sessionId, result.instanceId);

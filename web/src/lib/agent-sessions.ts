@@ -24,6 +24,7 @@ async function ensureSessionTable(): Promise<void> {
 		.addColumn("created_at", "text", (c) => c.notNull())
 		.addColumn("last_activity_at", "text", (c) => c.notNull())
 		.addColumn("snapshot_id", "text")
+		.addColumn("claude_session_id", "text")
 		.execute();
 	await db.schema
 		.createIndex("idx_agent_sessions_thread")
@@ -31,14 +32,16 @@ async function ensureSessionTable(): Promise<void> {
 		.on("agent_sessions")
 		.columns(["repo", "agent_name", "thread_id"])
 		.execute();
-	// Migrate: add snapshot_id if table already existed without it
-	try {
-		await db.schema
-			.alterTable("agent_sessions")
-			.addColumn("snapshot_id", "text")
-			.execute();
-	} catch {
-		// Column already exists
+	// Migrate: add columns if table already existed without them
+	for (const col of ["snapshot_id", "claude_session_id"] as const) {
+		try {
+			await db.schema
+				.alterTable("agent_sessions")
+				.addColumn(col, "text")
+				.execute();
+		} catch {
+			// Column already exists
+		}
 	}
 	migrated = true;
 }
@@ -50,6 +53,7 @@ function rowToSession(r: {
 	compute_backend: string;
 	compute_instance_id: string | null;
 	snapshot_id: string | null;
+	claude_session_id: string | null;
 	thread_id: string;
 	discussion_id: string | null;
 	status: string;
@@ -63,6 +67,7 @@ function rowToSession(r: {
 		computeBackend: r.compute_backend as ComputeBackendId,
 		computeInstanceId: r.compute_instance_id,
 		snapshotId: r.snapshot_id,
+		claudeSessionId: r.claude_session_id,
 		threadId: r.thread_id,
 		discussionId: r.discussion_id,
 		status: r.status as AgentSessionStatus,
@@ -83,6 +88,7 @@ export async function createSession(session: AgentSession): Promise<void> {
 			compute_backend: session.computeBackend,
 			compute_instance_id: session.computeInstanceId,
 			snapshot_id: session.snapshotId,
+			claude_session_id: session.claudeSessionId,
 			thread_id: session.threadId,
 			discussion_id: session.discussionId,
 			status: session.status,
