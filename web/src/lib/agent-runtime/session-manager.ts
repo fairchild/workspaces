@@ -88,7 +88,9 @@ export class SessionManager {
 			// Sandbox may be gone after process restart or timeout
 			let resumed = false;
 			try {
-				await provider.sendMessage(existing.computeInstanceId, params.message);
+				await provider.sendMessage(existing.computeInstanceId, params.message, {
+					claudeSessionId: existing.claudeSessionId ?? undefined,
+				});
 				resumed = true;
 			} catch {
 				await updateSessionStatus(existing.id, "completed");
