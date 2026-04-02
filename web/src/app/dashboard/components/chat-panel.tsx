@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import styles from "./chat-panel.module.css";
 import { ComposeBar } from "./compose-bar";
 import { MessageList } from "./message-list";
+import { StreamingBubble } from "./streaming-bubble";
 
 const POLL_INTERVAL = 5_000;
 
@@ -37,6 +38,9 @@ export function ChatPanel({
 			| "thinking"
 			| "streaming";
 	} | null>(null);
+	const streamingRef = useRef(false);
+	const pendingContentRef = useRef("");
+	const rafRef = useRef<number>(0);
 	const lastCountRef = useRef(0);
 	const abortRef = useRef<AbortController | null>(null);
 
@@ -52,7 +56,13 @@ export function ChatPanel({
 			);
 			if (res.ok) {
 				const data: TimelineEntry[] = await res.json();
-				setEntries(data);
+				setEntries((prev) =>
+					prev.length === data.length &&
+					prev[0]?.id === data[0]?.id &&
+					prev[prev.length - 1]?.id === data[data.length - 1]?.id
+						? prev
+						: data,
+				);
 				if (data.length > lastCountRef.current && lastCountRef.current > 0) {
 					onNewMessage?.();
 				}
@@ -75,6 +85,11 @@ export function ChatPanel({
 		return () => clearInterval(id);
 	}, [repo, fetchTimeline]);
 
+	// Sync streaming ref for stable callback access
+	useEffect(() => {
+		streamingRef.current = streamingMessage !== null;
+	}, [streamingMessage]);
+
 	// Clean up active stream on unmount
 	useEffect(() => {
 		return () => {
@@ -88,11 +103,23 @@ export function ChatPanel({
 			const controller = new AbortController();
 			abortRef.current = controller;
 
+			pendingContentRef.current = "";
 			setStreamingMessage((prev) => ({
 				agentName: session.agentName,
 				content: "",
 				status: prev?.status === "sending" ? "connecting" : "provisioning",
 			}));
+
+			const scheduleFlush = () => {
+				if (rafRef.current) return;
+				rafRef.current = requestAnimationFrame(() => {
+					rafRef.current = 0;
+					const content = pendingContentRef.current;
+					setStreamingMessage((prev) =>
+						prev ? { ...prev, content, status: "streaming" } : null,
+					);
+				});
+			};
 
 			try {
 				const res = await fetch(session.streamUrl, {
@@ -130,15 +157,8 @@ export function ChatPanel({
 						try {
 							const chunk = JSON.parse(line.slice(6));
 							if (chunk.type === "text") {
-								setStreamingMessage((prev) =>
-									prev
-										? {
-												...prev,
-												content: prev.content + chunk.content,
-												status: "streaming",
-											}
-										: null,
-								);
+								pendingContentRef.current += chunk.content;
+								scheduleFlush();
 							} else if (chunk.type === "status") {
 								const s = chunk.content?.includes("Starting")
 									? "provisioning"
@@ -158,6 +178,10 @@ export function ChatPanel({
 			} catch (err) {
 				if (err instanceof DOMException && err.name === "AbortError") return;
 			} finally {
+				if (rafRef.current) {
+					cancelAnimationFrame(rafRef.current);
+					rafRef.current = 0;
+				}
 				setStreamingMessage(null);
 				abortRef.current = null;
 				// Refresh timeline to pick up persisted agent response
@@ -169,7 +193,7 @@ export function ChatPanel({
 
 	const handleSend = useCallback(
 		async (message: string, agentName?: string) => {
-			if (!repo || streamingMessage) return;
+			if (!repo || streamingRef.current) return;
 
 			// Optimistic: show message immediately
 			const optimisticEntry: TimelineEntry = {
@@ -225,7 +249,7 @@ export function ChatPanel({
 				await fetchTimeline();
 			}
 		},
-		[repo, fetchTimeline, connectToAgentStream, streamingMessage],
+		[repo, fetchTimeline, connectToAgentStream],
 	);
 
 	if (!selectedRepo) {
@@ -241,11 +265,8 @@ export function ChatPanel({
 
 	return (
 		<div className={styles.panel}>
-			<MessageList
-				entries={entries}
-				loading={loading}
-				streamingMessage={streamingMessage}
-			/>
+			<MessageList entries={entries} loading={loading} />
+			<StreamingBubble message={streamingMessage} />
 			<ComposeBar repo={repo as string} agents={agents} onSend={handleSend} />
 		</div>
 	);

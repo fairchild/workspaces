@@ -1,12 +1,8 @@
 "use client";
 
 import { dayKey } from "@/lib/timeline-utils";
-import type {
-	DispatchMetadata,
-	TimelineEntry,
-	WebhookEvent,
-} from "@/lib/types";
-import { useEffect, useMemo, useRef } from "react";
+import type { TimelineEntry, WebhookEvent } from "@/lib/types";
+import { memo, useEffect, useMemo, useRef } from "react";
 import { DispatchCard, tryParseDispatchMetadata } from "./dispatch-card";
 import { EventGroupRow } from "./event-group-row";
 import styles from "./message-list.module.css";
@@ -51,31 +47,12 @@ function groupEntries(entries: TimelineEntry[]): GroupedEntry[] {
 	return result;
 }
 
-interface StreamingMessage {
-	agentName: string;
-	content: string;
-	status: "sending" | "connecting" | "provisioning" | "thinking" | "streaming";
-}
-
-const STATUS_LABELS: Record<StreamingMessage["status"], string> = {
-	sending: "Sending...",
-	connecting: "Connecting",
-	provisioning: "Starting sandbox...",
-	thinking: "Thinking...",
-	streaming: "",
-};
-
 interface MessageListProps {
 	entries: TimelineEntry[];
 	loading: boolean;
-	streamingMessage?: StreamingMessage | null;
 }
 
-export function MessageList({
-	entries,
-	loading,
-	streamingMessage,
-}: MessageListProps) {
+export function MessageList({ entries, loading }: MessageListProps) {
 	const anchorRef = useRef<HTMLDivElement>(null);
 	const containerRef = useRef<HTMLDivElement>(null);
 	const wasAtBottom = useRef(true);
@@ -91,12 +68,12 @@ export function MessageList({
 		return () => el.removeEventListener("scroll", handleScroll);
 	}, []);
 
-	// biome-ignore lint/correctness/useExhaustiveDependencies: scroll on new entries or streaming updates
+	// biome-ignore lint/correctness/useExhaustiveDependencies: scroll on new entries
 	useEffect(() => {
 		if (wasAtBottom.current) {
 			anchorRef.current?.scrollIntoView({ behavior: "smooth" });
 		}
-	}, [entries.length, streamingMessage?.content.length]);
+	}, [entries.length]);
 
 	const grouped = useMemo(() => groupEntries(entries), [entries]);
 
@@ -151,49 +128,29 @@ export function MessageList({
 								<EventGroupRow events={g.events} />
 							) : g.kind === "event" ? (
 								<StatusCard event={g.entry} />
-							) : g.agentTarget && tryParseDispatchMetadata(g.content) ? (
-								<DispatchCard
-									metadata={
-										tryParseDispatchMetadata(g.content) as DispatchMetadata
-									}
-								/>
 							) : (
-								<ChatMessageRow message={g} />
+								<ChatOrDispatchRow message={g} />
 							)}
 						</div>
 					);
 				})}
-				{streamingMessage && (
-					<div className={`${styles.message} ${styles.messageAgent}`}>
-						<div className={styles.messageHeader}>
-							<span
-								className={`${styles.messageAuthor} ${styles.messageAuthorAgent}`}
-							>
-								{streamingMessage.agentName}
-							</span>
-							<span className={styles.messageTime}>now</span>
-						</div>
-						{streamingMessage.content ? (
-							<span
-								className={`${styles.messageContent} ${styles.streamingContent}`}
-							>
-								{streamingMessage.content}
-							</span>
-						) : (
-							<span className={styles.streamingIndicator}>
-								{STATUS_LABELS[streamingMessage.status] ||
-									`Connecting to @${streamingMessage.agentName}...`}
-							</span>
-						)}
-					</div>
-				)}
 			</div>
 			<div ref={anchorRef} className={styles.anchor} />
 		</div>
 	);
 }
 
-function ChatMessageRow({
+function ChatOrDispatchRow({
+	message,
+}: { message: TimelineEntry & { kind: "chat" } }) {
+	const dispatch = message.agentTarget
+		? tryParseDispatchMetadata(message.content)
+		: null;
+	if (dispatch) return <DispatchCard metadata={dispatch} />;
+	return <ChatMessageRow message={message} />;
+}
+
+const ChatMessageRow = memo(function ChatMessageRow({
 	message,
 }: { message: TimelineEntry & { kind: "chat" } }) {
 	const authorClass =
@@ -228,4 +185,4 @@ function ChatMessageRow({
 			)}
 		</div>
 	);
-}
+});
