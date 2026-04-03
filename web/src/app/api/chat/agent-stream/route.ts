@@ -45,12 +45,24 @@ export async function POST(request: Request): Promise<Response> {
 		);
 	}
 
-	const token = await getGitHubToken(session.user.id);
-	if (!token) {
-		return Response.json({ error: "GitHub token not found" }, { status: 403 });
+	let ghToken: string;
+	let login: string;
+
+	if (process.env.DEV_BYPASS_AUTH === "1") {
+		ghToken = "dev-bypass-token";
+		login = "fairchild";
+	} else {
+		const token = await getGitHubToken(session.user.id);
+		if (!token) {
+			return Response.json(
+				{ error: "GitHub token not found" },
+				{ status: 403 },
+			);
+		}
+		ghToken = token;
+		login = await fetchGitHubLogin(token);
 	}
 
-	const login = await fetchGitHubLogin(token);
 	if (!ALLOWED_AGENT_LOGINS.has(login)) {
 		return Response.json(
 			{ error: "Agent sessions are not yet available for your account" },
@@ -69,7 +81,7 @@ export async function POST(request: Request): Promise<Response> {
 					agentName: body.agentName,
 					message: body.message,
 					userId: session.user.id,
-					githubToken: token,
+					githubToken: ghToken,
 					threadId: body.threadId,
 					discussionId: body.discussionId,
 				})) {

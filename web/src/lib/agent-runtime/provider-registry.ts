@@ -70,11 +70,21 @@ export async function getRegistry(): Promise<ComputeProviderRegistry> {
 			import("./github-actions"),
 		]);
 
-		_registry = new ComputeProviderRegistry([
+		const providers = [
 			new VercelSandboxProvider(),
 			new DaytonaProvider(),
 			new GitHubActionsProvider(),
-		]);
+		];
+
+		if (process.env.MOCK_AGENT === "1") {
+			const { MockComputeProvider } = await import("./mock-provider");
+			_registry = new ComputeProviderRegistry(
+				[...providers, new MockComputeProvider()],
+				"mock",
+			);
+		} else {
+			_registry = new ComputeProviderRegistry(providers);
+		}
 		return _registry;
 	})();
 

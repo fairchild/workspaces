@@ -19,12 +19,18 @@ export async function GET(
 	if (!session)
 		return Response.json({ error: "unauthorized" }, { status: 401 });
 
-	const token = await getGitHubToken(session.user.id);
-	if (!token)
-		return Response.json(
-			{ error: "no_github_token", needsReauth: true },
-			{ status: 403 },
-		);
+	let token: string;
+	if (process.env.DEV_BYPASS_AUTH === "1") {
+		token = "dev-bypass-token";
+	} else {
+		const ghToken = await getGitHubToken(session.user.id);
+		if (!ghToken)
+			return Response.json(
+				{ error: "no_github_token", needsReauth: true },
+				{ status: 403 },
+			);
+		token = ghToken;
+	}
 
 	const { owner, repo } = await params;
 

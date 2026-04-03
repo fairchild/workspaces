@@ -7,7 +7,8 @@ type StreamingStatus =
 	| "connecting"
 	| "provisioning"
 	| "thinking"
-	| "streaming";
+	| "streaming"
+	| "error";
 
 const STATUS_LABELS: Record<StreamingStatus, string> = {
 	sending: "Sending...",
@@ -15,6 +16,7 @@ const STATUS_LABELS: Record<StreamingStatus, string> = {
 	provisioning: "Starting sandbox...",
 	thinking: "Thinking...",
 	streaming: "",
+	error: "",
 };
 
 interface StreamingBubbleProps {
@@ -28,14 +30,20 @@ interface StreamingBubbleProps {
 export function StreamingBubble({ message }: StreamingBubbleProps) {
 	if (!message) return null;
 
+	const isError = message.status === "error";
+
 	return (
-		<div className={styles.bubble}>
+		<div className={`${styles.bubble} ${isError ? styles.error : ""}`}>
 			<div className={styles.header}>
-				<span className={styles.author}>{message.agentName}</span>
+				<span className={isError ? styles.authorError : styles.author}>
+					{message.agentName}
+				</span>
 				<span className={styles.time}>now</span>
 			</div>
 			{message.content ? (
-				<span className={styles.content}>{message.content}</span>
+				<span className={isError ? styles.contentError : styles.content}>
+					{message.content}
+				</span>
 			) : (
 				<span className={styles.indicator}>
 					{STATUS_LABELS[message.status] ||

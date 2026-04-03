@@ -57,9 +57,17 @@ export async function POST(request: Request): Promise<Response> {
 		);
 	}
 
-	const token = await getGitHubToken(session.user.id);
-	if (!token) {
-		return Response.json({ error: "GitHub token not found" }, { status: 403 });
+	let token: string | null;
+	if (process.env.DEV_BYPASS_AUTH === "1") {
+		token = "dev-bypass-token";
+	} else {
+		token = await getGitHubToken(session.user.id);
+		if (!token) {
+			return Response.json(
+				{ error: "GitHub token not found" },
+				{ status: 403 },
+			);
+		}
 	}
 
 	const messageId = crypto.randomUUID();
@@ -84,7 +92,10 @@ export async function POST(request: Request): Promise<Response> {
 
 	// Check if the mention targets a known agent persona (restricted to allowed users).
 	if (agentTarget && agentTarget !== "spaces") {
-		const login = await fetchGitHubLogin(token);
+		const login =
+			process.env.DEV_BYPASS_AUTH === "1"
+				? "fairchild"
+				: await fetchGitHubLogin(token);
 		if (ALLOWED_AGENT_LOGINS.has(login)) {
 			const persona = await resolvePersona(token, owner, repo, agentTarget);
 			if (persona) {

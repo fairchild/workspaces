@@ -41,6 +41,7 @@ export default defineConfig({
 		timeout: 120_000,
 		env: {
 			DEV_BYPASS_AUTH: "1",
+			MOCK_AGENT: "1",
 		},
 	},
 });
