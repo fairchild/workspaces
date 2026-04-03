@@ -5,3 +5,6 @@ export const ALLOWED_AGENT_LOGINS = new Set(
 		.map((s) => s.trim())
 		.filter(Boolean),
 );
+
+/** Agent name to use when no @mention is provided. Null disables default routing. */
+export const DEFAULT_AGENT: string | null = process.env.DEFAULT_AGENT ?? null;

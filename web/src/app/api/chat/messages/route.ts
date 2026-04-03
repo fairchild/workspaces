@@ -1,5 +1,8 @@
 import crypto from "node:crypto";
-import { ALLOWED_AGENT_LOGINS } from "@/lib/agent-runtime/config";
+import {
+	ALLOWED_AGENT_LOGINS,
+	DEFAULT_AGENT,
+} from "@/lib/agent-runtime/config";
 import { resolvePersona } from "@/lib/agent-runtime/persona-loader";
 import { getSession } from "@/lib/auth-server";
 import { getMixedTimeline, pushChatMessage } from "@/lib/chat";
@@ -75,11 +78,12 @@ export async function POST(request: Request): Promise<Response> {
 	let discussionId: string | null = null;
 	let discussionUrl: string | null = null;
 
-	const agentTarget = body.agentName ?? parseAgentMention(body.message);
+	const explicitTarget = body.agentName ?? parseAgentMention(body.message);
+	const agentTarget = explicitTarget ?? DEFAULT_AGENT;
 
-	// Bot commands: @spaces status, @spaces pipeline, @<agent> status
+	// Bot commands only for explicit @mentions (not default agent fallback)
 	const botResponse = await handleBotCommand({
-		target: agentTarget,
+		target: explicitTarget,
 		message: body.message,
 		repo: body.repo,
 		author: session.user.name ?? session.user.email ?? "you",
@@ -125,8 +129,10 @@ export async function POST(request: Request): Promise<Response> {
 		}
 	}
 
-	const title = agentTarget
-		? `@${agentTarget}: ${body.message.slice(0, 100)}`
+	// Use explicit target (not default fallback) for Discussion titles
+	const effectiveTarget = explicitTarget;
+	const title = effectiveTarget
+		? `@${effectiveTarget}: ${body.message.slice(0, 100)}`
 		: body.message.slice(0, 100);
 
 	try {
@@ -160,7 +166,7 @@ export async function POST(request: Request): Promise<Response> {
 		author: session.user.name ?? session.user.email ?? "you",
 		authorType: "user",
 		content: body.message,
-		agentTarget: agentTarget ?? null,
+		agentTarget: effectiveTarget ?? null,
 		discussionId,
 		discussionUrl,
 		timestamp,

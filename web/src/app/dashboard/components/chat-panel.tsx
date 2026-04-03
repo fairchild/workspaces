@@ -87,6 +87,7 @@ export function ChatPanel({
 	useEffect(() => {
 		setEntries([]);
 		lastCountRef.current = 0;
+		agentThreadRef.current = null;
 		if (!repo) return;
 
 		setLoading(true);
@@ -248,10 +249,12 @@ export function ChatPanel({
 				});
 			}
 
+			// Reuse thread if same agent mentioned, or if no mention (default agent follow-up)
 			const mentionedAgent = agentName ?? parseMention(message);
+			const thread = agentThreadRef.current;
 			const parentDiscussionId =
-				mentionedAgent && agentThreadRef.current?.agentName === mentionedAgent
-					? agentThreadRef.current.threadId
+				thread && (mentionedAgent === thread.agentName || !mentionedAgent)
+					? thread.threadId
 					: undefined;
 
 			let data: Record<string, unknown>;

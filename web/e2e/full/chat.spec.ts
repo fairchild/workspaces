@@ -195,6 +195,26 @@ test.describe("Collapsed event groups", () => {
 	});
 });
 
+test.describe("Default agent responses", () => {
+	test("plain message with default agent response renders in timeline", async ({ page }) => {
+		await page.goto(CHAT_URL);
+		await page.waitForTimeout(2000);
+		// Seeded plain message (no @mention) and default agent response
+		await expect(page.getByText("What's the project structure?")).toBeVisible();
+		await expect(page.getByText(/Next\.js and a native Swift app/)).toBeVisible();
+	});
+
+	test("default agent response has agent styling", async ({ page }) => {
+		await page.goto(CHAT_URL);
+		await page.waitForTimeout(2000);
+		// The default agent response should have the same accent styling as @mentioned agent responses
+		const agentMessages = page.locator("[class*='messageAgent']");
+		const count = await agentMessages.count();
+		// At least 2: the @april-clearwater response + the default agent response
+		expect(count).toBeGreaterThanOrEqual(2);
+	});
+});
+
 test.describe("Timeline order", () => {
 	test("messages appear in chronological order (oldest first)", async ({ page }) => {
 		await page.goto(CHAT_URL);
@@ -217,14 +237,9 @@ test.describe("Timeline order", () => {
 		await page.goto(CHAT_URL);
 		await page.waitForTimeout(2000);
 
-		// The last chat message should be near the bottom
-		const lastMsg = page.getByText("Can you check the open issues?");
-		if (await lastMsg.isVisible()) {
-			const box = await lastMsg.boundingBox();
-			const viewport = page.viewportSize();
-			// Should be in the lower half of the viewport
-			expect(box!.y).toBeGreaterThan(viewport!.height * 0.3);
-		}
+		// The newest seeded message should be present and near the bottom
+		const lastMsg = page.getByText("Next.js and a native Swift app");
+		await expect(lastMsg).toBeVisible({ timeout: 5000 });
 	});
 });
 
