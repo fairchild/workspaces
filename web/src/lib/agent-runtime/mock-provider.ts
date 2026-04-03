@@ -14,6 +14,9 @@ let counter = 0;
 /** Active mock instances: instanceId → stored message. */
 const instances = new Map<string, string>();
 
+/** Instances that were created via restoreSnapshot. */
+const restoredInstances = new Set<string>();
+
 /** Snapshot store: snapshotId → message at time of snapshot. */
 const snapshots = new Map<string, string>();
 
@@ -38,9 +41,10 @@ export class MockComputeProvider implements ComputeProvider, SnapshotCapable {
 
 	async *streamOutput(instanceId: string): AsyncGenerator<StreamChunk> {
 		const message = instances.get(instanceId) ?? "";
+		const prefix = restoredInstances.has(instanceId) ? "[restored] " : "";
 		yield {
 			type: "text",
-			content: `Mock agent response. You said: ${message}`,
+			content: `${prefix}Mock agent response. You said: ${message}`,
 		};
 		yield { type: "done", content: "" };
 	}
@@ -62,9 +66,10 @@ export class MockComputeProvider implements ComputeProvider, SnapshotCapable {
 	}
 
 	async restoreSnapshot(snapshotId: string): Promise<SandboxResult> {
-		const instanceId = `mock-${counter++}`;
+		const instanceId = `mock-restored-${counter++}`;
 		const message = snapshots.get(snapshotId) ?? "";
 		instances.set(instanceId, message);
+		restoredInstances.add(instanceId);
 		return { instanceId, status: "ready" };
 	}
 }

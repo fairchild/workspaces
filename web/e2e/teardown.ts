@@ -32,4 +32,15 @@ export default async function globalTeardown() {
 	for (const id of CHAT_IDS) {
 		await db.execute({ sql: "DELETE FROM chat_messages WHERE id = ?", args: [id] });
 	}
+
+	// Clean up agent test data created during E2E runs
+	await db.execute(
+		"DELETE FROM chat_messages WHERE content LIKE '%Mock agent response%'",
+	);
+	await db.execute(
+		"DELETE FROM chat_messages WHERE content LIKE '%@april-clearwater%' AND (content LIKE '%e2e-%' OR content LIKE '%persist-%' OR content LIKE '%first message%' OR content LIKE '%second message%')",
+	);
+	await db.execute(
+		"DELETE FROM agent_sessions WHERE compute_backend = 'mock'",
+	);
 }

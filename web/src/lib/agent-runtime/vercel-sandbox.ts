@@ -204,13 +204,15 @@ export class VercelSandboxProvider implements ComputeProvider, SnapshotCapable {
 			// On first run, --session-id creates a named session that persists to disk.
 			// On restore (claude-resume.flag exists), --resume loads the prior session,
 			// giving the agent full memory of its previous reasoning and tool calls.
-			// Session args (--session-id / --resume) are written but disabled until
-			// the base snapshot's Claude Code CLI version is verified to support them.
-			// The session-id file and resume flag are still written to the sandbox
-			// so they'll be ready when re-enabled.
 			const runnerScript = `#!/bin/bash
 PROMPT=$(cat /vercel/sandbox/system-prompt.txt)
-cat /vercel/sandbox/message.txt | claude -p --system-prompt "$PROMPT" --allowedTools ${tools}
+SESSION_ARGS=""
+if [ -f /vercel/sandbox/claude-resume.flag ]; then
+  SESSION_ARGS="--resume $(cat /vercel/sandbox/claude-session-id.txt)"
+elif [ -f /vercel/sandbox/claude-session-id.txt ]; then
+  SESSION_ARGS="--session-id $(cat /vercel/sandbox/claude-session-id.txt)"
+fi
+cat /vercel/sandbox/message.txt | claude -p $SESSION_ARGS --system-prompt "$PROMPT" --allowedTools ${tools}
 `;
 
 			const filesToWrite: Array<{

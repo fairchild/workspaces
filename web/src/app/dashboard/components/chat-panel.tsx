@@ -42,7 +42,8 @@ export function ChatPanel({
 			| "connecting"
 			| "provisioning"
 			| "thinking"
-			| "streaming";
+			| "streaming"
+			| "error";
 	} | null>(null);
 	const streamingRef = useRef(false);
 	const pendingContentRef = useRef("");
@@ -176,7 +177,19 @@ export function ChatPanel({
 								setStreamingMessage((prev) =>
 									prev ? { ...prev, status: s as typeof prev.status } : null,
 								);
-							} else if (chunk.type === "done" || chunk.type === "error") {
+							} else if (chunk.type === "error") {
+								setStreamingMessage((prev) =>
+									prev
+										? {
+												...prev,
+												content: chunk.content || "Agent session failed",
+												status: "error",
+											}
+										: null,
+								);
+								streamDone = true;
+								break;
+							} else if (chunk.type === "done") {
 								streamDone = true;
 								break;
 							}
@@ -192,7 +205,14 @@ export function ChatPanel({
 					cancelAnimationFrame(rafRef.current);
 					rafRef.current = 0;
 				}
-				setStreamingMessage(null);
+				// Keep error visible briefly so the user can read it
+				setStreamingMessage((prev) => {
+					if (prev?.status === "error") {
+						setTimeout(() => setStreamingMessage(null), 4000);
+						return prev;
+					}
+					return null;
+				});
 				abortRef.current = null;
 				// Refresh timeline to pick up persisted agent response
 				await fetchTimeline();

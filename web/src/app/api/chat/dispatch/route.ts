@@ -45,9 +45,18 @@ export async function POST(request: Request): Promise<Response> {
 		);
 	}
 
-	const token = await getGitHubToken(session.user.id);
-	if (!token) {
-		return Response.json({ error: "GitHub token not found" }, { status: 403 });
+	let token: string;
+	if (process.env.DEV_BYPASS_AUTH === "1") {
+		token = "dev-bypass-token";
+	} else {
+		const ghToken = await getGitHubToken(session.user.id);
+		if (!ghToken) {
+			return Response.json(
+				{ error: "GitHub token not found" },
+				{ status: 403 },
+			);
+		}
+		token = ghToken;
 	}
 
 	const taskId = crypto.randomUUID().slice(0, 8);

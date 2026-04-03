@@ -64,6 +64,49 @@ test.describe("Agent chat with mock provider", () => {
 		expect(secondBody.threadId).toBe(firstBody.threadId);
 	});
 
+	test("second message restores from snapshot (same session)", async ({
+		page,
+	}) => {
+		await page.goto(CHAT_URL);
+		await page.waitForLoadState("networkidle");
+
+		const input = page.getByPlaceholder(
+			"Type a message or @mention an agent",
+		);
+		await expect(input).toBeVisible();
+
+		// First message — creates a fresh session, gets snapshotted after response
+		const unique = `snap-${Date.now()}`;
+		await input.fill(`@april-clearwater first-${unique}`);
+		await input.press("Enter");
+
+		// Wait for the first mock response containing our unique token
+		// nth(1) = second match: first is the user message, second is the agent echo
+		await expect(
+			page.getByText(`first-${unique}`, { exact: false }).nth(1),
+		).toBeVisible({ timeout: 30_000 });
+
+		// First response must NOT be restored (fresh session)
+		const firstResponseText = await page
+			.getByText(`first-${unique}`, { exact: false })
+			.nth(1)
+			.textContent();
+		expect(firstResponseText).not.toContain("[restored]");
+
+		// Second message — session manager finds the snapshotted session and restores it
+		await input.fill(`@april-clearwater second-${unique}`);
+		await input.press("Enter");
+
+		// The restored mock response includes "[restored]" prefix and our unique token
+		// in the enriched message. Use a locator scoped to our unique token to avoid
+		// matching responses from parallel tests.
+		const restoredLocator = page.locator("span", {
+			hasText: `second-${unique}`,
+		}).filter({ hasText: "[restored]" });
+
+		await expect(restoredLocator.first()).toBeVisible({ timeout: 30_000 });
+	});
+
 	test("agent response persists in timeline after page reload", async ({
 		page,
 	}) => {

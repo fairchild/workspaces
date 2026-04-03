@@ -38,6 +38,26 @@
 	word-break: break-word;
 }
 
+.error {
+	border-left-color: var(--error, #e53e3e);
+}
+
+.authorError {
+	font-family: var(--font-mono), ui-monospace, monospace;
+	font-size: 0.6875rem;
+	font-weight: 600;
+	color: var(--error, #e53e3e);
+}
+
+.contentError {
+	font-family: var(--font-mono), ui-monospace, monospace;
+	font-size: 0.75rem;
+	color: var(--error, #e53e3e);
+	line-height: 1.5;
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+
 .indicator {
 	color: var(--text-tertiary);
 	animation: pulse 1.5s ease-in-out infinite;
