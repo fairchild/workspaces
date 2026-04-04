@@ -27,6 +27,8 @@ const CHAT_IDS = [
 	"e2e-chat-2",
 	"e2e-chat-3",
 	"e2e-chat-4",
+	"e2e-chat-5",
+	"e2e-chat-6",
 ];
 
 function minutesAgo(day: number, minutes: number): string {
@@ -116,6 +118,9 @@ export default async function globalSetup() {
 		{ id: CHAT_IDS[2], author: "april-clearwater", authorType: "agent", content: "Workspaces is a terminal-first workspace manager for AI coding sessions on macOS.", ts: minutesAgo(0, 14) },
 		// Today: another user message after the second event group
 		{ id: CHAT_IDS[3], author: "Dev User", authorType: "user", content: "Thanks! Can you check the open issues?", ts: minutesAgo(0, 3) },
+		// Default agent interaction: plain message (no @mention) routed to default agent
+		{ id: CHAT_IDS[4], author: "Dev User", authorType: "user", content: "What's the project structure?", ts: minutesAgo(0, 2) },
+		{ id: CHAT_IDS[5], author: "April Clearwater", authorType: "agent", content: "The project has a web/ directory with Next.js and a native Swift app.", ts: minutesAgo(0, 1) },
 	];
 
 	for (const m of messages) {
