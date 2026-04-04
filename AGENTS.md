@@ -185,6 +185,7 @@ mise run evidence -- --pr <N> --name <slug>  # Evidence
 | Evidence guide | docs/development/evidence.md | - |
 | Lume runner setup | docs/development/lume-runner-setup.md | - |
 | Lume daemon reliability | docs/development/lume-integration.md § "Daemon Reliability" | - |
+| Web architecture | web/docs/architecture.md | - |
 | Roadmap/planning | backlog/ROADMAP.md | - |
 | Deferred work items | backlog/*.md | - |
 | Prototypes | prototypes/README.md | - |
@@ -218,8 +219,15 @@ mise run evidence -- --pr <N> --name <slug>  # Evidence
 | Webhook event model | Sources/WorkspaceManagerCore/Models/WebhookEvent.swift |
 | Cloudflare Worker (webhooks) | infra/cloudflare-webhook-relay/ |
 | Cloudflare Worker (evidence) | infra/cloudflare-evidence-store/ |
+| Cloudflare Worker (terminal proxy) | infra/terminalshare-proxy/ |
 | Evidence upload script | scripts/upload-evidence.py |
 | Tests | Tests/WorkspaceManagerTests/ |
+| Web dashboard | web/src/app/dashboard/ |
+| Web agent runtime | web/src/lib/agent-runtime/ |
+| Web compute providers | web/src/lib/agent-runtime/vercel-sandbox.ts, provider-registry.ts |
+| Web terminal panel | web/src/app/dashboard/components/terminal-panel.tsx |
+| Web terminal API | web/src/app/api/terminal/ |
+| Web architecture doc | web/docs/architecture.md |
 
 ## Key Patterns
 
@@ -262,11 +270,26 @@ Tests use **Swift Testing** (`@Suite`, `@Test`, `#expect`), not XCTest. Test beh
 
 ## Tech Stack
 
+### macOS App
 - **UI**: SwiftUI + AppKit hybrid
 - **Terminal**: GhosttyKit (`libghostty`) binary target
 - **Persistence**: SwiftData
 - **Target**: macOS 14.0+
 - **Distribution**: Direct (non-sandboxed, App Store sandbox blocks shell execution)
+
+### Web Dashboard (`web/`)
+- **Framework**: Next.js 15 (App Router), deployed to Vercel
+- **Auth**: Better Auth + GitHub OAuth
+- **Database**: LibSQL + Kysely
+- **Terminal**: ghostty-web (WASM-compiled Ghostty)
+- **Agent runtime**: Multi-provider (Vercel Sandbox, Cloudflare Sandbox, Daytona, GitHub Actions)
+- **Styling**: CSS Modules + CSS custom properties (no Tailwind)
+- **Tests**: Vitest (unit), Playwright (E2E with video)
+
+### Infrastructure
+- **Webhook relay**: Cloudflare Worker + Durable Object (`infra/cloudflare-webhook-relay/`)
+- **Evidence store**: Cloudflare Worker + R2 (`infra/cloudflare-evidence-store/`)
+- **Terminal proxy**: Cloudflare Worker + Durable Object (`infra/terminalshare-proxy/`)
 
 ## Multi-Agent Coordination
 
