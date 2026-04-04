@@ -188,6 +188,24 @@ export async function claimSnapshotSession(id: string): Promise<boolean> {
 	return Number(result[0]?.numUpdatedRows ?? 0) > 0;
 }
 
+/** Find the most recent active or snapshotted session for a repo (any agent). */
+export async function getActiveSessionForRepo(
+	repo: string,
+): Promise<AgentSession | null> {
+	await ensureSessionTable();
+	const db = getDb();
+	const row = await db
+		.selectFrom("agent_sessions")
+		.selectAll()
+		.where("repo", "=", repo)
+		.where("status", "in", ["active", "streaming", "snapshotted"])
+		.where("compute_instance_id", "is not", null)
+		.orderBy("last_activity_at", "desc")
+		.limit(1)
+		.executeTakeFirst();
+	return row ? rowToSession(row) : null;
+}
+
 /** Find the most recent snapshotted session for a thread (for restore). */
 export async function getSnapshotSessionForThread(
 	repo: string,

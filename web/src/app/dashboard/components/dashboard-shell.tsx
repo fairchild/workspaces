@@ -8,16 +8,20 @@ import { ActivityFeed } from "./activity-feed";
 import { ChatPanel } from "./chat-panel";
 import { MainPanel } from "./main-panel";
 import { Sidebar } from "./sidebar";
+import { TerminalPanel } from "./terminal-panel";
 
-type TabId = "dashboard" | "chat";
+type TabId = "dashboard" | "chat" | "terminal";
 
 const TABS: { id: TabId; label: string }[] = [
 	{ id: "dashboard", label: "Dashboard" },
 	{ id: "chat", label: "Chat" },
+	{ id: "terminal", label: "Terminal" },
 ];
 
+const VALID_TABS = new Set<string>(TABS.map((t) => t.id));
+
 function isValidTab(value: string | undefined): value is TabId {
-	return value === "dashboard" || value === "chat";
+	return !!value && VALID_TABS.has(value);
 }
 
 interface DashboardShellProps {
@@ -75,6 +79,10 @@ export function DashboardShell({
 			if (e.metaKey && e.key === "2") {
 				e.preventDefault();
 				setTab("chat");
+			}
+			if (e.metaKey && e.key === "3") {
+				e.preventDefault();
+				setTab("terminal");
 			}
 		};
 		window.addEventListener("keydown", handleKeyDown);
@@ -198,12 +206,14 @@ export function DashboardShell({
 						loading={loading}
 						error={error}
 					/>
-				) : (
+				) : activeTab === "chat" ? (
 					<ChatPanel
 						selectedRepo={selectedRepo}
 						agents={agentData?.agents ?? []}
 						onNewMessage={handleNewChatMessage}
 					/>
+				) : (
+					<TerminalPanel selectedRepo={selectedRepo} />
 				)}
 			</main>
 			<aside className={styles.right}>
