@@ -4,6 +4,32 @@ import { getUserRepos } from "@/lib/repos";
 
 export const dynamic = "force-dynamic";
 
+/**
+ * Resolve the terminal WebSocket URL for a sandbox session.
+ * - Vercel sandbox: direct connection to ttyd on sandbox.domain(7681)
+ * - Cloudflare sandbox: WebSocket via TerminalShare Worker
+ */
+async function resolveTerminalUrl(
+	computeBackend: string,
+	instanceId: string,
+): Promise<string | undefined> {
+	if (computeBackend === "cloudflare-sandbox") {
+		const { getTerminalUrl } = await import(
+			"@/lib/agent-runtime/cloudflare-sandbox"
+		);
+		return getTerminalUrl(instanceId) ?? undefined;
+	}
+
+	if (computeBackend === "vercel-sandbox") {
+		const { getTerminalUrl } = await import(
+			"@/lib/agent-runtime/vercel-sandbox"
+		);
+		return getTerminalUrl(instanceId) ?? undefined;
+	}
+
+	return undefined;
+}
+
 export async function GET(request: Request): Promise<Response> {
 	const session = await getSession();
 	if (!session?.user) {
@@ -29,9 +55,16 @@ export async function GET(request: Request): Promise<Response> {
 		return Response.json({ connected: false });
 	}
 
+	const terminalUrl = await resolveTerminalUrl(
+		agentSession.computeBackend,
+		agentSession.computeInstanceId,
+	);
+
 	return Response.json({
 		connected: true,
 		sandboxId: agentSession.computeInstanceId,
 		agentName: agentSession.agentName,
+		provider: agentSession.computeBackend,
+		terminalUrl,
 	});
 }

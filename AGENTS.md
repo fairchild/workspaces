@@ -158,6 +158,26 @@ mise run test              # Test
 mise run evidence -- --pr <N> --name <slug>  # Evidence
 ```
 
+### Web dashboard tasks (`web/.mise.toml`)
+
+**Use these instead of raw compound commands.** They are auto-allowed via `Bash(mise run web:*)` and guarded by a hook that blocks execution if `.mise.toml` has uncommitted changes.
+
+```bash
+mise run web:check                          # typecheck + lint + unit tests
+mise run web:dev                            # seed DB + auth bypass + start dev server
+mise run web:e2e                            # Playwright E2E (fast + full)
+mise run web:e2e:demo                       # Playwright demo with video recording
+mise run web:evidence -- --pr <N> --name <slug>  # screenshot capture + evidence upload
+mise run web:deps -- <pkg>                  # pnpm add + auto-fix package.json formatting
+mise run web:deps:remove -- <pkg>           # pnpm remove + auto-fix formatting
+```
+
+**Anti-patterns to avoid** (use the mise tasks instead):
+- `pnpm typecheck && pnpm lint && pnpm test` → `mise run web:check`
+- `pnpm add <pkg>` then `pnpm biome check --write package.json` → `mise run web:deps -- <pkg>`
+- Manual DB seeding + `DEV_BYPASS_AUTH=1 pnpm dev` → `mise run web:dev`
+- Ad-hoc Playwright screenshot scripts → `mise run web:evidence -- --pr <N>`
+
 ## Python Script Preference
 
 - Prefer single-file UV scripts for new standalone Python utilities.

@@ -117,6 +117,16 @@ async function resolveBaseSnapshot(): Promise<string> {
 		sudo: true,
 	});
 
+	// Install ttyd for WebSocket terminal access
+	await sandbox.runCommand({
+		cmd: "bash",
+		args: [
+			"-c",
+			"curl -sL https://github.com/tsl0922/ttyd/releases/latest/download/ttyd.x86_64 -o /usr/local/bin/ttyd && chmod +x /usr/local/bin/ttyd",
+		],
+		sudo: true,
+	});
+
 	const snapshot = await sandbox.snapshot({ expiration: ms("30d") });
 	return snapshot.snapshotId;
 }
@@ -166,6 +176,7 @@ export class VercelSandboxProvider implements ComputeProvider, SnapshotCapable {
 			source: { type: "snapshot", snapshotId: baseSnapshotId },
 			timeout: request.readOnly ? ms("10m") : ms("30m"),
 			resources: { vcpus: 2 },
+			ports: [7681],
 			env: {
 				ANTHROPIC_API_KEY: stripQuotes(apiKey),
 				...request.envVars,
@@ -248,6 +259,14 @@ cat /vercel/sandbox/message.txt | claude -p $SESSION_ARGS --system-prompt "$PROM
 			}
 
 			await sandbox.writeFiles(filesToWrite);
+
+			// Start ttyd for WebSocket terminal access on port 7681
+			await sandbox.runCommand({
+				cmd: "ttyd",
+				args: ["-W", "-p", "7681", "bash"],
+				cwd: "/vercel/sandbox/repo",
+				detached: true,
+			});
 
 			activeSandboxes.set(instanceId, sandbox);
 			return { instanceId, status: "ready" };
@@ -350,14 +369,34 @@ cat /vercel/sandbox/message.txt | claude -p $SESSION_ARGS --system-prompt "$PROM
 			source: { type: "snapshot", snapshotId },
 			timeout: ms("10m"),
 			resources: { vcpus: 2 },
+			ports: [7681],
 			env: {
 				ANTHROPIC_API_KEY: stripQuotes(process.env.ANTHROPIC_API_KEY ?? ""),
 			},
 			networkPolicy: { allow: ALLOWED_DOMAINS },
 		});
 
+		// Restart ttyd for terminal access after restore
+		await sandbox.runCommand({
+			cmd: "ttyd",
+			args: ["-W", "-p", "7681", "bash"],
+			cwd: "/vercel/sandbox/repo",
+			detached: true,
+		});
+
 		const instanceId = sandbox.sandboxId;
 		activeSandboxes.set(instanceId, sandbox);
 		return { instanceId, status: "ready" };
+	}
+}
+
+/** Get the public terminal WebSocket URL for a Vercel sandbox. */
+export function getTerminalUrl(instanceId: string): string | null {
+	const sandbox = activeSandboxes.get(instanceId);
+	if (!sandbox) return null;
+	try {
+		return sandbox.domain(7681);
+	} catch {
+		return null;
 	}
 }
