@@ -3,6 +3,8 @@ import Foundation
 import WorkspaceManagerCore
 
 enum DiagnosticReportExporter {
+    static let recentLogsPredicate =
+        "subsystem == \"com.cloudcompute.workspaces\" OR process == \"WorkspaceManager\" OR eventMessage CONTAINS \"[Perf]\""
 
     struct Report: Codable {
         let schemaVersion: Int
@@ -128,7 +130,8 @@ enum DiagnosticReportExporter {
             "/usr/bin/log",
             [
                 "show", "--last", "5m",
-                "--predicate", "subsystem == \"com.cloudcompute.workspaces\"",
+                "--predicate",
+                recentLogsPredicate,
                 "--style", "compact",
             ]
         )

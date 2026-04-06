@@ -13,6 +13,7 @@ final class GhosttySurfaceView: NSView {
     private let onProcessExit: (() -> Void)?
 
     private var terminalConfig: GhosttyTerminalConfig
+    private let readinessDiagnostics: TerminalReadinessDiagnostics
     var eventMonitor: Any?
     var keyTextAccumulator: [String]?
     var markedText = NSMutableAttributedString()
@@ -31,6 +32,10 @@ final class GhosttySurfaceView: NSView {
         self.workingDirectory = workingDirectory
         self.onProcessExit = onProcessExit
         self.terminalConfig = GhosttyTerminalConfig(workingDirectory: workingDirectory)
+        self.readinessDiagnostics = TerminalReadinessDiagnostics(
+            workingDirectoryName: workingDirectory.lastPathComponent,
+            shellProfileMode: terminalConfig.shellProfileModeLabel
+        )
         super.init(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
         self.wantsLayer = true
 
@@ -41,6 +46,10 @@ final class GhosttySurfaceView: NSView {
         self.workingDirectory = FileManager.default.temporaryDirectory
         self.onProcessExit = onProcessExit
         self.terminalConfig = GhosttyTerminalConfig(customCommand: customCommand)
+        self.readinessDiagnostics = TerminalReadinessDiagnostics(
+            workingDirectoryName: workingDirectory.lastPathComponent,
+            shellProfileMode: terminalConfig.shellProfileModeLabel
+        )
         super.init(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
         self.wantsLayer = true
 
@@ -140,10 +149,14 @@ final class GhosttySurfaceView: NSView {
 
     func updateTerminalTitle(_ title: String) {
         terminalTitle = title
+        guard !title.isEmpty else { return }
+        readinessDiagnostics.observeShellSignal(.setTitle)
     }
 
     func updateWorkingDirectory(_ path: String?) {
         currentWorkingDirectory = path
+        guard let path, !path.isEmpty else { return }
+        readinessDiagnostics.observeShellSignal(.pwd)
     }
 
     func runtimeDidRequestClose(processAlive: Bool) {
@@ -180,9 +193,12 @@ final class GhosttySurfaceView: NSView {
     private func createSurfaceIfNeeded() {
         guard surface == nil else { return }
 
+        readinessDiagnostics.markSurfaceCreateStarted()
+
         GhosttyAppManager.shared.initializeIfNeeded()
         guard let app = GhosttyAppManager.shared.app else {
             NSLog("[GhosttySurfaceView] Ghostty app is not initialized")
+            readinessDiagnostics.markSurfaceCreateFailed(reason: "ghostty_app_not_initialized")
             return
         }
 
@@ -192,12 +208,14 @@ final class GhosttySurfaceView: NSView {
 
         guard let createdSurface else {
             NSLog("[GhosttySurfaceView] ghostty_surface_new failed")
+            readinessDiagnostics.markSurfaceCreateFailed(reason: "ghostty_surface_new_failed")
             return
         }
 
         surface = createdSurface
         updateScaleAndSize()
         applySystemColorSchemeIfNeeded(force: true)
+        readinessDiagnostics.markSurfaceCreateSucceeded()
     }
 
     private func updateScaleAndSize() {
