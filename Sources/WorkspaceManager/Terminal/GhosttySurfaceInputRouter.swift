@@ -195,7 +195,36 @@ enum GhosttySurfaceInputRouter {
     }
 
     static func keyDown(in view: GhosttySurfaceView, event: NSEvent) {
+        let handlerStartedAt = ProcessInfo.processInfo.systemUptime
+        let eventAgeMs = max(0, (handlerStartedAt - event.timestamp) * 1000)
+        var outcome = "handled"
+        var textMode = "direct"
+        var hadMarkedText = false
+        var surfaceMissing = false
+
+        defer {
+            let handlerDurationMs = max(0, (ProcessInfo.processInfo.systemUptime - handlerStartedAt) * 1000)
+            InvestigationDiagnostics.emitInput(
+                phase: "key_down_handled",
+                fields: [
+                    "chars": event.charactersIgnoringModifiers ?? "",
+                    "event_age_ms": String(format: "%.2f", eventAgeMs),
+                    "focused": view.focused ? "true" : "false",
+                    "handler_duration_ms": String(format: "%.2f", handlerDurationMs),
+                    "key_code": String(event.keyCode),
+                    "marked_text": hadMarkedText ? "true" : "false",
+                    "outcome": outcome,
+                    "repeat": event.isARepeat ? "true" : "false",
+                    "surface_missing": surfaceMissing ? "true" : "false",
+                    "text_mode": textMode,
+                    "window_key": view.window?.isKeyWindow == true ? "true" : "false",
+                ]
+            )
+        }
+
         guard let surface = view.surface else {
+            outcome = "surface_missing"
+            surfaceMissing = true
             view.interpretKeyEvents([event])
             return
         }
@@ -224,13 +253,14 @@ enum GhosttySurfaceInputRouter {
         view.keyTextAccumulator = []
         defer { view.keyTextAccumulator = nil }
 
-        let hadMarkedText = view.markedText.length > 0
+        hadMarkedText = view.markedText.length > 0
         view.interpretKeyEvents([translationEvent])
         view.syncPreedit(clearIfNeeded: hadMarkedText)
 
         let action: ghostty_input_action_e = event.isARepeat ? GHOSTTY_ACTION_REPEAT : GHOSTTY_ACTION_PRESS
 
         if let keyTextAccumulator = view.keyTextAccumulator, !keyTextAccumulator.isEmpty {
+            textMode = "accumulator"
             for text in keyTextAccumulator {
                 _ = view.keyAction(action, event: event, translationEvent: translationEvent, text: text)
             }

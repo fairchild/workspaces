@@ -8,10 +8,28 @@ import Foundation
 import GhosttyKit
 
 struct GhosttyTerminalConfig {
+    private enum ShellProfileMode: String {
+        case login
+        case clean
+
+        static func resolve(from environment: [String: String]) -> Self {
+            let rawValue = environment["WORKSPACES_SHELL_PROFILE_MODE"]?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+            switch rawValue {
+            case "clean":
+                return .clean
+            default:
+                return .login
+            }
+        }
+    }
+
     let fontSize: Float32
     let workingDirectory: String
     let command: String?
     let environmentVariables: [String: String]
+    let shellProfileModeLabel: String
 
     init(
         workingDirectory: URL,
@@ -39,6 +57,7 @@ struct GhosttyTerminalConfig {
         }
 
         let shell = environment["SHELL"] ?? "/bin/zsh"
+        let shellProfileMode = ShellProfileMode.resolve(from: environment)
         let mode = terminalMultiplexingMode ?? TerminalMultiplexingMode.resolve()
         let tmuxAvailable =
             isTmuxAvailableOverride
@@ -52,10 +71,11 @@ struct GhosttyTerminalConfig {
             let quotedSession = Self.singleQuoted(tmuxSessionName)
             let quotedWorkingDirectory = Self.singleQuoted(workingDirectory.path)
             let tmuxScript = "exec tmux -L workspaces new-session -A -s \(quotedSession) -c \(quotedWorkingDirectory)"
-            self.command = "\(shell) --login -c \(Self.singleQuoted(tmuxScript))"
+            self.command = Self.shellInvocation(shell: shell, profileMode: shellProfileMode, command: tmuxScript)
         } else {
-            self.command = "\(shell) --login"
+            self.command = Self.shellInvocation(shell: shell, profileMode: shellProfileMode)
         }
+        self.shellProfileModeLabel = shellProfileMode.rawValue
         self.environmentVariables = environment
     }
 
@@ -65,12 +85,43 @@ struct GhosttyTerminalConfig {
         self.fontSize = fontSize
         self.workingDirectory = FileManager.default.temporaryDirectory.path
         self.command = customCommand
+        self.shellProfileModeLabel = "custom"
         self.environmentVariables = [
             "TERM": "xterm-256color",
             "COLORTERM": "truecolor",
             "LANG": "en_US.UTF-8",
             "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin",
         ]
+    }
+
+    private static func shellInvocation(
+        shell: String,
+        profileMode: ShellProfileMode,
+        command: String? = nil
+    ) -> String {
+        let shellName = URL(fileURLWithPath: shell).lastPathComponent.lowercased()
+        let arguments: [String]
+
+        switch (shellName, profileMode) {
+        case ("zsh", .login):
+            arguments = ["--login"]
+        case ("zsh", .clean):
+            arguments = ["-f"]
+        case ("bash", .login):
+            arguments = ["--login"]
+        case ("bash", .clean):
+            arguments = ["--noprofile", "--norc"]
+        default:
+            arguments = profileMode == .login ? ["--login"] : []
+        }
+
+        var components = [shell]
+        components.append(contentsOf: arguments)
+        if let command {
+            components.append("-c")
+            components.append(Self.singleQuoted(command))
+        }
+        return components.joined(separator: " ")
     }
 
     private static func isExecutableAvailable(_ executable: String, inPath path: String?) -> Bool {

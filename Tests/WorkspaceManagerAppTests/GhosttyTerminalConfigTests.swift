@@ -59,6 +59,59 @@ struct GhosttyTerminalConfigTests {
         #expect(config.command == "/bin/zsh --login")
     }
 
+    @Test("clean shell mode uses zsh without profile loading")
+    func cleanShellModeUsesBareZsh() {
+        let config = GhosttyTerminalConfig(
+            workingDirectory: URL(fileURLWithPath: "/tmp/repo-a"),
+            environment: [
+                "SHELL": "/bin/zsh",
+                "PATH": "/usr/bin:/bin",
+                "WORKSPACES_SHELL_PROFILE_MODE": "clean",
+            ],
+            terminalMultiplexingMode: .ghosttyManagedSplits,
+            isTmuxAvailableOverride: true
+        )
+
+        #expect(config.command == "/bin/zsh -f")
+        #expect(config.shellProfileModeLabel == "clean")
+    }
+
+    @Test("clean shell mode uses bash without profile loading")
+    func cleanShellModeUsesBareBash() {
+        let config = GhosttyTerminalConfig(
+            workingDirectory: URL(fileURLWithPath: "/tmp/repo-a"),
+            environment: [
+                "SHELL": "/bin/bash",
+                "PATH": "/usr/bin:/bin",
+                "WORKSPACES_SHELL_PROFILE_MODE": "clean",
+            ],
+            terminalMultiplexingMode: .ghosttyManagedSplits,
+            isTmuxAvailableOverride: true
+        )
+
+        #expect(config.command == "/bin/bash --noprofile --norc")
+        #expect(config.shellProfileModeLabel == "clean")
+    }
+
+    @Test("tmux mode respects clean shell override")
+    func tmuxModeRespectsCleanShellOverride() throws {
+        let config = GhosttyTerminalConfig(
+            workingDirectory: URL(fileURLWithPath: "/tmp/repo-a"),
+            environment: [
+                "SHELL": "/bin/zsh",
+                "PATH": "/usr/bin:/bin",
+                "WORKSPACES_SHELL_PROFILE_MODE": "clean",
+            ],
+            terminalMultiplexingMode: .tmuxPerSession,
+            isTmuxAvailableOverride: true
+        )
+
+        let command = try #require(config.command)
+        #expect(command.contains("/bin/zsh -f -c "))
+        #expect(command.contains("tmux -L workspaces new-session -A -s"))
+        #expect(config.shellProfileModeLabel == "clean")
+    }
+
     @Test("tmux session identity is stable for a given path")
     func tmuxSessionIdentityIsStable() {
         let first = GhosttyTerminalConfig(

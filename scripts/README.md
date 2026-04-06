@@ -30,6 +30,21 @@ This directory contains build/release helpers plus UI test utilities.
   - Reads, sets, and validates app release version metadata from `Sources/WorkspaceManager/Resources/Info.plist`.
   - Use this instead of editing `Info.plist` by hand before tagging or notarizing a release.
 
+## Installed Diagnostics
+
+- `./scripts/launch-installed-diagnostics.sh`
+  - Launches the installed `/Applications` app with diagnostics-oriented env vars.
+  - Enables:
+    - `WORKSPACES_FOCUS_DIAGNOSTICS=1`
+    - `WORKSPACES_TERMINAL_DIAGNOSTICS=1`
+  - Leaves `WORKSPACES_INPUT_DIAGNOSTICS` off by default because per-key logging can perturb typing measurements.
+  - Disables repo auto-import by default to reduce startup noise.
+  - Optional flags:
+    - `--clean-shell` to bypass shell profile loading in embedded terminals
+    - `--with-input-diagnostics` for short active-typing captures
+    - `--no-activate` to avoid app activation on launch
+    - `--log-file <path>` to choose the capture log path
+
 ## Primary UI Test Entry Points
 
 Use these scripts for day-to-day UI verification:
