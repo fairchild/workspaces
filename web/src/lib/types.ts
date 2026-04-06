@@ -214,6 +214,7 @@ export type AgentSessionStatus =
 
 export type ComputeBackendId =
 	| "vercel-sandbox"
+	| "cloudflare-sandbox"
 	| "daytona"
 	| "github-actions"
 	| "lume"
