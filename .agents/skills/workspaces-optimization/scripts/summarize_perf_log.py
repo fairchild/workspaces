@@ -1,0 +1,300 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
+"""Summarize WorkspaceManager `[Perf]` log output.
+
+Works with logs produced by the installed diagnostics launcher and with
+existing repo-side perf logs that include `[Perf]` lines.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import statistics
+import sys
+from collections import defaultdict
+from pathlib import Path
+from typing import Any
+
+
+PERF_PATTERN = re.compile(r"\[Perf\]\s+(?P<body>.*)")
+FIELD_PATTERN = re.compile(r"(?P<key>[A-Za-z0-9_]+)=(?P<value>\S+)")
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Summarize WorkspaceManager [Perf] log output."
+    )
+    parser.add_argument("log_file", type=Path, help="Path to the diagnostic or perf log file.")
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON instead of human-readable text.",
+    )
+    parser.add_argument(
+        "--metric",
+        action="append",
+        default=[],
+        help="Only include selected metric names. Can be passed more than once.",
+    )
+    return parser.parse_args()
+
+
+def maybe_number(value: str) -> float | None:
+    try:
+        return float(value)
+    except ValueError:
+        return None
+
+
+def parse_perf_line(line: str) -> dict[str, str] | None:
+    match = PERF_PATTERN.search(line)
+    if match is None:
+        return None
+
+    fields: dict[str, str] = {}
+    for field in FIELD_PATTERN.finditer(match.group("body")):
+        fields[field.group("key")] = field.group("value")
+    return fields or None
+
+
+def summarize_numeric(values: list[float]) -> dict[str, float]:
+    return {
+        "count": len(values),
+        "min": min(values),
+        "median": statistics.median(values),
+        "max": max(values),
+        "mean": statistics.mean(values),
+    }
+
+
+def build_summary(log_file: Path, metrics_filter: set[str]) -> dict[str, Any]:
+    lines = log_file.read_text(encoding="utf-8", errors="replace").splitlines()
+
+    parsed_events: list[dict[str, Any]] = []
+    groups: dict[tuple[str, str], list[dict[str, str]]] = defaultdict(list)
+    all_metrics: dict[str, list[dict[str, str]]] = defaultdict(list)
+
+    for line in lines:
+        fields = parse_perf_line(line)
+        if fields is None:
+            continue
+        metric = fields.get("metric")
+        if not metric:
+            continue
+        if metrics_filter and metric not in metrics_filter:
+            continue
+
+        phase = fields.get("phase", "none")
+        groups[(metric, phase)].append(fields)
+        all_metrics[metric].append(fields)
+        parsed_events.append(
+            {
+                "metric": metric,
+                "phase": phase,
+                "fields": fields,
+            }
+        )
+
+    metric_summaries: dict[str, Any] = {}
+    for metric, events in all_metrics.items():
+        phases = sorted({event.get("phase", "none") for event in events})
+        metric_summaries[metric] = {
+            "count": len(events),
+            "phases": phases,
+        }
+
+    phase_summaries: dict[str, Any] = {}
+    for (metric, phase), events in sorted(groups.items()):
+        numeric_fields: dict[str, list[float]] = defaultdict(list)
+        categorical_counts: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+
+        for event in events:
+            for key, value in event.items():
+                if key in {"metric", "phase"}:
+                    continue
+                numeric = maybe_number(value)
+                if numeric is not None:
+                    numeric_fields[key].append(numeric)
+                else:
+                    categorical_counts[key][value] += 1
+
+        phase_summaries[f"{metric}:{phase}"] = {
+            "metric": metric,
+            "phase": phase,
+            "count": len(events),
+            "numeric_fields": {
+                key: summarize_numeric(values)
+                for key, values in sorted(numeric_fields.items())
+            },
+            "categorical_fields": {
+                key: dict(sorted(values.items()))
+                for key, values in sorted(categorical_counts.items())
+            },
+        }
+
+    findings = derive_findings(phase_summaries)
+
+    return {
+        "log_file": str(log_file),
+        "line_count": len(lines),
+        "perf_event_count": len(parsed_events),
+        "metrics": metric_summaries,
+        "phases": phase_summaries,
+        "findings": findings,
+    }
+
+
+def derive_findings(phase_summaries: dict[str, Any]) -> list[str]:
+    findings: list[str] = []
+
+    terminal = phase_summaries.get("terminal_investigation:surface_create_succeeded")
+    if terminal:
+        duration_stats = terminal["numeric_fields"].get("duration_ms")
+        shell_modes = terminal["categorical_fields"].get("shell_profile_mode", {})
+        if duration_stats:
+            median_ms = duration_stats["median"]
+            if median_ms > 1_000:
+                findings.append(
+                    f"Ghostty surface creation median is {median_ms:.2f} ms. That is large enough to be a user-visible startup cost."
+                )
+            elif median_ms > 200:
+                findings.append(
+                    f"Ghostty surface creation median is {median_ms:.2f} ms. That is noticeable and worth comparing between shell modes."
+                )
+        if shell_modes:
+            findings.append(
+                "Terminal surface events were captured for shell modes: "
+                + ", ".join(sorted(shell_modes))
+                + "."
+            )
+
+    first_output = phase_summaries.get("terminal_first_output:none")
+    if first_output:
+        duration_stats = first_output["numeric_fields"].get("duration_ms")
+        signals = first_output["categorical_fields"].get("signal", {})
+        if duration_stats and duration_stats["median"] > 1_000:
+            findings.append(
+                f"terminal_first_output median is {duration_stats['median']:.2f} ms. The child shell is not producing an early readiness signal quickly."
+            )
+        if signals:
+            findings.append(
+                "terminal_first_output was triggered by signals: "
+                + ", ".join(sorted(signals))
+                + "."
+            )
+
+    prompt_ready = phase_summaries.get("first_prompt_ready:none")
+    if prompt_ready:
+        duration_stats = prompt_ready["numeric_fields"].get("duration_ms")
+        signals = prompt_ready["categorical_fields"].get("signal", {})
+        if duration_stats and duration_stats["median"] > 5_000:
+            findings.append(
+                f"first_prompt_ready median is {duration_stats['median']:.2f} ms. Prompt readiness is still severely delayed after surface creation starts."
+            )
+        elif duration_stats and duration_stats["median"] > 1_000:
+            findings.append(
+                f"first_prompt_ready median is {duration_stats['median']:.2f} ms. Prompt readiness is noticeable and worth comparing between clean and login shell runs."
+            )
+        if signals:
+            findings.append(
+                "first_prompt_ready was triggered by signals: "
+                + ", ".join(sorted(signals))
+                + "."
+            )
+
+    input_summary = phase_summaries.get("input_investigation:key_down_handled")
+    if input_summary:
+        event_age_stats = input_summary["numeric_fields"].get("event_age_ms")
+        handler_stats = input_summary["numeric_fields"].get("handler_duration_ms")
+        surface_missing = input_summary["categorical_fields"].get("surface_missing", {})
+        if event_age_stats and event_age_stats["median"] > 50:
+            findings.append(
+                f"Input event age median is {event_age_stats['median']:.2f} ms. Keys may be arriving late to the app rather than being handled slowly."
+            )
+        if handler_stats and handler_stats["median"] > 10:
+            findings.append(
+                f"Input handler median is {handler_stats['median']:.2f} ms. The in-app key path itself is slower than expected."
+            )
+        if surface_missing.get("true", 0) > 0:
+            findings.append(
+                "Some key events were recorded without an active terminal surface."
+            )
+
+    focus_metrics = [
+        summary
+        for summary in phase_summaries.values()
+        if summary["metric"] == "focus_investigation"
+    ]
+    if focus_metrics:
+        phases = sorted(summary["phase"] for summary in focus_metrics)
+        findings.append(
+            "Focus diagnostics captured phases: " + ", ".join(phases) + "."
+        )
+
+    launch = phase_summaries.get("launch_to_first_prompt:none")
+    if launch:
+        duration_stats = launch["numeric_fields"].get("duration_ms")
+        if duration_stats and duration_stats["median"] > 5_000:
+            findings.append(
+                f"launch_to_first_prompt median is {duration_stats['median']:.2f} ms. Startup is still dominated by terminal readiness or focus."
+            )
+
+    if not findings:
+        findings.append("No strong automated findings were derived from the parsed [Perf] lines.")
+
+    return findings
+
+
+def print_text(summary: dict[str, Any]) -> None:
+    print("WorkspaceManager perf log summary")
+    print(f"  log_file: {summary['log_file']}")
+    print(f"  total_lines: {summary['line_count']}")
+    print(f"  perf_events: {summary['perf_event_count']}")
+    print()
+
+    print("Metrics:")
+    if not summary["metrics"]:
+        print("- no [Perf] metrics found")
+    else:
+        for metric, details in sorted(summary["metrics"].items()):
+            phases = ", ".join(details["phases"])
+            print(f"- {metric}: count={details['count']} phases={phases}")
+
+    print()
+    print("Phase summaries:")
+    for key, details in sorted(summary["phases"].items()):
+        print(f"- {key}: count={details['count']}")
+        for field, stats in sorted(details["numeric_fields"].items()):
+            print(
+                "  "
+                + f"{field}: min={stats['min']:.2f} median={stats['median']:.2f} "
+                + f"max={stats['max']:.2f} mean={stats['mean']:.2f}"
+            )
+        for field, values in sorted(details["categorical_fields"].items()):
+            items = ", ".join(f"{name}={count}" for name, count in values.items())
+            print("  " + f"{field}: {items}")
+
+    print()
+    print("Findings:")
+    for finding in summary["findings"]:
+        print(f"- {finding}")
+
+
+def main() -> int:
+    args = parse_args()
+    summary = build_summary(args.log_file, set(args.metric))
+    if args.json:
+        json.dump(summary, sys.stdout, indent=2, sort_keys=True)
+        sys.stdout.write("\n")
+    else:
+        print_text(summary)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
