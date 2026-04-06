@@ -1,5 +1,98 @@
 # Changelog
 
+## [0.9.0] - 2026-04-06
+
+### Added
+- cap agent WIP and shift toward closure-first behavior (#207)
+- pre-fetch PR diffs into agent review context (#201)
+- agent discovery dashboard Phase 1 (#206)
+- collapsible dashboard sections with sticky state (#216)
+- collapsible dashboard sections with sticky state (#217)
+- bookmarkable URL routing for dashboard repo views (#222)
+- clickable event details with GitHub source links (#223)
+- add prek pre-commit hooks for swift-format and biome lint
+- add Carl Community agent for daily project commentary (#187)
+- workspace state sync endpoint (#179) (#245)
+- integrate chat platform — AI streaming, Slack, dispatch, status cards, chat UI (#246)
+- evidence tooling for local and CI use (#254)
+- @agent chat with compute backend abstraction (#257)
+- durable-workflows skill — PGlite + DBOS crash-resilient workflows (#247)
+- collapse consecutive events in chat timeline (#271)
+- autofocus chat input when switching to Chat tab
+- collapsible panels + keyboard shortcuts (#275)
+- persistent sandbox via snapshot API for conversation continuity (#277)
+- claude --resume for full conversation memory (#278)
+- session-manager tests + threadId continuity fix (#285)
+- mock provider + E2E agent chat tests (#286)
+- default agent for chat messages (#287)
+- terminal tab with ghostty-web + TerminalShare proxy (#288)
+- multi-provider terminal — Vercel ttyd + Cloudflare sandbox (#290)
+
+### Fixed
+- gate inline PR diffs to trusted sources (#210)
+- surface API errors on setup page (#213)
+- debug webhook signature failures (#220)
+- surface agent API errors and webhook debug logging (#221)
+- validate Lume unattended inputs before temp file creation
+- harden Codespaces Claude worker launch flow
+- setup script installs dependencies from lockfiles
+- ensure data directory exists for local SQLite fallback
+- sort imports for biome linting
+- biome lint and format compliance
+- show tab bar on desktop for Dashboard/Chat switching (#248)
+- show tab bar on desktop for Dashboard/Chat switching (#249)
+- refresh expired GitHub OAuth tokens (#250)
+- quality fixes for chat platform merge (#251)
+- make chat tab bar sticky during scroll (#253)
+- wire mention kill switch and harden evidence store (#256)
+- exclude e2e from vitest/biome, add evidence hook to settings (#258)
+- gate scheduled agent runs on AGENT_SCHEDULED_RUNS_ENABLED (#260)
+- unified AGENT_AUTOMATIONS_ENABLED kill switch for all agent workflows (#261)
+- harden agent runtime — resource leaks, auth config, error handling (#264)
+- update sandbox E2E test for ALLOWED_AGENT_LOGINS rename (#268)
+- hooks order and biome lint in collapsed events (#271)
+- symlink .env from main worktree in scripts/setup (#276)
+- revert stream-json, keep plain text streaming (#283)
+- disable --session-id/--resume in runner until CLI version verified (#284)
+
+### Other
+- Add Codespaces Claude worker runtime substrate
+- Add Codespaces Claude launcher
+- Add Codespaces Claude worker workflow docs
+- agents: harden prompt trust boundaries (#209)
+- pin actions and remove committed Lume guest credentials (#208)
+- add mention automation kill switch (#211)
+- agents: isolate contributor execution from secrets (#212)
+- Install Vercel Web Analytics (#218)
+- security: default Lume to NAT and disable public mentions
+- security: add approval-gated agent triage
+- review PR files from pull refs
+- update roadmap learnings for web dev reliability
+- broaden PR evidence requirements to cover all change types (#242)
+- broaden evidence rules in AGENTS.md for all PR types (#243)
+- security: pin remaining floating action, add explicit permissions, harden tests (#239)
+- session wrapup — chat platform consolidation learnings
+- add behavior tests for GitHub token refresh (#252)
+- expand test coverage with unit tests and Playwright E2E (#255)
+- add chat & agent dispatch design documents
+- add unit tests and E2E fast tests to Web CI (#259)
+- session wrapup — security review and agent kill switch
+- session wrapup — agent chat runtime design and implementation
+- session wrapup — QA, test coverage, agent runtime hardening
+- trigger redeploy with sandbox env vars
+- add evidence guide for PR screenshots (#267)
+- add Playwright auth fixture with DEV_BYPASS_AUTH (#262)
+- validate agent chat sandbox pipeline E2E (#265)
+- sandbox testing session wrapup (#269)
+- bot command tests + E2E data seeding + auth fixture (#270)
+- session wrapup — chat timeline collapsed events
+- comprehensive chat E2E tests and video demo recordings (#273)
+- fix INP on compose bar and reduce re-renders (#280)
+- move persistent sandbox backlog item to done (#281)
+- snapshot session lifecycle + stream-json parser (#282)
+- session wrapup for web perf PR #280
+- [codex] Add Workspaces optimization skill and diagnostics (#291)
+
 ## [0.8.1] - 2026-03-24
 
 ### Fixed
