@@ -55,11 +55,19 @@ export interface AgentSessionsTable {
 	last_activity_at: string;
 }
 
+export interface BaseSnapshotsTable {
+	provider: string;
+	version: string;
+	snapshot_id: string;
+	created_at: string;
+}
+
 interface Database {
 	webhook_events: EventsTable;
 	chat_messages: ChatMessagesTable;
 	workspaces: WorkspacesTable;
 	agent_sessions: AgentSessionsTable;
+	base_snapshots: BaseSnapshotsTable;
 }
 
 let _turso: Client | undefined;

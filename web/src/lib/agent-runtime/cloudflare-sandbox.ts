@@ -185,13 +185,22 @@ export class CloudflareSandboxProvider
 }
 
 /**
- * Get the terminal WebSocket URL for a Cloudflare sandbox session.
- * The TerminalShare Worker exposes terminals at /ws/:sessionId.
+ * Liveness + terminal URL for a Cloudflare sandbox session.
+ *
+ * TODO: once the @cloudflare/sandbox SDK is wired into the TerminalShare
+ * Worker, this should make an HTTP call to the Worker to check if the
+ * sandbox is actually alive. Today the sandbox lifecycle routes return
+ * 501, so we can only report based on Worker configuration.
  */
-export function getTerminalUrl(instanceId: string): string | null {
+export type SandboxState =
+	| { alive: false }
+	| { alive: true; terminalUrl?: string };
+
+export async function resolveSandboxState(
+	instanceId: string,
+): Promise<SandboxState> {
 	const workerUrl = process.env.CLOUDFLARE_SANDBOX_WORKER_URL;
-	if (!workerUrl) return null;
-	// Convert https:// to wss:// for WebSocket
+	if (!workerUrl) return { alive: false };
 	const wsUrl = workerUrl.replace(/^https?:\/\//, "wss://");
-	return `${wsUrl}/ws/${instanceId}`;
+	return { alive: true, terminalUrl: `${wsUrl}/ws/${instanceId}` };
 }

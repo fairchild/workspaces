@@ -1,4 +1,7 @@
-import { getActiveSessionForRepo } from "@/lib/agent-sessions";
+import {
+	getActiveSessionForRepo,
+	updateSessionStatus,
+} from "@/lib/agent-sessions";
 import { getSession } from "@/lib/auth-server";
 import { getUserRepos } from "@/lib/repos";
 import { Sandbox } from "@vercel/sandbox";
@@ -56,6 +59,12 @@ export async function POST(request: Request): Promise<Response> {
 			...getCredentials(),
 		});
 	} catch {
+		// Reconcile: mark the session completed so subsequent status polls
+		// report disconnected immediately instead of waiting for the next
+		// 10s poll to detect the dead sandbox.
+		await updateSessionStatus(agentSession.id, "completed").catch((err) => {
+			console.warn("[terminal/exec] reconcile update failed:", err);
+		});
 		return Response.json(
 			{ error: "Sandbox is no longer available" },
 			{ status: 410 },

@@ -4,20 +4,7 @@ run = "pnpm typecheck && pnpm lint && pnpm test"
 
 [tasks."web:dev"]
 description = "Seed dev database and start dev server with auth bypass."
-run = """
-node -e "
-const { createClient } = require('@libsql/client');
-const { mkdirSync } = require('fs');
-mkdirSync('data', { recursive: true });
-const db = createClient({ url: 'file:data/auth.db' });
-(async () => {
-  await db.execute('CREATE TABLE IF NOT EXISTS user_repos (user_id TEXT NOT NULL, owner TEXT NOT NULL, repo TEXT NOT NULL, added_at TEXT NOT NULL DEFAULT (datetime(\"now\")), PRIMARY KEY (user_id, owner, repo))');
-  await db.execute({ sql: \"INSERT OR IGNORE INTO user_repos (user_id, owner, repo) VALUES (?, 'fairchild', 'workspaces')\", args: ['dev-user'] });
-  console.log('DB seeded');
-})();
-"
-DEV_BYPASS_AUTH=1 pnpm dev
-"""
+run = "node scripts/dev-seed.js && DEV_BYPASS_AUTH=1 pnpm dev"
 
 [tasks."web:e2e"]
 description = "Run Playwright E2E tests (fast + full projects)."

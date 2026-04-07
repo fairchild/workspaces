@@ -1,33 +1,28 @@
-import { getActiveSessionForRepo } from "@/lib/agent-sessions";
+import {
+	getActiveSessionForRepo,
+	updateSessionStatus,
+} from "@/lib/agent-sessions";
 import { getSession } from "@/lib/auth-server";
 import { getUserRepos } from "@/lib/repos";
 
 export const dynamic = "force-dynamic";
 
-/**
- * Resolve the terminal WebSocket URL for a sandbox session.
- * - Vercel sandbox: direct connection to ttyd on sandbox.domain(7681)
- * - Cloudflare sandbox: WebSocket via TerminalShare Worker
- */
-async function resolveTerminalUrl(
+type SandboxState = { alive: false } | { alive: true; terminalUrl?: string };
+
+/** Dynamic provider loader — keeps cold-start cost low. */
+async function resolveState(
 	computeBackend: string,
 	instanceId: string,
-): Promise<string | undefined> {
+): Promise<SandboxState | null> {
 	if (computeBackend === "cloudflare-sandbox") {
-		const { getTerminalUrl } = await import(
-			"@/lib/agent-runtime/cloudflare-sandbox"
-		);
-		return getTerminalUrl(instanceId) ?? undefined;
+		const m = await import("@/lib/agent-runtime/cloudflare-sandbox");
+		return m.resolveSandboxState(instanceId);
 	}
-
 	if (computeBackend === "vercel-sandbox") {
-		const { getTerminalUrl } = await import(
-			"@/lib/agent-runtime/vercel-sandbox"
-		);
-		return getTerminalUrl(instanceId) ?? undefined;
+		const m = await import("@/lib/agent-runtime/vercel-sandbox");
+		return m.resolveSandboxState(instanceId);
 	}
-
-	return undefined;
+	return null; // unknown backend — no reconciliation
 }
 
 export async function GET(request: Request): Promise<Response> {
@@ -55,16 +50,36 @@ export async function GET(request: Request): Promise<Response> {
 		return Response.json({ connected: false });
 	}
 
-	const terminalUrl = await resolveTerminalUrl(
+	const state = await resolveState(
 		agentSession.computeBackend,
 		agentSession.computeInstanceId,
 	);
+
+	// Unknown backend — trust the DB, report connected without terminalUrl
+	if (state === null) {
+		return Response.json({
+			connected: true,
+			sandboxId: agentSession.computeInstanceId,
+			agentName: agentSession.agentName,
+			provider: agentSession.computeBackend,
+		});
+	}
+
+	// Reconcile: if the sandbox is dead, mark the session completed
+	// and report disconnected so the UI shows the correct empty state.
+	if (!state.alive) {
+		// Best-effort — don't fail the endpoint if the DB write blips
+		await updateSessionStatus(agentSession.id, "completed").catch((err) => {
+			console.warn("[terminal/status] reconcile update failed:", err);
+		});
+		return Response.json({ connected: false });
+	}
 
 	return Response.json({
 		connected: true,
 		sandboxId: agentSession.computeInstanceId,
 		agentName: agentSession.agentName,
 		provider: agentSession.computeBackend,
-		terminalUrl,
+		terminalUrl: state.terminalUrl,
 	});
 }

@@ -1,5 +1,6 @@
 import { Sandbox, Snapshot } from "@vercel/sandbox";
 import ms from "ms";
+import { getBaseSnapshotId, recordBaseSnapshot } from "../base-snapshots";
 import type {
 	ComputeProvider,
 	ComputeProviderAvailability,
@@ -12,6 +13,17 @@ import type {
 
 const CONVERSATIONAL_TOOLS = "Read,Glob,Grep,WebFetch";
 const FULL_TOOLS = "Read,Write,Edit,Bash,Glob,Grep,WebFetch";
+
+/**
+ * Bump this version when the base snapshot contents change (new tools,
+ * package updates, etc.). Old versions remain valid until manually deleted —
+ * this lets us roll back without rebuilding.
+ *
+ * v1: node22 + @anthropic-ai/claude-code
+ * v2-ttyd: + ttyd for WebSocket terminal access
+ */
+const BASE_SNAPSHOT_VERSION = "v2-ttyd";
+const PROVIDER_ID = "vercel-sandbox";
 
 function stripQuotes(s: string): string {
 	return s.replace(/^["']|["']$/g, "");
@@ -96,14 +108,20 @@ function getOrCreateBaseSnapshot(): Promise<string> {
 }
 
 async function resolveBaseSnapshot(): Promise<string> {
-	// Check existing snapshots for a reusable base
-	const result = await Snapshot.list(getCredentials());
-	const existing = result.json.snapshots.find(
-		(s: { id: string; status: string }) => s.status === "created",
-	);
-	if (existing) return existing.id;
+	// 1. Check our DB for a snapshot ID matching the current version
+	const recorded = await getBaseSnapshotId(PROVIDER_ID, BASE_SNAPSHOT_VERSION);
+	if (recorded) {
+		// Verify it still exists in Vercel (could have been deleted/expired)
+		const list = await Snapshot.list(getCredentials());
+		const found = list.json.snapshots.find(
+			(s: { id: string; status: string }) =>
+				s.id === recorded && s.status === "created",
+		);
+		if (found) return recorded;
+		// Recorded snapshot is gone — fall through to recreate
+	}
 
-	// Create fresh base: node22 + Claude Code CLI
+	// 2. Create fresh base: node22 + Claude Code CLI + ttyd
 	const sandbox = await Sandbox.create({
 		...getCredentials(),
 		runtime: "node22",
@@ -128,6 +146,14 @@ async function resolveBaseSnapshot(): Promise<string> {
 	});
 
 	const snapshot = await sandbox.snapshot({ expiration: ms("30d") });
+
+	// 3. Record the new snapshot so future requests find it
+	await recordBaseSnapshot(
+		PROVIDER_ID,
+		BASE_SNAPSHOT_VERSION,
+		snapshot.snapshotId,
+	);
+
 	return snapshot.snapshotId;
 }
 
@@ -390,13 +416,48 @@ cat /vercel/sandbox/message.txt | claude -p $SESSION_ARGS --system-prompt "$PROM
 	}
 }
 
-/** Get the public terminal WebSocket URL for a Vercel sandbox. */
-export function getTerminalUrl(instanceId: string): string | null {
-	const sandbox = activeSandboxes.get(instanceId);
-	if (!sandbox) return null;
+/**
+ * Liveness + terminal URL for a sandbox, in a single Vercel API call.
+ *
+ * Returns `{ alive: false }` if the sandbox is gone (timed out, stopped,
+ * or never existed). Returns `{ alive: true, terminalUrl? }` if the
+ * sandbox exists — `terminalUrl` is present when port 7681 is published
+ * (v2-ttyd snapshot), absent for older v1 sandboxes that lack ttyd.
+ *
+ * Uses `Sandbox.get()` so it works across serverless function boundaries:
+ * the in-memory `activeSandboxes` map is only populated in whichever
+ * function instance created the sandbox, but the status API runs in
+ * separate instances. The map is a fast-path cache.
+ */
+export type SandboxState =
+	| { alive: false }
+	| { alive: true; terminalUrl?: string };
+
+export async function resolveSandboxState(
+	instanceId: string,
+): Promise<SandboxState> {
+	// Fast path: in-memory map (same serverless instance)
+	const cached = activeSandboxes.get(instanceId);
+	if (cached) {
+		try {
+			return { alive: true, terminalUrl: cached.domain(7681) };
+		} catch {
+			return { alive: true }; // alive but no port 7681 (v1 snapshot)
+		}
+	}
+
+	// Cross-instance path: single HTTP call to Vercel API
 	try {
-		return sandbox.domain(7681);
+		const sandbox = await Sandbox.get({
+			sandboxId: instanceId,
+			...getCredentials(),
+		});
+		try {
+			return { alive: true, terminalUrl: sandbox.domain(7681) };
+		} catch {
+			return { alive: true };
+		}
 	} catch {
-		return null;
+		return { alive: false };
 	}
 }
