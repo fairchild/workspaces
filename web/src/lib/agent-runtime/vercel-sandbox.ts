@@ -1,5 +1,6 @@
 import { Sandbox, Snapshot } from "@vercel/sandbox";
 import ms from "ms";
+import { getBaseSnapshotId, recordBaseSnapshot } from "../base-snapshots";
 import type {
 	ComputeProvider,
 	ComputeProviderAvailability,
@@ -9,6 +10,17 @@ import type {
 	SnapshotCapable,
 	StreamChunk,
 } from "./types";
+
+/**
+ * Bump this version when the base snapshot contents change (new tools,
+ * package updates, etc.). Old versions remain valid until manually deleted —
+ * this lets us roll back without rebuilding.
+ *
+ * v1: node22 + @anthropic-ai/claude-code
+ * v2: + ttyd for WebSocket terminal access
+ */
+const BASE_SNAPSHOT_VERSION = "v2-ttyd";
+const PROVIDER_ID = "vercel-sandbox";
 
 const CONVERSATIONAL_TOOLS = "Read,Glob,Grep,WebFetch";
 const FULL_TOOLS = "Read,Write,Edit,Bash,Glob,Grep,WebFetch";
@@ -96,14 +108,20 @@ function getOrCreateBaseSnapshot(): Promise<string> {
 }
 
 async function resolveBaseSnapshot(): Promise<string> {
-	// Check existing snapshots for a reusable base
-	const result = await Snapshot.list(getCredentials());
-	const existing = result.json.snapshots.find(
-		(s: { id: string; status: string }) => s.status === "created",
-	);
-	if (existing) return existing.id;
+	// 1. Check our DB for a snapshot ID matching the current version
+	const recorded = await getBaseSnapshotId(PROVIDER_ID, BASE_SNAPSHOT_VERSION);
+	if (recorded) {
+		// Verify it still exists in Vercel (could have been deleted/expired)
+		const list = await Snapshot.list(getCredentials());
+		const found = list.json.snapshots.find(
+			(s: { id: string; status: string }) =>
+				s.id === recorded && s.status === "created",
+		);
+		if (found) return recorded;
+		// Recorded snapshot is gone — fall through to recreate
+	}
 
-	// Create fresh base: node22 + Claude Code CLI
+	// 2. Create fresh base: node22 + Claude Code CLI + ttyd
 	const sandbox = await Sandbox.create({
 		...getCredentials(),
 		runtime: "node22",
@@ -128,6 +146,14 @@ async function resolveBaseSnapshot(): Promise<string> {
 	});
 
 	const snapshot = await sandbox.snapshot({ expiration: ms("30d") });
+
+	// 3. Record the new snapshot for this version so future requests find it
+	await recordBaseSnapshot(
+		PROVIDER_ID,
+		BASE_SNAPSHOT_VERSION,
+		snapshot.snapshotId,
+	);
+
 	return snapshot.snapshotId;
 }
 

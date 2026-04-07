@@ -4,7 +4,7 @@
  * Used by `mise run web:dev` to ensure the dashboard loads without GitHub OAuth.
  */
 const { createClient } = require("@libsql/client");
-const { mkdirSync } = require("fs");
+const { mkdirSync } = require("node:fs");
 
 mkdirSync("data", { recursive: true });
 const db = createClient({ url: "file:data/auth.db" });
