@@ -433,12 +433,21 @@ export type SandboxState =
 	| { alive: false }
 	| { alive: true; terminalUrl?: string };
 
+/**
+ * Vercel sandbox statuses that mean "this sandbox can accept commands".
+ *
+ * `Sandbox.get()` returns successfully for stopped/failed sandboxes too —
+ * it fetches the metadata record, not the runtime state. We have to
+ * explicitly check the status field to distinguish alive from dead.
+ */
+const ALIVE_STATUSES: ReadonlySet<string> = new Set(["running", "pending"]);
+
 export async function resolveSandboxState(
 	instanceId: string,
 ): Promise<SandboxState> {
 	// Fast path: in-memory map (same serverless instance)
 	const cached = activeSandboxes.get(instanceId);
-	if (cached) {
+	if (cached && ALIVE_STATUSES.has(cached.status)) {
 		try {
 			return { alive: true, terminalUrl: cached.domain(7681) };
 		} catch {
@@ -452,12 +461,16 @@ export async function resolveSandboxState(
 			sandboxId: instanceId,
 			...getCredentials(),
 		});
+		if (!ALIVE_STATUSES.has(sandbox.status)) {
+			return { alive: false };
+		}
 		try {
 			return { alive: true, terminalUrl: sandbox.domain(7681) };
 		} catch {
 			return { alive: true };
 		}
 	} catch {
+		// Sandbox record doesn't exist at all (never created, or purged)
 		return { alive: false };
 	}
 }
