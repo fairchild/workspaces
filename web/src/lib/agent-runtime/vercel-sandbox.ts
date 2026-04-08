@@ -261,7 +261,7 @@ export class VercelSandboxProvider implements ComputeProvider, SnapshotCapable {
 					path: "/vercel/sandbox/run-agent.sh",
 					content: Buffer.from(buildRunnerScript(tools)),
 				},
-				...claudeAuthFiles(),
+				...claudeAuthFiles(apiKey),
 			];
 
 			if (request.chatHistory) {
@@ -279,6 +279,12 @@ export class VercelSandboxProvider implements ComputeProvider, SnapshotCapable {
 			}
 
 			await sandbox.writeFiles(filesToWrite);
+			// claude CLI invokes apiKeyHelper as an executable, so the helper
+			// script needs +x. writeFiles doesn't take a mode arg.
+			await sandbox.runCommand("chmod", [
+				"+x",
+				`${CLAUDE_CONFIG_DIR}/api-key-helper.sh`,
+			]);
 
 			// Auth-gated ttyd on port 7681 — same path token as the terminal
 			// tab so an attacker who finds an agent sandbox URL still can't
@@ -397,7 +403,14 @@ export class VercelSandboxProvider implements ComputeProvider, SnapshotCapable {
 		// The snapshot was taken from a sandbox built by createSandbox, so
 		// the auth files already exist on disk. Re-write them anyway in
 		// case the snapshot pre-dates the auth fix or someone deleted them.
-		await sandbox.writeFiles(claudeAuthFiles());
+		const restoreApiKey = stripQuotes(process.env.ANTHROPIC_API_KEY ?? "");
+		if (restoreApiKey) {
+			await sandbox.writeFiles(claudeAuthFiles(restoreApiKey));
+			await sandbox.runCommand("chmod", [
+				"+x",
+				`${CLAUDE_CONFIG_DIR}/api-key-helper.sh`,
+			]);
+		}
 
 		// Restart ttyd with the auth-gated base-path. The token is derived
 		// from the new sandbox ID, not the old one — ttydUrl() also reads
@@ -455,7 +468,11 @@ export class VercelSandboxProvider implements ComputeProvider, SnapshotCapable {
 			// Same claude auth setup as the agent path so `claude` works
 			// out of the box from the shell.
 			if (apiKey) {
-				await sandbox.writeFiles(claudeAuthFiles());
+				await sandbox.writeFiles(claudeAuthFiles(apiKey));
+				await sandbox.runCommand("chmod", [
+					"+x",
+					`${CLAUDE_CONFIG_DIR}/api-key-helper.sh`,
+				]);
 			}
 
 			await startTtyd(sandbox);
@@ -575,13 +592,19 @@ cat /vercel/sandbox/message.txt | claude -p $SESSION_ARGS --system-prompt "$PROM
 }
 
 /**
- * Files needed for claude CLI to authenticate non-interactively from
- * `$ANTHROPIC_API_KEY`. Recent claude CLI versions (>=2.0) require
- * either an OAuth token or an `apiKeyHelper` settings entry; the bare
- * env var alone is no longer enough in non-interactive `-p` mode for
- * every version. Writing a settings.json with apiKeyHelper that simply
- * echoes the env var is the documented mechanism and works across
- * versions.
+ * Files needed for claude CLI to authenticate non-interactively. The
+ * documented mechanism is `apiKeyHelper`, a shell command in
+ * `settings.json` whose stdout is the API key.
+ *
+ * #306 used `echo $ANTHROPIC_API_KEY` as the helper command, but
+ * production verification showed the agent still hitting "Not logged
+ * in". The CLI invokes the helper via execve, not via /bin/sh, so
+ * `$ANTHROPIC_API_KEY` was passed literally rather than expanded.
+ *
+ * Fix: write a real shell script that prints the key from a
+ * single-quoted heredoc — no env var dependency, no quoting puzzles
+ * with the key value. The settings.json points apiKeyHelper at the
+ * absolute path of this script.
  *
  * We also point CLAUDE_CONFIG_DIR at this directory in the sandbox env
  * so the CLI looks here instead of $HOME/.claude (which we'd otherwise
@@ -589,18 +612,25 @@ cat /vercel/sandbox/message.txt | claude -p $SESSION_ARGS --system-prompt "$PROM
  *
  * https://code.claude.com/docs/en/authentication
  */
-function claudeAuthFiles(): Array<{ path: string; content: Buffer }> {
-	const settings = JSON.stringify(
-		{
-			apiKeyHelper: "echo $ANTHROPIC_API_KEY",
-		},
-		null,
-		2,
-	);
+function claudeAuthFiles(
+	apiKey: string,
+): Array<{ path: string; content: Buffer }> {
+	const helperPath = `${CLAUDE_CONFIG_DIR}/api-key-helper.sh`;
+	const settings = JSON.stringify({ apiKeyHelper: helperPath }, null, 2);
+	// Single-quoted heredoc avoids any escaping problems with the key.
+	const helper = `#!/bin/sh
+cat <<'__CLAUDE_KEY_EOF__'
+${stripQuotes(apiKey)}
+__CLAUDE_KEY_EOF__
+`;
 	return [
 		{
 			path: `${CLAUDE_CONFIG_DIR}/settings.json`,
 			content: Buffer.from(settings),
+		},
+		{
+			path: helperPath,
+			content: Buffer.from(helper),
 		},
 	];
 }
