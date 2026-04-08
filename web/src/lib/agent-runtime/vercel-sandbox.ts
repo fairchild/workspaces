@@ -16,6 +16,14 @@ const CONVERSATIONAL_TOOLS = "Read,Glob,Grep,WebFetch";
 const FULL_TOOLS = "Read,Write,Edit,Bash,Glob,Grep,WebFetch";
 
 /**
+ * Where the sandbox stores claude CLI settings + credentials. We override
+ * the default `~/.claude` location so we don't depend on whatever HOME
+ * happens to be inside the sandbox. The CLI honors `$CLAUDE_CONFIG_DIR`
+ * for both settings.json lookup and credential storage.
+ */
+const CLAUDE_CONFIG_DIR = "/vercel/sandbox/claude-config";
+
+/**
  * Bump this version when the base snapshot contents change (new tools,
  * package updates, etc.). Old versions remain valid until manually deleted —
  * this lets us roll back without rebuilding.
@@ -206,6 +214,7 @@ export class VercelSandboxProvider implements ComputeProvider, SnapshotCapable {
 			ports: [7681],
 			env: {
 				ANTHROPIC_API_KEY: stripQuotes(apiKey),
+				CLAUDE_CONFIG_DIR,
 				...request.envVars,
 			},
 			networkPolicy: { allow: ALLOWED_DOMAINS },
@@ -236,23 +245,6 @@ export class VercelSandboxProvider implements ComputeProvider, SnapshotCapable {
 				fullMessage = `## Recent conversation context\n\n${contextBlock}\n\n---\n\n## Current message\n\n${request.message}`;
 			}
 
-			// Write prompt, message, and a runner script to files.
-			// The runner script avoids shell injection by reading from files
-			// and passing via env var (not shell interpolation).
-			// On first run, --session-id creates a named session that persists to disk.
-			// On restore (claude-resume.flag exists), --resume loads the prior session,
-			// giving the agent full memory of its previous reasoning and tool calls.
-			const runnerScript = `#!/bin/bash
-PROMPT=$(cat /vercel/sandbox/system-prompt.txt)
-SESSION_ARGS=""
-if [ -f /vercel/sandbox/claude-resume.flag ]; then
-  SESSION_ARGS="--resume $(cat /vercel/sandbox/claude-session-id.txt)"
-elif [ -f /vercel/sandbox/claude-session-id.txt ]; then
-  SESSION_ARGS="--session-id $(cat /vercel/sandbox/claude-session-id.txt)"
-fi
-cat /vercel/sandbox/message.txt | claude -p $SESSION_ARGS --system-prompt "$PROMPT" --allowedTools ${tools}
-`;
-
 			const filesToWrite: Array<{
 				path: string;
 				content: Buffer;
@@ -267,8 +259,9 @@ cat /vercel/sandbox/message.txt | claude -p $SESSION_ARGS --system-prompt "$PROM
 				},
 				{
 					path: "/vercel/sandbox/run-agent.sh",
-					content: Buffer.from(runnerScript),
+					content: Buffer.from(buildRunnerScript(tools)),
 				},
+				...claudeAuthFiles(),
 			];
 
 			if (request.chatHistory) {
@@ -396,9 +389,15 @@ cat /vercel/sandbox/message.txt | claude -p $SESSION_ARGS --system-prompt "$PROM
 			ports: [7681],
 			env: {
 				ANTHROPIC_API_KEY: stripQuotes(process.env.ANTHROPIC_API_KEY ?? ""),
+				CLAUDE_CONFIG_DIR,
 			},
 			networkPolicy: { allow: ALLOWED_DOMAINS },
 		});
+
+		// The snapshot was taken from a sandbox built by createSandbox, so
+		// the auth files already exist on disk. Re-write them anyway in
+		// case the snapshot pre-dates the auth fix or someone deleted them.
+		await sandbox.writeFiles(claudeAuthFiles());
 
 		// Restart ttyd with the auth-gated base-path. The token is derived
 		// from the new sandbox ID, not the old one — ttydUrl() also reads
@@ -423,6 +422,7 @@ cat /vercel/sandbox/message.txt | claude -p $SESSION_ARGS --system-prompt "$PROM
 		branch?: string;
 	}): Promise<SandboxResult> {
 		const baseSnapshotId = await getOrCreateBaseSnapshot();
+		const apiKey = process.env.ANTHROPIC_API_KEY;
 
 		const sandbox = await Sandbox.create({
 			...getCredentials(),
@@ -430,6 +430,16 @@ cat /vercel/sandbox/message.txt | claude -p $SESSION_ARGS --system-prompt "$PROM
 			timeout: ms("30m"),
 			resources: { vcpus: 2 },
 			ports: [7681],
+			// Pass ANTHROPIC_API_KEY + CLAUDE_CONFIG_DIR so a user who runs
+			// `claude` from the terminal shell isn't greeted with "Not
+			// logged in". The terminal is auth-gated by ttydPathToken, so
+			// only the authenticated user can read these env vars.
+			env: apiKey
+				? {
+						ANTHROPIC_API_KEY: stripQuotes(apiKey),
+						CLAUDE_CONFIG_DIR,
+					}
+				: undefined,
 			networkPolicy: { allow: ALLOWED_DOMAINS },
 		});
 
@@ -441,6 +451,12 @@ cat /vercel/sandbox/message.txt | claude -p $SESSION_ARGS --system-prompt "$PROM
 			}
 			cloneArgs.push(params.cloneUrl, "/vercel/sandbox/repo");
 			await sandbox.runCommand("git", cloneArgs);
+
+			// Same claude auth setup as the agent path so `claude` works
+			// out of the box from the shell.
+			if (apiKey) {
+				await sandbox.writeFiles(claudeAuthFiles());
+			}
 
 			await startTtyd(sandbox);
 
@@ -529,6 +545,64 @@ async function startTtyd(sandbox: Sandbox): Promise<void> {
 		cwd: "/vercel/sandbox/repo",
 		detached: true,
 	});
+}
+
+/**
+ * Build the agent runner script. The script reads prompt + message + an
+ * optional claude session id from files in /vercel/sandbox/, and pipes
+ * the message into `claude -p`. Reading from files (not env or
+ * positional args) keeps shell injection out of the picture.
+ *
+ * On first run, --session-id creates a named claude session that
+ * persists to disk. On restore (claude-resume.flag exists), --resume
+ * loads the prior session, giving the agent full memory of its previous
+ * reasoning and tool calls.
+ *
+ * One source of truth for how the agent runs — anyone touching the
+ * runner edits this function.
+ */
+function buildRunnerScript(tools: string): string {
+	return `#!/bin/bash
+PROMPT=$(cat /vercel/sandbox/system-prompt.txt)
+SESSION_ARGS=""
+if [ -f /vercel/sandbox/claude-resume.flag ]; then
+  SESSION_ARGS="--resume $(cat /vercel/sandbox/claude-session-id.txt)"
+elif [ -f /vercel/sandbox/claude-session-id.txt ]; then
+  SESSION_ARGS="--session-id $(cat /vercel/sandbox/claude-session-id.txt)"
+fi
+cat /vercel/sandbox/message.txt | claude -p $SESSION_ARGS --system-prompt "$PROMPT" --allowedTools ${tools}
+`;
+}
+
+/**
+ * Files needed for claude CLI to authenticate non-interactively from
+ * `$ANTHROPIC_API_KEY`. Recent claude CLI versions (>=2.0) require
+ * either an OAuth token or an `apiKeyHelper` settings entry; the bare
+ * env var alone is no longer enough in non-interactive `-p` mode for
+ * every version. Writing a settings.json with apiKeyHelper that simply
+ * echoes the env var is the documented mechanism and works across
+ * versions.
+ *
+ * We also point CLAUDE_CONFIG_DIR at this directory in the sandbox env
+ * so the CLI looks here instead of $HOME/.claude (which we'd otherwise
+ * have to guess at — root vs vercel-sandbox).
+ *
+ * https://code.claude.com/docs/en/authentication
+ */
+function claudeAuthFiles(): Array<{ path: string; content: Buffer }> {
+	const settings = JSON.stringify(
+		{
+			apiKeyHelper: "echo $ANTHROPIC_API_KEY",
+		},
+		null,
+		2,
+	);
+	return [
+		{
+			path: `${CLAUDE_CONFIG_DIR}/settings.json`,
+			content: Buffer.from(settings),
+		},
+	];
 }
 
 export async function resolveSandboxState(
