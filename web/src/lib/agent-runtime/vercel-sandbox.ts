@@ -261,6 +261,10 @@ export class VercelSandboxProvider implements ComputeProvider, SnapshotCapable {
 					path: "/vercel/sandbox/run-agent.sh",
 					content: Buffer.from(buildRunnerScript(tools)),
 				},
+				{
+					path: "/vercel/sandbox/env.sh",
+					content: Buffer.from(buildEnvSource(apiKey)),
+				},
 				...claudeAuthFiles(apiKey),
 			];
 
@@ -570,6 +574,15 @@ async function startTtyd(sandbox: Sandbox): Promise<void> {
  * the message into `claude -p`. Reading from files (not env or
  * positional args) keeps shell injection out of the picture.
  *
+ * The first thing the script does is `source /vercel/sandbox/env.sh`,
+ * which the caller writes alongside the runner. Diagnostic probe
+ * (#308) revealed that env vars passed via `Sandbox.create({env: ...})`
+ * are NOT inherited by `sandbox.runCommand()` invocations — every
+ * runCommand spawns with an empty env relative to the sandbox config.
+ * Sourcing an env file is the most reliable way to get
+ * ANTHROPIC_API_KEY and CLAUDE_CONFIG_DIR into the runner's
+ * environment.
+ *
  * On first run, --session-id creates a named claude session that
  * persists to disk. On restore (claude-resume.flag exists), --resume
  * loads the prior session, giving the agent full memory of its previous
@@ -580,36 +593,8 @@ async function startTtyd(sandbox: Sandbox): Promise<void> {
  */
 function buildRunnerScript(tools: string): string {
 	return `#!/bin/bash
-# === DIAGNOSTIC PROBE — temporary, see PR ====================================
-# The "Not logged in" bug across #306 and #307 isn't responding to either the
-# inline-echo apiKeyHelper or the heredoc shell-script approach. This block
-# prints enough state to root-cause it from a single agent stream output.
-# Remove the block once we have a confirmed fix.
-echo "=== claude-auth-debug ==="
-echo "claude --version: $(claude --version 2>&1 || echo FAILED)"
-echo "which claude: $(which claude 2>&1)"
-echo "ANTHROPIC_API_KEY length: \${#ANTHROPIC_API_KEY}"
-echo "ANTHROPIC_AUTH_TOKEN length: \${#ANTHROPIC_AUTH_TOKEN}"
-echo "CLAUDE_CONFIG_DIR: $CLAUDE_CONFIG_DIR"
-echo "HOME: $HOME"
-echo "USER: $(whoami)"
-echo "--- ls -la $CLAUDE_CONFIG_DIR ---"
-ls -la "$CLAUDE_CONFIG_DIR" 2>&1 || echo "(dir missing)"
-echo "--- settings.json ---"
-cat "$CLAUDE_CONFIG_DIR/settings.json" 2>&1 || echo "(missing)"
-echo "--- api-key-helper.sh (first 3 lines, then last 3) ---"
-head -3 "$CLAUDE_CONFIG_DIR/api-key-helper.sh" 2>&1 || echo "(missing)"
-echo "..."
-tail -3 "$CLAUDE_CONFIG_DIR/api-key-helper.sh" 2>&1 || echo "(missing)"
-echo "--- helper exec test ---"
-sh "$CLAUDE_CONFIG_DIR/api-key-helper.sh" 2>&1 | sed 's/[a-zA-Z0-9_-]\\{20,\\}/<redacted>/g' || echo "(failed)"
-echo "--- ls ~/.claude (any stale state?) ---"
-ls -la ~/.claude 2>&1 || echo "(no ~/.claude)"
-echo "--- env | grep -i claude ---"
-env | grep -i claude 2>&1
-echo "=== /claude-auth-debug ==="
-echo
-
+set -e
+source /vercel/sandbox/env.sh
 PROMPT=$(cat /vercel/sandbox/system-prompt.txt)
 SESSION_ARGS=""
 if [ -f /vercel/sandbox/claude-resume.flag ]; then
@@ -618,6 +603,21 @@ elif [ -f /vercel/sandbox/claude-session-id.txt ]; then
   SESSION_ARGS="--session-id $(cat /vercel/sandbox/claude-session-id.txt)"
 fi
 cat /vercel/sandbox/message.txt | claude -p $SESSION_ARGS --system-prompt "$PROMPT" --allowedTools ${tools}
+`;
+}
+
+/**
+ * Build the env-source file. Sandbox.create({env}) doesn't propagate
+ * to runCommand subprocesses (verified via #308 diagnostic probe), so
+ * we write a sourceable shell file with the values inlined and the
+ * runner sources it before invoking claude.
+ *
+ * Single-quoted to avoid shell interpretation of the API key value.
+ */
+function buildEnvSource(apiKey: string): string {
+	return `# Sourced by /vercel/sandbox/run-agent.sh — see buildEnvSource() comment.
+export ANTHROPIC_API_KEY='${stripQuotes(apiKey).replace(/'/g, "'\\''")}'
+export CLAUDE_CONFIG_DIR='${CLAUDE_CONFIG_DIR}'
 `;
 }
 
