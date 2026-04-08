@@ -580,6 +580,36 @@ async function startTtyd(sandbox: Sandbox): Promise<void> {
  */
 function buildRunnerScript(tools: string): string {
 	return `#!/bin/bash
+# === DIAGNOSTIC PROBE — temporary, see PR ====================================
+# The "Not logged in" bug across #306 and #307 isn't responding to either the
+# inline-echo apiKeyHelper or the heredoc shell-script approach. This block
+# prints enough state to root-cause it from a single agent stream output.
+# Remove the block once we have a confirmed fix.
+echo "=== claude-auth-debug ==="
+echo "claude --version: $(claude --version 2>&1 || echo FAILED)"
+echo "which claude: $(which claude 2>&1)"
+echo "ANTHROPIC_API_KEY length: \${#ANTHROPIC_API_KEY}"
+echo "ANTHROPIC_AUTH_TOKEN length: \${#ANTHROPIC_AUTH_TOKEN}"
+echo "CLAUDE_CONFIG_DIR: $CLAUDE_CONFIG_DIR"
+echo "HOME: $HOME"
+echo "USER: $(whoami)"
+echo "--- ls -la $CLAUDE_CONFIG_DIR ---"
+ls -la "$CLAUDE_CONFIG_DIR" 2>&1 || echo "(dir missing)"
+echo "--- settings.json ---"
+cat "$CLAUDE_CONFIG_DIR/settings.json" 2>&1 || echo "(missing)"
+echo "--- api-key-helper.sh (first 3 lines, then last 3) ---"
+head -3 "$CLAUDE_CONFIG_DIR/api-key-helper.sh" 2>&1 || echo "(missing)"
+echo "..."
+tail -3 "$CLAUDE_CONFIG_DIR/api-key-helper.sh" 2>&1 || echo "(missing)"
+echo "--- helper exec test ---"
+sh "$CLAUDE_CONFIG_DIR/api-key-helper.sh" 2>&1 | sed 's/[a-zA-Z0-9_-]\\{20,\\}/<redacted>/g' || echo "(failed)"
+echo "--- ls ~/.claude (any stale state?) ---"
+ls -la ~/.claude 2>&1 || echo "(no ~/.claude)"
+echo "--- env | grep -i claude ---"
+env | grep -i claude 2>&1
+echo "=== /claude-auth-debug ==="
+echo
+
 PROMPT=$(cat /vercel/sandbox/system-prompt.txt)
 SESSION_ARGS=""
 if [ -f /vercel/sandbox/claude-resume.flag ]; then
