@@ -7,6 +7,8 @@ export type AgentSessionState = "running" | "paused";
 export interface AgentTab {
 	agentName: string;
 	state?: AgentSessionState;
+	/** Optional display label. Falls back to agentName. */
+	label?: string;
 }
 
 interface AgentSubTabsProps {
@@ -53,7 +55,7 @@ export function AgentSubTabs({
 						onClick={() => onSelect(tab.agentName)}
 					>
 						<span className={dotClass} />
-						<span>{tab.agentName}</span>
+						<span>{tab.label ?? tab.agentName}</span>
 					</button>
 				);
 			})}
