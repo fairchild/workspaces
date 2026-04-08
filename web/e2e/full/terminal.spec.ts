@@ -18,7 +18,7 @@ test.describe("Terminal tab navigation", () => {
 	test("direct navigation to terminal tab works", async ({ page }) => {
 		await page.goto(TERMINAL_URL);
 		await expect(
-			page.getByRole("button", { name: "Terminal" }),
+			page.locator("nav").getByRole("button", { name: "Terminal" }),
 		).toHaveClass(/tabActive|Active/);
 	});
 
@@ -26,10 +26,11 @@ test.describe("Terminal tab navigation", () => {
 		await page.goto(TERMINAL_URL);
 		await expect(page).toHaveURL(/tab=terminal/);
 
-		await page.getByRole("button", { name: "Dashboard" }).click();
+		const tabBar = page.locator("nav");
+		await tabBar.getByRole("button", { name: "Dashboard" }).click();
 		await expect(page).not.toHaveURL(/tab=terminal/);
 
-		await page.getByRole("button", { name: "Terminal" }).click();
+		await tabBar.getByRole("button", { name: "Terminal" }).click();
 		await expect(page).toHaveURL(/tab=terminal/);
 	});
 
@@ -41,19 +42,16 @@ test.describe("Terminal tab navigation", () => {
 });
 
 test.describe("Terminal tab empty states", () => {
-	test("shows no-session message when no sandbox active", async ({ page }) => {
+	test("shows start button when no sandbox active", async ({ page }) => {
 		await page.goto(TERMINAL_URL);
+		await expect(page.getByText("No active terminal")).toBeVisible();
 		await expect(
-			page.getByText("No active sandbox session"),
+			page.getByRole("button", { name: "Start terminal" }),
 		).toBeVisible();
 	});
 
-	test("shows select-repo message when no repo selected", async ({
-		page,
-	}) => {
+	test("shows select-repo message when no repo selected", async ({ page }) => {
 		await page.goto("/dashboard?tab=terminal");
-		await expect(
-			page.getByText("Select a repository"),
-		).toBeVisible();
+		await expect(page.getByText("Select a repository")).toBeVisible();
 	});
 });

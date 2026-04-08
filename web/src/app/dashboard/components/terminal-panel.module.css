@@ -61,3 +61,57 @@
 	max-width: 300px;
 	line-height: 1.5;
 }
+
+.startButton {
+	margin-top: 0.5rem;
+	padding: 0.5rem 1.25rem;
+	background: transparent;
+	border: 1px solid var(--accent-dim);
+	border-radius: 4px;
+	color: var(--accent);
+	font-family: var(--font-mono), ui-monospace, monospace;
+	font-size: 0.75rem;
+	letter-spacing: 0.04em;
+	cursor: pointer;
+	transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.startButton:hover:not(:disabled) {
+	background: var(--accent-muted);
+	border-color: var(--accent);
+}
+
+.startButton:disabled {
+	opacity: 0.6;
+	cursor: default;
+}
+
+.startError {
+	margin-top: 0.5rem;
+	font-family: var(--font-mono), ui-monospace, monospace;
+	font-size: 0.6875rem;
+	color: #ff6b6b;
+	max-width: 400px;
+}
+
+.statusText {
+	flex: 1;
+}
+
+.stopButton {
+	background: transparent;
+	border: 1px solid var(--border-subtle);
+	border-radius: 3px;
+	color: var(--text-tertiary);
+	font-family: var(--font-mono), ui-monospace, monospace;
+	font-size: 0.625rem;
+	letter-spacing: 0.04em;
+	padding: 0.125rem 0.5rem;
+	cursor: pointer;
+	transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.stopButton:hover {
+	color: #ff6b6b;
+	border-color: #ff6b6b;
+}
