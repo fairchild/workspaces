@@ -31,6 +31,12 @@ const CHAT_IDS = [
 	"e2e-chat-6",
 ];
 
+const SESSION_IDS = [
+	"e2e-session-paused-april",
+	// Add more here when we want running fixtures (running needs a real
+	// sandbox or mocking — paused works without any real sandbox)
+];
+
 function minutesAgo(day: number, minutes: number): string {
 	const d = new Date();
 	d.setDate(d.getDate() - day);
@@ -74,6 +80,27 @@ export default async function globalSetup() {
 		discussion_url TEXT,
 		timestamp TEXT NOT NULL
 	)`);
+
+	await db.execute(`CREATE TABLE IF NOT EXISTS agent_sessions (
+		id TEXT PRIMARY KEY,
+		repo TEXT NOT NULL,
+		agent_name TEXT NOT NULL,
+		compute_backend TEXT NOT NULL,
+		compute_instance_id TEXT,
+		thread_id TEXT NOT NULL,
+		discussion_id TEXT,
+		status TEXT NOT NULL,
+		created_at TEXT NOT NULL,
+		last_activity_at TEXT NOT NULL,
+		snapshot_id TEXT,
+		claude_session_id TEXT
+	)`);
+
+	// Wipe any e2e fixtures from previous runs so the test starts clean
+	await db.execute({
+		sql: "DELETE FROM agent_sessions WHERE id LIKE ?",
+		args: ["e2e-session-%"],
+	});
 
 	// Seed user repo
 	await db.execute({
@@ -129,4 +156,29 @@ export default async function globalSetup() {
 			args: [m.id, TEST_REPO, m.author, m.authorType, m.content, m.ts],
 		});
 	}
+
+	// Seed one paused session so the terminal tab tests have something to
+	// render the Resume / sub-tab states against. We use a fake sandbox ID;
+	// the status route will report it as paused (no Sandbox.get() needed)
+	// because status='snapshotted' is treated as paused without a liveness
+	// check.
+	const now = new Date().toISOString();
+	await db.execute({
+		sql: `INSERT OR REPLACE INTO agent_sessions (
+			id, repo, agent_name, compute_backend, compute_instance_id,
+			snapshot_id, thread_id, status, created_at, last_activity_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		args: [
+			SESSION_IDS[0],
+			TEST_REPO,
+			"april-clearwater",
+			"vercel-sandbox",
+			"sbx_e2e_paused_april",
+			"snap_e2e_paused_april",
+			"e2e-thread-paused",
+			"snapshotted",
+			now,
+			now,
+		],
+	});
 }

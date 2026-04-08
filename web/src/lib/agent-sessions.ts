@@ -43,6 +43,22 @@ async function ensureSessionTable(): Promise<void> {
 			// Column already exists
 		}
 	}
+	// Migrate: rename the synthetic terminal slot from "terminal" to "shell".
+	// PR #299 changed the default fallback from "terminal" to "shell" but
+	// existing rows weren't updated. Without this, those rows are orphaned —
+	// the UI shows them as "shell" via the display alias but the Stop button
+	// sends agentName="shell" which doesn't match. One-shot rename so the DB
+	// matches the new vocabulary.
+	try {
+		await db
+			.updateTable("agent_sessions")
+			.set({ agent_name: "shell" })
+			.where("agent_name", "=", "terminal")
+			.where("status", "in", ["active", "streaming", "snapshotted"] as never[])
+			.execute();
+	} catch {
+		// Best-effort — don't block startup if the migration fails
+	}
 	migrated = true;
 }
 

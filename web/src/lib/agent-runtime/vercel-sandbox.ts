@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { Sandbox, Snapshot } from "@vercel/sandbox";
 import ms from "ms";
 import { getBaseSnapshotId, recordBaseSnapshot } from "../base-snapshots";
@@ -402,10 +403,12 @@ cat /vercel/sandbox/message.txt | claude -p $SESSION_ARGS --system-prompt "$PROM
 			networkPolicy: { allow: ALLOWED_DOMAINS },
 		});
 
-		// Restart ttyd for terminal access after restore
+		// Restart ttyd with the same base-path token derived from the new
+		// sandbox ID so the URL is properly auth-gated after restore.
+		const token = ttydPathToken(sandbox.sandboxId);
 		await sandbox.runCommand({
 			cmd: "ttyd",
-			args: ["-W", "-p", "7681", "bash"],
+			args: ["-W", "-p", "7681", "-b", `/${token}`, "bash"],
 			cwd: "/vercel/sandbox/repo",
 			detached: true,
 		});
@@ -447,10 +450,13 @@ cat /vercel/sandbox/message.txt | claude -p $SESSION_ARGS --system-prompt "$PROM
 			cloneArgs.push(params.cloneUrl, "/vercel/sandbox/repo");
 			await sandbox.runCommand("git", cloneArgs);
 
-			// Start ttyd for WebSocket terminal access
+			// Start ttyd with a randomized base path so the public sandbox URL
+			// alone is not enough to connect — an attacker who guesses a sandbox
+			// ID still can't reach the shell without the HMAC-derived token.
+			const token = ttydPathToken(sandbox.sandboxId);
 			await sandbox.runCommand({
 				cmd: "ttyd",
-				args: ["-W", "-p", "7681", "bash"],
+				args: ["-W", "-p", "7681", "-b", `/${token}`, "bash"],
 				cwd: "/vercel/sandbox/repo",
 				detached: true,
 			});
@@ -492,12 +498,37 @@ export type SandboxState =
 const ALIVE_STATUSES: ReadonlySet<string> = new Set(["running", "pending"]);
 
 /**
- * Turn `sandbox.domain(7681)` (an https:// URL) into the ttyd WebSocket
- * endpoint. ttyd serves its WebSocket at `/ws`; the root URL serves the
- * default HTML client which is not what we want.
+ * Derive a stable per-sandbox path token used as ttyd's `--base-path`.
+ *
+ * The terminal URL `https://sb-xxx.vercel.run/<token>/ws` is the only
+ * gate between an attacker and shell access. By making the path a 24-char
+ * HMAC of the sandbox ID + a server-side secret, an attacker who guesses
+ * a sandbox ID still can't connect without knowing the secret.
+ *
+ * The token is stateless — anywhere we know the sandbox ID, we can
+ * recompute it. No DB column needed.
+ *
+ * Exported for testing.
  */
-function ttydUrl(domain: string): string {
-	return `${domain.replace(/\/$/, "")}/ws`;
+export function ttydPathToken(sandboxId: string): string {
+	const secret =
+		process.env.TTYD_TOKEN_SECRET ??
+		process.env.BETTER_AUTH_SECRET ??
+		"dev-only-fallback-do-not-use-in-prod";
+	return crypto
+		.createHmac("sha256", secret)
+		.update(sandboxId)
+		.digest("hex")
+		.slice(0, 24);
+}
+
+/**
+ * Build the ttyd WebSocket URL for a sandbox: append the auth token path
+ * + `/ws`. ttyd serves its WebSocket at `<base-path>/ws`.
+ */
+function ttydUrl(domain: string, sandboxId: string): string {
+	const token = ttydPathToken(sandboxId);
+	return `${domain.replace(/\/$/, "")}/${token}/ws`;
 }
 
 export async function resolveSandboxState(
@@ -507,9 +538,16 @@ export async function resolveSandboxState(
 	const cached = activeSandboxes.get(instanceId);
 	if (cached && ALIVE_STATUSES.has(cached.status)) {
 		try {
-			return { alive: true, terminalUrl: ttydUrl(cached.domain(7681)) };
+			return {
+				alive: true,
+				terminalUrl: ttydUrl(cached.domain(7681), instanceId),
+			};
 		} catch {
-			return { alive: true }; // alive but no port 7681 (v1 snapshot)
+			// Pre-v2 sandbox without port 7681 published. We have no way to
+			// connect a terminal to it, so treat it as dead for our purposes —
+			// reconciliation will mark the session completed and the user can
+			// start a fresh sandbox that has ttyd.
+			return { alive: false };
 		}
 	}
 
@@ -523,9 +561,12 @@ export async function resolveSandboxState(
 			return { alive: false };
 		}
 		try {
-			return { alive: true, terminalUrl: ttydUrl(sandbox.domain(7681)) };
+			return {
+				alive: true,
+				terminalUrl: ttydUrl(sandbox.domain(7681), instanceId),
+			};
 		} catch {
-			return { alive: true };
+			return { alive: false };
 		}
 	} catch {
 		// Sandbox record doesn't exist at all (never created, or purged)
