@@ -43,6 +43,10 @@ export function DashboardShell({
 			? initialTab
 			: "dashboard";
 
+	// Shared across Terminal and Chat tabs — which agent's session is focused.
+	// Persisted in the URL so switching main tabs preserves the agent context.
+	const selectedAgent = searchParams.get("agent");
+
 	const [unreadChat, setUnreadChat] = useState(false);
 	const [leftCollapsed, setLeftCollapsed] = useState(false);
 	const [rightCollapsed, setRightCollapsed] = useState(false);
@@ -54,6 +58,20 @@ export function DashboardShell({
 				params.delete("tab");
 			} else {
 				params.set("tab", tab);
+			}
+			const qs = params.toString();
+			router.replace(`${pathname}${qs ? `?${qs}` : ""}`, { scroll: false });
+		},
+		[pathname, router, searchParams],
+	);
+
+	const setSelectedAgent = useCallback(
+		(agentName: string | null) => {
+			const params = new URLSearchParams(searchParams.toString());
+			if (agentName) {
+				params.set("agent", agentName);
+			} else {
+				params.delete("agent");
 			}
 			const qs = params.toString();
 			router.replace(`${pathname}${qs ? `?${qs}` : ""}`, { scroll: false });
@@ -211,9 +229,15 @@ export function DashboardShell({
 						selectedRepo={selectedRepo}
 						agents={agentData?.agents ?? []}
 						onNewMessage={handleNewChatMessage}
+						selectedAgent={selectedAgent}
+						onSelectAgent={setSelectedAgent}
 					/>
 				) : (
-					<TerminalPanel selectedRepo={selectedRepo} />
+					<TerminalPanel
+						selectedRepo={selectedRepo}
+						selectedAgent={selectedAgent}
+						onSelectAgent={setSelectedAgent}
+					/>
 				)}
 			</main>
 			<aside className={styles.right}>

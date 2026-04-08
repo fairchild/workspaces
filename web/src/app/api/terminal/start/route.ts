@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { VercelSandboxProvider } from "@/lib/agent-runtime/vercel-sandbox";
-import { createSession } from "@/lib/agent-sessions";
+import { createSession, getSessionForAgent } from "@/lib/agent-sessions";
 import { getSession } from "@/lib/auth-server";
 import { getGitHubToken } from "@/lib/github";
 import { getUserRepos } from "@/lib/repos";
@@ -10,12 +10,19 @@ export const maxDuration = 300;
 
 interface PostBody {
 	repo: string;
+	agentName?: string;
 	branch?: string;
 }
 
 /**
- * Start a standalone terminal sandbox — no agent, no chat required.
- * Creates a fresh Vercel sandbox with the repo cloned and ttyd running.
+ * Start a terminal sandbox for a specific agent on a repo.
+ *
+ * If `agentName` is omitted, defaults to `DEFAULT_AGENT` env var, falling
+ * back to "terminal" (a synthetic slot for ad-hoc shells not tied to any
+ * agent persona).
+ *
+ * If a live session already exists for (repo, agentName), returns it
+ * without creating a duplicate sandbox.
  */
 export async function POST(request: Request): Promise<Response> {
 	const session = await getSession();
@@ -42,6 +49,19 @@ export async function POST(request: Request): Promise<Response> {
 			{ error: "repo not in your workspace" },
 			{ status: 403 },
 		);
+	}
+
+	const agentName = body.agentName ?? process.env.DEFAULT_AGENT ?? "terminal";
+
+	// If a live session already exists for this (repo, agent), reuse it
+	const existing = await getSessionForAgent(body.repo, agentName);
+	if (existing?.computeInstanceId && existing.status !== "snapshotted") {
+		return Response.json({
+			sessionId: existing.id,
+			sandboxId: existing.computeInstanceId,
+			agentName,
+			status: "reused",
+		});
 	}
 
 	// Build clone URL — use token for private repos, fall back to public HTTPS
@@ -84,12 +104,12 @@ export async function POST(request: Request): Promise<Response> {
 	await createSession({
 		id: sessionId,
 		repo: body.repo,
-		agentName: "terminal",
+		agentName,
 		computeBackend: "vercel-sandbox",
 		computeInstanceId: result.instanceId,
 		snapshotId: null,
 		claudeSessionId: null,
-		threadId: `terminal:${session.user.id}:${Date.now()}`,
+		threadId: `terminal:${session.user.id}:${agentName}:${Date.now()}`,
 		discussionId: null,
 		status: "active",
 		createdAt: now,
@@ -99,6 +119,7 @@ export async function POST(request: Request): Promise<Response> {
 	return Response.json({
 		sessionId,
 		sandboxId: result.instanceId,
+		agentName,
 		status: "ready",
 	});
 }

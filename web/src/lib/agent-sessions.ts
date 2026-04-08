@@ -206,6 +206,56 @@ export async function getActiveSessionForRepo(
 	return row ? rowToSession(row) : null;
 }
 
+/**
+ * Find all live sessions for a repo, one per agent. Returns the most
+ * recent session (by last_activity_at) for each distinct agent_name.
+ * Used by the terminal tab to render agent sub-tabs.
+ */
+export async function getSessionsForRepo(
+	repo: string,
+): Promise<AgentSession[]> {
+	await ensureSessionTable();
+	const db = getDb();
+	const rows = await db
+		.selectFrom("agent_sessions")
+		.selectAll()
+		.where("repo", "=", repo)
+		.where("status", "in", ["active", "streaming", "snapshotted"])
+		.where("compute_instance_id", "is not", null)
+		.orderBy("last_activity_at", "desc")
+		.execute();
+
+	// Dedupe by agent_name, keeping the most recent (rows already ordered desc)
+	const seen = new Set<string>();
+	const sessions: AgentSession[] = [];
+	for (const r of rows) {
+		if (seen.has(r.agent_name)) continue;
+		seen.add(r.agent_name);
+		sessions.push(rowToSession(r));
+	}
+	return sessions;
+}
+
+/** Find the most recent live session for a specific (repo, agent). */
+export async function getSessionForAgent(
+	repo: string,
+	agentName: string,
+): Promise<AgentSession | null> {
+	await ensureSessionTable();
+	const db = getDb();
+	const row = await db
+		.selectFrom("agent_sessions")
+		.selectAll()
+		.where("repo", "=", repo)
+		.where("agent_name", "=", agentName)
+		.where("status", "in", ["active", "streaming", "snapshotted"])
+		.where("compute_instance_id", "is not", null)
+		.orderBy("last_activity_at", "desc")
+		.limit(1)
+		.executeTakeFirst();
+	return row ? rowToSession(row) : null;
+}
+
 /** Find the most recent snapshotted session for a thread (for restore). */
 export async function getSnapshotSessionForThread(
 	repo: string,

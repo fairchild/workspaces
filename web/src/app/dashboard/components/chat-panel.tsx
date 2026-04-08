@@ -1,7 +1,8 @@
 "use client";
 
 import type { Agent, TimelineEntry } from "@/lib/types";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AgentSubTabs } from "./agent-sub-tabs";
 import styles from "./chat-panel.module.css";
 import { ComposeBar } from "./compose-bar";
 import { MessageList } from "./message-list";
@@ -21,17 +22,29 @@ interface AgentSessionInfo {
 	threadId: string;
 }
 
+interface TerminalSessionInfo {
+	agentName: string;
+	state: "running" | "paused";
+}
+
 interface ChatPanelProps {
 	selectedRepo: { owner: string; repo: string } | null;
 	agents: Agent[];
 	onNewMessage?: () => void;
+	selectedAgent?: string | null;
+	onSelectAgent?: (agentName: string | null) => void;
 }
 
 export function ChatPanel({
 	selectedRepo,
 	agents,
 	onNewMessage,
+	selectedAgent = null,
+	onSelectAgent,
 }: ChatPanelProps) {
+	const [terminalSessions, setTerminalSessions] = useState<
+		TerminalSessionInfo[]
+	>([]);
 	const [entries, setEntries] = useState<TimelineEntry[]>([]);
 	const [loading, setLoading] = useState(false);
 	const [streamingMessage, setStreamingMessage] = useState<{
@@ -83,6 +96,33 @@ export function ChatPanel({
 			// retry on next poll
 		}
 	}, [repo, onNewMessage]);
+
+	// Fetch terminal sessions so the sub-tab strip can show what's live
+	const fetchTerminalSessions = useCallback(async () => {
+		if (!repo) {
+			setTerminalSessions([]);
+			return;
+		}
+		try {
+			const res = await fetch(
+				`/api/terminal/status?repo=${encodeURIComponent(repo)}`,
+			);
+			if (res.ok) {
+				const data = (await res.json()) as {
+					sessions?: TerminalSessionInfo[];
+				};
+				setTerminalSessions(data.sessions ?? []);
+			}
+		} catch {
+			// silent
+		}
+	}, [repo]);
+
+	useEffect(() => {
+		fetchTerminalSessions();
+		const id = setInterval(fetchTerminalSessions, 10_000);
+		return () => clearInterval(id);
+	}, [fetchTerminalSessions]);
 
 	useEffect(() => {
 		setEntries([]);
@@ -297,6 +337,41 @@ export function ChatPanel({
 		[repo, fetchTimeline, connectToAgentStream],
 	);
 
+	// Filter entries to the selected agent's thread, if one is selected.
+	// "All" (selectedAgent === null) shows everything.
+	const filteredEntries = useMemo(() => {
+		if (!selectedAgent) return entries;
+		return entries.filter((entry) => {
+			if (entry.kind !== "chat") return true; // keep events/status cards
+			// Match messages authored by the selected agent, or mentioning them
+			if (entry.authorType === "agent" && entry.author === selectedAgent) {
+				return true;
+			}
+			if (entry.agentTarget === selectedAgent) return true;
+			return false;
+		});
+	}, [entries, selectedAgent]);
+
+	// Build sub-tab list: union of terminal sessions and agents seen in
+	// the timeline. Always include an "All" pseudo-tab at the start.
+	const subTabs = useMemo(() => {
+		const map = new Map<
+			string,
+			{ agentName: string; state?: "running" | "paused" }
+		>();
+		for (const s of terminalSessions) {
+			map.set(s.agentName, { agentName: s.agentName, state: s.state });
+		}
+		for (const e of entries) {
+			if (e.kind !== "chat") continue;
+			const name =
+				e.authorType === "agent" ? e.author : (e.agentTarget ?? null);
+			if (!name) continue;
+			if (!map.has(name)) map.set(name, { agentName: name });
+		}
+		return [...map.values()];
+	}, [terminalSessions, entries]);
+
 	if (!selectedRepo) {
 		return (
 			<div className={styles.noRepo}>
@@ -309,10 +384,20 @@ export function ChatPanel({
 	}
 
 	return (
-		<div className={styles.panel}>
-			<MessageList entries={entries} loading={loading} />
-			<StreamingBubble message={streamingMessage} />
-			<ComposeBar repo={repo as string} agents={agents} onSend={handleSend} />
-		</div>
+		<>
+			<AgentSubTabs
+				tabs={[{ agentName: "all" }, ...subTabs]}
+				selected={selectedAgent ?? "all"}
+				onSelect={(name) => {
+					onSelectAgent?.(name === "all" ? null : name);
+				}}
+				showNew={false}
+			/>
+			<div className={styles.panel}>
+				<MessageList entries={filteredEntries} loading={loading} />
+				<StreamingBubble message={streamingMessage} />
+				<ComposeBar repo={repo as string} agents={agents} onSend={handleSend} />
+			</div>
+		</>
 	);
 }
