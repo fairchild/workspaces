@@ -287,13 +287,10 @@ cat /vercel/sandbox/message.txt | claude -p $SESSION_ARGS --system-prompt "$PROM
 
 			await sandbox.writeFiles(filesToWrite);
 
-			// Start ttyd for WebSocket terminal access on port 7681
-			await sandbox.runCommand({
-				cmd: "ttyd",
-				args: ["-W", "-p", "7681", "bash"],
-				cwd: "/vercel/sandbox/repo",
-				detached: true,
-			});
+			// Auth-gated ttyd on port 7681 — same path token as the terminal
+			// tab so an attacker who finds an agent sandbox URL still can't
+			// shell into it without knowing the token secret.
+			await startTtyd(sandbox);
 
 			activeSandboxes.set(instanceId, sandbox);
 			return { instanceId, status: "ready" };
@@ -403,15 +400,10 @@ cat /vercel/sandbox/message.txt | claude -p $SESSION_ARGS --system-prompt "$PROM
 			networkPolicy: { allow: ALLOWED_DOMAINS },
 		});
 
-		// Restart ttyd with the same base-path token derived from the new
-		// sandbox ID so the URL is properly auth-gated after restore.
-		const token = ttydPathToken(sandbox.sandboxId);
-		await sandbox.runCommand({
-			cmd: "ttyd",
-			args: ["-W", "-p", "7681", "-b", `/${token}`, "bash"],
-			cwd: "/vercel/sandbox/repo",
-			detached: true,
-		});
+		// Restart ttyd with the auth-gated base-path. The token is derived
+		// from the new sandbox ID, not the old one — ttydUrl() also reads
+		// from the new ID, so they stay in sync.
+		await startTtyd(sandbox);
 
 		const instanceId = sandbox.sandboxId;
 		activeSandboxes.set(instanceId, sandbox);
@@ -450,16 +442,7 @@ cat /vercel/sandbox/message.txt | claude -p $SESSION_ARGS --system-prompt "$PROM
 			cloneArgs.push(params.cloneUrl, "/vercel/sandbox/repo");
 			await sandbox.runCommand("git", cloneArgs);
 
-			// Start ttyd with a randomized base path so the public sandbox URL
-			// alone is not enough to connect — an attacker who guesses a sandbox
-			// ID still can't reach the shell without the HMAC-derived token.
-			const token = ttydPathToken(sandbox.sandboxId);
-			await sandbox.runCommand({
-				cmd: "ttyd",
-				args: ["-W", "-p", "7681", "-b", `/${token}`, "bash"],
-				cwd: "/vercel/sandbox/repo",
-				detached: true,
-			});
+			await startTtyd(sandbox);
 
 			const instanceId = sandbox.sandboxId;
 			activeSandboxes.set(instanceId, sandbox);
@@ -529,6 +512,23 @@ export function ttydPathToken(sandboxId: string): string {
 function ttydUrl(domain: string, sandboxId: string): string {
 	const token = ttydPathToken(sandboxId);
 	return `${domain.replace(/\/$/, "")}/${token}/ws`;
+}
+
+/**
+ * Start ttyd inside a sandbox with the auth-gated base-path. This is the
+ * ONE place that decides ttyd's invocation — every sandbox we create
+ * (agent chat, terminal tab, restored snapshot) must call this so the
+ * URL we later construct via `ttydUrl()` matches what ttyd actually
+ * serves and the shell stays behind the HMAC token.
+ */
+async function startTtyd(sandbox: Sandbox): Promise<void> {
+	const token = ttydPathToken(sandbox.sandboxId);
+	await sandbox.runCommand({
+		cmd: "ttyd",
+		args: ["-W", "-p", "7681", "-b", `/${token}`, "bash"],
+		cwd: "/vercel/sandbox/repo",
+		detached: true,
+	});
 }
 
 export async function resolveSandboxState(

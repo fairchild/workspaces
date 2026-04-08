@@ -16,12 +16,6 @@ interface TerminalPanelProps {
 
 const SHELL_SLOT = "shell";
 
-/** Pretty label for the synthetic shell slot. */
-function displayAgentName(name: string): string {
-	if (name === SHELL_SLOT || name === "terminal") return "shell";
-	return name;
-}
-
 export function TerminalPanel({
 	selectedRepo,
 	selectedAgent,
@@ -78,13 +72,13 @@ export function TerminalPanel({
 	}> = sessions.map((s) => ({
 		agentName: s.agentName,
 		state: s.state,
-		label: displayAgentName(s.agentName),
+		label: s.agentName,
 	}));
 	for (const slot of Object.keys(provisioning)) {
 		if (!subTabs.some((t) => t.agentName === slot)) {
 			subTabs.push({
 				agentName: slot,
-				label: displayAgentName(slot),
+				label: slot,
 			});
 		}
 	}
@@ -159,8 +153,8 @@ export function TerminalPanel({
 				<div className={styles.noSession}>
 					<span className={styles.noSessionIcon}>⏸</span>
 					<span className={styles.noSessionText}>
-						<strong>{displayAgentName(activeSession.agentName)}</strong>
-						&apos;s sandbox is paused. Resume it to reconnect the terminal.
+						<strong>{activeSession.agentName}</strong>&apos;s sandbox is paused.
+						Resume it to reconnect the terminal.
 					</span>
 					<button
 						type="button"
@@ -191,16 +185,15 @@ export function TerminalPanel({
 				<div className={styles.noSession}>
 					<span className={styles.noSessionIcon}>&gt;_</span>
 					<span className={styles.noSessionText}>
-						No active terminal for{" "}
-						<strong>{displayAgentName(selectedAgent)}</strong>. Start a fresh
-						shell with the repo cloned and ready.
+						No active terminal for <strong>{selectedAgent}</strong>. Start a
+						fresh shell with the repo cloned and ready.
 					</span>
 					<button
 						type="button"
 						className={styles.startButton}
 						onClick={() => startTerminal(selectedAgent)}
 					>
-						Start terminal for {displayAgentName(selectedAgent)}
+						Start terminal for {selectedAgent}
 					</button>
 					{error && <span className={styles.startError}>{error}</span>}
 				</div>
@@ -239,7 +232,7 @@ export function TerminalPanel({
 						className={`${styles.statusDot} ${styles.statusDotConnected}`}
 					/>
 					<span className={styles.statusText}>
-						PTY: {displayAgentName(activeSession?.agentName ?? SHELL_SLOT)}
+						PTY: {activeSession?.agentName ?? SHELL_SLOT}
 					</span>
 					<button
 						type="button"
@@ -247,9 +240,9 @@ export function TerminalPanel({
 						onClick={() =>
 							activeSession && stopTerminal(activeSession.agentName)
 						}
-						title={`Stop ${displayAgentName(activeSession?.agentName ?? SHELL_SLOT)}`}
+						title={`Stop ${activeSession?.agentName ?? SHELL_SLOT}`}
 					>
-						Stop {displayAgentName(activeSession?.agentName ?? SHELL_SLOT)}
+						Stop {activeSession?.agentName ?? SHELL_SLOT}
 					</button>
 				</div>
 			</div>

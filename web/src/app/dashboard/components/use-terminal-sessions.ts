@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 export interface TerminalSessionInfo {
 	agentName: string;
@@ -34,6 +34,10 @@ const PROVISIONING_MAX_POLLS = 20;
  * Owns the terminal session state for one repo: polling, provisioning,
  * and the start/stop/resume mutations. The TerminalPanel uses this to
  * stay focused on rendering.
+ *
+ * All callbacks close over `repo`, so changing repo invalidates them and
+ * the polling effect re-runs with the new value. State is reset on the
+ * same edge so the user never sees stale sessions from the previous repo.
  */
 export function useTerminalSessions(repo: string | null): UseTerminalSessions {
 	const [sessions, setSessions] = useState<TerminalSessionInfo[]>([]);
@@ -42,21 +46,14 @@ export function useTerminalSessions(repo: string | null): UseTerminalSessions {
 	>({});
 	const [error, setError] = useState<string | null>(null);
 
-	// Stable callback references to avoid re-creating on every render
-	const repoRef = useRef(repo);
-	useEffect(() => {
-		repoRef.current = repo;
-	}, [repo]);
-
 	const refresh = useCallback(async (): Promise<TerminalSessionInfo[]> => {
-		const r = repoRef.current;
-		if (!r) {
+		if (!repo) {
 			setSessions([]);
 			return [];
 		}
 		try {
 			const res = await fetch(
-				`/api/terminal/status?repo=${encodeURIComponent(r)}`,
+				`/api/terminal/status?repo=${encodeURIComponent(repo)}`,
 			);
 			if (res.ok) {
 				const data: StatusResponse = await res.json();
@@ -68,21 +65,19 @@ export function useTerminalSessions(repo: string | null): UseTerminalSessions {
 			// silent — next poll will retry
 		}
 		return [];
-	}, []);
+	}, [repo]);
 
-	// Poll the status API on a fixed interval
-	useEffect(() => {
-		refresh();
-		const id = setInterval(refresh, POLL_INTERVAL_MS);
-		return () => clearInterval(id);
-	}, [refresh]);
-
-	// Reset state when repo changes
+	// Poll the status API on a fixed interval. When repo changes, refresh
+	// gets a new identity and this effect re-runs: blank state, fetch fresh,
+	// and start a new interval pinned to the new repo.
 	useEffect(() => {
 		setSessions([]);
 		setProvisioning({});
 		setError(null);
-	}, []);
+		refresh();
+		const id = setInterval(refresh, POLL_INTERVAL_MS);
+		return () => clearInterval(id);
+	}, [refresh]);
 
 	const clearProvisioning = useCallback((slot: string) => {
 		setProvisioning((p) => {
@@ -129,8 +124,7 @@ export function useTerminalSessions(repo: string | null): UseTerminalSessions {
 	 */
 	const startTerminal = useCallback(
 		async (agentName?: string): Promise<string | null> => {
-			const r = repoRef.current;
-			if (!r) return null;
+			if (!repo) return null;
 			const slot = agentName ?? "shell";
 			if (provisioning[slot]) return slot;
 
@@ -142,7 +136,7 @@ export function useTerminalSessions(repo: string | null): UseTerminalSessions {
 				const res = await fetch("/api/terminal/start", {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({ repo: r, agentName }),
+					body: JSON.stringify({ repo, agentName }),
 				});
 				if (!res.ok) {
 					const body = await res.json().catch(() => ({}));
@@ -161,20 +155,19 @@ export function useTerminalSessions(repo: string | null): UseTerminalSessions {
 			void pollUntilReady(slot);
 			return data.agentName;
 		},
-		[provisioning, pollUntilReady, clearProvisioning],
+		[repo, provisioning, pollUntilReady, clearProvisioning],
 	);
 
 	const resumeTerminal = useCallback(
 		async (agentName: string): Promise<void> => {
-			const r = repoRef.current;
-			if (!r || provisioning[agentName]) return;
+			if (!repo || provisioning[agentName]) return;
 			setProvisioning((p) => ({ ...p, [agentName]: "resuming" }));
 			setError(null);
 			try {
 				const res = await fetch("/api/terminal/resume", {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({ repo: r, agentName }),
+					body: JSON.stringify({ repo, agentName }),
 				});
 				if (!res.ok) {
 					const body = await res.json().catch(() => ({}));
@@ -191,25 +184,24 @@ export function useTerminalSessions(repo: string | null): UseTerminalSessions {
 			// Fire-and-forget — same reasoning as startTerminal.
 			void pollUntilReady(agentName);
 		},
-		[provisioning, pollUntilReady, clearProvisioning],
+		[repo, provisioning, pollUntilReady, clearProvisioning],
 	);
 
 	const stopTerminal = useCallback(
 		async (agentName: string): Promise<void> => {
-			const r = repoRef.current;
-			if (!r) return;
+			if (!repo) return;
 			try {
 				await fetch("/api/terminal/stop", {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({ repo: r, agentName }),
+					body: JSON.stringify({ repo, agentName }),
 				});
 			} catch {
 				// best-effort; refresh below
 			}
 			await refresh();
 		},
-		[refresh],
+		[repo, refresh],
 	);
 
 	return {
