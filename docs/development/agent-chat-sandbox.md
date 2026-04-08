@@ -174,7 +174,83 @@ The E2E script tests:
 
 Creating a sandbox from scratch (install node, install claude-code) takes minutes. To avoid this on every request:
 
-1. First request creates a **base snapshot**: node22 runtime + `@anthropic-ai/claude-code` globally installed
+1. First request creates a **base snapshot**: node22 runtime + `@anthropic-ai/claude-code` globally installed + ttyd
 2. The snapshot is promise-memoized — concurrent requests share the same creation
 3. Subsequent sandboxes clone from the base snapshot (seconds, not minutes)
 4. Base snapshots expire after 30 days; session snapshots after 7 days
+
+## Claude CLI Authentication (don't re-break this)
+
+The runner invokes `claude -p` inside the sandbox. Claude CLI needs
+credentials, and setting them up is NOT as simple as it looks.
+
+### The gotcha
+
+`Sandbox.create({env: {...}})` **does NOT propagate** env vars to
+`sandbox.runCommand()` invocations. Every `runCommand` spawns with an
+empty environment relative to the sandbox-level config. Passing
+`ANTHROPIC_API_KEY` at sandbox creation and hoping `claude` sees it
+in env was silently broken from whenever Vercel changed the env
+behavior (maybe since day one — we just didn't notice because early
+tests hit a cached snapshot response).
+
+PR #306 and PR #307 both failed because they assumed env
+propagation. PR #308 (a temporary diagnostic probe in the runner
+script) revealed the actual state — all expected env vars were
+length 0. PR #309 fixed it.
+
+### The fix: source env.sh
+
+The runner script starts with:
+
+```bash
+#!/bin/bash
+set -e
+source /vercel/sandbox/env.sh
+```
+
+`env.sh` is written alongside the runner by `buildEnvSource(apiKey)`:
+
+```sh
+# Sourced by /vercel/sandbox/run-agent.sh
+export ANTHROPIC_API_KEY='<key>'
+export CLAUDE_CONFIG_DIR='/vercel/sandbox/claude-config'
+```
+
+The API key value is single-quoted with apostrophe escaping
+(`'\\''`) so a key containing a literal apostrophe won't break the
+source. After sourcing, `ANTHROPIC_API_KEY` is in the bash env,
+`claude` inherits it, and per the [docs](https://code.claude.com/docs/en/authentication)
+the CLI uses it directly in non-interactive `-p` mode.
+
+`CLAUDE_CONFIG_DIR` points the CLI at a known absolute path (no
+HOME ambiguity between `root` and `vercel-sandbox` users), and a
+`settings.json` in that dir provides an `apiKeyHelper` fallback in
+case env-var auth ever stops working.
+
+### If "Not logged in" comes back
+
+1. Check the agent stream output for `"Not logged in · Please run /login"`
+2. Temporarily re-add a diagnostic probe to `buildRunnerScript()` —
+   the pattern is in git history on PR #308:
+   ```bash
+   echo "ANTHROPIC_API_KEY length: ${#ANTHROPIC_API_KEY}"
+   echo "CLAUDE_CONFIG_DIR: $CLAUDE_CONFIG_DIR"
+   ls -la "$CLAUDE_CONFIG_DIR"
+   ```
+3. Ship the probe, send one chat message, read the stream output.
+   Four PRs of guesswork were replaced by one probe cycle in this arc.
+4. Don't merge a fix without exercising the agent stream end-to-end
+   in production. Green unit tests and lint are necessary but not
+   sufficient — the test surface doesn't include the "does claude
+   actually authenticate" path.
+
+## Troubleshooting
+
+| Symptom | Most likely cause | Fix |
+|---------|------------------|-----|
+| "Not logged in · Please run /login" in agent stream | env.sh not sourced, or ANTHROPIC_API_KEY missing | See "Claude CLI Authentication" section above |
+| Agent stream hangs on "Agent is thinking..." | Base snapshot issue (old CLI version, network policy) | Bump `BASE_SNAPSHOT_VERSION`, recreate base |
+| `Sandbox.create` throws "Missing credentials" | Dev env has no Vercel token | `.env.local` needs `VERCEL_TOKEN` + `VERCEL_TEAM_ID` + `VERCEL_PROJECT_ID`, or run on Vercel |
+| ttyd WebSocket 404s | ttyd started without `-b /<token>` base path | All sandbox creation must go through `startTtyd(sandbox)` helper |
+| Agent sub-tab can't connect to restored sandbox | `restoreSnapshot` didn't re-run `startTtyd` with a new token | Handled in `restoreSnapshot` — verify via `resolveSandboxState` returns a `terminalUrl` with the new sandbox ID's token |
