@@ -23,7 +23,7 @@ export interface UseTerminalSessions {
 	startTerminal: (agentName?: string) => Promise<string | null>;
 	stopTerminal: (agentName: string) => Promise<void>;
 	resumeTerminal: (agentName: string) => Promise<void>;
-	refresh: () => Promise<void>;
+	refresh: () => Promise<TerminalSessionInfo[]>;
 }
 
 const POLL_INTERVAL_MS = 10_000;
@@ -48,11 +48,11 @@ export function useTerminalSessions(repo: string | null): UseTerminalSessions {
 		repoRef.current = repo;
 	}, [repo]);
 
-	const refresh = useCallback(async () => {
+	const refresh = useCallback(async (): Promise<TerminalSessionInfo[]> => {
 		const r = repoRef.current;
 		if (!r) {
 			setSessions([]);
-			return;
+			return [];
 		}
 		try {
 			const res = await fetch(
@@ -60,11 +60,14 @@ export function useTerminalSessions(repo: string | null): UseTerminalSessions {
 			);
 			if (res.ok) {
 				const data: StatusResponse = await res.json();
-				setSessions(data.sessions ?? []);
+				const list = data.sessions ?? [];
+				setSessions(list);
+				return list;
 			}
 		} catch {
 			// silent — next poll will retry
 		}
+		return [];
 	}, []);
 
 	// Poll the status API on a fixed interval
@@ -81,10 +84,48 @@ export function useTerminalSessions(repo: string | null): UseTerminalSessions {
 		setError(null);
 	}, []);
 
+	const clearProvisioning = useCallback((slot: string) => {
+		setProvisioning((p) => {
+			const next = { ...p };
+			delete next[slot];
+			return next;
+		});
+	}, []);
+
+	/**
+	 * Background poll: refreshes the sessions list until the named slot
+	 * appears as running, or until we hit the timeout. Always clears the
+	 * provisioning state at the end so the UI doesn't get stuck.
+	 *
+	 * This MUST run outside the click handler — awaiting a 20s loop inside
+	 * a button onClick blocks React's render cycle and triggers an INP
+	 * warning ("Event handlers blocked UI updates for 47s"). Spawn it with
+	 * `void pollUntilReady(...)` so the click handler can return immediately
+	 * and the provisioning placeholder renders right away.
+	 */
+	const pollUntilReady = useCallback(
+		async (slot: string): Promise<void> => {
+			try {
+				for (let i = 0; i < PROVISIONING_MAX_POLLS; i++) {
+					await new Promise((r) => setTimeout(r, PROVISIONING_POLL_MS));
+					const list = await refresh();
+					const found = list.find((s) => s.agentName === slot);
+					if (found && found.state === "running" && found.terminalUrl) {
+						return;
+					}
+				}
+			} finally {
+				clearProvisioning(slot);
+			}
+		},
+		[refresh, clearProvisioning],
+	);
+
 	/**
 	 * Provision a new sandbox. Optimistically marks the slot as provisioning,
-	 * polls until it shows up in the sessions list (or timeout), then clears.
-	 * Returns the slot name that was provisioned, or null on error.
+	 * fires the start request, and spawns a background poll to clear the
+	 * provisioning state once the session shows up. Returns the slot name
+	 * that was provisioned, or null on error.
 	 */
 	const startTerminal = useCallback(
 		async (agentName?: string): Promise<string | null> => {
@@ -96,6 +137,7 @@ export function useTerminalSessions(repo: string | null): UseTerminalSessions {
 			setProvisioning((p) => ({ ...p, [slot]: "starting" }));
 			setError(null);
 
+			let data: { agentName: string };
 			try {
 				const res = await fetch("/api/terminal/start", {
 					method: "POST",
@@ -105,27 +147,21 @@ export function useTerminalSessions(repo: string | null): UseTerminalSessions {
 				if (!res.ok) {
 					const body = await res.json().catch(() => ({}));
 					setError(body.error ?? `HTTP ${res.status}`);
+					clearProvisioning(slot);
 					return null;
 				}
-				const data = (await res.json()) as { agentName: string };
-				// Poll until the new session shows up in the list
-				for (let i = 0; i < PROVISIONING_MAX_POLLS; i++) {
-					await new Promise((r) => setTimeout(r, PROVISIONING_POLL_MS));
-					await refresh();
-				}
-				return data.agentName;
+				data = (await res.json()) as { agentName: string };
 			} catch (err) {
 				setError(err instanceof Error ? err.message : "Start failed");
+				clearProvisioning(slot);
 				return null;
-			} finally {
-				setProvisioning((p) => {
-					const next = { ...p };
-					delete next[slot];
-					return next;
-				});
 			}
+
+			// Fire-and-forget — don't block the click handler on the poll loop.
+			void pollUntilReady(slot);
+			return data.agentName;
 		},
-		[provisioning, refresh],
+		[provisioning, pollUntilReady, clearProvisioning],
 	);
 
 	const resumeTerminal = useCallback(
@@ -143,23 +179,19 @@ export function useTerminalSessions(repo: string | null): UseTerminalSessions {
 				if (!res.ok) {
 					const body = await res.json().catch(() => ({}));
 					setError(body.error ?? `HTTP ${res.status}`);
+					clearProvisioning(agentName);
 					return;
-				}
-				for (let i = 0; i < PROVISIONING_MAX_POLLS; i++) {
-					await new Promise((r) => setTimeout(r, PROVISIONING_POLL_MS));
-					await refresh();
 				}
 			} catch (err) {
 				setError(err instanceof Error ? err.message : "Resume failed");
-			} finally {
-				setProvisioning((p) => {
-					const next = { ...p };
-					delete next[agentName];
-					return next;
-				});
+				clearProvisioning(agentName);
+				return;
 			}
+
+			// Fire-and-forget — same reasoning as startTerminal.
+			void pollUntilReady(agentName);
 		},
-		[provisioning, refresh],
+		[provisioning, pollUntilReady, clearProvisioning],
 	);
 
 	const stopTerminal = useCallback(
