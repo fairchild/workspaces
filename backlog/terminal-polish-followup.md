@@ -1,72 +1,54 @@
 ---
 priority: 2
-description: Polish items for the multi-agent terminal that didn't make the first polish PR
+description: Small terminal polish items — each fits in one PR and needs no architectural decision. Larger items live in terminal-architecture-followups.md.
 ---
 
 # Terminal Polish Follow-Ups
 
-After the initial polish PR (resize bug + top 5 UX items), these are the rougher edges that remain. Listed roughly in order of user impact.
+Small UX and quality items for the multi-agent terminal. Each is scoped
+to fit in one PR with no design discussion needed. Listed roughly in
+order of user impact.
 
-## 1. Cost awareness UI
+For larger items that need design discussion (tmux, reconciliation cost,
+agent_name refactor, Cloudflare scaffold decision, cost UI), see
+`terminal-architecture-followups.md`.
 
-Each sandbox costs ~$0.10/hr. With multiple agents per repo across multiple repos, this can add up unnoticed. Need:
+## 1. Backgrounded terminals — verify reconnect-replay actually works
 
-- Header indicator: "● 3 active sandboxes"
-- Hover/click → list of active sessions across all repos
-- Estimated daily cost projection
-- Auto-stop after N minutes idle setting
+When the user switches Terminal tab → another main tab, ghostty-web
+stays mounted (kept around via `display: none` in `TerminalCanvas`).
+But the WebSocket might still close on long backgrounding. ttyd has a
+ring buffer; we need to verify reconnect-replay actually works after
+extended absence and add a smaller ring buffer in the Cloudflare proxy
+if not.
 
-## 2. Backgrounded terminals lose output
+Verification: open the terminal tab, run `seq 1 1000`, switch to
+Dashboard for 5 minutes, switch back. Expect to see all 1000 lines.
 
-When the user switches Terminal tab → another main tab, ghostty-web is currently kept mounted (post-polish PR). But the WebSocket might still close on long backgrounding. ttyd has a ring buffer; we need to verify reconnect-replay actually works after extended absence and add a smaller ring buffer in the proxy if not.
+## 2. Sub-tab order is unstable
 
-## 3. Resume preserves filesystem only, not shell process state
+Sessions come from the DB ordered by `last_activity_at desc`. Sub-tab
+order changes when you interact with one — confusing because the tab
+you just clicked moves. Should be either alphabetical or
+first-created-first.
 
-`Resume` restores the Vercel sandbox snapshot which captures the disk, but bash is a fresh process. So `cd somewhere`, `export VAR=...`, command history — all gone. Two options:
+Fix: order sub-tabs by `created_at asc` in `getSessionsForRepo` (or in
+the panel after fetch). Keep `last_activity_at` ordering only for
+"which session is the most recent" lookups.
 
-- **In-sandbox tmux**: run bash inside `tmux new -s shell` so the process survives. The sandbox can attach/detach.
-- **UI disclosure**: spell out the limitation in the Resume button tooltip ("Resume restores files; shell session restarts").
-
-## 4. Idle timeout / auto-stop / auto-snapshot
-
-Standalone terminal sandboxes get the 30min default. User opens, walks away, comes back to "no active terminal". Should:
-
-- Show countdown when terminal is idle ("idle for 25m, will stop in 5m unless used")
-- Auto-snapshot before timeout so user can resume
-- Configurable max idle minutes per sandbox
-
-## 5. Sub-tab order is unstable
-
-Sessions come from the DB ordered by `last_activity_at desc`. Sub-tab order changes when you interact with one. Confusing — should be alphabetical or first-created-first.
-
-## 6. No keyboard shortcuts for sub-tabs
+## 3. No keyboard shortcuts for sub-tabs
 
 Cmd+1/2/3 switches main tabs. Need shortcuts for sub-tabs:
-- Cmd+Shift+[ / Cmd+Shift+] for prev/next sub-tab
-- Cmd+Shift+1..9 for direct sub-tab selection
 
-## 7. Agents have isolated filesystems
+- `Cmd+Shift+[` / `Cmd+Shift+]` for prev/next sub-tab
+- `Cmd+Shift+1..9` for direct sub-tab selection
 
-By design, but surprising. User clones a branch in @april's terminal, switches to @plat's, the file isn't there. Either:
+Wire into the same dashboard keyboard handler that owns Cmd+1/2/3.
 
-- Add a UI hint somewhere ("each agent has their own isolated workspace")
-- Add a shared `/workspace/shared` volume mount that all agents see (Cloudflare R2 bucket via mountBucket)
+## 4. No visible cwd / welcome banner in fresh terminal
 
-## 8. agent_name column is overloaded
-
-Means three different things in the `agent_sessions` table:
-- The persona slug for chat agents (`april-clearwater`)
-- The synthetic slot for ad-hoc shells (`shell`)
-- The default agent identifier when no @mention
-
-Refactor to a clearer model:
-- `session_type: 'agent' | 'shell'`
-- `agent_id: string | null` (only set for type=agent)
-- Allow multiple shells per repo by promoting to `shell_name`
-
-## 9. No visible cwd in fresh terminal
-
-User sees `[vercel-sandbox@xxx repo]$` and has to type `pwd` to know where they are. A welcome banner like:
+User sees `[vercel-sandbox@xxx repo]$` and has to type `pwd` to know
+where they are. A welcome banner like:
 
 ```
 Welcome to fairchild/workspaces (sandbox)
@@ -76,42 +58,52 @@ agent: shell  •  shutdown: 30 min idle
 $
 ```
 
-## 10. + button needs a picker, not a default action
+Implement by writing to ttyd's stdin via the sandbox runCommand before
+detaching, or via a `.bashrc` snippet baked into the v3 base snapshot.
 
-Currently the `+` button just calls `startTerminal()` which uses the default agent slot. Should open a picker:
+## 5. Sub-tab strip visual subordination
 
-- `[default shell]`
-- `[pick agent]` → submenu of available agents from agent discovery
-- `[ad-hoc shell]` → arbitrary shell with a custom name
+Two horizontal nav bars stacked vertically with similar styling. The
+sub-tab strip should be visually subordinate to the main tab bar:
 
-## 11. Sub-tab strip vs main tab strip visual confusion
-
-Two horizontal nav bars stacked vertically with similar styling. Sub-tabs should be visually subordinate:
 - Smaller font
-- Left-indented (offset under the active main tab)
 - Different background tint
 - Or: collapsed into a dropdown when only one is active
 
-## 12. Stale active reconciliation runs on every status poll
+Pure CSS change, low risk.
 
-Each `/api/terminal/status` call iterates all sessions and calls `Sandbox.get()` for each. With 5 agents per repo, that's 5 HTTP calls every 10 seconds. Optimize:
-- Cache sandbox state in the route for 5 seconds
-- Or: batch the Sandbox.get calls (Vercel SDK doesn't support this today)
-- Or: trust the DB more aggressively, only reconcile on demand
+## 6. "Session ended" notification on Stop
 
-## 13. INP Issue toast pollutes screenshots
+Click Stop → sub-tab disappears immediately. No confirmation, no undo,
+no "your sandbox was stopped" toast. Easy to misclick. Add a brief
+toast that says "Stopped <agent> sandbox" with a 5-second undo button
+(re-creates the sandbox via createTerminalSandbox; doesn't restore
+state — that's the tmux item in the architecture backlog).
 
-Vercel's dev INP feedback widget appears in the bottom-right of screenshots. Not our code but it's distracting. Either:
-- Disable in dev mode somehow
-- CSS to hide via `[data-vercel-feedback]` selector
+## 7. Vercel INP feedback widget pollutes evidence screenshots
 
-## 14. No "session ended" notification on Stop
+Vercel's dev INP feedback widget appears in the bottom-right of every
+production screenshot. Not our code but it's distracting in evidence
+uploads.
 
-Click Stop → sub-tab disappears. No confirmation that it stopped, no undo, no "your sandbox was stopped" toast. Easy to misclick.
+Fix: CSS to hide via `[data-vercel-feedback]` selector, OR set the
+`vercel.feedback` cookie to disable, OR ignore in screenshot tooling.
+Cheapest: a CSS rule scoped to a `?evidence=1` query param that
+evidence.sh appends.
+
+## 8. Agents have isolated filesystems — surface this
+
+By design (each sandbox is its own /vercel/sandbox), but surprising.
+User clones a branch in @april's terminal, switches to @plat's, the
+file isn't there.
+
+Easiest fix: a one-line hint in the welcome banner or the sub-tab
+hover tooltip ("each agent has their own isolated workspace"). The
+shared-volume option is an architectural item — see
+`terminal-architecture-followups.md`.
 
 ## References
 
-- Initial polish PR: (this PR)
-- Reflection thread: see Chronicle/notes from that session
-- Architecture: `web/docs/architecture.md`
+- Architecture items: `backlog/terminal-architecture-followups.md`
+- Architecture overview: `web/docs/architecture.md`
 - Original multi-agent design: PR #298
