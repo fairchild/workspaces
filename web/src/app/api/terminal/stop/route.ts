@@ -1,7 +1,4 @@
-import {
-	getActiveSessionForRepo,
-	updateSessionStatus,
-} from "@/lib/agent-sessions";
+import { getSessionForAgent, updateSessionStatus } from "@/lib/agent-sessions";
 import { getSession } from "@/lib/auth-server";
 import { getUserRepos } from "@/lib/repos";
 import { Sandbox } from "@vercel/sandbox";
@@ -18,11 +15,12 @@ function getCredentials() {
 
 interface PostBody {
 	repo: string;
+	agentName?: string;
 }
 
 /**
- * Stop the active terminal session for a repo. Marks the session completed
- * and tells Vercel to stop the sandbox so we don't pay for idle time.
+ * Stop the active terminal session for (repo, agentName). If agentName is
+ * omitted, defaults to the DEFAULT_AGENT env var fallback used by start.
  */
 export async function POST(request: Request): Promise<Response> {
 	const session = await getSession();
@@ -43,7 +41,9 @@ export async function POST(request: Request): Promise<Response> {
 		);
 	}
 
-	const agentSession = await getActiveSessionForRepo(body.repo);
+	const agentName = body.agentName ?? process.env.DEFAULT_AGENT ?? "terminal";
+
+	const agentSession = await getSessionForAgent(body.repo, agentName);
 	if (!agentSession?.computeInstanceId) {
 		return Response.json({ stopped: false, reason: "no active session" });
 	}
@@ -61,5 +61,9 @@ export async function POST(request: Request): Promise<Response> {
 
 	await updateSessionStatus(agentSession.id, "completed");
 
-	return Response.json({ stopped: true, sessionId: agentSession.id });
+	return Response.json({
+		stopped: true,
+		sessionId: agentSession.id,
+		agentName,
+	});
 }

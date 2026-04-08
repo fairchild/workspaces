@@ -1,13 +1,21 @@
-import {
-	getActiveSessionForRepo,
-	updateSessionStatus,
-} from "@/lib/agent-sessions";
+import { getSessionsForRepo, updateSessionStatus } from "@/lib/agent-sessions";
 import { getSession } from "@/lib/auth-server";
 import { getUserRepos } from "@/lib/repos";
+import type { AgentSession } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
 type SandboxState = { alive: false } | { alive: true; terminalUrl?: string };
+
+export type TerminalSessionState = "running" | "paused";
+
+export interface TerminalSessionInfo {
+	agentName: string;
+	state: TerminalSessionState;
+	sandboxId: string;
+	provider: string;
+	terminalUrl?: string;
+}
 
 /** Dynamic provider loader — keeps cold-start cost low. */
 async function resolveState(
@@ -22,7 +30,58 @@ async function resolveState(
 		const m = await import("@/lib/agent-runtime/vercel-sandbox");
 		return m.resolveSandboxState(instanceId);
 	}
-	return null; // unknown backend — no reconciliation
+	return null;
+}
+
+/**
+ * Resolve a DB session into a TerminalSessionInfo for the UI.
+ * Returns null if the sandbox is dead AND the DB says it should be alive
+ * (in which case we reconcile it to "completed" and drop it from the list).
+ */
+async function resolveSession(
+	session: AgentSession,
+): Promise<TerminalSessionInfo | null> {
+	if (!session.computeInstanceId) return null;
+
+	const state = await resolveState(
+		session.computeBackend,
+		session.computeInstanceId,
+	);
+
+	// Unknown backend — trust the DB
+	if (state === null) {
+		return {
+			agentName: session.agentName,
+			state: session.status === "snapshotted" ? "paused" : "running",
+			sandboxId: session.computeInstanceId,
+			provider: session.computeBackend,
+		};
+	}
+
+	if (!state.alive) {
+		// Snapshotted sessions are expected to not be running — they're paused
+		if (session.status === "snapshotted") {
+			return {
+				agentName: session.agentName,
+				state: "paused",
+				sandboxId: session.computeInstanceId,
+				provider: session.computeBackend,
+			};
+		}
+		// Active in DB but actually dead → reconcile
+		await updateSessionStatus(session.id, "completed").catch((err) => {
+			console.warn("[terminal/status] reconcile update failed:", err);
+		});
+		return null;
+	}
+
+	return {
+		agentName: session.agentName,
+		state: "running",
+		sandboxId: session.computeInstanceId,
+		provider: session.computeBackend,
+		terminalUrl: state.terminalUrl,
+	};
 }
 
 export async function GET(request: Request): Promise<Response> {
@@ -45,41 +104,9 @@ export async function GET(request: Request): Promise<Response> {
 		);
 	}
 
-	const agentSession = await getActiveSessionForRepo(repo);
-	if (!agentSession?.computeInstanceId) {
-		return Response.json({ connected: false });
-	}
+	const dbSessions = await getSessionsForRepo(repo);
+	const resolved = await Promise.all(dbSessions.map(resolveSession));
+	const sessions = resolved.filter((s): s is TerminalSessionInfo => s !== null);
 
-	const state = await resolveState(
-		agentSession.computeBackend,
-		agentSession.computeInstanceId,
-	);
-
-	// Unknown backend — trust the DB, report connected without terminalUrl
-	if (state === null) {
-		return Response.json({
-			connected: true,
-			sandboxId: agentSession.computeInstanceId,
-			agentName: agentSession.agentName,
-			provider: agentSession.computeBackend,
-		});
-	}
-
-	// Reconcile: if the sandbox is dead, mark the session completed
-	// and report disconnected so the UI shows the correct empty state.
-	if (!state.alive) {
-		// Best-effort — don't fail the endpoint if the DB write blips
-		await updateSessionStatus(agentSession.id, "completed").catch((err) => {
-			console.warn("[terminal/status] reconcile update failed:", err);
-		});
-		return Response.json({ connected: false });
-	}
-
-	return Response.json({
-		connected: true,
-		sandboxId: agentSession.computeInstanceId,
-		agentName: agentSession.agentName,
-		provider: agentSession.computeBackend,
-		terminalUrl: state.terminalUrl,
-	});
+	return Response.json({ sessions });
 }

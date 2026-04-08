@@ -1,203 +1,169 @@
 "use client";
 
+import type { Agent } from "@/lib/types";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { AgentSubTabs } from "./agent-sub-tabs";
 import styles from "./terminal-panel.module.css";
 
-type ConnectionState = "disconnected" | "connecting" | "connected";
-
-interface SandboxStatus {
-	connected: boolean;
-	sandboxId?: string;
-	agentName?: string;
-	/** WebSocket URL for direct PTY connection (TerminalShare or sandbox port) */
+interface TerminalSessionInfo {
+	agentName: string;
+	state: "running" | "paused";
+	sandboxId: string;
+	provider: string;
 	terminalUrl?: string;
+}
+
+interface StatusResponse {
+	sessions: TerminalSessionInfo[];
 }
 
 interface TerminalPanelProps {
 	selectedRepo: { owner: string; repo: string } | null;
+	selectedAgent: string | null;
+	onSelectAgent: (agentName: string | null) => void;
+	availableAgents?: Agent[];
 }
 
 // ghostty-web types (loaded dynamically)
 type GhosttyTerminal = import("ghostty-web").Terminal;
 type GhosttyFitAddon = import("ghostty-web").FitAddon;
 
-export function TerminalPanel({ selectedRepo }: TerminalPanelProps) {
+export function TerminalPanel({
+	selectedRepo,
+	selectedAgent,
+	onSelectAgent,
+}: TerminalPanelProps) {
 	const repo = selectedRepo
 		? `${selectedRepo.owner}/${selectedRepo.repo}`
 		: null;
 
-	const [connectionState, setConnectionState] =
-		useState<ConnectionState>("disconnected");
-	const [sandboxInfo, setSandboxInfo] = useState<SandboxStatus | null>(null);
-	const [starting, setStarting] = useState(false);
-	const [startError, setStartError] = useState<string | null>(null);
-	const termRef = useRef<HTMLDivElement>(null);
+	const [sessions, setSessions] = useState<TerminalSessionInfo[]>([]);
+	const [busy, setBusy] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+	const termContainerRef = useRef<HTMLDivElement>(null);
 	const terminalRef = useRef<GhosttyTerminal | null>(null);
 	const fitAddonRef = useRef<GhosttyFitAddon | null>(null);
 	const wsRef = useRef<WebSocket | null>(null);
-	const inputBufferRef = useRef("");
-	const abortRef = useRef<AbortController | null>(null);
-	const cwdRef = useRef("/vercel/sandbox/repo");
 
-	// Check for active sandbox
-	const checkStatus = useCallback(async () => {
+	// Which session is currently being shown? Derived from selectedAgent + sessions
+	const activeSession = sessions.find((s) => s.agentName === selectedAgent);
+
+	// Poll status API
+	const refreshSessions = useCallback(async () => {
 		if (!repo) {
-			setSandboxInfo(null);
-			setConnectionState("disconnected");
+			setSessions([]);
 			return;
 		}
-
 		try {
 			const res = await fetch(
 				`/api/terminal/status?repo=${encodeURIComponent(repo)}`,
 			);
 			if (res.ok) {
-				const data: SandboxStatus = await res.json();
-				setSandboxInfo(data);
-				setConnectionState(data.connected ? "connected" : "disconnected");
+				const data: StatusResponse = await res.json();
+				setSessions(data.sessions ?? []);
 			}
 		} catch {
-			setSandboxInfo(null);
-			setConnectionState("disconnected");
+			// silent — next poll will retry
 		}
 	}, [repo]);
 
-	// Poll for sandbox status
 	useEffect(() => {
-		checkStatus();
-		const id = setInterval(checkStatus, 10_000);
+		refreshSessions();
+		const id = setInterval(refreshSessions, 10_000);
 		return () => clearInterval(id);
-	}, [checkStatus]);
+	}, [refreshSessions]);
 
-	// Start a standalone terminal sandbox
-	const startTerminal = useCallback(async () => {
-		if (!repo || starting) return;
-		setStarting(true);
-		setStartError(null);
-		try {
-			const res = await fetch("/api/terminal/start", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ repo }),
-			});
-			if (!res.ok) {
-				const body = await res.json().catch(() => ({}));
-				setStartError(body.error ?? `HTTP ${res.status}`);
-				return;
-			}
-			// Poll status until we see the connected state
-			for (let i = 0; i < 10; i++) {
-				await new Promise((r) => setTimeout(r, 1000));
-				await checkStatus();
-			}
-		} catch (err) {
-			setStartError(err instanceof Error ? err.message : "Start failed");
-		} finally {
-			setStarting(false);
-		}
-	}, [repo, starting, checkStatus]);
+	// Auto-select first session if none selected
+	useEffect(() => {
+		if (selectedAgent) return;
+		if (sessions.length === 0) return;
+		onSelectAgent(sessions[0].agentName);
+	}, [selectedAgent, sessions, onSelectAgent]);
 
-	// Stop the active terminal sandbox
+	// Start a new terminal sandbox (uses DEFAULT_AGENT on the server)
+	const startTerminal = useCallback(
+		async (agentName?: string) => {
+			if (!repo || busy) return;
+			setBusy(true);
+			setError(null);
+			try {
+				const res = await fetch("/api/terminal/start", {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ repo, agentName }),
+				});
+				if (!res.ok) {
+					const body = await res.json().catch(() => ({}));
+					setError(body.error ?? `HTTP ${res.status}`);
+					return;
+				}
+				const data = (await res.json()) as { agentName: string };
+				onSelectAgent(data.agentName);
+				for (let i = 0; i < 15; i++) {
+					await new Promise((r) => setTimeout(r, 1000));
+					await refreshSessions();
+				}
+			} catch (err) {
+				setError(err instanceof Error ? err.message : "Start failed");
+			} finally {
+				setBusy(false);
+			}
+		},
+		[repo, busy, refreshSessions, onSelectAgent],
+	);
+
+	// Resume a paused session by restoring its snapshot
+	const resumeTerminal = useCallback(
+		async (agentName: string) => {
+			if (!repo || busy) return;
+			setBusy(true);
+			setError(null);
+			try {
+				const res = await fetch("/api/terminal/resume", {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ repo, agentName }),
+				});
+				if (!res.ok) {
+					const body = await res.json().catch(() => ({}));
+					setError(body.error ?? `HTTP ${res.status}`);
+					return;
+				}
+				for (let i = 0; i < 15; i++) {
+					await new Promise((r) => setTimeout(r, 1000));
+					await refreshSessions();
+				}
+			} catch (err) {
+				setError(err instanceof Error ? err.message : "Resume failed");
+			} finally {
+				setBusy(false);
+			}
+		},
+		[repo, busy, refreshSessions],
+	);
+
+	// Stop the currently-selected agent's sandbox
 	const stopTerminal = useCallback(async () => {
-		if (!repo) return;
+		if (!repo || !selectedAgent) return;
 		try {
 			await fetch("/api/terminal/stop", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ repo }),
+				body: JSON.stringify({ repo, agentName: selectedAgent }),
 			});
 		} catch {
-			// Best-effort; always re-check status afterward
+			// ignore
 		}
-		await checkStatus();
-	}, [repo, checkStatus]);
+		await refreshSessions();
+	}, [repo, selectedAgent, refreshSessions]);
 
-	// SSE fallback: execute a command via /api/terminal/exec
-	const execCommand = useCallback(
-		async (command: string) => {
-			if (!repo || connectionState !== "connected") return;
+	// Initialize / reconnect ghostty-web for the active (running) session.
+	// Re-runs whenever the selected agent's terminalUrl changes.
+	const runningUrl =
+		activeSession?.state === "running" ? activeSession.terminalUrl : null;
 
-			abortRef.current?.abort();
-			const controller = new AbortController();
-			abortRef.current = controller;
-
-			const term = terminalRef.current;
-			if (!term) return;
-
-			const cdMatch = command.match(/^\s*cd\s+(.*)/);
-			const wrappedCommand = cdMatch
-				? `cd ${cwdRef.current} && cd ${cdMatch[1]} && pwd`
-				: `cd ${cwdRef.current} && ${command}`;
-
-			try {
-				const res = await fetch("/api/terminal/exec", {
-					method: "POST",
-					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({ repo, command: wrappedCommand }),
-					signal: controller.signal,
-				});
-
-				if (!res.ok || !res.body) {
-					term.write(
-						`\x1b[31mError: ${res.statusText || "Command failed"}\x1b[0m\r\n`,
-					);
-					return;
-				}
-
-				const reader = res.body.getReader();
-				const decoder = new TextDecoder();
-				let buffer = "";
-				let lastOutput = "";
-
-				while (true) {
-					const { done, value } = await reader.read();
-					if (done) break;
-
-					buffer += decoder.decode(value, { stream: true });
-					const lines = buffer.split("\n");
-					buffer = lines.pop() ?? "";
-
-					for (const line of lines) {
-						if (!line.startsWith("data: ")) continue;
-						try {
-							const chunk = JSON.parse(line.slice(6));
-							if (chunk.stream === "stdout" || chunk.stream === "stderr") {
-								const text = chunk.data.replace(/\n/g, "\r\n");
-								term.write(text);
-								lastOutput = chunk.data;
-							} else if (chunk.type === "exit") {
-								if (cdMatch && chunk.exitCode === 0 && lastOutput.trim()) {
-									cwdRef.current =
-										lastOutput.trim().split("\n").pop() ?? cwdRef.current;
-								}
-							} else if (chunk.type === "error") {
-								term.write(`\x1b[31m${chunk.data}\x1b[0m\r\n`);
-							}
-						} catch {
-							// skip malformed SSE
-						}
-					}
-				}
-			} catch (err) {
-				if (err instanceof DOMException && err.name === "AbortError") return;
-				term.write("\x1b[31mConnection lost\x1b[0m\r\n");
-			} finally {
-				abortRef.current = null;
-			}
-		},
-		[repo, connectionState],
-	);
-
-	const writePrompt = useCallback(() => {
-		const term = terminalRef.current;
-		if (!term) return;
-		const shortCwd = cwdRef.current.replace("/vercel/sandbox/repo", "~");
-		term.write(`\x1b[32m${shortCwd}\x1b[0m $ `);
-	}, []);
-
-	// Initialize terminal
 	useEffect(() => {
-		if (!termRef.current || connectionState !== "connected") return;
+		if (!termContainerRef.current || !runningUrl) return;
 
 		let disposed = false;
 
@@ -206,7 +172,7 @@ export function TerminalPanel({ selectedRepo }: TerminalPanelProps) {
 			await init();
 
 			if (disposed) return;
-			const container = termRef.current;
+			const container = termContainerRef.current;
 			if (!container) return;
 
 			const fitAddon = new FitAddon();
@@ -237,12 +203,8 @@ export function TerminalPanel({ selectedRepo }: TerminalPanelProps) {
 			terminalRef.current = term;
 			fitAddonRef.current = fitAddon;
 
-			// WebSocket mode: direct PTY connection
-			if (sandboxInfo?.terminalUrl) {
-				connectWebSocket(term, sandboxInfo.terminalUrl);
-			} else {
-				// SSE fallback: line-based command execution
-				setupLineInput(term);
+			if (runningUrl) {
+				connectWebSocket(term, runningUrl);
 			}
 		}
 
@@ -250,11 +212,8 @@ export function TerminalPanel({ selectedRepo }: TerminalPanelProps) {
 		 * ttyd WebSocket protocol:
 		 * - Subprotocol: `tty`
 		 * - Binary frames only
-		 * - On open: send JSON `{AuthToken, columns, rows}` as text (not framed)
-		 * - Server → client: first byte is the command
-		 *     '0' OUTPUT, '1' SET_WINDOW_TITLE, '2' SET_PREFERENCES
-		 * - Client → server: first byte is the command
-		 *     '0' INPUT (data), '1' RESIZE_TERMINAL (JSON)
+		 * - On open: send JSON `{AuthToken, columns, rows}` as text
+		 * - Command byte prefix: '0'=INPUT/OUTPUT, '1'=RESIZE/TITLE, '2'=PREFS
 		 */
 		function connectWebSocket(term: GhosttyTerminal, url: string) {
 			const ws = new WebSocket(url, ["tty"]);
@@ -268,7 +227,7 @@ export function TerminalPanel({ selectedRepo }: TerminalPanelProps) {
 				if (ws.readyState !== WebSocket.OPEN) return;
 				const payload = encoder.encode(data);
 				const frame = new Uint8Array(payload.length + 1);
-				frame[0] = "0".charCodeAt(0); // INPUT
+				frame[0] = "0".charCodeAt(0);
 				frame.set(payload, 1);
 				ws.send(frame);
 			};
@@ -277,13 +236,12 @@ export function TerminalPanel({ selectedRepo }: TerminalPanelProps) {
 				if (ws.readyState !== WebSocket.OPEN) return;
 				const payload = encoder.encode(JSON.stringify({ columns: cols, rows }));
 				const frame = new Uint8Array(payload.length + 1);
-				frame[0] = "1".charCodeAt(0); // RESIZE_TERMINAL
+				frame[0] = "1".charCodeAt(0);
 				frame.set(payload, 1);
 				ws.send(frame);
 			};
 
 			ws.onopen = () => {
-				// ttyd auth handshake — empty token is fine (no auth configured)
 				ws.send(
 					JSON.stringify({
 						AuthToken: "",
@@ -299,14 +257,8 @@ export function TerminalPanel({ selectedRepo }: TerminalPanelProps) {
 				const data = new Uint8Array(event.data);
 				if (data.length === 0) return;
 				const cmd = String.fromCharCode(data[0]);
-				const rest = data.slice(1);
 				if (cmd === "0") {
-					// OUTPUT
-					term.write(decoder.decode(rest));
-				} else if (cmd === "1") {
-					// SET_WINDOW_TITLE — ignore
-				} else if (cmd === "2") {
-					// SET_PREFERENCES — ignore
+					term.write(decoder.decode(data.slice(1)));
 				}
 			};
 
@@ -321,49 +273,13 @@ export function TerminalPanel({ selectedRepo }: TerminalPanelProps) {
 						"\r\n\x1b[33mDisconnected. Reconnecting in 2s...\x1b[0m\r\n",
 					);
 					setTimeout(() => {
-						if (!disposed && sandboxInfo?.terminalUrl) {
-							connectWebSocket(term, sandboxInfo.terminalUrl);
-						}
+						if (!disposed && runningUrl) connectWebSocket(term, runningUrl);
 					}, 2000);
 				}
 			};
 
-			// Keystrokes → ttyd INPUT frame
 			term.onData(sendInput);
-
-			// Resize → ttyd RESIZE_TERMINAL frame
 			term.onResize(({ cols, rows }) => sendResize(cols, rows));
-		}
-
-		function setupLineInput(term: GhosttyTerminal) {
-			term.write("Connected to sandbox shell\r\n\r\n");
-			writePrompt();
-
-			term.onData((data) => {
-				if (data === "\r") {
-					term.write("\r\n");
-					const cmd = inputBufferRef.current.trim();
-					inputBufferRef.current = "";
-					if (cmd) {
-						execCommand(cmd).then(() => writePrompt());
-					} else {
-						writePrompt();
-					}
-				} else if (data === "\u007f") {
-					if (inputBufferRef.current.length > 0) {
-						inputBufferRef.current = inputBufferRef.current.slice(0, -1);
-						term.write("\b \b");
-					}
-				} else if (data === "\u0003") {
-					inputBufferRef.current = "";
-					term.write("^C\r\n");
-					abortRef.current?.abort();
-					writePrompt();
-				} else if (data >= " ") {
-					inputBufferRef.current += data;
-					term.write(data);
-				}
-			});
 		}
 
 		setup();
@@ -380,7 +296,7 @@ export function TerminalPanel({ selectedRepo }: TerminalPanelProps) {
 			terminalRef.current = null;
 			fitAddonRef.current = null;
 		};
-	}, [connectionState, sandboxInfo?.terminalUrl, execCommand, writePrompt]);
+	}, [runningUrl]);
 
 	// Fit terminal when it becomes visible (tab switch)
 	useEffect(() => {
@@ -399,49 +315,102 @@ export function TerminalPanel({ selectedRepo }: TerminalPanelProps) {
 		);
 	}
 
-	if (connectionState === "disconnected" || !sandboxInfo?.connected) {
+	const subTabs = sessions.map((s) => ({
+		agentName: s.agentName,
+		state: s.state,
+	}));
+
+	// Empty state — no sessions at all
+	if (sessions.length === 0) {
 		return (
-			<div className={styles.noSession}>
-				<span className={styles.noSessionIcon}>&gt;_</span>
-				<span className={styles.noSessionText}>
-					No active terminal. Start a fresh shell with the repo cloned and
-					ready.
-				</span>
-				<button
-					type="button"
-					className={styles.startButton}
-					onClick={startTerminal}
-					disabled={starting}
-				>
-					{starting ? "Starting sandbox..." : "Start terminal"}
-				</button>
-				{startError && <span className={styles.startError}>{startError}</span>}
-			</div>
+			<>
+				<AgentSubTabs
+					tabs={[]}
+					selected={null}
+					onSelect={() => {}}
+					onNew={() => startTerminal()}
+				/>
+				<div className={styles.noSession}>
+					<span className={styles.noSessionIcon}>&gt;_</span>
+					<span className={styles.noSessionText}>
+						No active terminal. Start a fresh shell with the repo cloned and
+						ready.
+					</span>
+					<button
+						type="button"
+						className={styles.startButton}
+						onClick={() => startTerminal()}
+						disabled={busy}
+					>
+						{busy ? "Starting sandbox..." : "Start terminal"}
+					</button>
+					{error && <span className={styles.startError}>{error}</span>}
+				</div>
+			</>
 		);
 	}
 
-	return (
-		<div className={styles.panel}>
-			<div ref={termRef} className={styles.terminal} />
-			<div className={styles.statusBar}>
-				<span
-					className={`${styles.statusDot} ${connectionState === "connected" ? styles.statusDotConnected : ""}`}
+	// Paused state — session exists but sandbox is snapshotted, needs resume
+	if (activeSession?.state === "paused") {
+		return (
+			<>
+				<AgentSubTabs
+					tabs={subTabs}
+					selected={selectedAgent}
+					onSelect={onSelectAgent}
+					onNew={() => startTerminal()}
 				/>
-				<span className={styles.statusText}>
-					{connectionState === "connecting"
-						? "Connecting..."
-						: sandboxInfo?.terminalUrl
-							? `PTY: ${sandboxInfo?.agentName ?? "sandbox"}`
-							: `Shell: ${sandboxInfo?.agentName ?? "sandbox"}`}
-				</span>
-				<button
-					type="button"
-					className={styles.stopButton}
-					onClick={stopTerminal}
-				>
-					Stop
-				</button>
+				<div className={styles.noSession}>
+					<span className={styles.noSessionIcon}>⏸</span>
+					<span className={styles.noSessionText}>
+						<strong>{activeSession.agentName}</strong>&apos;s sandbox is paused.
+						Resume it to reconnect the terminal.
+					</span>
+					<button
+						type="button"
+						className={styles.startButton}
+						onClick={() => resumeTerminal(activeSession.agentName)}
+						disabled={busy}
+					>
+						{busy ? "Resuming..." : "Resume"}
+					</button>
+					{error && <span className={styles.startError}>{error}</span>}
+				</div>
+			</>
+		);
+	}
+
+	// Running state — render the terminal
+	return (
+		<>
+			<AgentSubTabs
+				tabs={subTabs}
+				selected={selectedAgent}
+				onSelect={onSelectAgent}
+				onNew={() => startTerminal()}
+			/>
+			<div className={styles.panel}>
+				<div
+					key={activeSession?.sandboxId ?? "none"}
+					ref={termContainerRef}
+					className={styles.terminal}
+				/>
+				<div className={styles.statusBar}>
+					<span
+						className={`${styles.statusDot} ${styles.statusDotConnected}`}
+					/>
+					<span className={styles.statusText}>
+						PTY: {activeSession?.agentName ?? "sandbox"}
+					</span>
+					<button
+						type="button"
+						className={styles.stopButton}
+						onClick={stopTerminal}
+					>
+						Stop
+					</button>
+				</div>
 			</div>
-		</div>
+		</>
 	);
 }
