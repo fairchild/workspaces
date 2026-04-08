@@ -491,6 +491,15 @@ export type SandboxState =
  */
 const ALIVE_STATUSES: ReadonlySet<string> = new Set(["running", "pending"]);
 
+/**
+ * Turn `sandbox.domain(7681)` (an https:// URL) into the ttyd WebSocket
+ * endpoint. ttyd serves its WebSocket at `/ws`; the root URL serves the
+ * default HTML client which is not what we want.
+ */
+function ttydUrl(domain: string): string {
+	return `${domain.replace(/\/$/, "")}/ws`;
+}
+
 export async function resolveSandboxState(
 	instanceId: string,
 ): Promise<SandboxState> {
@@ -498,7 +507,7 @@ export async function resolveSandboxState(
 	const cached = activeSandboxes.get(instanceId);
 	if (cached && ALIVE_STATUSES.has(cached.status)) {
 		try {
-			return { alive: true, terminalUrl: cached.domain(7681) };
+			return { alive: true, terminalUrl: ttydUrl(cached.domain(7681)) };
 		} catch {
 			return { alive: true }; // alive but no port 7681 (v1 snapshot)
 		}
@@ -514,7 +523,7 @@ export async function resolveSandboxState(
 			return { alive: false };
 		}
 		try {
-			return { alive: true, terminalUrl: sandbox.domain(7681) };
+			return { alive: true, terminalUrl: ttydUrl(sandbox.domain(7681)) };
 		} catch {
 			return { alive: true };
 		}

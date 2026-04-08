@@ -246,16 +246,68 @@ export function TerminalPanel({ selectedRepo }: TerminalPanelProps) {
 			}
 		}
 
+		/**
+		 * ttyd WebSocket protocol:
+		 * - Subprotocol: `tty`
+		 * - Binary frames only
+		 * - On open: send JSON `{AuthToken, columns, rows}` as text (not framed)
+		 * - Server → client: first byte is the command
+		 *     '0' OUTPUT, '1' SET_WINDOW_TITLE, '2' SET_PREFERENCES
+		 * - Client → server: first byte is the command
+		 *     '0' INPUT (data), '1' RESIZE_TERMINAL (JSON)
+		 */
 		function connectWebSocket(term: GhosttyTerminal, url: string) {
-			const ws = new WebSocket(url);
+			const ws = new WebSocket(url, ["tty"]);
+			ws.binaryType = "arraybuffer";
 			wsRef.current = ws;
 
+			const encoder = new TextEncoder();
+			const decoder = new TextDecoder();
+
+			const sendInput = (data: string) => {
+				if (ws.readyState !== WebSocket.OPEN) return;
+				const payload = encoder.encode(data);
+				const frame = new Uint8Array(payload.length + 1);
+				frame[0] = "0".charCodeAt(0); // INPUT
+				frame.set(payload, 1);
+				ws.send(frame);
+			};
+
+			const sendResize = (cols: number, rows: number) => {
+				if (ws.readyState !== WebSocket.OPEN) return;
+				const payload = encoder.encode(JSON.stringify({ columns: cols, rows }));
+				const frame = new Uint8Array(payload.length + 1);
+				frame[0] = "1".charCodeAt(0); // RESIZE_TERMINAL
+				frame.set(payload, 1);
+				ws.send(frame);
+			};
+
 			ws.onopen = () => {
+				// ttyd auth handshake — empty token is fine (no auth configured)
+				ws.send(
+					JSON.stringify({
+						AuthToken: "",
+						columns: term.cols,
+						rows: term.rows,
+					}),
+				);
 				term.write("Connected to sandbox shell\r\n\r\n");
 			};
 
 			ws.onmessage = (event) => {
-				term.write(event.data);
+				if (!(event.data instanceof ArrayBuffer)) return;
+				const data = new Uint8Array(event.data);
+				if (data.length === 0) return;
+				const cmd = String.fromCharCode(data[0]);
+				const rest = data.slice(1);
+				if (cmd === "0") {
+					// OUTPUT
+					term.write(decoder.decode(rest));
+				} else if (cmd === "1") {
+					// SET_WINDOW_TITLE — ignore
+				} else if (cmd === "2") {
+					// SET_PREFERENCES — ignore
+				}
 			};
 
 			ws.onerror = () => {
@@ -276,19 +328,11 @@ export function TerminalPanel({ selectedRepo }: TerminalPanelProps) {
 				}
 			};
 
-			// Keystrokes → WebSocket
-			term.onData((data) => {
-				if (ws.readyState === WebSocket.OPEN) {
-					ws.send(data);
-				}
-			});
+			// Keystrokes → ttyd INPUT frame
+			term.onData(sendInput);
 
-			// Resize → WebSocket (JSON control message)
-			term.onResize(({ cols, rows }) => {
-				if (ws.readyState === WebSocket.OPEN) {
-					ws.send(JSON.stringify({ type: "resize", cols, rows }));
-				}
-			});
+			// Resize → ttyd RESIZE_TERMINAL frame
+			term.onResize(({ cols, rows }) => sendResize(cols, rows));
 		}
 
 		function setupLineInput(term: GhosttyTerminal) {
