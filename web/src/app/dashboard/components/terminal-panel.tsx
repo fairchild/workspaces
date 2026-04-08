@@ -29,6 +29,8 @@ export function TerminalPanel({ selectedRepo }: TerminalPanelProps) {
 	const [connectionState, setConnectionState] =
 		useState<ConnectionState>("disconnected");
 	const [sandboxInfo, setSandboxInfo] = useState<SandboxStatus | null>(null);
+	const [starting, setStarting] = useState(false);
+	const [startError, setStartError] = useState<string | null>(null);
 	const termRef = useRef<HTMLDivElement>(null);
 	const terminalRef = useRef<GhosttyTerminal | null>(null);
 	const fitAddonRef = useRef<GhosttyFitAddon | null>(null);
@@ -66,6 +68,49 @@ export function TerminalPanel({ selectedRepo }: TerminalPanelProps) {
 		const id = setInterval(checkStatus, 10_000);
 		return () => clearInterval(id);
 	}, [checkStatus]);
+
+	// Start a standalone terminal sandbox
+	const startTerminal = useCallback(async () => {
+		if (!repo || starting) return;
+		setStarting(true);
+		setStartError(null);
+		try {
+			const res = await fetch("/api/terminal/start", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ repo }),
+			});
+			if (!res.ok) {
+				const body = await res.json().catch(() => ({}));
+				setStartError(body.error ?? `HTTP ${res.status}`);
+				return;
+			}
+			// Poll status until we see the connected state
+			for (let i = 0; i < 10; i++) {
+				await new Promise((r) => setTimeout(r, 1000));
+				await checkStatus();
+			}
+		} catch (err) {
+			setStartError(err instanceof Error ? err.message : "Start failed");
+		} finally {
+			setStarting(false);
+		}
+	}, [repo, starting, checkStatus]);
+
+	// Stop the active terminal sandbox
+	const stopTerminal = useCallback(async () => {
+		if (!repo) return;
+		try {
+			await fetch("/api/terminal/stop", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ repo }),
+			});
+		} catch {
+			// Best-effort; always re-check status afterward
+		}
+		await checkStatus();
+	}, [repo, checkStatus]);
 
 	// SSE fallback: execute a command via /api/terminal/exec
 	const execCommand = useCallback(
@@ -315,9 +360,18 @@ export function TerminalPanel({ selectedRepo }: TerminalPanelProps) {
 			<div className={styles.noSession}>
 				<span className={styles.noSessionIcon}>&gt;_</span>
 				<span className={styles.noSessionText}>
-					No active sandbox session. Chat with an agent first to start a
-					sandbox, then return here to access its shell.
+					No active terminal. Start a fresh shell with the repo cloned and
+					ready.
 				</span>
+				<button
+					type="button"
+					className={styles.startButton}
+					onClick={startTerminal}
+					disabled={starting}
+				>
+					{starting ? "Starting sandbox..." : "Start terminal"}
+				</button>
+				{startError && <span className={styles.startError}>{startError}</span>}
 			</div>
 		);
 	}
@@ -329,13 +383,20 @@ export function TerminalPanel({ selectedRepo }: TerminalPanelProps) {
 				<span
 					className={`${styles.statusDot} ${connectionState === "connected" ? styles.statusDotConnected : ""}`}
 				/>
-				<span>
+				<span className={styles.statusText}>
 					{connectionState === "connecting"
 						? "Connecting..."
 						: sandboxInfo?.terminalUrl
 							? `PTY: ${sandboxInfo?.agentName ?? "sandbox"}`
 							: `Shell: ${sandboxInfo?.agentName ?? "sandbox"}`}
 				</span>
+				<button
+					type="button"
+					className={styles.stopButton}
+					onClick={stopTerminal}
+				>
+					Stop
+				</button>
 			</div>
 		</div>
 	);

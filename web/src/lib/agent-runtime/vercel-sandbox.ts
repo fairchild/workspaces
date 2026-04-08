@@ -414,6 +414,55 @@ cat /vercel/sandbox/message.txt | claude -p $SESSION_ARGS --system-prompt "$PROM
 		activeSandboxes.set(instanceId, sandbox);
 		return { instanceId, status: "ready" };
 	}
+
+	/**
+	 * Create a standalone terminal sandbox — no agent runner, just a shell
+	 * with the repo cloned and ttyd running on port 7681.
+	 *
+	 * Unlike `createSandbox()`, this is NOT tied to an agent chat flow. The
+	 * sandbox stays alive for the full timeout (30 minutes) so users can
+	 * interact with it via the terminal tab directly.
+	 */
+	async createTerminalSandbox(params: {
+		cloneUrl: string;
+		branch?: string;
+	}): Promise<SandboxResult> {
+		const baseSnapshotId = await getOrCreateBaseSnapshot();
+
+		const sandbox = await Sandbox.create({
+			...getCredentials(),
+			source: { type: "snapshot", snapshotId: baseSnapshotId },
+			timeout: ms("30m"),
+			resources: { vcpus: 2 },
+			ports: [7681],
+			networkPolicy: { allow: ALLOWED_DOMAINS },
+		});
+
+		try {
+			// Clone the target repo
+			const cloneArgs = ["clone", "--depth", "1"];
+			if (params.branch) {
+				cloneArgs.push("--branch", params.branch);
+			}
+			cloneArgs.push(params.cloneUrl, "/vercel/sandbox/repo");
+			await sandbox.runCommand("git", cloneArgs);
+
+			// Start ttyd for WebSocket terminal access
+			await sandbox.runCommand({
+				cmd: "ttyd",
+				args: ["-W", "-p", "7681", "bash"],
+				cwd: "/vercel/sandbox/repo",
+				detached: true,
+			});
+
+			const instanceId = sandbox.sandboxId;
+			activeSandboxes.set(instanceId, sandbox);
+			return { instanceId, status: "ready" };
+		} catch (err) {
+			await sandbox.stop().catch(() => {});
+			throw err;
+		}
+	}
 }
 
 /**
