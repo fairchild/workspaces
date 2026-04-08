@@ -43,4 +43,10 @@ export default async function globalTeardown() {
 	await db.execute(
 		"DELETE FROM agent_sessions WHERE compute_backend = 'mock'",
 	);
+
+	// Clean up the seeded e2e fixtures
+	await db.execute({
+		sql: "DELETE FROM agent_sessions WHERE id LIKE ?",
+		args: ["e2e-session-%"],
+	});
 }

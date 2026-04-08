@@ -10,9 +10,9 @@
 │  │  Dashboard    │  │  Chat Panel  │  │  Terminal Panel            │ │
 │  │  (MainPanel)  │  │  (SSE stream │  │  (ghostty-web WASM)       │ │
 │  │              │  │   to agents)  │  │                            │ │
-│  │  Stats,      │  │              │  │  WSS → TerminalShare proxy │ │
-│  │  agents,     │  │  Compose bar │  │  SSE → /api/terminal/exec  │ │
-│  │  pipeline    │  │  + @mentions  │  │  (fallback)               │ │
+│  │  Stats,      │  │              │  │  WSS → ttyd on sandbox     │ │
+│  │  agents,     │  │  Compose bar │  │   (path is HMAC token,     │ │
+│  │  pipeline    │  │  + @mentions  │  │    derived from sandboxId)│ │
 │  └──────────────┘  └──────────────┘  └────────────────────────────┘ │
 └──────────┬──────────────────┬──────────────────┬────────────────────┘
            │                  │                  │
@@ -22,8 +22,10 @@
 │                                                                     │
 │  /api/chat/messages     — CRUD chat messages, trigger agent sessions│
 │  /api/chat/agent-stream — SSE stream of agent output                │
-│  /api/terminal/status   — sandbox availability + terminal URL       │
-│  /api/terminal/exec     — SSE command execution (fallback)          │
+│  /api/terminal/status   — list live sessions + per-agent terminalUrl│
+│  /api/terminal/start    — provision a new sandbox for an agent      │
+│  /api/terminal/stop     — stop the sandbox for an agent             │
+│  /api/terminal/resume   — restore a paused (snapshotted) session    │
 │  /api/repos             — user repo management                      │
 │  /api/events            — webhook event tracking                    │
 └──────────┬──────────────────┬──────────────────┬────────────────────┘
@@ -96,9 +98,9 @@ The Terminal tab provides shell access to active agent sandboxes.
 
 ### Dual-mode connection
 
-1. **WebSocket PTY** (preferred) — when a `terminalUrl` is available (from TerminalShare proxy or sandbox port), ghostty-web connects directly via WebSocket for full interactive terminal (tab completion, vim, curses apps).
+**ghostty-web** (WASM-compiled Ghostty) renders the terminal canvas. It connects via **WebSocket** to **ttyd** running inside the sandbox on port 7681. The WebSocket endpoint is path-protected: ttyd is started with `--base-path /<token>` where the token is `HMAC-SHA256(secret, sandboxId).hex.slice(0, 24)`. The status API derives the same token from the sandboxId, so the public sandbox URL alone (which can leak via screenshots, browser history, etc.) is not enough to connect — an attacker would need both the URL and the server-side secret.
 
-2. **SSE fallback** — when no WebSocket endpoint exists, each command typed is POSTed to `/api/terminal/exec`, which runs `bash -c <command>` in the sandbox and streams output back via SSE.
+The ttyd protocol itself uses the `tty` WebSocket subprotocol with binary frames: command-byte prefix (`0`=INPUT/OUTPUT, `1`=RESIZE) plus payload. Auth handshake on open is a JSON `{AuthToken: "", columns, rows}`.
 
 ### TerminalShare Proxy
 
