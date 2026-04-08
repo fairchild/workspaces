@@ -13,13 +13,14 @@ import { expect, test } from "@playwright/test";
  * Output: test-results/ contains .webm videos
  */
 test("terminal tab walkthrough", async ({ page }) => {
-	// Start at dashboard with repo selected
+	// Start at dashboard with repo selected. The seed has a paused
+	// april-clearwater session which the Terminal tab will auto-select.
 	await page.goto("/dashboard/fairchild/workspaces");
 	await page.waitForLoadState("networkidle");
 	await page.waitForTimeout(1500);
 
-	// Show all three tabs in the tab bar
-	const tabBar = page.locator("nav");
+	// Use the first nav explicitly — the sub-tab strip is also a <nav>.
+	const tabBar = page.locator("nav").first();
 	await expect(tabBar.getByRole("button", { name: "Dashboard" })).toBeVisible();
 	await expect(tabBar.getByRole("button", { name: "Chat" })).toBeVisible();
 	await expect(tabBar.getByRole("button", { name: "Terminal" })).toBeVisible();
@@ -29,12 +30,13 @@ test("terminal tab walkthrough", async ({ page }) => {
 	await tabBar.getByRole("button", { name: "Chat" }).click();
 	await page.waitForTimeout(1500);
 
-	// Switch to Terminal tab
+	// Switch to Terminal tab — auto-selects the paused april session
 	await tabBar.getByRole("button", { name: "Terminal" }).click();
 	await page.waitForTimeout(2000);
 
-	// Show the empty state message
-	await expect(page.getByText("No active sandbox session")).toBeVisible();
+	// Demonstrate the Resume affordance for paused sandboxes
+	await expect(page.getByText(/sandbox is paused/)).toBeVisible();
+	await expect(page.getByRole("button", { name: /^Resume$/ })).toBeVisible();
 	await page.waitForTimeout(1500);
 
 	// Use keyboard shortcut to go to Dashboard (Cmd+1)
@@ -50,9 +52,9 @@ test("terminal tab walkthrough", async ({ page }) => {
 	await page.waitForTimeout(1500);
 
 	// Show Terminal tab is active
-	await expect(
-		tabBar.getByRole("button", { name: "Terminal" }),
-	).toHaveClass(/tabActive|Active/);
+	await expect(tabBar.getByRole("button", { name: "Terminal" })).toHaveClass(
+		/tabActive|Active/,
+	);
 	await page.waitForTimeout(1500);
 
 	// Go back to Dashboard to end
