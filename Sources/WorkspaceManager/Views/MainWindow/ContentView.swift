@@ -224,6 +224,36 @@ struct ContentView: View {
         return openInDefaultEditor
     }
 
+    private var openInBrowserFocusedAction: (@MainActor () -> Void)? {
+        guard currentSelectedWebSource?.baseURL != nil else { return nil }
+        return openSelectedWebSourceInBrowser
+    }
+
+    private var reloadWebSourceFocusedAction: (@MainActor () -> Void)? {
+        guard currentSelectedWebSource != nil else { return nil }
+        return reloadSelectedWebSource
+    }
+
+    private var openDesktopFocusedAction: (@MainActor () -> Void)? {
+        guard let workspace = currentSelectedWorkspace,
+            selectedWorkspaceSupportsDesktop,
+            workspace.status != .provisioning
+        else { return nil }
+        return { @MainActor in
+            openDesktop(for: workspace)
+        }
+    }
+
+    private var revealInFinderFocusedAction: (@MainActor () -> Void)? {
+        guard openInEditorTarget != nil else { return nil }
+        return revealInFinder
+    }
+
+    private var copyPathFocusedAction: (@MainActor () -> Void)? {
+        guard openInEditorTarget != nil else { return nil }
+        return copyWorkspacePath
+    }
+
     private var selectedWorkspaceProviderDescriptor: WorkspaceProviderDescriptor? {
         guard let workspace = currentSelectedWorkspace else { return nil }
         return workspaceProviderRegistry.provider(for: workspace)?.descriptor
@@ -351,66 +381,30 @@ struct ContentView: View {
     }
 
     private var splitViewWithToolbar: some View {
-        baseSplitView
-            .toolbar {
-                ToolbarItem(placement: .principal) {
-                    AppBuildIdentityBadge(identity: buildIdentity)
-                }
-
-                ToolbarItemGroup(placement: .automatic) {
-                    if let selectedWebSource = currentSelectedWebSource {
-                        Button {
-                            openSelectedWebSourceInBrowser()
-                        } label: {
-                            Image(systemName: "safari")
+        Group {
+            if PerformanceExperimentFlags.minimalToolbar {
+                baseSplitView
+            } else {
+                baseSplitView
+                    .toolbar {
+                        ToolbarItem(placement: .principal) {
+                            AppBuildIdentityBadge(identity: buildIdentity)
                         }
-                        .help("Open in Browser")
-                        .disabled(selectedWebSource.baseURL == nil)
 
-                        Button {
-                            reloadSelectedWebSource()
-                        } label: {
-                            Image(systemName: "arrow.clockwise")
-                        }
-                        .help("Reload")
-                        .disabled(selectedWebSource.baseURL == nil)
-                    } else if let workspace = currentSelectedWorkspace {
-                        if selectedWorkspaceSupportsDesktop {
+                        ToolbarItemGroup(placement: .primaryAction) {
                             Button {
-                                openDesktop(for: workspace)
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    viewState.isRightPaneVisible.toggle()
+                                }
                             } label: {
-                                Image(systemName: "desktopcomputer")
+                                Image(systemName: "sidebar.trailing")
                             }
-                            .help("Open Desktop")
-                            .disabled(workspace.status == .provisioning)
-                        }
-
-                        if let defaultEditor = defaultEditorDescriptor {
-                            WorkspaceEditorToolbarButton(
-                                workspaceName: workspace.name,
-                                editorOptions: availableEditors,
-                                defaultEditor: defaultEditor,
-                                onOpenInDefaultEditor: openInDefaultEditor,
-                                onOpenInEditor: openInSelectedEditor,
-                                onRevealInFinder: revealInFinder,
-                                onCopyPath: copyWorkspacePath
-                            )
+                            .help(viewState.isRightPaneVisible ? "Hide Inspector" : "Show Inspector")
+                            .disabled(!hasInspectorTarget)
                         }
                     }
-                }
-
-                ToolbarItemGroup(placement: .primaryAction) {
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            viewState.isRightPaneVisible.toggle()
-                        }
-                    } label: {
-                        Image(systemName: "sidebar.trailing")
-                    }
-                    .help(viewState.isRightPaneVisible ? "Hide Inspector" : "Show Inspector")
-                    .disabled(!hasInspectorTarget)
-                }
             }
+        }
     }
 
     private var splitViewWithLifecycleHandlers: some View {
@@ -496,6 +490,11 @@ struct ContentView: View {
             .focusedSceneValue(\.toggleInspectorAction, toggleInspectorVisibility)
             .focusedSceneValue(\.toggleTerminalPanelAction, toggleTerminalPanelVisibility)
             .focusedSceneValue(\.openInEditorAction, openInEditorFocusedAction)
+            .focusedSceneValue(\.openInBrowserAction, openInBrowserFocusedAction)
+            .focusedSceneValue(\.reloadWebSourceAction, reloadWebSourceFocusedAction)
+            .focusedSceneValue(\.openDesktopAction, openDesktopFocusedAction)
+            .focusedSceneValue(\.revealInFinderAction, revealInFinderFocusedAction)
+            .focusedSceneValue(\.copyPathAction, copyPathFocusedAction)
             .alert(
                 "Could Not Open Editor",
                 isPresented: isShowingOpenInEditorError

@@ -19,6 +19,11 @@ struct WorkspaceManagerApp: App {
     @FocusedValue(\.toggleInspectorAction) private var toggleInspectorAction
     @FocusedValue(\.toggleTerminalPanelAction) private var toggleTerminalPanelAction
     @FocusedValue(\.openInEditorAction) private var openInEditorAction
+    @FocusedValue(\.openInBrowserAction) private var openInBrowserAction
+    @FocusedValue(\.reloadWebSourceAction) private var reloadWebSourceAction
+    @FocusedValue(\.openDesktopAction) private var openDesktopAction
+    @FocusedValue(\.revealInFinderAction) private var revealInFinderAction
+    @FocusedValue(\.copyPathAction) private var copyPathAction
     private let appRuntimeDependencies = AppRuntimeDependencies.resolved()
 
     var sharedModelContainer: ModelContainer = {
@@ -100,6 +105,35 @@ struct WorkspaceManagerApp: App {
             }
 
             SidebarCommands()
+
+            CommandMenu("Selection") {
+                Button("Open in Browser") {
+                    openInBrowserAction?()
+                }
+                .disabled(openInBrowserAction == nil)
+
+                Button("Reload Web Source") {
+                    reloadWebSourceAction?()
+                }
+                .disabled(reloadWebSourceAction == nil)
+
+                Divider()
+
+                Button("Open Desktop") {
+                    openDesktopAction?()
+                }
+                .disabled(openDesktopAction == nil)
+
+                Button("Reveal in Finder") {
+                    revealInFinderAction?()
+                }
+                .disabled(revealInFinderAction == nil)
+
+                Button("Copy Path") {
+                    copyPathAction?()
+                }
+                .disabled(copyPathAction == nil)
+            }
 
             CommandGroup(after: .help) {
                 Button("Export Diagnostic Report...") {
@@ -556,6 +590,26 @@ private struct OpenInEditorActionKey: FocusedValueKey {
     typealias Value = @MainActor () -> Void
 }
 
+private struct OpenInBrowserActionKey: FocusedValueKey {
+    typealias Value = @MainActor () -> Void
+}
+
+private struct ReloadWebSourceActionKey: FocusedValueKey {
+    typealias Value = @MainActor () -> Void
+}
+
+private struct OpenDesktopActionKey: FocusedValueKey {
+    typealias Value = @MainActor () -> Void
+}
+
+private struct RevealInFinderActionKey: FocusedValueKey {
+    typealias Value = @MainActor () -> Void
+}
+
+private struct CopyPathActionKey: FocusedValueKey {
+    typealias Value = @MainActor () -> Void
+}
+
 extension FocusedValues {
     var newWorkspaceAction: (@MainActor () -> Void)? {
         get { self[NewWorkspaceActionKey.self] }
@@ -580,5 +634,30 @@ extension FocusedValues {
     var openInEditorAction: (@MainActor () -> Void)? {
         get { self[OpenInEditorActionKey.self] }
         set { self[OpenInEditorActionKey.self] = newValue }
+    }
+
+    var openInBrowserAction: (@MainActor () -> Void)? {
+        get { self[OpenInBrowserActionKey.self] }
+        set { self[OpenInBrowserActionKey.self] = newValue }
+    }
+
+    var reloadWebSourceAction: (@MainActor () -> Void)? {
+        get { self[ReloadWebSourceActionKey.self] }
+        set { self[ReloadWebSourceActionKey.self] = newValue }
+    }
+
+    var openDesktopAction: (@MainActor () -> Void)? {
+        get { self[OpenDesktopActionKey.self] }
+        set { self[OpenDesktopActionKey.self] = newValue }
+    }
+
+    var revealInFinderAction: (@MainActor () -> Void)? {
+        get { self[RevealInFinderActionKey.self] }
+        set { self[RevealInFinderActionKey.self] = newValue }
+    }
+
+    var copyPathAction: (@MainActor () -> Void)? {
+        get { self[CopyPathActionKey.self] }
+        set { self[CopyPathActionKey.self] = newValue }
     }
 }

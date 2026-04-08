@@ -147,26 +147,32 @@ struct RepoRow: View {
     }
 
     var body: some View {
+        let repoName = repo.name
         let workspaceCount = repo.workspaces.count
         let showsVisibleQuickActions = showsQuickActions && isHovering
+        let accessibilityDescription =
+            "\(repoName), \(workspaceCount) workspace\(workspaceCount == 1 ? "" : "s"), \(sessionActivity.accessibilityDescription)"
+            + (SidebarSessionActivity.showsPaneCountBadge(for: paneCount) ? ", \(paneCount) panes" : "")
+            + ", \(isExpanded ? "expanded" : "collapsed")"
 
         HStack(spacing: 10) {
             Button(action: onToggleExpansion) {
                 repoFolderIcon
             }
             .buttonStyle(.plain)
-            .help(isExpanded ? "Collapse \(repo.name)" : "Expand \(repo.name)")
+            .help(isExpanded ? "Collapse \(repoName)" : "Expand \(repoName)")
 
             Button(action: onSelectRepo) {
-                repoLabelContent(workspaceCount: workspaceCount)
+                repoLabelContent(repoName: repoName, workspaceCount: workspaceCount)
             }
             .buttonStyle(.plain)
 
             if showsQuickActions {
-                repoActionMenu
-                    .opacity(showsVisibleQuickActions ? 1 : 0)
-                    .allowsHitTesting(showsVisibleQuickActions)
-                    .accessibilityHidden(!showsVisibleQuickActions)
+                if showsVisibleQuickActions {
+                    repoActionMenu
+                } else {
+                    repoActionMenuPlaceholder
+                }
             }
         }
         .padding(.vertical, 2)
@@ -176,16 +182,10 @@ struct RepoRow: View {
                 .fill(isSelected ? Color.accentColor.opacity(0.1) : .clear)
         )
         .onHover { hovering in
-            withAnimation(.easeInOut(duration: 0.12)) {
-                isHovering = hovering
-            }
+            isHovering = hovering
         }
         .accessibilityElement(children: .contain)
-        .accessibilityLabel(
-            "\(repo.name), \(repo.workspaces.count) workspace\(repo.workspaces.count == 1 ? "" : "s"), \(sessionActivity.accessibilityDescription)"
-                + (SidebarSessionActivity.showsPaneCountBadge(for: paneCount) ? ", \(paneCount) panes" : "")
-                + ", \(isExpanded ? "expanded" : "collapsed")"
-        )
+        .accessibilityLabel(accessibilityDescription)
     }
 
     private var repoFolderIcon: some View {
@@ -199,9 +199,9 @@ struct RepoRow: View {
             .contentTransition(.symbolEffect(.replace))
     }
 
-    private func repoLabelContent(workspaceCount: Int) -> some View {
+    private func repoLabelContent(repoName: String, workspaceCount: Int) -> some View {
         HStack(spacing: 10) {
-            Text(repo.name)
+            Text(repoName)
                 .font(.callout.weight(isSelected || sessionActivity.isActive ? .semibold : .regular))
                 .lineLimit(1)
 
@@ -222,6 +222,12 @@ struct RepoRow: View {
             }
         }
         .contentShape(Rectangle())
+    }
+
+    private var repoActionMenuPlaceholder: some View {
+        Color.clear
+            .frame(width: 22, height: 22)
+            .accessibilityHidden(true)
     }
 
     private var repoActionMenu: some View {

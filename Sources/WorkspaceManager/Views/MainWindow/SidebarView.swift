@@ -124,124 +124,135 @@ struct SidebarView: View {
     }
 
     var body: some View {
-        sidebarList
-            .listStyle(.sidebar)
-            .environment(\.defaultMinListRowHeight, 34)
-            .safeAreaInset(edge: .bottom) {
-                footerBar
-            }
-            .toolbar {
-                ToolbarItem(placement: .primaryAction) {
-                    addSourceMenu
-                }
-            }
-            .fileImporter(
-                isPresented: $isAddingRepo,
-                allowedContentTypes: [.folder],
-                allowsMultipleSelection: false
-            ) { result in
-                if case .success(let urls) = result, let url = urls.first {
-                    Task {
-                        await addRepo(from: url)
+        Group {
+            if PerformanceExperimentFlags.minimalToolbar {
+                sidebarList
+                    .listStyle(.sidebar)
+                    .environment(\.defaultMinListRowHeight, 34)
+                    .safeAreaInset(edge: .bottom) {
+                        footerBar
                     }
-                }
-            }
-            .sheet(item: $newWorkspaceSheetContext) { context in
-                NewWorkspaceSheet(
-                    repo: context.repo,
-                    environmentOptions: environmentOptions(for: context.repo),
-                    isPreparingEnvironmentOptions: isPreparingNewWorkspaceSheet,
-                    isCreateDisabled: isCreatingWorkspace(for: context.repo.id)
-                ) { name, nameSource, providerID, guestOS in
-                    Task { @MainActor in
-                        await createWorkspace(
-                            from: context.repo,
-                            name: name,
-                            nameSource: nameSource,
-                            providerID: providerID,
-                            guestOS: guestOS
-                        )
+            } else {
+                sidebarList
+                    .listStyle(.sidebar)
+                    .environment(\.defaultMinListRowHeight, 34)
+                    .safeAreaInset(edge: .bottom) {
+                        footerBar
                     }
-                }
-            }
-            .alert("Error", isPresented: $showingError) {
-                Button("OK", role: .cancel) {}
-
-                if shouldOfferLumeRecoveryActions {
-                    Button("Open VM Runtime") {
-                        openSettingsWindow()
+                    .toolbar {
+                        ToolbarItem(placement: .primaryAction) {
+                            addSourceMenu
+                        }
                     }
-
-                    Button("Open Lume Log") {
-                        openLumeLog()
-                    }
-                }
-            } message: {
-                Text(errorMessage ?? "An unknown error occurred")
             }
-            .confirmationDialog(
-                "Delete Workspace",
-                isPresented: $showingDeleteConfirmation,
-                presenting: workspaceToDelete
-            ) { workspace in
-                Button("Delete (Keep Files)", role: .destructive) {
-                    Task { @MainActor in
-                        await performDelete(workspace, deleteFiles: false)
-                    }
-                }
-                Button("Delete and Remove Files", role: .destructive) {
-                    Task { @MainActor in
-                        await performDelete(workspace, deleteFiles: true)
-                    }
-                }
-                Button("Cancel", role: .cancel) {
-                    workspaceToDelete = nil
-                }
-            } message: { workspace in
-                Text("Are you sure you want to delete '\(workspace.name)'?")
-            }
-            .focusedSceneValue(\.newWorkspaceAction, handleNewWorkspaceShortcut)
-            .onChange(of: selectedWorkspace?.id) { _, _ in
-                expandRepoForSelectedWorkspace()
-            }
-            .onChange(of: selectedWebSource?.id) { _, _ in
-                expandContainersForSelectedWebSource()
-            }
-            .onChange(of: repos.map(\.id)) { _, _ in
-                pruneExpandedRepos()
-                pruneExpandedWorkspaces()
-                syncRepoSortSnapshot()
-                Task { @MainActor in
-                    await maybeDriveHostLumeSmokeAutomation()
-                }
-            }
-            .onChange(of: repoSortModeRawValue) { _, _ in
-                syncRepoSortSnapshot(forceRefresh: true)
-            }
-            .onAppear {
-                initializeExpandedReposIfNeeded()
-                expandContainersForSelectedWebSource()
-                syncRepoSortSnapshot(forceRefresh: false)
-                guard !isRepoAutoImportDisabled else { return }
-                guard !didAttemptDefaultRepoImport else { return }
-                didAttemptDefaultRepoImport = true
+        }
+        .fileImporter(
+            isPresented: $isAddingRepo,
+            allowedContentTypes: [.folder],
+            allowsMultipleSelection: false
+        ) { result in
+            if case .success(let urls) = result, let url = urls.first {
                 Task {
-                    await autoImportReposFromCodeHome()
+                    await addRepo(from: url)
                 }
             }
-            .task {
-                _ = await seedFixtureProviderStateIfNeeded()
-                await maybeDriveHostLumeSmokeAutomation()
-            }
-            .onChange(of: errorMessage) { _, message in
-                guard let message else { return }
+        }
+        .sheet(item: $newWorkspaceSheetContext) { context in
+            NewWorkspaceSheet(
+                repo: context.repo,
+                environmentOptions: environmentOptions(for: context.repo),
+                isPreparingEnvironmentOptions: isPreparingNewWorkspaceSheet,
+                isCreateDisabled: isCreatingWorkspace(for: context.repo.id)
+            ) { name, nameSource, providerID, guestOS in
                 Task { @MainActor in
-                    await hostLumeSmokeAutomation.noteFailure(
-                        message: message,
-                        recoveryHints: hostLumeSmokeRecoveryHints(for: message)
+                    await createWorkspace(
+                        from: context.repo,
+                        name: name,
+                        nameSource: nameSource,
+                        providerID: providerID,
+                        guestOS: guestOS
                     )
                 }
             }
+        }
+        .alert("Error", isPresented: $showingError) {
+            Button("OK", role: .cancel) {}
+
+            if shouldOfferLumeRecoveryActions {
+                Button("Open VM Runtime") {
+                    openSettingsWindow()
+                }
+
+                Button("Open Lume Log") {
+                    openLumeLog()
+                }
+            }
+        } message: {
+            Text(errorMessage ?? "An unknown error occurred")
+        }
+        .confirmationDialog(
+            "Delete Workspace",
+            isPresented: $showingDeleteConfirmation,
+            presenting: workspaceToDelete
+        ) { workspace in
+            Button("Delete (Keep Files)", role: .destructive) {
+                Task { @MainActor in
+                    await performDelete(workspace, deleteFiles: false)
+                }
+            }
+            Button("Delete and Remove Files", role: .destructive) {
+                Task { @MainActor in
+                    await performDelete(workspace, deleteFiles: true)
+                }
+            }
+            Button("Cancel", role: .cancel) {
+                workspaceToDelete = nil
+            }
+        } message: { workspace in
+            Text("Are you sure you want to delete '\(workspace.name)'?")
+        }
+        .focusedSceneValue(\.newWorkspaceAction, handleNewWorkspaceShortcut)
+        .onChange(of: selectedWorkspace?.id) { _, _ in
+            expandRepoForSelectedWorkspace()
+        }
+        .onChange(of: selectedWebSource?.id) { _, _ in
+            expandContainersForSelectedWebSource()
+        }
+        .onChange(of: repos.map(\.id)) { _, _ in
+            pruneExpandedRepos()
+            pruneExpandedWorkspaces()
+            syncRepoSortSnapshot()
+            Task { @MainActor in
+                await maybeDriveHostLumeSmokeAutomation()
+            }
+        }
+        .onChange(of: repoSortModeRawValue) { _, _ in
+            syncRepoSortSnapshot(forceRefresh: true)
+        }
+        .onAppear {
+            initializeExpandedReposIfNeeded()
+            expandContainersForSelectedWebSource()
+            syncRepoSortSnapshot(forceRefresh: false)
+            guard !isRepoAutoImportDisabled else { return }
+            guard !didAttemptDefaultRepoImport else { return }
+            didAttemptDefaultRepoImport = true
+            Task {
+                await autoImportReposFromCodeHome()
+            }
+        }
+        .task {
+            _ = await seedFixtureProviderStateIfNeeded()
+            await maybeDriveHostLumeSmokeAutomation()
+        }
+        .onChange(of: errorMessage) { _, message in
+            guard let message else { return }
+            Task { @MainActor in
+                await hostLumeSmokeAutomation.noteFailure(
+                    message: message,
+                    recoveryHints: hostLumeSmokeRecoveryHints(for: message)
+                )
+            }
+        }
     }
 
     private var sidebarList: some View {
