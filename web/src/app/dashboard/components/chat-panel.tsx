@@ -16,6 +16,14 @@ function parseMention(text: string): string | null {
 	return match ? match[1] : null;
 }
 
+/**
+ * Canonical agent slug. "April Clearwater" → "april-clearwater" so that
+ * display names and machine slugs collapse into one sub-tab.
+ */
+function toAgentSlug(name: string): string {
+	return name.toLowerCase().trim().replace(/\s+/g, "-");
+}
+
 interface AgentSessionInfo {
 	agentName: string;
 	streamUrl: string;
@@ -337,37 +345,72 @@ export function ChatPanel({
 		[repo, fetchTimeline, connectToAgentStream],
 	);
 
+	const matchesAgent = useCallback(
+		(slug: string, entry: TimelineEntry): boolean => {
+			if (entry.kind !== "chat") return false;
+			if (entry.authorType === "agent" && toAgentSlug(entry.author) === slug) {
+				return true;
+			}
+			if (entry.agentTarget && toAgentSlug(entry.agentTarget) === slug) {
+				return true;
+			}
+			return false;
+		},
+		[],
+	);
+
 	// Filter entries to the selected agent's thread, if one is selected.
 	// "All" (selectedAgent === null) shows everything.
 	const filteredEntries = useMemo(() => {
 		if (!selectedAgent) return entries;
 		return entries.filter((entry) => {
 			if (entry.kind !== "chat") return true; // keep events/status cards
-			// Match messages authored by the selected agent, or mentioning them
-			if (entry.authorType === "agent" && entry.author === selectedAgent) {
-				return true;
-			}
-			if (entry.agentTarget === selectedAgent) return true;
-			return false;
+			return matchesAgent(selectedAgent, entry);
 		});
-	}, [entries, selectedAgent]);
+	}, [entries, selectedAgent, matchesAgent]);
 
 	// Build sub-tab list: union of terminal sessions and agents seen in
-	// the timeline. Always include an "All" pseudo-tab at the start.
+	// the timeline, deduped by canonical slug. Display label is the
+	// first non-slug name we see (e.g. "April Clearwater" preferred
+	// over "april-clearwater").
 	const subTabs = useMemo(() => {
-		const map = new Map<
-			string,
-			{ agentName: string; state?: "running" | "paused" }
-		>();
+		type Tab = {
+			agentName: string;
+			label: string;
+			state?: "running" | "paused";
+		};
+		const map = new Map<string, Tab>();
+
+		const upsert = (
+			rawName: string,
+			displayName?: string,
+			state?: "running" | "paused",
+		) => {
+			const slug = toAgentSlug(rawName);
+			const existing = map.get(slug);
+			const preferredLabel =
+				displayName && displayName !== slug
+					? displayName
+					: existing?.label && existing.label !== slug
+						? existing.label
+						: (rawName ?? slug);
+			map.set(slug, {
+				agentName: slug,
+				label: preferredLabel,
+				state: existing?.state ?? state,
+			});
+		};
+
 		for (const s of terminalSessions) {
-			map.set(s.agentName, { agentName: s.agentName, state: s.state });
+			upsert(s.agentName, undefined, s.state);
 		}
 		for (const e of entries) {
 			if (e.kind !== "chat") continue;
-			const name =
-				e.authorType === "agent" ? e.author : (e.agentTarget ?? null);
-			if (!name) continue;
-			if (!map.has(name)) map.set(name, { agentName: name });
+			if (e.authorType === "agent") {
+				upsert(e.author, e.author);
+			} else if (e.agentTarget) {
+				upsert(e.agentTarget);
+			}
 		}
 		return [...map.values()];
 	}, [terminalSessions, entries]);
@@ -386,7 +429,7 @@ export function ChatPanel({
 	return (
 		<>
 			<AgentSubTabs
-				tabs={[{ agentName: "all" }, ...subTabs]}
+				tabs={[{ agentName: "all", label: "all" }, ...subTabs]}
 				selected={selectedAgent ?? "all"}
 				onSelect={(name) => {
 					onSelectAgent?.(name === "all" ? null : name);

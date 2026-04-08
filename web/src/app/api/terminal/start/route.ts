@@ -51,7 +51,7 @@ export async function POST(request: Request): Promise<Response> {
 		);
 	}
 
-	const agentName = body.agentName ?? process.env.DEFAULT_AGENT ?? "terminal";
+	const agentName = body.agentName ?? process.env.DEFAULT_AGENT ?? "shell";
 
 	// If a live session already exists for this (repo, agent), reuse it
 	const existing = await getSessionForAgent(body.repo, agentName);
