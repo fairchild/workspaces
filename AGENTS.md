@@ -135,6 +135,9 @@ The script auto-sources `.env` for `EVIDENCE_UPLOAD_TOKEN`. Uploads go to `https
 - **Persist selection state by stable IDs, not live SwiftData objects.** Restore and fallback logic should resolve models late and validate them against current data before selection.
 - **Release version metadata must have one source of truth.** Tag, app version, and packaged artifact version should be validated against each other before a release is created.
 - **If the app opens or closes unexpectedly on a dev machine, check the launching process first.** On this project, CI/self-hosted runner behavior can look like an app bug.
+- **Vercel `Sandbox.create({env: {...}})` does NOT propagate to `sandbox.runCommand()`.** Every `runCommand` spawns with an empty environment relative to the sandbox config. If your runner needs env vars, write them to an `env.sh` file and `source` it at the top of the script. See `docs/development/agent-chat-sandbox.md` § "Claude CLI Authentication" for the pattern.
+- **Ship a diagnostic probe instead of your third guess.** Terminal arc #306 → #307 → #308 → #309: two guess-fixes both merged with green tests and failed in production. One temporary runner-script probe (`#308`) captured the exact state of the broken sandbox and revealed the root cause in a single ship cycle. When you're guessing, stop and instrument instead.
+- **"Tests green" is not the same as "works in production" for agent paths.** The web test surface doesn't include the `does claude actually authenticate inside a provisioned Vercel sandbox` path, so a broken fix sails through CI. For changes that touch `createSandbox`, `restoreSnapshot`, `createTerminalSandbox`, or `streamOutput`, send a real chat message in production and read the agent stream before declaring victory.
 
 ## Commit Hygiene
 
