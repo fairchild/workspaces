@@ -31,15 +31,49 @@ const CLAUDE_CONFIG_DIR = "/vercel/sandbox/claude-config";
  * v1:         node22 + @anthropic-ai/claude-code
  * v2-ttyd:    + ttyd for WebSocket terminal access
  * v3-tmux:    + tmux so the shell process survives snapshot/restore
- *               (first attempt — install dropped by snapshot, broken)
- * v3-tmux-b:  same, with probe manifest written at install time so we
- *               can see what actually survived the snapshot, plus
- *               additional copies of tmux's shared libraries into
- *               /usr/local/lib (on the theory that apt's lib installs
- *               don't survive but /usr/local does)
+ *               (broken — snapshot didn't persist install files)
+ * v3-tmux-b:  attempted /usr/local/lib copies (also broken)
+ * v3-tmux-c:  check runCommand exitCode (previous versions silently
+ *               ignored non-zero exit, so the install was failing
+ *               mid-way and we were snapshotting a half-done state).
+ *               Also captures stderr on failure for diagnosis.
  */
-const BASE_SNAPSHOT_VERSION = "v3-tmux-b";
+const BASE_SNAPSHOT_VERSION = "v3-tmux-c";
 const PROVIDER_ID = "vercel-sandbox";
+
+/**
+ * Run a command in a sandbox and throw if it exits non-zero. The
+ * Vercel sandbox SDK's `runCommand` returns a `CommandFinished` with
+ * an `exitCode` property but does NOT throw on non-zero exit — the
+ * caller has to check explicitly.
+ *
+ * We used to ignore the exit code in `resolveBaseSnapshot`, which
+ * meant a failing apt-get would silently proceed and we'd snapshot
+ * a half-installed state (the v3-tmux / v3-tmux-b outage). Any
+ * multi-step install script should go through this helper.
+ */
+async function assertRunCommand(
+	sandbox: Sandbox,
+	label: string,
+	params: Parameters<Sandbox["runCommand"]>[0],
+): Promise<void> {
+	// Overload pick: the object form returns CommandFinished.
+	const cmd = (await sandbox.runCommand(
+		params as Parameters<Sandbox["runCommand"]>[0] & object,
+		// biome-ignore lint/suspicious/noExplicitAny: SDK has two overloads, tsc narrows the wrong one
+	)) as any;
+	if (cmd.exitCode !== 0) {
+		let stderr = "";
+		try {
+			stderr = await cmd.output("both");
+		} catch {
+			// best effort
+		}
+		throw new Error(
+			`[vercel-sandbox] ${label} exited ${cmd.exitCode}\n${stderr.slice(0, 2000)}`,
+		);
+	}
+}
 
 function stripQuotes(s: string): string {
 	return s.replace(/^["']|["']$/g, "");
@@ -145,58 +179,43 @@ async function resolveBaseSnapshot(): Promise<string> {
 		timeout: ms("10m"),
 	});
 
-	await sandbox.runCommand({
+	await assertRunCommand(sandbox, "npm install claude-code", {
 		cmd: "npm",
 		args: ["install", "-g", "@anthropic-ai/claude-code"],
 		sudo: true,
 	});
 
-	// Install ttyd + tmux into /usr/local/ so they survive the Vercel
-	// snapshot. First v3-tmux attempt put tmux in /usr/bin via apt
-	// (dropped by snapshot). Second attempt cp'd to /usr/local/bin but
-	// failed to also move tmux's shared libs — dynamic linker couldn't
-	// resolve libevent/libtinfo at runtime, execvp returned ENOENT.
-	//
-	// This build:
-	//   1. ttyd — static binary from GitHub, straight into /usr/local/bin
-	//   2. tmux — apt installs it to /usr/bin + libs to /usr/lib/x86_64-linux-gnu/.
-	//      We then copy BOTH the binary and its ldd'd dependencies into
-	//      /usr/local/bin and /usr/local/lib, and sanity-check via
-	//      LD_LIBRARY_PATH that tmux runs.
-	//   3. Manifest file /usr/local/share/install-manifest.txt written
-	//      at the end — listing everything we just put into /usr/local.
-	//      After snapshot, a probe can read it to verify what actually
-	//      persisted. Diagnostic pattern from #308 applied again.
-	await sandbox.runCommand({
+	// Install ttyd + tmux + shared libs into /usr/local/. Vercel's
+	// snapshot persists /usr/local (ttyd survived v2-ttyd fine).
+	// Everything is in one bash script so a single runCommand failure
+	// trips assertRunCommand and we see the actual error. Prior
+	// versions split into multiple shell lines and ignored exit codes,
+	// which is how v3-tmux shipped with a half-done install.
+	await assertRunCommand(sandbox, "install ttyd + tmux", {
 		cmd: "bash",
 		args: [
 			"-c",
 			[
 				"set -euo pipefail",
-				// ttyd
+				"echo '--- installing ttyd ---'",
 				"curl -sL https://github.com/tsl0922/ttyd/releases/latest/download/ttyd.x86_64 -o /usr/local/bin/ttyd",
 				"chmod +x /usr/local/bin/ttyd",
-				// tmux via apt
+				"echo '--- apt-get update ---'",
 				"apt-get update",
+				"echo '--- apt-get install tmux ---'",
 				"apt-get install -y --no-install-recommends tmux",
-				// Copy tmux into /usr/local/bin
+				"echo '--- copying tmux + deps to /usr/local ---'",
+				"mkdir -p /usr/local/lib /usr/local/share",
 				"cp /usr/bin/tmux /usr/local/bin/tmux",
 				"chmod +x /usr/local/bin/tmux",
-				// Copy tmux's shared lib dependencies into /usr/local/lib
-				// so the dynamic linker can resolve them post-snapshot.
-				// Skip the kernel vDSO and the interpreter itself — those
-				// live outside /usr/lib and aren't ours to move.
-				"mkdir -p /usr/local/lib",
+				// Copy tmux's ldd-resolved shared lib dependencies so the
+				// dynamic linker can find them post-snapshot.
 				"for lib in $(ldd /usr/bin/tmux | awk '/=> \\//{print $3}'); do " +
 					'  cp -n "$lib" /usr/local/lib/ || true; ' +
 					"done",
-				// Verify tmux runs via the absolute path with our library
-				// path prepended. If ldd missed any deps, this fails here
-				// rather than later in production.
+				"echo '--- verifying tmux runs ---'",
 				"LD_LIBRARY_PATH=/usr/local/lib /usr/local/bin/tmux -V",
-				// Probe manifest — what survived the install, ready to be
-				// read back from a running sandbox after snapshot/restore.
-				"mkdir -p /usr/local/share",
+				"echo '--- writing install manifest ---'",
 				"{ " +
 					"  echo '=== install-manifest ==='; " +
 					"  date -u '+built_at=%Y-%m-%dT%H:%M:%SZ'; " +
@@ -205,6 +224,8 @@ async function resolveBaseSnapshot(): Promise<string> {
 					"  echo '--- ldd /usr/local/bin/tmux ---'; LD_LIBRARY_PATH=/usr/local/lib ldd /usr/local/bin/tmux; " +
 					"  echo '--- tmux version ---'; LD_LIBRARY_PATH=/usr/local/lib /usr/local/bin/tmux -V; " +
 					"} > /usr/local/share/install-manifest.txt",
+				"echo '--- install manifest written ---'",
+				"cat /usr/local/share/install-manifest.txt",
 			].join(" && "),
 		],
 		sudo: true,
