@@ -8,7 +8,11 @@ import { ComposeBar } from "./compose-bar";
 import { MessageList } from "./message-list";
 import { StreamingBubble } from "./streaming-bubble";
 
-const POLL_INTERVAL = 5_000;
+// Chat timeline poll interval. Was 5s, bumped to 10s after a Turso
+// quota incident where chat polling + a missing index generated 500M
+// row reads per month. 10s feels fine for human chat and halves the
+// steady-state DB load from an idle dashboard tab.
+const POLL_INTERVAL = 10_000;
 
 /** Extract @agent-name from start of message (client-safe, no node:crypto). */
 function parseMention(text: string): string | null {
