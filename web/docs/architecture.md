@@ -71,11 +71,12 @@ The agent runtime executes Claude Code inside sandboxed environments. The `Compu
 
 | Provider | Backend | Snapshot | Terminal |
 |----------|---------|----------|----------|
-| `vercel-sandbox` | Firecracker microVM | Yes (ephemeral) | Via ttyd relay |
-| `cloudflare-sandbox` | Container | Yes (R2-backed) | Native PTY WebSocket |
+| `vercel-sandbox` | Firecracker microVM | Yes (ephemeral) | Via ttyd + tmux |
 | `daytona` | VM | No | — |
 | `github-actions` | Runner | No | — |
 | `mock` | In-process | Yes | — |
+
+> Historical note: `cloudflare-sandbox` was scaffolded alongside the Vercel provider as a multi-provider proof-of-concept. The Worker and provider class were deleted in PR #321 because the scaffold had never been wired to a real Cloudflare account and was sitting in the runtime as ~500 lines of dead code. Design notes preserved in `backlog/cloudflare-sandbox-live-plan.md`.
 
 ### Session Lifecycle
 
@@ -96,30 +97,25 @@ Sessions persist across messages via snapshot/restore. The `agent_sessions` tabl
 
 The Terminal tab provides shell access to active agent sandboxes.
 
-### Dual-mode connection
+### Direct connection
 
-**ghostty-web** (WASM-compiled Ghostty) renders the terminal canvas. It connects via **WebSocket** to **ttyd** running inside the sandbox on port 7681. The WebSocket endpoint is path-protected: ttyd is started with `--base-path /<token>` where the token is `HMAC-SHA256(secret, sandboxId).hex.slice(0, 24)`. The status API derives the same token from the sandboxId, so the public sandbox URL alone (which can leak via screenshots, browser history, etc.) is not enough to connect — an attacker would need both the URL and the server-side secret.
+**ghostty-web** (WASM-compiled Ghostty) renders the terminal canvas. It connects via **WebSocket** directly to **ttyd** running inside the Vercel sandbox on port 7681. The WebSocket endpoint is path-protected: ttyd is started with `--base-path /<token>` where the token is `HMAC-SHA256(secret, sandboxId).hex.slice(0, 24)`. The status API derives the same token from the sandboxId, so the public sandbox URL alone (which can leak via screenshots, browser history, etc.) is not enough to connect — an attacker would need both the URL and the server-side secret.
 
 The ttyd protocol itself uses the `tty` WebSocket subprotocol with binary frames: command-byte prefix (`0`=INPUT/OUTPUT, `1`=RESIZE) plus payload. Auth handshake on open is a JSON `{AuthToken: "", columns, rows}`.
 
-### TerminalShare Proxy
-
-`infra/terminalshare-proxy/` is a Cloudflare Worker + Durable Object that:
-
-- Accepts WebSocket connections from the browser
-- Proxies bidirectionally to the upstream sandbox PTY
-- Maintains a 64KB ring buffer of recent output for reconnection replay
-- Supports multiple browser clients on the same terminal session
-- Abstracts away which sandbox provider backs the session
+ttyd's target command is `tmux new-session -A -s shell`, not bare bash — the `-A` flag attaches to an existing named session if one exists (so a tab reload reattaches to the same tmux state), otherwise creates a new one. See `docs/development/agent-chat-sandbox.md` § "Session Continuity via tmux".
 
 ```
-Browser (ghostty-web)
-  │ WSS
+Browser (ghostty-web canvas)
+  │ WSS /<token>/ws
   ▼
-TerminalShare Proxy (Cloudflare Worker)
+Vercel Sandbox ttyd (port 7681)
   │
-  ├── Cloudflare Sandbox → sandbox.terminal() (native PTY)
-  └── Vercel Sandbox → ttyd on published port (WebSocket PTY)
+  ▼
+tmux new-session -A -s shell
+  │
+  ▼
+bash in /vercel/sandbox/repo
 ```
 
 ## Dashboard Tabs
@@ -136,4 +132,3 @@ TerminalShare Proxy (Cloudflare Worker)
 |---------|----------|---------|
 | Webhook relay | `infra/cloudflare-webhook-relay/` | GitHub webhook ingestion + WebSocket fan-out |
 | Evidence store | `infra/cloudflare-evidence-store/` | R2-backed screenshot/artifact uploads for PRs |
-| Terminal proxy | `infra/terminalshare-proxy/` | WebSocket proxy for sandbox terminal sessions |

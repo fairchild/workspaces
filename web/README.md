@@ -38,4 +38,3 @@ Deployed to Vercel with root directory set to `web/`.
 Infrastructure workers deployed separately:
 - `infra/cloudflare-webhook-relay/` — GitHub webhook ingestion
 - `infra/cloudflare-evidence-store/` — PR evidence uploads
-- `infra/terminalshare-proxy/` — Terminal WebSocket proxy

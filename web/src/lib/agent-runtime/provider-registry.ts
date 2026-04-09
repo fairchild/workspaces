@@ -62,19 +62,16 @@ export async function getRegistry(): Promise<ComputeProviderRegistry> {
 	_registryPromise = (async () => {
 		const [
 			{ VercelSandboxProvider },
-			{ CloudflareSandboxProvider },
 			{ DaytonaProvider },
 			{ GitHubActionsProvider },
 		] = await Promise.all([
 			import("./vercel-sandbox"),
-			import("./cloudflare-sandbox"),
 			import("./daytona"),
 			import("./github-actions"),
 		]);
 
 		const providers = [
 			new VercelSandboxProvider(),
-			new CloudflareSandboxProvider(),
 			new DaytonaProvider(),
 			new GitHubActionsProvider(),
 		];
@@ -86,11 +83,7 @@ export async function getRegistry(): Promise<ComputeProviderRegistry> {
 				"mock",
 			);
 		} else {
-			// Use Cloudflare if configured, otherwise Vercel
-			const defaultProvider = process.env.CLOUDFLARE_SANDBOX_WORKER_URL
-				? "cloudflare-sandbox"
-				: "vercel-sandbox";
-			_registry = new ComputeProviderRegistry(providers, defaultProvider);
+			_registry = new ComputeProviderRegistry(providers, "vercel-sandbox");
 		}
 		return _registry;
 	})();
