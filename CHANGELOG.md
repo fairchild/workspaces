@@ -1,5 +1,37 @@
 # Changelog
 
+## [0.10.0] - 2026-04-09
+
+### Added
+- standalone terminal sessions — no agent chat required (#295)
+- terminal per agent with sub-tabs in Terminal and Chat (#298)
+- run tmux inside sandbox for real Resume continuity (#311)
+
+### Fixed
+- make terminal tab actually work in production (#292)
+- check sandbox.status in resolveSandboxState (#293)
+- implement ttyd WebSocket protocol in terminal panel (#297)
+- terminal resize bug + multi-agent UX polish (#299)
+- terminal security + correctness fixes from reflection (#302)
+- unblock terminal start button (47s INP block) (#303)
+- close ttyd auth gap for agent sandboxes + small polish (#305)
+- claude CLI auth in sandboxes + runner extraction + backlog reconcile (#306)
+- claude apiKeyHelper as a real shell script (not echo \$VAR) (#307)
+- source env.sh in agent runner — Sandbox.create env doesn't propagate (#309)
+- webhook_events composite index + getEventStats cache + poll bump (#314)
+- install tmux into /usr/local/bin so it survives Vercel snapshot (#316)
+- v3-tmux-b — bundle tmux shared libs + install manifest probe (#317)
+- assert runCommand exitCode in base snapshot build (v3-tmux-c) (#318)
+- install tmux as a static binary (v3-tmux-d) (#319)
+
+### Other
+- Add self-hosted runner management skill (#296)
+- debug(web): add diagnostic probe to agent runner script (#308)
+- claude CLI auth section + terminal arc retrospective (#310)
+- Revert "feat(web): run tmux inside sandbox for real Resume continuity (#311)" (#312)
+- debug(web): /api/debug-db endpoint to diagnose dashboard 500s (#313)
+- Reapply "feat(web): run tmux inside sandbox for real Resume continuity (#311)" (#312) (#315)
+
 ## [0.9.0] - 2026-04-06
 
 ### Added
