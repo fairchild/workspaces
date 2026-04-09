@@ -34,15 +34,15 @@ const CLAUDE_CONFIG_DIR = "/vercel/sandbox/claude-config";
  * v3-tmux-b:  attempted libs copy (also broken)
  * v3-tmux-c:  assertRunCommand exitCode check — finally surfaced the
  *               real error: "apt-get: command not found". The Vercel
- *               sandbox node22 runtime doesn't have apt at all. Every
- *               prior version had been silently failing at the first
- *               apt step and snapshotting a half-done state.
- * v3-tmux-d:  skip apt entirely, download a statically-linked tmux
- *               binary from mjakob-gh/build-static-tmux (3.6a) into
- *               /usr/local/bin. Same pattern as the existing ttyd
- *               install. No shared library deps, no distro assumptions.
+ *               sandbox node22 runtime doesn't have apt at all.
+ * v3-tmux-d:  static tmux binary from mjakob-gh/build-static-tmux —
+ *               the version that actually works.
+ * v4-welcome: + Spaces welcome banner appended to /etc/bash.bashrc.
+ *               Shown once per shell session via a guard env var.
+ *               Shows repo (from git remote), cwd, tmux session name,
+ *               and the idle-timeout hint.
  */
-const BASE_SNAPSHOT_VERSION = "v3-tmux-d";
+const BASE_SNAPSHOT_VERSION = "v4-welcome";
 
 /**
  * Static tmux binary download URL. See
@@ -230,6 +230,42 @@ async function resolveBaseSnapshot(): Promise<string> {
 				"/usr/local/bin/tmux -V",
 				"echo '--- install complete ---'",
 			].join(" && "),
+		],
+		sudo: true,
+	});
+
+	// Install the Spaces welcome banner as a bashrc snippet. Shown
+	// once per shell session (guard via $__SPACES_WELCOMED export).
+	// tmux spawns interactive non-login bash, which sources
+	// /etc/bash.bashrc, so this is where the banner goes. Uses
+	// printf + ANSI color, reads the repo name from git remote so
+	// the content adapts to whatever repo was cloned into the
+	// sandbox at runtime. The heredoc is single-quoted so no host-
+	// side shell expansion happens — every $VAR is sandbox-side.
+	await assertRunCommand(sandbox, "install welcome banner", {
+		cmd: "bash",
+		args: [
+			"-c",
+			`cat >> /etc/bash.bashrc <<'__SPACES_WELCOME_EOF__'
+
+# --- Spaces welcome banner (added by base snapshot install) ---
+if [ -z "\${__SPACES_WELCOMED:-}" ] && [ -t 1 ]; then
+  export __SPACES_WELCOMED=1
+  __spaces_repo=""
+  if [ -d /vercel/sandbox/repo/.git ]; then
+    __spaces_repo=$(cd /vercel/sandbox/repo && git remote get-url origin 2>/dev/null | sed -E 's#.*[:/]([^/]+/[^/]+)(\\.git)?$#\\1#')
+  fi
+  printf '\\n'
+  printf '\\033[1;36m━━━ Spaces sandbox ━━━\\033[0m\\n'
+  printf '\\033[0;36m repo   \\033[0m %s\\n' "\${__spaces_repo:-(no repo)}"
+  printf '\\033[0;36m cwd    \\033[0m %s\\n' "$(pwd)"
+  printf '\\033[0;36m tmux   \\033[0m session "shell"  (Ctrl-B d to detach)\\n'
+  printf '\\033[0;36m timeout\\033[0m 30 min idle\\n'
+  printf '\\033[0;90m ──────────────────────\\033[0m\\n'
+  printf '\\n'
+  unset __spaces_repo
+fi
+__SPACES_WELCOME_EOF__`,
 		],
 		sudo: true,
 	});
