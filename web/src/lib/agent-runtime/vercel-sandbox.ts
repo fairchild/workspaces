@@ -307,7 +307,10 @@ export class VercelSandboxProvider implements ComputeProvider, SnapshotCapable {
 				cloneArgs.push("--branch", request.branch);
 			}
 			cloneArgs.push(request.cloneUrl, "/vercel/sandbox/repo");
-			await sandbox.runCommand("git", cloneArgs);
+			await assertRunCommand(sandbox, "git clone (agent sandbox)", {
+				cmd: "git",
+				args: cloneArgs,
+			});
 
 			const instanceId = sandbox.sandboxId;
 			const tools =
@@ -365,10 +368,10 @@ export class VercelSandboxProvider implements ComputeProvider, SnapshotCapable {
 			await sandbox.writeFiles(filesToWrite);
 			// claude CLI invokes apiKeyHelper as an executable, so the helper
 			// script needs +x. writeFiles doesn't take a mode arg.
-			await sandbox.runCommand("chmod", [
-				"+x",
-				`${CLAUDE_CONFIG_DIR}/api-key-helper.sh`,
-			]);
+			await assertRunCommand(sandbox, "chmod api-key-helper (agent sandbox)", {
+				cmd: "chmod",
+				args: ["+x", `${CLAUDE_CONFIG_DIR}/api-key-helper.sh`],
+			});
 
 			// Auth-gated ttyd on port 7681 — same path token as the terminal
 			// tab so an attacker who finds an agent sandbox URL still can't
@@ -490,10 +493,10 @@ export class VercelSandboxProvider implements ComputeProvider, SnapshotCapable {
 		const restoreApiKey = stripQuotes(process.env.ANTHROPIC_API_KEY ?? "");
 		if (restoreApiKey) {
 			await sandbox.writeFiles(claudeAuthFiles(restoreApiKey));
-			await sandbox.runCommand("chmod", [
-				"+x",
-				`${CLAUDE_CONFIG_DIR}/api-key-helper.sh`,
-			]);
+			await assertRunCommand(sandbox, "chmod api-key-helper (restore)", {
+				cmd: "chmod",
+				args: ["+x", `${CLAUDE_CONFIG_DIR}/api-key-helper.sh`],
+			});
 		}
 
 		// Restart ttyd with the auth-gated base-path. The token is derived
@@ -547,16 +550,23 @@ export class VercelSandboxProvider implements ComputeProvider, SnapshotCapable {
 				cloneArgs.push("--branch", params.branch);
 			}
 			cloneArgs.push(params.cloneUrl, "/vercel/sandbox/repo");
-			await sandbox.runCommand("git", cloneArgs);
+			await assertRunCommand(sandbox, "git clone (terminal sandbox)", {
+				cmd: "git",
+				args: cloneArgs,
+			});
 
 			// Same claude auth setup as the agent path so `claude` works
 			// out of the box from the shell.
 			if (apiKey) {
 				await sandbox.writeFiles(claudeAuthFiles(apiKey));
-				await sandbox.runCommand("chmod", [
-					"+x",
-					`${CLAUDE_CONFIG_DIR}/api-key-helper.sh`,
-				]);
+				await assertRunCommand(
+					sandbox,
+					"chmod api-key-helper (terminal sandbox)",
+					{
+						cmd: "chmod",
+						args: ["+x", `${CLAUDE_CONFIG_DIR}/api-key-helper.sh`],
+					},
+				);
 			}
 
 			await startTtyd(sandbox);
