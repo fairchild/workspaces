@@ -178,22 +178,41 @@ Creating a sandbox from scratch (install node, install claude-code) takes minute
 2. The snapshot is promise-memoized — concurrent requests share the same creation
 3. Subsequent sandboxes clone from the base snapshot (seconds, not minutes)
 4. Base snapshots expire after 30 days; session snapshots after 7 days
-5. Bump `BASE_SNAPSHOT_VERSION` in `vercel-sandbox.ts` when adding new tooling — old versions remain valid until manually deleted, which lets us roll back without rebuilding. Current version: `v3-tmux`.
+5. Bump `BASE_SNAPSHOT_VERSION` in `vercel-sandbox.ts` when adding new tooling — old versions remain valid until manually deleted, which lets us roll back without rebuilding. Current version: `v4-welcome-c`.
 
-## Session Continuity via tmux
+## Terminal shell via tmux (and what it does NOT give you)
 
-`startTtyd` runs `tmux new-session -A -s shell` instead of bare bash. The `-A` flag attaches to an existing session if one is present, otherwise creates it. Combined with the Resume flow (snapshot the sandbox filesystem, restore later into a new sandbox), this means:
+`startTtyd` runs `tmux new-session -A -s shell` instead of bare bash. The `-A` flag attaches to an existing session if one is present, otherwise creates it.
 
-- Resume → restore snapshot → new sandbox → `startTtyd` → `tmux new-session -A -s shell` → tmux finds the existing `shell` session on disk → attaches → user lands in the exact shell state they left (`cd`, env, command history, running processes, whatever)
+### What tmux DOES give us
 
-Without tmux, Resume only restored the filesystem; bash was a fresh process. With tmux, the shell process itself survives. This is what "Resume" should have meant all along.
+**Reattach within the same sandbox across WebSocket reconnects.** When the browser tab reloads, the network blips, or the user switches main tabs, the new ttyd client connects to the still-running tmux server inside the sandbox and gets back the exact same session — same cwd, same env, same command history, same in-flight processes.
 
-Tradeoffs:
+Verified live: running `cd /tmp`, closing the browser tab, reopening it, and seeing `pwd` still return `/tmp`.
+
+### What tmux does NOT give us
+
+**Session continuity across sandbox snapshot/restore.** We initially expected Resume to land the user back in the exact tmux state they left, but `Sandbox.snapshot()` + `restoreSnapshot()` gives you a fresh Vercel sandbox with the snapshotted filesystem — **not a resumed VM**. The original tmux server process dies with the original sandbox, and tmux sockets (in `/tmp/tmux-$UID/`) can't be "attached to" from a different process. Confirmed empirically: `/tmp/tmux-0` is absent in a restored sandbox.
+
+So Resume in this codebase means:
+- Files come back (repo, env.sh, claude state)
+- Shell process does NOT come back
+- `cd`, env vars, history, running processes from before the snapshot are gone
+- The user lands at a fresh bash prompt via a fresh tmux session
+
+If you want real shell continuity across Resume, you'd need one of:
+- A process-level checkpoint/restore tool (CRIU) — not available in Vercel Sandbox
+- Session state serialization (tmux-resurrect plugin) — adds dependencies and filesystem hooks
+- A different compute backend that supports VM-memory snapshot (Firecracker snapshot, not Vercel's filesystem-only API)
+
+None are pursued today. The UX contract for Resume is "your files come back, your shell restarts" — make sure any tooltip or copy around Resume reflects that.
+
+### Tradeoffs of having tmux at all
+
 - Mouse selection behaves slightly differently inside tmux
 - Users unfamiliar with tmux may be surprised by the Ctrl-B prefix
-- Roughly 3 MB extra in the base snapshot
-
-Net: much better Resume UX. Worth it.
+- Roughly 500 KB extra in the base snapshot (static binary from `mjakob-gh/build-static-tmux`)
+- Net gain for reattach-within-sandbox outweighs the minor UX footprint
 
 ## DB query volume (don't re-break this)
 
