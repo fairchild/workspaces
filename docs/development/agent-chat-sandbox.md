@@ -179,6 +179,59 @@ Creating a sandbox from scratch (install node, install claude-code) takes minute
 3. Subsequent sandboxes clone from the base snapshot (seconds, not minutes)
 4. Base snapshots expire after 30 days; session snapshots after 7 days
 
+## DB query volume (don't re-break this)
+
+One dashboard tab open for a few hours a day generated enough read
+volume to exhaust a Turso starter plan (500M rows/month) in a
+single billing cycle. The dashboard went down one morning and the
+culprit was a missing composite index on `webhook_events`.
+
+### The hot-path contract
+
+Any query invoked from a polling endpoint must use an index that
+covers **both** the filter and the order. For
+`WHERE repo = ? ORDER BY timestamp DESC LIMIT N`, that means a
+composite `(repo, timestamp desc)` index — separate `(repo)` and
+`(timestamp)` indexes are not sufficient. The planner picks one,
+scans every matching row, sorts in memory, then takes N.
+
+`chat_messages` has `idx_chat_messages_repo_ts`. `webhook_events`
+now has `idx_webhook_events_repo_ts`. Verify any new polled table
+has the same shape before shipping.
+
+### Current polling cadences
+
+| Endpoint | Component | Interval |
+|---|---|---|
+| `/api/chat/messages` | `chat-panel.tsx` | 10s (was 5s, bumped after the incident) |
+| `/api/events` | `activity-feed.tsx` | 10s |
+| `/api/terminal/status` | `use-terminal-sessions.ts` + `chat-panel.tsx` | 10s |
+
+Any new polled endpoint should default to 10s or slower unless
+there's a compelling UX reason. If you need faster refresh, prefer
+SSE or a Durable Object over client polling.
+
+### The cache for `getEventStats`
+
+`getEventStats` does a `SELECT DISTINCT repo FROM webhook_events`
+which is a full-table scan — no index can help it. It's called from
+every `/api/chat/messages` POST (indirectly via
+`handleBotCommand`). The function is module-level TTL-cached for
+60s. **Don't remove the cache.** If you need fresher stats,
+consider a counter table updated by triggers rather than scanning
+the events table.
+
+### Measuring read volume
+
+```bash
+turso db inspect spaces-web
+```
+
+shows rows-read for the current billing period. Expect <50M/month
+on a single-user workload with the indexes in place. Anything
+dramatically higher is a regression — check which endpoint is
+newly-hot.
+
 ## Claude CLI Authentication (don't re-break this)
 
 The runner invokes `claude -p` inside the sandbox. Claude CLI needs

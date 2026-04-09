@@ -38,6 +38,19 @@ async function ensureEventsTable(): Promise<void> {
 		.on("webhook_events")
 		.column("repo")
 		.execute();
+	// Composite index for `WHERE repo = ? ORDER BY timestamp DESC LIMIT N`.
+	// Without this, that query scans every event for the repo — the chat
+	// panel and activity feed poll endpoints hit this path every 5-10s
+	// and blew through 500M Turso row-reads in a single month for one
+	// user. The separate single-column indexes above are not enough; the
+	// planner needs a composite that matches the filter + order.
+	// See docs/development/agent-chat-sandbox.md § "DB query volume".
+	await db.schema
+		.createIndex("idx_webhook_events_repo_ts")
+		.ifNotExists()
+		.on("webhook_events")
+		.columns(["repo", "timestamp desc"])
+		.execute();
 	migrated = true;
 }
 
@@ -122,7 +135,24 @@ export interface EventStats {
 	repos: string[];
 }
 
+/**
+ * In-memory TTL cache for getEventStats. The "repos" list is a
+ * SELECT DISTINCT full-table scan and the "eventsToday" count is a
+ * range scan. Neither changes fast enough to justify running per
+ * chat POST. 60s is plenty fresh for a stats card.
+ *
+ * Module-level cache survives across requests within the same warm
+ * serverless function instance. Cold starts re-populate.
+ */
+const EVENT_STATS_TTL_MS = 60_000;
+let cachedEventStats: { at: number; value: EventStats } | undefined;
+
 export async function getEventStats(): Promise<EventStats> {
+	const now = Date.now();
+	if (cachedEventStats && now - cachedEventStats.at < EVENT_STATS_TTL_MS) {
+		return cachedEventStats.value;
+	}
+
 	await ensureEventsTable();
 	const db = getDb();
 	const today = new Date();
@@ -138,8 +168,15 @@ export async function getEventStats(): Promise<EventStats> {
 		db.selectFrom("webhook_events").select("repo").distinct().execute(),
 	]);
 
-	return {
+	const value: EventStats = {
 		eventsToday: Number(countResult.count),
 		repos: repoResult.map((r) => r.repo),
 	};
+	cachedEventStats = { at: now, value };
+	return value;
+}
+
+/** Exposed for tests — reset the TTL cache between runs. */
+export function __resetEventStatsCache(): void {
+	cachedEventStats = undefined;
 }
