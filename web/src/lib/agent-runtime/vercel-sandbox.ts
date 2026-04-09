@@ -40,12 +40,17 @@ const CLAUDE_CONFIG_DIR = "/vercel/sandbox/claude-config";
  * v4-welcome: + Spaces welcome banner in /etc/bash.bashrc — didn't
  *               fire because tmux starts bash as a login shell which
  *               sources /etc/profile.d/*.sh, not /etc/bash.bashrc.
- * v4-welcome-b: + welcome banner also installed at
+ * v4-welcome-b: + welcome banner installed at
  *                 /etc/profile.d/spaces-welcome.sh so login shells
- *                 fire it. Same guard env var coordinates between
- *                 the two copies so it only fires once per session.
+ *                 fire it. Same guard env var means it only fires
+ *                 once per session. Banner worked but showed
+ *                 "fairchild/workspaces.git" because the sed regex
+ *                 couldn't strip the `.git` suffix.
+ * v4-welcome-c: + banner uses bash parameter expansion instead of
+ *                 sed so the `.git` suffix is stripped correctly
+ *                 and the owner/repo extraction is readable.
  */
-const BASE_SNAPSHOT_VERSION = "v4-welcome-b";
+const BASE_SNAPSHOT_VERSION = "v4-welcome-c";
 
 /**
  * Static tmux binary download URL. See
@@ -260,7 +265,15 @@ if [ -z "\${__SPACES_WELCOMED:-}" ] && [ -t 1 ]; then
   export __SPACES_WELCOMED=1
   __spaces_repo=""
   if [ -d /vercel/sandbox/repo/.git ]; then
-    __spaces_repo=$(cd /vercel/sandbox/repo && git remote get-url origin 2>/dev/null | sed -E 's#.*[:/]([^/]+/[^/]+)(\\.git)?$#\\1#')
+    __spaces_url=$(cd /vercel/sandbox/repo && git remote get-url origin 2>/dev/null)
+    if [ -n "\$__spaces_url" ]; then
+      __spaces_url="\${__spaces_url%.git}"            # strip trailing .git
+      __spaces_name="\${__spaces_url##*/}"            # repo name = basename
+      __spaces_dir="\${__spaces_url%/*}"              # dirname of url
+      __spaces_owner="\${__spaces_dir##*[/:]}"        # owner = last segment of dirname
+      __spaces_repo="\${__spaces_owner}/\${__spaces_name}"
+      unset __spaces_url __spaces_name __spaces_dir __spaces_owner
+    fi
   fi
   printf '\\n'
   printf '\\033[1;36m━━━ Spaces sandbox ━━━\\033[0m\\n'
