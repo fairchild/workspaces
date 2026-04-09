@@ -152,11 +152,39 @@ async function resolveBaseSnapshot(): Promise<string> {
 	// project's GitHub releases; tmux comes from the distro package
 	// manager. Vercel sandbox's node22 runtime is Debian-based, so apt
 	// is available.
+	//
+	// IMPORTANT: Vercel's snapshot appears to persist /usr/local/bin
+	// (ttyd lives there and survives the round-trip) but NOT /usr/bin
+	// (where apt installs tmux by default). The first v3-tmux attempt
+	// shipped with just `apt-get install tmux` — the build succeeded,
+	// tmux -V passed, the snapshot was recorded. But every sandbox
+	// created from the snapshot was missing tmux in /usr/bin, and
+	// ttyd's execvp of tmux failed with ENOENT. Confirmed by asking
+	// April to Glob for `tmux` inside a running sandbox — absent.
+	//
+	// Fix: after apt installs tmux to /usr/bin, `cp` it into
+	// /usr/local/bin (same directory as ttyd) and verify via the
+	// /usr/local/bin path. Now it survives the snapshot.
 	await sandbox.runCommand({
 		cmd: "bash",
 		args: [
 			"-c",
-			"curl -sL https://github.com/tsl0922/ttyd/releases/latest/download/ttyd.x86_64 -o /usr/local/bin/ttyd && chmod +x /usr/local/bin/ttyd && apt-get update && apt-get install -y --no-install-recommends tmux && tmux -V",
+			[
+				"set -e",
+				"curl -sL https://github.com/tsl0922/ttyd/releases/latest/download/ttyd.x86_64 -o /usr/local/bin/ttyd",
+				"chmod +x /usr/local/bin/ttyd",
+				"apt-get update",
+				"apt-get install -y --no-install-recommends tmux",
+				// Copy (don't symlink — Vercel snapshots might not
+				// follow symlinks out of /usr/local) into the path
+				// that's known to persist.
+				"cp /usr/bin/tmux /usr/local/bin/tmux",
+				"chmod +x /usr/local/bin/tmux",
+				// Verify via the path we care about, not $PATH, so a
+				// missing file here fails the build instead of silently
+				// finding a different tmux.
+				"/usr/local/bin/tmux -V",
+			].join(" && "),
 		],
 		sudo: true,
 	});
@@ -587,7 +615,11 @@ async function startTtyd(sandbox: Sandbox): Promise<void> {
 			"7681",
 			"-b",
 			`/${token}`,
-			"tmux",
+			// Absolute path — ttyd execvp's this arg directly and we
+			// don't want to depend on /usr/local/bin being in the
+			// runtime sandbox's PATH. See the v3-tmux install-path
+			// comment in resolveBaseSnapshot for the history.
+			"/usr/local/bin/tmux",
 			"new-session",
 			"-A",
 			"-s",
