@@ -174,10 +174,26 @@ The E2E script tests:
 
 Creating a sandbox from scratch (install node, install claude-code) takes minutes. To avoid this on every request:
 
-1. First request creates a **base snapshot**: node22 runtime + `@anthropic-ai/claude-code` globally installed + ttyd
+1. First request creates a **base snapshot**: node22 runtime + `@anthropic-ai/claude-code` globally installed + ttyd + tmux
 2. The snapshot is promise-memoized — concurrent requests share the same creation
 3. Subsequent sandboxes clone from the base snapshot (seconds, not minutes)
 4. Base snapshots expire after 30 days; session snapshots after 7 days
+5. Bump `BASE_SNAPSHOT_VERSION` in `vercel-sandbox.ts` when adding new tooling — old versions remain valid until manually deleted, which lets us roll back without rebuilding. Current version: `v3-tmux`.
+
+## Session Continuity via tmux
+
+`startTtyd` runs `tmux new-session -A -s shell` instead of bare bash. The `-A` flag attaches to an existing session if one is present, otherwise creates it. Combined with the Resume flow (snapshot the sandbox filesystem, restore later into a new sandbox), this means:
+
+- Resume → restore snapshot → new sandbox → `startTtyd` → `tmux new-session -A -s shell` → tmux finds the existing `shell` session on disk → attaches → user lands in the exact shell state they left (`cd`, env, command history, running processes, whatever)
+
+Without tmux, Resume only restored the filesystem; bash was a fresh process. With tmux, the shell process itself survives. This is what "Resume" should have meant all along.
+
+Tradeoffs:
+- Mouse selection behaves slightly differently inside tmux
+- Users unfamiliar with tmux may be surprised by the Ctrl-B prefix
+- Roughly 3 MB extra in the base snapshot
+
+Net: much better Resume UX. Worth it.
 
 ## Claude CLI Authentication (don't re-break this)
 
