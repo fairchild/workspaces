@@ -30,15 +30,32 @@ const CLAUDE_CONFIG_DIR = "/vercel/sandbox/claude-config";
  *
  * v1:         node22 + @anthropic-ai/claude-code
  * v2-ttyd:    + ttyd for WebSocket terminal access
- * v3-tmux:    + tmux so the shell process survives snapshot/restore
- *               (broken — snapshot didn't persist install files)
- * v3-tmux-b:  attempted /usr/local/lib copies (also broken)
- * v3-tmux-c:  check runCommand exitCode (previous versions silently
- *               ignored non-zero exit, so the install was failing
- *               mid-way and we were snapshotting a half-done state).
- *               Also captures stderr on failure for diagnosis.
+ * v3-tmux:    + tmux (broken — see v3-tmux-c for the debug arc)
+ * v3-tmux-b:  attempted libs copy (also broken)
+ * v3-tmux-c:  assertRunCommand exitCode check — finally surfaced the
+ *               real error: "apt-get: command not found". The Vercel
+ *               sandbox node22 runtime doesn't have apt at all. Every
+ *               prior version had been silently failing at the first
+ *               apt step and snapshotting a half-done state.
+ * v3-tmux-d:  skip apt entirely, download a statically-linked tmux
+ *               binary from mjakob-gh/build-static-tmux (3.6a) into
+ *               /usr/local/bin. Same pattern as the existing ttyd
+ *               install. No shared library deps, no distro assumptions.
  */
-const BASE_SNAPSHOT_VERSION = "v3-tmux-c";
+const BASE_SNAPSHOT_VERSION = "v3-tmux-d";
+
+/**
+ * Static tmux binary download URL. See
+ * https://github.com/mjakob-gh/build-static-tmux for the build
+ * sources. The `.stripped` variant is smaller (~500KB) and
+ * statically-linked against musl, ncurses, and libevent so it has no
+ * runtime dependencies.
+ *
+ * If this URL ever breaks, the pythops/tmux-linux-binary project is
+ * a known-good alternative.
+ */
+const TMUX_STATIC_URL =
+	"https://github.com/mjakob-gh/build-static-tmux/releases/latest/download/tmux.linux-amd64.stripped.gz";
 const PROVIDER_ID = "vercel-sandbox";
 
 /**
@@ -185,47 +202,33 @@ async function resolveBaseSnapshot(): Promise<string> {
 		sudo: true,
 	});
 
-	// Install ttyd + tmux + shared libs into /usr/local/. Vercel's
-	// snapshot persists /usr/local (ttyd survived v2-ttyd fine).
-	// Everything is in one bash script so a single runCommand failure
-	// trips assertRunCommand and we see the actual error. Prior
-	// versions split into multiple shell lines and ignored exit codes,
-	// which is how v3-tmux shipped with a half-done install.
-	await assertRunCommand(sandbox, "install ttyd + tmux", {
+	// Install ttyd + tmux as static binaries into /usr/local/bin. No
+	// apt, no distro package manager — the Vercel sandbox node22
+	// runtime doesn't have apt. Discovered the hard way in v3-tmux-c
+	// when assertRunCommand finally caught the real error:
+	// "apt-get: command not found". Both binaries are statically
+	// linked (ttyd's upstream release is a static build; tmux comes
+	// from mjakob-gh/build-static-tmux which builds against musl +
+	// ncurses + libevent so it has no runtime deps).
+	await assertRunCommand(sandbox, "install ttyd + tmux static", {
 		cmd: "bash",
 		args: [
 			"-c",
 			[
 				"set -euo pipefail",
-				"echo '--- installing ttyd ---'",
-				"curl -sL https://github.com/tsl0922/ttyd/releases/latest/download/ttyd.x86_64 -o /usr/local/bin/ttyd",
+				"echo '--- downloading ttyd ---'",
+				"curl -sfL https://github.com/tsl0922/ttyd/releases/latest/download/ttyd.x86_64 -o /usr/local/bin/ttyd",
 				"chmod +x /usr/local/bin/ttyd",
-				"echo '--- apt-get update ---'",
-				"apt-get update",
-				"echo '--- apt-get install tmux ---'",
-				"apt-get install -y --no-install-recommends tmux",
-				"echo '--- copying tmux + deps to /usr/local ---'",
-				"mkdir -p /usr/local/lib /usr/local/share",
-				"cp /usr/bin/tmux /usr/local/bin/tmux",
+				"echo '--- ttyd version ---'",
+				"/usr/local/bin/ttyd --version",
+				"echo '--- downloading tmux static ---'",
+				`curl -sfL ${TMUX_STATIC_URL} -o /tmp/tmux.gz`,
+				"gunzip -f /tmp/tmux.gz",
+				"mv /tmp/tmux /usr/local/bin/tmux",
 				"chmod +x /usr/local/bin/tmux",
-				// Copy tmux's ldd-resolved shared lib dependencies so the
-				// dynamic linker can find them post-snapshot.
-				"for lib in $(ldd /usr/bin/tmux | awk '/=> \\//{print $3}'); do " +
-					'  cp -n "$lib" /usr/local/lib/ || true; ' +
-					"done",
-				"echo '--- verifying tmux runs ---'",
-				"LD_LIBRARY_PATH=/usr/local/lib /usr/local/bin/tmux -V",
-				"echo '--- writing install manifest ---'",
-				"{ " +
-					"  echo '=== install-manifest ==='; " +
-					"  date -u '+built_at=%Y-%m-%dT%H:%M:%SZ'; " +
-					"  echo '--- /usr/local/bin ---'; ls -la /usr/local/bin; " +
-					"  echo '--- /usr/local/lib ---'; ls -la /usr/local/lib; " +
-					"  echo '--- ldd /usr/local/bin/tmux ---'; LD_LIBRARY_PATH=/usr/local/lib ldd /usr/local/bin/tmux; " +
-					"  echo '--- tmux version ---'; LD_LIBRARY_PATH=/usr/local/lib /usr/local/bin/tmux -V; " +
-					"} > /usr/local/share/install-manifest.txt",
-				"echo '--- install manifest written ---'",
-				"cat /usr/local/share/install-manifest.txt",
+				"echo '--- tmux version ---'",
+				"/usr/local/bin/tmux -V",
+				"echo '--- install complete ---'",
 			].join(" && "),
 		],
 		sudo: true,
@@ -649,16 +652,21 @@ function ttydUrl(domain: string, sandboxId: string): string {
  */
 async function startTtyd(sandbox: Sandbox): Promise<void> {
 	const token = ttydPathToken(sandbox.sandboxId);
-	// Wrap ttyd in bash so we can set LD_LIBRARY_PATH before exec. The
-	// tmux binary in /usr/local/bin links against libs we copied into
-	// /usr/local/lib — they're not on the default loader search path
-	// in the runtime sandbox. Setting LD_LIBRARY_PATH inline + exec'ing
-	// ttyd lets the library path inherit through ttyd's execvp of tmux.
+	// tmux is a static binary in /usr/local/bin/tmux — no library
+	// path setup needed. ttyd execs tmux directly.
 	await sandbox.runCommand({
-		cmd: "bash",
+		cmd: "ttyd",
 		args: [
-			"-c",
-			`export LD_LIBRARY_PATH=/usr/local/lib && exec ttyd -W -p 7681 -b /${token} /usr/local/bin/tmux new-session -A -s shell`,
+			"-W",
+			"-p",
+			"7681",
+			"-b",
+			`/${token}`,
+			"/usr/local/bin/tmux",
+			"new-session",
+			"-A",
+			"-s",
+			"shell",
 		],
 		cwd: "/vercel/sandbox/repo",
 		detached: true,
