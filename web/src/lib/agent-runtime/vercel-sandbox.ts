@@ -37,12 +37,15 @@ const CLAUDE_CONFIG_DIR = "/vercel/sandbox/claude-config";
  *               sandbox node22 runtime doesn't have apt at all.
  * v3-tmux-d:  static tmux binary from mjakob-gh/build-static-tmux —
  *               the version that actually works.
- * v4-welcome: + Spaces welcome banner appended to /etc/bash.bashrc.
- *               Shown once per shell session via a guard env var.
- *               Shows repo (from git remote), cwd, tmux session name,
- *               and the idle-timeout hint.
+ * v4-welcome: + Spaces welcome banner in /etc/bash.bashrc — didn't
+ *               fire because tmux starts bash as a login shell which
+ *               sources /etc/profile.d/*.sh, not /etc/bash.bashrc.
+ * v4-welcome-b: + welcome banner also installed at
+ *                 /etc/profile.d/spaces-welcome.sh so login shells
+ *                 fire it. Same guard env var coordinates between
+ *                 the two copies so it only fires once per session.
  */
-const BASE_SNAPSHOT_VERSION = "v4-welcome";
+const BASE_SNAPSHOT_VERSION = "v4-welcome-b";
 
 /**
  * Static tmux binary download URL. See
@@ -234,21 +237,25 @@ async function resolveBaseSnapshot(): Promise<string> {
 		sudo: true,
 	});
 
-	// Install the Spaces welcome banner as a bashrc snippet. Shown
-	// once per shell session (guard via $__SPACES_WELCOMED export).
-	// tmux spawns interactive non-login bash, which sources
-	// /etc/bash.bashrc, so this is where the banner goes. Uses
-	// printf + ANSI color, reads the repo name from git remote so
-	// the content adapts to whatever repo was cloned into the
-	// sandbox at runtime. The heredoc is single-quoted so no host-
-	// side shell expansion happens — every $VAR is sandbox-side.
+	// Install the Spaces welcome banner. Goes in /etc/profile.d/ so
+	// it fires on login shells (which is what tmux starts by
+	// default) — v4-welcome put it only in /etc/bash.bashrc which
+	// covers non-login interactive shells, and that's the wrong
+	// path for tmux → bash.
+	//
+	// The snippet guards via $__SPACES_WELCOMED so child shells and
+	// subsequent tmux windows skip the banner. Reads the repo name
+	// at runtime from git remote so the content adapts per sandbox.
+	//
+	// Heredoc is single-quoted so every $VAR is sandbox-side, not
+	// interpolated on the host.
 	await assertRunCommand(sandbox, "install welcome banner", {
 		cmd: "bash",
 		args: [
 			"-c",
-			`cat >> /etc/bash.bashrc <<'__SPACES_WELCOME_EOF__'
-
-# --- Spaces welcome banner (added by base snapshot install) ---
+			`cat > /etc/profile.d/spaces-welcome.sh <<'__SPACES_WELCOME_EOF__'
+# Spaces welcome banner — added by base snapshot install.
+# Shown once per shell session via the __SPACES_WELCOMED guard.
 if [ -z "\${__SPACES_WELCOMED:-}" ] && [ -t 1 ]; then
   export __SPACES_WELCOMED=1
   __spaces_repo=""
@@ -265,7 +272,10 @@ if [ -z "\${__SPACES_WELCOMED:-}" ] && [ -t 1 ]; then
   printf '\\n'
   unset __spaces_repo
 fi
-__SPACES_WELCOME_EOF__`,
+__SPACES_WELCOME_EOF__
+chmod 0644 /etc/profile.d/spaces-welcome.sh
+# Verify the file is there at install time (surfaces errors early).
+test -s /etc/profile.d/spaces-welcome.sh`,
 		],
 		sudo: true,
 	});
