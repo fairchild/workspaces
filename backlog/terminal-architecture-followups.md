@@ -9,7 +9,45 @@ These are the items that don't fit in a single mechanical PR — each
 has design tradeoffs worth thinking about before writing code. For
 small UX polish items, see `terminal-polish-followup.md`.
 
-## 1. Reconciliation cost: Sandbox.get per session per poll
+## 1. Run tmux inside the sandbox (real Resume continuity)
+
+**Why**: The current Resume model restores the Vercel sandbox snapshot
+(filesystem state) but the bash *process* is fresh. Users see the
+disk state come back but their `cd somewhere`, `export VAR=...`,
+command history, and any in-flight processes are gone. This
+contradicts the intuition of "Resume".
+
+A tmux server inside the sandbox solves this:
+
+- Process state survives reconnect and snapshot/restore
+- Multi-client (multiple browsers can attach to the same session)
+- Splits/panes if we want them later
+- Standard tmux UX users may already know
+
+**Cost**: install tmux in the v3 base snapshot, change ttyd's command
+from `bash` to `tmux new -A -s shell`, accept the slightly different
+terminal model.
+
+**Plan**:
+1. Bump `BASE_SNAPSHOT_VERSION` to `v3-tmux`
+2. Add tmux install to `resolveBaseSnapshot()` after the ttyd install
+3. Change the `startTtyd` helper's command from `bash` to
+   `tmux new-session -A -s shell` (the helper extracted in #305 means
+   this is a one-line change in one place — the value of that
+   refactor cashes in here)
+4. After Resume, re-attach the same tmux session and the user lands
+   in the exact shell state they left
+5. Document the tmux semantics — Ctrl-B prefix, mouse mode, etc.
+
+**Tradeoffs**:
+- Slight learning curve for users who don't know tmux
+- Mouse selection works differently inside tmux (could enable mouse
+  mode)
+- One more dependency in the base snapshot (~3MB)
+
+The net is much better Resume UX. Worth it.
+
+## 2. Reconciliation cost: Sandbox.get per session per poll
 
 `/api/terminal/status` does
 `Promise.all(sessions.map(resolveSandboxState))`. With N agents per
@@ -34,7 +72,7 @@ The decentralized option is the cleanest but requires the most
 plumbing. The cache option is the smallest change for a big win.
 Worth picking *one* and committing.
 
-## 2. Delete or commit-to-deploy the Cloudflare provider scaffold
+## 3. Delete or commit-to-deploy the Cloudflare provider scaffold
 
 `infra/terminalshare-proxy/` and
 `web/src/lib/agent-runtime/cloudflare-sandbox.ts` exist as ~500 lines
@@ -58,7 +96,7 @@ sitting in the runtime where future contributors will trip over it.
 
 Neither is wrong. Sitting in the middle is the worst place.
 
-## 3. + button: agent picker
+## 4. + button: agent picker
 
 The `+` button in the sub-tab strip currently always calls
 `startTerminal()` with no agent name, which uses
@@ -81,7 +119,7 @@ entry point.
 discovery wiring, and decisions about how custom-named ad-hoc shells
 interact with the agent_name column refactor below.
 
-## 4. agent_name column refactor
+## 5. agent_name column refactor
 
 `agent_name` in `agent_sessions` means three different things:
 
@@ -104,7 +142,7 @@ ALTER TABLE agent_sessions
 Not urgent but worth doing before adding more session kinds (see + button
 picker above which would benefit from this).
 
-## 5. Cost awareness UI
+## 6. Cost awareness UI
 
 Each running sandbox is ~$0.10/hr on Vercel. A user with 5 active
 sandboxes for 8 hours/day spends ~$120/month without realizing.
@@ -120,7 +158,7 @@ Need:
 current user, adding a route for cross-repo session listing, and
 deciding where the indicator lives in the global header.
 
-## 6. Idle timeout / auto-stop / auto-snapshot
+## 7. Idle timeout / auto-stop / auto-snapshot
 
 Standalone terminal sandboxes get the 30min default. User opens,
 walks away, comes back to "no active terminal". Should:
@@ -136,7 +174,7 @@ auto-snapshot interacts with the existing snapshot/restore flow.
 Pairs naturally with the cost awareness item — both are about not
 silently burning money.
 
-## 7. Shared filesystem volume across agents
+## 8. Shared filesystem volume across agents
 
 By design, each sandbox has its own `/vercel/sandbox`. User clones a
 branch in @april's terminal, switches to @plat's, the file isn't
@@ -147,7 +185,7 @@ architectural version is to mount a shared `/workspace/shared`
 volume that all agents see — Cloudflare R2 bucket via mountBucket,
 or a Vercel-provided shared volume if/when that ships.
 
-Pairs with the Cloudflare scaffold decision (item 2) — if we go
+Pairs with the Cloudflare scaffold decision (item 3) — if we go
 multi-provider, we want a portable shared-volume abstraction.
 
 ## References

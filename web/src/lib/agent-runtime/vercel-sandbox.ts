@@ -28,13 +28,10 @@ const CLAUDE_CONFIG_DIR = "/vercel/sandbox/claude-config";
  * package updates, etc.). Old versions remain valid until manually deleted —
  * this lets us roll back without rebuilding.
  *
- * v1:       node22 + @anthropic-ai/claude-code
- * v2-ttyd:  + ttyd for WebSocket terminal access
- * v3-tmux:  + tmux so the shell process survives snapshot/restore
- *             (ttyd now runs `tmux new-session -A -s shell` instead of
- *             bare bash — see `startTtyd` below)
+ * v1: node22 + @anthropic-ai/claude-code
+ * v2-ttyd: + ttyd for WebSocket terminal access
  */
-const BASE_SNAPSHOT_VERSION = "v3-tmux";
+const BASE_SNAPSHOT_VERSION = "v2-ttyd";
 const PROVIDER_ID = "vercel-sandbox";
 
 function stripQuotes(s: string): string {
@@ -133,7 +130,7 @@ async function resolveBaseSnapshot(): Promise<string> {
 		// Recorded snapshot is gone — fall through to recreate
 	}
 
-	// 2. Create fresh base: node22 + Claude Code CLI + ttyd + tmux
+	// 2. Create fresh base: node22 + Claude Code CLI + ttyd
 	const sandbox = await Sandbox.create({
 		...getCredentials(),
 		runtime: "node22",
@@ -147,16 +144,12 @@ async function resolveBaseSnapshot(): Promise<string> {
 		sudo: true,
 	});
 
-	// Install ttyd for WebSocket terminal access + tmux for session
-	// continuity across snapshot/restore. The ttyd binary comes from the
-	// project's GitHub releases; tmux comes from the distro package
-	// manager. Vercel sandbox's node22 runtime is Debian-based, so apt
-	// is available.
+	// Install ttyd for WebSocket terminal access
 	await sandbox.runCommand({
 		cmd: "bash",
 		args: [
 			"-c",
-			"curl -sL https://github.com/tsl0922/ttyd/releases/latest/download/ttyd.x86_64 -o /usr/local/bin/ttyd && chmod +x /usr/local/bin/ttyd && apt-get update && apt-get install -y --no-install-recommends tmux && tmux -V",
+			"curl -sL https://github.com/tsl0922/ttyd/releases/latest/download/ttyd.x86_64 -o /usr/local/bin/ttyd && chmod +x /usr/local/bin/ttyd",
 		],
 		sudo: true,
 	});
@@ -564,35 +557,12 @@ function ttydUrl(domain: string, sandboxId: string): string {
  * (agent chat, terminal tab, restored snapshot) must call this so the
  * URL we later construct via `ttydUrl()` matches what ttyd actually
  * serves and the shell stays behind the HMAC token.
- *
- * ttyd runs `tmux new-session -A -s shell` instead of bare bash so the
- * shell process survives snapshot/restore:
- *
- *   -A   attach to the named session if it already exists (post-restore),
- *        otherwise create a new one (first launch).
- *   -s shell   name the session so Resume can re-attach explicitly.
- *
- * Without tmux, Resume restores the filesystem snapshot but bash is a
- * fresh process — `cd somewhere`, `export VAR=...`, command history, and
- * any in-flight processes are gone. With tmux, the user lands in the
- * exact shell state they left when they resume a paused sandbox.
  */
 async function startTtyd(sandbox: Sandbox): Promise<void> {
 	const token = ttydPathToken(sandbox.sandboxId);
 	await sandbox.runCommand({
 		cmd: "ttyd",
-		args: [
-			"-W",
-			"-p",
-			"7681",
-			"-b",
-			`/${token}`,
-			"tmux",
-			"new-session",
-			"-A",
-			"-s",
-			"shell",
-		],
+		args: ["-W", "-p", "7681", "-b", `/${token}`, "bash"],
 		cwd: "/vercel/sandbox/repo",
 		detached: true,
 	});
