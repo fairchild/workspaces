@@ -7,6 +7,13 @@ export interface ComputeProviderDescriptor {
 	maxSessionDuration: number;
 	supportsSnapshot: boolean;
 	supportsStreaming: boolean;
+	/**
+	 * How the provider exposes its terminal surface. "pty" = interactive
+	 * ttyd/WebSocket (Vercel, Cloudflare, etc.). "transcript" = read-only view
+	 * of tool-call events (managed-agents, where bash is turn-based).
+	 * Defaults to "pty" when omitted.
+	 */
+	terminalMode?: "pty" | "transcript";
 }
 
 export interface ComputeProviderAvailability {

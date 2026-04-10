@@ -65,11 +65,13 @@ export async function getRegistry(): Promise<ComputeProviderRegistry> {
 			{ CloudflareSandboxProvider },
 			{ DaytonaProvider },
 			{ GitHubActionsProvider },
+			{ ManagedAgentsProvider },
 		] = await Promise.all([
 			import("./vercel-sandbox"),
 			import("./cloudflare-sandbox"),
 			import("./daytona"),
 			import("./github-actions"),
+			import("./managed-agents"),
 		]);
 
 		const providers = [
@@ -77,6 +79,7 @@ export async function getRegistry(): Promise<ComputeProviderRegistry> {
 			new CloudflareSandboxProvider(),
 			new DaytonaProvider(),
 			new GitHubActionsProvider(),
+			new ManagedAgentsProvider(),
 		];
 
 		if (process.env.MOCK_AGENT === "1") {
@@ -86,10 +89,15 @@ export async function getRegistry(): Promise<ComputeProviderRegistry> {
 				"mock",
 			);
 		} else {
-			// Use Cloudflare if configured, otherwise Vercel
-			const defaultProvider = process.env.CLOUDFLARE_SANDBOX_WORKER_URL
-				? "cloudflare-sandbox"
-				: "vercel-sandbox";
+			// Precedence: explicit COMPUTE_PROVIDER > Cloudflare if configured > Vercel
+			const explicit = process.env.COMPUTE_PROVIDER as
+				| ComputeBackendId
+				| undefined;
+			const defaultProvider: ComputeBackendId =
+				explicit ??
+				(process.env.CLOUDFLARE_SANDBOX_WORKER_URL
+					? "cloudflare-sandbox"
+					: "vercel-sandbox");
 			_registry = new ComputeProviderRegistry(providers, defaultProvider);
 		}
 		return _registry;

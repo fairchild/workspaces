@@ -5,6 +5,7 @@ import { useEffect } from "react";
 import { AgentSubTabs } from "./agent-sub-tabs";
 import { TerminalCanvas } from "./terminal-canvas";
 import styles from "./terminal-panel.module.css";
+import { TranscriptTerminal } from "./transcript-terminal";
 import { useTerminalSessions } from "./use-terminal-sessions";
 
 interface TerminalPanelProps {
@@ -201,11 +202,14 @@ export function TerminalPanel({
 		);
 	}
 
-	// Running state — render one TerminalCanvas per running session and
-	// hide non-active ones with display:none. The canvases stay alive in
-	// the DOM so scrollback persists across sub-tab switches.
+	// Running state — render one view per running session and hide
+	// non-active ones with display:none. Views stay alive in the DOM so
+	// scrollback persists across sub-tab switches. Managed Agents sessions
+	// have no PTY; they render a read-only tool-call transcript instead.
 	const runningSessions = sessions.filter(
-		(s) => s.state === "running" && s.terminalUrl,
+		(s) =>
+			s.state === "running" &&
+			(s.provider === "managed-agents" || !!s.terminalUrl),
 	);
 
 	return (
@@ -218,14 +222,23 @@ export function TerminalPanel({
 			/>
 			<div className={styles.panel}>
 				<div className={styles.terminalHost}>
-					{runningSessions.map((s) => (
-						<TerminalCanvas
-							key={s.agentName}
-							agentName={s.agentName}
-							terminalUrl={s.terminalUrl as string}
-							active={s.agentName === selectedAgent}
-						/>
-					))}
+					{runningSessions.map((s) =>
+						s.provider === "managed-agents" ? (
+							<TranscriptTerminal
+								key={s.agentName}
+								sessionId={s.sandboxId}
+								agentName={s.agentName}
+								active={s.agentName === selectedAgent}
+							/>
+						) : (
+							<TerminalCanvas
+								key={s.agentName}
+								agentName={s.agentName}
+								terminalUrl={s.terminalUrl as string}
+								active={s.agentName === selectedAgent}
+							/>
+						),
+					)}
 				</div>
 				<div className={styles.statusBar}>
 					<span
