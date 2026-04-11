@@ -8,8 +8,10 @@ import type {
 	ComputeProviderDescriptor,
 	SandboxRequest,
 	SandboxResult,
+	SandboxState,
 	SnapshotCapable,
 	StreamChunk,
+	TerminalCapable,
 } from "./types";
 
 const CONVERSATIONAL_TOOLS = "Read,Glob,Grep,WebFetch";
@@ -249,13 +251,16 @@ async function resolveBaseSnapshot(): Promise<string> {
 /** Active sandbox instances keyed by instanceId (sandboxId). */
 const activeSandboxes = new Map<string, Sandbox>();
 
-export class VercelSandboxProvider implements ComputeProvider, SnapshotCapable {
+export class VercelSandboxProvider
+	implements ComputeProvider, SnapshotCapable, TerminalCapable
+{
 	readonly descriptor: ComputeProviderDescriptor = {
 		id: "vercel-sandbox",
 		displayName: "Vercel Sandbox",
 		maxSessionDuration: ms("5h"),
 		supportsSnapshot: true,
 		supportsStreaming: true,
+		supportsTerminal: true,
 	};
 
 	async checkAvailability(): Promise<ComputeProviderAvailability> {
@@ -569,6 +574,10 @@ export class VercelSandboxProvider implements ComputeProvider, SnapshotCapable {
 			throw err;
 		}
 	}
+
+	async resolveSandboxState(instanceId: string): Promise<SandboxState> {
+		return resolveSandboxState(instanceId);
+	}
 }
 
 /**
@@ -584,9 +593,7 @@ export class VercelSandboxProvider implements ComputeProvider, SnapshotCapable {
  * function instance created the sandbox, but the status API runs in
  * separate instances. The map is a fast-path cache.
  */
-export type SandboxState =
-	| { alive: false }
-	| { alive: true; terminalUrl?: string };
+export type { SandboxState } from "./types";
 
 /**
  * Vercel sandbox statuses that mean "this sandbox can accept commands".

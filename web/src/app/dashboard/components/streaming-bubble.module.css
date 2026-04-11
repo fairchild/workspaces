@@ -63,6 +63,12 @@
 	animation: pulse 1.5s ease-in-out infinite;
 }
 
+.toolIndicator {
+	font-family: var(--font-mono, ui-monospace, monospace);
+	font-size: 0.625rem;
+	color: var(--text-tertiary);
+}
+
 @keyframes pulse {
 	0%,
 	100% {

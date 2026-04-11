@@ -50,6 +50,7 @@ const DESCRIPTOR: ComputeProviderDescriptor = {
 	maxSessionDuration: 3600,
 	supportsSnapshot: true,
 	supportsStreaming: true,
+	supportsTerminal: true,
 };
 
 function makeMockProvider(): ComputeProvider &

@@ -63,11 +63,13 @@ export async function getRegistry(): Promise<ComputeProviderRegistry> {
 		const [
 			{ VercelSandboxProvider },
 			{ CloudflareSandboxProvider },
+			{ AnthropicManagedProvider },
 			{ DaytonaProvider },
 			{ GitHubActionsProvider },
 		] = await Promise.all([
 			import("./vercel-sandbox"),
 			import("./cloudflare-sandbox"),
+			import("./anthropic-managed"),
 			import("./daytona"),
 			import("./github-actions"),
 		]);
@@ -75,6 +77,7 @@ export async function getRegistry(): Promise<ComputeProviderRegistry> {
 		const providers = [
 			new VercelSandboxProvider(),
 			new CloudflareSandboxProvider(),
+			new AnthropicManagedProvider(),
 			new DaytonaProvider(),
 			new GitHubActionsProvider(),
 		];
@@ -86,10 +89,12 @@ export async function getRegistry(): Promise<ComputeProviderRegistry> {
 				"mock",
 			);
 		} else {
-			// Use Cloudflare if configured, otherwise Vercel
-			const defaultProvider = process.env.CLOUDFLARE_SANDBOX_WORKER_URL
-				? "cloudflare-sandbox"
-				: "vercel-sandbox";
+			// Priority: Managed Agents > Cloudflare > Vercel
+			const defaultProvider = process.env.ANTHROPIC_MANAGED_AGENTS
+				? "anthropic-managed"
+				: process.env.CLOUDFLARE_SANDBOX_WORKER_URL
+					? "cloudflare-sandbox"
+					: "vercel-sandbox";
 			_registry = new ComputeProviderRegistry(providers, defaultProvider);
 		}
 		return _registry;

@@ -7,6 +7,7 @@ export interface ComputeProviderDescriptor {
 	maxSessionDuration: number;
 	supportsSnapshot: boolean;
 	supportsStreaming: boolean;
+	supportsTerminal: boolean;
 }
 
 export interface ComputeProviderAvailability {
@@ -93,4 +94,25 @@ export function isSnapshotCapable(
 	provider: ComputeProvider,
 ): provider is ComputeProvider & SnapshotCapable {
 	return provider.descriptor.supportsSnapshot;
+}
+
+/** Liveness + terminal URL for a compute sandbox. */
+export type SandboxState =
+	| { alive: false }
+	| { alive: true; terminalUrl?: string };
+
+/** Optional capability: terminal access to a running sandbox. */
+export interface TerminalCapable {
+	createTerminalSandbox(params: {
+		cloneUrl: string;
+		branch?: string;
+	}): Promise<SandboxResult>;
+	resolveSandboxState(instanceId: string): Promise<SandboxState>;
+}
+
+/** Type guard for providers that support terminal access. */
+export function isTerminalCapable(
+	provider: ComputeProvider,
+): provider is ComputeProvider & TerminalCapable {
+	return provider.descriptor.supportsTerminal;
 }

@@ -62,6 +62,7 @@ export function ChatPanel({
 	const [streamingMessage, setStreamingMessage] = useState<{
 		agentName: string;
 		content: string;
+		lastTool: string | null;
 		status:
 			| "sending"
 			| "connecting"
@@ -171,6 +172,7 @@ export function ChatPanel({
 			setStreamingMessage((prev) => ({
 				agentName: session.agentName,
 				content: "",
+				lastTool: null,
 				status: prev?.status === "sending" ? "connecting" : "provisioning",
 			}));
 
@@ -223,6 +225,12 @@ export function ChatPanel({
 							if (chunk.type === "text") {
 								pendingContentRef.current += chunk.content;
 								scheduleFlush();
+							} else if (chunk.type === "tool_use") {
+								setStreamingMessage((prev) =>
+									prev
+										? { ...prev, lastTool: chunk.content, status: "streaming" }
+										: null,
+								);
 							} else if (chunk.type === "status") {
 								const s = chunk.content?.includes("Starting")
 									? "provisioning"
@@ -297,6 +305,7 @@ export function ChatPanel({
 				setStreamingMessage({
 					agentName,
 					content: "",
+					lastTool: null,
 					status: "sending",
 				});
 			}

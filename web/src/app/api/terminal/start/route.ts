@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
-import { VercelSandboxProvider } from "@/lib/agent-runtime/vercel-sandbox";
+import { getRegistry } from "@/lib/agent-runtime/provider-registry";
+import { isTerminalCapable } from "@/lib/agent-runtime/types";
 import { createSession, getSessionForAgent } from "@/lib/agent-sessions";
 import { getSession } from "@/lib/auth-server";
 import { getGitHubToken } from "@/lib/github";
@@ -73,7 +74,18 @@ export async function POST(request: Request): Promise<Response> {
 		}
 	}
 
-	const provider = new VercelSandboxProvider();
+	const registry = await getRegistry();
+	const provider = registry.getDefault();
+
+	if (!isTerminalCapable(provider)) {
+		return Response.json(
+			{
+				error: `${provider.descriptor.displayName} does not support terminal sessions`,
+			},
+			{ status: 501 },
+		);
+	}
+
 	const availability = await provider.checkAvailability();
 	if (!availability.available) {
 		return Response.json(
@@ -105,7 +117,7 @@ export async function POST(request: Request): Promise<Response> {
 		id: sessionId,
 		repo: body.repo,
 		agentName,
-		computeBackend: "vercel-sandbox",
+		computeBackend: provider.descriptor.id,
 		computeInstanceId: result.instanceId,
 		snapshotId: null,
 		claudeSessionId: null,

@@ -5,8 +5,10 @@ import type {
 	ComputeProviderDescriptor,
 	SandboxRequest,
 	SandboxResult,
+	SandboxState,
 	SnapshotCapable,
 	StreamChunk,
+	TerminalCapable,
 } from "./types";
 
 /**
@@ -20,7 +22,7 @@ import type {
  * via a WebSocket endpoint, giving full PTY support without ttyd.
  */
 export class CloudflareSandboxProvider
-	implements ComputeProvider, SnapshotCapable
+	implements ComputeProvider, SnapshotCapable, TerminalCapable
 {
 	readonly descriptor: ComputeProviderDescriptor = {
 		id: "cloudflare-sandbox",
@@ -28,6 +30,7 @@ export class CloudflareSandboxProvider
 		maxSessionDuration: ms("5h"),
 		supportsSnapshot: true,
 		supportsStreaming: true,
+		supportsTerminal: true,
 	};
 
 	private get baseUrl(): string {
@@ -182,25 +185,44 @@ export class CloudflareSandboxProvider
 		}
 		return (await res.json()) as SandboxResult;
 	}
+
+	async createTerminalSandbox(params: {
+		cloneUrl: string;
+		branch?: string;
+	}): Promise<SandboxResult> {
+		const res = await fetch(`${this.baseUrl}/sandbox/terminal`, {
+			method: "POST",
+			headers: {
+				"Content-Type": "application/json",
+				Authorization: `Bearer ${this.secret}`,
+			},
+			body: JSON.stringify(params),
+		});
+		if (!res.ok) {
+			throw new Error(
+				`Cloudflare terminal sandbox failed: ${await res.text()}`,
+			);
+		}
+		return (await res.json()) as SandboxResult;
+	}
+
+	async resolveSandboxState(instanceId: string): Promise<SandboxState> {
+		const workerUrl = this.baseUrl;
+		if (!workerUrl) return { alive: false };
+		const wsUrl = workerUrl.replace(/^https?:\/\//, "wss://");
+		return { alive: true, terminalUrl: `${wsUrl}/ws/${instanceId}` };
+	}
 }
 
-/**
- * Liveness + terminal URL for a Cloudflare sandbox session.
- *
- * TODO: once the @cloudflare/sandbox SDK is wired into the TerminalShare
- * Worker, this should make an HTTP call to the Worker to check if the
- * sandbox is actually alive. Today the sandbox lifecycle routes return
- * 501, so we can only report based on Worker configuration.
- */
-export type SandboxState =
-	| { alive: false }
-	| { alive: true; terminalUrl?: string };
+export type { SandboxState } from "./types";
 
+/**
+ * Module-level backward-compat wrapper. Delegates to an ephemeral
+ * CloudflareSandboxProvider instance so the logic lives in one place.
+ */
 export async function resolveSandboxState(
 	instanceId: string,
-): Promise<SandboxState> {
-	const workerUrl = process.env.CLOUDFLARE_SANDBOX_WORKER_URL;
-	if (!workerUrl) return { alive: false };
-	const wsUrl = workerUrl.replace(/^https?:\/\//, "wss://");
-	return { alive: true, terminalUrl: `${wsUrl}/ws/${instanceId}` };
+): Promise<import("./types").SandboxState> {
+	const provider = new CloudflareSandboxProvider();
+	return provider.resolveSandboxState(instanceId);
 }
