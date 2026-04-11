@@ -245,6 +245,7 @@ export class SessionManager {
 				contextMessages,
 				chatHistory,
 				claudeSessionId,
+				envVars: { GITHUB_TOKEN: params.githubToken },
 			});
 
 			await updateComputeInstance(sessionId, result.instanceId);
