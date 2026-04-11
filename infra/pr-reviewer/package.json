@@ -1,0 +1,12 @@
+{
+  "name": "pr-reviewer",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "setup": "bun run src/setup.ts",
+    "start": "bun run src/server.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "latest"
+  }
+}

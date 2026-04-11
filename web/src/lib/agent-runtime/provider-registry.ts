@@ -64,16 +64,19 @@ export async function getRegistry(): Promise<ComputeProviderRegistry> {
 			{ VercelSandboxProvider },
 			{ DaytonaProvider },
 			{ GitHubActionsProvider },
+			{ ManagedAgentsProvider },
 		] = await Promise.all([
 			import("./vercel-sandbox"),
 			import("./daytona"),
 			import("./github-actions"),
+			import("./managed-agents"),
 		]);
 
 		const providers = [
 			new VercelSandboxProvider(),
 			new DaytonaProvider(),
 			new GitHubActionsProvider(),
+			new ManagedAgentsProvider(),
 		];
 
 		if (process.env.MOCK_AGENT === "1") {
@@ -83,7 +86,12 @@ export async function getRegistry(): Promise<ComputeProviderRegistry> {
 				"mock",
 			);
 		} else {
-			_registry = new ComputeProviderRegistry(providers, "vercel-sandbox");
+			// Precedence: explicit COMPUTE_PROVIDER > Vercel default
+			const explicit = process.env.COMPUTE_PROVIDER as
+				| ComputeBackendId
+				| undefined;
+			const defaultProvider: ComputeBackendId = explicit ?? "vercel-sandbox";
+			_registry = new ComputeProviderRegistry(providers, defaultProvider);
 		}
 		return _registry;
 	})();

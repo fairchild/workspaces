@@ -217,6 +217,7 @@ export type ComputeBackendId =
 	| "daytona"
 	| "github-actions"
 	| "lume"
+	| "managed-agents"
 	| "mock";
 
 export interface AgentSession {
