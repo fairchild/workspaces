@@ -721,6 +721,23 @@ function ttydUrl(domain: string, sandboxId: string): string {
  */
 async function startTtyd(sandbox: Sandbox): Promise<void> {
 	const token = ttydPathToken(sandbox.sandboxId);
+
+	// Ensure the tmux socket directory exists before ttyd launches tmux.
+	// After snapshot restore `/tmp` may be empty, and the static tmux
+	// binary sometimes fails to create `/tmp/tmux-<uid>/` on its own
+	// (produces: "tmux socket dir: `/tmp/tmux-0` does not exist"). We
+	// also remove any stale socket files left over from a previous tmux
+	// server that was running when the snapshot was taken — a dead socket
+	// prevents `new-session -A` from starting a fresh server.
+	await sandbox.runCommand({
+		cmd: "bash",
+		args: [
+			"-c",
+			"rm -rf /tmp/tmux-* && mkdir -p /tmp/tmux-0 && chmod 700 /tmp/tmux-0",
+		],
+		sudo: true,
+	});
+
 	// tmux is a static binary in /usr/local/bin/tmux — no library
 	// path setup needed. ttyd execs tmux directly.
 	await sandbox.runCommand({
