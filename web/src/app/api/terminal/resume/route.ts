@@ -1,4 +1,5 @@
-import { VercelSandboxProvider } from "@/lib/agent-runtime/vercel-sandbox";
+import { getRegistry } from "@/lib/agent-runtime/provider-registry";
+import { isSnapshotCapable } from "@/lib/agent-runtime/types";
 import {
 	getSessionForAgent,
 	updateComputeInstance,
@@ -57,16 +58,19 @@ export async function POST(request: Request): Promise<Response> {
 		);
 	}
 
-	if (agentSession.computeBackend !== "vercel-sandbox") {
+	const registry = await getRegistry();
+	const provider = registry.get(
+		agentSession.computeBackend as import("@/lib/types").ComputeBackendId,
+	);
+	if (!provider || !isSnapshotCapable(provider)) {
 		return Response.json(
 			{
-				error: `resume not yet implemented for ${agentSession.computeBackend}`,
+				error: `Resume not supported for ${agentSession.computeBackend}`,
 			},
 			{ status: 501 },
 		);
 	}
 
-	const provider = new VercelSandboxProvider();
 	try {
 		const restored = await provider.restoreSnapshot(agentSession.snapshotId);
 		await updateComputeInstance(agentSession.id, restored.instanceId);

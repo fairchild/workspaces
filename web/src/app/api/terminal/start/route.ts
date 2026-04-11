@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
-import { VercelSandboxProvider } from "@/lib/agent-runtime/vercel-sandbox";
+import { getRegistry } from "@/lib/agent-runtime/provider-registry";
+import { isTerminalCapable } from "@/lib/agent-runtime/types";
 import { createSession, getSessionForAgent } from "@/lib/agent-sessions";
 import { getSession } from "@/lib/auth-server";
 import { getGitHubToken } from "@/lib/github";
@@ -73,7 +74,24 @@ export async function POST(request: Request): Promise<Response> {
 		}
 	}
 
-	const provider = new VercelSandboxProvider();
+	const registry = await getRegistry();
+
+	// Terminal sessions need a PTY-capable provider, which may differ from the
+	// default (e.g. default=managed-agents for chat, but terminals need Vercel).
+	const defaultProvider = registry.getDefault();
+	const provider = isTerminalCapable(defaultProvider)
+		? defaultProvider
+		: registry.all().find(isTerminalCapable);
+
+	if (!provider) {
+		return Response.json(
+			{
+				error: "No terminal-capable provider is configured",
+			},
+			{ status: 501 },
+		);
+	}
+
 	const availability = await provider.checkAvailability();
 	if (!availability.available) {
 		return Response.json(
@@ -105,7 +123,7 @@ export async function POST(request: Request): Promise<Response> {
 		id: sessionId,
 		repo: body.repo,
 		agentName,
-		computeBackend: "vercel-sandbox",
+		computeBackend: provider.descriptor.id,
 		computeInstanceId: result.instanceId,
 		snapshotId: null,
 		claudeSessionId: null,

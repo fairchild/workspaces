@@ -1,17 +1,11 @@
+import { getRegistry } from "@/lib/agent-runtime/provider-registry";
+import { isTerminalCapable } from "@/lib/agent-runtime/types";
 import { getSessionForAgent, updateSessionStatus } from "@/lib/agent-sessions";
 import { getSession } from "@/lib/auth-server";
 import { getUserRepos } from "@/lib/repos";
-import { Sandbox } from "@vercel/sandbox";
+import type { ComputeBackendId } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
-
-function getCredentials() {
-	return {
-		token: process.env.VERCEL_TOKEN,
-		teamId: process.env.VERCEL_TEAM_ID,
-		projectId: process.env.VERCEL_PROJECT_ID,
-	};
-}
 
 interface PostBody {
 	repo: string;
@@ -48,13 +42,17 @@ export async function POST(request: Request): Promise<Response> {
 		return Response.json({ stopped: false, reason: "no active session" });
 	}
 
-	// Best-effort sandbox stop (don't fail if already dead)
+	// Best-effort sandbox stop (don't fail if already dead).
+	// Uses stopSandbox (cross-process safe) rather than destroySandbox
+	// (in-memory only), since API routes run in different serverless instances.
 	try {
-		const sandbox = await Sandbox.get({
-			sandboxId: agentSession.computeInstanceId,
-			...getCredentials(),
-		});
-		await sandbox.stop();
+		const registry = await getRegistry();
+		const provider = registry.get(
+			agentSession.computeBackend as ComputeBackendId,
+		);
+		if (provider && isTerminalCapable(provider)) {
+			await provider.stopSandbox(agentSession.computeInstanceId);
+		}
 	} catch {
 		// sandbox already gone
 	}

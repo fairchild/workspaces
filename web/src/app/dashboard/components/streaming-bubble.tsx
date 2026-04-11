@@ -23,6 +23,7 @@ interface StreamingBubbleProps {
 	message: {
 		agentName: string;
 		content: string;
+		lastTool?: string | null;
 		status: StreamingStatus;
 	} | null;
 }
@@ -49,6 +50,9 @@ export function StreamingBubble({ message }: StreamingBubbleProps) {
 					{STATUS_LABELS[message.status] ||
 						`Connecting to @${message.agentName}...`}
 				</span>
+			)}
+			{message.lastTool && !message.content && (
+				<span className={styles.toolIndicator}>Using {message.lastTool}</span>
 			)}
 		</div>
 	);

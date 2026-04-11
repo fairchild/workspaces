@@ -9,7 +9,7 @@ export interface ComputeProviderDescriptor {
 	supportsStreaming: boolean;
 	/**
 	 * How the provider exposes its terminal surface. "pty" = interactive
-	 * ttyd/WebSocket (Vercel, Cloudflare, etc.). "transcript" = read-only view
+	 * ttyd/WebSocket (Vercel, etc.). "transcript" = read-only view
 	 * of tool-call events (managed-agents, where bash is turn-based).
 	 * Defaults to "pty" when omitted.
 	 */
@@ -100,4 +100,28 @@ export function isSnapshotCapable(
 	provider: ComputeProvider,
 ): provider is ComputeProvider & SnapshotCapable {
 	return provider.descriptor.supportsSnapshot;
+}
+
+/** Liveness + terminal URL for a compute sandbox. */
+export type SandboxState =
+	| { alive: false }
+	| { alive: true; terminalUrl?: string };
+
+/** Optional capability: terminal access to a running sandbox. */
+export interface TerminalCapable {
+	createTerminalSandbox(params: {
+		cloneUrl: string;
+		branch?: string;
+	}): Promise<SandboxResult>;
+	resolveSandboxState(instanceId: string): Promise<SandboxState>;
+	/** Stop a sandbox by ID, even from a different serverless instance. */
+	stopSandbox(instanceId: string): Promise<void>;
+}
+
+/** Type guard for providers that support interactive terminal access. */
+export function isTerminalCapable(
+	provider: ComputeProvider,
+): provider is ComputeProvider & TerminalCapable {
+	const mode = provider.descriptor.terminalMode;
+	return mode === "pty" || mode === undefined;
 }

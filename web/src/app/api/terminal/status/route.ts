@@ -1,11 +1,14 @@
+import { getRegistry } from "@/lib/agent-runtime/provider-registry";
+import {
+	type SandboxState,
+	isTerminalCapable,
+} from "@/lib/agent-runtime/types";
 import { getSessionsForRepo, updateSessionStatus } from "@/lib/agent-sessions";
 import { getSession } from "@/lib/auth-server";
 import { getUserRepos } from "@/lib/repos";
-import type { AgentSession } from "@/lib/types";
+import type { AgentSession, ComputeBackendId } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
-
-type SandboxState = { alive: false } | { alive: true; terminalUrl?: string };
 
 export type TerminalSessionState = "running" | "paused";
 
@@ -17,16 +20,14 @@ export interface TerminalSessionInfo {
 	terminalUrl?: string;
 }
 
-/** Dynamic provider loader — keeps cold-start cost low. */
 async function resolveState(
 	computeBackend: string,
 	instanceId: string,
 ): Promise<SandboxState | null> {
-	if (computeBackend === "vercel-sandbox") {
-		const m = await import("@/lib/agent-runtime/vercel-sandbox");
-		return m.resolveSandboxState(instanceId);
-	}
-	return null;
+	const registry = await getRegistry();
+	const provider = registry.get(computeBackend as ComputeBackendId);
+	if (!provider || !isTerminalCapable(provider)) return null;
+	return provider.resolveSandboxState(instanceId);
 }
 
 /**

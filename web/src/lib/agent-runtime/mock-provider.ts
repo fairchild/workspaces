@@ -5,8 +5,10 @@ import type {
 	ComputeProviderDescriptor,
 	SandboxRequest,
 	SandboxResult,
+	SandboxState,
 	SnapshotCapable,
 	StreamChunk,
+	TerminalCapable,
 } from "./types";
 
 let counter = 0;
@@ -20,13 +22,16 @@ const restoredInstances = new Set<string>();
 /** Snapshot store: snapshotId → message at time of snapshot. */
 const snapshots = new Map<string, string>();
 
-export class MockComputeProvider implements ComputeProvider, SnapshotCapable {
+export class MockComputeProvider
+	implements ComputeProvider, SnapshotCapable, TerminalCapable
+{
 	readonly descriptor: ComputeProviderDescriptor = {
 		id: "mock",
 		displayName: "Mock Provider",
 		maxSessionDuration: ms("1h"),
 		supportsSnapshot: true,
 		supportsStreaming: true,
+		terminalMode: "pty",
 	};
 
 	async checkAvailability(): Promise<ComputeProviderAvailability> {
@@ -57,6 +62,10 @@ export class MockComputeProvider implements ComputeProvider, SnapshotCapable {
 		instances.delete(instanceId);
 	}
 
+	async stopSandbox(instanceId: string): Promise<void> {
+		instances.delete(instanceId);
+	}
+
 	async createSnapshot(instanceId: string): Promise<string> {
 		const snapshotId = `mock-snap-${counter++}`;
 		const message = instances.get(instanceId) ?? "";
@@ -71,5 +80,18 @@ export class MockComputeProvider implements ComputeProvider, SnapshotCapable {
 		instances.set(instanceId, message);
 		restoredInstances.add(instanceId);
 		return { instanceId, status: "ready" };
+	}
+
+	async createTerminalSandbox(params: {
+		cloneUrl: string;
+		branch?: string;
+	}): Promise<SandboxResult> {
+		const instanceId = `mock-terminal-${counter++}`;
+		instances.set(instanceId, "terminal");
+		return { instanceId, status: "ready" };
+	}
+
+	async resolveSandboxState(instanceId: string): Promise<SandboxState> {
+		return instances.has(instanceId) ? { alive: true } : { alive: false };
 	}
 }
