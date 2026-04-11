@@ -49,8 +49,14 @@ const CLAUDE_CONFIG_DIR = "/vercel/sandbox/claude-config";
  * v4-welcome-c: + banner uses bash parameter expansion instead of
  *                 sed so the `.git` suffix is stripped correctly
  *                 and the owner/repo extraction is readable.
+ * v5-pi-skills:  + pi coding agent (@mariozechner/pi-coding-agent),
+ *                  skills CLI, mise, uv, and pre-installed Anthropic
+ *                  skills from anthropics/skills and
+ *                  anthropics/claude-plugins-official.
+ *                  Discovery: dnf IS available (Amazon Linux 2023)
+ *                  for system packages — use `sudo: true`.
  */
-const BASE_SNAPSHOT_VERSION = "v4-welcome-c";
+const BASE_SNAPSHOT_VERSION = "v5-pi-skills";
 
 /**
  * Static tmux binary download URL. See
@@ -196,12 +202,12 @@ async function resolveBaseSnapshot(): Promise<string> {
 		// Recorded snapshot is gone — fall through to recreate
 	}
 
-	// 2. Create fresh base: node22 + Claude Code CLI + ttyd + tmux
+	// 2. Create fresh base: node22 + agents + tools + skills
 	const sandbox = await Sandbox.create({
 		...getCredentials(),
 		runtime: "node22",
 		resources: { vcpus: 2 },
-		timeout: ms("10m"),
+		timeout: ms("15m"),
 	});
 
 	await assertRunCommand(sandbox, "npm install claude-code", {
@@ -210,14 +216,74 @@ async function resolveBaseSnapshot(): Promise<string> {
 		sudo: true,
 	});
 
-	// Install ttyd + tmux as static binaries into /usr/local/bin. No
-	// apt, no distro package manager — the Vercel sandbox node22
-	// runtime doesn't have apt. Discovered the hard way in v3-tmux-c
-	// when assertRunCommand finally caught the real error:
-	// "apt-get: command not found". Both binaries are statically
-	// linked (ttyd's upstream release is a static build; tmux comes
-	// from mjakob-gh/build-static-tmux which builds against musl +
-	// ncurses + libevent so it has no runtime deps).
+	await assertRunCommand(sandbox, "npm install pi-coding-agent", {
+		cmd: "npm",
+		args: ["install", "-g", "@mariozechner/pi-coding-agent"],
+		sudo: true,
+	});
+
+	await assertRunCommand(sandbox, "npm install skills", {
+		cmd: "npm",
+		args: ["install", "-g", "skills"],
+		sudo: true,
+	});
+
+	// Install mise and uv as static binaries into /usr/local/bin.
+	// mise: runtime/env manager (https://mise.jdx.dev)
+	// uv: fast Python package manager (https://docs.astral.sh/uv)
+	await assertRunCommand(sandbox, "install mise + uv static", {
+		cmd: "bash",
+		args: [
+			"-c",
+			[
+				"set -euo pipefail",
+				"echo '--- downloading mise ---'",
+				"curl -fsSL https://mise.jdx.dev/mise-latest-linux-x64 -o /usr/local/bin/mise",
+				"chmod +x /usr/local/bin/mise",
+				"echo '--- mise version ---'",
+				"/usr/local/bin/mise --version",
+				"echo '--- downloading uv ---'",
+				"curl -fsSL https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-unknown-linux-gnu.tar.gz | tar xz -C /tmp",
+				"mv /tmp/uv-x86_64-unknown-linux-gnu/uv /usr/local/bin/uv",
+				"mv /tmp/uv-x86_64-unknown-linux-gnu/uvx /usr/local/bin/uvx",
+				"chmod +x /usr/local/bin/uv /usr/local/bin/uvx",
+				"rm -rf /tmp/uv-x86_64-unknown-linux-gnu",
+				"echo '--- uv version ---'",
+				"/usr/local/bin/uv --version",
+				"echo '--- install complete ---'",
+			].join(" && "),
+		],
+		sudo: true,
+	});
+
+	// Pre-install Anthropic skill packs so they're baked into every
+	// sandbox. The skills CLI clones from GitHub and writes SKILL.md
+	// files into the agent's skill directory. Runs during snapshot
+	// creation (full internet access) so per-session sandboxes don't
+	// need npm registry or GitHub access for skills discovery.
+	await assertRunCommand(sandbox, "install anthropics/skills", {
+		cmd: "skills",
+		args: ["add", "anthropics/skills", "-y"],
+	});
+
+	await assertRunCommand(
+		sandbox,
+		"install anthropics/claude-plugins-official",
+		{
+			cmd: "skills",
+			args: ["add", "anthropics/claude-plugins-official", "-y"],
+		},
+	);
+
+	// Install ttyd + tmux as static binaries into /usr/local/bin.
+	// The Vercel sandbox node22 runtime is Amazon Linux 2023 — it has
+	// dnf (NOT apt-get). For system packages use:
+	//   await assertRunCommand(sandbox, "install foo", {
+	//     cmd: "dnf", args: ["install", "-y", "foo"], sudo: true,
+	//   });
+	// See: https://vercel.com/kb/guide/how-to-install-system-packages-in-vercel-sandbox
+	// We use static binaries here since ttyd and tmux aren't in the
+	// Amazon Linux repos and the static builds have zero runtime deps.
 	await assertRunCommand(sandbox, "install ttyd + tmux static", {
 		cmd: "bash",
 		args: [
