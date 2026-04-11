@@ -36,6 +36,7 @@ struct SidebarView: View {
     @Environment(\.lumeRuntimeService) private var lumeRuntimeService
     @Environment(\.workspaceService) private var workspaceService
     @Environment(\.workspaceProviderRegistry) private var workspaceProviderRegistry
+    @ObservedObject var appCommandState: AppCommandState
     let repos: [Repo]
     let webSources: [WebSource]
     let selectedRepo: Repo?
@@ -211,7 +212,12 @@ struct SidebarView: View {
         } message: { workspace in
             Text("Are you sure you want to delete '\(workspace.name)'?")
         }
-        .focusedSceneValue(\.newWorkspaceAction, handleNewWorkspaceShortcut)
+        .task {
+            syncAppCommands()
+        }
+        .onDisappear {
+            clearAppCommands()
+        }
         .onChange(of: selectedWorkspace?.id) { _, _ in
             expandRepoForSelectedWorkspace()
         }
@@ -1009,6 +1015,16 @@ struct SidebarView: View {
         Task { @MainActor in
             await prepareNewWorkspaceSheet(for: preferredRepo)
         }
+    }
+
+    @MainActor
+    private func syncAppCommands() {
+        appCommandState.newWorkspaceAction = handleNewWorkspaceShortcut
+    }
+
+    @MainActor
+    private func clearAppCommands() {
+        appCommandState.newWorkspaceAction = nil
     }
 
     @MainActor

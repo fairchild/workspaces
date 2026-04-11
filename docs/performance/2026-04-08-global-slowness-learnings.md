@@ -21,6 +21,7 @@ The strongest contributors found so far are:
 2. the contextual toolbar item in `ContentView.swift`
 3. focus/window timing that still leaves some events stale before they reach the terminal handler
 4. residual SwiftUI preference and toolbar bridge churn after the contextual toolbar item is removed
+5. installed-build Ghostty resources were previously missing, which degraded shell integration and terminfo setup
 
 Shortcut pass-through is working. In the latest shortcut-specific run, Ghostty actions fired for split and pane navigation. The delay remained upstream of the key handler.
 
@@ -93,6 +94,34 @@ Interpretation:
 
 - the current remaining hotspot is still app-side view and preference churn
 - the next work should not go back to shell-startup or Ghostty shortcut-routing theories
+
+## New Follow-up Learnings
+
+### Installed builds need explicit Ghostty resources
+
+The installed-build report that looked much better overall still exposed a real packaging problem:
+
+- `ghostty terminfo not found`
+- `no resources dir set, shell integration disabled`
+
+That is now addressed in code by:
+
+- embedding Ghostty `share` resources into the release app bundle
+- setting `GHOSTTY_RESOURCES_DIR` before `ghostty_init`
+
+This should improve installed-build terminal readiness and keep shell integration available.
+
+### App commands no longer depend on `FocusedValue`
+
+The initial command-menu recovery used focused scene values. A later installed-build report still showed:
+
+- `FocusedValue update tried to update multiple times per frame`
+
+Collapsing many focused values into one payload was not enough, so app-command routing now uses an observable `AppCommandState` instead of `FocusedValue`.
+
+What remains open:
+
+- we still need one fresh manual diagnostic run on the new packaged build to confirm whether that SwiftUI warning is actually gone in practice
 
 ## Product Direction From Current Evidence
 

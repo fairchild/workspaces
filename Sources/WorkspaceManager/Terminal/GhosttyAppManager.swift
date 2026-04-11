@@ -47,6 +47,12 @@ final class GhosttyAppManager: NSObject {
     func initializeIfNeeded() {
         guard !initialized else { return }
 
+        if let resourcesDirectory = GhosttyResourcesLocator.configureProcessEnvironment() {
+            NSLog("[GhosttyAppManager] using Ghostty resources dir: %@", resourcesDirectory.path)
+        } else {
+            NSLog("[GhosttyAppManager] Ghostty resources dir unavailable")
+        }
+
         let initResult = ghostty_init(UInt(CommandLine.argc), CommandLine.unsafeArgv)
         guard initResult == GHOSTTY_SUCCESS else {
             NSLog("[GhosttyAppManager] ghostty_init failed: %d", initResult)

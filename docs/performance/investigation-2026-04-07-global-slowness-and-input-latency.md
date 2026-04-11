@@ -314,6 +314,26 @@ Primary code:
 - `Sources/WorkspaceManager/App/WorkspaceManagerApp.swift`
 - `Sources/WorkspaceManager/Views/MainWindow/ContentView.swift`
 
+Current status:
+
+- app-command routing no longer uses `FocusedValue`; it now uses `AppCommandState`
+- if the warning persists in the next manual report, the remaining source is deeper in SwiftUI focus/preference churn rather than app-command menu wiring
+
+### H2d. Installed builds were previously missing Ghostty runtime resources, degrading shell integration and terminal setup
+
+Why it fits:
+
+- installed-build report showed:
+  - `ghostty terminfo not found`
+  - `no resources dir set, shell integration disabled`
+- those warnings do not match the improved local branch behavior and point to a packaged-app-specific issue
+
+Primary code:
+
+- `Sources/WorkspaceManager/Terminal/GhosttyAppManager.swift`
+- `Sources/WorkspaceManager/Terminal/GhosttyResourcesLocator.swift`
+- `scripts/build-release.sh`
+
 ### H3. Shortcut/local-event routing may be amplifying focus churn, but is probably not the primary root cause
 
 Why it is still plausible:
@@ -342,16 +362,17 @@ Primary code:
 ## Next Experiments
 
 1. Reduce the remaining sidebar row and preference churn that still appears in `RepoRow.body`, `View.help`, and `ToolbarBridge`.
-2. Separate focused-scene-value cost from toolbar bridge cost so the next command-surface choice is evidence-based.
-3. Re-measure:
+2. Re-measure on a freshly packaged build now that Ghostty resources are bundled and app commands no longer use `FocusedValue`.
+3. If warnings remain, separate residual SwiftUI focus/preference churn from toolbar bridge cost with another active-lag sample.
+4. Re-measure:
    - corrected clean-shell post-prompt input diagnostics
    - active-lag sample
    - focus spans
-4. Only if the SwiftUI-side reductions stop helping, instrument shortcut/local-event routing more deeply:
+5. Only if the SwiftUI-side reductions stop helping, instrument shortcut/local-event routing more deeply:
    - local event monitor entry/exit
    - `performKeyEquivalent`
    - first-responder transitions around focus restore
-5. If focus loss remains after UI churn drops further, narrow in on `TerminalWindowController` / surface-store timing.
+6. If focus loss remains after UI churn drops further, narrow in on `TerminalWindowController` / surface-store timing.
 
 ## Success Criteria
 

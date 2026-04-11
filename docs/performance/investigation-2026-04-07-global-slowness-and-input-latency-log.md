@@ -403,3 +403,107 @@ Takeaway:
 - the current branch looks materially better on median input delivery than the earlier slow runs
 - the remaining issue is now best described as intermittent app-side spikes, not consistently stale key delivery
 - the next optimization target should stay in SwiftUI/AppKit preference and row rendering churn, not shell startup or Ghostty shortcut routing
+
+### EXP-0012: Package Ghostty resources into the release app and set `GHOSTTY_RESOURCES_DIR` before runtime init
+
+Status: complete
+
+Hypothesis:
+
+- the installed-app warnings about missing terminfo and disabled shell integration are caused by the release bundle not embedding Ghostty's `share` payload or telling libghostty where to find it
+
+Change:
+
+- added `GhosttyResourcesLocator.swift`
+- updated `GhosttyAppManager.initializeIfNeeded()` to resolve bundled Ghostty resources and set `GHOSTTY_RESOURCES_DIR` before `ghostty_init`
+- updated `scripts/build-release.sh` to copy Ghostty `zig-out/share` contents into `WorkspaceManager.app/Contents/Resources`
+
+Artifacts:
+
+- `/Users/fairchild/Downloads/workspaces-report-2026-04-08-204228.zip`
+- local packaged app build output from `./scripts/build-release.sh --no-sign`
+- packaged bundle path:
+  - `build/WorkspaceManager.app/Contents/Resources/ghostty`
+  - `build/WorkspaceManager.app/Contents/Resources/terminfo`
+
+Result:
+
+- the prior installed-build report implicated:
+  - `ghostty terminfo not found`
+  - `no resources dir set, shell integration disabled`
+- the new release bundle now embeds the expected Ghostty resource layout and configures the runtime before initialization
+- local unattended packaged-run validation did not surface the old terminfo / shell-integration warning signatures again, but log capture from this harness remained incomplete enough that a fresh manual diagnostic export is still the cleanest confirmation path
+
+Takeaway:
+
+- installed bundles must carry Ghostty resources explicitly
+- the old installed-build Ghostty degradation was a real packaging/runtime issue, not just noise
+- future installed-build perf reports should be checked to confirm those warnings stay gone
+
+### EXP-0013: Remove app-command `FocusedValue` usage entirely after aggregation was insufficient
+
+Status: complete
+
+Hypothesis:
+
+- the remaining `FocusedValue update tried to update multiple times per frame` warning is tied to the app-command routing mechanism itself, not merely the number of focused-scene keys
+
+Change:
+
+- first collapsed multiple focused scene values into one `MainWindowFocusedActions` payload
+- after one packaged run still showed the SwiftUI focused-value warning, replaced app-command routing with `AppCommandState`
+- removed `focusedSceneValue` usage from `ContentView` and `SidebarView`
+- main app commands now read from shared observable command state instead of `@FocusedValue`
+
+Artifacts:
+
+- local packaged-run log inspection around the pre-refactor build showed:
+  - `FocusedValue update tried to update multiple times per frame`
+- `swift build`
+- `swift test`
+
+Result:
+
+- the command-state refactor is buildable and test-clean
+- it removes the direct app-command dependence on SwiftUI focused values
+- a fresh manual diagnostic run is still needed to prove whether the runtime focused-value warning is fully eliminated in practice
+
+Takeaway:
+
+- reducing the number of focused values was not sufficient on its own
+- if the warning still appears in the next manual report, the remaining source is elsewhere in SwiftUI focus/preference updates rather than app-command plumbing
+
+### EXP-0014: Manual diagnostic report on April 8, 2026 shows sub-second first prompt and no recurrence of prior warning signatures
+
+Status: complete
+
+Artifacts:
+
+- diagnostic bundle: `/Users/fairchild/Downloads/workspaces-report-2026-04-08-230216.zip`
+- Ghostty crash envelope: `/Users/fairchild/.local/state/ghostty/crash/e3b21dee-c40d-47b3-70d2-9647f49a9155.ghosttycrash`
+
+Result:
+
+- `launch_to_first_prompt` improved to `795.65 ms`
+- `repo_hydration` was `3.74 ms`
+- first `terminal_first_output` and `first_prompt_ready` were both `676.99 ms`
+- later terminal readiness events measured about `130.03 ms` and `142.15 ms`
+- the report did not include the earlier `FocusedValue update tried to update multiple times per frame` warning
+- the report did not include the earlier Ghostty `terminfo not found` / `no resources dir set` warnings
+
+Crash-file inspection:
+
+- the Ghostty crash artifact is a real Sentry Breakpad envelope, not a false-positive text log
+- event timestamp: `2026-04-09T04:43:30.383615Z`
+- session status: `crashed`
+- session duration: `2765.47 s`
+- release tag inside the envelope: `1.3.0-main+da10707f9`
+- the envelope carries a `649280` byte `event.minidump` attachment
+- the structured event payload does not include a decoded exception or symbolized stack inline
+- this machine does not currently have a local Breakpad stackwalker, and `lldb` did not produce a usable backtrace from the extracted minidump
+
+Takeaway:
+
+- the recent performance fixes materially improved launch and terminal readiness
+- the previously observed SwiftUI focused-value and Ghostty resource warnings appear resolved in this run
+- one residual native Ghostty crash remains worth tracking separately as a stability issue, but it does not look like the main driver of the earlier performance regression
