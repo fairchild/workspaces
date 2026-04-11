@@ -62,13 +62,11 @@ export async function getRegistry(): Promise<ComputeProviderRegistry> {
 	_registryPromise = (async () => {
 		const [
 			{ VercelSandboxProvider },
-			{ AnthropicManagedProvider },
 			{ DaytonaProvider },
 			{ GitHubActionsProvider },
 			{ ManagedAgentsProvider },
 		] = await Promise.all([
 			import("./vercel-sandbox"),
-			import("./anthropic-managed"),
 			import("./daytona"),
 			import("./github-actions"),
 			import("./managed-agents"),
@@ -76,7 +74,6 @@ export async function getRegistry(): Promise<ComputeProviderRegistry> {
 
 		const providers = [
 			new VercelSandboxProvider(),
-			new AnthropicManagedProvider(),
 			new DaytonaProvider(),
 			new GitHubActionsProvider(),
 			new ManagedAgentsProvider(),

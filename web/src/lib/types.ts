@@ -214,7 +214,6 @@ export type AgentSessionStatus =
 
 export type ComputeBackendId =
 	| "vercel-sandbox"
-	| "anthropic-managed"
 	| "daytona"
 	| "github-actions"
 	| "lume"
