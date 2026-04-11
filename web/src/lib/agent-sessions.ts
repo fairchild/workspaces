@@ -241,7 +241,8 @@ export async function getSessionsForRepo(
 		.orderBy("last_activity_at", "desc")
 		.execute();
 
-	// Dedupe by agent_name, keeping the most recent (rows already ordered desc)
+	// Dedupe by agent_name, keeping the most recent (rows ordered desc
+	// by last_activity_at so the first hit per agent is the freshest).
 	const seen = new Set<string>();
 	const sessions: AgentSession[] = [];
 	for (const r of rows) {
@@ -249,6 +250,11 @@ export async function getSessionsForRepo(
 		seen.add(r.agent_name);
 		sessions.push(rowToSession(r));
 	}
+	// Sort by created_at ascending so sub-tab order is stable — the
+	// first session you started stays leftmost, regardless of which one
+	// you interacted with most recently. Without this, interacting with
+	// a session bumps it to the front and the tabs shuffle.
+	sessions.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 	return sessions;
 }
 
