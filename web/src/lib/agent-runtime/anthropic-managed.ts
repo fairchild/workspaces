@@ -123,7 +123,7 @@ export class AnthropicManagedProvider implements ComputeProvider {
 		maxSessionDuration: ms("4h"),
 		supportsSnapshot: false,
 		supportsStreaming: true,
-		supportsTerminal: false,
+		terminalMode: "transcript",
 	};
 
 	private agentCache = new Map<string, Promise<ManagedAgent>>();

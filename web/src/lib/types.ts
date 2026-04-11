@@ -214,11 +214,11 @@ export type AgentSessionStatus =
 
 export type ComputeBackendId =
 	| "vercel-sandbox"
-	| "cloudflare-sandbox"
 	| "anthropic-managed"
 	| "daytona"
 	| "github-actions"
 	| "lume"
+	| "managed-agents"
 	| "mock";
 
 export interface AgentSession {

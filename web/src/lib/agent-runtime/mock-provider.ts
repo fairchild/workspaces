@@ -31,7 +31,7 @@ export class MockComputeProvider
 		maxSessionDuration: ms("1h"),
 		supportsSnapshot: true,
 		supportsStreaming: true,
-		supportsTerminal: true,
+		terminalMode: "pty",
 	};
 
 	async checkAvailability(): Promise<ComputeProviderAvailability> {

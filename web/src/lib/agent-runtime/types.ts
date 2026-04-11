@@ -7,7 +7,13 @@ export interface ComputeProviderDescriptor {
 	maxSessionDuration: number;
 	supportsSnapshot: boolean;
 	supportsStreaming: boolean;
-	supportsTerminal: boolean;
+	/**
+	 * How the provider exposes its terminal surface. "pty" = interactive
+	 * ttyd/WebSocket (Vercel, etc.). "transcript" = read-only view
+	 * of tool-call events (managed-agents, where bash is turn-based).
+	 * Defaults to "pty" when omitted.
+	 */
+	terminalMode?: "pty" | "transcript";
 }
 
 export interface ComputeProviderAvailability {
@@ -110,9 +116,10 @@ export interface TerminalCapable {
 	resolveSandboxState(instanceId: string): Promise<SandboxState>;
 }
 
-/** Type guard for providers that support terminal access. */
+/** Type guard for providers that support interactive terminal access. */
 export function isTerminalCapable(
 	provider: ComputeProvider,
 ): provider is ComputeProvider & TerminalCapable {
-	return provider.descriptor.supportsTerminal;
+	const mode = provider.descriptor.terminalMode;
+	return mode === "pty" || mode === undefined;
 }

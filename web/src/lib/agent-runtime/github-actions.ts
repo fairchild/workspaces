@@ -18,7 +18,7 @@ export class GitHubActionsProvider implements ComputeProvider {
 		maxSessionDuration: 6 * 60 * 60 * 1000, // 6 hours
 		supportsSnapshot: false,
 		supportsStreaming: false,
-		supportsTerminal: false,
+		terminalMode: "transcript",
 	};
 
 	async checkAvailability(): Promise<ComputeProviderAvailability> {

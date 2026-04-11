@@ -36,15 +36,29 @@ const CLAUDE_CONFIG_DIR = "/vercel/sandbox/claude-config";
  * v3-tmux-b:  attempted libs copy (also broken)
  * v3-tmux-c:  assertRunCommand exitCode check — finally surfaced the
  *               real error: "apt-get: command not found". The Vercel
- *               sandbox node22 runtime doesn't have apt at all. Every
- *               prior version had been silently failing at the first
- *               apt step and snapshotting a half-done state.
- * v3-tmux-d:  skip apt entirely, download a statically-linked tmux
- *               binary from mjakob-gh/build-static-tmux (3.6a) into
- *               /usr/local/bin. Same pattern as the existing ttyd
- *               install. No shared library deps, no distro assumptions.
+ *               sandbox node22 runtime doesn't have apt at all.
+ * v3-tmux-d:  static tmux binary from mjakob-gh/build-static-tmux —
+ *               the version that actually works.
+ * v4-welcome: + Spaces welcome banner in /etc/bash.bashrc — didn't
+ *               fire because tmux starts bash as a login shell which
+ *               sources /etc/profile.d/*.sh, not /etc/bash.bashrc.
+ * v4-welcome-b: + welcome banner installed at
+ *                 /etc/profile.d/spaces-welcome.sh so login shells
+ *                 fire it. Same guard env var means it only fires
+ *                 once per session. Banner worked but showed
+ *                 "fairchild/workspaces.git" because the sed regex
+ *                 couldn't strip the `.git` suffix.
+ * v4-welcome-c: + banner uses bash parameter expansion instead of
+ *                 sed so the `.git` suffix is stripped correctly
+ *                 and the owner/repo extraction is readable.
+ * v5-pi-skills:  + pi coding agent (@mariozechner/pi-coding-agent),
+ *                  skills CLI, mise, uv, and pre-installed Anthropic
+ *                  skills from anthropics/skills and
+ *                  anthropics/claude-plugins-official.
+ *                  Discovery: dnf IS available (Amazon Linux 2023)
+ *                  for system packages — use `sudo: true`.
  */
-const BASE_SNAPSHOT_VERSION = "v3-tmux-d";
+const BASE_SNAPSHOT_VERSION = "v5-pi-skills";
 
 /**
  * Static tmux binary download URL. See
@@ -190,12 +204,12 @@ async function resolveBaseSnapshot(): Promise<string> {
 		// Recorded snapshot is gone — fall through to recreate
 	}
 
-	// 2. Create fresh base: node22 + Claude Code CLI + ttyd + tmux
+	// 2. Create fresh base: node22 + agents + tools + skills
 	const sandbox = await Sandbox.create({
 		...getCredentials(),
 		runtime: "node22",
 		resources: { vcpus: 2 },
-		timeout: ms("10m"),
+		timeout: ms("15m"),
 	});
 
 	await assertRunCommand(sandbox, "npm install claude-code", {
@@ -204,14 +218,74 @@ async function resolveBaseSnapshot(): Promise<string> {
 		sudo: true,
 	});
 
-	// Install ttyd + tmux as static binaries into /usr/local/bin. No
-	// apt, no distro package manager — the Vercel sandbox node22
-	// runtime doesn't have apt. Discovered the hard way in v3-tmux-c
-	// when assertRunCommand finally caught the real error:
-	// "apt-get: command not found". Both binaries are statically
-	// linked (ttyd's upstream release is a static build; tmux comes
-	// from mjakob-gh/build-static-tmux which builds against musl +
-	// ncurses + libevent so it has no runtime deps).
+	await assertRunCommand(sandbox, "npm install pi-coding-agent", {
+		cmd: "npm",
+		args: ["install", "-g", "@mariozechner/pi-coding-agent"],
+		sudo: true,
+	});
+
+	await assertRunCommand(sandbox, "npm install skills", {
+		cmd: "npm",
+		args: ["install", "-g", "skills"],
+		sudo: true,
+	});
+
+	// Install mise and uv as static binaries into /usr/local/bin.
+	// mise: runtime/env manager (https://mise.jdx.dev)
+	// uv: fast Python package manager (https://docs.astral.sh/uv)
+	await assertRunCommand(sandbox, "install mise + uv static", {
+		cmd: "bash",
+		args: [
+			"-c",
+			[
+				"set -euo pipefail",
+				"echo '--- downloading mise ---'",
+				"curl -fsSL https://mise.jdx.dev/mise-latest-linux-x64 -o /usr/local/bin/mise",
+				"chmod +x /usr/local/bin/mise",
+				"echo '--- mise version ---'",
+				"/usr/local/bin/mise --version",
+				"echo '--- downloading uv ---'",
+				"curl -fsSL https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-unknown-linux-gnu.tar.gz | tar xz -C /tmp",
+				"mv /tmp/uv-x86_64-unknown-linux-gnu/uv /usr/local/bin/uv",
+				"mv /tmp/uv-x86_64-unknown-linux-gnu/uvx /usr/local/bin/uvx",
+				"chmod +x /usr/local/bin/uv /usr/local/bin/uvx",
+				"rm -rf /tmp/uv-x86_64-unknown-linux-gnu",
+				"echo '--- uv version ---'",
+				"/usr/local/bin/uv --version",
+				"echo '--- install complete ---'",
+			].join(" && "),
+		],
+		sudo: true,
+	});
+
+	// Pre-install Anthropic skill packs so they're baked into every
+	// sandbox. The skills CLI clones from GitHub and writes SKILL.md
+	// files into the agent's skill directory. Runs during snapshot
+	// creation (full internet access) so per-session sandboxes don't
+	// need npm registry or GitHub access for skills discovery.
+	await assertRunCommand(sandbox, "install anthropics/skills", {
+		cmd: "skills",
+		args: ["add", "anthropics/skills", "-y"],
+	});
+
+	await assertRunCommand(
+		sandbox,
+		"install anthropics/claude-plugins-official",
+		{
+			cmd: "skills",
+			args: ["add", "anthropics/claude-plugins-official", "-y"],
+		},
+	);
+
+	// Install ttyd + tmux as static binaries into /usr/local/bin.
+	// The Vercel sandbox node22 runtime is Amazon Linux 2023 — it has
+	// dnf (NOT apt-get). For system packages use:
+	//   await assertRunCommand(sandbox, "install foo", {
+	//     cmd: "dnf", args: ["install", "-y", "foo"], sudo: true,
+	//   });
+	// See: https://vercel.com/kb/guide/how-to-install-system-packages-in-vercel-sandbox
+	// We use static binaries here since ttyd and tmux aren't in the
+	// Amazon Linux repos and the static builds have zero runtime deps.
 	await assertRunCommand(sandbox, "install ttyd + tmux static", {
 		cmd: "bash",
 		args: [
@@ -232,6 +306,57 @@ async function resolveBaseSnapshot(): Promise<string> {
 				"/usr/local/bin/tmux -V",
 				"echo '--- install complete ---'",
 			].join(" && "),
+		],
+		sudo: true,
+	});
+
+	// Install the Spaces welcome banner. Goes in /etc/profile.d/ so
+	// it fires on login shells (which is what tmux starts by
+	// default) — v4-welcome put it only in /etc/bash.bashrc which
+	// covers non-login interactive shells, and that's the wrong
+	// path for tmux → bash.
+	//
+	// The snippet guards via $__SPACES_WELCOMED so child shells and
+	// subsequent tmux windows skip the banner. Reads the repo name
+	// at runtime from git remote so the content adapts per sandbox.
+	//
+	// Heredoc is single-quoted so every $VAR is sandbox-side, not
+	// interpolated on the host.
+	await assertRunCommand(sandbox, "install welcome banner", {
+		cmd: "bash",
+		args: [
+			"-c",
+			`cat > /etc/profile.d/spaces-welcome.sh <<'__SPACES_WELCOME_EOF__'
+# Spaces welcome banner — added by base snapshot install.
+# Shown once per shell session via the __SPACES_WELCOMED guard.
+if [ -z "\${__SPACES_WELCOMED:-}" ] && [ -t 1 ]; then
+  export __SPACES_WELCOMED=1
+  __spaces_repo=""
+  if [ -d /vercel/sandbox/repo/.git ]; then
+    __spaces_url=$(cd /vercel/sandbox/repo && git remote get-url origin 2>/dev/null)
+    if [ -n "\$__spaces_url" ]; then
+      __spaces_url="\${__spaces_url%.git}"            # strip trailing .git
+      __spaces_name="\${__spaces_url##*/}"            # repo name = basename
+      __spaces_dir="\${__spaces_url%/*}"              # dirname of url
+      __spaces_owner="\${__spaces_dir##*[/:]}"        # owner = last segment of dirname
+      __spaces_repo="\${__spaces_owner}/\${__spaces_name}"
+      unset __spaces_url __spaces_name __spaces_dir __spaces_owner
+    fi
+  fi
+  printf '\\n'
+  printf '\\033[1;36m━━━ Spaces sandbox ━━━\\033[0m\\n'
+  printf '\\033[0;36m repo   \\033[0m %s\\n' "\${__spaces_repo:-(no repo)}"
+  printf '\\033[0;36m cwd    \\033[0m %s\\n' "$(pwd)"
+  printf '\\033[0;36m tmux   \\033[0m session "shell"  (Ctrl-B d to detach)\\n'
+  printf '\\033[0;36m timeout\\033[0m 30 min idle\\n'
+  printf '\\033[0;90m ──────────────────────\\033[0m\\n'
+  printf '\\n'
+  unset __spaces_repo
+fi
+__SPACES_WELCOME_EOF__
+chmod 0644 /etc/profile.d/spaces-welcome.sh
+# Verify the file is there at install time (surfaces errors early).
+test -s /etc/profile.d/spaces-welcome.sh`,
 		],
 		sudo: true,
 	});
@@ -260,7 +385,7 @@ export class VercelSandboxProvider
 		maxSessionDuration: ms("5h"),
 		supportsSnapshot: true,
 		supportsStreaming: true,
-		supportsTerminal: true,
+		terminalMode: "pty",
 	};
 
 	async checkAvailability(): Promise<ComputeProviderAvailability> {
@@ -312,7 +437,10 @@ export class VercelSandboxProvider
 				cloneArgs.push("--branch", request.branch);
 			}
 			cloneArgs.push(request.cloneUrl, "/vercel/sandbox/repo");
-			await sandbox.runCommand("git", cloneArgs);
+			await assertRunCommand(sandbox, "git clone (agent sandbox)", {
+				cmd: "git",
+				args: cloneArgs,
+			});
 
 			const instanceId = sandbox.sandboxId;
 			const tools =
@@ -370,10 +498,10 @@ export class VercelSandboxProvider
 			await sandbox.writeFiles(filesToWrite);
 			// claude CLI invokes apiKeyHelper as an executable, so the helper
 			// script needs +x. writeFiles doesn't take a mode arg.
-			await sandbox.runCommand("chmod", [
-				"+x",
-				`${CLAUDE_CONFIG_DIR}/api-key-helper.sh`,
-			]);
+			await assertRunCommand(sandbox, "chmod api-key-helper (agent sandbox)", {
+				cmd: "chmod",
+				args: ["+x", `${CLAUDE_CONFIG_DIR}/api-key-helper.sh`],
+			});
 
 			// Auth-gated ttyd on port 7681 — same path token as the terminal
 			// tab so an attacker who finds an agent sandbox URL still can't
@@ -495,10 +623,10 @@ export class VercelSandboxProvider
 		const restoreApiKey = stripQuotes(process.env.ANTHROPIC_API_KEY ?? "");
 		if (restoreApiKey) {
 			await sandbox.writeFiles(claudeAuthFiles(restoreApiKey));
-			await sandbox.runCommand("chmod", [
-				"+x",
-				`${CLAUDE_CONFIG_DIR}/api-key-helper.sh`,
-			]);
+			await assertRunCommand(sandbox, "chmod api-key-helper (restore)", {
+				cmd: "chmod",
+				args: ["+x", `${CLAUDE_CONFIG_DIR}/api-key-helper.sh`],
+			});
 		}
 
 		// Restart ttyd with the auth-gated base-path. The token is derived
@@ -552,16 +680,23 @@ export class VercelSandboxProvider
 				cloneArgs.push("--branch", params.branch);
 			}
 			cloneArgs.push(params.cloneUrl, "/vercel/sandbox/repo");
-			await sandbox.runCommand("git", cloneArgs);
+			await assertRunCommand(sandbox, "git clone (terminal sandbox)", {
+				cmd: "git",
+				args: cloneArgs,
+			});
 
 			// Same claude auth setup as the agent path so `claude` works
 			// out of the box from the shell.
 			if (apiKey) {
 				await sandbox.writeFiles(claudeAuthFiles(apiKey));
-				await sandbox.runCommand("chmod", [
-					"+x",
-					`${CLAUDE_CONFIG_DIR}/api-key-helper.sh`,
-				]);
+				await assertRunCommand(
+					sandbox,
+					"chmod api-key-helper (terminal sandbox)",
+					{
+						cmd: "chmod",
+						args: ["+x", `${CLAUDE_CONFIG_DIR}/api-key-helper.sh`],
+					},
+				);
 			}
 
 			await startTtyd(sandbox);
@@ -659,6 +794,23 @@ function ttydUrl(domain: string, sandboxId: string): string {
  */
 async function startTtyd(sandbox: Sandbox): Promise<void> {
 	const token = ttydPathToken(sandbox.sandboxId);
+
+	// Ensure the tmux socket directory exists before ttyd launches tmux.
+	// After snapshot restore `/tmp` may be empty, and the static tmux
+	// binary sometimes fails to create `/tmp/tmux-<uid>/` on its own
+	// (produces: "tmux socket dir: `/tmp/tmux-0` does not exist"). We
+	// also remove any stale socket files left over from a previous tmux
+	// server that was running when the snapshot was taken — a dead socket
+	// prevents `new-session -A` from starting a fresh server.
+	await sandbox.runCommand({
+		cmd: "bash",
+		args: [
+			"-c",
+			"rm -rf /tmp/tmux-* && mkdir -p /tmp/tmux-0 && chmod 700 /tmp/tmux-0",
+		],
+		sudo: true,
+	});
+
 	// tmux is a static binary in /usr/local/bin/tmux — no library
 	// path setup needed. ttyd execs tmux directly.
 	await sandbox.runCommand({

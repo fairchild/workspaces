@@ -18,7 +18,7 @@ export class DaytonaProvider implements ComputeProvider {
 		maxSessionDuration: 4 * 60 * 60 * 1000, // 4 hours
 		supportsSnapshot: false,
 		supportsStreaming: true,
-		supportsTerminal: false,
+		terminalMode: "transcript",
 	};
 
 	async checkAvailability(): Promise<ComputeProviderAvailability> {

@@ -16,7 +16,7 @@
 		"test:e2e:full": "playwright test --project full"
 	},
 	"dependencies": {
-		"@anthropic-ai/sdk": "^0.80.0",
+		"@anthropic-ai/sdk": "^0.86.1",
 		"@chat-adapter/github": "^4.23.0",
 		"@chat-adapter/slack": "^4.23.0",
 		"@chat-adapter/state-memory": "^4.23.0",

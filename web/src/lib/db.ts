@@ -62,12 +62,21 @@ export interface BaseSnapshotsTable {
 	created_at: string;
 }
 
+export interface ManagedAgentsCacheTable {
+	kind: string;
+	hash: string;
+	remote_id: string;
+	created_at: string;
+	metadata: string | null;
+}
+
 interface Database {
 	webhook_events: EventsTable;
 	chat_messages: ChatMessagesTable;
 	workspaces: WorkspacesTable;
 	agent_sessions: AgentSessionsTable;
 	base_snapshots: BaseSnapshotsTable;
+	managed_agents_cache: ManagedAgentsCacheTable;
 }
 
 let _turso: Client | undefined;
