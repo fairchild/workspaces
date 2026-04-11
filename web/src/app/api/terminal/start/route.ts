@@ -75,12 +75,18 @@ export async function POST(request: Request): Promise<Response> {
 	}
 
 	const registry = await getRegistry();
-	const provider = registry.getDefault();
 
-	if (!isTerminalCapable(provider)) {
+	// Terminal sessions need a PTY-capable provider, which may differ from the
+	// default (e.g. default=managed-agents for chat, but terminals need Vercel).
+	const defaultProvider = registry.getDefault();
+	const provider = isTerminalCapable(defaultProvider)
+		? defaultProvider
+		: registry.all().find(isTerminalCapable);
+
+	if (!provider) {
 		return Response.json(
 			{
-				error: `${provider.descriptor.displayName} does not support terminal sessions`,
+				error: "No terminal-capable provider is configured",
 			},
 			{ status: 501 },
 		);

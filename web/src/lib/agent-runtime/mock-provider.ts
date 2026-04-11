@@ -62,6 +62,10 @@ export class MockComputeProvider
 		instances.delete(instanceId);
 	}
 
+	async stopSandbox(instanceId: string): Promise<void> {
+		instances.delete(instanceId);
+	}
+
 	async createSnapshot(instanceId: string): Promise<string> {
 		const snapshotId = `mock-snap-${counter++}`;
 		const message = instances.get(instanceId) ?? "";

@@ -591,6 +591,22 @@ export class VercelSandboxProvider
 		}
 	}
 
+	async stopSandbox(instanceId: string): Promise<void> {
+		// Fast path: in-memory (same process that created the sandbox)
+		const local = activeSandboxes.get(instanceId);
+		if (local) {
+			await local.stop();
+			activeSandboxes.delete(instanceId);
+			return;
+		}
+		// Cross-instance path: Sandbox.get() works across serverless boundaries
+		const sandbox = await Sandbox.get({
+			sandboxId: instanceId,
+			...getCredentials(),
+		});
+		await sandbox.stop();
+	}
+
 	async createSnapshot(instanceId: string): Promise<string> {
 		const sandbox = activeSandboxes.get(instanceId);
 		if (!sandbox) throw new Error(`Sandbox ${instanceId} not found`);

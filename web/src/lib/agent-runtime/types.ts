@@ -114,6 +114,8 @@ export interface TerminalCapable {
 		branch?: string;
 	}): Promise<SandboxResult>;
 	resolveSandboxState(instanceId: string): Promise<SandboxState>;
+	/** Stop a sandbox by ID, even from a different serverless instance. */
+	stopSandbox(instanceId: string): Promise<void>;
 }
 
 /** Type guard for providers that support interactive terminal access. */

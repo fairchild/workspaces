@@ -1,4 +1,5 @@
 import { getRegistry } from "@/lib/agent-runtime/provider-registry";
+import { isTerminalCapable } from "@/lib/agent-runtime/types";
 import { getSessionForAgent, updateSessionStatus } from "@/lib/agent-sessions";
 import { getSession } from "@/lib/auth-server";
 import { getUserRepos } from "@/lib/repos";
@@ -41,14 +42,16 @@ export async function POST(request: Request): Promise<Response> {
 		return Response.json({ stopped: false, reason: "no active session" });
 	}
 
-	// Best-effort sandbox stop (don't fail if already dead)
+	// Best-effort sandbox stop (don't fail if already dead).
+	// Uses stopSandbox (cross-process safe) rather than destroySandbox
+	// (in-memory only), since API routes run in different serverless instances.
 	try {
 		const registry = await getRegistry();
 		const provider = registry.get(
 			agentSession.computeBackend as ComputeBackendId,
 		);
-		if (provider) {
-			await provider.destroySandbox(agentSession.computeInstanceId);
+		if (provider && isTerminalCapable(provider)) {
+			await provider.stopSandbox(agentSession.computeInstanceId);
 		}
 	} catch {
 		// sandbox already gone
