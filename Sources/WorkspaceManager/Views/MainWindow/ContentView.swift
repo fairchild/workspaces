@@ -16,10 +16,23 @@ private let creationLog = Logger(
     category: "WorkspaceCreation"
 )
 
+private struct MainWindowCommandAvailabilitySnapshot: Equatable {
+    let canToggleSidebar: Bool
+    let canToggleInspector: Bool
+    let canToggleTerminalPanel: Bool
+    let canOpenInEditor: Bool
+    let canOpenInBrowser: Bool
+    let canReloadWebSource: Bool
+    let canOpenDesktop: Bool
+    let canRevealInFinder: Bool
+    let canCopyPath: Bool
+}
+
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
     @Binding var deepLinkState: WorkspaceDeepLinkState
     @Binding var lastSurfaceRawValue: String
+    @ObservedObject var appCommandState: AppCommandState
     @ObservedObject var hostTerminalState: HostTerminalStateStore
     @ObservedObject var workspaceProviderSetupCoordinator: WorkspaceProviderSetupCoordinator
     @ObservedObject var hostLumeSmokeAutomation: HostLumeSmokeAutomationController
@@ -224,6 +237,62 @@ struct ContentView: View {
         return openInDefaultEditor
     }
 
+    private var openInBrowserFocusedAction: (@MainActor () -> Void)? {
+        guard currentSelectedWebSource?.baseURL != nil else { return nil }
+        return openSelectedWebSourceInBrowser
+    }
+
+    private var reloadWebSourceFocusedAction: (@MainActor () -> Void)? {
+        guard currentSelectedWebSource != nil else { return nil }
+        return reloadSelectedWebSource
+    }
+
+    private var openDesktopFocusedAction: (@MainActor () -> Void)? {
+        guard let workspace = currentSelectedWorkspace,
+            selectedWorkspaceSupportsDesktop,
+            workspace.status != .provisioning
+        else { return nil }
+        return openDesktopForCurrentSelection
+    }
+
+    private var revealInFinderFocusedAction: (@MainActor () -> Void)? {
+        guard openInEditorTarget != nil else { return nil }
+        return revealInFinder
+    }
+
+    private var copyPathFocusedAction: (@MainActor () -> Void)? {
+        guard openInEditorTarget != nil else { return nil }
+        return copyWorkspacePath
+    }
+
+    private var mainWindowFocusedActions: MainWindowFocusedActions {
+        MainWindowFocusedActions(
+            toggleSidebar: toggleSidebarVisibility,
+            toggleInspector: toggleInspectorVisibility,
+            toggleTerminalPanel: toggleTerminalPanelVisibility,
+            openInEditor: openInEditorFocusedAction,
+            openInBrowser: openInBrowserFocusedAction,
+            reloadWebSource: reloadWebSourceFocusedAction,
+            openDesktop: openDesktopFocusedAction,
+            revealInFinder: revealInFinderFocusedAction,
+            copyPath: copyPathFocusedAction
+        )
+    }
+
+    private var mainWindowCommandAvailabilitySnapshot: MainWindowCommandAvailabilitySnapshot {
+        MainWindowCommandAvailabilitySnapshot(
+            canToggleSidebar: true,
+            canToggleInspector: true,
+            canToggleTerminalPanel: true,
+            canOpenInEditor: openInEditorFocusedAction != nil,
+            canOpenInBrowser: openInBrowserFocusedAction != nil,
+            canReloadWebSource: reloadWebSourceFocusedAction != nil,
+            canOpenDesktop: openDesktopFocusedAction != nil,
+            canRevealInFinder: revealInFinderFocusedAction != nil,
+            canCopyPath: copyPathFocusedAction != nil
+        )
+    }
+
     private var selectedWorkspaceProviderDescriptor: WorkspaceProviderDescriptor? {
         guard let workspace = currentSelectedWorkspace else { return nil }
         return workspaceProviderRegistry.provider(for: workspace)?.descriptor
@@ -326,6 +395,7 @@ struct ContentView: View {
     private var baseSplitView: some View {
         NavigationSplitView(columnVisibility: $viewState.columnVisibility) {
             SidebarView(
+                appCommandState: appCommandState,
                 repos: repos,
                 webSources: webSources,
                 selectedRepo: selectedRepoForSidebar,
@@ -351,66 +421,30 @@ struct ContentView: View {
     }
 
     private var splitViewWithToolbar: some View {
-        baseSplitView
-            .toolbar {
-                ToolbarItem(placement: .principal) {
-                    AppBuildIdentityBadge(identity: buildIdentity)
-                }
-
-                ToolbarItemGroup(placement: .automatic) {
-                    if let selectedWebSource = currentSelectedWebSource {
-                        Button {
-                            openSelectedWebSourceInBrowser()
-                        } label: {
-                            Image(systemName: "safari")
+        Group {
+            if PerformanceExperimentFlags.minimalToolbar {
+                baseSplitView
+            } else {
+                baseSplitView
+                    .toolbar {
+                        ToolbarItem(placement: .principal) {
+                            AppBuildIdentityBadge(identity: buildIdentity)
                         }
-                        .help("Open in Browser")
-                        .disabled(selectedWebSource.baseURL == nil)
 
-                        Button {
-                            reloadSelectedWebSource()
-                        } label: {
-                            Image(systemName: "arrow.clockwise")
-                        }
-                        .help("Reload")
-                        .disabled(selectedWebSource.baseURL == nil)
-                    } else if let workspace = currentSelectedWorkspace {
-                        if selectedWorkspaceSupportsDesktop {
+                        ToolbarItemGroup(placement: .primaryAction) {
                             Button {
-                                openDesktop(for: workspace)
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    viewState.isRightPaneVisible.toggle()
+                                }
                             } label: {
-                                Image(systemName: "desktopcomputer")
+                                Image(systemName: "sidebar.trailing")
                             }
-                            .help("Open Desktop")
-                            .disabled(workspace.status == .provisioning)
-                        }
-
-                        if let defaultEditor = defaultEditorDescriptor {
-                            WorkspaceEditorToolbarButton(
-                                workspaceName: workspace.name,
-                                editorOptions: availableEditors,
-                                defaultEditor: defaultEditor,
-                                onOpenInDefaultEditor: openInDefaultEditor,
-                                onOpenInEditor: openInSelectedEditor,
-                                onRevealInFinder: revealInFinder,
-                                onCopyPath: copyWorkspacePath
-                            )
+                            .help(viewState.isRightPaneVisible ? "Hide Inspector" : "Show Inspector")
+                            .disabled(!hasInspectorTarget)
                         }
                     }
-                }
-
-                ToolbarItemGroup(placement: .primaryAction) {
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            viewState.isRightPaneVisible.toggle()
-                        }
-                    } label: {
-                        Image(systemName: "sidebar.trailing")
-                    }
-                    .help(viewState.isRightPaneVisible ? "Hide Inspector" : "Show Inspector")
-                    .disabled(!hasInspectorTarget)
-                }
             }
+        }
     }
 
     private var splitViewWithLifecycleHandlers: some View {
@@ -492,10 +526,6 @@ struct ContentView: View {
 
     private var splitViewWithFocusAndAlerts: some View {
         splitViewWithLifecycleHandlers
-            .focusedSceneValue(\.toggleSidebarAction, toggleSidebarVisibility)
-            .focusedSceneValue(\.toggleInspectorAction, toggleInspectorVisibility)
-            .focusedSceneValue(\.toggleTerminalPanelAction, toggleTerminalPanelVisibility)
-            .focusedSceneValue(\.openInEditorAction, openInEditorFocusedAction)
             .alert(
                 "Could Not Open Editor",
                 isPresented: isShowingOpenInEditorError
@@ -609,6 +639,15 @@ struct ContentView: View {
 
     var body: some View {
         splitViewWithFocusAndAlerts
+            .task {
+                syncAppCommands()
+            }
+            .onChange(of: mainWindowCommandAvailabilitySnapshot) { _, _ in
+                syncAppCommands()
+            }
+            .onDisappear {
+                clearAppCommands()
+            }
             .sheet(item: $repoForNewWorkspaceFromLanding) { repo in
                 NewWorkspaceSheet(
                     repo: repo,
@@ -1559,6 +1598,18 @@ struct ContentView: View {
     }
 
     @MainActor
+    private func openDesktopForCurrentSelection() {
+        guard let workspace = currentSelectedWorkspace,
+            selectedWorkspaceSupportsDesktop,
+            workspace.status != .provisioning
+        else {
+            return
+        }
+
+        openDesktop(for: workspace)
+    }
+
+    @MainActor
     private func openDesktopAfterSetup(
         _ workspace: Workspace,
         provider: any WorkspaceProviderProtocol
@@ -1723,6 +1774,16 @@ struct ContentView: View {
     private func clearCodePreview() {
         viewState.selectedCodePreview = nil
         viewState.isTerminalPanelVisible = true
+    }
+
+    @MainActor
+    private func syncAppCommands() {
+        appCommandState.mainWindowActions = mainWindowFocusedActions
+    }
+
+    @MainActor
+    private func clearAppCommands() {
+        appCommandState.mainWindowActions = .empty
     }
 
     private func persistLastSurface(_ surface: MainWindowLastSurface) {
@@ -2092,6 +2153,7 @@ struct WorkspaceConnectingOverlay: View {
 private struct ContentViewPreviewHost: View {
     @State private var deepLinkState = WorkspaceDeepLinkState()
     @State private var lastSurfaceRawValue = ""
+    @StateObject private var appCommandState = AppCommandState()
     @StateObject private var hostTerminalState = HostTerminalStateStore()
     @StateObject private var workspaceProviderSetupCoordinator = WorkspaceProviderSetupCoordinator()
     @StateObject private var hostLumeSmokeAutomation = HostLumeSmokeAutomationController(
@@ -2102,6 +2164,7 @@ private struct ContentViewPreviewHost: View {
         ContentView(
             deepLinkState: $deepLinkState,
             lastSurfaceRawValue: $lastSurfaceRawValue,
+            appCommandState: appCommandState,
             hostTerminalState: hostTerminalState,
             workspaceProviderSetupCoordinator: workspaceProviderSetupCoordinator,
             hostLumeSmokeAutomation: hostLumeSmokeAutomation

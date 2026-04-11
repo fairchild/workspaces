@@ -116,6 +116,30 @@ expand_home_prefix() {
     printf '%s\n' "$path"
 }
 
+resolve_ghostty_share_dir() {
+    local -a candidates=()
+    local candidate=""
+
+    if [[ -n "${GHOSTTY_SHARE_DIR:-}" ]]; then
+        candidates+=("$(expand_home_prefix "$GHOSTTY_SHARE_DIR")")
+    fi
+
+    if [[ -n "${GHOSTTY_DIR:-}" ]]; then
+        candidates+=("$(expand_home_prefix "$GHOSTTY_DIR")/zig-out/share")
+    fi
+
+    candidates+=("$HOME/.cache/workspacemanager/ghostty/zig-out/share")
+
+    for candidate in "${candidates[@]}"; do
+        if [[ -d "$candidate/ghostty" ]] && [[ -d "$candidate/terminfo" ]]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
 plist_print() {
     local plist_path="$1"
     local key_path="$2"
@@ -393,6 +417,13 @@ SPM_RESOURCES=".build/release/WorkspaceManager_WorkspaceManager.bundle"
 if [[ -d "$SPM_RESOURCES" ]]; then
     cp -R "$SPM_RESOURCES"/* "$APP_BUNDLE/Contents/Resources/" 2>/dev/null || true
     log_success "Copied SPM resources"
+fi
+
+if GHOSTTY_SHARE_DIR_RESOLVED="$(resolve_ghostty_share_dir)"; then
+    cp -R "$GHOSTTY_SHARE_DIR_RESOLVED"/* "$APP_BUNDLE/Contents/Resources/" 2>/dev/null || true
+    log_success "Copied Ghostty resources from $GHOSTTY_SHARE_DIR_RESOLVED"
+else
+    log_warning "Ghostty share resources not found; packaged shell integration may be degraded"
 fi
 
 ASSETS_DIR="Sources/WorkspaceManager/Resources/Assets.xcassets"

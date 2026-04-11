@@ -14,11 +14,7 @@ import WorkspaceManagerCore
 @main
 struct WorkspaceManagerApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
-    @FocusedValue(\.newWorkspaceAction) private var newWorkspaceAction
-    @FocusedValue(\.toggleSidebarAction) private var toggleSidebarAction
-    @FocusedValue(\.toggleInspectorAction) private var toggleInspectorAction
-    @FocusedValue(\.toggleTerminalPanelAction) private var toggleTerminalPanelAction
-    @FocusedValue(\.openInEditorAction) private var openInEditorAction
+    @StateObject private var appCommandState = AppCommandState()
     private let appRuntimeDependencies = AppRuntimeDependencies.resolved()
 
     var sharedModelContainer: ModelContainer = {
@@ -45,10 +41,16 @@ struct WorkspaceManagerApp: App {
 
     var body: some Scene {
         WindowGroup {
-            MainWindowRootView(appRuntimeDependencies: appRuntimeDependencies)
-                .environment(\.lumeRuntimeService, appRuntimeDependencies.lumeRuntimeService)
-                .environment(\.workspaceProviderRegistry, appRuntimeDependencies.workspaceProviderRegistry)
-                .frame(minWidth: 1000, minHeight: 700)
+            MainWindowRootView(
+                appRuntimeDependencies: appRuntimeDependencies,
+                appCommandState: appCommandState
+            )
+            .environment(\.lumeRuntimeService, appRuntimeDependencies.lumeRuntimeService)
+            .environment(
+                \.workspaceProviderRegistry,
+                appRuntimeDependencies.workspaceProviderRegistry
+            )
+            .frame(minWidth: 1000, minHeight: 700)
         }
         .modelContainer(sharedModelContainer)
         .defaultSize(width: 1400, height: 900)
@@ -58,48 +60,81 @@ struct WorkspaceManagerApp: App {
         .commands {
             CommandGroup(after: .newItem) {
                 Button("New Workspace...") {
-                    newWorkspaceAction?()
+                    appCommandState.newWorkspaceAction?()
                 }
                 .keyboardShortcut(
                     AppChromeShortcut.newWorkspace.keyEquivalent,
                     modifiers: AppChromeShortcut.newWorkspace.eventModifiers
                 )
+                .disabled(appCommandState.newWorkspaceAction == nil)
 
                 Button("Open in...") {
-                    openInEditorAction?()
+                    appCommandState.mainWindowActions.openInEditor?()
                 }
                 .keyboardShortcut(
                     AppChromeShortcut.openInEditor.keyEquivalent,
                     modifiers: AppChromeShortcut.openInEditor.eventModifiers
                 )
-                .disabled(openInEditorAction == nil)
+                .disabled(appCommandState.mainWindowActions.openInEditor == nil)
 
                 Button("Toggle Sidebar") {
-                    toggleSidebarAction?()
+                    appCommandState.mainWindowActions.toggleSidebar?()
                 }
                 .keyboardShortcut(
                     AppChromeShortcut.toggleSidebar.keyEquivalent,
                     modifiers: AppChromeShortcut.toggleSidebar.eventModifiers
                 )
+                .disabled(appCommandState.mainWindowActions.toggleSidebar == nil)
 
                 Button("Toggle Inspector") {
-                    toggleInspectorAction?()
+                    appCommandState.mainWindowActions.toggleInspector?()
                 }
                 .keyboardShortcut(
                     AppChromeShortcut.toggleInspector.keyEquivalent,
                     modifiers: AppChromeShortcut.toggleInspector.eventModifiers
                 )
+                .disabled(appCommandState.mainWindowActions.toggleInspector == nil)
 
                 Button("Toggle Terminal Panel") {
-                    toggleTerminalPanelAction?()
+                    appCommandState.mainWindowActions.toggleTerminalPanel?()
                 }
                 .keyboardShortcut(
                     AppChromeShortcut.toggleTerminalPanel.keyEquivalent,
                     modifiers: AppChromeShortcut.toggleTerminalPanel.eventModifiers
                 )
+                .disabled(appCommandState.mainWindowActions.toggleTerminalPanel == nil)
             }
 
             SidebarCommands()
+
+            CommandMenu("Selection") {
+                Button("Open in Browser") {
+                    appCommandState.mainWindowActions.openInBrowser?()
+                }
+                .disabled(appCommandState.mainWindowActions.openInBrowser == nil)
+
+                Button("Reload Web Source") {
+                    appCommandState.mainWindowActions.reloadWebSource?()
+                }
+                .disabled(appCommandState.mainWindowActions.reloadWebSource == nil)
+
+                Divider()
+
+                Button("Open Desktop") {
+                    appCommandState.mainWindowActions.openDesktop?()
+                }
+                .disabled(appCommandState.mainWindowActions.openDesktop == nil)
+
+                Button("Reveal in Finder") {
+                    appCommandState.mainWindowActions.revealInFinder?()
+                }
+                .disabled(appCommandState.mainWindowActions.revealInFinder == nil)
+
+                Button("Copy Path") {
+                    appCommandState.mainWindowActions.copyPath?()
+                }
+                .disabled(appCommandState.mainWindowActions.copyPath == nil)
+            }
 
             CommandGroup(after: .help) {
                 Button("Export Diagnostic Report...") {
@@ -270,14 +305,19 @@ private func seedUIFixtureDataIfNeeded(in context: ModelContext) {
 
 private struct MainWindowRootView: View {
     private let appRuntimeDependencies: AppRuntimeDependencies
+    @ObservedObject private var appCommandState: AppCommandState
     @State private var deepLinkState = WorkspaceDeepLinkState()
     @SceneStorage(MainWindowLastSurface.storageKey) private var lastSurfaceRawValue = ""
     @StateObject private var hostTerminalState = HostTerminalStateStore()
     @StateObject private var workspaceProviderSetupCoordinator = WorkspaceProviderSetupCoordinator()
     @StateObject private var hostLumeSmokeAutomation: HostLumeSmokeAutomationController
 
-    init(appRuntimeDependencies: AppRuntimeDependencies) {
+    init(
+        appRuntimeDependencies: AppRuntimeDependencies,
+        appCommandState: AppCommandState
+    ) {
         self.appRuntimeDependencies = appRuntimeDependencies
+        self._appCommandState = ObservedObject(wrappedValue: appCommandState)
         _hostLumeSmokeAutomation = StateObject(
             wrappedValue: HostLumeSmokeAutomationController()
         )
@@ -287,6 +327,7 @@ private struct MainWindowRootView: View {
         ContentView(
             deepLinkState: $deepLinkState,
             lastSurfaceRawValue: $lastSurfaceRawValue,
+            appCommandState: appCommandState,
             hostTerminalState: hostTerminalState,
             workspaceProviderSetupCoordinator: workspaceProviderSetupCoordinator,
             hostLumeSmokeAutomation: hostLumeSmokeAutomation
@@ -534,51 +575,24 @@ extension EnvironmentValues {
     }
 }
 
-// MARK: - Focused Scene Values
+struct MainWindowFocusedActions {
+    typealias Action = @MainActor () -> Void
 
-private struct NewWorkspaceActionKey: FocusedValueKey {
-    typealias Value = @MainActor () -> Void
+    var toggleSidebar: Action? = nil
+    var toggleInspector: Action? = nil
+    var toggleTerminalPanel: Action? = nil
+    var openInEditor: Action? = nil
+    var openInBrowser: Action? = nil
+    var reloadWebSource: Action? = nil
+    var openDesktop: Action? = nil
+    var revealInFinder: Action? = nil
+    var copyPath: Action? = nil
+
+    static let empty = MainWindowFocusedActions()
 }
 
-private struct ToggleSidebarActionKey: FocusedValueKey {
-    typealias Value = @MainActor () -> Void
-}
-
-private struct ToggleInspectorActionKey: FocusedValueKey {
-    typealias Value = @MainActor () -> Void
-}
-
-private struct ToggleTerminalPanelActionKey: FocusedValueKey {
-    typealias Value = @MainActor () -> Void
-}
-
-private struct OpenInEditorActionKey: FocusedValueKey {
-    typealias Value = @MainActor () -> Void
-}
-
-extension FocusedValues {
-    var newWorkspaceAction: (@MainActor () -> Void)? {
-        get { self[NewWorkspaceActionKey.self] }
-        set { self[NewWorkspaceActionKey.self] = newValue }
-    }
-
-    var toggleSidebarAction: (@MainActor () -> Void)? {
-        get { self[ToggleSidebarActionKey.self] }
-        set { self[ToggleSidebarActionKey.self] = newValue }
-    }
-
-    var toggleInspectorAction: (@MainActor () -> Void)? {
-        get { self[ToggleInspectorActionKey.self] }
-        set { self[ToggleInspectorActionKey.self] = newValue }
-    }
-
-    var toggleTerminalPanelAction: (@MainActor () -> Void)? {
-        get { self[ToggleTerminalPanelActionKey.self] }
-        set { self[ToggleTerminalPanelActionKey.self] = newValue }
-    }
-
-    var openInEditorAction: (@MainActor () -> Void)? {
-        get { self[OpenInEditorActionKey.self] }
-        set { self[OpenInEditorActionKey.self] = newValue }
-    }
+@MainActor
+final class AppCommandState: ObservableObject {
+    @Published var newWorkspaceAction: (@MainActor () -> Void)?
+    @Published var mainWindowActions = MainWindowFocusedActions.empty
 }

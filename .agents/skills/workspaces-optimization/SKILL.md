@@ -21,17 +21,24 @@ The workflow supports two environments:
 
 ## Quick Start
 
+Collect the standard installed-app bundle on a target machine that also has a repo checkout:
+
+```bash
+./.agents/skills/workspaces-optimization/scripts/collect_installed_perf_bundle.py \
+  --slow-repo /path/to/slow/repo
+```
+
 Summarize an exported diagnostic report:
 
 ```bash
-uv run --script .agents/skills/workspaces-optimization/scripts/summarize_diagnostic_report.py \
+./.agents/skills/workspaces-optimization/scripts/summarize_diagnostic_report.py \
   /path/to/workspaces-report.zip
 ```
 
 Collect host-side shell and process evidence on a slow machine:
 
 ```bash
-uv run --script .agents/skills/workspaces-optimization/scripts/host_perf_probe.py \
+./.agents/skills/workspaces-optimization/scripts/host_perf_probe.py \
   --cwd /path/to/slow/repo \
   --sample-running
 ```
@@ -39,7 +46,7 @@ uv run --script .agents/skills/workspaces-optimization/scripts/host_perf_probe.p
 Capture active-lag samples for both the app and child shell processes:
 
 ```bash
-uv run --script .agents/skills/workspaces-optimization/scripts/capture_active_lag_samples.py \
+./.agents/skills/workspaces-optimization/scripts/capture_active_lag_samples.py \
   --countdown 5 \
   --sample-seconds 8
 ```
@@ -53,7 +60,7 @@ Launch an installed build with focused diagnostics enabled:
 Summarize the resulting `[Perf]` log:
 
 ```bash
-uv run --script .agents/skills/workspaces-optimization/scripts/summarize_perf_log.py \
+./.agents/skills/workspaces-optimization/scripts/summarize_perf_log.py \
   /tmp/workspaces-installed-diagnostics-YYYYMMDD-HHMMSS.log
 ```
 
@@ -69,6 +76,7 @@ Run the repo's repeated launch baseline when you have a checkout and can use the
 ### 1. Classify the environment
 
 - If the user provides a diagnostic zip, run `summarize_diagnostic_report.py` first.
+- If the machine has both the installed app and a repo checkout, prefer `collect_installed_perf_bundle.py` so the operator can run one command and return one zip bundle.
 - If the machine only has the installed app, run `host_perf_probe.py` in the slow repo and use the installed app for manual repro.
 - If you have a repo checkout and want an instrumented installed build run, use `./scripts/launch-installed-diagnostics.sh` with either `--clean-shell` or `--login-shell`.
 - If you have the repo checkout and can build locally, use the repo perf scripts after the host probe so you have both target-machine and debug-build evidence.
@@ -174,6 +182,16 @@ Use after `launch-installed-diagnostics.sh` or any captured app log with `[Perf]
 - groups metrics by `metric` and `phase`
 - summarizes numeric fields such as `duration_ms`, `event_age_ms`, and `handler_duration_ms`
 - emits quick findings about terminal surface creation and input-path timing
+
+### `collect_installed_perf_bundle.py`
+
+Use on target machines that have both the installed app and a checkout of this repo.
+
+- runs clean-shell, login-shell, and optional input-diagnostics launch phases
+- summarizes each log automatically
+- runs the host probe
+- runs active-lag sampling with a guided countdown
+- writes `manifest.json`, `README.txt`, and a zip archive for easy handoff
 
 ## Guardrails
 
