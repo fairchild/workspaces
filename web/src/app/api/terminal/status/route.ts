@@ -22,10 +22,6 @@ async function resolveState(
 	computeBackend: string,
 	instanceId: string,
 ): Promise<SandboxState | null> {
-	if (computeBackend === "cloudflare-sandbox") {
-		const m = await import("@/lib/agent-runtime/cloudflare-sandbox");
-		return m.resolveSandboxState(instanceId);
-	}
 	if (computeBackend === "vercel-sandbox") {
 		const m = await import("@/lib/agent-runtime/vercel-sandbox");
 		return m.resolveSandboxState(instanceId);

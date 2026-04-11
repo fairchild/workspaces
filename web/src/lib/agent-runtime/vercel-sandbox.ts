@@ -34,15 +34,23 @@ const CLAUDE_CONFIG_DIR = "/vercel/sandbox/claude-config";
  * v3-tmux-b:  attempted libs copy (also broken)
  * v3-tmux-c:  assertRunCommand exitCode check — finally surfaced the
  *               real error: "apt-get: command not found". The Vercel
- *               sandbox node22 runtime doesn't have apt at all. Every
- *               prior version had been silently failing at the first
- *               apt step and snapshotting a half-done state.
- * v3-tmux-d:  skip apt entirely, download a statically-linked tmux
- *               binary from mjakob-gh/build-static-tmux (3.6a) into
- *               /usr/local/bin. Same pattern as the existing ttyd
- *               install. No shared library deps, no distro assumptions.
+ *               sandbox node22 runtime doesn't have apt at all.
+ * v3-tmux-d:  static tmux binary from mjakob-gh/build-static-tmux —
+ *               the version that actually works.
+ * v4-welcome: + Spaces welcome banner in /etc/bash.bashrc — didn't
+ *               fire because tmux starts bash as a login shell which
+ *               sources /etc/profile.d/*.sh, not /etc/bash.bashrc.
+ * v4-welcome-b: + welcome banner installed at
+ *                 /etc/profile.d/spaces-welcome.sh so login shells
+ *                 fire it. Same guard env var means it only fires
+ *                 once per session. Banner worked but showed
+ *                 "fairchild/workspaces.git" because the sed regex
+ *                 couldn't strip the `.git` suffix.
+ * v4-welcome-c: + banner uses bash parameter expansion instead of
+ *                 sed so the `.git` suffix is stripped correctly
+ *                 and the owner/repo extraction is readable.
  */
-const BASE_SNAPSHOT_VERSION = "v3-tmux-d";
+const BASE_SNAPSHOT_VERSION = "v4-welcome-c";
 
 /**
  * Static tmux binary download URL. See
@@ -234,6 +242,57 @@ async function resolveBaseSnapshot(): Promise<string> {
 		sudo: true,
 	});
 
+	// Install the Spaces welcome banner. Goes in /etc/profile.d/ so
+	// it fires on login shells (which is what tmux starts by
+	// default) — v4-welcome put it only in /etc/bash.bashrc which
+	// covers non-login interactive shells, and that's the wrong
+	// path for tmux → bash.
+	//
+	// The snippet guards via $__SPACES_WELCOMED so child shells and
+	// subsequent tmux windows skip the banner. Reads the repo name
+	// at runtime from git remote so the content adapts per sandbox.
+	//
+	// Heredoc is single-quoted so every $VAR is sandbox-side, not
+	// interpolated on the host.
+	await assertRunCommand(sandbox, "install welcome banner", {
+		cmd: "bash",
+		args: [
+			"-c",
+			`cat > /etc/profile.d/spaces-welcome.sh <<'__SPACES_WELCOME_EOF__'
+# Spaces welcome banner — added by base snapshot install.
+# Shown once per shell session via the __SPACES_WELCOMED guard.
+if [ -z "\${__SPACES_WELCOMED:-}" ] && [ -t 1 ]; then
+  export __SPACES_WELCOMED=1
+  __spaces_repo=""
+  if [ -d /vercel/sandbox/repo/.git ]; then
+    __spaces_url=$(cd /vercel/sandbox/repo && git remote get-url origin 2>/dev/null)
+    if [ -n "\$__spaces_url" ]; then
+      __spaces_url="\${__spaces_url%.git}"            # strip trailing .git
+      __spaces_name="\${__spaces_url##*/}"            # repo name = basename
+      __spaces_dir="\${__spaces_url%/*}"              # dirname of url
+      __spaces_owner="\${__spaces_dir##*[/:]}"        # owner = last segment of dirname
+      __spaces_repo="\${__spaces_owner}/\${__spaces_name}"
+      unset __spaces_url __spaces_name __spaces_dir __spaces_owner
+    fi
+  fi
+  printf '\\n'
+  printf '\\033[1;36m━━━ Spaces sandbox ━━━\\033[0m\\n'
+  printf '\\033[0;36m repo   \\033[0m %s\\n' "\${__spaces_repo:-(no repo)}"
+  printf '\\033[0;36m cwd    \\033[0m %s\\n' "$(pwd)"
+  printf '\\033[0;36m tmux   \\033[0m session "shell"  (Ctrl-B d to detach)\\n'
+  printf '\\033[0;36m timeout\\033[0m 30 min idle\\n'
+  printf '\\033[0;90m ──────────────────────\\033[0m\\n'
+  printf '\\n'
+  unset __spaces_repo
+fi
+__SPACES_WELCOME_EOF__
+chmod 0644 /etc/profile.d/spaces-welcome.sh
+# Verify the file is there at install time (surfaces errors early).
+test -s /etc/profile.d/spaces-welcome.sh`,
+		],
+		sudo: true,
+	});
+
 	const snapshot = await sandbox.snapshot({ expiration: ms("30d") });
 
 	// 3. Record the new snapshot so future requests find it
@@ -307,7 +366,10 @@ export class VercelSandboxProvider implements ComputeProvider, SnapshotCapable {
 				cloneArgs.push("--branch", request.branch);
 			}
 			cloneArgs.push(request.cloneUrl, "/vercel/sandbox/repo");
-			await sandbox.runCommand("git", cloneArgs);
+			await assertRunCommand(sandbox, "git clone (agent sandbox)", {
+				cmd: "git",
+				args: cloneArgs,
+			});
 
 			const instanceId = sandbox.sandboxId;
 			const tools =
@@ -365,10 +427,10 @@ export class VercelSandboxProvider implements ComputeProvider, SnapshotCapable {
 			await sandbox.writeFiles(filesToWrite);
 			// claude CLI invokes apiKeyHelper as an executable, so the helper
 			// script needs +x. writeFiles doesn't take a mode arg.
-			await sandbox.runCommand("chmod", [
-				"+x",
-				`${CLAUDE_CONFIG_DIR}/api-key-helper.sh`,
-			]);
+			await assertRunCommand(sandbox, "chmod api-key-helper (agent sandbox)", {
+				cmd: "chmod",
+				args: ["+x", `${CLAUDE_CONFIG_DIR}/api-key-helper.sh`],
+			});
 
 			// Auth-gated ttyd on port 7681 — same path token as the terminal
 			// tab so an attacker who finds an agent sandbox URL still can't
@@ -490,10 +552,10 @@ export class VercelSandboxProvider implements ComputeProvider, SnapshotCapable {
 		const restoreApiKey = stripQuotes(process.env.ANTHROPIC_API_KEY ?? "");
 		if (restoreApiKey) {
 			await sandbox.writeFiles(claudeAuthFiles(restoreApiKey));
-			await sandbox.runCommand("chmod", [
-				"+x",
-				`${CLAUDE_CONFIG_DIR}/api-key-helper.sh`,
-			]);
+			await assertRunCommand(sandbox, "chmod api-key-helper (restore)", {
+				cmd: "chmod",
+				args: ["+x", `${CLAUDE_CONFIG_DIR}/api-key-helper.sh`],
+			});
 		}
 
 		// Restart ttyd with the auth-gated base-path. The token is derived
@@ -547,16 +609,23 @@ export class VercelSandboxProvider implements ComputeProvider, SnapshotCapable {
 				cloneArgs.push("--branch", params.branch);
 			}
 			cloneArgs.push(params.cloneUrl, "/vercel/sandbox/repo");
-			await sandbox.runCommand("git", cloneArgs);
+			await assertRunCommand(sandbox, "git clone (terminal sandbox)", {
+				cmd: "git",
+				args: cloneArgs,
+			});
 
 			// Same claude auth setup as the agent path so `claude` works
 			// out of the box from the shell.
 			if (apiKey) {
 				await sandbox.writeFiles(claudeAuthFiles(apiKey));
-				await sandbox.runCommand("chmod", [
-					"+x",
-					`${CLAUDE_CONFIG_DIR}/api-key-helper.sh`,
-				]);
+				await assertRunCommand(
+					sandbox,
+					"chmod api-key-helper (terminal sandbox)",
+					{
+						cmd: "chmod",
+						args: ["+x", `${CLAUDE_CONFIG_DIR}/api-key-helper.sh`],
+					},
+				);
 			}
 
 			await startTtyd(sandbox);
