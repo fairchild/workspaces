@@ -1,4 +1,5 @@
 #!/usr/bin/env -S npx tsx
+export {};
 /**
  * Simulates GitHub webhook events for local development.
  *

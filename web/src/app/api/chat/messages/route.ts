@@ -62,7 +62,7 @@ export async function POST(request: Request): Promise<Response> {
 
 	let token: string | null;
 	if (process.env.DEV_BYPASS_AUTH === "1") {
-		token = "dev-bypass-token";
+		token = process.env.GITHUB_TOKEN ?? "dev-bypass-token";
 	} else {
 		token = await getGitHubToken(session.user.id);
 		if (!token) {

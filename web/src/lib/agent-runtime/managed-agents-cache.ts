@@ -90,6 +90,10 @@ export interface AgentSpec {
 	model: string;
 	systemPrompt: string;
 	toolsetVersion?: string;
+	/** Override default toolset with custom tool configs. */
+	tools?: unknown[];
+	/** MCP server declarations for the agent. */
+	mcpServers?: unknown[];
 }
 
 export async function getOrCreateAgent(
@@ -102,20 +106,31 @@ export async function getOrCreateAgent(
 			model: spec.model,
 			system: spec.systemPrompt,
 			toolset: toolsetVersion,
+			tools: spec.tools,
+			mcpServers: spec.mcpServers,
 			v: 1,
 		}),
 	);
 	const cached = await readCache("agent", hash);
 	if (cached) return cached;
 
-	const tools: BetaManagedAgentsAgentToolset20260401Params[] = [
-		{ type: "agent_toolset_20260401" },
+	const tools: unknown[] = spec.tools ?? [
+		{
+			type: "agent_toolset_20260401",
+		} satisfies BetaManagedAgentsAgentToolset20260401Params,
 	];
 	const agent = await client.beta.agents.create({
 		name: `${spec.name}-${hash}`.slice(0, 256),
 		model: spec.model,
 		system: spec.systemPrompt,
-		tools,
+		tools: tools as BetaManagedAgentsAgentToolset20260401Params[],
+		...(spec.mcpServers
+			? {
+					mcp_servers: spec.mcpServers as Parameters<
+						typeof client.beta.agents.create
+					>[0]["mcp_servers"],
+				}
+			: {}),
 		metadata: { hash, persona: spec.name },
 	});
 	await writeCache("agent", hash, agent.id, { persona: spec.name });
