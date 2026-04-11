@@ -122,7 +122,7 @@ describe("ManagedAgentsProvider.createSandbox", () => {
 		expect(call.environment_id).toBe("env_01");
 		expect(call.resources?.[0]).toMatchObject({
 			type: "github_repository",
-			url: "https://github.com/fairchild/workspaces.git",
+			url: "https://github.com/fairchild/workspaces",
 			mount_path: "/workspace/repo",
 			authorization_token: "ghp_test",
 		});

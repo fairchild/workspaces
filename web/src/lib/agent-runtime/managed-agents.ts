@@ -26,15 +26,15 @@ const DESTROY_MODE =
 	process.env.MANAGED_AGENTS_DESTROY_MODE === "delete" ? "delete" : "archive";
 
 const DEFAULT_ALLOWED_HOSTS = [
-	"https://github.com",
-	"https://api.github.com",
-	"https://raw.githubusercontent.com",
-	"https://codeload.github.com",
-	"https://objects.githubusercontent.com",
-	"https://registry.npmjs.org",
-	"https://pypi.org",
-	"https://files.pythonhosted.org",
-	"https://api.anthropic.com",
+	"github.com",
+	"api.github.com",
+	"raw.githubusercontent.com",
+	"codeload.github.com",
+	"objects.githubusercontent.com",
+	"registry.npmjs.org",
+	"pypi.org",
+	"files.pythonhosted.org",
+	"api.anthropic.com",
 ];
 
 export class ManagedAgentsProvider implements ComputeProvider {
@@ -105,10 +105,12 @@ export class ManagedAgentsProvider implements ComputeProvider {
 		});
 
 		const githubToken = request.envVars?.GITHUB_TOKEN ?? "";
+		// Managed Agents requires https://github.com/{owner}/{repo} with no .git suffix
+		const repoUrl = request.cloneUrl.replace(/\.git$/, "");
 		const resources: BetaManagedAgentsGitHubRepositoryResourceParams[] = [
 			{
 				type: "github_repository",
-				url: request.cloneUrl,
+				url: repoUrl,
 				mount_path: "/workspace/repo",
 				authorization_token: githubToken,
 				...(request.branch
