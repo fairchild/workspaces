@@ -49,7 +49,7 @@ export async function POST(request: Request): Promise<Response> {
 	let login: string;
 
 	if (process.env.DEV_BYPASS_AUTH === "1") {
-		ghToken = "dev-bypass-token";
+		ghToken = process.env.GITHUB_TOKEN ?? "dev-bypass-token";
 		login = "fairchild";
 	} else {
 		const token = await getGitHubToken(session.user.id);
