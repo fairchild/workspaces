@@ -1,5 +1,6 @@
 "use client";
 
+import { capturePostHogEvent } from "@/lib/posthog-browser";
 import type { GitHubRepo, SelectedRepo } from "@/lib/types";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
@@ -168,6 +169,10 @@ function SetupInner() {
 				body: JSON.stringify({ repos: repoPayload }),
 			});
 			if (res.ok) {
+				capturePostHogEvent("web_repositories_saved", {
+					mode: isAddMode ? "add" : "initial_setup",
+					repo_count: repoPayload.length,
+				});
 				router.push("/dashboard");
 			}
 		} catch {
@@ -175,7 +180,7 @@ function SetupInner() {
 		} finally {
 			setSubmitting(false);
 		}
-	}, [selected, router]);
+	}, [isAddMode, selected, router]);
 
 	return (
 		<main className={styles.main}>
