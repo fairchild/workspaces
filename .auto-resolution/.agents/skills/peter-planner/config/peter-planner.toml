@@ -1,0 +1,41 @@
+default_labels = ["enhancement", "agent:task"]
+
+[labels.enhancement]
+color = "a2eeef"
+description = "New feature or request"
+
+[labels."agent:task"]
+color = "0E8A16"
+description = "Planned by the agent team"
+
+[labels."area: ui"]
+color = "c5def5"
+description = "User interface"
+
+[labels."area: isolation"]
+color = "1d76db"
+description = "Workspace isolation backends"
+
+[labels."area: distribution"]
+color = "0e8a16"
+description = "Build, signing, updates"
+
+[labels."area: platform"]
+color = "fbca04"
+description = "CI, automation, agent infrastructure"
+
+[aliases]
+ci = "area: platform"
+infra = "area: platform"
+workflow = "area: platform"
+automation = "area: platform"
+testing = "area: platform"
+agents = "area: platform"
+notifications = "area: platform"
+release = "area: distribution"
+signing = "area: distribution"
+notarization = "area: distribution"
+ui = "area: ui"
+ux = "area: ui"
+isolation = "area: isolation"
+workspace = "area: isolation"

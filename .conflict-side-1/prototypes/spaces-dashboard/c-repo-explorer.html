@@ -1,0 +1,746 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Spaces — Repo Explorer</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+            background: #0f0f11;
+            color: #f5f5f7;
+            -webkit-font-smoothing: antialiased;
+            min-height: 100vh;
+        }
+
+        /* -- Login --------------------------------------------------------- */
+
+        .login-page {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            flex-direction: column;
+            gap: 32px;
+        }
+
+        .login-page.hidden { display: none; }
+
+        .login-brand {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .login-brand .mark {
+            width: 36px;
+            height: 36px;
+            border-radius: 10px;
+            background: linear-gradient(135deg, #7d7aff, #5856d6);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            font-weight: 900;
+        }
+
+        .login-brand h1 {
+            font-size: 24px;
+            font-weight: 800;
+            letter-spacing: -0.6px;
+        }
+
+        .login-desc {
+            font-size: 14px;
+            color: #a1a1a6;
+            text-align: center;
+            max-width: 380px;
+            line-height: 1.5;
+        }
+
+        .btn-gh {
+            background: #f5f5f7;
+            color: #1d1d1f;
+            border: none;
+            padding: 12px 28px;
+            border-radius: 10px;
+            font-size: 14px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: opacity 0.15s;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .btn-gh:hover { opacity: 0.85; }
+        .btn-gh svg { width: 18px; height: 18px; }
+
+        /* -- App layout ---------------------------------------------------- */
+
+        .app { display: none; }
+        .app.visible { display: block; }
+
+        .header-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 14px 28px;
+            border-bottom: 1px solid rgba(255,255,255,0.06);
+            position: sticky;
+            top: 0;
+            background: rgba(15,15,17,0.85);
+            backdrop-filter: blur(16px);
+            z-index: 10;
+        }
+
+        .header-bar .brand {
+            font-size: 15px;
+            font-weight: 800;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .header-bar .brand .mark {
+            width: 24px;
+            height: 24px;
+            border-radius: 7px;
+            background: linear-gradient(135deg, #7d7aff, #5856d6);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 11px;
+            font-weight: 900;
+        }
+
+        .header-user {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            color: #a1a1a6;
+        }
+
+        .header-avatar {
+            width: 26px;
+            height: 26px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #7d7aff, #5856d6);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 11px;
+            font-weight: 700;
+        }
+
+        /* -- Content ------------------------------------------------------- */
+
+        .content {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 28px 24px;
+        }
+
+        .content > h2 {
+            font-size: 22px;
+            font-weight: 800;
+            letter-spacing: -0.5px;
+            margin-bottom: 6px;
+        }
+
+        .content > .subtitle {
+            font-size: 13px;
+            color: #a1a1a6;
+            margin-bottom: 28px;
+        }
+
+        /* -- Repo accordion ------------------------------------------------ */
+
+        .repo-block {
+            margin-bottom: 16px;
+            border: 1px solid rgba(255,255,255,0.06);
+            border-radius: 14px;
+            overflow: hidden;
+            background: rgba(255,255,255,0.02);
+        }
+
+        .repo-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 16px 20px;
+            cursor: pointer;
+            transition: background 0.1s;
+        }
+
+        .repo-header:hover { background: rgba(255,255,255,0.03); }
+
+        .repo-header-left {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .repo-icon {
+            width: 32px;
+            height: 32px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+        }
+
+        .repo-icon.has-agents {
+            background: linear-gradient(135deg, rgba(48,209,88,0.2), rgba(0,199,190,0.2));
+            color: #30d158;
+        }
+
+        .repo-icon.no-agents {
+            background: rgba(255,255,255,0.06);
+            color: #6e6e73;
+        }
+
+        .repo-name-group h3 {
+            font-size: 15px;
+            font-weight: 700;
+        }
+
+        .repo-name-group .url {
+            font-size: 11px;
+            font-family: "SF Mono", monospace;
+            color: #6e6e73;
+        }
+
+        .repo-header-right {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .repo-stat-chip {
+            font-size: 10px;
+            padding: 3px 10px;
+            border-radius: 6px;
+            background: rgba(125,122,255,0.1);
+            color: #7d7aff;
+            font-weight: 600;
+        }
+
+        .chevron {
+            color: #6e6e73;
+            font-size: 12px;
+            transition: transform 0.2s;
+        }
+
+        .repo-block.open .chevron { transform: rotate(90deg); }
+
+        .repo-body {
+            display: none;
+            border-top: 1px solid rgba(255,255,255,0.04);
+        }
+
+        .repo-block.open .repo-body { display: block; }
+
+        /* -- Tree view inside repo ---------------------------------------- */
+
+        .tree {
+            padding: 12px 20px 20px;
+        }
+
+        .tree-section {
+            margin-bottom: 16px;
+        }
+
+        .tree-section-header {
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+            color: #6e6e73;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .tree-section-header .count {
+            background: rgba(255,255,255,0.08);
+            padding: 0 6px;
+            border-radius: 6px;
+            font-size: 10px;
+        }
+
+        .tree-nodes {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            padding-left: 12px;
+            border-left: 1px solid rgba(255,255,255,0.06);
+        }
+
+        .tree-node {
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            padding: 8px 12px;
+            border-radius: 8px;
+            transition: background 0.1s;
+        }
+
+        .tree-node:hover { background: rgba(255,255,255,0.03); }
+
+        .node-icon {
+            width: 28px;
+            height: 28px;
+            border-radius: 7px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            flex-shrink: 0;
+            margin-top: 1px;
+        }
+
+        .node-icon.agent-app { background: rgba(48,209,88,0.12); color: #30d158; }
+        .node-icon.agent-plat { background: rgba(255,159,10,0.12); color: #ff9f0a; }
+        .node-icon.agent-plan { background: rgba(10,132,255,0.12); color: #0a84ff; }
+        .node-icon.agent-obs { background: rgba(191,90,242,0.12); color: #bf5af2; }
+        .node-icon.skill { background: rgba(125,122,255,0.1); color: #7d7aff; }
+        .node-icon.file { background: rgba(255,255,255,0.06); color: #a1a1a6; }
+        .node-icon.discuss { background: rgba(255,214,10,0.12); color: #ffd60a; }
+        .node-icon.issue { background: rgba(48,209,88,0.12); color: #30d158; }
+
+        .node-body {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .node-title {
+            font-size: 13px;
+            font-weight: 600;
+        }
+
+        .node-desc {
+            font-size: 11px;
+            color: #a1a1a6;
+            margin-top: 2px;
+            line-height: 1.4;
+        }
+
+        .node-meta {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            margin-top: 6px;
+        }
+
+        .meta-tag {
+            font-size: 10px;
+            padding: 1px 7px;
+            border-radius: 4px;
+            background: rgba(255,255,255,0.06);
+            color: #a1a1a6;
+            font-weight: 500;
+        }
+
+        .meta-tag.active { background: rgba(48,209,88,0.1); color: #30d158; }
+        .meta-tag.idle { background: rgba(255,255,255,0.06); color: #6e6e73; }
+        .meta-tag.scheduled { background: rgba(255,159,10,0.1); color: #ff9f0a; }
+
+        .node-status {
+            font-size: 10px;
+            color: #6e6e73;
+            flex-shrink: 0;
+            margin-top: 2px;
+        }
+
+        /* -- No-agents state ----------------------------------------------- */
+
+        .no-agent-msg {
+            padding: 24px 20px;
+            text-align: center;
+            color: #6e6e73;
+            font-size: 13px;
+        }
+
+        .no-agent-msg code {
+            font-family: "SF Mono", monospace;
+            font-size: 12px;
+            background: rgba(255,255,255,0.06);
+            padding: 2px 6px;
+            border-radius: 4px;
+        }
+
+        /* -- Workflow diagram ----------------------------------------------- */
+
+        .workflow-section {
+            margin-top: 20px;
+            padding-top: 16px;
+            border-top: 1px solid rgba(255,255,255,0.04);
+        }
+
+        .workflow-steps {
+            display: flex;
+            gap: 4px;
+            overflow-x: auto;
+            padding: 8px 0;
+        }
+
+        .wf-step {
+            flex: 1;
+            min-width: 120px;
+            background: rgba(255,255,255,0.03);
+            border: 1px solid rgba(255,255,255,0.06);
+            border-radius: 8px;
+            padding: 10px;
+            text-align: center;
+        }
+
+        .wf-step .label {
+            font-size: 10px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+            color: #6e6e73;
+        }
+
+        .wf-step .actor {
+            font-size: 12px;
+            font-weight: 600;
+            margin-top: 4px;
+        }
+
+        .wf-arrow {
+            display: flex;
+            align-items: center;
+            color: #6e6e73;
+            font-size: 14px;
+            flex-shrink: 0;
+        }
+    </style>
+</head>
+<body>
+
+<!-- Login -->
+<div class="login-page" id="login-page">
+    <div class="login-brand">
+        <div class="mark">S</div>
+        <h1>Spaces</h1>
+    </div>
+    <p class="login-desc">Explore the AI agent setup in each of your GitHub repositories. See agents, skills, config files, and coordination workflows at a glance.</p>
+    <button class="btn-gh" onclick="doLogin()">
+        <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+        Sign in with GitHub
+    </button>
+</div>
+
+<!-- App -->
+<div class="app" id="app">
+    <div class="header-bar">
+        <div class="brand">
+            <div class="mark">S</div>
+            Spaces
+        </div>
+        <div class="header-user">
+            fairchild
+            <div class="header-avatar">F</div>
+        </div>
+    </div>
+
+    <div class="content">
+        <h2>Repository Explorer</h2>
+        <p class="subtitle">Click a repo to inspect its agent setup. We scan for <code>.agents/</code>, <code>CLAUDE.md</code>, skills, personas, and coordination config.</p>
+
+        <div id="repo-list"></div>
+    </div>
+</div>
+
+<script>
+(function() {
+    "use strict";
+
+    const REPOS = [
+        {
+            name: "fairchild/workspaces",
+            url: "github.com/fairchild/workspaces",
+            hasAgents: true,
+            agents: [
+                { name: "April Clearwater", role: "Application Lead", icon: "agent-app", initial: "A", status: "active", statusText: "Reviewing PR #190" },
+                { name: "Plat Ironwood", role: "Platform Lead", icon: "agent-plat", initial: "P", status: "scheduled", statusText: "Next: 7:30am PT" },
+                { name: "Peter Planner", role: "Planner", icon: "agent-plan", initial: "Pp", status: "idle", statusText: "Awaiting ideas" },
+                { name: "Oliver Obever", role: "Observer", icon: "agent-obs", initial: "O", status: "scheduled", statusText: "Monday 1:30pm" }
+            ],
+            skills: [
+                { name: "cofounder-contributor", desc: "Runs standing personas with daily wake-up, PR review, issue execution" },
+                { name: "drive", desc: "Manual milestone execution — plan, refresh, execute issues" },
+                { name: "gh-discuss", desc: "Multi-agent coordination via GitHub Discussions" },
+                { name: "peter-planner", desc: "Converts approved ideas into Issues + Milestones" },
+                { name: "tart-gui-automation", desc: "Headless macOS VM automation via Tart/VNC" }
+            ],
+            files: [
+                { path: ".agents/MEMORY.md", desc: "Shared operational guardrails for all agents" },
+                { path: ".agents/config/peter-planner.toml", desc: "Label catalog and aliases for planning" },
+                { path: ".agents/workspaces/index.html", desc: "Custom repo landing page override" },
+                { path: "CLAUDE.md", desc: "Full agent context, dev verification, code nav" },
+                { path: "docs/development/agent-team.md", desc: "Team structure, schedule, workflow" },
+                { path: "docs/development/agent-owner-protocol.md", desc: "Owner approval and control protocol" }
+            ],
+            discussions: [
+                { title: "[idea] Lume VM snapshot pre-warming", status: "open", author: "Plat" },
+                { title: "[endorsed] Sidebar keyboard navigation", status: "planning", author: "April" },
+                { title: "[shipped] Terminal focus instrumentation", status: "shipped", author: "April" }
+            ],
+            issues: [
+                { title: "#187: Add startup perf budget alerts", label: "agent:ready" },
+                { title: "#188: Sidebar keyboard nav", label: "agent:ready" },
+                { title: "#190: Workspace creation diagnostics", label: "agent:review" }
+            ]
+        },
+        {
+            name: "fairchild/homepage",
+            url: "github.com/fairchild/homepage",
+            hasAgents: true,
+            agents: [
+                { name: "April Clearwater", role: "Application Lead", icon: "agent-app", initial: "A", status: "idle", statusText: "No pending work" }
+            ],
+            skills: [
+                { name: "cofounder-contributor", desc: "Runs April persona for UI tasks" }
+            ],
+            files: [
+                { path: "CLAUDE.md", desc: "Project context and instructions" },
+                { path: ".agents/MEMORY.md", desc: "Shared memory" }
+            ],
+            discussions: [],
+            issues: [
+                { title: "#15: Add dark mode toggle", label: "agent:ready" }
+            ]
+        },
+        {
+            name: "fairchild/dotfiles",
+            url: "github.com/fairchild/dotfiles",
+            hasAgents: false,
+            agents: [],
+            skills: [],
+            files: [],
+            discussions: [],
+            issues: []
+        }
+    ];
+
+    // -- Login -------------------------------------------------------------
+
+    window.doLogin = function() {
+        document.getElementById("login-page").classList.add("hidden");
+        document.getElementById("app").classList.add("visible");
+        renderRepos();
+    };
+
+    // -- Render repos ------------------------------------------------------
+
+    function renderRepos() {
+        const list = document.getElementById("repo-list");
+        list.innerHTML = "";
+
+        REPOS.forEach(repo => {
+            const block = document.createElement("div");
+            block.className = "repo-block";
+
+            // Header
+            const header = document.createElement("div");
+            header.className = "repo-header";
+            header.innerHTML = `
+                <div class="repo-header-left">
+                    <div class="repo-icon ${repo.hasAgents ? "has-agents" : "no-agents"}">
+                        ${repo.hasAgents ? "&#x2699;" : "&#x2015;"}
+                    </div>
+                    <div class="repo-name-group">
+                        <h3>${repo.name}</h3>
+                        <div class="url">${repo.url}</div>
+                    </div>
+                </div>
+                <div class="repo-header-right">
+                    ${repo.hasAgents ? `
+                        <span class="repo-stat-chip">${repo.agents.length} agent${repo.agents.length !== 1 ? "s" : ""}</span>
+                        <span class="repo-stat-chip">${repo.skills.length} skill${repo.skills.length !== 1 ? "s" : ""}</span>
+                    ` : `<span style="font-size:11px;color:#6e6e73">no agent setup</span>`}
+                    <span class="chevron">&#9654;</span>
+                </div>
+            `;
+            header.onclick = () => {
+                block.classList.toggle("open");
+            };
+
+            // Body
+            const body = document.createElement("div");
+            body.className = "repo-body";
+
+            if (!repo.hasAgents) {
+                body.innerHTML = `
+                    <div class="no-agent-msg">
+                        No <code>.agents/</code> directory or <code>CLAUDE.md</code> found.<br>
+                        Add agent configuration to enable AI collaboration.
+                    </div>
+                `;
+            } else {
+                body.innerHTML = renderTree(repo);
+            }
+
+            block.append(header, body);
+            list.appendChild(block);
+        });
+    }
+
+    function renderTree(repo) {
+        let html = '<div class="tree">';
+
+        // Agents
+        html += `
+            <div class="tree-section">
+                <div class="tree-section-header">Agents <span class="count">${repo.agents.length}</span></div>
+                <div class="tree-nodes">
+                    ${repo.agents.map(a => `
+                        <div class="tree-node">
+                            <div class="node-icon ${a.icon}">${a.initial}</div>
+                            <div class="node-body">
+                                <div class="node-title">${a.name}</div>
+                                <div class="node-desc">${a.role}</div>
+                                <div class="node-meta">
+                                    <span class="meta-tag ${a.status}">${a.statusText}</span>
+                                </div>
+                            </div>
+                        </div>
+                    `).join("")}
+                </div>
+            </div>
+        `;
+
+        // Skills
+        if (repo.skills.length > 0) {
+            html += `
+                <div class="tree-section">
+                    <div class="tree-section-header">Skills <span class="count">${repo.skills.length}</span></div>
+                    <div class="tree-nodes">
+                        ${repo.skills.map(s => `
+                            <div class="tree-node">
+                                <div class="node-icon skill">S</div>
+                                <div class="node-body">
+                                    <div class="node-title" style="font-family:'SF Mono',monospace;font-size:12px;">${s.name}</div>
+                                    <div class="node-desc">${s.desc}</div>
+                                </div>
+                            </div>
+                        `).join("")}
+                    </div>
+                </div>
+            `;
+        }
+
+        // Config files
+        if (repo.files.length > 0) {
+            html += `
+                <div class="tree-section">
+                    <div class="tree-section-header">Configuration <span class="count">${repo.files.length}</span></div>
+                    <div class="tree-nodes">
+                        ${repo.files.map(f => `
+                            <div class="tree-node">
+                                <div class="node-icon file">F</div>
+                                <div class="node-body">
+                                    <div class="node-title" style="font-family:'SF Mono',monospace;font-size:12px;">${f.path}</div>
+                                    <div class="node-desc">${f.desc}</div>
+                                </div>
+                            </div>
+                        `).join("")}
+                    </div>
+                </div>
+            `;
+        }
+
+        // Discussions
+        if (repo.discussions.length > 0) {
+            html += `
+                <div class="tree-section">
+                    <div class="tree-section-header">Discussions <span class="count">${repo.discussions.length}</span></div>
+                    <div class="tree-nodes">
+                        ${repo.discussions.map(d => `
+                            <div class="tree-node">
+                                <div class="node-icon discuss">D</div>
+                                <div class="node-body">
+                                    <div class="node-title">${d.title}</div>
+                                    <div class="node-desc">by ${d.author}</div>
+                                </div>
+                                <div class="node-status">${d.status}</div>
+                            </div>
+                        `).join("")}
+                    </div>
+                </div>
+            `;
+        }
+
+        // Issues
+        if (repo.issues.length > 0) {
+            html += `
+                <div class="tree-section">
+                    <div class="tree-section-header">Agent Issues <span class="count">${repo.issues.length}</span></div>
+                    <div class="tree-nodes">
+                        ${repo.issues.map(i => `
+                            <div class="tree-node">
+                                <div class="node-icon issue">I</div>
+                                <div class="node-body">
+                                    <div class="node-title">${i.title}</div>
+                                </div>
+                                <div class="node-status">${i.label}</div>
+                            </div>
+                        `).join("")}
+                    </div>
+                </div>
+            `;
+        }
+
+        // Workflow diagram
+        html += `
+            <div class="workflow-section">
+                <div class="tree-section-header">Coordination Workflow</div>
+                <div class="workflow-steps">
+                    <div class="wf-step">
+                        <div class="label">Propose</div>
+                        <div class="actor">Agent</div>
+                    </div>
+                    <div class="wf-arrow">&rarr;</div>
+                    <div class="wf-step">
+                        <div class="label">Approve</div>
+                        <div class="actor">Owner</div>
+                    </div>
+                    <div class="wf-arrow">&rarr;</div>
+                    <div class="wf-step">
+                        <div class="label">Plan</div>
+                        <div class="actor">Peter</div>
+                    </div>
+                    <div class="wf-arrow">&rarr;</div>
+                    <div class="wf-step">
+                        <div class="label">Execute</div>
+                        <div class="actor">April / Plat</div>
+                    </div>
+                    <div class="wf-arrow">&rarr;</div>
+                    <div class="wf-step">
+                        <div class="label">Review</div>
+                        <div class="actor">Peer + Owner</div>
+                    </div>
+                    <div class="wf-arrow">&rarr;</div>
+                    <div class="wf-step">
+                        <div class="label">Merge</div>
+                        <div class="actor">Owner</div>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        html += '</div>';
+        return html;
+    }
+})();
+</script>
+</body>
+</html>

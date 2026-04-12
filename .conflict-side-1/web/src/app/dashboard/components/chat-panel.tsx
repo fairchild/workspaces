@@ -1,0 +1,459 @@
+"use client";
+
+import type { Agent, TimelineEntry } from "@/lib/types";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AgentSubTabs } from "./agent-sub-tabs";
+import styles from "./chat-panel.module.css";
+import { ComposeBar } from "./compose-bar";
+import { MessageList } from "./message-list";
+import { StreamingBubble } from "./streaming-bubble";
+
+// Chat timeline poll interval. Was 5s, bumped to 10s after a Turso
+// quota incident where chat polling + a missing index generated 500M
+// row reads per month. 10s feels fine for human chat and halves the
+// steady-state DB load from an idle dashboard tab.
+const POLL_INTERVAL = 10_000;
+
+/** Extract @agent-name from start of message (client-safe, no node:crypto). */
+function parseMention(text: string): string | null {
+	const match = text.match(/^@([a-zA-Z0-9_-]+)/);
+	return match ? match[1] : null;
+}
+
+/**
+ * Canonical agent slug. "April Clearwater" → "april-clearwater" so that
+ * display names and machine slugs collapse into one sub-tab.
+ */
+function toAgentSlug(name: string): string {
+	return name.toLowerCase().trim().replace(/\s+/g, "-");
+}
+
+interface AgentSessionInfo {
+	agentName: string;
+	streamUrl: string;
+	threadId: string;
+}
+
+interface TerminalSessionInfo {
+	agentName: string;
+	state: "running" | "paused";
+}
+
+interface ChatPanelProps {
+	selectedRepo: { owner: string; repo: string } | null;
+	agents: Agent[];
+	onNewMessage?: () => void;
+	selectedAgent?: string | null;
+	onSelectAgent?: (agentName: string | null) => void;
+}
+
+export function ChatPanel({
+	selectedRepo,
+	agents,
+	onNewMessage,
+	selectedAgent = null,
+	onSelectAgent,
+}: ChatPanelProps) {
+	const [terminalSessions, setTerminalSessions] = useState<
+		TerminalSessionInfo[]
+	>([]);
+	const [entries, setEntries] = useState<TimelineEntry[]>([]);
+	const [loading, setLoading] = useState(false);
+	const [streamingMessage, setStreamingMessage] = useState<{
+		agentName: string;
+		content: string;
+		lastTool: string | null;
+		status:
+			| "sending"
+			| "connecting"
+			| "provisioning"
+			| "thinking"
+			| "streaming"
+			| "error";
+	} | null>(null);
+	const streamingRef = useRef(false);
+	const pendingContentRef = useRef("");
+	const rafRef = useRef<number>(0);
+	const lastCountRef = useRef(0);
+	const abortRef = useRef<AbortController | null>(null);
+	const agentThreadRef = useRef<{
+		agentName: string;
+		threadId: string;
+	} | null>(null);
+
+	const repo = selectedRepo
+		? `${selectedRepo.owner}/${selectedRepo.repo}`
+		: null;
+
+	const fetchTimeline = useCallback(async () => {
+		if (!repo) return;
+		try {
+			const res = await fetch(
+				`/api/chat/messages?repo=${encodeURIComponent(repo)}&limit=100`,
+			);
+			if (res.ok) {
+				const data: TimelineEntry[] = await res.json();
+				setEntries((prev) =>
+					prev.length === data.length &&
+					prev[0]?.id === data[0]?.id &&
+					prev[prev.length - 1]?.id === data[data.length - 1]?.id
+						? prev
+						: data,
+				);
+				if (data.length > lastCountRef.current && lastCountRef.current > 0) {
+					onNewMessage?.();
+				}
+				lastCountRef.current = data.length;
+			}
+		} catch {
+			// retry on next poll
+		}
+	}, [repo, onNewMessage]);
+
+	// Fetch terminal sessions so the sub-tab strip can show what's live
+	const fetchTerminalSessions = useCallback(async () => {
+		if (!repo) {
+			setTerminalSessions([]);
+			return;
+		}
+		try {
+			const res = await fetch(
+				`/api/terminal/status?repo=${encodeURIComponent(repo)}`,
+			);
+			if (res.ok) {
+				const data = (await res.json()) as {
+					sessions?: TerminalSessionInfo[];
+				};
+				setTerminalSessions(data.sessions ?? []);
+			}
+		} catch {
+			// silent
+		}
+	}, [repo]);
+
+	useEffect(() => {
+		fetchTerminalSessions();
+		const id = setInterval(fetchTerminalSessions, 10_000);
+		return () => clearInterval(id);
+	}, [fetchTerminalSessions]);
+
+	useEffect(() => {
+		setEntries([]);
+		lastCountRef.current = 0;
+		agentThreadRef.current = null;
+		if (!repo) return;
+
+		setLoading(true);
+		fetchTimeline().finally(() => setLoading(false));
+
+		const id = setInterval(fetchTimeline, POLL_INTERVAL);
+		return () => clearInterval(id);
+	}, [repo, fetchTimeline]);
+
+	// Sync streaming ref for stable callback access
+	useEffect(() => {
+		streamingRef.current = streamingMessage !== null;
+	}, [streamingMessage]);
+
+	// Clean up active stream on unmount
+	useEffect(() => {
+		return () => {
+			abortRef.current?.abort();
+		};
+	}, []);
+
+	const connectToAgentStream = useCallback(
+		async (session: AgentSessionInfo & { message: string }) => {
+			abortRef.current?.abort();
+			const controller = new AbortController();
+			abortRef.current = controller;
+
+			pendingContentRef.current = "";
+			setStreamingMessage((prev) => ({
+				agentName: session.agentName,
+				content: "",
+				lastTool: null,
+				status: prev?.status === "sending" ? "connecting" : "provisioning",
+			}));
+
+			const scheduleFlush = () => {
+				if (rafRef.current) return;
+				rafRef.current = requestAnimationFrame(() => {
+					rafRef.current = 0;
+					const content = pendingContentRef.current;
+					setStreamingMessage((prev) =>
+						prev ? { ...prev, content, status: "streaming" } : null,
+					);
+				});
+			};
+
+			try {
+				const res = await fetch(session.streamUrl, {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({
+						repo,
+						agentName: session.agentName,
+						message: session.message,
+						threadId: session.threadId,
+					}),
+					signal: controller.signal,
+				});
+
+				if (!res.ok || !res.body) {
+					setStreamingMessage(null);
+					return;
+				}
+
+				const reader = res.body.getReader();
+				const decoder = new TextDecoder();
+				let buffer = "";
+				let streamDone = false;
+
+				while (!streamDone) {
+					const { done, value } = await reader.read();
+					if (done) break;
+
+					buffer += decoder.decode(value, { stream: true });
+					const lines = buffer.split("\n");
+					buffer = lines.pop() ?? "";
+
+					for (const line of lines) {
+						if (!line.startsWith("data: ")) continue;
+						try {
+							const chunk = JSON.parse(line.slice(6));
+							if (chunk.type === "text") {
+								pendingContentRef.current += chunk.content;
+								scheduleFlush();
+							} else if (chunk.type === "tool_use") {
+								setStreamingMessage((prev) =>
+									prev
+										? { ...prev, lastTool: chunk.content, status: "streaming" }
+										: null,
+								);
+							} else if (chunk.type === "status") {
+								const s = chunk.content?.includes("Starting")
+									? "provisioning"
+									: "thinking";
+								setStreamingMessage((prev) =>
+									prev ? { ...prev, status: s as typeof prev.status } : null,
+								);
+							} else if (chunk.type === "error") {
+								setStreamingMessage((prev) =>
+									prev
+										? {
+												...prev,
+												content: chunk.content || "Agent session failed",
+												status: "error",
+											}
+										: null,
+								);
+								streamDone = true;
+								break;
+							} else if (chunk.type === "done") {
+								streamDone = true;
+								break;
+							}
+						} catch {
+							// skip malformed SSE lines
+						}
+					}
+				}
+			} catch (err) {
+				if (err instanceof DOMException && err.name === "AbortError") return;
+			} finally {
+				if (rafRef.current) {
+					cancelAnimationFrame(rafRef.current);
+					rafRef.current = 0;
+				}
+				// Keep error visible briefly so the user can read it
+				setStreamingMessage((prev) => {
+					if (prev?.status === "error") {
+						setTimeout(() => setStreamingMessage(null), 4000);
+						return prev;
+					}
+					return null;
+				});
+				abortRef.current = null;
+				// Refresh timeline to pick up persisted agent response
+				await fetchTimeline();
+			}
+		},
+		[repo, fetchTimeline],
+	);
+
+	const handleSend = useCallback(
+		async (message: string, agentName?: string) => {
+			if (!repo || streamingRef.current) return;
+
+			// Optimistic: show message immediately
+			const optimisticEntry: TimelineEntry = {
+				kind: "chat",
+				id: `optimistic-${Date.now()}`,
+				repo,
+				author: "you",
+				authorType: "user",
+				content: message,
+				agentTarget: agentName ?? null,
+				discussionId: null,
+				discussionUrl: null,
+				timestamp: new Date().toISOString(),
+			};
+			setEntries((prev) => [...prev, optimisticEntry]);
+
+			if (agentName) {
+				setStreamingMessage({
+					agentName,
+					content: "",
+					lastTool: null,
+					status: "sending",
+				});
+			}
+
+			// Reuse thread if same agent mentioned, or if no mention (default agent follow-up)
+			const mentionedAgent = agentName ?? parseMention(message);
+			const thread = agentThreadRef.current;
+			const parentDiscussionId =
+				thread && (mentionedAgent === thread.agentName || !mentionedAgent)
+					? thread.threadId
+					: undefined;
+
+			let data: Record<string, unknown>;
+			try {
+				const res = await fetch("/api/chat/messages", {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({
+						repo,
+						message,
+						agentName,
+						parentDiscussionId,
+					}),
+				});
+				if (!res.ok) {
+					setStreamingMessage(null);
+					await fetchTimeline(); // revert optimistic
+					return;
+				}
+				data = await res.json();
+			} catch {
+				setStreamingMessage(null);
+				await fetchTimeline(); // revert optimistic
+				return;
+			}
+
+			if (data.agentSession) {
+				const session = data.agentSession as AgentSessionInfo;
+				agentThreadRef.current = {
+					agentName: session.agentName,
+					threadId: session.threadId,
+				};
+				await fetchTimeline(); // Replace optimistic with server version
+				await connectToAgentStream({ ...session, message });
+			} else {
+				// Regular message — just refresh
+				await fetchTimeline();
+			}
+		},
+		[repo, fetchTimeline, connectToAgentStream],
+	);
+
+	const matchesAgent = useCallback(
+		(slug: string, entry: TimelineEntry): boolean => {
+			if (entry.kind !== "chat") return false;
+			if (entry.authorType === "agent" && toAgentSlug(entry.author) === slug) {
+				return true;
+			}
+			if (entry.agentTarget && toAgentSlug(entry.agentTarget) === slug) {
+				return true;
+			}
+			return false;
+		},
+		[],
+	);
+
+	// Filter entries to the selected agent's thread, if one is selected.
+	// "All" (selectedAgent === null) shows everything.
+	const filteredEntries = useMemo(() => {
+		if (!selectedAgent) return entries;
+		return entries.filter((entry) => {
+			if (entry.kind !== "chat") return true; // keep events/status cards
+			return matchesAgent(selectedAgent, entry);
+		});
+	}, [entries, selectedAgent, matchesAgent]);
+
+	// Build sub-tab list: union of terminal sessions and agents seen in
+	// the timeline, deduped by canonical slug. Display label is the
+	// first non-slug name we see (e.g. "April Clearwater" preferred
+	// over "april-clearwater").
+	const subTabs = useMemo(() => {
+		type Tab = {
+			agentName: string;
+			label: string;
+			state?: "running" | "paused";
+		};
+		const map = new Map<string, Tab>();
+
+		const upsert = (
+			rawName: string,
+			displayName?: string,
+			state?: "running" | "paused",
+		) => {
+			const slug = toAgentSlug(rawName);
+			const existing = map.get(slug);
+			const preferredLabel =
+				displayName && displayName !== slug
+					? displayName
+					: existing?.label && existing.label !== slug
+						? existing.label
+						: (rawName ?? slug);
+			map.set(slug, {
+				agentName: slug,
+				label: preferredLabel,
+				state: existing?.state ?? state,
+			});
+		};
+
+		for (const s of terminalSessions) {
+			upsert(s.agentName, undefined, s.state);
+		}
+		for (const e of entries) {
+			if (e.kind !== "chat") continue;
+			if (e.authorType === "agent") {
+				upsert(e.author, e.author);
+			} else if (e.agentTarget) {
+				upsert(e.agentTarget);
+			}
+		}
+		return [...map.values()];
+	}, [terminalSessions, entries]);
+
+	if (!selectedRepo) {
+		return (
+			<div className={styles.noRepo}>
+				<span className={styles.noRepoIcon}>&gt;_</span>
+				<span className={styles.noRepoText}>
+					Select a repository from the sidebar to start chatting with agents.
+				</span>
+			</div>
+		);
+	}
+
+	return (
+		<>
+			<AgentSubTabs
+				tabs={[{ agentName: "all", label: "all" }, ...subTabs]}
+				selected={selectedAgent ?? "all"}
+				onSelect={(name) => {
+					onSelectAgent?.(name === "all" ? null : name);
+				}}
+				showNew={false}
+			/>
+			<div className={styles.panel}>
+				<MessageList entries={filteredEntries} loading={loading} />
+				<StreamingBubble message={streamingMessage} />
+				<ComposeBar repo={repo as string} agents={agents} onSend={handleSend} />
+			</div>
+		</>
+	);
+}

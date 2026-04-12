@@ -1,0 +1,266 @@
+.panel {
+	display: flex;
+	flex-direction: column;
+	gap: 1.5rem;
+	padding: 2rem;
+	max-width: 860px;
+	margin: 0 auto;
+}
+
+/* ── Empty / greeting state ── */
+
+.empty {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 0.75rem;
+	padding: 4rem 2rem;
+	text-align: center;
+	animation: fadeIn 0.6s ease-out both;
+}
+
+.greeting {
+	font-family: var(--font-display), "Georgia", serif;
+	font-size: 1.75rem;
+	font-weight: 400;
+	font-style: italic;
+	color: var(--text-primary);
+	letter-spacing: -0.02em;
+}
+
+.emptyHint {
+	font-family: var(--font-mono), ui-monospace, monospace;
+	font-size: 0.75rem;
+	color: var(--text-tertiary);
+	max-width: 360px;
+	line-height: 1.5;
+}
+
+/* ── Repo header ── */
+
+.repoTitle {
+	font-family: var(--font-display), "Georgia", serif;
+	font-size: 1.5rem;
+	font-weight: 400;
+	font-style: italic;
+	color: var(--text-primary);
+	letter-spacing: -0.02em;
+	animation: fadeIn 0.4s ease-out both;
+}
+
+/* ── Webhook status ── */
+
+.webhookStatus {
+	display: flex;
+	align-items: center;
+	gap: 0.375rem;
+	animation: fadeIn 0.4s ease-out 0.05s both;
+}
+
+.webhookDot {
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	flex-shrink: 0;
+}
+
+.webhookConnected {
+	background: var(--accent);
+	box-shadow: 0 0 4px rgba(166, 255, 223, 0.4);
+}
+
+.webhookDisconnected {
+	background: #f85149;
+	box-shadow: 0 0 4px rgba(248, 81, 73, 0.4);
+}
+
+.webhookText {
+	font-family: var(--font-mono), ui-monospace, monospace;
+	font-size: 0.6875rem;
+	color: var(--text-tertiary);
+}
+
+.webhookConfigure {
+	font-family: var(--font-mono), ui-monospace, monospace;
+	font-size: 0.6875rem;
+	color: var(--accent);
+	text-decoration: none;
+	margin-left: 0.25rem;
+}
+
+.webhookConfigure:hover {
+	text-decoration: underline;
+}
+
+/* ── Stats grid ── */
+
+.grid {
+	display: grid;
+	grid-template-columns: repeat(4, 1fr);
+	gap: 0.75rem;
+	animation: fadeIn 0.5s ease-out 0.05s both;
+}
+
+@media (max-width: 700px) {
+	.grid {
+		grid-template-columns: repeat(2, 1fr);
+	}
+}
+
+.stat {
+	display: flex;
+	flex-direction: column;
+	gap: 0.25rem;
+	padding: 1rem;
+	border: 1px solid var(--border-subtle);
+	border-radius: 8px;
+	background: var(--bg-surface);
+}
+
+.statValue {
+	font-family: var(--font-mono), ui-monospace, monospace;
+	font-size: 1.5rem;
+	color: var(--text-primary);
+}
+
+.statAccent {
+	color: var(--accent);
+}
+
+.statLabel {
+	font-family: var(--font-mono), ui-monospace, monospace;
+	font-size: 0.6875rem;
+	color: var(--text-tertiary);
+	text-transform: uppercase;
+	letter-spacing: 0.06em;
+}
+
+/* ── Section headers ── */
+
+.section {
+	display: flex;
+	align-items: center;
+	gap: 0.375rem;
+	padding: 0.375rem 0;
+	margin: 0;
+	background: none;
+	border: none;
+	cursor: pointer;
+	color: inherit;
+	font: inherit;
+	width: 100%;
+	text-align: left;
+	animation: fadeIn 0.5s ease-out 0.1s both;
+}
+
+.section:hover .sectionLabel {
+	color: var(--text-secondary);
+}
+
+.section:hover .sectionChevron {
+	color: var(--text-secondary);
+}
+
+.sectionChevron {
+	font-size: 0.5rem;
+	color: var(--text-tertiary);
+	transition: transform 0.15s ease, color 0.15s ease;
+}
+
+.sectionChevronCollapsed {
+	transform: rotate(-90deg);
+}
+
+.sectionLabel {
+	font-family: var(--font-mono), ui-monospace, monospace;
+	font-size: 0.625rem;
+	text-transform: uppercase;
+	letter-spacing: 0.1em;
+	color: var(--text-tertiary);
+	transition: color 0.15s ease;
+}
+
+/* ── Agent grid ── */
+
+.agentGrid {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+	gap: 0.75rem;
+	animation: fadeIn 0.5s ease-out 0.15s both;
+}
+
+/* ── No agents state ── */
+
+.noAgents {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 0.75rem;
+	padding: 3rem 2rem;
+	border: 1px solid var(--border-subtle);
+	border-radius: 8px;
+	background: var(--bg-surface);
+	text-align: center;
+	animation: fadeIn 0.5s ease-out 0.1s both;
+}
+
+.noAgentsIcon {
+	font-family: var(--font-mono), ui-monospace, monospace;
+	font-size: 1.5rem;
+	color: var(--text-tertiary);
+}
+
+.noAgentsTitle {
+	font-family: var(--font-mono), ui-monospace, monospace;
+	font-size: 0.875rem;
+	color: var(--text-secondary);
+}
+
+.noAgentsHint {
+	font-family: var(--font-mono), ui-monospace, monospace;
+	font-size: 0.75rem;
+	color: var(--text-tertiary);
+	line-height: 1.5;
+}
+
+.code {
+	padding: 0.125rem 0.375rem;
+	border-radius: 4px;
+	background: var(--bg-elevated);
+	font-family: var(--font-mono), ui-monospace, monospace;
+	font-size: 0.75rem;
+	color: var(--accent);
+}
+
+/* ── Skeleton loading ── */
+
+.skeletonHeader {
+	height: 2rem;
+	width: 240px;
+	border-radius: 6px;
+	background: var(--bg-elevated);
+	animation: gridShimmer 1.5s ease-in-out infinite;
+}
+
+.skeletonStat {
+	height: 72px;
+	border-radius: 8px;
+	background: var(--bg-elevated);
+	animation: gridShimmer 1.5s ease-in-out infinite;
+}
+
+.skeletonSection {
+	height: 1rem;
+	width: 120px;
+	border-radius: 4px;
+	background: var(--bg-elevated);
+	animation: gridShimmer 1.5s ease-in-out infinite;
+}
+
+.skeletonCard {
+	height: 96px;
+	border-radius: 8px;
+	background: var(--bg-elevated);
+	animation: gridShimmer 1.5s ease-in-out infinite;
+}

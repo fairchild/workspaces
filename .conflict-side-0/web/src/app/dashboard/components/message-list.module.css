@@ -1,0 +1,191 @@
+.container {
+	display: flex;
+	flex-direction: column;
+	flex: 1;
+	min-height: 0;
+	overflow-y: auto;
+	padding: 0.5rem 0;
+}
+
+.timeline {
+	display: flex;
+	flex-direction: column;
+	gap: 0.125rem;
+}
+
+/* ── Plain chat message (no agent target) ── */
+
+.message {
+	display: flex;
+	flex-direction: column;
+	gap: 0.25rem;
+	padding: 0.625rem 1rem;
+	transition: background 0.15s ease;
+	animation: fadeIn 0.3s ease-out both;
+}
+
+.message:hover {
+	background: var(--accent-dim);
+}
+
+.messageHeader {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 0.5rem;
+}
+
+.messageAuthor {
+	font-family: var(--font-mono), ui-monospace, monospace;
+	font-size: 0.6875rem;
+	font-weight: 600;
+	color: var(--text-primary);
+}
+
+.messageAuthorAgent {
+	color: var(--accent);
+}
+
+.messageAuthorBot {
+	color: #7eb8ff;
+}
+
+.messageTime {
+	font-family: var(--font-mono), ui-monospace, monospace;
+	font-size: 0.5625rem;
+	color: var(--text-tertiary);
+	flex-shrink: 0;
+}
+
+.messageContent {
+	font-family: var(--font-mono), ui-monospace, monospace;
+	font-size: 0.75rem;
+	color: var(--text-primary);
+	line-height: 1.5;
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+
+.messageDiscussionLink {
+	font-family: var(--font-mono), ui-monospace, monospace;
+	font-size: 0.5625rem;
+	color: var(--text-tertiary);
+	text-decoration: none;
+	transition: color 0.15s ease;
+}
+
+.messageDiscussionLink:hover {
+	color: var(--accent);
+}
+
+/* ── Agent message accent ── */
+
+.messageAgent {
+	border-left: 2px solid var(--accent);
+	padding-left: calc(1rem - 2px);
+}
+
+/* ── Empty state ── */
+
+.empty {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	flex: 1;
+	gap: 0.75rem;
+	padding: 2rem;
+	text-align: center;
+}
+
+.emptyIcon {
+	font-family: var(--font-mono), ui-monospace, monospace;
+	font-size: 1.25rem;
+	color: var(--text-tertiary);
+}
+
+.emptyText {
+	font-family: var(--font-mono), ui-monospace, monospace;
+	font-size: 0.6875rem;
+	color: var(--text-tertiary);
+	max-width: 260px;
+	line-height: 1.5;
+}
+
+/* ── Day separator ── */
+
+.daySeparator {
+	display: flex;
+	align-items: center;
+	gap: 0.75rem;
+	padding: 0.5rem 1rem;
+	margin: 0.25rem 0;
+}
+
+.daySeparator::before,
+.daySeparator::after {
+	content: "";
+	flex: 1;
+	height: 1px;
+	background: var(--border-subtle);
+}
+
+.dayLabel {
+	font-family: var(--font-mono), ui-monospace, monospace;
+	font-size: 0.5625rem;
+	color: var(--text-tertiary);
+	text-transform: uppercase;
+	letter-spacing: 0.08em;
+	flex-shrink: 0;
+}
+
+/* ── Streaming indicator ── */
+
+.streamingIndicator {
+	font-family: var(--font-mono), ui-monospace, monospace;
+	font-size: 0.75rem;
+	color: var(--text-tertiary);
+	animation: pulse 1.5s ease-in-out infinite;
+}
+
+.streamingContent {
+	border-right: 2px solid var(--accent);
+	animation: blink 0.8s step-end infinite;
+	padding-right: 2px;
+}
+
+@keyframes pulse {
+	0%,
+	100% {
+		opacity: 0.4;
+	}
+	50% {
+		opacity: 1;
+	}
+}
+
+@keyframes blink {
+	50% {
+		border-color: transparent;
+	}
+}
+
+/* ── Optimistic (unconfirmed) message ── */
+
+@keyframes fadeIn {
+	from {
+		opacity: 0;
+		transform: translateY(4px);
+	}
+	to {
+		opacity: 1;
+		transform: translateY(0);
+	}
+}
+
+/* ── Scroll anchor ── */
+
+.anchor {
+	height: 0;
+	flex-shrink: 0;
+}

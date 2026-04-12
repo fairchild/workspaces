@@ -1,0 +1,6 @@
+node_modules/
+.dbos/
+.spike-data/
+.evidence-data/
+dist/
+package-lock.json

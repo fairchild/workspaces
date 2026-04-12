@@ -1,0 +1,18 @@
+# Flow: Bring WorkspaceManager to foreground via Dock click
+# Agent-readable recipe — not directly executable by the harness.
+# Read landmarks from ../target.yaml, issue harness commands.
+
+name: activate-app
+description: >
+  Click the WorkspaceManager Dock icon to bring the app to foreground.
+  Wait for activation, then capture verification frame.
+
+steps:
+  - action: click
+    landmark: dock_icon
+    wait_ms: 2500
+    note: "Click Dock icon to activate. Wait for window to come forward."
+
+  - action: capture
+    output: activated.png
+    note: "Verify app is frontmost. If not, try Cmd+Tab or open -b bundle_id."

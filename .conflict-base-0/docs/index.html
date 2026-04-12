@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Workspaces - AI Coding Session Manager for macOS</title>
+    <meta name="description" content="A native macOS app for managing AI coding session workspaces with integrated terminal.">
+
+    <style>
+        /* ============================================================
+           Base Styles
+           ============================================================ */
+
+        :root {
+            --color-bg: #0d1117;
+            --color-surface: #161b22;
+            --color-border: #30363d;
+            --color-text: #c9d1d9;
+            --color-text-muted: #8b949e;
+            --color-accent: #58a6ff;
+            --color-accent-hover: #79b8ff;
+            --color-success: #3fb950;
+            --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+            --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: var(--font-sans);
+            background: var(--color-bg);
+            color: var(--color-text);
+            line-height: 1.6;
+            min-height: 100vh;
+        }
+
+        a {
+            color: var(--color-accent);
+            text-decoration: none;
+        }
+
+        a:hover {
+            color: var(--color-accent-hover);
+            text-decoration: underline;
+        }
+
+        /* ============================================================
+           Layout
+           ============================================================ */
+
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 2rem 1.5rem;
+        }
+
+        header {
+            text-align: center;
+            padding: 4rem 0 3rem;
+            border-bottom: 1px solid var(--color-border);
+        }
+
+        main {
+            padding: 3rem 0;
+        }
+
+        footer {
+            text-align: center;
+            padding: 2rem 0;
+            border-top: 1px solid var(--color-border);
+            color: var(--color-text-muted);
+            font-size: 0.875rem;
+        }
+
+        /* ============================================================
+           Typography
+           ============================================================ */
+
+        h1 {
+            font-size: 2.5rem;
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+            letter-spacing: -0.02em;
+        }
+
+        .tagline {
+            font-size: 1.25rem;
+            color: var(--color-text-muted);
+            margin-bottom: 2rem;
+        }
+
+        h2 {
+            font-size: 1.5rem;
+            font-weight: 600;
+            margin: 2rem 0 1rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 1px solid var(--color-border);
+        }
+
+        h3 {
+            font-size: 1rem;
+            font-weight: 600;
+            margin: 1.5rem 0 0.5rem;
+        }
+
+        p {
+            margin-bottom: 1rem;
+        }
+
+        ul {
+            margin: 1rem 0;
+            padding-left: 1.5rem;
+        }
+
+        li {
+            margin-bottom: 0.5rem;
+        }
+
+        code {
+            font-family: var(--font-mono);
+            background: var(--color-surface);
+            padding: 0.2em 0.4em;
+            border-radius: 4px;
+            font-size: 0.9em;
+        }
+
+        /* ============================================================
+           Components
+           ============================================================ */
+
+        .badge {
+            display: inline-block;
+            background: var(--color-surface);
+            border: 1px solid var(--color-border);
+            padding: 0.25rem 0.75rem;
+            border-radius: 2rem;
+            font-size: 0.875rem;
+            color: var(--color-text-muted);
+            margin-bottom: 1rem;
+        }
+
+        .badge--beta {
+            background: rgba(88, 166, 255, 0.1);
+            border-color: var(--color-accent);
+            color: var(--color-accent);
+        }
+
+        .download-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            background: var(--color-accent);
+            color: var(--color-bg);
+            padding: 0.875rem 1.5rem;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 1rem;
+            transition: background-color 0.2s;
+        }
+
+        .download-btn:hover {
+            background: var(--color-accent-hover);
+            color: var(--color-bg);
+            text-decoration: none;
+        }
+
+        .download-btn svg {
+            width: 20px;
+            height: 20px;
+        }
+
+        .requirements {
+            display: flex;
+            justify-content: center;
+            gap: 2rem;
+            margin-top: 1.5rem;
+            flex-wrap: wrap;
+        }
+
+        .requirement {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            color: var(--color-text-muted);
+            font-size: 0.875rem;
+        }
+
+        .requirement svg {
+            width: 16px;
+            height: 16px;
+            color: var(--color-success);
+        }
+
+        .features {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 1.5rem;
+            margin: 1.5rem 0;
+        }
+
+        .feature {
+            background: var(--color-surface);
+            border: 1px solid var(--color-border);
+            border-radius: 8px;
+            padding: 1.5rem;
+        }
+
+        .feature h3 {
+            margin-top: 0;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .feature p {
+            margin: 0;
+            color: var(--color-text-muted);
+            font-size: 0.9375rem;
+        }
+
+        .steps {
+            counter-reset: step;
+        }
+
+        .steps li {
+            counter-increment: step;
+            position: relative;
+            padding-left: 2.5rem;
+            margin-bottom: 1rem;
+        }
+
+        .steps li::before {
+            content: counter(step);
+            position: absolute;
+            left: 0;
+            width: 1.75rem;
+            height: 1.75rem;
+            background: var(--color-surface);
+            border: 1px solid var(--color-border);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.875rem;
+            font-weight: 600;
+        }
+
+        .callout {
+            background: var(--color-surface);
+            border: 1px solid var(--color-border);
+            border-left: 3px solid var(--color-accent);
+            padding: 1rem 1.25rem;
+            border-radius: 0 8px 8px 0;
+            margin: 1.5rem 0;
+        }
+
+        .callout p {
+            margin: 0;
+        }
+
+        .links {
+            display: flex;
+            justify-content: center;
+            gap: 2rem;
+            margin-top: 1rem;
+        }
+
+        /* ============================================================
+           Responsive
+           ============================================================ */
+
+        @media (max-width: 600px) {
+            h1 {
+                font-size: 2rem;
+            }
+
+            .tagline {
+                font-size: 1.125rem;
+            }
+
+            .requirements {
+                flex-direction: column;
+                gap: 0.75rem;
+                align-items: center;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <span class="badge badge--beta">Beta</span>
+            <h1>Workspaces</h1>
+            <p class="tagline">AI Coding Session Manager for macOS</p>
+
+            <a href="https://github.com/fairchild/workspaces/releases/latest/download/WorkspaceManager-latest.dmg"
+               class="download-btn">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                </svg>
+                Download for macOS
+            </a>
+
+            <div class="requirements">
+                <div class="requirement">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+                    </svg>
+                    macOS 14+ (Sonoma)
+                </div>
+                <div class="requirement">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+                    </svg>
+                    Apple Silicon & Intel
+                </div>
+                <div class="requirement">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+                    </svg>
+                    Notarized by Apple
+                </div>
+            </div>
+        </header>
+
+        <main>
+            <h2>Features</h2>
+            <div class="features">
+                <div class="feature">
+                    <h3>Workspace Management</h3>
+                    <p>Create isolated git worktrees for each AI coding session. Keep your main branch clean while experimenting.</p>
+                </div>
+                <div class="feature">
+                    <h3>Integrated Terminal</h3>
+                    <p>Full-featured terminal emulator built-in. Run commands, view output, and manage your session in one window.</p>
+                </div>
+                <div class="feature">
+                    <h3>Repository Browser</h3>
+                    <p>Browse files and view git status at a glance. See what changed in your workspace without switching apps.</p>
+                </div>
+                <div class="feature">
+                    <h3>Lifecycle Hooks</h3>
+                    <p>Custom <code>setup.sh</code> and <code>archive.sh</code> scripts run automatically when workspaces are created or deleted.</p>
+                </div>
+            </div>
+
+            <h2>Installation</h2>
+            <ol class="steps">
+                <li>Download the DMG file using the button above</li>
+                <li>Open the DMG and drag <strong>Workspaces</strong> to your Applications folder</li>
+                <li>On first launch, right-click the app and select <strong>Open</strong> to bypass Gatekeeper</li>
+                <li>Configure your workspace root directory in Settings</li>
+            </ol>
+
+            <div class="callout">
+                <p><strong>Note:</strong> This app requires access to your filesystem and terminal for workspace management. It's distributed outside the App Store because it needs capabilities that sandboxed apps cannot provide.</p>
+            </div>
+
+            <h2>Feedback & Support</h2>
+            <p>This is a beta release. Your feedback helps improve the app!</p>
+            <ul>
+                <li><strong>Bug reports:</strong> <a href="https://github.com/fairchild/workspaces/issues">Open an issue on GitHub</a></li>
+                <li><strong>Feature requests:</strong> <a href="https://github.com/fairchild/workspaces/discussions">Start a discussion</a></li>
+                <li><strong>Source code:</strong> <a href="https://github.com/fairchild/workspaces">View on GitHub</a></li>
+            </ul>
+
+            <h2>Developer Docs</h2>
+            <ul>
+                <li><a href="./performance-testing.md">Performance Testing and Benchmarking</a></li>
+                <li><a href="./performance/dashboard.md">Performance Dashboard</a></li>
+                <li><a href="./ops/dashboard.md">Ops Dashboard</a></li>
+                <li><a href="./performance/metrics-reference.md">Performance Metrics Reference</a></li>
+            </ul>
+        </main>
+
+        <footer>
+            <p>Built with SwiftUI for macOS</p>
+            <div class="links">
+                <a href="https://github.com/fairchild/workspaces">GitHub</a>
+                <a href="https://github.com/fairchild/workspaces/releases">Releases</a>
+                <a href="./performance-testing.md">Performance Docs</a>
+                <a href="https://github.com/fairchild/workspaces/blob/main/LICENSE">License</a>
+            </div>
+        </footer>
+    </div>
+</body>
+</html>

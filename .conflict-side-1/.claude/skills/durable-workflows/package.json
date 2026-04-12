@@ -1,0 +1,23 @@
+{
+  "name": "@local/durable-workflows",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "bootstrap": "tsx scripts/bootstrap.ts",
+    "dashboard": "tsx scripts/dashboard.ts",
+    "send": "tsx scripts/send.ts",
+    "inspect": "tsx scripts/inspect.ts",
+    "fork": "tsx scripts/fork.ts",
+    "list": "tsx scripts/list.ts",
+    "shutdown": "tsx scripts/shutdown.ts",
+    "spike": "tsx scripts/spike.ts",
+    "evidence": "tsx scripts/evidence.ts"
+  },
+  "dependencies": {
+    "@dbos-inc/dbos-sdk": "^4.11",
+    "@electric-sql/pglite": "^0.3",
+    "@electric-sql/pglite-socket": "^0.0.21",
+    "pg": "^8",
+    "tsx": "^4"
+  }
+}

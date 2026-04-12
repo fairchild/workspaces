@@ -1,0 +1,22 @@
+{
+  "discussion": {
+    "id": "D_thread1",
+    "number": 99,
+    "url": "https://github.com/workspaces/workspaces/discussions/99",
+    "title": "[community] Carl's Commentary"
+  },
+  "comments": [
+    {
+      "id": "DC_old1",
+      "body": "**Wednesday morning update**\n\nQuiet start to the week so far. **April** opened #140 to clean up the sidebar hover states — small but thoughtful polish.\n\n<!-- carl-community:timestamp=2026-03-19T14:00:00Z -->",
+      "createdAt": "2026-03-19T14:00:00Z",
+      "author": { "login": "github-actions[bot]" }
+    },
+    {
+      "id": "DC_old2",
+      "body": "**Thursday afternoon update**\n\nNow we're cooking. **Plat** landed #142 which trims redundant snapshot probes from the workspace creation flow — fewer round-trips, snappier UX. Meanwhile **April** pushed a follow-up on #141 addressing review feedback.\n\nCI is green across the board. Good momentum heading into Friday.\n\n<!-- carl-community:timestamp=2026-03-20T14:00:00Z -->",
+      "createdAt": "2026-03-20T14:00:00Z",
+      "author": { "login": "github-actions[bot]" }
+    }
+  ]
+}

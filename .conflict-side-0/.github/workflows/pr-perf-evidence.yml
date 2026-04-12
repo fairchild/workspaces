@@ -1,0 +1,60 @@
+name: PR Perf Evidence
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, labeled, unlabeled, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  enforce-perf-evidence:
+    if: "!github.event.pull_request.draft"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate performance evidence fields
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
+        with:
+          script: |
+            const label = 'performance-sensitive';
+            const labels = new Set((context.payload.pull_request.labels || []).map((item) => item.name));
+            const body = context.payload.pull_request.body || '';
+
+            if (!labels.has(label)) {
+              core.notice(`PR does not have the '${label}' label; perf evidence enforcement is advisory only.`);
+              return;
+            }
+
+            const requiredFields = [
+              'Scenario ID',
+              'Before Summary',
+              'After Summary',
+              'Delta Summary',
+            ];
+
+            const missing = requiredFields.filter((field) => {
+              const pattern = new RegExp(`^\\s*-\\s*${field}:\\s*(.+)$`, 'mi');
+              const match = body.match(pattern);
+              if (!match) {
+                return true;
+              }
+
+              const value = (match[1] || '').trim();
+              if (!value) {
+                return true;
+              }
+
+              const normalized = value.toLowerCase();
+              return normalized === '<required>' || normalized === 'tbd' || normalized === 'pending';
+            });
+
+            if (missing.length > 0) {
+              core.setFailed(
+                `Missing required performance evidence field(s): ${missing.join(', ')}. ` +
+                `Fill them in the PR body or remove the '${label}' label if this PR is not performance-sensitive.`
+              );
+              return;
+            }
+
+            core.notice(`Found required perf evidence fields for '${label}' PR.`);

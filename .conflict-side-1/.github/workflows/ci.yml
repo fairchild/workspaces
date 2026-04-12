@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      # Keep expensive hosted macOS CI focused on product, build, and release inputs.
+      - ".github/workflows/ci.yml"
+      - ".github/workflows/ci-fallback.yml"
+      - ".github/workflows/release.yml"
+      - ".swift-format"
+      - "Package.swift"
+      - "WorkspaceManager.entitlements"
+      - "Sources/**"
+      - "Tests/**"
+      - "scripts/build-ghosttykit.sh"
+      - "scripts/build-release.sh"
+      - "scripts/notarize.sh"
+      - "scripts/prepare-release.sh"
+      - "scripts/release-version.sh"
+      - "scripts/setup-release-secrets.sh"
+      - "scripts/verify-app-keychain-signing.sh"
+      - "scripts/verify-p12.sh"
+      - "scripts/verify-release-bundle.sh"
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/ci.yml"
+      - ".github/workflows/ci-fallback.yml"
+      - ".github/workflows/release.yml"
+      - ".swift-format"
+      - "Package.swift"
+      - "WorkspaceManager.entitlements"
+      - "Sources/**"
+      - "Tests/**"
+      - "scripts/build-ghosttykit.sh"
+      - "scripts/build-release.sh"
+      - "scripts/notarize.sh"
+      - "scripts/prepare-release.sh"
+      - "scripts/release-version.sh"
+      - "scripts/setup-release-secrets.sh"
+      - "scripts/verify-app-keychain-signing.sh"
+      - "scripts/verify-p12.sh"
+      - "scripts/verify-release-bundle.sh"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    runs-on: [self-hosted, lume-macos]
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+
+      - name: Ensure mise
+        run: |
+          if command -v mise >/dev/null 2>&1; then
+            mise --version
+          else
+            brew install mise
+          fi
+
+      - name: Build GhosttyKit
+        run: ./scripts/build-ghosttykit.sh
+
+      - name: Ensure swift-format
+        run: |
+          if command -v swift-format >/dev/null 2>&1; then
+            swift-format --version
+          else
+            brew install swift-format
+          fi
+
+      - name: Lint
+        run: swift-format lint --strict --recursive Sources/ Tests/
+
+      - name: Build (debug)
+        run: swift build
+
+      - name: Build (release)
+        run: swift build -c release
+
+      - name: Test
+        run: swift test

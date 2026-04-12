@@ -1,0 +1,867 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Spaces — Command Center</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+            background: #0d0d0f;
+            color: #f5f5f7;
+            -webkit-font-smoothing: antialiased;
+            min-height: 100vh;
+        }
+
+        /* -- Layout -------------------------------------------------------- */
+
+        .shell {
+            display: flex;
+            height: 100vh;
+        }
+
+        .sidebar {
+            width: 260px;
+            border-right: 1px solid rgba(255,255,255,0.06);
+            display: flex;
+            flex-direction: column;
+            background: rgba(255,255,255,0.02);
+        }
+
+        .sidebar-header {
+            padding: 20px;
+            border-bottom: 1px solid rgba(255,255,255,0.06);
+        }
+
+        .sidebar-header h1 {
+            font-size: 15px;
+            font-weight: 700;
+            letter-spacing: -0.3px;
+        }
+
+        .sidebar-header .subtitle {
+            font-size: 11px;
+            color: #a1a1a6;
+            margin-top: 2px;
+        }
+
+        .user-info {
+            padding: 12px 20px;
+            border-bottom: 1px solid rgba(255,255,255,0.06);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .avatar {
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #7d7aff 0%, #5856d6 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            font-weight: 700;
+        }
+
+        .user-name { font-size: 13px; font-weight: 600; }
+
+        .repo-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 8px 0;
+        }
+
+        .repo-section-label {
+            font-size: 10px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: #6e6e73;
+            padding: 12px 20px 6px;
+        }
+
+        .repo-item {
+            padding: 8px 20px;
+            font-size: 13px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            transition: background 0.1s;
+        }
+
+        .repo-item:hover { background: rgba(255,255,255,0.04); }
+        .repo-item.selected { background: rgba(125,122,255,0.12); }
+
+        .repo-item .name { font-weight: 500; }
+
+        .agent-count {
+            font-size: 10px;
+            background: rgba(125,122,255,0.15);
+            color: #7d7aff;
+            padding: 1px 6px;
+            border-radius: 8px;
+            font-weight: 600;
+        }
+
+        .no-agents {
+            font-size: 10px;
+            color: #6e6e73;
+        }
+
+        /* -- Main content -------------------------------------------------- */
+
+        .main {
+            flex: 1;
+            overflow-y: auto;
+            padding: 24px 32px;
+        }
+
+        .main-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 24px;
+        }
+
+        .main-header h2 {
+            font-size: 20px;
+            font-weight: 700;
+            letter-spacing: -0.4px;
+        }
+
+        .main-header .repo-url {
+            font-size: 12px;
+            color: #a1a1a6;
+            font-family: "SF Mono", monospace;
+        }
+
+        /* -- Stats row ----------------------------------------------------- */
+
+        .stats-row {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 12px;
+            margin-bottom: 24px;
+        }
+
+        .stat-card {
+            background: rgba(255,255,255,0.03);
+            border: 1px solid rgba(255,255,255,0.06);
+            border-radius: 12px;
+            padding: 16px;
+        }
+
+        .stat-card .label {
+            font-size: 11px;
+            color: #6e6e73;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+            font-weight: 600;
+        }
+
+        .stat-card .value {
+            font-size: 28px;
+            font-weight: 700;
+            margin-top: 4px;
+            letter-spacing: -1px;
+        }
+
+        .stat-card .detail {
+            font-size: 11px;
+            color: #a1a1a6;
+            margin-top: 2px;
+        }
+
+        .stat-card .value.green { color: #30d158; }
+        .stat-card .value.purple { color: #7d7aff; }
+        .stat-card .value.orange { color: #ff9f0a; }
+        .stat-card .value.blue { color: #0a84ff; }
+
+        /* -- Sections ------------------------------------------------------ */
+
+        .section {
+            margin-bottom: 28px;
+        }
+
+        .section-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 12px;
+        }
+
+        .section-header h3 {
+            font-size: 14px;
+            font-weight: 700;
+            letter-spacing: -0.2px;
+        }
+
+        .section-badge {
+            font-size: 10px;
+            background: rgba(255,255,255,0.06);
+            padding: 2px 8px;
+            border-radius: 6px;
+            color: #a1a1a6;
+        }
+
+        /* -- Agent cards --------------------------------------------------- */
+
+        .agent-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+            gap: 12px;
+        }
+
+        .agent-card {
+            background: rgba(255,255,255,0.03);
+            border: 1px solid rgba(255,255,255,0.06);
+            border-radius: 12px;
+            padding: 16px;
+            transition: all 0.15s;
+        }
+
+        .agent-card:hover {
+            background: rgba(255,255,255,0.05);
+            border-color: rgba(255,255,255,0.1);
+        }
+
+        .agent-name {
+            font-size: 14px;
+            font-weight: 700;
+        }
+
+        .agent-role {
+            font-size: 11px;
+            color: #a1a1a6;
+            margin-top: 2px;
+        }
+
+        .agent-status {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin-top: 10px;
+            font-size: 11px;
+        }
+
+        .status-dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+        }
+
+        .status-dot.active { background: #30d158; animation: pulse 2s ease-in-out infinite; }
+        .status-dot.idle { background: #6e6e73; }
+        .status-dot.scheduled { background: #ff9f0a; }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
+
+        .agent-skills {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            margin-top: 10px;
+        }
+
+        .skill-tag {
+            font-size: 10px;
+            padding: 2px 7px;
+            border-radius: 4px;
+            background: rgba(125,122,255,0.1);
+            color: #7d7aff;
+            font-weight: 500;
+        }
+
+        .agent-last-action {
+            font-size: 11px;
+            color: #6e6e73;
+            margin-top: 8px;
+            border-top: 1px solid rgba(255,255,255,0.04);
+            padding-top: 8px;
+        }
+
+        /* -- Activity feed ------------------------------------------------- */
+
+        .activity-list {
+            display: flex;
+            flex-direction: column;
+            gap: 1px;
+        }
+
+        .activity-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+            padding: 10px 14px;
+            background: rgba(255,255,255,0.02);
+            border-radius: 8px;
+        }
+
+        .activity-item + .activity-item {
+            margin-top: 2px;
+        }
+
+        .activity-icon {
+            width: 24px;
+            height: 24px;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            flex-shrink: 0;
+            margin-top: 1px;
+        }
+
+        .activity-icon.pr { background: rgba(48,209,88,0.12); color: #30d158; }
+        .activity-icon.review { background: rgba(125,122,255,0.12); color: #7d7aff; }
+        .activity-icon.idea { background: rgba(255,159,10,0.12); color: #ff9f0a; }
+        .activity-icon.plan { background: rgba(10,132,255,0.12); color: #0a84ff; }
+
+        .activity-body {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .activity-title {
+            font-size: 13px;
+            font-weight: 500;
+        }
+
+        .activity-meta {
+            font-size: 11px;
+            color: #6e6e73;
+            margin-top: 2px;
+        }
+
+        .activity-time {
+            font-size: 11px;
+            color: #6e6e73;
+            flex-shrink: 0;
+            margin-top: 1px;
+        }
+
+        /* -- Issue pipeline ------------------------------------------------ */
+
+        .pipeline {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 12px;
+        }
+
+        .pipeline-col {
+            background: rgba(255,255,255,0.02);
+            border-radius: 10px;
+            padding: 12px;
+        }
+
+        .pipeline-col-header {
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+            color: #6e6e73;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .pipeline-count {
+            background: rgba(255,255,255,0.08);
+            padding: 0 6px;
+            border-radius: 8px;
+            font-size: 10px;
+        }
+
+        .pipeline-item {
+            background: rgba(255,255,255,0.03);
+            border: 1px solid rgba(255,255,255,0.06);
+            border-radius: 8px;
+            padding: 10px;
+            margin-bottom: 6px;
+            font-size: 12px;
+        }
+
+        .pipeline-item .title {
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+
+        .pipeline-item .assignee {
+            font-size: 10px;
+            color: #a1a1a6;
+        }
+
+        /* -- Config files section ------------------------------------------ */
+
+        .config-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 8px;
+        }
+
+        .config-file {
+            background: rgba(255,255,255,0.02);
+            border: 1px solid rgba(255,255,255,0.06);
+            border-radius: 8px;
+            padding: 12px;
+            font-family: "SF Mono", monospace;
+            font-size: 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .config-file .icon {
+            color: #a1a1a6;
+        }
+
+        .config-file .path {
+            color: #7d7aff;
+        }
+
+        .config-file .desc {
+            font-family: -apple-system, sans-serif;
+            font-size: 10px;
+            color: #6e6e73;
+            margin-top: 4px;
+        }
+
+        /* -- Login overlay ------------------------------------------------- */
+
+        .login-overlay {
+            position: fixed;
+            inset: 0;
+            background: #0d0d0f;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 100;
+        }
+
+        .login-overlay.hidden { display: none; }
+
+        .login-box {
+            text-align: center;
+            max-width: 360px;
+        }
+
+        .login-box h1 {
+            font-size: 28px;
+            font-weight: 800;
+            letter-spacing: -0.8px;
+            margin-bottom: 8px;
+        }
+
+        .login-box p {
+            font-size: 14px;
+            color: #a1a1a6;
+            line-height: 1.5;
+            margin-bottom: 24px;
+        }
+
+        .btn-github {
+            background: #f5f5f7;
+            color: #1d1d1f;
+            border: none;
+            padding: 12px 28px;
+            border-radius: 10px;
+            font-size: 14px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: opacity 0.15s;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .btn-github:hover { opacity: 0.85; }
+
+        .btn-github svg { width: 18px; height: 18px; }
+
+        /* -- Empty / no-agent states --------------------------------------- */
+
+        .no-agents-main {
+            text-align: center;
+            padding: 80px 20px;
+            color: #6e6e73;
+        }
+
+        .no-agents-main .icon { font-size: 36px; margin-bottom: 12px; }
+        .no-agents-main h3 { font-size: 16px; color: #a1a1a6; font-weight: 600; }
+        .no-agents-main p { font-size: 13px; margin-top: 6px; }
+    </style>
+</head>
+<body>
+
+<!-- Login overlay -->
+<div class="login-overlay" id="login-overlay">
+    <div class="login-box">
+        <h1>Spaces</h1>
+        <p>Discover and manage AI agent teams across your GitHub repositories.</p>
+        <button class="btn-github" onclick="doLogin()">
+            <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+            Sign in with GitHub
+        </button>
+    </div>
+</div>
+
+<!-- Main shell -->
+<div class="shell" id="shell" style="display: none;">
+
+    <!-- Sidebar -->
+    <div class="sidebar">
+        <div class="sidebar-header">
+            <h1>Spaces</h1>
+            <div class="subtitle">Agent Dashboard</div>
+        </div>
+        <div class="user-info" id="user-info"></div>
+        <div class="repo-section-label">Repositories</div>
+        <div class="repo-list" id="repo-list"></div>
+    </div>
+
+    <!-- Main -->
+    <div class="main" id="main-content"></div>
+</div>
+
+<script>
+(function() {
+    "use strict";
+
+    // -- Mock data simulating GitHub API + repo scanning -------------------
+
+    const MOCK_USER = { login: "fairchild", avatar: "F" };
+
+    const MOCK_REPOS = [
+        {
+            name: "fairchild/workspaces",
+            url: "https://github.com/fairchild/workspaces",
+            hasAgents: true,
+            agents: [
+                {
+                    name: "April Clearwater",
+                    role: "Application Lead",
+                    status: "active",
+                    statusText: "Reviewing PR #190",
+                    skills: ["UI", "Terminal", "UX", "Workflows"],
+                    lastAction: "Opened PR #190: workspace creation diagnostics",
+                    lastActionTime: "2h ago"
+                },
+                {
+                    name: "Plat Ironwood",
+                    role: "Platform Lead",
+                    status: "scheduled",
+                    statusText: "Next run: 7:30am PT",
+                    skills: ["CI/CD", "Infra", "Testing", "Distribution"],
+                    lastAction: "Merged fix for snapshot cache staleness",
+                    lastActionTime: "6h ago"
+                },
+                {
+                    name: "Peter Planner",
+                    role: "Planner",
+                    status: "idle",
+                    statusText: "Waiting for approved ideas",
+                    skills: ["Planning", "Issues", "Milestones"],
+                    lastAction: "Created Milestone 7 with 5 issues",
+                    lastActionTime: "1d ago"
+                },
+                {
+                    name: "Oliver Obever",
+                    role: "Observer",
+                    status: "scheduled",
+                    statusText: "Next report: Monday",
+                    skills: ["Ops Reports", "Metrics", "Health Checks"],
+                    lastAction: "Published weekly ops report",
+                    lastActionTime: "5d ago"
+                }
+            ],
+            skills: ["cofounder-contributor", "drive", "gh-discuss", "peter-planner", "tart-gui-automation"],
+            configFiles: [
+                { path: ".agents/MEMORY.md", desc: "Shared operational guardrails" },
+                { path: ".agents/config/peter-planner.toml", desc: "Label catalog" },
+                { path: ".agents/workspaces/index.html", desc: "Custom landing page" },
+                { path: "CLAUDE.md", desc: "Agent context & instructions" }
+            ],
+            stats: { agents: 4, skills: 5, openPRs: 2, readyIssues: 3 },
+            activity: [
+                { type: "pr", title: "PR #190: workspace creation diagnostics", agent: "April", time: "2h" },
+                { type: "review", title: "Reviewed PR #166: snapshot cache fix", agent: "Plat", time: "6h" },
+                { type: "plan", title: "Created Milestone 7: Terminal Focus", agent: "Peter", time: "1d" },
+                { type: "idea", title: "[idea] Lume VM snapshot pre-warming", agent: "Plat", time: "2d" },
+                { type: "review", title: "Approved PR #165: parallel provider refresh", agent: "April", time: "3d" }
+            ],
+            pipeline: {
+                ready: [
+                    { title: "Add startup perf budget alerts", assignee: null },
+                    { title: "Sidebar keyboard nav", assignee: null },
+                    { title: "Terminal scroll anchor", assignee: null }
+                ],
+                claimed: [
+                    { title: "Workspace creation diagnostics", assignee: "April" }
+                ],
+                review: [
+                    { title: "PR #190: creation diagnostics", assignee: "April" },
+                    { title: "PR #166: snapshot cache fix", assignee: "Plat" }
+                ],
+                mergeable: []
+            }
+        },
+        {
+            name: "fairchild/dotfiles",
+            url: "https://github.com/fairchild/dotfiles",
+            hasAgents: false,
+            agents: [],
+            skills: [],
+            configFiles: [],
+            stats: { agents: 0, skills: 0, openPRs: 0, readyIssues: 0 },
+            activity: [],
+            pipeline: { ready: [], claimed: [], review: [], mergeable: [] }
+        },
+        {
+            name: "fairchild/homepage",
+            url: "https://github.com/fairchild/homepage",
+            hasAgents: true,
+            agents: [
+                {
+                    name: "April Clearwater",
+                    role: "Application Lead",
+                    status: "idle",
+                    statusText: "No pending work",
+                    skills: ["UI", "Design"],
+                    lastAction: "Updated landing hero section",
+                    lastActionTime: "4d ago"
+                }
+            ],
+            skills: ["cofounder-contributor"],
+            configFiles: [
+                { path: "CLAUDE.md", desc: "Project instructions" },
+                { path: ".agents/MEMORY.md", desc: "Shared memory" }
+            ],
+            stats: { agents: 1, skills: 1, openPRs: 0, readyIssues: 1 },
+            activity: [
+                { type: "pr", title: "PR #12: Updated hero section", agent: "April", time: "4d" }
+            ],
+            pipeline: { ready: [{ title: "Add dark mode toggle", assignee: null }], claimed: [], review: [], mergeable: [] }
+        }
+    ];
+
+    let selectedRepo = null;
+
+    // -- Login -------------------------------------------------------------
+
+    window.doLogin = function() {
+        document.getElementById("login-overlay").classList.add("hidden");
+        document.getElementById("shell").style.display = "flex";
+        renderSidebar();
+        selectRepo(MOCK_REPOS[0]);
+    };
+
+    // -- Sidebar -----------------------------------------------------------
+
+    function renderSidebar() {
+        const userInfo = document.getElementById("user-info");
+        userInfo.innerHTML = `
+            <div class="avatar">${MOCK_USER.avatar}</div>
+            <span class="user-name">${MOCK_USER.login}</span>
+        `;
+
+        const list = document.getElementById("repo-list");
+        list.innerHTML = "";
+        MOCK_REPOS.forEach(repo => {
+            const item = document.createElement("div");
+            item.className = "repo-item" + (selectedRepo === repo ? " selected" : "");
+            item.innerHTML = `
+                <span class="name">${repo.name.split("/")[1]}</span>
+                ${repo.hasAgents
+                    ? `<span class="agent-count">${repo.stats.agents} agents</span>`
+                    : `<span class="no-agents">no agents</span>`}
+            `;
+            item.onclick = () => selectRepo(repo);
+            list.appendChild(item);
+        });
+    }
+
+    function selectRepo(repo) {
+        selectedRepo = repo;
+        renderSidebar();
+        renderMain(repo);
+    }
+
+    // -- Main content ------------------------------------------------------
+
+    function renderMain(repo) {
+        const main = document.getElementById("main-content");
+
+        if (!repo.hasAgents) {
+            main.innerHTML = `
+                <div class="main-header">
+                    <div>
+                        <h2>${repo.name}</h2>
+                        <span class="repo-url">${repo.url}</span>
+                    </div>
+                </div>
+                <div class="no-agents-main">
+                    <div class="icon">&#x2338;</div>
+                    <h3>No agent setup detected</h3>
+                    <p>This repo doesn't have a <code>.agents/</code> directory or <code>CLAUDE.md</code>.</p>
+                </div>
+            `;
+            return;
+        }
+
+        main.innerHTML = `
+            <div class="main-header">
+                <div>
+                    <h2>${repo.name}</h2>
+                    <span class="repo-url">${repo.url}</span>
+                </div>
+            </div>
+
+            <!-- Stats -->
+            <div class="stats-row">
+                <div class="stat-card">
+                    <div class="label">Agents</div>
+                    <div class="value purple">${repo.stats.agents}</div>
+                    <div class="detail">${repo.agents.filter(a => a.status === "active").length} active now</div>
+                </div>
+                <div class="stat-card">
+                    <div class="label">Skills</div>
+                    <div class="value blue">${repo.stats.skills}</div>
+                    <div class="detail">Reusable capabilities</div>
+                </div>
+                <div class="stat-card">
+                    <div class="label">Open PRs</div>
+                    <div class="value green">${repo.stats.openPRs}</div>
+                    <div class="detail">Agent-authored</div>
+                </div>
+                <div class="stat-card">
+                    <div class="label">Ready Issues</div>
+                    <div class="value orange">${repo.stats.readyIssues}</div>
+                    <div class="detail">Queued for execution</div>
+                </div>
+            </div>
+
+            <!-- Agent team -->
+            <div class="section">
+                <div class="section-header">
+                    <h3>Agent Team</h3>
+                    <span class="section-badge">${repo.agents.length} members</span>
+                </div>
+                <div class="agent-grid" id="agent-grid"></div>
+            </div>
+
+            <!-- Pipeline -->
+            <div class="section">
+                <div class="section-header">
+                    <h3>Issue Pipeline</h3>
+                </div>
+                <div class="pipeline" id="pipeline"></div>
+            </div>
+
+            <!-- Activity -->
+            <div class="section">
+                <div class="section-header">
+                    <h3>Recent Activity</h3>
+                </div>
+                <div class="activity-list" id="activity-list"></div>
+            </div>
+
+            <!-- Config -->
+            <div class="section">
+                <div class="section-header">
+                    <h3>Configuration</h3>
+                </div>
+                <div class="config-grid" id="config-grid"></div>
+            </div>
+        `;
+
+        // Agents
+        const agentGrid = document.getElementById("agent-grid");
+        repo.agents.forEach(agent => {
+            const card = document.createElement("div");
+            card.className = "agent-card";
+            card.innerHTML = `
+                <div class="agent-name">${agent.name}</div>
+                <div class="agent-role">${agent.role}</div>
+                <div class="agent-status">
+                    <span class="status-dot ${agent.status}"></span>
+                    <span>${agent.statusText}</span>
+                </div>
+                <div class="agent-skills">
+                    ${agent.skills.map(s => `<span class="skill-tag">${s}</span>`).join("")}
+                </div>
+                <div class="agent-last-action">${agent.lastAction} &middot; ${agent.lastActionTime}</div>
+            `;
+            agentGrid.appendChild(card);
+        });
+
+        // Pipeline
+        const pipeline = document.getElementById("pipeline");
+        const cols = [
+            { key: "ready", label: "Ready" },
+            { key: "claimed", label: "Claimed" },
+            { key: "review", label: "In Review" },
+            { key: "mergeable", label: "Mergeable" }
+        ];
+        cols.forEach(col => {
+            const items = repo.pipeline[col.key];
+            const el = document.createElement("div");
+            el.className = "pipeline-col";
+            el.innerHTML = `
+                <div class="pipeline-col-header">
+                    ${col.label} <span class="pipeline-count">${items.length}</span>
+                </div>
+                ${items.map(item => `
+                    <div class="pipeline-item">
+                        <div class="title">${item.title}</div>
+                        ${item.assignee ? `<div class="assignee">${item.assignee}</div>` : ""}
+                    </div>
+                `).join("") || `<div style="font-size:11px;color:#6e6e73;text-align:center;padding:16px 0;">Empty</div>`}
+            `;
+            pipeline.appendChild(el);
+        });
+
+        // Activity
+        const activityList = document.getElementById("activity-list");
+        const icons = { pr: "PR", review: "R", idea: "?", plan: "P" };
+        repo.activity.forEach(item => {
+            const el = document.createElement("div");
+            el.className = "activity-item";
+            el.innerHTML = `
+                <div class="activity-icon ${item.type}">${icons[item.type]}</div>
+                <div class="activity-body">
+                    <div class="activity-title">${item.title}</div>
+                    <div class="activity-meta">${item.agent}</div>
+                </div>
+                <div class="activity-time">${item.time}</div>
+            `;
+            activityList.appendChild(el);
+        });
+
+        // Config
+        const configGrid = document.getElementById("config-grid");
+        repo.configFiles.forEach(file => {
+            const el = document.createElement("div");
+            el.className = "config-file";
+            el.innerHTML = `
+                <div>
+                    <span class="path">${file.path}</span>
+                    <div class="desc">${file.desc}</div>
+                </div>
+            `;
+            configGrid.appendChild(el);
+        });
+    }
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,13 @@
+{
+  "name": "webhook-relay",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "test:e2e": "bun run test/e2e.ts"
+  },
+  "devDependencies": {
+    "wrangler": "^4",
+    "@cloudflare/workers-types": "^4"
+  }
+}

@@ -1,0 +1,67 @@
+tmp/
+# Swift Package Manager
+.build/
+.swiftpm/
+DerivedData/
+
+# Xcode
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+
+# Build artifacts
+build/
+*.app
+*.dmg
+*.pkg
+Frameworks/
+
+# Signing credentials (NEVER commit these)
+scripts/signing-config.sh
+
+# Session artifacts (ephemeral, agent-specific)
+.context/
+.dev-data/
+.sandbox-data/
+
+# Script/capture output
+output/
+docs/.mermaid/
+
+# Secrets (safety net)
+.env
+.env.*
+*.pem
+*.key
+*.p12
+
+# Directories that should never be committed
+.aws/
+.ssh/
+secrets/
+
+# Python
+__pycache__/
+
+# Node/Bun (Cloudflare Worker, Next.js)
+node_modules/
+.next/
+.vercel/
+
+# Papers (keep README.md, ignore binaries)
+docs/papers/*.pdf
+
+# Auto-generated skill artifacts (obra/superpowers, skill-seeker)
+.agents/skills/sandbox/
+.claude/skills/sandbox/
+.pi/skills/sandbox/
+
+# Playwright
+web/playwright-report/
+
+# Superpowers brainstorm artifacts
+.superpowers/
+
+# macOS
+.DS_Store
+*.swp

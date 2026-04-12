@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Workspaces User Guide</title>
+    <style>
+        :root {
+            --color-bg: #0d1117;
+            --color-surface: #161b22;
+            --color-surface-raised: #1c2129;
+            --color-border: #30363d;
+            --color-text: #c9d1d9;
+            --color-text-muted: #8b949e;
+            --color-accent: #58a6ff;
+            --color-accent-hover: #79b8ff;
+            --color-success: #3fb950;
+            --color-warning: #d29922;
+            --color-cloud: #58a6ff;
+            --color-stopped: #d29922;
+            --color-archived: #8b949e;
+            --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+            --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: var(--font-sans);
+            background: var(--color-bg);
+            color: var(--color-text);
+            line-height: 1.6;
+            min-height: 100vh;
+        }
+
+        a { color: var(--color-accent); text-decoration: none; }
+        a:hover { color: var(--color-accent-hover); text-decoration: underline; }
+
+        .container {
+            max-width: 720px;
+            margin: 0 auto;
+            padding: 2rem 1.5rem;
+        }
+
+        /* Header */
+        header {
+            text-align: center;
+            padding: 3rem 0 2.5rem;
+            border-bottom: 1px solid var(--color-border);
+        }
+
+        header h1 {
+            font-size: 2rem;
+            font-weight: 600;
+            letter-spacing: -0.02em;
+            margin-bottom: 0.25rem;
+        }
+
+        header p {
+            color: var(--color-text-muted);
+            font-size: 1.1rem;
+        }
+
+        /* Navigation */
+        nav {
+            position: sticky;
+            top: 0;
+            background: var(--color-bg);
+            border-bottom: 1px solid var(--color-border);
+            z-index: 10;
+            padding: 0.75rem 0;
+        }
+
+        nav ul {
+            list-style: none;
+            display: flex;
+            gap: 1.5rem;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
+        nav a {
+            font-size: 0.875rem;
+            font-weight: 500;
+            color: var(--color-text-muted);
+            padding: 0.25rem 0;
+            border-bottom: 2px solid transparent;
+            transition: color 0.15s, border-color 0.15s;
+        }
+
+        nav a:hover, nav a:focus {
+            color: var(--color-text);
+            border-bottom-color: var(--color-accent);
+            text-decoration: none;
+        }
+
+        /* Sections */
+        section {
+            padding: 2.5rem 0;
+            border-bottom: 1px solid var(--color-border);
+        }
+
+        section:last-of-type { border-bottom: none; }
+
+        h2 {
+            font-size: 1.4rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+            letter-spacing: -0.01em;
+        }
+
+        h3 {
+            font-size: 1.05rem;
+            font-weight: 600;
+            margin: 1.75rem 0 0.5rem;
+            color: var(--color-text);
+        }
+
+        p { margin-bottom: 1rem; }
+
+        ul, ol {
+            margin: 0.75rem 0 1rem;
+            padding-left: 1.5rem;
+        }
+
+        li { margin-bottom: 0.4rem; }
+
+        code {
+            font-family: var(--font-mono);
+            background: var(--color-surface);
+            padding: 0.15em 0.4em;
+            border-radius: 4px;
+            font-size: 0.88em;
+        }
+
+        pre {
+            background: var(--color-surface);
+            border: 1px solid var(--color-border);
+            border-radius: 8px;
+            padding: 1rem 1.25rem;
+            overflow-x: auto;
+            margin: 1rem 0;
+            font-family: var(--font-mono);
+            font-size: 0.85rem;
+            line-height: 1.5;
+        }
+
+        /* Step cards */
+        .steps {
+            counter-reset: step;
+            list-style: none;
+            padding-left: 0;
+            margin: 1rem 0;
+        }
+
+        .steps li {
+            counter-increment: step;
+            position: relative;
+            padding: 1rem 1.25rem 1rem 3.5rem;
+            background: var(--color-surface);
+            border: 1px solid var(--color-border);
+            border-radius: 8px;
+            margin-bottom: 0.75rem;
+        }
+
+        .steps li::before {
+            content: counter(step);
+            position: absolute;
+            left: 1.25rem;
+            top: 1rem;
+            width: 1.5rem;
+            height: 1.5rem;
+            background: var(--color-accent);
+            color: var(--color-bg);
+            border-radius: 50%;
+            font-size: 0.8rem;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .steps li strong { display: block; margin-bottom: 0.25rem; }
+
+        /* Status badges */
+        .badge {
+            display: inline-block;
+            padding: 0.15rem 0.5rem;
+            border-radius: 3px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            vertical-align: middle;
+        }
+
+        .badge--active { background: rgba(63, 185, 80, 0.15); color: var(--color-success); }
+        .badge--stopped { background: rgba(210, 153, 34, 0.15); color: var(--color-stopped); }
+        .badge--archived { background: rgba(139, 148, 158, 0.15); color: var(--color-archived); }
+
+        /* State diagram */
+        .state-diagram {
+            background: var(--color-surface);
+            border: 1px solid var(--color-border);
+            border-radius: 8px;
+            padding: 1.5rem;
+            margin: 1rem 0;
+            font-family: var(--font-mono);
+            font-size: 0.82rem;
+            line-height: 1.7;
+            white-space: pre;
+            overflow-x: auto;
+        }
+
+        /* Keyboard shortcut */
+        kbd {
+            display: inline-block;
+            padding: 0.1em 0.4em;
+            font-family: var(--font-mono);
+            font-size: 0.82em;
+            background: var(--color-surface-raised);
+            border: 1px solid var(--color-border);
+            border-radius: 4px;
+            box-shadow: 0 1px 0 var(--color-border);
+        }
+
+        /* Tip / Note callouts */
+        .callout {
+            border-left: 3px solid var(--color-accent);
+            background: rgba(88, 166, 255, 0.06);
+            padding: 0.75rem 1rem;
+            border-radius: 0 6px 6px 0;
+            margin: 1rem 0;
+            font-size: 0.92rem;
+        }
+
+        .callout--warn {
+            border-left-color: var(--color-warning);
+            background: rgba(210, 153, 34, 0.06);
+        }
+
+        .callout strong {
+            display: block;
+            margin-bottom: 0.25rem;
+            font-size: 0.82rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        /* Table */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 1rem 0;
+            font-size: 0.9rem;
+        }
+
+        th, td {
+            text-align: left;
+            padding: 0.6rem 0.75rem;
+            border-bottom: 1px solid var(--color-border);
+        }
+
+        th {
+            font-weight: 600;
+            color: var(--color-text-muted);
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+
+        /* Footer */
+        footer {
+            text-align: center;
+            padding: 2rem 0;
+            border-top: 1px solid var(--color-border);
+            color: var(--color-text-muted);
+            font-size: 0.8rem;
+        }
+
+        @media (max-width: 600px) {
+            .container { padding: 1.5rem 1rem; }
+            header h1 { font-size: 1.6rem; }
+            nav ul { gap: 1rem; }
+            .steps li { padding-left: 3rem; }
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+
+    <header>
+        <h1>Workspaces User Guide</h1>
+        <p>Cloud workspaces with Daytona</p>
+    </header>
+
+    <nav>
+        <ul>
+            <li><a href="#setup">Setup</a></li>
+            <li><a href="#creating">Creating</a></li>
+            <li><a href="#connecting">Connecting</a></li>
+            <li><a href="#lifecycle">Lifecycle</a></li>
+            <li><a href="#states">States</a></li>
+            <li><a href="#troubleshooting">Troubleshooting</a></li>
+        </ul>
+    </nav>
+
+    <!-- ============================================================ -->
+    <section id="setup">
+        <h2>Setup</h2>
+
+        <p>Cloud workspaces run on <a href="https://www.daytona.io">Daytona</a> sandboxes &mdash; remote Linux VMs you can SSH into directly from the app. You need two things to get started:</p>
+
+        <ol class="steps">
+            <li>
+                <strong>Get a Daytona API key</strong>
+                Sign up at <a href="https://app.daytona.io">app.daytona.io</a> and generate an API key from your account settings.
+            </li>
+            <li>
+                <strong>Add the key to <code>~/.env</code></strong>
+                Create or edit <code>~/.env</code> in your home directory:
+                <pre>DAYTONA_API_KEY=your_api_key_here</pre>
+            </li>
+            <li>
+                <strong>Install uv</strong>
+                The backend currently uses a Python script via <a href="https://docs.astral.sh/uv/">uv</a>:
+                <pre>brew install uv</pre>
+            </li>
+        </ol>
+
+        <div class="callout">
+            <strong>Note</strong>
+            When Workspaces launches, it checks for <code>uv</code> on your system. If found, the "Remote VM" option appears when creating new workspaces. No additional configuration needed.
+        </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <section id="creating">
+        <h2>Creating a Cloud Workspace</h2>
+
+        <ol class="steps">
+            <li>
+                <strong>Right-click a repository in the sidebar</strong>
+                Choose "New Workspace..." from the context menu. The repository must have a remote URL (GitHub, GitLab, etc.) for clone to work.
+            </li>
+            <li>
+                <strong>Pick "Remote VM" in the environment picker</strong>
+                Enter a name and switch the environment toggle from Local to Remote VM.
+            </li>
+            <li>
+                <strong>Click Create</strong>
+                The sheet dismisses immediately. A spinner appears under the repo with "Creating cloud workspace..." while the sandbox is provisioned and your repository is cloned.
+            </li>
+            <li>
+                <strong>Connect</strong>
+                Once created, the workspace appears in the sidebar with a cloud icon. Click it to open an SSH terminal session.
+            </li>
+        </ol>
+
+        <div class="callout--warn callout">
+            <strong>Timing</strong>
+            Sandbox creation typically takes 10&ndash;30 seconds depending on repository size. The spinner stays visible throughout.
+        </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <section id="connecting">
+        <h2>Connecting to a Workspace</h2>
+
+        <p>Click any cloud workspace in the sidebar to connect. The behavior depends on the workspace state:</p>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>State</th>
+                    <th>What Happens</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><span class="badge badge--active">Active</span></td>
+                    <td>SSH session opens immediately (or reuses existing session)</td>
+                </tr>
+                <tr>
+                    <td><span class="badge badge--stopped">Stopped</span></td>
+                    <td>Sandbox starts automatically, then SSH connects. A "Connecting..." overlay shows progress.</td>
+                </tr>
+                <tr>
+                    <td><span class="badge badge--archived">Archived</span></td>
+                    <td>Sandbox restores from cold storage, then SSH connects. This takes longer.</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <p>You don't need to manually start a stopped workspace &mdash; clicking it handles everything.</p>
+
+        <h3>Disconnecting</h3>
+
+        <p>Press <kbd>Ctrl</kbd>+<kbd>D</kbd> or type <code>exit</code> in the terminal to end the SSH session. The sidebar selection automatically updates to reflect which terminal is now active. The remote sandbox keeps running until you stop it.</p>
+    </section>
+
+    <!-- ============================================================ -->
+    <section id="lifecycle">
+        <h2>Lifecycle Management</h2>
+
+        <p>Right-click a cloud workspace to manage its state. Available actions depend on the current state:</p>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>Current State</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><span class="badge badge--active">Active</span></td>
+                    <td>Stop, Archive, Delete</td>
+                </tr>
+                <tr>
+                    <td><span class="badge badge--stopped">Stopped</span></td>
+                    <td>Start, Archive, Delete</td>
+                </tr>
+                <tr>
+                    <td><span class="badge badge--archived">Archived</span></td>
+                    <td>Start, Delete</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <h3>Stop</h3>
+        <p>Pauses the VM. Disk is preserved, compute billing stops. Fast to resume (seconds). Use this when you're done for the day but want to pick up where you left off.</p>
+
+        <h3>Archive</h3>
+        <p>Moves the sandbox to cold storage. Minimal cost. Slower to resume since disk needs to be restored. Use this for workspaces you won't touch for a while.</p>
+
+        <h3>Delete</h3>
+        <p>Permanently destroys the sandbox and removes the workspace from the sidebar. This cannot be undone.</p>
+
+        <div class="callout">
+            <strong>Status sync</strong>
+            On launch, Workspaces checks the actual state of all cloud sandboxes via the Daytona API and updates the sidebar to match. If a sandbox was auto-stopped or archived externally, you'll see the correct state.
+        </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <section id="states">
+        <h2>State Diagram</h2>
+
+        <div class="state-diagram">                   click
+  ┌──────────┐ ──────────────────────────┐
+  │  Active   │                           │
+  │  (cloud)  │ ◄── Start ── ┐           │
+  └──┬───┬────┘              │           │
+     │   │                   │           │
+  Stop   Archive         ┌───┴────┐      │
+     │   │               │Stopped │      │
+     │   │               │(orange)│      │
+     │   └──────────┐    └───┬────┘      │
+     │              │        │           │
+     │              ▼     Archive        │
+     │         ┌─────────┐   │           │
+     └────────►│Archived │◄──┘           │
+               │ (gray)  │              │
+               └────┬────┘              │
+                    │                   │
+                 Start ─────────────────┘
+
+  Delete is available from any state.</div>
+
+        <h3>Sidebar Indicators</h3>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>Icon</th>
+                    <th>Meaning</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>Filled blue cloud</td>
+                    <td>Active cloud workspace</td>
+                </tr>
+                <tr>
+                    <td>Outline cloud + <span class="badge badge--stopped">Stopped</span></td>
+                    <td>Sandbox is paused</td>
+                </tr>
+                <tr>
+                    <td>Outline cloud + <span class="badge badge--archived">Archived</span></td>
+                    <td>Sandbox is in cold storage</td>
+                </tr>
+                <tr>
+                    <td>Spinner</td>
+                    <td>Operation in progress (creating, connecting, stopping, etc.)</td>
+                </tr>
+            </tbody>
+        </table>
+    </section>
+
+    <!-- ============================================================ -->
+    <section id="troubleshooting">
+        <h2>Troubleshooting</h2>
+
+        <h3>"Remote VM" option doesn't appear</h3>
+        <p>Workspaces checks for <code>uv</code> on launch. Make sure it's installed (<code>brew install uv</code>) and on your PATH. Relaunch the app after installing.</p>
+
+        <h3>Connection fails or times out</h3>
+        <p>Check your API key in <code>~/.env</code>. The key should be on its own line: <code>DAYTONA_API_KEY=dyt_...</code>. Also verify your internet connection &mdash; the sandbox runs in Daytona's cloud.</p>
+
+        <h3>Sandbox won't stop (timeout)</h3>
+        <p>Stop operations have a 180-second timeout. If the sandbox is under heavy load, the stop may take longer. Try again, or archive instead (archive stops the sandbox first, then moves to cold storage).</p>
+
+        <h3>Status shows wrong state after restart</h3>
+        <p>Workspaces syncs cloud workspace statuses on every launch. If it looks wrong, relaunch the app. You can also right-click and use the lifecycle actions to force a state change.</p>
+
+        <h3>SSH session dies immediately</h3>
+        <p>The SSH access token expires after 8 hours. If your session drops, click the workspace again to get a fresh token and reconnect.</p>
+    </section>
+
+    <footer>
+        Workspaces &mdash; Terminal-first workspace manager for macOS
+    </footer>
+
+</div>
+</body>
+</html>

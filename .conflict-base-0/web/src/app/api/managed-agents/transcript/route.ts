@@ -1,0 +1,141 @@
+import { getSession } from "@/lib/auth-server";
+import Anthropic from "@anthropic-ai/sdk";
+import type { BetaManagedAgentsStreamSessionEvents } from "@anthropic-ai/sdk/resources/beta/sessions/events";
+
+export const dynamic = "force-dynamic";
+
+/**
+ * SSE endpoint that streams a Managed Agents session's `agent.tool_use` and
+ * `agent.tool_result` events as compact JSON lines, consumed by the
+ * `TranscriptTerminal` client component. Read-only: there is no way to
+ * drive the container from this route.
+ */
+export async function GET(request: Request): Promise<Response> {
+	const authed = await getSession();
+	if (!authed) {
+		return new Response("unauthorized", { status: 401 });
+	}
+	const sessionId = new URL(request.url).searchParams.get("sessionId");
+	if (!sessionId) {
+		return new Response("sessionId required", { status: 400 });
+	}
+	if (!process.env.ANTHROPIC_API_KEY) {
+		return new Response("ANTHROPIC_API_KEY not set", { status: 503 });
+	}
+
+	const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+	const encoder = new TextEncoder();
+
+	const stream = new ReadableStream<Uint8Array>({
+		async start(controller) {
+			const send = (data: unknown) => {
+				controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
+			};
+
+			let closed = false;
+			const onAbort = () => {
+				closed = true;
+				try {
+					controller.close();
+				} catch {
+					// already closed
+				}
+			};
+			request.signal.addEventListener("abort", onAbort);
+
+			try {
+				// Backfill existing history first so the user sees prior calls
+				// immediately when they open the tab.
+				for await (const event of client.beta.sessions.events.list(sessionId, {
+					order: "asc",
+				})) {
+					if (closed) return;
+					const line = toTranscriptLine(
+						event as BetaManagedAgentsStreamSessionEvents,
+					);
+					if (line) send(line);
+				}
+
+				// Then live-tail new events. session.status_idle does NOT close
+				// the stream on our side — a follow-up user turn can make the
+				// agent produce more tool calls on the same session.
+				const live = await client.beta.sessions.events.stream(sessionId);
+				for await (const event of live) {
+					if (closed) return;
+					const line = toTranscriptLine(event);
+					if (line) send(line);
+				}
+			} catch (err) {
+				if (!closed) {
+					send({
+						key: `error-${Date.now()}`,
+						kind: "error",
+						text: err instanceof Error ? err.message : String(err),
+					});
+				}
+			} finally {
+				request.signal.removeEventListener("abort", onAbort);
+				if (!closed) {
+					try {
+						controller.close();
+					} catch {
+						// already closed
+					}
+				}
+			}
+		},
+	});
+
+	return new Response(stream, {
+		headers: {
+			"Content-Type": "text/event-stream",
+			"Cache-Control": "no-cache, no-transform",
+			Connection: "keep-alive",
+		},
+	});
+}
+
+interface TranscriptLine {
+	key: string;
+	kind: "command" | "result" | "status" | "error";
+	tool?: string;
+	text: string;
+}
+
+function toTranscriptLine(
+	event: BetaManagedAgentsStreamSessionEvents,
+): TranscriptLine | null {
+	if (event.type === "agent.tool_use") {
+		const input = event.input as Record<string, unknown> | undefined;
+		const text =
+			event.name === "bash"
+				? String(input?.command ?? "")
+				: JSON.stringify(input ?? {});
+		return {
+			key: event.id,
+			kind: "command",
+			tool: event.name,
+			text,
+		};
+	}
+	if (event.type === "agent.tool_result") {
+		const parts: string[] = [];
+		for (const block of event.content ?? []) {
+			if (block && (block as { type?: string }).type === "text") {
+				parts.push((block as { text?: string }).text ?? "");
+			}
+		}
+		const text = parts.join("");
+		if (!text) return null;
+		return { key: event.id, kind: "result", text };
+	}
+	if (event.type === "session.error") {
+		const err = event.error as { message?: string } | undefined;
+		return {
+			key: event.id,
+			kind: "error",
+			text: err?.message ?? "session.error",
+		};
+	}
+	return null;
+}

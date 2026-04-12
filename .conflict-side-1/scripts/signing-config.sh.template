@@ -1,0 +1,74 @@
+#!/bin/bash
+# ============================================================================
+# signing-config.sh - Code Signing Configuration for WorkspaceManager
+# ============================================================================
+#
+# This file contains your personal signing credentials. To use:
+#
+# 1. Copy this file to signing-config.sh:
+#    cp signing-config.sh.template signing-config.sh
+#
+# 2. Fill in your Apple Developer credentials below
+#
+# 3. NEVER commit signing-config.sh to version control (it's gitignored)
+#
+# Prerequisites:
+# - Apple Developer Program membership ($99/year)
+# - Developer ID Application certificate installed in Keychain
+# - App-specific password created at appleid.apple.com
+#
+# ============================================================================
+
+# Your 10-character Apple Developer Team ID
+# Find it at: https://developer.apple.com/account -> Membership Details
+export TEAM_ID="XXXXXXXXXX"
+
+# The app's bundle identifier (don't change unless you know what you're doing)
+export BUNDLE_ID="com.cloudcompute.workspaces"
+
+# Signing identity (typically matches your certificate name)
+# Format: "Developer ID Application: Your Name (TEAM_ID)"
+# List available identities: security find-identity -v -p codesigning
+export SIGNING_IDENTITY="Developer ID Application: Your Name ($TEAM_ID)"
+
+# Developer ID provisioning profile with keychain sharing enabled for
+# com.cloudcompute.workspaces. Signed packaged apps need this in addition to the
+# certificate so they can claim the data protection keychain access group.
+export PROVISIONING_PROFILE_PATH="$HOME/.config/apple/workspaces.provisionprofile"
+
+# Your Apple ID email (used for notarization)
+export APPLE_ID="your.email@example.com"
+
+# App-specific password for notarization
+# Create one at: https://appleid.apple.com -> App-Specific Passwords
+# Store securely - never share or commit this!
+export APP_PASSWORD="xxxx-xxxx-xxxx-xxxx"
+
+# ============================================================================
+# Alternative: Keychain Storage (More Secure)
+# ============================================================================
+# Instead of storing APP_PASSWORD in this file, you can store it in Keychain:
+#
+# 1. Store the password:
+#    security add-generic-password -a "$APPLE_ID" -s "notarytool" -w "your-app-password"
+#
+# 2. Comment out APP_PASSWORD above and uncomment this:
+# export APP_PASSWORD=$(security find-generic-password -a "$APPLE_ID" -s "notarytool" -w 2>/dev/null)
+#
+# ============================================================================
+
+# ============================================================================
+# Verification Commands
+# ============================================================================
+# After signing, verify with these commands:
+#
+# Check code signature:
+#   codesign -dv --verbose=4 path/to/WorkspaceManager.app
+#
+# Verify Gatekeeper approval:
+#   spctl --assess --type execute --verbose path/to/WorkspaceManager.app
+#
+# Check notarization status:
+#   xcrun stapler validate path/to/WorkspaceManager.dmg
+#
+# ============================================================================

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Workspaces Optimization"
+  short_description: "Debug and tune Workspaces performance with evidence-first workflows."
+  default_prompt: "Use $workspaces-optimization to collect host and app evidence, classify the bottleneck, and then improve Workspaces performance with before-and-after metrics."

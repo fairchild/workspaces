@@ -1,0 +1,207 @@
+name: GitHub App Review Smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      app_slug:
+        description: "GitHub App slug to use for the review"
+        type: choice
+        required: true
+        options:
+          - april-clearwater
+          - workspace-agents
+      pr_number:
+        description: "Pull request number to review"
+        type: number
+        required: true
+      review_event:
+        description: "Review event to submit"
+        type: choice
+        required: true
+        options:
+          - COMMENT
+          - REQUEST_CHANGES
+          - APPROVE
+      body:
+        description: "Review body text"
+        type: string
+        required: true
+
+permissions:
+  # This workflow validates GitHub App review capability. These permissions only
+  # apply to GITHUB_TOKEN and are intentionally minimal.
+  contents: read
+
+concurrency:
+  group: app-review-smoke-${{ inputs.app_slug }}-${{ inputs.pr_number }}
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Generate April app token
+        if: inputs.app_slug == 'april-clearwater'
+        id: april-token
+        uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859 # v3
+        with:
+          app-id: ${{ secrets.APRIL_APP_ID }}
+          private-key: ${{ secrets.APRIL_PRIVATE_KEY }}
+
+      - name: Generate Workspace Agents app token
+        if: inputs.app_slug == 'workspace-agents'
+        id: workspace-token
+        uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859 # v3
+        with:
+          app-id: ${{ secrets.WORKSPACE_AGENTS_APP_ID }}
+          private-key: ${{ secrets.WORKSPACE_AGENTS_PRIVATE_KEY }}
+
+      - name: Resolve selected app token
+        id: resolve
+        env:
+          APP_SLUG: ${{ inputs.app_slug }}
+          APRIL_TOKEN: ${{ steps.april-token.outputs.token }}
+          WORKSPACE_TOKEN: ${{ steps.workspace-token.outputs.token }}
+        run: |
+          set -euo pipefail
+
+          case "$APP_SLUG" in
+            april-clearwater)
+              token="$APRIL_TOKEN"
+              expected_login="april-clearwater[bot]"
+              ;;
+            workspace-agents)
+              token="$WORKSPACE_TOKEN"
+              expected_login="workspace-agents[bot]"
+              ;;
+            *)
+              echo "Unsupported app slug: $APP_SLUG" >&2
+              exit 1
+              ;;
+          esac
+
+          if [ -z "$token" ]; then
+            echo "No app token was generated for $APP_SLUG" >&2
+            exit 1
+          fi
+
+          echo "::add-mask::$token"
+          echo "token=$token" >> "$GITHUB_OUTPUT"
+          echo "expected_login=$expected_login" >> "$GITHUB_OUTPUT"
+
+      - name: Submit app-native review
+        env:
+          GH_TOKEN: ${{ steps.resolve.outputs.token }}
+          APP_SLUG: ${{ inputs.app_slug }}
+          EXPECTED_LOGIN: ${{ steps.resolve.outputs.expected_login }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          REVIEW_EVENT: ${{ inputs.review_event }}
+          REVIEW_BODY: ${{ inputs.body }}
+        run: |
+          set -euo pipefail
+          unset GITHUB_TOKEN || true
+
+          case "$REVIEW_EVENT" in
+            COMMENT)
+              review_flag="--comment"
+              expected_state="COMMENTED"
+              ;;
+            REQUEST_CHANGES)
+              review_flag="--request-changes"
+              expected_state="CHANGES_REQUESTED"
+              ;;
+            APPROVE)
+              review_flag="--approve"
+              expected_state="APPROVED"
+              ;;
+            *)
+              echo "Unsupported review event: $REVIEW_EVENT" >&2
+              exit 1
+              ;;
+          esac
+
+          viewer=$(gh api graphql -f query='query { viewer { login } }' --jq '.data.viewer.login')
+          echo "viewer=$viewer"
+
+          if [ "$viewer" != "$EXPECTED_LOGIN" ]; then
+            echo "Unexpected authenticated identity: expected $EXPECTED_LOGIN, got $viewer" >&2
+            exit 1
+          fi
+
+          marker="[app-review-smoke] run ${GITHUB_RUN_ID} attempt ${GITHUB_RUN_ATTEMPT}"
+          body_file=$(mktemp)
+          printf '%s\n\n%s\n' "$REVIEW_BODY" "$marker" > "$body_file"
+
+          set +e
+          output=$(gh pr review "$PR_NUMBER" "$review_flag" --body-file "$body_file" --repo "$GITHUB_REPOSITORY" 2>&1)
+          status=$?
+          set -e
+
+          printf '%s\n' "$output"
+
+          if [[ "$output" == *"Resource not accessible by integration"* || "$output" == *"addPullRequestReview"* ]]; then
+            echo "GitHub App review failed with an integration permissions error." >&2
+            exit 1
+          fi
+
+          if [ "$status" -ne 0 ]; then
+            exit "$status"
+          fi
+
+          review_author=""
+          review_state=""
+          reviews_json="[]"
+
+          # GitHub can take a moment to surface a freshly-submitted review in
+          # the pull request reviews list, so retry before treating it as a
+          # failure.
+          for attempt in $(seq 1 10); do
+            reviews_json=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/reviews")
+            review_author=$(printf '%s' "$reviews_json" | jq -r --arg marker "$marker" 'map(select((.body // "") | contains($marker))) | last | .user.login // empty')
+            review_state=$(printf '%s' "$reviews_json" | jq -r --arg marker "$marker" 'map(select((.body // "") | contains($marker))) | last | .state // empty')
+
+            if [ -n "$review_author" ] && [ -n "$review_state" ]; then
+              break
+            fi
+
+            if [ "$attempt" -lt 10 ]; then
+              echo "Smoke review not visible yet; retrying ($attempt/10)..."
+              sleep 2
+            fi
+          done
+
+          if [ -z "$review_author" ] || [ -z "$review_state" ]; then
+            echo "Unable to find the smoke review after submission." >&2
+            printf '%s\n' "$reviews_json" | jq 'map({user: .user.login, state: .state, submitted_at: .submitted_at, body: (.body // "")}) | last'
+            exit 1
+          fi
+
+          echo "review_author=$review_author"
+          echo "review_state=$review_state"
+
+          if [ "$review_author" != "$EXPECTED_LOGIN" ]; then
+            echo "Unexpected review author: expected $EXPECTED_LOGIN, got $review_author" >&2
+            exit 1
+          fi
+
+          if [ "$review_author" = "github-actions[bot]" ]; then
+            echo "Review was authored by github-actions[bot], not the GitHub App bot." >&2
+            exit 1
+          fi
+
+          if [ "$review_state" != "$expected_state" ]; then
+            echo "Unexpected review state: expected $expected_state, got $review_state" >&2
+            exit 1
+          fi
+
+          {
+            echo "### GitHub App Review Smoke"
+            echo ""
+            echo "- app: \`$APP_SLUG\`"
+            echo "- viewer: \`$viewer\`"
+            echo "- review author: \`$review_author\`"
+            echo "- review state: \`$review_state\`"
+            echo "- pull request: \`#$PR_NUMBER\`"
+            echo "- marker: \`$marker\`"
+          } >> "$GITHUB_STEP_SUMMARY"

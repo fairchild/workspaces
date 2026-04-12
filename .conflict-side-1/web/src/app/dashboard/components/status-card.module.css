@@ -1,0 +1,101 @@
+.card {
+	display: flex;
+	align-items: flex-start;
+	gap: 0.5rem;
+	padding: 0.5rem 1rem;
+	animation: fadeIn 0.3s ease-out both;
+}
+
+.indicator {
+	width: 1px;
+	align-self: stretch;
+	flex-shrink: 0;
+}
+
+.indicatorCi {
+	background: var(--accent);
+}
+
+.indicatorPr {
+	background: #c4a1ff;
+}
+
+.indicatorPush {
+	background: #ffd07e;
+}
+
+.indicatorDiscussion {
+	background: #7eb8ff;
+}
+
+.indicatorIssue {
+	background: #ff9e7e;
+}
+
+.body {
+	display: flex;
+	flex-direction: column;
+	gap: 0.125rem;
+	min-width: 0;
+	flex: 1;
+}
+
+.row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 0.5rem;
+}
+
+.badge {
+	font-family: var(--font-mono), ui-monospace, monospace;
+	font-size: 0.5625rem;
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.06em;
+	padding: 0.0625rem 0.3125rem;
+	border-radius: 2px;
+	flex-shrink: 0;
+}
+
+.badgeCi {
+	color: var(--accent);
+	background: var(--accent-dim);
+}
+
+.badgePr {
+	color: #c4a1ff;
+	background: rgba(196, 161, 255, 0.1);
+}
+
+.badgePush {
+	color: #ffd07e;
+	background: rgba(255, 208, 126, 0.1);
+}
+
+.badgeDiscussion {
+	color: #7eb8ff;
+	background: rgba(126, 184, 255, 0.1);
+}
+
+.badgeIssue {
+	color: #ff9e7e;
+	background: rgba(255, 158, 126, 0.1);
+}
+
+.time {
+	font-family: var(--font-mono), ui-monospace, monospace;
+	font-size: 0.5625rem;
+	color: var(--text-tertiary);
+	flex-shrink: 0;
+}
+
+.summary {
+	font-family: var(--font-mono), ui-monospace, monospace;
+	font-size: 0.6875rem;
+	color: var(--text-secondary);
+	line-height: 1.4;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
