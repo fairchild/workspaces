@@ -285,7 +285,7 @@ struct WorkspaceRow: View {
             return "desktopcomputer"
         case .daytona:
             return workspace.status == .active ? "cloud.fill" : "cloud"
-        case .local, .ssh:
+        case .local, .ssh, .unknown:
             return sessionActivity.isActive ? "terminal.fill" : "terminal"
         }
     }
@@ -296,7 +296,7 @@ struct WorkspaceRow: View {
             return workspace.status == .active ? .teal : .secondary
         case .daytona:
             return workspace.status == .active ? .blue : .secondary
-        case .local, .ssh:
+        case .local, .ssh, .unknown:
             return sessionActivity.iconColor(inactiveColor: .secondary)
         }
     }

@@ -315,7 +315,7 @@ public final class Workspace {
     }
 
     public var backend: BackendKind {
-        get { BackendKind(rawValue: backendIdentifier) ?? .local }
+        get { BackendKind(rawValue: backendIdentifier) }
         set { backendIdentifier = newValue.rawValue }
     }
 
@@ -326,7 +326,7 @@ public final class Workspace {
     public var usesHostWorkspaceFiles: Bool {
         switch backend {
         case .local, .lume: return true
-        case .daytona, .ssh: return false
+        case .daytona, .ssh, .unknown: return false
         }
     }
 
@@ -497,11 +497,35 @@ public enum WebSourceOwnershipScope: Hashable, Codable, Sendable {
     case workspace(UUID)
 }
 
-public enum BackendKind: String, Codable, Sendable {
+public enum BackendKind: Codable, Sendable, Equatable {
     case local
     case lume
     case daytona
     case ssh
+    /// A provider ID not in this enum — preserves the raw string for registry lookups.
+    case unknown(String)
+
+    public init(rawValue: String) {
+        switch rawValue {
+        case "local": self = .local
+        case "lume": self = .lume
+        case "daytona": self = .daytona
+        case "ssh": self = .ssh
+        default: self = .unknown(rawValue)
+        }
+    }
+
+    public var rawValue: String {
+        switch self {
+        case .local: return "local"
+        case .lume: return "lume"
+        case .daytona: return "daytona"
+        case .ssh: return "ssh"
+        case .unknown(let id): return id
+        }
+    }
+
+    public var isLocal: Bool { self == .local }
 }
 
 public enum WorkspaceStatus: String, Codable, CaseIterable, Sendable {

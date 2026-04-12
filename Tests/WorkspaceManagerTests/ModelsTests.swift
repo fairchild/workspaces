@@ -329,6 +329,23 @@ struct ModelsTests {
             #expect(workspace.composeMetadata == nil)
         }
 
+        @Test("Unknown provider IDs are treated as remote, not local")
+        func unknownProviderIsRemote() {
+            let repo = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))
+            let workspace = Workspace(
+                name: "future-feature",
+                path: URL(fileURLWithPath: "/tmp/alpha/workspaces/future-feature"),
+                sourceRepo: repo,
+                backendIdentifier: "future-provider",
+                remoteId: "instance-456"
+            )
+
+            #expect(workspace.backend == .unknown("future-provider"))
+            #expect(workspace.isRemote)
+            #expect(!workspace.usesHostWorkspaceFiles)
+            #expect(workspace.backendIdentifier == "future-provider")
+        }
+
         @Test("Remote workspaces do not expose a local directory URL")
         func remoteWorkspaceDoesNotExposeLocalDirectoryURL() {
             let repo = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))

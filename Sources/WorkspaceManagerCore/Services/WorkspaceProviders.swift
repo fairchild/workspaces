@@ -315,13 +315,13 @@ public struct WorkspaceProviderTarget: Sendable, Equatable {
     }
 
     public var backend: BackendKind {
-        BackendKind(rawValue: backendIdentifier) ?? .local
+        BackendKind(rawValue: backendIdentifier)
     }
 
     public var usesHostWorkspaceFiles: Bool {
         switch backend {
         case .local, .lume: return true
-        case .daytona, .ssh: return false
+        case .daytona, .ssh, .unknown: return false
         }
     }
 
