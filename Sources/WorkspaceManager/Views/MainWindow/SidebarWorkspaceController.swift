@@ -31,6 +31,7 @@ struct SidebarWorkspaceController {
     let modelContext: ModelContext
     let workspaceService: any WorkspaceServiceProtocol
     let workspaceProviderRegistry: WorkspaceProviderRegistry
+    let telemetryService: DesktopTelemetryService
 
     nonisolated static func preferredRepoForNewWorkspace(
         selectedWorkspace: Workspace?,
@@ -135,6 +136,15 @@ struct SidebarWorkspaceController {
                 throw ControllerError.message("Failed to create workspace record.")
             }
 
+            telemetryService.capture(
+                .workspaceCreated,
+                properties: [
+                    "provider_id": providerID,
+                    "guest_os": guestOS?.rawValue ?? "host",
+                    "is_remote": provider.descriptor.usesHostWorkspaceFiles == false,
+                    "name_source": nameSource.rawValue,
+                ]
+            )
             await Self.nameReservationStore.release(reservation)
             log.info("createWorkspace: success, returning workspace")
             return persistedWorkspace

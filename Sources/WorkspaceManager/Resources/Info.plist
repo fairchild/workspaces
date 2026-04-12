@@ -33,6 +33,10 @@
 	</array>
 	<key>CFBundleVersion</key>
 	<string>11</string>
+	<key>PostHogAPIKey</key>
+	<string></string>
+	<key>PostHogHost</key>
+	<string>https://us.i.posthog.com</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.developer-tools</string>
 	<key>LSArchitecturePriority</key>

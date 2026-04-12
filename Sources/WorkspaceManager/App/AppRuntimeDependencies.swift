@@ -11,6 +11,7 @@ import WorkspaceManagerCore
 struct AppRuntimeDependencies {
     let lumeRuntimeService: any LumeRuntimeServiceProtocol
     let workspaceProviderRegistry: WorkspaceProviderRegistry
+    let telemetryService: DesktopTelemetryService
 
     static func resolved(
         environment: [String: String] = ProcessInfo.processInfo.environment
@@ -25,7 +26,8 @@ struct AppRuntimeDependencies {
                         UIFixtureDaytonaWorkspaceProvider(),
                         UIFixtureLumeWorkspaceProvider(runtimeService: runtimeService),
                     ]
-                )
+                ),
+                telemetryService: .disabled
             )
         }
 
@@ -60,7 +62,8 @@ struct AppRuntimeDependencies {
                         LumeWorkspaceProvider(runtimeService: runtimeService)
                     },
                 ]
-            )
+            ),
+            telemetryService: DesktopTelemetryService.live(environment: environment)
         )
     }
 }

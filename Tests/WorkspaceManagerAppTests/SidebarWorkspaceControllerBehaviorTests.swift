@@ -549,7 +549,8 @@ struct SidebarWorkspaceControllerBehaviorTests {
         SidebarWorkspaceController(
             modelContext: context,
             workspaceService: workspaceService,
-            workspaceProviderRegistry: WorkspaceProviderRegistry(providers: providers)
+            workspaceProviderRegistry: WorkspaceProviderRegistry(providers: providers),
+            telemetryService: .disabled
         )
     }
 

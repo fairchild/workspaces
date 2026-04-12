@@ -37,6 +37,7 @@ struct SidebarView: View {
     @Environment(\.workspaceService) private var workspaceService
     @Environment(\.workspaceProviderRegistry) private var workspaceProviderRegistry
     @ObservedObject var appCommandState: AppCommandState
+    @Environment(\.telemetryService) private var telemetryService
     let repos: [Repo]
     let webSources: [WebSource]
     let selectedRepo: Repo?
@@ -90,7 +91,8 @@ struct SidebarView: View {
         SidebarWorkspaceController(
             modelContext: modelContext,
             workspaceService: workspaceService,
-            workspaceProviderRegistry: workspaceProviderRegistry
+            workspaceProviderRegistry: workspaceProviderRegistry,
+            telemetryService: telemetryService
         )
     }
 
@@ -613,7 +615,16 @@ struct SidebarView: View {
             modelContext.insert(repo)
             if !saveModelContext(action: "save repository") {
                 modelContext.rollback()
+                return
             }
+
+            telemetryService.capture(
+                .repoAdded,
+                properties: [
+                    "source": "file_importer",
+                    "has_remote": repo.remoteURL != nil,
+                ]
+            )
         }
     }
 

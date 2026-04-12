@@ -46,6 +46,7 @@ struct WorkspaceManagerApp: App {
                 appCommandState: appCommandState
             )
             .environment(\.lumeRuntimeService, appRuntimeDependencies.lumeRuntimeService)
+            .environment(\.telemetryService, appRuntimeDependencies.telemetryService)
             .environment(
                 \.workspaceProviderRegistry,
                 appRuntimeDependencies.workspaceProviderRegistry
@@ -148,6 +149,7 @@ struct WorkspaceManagerApp: App {
         Settings {
             SettingsView()
                 .environment(\.lumeRuntimeService, appRuntimeDependencies.lumeRuntimeService)
+                .environment(\.telemetryService, appRuntimeDependencies.telemetryService)
                 .environment(\.workspaceProviderRegistry, appRuntimeDependencies.workspaceProviderRegistry)
         }
     }
@@ -543,6 +545,10 @@ private struct WorkspaceProviderRegistryKey: EnvironmentKey {
     static let defaultValue = WorkspaceProviderRegistry.live
 }
 
+private struct TelemetryServiceKey: EnvironmentKey {
+    static let defaultValue = DesktopTelemetryService.disabled
+}
+
 extension EnvironmentValues {
     var gitService: any GitServiceProtocol {
         get { self[GitServiceKey.self] }
@@ -572,6 +578,11 @@ extension EnvironmentValues {
     var workspaceProviderRegistry: WorkspaceProviderRegistry {
         get { self[WorkspaceProviderRegistryKey.self] }
         set { self[WorkspaceProviderRegistryKey.self] = newValue }
+    }
+
+    var telemetryService: DesktopTelemetryService {
+        get { self[TelemetryServiceKey.self] }
+        set { self[TelemetryServiceKey.self] = newValue }
     }
 }
 

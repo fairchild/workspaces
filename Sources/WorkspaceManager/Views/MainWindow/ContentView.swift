@@ -46,6 +46,7 @@ struct ContentView: View {
     @Environment(\.lumeRuntimeService) private var lumeRuntimeService
     @Environment(\.workspaceService) private var workspaceService
     @Environment(\.workspaceProviderRegistry) private var workspaceProviderRegistry
+    @Environment(\.telemetryService) private var telemetryService
     @ObservedObject private var notificationCoordinator = NotificationCoordinator.shared
 
     @State private var viewState = MainWindowViewState()
@@ -1112,6 +1113,14 @@ struct ContentView: View {
         if workspace.backendIdentifier != LocalWorkspaceProvider.identifier {
             handleProviderBackedWorkspaceSelection(workspace)
         } else {
+            telemetryService.capture(
+                .workspaceOpened,
+                properties: [
+                    "provider_id": workspace.backendIdentifier,
+                    "is_remote": false,
+                    "workspace_status": workspace.status.rawValue,
+                ]
+            )
             abandonPendingRemoteConnection(reason: "local_workspace_selected")
             markAccessed(workspace: workspace)
             applyNavigationDestination(.workspaceTerminal(workspace))
@@ -1140,7 +1149,6 @@ struct ContentView: View {
                 }
             )
         }
-
     }
 
     @MainActor
@@ -1160,6 +1168,14 @@ struct ContentView: View {
             markAccessed(workspace: workspace)
             applyNavigationDestination(.workspaceTerminal(workspace))
             hostTerminalState.activateExistingSession(sessionID: existing.id)
+            telemetryService.capture(
+                .workspaceOpened,
+                properties: [
+                    "provider_id": workspace.backendIdentifier,
+                    "is_remote": true,
+                    "workspace_status": workspace.status.rawValue,
+                ]
+            )
             terminalFocusCoordinator.requestMainTerminalFocus(
                 targetSessionID: existing.id,
                 surfaceStore: hostTerminalState.surfaceStore,
@@ -1202,6 +1218,14 @@ struct ContentView: View {
                 customCommand: launchSpec.customCommand
             )
             viewState.columnVisibility = .all
+            telemetryService.capture(
+                .workspaceOpened,
+                properties: [
+                    "provider_id": workspace.backendIdentifier,
+                    "is_remote": true,
+                    "workspace_status": workspace.status.rawValue,
+                ]
+            )
             terminalFocusCoordinator.requestMainTerminalFocus(
                 targetSessionID: session.id,
                 surfaceStore: hostTerminalState.surfaceStore,
@@ -1306,7 +1330,8 @@ struct ContentView: View {
         let controller = SidebarWorkspaceController(
             modelContext: modelContext,
             workspaceService: workspaceService,
-            workspaceProviderRegistry: workspaceProviderRegistry
+            workspaceProviderRegistry: workspaceProviderRegistry,
+            telemetryService: telemetryService
         )
         let workspace = try await controller.createWorkspace(
             from: repo,
@@ -1331,7 +1356,8 @@ struct ContentView: View {
             let controller = SidebarWorkspaceController(
                 modelContext: modelContext,
                 workspaceService: workspaceService,
-                workspaceProviderRegistry: workspaceProviderRegistry
+                workspaceProviderRegistry: workspaceProviderRegistry,
+                telemetryService: telemetryService
             )
             do {
                 try await controller.archive(workspace)
@@ -1351,6 +1377,14 @@ struct ContentView: View {
                 editorID: nil,
                 externalEditorService: externalEditorService,
                 trigger: .uiPrimaryAction
+            )
+            telemetryService.capture(
+                .editorOpened,
+                properties: [
+                    "editor_id": externalEditorService.defaultEditor.rawValue,
+                    "target_kind": "project",
+                    "trigger": OpenInEditorLaunchTrigger.uiPrimaryAction.rawValue,
+                ]
             )
         } catch {
             presentOpenInEditorError(error)
@@ -1375,6 +1409,10 @@ struct ContentView: View {
 
             modelContext.insert(source)
             try modelContext.save()
+            telemetryService.capture(
+                .webSourceCreated,
+                properties: ["scope": telemetryScope(for: target)]
+            )
             handleWebSourceSelection(source)
         } catch {
             if let validationError = error as? WebSourceValidationError {
@@ -1699,6 +1737,14 @@ struct ContentView: View {
                 externalEditorService: externalEditorService,
                 trigger: trigger
             )
+            telemetryService.capture(
+                .editorOpened,
+                properties: [
+                    "editor_id": (editorID ?? externalEditorService.defaultEditor).rawValue,
+                    "target_kind": telemetryTargetKind(for: openInEditorTarget),
+                    "trigger": trigger.rawValue,
+                ]
+            )
         } catch {
             presentOpenInEditorError(error)
         }
@@ -1742,6 +1788,28 @@ struct ContentView: View {
         }
 
         return .uiPrimaryAction
+    }
+
+    private func telemetryScope(for target: WebSourceCreationTarget) -> String {
+        switch target {
+        case .global:
+            return "global"
+        case .repo:
+            return "repo"
+        case .workspace:
+            return "workspace"
+        }
+    }
+
+    private func telemetryTargetKind(for target: OpenInEditorTarget?) -> String {
+        switch target {
+        case .project:
+            return "project"
+        case .projectAndFile:
+            return "project_and_file"
+        case nil:
+            return "unknown"
+        }
     }
 
     private func handleCodePreviewSelection(_ selection: CodePreviewSelection) {
