@@ -99,10 +99,9 @@ public final class WebSource {
         sourceRepo: Repo? = nil,
         sourceWorkspace: Workspace? = nil
     ) {
-        precondition(
-            sourceRepo == nil || sourceWorkspace == nil,
-            "WebSource cannot be owned by both a repo and a workspace"
-        )
+        guard sourceRepo == nil || sourceWorkspace == nil else {
+            fatalError("WebSource cannot be owned by both a repo and a workspace")
+        }
         self.id = id
         self.name = name
         self.baseURLString = baseURLString
@@ -293,10 +292,14 @@ public final class Workspace {
     /// Stable terminal-routing identity for workspaces whose provider ID is not a lifecycle ID.
     public var sessionRoutingID: String?
 
-    /// Provider-specific metadata encoded as JSON.
+    /// Provider-specific metadata (Lume VM config, Daytona sandbox info) encoded as JSON.
+    /// Decoded via `decodeBackendMetadata<T>()`. Distinct from `remoteMetadataJSON` which
+    /// stores connection-layer config (SSH, Docker Compose).
     public var backendMetadataRaw: String = ""
 
-    /// Backend-specific metadata encoded as JSON; empty string means no metadata.
+    /// Connection-layer metadata (SSH host/port, Docker Compose config) encoded as JSON.
+    /// Accessed via `sshMetadata`, `composeMetadata`, `kubernetesMetadata` computed properties.
+    /// Distinct from `backendMetadataRaw` which stores provider-specific workspace config.
     public var remoteMetadataJSON: String = ""
 
     @Relationship(deleteRule: .cascade, inverse: \WebSource.sourceWorkspace)
@@ -311,16 +314,19 @@ public final class Workspace {
         return workspaceURL
     }
 
+    public var backend: BackendKind {
+        get { BackendKind(rawValue: backendIdentifier) ?? .local }
+        set { backendIdentifier = newValue.rawValue }
+    }
+
     public var isRemote: Bool {
-        backendIdentifier != "local"
+        backend != .local
     }
 
     public var usesHostWorkspaceFiles: Bool {
-        switch backendIdentifier {
-        case LocalWorkspaceProvider.identifier, LumeWorkspaceProvider.identifier:
-            return true
-        default:
-            return false
+        switch backend {
+        case .local, .lume: return true
+        case .daytona, .ssh: return false
         }
     }
 
@@ -491,6 +497,13 @@ public enum WebSourceOwnershipScope: Hashable, Codable, Sendable {
     case workspace(UUID)
 }
 
+public enum BackendKind: String, Codable, Sendable {
+    case local
+    case lume
+    case daytona
+    case ssh
+}
+
 public enum WorkspaceStatus: String, Codable, CaseIterable, Sendable {
     case provisioning
     case active
@@ -551,7 +564,7 @@ public enum GitStatus: String, CaseIterable, Sendable {
 // MARK: - File Node (for file tree display)
 
 public struct FileNode: Identifiable, Hashable, Sendable {
-    public let id = UUID()
+    public var id: String { path }
     public let name: String
     public let path: String
     public let isDirectory: Bool

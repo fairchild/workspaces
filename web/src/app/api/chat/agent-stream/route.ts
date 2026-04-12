@@ -1,6 +1,6 @@
 import { ALLOWED_AGENT_LOGINS } from "@/lib/agent-runtime/config";
 import { getSessionManager } from "@/lib/agent-runtime/session-manager";
-import { getSession } from "@/lib/auth-server";
+import { getDevBypassToken, getSession } from "@/lib/auth-server";
 import { fetchGitHubLogin, getGitHubToken } from "@/lib/github";
 import { getUserRepos } from "@/lib/repos";
 
@@ -48,8 +48,9 @@ export async function POST(request: Request): Promise<Response> {
 	let ghToken: string;
 	let login: string;
 
-	if (process.env.DEV_BYPASS_AUTH === "1") {
-		ghToken = process.env.GITHUB_TOKEN ?? "dev-bypass-token";
+	const bypass = getDevBypassToken();
+	if (bypass) {
+		ghToken = bypass;
 		login = "fairchild";
 	} else {
 		const token = await getGitHubToken(session.user.id);

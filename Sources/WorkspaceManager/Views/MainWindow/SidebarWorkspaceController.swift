@@ -155,7 +155,7 @@ struct SidebarWorkspaceController {
     func deleteWorkspace(_ workspace: Workspace, deleteFiles: Bool) async throws {
         let workspaceURL = workspace.workspaceURL
 
-        if workspace.backendIdentifier == LocalWorkspaceProvider.identifier {
+        if workspace.backend == .local {
             try await workspaceService.deleteWorkspace(at: workspaceURL, deleteFiles: deleteFiles)
         } else {
             let provider = try provider(for: workspace)

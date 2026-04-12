@@ -8,6 +8,7 @@ public enum NotificationConstants {
         {
             return url
         }
+        // Safe: constant URL string, always parses successfully
         return URL(string: "https://webhooks.cloudcompute.com")!
     }()
     public static let gitHubAppClientID = "Iv23liJBRgQoWIWjtRoO"

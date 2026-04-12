@@ -6,6 +6,9 @@
 //
 
 import Foundation
+import os.log
+
+private let log = Logger(subsystem: "com.cloudcompute.workspaces", category: "WorkspaceService")
 
 public actor WorkspaceService: WorkspaceServiceProtocol {
     public static let shared = WorkspaceService()
@@ -79,12 +82,16 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
         await progress?(.copyingRepository)
         try await copyRepository(from: repoLocalURL, to: workspaceDir)
 
+        var warnings: [String] = []
+
         let branchName = "workspace/\(sanitizedName)"
         await progress?(.creatingBranch)
         do {
             try await gitService.createBranch(branchName, at: workspaceDir)
         } catch {
-            print("Warning: Could not create branch '\(branchName)': \(error)")
+            let msg = "Could not create branch '\(branchName)': \(error)"
+            log.warning("\(msg)")
+            warnings.append(msg)
         }
 
         let currentBranch = try? await gitService.getCurrentBranch(at: workspaceDir)
@@ -92,10 +99,12 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
         await progress?(.runningSetupScript)
         let setupResult = try await runLifecycleScript("setup.sh", in: workspaceDir)
         if !setupResult.stdout.isEmpty {
-            print("setup.sh output:\n\(setupResult.stdout)")
+            log.info("setup.sh output: \(setupResult.stdout)")
         }
         if setupResult.exitCode != 0 {
-            print("setup.sh warning (exit \(setupResult.exitCode)):\n\(setupResult.stderr)")
+            let msg = "setup.sh exited with code \(setupResult.exitCode): \(setupResult.stderr)"
+            log.warning("\(msg)")
+            warnings.append(msg)
         }
 
         await progress?(.finished)
@@ -103,7 +112,8 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
         return NewWorkspaceInfo(
             name: name,
             path: workspaceDir,
-            gitBranch: currentBranch ?? branchName
+            gitBranch: currentBranch ?? branchName,
+            warnings: warnings
         )
     }
 
@@ -126,10 +136,10 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
     public func archiveWorkspace(at workspaceURL: URL) async throws {
         let archiveResult = try await runLifecycleScript("archive.sh", in: workspaceURL)
         if !archiveResult.stdout.isEmpty {
-            print("archive.sh output:\n\(archiveResult.stdout)")
+            log.info("archive.sh output: \(archiveResult.stdout)")
         }
         if archiveResult.exitCode != 0 {
-            print("archive.sh warning (exit \(archiveResult.exitCode)):\n\(archiveResult.stderr)")
+            log.warning("archive.sh exited with code \(archiveResult.exitCode): \(archiveResult.stderr)")
         }
     }
 
