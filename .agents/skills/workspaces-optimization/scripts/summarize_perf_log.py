@@ -20,6 +20,11 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
+REPO_ROOT = Path(__file__).resolve().parents[4]
+sys.path.insert(0, str(REPO_ROOT / "scripts"))
+
+from perf_schema import app_version_from_binary, canonical_summary, load_contract, numeric_stats
+
 
 PERF_PATTERN = re.compile(r"\[Perf\]\s+(?P<body>.*)")
 FIELD_PATTERN = re.compile(r"(?P<key>[A-Za-z0-9_]+)=(?P<value>\S+)")
@@ -40,6 +45,20 @@ def parse_args() -> argparse.Namespace:
         action="append",
         default=[],
         help="Only include selected metric names. Can be passed more than once.",
+    )
+    parser.add_argument(
+        "--scenario",
+        help="Canonical scenario id. If omitted, infer from the parsed metrics when possible.",
+    )
+    parser.add_argument(
+        "--build-kind",
+        choices=["debug", "installed"],
+        help="Build kind for the canonical summary. Defaults to an inference based on the log path.",
+    )
+    parser.add_argument(
+        "--app-path",
+        type=Path,
+        help="Optional app bundle or binary path used to resolve the app version.",
     )
     return parser.parse_args()
 
@@ -72,7 +91,118 @@ def summarize_numeric(values: list[float]) -> dict[str, float]:
     }
 
 
-def build_summary(log_file: Path, metrics_filter: set[str]) -> dict[str, Any]:
+def infer_scenario(
+    requested: str | None,
+    phase_summaries: dict[str, Any],
+    phase_keys: set[str],
+) -> str:
+    if requested:
+        return requested
+    if "input_investigation:key_down_handled" in phase_keys:
+        return "installed_input_short_capture"
+
+    terminal_summary = phase_summaries.get("terminal_investigation:surface_create_succeeded")
+    shell_modes = (
+        terminal_summary.get("categorical_fields", {}).get("shell_profile_mode", {})
+        if terminal_summary else {}
+    )
+    if "clean" in shell_modes:
+        return "installed_clean_shell"
+    if "login" in shell_modes:
+        return "installed_login_shell"
+    return "unknown"
+
+
+def infer_build_kind(requested: str | None, log_file: Path, scenario: str) -> str:
+    if requested:
+        return requested
+    if scenario.startswith("debug_"):
+        return "debug"
+    if "installed" in log_file.name:
+        return "installed"
+    return "debug"
+
+
+def build_canonical_metrics(
+    all_metrics: dict[str, list[dict[str, str]]],
+    phase_summaries: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    metrics: dict[str, dict[str, Any]] = {}
+
+    for metric_name, events in sorted(all_metrics.items()):
+        durations = [
+            float(duration)
+            for duration in (
+                event.get("duration_ms")
+                for event in events
+            )
+            if duration is not None and maybe_number(duration) is not None
+        ]
+        stats = numeric_stats(durations)
+        if stats is not None:
+            metrics[metric_name] = stats
+
+    input_summary = phase_summaries.get("input_investigation:key_down_handled")
+    if input_summary:
+        event_age_stats = input_summary["numeric_fields"].get("event_age_ms")
+        handler_stats = input_summary["numeric_fields"].get("handler_duration_ms")
+        if event_age_stats:
+            metrics["input_event_age_ms_median"] = {
+                "count": event_age_stats["count"],
+                "min": event_age_stats["min"],
+                "median": event_age_stats["median"],
+                "mean": event_age_stats["mean"],
+                "max": event_age_stats["max"],
+                "p95": event_age_stats["max"],
+                "unit": "ms",
+            }
+        if handler_stats:
+            metrics["input_handler_duration_ms_median"] = {
+                "count": handler_stats["count"],
+                "min": handler_stats["min"],
+                "median": handler_stats["median"],
+                "mean": handler_stats["mean"],
+                "max": handler_stats["max"],
+                "p95": handler_stats["max"],
+                "unit": "ms",
+            }
+    else:
+        aggregate_summary = phase_summaries.get("input_investigation:key_down_summary")
+        if aggregate_summary:
+            age_stats = aggregate_summary["numeric_fields"].get("event_age_median_ms")
+            handler_stats = aggregate_summary["numeric_fields"].get("handler_duration_median_ms")
+            if age_stats:
+                metrics["input_event_age_ms_median"] = {
+                    "count": age_stats["count"],
+                    "min": age_stats["min"],
+                    "median": age_stats["median"],
+                    "mean": age_stats["mean"],
+                    "max": age_stats["max"],
+                    "p95": age_stats["max"],
+                    "unit": "ms",
+                }
+            if handler_stats:
+                metrics["input_handler_duration_ms_median"] = {
+                    "count": handler_stats["count"],
+                    "min": handler_stats["min"],
+                    "median": handler_stats["median"],
+                    "mean": handler_stats["mean"],
+                    "max": handler_stats["max"],
+                    "p95": handler_stats["max"],
+                    "unit": "ms",
+                }
+
+    return metrics
+
+
+def build_summary(
+    log_file: Path,
+    metrics_filter: set[str],
+    *,
+    requested_scenario: str | None,
+    requested_build_kind: str | None,
+    app_path: Path | None,
+) -> dict[str, Any]:
     lines = log_file.read_text(encoding="utf-8", errors="replace").splitlines()
 
     parsed_events: list[dict[str, Any]] = []
@@ -138,15 +268,36 @@ def build_summary(log_file: Path, metrics_filter: set[str]) -> dict[str, Any]:
         }
 
     findings = derive_findings(phase_summaries)
-
-    return {
-        "log_file": str(log_file),
-        "line_count": len(lines),
-        "perf_event_count": len(parsed_events),
-        "metrics": metric_summaries,
-        "phases": phase_summaries,
-        "findings": findings,
-    }
+    scenario = infer_scenario(requested_scenario, phase_summaries, set(phase_summaries))
+    build_kind = infer_build_kind(requested_build_kind, log_file, scenario)
+    app_version = app_version_from_binary(app_path)
+    canonical_metrics = build_canonical_metrics(all_metrics, phase_summaries)
+    contract = load_contract()
+    summary = canonical_summary(
+        scenario=scenario,
+        build_kind=build_kind,
+        metrics=canonical_metrics,
+        diagnostic_findings=findings,
+        artifacts={
+            "log_file": str(log_file),
+            "line_count": len(lines),
+            "perf_event_count": len(parsed_events),
+        },
+        app_version=app_version,
+        contract=contract,
+        extra={
+            "log_file": str(log_file),
+            "line_count": len(lines),
+            "perf_event_count": len(parsed_events),
+            "phases": phase_summaries,
+            "findings": findings,
+            "legacy_metric_summaries": metric_summaries,
+        },
+    )
+    summary["metrics_by_phase"] = phase_summaries
+    summary["metrics_detected"] = metric_summaries
+    summary["findings"] = findings
+    return summary
 
 
 def derive_findings(phase_summaries: dict[str, Any]) -> list[str]:
@@ -253,21 +404,33 @@ def derive_findings(phase_summaries: dict[str, Any]) -> list[str]:
 def print_text(summary: dict[str, Any]) -> None:
     print("WorkspaceManager perf log summary")
     print(f"  log_file: {summary['log_file']}")
+    print(f"  scenario: {summary['scenario']}")
+    print(f"  build_kind: {summary['environment']['build_kind']}")
     print(f"  total_lines: {summary['line_count']}")
     print(f"  perf_events: {summary['perf_event_count']}")
     print()
 
     print("Metrics:")
-    if not summary["metrics"]:
+    if not summary["metrics_detected"]:
         print("- no [Perf] metrics found")
     else:
         for metric, details in sorted(summary["metrics"].items()):
-            phases = ", ".join(details["phases"])
-            print(f"- {metric}: count={details['count']} phases={phases}")
+            budget = summary["budget_results"].get(metric, {})
+            budget_suffix = ""
+            if budget.get("gate_budget_ms") is not None:
+                budget_suffix = (
+                    f" gate<={budget['gate_budget_ms']}ms"
+                    f" status={budget['status']}"
+                )
+            print(
+                f"- {metric}: count={details['count']} min={details['min']:.2f} "
+                f"median={details['median']:.2f} p95={details['p95']:.2f} "
+                f"max={details['max']:.2f}{budget_suffix}"
+            )
 
     print()
     print("Phase summaries:")
-    for key, details in sorted(summary["phases"].items()):
+    for key, details in sorted(summary["metrics_by_phase"].items()):
         print(f"- {key}: count={details['count']}")
         for field, stats in sorted(details["numeric_fields"].items()):
             print(
@@ -287,7 +450,13 @@ def print_text(summary: dict[str, Any]) -> None:
 
 def main() -> int:
     args = parse_args()
-    summary = build_summary(args.log_file, set(args.metric))
+    summary = build_summary(
+        args.log_file,
+        set(args.metric),
+        requested_scenario=args.scenario,
+        requested_build_kind=args.build_kind,
+        app_path=args.app_path,
+    )
     if args.json:
         json.dump(summary, sys.stdout, indent=2, sort_keys=True)
         sys.stdout.write("\n")

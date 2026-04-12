@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import os
 import re
 import shutil
@@ -22,6 +23,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+
+from perf_schema import load_contract
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -51,11 +54,19 @@ ISSUE_MARKER_RE = re.compile(
 )
 IDEA_PATTERN = re.compile(r"\[idea\](?:\[endorsed\])?", re.IGNORECASE)
 
-PERF_TARGETS_MS = {
-    "launch_to_first_prompt": 250.0,
-    "repo_hydration": 25.0,
-    "repo_click_to_focus": 250.0,
-}
+def load_perf_targets_ms() -> dict[str, float]:
+    contract = load_contract()
+    scenario = "debug_no_activate"
+    targets: dict[str, float] = {}
+    for metric in contract.get("metrics", []):
+        reference = metric.get("reference_baselines", {}).get(scenario)
+        if reference is None:
+            continue
+        targets[metric["name"]] = math.ceil(float(reference["median_ms"]) * 1.25)
+    return targets
+
+
+PERF_TARGETS_MS = load_perf_targets_ms()
 FAILURE_CONCLUSIONS = {"failure", "timed_out", "startup_failure", "action_required"}
 AGENT_WORKFLOW_PREFIX = "Agent: "
 OPS_IDEA_TITLES = {

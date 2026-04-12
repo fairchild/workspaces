@@ -2,6 +2,20 @@
 
 This page explains what each dashboard metric means, where timing starts/ends, and the runtime flow being measured.
 
+The machine-readable source of truth for scenarios, metric coverage, and budget formulas is:
+
+- `config/performance/contract.json`
+
+Canonical scenarios:
+
+| Scenario | Build Kind | Purpose |
+|---|---|---|
+| `debug_no_activate` | `debug` | Low-variance local startup and switch timing without app activation |
+| `debug_activate` | `debug` | Interactive debug startup timing with normal activation |
+| `installed_clean_shell` | `installed` | Installed-app startup with shell init bypassed |
+| `installed_login_shell` | `installed` | Installed-app startup with normal login shell cost included |
+| `installed_input_short_capture` | `installed` | Short focused typing capture for input event age and handler timing |
+
 ## Metric Definitions
 
 ### `launch_to_first_prompt`
@@ -236,17 +250,29 @@ sequenceDiagram
     end
 ```
 
-## Enforced Budget Targets
+## Budget Contract
 
-The three core startup metrics have enforced performance budgets. When `perf-baseline.sh` is invoked with `--assert-budget`, it exits nonzero if any metric's median exceeds its target.
+Budgets are derived from the reference baselines in `config/performance/contract.json` using one formula everywhere:
 
-| Metric | Budget |
-|---|---:|
-| `launch_to_first_prompt` | <= 250 ms |
-| `repo_hydration` | <= 25 ms |
-| `repo_click_to_focus` | <= 250 ms |
+- gate budget: `ceil(reference median * 1.25)`
+- diagnostic threshold: `ceil(reference p95 * 1.5)`
 
-These are enforced in the `perf-validation.yml` workflow. A budget breach fails the workflow run. Release blocking via required check status is tracked in #98.
+Rules:
+
+- median is the gating statistic
+- p95 is diagnostic and should trigger investigation even when median still passes
+- existing `[Perf]` metric names remain the raw telemetry source; contract logic sits above them
+
+Enforcement points:
+
+- `./scripts/perf-baseline.sh --assert-budget`
+- `./scripts/perf-runner.sh --scenario <id> --assert-budget`
+- `.github/workflows/perf-validation.yml`
+
+Installed-build parity is verified separately in the release path:
+
+- `./scripts/verify-release-bundle.sh`
+- `./scripts/verify-installed-perf.sh`
 
 ## Interpreting Dashboard Changes
 

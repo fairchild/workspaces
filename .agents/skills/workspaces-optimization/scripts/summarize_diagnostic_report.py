@@ -20,6 +20,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+REPO_ROOT = Path(__file__).resolve().parents[4]
+sys.path.insert(0, str(REPO_ROOT / "scripts"))
+
+from perf_schema import canonical_summary, load_contract, numeric_stats
+
 
 @dataclass
 class MetricEvent:
@@ -44,6 +49,11 @@ def parse_args() -> argparse.Namespace:
         "--json",
         action="store_true",
         help="Emit the summary as JSON instead of human-readable text.",
+    )
+    parser.add_argument(
+        "--scenario",
+        default="installed_login_shell",
+        help="Canonical scenario id for the report. Default: installed_login_shell.",
     )
     return parser.parse_args()
 
@@ -114,7 +124,13 @@ def recent_logs_empty(recent_logs: str | None) -> bool:
     return False
 
 
-def build_summary(report: dict[str, Any], system_profile: str | None, recent_logs: str | None) -> dict[str, Any]:
+def build_summary(
+    report: dict[str, Any],
+    system_profile: str | None,
+    recent_logs: str | None,
+    *,
+    scenario: str,
+) -> dict[str, Any]:
     events = parse_events(report)
     launch = find_event(events, "launch_to_first_prompt")
     hydration = find_event(events, "repo_hydration")
@@ -168,44 +184,76 @@ def build_summary(report: dict[str, Any], system_profile: str | None, recent_log
                 app_path = stripped.removeprefix("Path: ")
                 break
 
-    return {
-        "report_path": str(report.get("_report_path", "")),
-        "generated_at": report.get("generatedAt"),
-        "system": {
-            "model": system.get("hardwareModel"),
-            "architecture": system.get("architecture"),
-            "memory_gb": system.get("physicalMemoryGB"),
-            "processors": system.get("processorCount"),
-            "os_version": system.get("osVersion"),
-            "os_build": system.get("osBuild"),
+    canonical_metrics: dict[str, dict[str, Any]] = {}
+    by_metric: dict[str, list[float]] = {}
+    for event in events:
+        by_metric.setdefault(event.metric, []).append(event.duration_ms)
+    for metric_name, values in sorted(by_metric.items()):
+        stats = numeric_stats(values)
+        if stats is not None:
+            canonical_metrics[metric_name] = stats
+
+    summary = canonical_summary(
+        scenario=scenario,
+        build_kind="installed",
+        metrics=canonical_metrics,
+        diagnostic_findings=findings,
+        artifacts={
+            "report_path": str(report.get("_report_path", "")),
+            "generated_at": report.get("generatedAt"),
+            "recent_logs_empty": recent_logs_empty(recent_logs),
         },
-        "app": {
-            "version": diagnostics.get("appVersion"),
-            "build_number": diagnostics.get("buildNumber"),
-            "app_path": app_path,
+        app_version=(
+            f"{diagnostics.get('appVersion')} ({diagnostics.get('buildNumber')})"
+            if diagnostics.get("appVersion") and diagnostics.get("buildNumber")
+            else diagnostics.get("appVersion")
+        ),
+        os_version=system.get("osVersion"),
+        os_build=system.get("osBuild"),
+        machine_model=system.get("hardwareModel"),
+        arch=system.get("architecture"),
+        contract=load_contract(),
+        extra={
+            "report_path": str(report.get("_report_path", "")),
+            "generated_at": report.get("generatedAt"),
+            "system": {
+                "model": system.get("hardwareModel"),
+                "architecture": system.get("architecture"),
+                "memory_gb": system.get("physicalMemoryGB"),
+                "processors": system.get("processorCount"),
+                "os_version": system.get("osVersion"),
+                "os_build": system.get("osBuild"),
+            },
+            "app": {
+                "version": diagnostics.get("appVersion"),
+                "build_number": diagnostics.get("buildNumber"),
+                "app_path": app_path,
+            },
+            "event_metrics": {
+                "launch_to_first_prompt_ms": launch.duration_ms if launch else None,
+                "launch_started_at": launch.started_at.isoformat() if launch and launch.started_at else None,
+                "launch_recorded_at": launch.timestamp.isoformat() if launch and launch.timestamp else None,
+                "repo_hydration_ms": hydration.duration_ms if hydration else None,
+                "repo_hydration_recorded_at": hydration.timestamp.isoformat() if hydration and hydration.timestamp else None,
+                "repo_hydration_labels": hydration.labels if hydration else None,
+                "terminal_first_output_ms": first_output.duration_ms if first_output else None,
+                "terminal_first_output_labels": first_output.labels if first_output else None,
+                "first_prompt_ready_ms": prompt_ready.duration_ms if prompt_ready else None,
+                "first_prompt_ready_labels": prompt_ready.labels if prompt_ready else None,
+            },
+            "recent_logs_empty": recent_logs_empty(recent_logs),
+            "findings": findings,
+            "next_steps": next_steps,
         },
-        "metrics": {
-            "launch_to_first_prompt_ms": launch.duration_ms if launch else None,
-            "launch_started_at": launch.started_at.isoformat() if launch and launch.started_at else None,
-            "launch_recorded_at": launch.timestamp.isoformat() if launch and launch.timestamp else None,
-            "repo_hydration_ms": hydration.duration_ms if hydration else None,
-            "repo_hydration_recorded_at": hydration.timestamp.isoformat() if hydration and hydration.timestamp else None,
-            "repo_hydration_labels": hydration.labels if hydration else None,
-            "terminal_first_output_ms": first_output.duration_ms if first_output else None,
-            "terminal_first_output_labels": first_output.labels if first_output else None,
-            "first_prompt_ready_ms": prompt_ready.duration_ms if prompt_ready else None,
-            "first_prompt_ready_labels": prompt_ready.labels if prompt_ready else None,
-        },
-        "recent_logs_empty": recent_logs_empty(recent_logs),
-        "findings": findings,
-        "next_steps": next_steps,
-    }
+    )
+    summary["metrics_legacy"] = summary["event_metrics"]
+    return summary
 
 
 def print_text(summary: dict[str, Any]) -> None:
     system = summary["system"]
     app = summary["app"]
-    metrics = summary["metrics"]
+    metrics = summary["event_metrics"]
 
     print("Workspaces diagnostic summary")
     print(f"  model: {system['model']} ({system['architecture']})")
@@ -246,7 +294,7 @@ def main() -> int:
     args = parse_args()
     report, system_profile, recent_logs = load_report(args.report_zip)
     report["_report_path"] = str(args.report_zip)
-    summary = build_summary(report, system_profile, recent_logs)
+    summary = build_summary(report, system_profile, recent_logs, scenario=args.scenario)
 
     if args.json:
         json.dump(summary, sys.stdout, indent=2, sort_keys=True)

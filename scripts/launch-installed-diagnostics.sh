@@ -13,6 +13,7 @@ Options:
   --log-file <path>      Path to write combined stdout/stderr.
   --clean-shell          Launch embedded terminals with clean shell profiles.
   --login-shell          Launch embedded terminals with normal login profiles.
+  --capture-seconds <n>  Auto-terminate the app after n seconds and keep the log.
   --with-input-diagnostics
                          Enable per-key input diagnostics. Use only for short captures.
   --no-activate          Do not activate the app on launch.
@@ -34,6 +35,7 @@ SHELL_MODE=""
 NO_ACTIVATE=0
 DISABLE_AUTO_IMPORT=1
 WITH_INPUT_DIAGNOSTICS=0
+CAPTURE_SECONDS=0
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -56,6 +58,10 @@ while [[ $# -gt 0 ]]; do
         --with-input-diagnostics)
             WITH_INPUT_DIAGNOSTICS=1
             shift
+            ;;
+        --capture-seconds)
+            CAPTURE_SECONDS="$2"
+            shift 2
             ;;
         --no-activate)
             NO_ACTIVATE=1
@@ -88,7 +94,7 @@ ENV_VARS=(
 )
 
 if [[ "$WITH_INPUT_DIAGNOSTICS" -eq 1 ]]; then
-    ENV_VARS+=("WORKSPACES_INPUT_DIAGNOSTICS=1")
+    ENV_VARS+=("WORKSPACES_INPUT_DIAGNOSTICS=detailed")
 fi
 
 if [[ -n "$SHELL_MODE" ]]; then
@@ -111,6 +117,14 @@ for entry in "${ENV_VARS[@]}"; do
     echo "    $entry"
 done
 echo "  summarize:"
-echo "    uv run --script .agents/skills/workspaces-optimization/scripts/summarize_perf_log.py $LOG_FILE"
-
-env "${ENV_VARS[@]}" "$APP_PATH" 2>&1 | tee "$LOG_FILE"
+echo "    ./.agents/skills/workspaces-optimization/scripts/summarize_perf_log.py $LOG_FILE"
+if [[ "$CAPTURE_SECONDS" -gt 0 ]]; then
+    echo "  capture_seconds: $CAPTURE_SECONDS"
+    env "${ENV_VARS[@]}" "$APP_PATH" > >(tee "$LOG_FILE") 2>&1 &
+    APP_PID=$!
+    sleep "$CAPTURE_SECONDS"
+    kill "$APP_PID" 2>/dev/null || true
+    wait "$APP_PID" 2>/dev/null || true
+else
+    env "${ENV_VARS[@]}" "$APP_PATH" 2>&1 | tee "$LOG_FILE"
+fi

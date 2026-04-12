@@ -189,6 +189,9 @@ jobs:
       - name: Verify signed app bundle
         run: ./scripts/verify-release-bundle.sh build/WorkspaceManager.app
 
+      - name: Verify installed-build perf parity
+        run: ./scripts/verify-installed-perf.sh build/WorkspaceManager.app build/release-installed-perf
+
       - name: Notarize and package DMG
         run: bash ./scripts/notarize.sh
 

@@ -204,9 +204,13 @@ enum GhosttySurfaceInputRouter {
 
         defer {
             let handlerDurationMs = max(0, (ProcessInfo.processInfo.systemUptime - handlerStartedAt) * 1000)
-            InvestigationDiagnostics.emitInput(
-                phase: "key_down_handled",
-                fields: [
+            let isWindowKey = view.window?.isKeyWindow == true
+            InvestigationDiagnostics.recordInputHandled(
+                eventAgeMs: eventAgeMs,
+                handlerDurationMs: handlerDurationMs,
+                surfaceMissing: surfaceMissing,
+                windowKey: isWindowKey,
+                detailedFields: [
                     "chars": event.charactersIgnoringModifiers ?? "",
                     "event_age_ms": String(format: "%.2f", eventAgeMs),
                     "focused": view.focused ? "true" : "false",
@@ -217,7 +221,7 @@ enum GhosttySurfaceInputRouter {
                     "repeat": event.isARepeat ? "true" : "false",
                     "surface_missing": surfaceMissing ? "true" : "false",
                     "text_mode": textMode,
-                    "window_key": view.window?.isKeyWindow == true ? "true" : "false",
+                    "window_key": isWindowKey ? "true" : "false",
                 ]
             )
         }

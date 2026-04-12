@@ -9,8 +9,13 @@ on:
       - codex/**
     paths:
       - .github/workflows/perf-validation.yml
+      - config/performance/**
+      - .agents/skills/workspaces-optimization/scripts/**
       - scripts/build-ghosttykit.sh
       - scripts/perf-baseline.sh
+      - scripts/perf-runner.sh
+      - scripts/launch-installed-diagnostics.sh
+      - scripts/verify-installed-perf.sh
       - Sources/**
       - Tests/**
 
@@ -20,9 +25,84 @@ concurrency:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
+  runner-lane-health:
+    runs-on: ubuntu-latest
+    outputs:
+      lane_available: ${{ steps.inspect.outputs.lane_available }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+
+      - name: Inspect tart-ui runner lane
+        id: inspect
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.request
+          from pathlib import Path
+
+          repo = os.environ["GITHUB_REPOSITORY"]
+          token = os.environ["GH_TOKEN"]
+          req = urllib.request.Request(
+              f"https://api.github.com/repos/{repo}/actions/runners?per_page=100",
+              headers={
+                  "Accept": "application/vnd.github+json",
+                  "Authorization": f"Bearer {token}",
+                  "X-GitHub-Api-Version": "2022-11-28",
+              },
+          )
+          with urllib.request.urlopen(req) as response:
+              payload = json.loads(response.read().decode("utf-8"))
+
+          lane_runners = []
+          for runner in payload.get("runners", []):
+              labels = {label.get("name") for label in runner.get("labels", [])}
+              if "tart-ui" not in labels:
+                  continue
+              lane_runners.append(
+                  {
+                      "name": runner.get("name"),
+                      "status": runner.get("status"),
+                      "busy": runner.get("busy"),
+                      "labels": sorted(labels),
+                  }
+              )
+
+          available = any(
+              runner["status"] == "online" and runner["busy"] is False
+              for runner in lane_runners
+          )
+          state = {
+              "lane": "tart-ui",
+              "available": available,
+              "runners": lane_runners,
+              "summary": (
+                  "At least one tart-ui runner is online and idle."
+                  if available
+                  else "No tart-ui runner is currently online and idle."
+              ),
+          }
+          Path("runner-lane-health.json").write_text(json.dumps(state, indent=2) + "\n")
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as handle:
+              handle.write(f"lane_available={'true' if available else 'false'}\n")
+          PY
+
+      - name: Upload runner lane health artifact
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: runner-lane-health-${{ github.run_id }}
+          path: runner-lane-health.json
+          if-no-files-found: error
+
   perf-validation:
+    needs: runner-lane-health
+    if: needs.runner-lane-health.outputs.lane_available == 'true'
     # Run perf validation on the dedicated Tart UI lane so app-launching checks
     # never contend with generic CI or the interactive desktop runner.
     runs-on: [self-hosted, tart-ui]
@@ -69,3 +149,23 @@ jobs:
           name: performance-dashboard-${{ github.run_id }}
           path: perf-artifacts
           if-no-files-found: warn
+
+  perf-validation-skipped:
+    needs: runner-lane-health
+    if: needs.runner-lane-health.outputs.lane_available != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Write skip reason
+        run: |
+          cat <<'EOF' > perf-validation-skipped.md
+          Perf validation did not run because the dedicated tart-ui lane was not available.
+          Treat this as infrastructure state, not a product regression.
+          See the runner-lane-health artifact for the runner inventory snapshot.
+          EOF
+
+      - name: Upload skip artifact
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: perf-validation-skipped-${{ github.run_id }}
+          path: perf-validation-skipped.md
+          if-no-files-found: error

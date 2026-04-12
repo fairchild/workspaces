@@ -29,6 +29,19 @@ This directory contains build/release helpers plus UI test utilities.
 - `./scripts/release-version.sh`
   - Reads, sets, and validates app release version metadata from `Sources/WorkspaceManager/Resources/Info.plist`.
   - Use this instead of editing `Info.plist` by hand before tagging or notarizing a release.
+- `./scripts/verify-installed-perf.sh`
+  - Verifies packaged-app Ghostty resource presence plus a clean-shell installed-build perf capture.
+  - Fails if `terminal_first_output` / `first_prompt_ready` are missing or if known Ghostty resource warnings appear.
+  - Requires an interactive display-capable macOS session; it is not valid in headless AppKit environments.
+
+## Performance Contract
+
+- `./scripts/perf-runner.sh --scenario <id>`
+  - Runs one canonical scenario and writes a canonical summary artifact.
+- `./scripts/perf-compare.py before.json after.json`
+  - Compares two canonical summaries and prints metric deltas plus gate status.
+- Contract source of truth:
+  - `./config/performance/contract.json`
 
 ## Installed Diagnostics
 
@@ -43,6 +56,7 @@ This directory contains build/release helpers plus UI test utilities.
     - `--clean-shell` to bypass shell profile loading in embedded terminals
     - `--with-input-diagnostics` for short active-typing captures
     - `--no-activate` to avoid app activation on launch
+    - `--capture-seconds <n>` for unattended installed-build captures
     - `--log-file <path>` to choose the capture log path
 
 ## Primary UI Test Entry Points

@@ -142,7 +142,7 @@ ARCH="$(uname -m)"
 MODEL="$(sysctl -n hw.model 2>/dev/null || echo unknown)"
 TIMESTAMP="$(date '+%Y-%m-%dT%H:%M:%S%z')"
 
-python3 - "$OUTPUT_DIR" "$ROOT_DIR" "$RUNS" "$SLEEP_SECONDS" "$RECORD" "$TIMESTAMP" "$OS_VERSION" "$OS_BUILD" "$ARCH" "$MODEL" "$LAUNCH_MODE" "$ASSERT_BUDGET" <<'PY'
+PERF_SUMMARY_TIMESTAMP="$TIMESTAMP" PYTHONPATH="$ROOT_DIR/scripts${PYTHONPATH:+:$PYTHONPATH}" python3 - "$OUTPUT_DIR" "$ROOT_DIR" "$RUNS" "$SLEEP_SECONDS" "$RECORD" "$TIMESTAMP" "$OS_VERSION" "$OS_BUILD" "$ARCH" "$MODEL" "$LAUNCH_MODE" "$ASSERT_BUDGET" <<'PY'
 import csv
 from datetime import datetime
 import json
@@ -150,6 +150,8 @@ import pathlib
 import re
 import statistics
 import sys
+
+from perf_schema import canonical_summary, load_contract
 
 out_dir = pathlib.Path(sys.argv[1])
 root_dir = pathlib.Path(sys.argv[2])
@@ -224,41 +226,82 @@ def summarize(values):
     if not values:
         return None
     return {
-        "n": len(values),
+        "count": len(values),
         "min": min(values),
         "max": max(values),
         "median": statistics.median(values),
         "mean": statistics.mean(values),
+        "p95": max(values),
+        "unit": "ms",
     }
 
 
-summary = {metric: summarize(values) for metric, values in metrics.items()}
-summary["metadata"] = {
-    "timestamp": timestamp,
-    "runs_requested": runs,
-    "sleep_seconds": sleep_seconds,
-    "launch_mode": launch_mode,
-    "os_version": os_version,
-    "os_build": os_build,
-    "arch": arch,
-    "model": model,
-    "discovered_repos_median": int(statistics.median(discovered_values)) if discovered_values else None,
-    "imported_repos_median": int(statistics.median(imported_values)) if imported_values else None,
-    "activation_to_first_prompt_median_ms": (
-        statistics.median(activation_to_first_prompt_values)
-        if activation_to_first_prompt_values else None
-    ),
-}
+scenario = "debug_no_activate" if launch_mode == "no-activate" else "debug_activate"
+metrics_summary = {}
+for metric, values in metrics.items():
+    stats = summarize(values)
+    if stats is not None:
+        metrics_summary[metric] = stats
+
+findings = []
+launch_stats = metrics_summary.get("launch_to_first_prompt")
+if launch_stats and launch_stats["median"] > 500:
+    findings.append(
+        f"launch_to_first_prompt median is {launch_stats['median']:.2f} ms in {scenario}. Startup remains visibly slower than the debug gate."
+    )
+repo_focus_stats = metrics_summary.get("repo_click_to_focus")
+if repo_focus_stats and repo_focus_stats["median"] > 300:
+    findings.append(
+        f"repo_click_to_focus median is {repo_focus_stats['median']:.2f} ms. Repo switching still has measurable post-prompt lag."
+    )
+if not findings:
+    findings.append("No automated debug perf findings were derived from the captured [Perf] lines.")
+
+summary = canonical_summary(
+    scenario=scenario,
+    build_kind="debug",
+    metrics=metrics_summary,
+    diagnostic_findings=findings,
+    artifacts={
+        "output_dir": str(out_dir),
+        "runs_requested": runs,
+        "sleep_seconds": sleep_seconds,
+        "log_files": [str(path) for path in sorted(out_dir.glob("run-*.log"))],
+    },
+    os_version=os_version,
+    os_build=os_build,
+    machine_model=model,
+    arch=arch,
+    contract=load_contract(),
+    extra={
+        "metadata": {
+            "timestamp": timestamp,
+            "runs_requested": runs,
+            "sleep_seconds": sleep_seconds,
+            "launch_mode": launch_mode,
+            "os_version": os_version,
+            "os_build": os_build,
+            "arch": arch,
+            "model": model,
+            "discovered_repos_median": int(statistics.median(discovered_values)) if discovered_values else None,
+            "imported_repos_median": int(statistics.median(imported_values)) if imported_values else None,
+            "activation_to_first_prompt_median_ms": (
+                statistics.median(activation_to_first_prompt_values)
+                if activation_to_first_prompt_values else None
+            ),
+        }
+    },
+)
 
 summary_lines = []
 for metric in metric_order:
-    stats = summary[metric]
+    stats = summary["metrics"].get(metric)
     if stats is None:
         summary_lines.append(f"{metric}: missing")
         continue
     summary_lines.append(
-        f"{metric}: n={stats['n']} min={stats['min']:.2f} max={stats['max']:.2f} "
-        f"median={stats['median']:.2f} mean={stats['mean']:.2f}"
+        f"{metric}: count={stats['count']} min={stats['min']:.2f} max={stats['max']:.2f} "
+        f"median={stats['median']:.2f} mean={stats['mean']:.2f} p95={stats['p95']:.2f}"
     )
 
 summary_path = out_dir / "summary.txt"
@@ -267,31 +310,28 @@ summary_path.write_text("\n".join(summary_lines) + "\n")
 summary_json_path.write_text(json.dumps(summary, indent=2) + "\n")
 
 print(summary_path)
+print(f"scenario: {scenario}")
 print(f"launch_mode: {launch_mode}")
 print("\n".join(summary_lines))
 print(f"summary_json={summary_json_path}")
 
-# Budget targets for the three core metrics (used by both --record dashboard
-# and --assert-budget enforcement).
-budget_specs = [
-    ("launch_to_first_prompt", 250.0),
-    ("repo_hydration", 25.0),
-    ("repo_click_to_focus", 250.0),
-]
-
 budget_exit_code = 0
 if assert_budget:
     violations = []
-    for metric_name, target in budget_specs:
-        stats = summary.get(metric_name)
+    for metric_name in ["launch_to_first_prompt", "repo_hydration", "repo_click_to_focus"]:
+        stats = summary["metrics"].get(metric_name)
+        budget = summary["budget_results"].get(metric_name, {})
+        target = budget.get("gate_budget_ms")
         if stats is None:
             violations.append(f"  {metric_name}: MISSING (no data collected)")
             continue
-        median = stats["median"]
-        if median > target:
-            overshoot = median - target
+        if target is None:
+            continue
+        median = float(stats["median"])
+        if median > float(target):
+            overshoot = median - float(target)
             violations.append(
-                f"  {metric_name}: {median:.2f} ms (budget {target:.0f} ms, over by {overshoot:.2f} ms)"
+                f"  {metric_name}: {median:.2f} ms (budget {float(target):.0f} ms, over by {overshoot:.2f} ms)"
             )
     if violations:
         budget_exit_code = 1
@@ -314,6 +354,8 @@ latest_json_path = perf_dir / "latest-summary.json"
 latest_json_path.write_text(json.dumps(summary, indent=2) + "\n")
 
 fieldnames = [
+    "scenario",
+    "build_kind",
     "timestamp",
     "runs_requested",
     "sleep_seconds",
@@ -335,6 +377,8 @@ fieldnames = [
 ]
 
 record_row = {
+    "scenario": scenario,
+    "build_kind": "debug",
     "timestamp": timestamp,
     "runs_requested": runs,
     "sleep_seconds": sleep_seconds,
@@ -344,14 +388,14 @@ record_row = {
     "model": model,
     "discovered_repos_median": summary["metadata"]["discovered_repos_median"],
     "imported_repos_median": summary["metadata"]["imported_repos_median"],
-    "launch_to_first_prompt_median_ms": summary["launch_to_first_prompt"]["median"] if summary["launch_to_first_prompt"] else "",
-    "repo_hydration_median_ms": summary["repo_hydration"]["median"] if summary["repo_hydration"] else "",
-    "repo_click_to_focus_median_ms": summary["repo_click_to_focus"]["median"] if summary["repo_click_to_focus"] else "",
-    "workspace_click_to_focus_median_ms": summary["workspace_click_to_focus"]["median"] if summary["workspace_click_to_focus"] else "",
-    "launch_to_first_prompt_mean_ms": summary["launch_to_first_prompt"]["mean"] if summary["launch_to_first_prompt"] else "",
-    "repo_hydration_mean_ms": summary["repo_hydration"]["mean"] if summary["repo_hydration"] else "",
-    "repo_click_to_focus_mean_ms": summary["repo_click_to_focus"]["mean"] if summary["repo_click_to_focus"] else "",
-    "workspace_click_to_focus_mean_ms": summary["workspace_click_to_focus"]["mean"] if summary["workspace_click_to_focus"] else "",
+    "launch_to_first_prompt_median_ms": summary["metrics"]["launch_to_first_prompt"]["median"] if summary["metrics"].get("launch_to_first_prompt") else "",
+    "repo_hydration_median_ms": summary["metrics"]["repo_hydration"]["median"] if summary["metrics"].get("repo_hydration") else "",
+    "repo_click_to_focus_median_ms": summary["metrics"]["repo_click_to_focus"]["median"] if summary["metrics"].get("repo_click_to_focus") else "",
+    "workspace_click_to_focus_median_ms": summary["metrics"]["workspace_click_to_focus"]["median"] if summary["metrics"].get("workspace_click_to_focus") else "",
+    "launch_to_first_prompt_mean_ms": summary["metrics"]["launch_to_first_prompt"]["mean"] if summary["metrics"].get("launch_to_first_prompt") else "",
+    "repo_hydration_mean_ms": summary["metrics"]["repo_hydration"]["mean"] if summary["metrics"].get("repo_hydration") else "",
+    "repo_click_to_focus_mean_ms": summary["metrics"]["repo_click_to_focus"]["mean"] if summary["metrics"].get("repo_click_to_focus") else "",
+    "workspace_click_to_focus_mean_ms": summary["metrics"]["workspace_click_to_focus"]["mean"] if summary["metrics"].get("workspace_click_to_focus") else "",
     "activation_to_first_prompt_median_ms": summary["metadata"]["activation_to_first_prompt_median_ms"] or "",
 }
 
@@ -375,7 +419,9 @@ with history_csv_path.open(newline="") as f:
     rows = list(reader)
 
 metric_specs = [
-    (f"{name}_median_ms", name, target) for name, target in budget_specs
+    ("launch_to_first_prompt_median_ms", "launch_to_first_prompt"),
+    ("repo_hydration_median_ms", "repo_hydration"),
+    ("repo_click_to_focus_median_ms", "repo_click_to_focus"),
 ]
 
 def parse_float(value):
@@ -416,14 +462,19 @@ dashboard_lines.append("")
 dashboard_lines.append("| Metric | Median (ms) | Mean (ms) | Target (ms) | Status | Delta vs Previous |")
 dashboard_lines.append("|---|---:|---:|---:|---|---|")
 
-for median_key, metric_name, target in metric_specs:
+for median_key, metric_name in metric_specs:
     median_value = parse_float(latest.get(median_key) if latest else None)
     mean_value = parse_float(latest.get(f"{metric_name}_mean_ms") if latest else None)
     prev_value = parse_float(previous.get(median_key) if previous else None)
-    status = "pass" if median_value is not None and median_value <= target else "fail"
+    budget = summary["budget_results"].get(metric_name, {})
+    target = budget.get("gate_budget_ms")
+    if target is None:
+        status = "ungated"
+    else:
+        status = "pass" if median_value is not None and median_value <= target else "fail"
     dashboard_lines.append(
         f"| `{metric_name}` | {fmt_ms(median_value)} | "
-        f"{fmt_ms(mean_value)} | <= {target:.0f} | {status} | "
+        f"{fmt_ms(mean_value)} | <= {target if target is not None else 'n/a'} | {status} | "
         f"{delta_text(median_value, prev_value)} |"
     )
 
@@ -448,7 +499,8 @@ else:
     dashboard_lines.append(
         f"- Portfolio size changed from discovered={previous_discovered} to discovered={latest_discovered}, "
         f"but `repo_hydration` only moved {delta_text(latest_hydration, previous_hydration)} and remains "
-        f"{'within' if latest_hydration is not None and latest_hydration <= 25.0 else 'outside'} the `<= 25 ms` gate."
+        f"{'within' if latest_hydration is not None and latest_hydration <= (summary['budget_results'].get('repo_hydration', {}).get('gate_budget_ms') or 0) else 'outside'} "
+        f"the configured gate."
     )
 
     dashboard_lines.append(
@@ -498,14 +550,16 @@ dashboard_lines.append("")
 dashboard_lines.append("## Visual Bars (Last 10 Run Window)")
 dashboard_lines.append("")
 
-for median_key, metric_name, target in metric_specs:
+for median_key, metric_name in metric_specs:
     current = parse_float(latest.get(median_key) if latest else None)
-    target_pct = (current / target * 100.0) if current is not None and target > 0 else None
+    target = summary["budget_results"].get(metric_name, {}).get("gate_budget_ms")
+    target_pct = (current / target * 100.0) if current is not None and target is not None and target > 0 else None
     target_pct_text = f"{target_pct:.1f}%" if target_pct is not None else "n/a"
-    dashboard_lines.append(f"`{metric_name}` target <= {target:.0f} ms")
+    target_text = f"{target:.0f}" if target is not None else "n/a"
+    dashboard_lines.append(f"`{metric_name}` target <= {target_text} ms")
     dashboard_lines.append("")
     dashboard_lines.append(f"current {fmt_ms(current)} ms ({target_pct_text} of target)")
-    dashboard_lines.append(f"[{bar(current, target)}]")
+    dashboard_lines.append(f"[{bar(current, target or 0)}]")
     dashboard_lines.append("")
 
 dashboard_lines.append("## Run Context")

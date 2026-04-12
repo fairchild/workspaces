@@ -16,18 +16,6 @@ private let creationLog = Logger(
     category: "WorkspaceCreation"
 )
 
-private struct MainWindowCommandAvailabilitySnapshot: Equatable {
-    let canToggleSidebar: Bool
-    let canToggleInspector: Bool
-    let canToggleTerminalPanel: Bool
-    let canOpenInEditor: Bool
-    let canOpenInBrowser: Bool
-    let canReloadWebSource: Bool
-    let canOpenDesktop: Bool
-    let canRevealInFinder: Bool
-    let canCopyPath: Bool
-}
-
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
     @Binding var deepLinkState: WorkspaceDeepLinkState
@@ -279,8 +267,8 @@ struct ContentView: View {
         )
     }
 
-    private var mainWindowCommandAvailabilitySnapshot: MainWindowCommandAvailabilitySnapshot {
-        MainWindowCommandAvailabilitySnapshot(
+    private var mainWindowCommandAvailabilitySnapshot: MainWindowCommandAvailability {
+        MainWindowCommandAvailability(
             canToggleSidebar: true,
             canToggleInspector: true,
             canToggleTerminalPanel: true,
@@ -1778,12 +1766,15 @@ struct ContentView: View {
 
     @MainActor
     private func syncAppCommands() {
-        appCommandState.mainWindowActions = mainWindowFocusedActions
+        appCommandState.setMainWindowActions(
+            mainWindowFocusedActions,
+            availability: mainWindowCommandAvailabilitySnapshot
+        )
     }
 
     @MainActor
     private func clearAppCommands() {
-        appCommandState.mainWindowActions = .empty
+        appCommandState.clearMainWindowActions()
     }
 
     private func persistLastSurface(_ surface: MainWindowLastSurface) {
