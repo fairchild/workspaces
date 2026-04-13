@@ -82,6 +82,7 @@ public actor LumeWorkspaceProvider: WorkspaceProviderProtocol {
     private let daemonErrorLogPath = "/tmp/lume_daemon.error.log"
 
     public init(
+        // Safe: constant URL string, always parses successfully
         baseURL: URL = URL(string: "http://localhost:7777/lume/")!,
         urlSession: URLSession = .shared,
         runtimeService: any LumeRuntimeServiceProtocol = LumeRuntimeService.shared,

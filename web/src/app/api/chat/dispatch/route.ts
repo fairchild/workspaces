@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { getSession } from "@/lib/auth-server";
+import { getDevBypassToken, getSession } from "@/lib/auth-server";
 import { pushChatMessage } from "@/lib/chat";
 import { formatDispatchBody, parseIssueRef } from "@/lib/chat-utils";
 import { createDiscussion, getGitHubToken } from "@/lib/github";
@@ -46,8 +46,9 @@ export async function POST(request: Request): Promise<Response> {
 	}
 
 	let token: string;
-	if (process.env.DEV_BYPASS_AUTH === "1") {
-		token = "dev-bypass-token";
+	const bypassToken = getDevBypassToken();
+	if (bypassToken) {
+		token = bypassToken;
 	} else {
 		const ghToken = await getGitHubToken(session.user.id);
 		if (!ghToken) {

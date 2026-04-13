@@ -1,4 +1,4 @@
-import { getSession } from "@/lib/auth-server";
+import { getDevBypassToken, getSession } from "@/lib/auth-server";
 import { GitHubApiError, fetchUserRepos, getGitHubToken } from "@/lib/github";
 
 export async function GET(): Promise<Response> {
@@ -8,8 +8,9 @@ export async function GET(): Promise<Response> {
 
 	try {
 		let token: string;
-		if (process.env.DEV_BYPASS_AUTH === "1") {
-			token = "dev-bypass-token";
+		const bypassToken = getDevBypassToken();
+		if (bypassToken) {
+			token = bypassToken;
 		} else {
 			const ghToken = await getGitHubToken(session.user.id);
 			if (!ghToken)

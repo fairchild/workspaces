@@ -95,6 +95,7 @@ public actor WorkspaceProcessMonitor: WorkspaceProcessMonitorProtocol {
 
         for line in output.components(separatedBy: "\n") {
             guard !line.isEmpty else { continue }
+            // Safe: line is non-empty per the guard above
             let prefix = line.first!
             let value = String(line.dropFirst())
 

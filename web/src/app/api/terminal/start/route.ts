@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import { getRegistry } from "@/lib/agent-runtime/provider-registry";
 import { isTerminalCapable } from "@/lib/agent-runtime/types";
 import { createSession, getSessionForAgent } from "@/lib/agent-sessions";
-import { getSession } from "@/lib/auth-server";
+import { getDevBypassToken, getSession } from "@/lib/auth-server";
 import { getGitHubToken } from "@/lib/github";
 import { getUserRepos } from "@/lib/repos";
 
@@ -67,7 +67,7 @@ export async function POST(request: Request): Promise<Response> {
 
 	// Build clone URL — use token for private repos, fall back to public HTTPS
 	let cloneUrl = `https://github.com/${body.repo}.git`;
-	if (process.env.DEV_BYPASS_AUTH !== "1") {
+	if (!getDevBypassToken()) {
 		const token = await getGitHubToken(session.user.id).catch(() => null);
 		if (token) {
 			cloneUrl = `https://x-access-token:${token}@github.com/${body.repo}.git`;

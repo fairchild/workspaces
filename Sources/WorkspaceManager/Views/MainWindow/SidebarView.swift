@@ -488,7 +488,7 @@ struct SidebarView: View {
 
                     Divider()
 
-                    if workspace.backendIdentifier == LocalWorkspaceProvider.identifier {
+                    if workspace.backend == .local {
                         localWorkspaceActions(workspace)
                     } else {
                         providerWorkspaceActions(workspace)

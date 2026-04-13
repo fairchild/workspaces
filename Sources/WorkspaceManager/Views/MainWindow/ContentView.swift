@@ -1109,7 +1109,7 @@ struct ContentView: View {
         terminalFocusCoordinator.cancelPendingRepoClickMeasurement(reason: "workspace_selected")
         terminalFocusCoordinator.cancelPendingFocusRequest(reason: "workspace_selected")
 
-        if workspace.backendIdentifier != LocalWorkspaceProvider.identifier {
+        if workspace.backend != .local {
             handleProviderBackedWorkspaceSelection(workspace)
         } else {
             abandonPendingRemoteConnection(reason: "local_workspace_selected")
@@ -1327,7 +1327,7 @@ struct ContentView: View {
 
     @MainActor
     private func archiveWorkspaceFromLanding(_ workspace: Workspace) async {
-        if workspace.backendIdentifier != LocalWorkspaceProvider.identifier {
+        if workspace.backend != .local {
             let controller = SidebarWorkspaceController(
                 modelContext: modelContext,
                 workspaceService: workspaceService,
@@ -1498,7 +1498,7 @@ struct ContentView: View {
     private func syncWorkspaceStatuses(trigger: String) async {
         let syncStartedAt = Date()
         let nonLocalWorkspaces = repos.flatMap(\.workspaces).filter {
-            $0.backendIdentifier != LocalWorkspaceProvider.identifier && $0.remoteId != nil
+            $0.backend != .local && $0.remoteId != nil
         }
         guard !nonLocalWorkspaces.isEmpty else { return }
 

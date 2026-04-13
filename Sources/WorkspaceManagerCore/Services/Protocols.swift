@@ -14,11 +14,14 @@ public struct NewWorkspaceInfo: Sendable {
     public let name: String
     public let path: URL
     public let gitBranch: String
+    /// Non-fatal issues encountered during creation (e.g. branch creation failed, setup script non-zero).
+    public let warnings: [String]
 
-    public init(name: String, path: URL, gitBranch: String) {
+    public init(name: String, path: URL, gitBranch: String, warnings: [String] = []) {
         self.name = name
         self.path = path
         self.gitBranch = gitBranch
+        self.warnings = warnings
     }
 }
 

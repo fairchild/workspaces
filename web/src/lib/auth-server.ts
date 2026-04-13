@@ -24,3 +24,13 @@ export async function getSession() {
 	const { auth } = await import("./auth");
 	return auth.api.getSession({ headers: await headers() });
 }
+
+export function getDevBypassToken(): string | null {
+	if (
+		process.env.NODE_ENV === "development" &&
+		process.env.DEV_BYPASS_AUTH === "1"
+	) {
+		return "dev-bypass-token";
+	}
+	return null;
+}

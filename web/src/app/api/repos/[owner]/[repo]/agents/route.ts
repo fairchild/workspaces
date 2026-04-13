@@ -1,5 +1,5 @@
 import { parseAgentTree } from "@/lib/agent-discovery";
-import { getSession } from "@/lib/auth-server";
+import { getDevBypassToken, getSession } from "@/lib/auth-server";
 import {
 	GitHubApiError,
 	fetchFileContent,
@@ -20,8 +20,9 @@ export async function GET(
 		return Response.json({ error: "unauthorized" }, { status: 401 });
 
 	let token: string;
-	if (process.env.DEV_BYPASS_AUTH === "1") {
-		token = "dev-bypass-token";
+	const bypassToken = getDevBypassToken();
+	if (bypassToken) {
+		token = bypassToken;
 	} else {
 		const ghToken = await getGitHubToken(session.user.id);
 		if (!ghToken)

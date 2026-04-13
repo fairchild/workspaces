@@ -314,12 +314,14 @@ public struct WorkspaceProviderTarget: Sendable, Equatable {
         URL(fileURLWithPath: path)
     }
 
+    public var backend: BackendKind {
+        BackendKind(rawValue: backendIdentifier)
+    }
+
     public var usesHostWorkspaceFiles: Bool {
-        switch backendIdentifier {
-        case LocalWorkspaceProvider.identifier, LumeWorkspaceProvider.identifier:
-            return true
-        default:
-            return false
+        switch backend {
+        case .local, .lume: return true
+        case .daytona, .ssh, .unknown: return false
         }
     }
 

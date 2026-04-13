@@ -280,23 +280,23 @@ struct WorkspaceRow: View {
     }
 
     private var providerIconName: String {
-        switch workspace.backendIdentifier {
-        case LumeWorkspaceProvider.identifier:
+        switch workspace.backend {
+        case .lume:
             return "desktopcomputer"
-        case DaytonaWorkspaceProvider.identifier:
+        case .daytona:
             return workspace.status == .active ? "cloud.fill" : "cloud"
-        default:
+        case .local, .ssh, .unknown:
             return sessionActivity.isActive ? "terminal.fill" : "terminal"
         }
     }
 
     private var providerIconColor: Color {
-        switch workspace.backendIdentifier {
-        case LumeWorkspaceProvider.identifier:
+        switch workspace.backend {
+        case .lume:
             return workspace.status == .active ? .teal : .secondary
-        case DaytonaWorkspaceProvider.identifier:
+        case .daytona:
             return workspace.status == .active ? .blue : .secondary
-        default:
+        case .local, .ssh, .unknown:
             return sessionActivity.iconColor(inactiveColor: .secondary)
         }
     }
