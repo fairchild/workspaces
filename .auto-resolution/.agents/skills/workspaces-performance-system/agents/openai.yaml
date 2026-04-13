@@ -1,4 +1,0 @@
-interface:
-  display_name: "Workspaces Performance System"
-  short_description: "Run the canonical Workspaces perf contract and classify results."
-  default_prompt: "Use $workspaces-performance-system to run the smallest canonical performance scenario, produce comparable summary artifacts, and classify any failures as product regressions or infrastructure issues."

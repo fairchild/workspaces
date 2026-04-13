@@ -1,4 +1,0 @@
-interface:
-  display_name: "Drive Milestone"
-  short_description: "Plan and execute repo milestones issue by issue."
-  default_prompt: "Use $drive to refresh the plan and deliver the next milestone from the latest GitHub state before writing code."
