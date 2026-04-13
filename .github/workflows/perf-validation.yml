@@ -36,6 +36,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       lane_available: ${{ steps.inspect.outputs.lane_available }}
+      lane_status: ${{ steps.inspect.outputs.lane_status }}
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
 
@@ -48,6 +49,7 @@ jobs:
           python3 - <<'PY'
           import json
           import os
+          import urllib.error
           import urllib.request
           from pathlib import Path
 
@@ -61,40 +63,79 @@ jobs:
                   "X-GitHub-Api-Version": "2022-11-28",
               },
           )
-          with urllib.request.urlopen(req) as response:
-              payload = json.loads(response.read().decode("utf-8"))
+          try:
+              with urllib.request.urlopen(req) as response:
+                  payload = json.loads(response.read().decode("utf-8"))
+          except urllib.error.HTTPError as error:
+              state = {
+                  "lane": "tart-ui",
+                  "available": None,
+                  "status": "inspection_blocked",
+                  "summary": (
+                      "Runner inventory could not be queried with the workflow token. "
+                      "Treat this as infrastructure visibility state, not a product regression."
+                  ),
+                  "error": {
+                      "type": "HTTPError",
+                      "code": error.code,
+                      "reason": str(error.reason),
+                  },
+              }
+              lane_available = "unknown"
+              lane_status = "inspection_blocked"
+          except Exception as error:  # pragma: no cover - defensive workflow guard
+              state = {
+                  "lane": "tart-ui",
+                  "available": None,
+                  "status": "inspection_error",
+                  "summary": (
+                      "Runner inventory inspection failed unexpectedly. "
+                      "Treat this as infrastructure state, not a product regression."
+                  ),
+                  "error": {
+                      "type": type(error).__name__,
+                      "message": str(error),
+                  },
+              }
+              lane_available = "unknown"
+              lane_status = "inspection_error"
+          else:
+              lane_runners = []
+              for runner in payload.get("runners", []):
+                  labels = {label.get("name") for label in runner.get("labels", [])}
+                  if "tart-ui" not in labels:
+                      continue
+                  lane_runners.append(
+                      {
+                          "name": runner.get("name"),
+                          "status": runner.get("status"),
+                          "busy": runner.get("busy"),
+                          "labels": sorted(labels),
+                      }
+                  )
 
-          lane_runners = []
-          for runner in payload.get("runners", []):
-              labels = {label.get("name") for label in runner.get("labels", [])}
-              if "tart-ui" not in labels:
-                  continue
-              lane_runners.append(
-                  {
-                      "name": runner.get("name"),
-                      "status": runner.get("status"),
-                      "busy": runner.get("busy"),
-                      "labels": sorted(labels),
-                  }
+              available = any(
+                  runner["status"] == "online" and runner["busy"] is False
+                  for runner in lane_runners
               )
+              state = {
+                  "lane": "tart-ui",
+                  "available": available,
+                  "status": "available" if available else "unavailable",
+                  "runners": lane_runners,
+                  "summary": (
+                      "At least one tart-ui runner is online and idle."
+                      if available
+                      else "No tart-ui runner is currently online and idle."
+                  ),
+              }
+              lane_available = "true" if available else "false"
+              lane_status = state["status"]
 
-          available = any(
-              runner["status"] == "online" and runner["busy"] is False
-              for runner in lane_runners
-          )
-          state = {
-              "lane": "tart-ui",
-              "available": available,
-              "runners": lane_runners,
-              "summary": (
-                  "At least one tart-ui runner is online and idle."
-                  if available
-                  else "No tart-ui runner is currently online and idle."
-              ),
-          }
           Path("runner-lane-health.json").write_text(json.dumps(state, indent=2) + "\n")
           with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as handle:
-              handle.write(f"lane_available={'true' if available else 'false'}\n")
+              handle.write(f"lane_available={lane_available}\n")
+              handle.write(f"lane_status={lane_status}\n")
           PY
 
       - name: Upload runner lane health artifact
@@ -160,10 +201,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Write skip reason
+        env:
+          LANE_AVAILABLE: ${{ needs.runner-lane-health.outputs.lane_available }}
+          LANE_STATUS: ${{ needs.runner-lane-health.outputs.lane_status }}
         run: |
-          cat <<'EOF' > perf-validation-skipped.md
-          Perf validation did not run because the dedicated tart-ui lane was not available.
-          Treat this as infrastructure state, not a product regression.
+          cat <<EOF > perf-validation-skipped.md
+          Perf validation did not run because the dedicated tart-ui lane was not available or could not be inspected.
+          lane_available: ${LANE_AVAILABLE}
+          lane_status: ${LANE_STATUS}
+          If lane_status is inspection_blocked, the workflow token could not query the runner inventory.
+          Treat this as infrastructure visibility state, not a product regression.
           See the runner-lane-health artifact for the runner inventory snapshot.
           EOF
 
