@@ -2,6 +2,14 @@
 
 Use this runbook to provision or relabel the dedicated `[self-hosted, signing-host]` lane required by the `Release` workflow.
 
+## Default operating policy
+
+- `signing-host` on the local interactive machine is opt-in only.
+- Do not leave a local signing runner running in the background when no release is in progress.
+- Start the runner for the release window, verify the release job is claimed, and stop it again when the work is finished.
+
+See [self-hosted-runner-policy.md](./self-hosted-runner-policy.md) for the repo-wide default.
+
 ## Why this exists
 
 The release workflow intentionally does not run on a generic self-hosted runner. It targets `[self-hosted, signing-host]` so signing and notarization stay isolated from routine desktop CI and Tart UI automation.
@@ -68,7 +76,16 @@ The job should report labels including `self-hosted` and `signing-host`, and `ru
 
 If repository release credentials are intentionally unavailable in the current environment, stop after the job is claimed by the correct runner.
 
-## 5. Move or remove the label
+## 5. Stop the local signing runner after use
+
+If the local host was only brought up for a release window, stop it when the release completes:
+
+```bash
+RUNNER_DIR="$HOME/.local/share/actions-runner-workspaces" \
+  ./scripts/runner.sh service-stop
+```
+
+## 6. Move or remove the label
 
 If release duties move to a different host:
 

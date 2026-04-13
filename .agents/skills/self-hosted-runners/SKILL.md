@@ -18,6 +18,15 @@ This repo has three important self-hosted lanes:
 - `lume-macos` for macOS CI and agent execution
 - `tart-ui` for UI and perf automation
 
+Default policy:
+
+- Keep the Lume guest runner as the normal `lume-macos` path.
+- Keep host-local runners stopped by default on the interactive machine.
+- Start host-local runners only as explicit, temporary capacity for cases like release signing or CI recovery.
+- Stop those host-local runners again as soon as the targeted jobs complete.
+
+Read [docs/development/self-hosted-runner-policy.md](../../docs/development/self-hosted-runner-policy.md) before leaving any host-local runner online.
+
 ## Quick Start
 
 Summarize GitHub runner inventory, queued jobs, and local runner directories:
@@ -64,8 +73,9 @@ For `lume-macos`:
 1. Confirm the VM exists and is running.
 2. Probe the guest over SSH with `probe_lume_runner_guest.py`.
 3. If the guest runner registration is stale, re-register it.
-4. If the guest is missing Xcode or is otherwise not build-ready, stop using it for CI and switch to a host fallback runner.
+4. If the guest is missing Xcode or is otherwise not build-ready, stop using it for CI and switch to a temporary host fallback runner.
 5. If a host fallback runner goes online and then flips offline while the local process is still alive, treat that as a host-side communication problem rather than a repo problem.
+6. Once the blocked jobs finish, stop the temporary host fallback runner so the host returns to the default stopped state.
 
 For `signing-host`:
 
@@ -104,6 +114,7 @@ Important patterns:
 - Prefer direct SSH into the Lume guest once passwordless SSH works.
 - Prefer a fresh host fallback runner name and directory over trying to salvage a strange local runner state.
 - Prefer proving that a runner can stay online and accept one job before relying on it for release work.
+- Prefer leaving host-local runners stopped when they are not actively needed.
 
 ## Standalone Scripts
 
@@ -130,3 +141,4 @@ Use for `lume-macos` guest recovery.
 - Do not keep rerunning jobs on a Lume guest that is missing Xcode.
 - Do not keep reusing a host fallback runner name that has session-conflict behavior. Register a fresh runner name if needed.
 - When a runner process is alive locally but GitHub shows it offline, classify that as a host-side problem first.
+- Do not leave temporary host-local runners running after the immediate CI or release need has been satisfied.

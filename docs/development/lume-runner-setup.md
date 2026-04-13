@@ -2,6 +2,14 @@
 
 Use this runbook to provision the `[self-hosted, lume-macos]` runner lane inside a Lume macOS VM for agent workflows that need macOS capabilities (swift build/test, screenshots).
 
+## Default operating policy
+
+- The Lume guest runner is the default `lume-macos` lane to leave available.
+- Host-local `lume-macos` fallback runners on the interactive machine should stay stopped by default.
+- Only start a host-local fallback runner when the Lume guest is unavailable or not build-ready, and stop it again after the blocked jobs finish.
+
+See [self-hosted-runner-policy.md](./self-hosted-runner-policy.md) for the repo-wide default.
+
 ## Secret handling
 
 The unattended profiles in this repo are templates, not ready-to-run secrets. Set a per-host guest password locally and render a local config copy before using any profile that needs auto-login or SSH:
@@ -107,6 +115,8 @@ gh api repos/fairchild/workspaces/actions/runners \
 ```
 
 Confirm there is an online runner with `lume-macos` label.
+
+This is the preferred steady-state lane. If you had to use a host-local fallback runner to recover CI, return to this VM-backed lane and stop the host-local service afterward.
 
 ## 5. Harden and install tools
 
@@ -227,6 +237,13 @@ Stop the VM:
 
 ```bash
 lume stop "$LUME_VM" --storage "$LUME_STORAGE/workspace-vms"
+```
+
+If you temporarily started a host-local fallback runner to unblock CI, stop it after the job finishes:
+
+```bash
+RUNNER_DIR="$HOME/.local/share/actions-runner-workspaces-lume-host-5" \
+  ./scripts/runner.sh service-stop
 ```
 
 Re-register after token expiry:
