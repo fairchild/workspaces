@@ -1,0 +1,210 @@
+{
+  "version": 1,
+  "reference_baseline_note": "Seed baseline derived from validated local runs and historical debug gates. Refresh with a 10-run reference capture before tightening budgets.",
+  "budget_formula": {
+    "gate": {
+      "stat": "median",
+      "multiplier": 1.25,
+      "rounding": "ceil"
+    },
+    "diagnostic": {
+      "stat": "p95",
+      "multiplier": 1.5,
+      "rounding": "ceil"
+    }
+  },
+  "gate_policy": {
+    "pr": {
+      "local_evidence_required": true,
+      "self_hosted_perf_required": false,
+      "self_hosted_perf_mode": "advisory"
+    },
+    "main_scheduled": {
+      "self_hosted_perf_required": true,
+      "self_hosted_perf_condition": "after_7_day_lane_stability"
+    }
+  },
+  "scenarios": [
+    {
+      "id": "debug_no_activate",
+      "build_kind": "debug",
+      "description": "Debug binary launched without activation for reproducible local startup and switch timing."
+    },
+    {
+      "id": "debug_activate",
+      "build_kind": "debug",
+      "description": "Debug binary launched with normal activation for interactive startup timing."
+    },
+    {
+      "id": "installed_clean_shell",
+      "build_kind": "installed",
+      "description": "Installed app launched with clean shell profiles to isolate app and terminal surface cost."
+    },
+    {
+      "id": "installed_login_shell",
+      "build_kind": "installed",
+      "description": "Installed app launched with normal login shell profiles to include shell-init overhead."
+    },
+    {
+      "id": "installed_input_short_capture",
+      "build_kind": "installed",
+      "description": "Short interactive focused typing capture on the installed app for event-age and handler timing."
+    }
+  ],
+  "metrics": [
+    {
+      "name": "launch_to_first_prompt",
+      "unit": "ms",
+      "supported_scenarios": [
+        "debug_no_activate",
+        "debug_activate",
+        "installed_clean_shell",
+        "installed_login_shell"
+      ],
+      "reference_baselines": {
+        "debug_no_activate": {
+          "median_ms": 200,
+          "p95_ms": 260
+        },
+        "debug_activate": {
+          "median_ms": 220,
+          "p95_ms": 300
+        },
+        "installed_clean_shell": {
+          "median_ms": 640,
+          "p95_ms": 760
+        },
+        "installed_login_shell": {
+          "median_ms": 900,
+          "p95_ms": 1100
+        }
+      }
+    },
+    {
+      "name": "terminal_first_output",
+      "unit": "ms",
+      "supported_scenarios": [
+        "installed_clean_shell",
+        "installed_login_shell"
+      ],
+      "reference_baselines": {
+        "installed_clean_shell": {
+          "median_ms": 540,
+          "p95_ms": 650
+        },
+        "installed_login_shell": {
+          "median_ms": 700,
+          "p95_ms": 900
+        }
+      }
+    },
+    {
+      "name": "first_prompt_ready",
+      "unit": "ms",
+      "supported_scenarios": [
+        "installed_clean_shell",
+        "installed_login_shell"
+      ],
+      "reference_baselines": {
+        "installed_clean_shell": {
+          "median_ms": 540,
+          "p95_ms": 650
+        },
+        "installed_login_shell": {
+          "median_ms": 700,
+          "p95_ms": 900
+        }
+      }
+    },
+    {
+      "name": "repo_hydration",
+      "unit": "ms",
+      "supported_scenarios": [
+        "debug_no_activate",
+        "debug_activate",
+        "installed_clean_shell",
+        "installed_login_shell"
+      ],
+      "reference_baselines": {
+        "debug_no_activate": {
+          "median_ms": 20,
+          "p95_ms": 30
+        },
+        "debug_activate": {
+          "median_ms": 20,
+          "p95_ms": 30
+        },
+        "installed_clean_shell": {
+          "median_ms": 20,
+          "p95_ms": 30
+        },
+        "installed_login_shell": {
+          "median_ms": 20,
+          "p95_ms": 30
+        }
+      }
+    },
+    {
+      "name": "repo_click_to_focus",
+      "unit": "ms",
+      "supported_scenarios": [
+        "debug_no_activate",
+        "debug_activate"
+      ],
+      "reference_baselines": {
+        "debug_no_activate": {
+          "median_ms": 200,
+          "p95_ms": 260
+        },
+        "debug_activate": {
+          "median_ms": 220,
+          "p95_ms": 300
+        }
+      }
+    },
+    {
+      "name": "workspace_click_to_focus",
+      "unit": "ms",
+      "supported_scenarios": [
+        "debug_no_activate",
+        "debug_activate"
+      ],
+      "reference_baselines": {
+        "debug_no_activate": {
+          "median_ms": 220,
+          "p95_ms": 300
+        },
+        "debug_activate": {
+          "median_ms": 240,
+          "p95_ms": 320
+        }
+      }
+    },
+    {
+      "name": "input_event_age_ms_median",
+      "unit": "ms",
+      "supported_scenarios": [
+        "installed_input_short_capture"
+      ],
+      "reference_baselines": {
+        "installed_input_short_capture": {
+          "median_ms": 12,
+          "p95_ms": 25
+        }
+      }
+    },
+    {
+      "name": "input_handler_duration_ms_median",
+      "unit": "ms",
+      "supported_scenarios": [
+        "installed_input_short_capture"
+      ],
+      "reference_baselines": {
+        "installed_input_short_capture": {
+          "median_ms": 1,
+          "p95_ms": 4
+        }
+      }
+    }
+  ]
+}

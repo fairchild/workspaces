@@ -189,6 +189,17 @@ jobs:
       - name: Verify signed app bundle
         run: ./scripts/verify-release-bundle.sh build/WorkspaceManager.app
 
+      - name: Verify installed-build perf parity
+        run: ./scripts/verify-installed-perf.sh --allow-skip-noninteractive build/WorkspaceManager.app build/release-installed-perf
+
+      - name: Upload installed-build perf verification artifact
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: release-installed-perf-${{ github.run_id }}
+          path: build/release-installed-perf
+          if-no-files-found: warn
+
       - name: Notarize and package DMG
         run: bash ./scripts/notarize.sh
 

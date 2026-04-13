@@ -60,80 +60,80 @@ struct WorkspaceManagerApp: App {
         .commands {
             CommandGroup(after: .newItem) {
                 Button("New Workspace...") {
-                    appCommandState.newWorkspaceAction?()
+                    appCommandState.performNewWorkspace()
                 }
                 .keyboardShortcut(
                     AppChromeShortcut.newWorkspace.keyEquivalent,
                     modifiers: AppChromeShortcut.newWorkspace.eventModifiers
                 )
-                .disabled(appCommandState.newWorkspaceAction == nil)
+                .disabled(!appCommandState.canCreateWorkspace)
 
                 Button("Open in...") {
-                    appCommandState.mainWindowActions.openInEditor?()
+                    appCommandState.perform(.openInEditor)
                 }
                 .keyboardShortcut(
                     AppChromeShortcut.openInEditor.keyEquivalent,
                     modifiers: AppChromeShortcut.openInEditor.eventModifiers
                 )
-                .disabled(appCommandState.mainWindowActions.openInEditor == nil)
+                .disabled(!appCommandState.mainWindowAvailability.canOpenInEditor)
 
                 Button("Toggle Sidebar") {
-                    appCommandState.mainWindowActions.toggleSidebar?()
+                    appCommandState.perform(.toggleSidebar)
                 }
                 .keyboardShortcut(
                     AppChromeShortcut.toggleSidebar.keyEquivalent,
                     modifiers: AppChromeShortcut.toggleSidebar.eventModifiers
                 )
-                .disabled(appCommandState.mainWindowActions.toggleSidebar == nil)
+                .disabled(!appCommandState.mainWindowAvailability.canToggleSidebar)
 
                 Button("Toggle Inspector") {
-                    appCommandState.mainWindowActions.toggleInspector?()
+                    appCommandState.perform(.toggleInspector)
                 }
                 .keyboardShortcut(
                     AppChromeShortcut.toggleInspector.keyEquivalent,
                     modifiers: AppChromeShortcut.toggleInspector.eventModifiers
                 )
-                .disabled(appCommandState.mainWindowActions.toggleInspector == nil)
+                .disabled(!appCommandState.mainWindowAvailability.canToggleInspector)
 
                 Button("Toggle Terminal Panel") {
-                    appCommandState.mainWindowActions.toggleTerminalPanel?()
+                    appCommandState.perform(.toggleTerminalPanel)
                 }
                 .keyboardShortcut(
                     AppChromeShortcut.toggleTerminalPanel.keyEquivalent,
                     modifiers: AppChromeShortcut.toggleTerminalPanel.eventModifiers
                 )
-                .disabled(appCommandState.mainWindowActions.toggleTerminalPanel == nil)
+                .disabled(!appCommandState.mainWindowAvailability.canToggleTerminalPanel)
             }
 
             SidebarCommands()
 
             CommandMenu("Selection") {
                 Button("Open in Browser") {
-                    appCommandState.mainWindowActions.openInBrowser?()
+                    appCommandState.perform(.openInBrowser)
                 }
-                .disabled(appCommandState.mainWindowActions.openInBrowser == nil)
+                .disabled(!appCommandState.mainWindowAvailability.canOpenInBrowser)
 
                 Button("Reload Web Source") {
-                    appCommandState.mainWindowActions.reloadWebSource?()
+                    appCommandState.perform(.reloadWebSource)
                 }
-                .disabled(appCommandState.mainWindowActions.reloadWebSource == nil)
+                .disabled(!appCommandState.mainWindowAvailability.canReloadWebSource)
 
                 Divider()
 
                 Button("Open Desktop") {
-                    appCommandState.mainWindowActions.openDesktop?()
+                    appCommandState.perform(.openDesktop)
                 }
-                .disabled(appCommandState.mainWindowActions.openDesktop == nil)
+                .disabled(!appCommandState.mainWindowAvailability.canOpenDesktop)
 
                 Button("Reveal in Finder") {
-                    appCommandState.mainWindowActions.revealInFinder?()
+                    appCommandState.perform(.revealInFinder)
                 }
-                .disabled(appCommandState.mainWindowActions.revealInFinder == nil)
+                .disabled(!appCommandState.mainWindowAvailability.canRevealInFinder)
 
                 Button("Copy Path") {
-                    appCommandState.mainWindowActions.copyPath?()
+                    appCommandState.perform(.copyPath)
                 }
-                .disabled(appCommandState.mainWindowActions.copyPath == nil)
+                .disabled(!appCommandState.mainWindowAvailability.canCopyPath)
             }
 
             CommandGroup(after: .help) {
@@ -591,8 +591,94 @@ struct MainWindowFocusedActions {
     static let empty = MainWindowFocusedActions()
 }
 
+struct MainWindowCommandAvailability: Equatable {
+    let canToggleSidebar: Bool
+    let canToggleInspector: Bool
+    let canToggleTerminalPanel: Bool
+    let canOpenInEditor: Bool
+    let canOpenInBrowser: Bool
+    let canReloadWebSource: Bool
+    let canOpenDesktop: Bool
+    let canRevealInFinder: Bool
+    let canCopyPath: Bool
+
+    static let empty = MainWindowCommandAvailability(
+        canToggleSidebar: false,
+        canToggleInspector: false,
+        canToggleTerminalPanel: false,
+        canOpenInEditor: false,
+        canOpenInBrowser: false,
+        canReloadWebSource: false,
+        canOpenDesktop: false,
+        canRevealInFinder: false,
+        canCopyPath: false
+    )
+}
+
+enum MainWindowCommand {
+    case toggleSidebar
+    case toggleInspector
+    case toggleTerminalPanel
+    case openInEditor
+    case openInBrowser
+    case reloadWebSource
+    case openDesktop
+    case revealInFinder
+    case copyPath
+}
+
 @MainActor
 final class AppCommandState: ObservableObject {
-    @Published var newWorkspaceAction: (@MainActor () -> Void)?
-    @Published var mainWindowActions = MainWindowFocusedActions.empty
+    @Published private(set) var canCreateWorkspace = false
+    @Published private(set) var mainWindowAvailability = MainWindowCommandAvailability.empty
+
+    private var newWorkspaceAction: (@MainActor () -> Void)?
+    private var mainWindowActions = MainWindowFocusedActions.empty
+
+    func setNewWorkspaceAction(_ action: (@MainActor () -> Void)?) {
+        newWorkspaceAction = action
+        let nextAvailability = action != nil
+        guard canCreateWorkspace != nextAvailability else { return }
+        canCreateWorkspace = nextAvailability
+    }
+
+    func setMainWindowActions(
+        _ actions: MainWindowFocusedActions,
+        availability: MainWindowCommandAvailability
+    ) {
+        mainWindowActions = actions
+        guard mainWindowAvailability != availability else { return }
+        mainWindowAvailability = availability
+    }
+
+    func clearMainWindowActions() {
+        setMainWindowActions(.empty, availability: .empty)
+    }
+
+    func performNewWorkspace() {
+        newWorkspaceAction?()
+    }
+
+    func perform(_ command: MainWindowCommand) {
+        switch command {
+        case .toggleSidebar:
+            mainWindowActions.toggleSidebar?()
+        case .toggleInspector:
+            mainWindowActions.toggleInspector?()
+        case .toggleTerminalPanel:
+            mainWindowActions.toggleTerminalPanel?()
+        case .openInEditor:
+            mainWindowActions.openInEditor?()
+        case .openInBrowser:
+            mainWindowActions.openInBrowser?()
+        case .reloadWebSource:
+            mainWindowActions.reloadWebSource?()
+        case .openDesktop:
+            mainWindowActions.openDesktop?()
+        case .revealInFinder:
+            mainWindowActions.revealInFinder?()
+        case .copyPath:
+            mainWindowActions.copyPath?()
+        }
+    }
 }

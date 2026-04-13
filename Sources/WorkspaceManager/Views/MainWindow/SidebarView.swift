@@ -1019,12 +1019,12 @@ struct SidebarView: View {
 
     @MainActor
     private func syncAppCommands() {
-        appCommandState.newWorkspaceAction = handleNewWorkspaceShortcut
+        appCommandState.setNewWorkspaceAction(handleNewWorkspaceShortcut)
     }
 
     @MainActor
     private func clearAppCommands() {
-        appCommandState.newWorkspaceAction = nil
+        appCommandState.setNewWorkspaceAction(nil)
     }
 
     @MainActor

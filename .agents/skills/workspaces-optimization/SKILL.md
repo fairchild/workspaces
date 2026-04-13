@@ -57,11 +57,23 @@ Launch an installed build with focused diagnostics enabled:
 ./scripts/launch-installed-diagnostics.sh --clean-shell
 ```
 
+Run one canonical perf scenario through the shared wrapper:
+
+```bash
+./scripts/perf-runner.sh --scenario debug_no_activate --assert-budget
+```
+
 Summarize the resulting `[Perf]` log:
 
 ```bash
 ./.agents/skills/workspaces-optimization/scripts/summarize_perf_log.py \
   /tmp/workspaces-installed-diagnostics-YYYYMMDD-HHMMSS.log
+```
+
+Compare two canonical summaries:
+
+```bash
+./scripts/perf-compare.py before-summary.json after-summary.json
 ```
 
 Run the repo's repeated launch baseline when you have a checkout and can use the debug app:
@@ -79,6 +91,7 @@ Run the repo's repeated launch baseline when you have a checkout and can use the
 - If the machine has both the installed app and a repo checkout, prefer `collect_installed_perf_bundle.py` so the operator can run one command and return one zip bundle.
 - If the machine only has the installed app, run `host_perf_probe.py` in the slow repo and use the installed app for manual repro.
 - If you have a repo checkout and want an instrumented installed build run, use `./scripts/launch-installed-diagnostics.sh` with either `--clean-shell` or `--login-shell`.
+- If you need deterministic scenario output across debug and installed runs, prefer `./scripts/perf-runner.sh --scenario <id>`.
 - If you have the repo checkout and can build locally, use the repo perf scripts after the host probe so you have both target-machine and debug-build evidence.
 
 ### 2. Collect the smallest useful baseline

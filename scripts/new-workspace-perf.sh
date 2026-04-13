@@ -123,12 +123,14 @@ ARCH="$(uname -m)"
 MODEL="$(sysctl -n hw.model 2>/dev/null || echo unknown)"
 TIMESTAMP="$(date '+%Y-%m-%dT%H:%M:%S%z')"
 
-python3 - "$OUTPUT_DIR" "$RUNS" "$SLEEP_SECONDS" "$TIMESTAMP" "$OS_VERSION" "$OS_BUILD" "$ARCH" "$MODEL" "$LAUNCH_MODE" <<'PY'
+PERF_SUMMARY_TIMESTAMP="$TIMESTAMP" PYTHONPATH="$ROOT_DIR/scripts${PYTHONPATH:+:$PYTHONPATH}" python3 - "$OUTPUT_DIR" "$RUNS" "$SLEEP_SECONDS" "$TIMESTAMP" "$OS_VERSION" "$OS_BUILD" "$ARCH" "$MODEL" "$LAUNCH_MODE" <<'PY'
 import json
 import pathlib
 import re
 import statistics
 import sys
+
+from perf_schema import canonical_summary, load_contract
 
 out_dir = pathlib.Path(sys.argv[1])
 runs = int(sys.argv[2])
@@ -199,31 +201,61 @@ def summarize(values: list[float]):
     if not values:
         return None
     return {
-        "n": len(values),
+        "count": len(values),
         "min": min(values),
         "max": max(values),
         "median": statistics.median(values),
         "mean": statistics.mean(values),
+        "p95": max(values),
+        "unit": "ms",
     }
 
 
-summary = {
-    "metadata": {
-        "timestamp": timestamp,
+scenario = "debug_no_activate" if launch_mode == "no-activate" else "debug_activate"
+canonical_metrics = {
+    metric: stats
+    for metric, values in metric_values.items()
+    if (stats := summarize(values)) is not None
+}
+findings = []
+sheet_stats = canonical_metrics.get("new_workspace_sheet_ready")
+if sheet_stats and sheet_stats["median"] > 500:
+    findings.append(
+        f"new_workspace_sheet_ready median is {sheet_stats['median']:.2f} ms. Opening the sheet still carries noticeable deferred work."
+    )
+if not findings:
+    findings.append("No automated new-workspace perf findings were derived from the captured [Perf] lines.")
+
+summary = canonical_summary(
+    scenario=scenario,
+    build_kind="debug",
+    metrics=canonical_metrics,
+    diagnostic_findings=findings,
+    artifacts={
+        "output_dir": str(out_dir),
         "runs_requested": runs,
         "sleep_seconds": sleep_seconds,
-        "launch_mode": launch_mode,
-        "os_version": os_version,
-        "os_build": os_build,
-        "arch": arch,
-        "model": model,
-        "new_workspace_sheet_triggers": sorted(set(new_workspace_triggers)),
+        "log_files": [str(path) for path in sorted(out_dir.glob("run-*.log"))],
     },
-    "metrics": {
-        metric: summarize(values)
-        for metric, values in metric_values.items()
+    os_version=os_version,
+    os_build=os_build,
+    machine_model=model,
+    arch=arch,
+    contract=load_contract(),
+    extra={
+        "metadata": {
+            "timestamp": timestamp,
+            "runs_requested": runs,
+            "sleep_seconds": sleep_seconds,
+            "launch_mode": launch_mode,
+            "os_version": os_version,
+            "os_build": os_build,
+            "arch": arch,
+            "model": model,
+            "new_workspace_sheet_triggers": sorted(set(new_workspace_triggers)),
+        }
     },
-}
+)
 
 summary_lines = []
 for metric in [
@@ -243,8 +275,8 @@ for metric in [
         summary_lines.append(f"{metric}: missing")
         continue
     summary_lines.append(
-        f"{metric}: n={stats['n']} min={stats['min']:.2f} max={stats['max']:.2f} "
-        f"median={stats['median']:.2f} mean={stats['mean']:.2f}"
+        f"{metric}: count={stats['count']} min={stats['min']:.2f} max={stats['max']:.2f} "
+        f"median={stats['median']:.2f} mean={stats['mean']:.2f} p95={stats['p95']:.2f}"
     )
 
 summary_lines.append(

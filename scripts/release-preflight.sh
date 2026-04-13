@@ -30,7 +30,7 @@ echo "SHA:  $SHA"
 echo "Repo: $REPO"
 echo ""
 
-# Check a workflow's conclusion for a given SHA.
+# Check a check-run's conclusion for a given SHA.
 # Returns: "success", "failure", "neutral", "cancelled", "skipped",
 #          "timed_out", "action_required", or "not_found"
 check_workflow() {
@@ -41,6 +41,19 @@ check_workflow() {
         --jq ".check_runs[] | select(.name == \"$workflow_name\") | .conclusion" \
         2>/dev/null | head -1)
     echo "${conclusion:-not_found}"
+}
+
+check_any_workflow() {
+    local workflow_name=""
+    local result="not_found"
+    for workflow_name in "$@"; do
+        result=$(check_workflow "$workflow_name")
+        if [[ "$result" != "not_found" ]]; then
+            echo "$result"
+            return
+        fi
+    done
+    echo "not_found"
 }
 
 EXIT_CODE=0
@@ -83,7 +96,7 @@ esac
 
 # --- Advisory: perf-validation ---
 echo -n "Perf validation: "
-PERF_RESULT=$(check_workflow "capture")
+PERF_RESULT=$(check_any_workflow "perf-validation" "capture")
 case "$PERF_RESULT" in
     success)
         echo "PASS"

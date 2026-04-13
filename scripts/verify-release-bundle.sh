@@ -26,7 +26,8 @@ usage() {
 Usage: ./scripts/verify-release-bundle.sh <WorkspaceManager.app>
 
 Verifies that the packaged app bundle and nested Mach-O code objects are signed
-with a non-ad-hoc Developer ID signature and a real team identifier.
+with a non-ad-hoc Developer ID signature and a real team identifier. Also
+verifies that the bundled Ghostty resources required at runtime are present.
 EOF
 }
 
@@ -101,6 +102,8 @@ require_cmd find
 
 APP_BUNDLE="${APP_BUNDLE/#\~/$HOME}"
 [[ -d "$APP_BUNDLE" ]] || fail "App bundle not found: $APP_BUNDLE"
+[[ -d "$APP_BUNDLE/Contents/Resources/ghostty" ]] || fail "Missing Ghostty resources directory"
+[[ -d "$APP_BUNDLE/Contents/Resources/terminfo" ]] || fail "Missing bundled terminfo directory"
 
 CODE_OBJECTS_FILE="$TMP_DIR/code-objects.txt"
 : >"$CODE_OBJECTS_FILE"

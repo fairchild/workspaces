@@ -15,6 +15,8 @@ final class TerminalFocusCoordinator: ObservableObject {
         let activateApp: Bool
         let activeSessionID: UUID?
         let onTargetFocused: (() -> Void)?
+        let requestedAtUptime: TimeInterval
+        var surfaceResolvedAtUptime: TimeInterval?
     }
 
     private weak var attachedSurfaceStore: HostTerminalSurfaceStore?
@@ -99,7 +101,9 @@ final class TerminalFocusCoordinator: ObservableObject {
             sessionID: targetSessionID,
             activateApp: activateApp,
             activeSessionID: activeSessionID,
-            onTargetFocused: onTargetFocused
+            onTargetFocused: onTargetFocused,
+            requestedAtUptime: ProcessInfo.processInfo.systemUptime,
+            surfaceResolvedAtUptime: nil
         )
         attemptPendingFocus(using: surfaceStore, reason: "request_started")
     }
@@ -205,7 +209,7 @@ final class TerminalFocusCoordinator: ObservableObject {
     }
 
     private func attemptPendingFocus(using surfaceStore: HostTerminalSurfaceStore, reason: String) {
-        guard let pendingFocusRequest else { return }
+        guard var pendingFocusRequest else { return }
 
         let focusFields = [
             "activate_app": pendingFocusRequest.activateApp ? "true" : "false",
@@ -222,9 +226,21 @@ final class TerminalFocusCoordinator: ObservableObject {
             return
         }
 
+        let surfaceResolvedAtUptime = ProcessInfo.processInfo.systemUptime
+        let resolutionDurationMs = max(
+            0,
+            (surfaceResolvedAtUptime - pendingFocusRequest.requestedAtUptime) * 1000
+        )
+        pendingFocusRequest.surfaceResolvedAtUptime = surfaceResolvedAtUptime
+        self.pendingFocusRequest = pendingFocusRequest
+
         InvestigationDiagnostics.emitFocus(
             phase: "focus_surface_resolution",
-            fields: focusFields.merging(["sub_span": "focus_surface_resolution"]) { _, new in new }
+            fields: focusFields.merging([
+                "duration_ms": String(format: "%.2f", resolutionDurationMs),
+                "status": "completed",
+                "sub_span": "focus_surface_resolution",
+            ]) { _, new in new }
         )
         InvestigationDiagnostics.emitFocus(
             phase: "coordinator_target_terminal_resolved",
@@ -241,18 +257,34 @@ final class TerminalFocusCoordinator: ObservableObject {
             for: terminal,
             onFocused: { [weak self] in
                 guard let self else { return }
-                guard self.pendingFocusRequest?.sessionID == pendingFocusRequest.sessionID else { return }
+                guard let pendingRequest = self.pendingFocusRequest,
+                    pendingRequest.sessionID == pendingFocusRequest.sessionID
+                else { return }
                 self.pendingFocusRequest = nil
+                let focusCompletedAtUptime = ProcessInfo.processInfo.systemUptime
+                let firstResponderDurationMs = max(
+                    0,
+                    (focusCompletedAtUptime
+                        - (pendingRequest.surfaceResolvedAtUptime ?? pendingRequest.requestedAtUptime))
+                        * 1000
+                )
+                let totalFocusDurationMs = max(
+                    0,
+                    (focusCompletedAtUptime - pendingRequest.requestedAtUptime) * 1000
+                )
                 InvestigationDiagnostics.emitFocus(
                     phase: "focus_request_to_first_responder",
                     fields: focusFields.merging([
+                        "duration_ms": String(format: "%.2f", firstResponderDurationMs),
                         "sub_span": "focus_request_to_first_responder",
                         "status": "completed",
                     ]) { _, new in new }
                 )
                 InvestigationDiagnostics.emitFocus(
                     phase: "coordinator_target_focused",
-                    fields: focusFields
+                    fields: focusFields.merging([
+                        "duration_ms": String(format: "%.2f", totalFocusDurationMs)
+                    ]) { _, new in new }
                 )
                 pendingFocusRequest.onTargetFocused?()
             }

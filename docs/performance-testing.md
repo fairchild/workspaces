@@ -32,6 +32,7 @@ Use the scripted baseline runner:
 ```bash
 ./scripts/perf-baseline.sh 5 8
 ./scripts/perf-baseline.sh 5 8 --launch-mode activate
+./scripts/perf-runner.sh --scenario debug_no_activate --assert-budget
 ```
 
 To persist results and generate a visual trend dashboard:
@@ -51,7 +52,7 @@ What it does:
 1. Kills existing `WorkspaceManager` process.
 2. Launches app with `WORKSPACES_PERF_AUTO_SELECT_FIRST_REPO=1`.
 3. Collects `[Perf]` metric log lines from each run.
-4. Produces `summary.txt` with min/median/mean/max.
+4. Produces canonical `summary.json` plus `summary.txt`.
 
 Output location:
 
@@ -78,6 +79,25 @@ The dedicated GitHub Actions workflow is `.github/workflows/perf-validation.yml`
 - It runs on `[self-hosted, tart-ui]`, not in the main `CI` workflow, so app-launching perf checks stay off the interactive desktop.
 - It rebuilds the app before capture, but leaves the full Swift test suite to the main `CI` workflow on GitHub-hosted macOS; this avoids headless keychain-specific failures on the Tart lane from blocking perf artifact generation.
 - On `codex/**` branches, pushes that change the perf workflow, perf script, or app/test sources also trigger it so branch-local validation is possible before merge.
+- A separate ubuntu-hosted runner-lane-health job classifies tart-ui availability so offline runners are treated as infra state, not product regressions.
+
+## Installed-build parity workflow
+
+Use the canonical installed-build wrapper when validating packaged or installed apps:
+
+```bash
+./scripts/perf-runner.sh --scenario installed_clean_shell --app /Applications/WorkspaceManager.app/Contents/MacOS/WorkspaceManager
+./scripts/perf-runner.sh --scenario installed_login_shell --app /Applications/WorkspaceManager.app/Contents/MacOS/WorkspaceManager
+./scripts/perf-runner.sh --scenario installed_input_short_capture --capture-seconds 15
+./scripts/verify-installed-perf.sh build/WorkspaceManager.app
+```
+
+These runs use the same summary schema as the debug baseline, so before/after comparisons can flow through `./scripts/perf-compare.py`.
+
+Notes:
+
+- `installed_input_short_capture` is intentionally interactive. The app activates and you must type in the focused terminal during the capture window.
+- `verify-installed-perf.sh --allow-skip-noninteractive` is reserved for release automation on runners that may lack an interactive Aqua session.
 
 ## Why `WORKSPACES_PERF_AUTO_SELECT_FIRST_REPO=1` is used
 
