@@ -71,7 +71,7 @@ Guidance:
 - Use `debug_activate` for interactive local validation.
 - Use `installed_clean_shell` to isolate app and terminal surface cost.
 - Use `installed_login_shell` to include shell-init overhead.
-- Use `installed_input_short_capture` only for short focused typing captures.
+- Use `installed_input_short_capture` only for short interactive focused typing captures.
 
 ### 3. Run through the wrapper first
 
@@ -118,7 +118,7 @@ Installed validation must confirm:
 - installed clean-shell capture emits `first_prompt_ready`
 - logs do not contain missing-resource warnings
 
-If the verifier fails because the machine is headless or lacks a real display session, classify that as an environment limitation, not a product perf result.
+If the verifier fails because the machine is headless or lacks a real display session, classify that as an environment limitation, not a product perf result. Release automation may use `./scripts/verify-installed-perf.sh --allow-skip-noninteractive` for that one case only.
 
 ### 6. Separate infra failures from perf regressions
 

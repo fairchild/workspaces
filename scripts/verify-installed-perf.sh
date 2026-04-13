@@ -6,7 +6,7 @@ set -euo pipefail
 usage() {
     cat <<'EOF'
 Usage:
-  ./scripts/verify-installed-perf.sh <WorkspaceManager.app|binary> [output_dir]
+  ./scripts/verify-installed-perf.sh [--allow-skip-noninteractive] <WorkspaceManager.app|binary> [output_dir]
 
 Checks:
   - bundled Ghostty resources exist
@@ -21,9 +21,42 @@ fail() {
     exit 1
 }
 
+write_status() {
+    local status="$1"
+    local reason="$2"
+    local status_file="${OUTPUT_DIR:-}/verification-status.json"
+    [[ -n "${OUTPUT_DIR:-}" ]] || return 0
+    cat >"$status_file" <<EOF
+{
+  "status": "$status",
+  "reason": "$reason",
+  "app_bundle": "${APP_BUNDLE:-}",
+  "app_binary": "${APP_BINARY:-}",
+  "log_file": "${LOG_FILE:-}",
+  "summary_json": "${SUMMARY_JSON:-}",
+  "summary_txt": "${SUMMARY_TXT:-}"
+}
+EOF
+}
+
+skip_noninteractive() {
+    local reason="$1"
+    write_status "skipped_noninteractive_display" "$reason"
+    echo "[verify-installed-perf] WARNING: $reason" >&2
+    echo "[verify-installed-perf] status: skipped_noninteractive_display" >&2
+    exit 0
+}
+
+ALLOW_SKIP_NONINTERACTIVE=0
+
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
     usage
     exit 0
+fi
+
+if [[ "${1:-}" == "--allow-skip-noninteractive" ]]; then
+    ALLOW_SKIP_NONINTERACTIVE=1
+    shift
 fi
 
 [[ $# -ge 1 ]] || {
@@ -81,6 +114,9 @@ if rg -n "ghostty terminfo not found|no resources dir set, shell integration dis
 fi
 
 if rg -n "CVDisplayLinkCreateWithCGDisplays error -6661|embedded_window: error initializing surface err=error.OutOfMemory" "$LOG_FILE" >/dev/null; then
+    if [[ "$ALLOW_SKIP_NONINTERACTIVE" -eq 1 ]]; then
+        skip_noninteractive "Installed-build perf verification requires an interactive display-capable macOS session; Ghostty surface initialization failed in the current environment"
+    fi
     fail "Installed-build perf verification requires an interactive display-capable macOS session; Ghostty surface initialization failed in the current environment"
 fi
 
@@ -100,6 +136,7 @@ if missing:
     raise SystemExit(f"missing installed perf metrics: {', '.join(missing)}")
 PY
 
+write_status "verified" "installed clean-shell metrics present"
 echo "Verified installed perf parity for $APP_BUNDLE"
 echo "  log: $LOG_FILE"
 echo "  summary_json: $SUMMARY_JSON"

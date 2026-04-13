@@ -154,6 +154,31 @@ class PerfSummarizerTests(unittest.TestCase):
             self.assertEqual(payload["environment"]["build_kind"], "installed")
             self.assertIn("terminal_first_output", payload["metrics"])
 
+    def test_installed_input_log_summary_is_canonical(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "installed-input.log"
+            log_path.write_text(
+                "\n".join(
+                    [
+                        "2026-04-11 10:00:00.000 [Perf] metric=input_investigation phase=key_down_handled event_age_ms=14.00 handler_duration_ms=0.80 window_key=true surface_missing=false",
+                        "2026-04-11 10:00:00.100 [Perf] metric=input_investigation phase=key_down_handled event_age_ms=11.00 handler_duration_ms=0.60 window_key=true surface_missing=false",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            payload = self.run_json(
+                [
+                    str(SUMMARIZE_PERF_LOG),
+                    "--json",
+                    str(log_path),
+                ]
+            )
+            self.assertEqual(payload["scenario"], "installed_input_short_capture")
+            self.assertEqual(payload["environment"]["build_kind"], "installed")
+            self.assertIn("input_event_age_ms_median", payload["metrics"])
+            self.assertIn("input_handler_duration_ms_median", payload["metrics"])
+
     def test_diagnostic_report_summary_is_canonical(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             zip_path = Path(tmpdir) / "workspaces-report.zip"

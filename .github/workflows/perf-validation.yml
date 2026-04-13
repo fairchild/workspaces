@@ -14,6 +14,10 @@ on:
       - scripts/build-ghosttykit.sh
       - scripts/perf-baseline.sh
       - scripts/perf-runner.sh
+      - scripts/perf_schema.py
+      - scripts/perf-compare.py
+      - scripts/new-workspace-perf.sh
+      - scripts/test_perf_tools.py
       - scripts/launch-installed-diagnostics.sh
       - scripts/verify-installed-perf.sh
       - Sources/**

@@ -33,6 +33,7 @@ This directory contains build/release helpers plus UI test utilities.
   - Verifies packaged-app Ghostty resource presence plus a clean-shell installed-build perf capture.
   - Fails if `terminal_first_output` / `first_prompt_ready` are missing or if known Ghostty resource warnings appear.
   - Requires an interactive display-capable macOS session; it is not valid in headless AppKit environments.
+  - `--allow-skip-noninteractive` converts only the known display-session limitation into a recorded skip for release automation.
 
 ## Performance Contract
 

@@ -48,7 +48,7 @@
     {
       "id": "installed_input_short_capture",
       "build_kind": "installed",
-      "description": "Short focused typing capture on the installed app for event-age and handler timing."
+      "description": "Short interactive focused typing capture on the installed app for event-age and handler timing."
     }
   ],
   "metrics": [

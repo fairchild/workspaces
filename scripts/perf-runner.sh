@@ -120,19 +120,34 @@ run_debug() {
 
 run_installed() {
     local shell_mode_flag="$1"
-    shift
+    local activate_mode="${2:-no-activate}"
+    shift 2
     local log_file="$OUTPUT_DIR/$SCENARIO.log"
     local summary_json="$OUTPUT_DIR/summary.json"
     local summary_txt="$OUTPUT_DIR/summary.txt"
     mkdir -p "$OUTPUT_DIR/app-data"
 
-    WORKSPACES_DATA_DIR="$OUTPUT_DIR/app-data" "$ROOT_DIR/scripts/launch-installed-diagnostics.sh" \
-        --app "$APP_PATH" \
-        "$shell_mode_flag" \
-        --no-activate \
-        --capture-seconds "$CAPTURE_SECONDS" \
-        "$@" \
+    local launch_args=(
+        --app "$APP_PATH"
+        "$shell_mode_flag"
+        --capture-seconds "$CAPTURE_SECONDS"
         --log-file "$log_file"
+    )
+    if [[ "$activate_mode" == "no-activate" ]]; then
+        launch_args+=(--no-activate)
+    fi
+
+    WORKSPACES_DATA_DIR="$OUTPUT_DIR/app-data" "$ROOT_DIR/scripts/launch-installed-diagnostics.sh" \
+        "${launch_args[@]}" \
+        "$@"
+
+    summarize_installed_log "$log_file" "$summary_json" "$summary_txt"
+}
+
+summarize_installed_log() {
+    local log_file="$1"
+    local summary_json="$2"
+    local summary_txt="$3"
 
     "$ROOT_DIR/.agents/skills/workspaces-optimization/scripts/summarize_perf_log.py" \
         --json \
@@ -152,6 +167,50 @@ run_installed() {
     echo "log_file=$log_file"
 }
 
+run_installed_input_short_capture() {
+    if [[ ! -t 0 || ! -t 1 ]]; then
+        echo "installed_input_short_capture requires an interactive terminal and focused manual typing." >&2
+        echo "Run this scenario from a local terminal session so Workspaces can activate and receive input." >&2
+        exit 1
+    fi
+
+    local log_file="$OUTPUT_DIR/$SCENARIO.log"
+    local summary_json="$OUTPUT_DIR/summary.json"
+    local summary_txt="$OUTPUT_DIR/summary.txt"
+    mkdir -p "$OUTPUT_DIR/app-data"
+
+    echo "Interactive capture: Workspaces will activate and run for $CAPTURE_SECONDS seconds."
+    echo "Type in the focused terminal during that window to produce input metrics."
+
+    WORKSPACES_DATA_DIR="$OUTPUT_DIR/app-data" "$ROOT_DIR/scripts/launch-installed-diagnostics.sh" \
+        --app "$APP_PATH" \
+        --login-shell \
+        --with-input-diagnostics \
+        --capture-seconds "$CAPTURE_SECONDS" \
+        --log-file "$log_file"
+
+    summarize_installed_log "$log_file" "$summary_json" "$summary_txt"
+
+    python3 - "$summary_json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+summary = json.loads(Path(sys.argv[1]).read_text())
+metrics = summary.get("metrics", {})
+missing = [
+    metric
+    for metric in ("input_event_age_ms_median", "input_handler_duration_ms_median")
+    if metric not in metrics
+]
+if missing:
+    raise SystemExit(
+        "interactive input capture did not produce canonical input metrics: "
+        + ", ".join(missing)
+    )
+PY
+}
+
 case "$SCENARIO" in
     debug_no_activate)
         run_debug "no-activate"
@@ -160,13 +219,13 @@ case "$SCENARIO" in
         run_debug "activate"
         ;;
     installed_clean_shell)
-        run_installed "--clean-shell"
+        run_installed "--clean-shell" "no-activate"
         ;;
     installed_login_shell)
-        run_installed "--login-shell"
+        run_installed "--login-shell" "no-activate"
         ;;
     installed_input_short_capture)
-        run_installed "--login-shell" "--with-input-diagnostics"
+        run_installed_input_short_capture
         ;;
     *)
         echo "Unsupported scenario: $SCENARIO" >&2
