@@ -2,10 +2,11 @@ import { getSession } from "@/lib/auth-server";
 import Image from "next/image";
 import Link from "next/link";
 import { redirect } from "next/navigation";
-
-export const dynamic = "force-dynamic";
+import { PostHogUserIdentify } from "./components/posthog-user-identify";
 import { SignOutButton } from "./components/sign-out-button";
 import styles from "./layout.module.css";
+
+export const dynamic = "force-dynamic";
 
 export default async function DashboardLayout({
 	children,
@@ -20,6 +21,11 @@ export default async function DashboardLayout({
 
 	return (
 		<div className={styles.shell}>
+			<PostHogUserIdentify
+				id={session.user.id}
+				email={session.user.email}
+				name={session.user.name}
+			/>
 			<header className={styles.topBar}>
 				<Link href="/dashboard" className={styles.brand}>
 					Spaces

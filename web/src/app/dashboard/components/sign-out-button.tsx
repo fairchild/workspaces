@@ -1,6 +1,7 @@
 "use client";
 
 import { signOut } from "@/lib/auth-client";
+import { resetPostHogUser } from "@/lib/posthog-browser";
 import styles from "./sign-out-button.module.css";
 
 export function SignOutButton() {
@@ -10,7 +11,12 @@ export function SignOutButton() {
 			className={styles.button}
 			onClick={() =>
 				signOut({
-					fetchOptions: { onSuccess: () => window.location.assign("/") },
+					fetchOptions: {
+						onSuccess: () => {
+							resetPostHogUser();
+							window.location.assign("/");
+						},
+					},
 				})
 			}
 		>

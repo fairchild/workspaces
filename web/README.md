@@ -31,6 +31,13 @@ pnpm test                    # unit tests (vitest)
 pnpm exec playwright test    # E2E tests
 ```
 
+Optional PostHog client telemetry:
+
+```bash
+NEXT_PUBLIC_POSTHOG_TOKEN=phc_xxx
+NEXT_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com
+```
+
 ## Deploy
 
 Deployed to Vercel with root directory set to `web/`.
