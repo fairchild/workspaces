@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { getUserRepos, hasUserRepos, setUserRepos } from "../repos";
+import {
+	getUserRepos,
+	hasUserRepos,
+	isRepoOwnedByUser,
+	setUserRepos,
+} from "../repos";
 
 // Unique userId per test so parallel write paths don't collide across tests
 // that share the same in-memory DB.
@@ -45,5 +50,38 @@ describe("setUserRepos (parallel writes)", () => {
 
 		await setUserRepos(userId, []);
 		expect(await hasUserRepos(userId)).toBe(false);
+	});
+});
+
+describe("isRepoOwnedByUser", () => {
+	it("returns true only for repos the user has", async () => {
+		const userId = uniqueUser();
+		await setUserRepos(userId, [
+			{ owner: "acme", repo: "alpha" },
+			{ owner: "acme", repo: "beta" },
+		]);
+
+		expect(await isRepoOwnedByUser(userId, "acme/alpha")).toBe(true);
+		expect(await isRepoOwnedByUser(userId, "acme/beta")).toBe(true);
+		expect(await isRepoOwnedByUser(userId, "acme/gamma")).toBe(false);
+		expect(await isRepoOwnedByUser(userId, "other/alpha")).toBe(false);
+	});
+
+	it("isolates between users", async () => {
+		const userA = uniqueUser();
+		const userB = uniqueUser();
+		await setUserRepos(userA, [{ owner: "acme", repo: "private" }]);
+
+		expect(await isRepoOwnedByUser(userA, "acme/private")).toBe(true);
+		expect(await isRepoOwnedByUser(userB, "acme/private")).toBe(false);
+	});
+
+	it("rejects malformed repo strings", async () => {
+		const userId = uniqueUser();
+		await setUserRepos(userId, [{ owner: "acme", repo: "repo" }]);
+
+		expect(await isRepoOwnedByUser(userId, "acme")).toBe(false);
+		expect(await isRepoOwnedByUser(userId, "")).toBe(false);
+		expect(await isRepoOwnedByUser(userId, "/repo")).toBe(false);
 	});
 });

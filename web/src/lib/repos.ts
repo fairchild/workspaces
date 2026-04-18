@@ -61,3 +61,17 @@ export async function hasUserRepos(userId: string): Promise<boolean> {
 	});
 	return result.rows.length > 0;
 }
+
+export async function isRepoOwnedByUser(
+	userId: string,
+	repo: string,
+): Promise<boolean> {
+	const [owner, name] = repo.split("/");
+	if (!owner || !name) return false;
+	await ensureTable();
+	const result = await getTurso().execute({
+		sql: "SELECT 1 FROM user_repos WHERE user_id = ? AND owner = ? AND repo = ? LIMIT 1",
+		args: [userId, owner, name],
+	});
+	return result.rows.length > 0;
+}
