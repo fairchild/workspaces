@@ -58,6 +58,7 @@ docs/papers/*.pdf
 
 # Playwright
 web/playwright-report/
+web/test-results/
 
 # Superpowers brainstorm artifacts
 .superpowers/

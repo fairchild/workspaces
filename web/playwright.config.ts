@@ -1,5 +1,8 @@
 import { defineConfig, devices } from "@playwright/test";
 
+const BASE_URL = process.env.PLAYWRIGHT_BASE_URL ?? "http://localhost:3000";
+const SKIP_WEB_SERVER = process.env.PLAYWRIGHT_SKIP_WEB_SERVER === "1";
+
 export default defineConfig({
 	testDir: "./e2e",
 	fullyParallel: true,
@@ -8,7 +11,7 @@ export default defineConfig({
 	workers: process.env.CI ? 1 : undefined,
 	reporter: "html",
 	use: {
-		baseURL: "http://localhost:3000",
+		baseURL: BASE_URL,
 		trace: "on-first-retry",
 	},
 	projects: [
@@ -31,17 +34,29 @@ export default defineConfig({
 				viewport: { width: 1280, height: 800 },
 			},
 		},
+		{
+			name: "qa-explore",
+			testMatch: "explore/**/*.spec.ts",
+			use: {
+				...devices["Desktop Chrome"],
+				video: "on",
+				trace: "on",
+				viewport: { width: 1440, height: 900 },
+			},
+		},
 	],
 	globalSetup: "./e2e/seed.ts",
 	globalTeardown: "./e2e/teardown.ts",
-	webServer: {
-		command: process.env.CI ? "pnpm start" : "pnpm dev",
-		url: "http://localhost:3000",
-		reuseExistingServer: !process.env.CI,
-		timeout: 120_000,
-		env: {
-			DEV_BYPASS_AUTH: "1",
-			MOCK_AGENT: "1",
-		},
-	},
+	webServer: SKIP_WEB_SERVER
+		? undefined
+		: {
+				command: process.env.CI ? "pnpm start" : "pnpm dev",
+				url: BASE_URL,
+				reuseExistingServer: !process.env.CI,
+				timeout: 120_000,
+				env: {
+					DEV_BYPASS_AUTH: "1",
+					MOCK_AGENT: "1",
+				},
+			},
 });

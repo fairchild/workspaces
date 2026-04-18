@@ -165,23 +165,30 @@ mise run evidence -- --pr <N> --name <slug>  # Evidence
 
 **Use these instead of raw compound commands.** They are auto-allowed via `Bash(mise run web:*)` and guarded by a hook that blocks execution if `.mise.toml` has uncommitted changes.
 
+**Important:** these tasks live in `web/.mise.toml` and are not chain-loaded from the root `.mise.toml`. Run them either (a) after `cd web/`, or (b) with `-C web` from anywhere in the repo, e.g. `mise -C web run web:check`.
+
 ```bash
 mise run web:check                          # typecheck + lint + unit tests
 mise run web:dev                            # seed DB + auth bypass + start dev server
 mise run web:e2e                            # Playwright E2E (fast + full)
 mise run web:e2e:demo                       # Playwright demo with video recording
+mise run web:e2e:explore                    # qa-explore project (video + trace + axe-core)
+mise run web:qa:init-agents                 # one-shot: scaffold Playwright's agent-loop files
+mise run web:qa:codegen                     # interactive Playwright codegen recorder
 mise run web:evidence -- --pr <N> --name <slug>  # screenshot capture + evidence upload
 mise run web:deps -- <pkg>                  # pnpm add + auto-fix package.json formatting
 mise run web:deps:remove -- <pkg>           # pnpm remove + auto-fix formatting
 ```
 
-**Dev-bypass token plumbing** — `mise run web:dev` hardcodes `DEV_BYPASS_AUTH=1`, which creates a fake "dev-user" session but gives routes a placeholder string in place of a real GitHub PAT. Any call that hits the real GitHub API (agent discovery, pipeline, webhook-status, login lookup) 401s and the UI prompts "sign out / sign in". To light up GitHub-backed features without running the full OAuth flow, prefix the task with a real token:
+**Local vs CI caveats:**
+- `fast/unauth-*` Playwright specs require `NODE_ENV=production` — they pass in CI (which uses `pnpm start`) and fail under `pnpm dev` (bypass active in development). Expected; not a regression.
+- **Dev-bypass token plumbing** — `mise run web:dev` hardcodes `DEV_BYPASS_AUTH=1`, which creates a fake "dev-user" session but gives routes a placeholder string in place of a real GitHub PAT. Any call that hits the real GitHub API (agent discovery, pipeline, webhook-status, login lookup) 401s and the UI prompts "sign out / sign in". To light up GitHub-backed features without running the full OAuth flow, prefix the task with a real token:
 
-```bash
-DEV_GH_TOKEN=$(gh auth token) mise run web:dev
-```
+  ```bash
+  DEV_GH_TOKEN=$(gh auth token) mise run web:dev
+  ```
 
-`getDevBypassToken()` in `web/src/lib/auth-server.ts` prefers `DEV_GH_TOKEN` over the placeholder when set. Setting `GITHUB_WEB_WORKSPACES_CLIENT_ID` vetoes the bypass entirely and forces the real OAuth flow.
+  `getDevBypassToken()` in `web/src/lib/auth-server.ts` prefers `DEV_GH_TOKEN` over the placeholder when set. Setting `GITHUB_WEB_WORKSPACES_CLIENT_ID` vetoes the bypass entirely and forces the real OAuth flow.
 
 **Anti-patterns to avoid** (use the mise tasks instead):
 - `pnpm typecheck && pnpm lint && pnpm test` → `mise run web:check`
@@ -328,6 +335,18 @@ Tests use **Swift Testing** (`@Suite`, `@Test`, `#expect`), not XCTest. Test beh
 Agents coordinate via GitHub Discussions. See `.agents/skills/gh-discuss/SKILL.md` for conventions and the CLI script.
 
 Quick start: `uv run .agents/skills/gh-discuss/scripts/gh-discuss.py dashboard`
+
+### QA of the web/ app
+
+`qa-web-agent` (`.claude/agents/qa-web-agent.md`) is the project-local subagent for `web/` testing. It runs in three phases — **Explore** (black-box, no reading `web/src/**`), **Author** (spec-first, human-gated, uses Playwright Test Agents 1.56+), **Heal** (distinguishes selector drift from regressions). Invoke via the `/qa` slash command (`.claude/commands/qa.md`):
+
+- `/qa` or `/qa explore [area]` — exploratory pass with a11y + screenshot evidence under `output/qa-agent/<ISO-date>/`.
+- `/qa author <slug>` — write a spec to `web/specs/<slug>.md`, pause for human approval, then generate a `.spec.ts`.
+- `/qa heal [test-path]` — triage a failing Playwright test.
+- `/qa run` — run `mise run web:check && mise run web:e2e` with a structured summary.
+- `/qa ledger` — summarize gaps in `web/tests/LEDGER.md`.
+
+Coverage is measured against `web/tests/LEDGER.md` (behavior → test → last-verified date), not line-coverage %. New behaviors worth automating should land in the ledger with a matching spec and test.
 
 Milestone delivery: use `.agents/skills/drive/SKILL.md` to plan first, refresh the latest milestone state from GitHub, and execute issues to completion one at a time.
 
