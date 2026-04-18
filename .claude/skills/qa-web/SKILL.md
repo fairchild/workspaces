@@ -85,26 +85,37 @@ Relevant mise tasks (in `web/.mise.toml`):
 
 ## Output format
 
-End every run with this block:
+End every run with a **BLUF-first** block — TL;DR and recommended actions come first, details go behind a collapsed `<details>`. This is what the caller sees in chat; it mirrors what `render-report.py` produces for the HTML/markdown reports.
 
 ```
-## qa-web report — <phase(s) run> — <ISO date>
+## TL;DR
 
+<one- or two-sentence natural-language summary: what was found, what's notable, whether there are blockers>
+
+- <Recommended action 1 in plain English — e.g. "Fix in product — copy the prompt below into an agent session">
+- <Recommended action 2 — e.g. "Log as gap in web/tests/LEDGER.md">
+- <Recommended action 3 — e.g. "Defer / dismiss N cosmetic items">
+
+**Counts:** <severity pill row>  |  <total> total
 **Branch / PR:** <branch> / #<pr or "none">
 **Scope:** <caller summary, or "bare /qa — derived from diff">
+**Ledger updates:** <n> rows added / updated
+**Evidence root:** `output/qa-agent/<ISO-date>/`
 
-**Findings:**
-- [P0] <issue> — <path to evidence>
-- [P1] <issue> — <path to evidence>
-- [gap] <uncovered behavior> — proposed spec: <path>
+<details>
+<summary>Findings (click to expand)</summary>
 
-**Next steps:**
-- <concrete action for the human>
+- 🚨 **[P0]** <issue> — <path to evidence>
+- ⚠️ **[P1]** <issue> — <path to evidence>
+- 🔭 **[gap]** <uncovered behavior> — proposed spec: <path>
 
-**Ledger updates:** <n> rows added / updated in web/tests/LEDGER.md
+</details>
 
-**Evidence root:** output/qa-agent/<ISO-date>/
+📄 Full report: `output/qa-agent/<ISO-date>/REPORT.md`
+🌐 Open in browser: `open 'output/qa-agent/<ISO-date>/report.html'`
 ```
+
+The details section, report links, and hand-off prompt are for the caller to expand when they want to act. The TL;DR + actions are what they read first.
 
 Do NOT open PRs yourself. Summarize the diff and evidence paths so the caller can review and open the PR.
 
