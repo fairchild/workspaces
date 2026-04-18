@@ -7,6 +7,13 @@
 
 import AppKit
 
+@MainActor
+protocol TerminalFocusWindowDelegate: AnyObject {
+    func shouldSkipWindowFocusRestore(for window: NSWindow) -> Bool
+    func windowDidBecomeKey(_ window: NSWindow)
+    func appDidBecomeActive(for window: NSWindow)
+}
+
 /// Manages focus for terminal views within a window.
 /// Uses NotificationCenter instead of window delegate so SwiftUI window behavior stays intact.
 ///
@@ -16,6 +23,9 @@ import AppKit
 /// exclusively by the coordinator — this manager never calls NSApp.activate.
 @MainActor
 final class TerminalFocusManager: NSObject {
+    private struct WeakWindowDelegate {
+        weak var value: (any TerminalFocusWindowDelegate)?
+    }
 
     static let shared = TerminalFocusManager()
 
@@ -28,9 +38,7 @@ final class TerminalFocusManager: NSObject {
     /// Track pending focus restoration work.
     private var pendingFocusWork: DispatchWorkItem?
 
-    var onWindowDidBecomeKey: (@MainActor () -> Void)?
-    var onAppDidBecomeActive: (@MainActor () -> Void)?
-    var shouldSkipWindowFocusRestore: (@MainActor () -> Bool)?
+    private var delegatesByWindowID: [ObjectIdentifier: WeakWindowDelegate] = [:]
 
     /// Maximum single-retry delay. Replaces the exponential backoff chain.
     private static let fallbackRetryDelay: TimeInterval = 0.1
@@ -60,6 +68,22 @@ final class TerminalFocusManager: NSObject {
             name: NSWindow.willCloseNotification,
             object: window
         )
+    }
+
+    func bindDelegate(_ delegate: any TerminalFocusWindowDelegate, to window: NSWindow) {
+        registerWindow(window)
+        delegatesByWindowID[ObjectIdentifier(window)] = WeakWindowDelegate(value: delegate)
+        pruneDeadDelegates()
+    }
+
+    func unbindDelegate(from window: NSWindow) {
+        delegatesByWindowID.removeValue(forKey: ObjectIdentifier(window))
+        pruneDeadDelegates()
+    }
+
+    func delegate(for window: NSWindow) -> (any TerminalFocusWindowDelegate)? {
+        pruneDeadDelegates()
+        return delegatesByWindowID[ObjectIdentifier(window)]?.value
     }
 
     // MARK: - Focus Management
@@ -211,7 +235,7 @@ final class TerminalFocusManager: NSObject {
         // Let the coordinator handle focus if it has a pending request.
         // Only self-restore when the coordinator is idle AND the window's
         // first responder is the window itself (meaning nothing else claimed focus).
-        let coordinatorHasPending = shouldSkipWindowFocusRestore?() == true
+        let coordinatorHasPending = delegate(for: window)?.shouldSkipWindowFocusRestore(for: window) == true
         if !coordinatorHasPending,
             window.firstResponder === window,
             let terminal = focusedTerminal
@@ -219,7 +243,7 @@ final class TerminalFocusManager: NSObject {
             requestFocus(for: terminal)
         }
 
-        onWindowDidBecomeKey?()
+        delegate(for: window)?.windowDidBecomeKey(window)
 
         syncFocusState(for: window)
     }
@@ -238,9 +262,29 @@ final class TerminalFocusManager: NSObject {
     @objc private func windowWillClose(_ notification: Notification) {
         guard let window = notification.object as? NSWindow else { return }
         managedWindows.remove(window)
+        delegatesByWindowID.removeValue(forKey: ObjectIdentifier(window))
 
         if focusedTerminal?.window === window {
             focusedTerminal = nil
+        }
+    }
+
+    func appDidBecomeActive() {
+        pruneDeadDelegates()
+
+        let candidateWindows = managedWindows.allObjects.filter { $0.isVisible || $0.isKeyWindow || $0.isMainWindow }
+        dispatchAppDidBecomeActive(to: candidateWindows)
+    }
+
+    private func pruneDeadDelegates() {
+        delegatesByWindowID = delegatesByWindowID.filter { $0.value.value != nil }
+    }
+
+    func dispatchAppDidBecomeActive(to windows: [NSWindow]) {
+        pruneDeadDelegates()
+
+        for window in windows {
+            delegate(for: window)?.appDidBecomeActive(for: window)
         }
     }
 

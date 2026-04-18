@@ -11,26 +11,29 @@
 ## Performance
 
 - [ ] Not a performance-sensitive change
-- [ ] Baseline metrics were provided with the task
-- [ ] Baseline metrics were gathered before changes
-- [ ] Post-change metrics were gathered at the end of the work
-- [ ] Before/after/delta is included below
-- [ ] Any meaningful change, missing metric, target crossing, or non-comparable context is called out below
+- [ ] Used canonical scenario(s) from `config/performance/contract.json`
+- [ ] Before and after evidence came from a like-for-like workload and environment
+- [ ] Any meaningful delta, missing metric, target crossing, or non-comparable context is called out below
 
-Performance evidence for performance-sensitive work should include:
+For performance-sensitive work, capture canonical evidence with:
 
-- the metric source and exact commands used
-- before and after values
-- the workload and environment context
-- a short note about the delta and whether the comparison is like-for-like
+```bash
+./scripts/prepare-perf-evidence.sh --scenario debug_no_activate
+```
+
+If this PR has the `performance-sensitive` label, fill all fields below. The `PR Perf Evidence` workflow enforces them.
 
 Performance evidence:
 
-- 
+- Scenario ID:
+- Before Summary:
+- After Summary:
+- Delta Summary:
 
 Performance comparison notes:
 
-- 
+- Exact commands used:
+- Workload / environment context:
 
 ## Evidence
 

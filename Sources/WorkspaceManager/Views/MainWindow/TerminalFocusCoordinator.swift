@@ -9,7 +9,7 @@ import WorkspaceManagerCore
 /// (NSApp.activate) lives here exclusively; TerminalFocusManager handles only
 /// the low-level makeFirstResponder mechanics.
 @MainActor
-final class TerminalFocusCoordinator: ObservableObject {
+final class TerminalFocusCoordinator: ObservableObject, TerminalFocusWindowDelegate {
     private struct PendingFocusRequest {
         let sessionID: UUID
         let activateApp: Bool
@@ -20,19 +20,20 @@ final class TerminalFocusCoordinator: ObservableObject {
     }
 
     private weak var attachedSurfaceStore: HostTerminalSurfaceStore?
+    private weak var window: NSWindow?
     private var pendingRepoFocusMeasurementSessionID: UUID?
     private var pendingWorkspaceFocusMeasurementSessionID: UUID?
     private var pendingFocusRequest: PendingFocusRequest?
 
-    init() {
-        TerminalFocusManager.shared.shouldSkipWindowFocusRestore = { [weak self] in
-            self?.pendingFocusRequest != nil
-        }
-        TerminalFocusManager.shared.onWindowDidBecomeKey = { [weak self] in
-            self?.retryPendingFocus(reason: "window_did_become_key")
-        }
-        TerminalFocusManager.shared.onAppDidBecomeActive = { [weak self] in
-            self?.restoreFocusOnAppActivation()
+    init() {}
+
+    deinit {
+        MainActor.assumeIsolated {
+            attachedSurfaceStore?.onSurfaceCreated = nil
+            attachedSurfaceStore?.onSurfaceInvalidated = nil
+            if let window {
+                TerminalFocusManager.shared.unbindDelegate(from: window)
+            }
         }
     }
 
@@ -49,6 +50,17 @@ final class TerminalFocusCoordinator: ObservableObject {
         surfaceStore.onSurfaceInvalidated = { [weak self] sessionID in
             self?.surfaceDidInvalidate(sessionID: sessionID)
         }
+    }
+
+    func bind(window: NSWindow) {
+        guard self.window !== window else { return }
+
+        if let previousWindow = self.window {
+            TerminalFocusManager.shared.unbindDelegate(from: previousWindow)
+        }
+
+        self.window = window
+        TerminalFocusManager.shared.bindDelegate(self, to: window)
     }
 
     func focusTerminal(sessionID: UUID, surfaceStore: HostTerminalSurfaceStore) {
@@ -112,12 +124,29 @@ final class TerminalFocusCoordinator: ObservableObject {
     /// Called from AppDelegate.applicationDidBecomeActive instead of going directly
     /// through TerminalFocusManager.
     func restoreFocusOnAppActivation() {
+        guard let window else { return }
+        guard window.isVisible || window.isKeyWindow || window.isMainWindow else { return }
         if pendingFocusRequest != nil {
             // Coordinator already has a pending request — let it drive.
             return
         }
         guard let terminal = TerminalFocusManager.shared.focusedTerminal else { return }
         TerminalFocusManager.shared.requestFocus(for: terminal)
+    }
+
+    func shouldSkipWindowFocusRestore(for window: NSWindow) -> Bool {
+        guard self.window === window else { return false }
+        return pendingFocusRequest != nil
+    }
+
+    func windowDidBecomeKey(_ window: NSWindow) {
+        guard self.window === window else { return }
+        retryPendingFocus(reason: "window_did_become_key")
+    }
+
+    func appDidBecomeActive(for window: NSWindow) {
+        guard self.window === window else { return }
+        restoreFocusOnAppActivation()
     }
 
     func beginRepoClickMeasurement(sessionID: UUID, repoPath: String) {

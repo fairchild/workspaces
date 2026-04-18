@@ -100,6 +100,16 @@ final class NotificationCoordinator: NotificationCoordinatorProtocol, Observable
         self.makeDeviceAuth = makeDeviceAuth
     }
 
+    deinit {
+        MainActor.assumeIsolated {
+            storedAuthLoadTask?.cancel()
+            eventListenerTask?.cancel()
+            connectionPollingTask?.cancel()
+            refreshTask?.cancel()
+            jwtRefreshTask?.cancel()
+        }
+    }
+
     func loadStoredAuth() {
         storedAuthLoadTask?.cancel()
 

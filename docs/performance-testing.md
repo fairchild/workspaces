@@ -25,6 +25,25 @@ swift build
 
 This ensures perf changes are not hiding functional regressions.
 
+## PR evidence contract
+
+Performance-sensitive PRs must carry canonical before/after evidence in the PR body. The expected workflow is:
+
+```bash
+./scripts/prepare-perf-evidence.sh --scenario debug_no_activate
+```
+
+That script runs the canonical scenario, captures `before` and `after` summaries, compares them with `./scripts/perf-compare.py`, and prints PR-ready fields that match `.github/pull_request_template.md`.
+
+Required PR fields for `performance-sensitive` work:
+
+- `Scenario ID`
+- `Before Summary`
+- `After Summary`
+- `Delta Summary`
+
+When the PR has the `performance-sensitive` label, `.github/workflows/pr-perf-evidence.yml` fails if those fields are missing. Use scenarios from `config/performance/contract.json` and keep the machine, launch mode, and workload comparable across captures.
+
 ## Standard benchmark workflow (recommended)
 
 Use the scripted baseline runner:
@@ -156,6 +175,8 @@ Recommended evidence loop for this startup-probing work:
 3. Run `./scripts/new-workspace-perf.sh 5 12` on the current branch.
 4. Keep machine, run count, and data-root shape constant across local comparisons.
 5. Capture median, mean, min, max, plus the launch delta percent in a dated report.
+
+For PR submission, prefer `./scripts/prepare-perf-evidence.sh` over ad hoc notes so the evidence format stays consistent with the repo gate.
 
 ## Installed-build validation workflow
 

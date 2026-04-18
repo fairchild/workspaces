@@ -14,30 +14,26 @@ import WorkspaceManagerCore
 @main
 struct WorkspaceManagerApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
-    @StateObject private var appCommandState = AppCommandState()
+    @StateObject private var appCommandState: AppCommandState
+    @StateObject private var modelStoreStatusController: ModelStoreStatusController
     private let appRuntimeDependencies = AppRuntimeDependencies.resolved()
+    let sharedModelContainer: ModelContainer
 
-    var sharedModelContainer: ModelContainer = {
+    init() {
         let schema = Schema([Repo.self, Workspace.self, WebSource.self])
-        let launchEnvironment = ProcessInfo.processInfo.environment
-        let shouldUseInMemoryStore = launchEnvironment["WORKSPACES_UI_FIXTURE"] == "1"
-        let modelConfiguration = resolvedModelConfiguration(
+        let bootstrap = ModelStoreBootstrapper.bootstrap(
             schema: schema,
-            launchEnvironment: launchEnvironment
+            launchEnvironment: ProcessInfo.processInfo.environment
         )
-
-        do {
-            let container = try ModelContainer(for: schema, configurations: [modelConfiguration])
-
-            if shouldUseInMemoryStore {
-                seedUIFixtureDataIfNeeded(in: container.mainContext)
-            }
-
-            return container
-        } catch {
-            fatalError("Could not create ModelContainer: \(error)")
+        if ProcessInfo.processInfo.environment["WORKSPACES_UI_FIXTURE"] == "1" {
+            seedUIFixtureDataIfNeeded(in: bootstrap.container.mainContext)
         }
-    }()
+
+        ModelStoreStatusController.shared.apply(bootstrap)
+        _appCommandState = StateObject(wrappedValue: AppCommandState())
+        _modelStoreStatusController = StateObject(wrappedValue: .shared)
+        self.sharedModelContainer = bootstrap.container
+    }
 
     var body: some Scene {
         WindowGroup {
@@ -50,6 +46,7 @@ struct WorkspaceManagerApp: App {
                 \.workspaceProviderRegistry,
                 appRuntimeDependencies.workspaceProviderRegistry
             )
+            .environmentObject(modelStoreStatusController)
             .frame(minWidth: 1000, minHeight: 700)
         }
         .modelContainer(sharedModelContainer)
@@ -149,105 +146,9 @@ struct WorkspaceManagerApp: App {
             SettingsView()
                 .environment(\.lumeRuntimeService, appRuntimeDependencies.lumeRuntimeService)
                 .environment(\.workspaceProviderRegistry, appRuntimeDependencies.workspaceProviderRegistry)
+                .environmentObject(modelStoreStatusController)
         }
     }
-}
-
-private func resolvedModelConfiguration(
-    schema: Schema,
-    launchEnvironment: [String: String]
-) -> ModelConfiguration {
-    let shouldUseInMemoryStore = launchEnvironment["WORKSPACES_UI_FIXTURE"] == "1"
-    if shouldUseInMemoryStore {
-        return ModelConfiguration(
-            schema: schema,
-            isStoredInMemoryOnly: true
-        )
-    }
-
-    if let requestedDataDirectory = launchEnvironment["WORKSPACES_DATA_DIR"]?
-        .trimmingCharacters(in: .whitespacesAndNewlines),
-        !requestedDataDirectory.isEmpty
-    {
-        let expandedPath = (requestedDataDirectory as NSString).expandingTildeInPath
-        let requestedURL = URL(fileURLWithPath: expandedPath, isDirectory: true)
-        do {
-            return try persistentModelConfiguration(schema: schema, storeDirectory: requestedURL)
-        } catch {
-            NSLog(
-                "[ModelStore] Failed to use WORKSPACES_DATA_DIR '%@': %@",
-                requestedURL.path,
-                String(describing: error)
-            )
-        }
-    }
-
-    do {
-        let appSupportDirectory = try defaultModelStoreDirectory()
-        return try persistentModelConfiguration(schema: schema, storeDirectory: appSupportDirectory)
-    } catch {
-        let fallbackDirectory = URL(
-            fileURLWithPath: FileManager.default.currentDirectoryPath,
-            isDirectory: true
-        )
-        .appendingPathComponent(".workspacemanager-data", isDirectory: true)
-        NSLog(
-            "[ModelStore] Falling back to workspace-local store (%@): %@",
-            fallbackDirectory.path,
-            String(describing: error)
-        )
-
-        do {
-            return try persistentModelConfiguration(schema: schema, storeDirectory: fallbackDirectory)
-        } catch {
-            NSLog(
-                "[ModelStore] Falling back to in-memory store: %@",
-                String(describing: error)
-            )
-            return ModelConfiguration(
-                schema: schema,
-                isStoredInMemoryOnly: true
-            )
-        }
-    }
-}
-
-private func defaultModelStoreDirectory() throws -> URL {
-    let appSupportDirectory = try FileManager.default.url(
-        for: .applicationSupportDirectory,
-        in: .userDomainMask,
-        appropriateFor: nil,
-        create: true
-    )
-    let modelDirectory = appSupportDirectory.appendingPathComponent("WorkspaceManager", isDirectory: true)
-    try ensureWritableDirectory(at: modelDirectory)
-    return modelDirectory
-}
-
-private func persistentModelConfiguration(
-    schema: Schema,
-    storeDirectory: URL
-) throws -> ModelConfiguration {
-    try ensureWritableDirectory(at: storeDirectory)
-    let storeURL = storeDirectory.appendingPathComponent("default.store", isDirectory: false)
-    return ModelConfiguration(
-        schema: schema,
-        url: storeURL
-    )
-}
-
-private func ensureWritableDirectory(at directory: URL) throws {
-    try FileManager.default.createDirectory(
-        at: directory,
-        withIntermediateDirectories: true
-    )
-
-    let probeURL = directory.appendingPathComponent(
-        ".write-probe-\(UUID().uuidString)",
-        isDirectory: false
-    )
-    try Data("ok".utf8).write(to: probeURL, options: .atomic)
-    try FileManager.default.removeItem(at: probeURL)
 }
 
 private func seedUIFixtureDataIfNeeded(in context: ModelContext) {
@@ -507,8 +408,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         NSLog("[AppDelegate] applicationDidBecomeActive")
         applyApplicationIconIfAvailable()
         GhosttyAppManager.shared.setFocus(true)
-        // Delegate focus restoration to the coordinator via callback.
-        TerminalFocusManager.shared.onAppDidBecomeActive?()
+        TerminalFocusManager.shared.appDidBecomeActive()
     }
 
     func applicationDidResignActive(_ notification: Notification) {

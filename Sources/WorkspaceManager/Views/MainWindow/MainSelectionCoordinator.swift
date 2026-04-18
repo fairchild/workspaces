@@ -8,6 +8,7 @@ struct MainSelectionCoordinator {
     private var lastRepoIDSet: Set<UUID> = []
     private var lastWorkspaceIDSet: Set<UUID> = []
     private var lastWebSourceIDSet: Set<UUID> = []
+    private(set) var cachedNormalizedRepoPaths: Set<String> = []
 
     func repo(with id: UUID?, in repos: [Repo]) -> Repo? {
         guard let id else { return nil }
@@ -26,7 +27,11 @@ struct MainSelectionCoordinator {
 
     // MARK: - Cached lookups
 
-    mutating func rebuildCachesIfNeeded(repos: [Repo], webSources: [WebSource]) {
+    mutating func rebuildCachesIfNeeded(
+        repos: [Repo],
+        webSources: [WebSource],
+        normalizePath: (String) -> String
+    ) {
         let repoIDs = Set(repos.map(\.id))
         let workspaceIDs = Set(repos.flatMap(\.workspaces).map(\.id))
         let webSourceIDs = Set(webSources.map(\.id))
@@ -38,6 +43,7 @@ struct MainSelectionCoordinator {
             cachedWorkspaceIndex = Dictionary(
                 uniqueKeysWithValues: repos.flatMap(\.workspaces).map { ($0.id, $0) }
             )
+            cachedNormalizedRepoPaths = Set(repos.map { normalizePath($0.localPath) })
         }
 
         if webSourceIDs != lastWebSourceIDSet {
