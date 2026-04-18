@@ -36,6 +36,16 @@ final class TerminalFocusCoordinator: ObservableObject {
         }
     }
 
+    deinit {
+        MainActor.assumeIsolated {
+            TerminalFocusManager.shared.shouldSkipWindowFocusRestore = nil
+            TerminalFocusManager.shared.onWindowDidBecomeKey = nil
+            TerminalFocusManager.shared.onAppDidBecomeActive = nil
+            attachedSurfaceStore?.onSurfaceCreated = nil
+            attachedSurfaceStore?.onSurfaceInvalidated = nil
+        }
+    }
+
     func attach(surfaceStore: HostTerminalSurfaceStore) {
         guard attachedSurfaceStore !== surfaceStore else { return }
 

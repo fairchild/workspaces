@@ -35,7 +35,13 @@ struct WorkspaceManagerApp: App {
 
             return container
         } catch {
-            fatalError("Could not create ModelContainer: \(error)")
+            NSLog("[ModelStore] ModelContainer failed, falling back to in-memory: %@", String(describing: error))
+            let inMemoryConfig = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
+            do {
+                return try ModelContainer(for: schema, configurations: [inMemoryConfig])
+            } catch {
+                fatalError("Could not create even an in-memory ModelContainer: \(error)")
+            }
         }
     }()
 

@@ -16,6 +16,12 @@ private let creationLog = Logger(
     category: "WorkspaceCreation"
 )
 
+private struct ModelSnapshot: Equatable {
+    let repoIDs: [UUID]
+    let workspaceIDs: [UUID]
+    let webSourceIDs: [UUID]
+}
+
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
     @Binding var deepLinkState: WorkspaceDeepLinkState
@@ -95,20 +101,16 @@ struct ContentView: View {
         mainSelectionCoordinator.cachedRepo(with: viewState.selectedRepoForLandingID)
     }
 
-    private var normalizedRepoPathSnapshot: [String] {
-        repos.map { normalizePath($0.localPath) }
+    private var modelSnapshot: ModelSnapshot {
+        ModelSnapshot(
+            repoIDs: repos.map(\.id),
+            workspaceIDs: repos.flatMap(\.workspaces).map(\.id),
+            webSourceIDs: webSources.map(\.id)
+        )
     }
 
-    private var repoIDSnapshot: [UUID] {
-        repos.map(\.id)
-    }
-
-    private var workspaceIDSnapshot: [UUID] {
-        repos.flatMap(\.workspaces).map(\.id)
-    }
-
-    private var webSourceIDSnapshot: [UUID] {
-        webSources.map(\.id)
+    private var normalizedRepoPathSnapshot: Set<String> {
+        mainSelectionCoordinator.cachedNormalizedRepoPaths
     }
 
     private var selectedRepoForInspector: Repo? {
@@ -438,7 +440,9 @@ struct ContentView: View {
     private var splitViewWithLifecycleHandlers: some View {
         splitViewWithToolbar
             .onAppear {
-                mainSelectionCoordinator.rebuildCachesIfNeeded(repos: repos, webSources: webSources)
+                mainSelectionCoordinator.rebuildCachesIfNeeded(
+                    repos: repos, webSources: webSources, normalizePath: normalizePath
+                )
                 ensureInitialHostSession()
                 resolveSurfaceLifecycle()
                 pruneRightPaneState()
@@ -461,23 +465,13 @@ struct ContentView: View {
             .onChange(of: deepLinkState.pendingRequest) { _, _ in
                 resolveSurfaceLifecycle()
             }
-            .onChange(of: repoIDSnapshot) { _, _ in
-                mainSelectionCoordinator.rebuildCachesIfNeeded(repos: repos, webSources: webSources)
+            .onChange(of: modelSnapshot) { _, _ in
+                mainSelectionCoordinator.rebuildCachesIfNeeded(
+                    repos: repos, webSources: webSources, normalizePath: normalizePath
+                )
                 reconcileSelectionAfterModelChange()
                 resolveSurfaceLifecycle()
-            }
-            .onChange(of: workspaceIDSnapshot) { _, _ in
-                mainSelectionCoordinator.rebuildCachesIfNeeded(repos: repos, webSources: webSources)
-                reconcileSelectionAfterModelChange()
-                resolveSurfaceLifecycle()
-            }
-            .onChange(of: normalizedRepoPathSnapshot) { _, paths in
-                hostTerminalState.pruneRepoSessions(validRepoPaths: Set(paths))
-            }
-            .onChange(of: webSourceIDSnapshot) { _, _ in
-                mainSelectionCoordinator.rebuildCachesIfNeeded(repos: repos, webSources: webSources)
-                reconcileSelectionAfterModelChange()
-                resolveSurfaceLifecycle()
+                hostTerminalState.pruneRepoSessions(validRepoPaths: normalizedRepoPathSnapshot)
             }
             .onChange(of: inspectorTargetIDSet) { _, _ in
                 pruneRightPaneState()

@@ -41,10 +41,16 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
 
     public init(gitService: any GitServiceProtocol = GitService.shared) {
         self.gitService = gitService
-        try? FileManager.default.createDirectory(
-            at: Self.defaultWorkspacesRoot,
-            withIntermediateDirectories: true
-        )
+        do {
+            try FileManager.default.createDirectory(
+                at: Self.defaultWorkspacesRoot,
+                withIntermediateDirectories: true
+            )
+        } catch {
+            log.warning(
+                "Failed to create default workspaces root at \(Self.defaultWorkspacesRoot.path): \(error.localizedDescription)"
+            )
+        }
     }
 
     // MARK: - Create Workspace

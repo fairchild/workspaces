@@ -626,7 +626,13 @@ public actor LumeRuntimeService: LumeRuntimeServiceProtocol {
         }
 
         let hostProfile = try await hostProfile()
-        let imageResolution = try? await defaultMacOSImageResolution()
+        let imageResolution: LumeImageResolution?
+        do {
+            imageResolution = try await defaultMacOSImageResolution()
+        } catch {
+            NSLog("[LumeRuntime] Failed to resolve default macOS image: %@", error.localizedDescription)
+            imageResolution = nil
+        }
         let profile = await validatedBaseService.resolveBaseVMProfile(
             hostProfile: hostProfile,
             imageResolution: imageResolution

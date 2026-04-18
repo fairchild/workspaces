@@ -457,14 +457,29 @@ public final class Workspace {
         backendMetadataRaw = rawValue
     }
 
+    @Transient private var _cachedRemoteMetadata: WorkspaceRemoteMetadataPayload??
+    @Transient private var _cachedRemoteMetadataSource: String = ""
+
     private var remoteMetadataPayload: WorkspaceRemoteMetadataPayload? {
         get {
             let trimmedJSON = remoteMetadataJSON.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmedJSON.isEmpty, let data = trimmedJSON.data(using: .utf8) else { return nil }
-            guard let payload = try? JSONDecoder().decode(WorkspaceRemoteMetadataPayload.self, from: data) else {
-                return nil
+            if trimmedJSON == _cachedRemoteMetadataSource, let cached = _cachedRemoteMetadata {
+                return cached
             }
-            return payload.isEmpty ? nil : payload
+            let result: WorkspaceRemoteMetadataPayload?
+            if trimmedJSON.isEmpty {
+                result = nil
+            } else if let data = trimmedJSON.data(using: .utf8),
+                let payload = try? JSONDecoder().decode(WorkspaceRemoteMetadataPayload.self, from: data),
+                !payload.isEmpty
+            {
+                result = payload
+            } else {
+                result = nil
+            }
+            _cachedRemoteMetadataSource = trimmedJSON
+            _cachedRemoteMetadata = .some(result)
+            return result
         }
         set {
             guard let newValue else {
