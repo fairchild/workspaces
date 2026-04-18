@@ -200,6 +200,7 @@ jobs:
         env:
           VALIDATOR: playwright
           PREVIEW_URL: ${{ needs.preview-web.outputs.preview_url }}
+          REPRO_HINT: cd web && PLAYWRIGHT_BASE_URL=${{ needs.preview-web.outputs.preview_url }} PLAYWRIGHT_SKIP_WEB_SERVER=1 pnpm exec playwright test --project fast
         with:
           script: |
             const fs = require('fs');
@@ -210,6 +211,48 @@ jobs:
               : '_No findings file produced._';
 
             const title = `CD: ${validator} failures on main`;
+
+            // Find existing rolling issue (if any) to count prior auto-fix attempts
+            const q = `repo:${context.repo.owner}/${context.repo.repo} in:body "${marker}" is:issue`;
+            const found = await github.rest.search.issuesAndPullRequests({ q, per_page: 1 });
+            const existing = found.data.items[0];
+
+            let attempts = 0;
+            let mentionApril = true;
+            const escalateLabel = 'needs-human';
+
+            if (existing) {
+              const comments = await github.rest.issues.listComments({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.number,
+                per_page: 100,
+              });
+              attempts = comments.data.filter(c =>
+                c.body && c.body.includes('@april-clearwater')
+              ).length;
+              if (attempts >= 2) {
+                mentionApril = false;
+              }
+            }
+
+            const fixSection = mentionApril
+              ? [
+                  '',
+                  '## Auto-fix request',
+                  '@april-clearwater please investigate this failure and propose a fix PR.',
+                  `Reproduce locally: \`${process.env.REPRO_HINT}\``,
+                  `Workflow artifacts contain the failed ${validator} report.`,
+                  '',
+                ]
+              : [
+                  '',
+                  '## Auto-fix exhausted — needs human',
+                  `April attempted ${attempts} fix(es) without success. Triage required.`,
+                  '@fairchild',
+                  '',
+                ];
+
             const body = [
               marker,
               `**Commit:** ${context.sha}`,
@@ -218,7 +261,7 @@ jobs:
               '',
               '## Findings',
               findings,
-              '',
+              ...fixSection,
               '## Plan to fix (if root cause is obvious)',
               '- [ ] Root cause: <one sentence>',
               '- [ ] Reproduction: <local command>',
@@ -231,10 +274,6 @@ jobs:
               '- [ ] Decision point: <what result tells us to do what>',
             ].join('\n');
 
-            const q = `repo:${context.repo.owner}/${context.repo.repo} in:body "${marker}" is:issue`;
-            const found = await github.rest.search.issuesAndPullRequests({ q, per_page: 1 });
-            const existing = found.data.items[0];
-
             if (existing) {
               if (existing.state === 'closed') {
                 await github.rest.issues.update({
@@ -244,13 +283,21 @@ jobs:
                   state: 'open',
                 });
               }
+              if (!mentionApril) {
+                await github.rest.issues.addLabels({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: existing.number,
+                  labels: [escalateLabel],
+                });
+              }
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: existing.number,
                 body,
               });
-              core.notice(`Updated rolling issue #${existing.number}`);
+              core.notice(`Updated rolling issue #${existing.number} (attempts=${attempts}, mentionApril=${mentionApril})`);
             } else {
               const created = await github.rest.issues.create({
                 owner: context.repo.owner,
@@ -275,6 +322,7 @@ jobs:
         env:
           VALIDATOR: lighthouse
           PREVIEW_URL: ${{ needs.preview-web.outputs.preview_url }}
+          REPRO_HINT: cd web && LHCI_COLLECT_URL=${{ needs.preview-web.outputs.preview_url }} pnpm exec lhci autorun --config=./lighthouserc.cjs
         with:
           script: |
             const fs = require('fs');
@@ -285,6 +333,47 @@ jobs:
               : '_No findings file produced._';
 
             const title = `CD: ${validator} failures on main`;
+
+            const q = `repo:${context.repo.owner}/${context.repo.repo} in:body "${marker}" is:issue`;
+            const found = await github.rest.search.issuesAndPullRequests({ q, per_page: 1 });
+            const existing = found.data.items[0];
+
+            let attempts = 0;
+            let mentionApril = true;
+            const escalateLabel = 'needs-human';
+
+            if (existing) {
+              const comments = await github.rest.issues.listComments({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.number,
+                per_page: 100,
+              });
+              attempts = comments.data.filter(c =>
+                c.body && c.body.includes('@april-clearwater')
+              ).length;
+              if (attempts >= 2) {
+                mentionApril = false;
+              }
+            }
+
+            const fixSection = mentionApril
+              ? [
+                  '',
+                  '## Auto-fix request',
+                  '@april-clearwater please investigate this failure and propose a fix PR.',
+                  `Reproduce locally: \`${process.env.REPRO_HINT}\``,
+                  `Workflow artifacts contain the failed ${validator} report.`,
+                  '',
+                ]
+              : [
+                  '',
+                  '## Auto-fix exhausted — needs human',
+                  `April attempted ${attempts} fix(es) without success. Triage required.`,
+                  '@fairchild',
+                  '',
+                ];
+
             const body = [
               marker,
               `**Commit:** ${context.sha}`,
@@ -293,7 +382,7 @@ jobs:
               '',
               '## Findings',
               findings,
-              '',
+              ...fixSection,
               '## Plan to fix (if root cause is obvious)',
               '- [ ] Root cause: <one sentence>',
               '- [ ] Reproduction: <local command>',
@@ -306,10 +395,6 @@ jobs:
               '- [ ] Decision point: <what result tells us to do what>',
             ].join('\n');
 
-            const q = `repo:${context.repo.owner}/${context.repo.repo} in:body "${marker}" is:issue`;
-            const found = await github.rest.search.issuesAndPullRequests({ q, per_page: 1 });
-            const existing = found.data.items[0];
-
             if (existing) {
               if (existing.state === 'closed') {
                 await github.rest.issues.update({
@@ -319,13 +404,21 @@ jobs:
                   state: 'open',
                 });
               }
+              if (!mentionApril) {
+                await github.rest.issues.addLabels({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: existing.number,
+                  labels: [escalateLabel],
+                });
+              }
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: existing.number,
                 body,
               });
-              core.notice(`Updated rolling issue #${existing.number}`);
+              core.notice(`Updated rolling issue #${existing.number} (attempts=${attempts}, mentionApril=${mentionApril})`);
             } else {
               const created = await github.rest.issues.create({
                 owner: context.repo.owner,
@@ -336,3 +429,109 @@ jobs:
               });
               core.notice(`Created rolling issue #${created.data.number}`);
             }
+
+  validate-prod:
+    needs: promote
+    if: success()
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install chromium --with-deps
+      - name: Settle CDN cache
+        run: |
+          for i in 1 2 3 4 5; do
+            if curl -sSf --max-time 10 "https://spaces.cloudcompute.com/" >/dev/null; then
+              echo "::notice::Prod reachable on attempt $i"
+              break
+            fi
+            sleep 5
+          done
+      - name: Playwright fast against prod
+        env:
+          PLAYWRIGHT_BASE_URL: https://spaces.cloudcompute.com
+          PLAYWRIGHT_SKIP_WEB_SERVER: "1"
+        run: |
+          set +e
+          pnpm exec playwright test --project fast --reporter=json > prod-report.json
+          PW_EXIT=$?
+          node scripts/playwright-findings.mjs prod-report.json > findings.md || echo "_findings script failed_" > findings.md
+          exit $PW_EXIT
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: prod-validate-findings
+          path: web/findings.md
+
+  post-prod-alert:
+    needs: [promote, validate-prod]
+    if: failure() && !cancelled() && needs.validate-prod.result == 'failure'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: prod-validate-findings
+          path: .
+      - uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
+        env:
+          PROD_URL: https://spaces.cloudcompute.com
+        with:
+          script: |
+            const fs = require('fs');
+            const findings = fs.existsSync('findings.md')
+              ? fs.readFileSync('findings.md', 'utf8')
+              : '_No findings file produced._';
+
+            const shortSha = context.sha.slice(0, 7);
+            const title = `🚨 Prod regression on ${shortSha}`;
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+
+            const body = [
+              `**Commit:** ${context.sha}`,
+              `**Run:** ${runUrl}`,
+              `**Prod URL:** ${process.env.PROD_URL}`,
+              '',
+              '## Findings',
+              findings,
+              '',
+              '## Manual rollback runbook',
+              '',
+              '**Vercel — instant alias swap:**',
+              '```bash',
+              'vercel rollback                    # interactive picker',
+              '# or:',
+              'vercel ls --prod | head -5',
+              'vercel promote <previous-prod-url>',
+              '```',
+              '',
+              '**Workers — re-deploy from previous good SHA:**',
+              '```bash',
+              'git checkout <previous-good-sha>',
+              'cd infra/<worker> && npx wrangler@4 deploy',
+              'git checkout main',
+              '```',
+              '',
+              '## Decide: rollback vs roll forward',
+              '- [ ] Rolled back (note which surfaces): ',
+              '- [ ] Rolling forward (link the fix PR): ',
+              '',
+              '@fairchild',
+            ].join('\n');
+
+            const created = await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title,
+              body,
+              labels: ['cd-failure', 'cd-failure:prod', 'urgent', 'auto-opened'],
+            });
+            core.notice(`Opened prod alert issue #${created.data.number}`);
