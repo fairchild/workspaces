@@ -126,6 +126,21 @@ export async function getSession(id: string): Promise<AgentSession | null> {
 	return row ? rowToSession(row) : null;
 }
 
+export async function getSessionByInstanceId(
+	instanceId: string,
+): Promise<AgentSession | null> {
+	await ensureSessionTable();
+	const db = getDb();
+	const row = await db
+		.selectFrom("agent_sessions")
+		.selectAll()
+		.where("compute_instance_id", "=", instanceId)
+		.orderBy("last_activity_at", "desc")
+		.limit(1)
+		.executeTakeFirst();
+	return row ? rowToSession(row) : null;
+}
+
 export async function getActiveSessionForThread(
 	repo: string,
 	agentName: string,

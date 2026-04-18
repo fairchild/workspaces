@@ -3,7 +3,13 @@ description = "Run typecheck + lint + unit tests."
 run = "pnpm typecheck && pnpm lint && pnpm test"
 
 [tasks."web:dev"]
-description = "Seed dev database and start dev server with auth bypass."
+# GitHub-backed features (agent discovery, pipeline, activity feed) need
+# a real token. Run as `DEV_GH_TOKEN=$(gh auth token) mise run web:dev`
+# to plumb one through; otherwise the UI will prompt "sign out / sign in"
+# when it hits the GitHub API. Setting GITHUB_WEB_WORKSPACES_CLIENT_ID
+# skips the bypass entirely and uses real OAuth. See AGENTS.md
+# § "Web dashboard tasks" and web/src/lib/auth-server.ts.
+description = "Seed dev database and start dev server with auth bypass (set DEV_GH_TOKEN for real GitHub data)."
 run = "node scripts/dev-seed.js && DEV_BYPASS_AUTH=1 pnpm dev"
 
 [tasks."web:e2e"]

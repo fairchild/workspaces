@@ -182,6 +182,13 @@ mise run web:deps:remove -- <pkg>           # pnpm remove + auto-fix formatting
 
 **Local vs CI caveats:**
 - `fast/unauth-*` Playwright specs require `NODE_ENV=production` — they pass in CI (which uses `pnpm start`) and fail under `pnpm dev` (bypass active in development). Expected; not a regression.
+- **Dev-bypass token plumbing** — `mise run web:dev` hardcodes `DEV_BYPASS_AUTH=1`, which creates a fake "dev-user" session but gives routes a placeholder string in place of a real GitHub PAT. Any call that hits the real GitHub API (agent discovery, pipeline, webhook-status, login lookup) 401s and the UI prompts "sign out / sign in". To light up GitHub-backed features without running the full OAuth flow, prefix the task with a real token:
+
+  ```bash
+  DEV_GH_TOKEN=$(gh auth token) mise run web:dev
+  ```
+
+  `getDevBypassToken()` in `web/src/lib/auth-server.ts` prefers `DEV_GH_TOKEN` over the placeholder when set. Setting `GITHUB_WEB_WORKSPACES_CLIENT_ID` vetoes the bypass entirely and forces the real OAuth flow.
 
 **Anti-patterns to avoid** (use the mise tasks instead):
 - `pnpm typecheck && pnpm lint && pnpm test` → `mise run web:check`
@@ -258,6 +265,7 @@ mise run web:deps:remove -- <pkg>           # pnpm remove + auto-fix formatting
 | Web compute providers | web/src/lib/agent-runtime/vercel-sandbox.ts, provider-registry.ts |
 | Web terminal panel | web/src/app/dashboard/components/terminal-panel.tsx |
 | Web terminal API | web/src/app/api/terminal/ |
+| Web API auth helpers | web/src/lib/api-auth.ts |
 | Web architecture doc | web/docs/architecture.md |
 
 ## Key Patterns

@@ -97,6 +97,30 @@ export async function getEvents(
 	}));
 }
 
+export async function getEventsForRepos(
+	repos: string[],
+	limit = 50,
+): Promise<WebhookEvent[]> {
+	if (repos.length === 0) return [];
+	await ensureEventsTable();
+	const db = getDb();
+	const rows = await db
+		.selectFrom("webhook_events")
+		.select(["id", "type", "action", "summary", "repo", "timestamp"])
+		.where("repo", "in", repos)
+		.orderBy("timestamp", "desc")
+		.limit(limit)
+		.execute();
+	return rows.map((r) => ({
+		id: r.id,
+		type: r.type as WebhookEventType,
+		action: r.action,
+		summary: r.summary,
+		repo: r.repo,
+		timestamp: r.timestamp,
+	}));
+}
+
 export async function getEvent(id: string): Promise<WebhookEvent | null> {
 	await ensureEventsTable();
 	const db = getDb();
@@ -179,4 +203,28 @@ export async function getEventStats(): Promise<EventStats> {
 /** Exposed for tests — reset the TTL cache between runs. */
 export function __resetEventStatsCache(): void {
 	cachedEventStats = undefined;
+}
+
+export async function getEventStatsForRepos(
+	repos: string[],
+): Promise<EventStats> {
+	if (repos.length === 0) return { eventsToday: 0, repos: [] };
+
+	await ensureEventsTable();
+	const db = getDb();
+	const today = new Date();
+	today.setHours(0, 0, 0, 0);
+	const todayISO = today.toISOString();
+
+	const countResult = await db
+		.selectFrom("webhook_events")
+		.select(db.fn.countAll().as("count"))
+		.where("repo", "in", repos)
+		.where("timestamp", ">=", todayISO)
+		.executeTakeFirstOrThrow();
+
+	return {
+		eventsToday: Number(countResult.count),
+		repos,
+	};
 }

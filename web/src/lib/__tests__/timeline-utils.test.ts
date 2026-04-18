@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { dayKey, shouldShowDay } from "../timeline-utils";
+import {
+	dayKey,
+	formatCompactTime,
+	formatRelativeTime,
+	shouldShowDay,
+} from "../timeline-utils";
 import type { TimelineEntry } from "../types";
 
 function chatEntry(timestamp: string): TimelineEntry {
@@ -60,5 +65,50 @@ describe("shouldShowDay", () => {
 			chatEntry("2026-03-29T20:00:00Z"),
 		];
 		expect(shouldShowDay(entries, 1)).toBe(true);
+	});
+});
+
+describe("formatCompactTime", () => {
+	beforeEach(() => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2026-03-29T12:00:00Z"));
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	it("returns 'now' for sub-minute timestamps", () => {
+		expect(formatCompactTime("2026-03-29T11:59:30Z")).toBe("now");
+	});
+
+	it("returns minutes for sub-hour timestamps", () => {
+		expect(formatCompactTime("2026-03-29T11:55:00Z")).toBe("5m");
+	});
+
+	it("returns hours for sub-day timestamps", () => {
+		expect(formatCompactTime("2026-03-29T09:00:00Z")).toBe("3h");
+	});
+
+	it("returns days for day-old timestamps", () => {
+		expect(formatCompactTime("2026-03-27T12:00:00Z")).toBe("2d");
+	});
+});
+
+describe("formatRelativeTime", () => {
+	beforeEach(() => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2026-03-29T12:00:00Z"));
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	it("returns matching relative labels for common ranges", () => {
+		expect(formatRelativeTime("2026-03-29T11:59:30Z")).toBe("just now");
+		expect(formatRelativeTime("2026-03-29T11:55:00Z")).toBe("5m ago");
+		expect(formatRelativeTime("2026-03-29T09:00:00Z")).toBe("3h ago");
+		expect(formatRelativeTime("2026-03-27T12:00:00Z")).toBe("2d ago");
 	});
 });

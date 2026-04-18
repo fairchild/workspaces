@@ -136,39 +136,48 @@ export function DashboardShell({
 			.catch((err) => console.warn("[dashboard] repos fetch failed:", err));
 	}, []);
 
-	// Fetch agent data when selectedRepo changes
-	const fetchAgentData = useCallback(async () => {
-		if (!selectedRepo) {
-			setAgentData(null);
-			setError(null);
-			return;
-		}
-		setLoading(true);
-		setError(null);
-		try {
-			const res = await fetch(
-				`/api/repos/${selectedRepo.owner}/${selectedRepo.repo}/agents`,
-			);
-			if (res.ok) {
-				setAgentData(await res.json());
-			} else {
-				const body = await res.json().catch(() => ({}));
-				setAgentData(null);
-				setError(
-					body.needsReauth
-						? "Please sign out and sign back in to grant repository access."
-						: `Failed to load agent data: ${body.error ?? res.statusText}`,
-				);
-			}
-		} catch {
-			setError("Failed to connect");
-		}
-		setLoading(false);
-	}, [selectedRepo]);
-
 	useEffect(() => {
-		fetchAgentData();
-	}, [fetchAgentData]);
+		let cancelled = false;
+
+		async function loadAgentData() {
+			if (!selectedRepo) {
+				setAgentData(null);
+				setError(null);
+				setLoading(false);
+				return;
+			}
+
+			setLoading(true);
+			setError(null);
+			try {
+				const res = await fetch(
+					`/api/repos/${selectedRepo.owner}/${selectedRepo.repo}/agents`,
+				);
+				if (cancelled) return;
+				if (res.ok) {
+					setAgentData(await res.json());
+				} else {
+					const body = await res.json().catch(() => ({}));
+					if (cancelled) return;
+					setAgentData(null);
+					setError(
+						body.needsReauth
+							? "Please sign out and sign back in to grant repository access."
+							: `Failed to load agent data: ${body.error ?? res.statusText}`,
+					);
+				}
+			} catch {
+				if (!cancelled) setError("Failed to connect");
+			} finally {
+				if (!cancelled) setLoading(false);
+			}
+		}
+
+		void loadAgentData();
+		return () => {
+			cancelled = true;
+		};
+	}, [selectedRepo]);
 
 	return (
 		<div

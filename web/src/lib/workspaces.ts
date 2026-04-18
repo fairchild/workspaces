@@ -1,4 +1,5 @@
 import { getDb } from "./db";
+import { formatRelativeTime } from "./timeline-utils";
 import type { Workspace, WorkspaceStatus } from "./types";
 
 let migrated = false;
@@ -45,42 +46,42 @@ export async function syncWorkspaces(
 	await ensureWorkspacesTable();
 	const db = getDb();
 	const now = new Date().toISOString();
-	let count = 0;
 
-	for (const ws of workspaces) {
-		await db
-			.insertInto("workspaces")
-			.values({
-				id: ws.id,
-				name: ws.name,
-				path: ws.path,
-				repo_id: ws.repoId ?? null,
-				repo_name: ws.repoName ?? null,
-				created_at: ws.createdAt,
-				last_accessed_at: ws.lastAccessedAt,
-				status: ws.status,
-				git_branch: ws.gitBranch ?? null,
-				backend_identifier: ws.backendIdentifier,
-				synced_at: now,
-			})
-			.onConflict((oc) =>
-				oc.column("id").doUpdateSet({
+	await Promise.all(
+		workspaces.map((ws) =>
+			db
+				.insertInto("workspaces")
+				.values({
+					id: ws.id,
 					name: ws.name,
 					path: ws.path,
 					repo_id: ws.repoId ?? null,
 					repo_name: ws.repoName ?? null,
+					created_at: ws.createdAt,
 					last_accessed_at: ws.lastAccessedAt,
 					status: ws.status,
 					git_branch: ws.gitBranch ?? null,
 					backend_identifier: ws.backendIdentifier,
 					synced_at: now,
-				}),
-			)
-			.execute();
-		count++;
-	}
+				})
+				.onConflict((oc) =>
+					oc.column("id").doUpdateSet({
+						name: ws.name,
+						path: ws.path,
+						repo_id: ws.repoId ?? null,
+						repo_name: ws.repoName ?? null,
+						last_accessed_at: ws.lastAccessedAt,
+						status: ws.status,
+						git_branch: ws.gitBranch ?? null,
+						backend_identifier: ws.backendIdentifier,
+						synced_at: now,
+					}),
+				)
+				.execute(),
+		),
+	);
 
-	return count;
+	return workspaces.length;
 }
 
 export async function getWorkspaces(
@@ -110,17 +111,6 @@ export async function getWorkspaces(
 	}));
 }
 
-export function relativeTime(iso: string): string {
-	const diff = Date.now() - new Date(iso).getTime();
-	const mins = Math.floor(diff / 60_000);
-	if (mins < 1) return "just now";
-	if (mins < 60) return `${mins}m ago`;
-	const hours = Math.floor(mins / 60);
-	if (hours < 24) return `${hours}h ago`;
-	const days = Math.floor(hours / 24);
-	return `${days}d ago`;
-}
-
 const STATUS_EMOJI: Record<WorkspaceStatus, string> = {
 	active: "🟢",
 	provisioning: "🟡",
@@ -138,7 +128,7 @@ export function formatWorkspaceStatusCard(workspaces: Workspace[]): string {
 	const rows = workspaces.map((ws) => {
 		const emoji = STATUS_EMOJI[ws.status] ?? "⚪";
 		const branch = ws.gitBranch ?? "—";
-		const activity = relativeTime(ws.lastAccessedAt);
+		const activity = formatRelativeTime(ws.lastAccessedAt);
 		return `| ${ws.name} | ${emoji} ${ws.status} | \`${branch}\` | ${activity} |`;
 	});
 

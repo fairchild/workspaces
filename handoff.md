@@ -36,8 +36,7 @@ Web frontend performance: fixed 7,225ms INP on compose bar and reduced re-render
 - `web/src/app/dashboard/components/event-group-row.tsx` — React.memo wrapped
 - `web/src/app/dashboard/components/activity-feed.tsx` — stable setEvents comparison
 - `web/src/app/dashboard/components/dashboard-shell.tsx` — stable handleNewChatMessage via activeTabRef
-- `web/src/app/dashboard/components/timeline-utils.ts` — cached formatTime
-- `web/src/lib/timeline-utils.ts` — cached dayKey
+- `web/src/lib/timeline-utils.ts` — cached `dayKey`, `formatCompactTime`, `formatRelativeTime` (the old `components/timeline-utils.ts` split was folded in here later, in PR #342)
 
 ## Open Questions
 - Pre-existing race: rapid stream switching can null newer stream via old finally block (narrow window, not introduced by this PR)

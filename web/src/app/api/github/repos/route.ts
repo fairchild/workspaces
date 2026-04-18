@@ -1,10 +1,10 @@
+import { unauthorizedResponse } from "@/lib/api-auth";
 import { getDevBypassToken, getSession } from "@/lib/auth-server";
 import { GitHubApiError, fetchUserRepos, getGitHubToken } from "@/lib/github";
 
 export async function GET(): Promise<Response> {
 	const session = await getSession();
-	if (!session)
-		return Response.json({ error: "unauthorized" }, { status: 401 });
+	if (!session) return unauthorizedResponse();
 
 	try {
 		let token: string;

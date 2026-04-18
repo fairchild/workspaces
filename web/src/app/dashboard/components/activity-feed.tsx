@@ -1,45 +1,19 @@
 "use client";
 
-import type { WebhookEvent, WebhookEventType } from "@/lib/types";
+import { formatRelativeTime } from "@/lib/timeline-utils";
+import type { WebhookEvent } from "@/lib/types";
 import { useCallback, useEffect, useState } from "react";
 import styles from "./activity-feed.module.css";
 import { EventDetail } from "./event-detail";
+import { type ColorKey, TYPE_COLOR, TYPE_LABEL } from "./event-utils";
 
-const EVENT_COLORS: Record<WebhookEventType, string> = {
-	pull_request: styles.eventPr,
-	check_run: styles.eventCheck,
-	check_suite: styles.eventCheck,
-	discussion: styles.eventDiscussion,
-	discussion_comment: styles.eventDiscussion,
+const EVENT_COLORS: Record<ColorKey, string> = {
+	ci: styles.eventCheck,
+	pr: styles.eventPr,
 	push: styles.eventPush,
-	issues: styles.eventIssue,
-	issue_comment: styles.eventIssue,
-	workflow_run: styles.eventWorkflow,
+	discussion: styles.eventDiscussion,
+	issue: styles.eventIssue,
 };
-
-const EVENT_LABELS: Record<WebhookEventType, string> = {
-	pull_request: "PR",
-	check_run: "CI",
-	check_suite: "CI",
-	discussion: "DISC",
-	discussion_comment: "DISC",
-	push: "PUSH",
-	issues: "ISSUE",
-	issue_comment: "ISSUE",
-	workflow_run: "CI",
-};
-
-function formatTime(timestamp: string): string {
-	const date = new Date(timestamp);
-	const now = new Date();
-	const diff = now.getTime() - date.getTime();
-	const mins = Math.floor(diff / 60000);
-	if (mins < 1) return "just now";
-	if (mins < 60) return `${mins}m ago`;
-	const hours = Math.floor(mins / 60);
-	if (hours < 24) return `${hours}h ago`;
-	return `${Math.floor(hours / 24)}d ago`;
-}
 
 function EventRow({
 	event,
@@ -60,11 +34,13 @@ function EventRow({
 				onClick={onToggle}
 			>
 				<div className={styles.eventHeader}>
-					<span className={`${styles.eventBadge} ${EVENT_COLORS[event.type]}`}>
-						{EVENT_LABELS[event.type]}
+					<span
+						className={`${styles.eventBadge} ${EVENT_COLORS[TYPE_COLOR[event.type]]}`}
+					>
+						{TYPE_LABEL[event.type]}
 					</span>
 					<span className={styles.eventTime}>
-						{formatTime(event.timestamp)}
+						{formatRelativeTime(event.timestamp)}
 					</span>
 				</div>
 				<span className={styles.eventSummary}>{event.summary}</span>
@@ -85,31 +61,45 @@ export function ActivityFeed({ filterRepo }: ActivityFeedProps) {
 	const [events, setEvents] = useState<WebhookEvent[]>([]);
 	const [expandedId, setExpandedId] = useState<string | null>(null);
 
-	const fetchEvents = useCallback(async () => {
-		try {
-			const url = filterRepo
-				? `/api/events?repo=${encodeURIComponent(filterRepo)}`
-				: "/api/events";
-			const res = await fetch(url);
-			if (res.ok) {
-				const data: WebhookEvent[] = await res.json();
-				setEvents((prev) =>
-					prev.length === data.length &&
-					prev[0]?.id === data[0]?.id &&
-					prev[prev.length - 1]?.id === data[data.length - 1]?.id
-						? prev
-						: data,
-				);
-			}
-		} catch {
-			// Silently retry on next poll
-		}
+	const fetchEvents = useCallback(() => {
+		let cancelled = false;
+		return {
+			run: async () => {
+				try {
+					const url = filterRepo
+						? `/api/events?repo=${encodeURIComponent(filterRepo)}`
+						: "/api/events";
+					const res = await fetch(url);
+					if (!res.ok || cancelled) return;
+					const data: WebhookEvent[] = await res.json();
+					if (cancelled) return;
+					setEvents((prev) =>
+						prev.length === data.length &&
+						prev[0]?.id === data[0]?.id &&
+						prev[prev.length - 1]?.id === data[data.length - 1]?.id
+							? prev
+							: data,
+					);
+				} catch {
+					// Silently retry on next poll
+				}
+			},
+			cancel: () => {
+				cancelled = true;
+			},
+		};
 	}, [filterRepo]);
 
 	useEffect(() => {
-		fetchEvents();
-		const id = setInterval(fetchEvents, POLL_INTERVAL);
-		return () => clearInterval(id);
+		const request = fetchEvents();
+		void request.run();
+		const id = setInterval(() => {
+			void request.run();
+		}, POLL_INTERVAL);
+		return () => {
+			request.cancel();
+			clearInterval(id);
+		};
 	}, [fetchEvents]);
 
 	// Collapse when repo filter changes

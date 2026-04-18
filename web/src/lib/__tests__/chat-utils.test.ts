@@ -1,12 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-	type EventStats,
 	formatDispatchBody,
 	handleBotCommand,
 	parseAgentMention,
 	parseIssueRef,
 	stripMention,
 } from "../chat-utils";
+import type { EventStats } from "../events";
 
 describe("parseAgentMention", () => {
 	it("extracts agent name from start of message", () => {

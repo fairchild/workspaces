@@ -5,8 +5,8 @@ import {
 	updateComputeInstance,
 	updateSessionStatus,
 } from "@/lib/agent-sessions";
+import { authorizeRepoAccess, unauthorizedResponse } from "@/lib/api-auth";
 import { getSession } from "@/lib/auth-server";
-import { getUserRepos } from "@/lib/repos";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -23,9 +23,7 @@ interface PostBody {
  */
 export async function POST(request: Request): Promise<Response> {
 	const session = await getSession();
-	if (!session?.user) {
-		return Response.json({ error: "unauthorized" }, { status: 401 });
-	}
+	if (!session?.user) return unauthorizedResponse();
 
 	const body = (await request.json()) as PostBody;
 	if (!body.repo || !body.agentName) {
@@ -35,13 +33,8 @@ export async function POST(request: Request): Promise<Response> {
 		);
 	}
 
-	const userRepos = await getUserRepos(session.user.id);
-	if (!userRepos.some((r) => `${r.owner}/${r.repo}` === body.repo)) {
-		return Response.json(
-			{ error: "repo not in your workspace" },
-			{ status: 403 },
-		);
-	}
+	const unauthorized = await authorizeRepoAccess(session.user.id, body.repo);
+	if (unauthorized) return unauthorized;
 
 	const agentSession = await getSessionForAgent(body.repo, body.agentName);
 	if (!agentSession) {

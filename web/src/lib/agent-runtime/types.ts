@@ -29,6 +29,17 @@ export interface ContextMessage {
 	timestamp: string;
 }
 
+export function buildEnrichedMessage(
+	message: string,
+	contextMessages: ContextMessage[] | undefined,
+): string {
+	if (!contextMessages?.length) return message;
+	const contextBlock = contextMessages
+		.map((m) => `[${m.timestamp}] ${m.author} (${m.authorType}): ${m.content}`)
+		.join("\n\n");
+	return `## Recent conversation context\n\n${contextBlock}\n\n---\n\n## Current message\n\n${message}`;
+}
+
 /** Request to create a compute sandbox for an agent session. */
 export interface SandboxRequest {
 	sessionId: string;

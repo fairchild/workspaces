@@ -1,10 +1,6 @@
 import crypto from "node:crypto";
+import type { EventStats } from "./events";
 import type { ChatMessage } from "./types";
-
-export interface EventStats {
-	eventsToday: number;
-	repos: string[];
-}
 
 export async function handleBotCommand(params: {
 	target: string | null;

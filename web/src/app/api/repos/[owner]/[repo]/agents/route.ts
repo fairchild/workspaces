@@ -1,4 +1,5 @@
 import { parseAgentTree } from "@/lib/agent-discovery";
+import { authorizeRepoAccess, unauthorizedResponse } from "@/lib/api-auth";
 import { getDevBypassToken, getSession } from "@/lib/auth-server";
 import {
 	GitHubApiError,
@@ -16,8 +17,14 @@ export async function GET(
 	{ params }: { params: Promise<{ owner: string; repo: string }> },
 ): Promise<Response> {
 	const session = await getSession();
-	if (!session)
-		return Response.json({ error: "unauthorized" }, { status: 401 });
+	if (!session) return unauthorizedResponse();
+
+	const { owner, repo } = await params;
+	const unauthorized = await authorizeRepoAccess(
+		session.user.id,
+		`${owner}/${repo}`,
+	);
+	if (unauthorized) return unauthorized;
 
 	let token: string;
 	const bypassToken = getDevBypassToken();
@@ -33,16 +40,12 @@ export async function GET(
 		token = ghToken;
 	}
 
-	const { owner, repo } = await params;
-
 	try {
-		// Fetch tree and identify SKILL.md files
 		const treeEntries = await fetchRepoTree(token, owner, repo);
 		const skillMdPaths = treeEntries
 			.filter((e) => e.path.match(/^\.agents\/skills\/[^/]+\/SKILL\.md$/))
 			.map((e) => e.path);
 
-		// Fetch SKILL.md contents in parallel
 		const skillContents = new Map<string, string>();
 		const contentResults = await Promise.all(
 			skillMdPaths.map(async (path) => {
@@ -54,13 +57,11 @@ export async function GET(
 			skillContents.set(path, content);
 		}
 
-		// Parse agents from tree
 		const { agents, skills, configFiles } = parseAgentTree(
 			treeEntries,
 			skillContents,
 		);
 
-		// Fetch pipeline issues and PR count in parallel
 		const [ready, claimed, review, mergeable, openPRs] = await Promise.all([
 			fetchIssuesByLabel(token, owner, repo, PIPELINE_GITHUB_LABELS.ready),
 			fetchIssuesByLabel(token, owner, repo, PIPELINE_GITHUB_LABELS.claimed),
@@ -69,11 +70,11 @@ export async function GET(
 			fetchOpenPRCount(token, owner, repo),
 		]);
 
-		// Mark agents as active if they have any claimed or review issues
-		// (any pipeline activity = at least one agent is working)
+		// Any claimed/review issue with an agent-named label counts as that
+		// agent being active — the label is the only cross-reference from an
+		// issue back to the agent persona that claimed it.
 		if (claimed.length > 0 || review.length > 0) {
 			for (const agent of agents) {
-				// Check if any claimed/review issue mentions this agent's name in its labels
 				const hasActivity = [...claimed, ...review].some((issue) =>
 					issue.labels.some((l) =>
 						l.toLowerCase().includes(agent.name.toLowerCase()),
