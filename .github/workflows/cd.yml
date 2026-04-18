@@ -21,6 +21,7 @@ concurrency:
 permissions:
   contents: read
   issues: write
+  actions: write
 
 jobs:
   preview-web:
@@ -206,62 +207,57 @@ jobs:
             const fs = require('fs');
             const validator = process.env.VALIDATOR;
             const marker = `<!-- cd-failure:${validator} -->`;
+            const dispatchMarker = `<!-- april-dispatch -->`;
+            const escalateLabel = 'needs-human';
+            const maxAttempts = 2;
             const findings = fs.existsSync('findings.md')
               ? fs.readFileSync('findings.md', 'utf8')
               : '_No findings file produced._';
 
             const title = `CD: ${validator} failures on main`;
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
 
-            // Find existing rolling issue (if any) to count prior auto-fix attempts
             const q = `repo:${context.repo.owner}/${context.repo.repo} in:body "${marker}" is:issue`;
             const found = await github.rest.search.issuesAndPullRequests({ q, per_page: 1 });
             const existing = found.data.items[0];
 
             let attempts = 0;
-            let mentionApril = true;
-            const escalateLabel = 'needs-human';
-
             if (existing) {
               const comments = await github.rest.issues.listComments({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: existing.number,
-                per_page: 100,
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: existing.number, per_page: 100,
               });
               attempts = comments.data.filter(c =>
-                c.body && c.body.includes('@april-clearwater')
+                c.body && c.body.includes(dispatchMarker)
               ).length;
-              if (attempts >= 2) {
-                mentionApril = false;
-              }
             }
+            const shouldDispatch = attempts < maxAttempts;
 
-            const fixSection = mentionApril
+            const statusSection = shouldDispatch
               ? [
                   '',
-                  '## Auto-fix request',
-                  '@april-clearwater please investigate this failure and propose a fix PR.',
+                  '## Auto-fix',
+                  `April will be dispatched to investigate (attempt ${attempts + 1}/${maxAttempts}).`,
                   `Reproduce locally: \`${process.env.REPRO_HINT}\``,
-                  `Workflow artifacts contain the failed ${validator} report.`,
                   '',
                 ]
               : [
                   '',
                   '## Auto-fix exhausted — needs human',
                   `April attempted ${attempts} fix(es) without success. Triage required.`,
-                  '@fairchild',
+                  '/cc @fairchild',
                   '',
                 ];
 
             const body = [
               marker,
               `**Commit:** ${context.sha}`,
-              `**Run:** ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              `**Run:** ${runUrl}`,
               `**Preview URL:** ${process.env.PREVIEW_URL || '(not available)'}`,
               '',
               '## Findings',
               findings,
-              ...fixSection,
+              ...statusSection,
               '## Plan to fix (if root cause is obvious)',
               '- [ ] Root cause: <one sentence>',
               '- [ ] Reproduction: <local command>',
@@ -274,39 +270,78 @@ jobs:
               '- [ ] Decision point: <what result tells us to do what>',
             ].join('\n');
 
+            let issueNumber;
             if (existing) {
               if (existing.state === 'closed') {
                 await github.rest.issues.update({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: existing.number,
-                  state: 'open',
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  issue_number: existing.number, state: 'open',
                 });
               }
-              if (!mentionApril) {
+              if (!shouldDispatch) {
                 await github.rest.issues.addLabels({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: existing.number,
-                  labels: [escalateLabel],
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  issue_number: existing.number, labels: [escalateLabel],
                 });
               }
               await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: existing.number,
-                body,
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: existing.number, body,
               });
-              core.notice(`Updated rolling issue #${existing.number} (attempts=${attempts}, mentionApril=${mentionApril})`);
+              issueNumber = existing.number;
+              core.notice(`Updated rolling issue #${issueNumber} (attempts=${attempts}, dispatch=${shouldDispatch})`);
             } else {
               const created = await github.rest.issues.create({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                title,
-                body,
+                owner: context.repo.owner, repo: context.repo.repo,
+                title, body,
                 labels: ['cd-failure', `cd-failure:${validator}`, 'auto-opened'],
               });
-              core.notice(`Created rolling issue #${created.data.number}`);
+              issueNumber = created.data.number;
+              core.notice(`Created rolling issue #${issueNumber}`);
+            }
+
+            if (shouldDispatch) {
+              const directive = [
+                `Investigate CD ${validator} failure tracked in issue #${issueNumber}.`,
+                `Commit: ${context.sha}`,
+                `Preview URL: ${process.env.PREVIEW_URL || '(not available)'}`,
+                `Workflow run: ${runUrl}`,
+                `Reproduce: ${process.env.REPRO_HINT}`,
+                `Task: reproduce locally, root-cause the failure, open a fix PR, and link it back to issue #${issueNumber}.`,
+              ].join('\n');
+              const ref = context.ref.replace(/^refs\/heads\//, '');
+              try {
+                await github.rest.actions.createWorkflowDispatch({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  workflow_id: 'agent-april.yml',
+                  ref,
+                  inputs: { message: directive },
+                });
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  issue_number: issueNumber,
+                  body: [
+                    dispatchMarker,
+                    `🤖 Dispatched **April** (attempt ${attempts + 1}/${maxAttempts}) on \`${ref}\`.`,
+                    '',
+                    '<details><summary>Directive</summary>',
+                    '',
+                    '```',
+                    directive,
+                    '```',
+                    '',
+                    '</details>',
+                  ].join('\n'),
+                });
+                core.notice(`Dispatched April (attempt ${attempts + 1})`);
+              } catch (err) {
+                core.warning(`Failed to dispatch April: ${err.message}`);
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  issue_number: issueNumber,
+                  body: `⚠️ Tried to dispatch April but failed: \`${err.message}\`. /cc @fairchild`,
+                });
+              }
             }
 
   fail-notify-lighthouse:
@@ -328,61 +363,57 @@ jobs:
             const fs = require('fs');
             const validator = process.env.VALIDATOR;
             const marker = `<!-- cd-failure:${validator} -->`;
+            const dispatchMarker = `<!-- april-dispatch -->`;
+            const escalateLabel = 'needs-human';
+            const maxAttempts = 2;
             const findings = fs.existsSync('findings.md')
               ? fs.readFileSync('findings.md', 'utf8')
               : '_No findings file produced._';
 
             const title = `CD: ${validator} failures on main`;
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
 
             const q = `repo:${context.repo.owner}/${context.repo.repo} in:body "${marker}" is:issue`;
             const found = await github.rest.search.issuesAndPullRequests({ q, per_page: 1 });
             const existing = found.data.items[0];
 
             let attempts = 0;
-            let mentionApril = true;
-            const escalateLabel = 'needs-human';
-
             if (existing) {
               const comments = await github.rest.issues.listComments({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: existing.number,
-                per_page: 100,
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: existing.number, per_page: 100,
               });
               attempts = comments.data.filter(c =>
-                c.body && c.body.includes('@april-clearwater')
+                c.body && c.body.includes(dispatchMarker)
               ).length;
-              if (attempts >= 2) {
-                mentionApril = false;
-              }
             }
+            const shouldDispatch = attempts < maxAttempts;
 
-            const fixSection = mentionApril
+            const statusSection = shouldDispatch
               ? [
                   '',
-                  '## Auto-fix request',
-                  '@april-clearwater please investigate this failure and propose a fix PR.',
+                  '## Auto-fix',
+                  `April will be dispatched to investigate (attempt ${attempts + 1}/${maxAttempts}).`,
                   `Reproduce locally: \`${process.env.REPRO_HINT}\``,
-                  `Workflow artifacts contain the failed ${validator} report.`,
                   '',
                 ]
               : [
                   '',
                   '## Auto-fix exhausted — needs human',
                   `April attempted ${attempts} fix(es) without success. Triage required.`,
-                  '@fairchild',
+                  '/cc @fairchild',
                   '',
                 ];
 
             const body = [
               marker,
               `**Commit:** ${context.sha}`,
-              `**Run:** ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              `**Run:** ${runUrl}`,
               `**Preview URL:** ${process.env.PREVIEW_URL || '(not available)'}`,
               '',
               '## Findings',
               findings,
-              ...fixSection,
+              ...statusSection,
               '## Plan to fix (if root cause is obvious)',
               '- [ ] Root cause: <one sentence>',
               '- [ ] Reproduction: <local command>',
@@ -395,39 +426,78 @@ jobs:
               '- [ ] Decision point: <what result tells us to do what>',
             ].join('\n');
 
+            let issueNumber;
             if (existing) {
               if (existing.state === 'closed') {
                 await github.rest.issues.update({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: existing.number,
-                  state: 'open',
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  issue_number: existing.number, state: 'open',
                 });
               }
-              if (!mentionApril) {
+              if (!shouldDispatch) {
                 await github.rest.issues.addLabels({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: existing.number,
-                  labels: [escalateLabel],
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  issue_number: existing.number, labels: [escalateLabel],
                 });
               }
               await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: existing.number,
-                body,
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: existing.number, body,
               });
-              core.notice(`Updated rolling issue #${existing.number} (attempts=${attempts}, mentionApril=${mentionApril})`);
+              issueNumber = existing.number;
+              core.notice(`Updated rolling issue #${issueNumber} (attempts=${attempts}, dispatch=${shouldDispatch})`);
             } else {
               const created = await github.rest.issues.create({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                title,
-                body,
+                owner: context.repo.owner, repo: context.repo.repo,
+                title, body,
                 labels: ['cd-failure', `cd-failure:${validator}`, 'auto-opened'],
               });
-              core.notice(`Created rolling issue #${created.data.number}`);
+              issueNumber = created.data.number;
+              core.notice(`Created rolling issue #${issueNumber}`);
+            }
+
+            if (shouldDispatch) {
+              const directive = [
+                `Investigate CD ${validator} failure tracked in issue #${issueNumber}.`,
+                `Commit: ${context.sha}`,
+                `Preview URL: ${process.env.PREVIEW_URL || '(not available)'}`,
+                `Workflow run: ${runUrl}`,
+                `Reproduce: ${process.env.REPRO_HINT}`,
+                `Task: reproduce locally, root-cause the failure, open a fix PR, and link it back to issue #${issueNumber}.`,
+              ].join('\n');
+              const ref = context.ref.replace(/^refs\/heads\//, '');
+              try {
+                await github.rest.actions.createWorkflowDispatch({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  workflow_id: 'agent-april.yml',
+                  ref,
+                  inputs: { message: directive },
+                });
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  issue_number: issueNumber,
+                  body: [
+                    dispatchMarker,
+                    `🤖 Dispatched **April** (attempt ${attempts + 1}/${maxAttempts}) on \`${ref}\`.`,
+                    '',
+                    '<details><summary>Directive</summary>',
+                    '',
+                    '```',
+                    directive,
+                    '```',
+                    '',
+                    '</details>',
+                  ].join('\n'),
+                });
+                core.notice(`Dispatched April (attempt ${attempts + 1})`);
+              } catch (err) {
+                core.warning(`Failed to dispatch April: ${err.message}`);
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner, repo: context.repo.repo,
+                  issue_number: issueNumber,
+                  body: `⚠️ Tried to dispatch April but failed: \`${err.message}\`. /cc @fairchild`,
+                });
+              }
             }
 
   validate-prod:
@@ -452,10 +522,12 @@ jobs:
           for i in 1 2 3 4 5; do
             if curl -sSf --max-time 10 "https://spaces.cloudcompute.com/" >/dev/null; then
               echo "::notice::Prod reachable on attempt $i"
-              break
+              exit 0
             fi
             sleep 5
           done
+          echo "::error::Prod unreachable after 5 attempts"
+          exit 1
       - name: Playwright fast against prod
         env:
           PLAYWRIGHT_BASE_URL: https://spaces.cloudcompute.com
