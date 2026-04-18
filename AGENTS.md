@@ -250,6 +250,7 @@ mise run web:deps:remove -- <pkg>           # pnpm remove + auto-fix formatting
 | Web compute providers | web/src/lib/agent-runtime/vercel-sandbox.ts, provider-registry.ts |
 | Web terminal panel | web/src/app/dashboard/components/terminal-panel.tsx |
 | Web terminal API | web/src/app/api/terminal/ |
+| Web API auth helpers | web/src/lib/api-auth.ts |
 | Web architecture doc | web/docs/architecture.md |
 
 ## Key Patterns
