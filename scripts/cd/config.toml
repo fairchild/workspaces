@@ -1,0 +1,37 @@
+# Preview→Validate→Promote CD bootstrap manifest.
+# Consumed by scripts/cd/bootstrap-preview.py.
+#
+# Adding a new worker to CD: append a [[workers]] block.
+# Adding a new preview-secret to an existing worker: append to preview_secrets.
+# Adding a new GitHub Actions secret: append to github_secrets.from_env.
+
+[repo]
+# Used for `gh secret set --repo`. Must be owner/name.
+slug = "fairchild/workspaces"
+
+[vercel]
+# Directory containing the Next.js app and the Vercel project link.
+# The bootstrap also writes/merges `git.deploymentEnabled.main = false` into
+# <project_dir>/vercel.json so Vercel's git integration stops auto-promoting
+# main. No dashboard step required.
+project_dir = "web"
+
+[[workers]]
+dir = "infra/cloudflare-webhook-relay"
+preview_health_url = "https://webhooks-preview.cloudcompute.com/health"
+preview_secrets = ["GITHUB_WEBHOOK_SECRET", "JWT_SIGNING_SECRET"]
+
+[[workers]]
+dir = "infra/cloudflare-evidence-store"
+preview_health_url = "https://evidence-preview.cloudcompute.com/health"
+preview_secrets = ["EVIDENCE_UPLOAD_TOKEN"]
+
+[github_secrets]
+# Secrets read straight from env and pushed to GitHub Actions.
+from_env = [
+  "VERCEL_TOKEN",
+  "CLOUDFLARE_API_TOKEN",
+  "CLOUDFLARE_ACCOUNT_ID",
+]
+# Secrets derived from web/.vercel/project.json after `vercel link`.
+from_vercel_link = ["VERCEL_ORG_ID", "VERCEL_PROJECT_ID"]

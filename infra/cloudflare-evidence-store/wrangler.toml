@@ -9,3 +9,15 @@ bucket_name = "evidence-screenshots"
 [[routes]]
 pattern = "evidence.cloudcompute.com"
 custom_domain = true
+
+# --- Preview environment ---
+[env.preview]
+name = "evidence-store-preview"
+
+[[env.preview.r2_buckets]]
+binding = "EVIDENCE_BUCKET"
+bucket_name = "evidence-screenshots-preview"
+
+[[env.preview.routes]]
+pattern = "evidence-preview.cloudcompute.com"
+custom_domain = true
