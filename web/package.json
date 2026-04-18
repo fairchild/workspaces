@@ -37,6 +37,7 @@
 		"onlyBuiltDependencies": ["better-sqlite3"]
 	},
 	"devDependencies": {
+		"@axe-core/playwright": "^4.11.2",
 		"@biomejs/biome": "^1",
 		"@playwright/test": "^1.58.2",
 		"@types/ms": "^2.1.0",

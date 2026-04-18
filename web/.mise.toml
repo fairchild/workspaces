@@ -76,3 +76,21 @@ pnpm remove "$@"
 pnpm biome check --write package.json 2>/dev/null || true
 echo "Removed and formatted."
 """
+
+[tasks."web:e2e:explore"]
+description = "Run the qa-explore Playwright project (video + trace + axe-core)."
+run = "pnpm exec playwright test --project=qa-explore --reporter=list"
+
+[tasks."web:qa:init-agents"]
+description = "One-shot: scaffold Playwright's agent-loop instructions (for Claude Code) into the repo. Run once; commit the output."
+run = "pnpm exec playwright init-agents --loop=claude"
+
+[tasks."web:qa:codegen"]
+description = "Launch Playwright codegen against the dev server to record interactions into a starter .spec.ts."
+usage = "[url]"
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+URL="${1:-${PLAYWRIGHT_BASE_URL:-http://localhost:3000}}"
+pnpm exec playwright codegen --target=javascript "$URL"
+"""
