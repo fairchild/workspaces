@@ -1,5 +1,9 @@
 import crypto from "node:crypto";
 import {
+	type PrReviewPayload,
+	triggerPrReview,
+} from "@/lib/agent-runtime/pr-review";
+import {
 	getChatMessageByDiscussionId,
 	pushChatMessage,
 	updateChatMessageContent,
@@ -138,6 +142,29 @@ export async function POST(request: Request): Promise<Response> {
 		eventType === "workflow_run"
 	) {
 		await updateDispatchFromWebhook(eventType, action, payload);
+	}
+
+	// Trigger automated PR review via Managed Agents (fire-and-forget)
+	if (eventType === "pull_request" && action === "opened") {
+		const pr = payload.pull_request as Record<string, unknown> | undefined;
+		const repoObj = payload.repository as Record<string, unknown> | undefined;
+		if (pr && repoObj) {
+			const head = pr.head as Record<string, unknown> | undefined;
+			const base = pr.base as Record<string, unknown> | undefined;
+			const reviewPayload: PrReviewPayload = {
+				number: Number(pr.number ?? 0),
+				title: String(pr.title ?? ""),
+				htmlUrl: String(pr.html_url ?? ""),
+				headRef: String(head?.ref ?? ""),
+				baseRef: String(base?.ref ?? ""),
+				repoUrl: String(repoObj.html_url ?? ""),
+				repoFullName: String(repoObj.full_name ?? ""),
+				repoName: String(repoObj.name ?? ""),
+			};
+			triggerPrReview(reviewPayload).catch((err) => {
+				console.error("[pr-review] failed:", err);
+			});
+		}
 	}
 
 	return Response.json({ ok: true });
