@@ -1,22 +1,18 @@
 "use client";
 
 import { formatRelativeTime } from "@/lib/timeline-utils";
-import type { WebhookEvent, WebhookEventType } from "@/lib/types";
+import type { WebhookEvent } from "@/lib/types";
 import { useCallback, useEffect, useState } from "react";
 import styles from "./activity-feed.module.css";
 import { EventDetail } from "./event-detail";
-import { TYPE_LABEL } from "./event-utils";
+import { type ColorKey, TYPE_COLOR, TYPE_LABEL } from "./event-utils";
 
-const EVENT_COLORS: Record<WebhookEventType, string> = {
-	pull_request: styles.eventPr,
-	check_run: styles.eventCheck,
-	check_suite: styles.eventCheck,
-	discussion: styles.eventDiscussion,
-	discussion_comment: styles.eventDiscussion,
+const EVENT_COLORS: Record<ColorKey, string> = {
+	ci: styles.eventCheck,
+	pr: styles.eventPr,
 	push: styles.eventPush,
-	issues: styles.eventIssue,
-	issue_comment: styles.eventIssue,
-	workflow_run: styles.eventWorkflow,
+	discussion: styles.eventDiscussion,
+	issue: styles.eventIssue,
 };
 
 function EventRow({
@@ -38,7 +34,9 @@ function EventRow({
 				onClick={onToggle}
 			>
 				<div className={styles.eventHeader}>
-					<span className={`${styles.eventBadge} ${EVENT_COLORS[event.type]}`}>
+					<span
+						className={`${styles.eventBadge} ${EVENT_COLORS[TYPE_COLOR[event.type]]}`}
+					>
 						{TYPE_LABEL[event.type]}
 					</span>
 					<span className={styles.eventTime}>
