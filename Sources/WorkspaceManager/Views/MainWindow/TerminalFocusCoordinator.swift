@@ -10,6 +10,10 @@ import WorkspaceManagerCore
 /// the low-level makeFirstResponder mechanics.
 @MainActor
 final class TerminalFocusCoordinator: ObservableObject {
+    private struct WeakCoordinator {
+        weak var value: TerminalFocusCoordinator?
+    }
+
     private struct PendingFocusRequest {
         let sessionID: UUID
         let activateApp: Bool
@@ -19,30 +23,22 @@ final class TerminalFocusCoordinator: ObservableObject {
         var surfaceResolvedAtUptime: TimeInterval?
     }
 
+    private static var registeredCoordinators: [ObjectIdentifier: WeakCoordinator] = [:]
+
     private weak var attachedSurfaceStore: HostTerminalSurfaceStore?
     private var pendingRepoFocusMeasurementSessionID: UUID?
     private var pendingWorkspaceFocusMeasurementSessionID: UUID?
     private var pendingFocusRequest: PendingFocusRequest?
 
     init() {
-        TerminalFocusManager.shared.shouldSkipWindowFocusRestore = { [weak self] in
-            self?.pendingFocusRequest != nil
-        }
-        TerminalFocusManager.shared.onWindowDidBecomeKey = { [weak self] in
-            self?.retryPendingFocus(reason: "window_did_become_key")
-        }
-        TerminalFocusManager.shared.onAppDidBecomeActive = { [weak self] in
-            self?.restoreFocusOnAppActivation()
-        }
+        Self.register(self)
     }
 
     deinit {
         MainActor.assumeIsolated {
-            TerminalFocusManager.shared.shouldSkipWindowFocusRestore = nil
-            TerminalFocusManager.shared.onWindowDidBecomeKey = nil
-            TerminalFocusManager.shared.onAppDidBecomeActive = nil
             attachedSurfaceStore?.onSurfaceCreated = nil
             attachedSurfaceStore?.onSurfaceInvalidated = nil
+            Self.unregister(self)
         }
     }
 
@@ -348,5 +344,50 @@ final class TerminalFocusCoordinator: ObservableObject {
     private func surfaceDidInvalidate(sessionID: UUID) {
         guard pendingFocusRequest?.sessionID == sessionID else { return }
         cancelPendingFocusRequest(reason: "surface_invalidated")
+    }
+
+    private static func register(_ coordinator: TerminalFocusCoordinator) {
+        pruneDeadCoordinators()
+        registeredCoordinators[ObjectIdentifier(coordinator)] = WeakCoordinator(value: coordinator)
+        installSharedHandlersIfNeeded()
+    }
+
+    private static func unregister(_ coordinator: TerminalFocusCoordinator) {
+        registeredCoordinators.removeValue(forKey: ObjectIdentifier(coordinator))
+        pruneDeadCoordinators()
+
+        guard !registeredCoordinators.isEmpty else {
+            TerminalFocusManager.shared.shouldSkipWindowFocusRestore = nil
+            TerminalFocusManager.shared.onWindowDidBecomeKey = nil
+            TerminalFocusManager.shared.onAppDidBecomeActive = nil
+            return
+        }
+
+        installSharedHandlersIfNeeded()
+    }
+
+    private static func installSharedHandlersIfNeeded() {
+        TerminalFocusManager.shared.shouldSkipWindowFocusRestore = {
+            activeCoordinators.contains { $0.pendingFocusRequest != nil }
+        }
+        TerminalFocusManager.shared.onWindowDidBecomeKey = {
+            for coordinator in activeCoordinators {
+                coordinator.retryPendingFocus(reason: "window_did_become_key")
+            }
+        }
+        TerminalFocusManager.shared.onAppDidBecomeActive = {
+            for coordinator in activeCoordinators {
+                coordinator.restoreFocusOnAppActivation()
+            }
+        }
+    }
+
+    private static var activeCoordinators: [TerminalFocusCoordinator] {
+        pruneDeadCoordinators()
+        return registeredCoordinators.values.compactMap(\.value)
+    }
+
+    private static func pruneDeadCoordinators() {
+        registeredCoordinators = registeredCoordinators.filter { $0.value.value != nil }
     }
 }
