@@ -32,7 +32,11 @@ Follow this order every time the skill is invoked:
    - `run` → just `mise run web:check && mise run web:e2e`, structured summary, candidates for `/qa heal`.
    - `ledger` → read `web/tests/LEDGER.md`, summarize gaps (`[gap]` rows, `last_verified` > 30 days old).
 3. **Execute the phase.** Follow the referenced procedure file.
-4. **Emit the final report** (format below).
+4. **Render the report.** Run `.claude/skills/qa-web/scripts/render-report.py --latest` (or pass the run directory explicitly). It aggregates every `finding.md` + axe artifact in the run into:
+   - `REPORT.md` — consolidated markdown, grouped by severity, with a Decisions section.
+   - `report.html` — single-page browser view with inline screenshots.
+   - A short terminal summary (findings counts + evidence paths + open-in-browser hint).
+5. **Present and decide.** Emit the terminal summary back to the caller, point them at the HTML, and explicitly ask for a decision per finding: **promote** (Phase 2 author), **log-as-gap** (LEDGER row), **fix** (bug issue), **dismiss** (document why), or **investigate** (tighter `/qa explore`). Do not advance until the caller chooses.
 
 ## Invariants
 
@@ -70,6 +74,7 @@ Supporting references (load on-demand):
 
 - `scripts/doctor.sh` — verify setup; exit 0 if ready, non-zero if not (prints remediation hints).
 - `scripts/scope-report.sh` — git + gh reconnaissance; prints the Phase 0 Scope Report.
+- `scripts/render-report.py` — aggregate a run's findings into `REPORT.md` + `report.html` with screenshots inline. Pass `--latest` to pick the most recent date dir under `output/qa-agent/`. Pass `--open` to open the HTML in the default browser.
 - `web/scripts/qa-probe.mjs` *(lives in the project, not the skill)* — axe-core + screenshots on a list of URLs. Invoke with `QA_SLUG=<slug> QA_BASE_URL=<url> node web/scripts/qa-probe.mjs`.
 
 Relevant mise tasks (in `web/.mise.toml`):
