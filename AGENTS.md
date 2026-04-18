@@ -175,6 +175,14 @@ mise run web:deps -- <pkg>                  # pnpm add + auto-fix package.json f
 mise run web:deps:remove -- <pkg>           # pnpm remove + auto-fix formatting
 ```
 
+**Dev-bypass token plumbing** — `mise run web:dev` hardcodes `DEV_BYPASS_AUTH=1`, which creates a fake "dev-user" session but gives routes a placeholder string in place of a real GitHub PAT. Any call that hits the real GitHub API (agent discovery, pipeline, webhook-status, login lookup) 401s and the UI prompts "sign out / sign in". To light up GitHub-backed features without running the full OAuth flow, prefix the task with a real token:
+
+```bash
+DEV_GH_TOKEN=$(gh auth token) mise run web:dev
+```
+
+`getDevBypassToken()` in `web/src/lib/auth-server.ts` prefers `DEV_GH_TOKEN` over the placeholder when set. Setting `GITHUB_WEB_WORKSPACES_CLIENT_ID` vetoes the bypass entirely and forces the real OAuth flow.
+
 **Anti-patterns to avoid** (use the mise tasks instead):
 - `pnpm typecheck && pnpm lint && pnpm test` → `mise run web:check`
 - `pnpm add <pkg>` then `pnpm biome check --write package.json` → `mise run web:deps -- <pkg>`
