@@ -1,6 +1,6 @@
+import { formatCompactTime } from "@/lib/timeline-utils";
 import type { WebhookEvent, WebhookEventType } from "@/lib/types";
 import styles from "./status-card.module.css";
-import { formatTime } from "./timeline-utils";
 
 export const TYPE_LABEL: Record<WebhookEventType, string> = {
 	pull_request: "PR",
@@ -61,7 +61,9 @@ export function StatusCard({ event }: StatusCardProps) {
 					<span className={`${styles.badge} ${BADGE[color]}`}>
 						{TYPE_LABEL[event.type]}
 					</span>
-					<span className={styles.time}>{formatTime(event.timestamp)}</span>
+					<span className={styles.time}>
+						{formatCompactTime(event.timestamp)}
+					</span>
 				</div>
 				<span className={styles.summary}>{event.summary}</span>
 			</div>

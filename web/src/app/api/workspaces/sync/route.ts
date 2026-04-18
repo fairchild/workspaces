@@ -1,4 +1,5 @@
 import { timingSafeEqual } from "node:crypto";
+import { unauthorizedResponse } from "@/lib/api-auth";
 import { getSession } from "@/lib/auth-server";
 import { isWorkspace } from "@/lib/workspace-utils";
 import {
@@ -28,7 +29,7 @@ async function authenticateRequest(request: Request): Promise<string | null> {
 
 export async function POST(request: Request): Promise<Response> {
 	const userId = await authenticateRequest(request);
-	if (!userId) return Response.json({ error: "unauthorized" }, { status: 401 });
+	if (!userId) return unauthorizedResponse();
 
 	let body: unknown;
 	try {
@@ -60,8 +61,7 @@ export async function POST(request: Request): Promise<Response> {
 
 export async function GET(): Promise<Response> {
 	const session = await getSession();
-	if (!session)
-		return Response.json({ error: "unauthorized" }, { status: 401 });
+	if (!session) return unauthorizedResponse();
 
 	const workspaces = await getWorkspaces();
 

@@ -43,12 +43,14 @@ export async function setUserRepos(
 		sql: "DELETE FROM user_repos WHERE user_id = ?",
 		args: [userId],
 	});
-	for (const r of repos) {
-		await db.execute({
-			sql: "INSERT INTO user_repos (user_id, owner, repo) VALUES (?, ?, ?)",
-			args: [userId, r.owner, r.repo],
-		});
-	}
+	await Promise.all(
+		repos.map((r) =>
+			db.execute({
+				sql: "INSERT INTO user_repos (user_id, owner, repo) VALUES (?, ?, ?)",
+				args: [userId, r.owner, r.repo],
+			}),
+		),
+	);
 }
 
 export async function hasUserRepos(userId: string): Promise<boolean> {

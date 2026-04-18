@@ -1,13 +1,12 @@
 "use client";
 
-import { dayKey } from "@/lib/timeline-utils";
+import { dayKey, formatCompactTime } from "@/lib/timeline-utils";
 import type { TimelineEntry, WebhookEvent } from "@/lib/types";
 import { memo, useEffect, useMemo, useRef } from "react";
 import { DispatchCard, tryParseDispatchMetadata } from "./dispatch-card";
 import { EventGroupRow } from "./event-group-row";
 import styles from "./message-list.module.css";
 import { StatusCard } from "./status-card";
-import { formatTime } from "./timeline-utils";
 
 type GroupedEntry =
 	| (TimelineEntry & { kind: "chat" })
@@ -169,7 +168,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
 					{message.author}
 				</span>
 				<span className={styles.messageTime}>
-					{formatTime(message.timestamp)}
+					{formatCompactTime(message.timestamp)}
 				</span>
 			</div>
 			<span className={styles.messageContent}>{message.content}</span>

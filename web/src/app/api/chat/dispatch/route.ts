@@ -1,9 +1,9 @@
 import crypto from "node:crypto";
+import { authorizeRepoAccess, unauthorizedResponse } from "@/lib/api-auth";
 import { getDevBypassToken, getSession } from "@/lib/auth-server";
 import { pushChatMessage } from "@/lib/chat";
 import { formatDispatchBody, parseIssueRef } from "@/lib/chat-utils";
 import { createDiscussion, getGitHubToken } from "@/lib/github";
-import { getUserRepos } from "@/lib/repos";
 import type { ChatMessage, DispatchMetadata } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -17,9 +17,7 @@ interface DispatchBody {
 
 export async function POST(request: Request): Promise<Response> {
 	const session = await getSession();
-	if (!session?.user) {
-		return Response.json({ error: "unauthorized" }, { status: 401 });
-	}
+	if (!session?.user) return unauthorizedResponse();
 
 	const body = (await request.json()) as DispatchBody;
 	if (!body.repo || !body.agentName || !body.task) {
@@ -37,13 +35,8 @@ export async function POST(request: Request): Promise<Response> {
 		);
 	}
 
-	const userRepos = await getUserRepos(session.user.id);
-	if (!userRepos.some((r) => `${r.owner}/${r.repo}` === body.repo)) {
-		return Response.json(
-			{ error: "repo not in your workspace" },
-			{ status: 403 },
-		);
-	}
+	const unauthorized = await authorizeRepoAccess(session.user.id, body.repo);
+	if (unauthorized) return unauthorized;
 
 	let token: string;
 	const bypassToken = getDevBypassToken();

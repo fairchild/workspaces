@@ -58,13 +58,14 @@ export function Sidebar({ repos, selectedRepo }: SidebarProps) {
 		let cancelled = false;
 
 		async function loadAgentInfo() {
-			for (const repo of repos) {
-				if (cancelled) return;
-				try {
-					const res = await fetch(
-						`/api/repos/${repo.owner}/${repo.repo}/agents`,
-					);
-					if (res.ok && !cancelled) {
+			await Promise.all(
+				repos.map(async (repo) => {
+					if (cancelled) return;
+					try {
+						const res = await fetch(
+							`/api/repos/${repo.owner}/${repo.repo}/agents`,
+						);
+						if (!res.ok || cancelled) return;
 						const data: AgentDiscoveryResponse = await res.json();
 						const key = `${repo.owner}/${repo.repo}`;
 						setAgentCache((prev) => {
@@ -75,11 +76,11 @@ export function Sidebar({ repos, selectedRepo }: SidebarProps) {
 							});
 							return next;
 						});
+					} catch {
+						// Skip failed fetches
 					}
-				} catch {
-					// Skip failed fetches
-				}
-			}
+				}),
+			);
 		}
 
 		loadAgentInfo();

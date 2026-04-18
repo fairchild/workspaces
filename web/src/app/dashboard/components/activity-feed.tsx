@@ -1,9 +1,11 @@
 "use client";
 
+import { formatRelativeTime } from "@/lib/timeline-utils";
 import type { WebhookEvent, WebhookEventType } from "@/lib/types";
 import { useCallback, useEffect, useState } from "react";
 import styles from "./activity-feed.module.css";
 import { EventDetail } from "./event-detail";
+import { TYPE_LABEL } from "./status-card";
 
 const EVENT_COLORS: Record<WebhookEventType, string> = {
 	pull_request: styles.eventPr,
@@ -16,30 +18,6 @@ const EVENT_COLORS: Record<WebhookEventType, string> = {
 	issue_comment: styles.eventIssue,
 	workflow_run: styles.eventWorkflow,
 };
-
-const EVENT_LABELS: Record<WebhookEventType, string> = {
-	pull_request: "PR",
-	check_run: "CI",
-	check_suite: "CI",
-	discussion: "DISC",
-	discussion_comment: "DISC",
-	push: "PUSH",
-	issues: "ISSUE",
-	issue_comment: "ISSUE",
-	workflow_run: "CI",
-};
-
-function formatTime(timestamp: string): string {
-	const date = new Date(timestamp);
-	const now = new Date();
-	const diff = now.getTime() - date.getTime();
-	const mins = Math.floor(diff / 60000);
-	if (mins < 1) return "just now";
-	if (mins < 60) return `${mins}m ago`;
-	const hours = Math.floor(mins / 60);
-	if (hours < 24) return `${hours}h ago`;
-	return `${Math.floor(hours / 24)}d ago`;
-}
 
 function EventRow({
 	event,
@@ -61,10 +39,10 @@ function EventRow({
 			>
 				<div className={styles.eventHeader}>
 					<span className={`${styles.eventBadge} ${EVENT_COLORS[event.type]}`}>
-						{EVENT_LABELS[event.type]}
+						{TYPE_LABEL[event.type]}
 					</span>
 					<span className={styles.eventTime}>
-						{formatTime(event.timestamp)}
+						{formatRelativeTime(event.timestamp)}
 					</span>
 				</div>
 				<span className={styles.eventSummary}>{event.summary}</span>

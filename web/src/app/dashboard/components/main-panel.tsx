@@ -1,3 +1,4 @@
+import { formatRelativeTime } from "@/lib/timeline-utils";
 import type { AgentDiscoveryResponse } from "@/lib/types";
 import { useCallback, useEffect, useState } from "react";
 import { AgentCard } from "./agent-card";
@@ -205,16 +206,6 @@ function StatCard({
 	);
 }
 
-function formatTimeAgo(timestamp: string): string {
-	const diff = Date.now() - new Date(timestamp).getTime();
-	const mins = Math.floor(diff / 60000);
-	if (mins < 1) return "just now";
-	if (mins < 60) return `${mins}m ago`;
-	const hours = Math.floor(mins / 60);
-	if (hours < 24) return `${hours}h ago`;
-	return `${Math.floor(hours / 24)}d ago`;
-}
-
 function WebhookStatus({ owner, repo }: { owner: string; repo: string }) {
 	const [status, setStatus] = useState<{
 		lastEvent: string | null;
@@ -241,7 +232,7 @@ function WebhookStatus({ owner, repo }: { owner: string; repo: string }) {
 			/>
 			<span className={styles.webhookText}>
 				{status.connected && status.lastEvent
-					? `Last event ${formatTimeAgo(status.lastEvent)}`
+					? `Last event ${formatRelativeTime(status.lastEvent)}`
 					: "No webhook events received"}
 			</span>
 			{!status.connected && (

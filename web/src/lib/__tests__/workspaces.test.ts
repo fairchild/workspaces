@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { formatRelativeTime } from "../timeline-utils";
 import type { Workspace } from "../types";
-import { formatWorkspaceStatusCard, relativeTime } from "../workspaces";
+import { formatWorkspaceStatusCard } from "../workspaces";
 
 // Pin time for deterministic relative time tests
 const NOW = new Date("2026-03-29T12:00:00Z");
@@ -14,21 +15,21 @@ afterEach(() => {
 	vi.useRealTimers();
 });
 
-describe("relativeTime", () => {
+describe("formatRelativeTime", () => {
 	it("returns 'just now' for < 1 minute", () => {
-		expect(relativeTime("2026-03-29T11:59:30Z")).toBe("just now");
+		expect(formatRelativeTime("2026-03-29T11:59:30Z")).toBe("just now");
 	});
 
 	it("returns minutes for < 1 hour", () => {
-		expect(relativeTime("2026-03-29T11:55:00Z")).toBe("5m ago");
+		expect(formatRelativeTime("2026-03-29T11:55:00Z")).toBe("5m ago");
 	});
 
 	it("returns hours for < 1 day", () => {
-		expect(relativeTime("2026-03-29T09:00:00Z")).toBe("3h ago");
+		expect(formatRelativeTime("2026-03-29T09:00:00Z")).toBe("3h ago");
 	});
 
 	it("returns days for >= 1 day", () => {
-		expect(relativeTime("2026-03-27T12:00:00Z")).toBe("2d ago");
+		expect(formatRelativeTime("2026-03-27T12:00:00Z")).toBe("2d ago");
 	});
 });
 
