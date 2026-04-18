@@ -1,3 +1,5 @@
+import { getSessionByInstanceId } from "@/lib/agent-sessions";
+import { authorizeRepoAccess } from "@/lib/api-auth";
 import { getSession } from "@/lib/auth-server";
 import Anthropic from "@anthropic-ai/sdk";
 import type { BetaManagedAgentsStreamSessionEvents } from "@anthropic-ai/sdk/resources/beta/sessions/events";
@@ -12,13 +14,24 @@ export const dynamic = "force-dynamic";
  */
 export async function GET(request: Request): Promise<Response> {
 	const authed = await getSession();
-	if (!authed) {
+	if (!authed?.user) {
 		return new Response("unauthorized", { status: 401 });
 	}
 	const sessionId = new URL(request.url).searchParams.get("sessionId");
 	if (!sessionId) {
 		return new Response("sessionId required", { status: 400 });
 	}
+
+	const agentSession = await getSessionByInstanceId(sessionId);
+	if (!agentSession) {
+		return new Response("session not found", { status: 404 });
+	}
+	const unauthorized = await authorizeRepoAccess(
+		authed.user.id,
+		agentSession.repo,
+	);
+	if (unauthorized) return unauthorized;
+
 	if (!process.env.ANTHROPIC_API_KEY) {
 		return new Response("ANTHROPIC_API_KEY not set", { status: 503 });
 	}

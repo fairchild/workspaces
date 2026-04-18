@@ -18,6 +18,7 @@ import {
 	type ComputeProvider,
 	type ContextMessage,
 	type StreamChunk,
+	buildEnrichedMessage,
 	isSnapshotCapable,
 } from "./types";
 
@@ -317,15 +318,10 @@ export class SessionManager {
 			timestamp: m.timestamp,
 		}));
 
-		let enrichedMessage = currentMessage;
-		if (contextMessages.length) {
-			const contextBlock = contextMessages
-				.map(
-					(m) => `[${m.timestamp}] ${m.author} (${m.authorType}): ${m.content}`,
-				)
-				.join("\n\n");
-			enrichedMessage = `## Recent conversation context\n\n${contextBlock}\n\n---\n\n## Current message\n\n${currentMessage}`;
-		}
+		const enrichedMessage = buildEnrichedMessage(
+			currentMessage,
+			contextMessages,
+		);
 
 		const chatHistory = history
 			.map(

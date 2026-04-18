@@ -1,10 +1,10 @@
+import { unauthorizedResponse } from "@/lib/api-auth";
 import { getSession } from "@/lib/auth-server";
 import { getUserRepos, setUserRepos } from "@/lib/repos";
 
 export async function GET(): Promise<Response> {
 	const session = await getSession();
-	if (!session)
-		return Response.json({ error: "unauthorized" }, { status: 401 });
+	if (!session) return unauthorizedResponse();
 
 	const repos = await getUserRepos(session.user.id);
 	return Response.json(repos);
@@ -12,8 +12,7 @@ export async function GET(): Promise<Response> {
 
 export async function POST(request: Request): Promise<Response> {
 	const session = await getSession();
-	if (!session)
-		return Response.json({ error: "unauthorized" }, { status: 401 });
+	if (!session) return unauthorizedResponse();
 
 	const body = (await request.json()) as {
 		repos: Array<{ owner: string; repo: string }>;

@@ -1,6 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { formatRelativeTime } from "../timeline-utils";
 import type { Workspace } from "../types";
-import { formatWorkspaceStatusCard, relativeTime } from "../workspaces";
+import {
+	type SyncWorkspaceInput,
+	formatWorkspaceStatusCard,
+	getWorkspaces,
+	syncWorkspaces,
+} from "../workspaces";
 
 // Pin time for deterministic relative time tests
 const NOW = new Date("2026-03-29T12:00:00Z");
@@ -14,21 +20,21 @@ afterEach(() => {
 	vi.useRealTimers();
 });
 
-describe("relativeTime", () => {
+describe("formatRelativeTime", () => {
 	it("returns 'just now' for < 1 minute", () => {
-		expect(relativeTime("2026-03-29T11:59:30Z")).toBe("just now");
+		expect(formatRelativeTime("2026-03-29T11:59:30Z")).toBe("just now");
 	});
 
 	it("returns minutes for < 1 hour", () => {
-		expect(relativeTime("2026-03-29T11:55:00Z")).toBe("5m ago");
+		expect(formatRelativeTime("2026-03-29T11:55:00Z")).toBe("5m ago");
 	});
 
 	it("returns hours for < 1 day", () => {
-		expect(relativeTime("2026-03-29T09:00:00Z")).toBe("3h ago");
+		expect(formatRelativeTime("2026-03-29T09:00:00Z")).toBe("3h ago");
 	});
 
 	it("returns days for >= 1 day", () => {
-		expect(relativeTime("2026-03-27T12:00:00Z")).toBe("2d ago");
+		expect(formatRelativeTime("2026-03-27T12:00:00Z")).toBe("2d ago");
 	});
 });
 
@@ -89,5 +95,55 @@ describe("formatWorkspaceStatusCard", () => {
 		]);
 		expect(result).toContain("| project-a |");
 		expect(result).toContain("| project-b |");
+	});
+});
+
+describe("syncWorkspaces (parallel upserts)", () => {
+	// No fake timers — these tests exercise real DB writes and need real time
+	beforeEach(() => {
+		vi.useRealTimers();
+	});
+
+	function makeInput(
+		id: string,
+		overrides: Partial<SyncWorkspaceInput> = {},
+	): SyncWorkspaceInput {
+		return {
+			id,
+			name: id,
+			path: `/tmp/${id}`,
+			createdAt: new Date().toISOString(),
+			lastAccessedAt: new Date().toISOString(),
+			status: "active",
+			backendIdentifier: "local",
+			...overrides,
+		};
+	}
+
+	it("persists every row in a multi-entry batch", async () => {
+		const prefix = `batch-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+		const inputs = Array.from({ length: 20 }, (_, i) =>
+			makeInput(`${prefix}-${i}`, { repoName: `acme/repo-${i}` }),
+		);
+
+		const count = await syncWorkspaces(inputs);
+		expect(count).toBe(20);
+
+		// Pull each back individually to avoid accidentally matching rows from
+		// other tests in the shared DB.
+		const all = await getWorkspaces();
+		const ours = all.filter((w) => w.id.startsWith(prefix));
+		expect(ours).toHaveLength(20);
+	});
+
+	it("upserts existing rows with new field values", async () => {
+		const id = `upsert-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+		await syncWorkspaces([makeInput(id, { status: "active" })]);
+		await syncWorkspaces([makeInput(id, { status: "stopped" })]);
+
+		const all = await getWorkspaces();
+		const ours = all.filter((w) => w.id === id);
+		expect(ours).toHaveLength(1);
+		expect(ours[0].status).toBe("stopped");
 	});
 });

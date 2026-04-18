@@ -1,10 +1,10 @@
 "use client";
 
-import type { WebhookEvent, WebhookEventType } from "@/lib/types";
+import { formatCompactTime } from "@/lib/timeline-utils";
+import type { WebhookEvent } from "@/lib/types";
 import { memo, useState } from "react";
 import styles from "./event-group-row.module.css";
-import { TYPE_COLOR, TYPE_LABEL } from "./status-card";
-import { formatTime } from "./timeline-utils";
+import { TYPE_COLOR, TYPE_LABEL } from "./event-utils";
 
 const COUNT_BADGE: Record<string, string> = {
 	ci: styles.countBadgeCi,
@@ -38,8 +38,8 @@ export const EventGroupRow = memo(function EventGroupRow({
 	const newest = events[events.length - 1].timestamp;
 	const timeStr =
 		oldest === newest
-			? formatTime(newest)
-			: `${formatTime(oldest)} – ${formatTime(newest)}`;
+			? formatCompactTime(newest)
+			: `${formatCompactTime(oldest)} – ${formatCompactTime(newest)}`;
 
 	return (
 		<button
@@ -86,7 +86,9 @@ function ExpandedEventItem({ event }: { event: WebhookEvent }) {
 				{TYPE_LABEL[event.type]}
 			</span>
 			<span className={styles.expandedSummary}>{event.summary}</span>
-			<span className={styles.expandedTime}>{formatTime(event.timestamp)}</span>
+			<span className={styles.expandedTime}>
+				{formatCompactTime(event.timestamp)}
+			</span>
 		</div>
 	);
 }

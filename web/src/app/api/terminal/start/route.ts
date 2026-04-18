@@ -2,9 +2,9 @@ import crypto from "node:crypto";
 import { getRegistry } from "@/lib/agent-runtime/provider-registry";
 import { isTerminalCapable } from "@/lib/agent-runtime/types";
 import { createSession, getSessionForAgent } from "@/lib/agent-sessions";
+import { authorizeRepoAccess, unauthorizedResponse } from "@/lib/api-auth";
 import { getDevBypassToken, getSession } from "@/lib/auth-server";
 import { getGitHubToken } from "@/lib/github";
-import { getUserRepos } from "@/lib/repos";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -27,9 +27,7 @@ interface PostBody {
  */
 export async function POST(request: Request): Promise<Response> {
 	const session = await getSession();
-	if (!session?.user) {
-		return Response.json({ error: "unauthorized" }, { status: 401 });
-	}
+	if (!session?.user) return unauthorizedResponse();
 
 	const body = (await request.json()) as PostBody;
 	if (!body.repo) {
@@ -44,13 +42,8 @@ export async function POST(request: Request): Promise<Response> {
 		);
 	}
 
-	const userRepos = await getUserRepos(session.user.id);
-	if (!userRepos.some((r) => `${r.owner}/${r.repo}` === body.repo)) {
-		return Response.json(
-			{ error: "repo not in your workspace" },
-			{ status: 403 },
-		);
-	}
+	const unauthorized = await authorizeRepoAccess(session.user.id, body.repo);
+	if (unauthorized) return unauthorized;
 
 	const agentName = body.agentName ?? process.env.DEFAULT_AGENT ?? "shell";
 

@@ -4,8 +4,8 @@ import {
 	isTerminalCapable,
 } from "@/lib/agent-runtime/types";
 import { getSessionsForRepo, updateSessionStatus } from "@/lib/agent-sessions";
+import { authorizeRepoAccess, unauthorizedResponse } from "@/lib/api-auth";
 import { getSession } from "@/lib/auth-server";
-import { getUserRepos } from "@/lib/repos";
 import type { AgentSession, ComputeBackendId } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -83,9 +83,7 @@ async function resolveSession(
 
 export async function GET(request: Request): Promise<Response> {
 	const session = await getSession();
-	if (!session?.user) {
-		return Response.json({ error: "unauthorized" }, { status: 401 });
-	}
+	if (!session?.user) return unauthorizedResponse();
 
 	const url = new URL(request.url);
 	const repo = url.searchParams.get("repo");
@@ -93,13 +91,8 @@ export async function GET(request: Request): Promise<Response> {
 		return Response.json({ error: "repo is required" }, { status: 400 });
 	}
 
-	const userRepos = await getUserRepos(session.user.id);
-	if (!userRepos.some((r) => `${r.owner}/${r.repo}` === repo)) {
-		return Response.json(
-			{ error: "repo not in your workspace" },
-			{ status: 403 },
-		);
-	}
+	const unauthorized = await authorizeRepoAccess(session.user.id, repo);
+	if (unauthorized) return unauthorized;
 
 	const dbSessions = await getSessionsForRepo(repo);
 	const resolved = await Promise.all(dbSessions.map(resolveSession));

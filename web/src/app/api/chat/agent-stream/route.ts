@@ -1,8 +1,8 @@
 import { ALLOWED_AGENT_LOGINS } from "@/lib/agent-runtime/config";
 import { getSessionManager } from "@/lib/agent-runtime/session-manager";
+import { authorizeRepoAccess, unauthorizedResponse } from "@/lib/api-auth";
 import { getDevBypassToken, getSession } from "@/lib/auth-server";
 import { fetchGitHubLogin, getGitHubToken } from "@/lib/github";
-import { getUserRepos } from "@/lib/repos";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300; // 5 min for Vercel Pro
@@ -17,9 +17,7 @@ interface PostBody {
 
 export async function POST(request: Request): Promise<Response> {
 	const session = await getSession();
-	if (!session?.user) {
-		return Response.json({ error: "unauthorized" }, { status: 401 });
-	}
+	if (!session?.user) return unauthorizedResponse();
 
 	const body = (await request.json()) as PostBody;
 	if (!body.repo || !body.agentName || !body.message) {
@@ -37,13 +35,8 @@ export async function POST(request: Request): Promise<Response> {
 		);
 	}
 
-	const userRepos = await getUserRepos(session.user.id);
-	if (!userRepos.some((r) => `${r.owner}/${r.repo}` === body.repo)) {
-		return Response.json(
-			{ error: "repo not in your workspace" },
-			{ status: 403 },
-		);
-	}
+	const unauthorized = await authorizeRepoAccess(session.user.id, body.repo);
+	if (unauthorized) return unauthorized;
 
 	let ghToken: string;
 	let login: string;

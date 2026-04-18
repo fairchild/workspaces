@@ -2,16 +2,17 @@ import crypto from "node:crypto";
 import { Sandbox, Snapshot } from "@vercel/sandbox";
 import ms from "ms";
 import { getBaseSnapshotId, recordBaseSnapshot } from "../base-snapshots";
-import type {
-	ComputeProvider,
-	ComputeProviderAvailability,
-	ComputeProviderDescriptor,
-	SandboxRequest,
-	SandboxResult,
-	SandboxState,
-	SnapshotCapable,
-	StreamChunk,
-	TerminalCapable,
+import {
+	type ComputeProvider,
+	type ComputeProviderAvailability,
+	type ComputeProviderDescriptor,
+	type SandboxRequest,
+	type SandboxResult,
+	type SandboxState,
+	type SnapshotCapable,
+	type StreamChunk,
+	type TerminalCapable,
+	buildEnrichedMessage,
 } from "./types";
 
 const CONVERSATIONAL_TOOLS = "Read,Glob,Grep,WebFetch";
@@ -446,17 +447,10 @@ export class VercelSandboxProvider
 			const tools =
 				request.tools === "conversational" ? CONVERSATIONAL_TOOLS : FULL_TOOLS;
 
-			// Build the message with conversation context prepended
-			let fullMessage = request.message;
-			if (request.contextMessages?.length) {
-				const contextBlock = request.contextMessages
-					.map(
-						(m) =>
-							`[${m.timestamp}] ${m.author} (${m.authorType}): ${m.content}`,
-					)
-					.join("\n\n");
-				fullMessage = `## Recent conversation context\n\n${contextBlock}\n\n---\n\n## Current message\n\n${request.message}`;
-			}
+			const fullMessage = buildEnrichedMessage(
+				request.message,
+				request.contextMessages,
+			);
 
 			const filesToWrite: Array<{
 				path: string;

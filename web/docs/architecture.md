@@ -118,6 +118,21 @@ tmux new-session -A -s shell
 bash in /vercel/sandbox/repo
 ```
 
+## Authorization
+
+Every API route that reads or mutates repo-scoped data passes through the two helpers in `src/lib/api-auth.ts`:
+
+| Helper | Purpose | Returns |
+|--------|---------|---------|
+| `unauthorizedResponse()` | 401 for missing/expired session | `Response` |
+| `authorizeRepoAccess(userId, repo)` | 403 if the user doesn't own the repo | `Response \| null` (null = allowed) |
+
+The ownership check is backed by `isRepoOwnedByUser` in `src/lib/repos.ts`, which does a pinpoint `SELECT 1 FROM user_repos WHERE user_id=? AND owner=? AND repo=? LIMIT 1` — hits the table's primary key index, one row read per request.
+
+Routes that accept a session or sandbox identifier instead of a repo (e.g. `/api/managed-agents/transcript?sessionId=`) resolve the identifier to its repo via `getSessionByInstanceId` in `src/lib/agent-sessions.ts`, then authorize against that repo. `agent_sessions` has no `user_id` column by design — session ownership is derived from the repo so co-owners can see each other's agent activity on the same repo.
+
+Webhook intake routes (`/api/webhooks/*`) are intentionally unauthenticated and verify GitHub's HMAC signature instead. The Better Auth handler at `/api/auth/[...all]` owns its own auth flow.
+
 ## Dashboard Tabs
 
 | Tab | Component | Shortcut | Purpose |
