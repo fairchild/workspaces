@@ -246,6 +246,17 @@ Any new polled endpoint should default to 10s or slower unless
 there's a compelling UX reason. If you need faster refresh, prefer
 SSE or a Durable Object over client polling.
 
+### Authz row-reads
+
+Every authenticated API route runs `authorizeRepoAccess(userId, repo)`
+(from `web/src/lib/api-auth.ts`), which delegates to `isRepoOwnedByUser`
+in `web/src/lib/repos.ts`. That helper does a `SELECT 1 ... LIMIT 1`
+against the `user_repos` primary key — **one row read per request**,
+not the N-row list scan the old inline `getUserRepos().some(...)`
+pattern used. If you add a new polled endpoint, keep the authz call
+once per request and prefer `authorizeRepoAccess` over re-hydrating the
+user's full repo list.
+
 ### The cache for `getEventStats`
 
 `getEventStats` does a `SELECT DISTINCT repo FROM webhook_events`
