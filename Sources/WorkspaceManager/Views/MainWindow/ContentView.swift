@@ -38,6 +38,7 @@ struct ContentView: View {
     private var notificationsEnabled = NotificationConstants.defaultEnabled
     @Environment(\.externalEditorService) private var externalEditorService
     @Environment(\.lumeRuntimeService) private var lumeRuntimeService
+    @EnvironmentObject private var modelStoreStatusController: ModelStoreStatusController
     @Environment(\.workspaceService) private var workspaceService
     @Environment(\.workspaceProviderRegistry) private var workspaceProviderRegistry
     @ObservedObject private var notificationCoordinator = NotificationCoordinator.shared
@@ -413,9 +414,9 @@ struct ContentView: View {
     private var splitViewWithToolbar: some View {
         Group {
             if PerformanceExperimentFlags.minimalToolbar {
-                baseSplitView
+                splitViewBody
             } else {
-                baseSplitView
+                splitViewBody
                     .toolbar {
                         ToolbarItem(placement: .principal) {
                             AppBuildIdentityBadge(identity: buildIdentity)
@@ -435,6 +436,21 @@ struct ContentView: View {
                     }
             }
         }
+    }
+
+    @ViewBuilder
+    private var splitViewBody: some View {
+        VStack(spacing: 0) {
+            if modelStoreStatusController.shouldShowDegradedWarning {
+                ModelStoreDegradedBanner()
+            }
+            baseSplitView
+        }
+        .background(
+            MainWindowHandleReader { window in
+                terminalFocusCoordinator.bind(window: window)
+            }
+        )
     }
 
     private var splitViewWithLifecycleHandlers: some View {

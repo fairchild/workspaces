@@ -1,98 +1,157 @@
+import AppKit
 import Foundation
 import Testing
 
 @testable import WorkspaceManager
 
+@MainActor
+private final class FocusWindowDelegateSpy: TerminalFocusWindowDelegate {
+    var shouldSkipFocusRestore = false
+    private(set) var becameKeyWindows: [NSWindow] = []
+    private(set) var becameActiveWindows: [NSWindow] = []
+
+    func shouldSkipWindowFocusRestore(for window: NSWindow) -> Bool {
+        shouldSkipFocusRestore
+    }
+
+    func windowDidBecomeKey(_ window: NSWindow) {
+        becameKeyWindows.append(window)
+    }
+
+    func appDidBecomeActive(for window: NSWindow) {
+        becameActiveWindows.append(window)
+    }
+}
+
 @Suite("TerminalFocusManager")
+@MainActor
 struct TerminalFocusManagerTests {
     @Test("Focus request uses single bounded retry, not exponential backoff")
     func singleBoundedRetry() {
-        // The new design uses isRetry: Bool instead of exponential delay progression.
-        // First attempt: isRetry = false (immediate dispatch)
-        // If it fails: exactly one retry with isRetry = true (100ms delay)
-        // No further retries after that.
-        //
-        // This replaces the old 50ms->100ms->200ms->400ms->500ms chain that got
-        // starved by main-actor work. The primary focus path is now lifecycle-driven
-        // (surface onSurfaceCreated callback), with this bounded retry as safety net.
         let fallbackDelay: TimeInterval = 0.1
         #expect(fallbackDelay == 0.1, "Fallback retry should be exactly 100ms")
+    }
+
+    @Test("windowDidBecomeKey dispatches only to the bound window delegate")
+    func windowDidBecomeKeyDispatchesOnlyToBoundDelegate() {
+        let manager = TerminalFocusManager.shared
+        let firstWindow = makeWindow()
+        let secondWindow = makeWindow()
+        let firstSpy = FocusWindowDelegateSpy()
+        let secondSpy = FocusWindowDelegateSpy()
+
+        defer {
+            manager.unbindDelegate(from: firstWindow)
+            manager.unbindDelegate(from: secondWindow)
+        }
+
+        manager.bindDelegate(firstSpy, to: firstWindow)
+        manager.bindDelegate(secondSpy, to: secondWindow)
+
+        NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: firstWindow)
+
+        #expect(firstSpy.becameKeyWindows == [firstWindow])
+        #expect(secondSpy.becameKeyWindows.isEmpty)
+    }
+
+    @Test("closing one window does not break app-active dispatch for another window")
+    func closingOneWindowDoesNotBreakAnotherWindow() {
+        let manager = TerminalFocusManager.shared
+        let closingWindow = makeWindow()
+        let survivingWindow = makeWindow()
+        let closingSpy = FocusWindowDelegateSpy()
+        let survivingSpy = FocusWindowDelegateSpy()
+
+        defer {
+            manager.unbindDelegate(from: closingWindow)
+            manager.unbindDelegate(from: survivingWindow)
+        }
+
+        manager.bindDelegate(closingSpy, to: closingWindow)
+        manager.bindDelegate(survivingSpy, to: survivingWindow)
+
+        NotificationCenter.default.post(name: NSWindow.willCloseNotification, object: closingWindow)
+
+        manager.dispatchAppDidBecomeActive(to: [survivingWindow])
+
+        #expect(closingSpy.becameActiveWindows.isEmpty)
+        #expect(survivingSpy.becameActiveWindows == [survivingWindow])
     }
 }
 
 @Suite("TerminalFocusCoordinator")
 @MainActor
 struct TerminalFocusCoordinatorTests {
-    @Test("A second window does not replace another window's pending focus callbacks")
-    func secondCoordinatorDoesNotMaskExistingPendingFocus() {
-        let manager = TerminalFocusManager.shared
-        let originalWindowDidBecomeKey = manager.onWindowDidBecomeKey
-        let originalAppDidBecomeActive = manager.onAppDidBecomeActive
-        let originalShouldSkipWindowFocusRestore = manager.shouldSkipWindowFocusRestore
-        let originalFocusedTerminal = manager.focusedTerminal
-
-        var primaryCoordinator: TerminalFocusCoordinator?
-        var secondaryCoordinator: TerminalFocusCoordinator?
+    @Test("pending focus state is scoped to the bound window")
+    func pendingFocusStateIsScopedToBoundWindow() {
+        let firstWindow = makeWindow()
+        let secondWindow = makeWindow()
+        let firstCoordinator = TerminalFocusCoordinator()
+        let secondCoordinator = TerminalFocusCoordinator()
+        let firstSurfaceStore = HostTerminalSurfaceStore()
+        let secondSurfaceStore = HostTerminalSurfaceStore()
 
         defer {
-            secondaryCoordinator = nil
-            primaryCoordinator = nil
-            manager.onWindowDidBecomeKey = originalWindowDidBecomeKey
-            manager.onAppDidBecomeActive = originalAppDidBecomeActive
-            manager.shouldSkipWindowFocusRestore = originalShouldSkipWindowFocusRestore
-            manager.focusedTerminal = originalFocusedTerminal
+            TerminalFocusManager.shared.unbindDelegate(from: firstWindow)
+            TerminalFocusManager.shared.unbindDelegate(from: secondWindow)
         }
 
-        let primarySurfaceStore = HostTerminalSurfaceStore()
-        primaryCoordinator = TerminalFocusCoordinator()
-        primaryCoordinator?.requestMainTerminalFocus(
+        firstCoordinator.bind(window: firstWindow)
+        secondCoordinator.bind(window: secondWindow)
+        firstCoordinator.requestMainTerminalFocus(
             targetSessionID: UUID(),
             activateApp: false,
-            surfaceStore: primarySurfaceStore,
+            surfaceStore: firstSurfaceStore,
+            activeSessionID: nil
+        )
+        secondCoordinator.requestMainTerminalFocus(
+            targetSessionID: nil,
+            activateApp: false,
+            surfaceStore: secondSurfaceStore,
             activeSessionID: nil
         )
 
-        #expect(manager.shouldSkipWindowFocusRestore?() == true)
-
-        weak var weakSecondaryCoordinator: TerminalFocusCoordinator?
-        secondaryCoordinator = TerminalFocusCoordinator()
-        weakSecondaryCoordinator = secondaryCoordinator
-
-        #expect(
-            manager.shouldSkipWindowFocusRestore?() == true,
-            "A newly created coordinator without a pending request must not mask another window's pending focus."
-        )
-
-        secondaryCoordinator = nil
-        #expect(weakSecondaryCoordinator == nil)
-        #expect(
-            manager.shouldSkipWindowFocusRestore?() == true,
-            "Deinitializing a different coordinator must not clear callbacks still needed by a surviving window."
-        )
+        #expect(firstCoordinator.shouldSkipWindowFocusRestore(for: firstWindow))
+        #expect(!secondCoordinator.shouldSkipWindowFocusRestore(for: secondWindow))
     }
 
-    @Test("Releasing the last coordinator clears shared focus callbacks")
-    func lastCoordinatorClearsSharedCallbacks() {
+    @Test("app activation restores focus only through the matching window delegate")
+    func appActivationRestoresFocusOnlyForMatchingWindow() {
         let manager = TerminalFocusManager.shared
-        let originalWindowDidBecomeKey = manager.onWindowDidBecomeKey
-        let originalAppDidBecomeActive = manager.onAppDidBecomeActive
-        let originalShouldSkipWindowFocusRestore = manager.shouldSkipWindowFocusRestore
+        let targetWindow = makeWindow()
+        let otherWindow = makeWindow()
+        let coordinator = TerminalFocusCoordinator()
+        let surfaceStore = HostTerminalSurfaceStore()
+        let otherSpy = FocusWindowDelegateSpy()
 
-        var coordinator: TerminalFocusCoordinator? = TerminalFocusCoordinator()
-        #expect(coordinator != nil)
+        defer {
+            manager.unbindDelegate(from: targetWindow)
+            manager.unbindDelegate(from: otherWindow)
+        }
 
-        #expect(manager.onWindowDidBecomeKey != nil)
-        #expect(manager.onAppDidBecomeActive != nil)
-        #expect(manager.shouldSkipWindowFocusRestore != nil)
+        coordinator.bind(window: targetWindow)
+        manager.bindDelegate(otherSpy, to: otherWindow)
 
-        coordinator = nil
+        coordinator.requestMainTerminalFocus(
+            targetSessionID: UUID(),
+            activateApp: false,
+            surfaceStore: surfaceStore,
+            activeSessionID: nil
+        )
 
-        #expect(manager.onWindowDidBecomeKey == nil)
-        #expect(manager.onAppDidBecomeActive == nil)
-        #expect(manager.shouldSkipWindowFocusRestore == nil)
+        manager.dispatchAppDidBecomeActive(to: [targetWindow])
 
-        manager.onWindowDidBecomeKey = originalWindowDidBecomeKey
-        manager.onAppDidBecomeActive = originalAppDidBecomeActive
-        manager.shouldSkipWindowFocusRestore = originalShouldSkipWindowFocusRestore
+        #expect(otherSpy.becameActiveWindows.isEmpty)
+        #expect(coordinator.shouldSkipWindowFocusRestore(for: targetWindow))
     }
+}
+
+@MainActor
+private func makeWindow() -> NSWindow {
+    NSWindow(
+        contentRect: NSRect(x: 0, y: 0, width: 640, height: 480),
+        styleMask: [.titled, .closable, .resizable],
+        backing: .buffered,
+        defer: false
+    )
 }

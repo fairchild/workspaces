@@ -20,6 +20,8 @@ Gathers operational evidence from GitHub and the checked-in perf snapshots. Runs
 
 All agents share core principles: quality over speed, hardening over feature expansion, calm/clean/intuitive UX without compromise.
 
+Performance-sensitive work has an extra delivery rule: PRs must include canonical before/after evidence from the repo performance contract, not narrative-only claims. Plat maintains that tooling and enforcement path, and Oliver uses the resulting evidence fields plus checked-in snapshots when tracking trend health.
+
 ## How It Works
 
 ```

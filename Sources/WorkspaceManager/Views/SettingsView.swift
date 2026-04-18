@@ -11,6 +11,7 @@ import WorkspaceManagerCore
 
 struct SettingsView: View {
     @Environment(\.lumeRuntimeService) private var lumeRuntimeService
+    @EnvironmentObject private var modelStoreStatusController: ModelStoreStatusController
 
     @AppStorage("workspacesRoot") private var workspacesRootPath: String = ""
     @AppStorage(TerminalMultiplexingMode.storageKey)
@@ -366,6 +367,47 @@ struct SettingsView: View {
                 }
             } header: {
                 Text("VM Runtime")
+            }
+
+            Section {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Model Store")
+                        .font(.headline)
+
+                    runtimeRow(
+                        label: "Active Mode",
+                        value: modelStoreStatusController.mode.label
+                    )
+
+                    runtimeRow(
+                        label: "Store Path",
+                        value: modelStoreStatusController.mode.path ?? "In-memory only"
+                    )
+
+                    if modelStoreStatusController.bootstrapErrors.isEmpty {
+                        Text("No bootstrap fallbacks were required.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Bootstrap Failures")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+
+                            ForEach(
+                                Array(modelStoreStatusController.bootstrapErrors.enumerated()),
+                                id: \.offset
+                            ) { _, error in
+                                Text(error)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .textSelection(.enabled)
+                            }
+                        }
+                    }
+                }
+            } header: {
+                Text("Persistence")
             }
 
             Section {

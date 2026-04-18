@@ -10,6 +10,7 @@ enum DiagnosticReportExporter {
         let schemaVersion: Int
         let generatedAt: Date
         let system: SystemInfo
+        let modelStore: ModelStoreStatusSnapshot
         let startupDiagnostics: StartupDiagnosticsStore.DiagnosticsBundle
     }
 
@@ -54,11 +55,13 @@ enum DiagnosticReportExporter {
             buildNumber: buildNumber
         )
         let systemInfo = gatherSystemInfo()
-        let report = Report(
-            schemaVersion: 1,
-            generatedAt: Date(),
-            system: systemInfo,
-            startupDiagnostics: diagnosticsBundle
+        let modelStoreSnapshot = await MainActor.run {
+            ModelStoreStatusController.shared.snapshot
+        }
+        let report = makeReport(
+            diagnosticsBundle: diagnosticsBundle,
+            systemInfo: systemInfo,
+            modelStoreSnapshot: modelStoreSnapshot
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -79,6 +82,20 @@ enum DiagnosticReportExporter {
 
         // zip
         try createZip(from: tempDir, to: zipURL)
+    }
+
+    static func makeReport(
+        diagnosticsBundle: StartupDiagnosticsStore.DiagnosticsBundle,
+        systemInfo: SystemInfo,
+        modelStoreSnapshot: ModelStoreStatusSnapshot
+    ) -> Report {
+        Report(
+            schemaVersion: 2,
+            generatedAt: Date(),
+            system: systemInfo,
+            modelStore: modelStoreSnapshot,
+            startupDiagnostics: diagnosticsBundle
+        )
     }
 
     // MARK: - System Info
@@ -119,6 +136,21 @@ enum DiagnosticReportExporter {
         lines.append("  Version: \(version) (\(build))")
         lines.append("  Channel: \(AppBuildIdentity.current.channel.rawValue)")
         lines.append("  Path: \(AppBuildIdentity.current.fullPath)")
+        lines.append("")
+        lines.append("Model Store:")
+        let modelStore = MainActor.assumeIsolated {
+            ModelStoreStatusController.shared.snapshot
+        }
+        lines.append("  Mode: \(modelStore.mode.label)")
+        lines.append("  Path: \(modelStore.mode.path ?? "In-memory only")")
+        if modelStore.bootstrapErrors.isEmpty {
+            lines.append("  Bootstrap Errors: none")
+        } else {
+            lines.append("  Bootstrap Errors:")
+            for error in modelStore.bootstrapErrors {
+                lines.append("    - \(error)")
+            }
+        }
 
         return lines.joined(separator: "\n") + "\n"
     }

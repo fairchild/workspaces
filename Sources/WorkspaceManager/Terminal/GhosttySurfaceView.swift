@@ -85,7 +85,10 @@ final class GhosttySurfaceView: NSView {
             setupEventMonitor()
             updateScaleAndSize()
             applySystemColorSchemeIfNeeded(force: true)
-            if TerminalFocusManager.shared.shouldSkipWindowFocusRestore?() != true {
+            let shouldSkipRestore =
+                (TerminalFocusManager.shared.delegate(for: window)?.shouldSkipWindowFocusRestore(for: window))
+                == true
+            if !shouldSkipRestore {
                 TerminalFocusManager.shared.requestFocus(for: self)
             }
         } else {

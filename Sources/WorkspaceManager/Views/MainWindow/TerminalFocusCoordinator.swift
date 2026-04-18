@@ -9,11 +9,7 @@ import WorkspaceManagerCore
 /// (NSApp.activate) lives here exclusively; TerminalFocusManager handles only
 /// the low-level makeFirstResponder mechanics.
 @MainActor
-final class TerminalFocusCoordinator: ObservableObject {
-    private struct WeakCoordinator {
-        weak var value: TerminalFocusCoordinator?
-    }
-
+final class TerminalFocusCoordinator: ObservableObject, TerminalFocusWindowDelegate {
     private struct PendingFocusRequest {
         let sessionID: UUID
         let activateApp: Bool
@@ -23,22 +19,21 @@ final class TerminalFocusCoordinator: ObservableObject {
         var surfaceResolvedAtUptime: TimeInterval?
     }
 
-    private static var registeredCoordinators: [ObjectIdentifier: WeakCoordinator] = [:]
-
     private weak var attachedSurfaceStore: HostTerminalSurfaceStore?
+    private weak var window: NSWindow?
     private var pendingRepoFocusMeasurementSessionID: UUID?
     private var pendingWorkspaceFocusMeasurementSessionID: UUID?
     private var pendingFocusRequest: PendingFocusRequest?
 
-    init() {
-        Self.register(self)
-    }
+    init() {}
 
     deinit {
         MainActor.assumeIsolated {
             attachedSurfaceStore?.onSurfaceCreated = nil
             attachedSurfaceStore?.onSurfaceInvalidated = nil
-            Self.unregister(self)
+            if let window {
+                TerminalFocusManager.shared.unbindDelegate(from: window)
+            }
         }
     }
 
@@ -55,6 +50,17 @@ final class TerminalFocusCoordinator: ObservableObject {
         surfaceStore.onSurfaceInvalidated = { [weak self] sessionID in
             self?.surfaceDidInvalidate(sessionID: sessionID)
         }
+    }
+
+    func bind(window: NSWindow) {
+        guard self.window !== window else { return }
+
+        if let previousWindow = self.window {
+            TerminalFocusManager.shared.unbindDelegate(from: previousWindow)
+        }
+
+        self.window = window
+        TerminalFocusManager.shared.bindDelegate(self, to: window)
     }
 
     func focusTerminal(sessionID: UUID, surfaceStore: HostTerminalSurfaceStore) {
@@ -118,12 +124,29 @@ final class TerminalFocusCoordinator: ObservableObject {
     /// Called from AppDelegate.applicationDidBecomeActive instead of going directly
     /// through TerminalFocusManager.
     func restoreFocusOnAppActivation() {
+        guard let window else { return }
+        guard window.isVisible || window.isKeyWindow || window.isMainWindow else { return }
         if pendingFocusRequest != nil {
             // Coordinator already has a pending request — let it drive.
             return
         }
         guard let terminal = TerminalFocusManager.shared.focusedTerminal else { return }
         TerminalFocusManager.shared.requestFocus(for: terminal)
+    }
+
+    func shouldSkipWindowFocusRestore(for window: NSWindow) -> Bool {
+        guard self.window === window else { return false }
+        return pendingFocusRequest != nil
+    }
+
+    func windowDidBecomeKey(_ window: NSWindow) {
+        guard self.window === window else { return }
+        retryPendingFocus(reason: "window_did_become_key")
+    }
+
+    func appDidBecomeActive(for window: NSWindow) {
+        guard self.window === window else { return }
+        restoreFocusOnAppActivation()
     }
 
     func beginRepoClickMeasurement(sessionID: UUID, repoPath: String) {
@@ -344,50 +367,5 @@ final class TerminalFocusCoordinator: ObservableObject {
     private func surfaceDidInvalidate(sessionID: UUID) {
         guard pendingFocusRequest?.sessionID == sessionID else { return }
         cancelPendingFocusRequest(reason: "surface_invalidated")
-    }
-
-    private static func register(_ coordinator: TerminalFocusCoordinator) {
-        pruneDeadCoordinators()
-        registeredCoordinators[ObjectIdentifier(coordinator)] = WeakCoordinator(value: coordinator)
-        installSharedHandlersIfNeeded()
-    }
-
-    private static func unregister(_ coordinator: TerminalFocusCoordinator) {
-        registeredCoordinators.removeValue(forKey: ObjectIdentifier(coordinator))
-        pruneDeadCoordinators()
-
-        guard !registeredCoordinators.isEmpty else {
-            TerminalFocusManager.shared.shouldSkipWindowFocusRestore = nil
-            TerminalFocusManager.shared.onWindowDidBecomeKey = nil
-            TerminalFocusManager.shared.onAppDidBecomeActive = nil
-            return
-        }
-
-        installSharedHandlersIfNeeded()
-    }
-
-    private static func installSharedHandlersIfNeeded() {
-        TerminalFocusManager.shared.shouldSkipWindowFocusRestore = {
-            activeCoordinators.contains { $0.pendingFocusRequest != nil }
-        }
-        TerminalFocusManager.shared.onWindowDidBecomeKey = {
-            for coordinator in activeCoordinators {
-                coordinator.retryPendingFocus(reason: "window_did_become_key")
-            }
-        }
-        TerminalFocusManager.shared.onAppDidBecomeActive = {
-            for coordinator in activeCoordinators {
-                coordinator.restoreFocusOnAppActivation()
-            }
-        }
-    }
-
-    private static var activeCoordinators: [TerminalFocusCoordinator] {
-        pruneDeadCoordinators()
-        return registeredCoordinators.values.compactMap(\.value)
-    }
-
-    private static func pruneDeadCoordinators() {
-        registeredCoordinators = registeredCoordinators.filter { $0.value.value != nil }
     }
 }
