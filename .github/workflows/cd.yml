@@ -302,12 +302,19 @@ jobs:
 
             if (shouldDispatch) {
               const directive = [
-                `Investigate CD ${validator} failure tracked in issue #${issueNumber}.`,
-                `Commit: ${context.sha}`,
-                `Preview URL: ${process.env.PREVIEW_URL || '(not available)'}`,
-                `Workflow run: ${runUrl}`,
-                `Reproduce: ${process.env.REPRO_HINT}`,
-                `Task: reproduce locally, root-cause the failure, open a fix PR, and link it back to issue #${issueNumber}.`,
+                `@${context.repo.owner} mentioned you in issue #${issueNumber}`,
+                '',
+                '---',
+                `CD ${validator} validation failed on \`${context.sha}\`.`,
+                '',
+                `- Commit: ${context.sha}`,
+                `- Preview URL: ${process.env.PREVIEW_URL || '(not available)'}`,
+                `- Workflow run: ${runUrl}`,
+                `- Reproduce: \`${process.env.REPRO_HINT}\``,
+                '',
+                `Reproduce locally, root-cause the failure, open a fix PR, and link it back to issue #${issueNumber}.`,
+                '---',
+                '',
               ].join('\n');
               const ref = context.ref.replace(/^refs\/heads\//, '');
               try {
@@ -458,12 +465,19 @@ jobs:
 
             if (shouldDispatch) {
               const directive = [
-                `Investigate CD ${validator} failure tracked in issue #${issueNumber}.`,
-                `Commit: ${context.sha}`,
-                `Preview URL: ${process.env.PREVIEW_URL || '(not available)'}`,
-                `Workflow run: ${runUrl}`,
-                `Reproduce: ${process.env.REPRO_HINT}`,
-                `Task: reproduce locally, root-cause the failure, open a fix PR, and link it back to issue #${issueNumber}.`,
+                `@${context.repo.owner} mentioned you in issue #${issueNumber}`,
+                '',
+                '---',
+                `CD ${validator} validation failed on \`${context.sha}\`.`,
+                '',
+                `- Commit: ${context.sha}`,
+                `- Preview URL: ${process.env.PREVIEW_URL || '(not available)'}`,
+                `- Workflow run: ${runUrl}`,
+                `- Reproduce: \`${process.env.REPRO_HINT}\``,
+                '',
+                `Reproduce locally, root-cause the failure, open a fix PR, and link it back to issue #${issueNumber}.`,
+                '---',
+                '',
               ].join('\n');
               const ref = context.ref.replace(/^refs\/heads\//, '');
               try {
