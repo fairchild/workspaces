@@ -4,7 +4,7 @@ import { formatCompactTime } from "@/lib/timeline-utils";
 import type { WebhookEvent } from "@/lib/types";
 import { memo, useState } from "react";
 import styles from "./event-group-row.module.css";
-import { TYPE_COLOR, TYPE_LABEL } from "./status-card";
+import { TYPE_COLOR, TYPE_LABEL } from "./event-utils";
 
 const COUNT_BADGE: Record<string, string> = {
 	ci: styles.countBadgeCi,

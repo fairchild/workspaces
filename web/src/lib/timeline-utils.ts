@@ -5,6 +5,24 @@ const dayKeyCache = new Map<string, string>();
 const compactCache = new Map<string, { value: string; expires: number }>();
 const relativeCache = new Map<string, { value: string; expires: number }>();
 
+function getElapsedMinutes(timestamp: string, now: number): number {
+	return Math.floor((now - new Date(timestamp).getTime()) / 60_000);
+}
+
+function formatElapsedTime(
+	timestamp: string,
+	cache: Map<string, { value: string; expires: number }>,
+	formatValue: (mins: number) => string,
+): string {
+	const now = Date.now();
+	const cached = cache.get(timestamp);
+	if (cached && now < cached.expires) return cached.value;
+
+	const value = formatValue(getElapsedMinutes(timestamp, now));
+	cache.set(timestamp, { value, expires: now + FORMAT_TTL });
+	return value;
+}
+
 export function dayKey(timestamp: string): string {
 	const cached = dayKeyCache.get(timestamp);
 	if (cached) return cached;
@@ -27,39 +45,19 @@ export function shouldShowDay(
 }
 
 export function formatCompactTime(timestamp: string): string {
-	const now = Date.now();
-	const cached = compactCache.get(timestamp);
-	if (cached && now < cached.expires) return cached.value;
-
-	const diff = now - new Date(timestamp).getTime();
-	const mins = Math.floor(diff / 60_000);
-	let value: string;
-	if (mins < 1) value = "now";
-	else if (mins < 60) value = `${mins}m`;
-	else {
+	return formatElapsedTime(timestamp, compactCache, (mins) => {
+		if (mins < 1) return "now";
+		if (mins < 60) return `${mins}m`;
 		const hours = Math.floor(mins / 60);
-		value = hours < 24 ? `${hours}h` : `${Math.floor(hours / 24)}d`;
-	}
-
-	compactCache.set(timestamp, { value, expires: now + FORMAT_TTL });
-	return value;
+		return hours < 24 ? `${hours}h` : `${Math.floor(hours / 24)}d`;
+	});
 }
 
 export function formatRelativeTime(timestamp: string): string {
-	const now = Date.now();
-	const cached = relativeCache.get(timestamp);
-	if (cached && now < cached.expires) return cached.value;
-
-	const diff = now - new Date(timestamp).getTime();
-	const mins = Math.floor(diff / 60_000);
-	let value: string;
-	if (mins < 1) value = "just now";
-	else if (mins < 60) value = `${mins}m ago`;
-	else {
+	return formatElapsedTime(timestamp, relativeCache, (mins) => {
+		if (mins < 1) return "just now";
+		if (mins < 60) return `${mins}m ago`;
 		const hours = Math.floor(mins / 60);
-		value = hours < 24 ? `${hours}h ago` : `${Math.floor(hours / 24)}d ago`;
-	}
-
-	relativeCache.set(timestamp, { value, expires: now + FORMAT_TTL });
-	return value;
+		return hours < 24 ? `${hours}h ago` : `${Math.floor(hours / 24)}d ago`;
+	});
 }

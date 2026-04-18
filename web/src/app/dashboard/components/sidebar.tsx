@@ -53,37 +53,50 @@ export function Sidebar({ repos, selectedRepo }: SidebarProps) {
 
 	// Fetch agent counts in background
 	useEffect(() => {
-		if (repos.length === 0) return;
+		if (repos.length === 0) {
+			setAgentCache(new Map());
+			return;
+		}
 
 		let cancelled = false;
 
 		async function loadAgentInfo() {
-			await Promise.all(
+			const repoKeys = new Set(
+				repos.map((repo) => `${repo.owner}/${repo.repo}`),
+			);
+			const results = await Promise.all(
 				repos.map(async (repo) => {
-					if (cancelled) return;
+					if (cancelled) return null;
 					try {
 						const res = await fetch(
 							`/api/repos/${repo.owner}/${repo.repo}/agents`,
 						);
-						if (!res.ok || cancelled) return;
+						if (!res.ok || cancelled) return null;
 						const data: AgentDiscoveryResponse = await res.json();
-						const key = `${repo.owner}/${repo.repo}`;
-						setAgentCache((prev) => {
-							const next = new Map(prev);
-							next.set(key, {
+						return {
+							key: `${repo.owner}/${repo.repo}`,
+							value: {
 								hasAgents: data.stats.agentCount > 0,
 								agentCount: data.stats.agentCount,
-							});
-							return next;
-						});
+							},
+						};
 					} catch {
 						// Skip failed fetches
+						return null;
 					}
 				}),
 			);
+			if (cancelled) return;
+			setAgentCache((prev) => {
+				const next = new Map([...prev].filter(([key]) => repoKeys.has(key)));
+				for (const result of results) {
+					if (result) next.set(result.key, result.value);
+				}
+				return next;
+			});
 		}
 
-		loadAgentInfo();
+		void loadAgentInfo();
 		return () => {
 			cancelled = true;
 		};
