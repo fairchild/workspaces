@@ -22,10 +22,13 @@ export function middleware(request: NextRequest) {
 
 	if (isPublic(pathname)) return NextResponse.next();
 
-	// Allow unauthenticated access on localhost for dev/evidence screenshots
+	// Allow unauthenticated access on localhost for dev/evidence
+	// screenshots — but only when no real OAuth app is configured,
+	// so production and OAuth-configured dev still redirect to sign-in.
 	if (
 		process.env.NODE_ENV === "development" &&
-		process.env.DEV_BYPASS_AUTH === "1"
+		process.env.DEV_BYPASS_AUTH === "1" &&
+		!process.env.GITHUB_WEB_WORKSPACES_CLIENT_ID
 	) {
 		return NextResponse.next();
 	}
