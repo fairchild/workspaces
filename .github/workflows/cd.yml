@@ -57,6 +57,7 @@ jobs:
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
         run: |
           URL=$(npx vercel@51 deploy --prebuilt --archive=tgz --token="$VERCEL_TOKEN" --scope="$VERCEL_ORG_ID")
           echo "preview_url=$URL" >> "$GITHUB_OUTPUT"
@@ -189,6 +190,7 @@ jobs:
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
         run: |
           npx vercel@51 promote "${{ needs.preview-web.outputs.preview_url }}" \
             --token="$VERCEL_TOKEN" --scope="$VERCEL_ORG_ID"
