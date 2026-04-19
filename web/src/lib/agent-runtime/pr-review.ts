@@ -165,3 +165,4 @@ Read the diff against ${payload.baseRef}, explore the surrounding code, run swif
 	);
 	return session.id;
 }
+// PR reviewer post-test — verify review appears on GitHub
