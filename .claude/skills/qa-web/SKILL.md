@@ -75,7 +75,7 @@ Supporting references (load on-demand):
 - `scripts/doctor.sh` — verify setup; exit 0 if ready, non-zero if not (prints remediation hints).
 - `scripts/scope-report.sh` — git + gh reconnaissance; prints the Phase 0 Scope Report.
 - `scripts/render-report.py` — aggregate a run's findings into `REPORT.md` + `report.html` with screenshots inline. Pass `--latest` to pick the most recent date dir under `output/qa-agent/`. Pass `--open` to open the HTML in the default browser.
-- `web/scripts/qa-probe.mjs` *(lives in the project, not the skill)* — axe-core + screenshots on a list of URLs. Invoke with `QA_SLUG=<slug> QA_BASE_URL=<url> node web/scripts/qa-probe.mjs`.
+- `web/scripts/qa-probe.js` *(lives in the project, not the skill)* — axe-core + screenshots on a list of URLs. Invoke with `QA_SLUG=<slug> QA_BASE_URL=<url> node web/scripts/qa-probe.js`.
 
 Relevant mise tasks (in `web/.mise.toml`):
 

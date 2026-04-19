@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 
 const reportPath = process.argv[2];
 if (!reportPath) {
-	console.error("usage: playwright-findings.mjs <playwright-report.json>");
+	console.error("usage: playwright-findings.js <playwright-report.json>");
 	process.exit(2);
 }
 

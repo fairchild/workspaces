@@ -2,6 +2,7 @@
 	"name": "spaces-web",
 	"version": "0.1.0",
 	"private": true,
+	"type": "module",
 	"packageManager": "pnpm@10.18.3",
 	"scripts": {
 		"dev": "next dev",
@@ -14,7 +15,7 @@
 		"test:e2e": "playwright test",
 		"test:e2e:fast": "playwright test --project fast",
 		"test:e2e:full": "playwright test --project full",
-		"lhci": "lhci autorun --config=./lighthouserc.cjs"
+		"lhci": "lhci autorun --config=./lighthouserc.json --collect.url=$LHCI_COLLECT_URL"
 	},
 	"dependencies": {
 		"@anthropic-ai/sdk": "^0.86.1",

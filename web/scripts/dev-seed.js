@@ -3,8 +3,8 @@
  * Seed the dev database with a test user and repo.
  * Used by `mise run web:dev` to ensure the dashboard loads without GitHub OAuth.
  */
-const { createClient } = require("@libsql/client");
-const { mkdirSync } = require("node:fs");
+import { mkdirSync } from "node:fs";
+import { createClient } from "@libsql/client";
 
 mkdirSync("data", { recursive: true });
 const db = createClient({ url: "file:data/auth.db" });

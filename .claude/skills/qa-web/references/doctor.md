@@ -19,7 +19,7 @@ Each check is a single assertion. Order is chosen to fail fast on the most commo
 11. **Mise tasks present** — grep `web:e2e:explore`, `web:qa:init-agents`, `web:qa:codegen` in `web/.mise.toml`.
 12. **Chromium browser installed** — filesystem check for `chromium-*` under `$PLAYWRIGHT_BROWSERS_PATH` (falls back to `~/Library/Caches/ms-playwright` on macOS, `~/.cache/ms-playwright` on Linux).
 13. **`gh` available and authenticated** — `gh auth status` exits 0. Warn (not fail) if unauthenticated — Phase 0 PR queries need it but Phases 1–3 don't.
-14. **qa-probe script present** — `web/scripts/qa-probe.mjs` exists.
+14. **qa-probe script present** — `web/scripts/qa-probe.js` exists.
 
 ## Severity
 

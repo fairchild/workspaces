@@ -76,7 +76,7 @@ After: every push to `main` produces a preview deployment, gets validated agains
 | `scripts/cd/.env.bootstrap.example` | Template for the gitignored `.env.bootstrap` where the operator's tokens live locally. |
 | `web/vercel.json` | Generated. Contains `git.deploymentEnabled.main = false` — disables Vercel's auto-promote so the CD workflow is the only path to prod. |
 | `web/playwright.config.ts` | Honors `PLAYWRIGHT_BASE_URL` to target the preview URL; skips the local `webServer` block when set. |
-| `web/lighthouserc.cjs` | Perf budgets: LCP ≤2500ms, CLS ≤0.1, TBT ≤200ms, perf score ≥0.9. Desktop preset, 3 runs, median assertions. |
+| `web/lighthouserc.json` | Perf budgets: LCP ≤2500ms, CLS ≤0.1, TBT ≤200ms, perf score ≥0.9. Desktop preset, 3 runs, median assertions. URL passed at invocation via `--collect.url`. |
 | `web/scripts/{playwright,lhci}-findings.mjs` | Render validator JSON output into markdown tables for the failure-issue body. |
 | `infra/<worker>/wrangler.toml` | Each in-tree worker has an `[env.preview]` block with separate routes/bindings (e.g. `evidence-screenshots-preview` R2 bucket). |
 

@@ -119,7 +119,7 @@ jobs:
           set +e
           pnpm exec playwright test --project fast --reporter=json > playwright-report.json
           PW_EXIT=$?
-          node scripts/playwright-findings.mjs playwright-report.json > findings.md || echo "_findings script failed_" > findings.md
+          node scripts/playwright-findings.js playwright-report.json > findings.md || echo "_findings script failed_" > findings.md
           exit $PW_EXIT
       - if: failure()
         uses: actions/upload-artifact@v4
@@ -149,9 +149,9 @@ jobs:
           curl -sSf "$LHCI_COLLECT_URL/" >/dev/null || true
           curl -sSf "$LHCI_COLLECT_URL/" >/dev/null || true
           set +e
-          pnpm exec lhci autorun --config=./lighthouserc.cjs
+          pnpm exec lhci autorun --config=./lighthouserc.json --collect.url="$LHCI_COLLECT_URL"
           LHCI_EXIT=$?
-          node scripts/lhci-findings.mjs .lighthouseci/assertion-results.json > findings.md || echo "_findings script failed_" > findings.md
+          node scripts/lhci-findings.js .lighthouseci/assertion-results.json > findings.md || echo "_findings script failed_" > findings.md
           exit $LHCI_EXIT
       - if: failure()
         uses: actions/upload-artifact@v4
@@ -204,7 +204,7 @@ jobs:
           REPRO_HINT: cd web && PLAYWRIGHT_BASE_URL=${{ needs.preview-web.outputs.preview_url }} PLAYWRIGHT_SKIP_WEB_SERVER=1 pnpm exec playwright test --project fast
         with:
           script: |
-            const failNotify = require('./.github/workflows/cd-fail-notify.cjs');
+            const { default: failNotify } = await import('./.github/workflows/cd-fail-notify.js');
             await failNotify({ github, context, core });
 
   fail-notify-lighthouse:
@@ -220,10 +220,10 @@ jobs:
         env:
           VALIDATOR: lighthouse
           PREVIEW_URL: ${{ needs.preview-web.outputs.preview_url }}
-          REPRO_HINT: cd web && LHCI_COLLECT_URL=${{ needs.preview-web.outputs.preview_url }} pnpm exec lhci autorun --config=./lighthouserc.cjs
+          REPRO_HINT: cd web && pnpm exec lhci autorun --config=./lighthouserc.json --collect.url=${{ needs.preview-web.outputs.preview_url }}
         with:
           script: |
-            const failNotify = require('./.github/workflows/cd-fail-notify.cjs');
+            const { default: failNotify } = await import('./.github/workflows/cd-fail-notify.js');
             await failNotify({ github, context, core });
 
   validate-prod:
@@ -262,7 +262,7 @@ jobs:
           set +e
           pnpm exec playwright test --project fast --reporter=json > prod-report.json
           PW_EXIT=$?
-          node scripts/playwright-findings.mjs prod-report.json > findings.md || echo "_findings script failed_" > findings.md
+          node scripts/playwright-findings.js prod-report.json > findings.md || echo "_findings script failed_" > findings.md
           exit $PW_EXIT
       - if: failure()
         uses: actions/upload-artifact@v4

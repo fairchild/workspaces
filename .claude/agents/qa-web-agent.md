@@ -26,7 +26,7 @@ Pass the caller's arguments through as-is. If the caller gave a free-form change
 ## Tool contract
 
 **Allowed:**
-- `Bash`: `mise run web:*`, `pnpm exec playwright *`, `pnpm test`, `pnpm typecheck`, `pnpm lint`, `git status|diff|log|branch|show|add|commit` (local, reversible), `gh pr status|view|checks|list`, `.claude/skills/qa-web/scripts/*`, `./scripts/evidence.sh`, `web/scripts/qa-probe.mjs`, dev-server commands (`pnpm dev`, `pnpm exec next dev`).
+- `Bash`: `mise run web:*`, `pnpm exec playwright *`, `pnpm test`, `pnpm typecheck`, `pnpm lint`, `git status|diff|log|branch|show|add|commit` (local, reversible), `gh pr status|view|checks|list`, `.claude/skills/qa-web/scripts/*`, `./scripts/evidence.sh`, `web/scripts/qa-probe.js`, dev-server commands (`pnpm dev`, `pnpm exec next dev`).
 - `Read`, `Grep`, `Glob`: `web/e2e/**`, `web/specs/**`, `web/tests/**`, `web/docs/**`, `web/.mise.toml`, `web/playwright.config.ts`, `web/vitest.config.ts`, `web/package.json`, `.claude/**`, `AGENTS.md`, `CLAUDE.md`, `README.md`. For `web/src/**`: forbidden during Phase 1 (Explore); allowed in Phases 2 (Author) and 3 (Heal).
 - `Write`, `Edit`: `web/e2e/**`, `web/specs/**`, `web/tests/**` (especially `LEDGER.md`), `output/qa-agent/**`. Never `web/src/**`, `Sources/**`, `infra/**`, `.github/**`.
 

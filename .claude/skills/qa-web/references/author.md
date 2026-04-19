@@ -34,7 +34,7 @@ Convert findings and uncovered behaviors into durable, spec-first tests. You orc
 
 ## Fallback: no Generator available
 
-If the `playwright-test-generator` subagent is missing (doctor fails check #15), fall back to writing the test yourself using `web/scripts/qa-probe.mjs` or `mise run web:qa:codegen <url>` (interactive recorder) as seed material. Still follow locator-priority rules manually. Then tell the caller to run `mise run web:qa:init-agents` to enable the delegated path next time.
+If the `playwright-test-generator` subagent is missing (doctor fails check #15), fall back to writing the test yourself using `web/scripts/qa-probe.js` or `mise run web:qa:codegen <url>` (interactive recorder) as seed material. Still follow locator-priority rules manually. Then tell the caller to run `mise run web:qa:init-agents` to enable the delegated path next time.
 
 ## When to refuse
 

@@ -19,7 +19,7 @@ During Phase 1 do NOT Read or Grep `web/src/app/**` or `web/src/lib/**`. You are
 ## Procedure
 
 1. **Pick scope from Phase 0's P0/P1 list.** If no Phase 0 ran, use the explicit area the caller gave (`/qa explore landing`).
-2. **For each surface**, drive the app via Playwright MCP or `web/scripts/qa-probe.mjs`:
+2. **For each surface**, drive the app via Playwright MCP or `web/scripts/qa-probe.js`:
    - Set viewport: 1440×900 (desktop) then 375×667 (mobile). Both are mandatory.
    - Apply **SFDIPOT**: Structure, Function, Data, Interfaces, Platform, Operations, Time. See `references/oracles.md`.
    - Apply **FEW HICCUPPS** oracles: History, Explainability, World, User expectation, Product consistency, Purpose, Statutes, Similar products.
@@ -47,7 +47,7 @@ output/qa-agent/<ISO-date>/<slug>/
 └── trace.zip           # optional, if captured from Playwright
 ```
 
-Use `QA_SLUG=<slug> QA_BASE_URL=http://localhost:4000 node web/scripts/qa-probe.mjs` to batch screenshots + axe across the URLs you visited.
+Use `QA_SLUG=<slug> QA_BASE_URL=http://localhost:4000 node web/scripts/qa-probe.js` to batch screenshots + axe across the URLs you visited.
 
 ## Exit conditions
 
