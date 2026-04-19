@@ -9,6 +9,16 @@ if (!reportPath) {
 
 const report = JSON.parse(readFileSync(reportPath, "utf8"));
 
+// Playwright's JSON reporter keeps terminal-formatted ANSI escapes in error
+// messages (e.g. "^[[31mred^[[39m"). Strip CSI-style color/style sequences so
+// markdown issue bodies render cleanly in GitHub. Built at runtime so the
+// source file doesn't embed control chars (biome rejects those literals).
+const ansiRegex = new RegExp(
+	`${String.fromCharCode(0x1b)}\\[[0-9;]*[A-Za-z]`,
+	"g",
+);
+const stripAnsi = (s) => s.replace(ansiRegex, "");
+
 const failures = [];
 function walk(suite, trail) {
 	const here = trail.concat(suite.title ? [suite.title] : []);
@@ -16,13 +26,9 @@ function walk(suite, trail) {
 		for (const test of spec.tests ?? []) {
 			for (const result of test.results ?? []) {
 				if (result.status === "failed" || result.status === "timedOut") {
-					const firstErr = (
-						result.errors?.[0]?.message ??
-						result.error?.message ??
-						""
-					)
-						.split("\n")[0]
-						.slice(0, 300);
+					const rawErr =
+						result.errors?.[0]?.message ?? result.error?.message ?? "";
+					const firstErr = stripAnsi(rawErr).split("\n")[0].slice(0, 300);
 					failures.push({
 						file: spec.file,
 						title: here.concat(spec.title).join(" › "),
