@@ -3,6 +3,17 @@ import { defineConfig, devices } from "@playwright/test";
 const BASE_URL = process.env.PLAYWRIGHT_BASE_URL ?? "http://localhost:3000";
 const SKIP_WEB_SERVER = process.env.PLAYWRIGHT_SKIP_WEB_SERVER === "1";
 
+// Vercel Deployment Protection: preview URLs redirect to vercel.com/login
+// unless callers supply the Protection Bypass for Automation secret. When
+// present, send it on every request so validators see the real app.
+const BYPASS_SECRET = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+const extraHTTPHeaders = BYPASS_SECRET
+	? {
+			"x-vercel-protection-bypass": BYPASS_SECRET,
+			"x-vercel-set-bypass-cookie": "true",
+		}
+	: undefined;
+
 export default defineConfig({
 	testDir: "./e2e",
 	fullyParallel: true,
@@ -13,6 +24,7 @@ export default defineConfig({
 	use: {
 		baseURL: BASE_URL,
 		trace: "on-first-retry",
+		extraHTTPHeaders,
 	},
 	projects: [
 		{

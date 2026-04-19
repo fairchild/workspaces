@@ -123,6 +123,7 @@ jobs:
         env:
           PLAYWRIGHT_BASE_URL: ${{ needs.preview-web.outputs.preview_url }}
           PLAYWRIGHT_SKIP_WEB_SERVER: "1"
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
         run: |
           set +e
           pnpm exec playwright test --project fast --reporter=json > playwright-report.json
@@ -155,11 +156,19 @@ jobs:
       - name: Warmup preview + run LHCI
         env:
           LHCI_COLLECT_URL: ${{ needs.preview-web.outputs.preview_url }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
         run: |
-          curl -sSf "$LHCI_COLLECT_URL/" >/dev/null || true
-          curl -sSf "$LHCI_COLLECT_URL/" >/dev/null || true
+          BYPASS_CURL=()
+          BYPASS_LHCI=()
+          if [ -n "$VERCEL_AUTOMATION_BYPASS_SECRET" ]; then
+            BYPASS_CURL=(-H "x-vercel-protection-bypass: $VERCEL_AUTOMATION_BYPASS_SECRET")
+            HEADERS_JSON=$(printf '{"x-vercel-protection-bypass":"%s","x-vercel-set-bypass-cookie":"true"}' "$VERCEL_AUTOMATION_BYPASS_SECRET")
+            BYPASS_LHCI=(--collect.settings.extraHeaders="$HEADERS_JSON")
+          fi
+          curl -sSf "${BYPASS_CURL[@]}" "$LHCI_COLLECT_URL/" >/dev/null || true
+          curl -sSf "${BYPASS_CURL[@]}" "$LHCI_COLLECT_URL/" >/dev/null || true
           set +e
-          pnpm exec lhci autorun --config=./lighthouserc.json --collect.url="$LHCI_COLLECT_URL"
+          pnpm exec lhci autorun --config=./lighthouserc.json --collect.url="$LHCI_COLLECT_URL" "${BYPASS_LHCI[@]}"
           LHCI_EXIT=$?
           node scripts/lhci-findings.js .lighthouseci/assertion-results.json > findings.md || echo "_findings script failed_" > findings.md
           exit $LHCI_EXIT
