@@ -28,9 +28,9 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       preview_url: ${{ steps.deploy.outputs.preview_url }}
-    defaults:
-      run:
-        working-directory: web
+    # Vercel CLI commands run from the repo root so the spaces-web project's
+    # rootDirectory=web setting resolves correctly. Only pnpm needs to cd into
+    # web/ (for package.json resolution).
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -41,7 +41,9 @@ jobs:
           node-version: 24
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
-      - run: pnpm install --frozen-lockfile
+      - name: Install web dependencies
+        working-directory: web
+        run: pnpm install --frozen-lockfile
       - name: Pull Vercel prod env + config
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
@@ -198,7 +200,6 @@ jobs:
             echo "::endgroup::"
           done
       - name: Promote validated Vercel preview to prod
-        working-directory: web
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
