@@ -45,9 +45,17 @@ install_deps() {
   fi
 }
 
-# Install prek pre-commit hooks (idempotent)
-if command -v prek >/dev/null 2>&1 && [[ -f "$REPO_ROOT/prek.toml" ]]; then
-  # Remove legacy core.hooksPath so prek can install into .git/hooks/
+# Install prek pre-commit hooks (idempotent, required)
+if [[ -f "$REPO_ROOT/prek.toml" ]]; then
+  if ! command -v prek >/dev/null 2>&1; then
+    echo "error: prek not found in PATH but prek.toml is present." >&2
+    echo "Install it with one of:" >&2
+    echo "  brew install prek           # macOS" >&2
+    echo "  cargo install --locked prek # cargo" >&2
+    echo "  curl -LsSf https://prek.j178.dev/install.sh | sh" >&2
+    exit 1
+  fi
+  # Remove any legacy core.hooksPath so prek can install into the per-worktree hooks dir.
   git config --unset-all --worktree core.hooksPath 2>/dev/null || true
   git config --unset-all --local core.hooksPath 2>/dev/null || true
   echo "=> Installing prek hooks"
