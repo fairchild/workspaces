@@ -1,17 +1,13 @@
 name: CD
 
-# Activation: this workflow ships with the push trigger DISABLED so the merge
-# commit doesn't kick off a failing run before bootstrap is complete. After:
-#   1. `uv run scripts/cd/bootstrap-preview.py --apply` (sets all secrets,
-#      generates web/vercel.json, links Vercel project)
-#   2. Cloudflare DNS for evidence-preview.cloudcompute.com added
-#   3. Verify a manual workflow_dispatch run goes green end-to-end
-# … then uncomment the `push: branches: [main]` block in a follow-up PR.
-# See scripts/cd/README.md for the full bootstrap walkthrough.
+# Every push to main goes through preview → validate → promote. Manual
+# dispatches (Actions tab / `gh workflow run cd.yml --ref main`) run the same
+# pipeline on demand. See scripts/cd/README.md for the mental model and
+# bootstrap walkthrough.
 
 on:
-  # push:
-  #   branches: [main]
+  push:
+    branches: [main]
   workflow_dispatch:
 
 concurrency:
