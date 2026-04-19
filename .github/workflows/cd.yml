@@ -215,7 +215,12 @@ jobs:
           REPRO_HINT: cd web && PLAYWRIGHT_BASE_URL=${{ needs.preview-web.outputs.preview_url }} PLAYWRIGHT_SKIP_WEB_SERVER=1 pnpm exec playwright test --project fast
         with:
           script: |
-            const { default: failNotify } = await import('./.github/workflows/cd-fail-notify.js');
+            // github-script runs from its own dist dir; relative imports look
+            // there, not at the workspace. Resolve via GITHUB_WORKSPACE + file URL.
+            const path = require('node:path');
+            const { pathToFileURL } = require('node:url');
+            const abs = path.join(process.env.GITHUB_WORKSPACE, '.github/workflows/cd-fail-notify.js');
+            const { default: failNotify } = await import(pathToFileURL(abs).href);
             await failNotify({ github, context, core });
 
   fail-notify-lighthouse:
@@ -234,7 +239,12 @@ jobs:
           REPRO_HINT: cd web && pnpm exec lhci autorun --config=./lighthouserc.json --collect.url=${{ needs.preview-web.outputs.preview_url }}
         with:
           script: |
-            const { default: failNotify } = await import('./.github/workflows/cd-fail-notify.js');
+            // github-script runs from its own dist dir; relative imports look
+            // there, not at the workspace. Resolve via GITHUB_WORKSPACE + file URL.
+            const path = require('node:path');
+            const { pathToFileURL } = require('node:url');
+            const abs = path.join(process.env.GITHUB_WORKSPACE, '.github/workflows/cd-fail-notify.js');
+            const { default: failNotify } = await import(pathToFileURL(abs).href);
             await failNotify({ github, context, core });
 
   validate-prod:
