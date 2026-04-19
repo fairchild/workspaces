@@ -20,11 +20,14 @@ project_dir = "web"
 dir = "infra/cloudflare-webhook-relay"
 preview_health_url = "https://webhooks-preview.cloudcompute.com/health"
 preview_secrets = ["GITHUB_WEBHOOK_SECRET", "JWT_SIGNING_SECRET"]
+preview_secret_hints.GITHUB_WEBHOOK_SECRET = "Shared HMAC secret configured on your GitHub App's webhook settings. Find it at https://github.com/settings/apps → your app → Webhook → Secret. Copy verbatim; generating a new one requires updating the GitHub App too."
+preview_secret_hints.JWT_SIGNING_SECRET = "Random 64+ bytes used to sign session JWTs. Generate once with `openssl rand -base64 64` and reuse; rotating invalidates existing sessions."
 
 [[workers]]
 dir = "infra/cloudflare-evidence-store"
 preview_health_url = "https://evidence-preview.cloudcompute.com/health"
 preview_secrets = ["EVIDENCE_UPLOAD_TOKEN"]
+preview_secret_hints.EVIDENCE_UPLOAD_TOKEN = "Bearer token required by clients uploading screenshots/artifacts to the preview evidence Worker. Generate with `openssl rand -hex 32`; must differ from the production token."
 
 [github_secrets]
 # Secrets read straight from env and pushed to GitHub Actions.

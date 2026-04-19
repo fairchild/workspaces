@@ -40,6 +40,46 @@ ENV_PATH = CD_DIR / ".env.bootstrap"
 ENV_EXAMPLE_PATH = CD_DIR / ".env.bootstrap.example"
 
 
+def npx(*args: str) -> list[str]:
+    """npx invocation that auto-accepts package installs.
+
+    `--yes` makes npx skip its interactive 'Ok to proceed?' prompt when a
+    package isn't locally installed. npm log noise is silenced globally via
+    the npm_config_loglevel env var set in main().
+    """
+    return ["npx", "--yes", *args]
+
+
+def curl_ok(url: str, timeout: int = 10) -> bool:
+    """Silent HTTP GET — returns True on any 2xx, no output."""
+    result = subprocess.run(
+        ["curl", "-sSf", "--max-time", str(timeout), url],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return result.returncode == 0
+
+
+def git_file_state(rel_path: str) -> str:
+    """Return 'untracked' | 'modified' | 'clean' | 'missing' for a repo-relative path."""
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain", "--", rel_path],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return "missing"
+    status = result.stdout.strip()
+    if not status:
+        return "clean"
+    # porcelain: "XY path" — first char index status, second worktree
+    return "untracked" if status.startswith("??") else "modified"
+
+
 # ---------- terminal output ----------
 
 
@@ -363,7 +403,7 @@ def step_vercel(
         teach("`vercel link` is interactive. It writes web/.vercel/project.json.")
         if runner.apply:
             runner.run(
-                ["npx", "vercel@37", "link", "--yes", "--token", token],
+                npx("vercel@37", "link", "--yes", "--token", token),
                 cwd=project_dir,
                 capture=False,
                 quiet=True,
@@ -383,12 +423,12 @@ def step_vercel(
         "no longer auto-promote to prod. The guard travels with the code — no dashboard "
         "step required, and it survives project recreation."
     )
-    ensure_vercel_json_disables_main(runner, project_dir)
+    ensure_vercel_json_disables_main(runner, prompt, project_dir)
 
     return ids
 
 
-def ensure_vercel_json_disables_main(runner: Runner, project_dir: Path) -> None:
+def ensure_vercel_json_disables_main(runner: Runner, prompt: Prompt, project_dir: Path) -> None:
     """Idempotently set git.deploymentEnabled.main = false in vercel.json.
 
     Local file write — gated on runner.apply so dry-run mode shows the intent
@@ -431,7 +471,45 @@ def ensure_vercel_json_disables_main(runner: Runner, project_dir: Path) -> None:
 
     enabled["main"] = False
     vjson_path.write_text(json.dumps(data, indent=2) + "\n")
-    ok(f"updated {rel} — commit this file so the guard reaches main")
+    ok(f"updated {rel}")
+
+    offer_commit_vercel_json(prompt, str(rel))
+
+
+def offer_commit_vercel_json(prompt: Prompt, rel: str) -> None:
+    """If vercel.json isn't committed, offer to commit it (or print the command)."""
+    state = git_file_state(rel)
+    commit_msg = "chore(web): disable Vercel git auto-promote for main"
+    commit_cmd = f'git add {rel} && git commit -m "{commit_msg}"'
+
+    if state == "clean":
+        ok(f"{rel} already committed")
+        return
+    if state == "missing":
+        warn(f"{rel} not visible to git (is the working tree healthy?)")
+        return
+
+    teach(
+        "Until this file reaches main, Vercel's git integration will continue to "
+        "auto-promote pushes — making every merge a potential prod surprise."
+    )
+    if prompt.interactive and prompt.yes_no(f"Commit {rel} now?", default=True):
+        try:
+            subprocess.run(["git", "add", rel], cwd=ROOT, check=True, capture_output=True)
+            subprocess.run(
+                ["git", "commit", "-m", commit_msg],
+                cwd=ROOT,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            ok(f"committed {rel} (run `git push` to share with the team)")
+        except subprocess.CalledProcessError as e:
+            warn(f"auto-commit failed — run manually:  {bold(commit_cmd)}")
+            if e.stderr:
+                info(dim(e.stderr.strip()[:200]))
+    else:
+        info(f"Run when ready:  {bold(commit_cmd)}")
 
 
 # ---------- step 3: cloudflare preview secrets ----------
@@ -440,7 +518,7 @@ def ensure_vercel_json_disables_main(runner: Runner, project_dir: Path) -> None:
 def list_worker_preview_secrets(worker_dir: Path) -> set[str]:
     try:
         result = subprocess.run(
-            ["npx", "wrangler@4", "secret", "list", "--env", "preview"],
+            npx("wrangler@4", "secret", "list", "--env", "preview"),
             cwd=worker_dir,
             check=False,
             capture_output=True,
@@ -474,6 +552,7 @@ def step_cloudflare(
 
     for w in cfg.get("workers", []):
         worker_dir = ROOT / w["dir"]
+        hints = w.get("preview_secret_hints", {})
         print()
         info(bold(f"worker: {w['dir']}"))
         existing = list_worker_preview_secrets(worker_dir)
@@ -488,11 +567,14 @@ def step_cloudflare(
             value = env.get(env_key)
             if not value:
                 warn(f"{name} not in env (expected as {env_key})")
-                docs_link = hyperlink(
-                    "https://developers.cloudflare.com/workers/configuration/secrets/",
-                    "Cloudflare Workers Secrets docs",
-                )
-                teach(f"This is a Worker secret for the preview deployment. {docs_link}")
+                hint = hints.get(name)
+                if hint:
+                    teach(hint)
+                else:
+                    teach(
+                        f"Worker secret for preview. See "
+                        f"{hyperlink('https://developers.cloudflare.com/workers/configuration/secrets/', 'Cloudflare Workers Secrets docs')}."
+                    )
                 value = prompt.secret(f"Paste value for {name}")
                 if value:
                     save_env_var(ENV_PATH, env_key, value)
@@ -503,7 +585,7 @@ def step_cloudflare(
                     continue
 
             runner.run(
-                ["npx", "wrangler@4", "secret", "put", name, "--env", "preview"],
+                npx("wrangler@4", "secret", "put", name, "--env", "preview"),
                 cwd=worker_dir,
                 stdin=value + "\n",
                 capture=True,
@@ -616,7 +698,7 @@ def step_github(
 def validate_worker_wiring(runner: Runner, worker_dir: Path) -> bool:
     try:
         runner.run(
-            ["npx", "wrangler@4", "deploy", "--env", "preview", "--dry-run"],
+            npx("wrangler@4", "deploy", "--env", "preview", "--dry-run"),
             cwd=worker_dir,
             capture=True,
             check=True,
@@ -630,64 +712,147 @@ def validate_worker_wiring(runner: Runner, worker_dir: Path) -> bool:
         return False
 
 
-def curl_health(url: str) -> bool:
-    result = subprocess.run(
-        ["curl", "-sSf", "--max-time", "10", url],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode == 0:
-        ok(f"health OK: {url}")
+def deploy_preview_real(runner: Runner, worker_dir: Path) -> bool:
+    """Run a real `wrangler deploy --env preview`.
+
+    With `custom_domain = true` in `[[env.preview.routes]]`, wrangler itself
+    provisions the custom hostname + DNS on first deploy — closing the gap
+    where a dry-run passes but the health URL is unreachable.
+    """
+    try:
+        runner.run(
+            npx("wrangler@4", "deploy", "--env", "preview"),
+            cwd=worker_dir,
+            capture=True,
+            check=True,
+        )
         return True
-    warn(f"health not reachable (OK if not yet deployed): {url}")
-    return False
+    except subprocess.CalledProcessError as e:
+        err(f"deploy failed: {(e.stderr or e.stdout or '').strip()[:300]}")
+        return False
 
 
-def step_validate(runner: Runner, cfg: dict) -> bool:
+def step_validate(runner: Runner, prompt: Prompt, cfg: dict) -> bool:
     step(5, "Validate wiring")
     teach("Dry-runs `wrangler deploy --env preview` and hits each preview /health URL.")
     all_ok = True
     for w in cfg.get("workers", []):
-        if not validate_worker_wiring(runner, ROOT / w["dir"]):
+        worker_dir = ROOT / w["dir"]
+        if not validate_worker_wiring(runner, worker_dir):
             all_ok = False
-        if w.get("preview_health_url"):
-            curl_health(w["preview_health_url"])
+            continue
+        url = w.get("preview_health_url")
+        if not url:
+            continue
+        if curl_ok(url):
+            ok(f"health OK: {url}")
+            continue
+
+        # Dry-run passed but health is unreachable — offer a real deploy to
+        # register the custom domain / DNS (works when wrangler.toml has
+        # custom_domain = true on the preview route).
+        warn(f"health not reachable: {url}")
+        if not runner.apply:
+            info(dim("(dry-run: skipping real deploy offer)"))
+            continue
+        if not prompt.interactive:
+            info(dim("(non-interactive: run `--only validate --apply` interactively to auto-deploy)"))
+            continue
+        teach(
+            "A real `wrangler deploy --env preview` provisions DNS for any "
+            "`custom_domain` routes declared in wrangler.toml."
+        )
+        if not prompt.yes_no(f"Run a real deploy of {w['dir']} now?", default=True):
+            continue
+        if not deploy_preview_real(runner, worker_dir):
+            all_ok = False
+            continue
+        if curl_ok(url):
+            ok(f"health OK after deploy: {url}")
+        else:
+            warn(
+                "health still not reachable after deploy. "
+                "Check DNS for the parent zone, then try: "
+                f"{bold(f'npx wrangler@4 deployments list --env preview')}"
+            )
     return all_ok
 
 
 # ---------- step 6: final summary ----------
 
 
+def current_branch() -> str:
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return result.stdout.strip() or "main"
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return "main"
+
+
 def step_summary(
     apply: bool,
-    vercel_cfg: dict,
     cfg: dict,
+    expected_gh_secrets: list[str],
 ) -> None:
-    step(6, "What's left")
+    step(6, "Verify + what's left")
     repo = cfg["repo"]["slug"]
 
-    info(f"{bold('Commit web/vercel.json')} so the auto-promote guard reaches main.")
-    teach("Until this lands on main, Vercel's git integration will still auto-promote pushes.")
+    # 1. GH secrets — verified via API, not dashboard eyeballing.
+    info(bold("GitHub Actions secrets"))
+    existing = list_github_secrets(repo)
+    if existing:
+        missing = [s for s in expected_gh_secrets if s not in existing]
+        for s in expected_gh_secrets:
+            (ok if s in existing else warn)(f"{s} {'present' if s in existing else 'MISSING'}")
+        if missing:
+            warn(f"Re-run: {bold(f'uv run scripts/cd/bootstrap-preview.py --apply --only github')}")
+    else:
+        warn(
+            "Could not read secrets via gh (auth or permissions issue). "
+            f"Check manually: {hyperlink(f'https://github.com/{repo}/settings/secrets/actions', f'{repo} secrets')}"
+        )
     print()
 
-    info(f"{bold('Cloudflare DNS for new preview hostnames')} (one-time, only when adding a new preview route):")
+    # 2. Vercel auto-promote guard
+    vjson_state = git_file_state("web/vercel.json")
+    info(bold("Vercel auto-promote guard"))
+    if vjson_state == "clean":
+        ok("web/vercel.json committed — guard reaches main on next push")
+    elif vjson_state in ("untracked", "modified"):
+        commit_cmd = 'git add web/vercel.json && git commit -m "chore(web): disable Vercel git auto-promote for main"'
+        warn(f"web/vercel.json not committed ({vjson_state}). Run: {bold(commit_cmd)}")
+    else:
+        warn("web/vercel.json missing — re-run `--only vercel --apply`")
+    print()
+
+    # 3. First CD run — CLI + dashboard
+    branch = current_branch()
+    info(bold("First CD run"))
+    run_cmd = f"gh workflow run cd.yml --ref {branch}"
+    tail_cmd = 'gh run watch $(gh run list --workflow cd.yml --limit 1 --json databaseId -q ".[0].databaseId")'
+    info(f"  CLI:  {bold(run_cmd)}")
+    info(f"  Tail: {bold(tail_cmd)}")
     info(
-        f"  {hyperlink('https://dash.cloudflare.com/', 'Cloudflare dashboard')} "
-        f"→ your zone → DNS → add the preview hostname as a CNAME or Worker route"
-    )
-    print()
-
-    info(f"{bold('Verify GitHub Actions secrets')} are present:")
-    info(f"  {hyperlink(f'https://github.com/{repo}/settings/secrets/actions', f'{repo} secrets')}")
-    print()
-
-    info(f"{bold('First CD run:')}")
-    info(
-        f"  {hyperlink(f'https://github.com/{repo}/actions/workflows/cd.yml', 'CD workflow')} "
-        f"→ Run workflow → pick `cd-preview-validate` branch"
+        f"  UI:   {hyperlink(f'https://github.com/{repo}/actions/workflows/cd.yml', 'CD workflow')}"
+        f" → Run workflow → `{branch}`"
     )
     teach("Watch preview-web output the *.vercel.app URL, then validators run against it.")
+    print()
+
+    # 4. Only surface DNS if adding a new preview route in the future — this
+    # isn't a blocker for the standard flow (bootstrap auto-registers DNS for
+    # existing custom_domain routes via step 5's real-deploy offer).
+    teach(
+        "Adding a new preview route later? Declare it with `custom_domain = true` in "
+        "the worker's wrangler.toml and re-run `--only validate --apply` — wrangler "
+        "will register DNS on the next deploy."
+    )
     print()
 
     if not apply:
@@ -718,6 +883,12 @@ def main() -> int:
         help="Run only this step.",
     )
     args = parser.parse_args()
+
+    # Silence npm deprecation-warning walls from `npx` package installs.
+    # Applies to every subprocess we spawn since we pass os.environ through.
+    os.environ.setdefault("npm_config_loglevel", "error")
+    os.environ.setdefault("npm_config_fund", "false")
+    os.environ.setdefault("npm_config_audit", "false")
 
     cfg = load_config(CONFIG_PATH)
     env = {**os.environ, **load_env_file(ENV_PATH)}
@@ -752,10 +923,12 @@ def main() -> int:
 
     validate_ok = True
     if only in (None, "validate"):
-        validate_ok = step_validate(runner, cfg)
+        validate_ok = step_validate(runner, prompt, cfg)
 
     if only is None:
-        step_summary(args.apply, cfg.get("vercel", {}), cfg)
+        gh_cfg = cfg.get("github_secrets", {})
+        expected_gh = [*gh_cfg.get("from_env", []), *gh_cfg.get("from_vercel_link", [])]
+        step_summary(args.apply, cfg, expected_gh)
 
     return 0 if validate_ok else 1
 

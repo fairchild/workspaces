@@ -88,21 +88,20 @@ uv run scripts/cd/bootstrap-preview.py
 
 # 2. When dry-run looks right, apply for real:
 uv run scripts/cd/bootstrap-preview.py --apply
-
-# 3. Commit the generated guard so it reaches main:
-git add web/vercel.json && git commit -m "chore(web): disable vercel auto-promote on main"
 ```
 
-What gets set up:
-- `web/vercel.json` — auto-promote guard (committed)
+When it's done, step 6 prints the exact `git commit` command for `web/vercel.json` (or offers to commit it interactively) and the `gh workflow run cd.yml` CLI for the first run.
+
+What gets set up automatically:
+- `web/vercel.json` — auto-promote guard (offered-to-commit interactively)
 - Cloudflare Worker preview secrets — per worker, per `wrangler secret put`
-- GitHub Actions repo secrets — `VERCEL_TOKEN`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`
+- GitHub Actions repo secrets — `VERCEL_TOKEN`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` — verified via `gh secret list` after push
 - Vercel project link — runs `vercel link` if `web/.vercel/project.json` doesn't exist
+- Preview worker custom-domain DNS — when a health URL is unreachable but dry-run passes, the script offers to run a real `wrangler deploy --env preview`. Wrangler provisions DNS for any `custom_domain = true` route automatically.
 
 What still requires you (no API exists for these):
 - Creating the Vercel token (dashboard)
 - Creating the Cloudflare API token (dashboard)
-- Adding DNS for any *new* preview hostname (Cloudflare dashboard)
 
 ## Adding a new worker to CD
 
@@ -113,6 +112,7 @@ What still requires you (no API exists for these):
    dir = "infra/your-new-worker"
    preview_health_url = "https://your-new-preview.cloudcompute.com/health"
    preview_secrets = ["SOME_API_KEY"]
+   preview_secret_hints.SOME_API_KEY = "Where does this come from? (One-line provenance — shown at the prompt so future operators know what to paste.)"
    ```
 3. Add `PW_SOME_API_KEY=` to `.env.bootstrap`.
 4. Re-run `uv run scripts/cd/bootstrap-preview.py --apply`.
