@@ -204,6 +204,9 @@ jobs:
     if: failure() && !cancelled() && needs.playwright-validate.result == 'failure'
     runs-on: ubuntu-latest
     steps:
+      # Checkout is required so the github-script step can import the shared
+      # fail-notify logic at .github/workflows/cd-fail-notify.js.
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           name: playwright-findings
@@ -228,6 +231,7 @@ jobs:
     if: failure() && !cancelled() && needs.lighthouse.result == 'failure'
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           name: lighthouse-findings
