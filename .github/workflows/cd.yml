@@ -1,0 +1,335 @@
+name: CD
+
+# Activation: this workflow ships with the push trigger DISABLED so the merge
+# commit doesn't kick off a failing run before bootstrap is complete. After:
+#   1. `uv run scripts/cd/bootstrap-preview.py --apply` (sets all secrets,
+#      generates web/vercel.json, links Vercel project)
+#   2. Cloudflare DNS for evidence-preview.cloudcompute.com added
+#   3. Verify a manual workflow_dispatch run goes green end-to-end
+# … then uncomment the `push: branches: [main]` block in a follow-up PR.
+# See scripts/cd/README.md for the full bootstrap walkthrough.
+
+on:
+  # push:
+  #   branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: cd-main
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+  actions: write
+
+jobs:
+  preview-web:
+    runs-on: ubuntu-latest
+    outputs:
+      preview_url: ${{ steps.deploy.outputs.preview_url }}
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - name: Pull Vercel prod env + config
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: npx vercel@37 pull --yes --environment=production --token="$VERCEL_TOKEN" --scope="$VERCEL_ORG_ID"
+      - name: Build production artifact
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: npx vercel@37 build --prod --token="$VERCEL_TOKEN"
+      - name: Deploy prebuilt artifact to preview URL
+        id: deploy
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+        run: |
+          URL=$(npx vercel@37 deploy --prebuilt --archive=tgz --token="$VERCEL_TOKEN" --scope="$VERCEL_ORG_ID")
+          echo "preview_url=$URL" >> "$GITHUB_OUTPUT"
+          echo "::notice::Preview deployed to $URL"
+
+  preview-workers:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - worker: cloudflare-webhook-relay
+            health_url: https://webhooks-preview.cloudcompute.com/health
+          - worker: cloudflare-evidence-store
+            health_url: https://evidence-preview.cloudcompute.com/health
+    defaults:
+      run:
+        working-directory: infra/${{ matrix.worker }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Deploy to preview env
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx wrangler@4 deploy --env preview
+      - name: Smoke /health
+        run: |
+          for attempt in 1 2 3; do
+            if curl -sSf --max-time 10 "${{ matrix.health_url }}"; then
+              echo "::notice::Health OK (attempt $attempt)"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::Health check failed after 3 attempts against ${{ matrix.health_url }}"
+          exit 1
+
+  playwright-validate:
+    needs: preview-web
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install chromium --with-deps
+      - name: Run Playwright fast against preview
+        env:
+          PLAYWRIGHT_BASE_URL: ${{ needs.preview-web.outputs.preview_url }}
+          PLAYWRIGHT_SKIP_WEB_SERVER: "1"
+        run: |
+          set +e
+          pnpm exec playwright test --project fast --reporter=json > playwright-report.json
+          PW_EXIT=$?
+          node scripts/playwright-findings.js playwright-report.json > findings.md || echo "_findings script failed_" > findings.md
+          exit $PW_EXIT
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-findings
+          path: web/findings.md
+
+  lighthouse:
+    needs: preview-web
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - name: Warmup preview + run LHCI
+        env:
+          LHCI_COLLECT_URL: ${{ needs.preview-web.outputs.preview_url }}
+        run: |
+          curl -sSf "$LHCI_COLLECT_URL/" >/dev/null || true
+          curl -sSf "$LHCI_COLLECT_URL/" >/dev/null || true
+          set +e
+          pnpm exec lhci autorun --config=./lighthouserc.json --collect.url="$LHCI_COLLECT_URL"
+          LHCI_EXIT=$?
+          node scripts/lhci-findings.js .lighthouseci/assertion-results.json > findings.md || echo "_findings script failed_" > findings.md
+          exit $LHCI_EXIT
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lighthouse-findings
+          path: web/findings.md
+
+  promote:
+    needs: [preview-web, preview-workers, playwright-validate, lighthouse]
+    if: success()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Deploy workers to prod
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          for w in cloudflare-webhook-relay cloudflare-evidence-store; do
+            echo "::group::wrangler deploy $w"
+            (cd "infra/$w" && npx wrangler@4 deploy)
+            echo "::endgroup::"
+          done
+      - name: Promote validated Vercel preview to prod
+        working-directory: web
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+        run: |
+          npx vercel@37 promote "${{ needs.preview-web.outputs.preview_url }}" \
+            --token="$VERCEL_TOKEN" --scope="$VERCEL_ORG_ID"
+          echo "::notice::Promoted ${{ needs.preview-web.outputs.preview_url }} to production"
+
+  fail-notify-playwright:
+    needs: [preview-web, playwright-validate]
+    if: failure() && !cancelled() && needs.playwright-validate.result == 'failure'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: playwright-findings
+          path: .
+      - uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
+        env:
+          VALIDATOR: playwright
+          PREVIEW_URL: ${{ needs.preview-web.outputs.preview_url }}
+          REPRO_HINT: cd web && PLAYWRIGHT_BASE_URL=${{ needs.preview-web.outputs.preview_url }} PLAYWRIGHT_SKIP_WEB_SERVER=1 pnpm exec playwright test --project fast
+        with:
+          script: |
+            const { default: failNotify } = await import('./.github/workflows/cd-fail-notify.js');
+            await failNotify({ github, context, core });
+
+  fail-notify-lighthouse:
+    needs: [preview-web, lighthouse]
+    if: failure() && !cancelled() && needs.lighthouse.result == 'failure'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: lighthouse-findings
+          path: .
+      - uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
+        env:
+          VALIDATOR: lighthouse
+          PREVIEW_URL: ${{ needs.preview-web.outputs.preview_url }}
+          REPRO_HINT: cd web && pnpm exec lhci autorun --config=./lighthouserc.json --collect.url=${{ needs.preview-web.outputs.preview_url }}
+        with:
+          script: |
+            const { default: failNotify } = await import('./.github/workflows/cd-fail-notify.js');
+            await failNotify({ github, context, core });
+
+  validate-prod:
+    needs: promote
+    if: success()
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install chromium --with-deps
+      - name: Settle CDN cache
+        run: |
+          for i in 1 2 3 4 5; do
+            if curl -sSf --max-time 10 "https://spaces.cloudcompute.com/" >/dev/null; then
+              echo "::notice::Prod reachable on attempt $i"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::Prod unreachable after 5 attempts"
+          exit 1
+      - name: Playwright fast against prod
+        env:
+          PLAYWRIGHT_BASE_URL: https://spaces.cloudcompute.com
+          PLAYWRIGHT_SKIP_WEB_SERVER: "1"
+        run: |
+          set +e
+          pnpm exec playwright test --project fast --reporter=json > prod-report.json
+          PW_EXIT=$?
+          node scripts/playwright-findings.js prod-report.json > findings.md || echo "_findings script failed_" > findings.md
+          exit $PW_EXIT
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: prod-validate-findings
+          path: web/findings.md
+
+  post-prod-alert:
+    needs: [promote, validate-prod]
+    if: failure() && !cancelled() && needs.validate-prod.result == 'failure'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: prod-validate-findings
+          path: .
+      - uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
+        env:
+          PROD_URL: https://spaces.cloudcompute.com
+        with:
+          script: |
+            const fs = require('fs');
+            const findings = fs.existsSync('findings.md')
+              ? fs.readFileSync('findings.md', 'utf8')
+              : '_No findings file produced._';
+
+            const shortSha = context.sha.slice(0, 7);
+            const title = `🚨 Prod regression on ${shortSha}`;
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+
+            const body = [
+              `**Commit:** ${context.sha}`,
+              `**Run:** ${runUrl}`,
+              `**Prod URL:** ${process.env.PROD_URL}`,
+              '',
+              '## Findings',
+              findings,
+              '',
+              '## Manual rollback runbook',
+              '',
+              '**Vercel — instant alias swap:**',
+              '```bash',
+              'vercel rollback                    # interactive picker',
+              '# or:',
+              'vercel ls --prod | head -5',
+              'vercel promote <previous-prod-url>',
+              '```',
+              '',
+              '**Workers — re-deploy from previous good SHA:**',
+              '```bash',
+              'git checkout <previous-good-sha>',
+              'cd infra/<worker> && npx wrangler@4 deploy',
+              'git checkout main',
+              '```',
+              '',
+              '## Decide: rollback vs roll forward',
+              '- [ ] Rolled back (note which surfaces): ',
+              '- [ ] Rolling forward (link the fix PR): ',
+              '',
+              '@fairchild',
+            ].join('\n');
+
+            const created = await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title,
+              body,
+              labels: ['cd-failure', 'cd-failure:prod', 'urgent', 'auto-opened'],
+            });
+            core.notice(`Opened prod alert issue #${created.data.number}`);

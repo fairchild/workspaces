@@ -31,9 +31,13 @@ docs/.mermaid/
 # Secrets (safety net)
 .env
 .env.*
+!scripts/cd/.env.bootstrap.example
 *.pem
 *.key
 *.p12
+
+# Wrangler local cache
+.wrangler/
 
 # Directories that should never be committed
 .aws/

@@ -86,7 +86,7 @@ if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then check_o
 else check_warn "gh authenticated" "run 'gh auth login' to enable Phase 0 PR queries (optional)"; fi
 
 # 14. qa-probe script
-if [[ -f web/scripts/qa-probe.mjs ]]; then check_ok "qa-probe script present"
+if [[ -f web/scripts/qa-probe.js ]]; then check_ok "qa-probe script present"
 else check_fail "qa-probe script present" "copy from skill template (setup.md)"; fi
 
 # 15. Playwright agents scaffolded (optional but enables delegated Author/Heal)
