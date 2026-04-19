@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { getInstallationToken } from "../github-app-auth";
 import {
 	getOrCreateAgent,
 	getOrCreateEnvironment,
@@ -70,6 +71,33 @@ export interface PrReviewPayload {
 	repoName: string;
 }
 
+async function resolveGitHubToken(): Promise<string | null> {
+	const {
+		PR_REVIEWER_APP_ID,
+		PR_REVIEWER_PRIVATE_KEY,
+		PR_REVIEWER_INSTALLATION_ID,
+	} = process.env;
+	if (
+		PR_REVIEWER_APP_ID &&
+		PR_REVIEWER_PRIVATE_KEY &&
+		PR_REVIEWER_INSTALLATION_ID
+	) {
+		try {
+			return await getInstallationToken(
+				PR_REVIEWER_APP_ID,
+				PR_REVIEWER_PRIVATE_KEY,
+				PR_REVIEWER_INSTALLATION_ID,
+			);
+		} catch (err) {
+			console.error(
+				"[pr-review] GitHub App token failed, falling back to PAT:",
+				err,
+			);
+		}
+	}
+	return process.env.GITHUB_TOKEN ?? null;
+}
+
 /**
  * Fire-and-forget: creates a Managed Agents session that reviews the PR
  * and posts a review via the GitHub API. Returns the session ID,
@@ -79,12 +107,12 @@ export async function triggerPrReview(
 	payload: PrReviewPayload,
 ): Promise<string | null> {
 	const apiKey = process.env.ANTHROPIC_API_KEY;
-	const githubToken = process.env.GITHUB_TOKEN;
+	const githubToken = await resolveGitHubToken();
 	const vaultId = process.env.PR_REVIEWER_VAULT_ID;
 
 	if (!apiKey || !githubToken) {
 		console.log(
-			"[pr-review] skipping — missing ANTHROPIC_API_KEY or GITHUB_TOKEN",
+			"[pr-review] skipping — missing ANTHROPIC_API_KEY or no GitHub token available",
 		);
 		return null;
 	}
