@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(mise run web:*)"
+      "Bash(mise run web:*)",
+      "Bash(but *)"
     ]
   },
   "hooks": {
@@ -11,7 +12,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "echo '⚠️  Evidence check: Have you uploaded evidence with ./scripts/evidence.sh before creating this PR? Evidence is a merge gate — see AGENTS.md § Evidence-Driven Development.'"
+            "command": "echo '\u26a0\ufe0f  Evidence check: Have you uploaded evidence with ./scripts/evidence.sh before creating this PR? Evidence is a merge gate \u2014 see AGENTS.md \u00a7 Evidence-Driven Development.'"
           }
         ]
       },
