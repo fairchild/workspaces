@@ -1,11 +1,19 @@
 ---
-status: pending
+status: done
 category: followup
-pr: null
-branch: null
+resolution: option-b
 ---
 
 # Consolidate prek.toml and .githooks/pre-commit
+
+## Resolution
+
+Took Option B. Deleted `.githooks/pre-commit`, scoped `prek.toml`'s
+`biome-web` hook to `web/` via a `files` regex, and hardened `scripts/setup`
+to fail with install instructions if `prek` is missing. `scripts/setup` still
+unsets any leftover `core.hooksPath` and then runs `prek install`, which writes
+hooks into the per-worktree hooks dir. Every new worktree must run
+`scripts/setup` before its first commit.
 
 ## Problem
 
