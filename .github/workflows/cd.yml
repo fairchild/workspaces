@@ -38,7 +38,7 @@ jobs:
           package_json_file: web/package.json
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
@@ -47,18 +47,18 @@ jobs:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
-        run: npx vercel@37 pull --yes --environment=production --token="$VERCEL_TOKEN" --scope="$VERCEL_ORG_ID"
+        run: npx vercel@51 pull --yes --environment=production --token="$VERCEL_TOKEN" --scope="$VERCEL_ORG_ID"
       - name: Build production artifact
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-        run: npx vercel@37 build --prod --token="$VERCEL_TOKEN"
+        run: npx vercel@51 build --prod --token="$VERCEL_TOKEN"
       - name: Deploy prebuilt artifact to preview URL
         id: deploy
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
         run: |
-          URL=$(npx vercel@37 deploy --prebuilt --archive=tgz --token="$VERCEL_TOKEN" --scope="$VERCEL_ORG_ID")
+          URL=$(npx vercel@51 deploy --prebuilt --archive=tgz --token="$VERCEL_TOKEN" --scope="$VERCEL_ORG_ID")
           echo "preview_url=$URL" >> "$GITHUB_OUTPUT"
           echo "::notice::Preview deployed to $URL"
 
@@ -79,7 +79,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
       - name: Deploy to preview env
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -110,7 +110,7 @@ jobs:
           package_json_file: web/package.json
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
@@ -144,7 +144,7 @@ jobs:
           package_json_file: web/package.json
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
@@ -173,7 +173,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
       - name: Deploy workers to prod
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -190,7 +190,7 @@ jobs:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
         run: |
-          npx vercel@37 promote "${{ needs.preview-web.outputs.preview_url }}" \
+          npx vercel@51 promote "${{ needs.preview-web.outputs.preview_url }}" \
             --token="$VERCEL_TOKEN" --scope="$VERCEL_ORG_ID"
           echo "::notice::Promoted ${{ needs.preview-web.outputs.preview_url }} to production"
 
@@ -246,7 +246,7 @@ jobs:
           package_json_file: web/package.json
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
