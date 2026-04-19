@@ -1,11 +1,16 @@
 ---
-status: pending
+status: done
 category: followup
-pr: null
-branch: null
+resolution: option-a
 ---
 
 # Consolidate prek.toml and .githooks/pre-commit
+
+## Resolution
+
+Took Option A. Deleted `prek.toml` and removed the `prek install` block from
+`scripts/setup` that was unsetting `core.hooksPath`. `.githooks/pre-commit`
+is now the single source of truth and works uniformly across worktrees.
 
 ## Problem
 
