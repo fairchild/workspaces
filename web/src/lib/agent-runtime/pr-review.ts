@@ -7,16 +7,37 @@ import {
 const SYSTEM_PROMPT = `You are a code reviewer for a Swift project (SwiftUI / Swift Package Manager).
 
 For each PR you receive:
-1. Read the diff. Use \`git diff main...HEAD\` (or the base ref mentioned) to see what changed.
+1. Read the diff. Use \`git diff origin/main...HEAD\` to see what changed. If \`main\` is not available locally, run \`git fetch origin main\` first.
 2. Explore the surrounding code — don't review in isolation. Use grep/glob to find callers, related types, and tests.
-3. If the project builds with SwiftPM, run \`swift build\` and \`swift test\`. Report failures explicitly.
+3. If the project builds with SwiftPM, run \`swift build\` and \`swift test\`. Report failures explicitly. If swift is unavailable, note this and continue.
 4. If a \`.swiftlint.yml\` exists, run \`swiftlint\` if available.
-5. Post a single PR review via the GitHub MCP server with:
-   - A high-level summary of the change
-   - Specific comments for issues (bugs, race conditions, force-unwraps, missing tests, security, performance)
-   - An overall recommendation: approve, request changes, or comment
+5. Post a single PR review using the GitHub API.
 
-Cite file:line for every comment. Skip nits unless they materially affect correctness or readability. Prefer fewer, higher-signal comments.`;
+## Posting the review
+
+A GitHub token is mounted at \`/workspace/.github-token\`. Use it to post the review via curl:
+
+\`\`\`bash
+TOKEN=$(cat /workspace/.github-token)
+curl -s -X POST "https://api.github.com/repos/{owner}/{repo}/pulls/{number}/reviews" \\
+  -H "Authorization: Bearer $TOKEN" \\
+  -H "Accept: application/vnd.github+json" \\
+  -d '{
+    "body": "your review text here (escape JSON properly)",
+    "event": "COMMENT"
+  }'
+\`\`\`
+
+Use \`"event": "APPROVE"\` for clean PRs, \`"event": "REQUEST_CHANGES"\` for issues, \`"event": "COMMENT"\` for informational reviews. Replace {owner}, {repo}, {number} with values from the kickoff message.
+
+## Review style
+
+Cite file:line for every comment. Skip nits unless they materially affect correctness or readability. Prefer fewer, higher-signal comments.
+
+Your review body should include:
+- A high-level summary of the change
+- Specific comments for issues (bugs, race conditions, force-unwraps, missing tests, security, performance)
+- An overall recommendation`;
 
 const TOOLS = [
 	{
@@ -27,15 +48,6 @@ const TOOLS = [
 			{ name: "edit", enabled: false },
 			{ name: "web_search", enabled: false },
 		],
-	},
-	{ type: "mcp_toolset" as const, mcp_server_name: "github" },
-];
-
-const MCP_SERVERS = [
-	{
-		type: "url" as const,
-		name: "github",
-		url: "https://api.githubcopilot.com/mcp/",
 	},
 ];
 
@@ -52,7 +64,7 @@ export interface PrReviewPayload {
 
 /**
  * Fire-and-forget: creates a Managed Agents session that reviews the PR
- * and posts a review via the GitHub MCP server. Returns the session ID,
+ * and posts a review via the GitHub API. Returns the session ID,
  * or null if required env vars are missing.
  */
 export async function triggerPrReview(
@@ -62,9 +74,9 @@ export async function triggerPrReview(
 	const githubToken = process.env.GITHUB_TOKEN;
 	const vaultId = process.env.PR_REVIEWER_VAULT_ID;
 
-	if (!apiKey || !githubToken || !vaultId) {
+	if (!apiKey || !githubToken) {
 		console.log(
-			"[pr-review] skipping — missing ANTHROPIC_API_KEY, GITHUB_TOKEN, or PR_REVIEWER_VAULT_ID",
+			"[pr-review] skipping — missing ANTHROPIC_API_KEY or GITHUB_TOKEN",
 		);
 		return null;
 	}
@@ -77,7 +89,6 @@ export async function triggerPrReview(
 		model,
 		systemPrompt: SYSTEM_PROMPT,
 		tools: TOOLS,
-		mcpServers: MCP_SERVERS,
 	});
 
 	const environmentId = await getOrCreateEnvironment(client, {
@@ -88,13 +99,22 @@ export async function triggerPrReview(
 		},
 	});
 
+	// Upload the GitHub token as a file so the agent can post reviews.
+	// This keeps the token out of the prompt/message stream.
+	const tokenFile = await client.beta.files.upload({
+		file: new File([githubToken], ".github-token", {
+			type: "text/plain",
+		}),
+	});
+
 	const mountPath = `/workspace/${payload.repoName}`;
+	const [owner, repo] = payload.repoFullName.split("/");
 
 	const session = await client.beta.sessions.create({
 		agent: agentId,
 		environment_id: environmentId,
 		title: `Review PR #${payload.number}: ${payload.title}`.slice(0, 256),
-		vault_ids: [vaultId],
+		...(vaultId ? { vault_ids: [vaultId] } : {}),
 		resources: [
 			{
 				type: "github_repository",
@@ -102,6 +122,11 @@ export async function triggerPrReview(
 				authorization_token: githubToken,
 				mount_path: mountPath,
 				checkout: { type: "branch", name: payload.headRef },
+			},
+			{
+				type: "file",
+				file_id: tokenFile.id,
+				mount_path: "/workspace/.github-token",
 			},
 		],
 		metadata: {
@@ -125,7 +150,10 @@ Head branch: ${payload.headRef}
 Base branch: ${payload.baseRef}
 Repo mounted at: ${mountPath}
 
-Read the diff against ${payload.baseRef}, explore the surrounding code, run swift build and swift test if the project supports them, then post a single PR review via the GitHub MCP server.`,
+GitHub API endpoint for posting the review:
+POST https://api.github.com/repos/${owner}/${repo}/pulls/${payload.number}/reviews
+
+Read the diff against ${payload.baseRef}, explore the surrounding code, run swift build and swift test if the project supports them, then post the review using the GitHub API with the token at /workspace/.github-token.`,
 					},
 				],
 			},

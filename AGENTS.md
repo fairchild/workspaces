@@ -224,6 +224,7 @@ mise run web:deps:remove -- <pkg>           # pnpm remove + auto-fix formatting
 | Lume runner setup | docs/development/lume-runner-setup.md | - |
 | Lume daemon reliability | docs/development/lume-integration.md § "Daemon Reliability" | - |
 | Web architecture | web/docs/architecture.md | - |
+| PR reviewer agent | web/docs/pr-reviewer.md | - |
 | Roadmap/planning | backlog/ROADMAP.md | - |
 | Deferred work items | backlog/*.md | - |
 | Prototypes | prototypes/README.md | - |
@@ -266,6 +267,8 @@ mise run web:deps:remove -- <pkg>           # pnpm remove + auto-fix formatting
 | Web terminal panel | web/src/app/dashboard/components/terminal-panel.tsx |
 | Web terminal API | web/src/app/api/terminal/ |
 | Web API auth helpers | web/src/lib/api-auth.ts |
+| Web PR reviewer agent | web/src/lib/agent-runtime/pr-review.ts |
+| PR reviewer status script | scripts/pr-reviewer-status.py |
 | Web architecture doc | web/docs/architecture.md |
 
 ## Key Patterns

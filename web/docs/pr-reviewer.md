@@ -1,6 +1,6 @@
 # PR Reviewer — Managed Agent
 
-Automated code review triggered by GitHub `pull_request.opened` webhooks. The agent runs on Anthropic's infrastructure, reads the diff, explores surrounding code, runs tests, and posts a review via GitHub MCP.
+Automated code review triggered by GitHub `pull_request.opened` webhooks. The agent runs on Anthropic's infrastructure, reads the diff, explores surrounding code, runs tests, and posts a review via the GitHub API.
 
 ## Architecture
 
@@ -12,7 +12,8 @@ GitHub PR opened
         → getOrCreateAgent/Environment (idempotent, DB-cached)
         → sessions.create (mounts repo at PR branch)
         → events.send (kickoff message)
-        → Agent runs autonomously on Anthropic → posts review via GitHub MCP
+        → Files API uploads GitHub token as mounted file
+        → Agent runs autonomously on Anthropic → posts review via GitHub API (curl)
 ```
 
 ## Key Files
@@ -29,9 +30,11 @@ GitHub PR opened
 | Var | Where | Purpose |
 |-----|-------|---------|
 | `ANTHROPIC_API_KEY` | Vercel | Anthropic API authentication |
-| `GITHUB_TOKEN` | Vercel | PAT for cloning repos into the sandbox (needs `repo` scope) |
-| `PR_REVIEWER_VAULT_ID` | Vercel | Vault containing GitHub MCP OAuth credentials |
+| `GITHUB_TOKEN` | Vercel | PAT for cloning repos and posting reviews (needs `repo` scope) |
+| `PR_REVIEWER_VAULT_ID` | Vercel (optional) | Vault for MCP credentials (not currently used) |
 | `PR_REVIEWER_MODEL` | Vercel (optional) | Override model (default: `claude-opus-4-6`) |
+
+**How the token reaches the agent:** `triggerPrReview()` uploads `GITHUB_TOKEN` as a file via the Files API and mounts it at `/workspace/.github-token`. The agent reads it with `cat` and uses `curl` to post the review via the GitHub API. The token never appears in the prompt or message stream.
 
 **Security:** Never print tokens to logs. Use pipes (`gh auth token | vercel env add ...`) or files, never standalone `echo`/`print` of credential values.
 
@@ -115,20 +118,19 @@ vercel deploy --prod
 
 For durable auth, create a GitHub App via the `/gh-apps` skill.
 
-### MCP server auth failed
+### Review not posted to GitHub
 
-The vault credential is empty or expired. Error looks like:
-```
-MCP server 'github' initialize failed: authorization token is invalid or expired
-```
-
-Add a credential to the vault — see `shared/managed-agents-tools.md` §Vaults for the OAuth shape.
+Check the session events for the `curl` call. Common causes:
+- `GITHUB_TOKEN` expired — rotate with `gh auth refresh` then update Vercel (see above)
+- Token file not mounted — check session resources for `/workspace/.github-token`
+- API response `401` — token lacks `repo` scope
+- API response `422` — review body has unescaped JSON characters
 
 ### Webhook fires but no session created
 
 Check Vercel error logs. Common causes:
 - `ANTHROPIC_API_KEY` not set (only in production, not preview)
-- `PR_REVIEWER_VAULT_ID` has a trailing newline (use `printf` not `echo` when setting)
+- Env var has a trailing newline (use `printf` not `echo` when setting)
 - Webhook secret mismatch between GitHub and `GITHUB_WEB_WORKSPACES_WEBHOOK_SECRET`
 
 ### Agent can't find the diff
