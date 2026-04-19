@@ -137,3 +137,5 @@ Read the diff against ${payload.baseRef}, explore the surrounding code, run swif
 	);
 	return session.id;
 }
+
+// PR reviewer smoke test — remove after verifying
