@@ -655,6 +655,10 @@ def step_github(
             "https://dash.cloudflare.com/",
             "sidebar on any account page, or `wrangler whoami`",
         ),
+        "VERCEL_AUTOMATION_BYPASS_SECRET": (
+            "https://vercel.com/docs/deployment-protection/methods-to-bypass-deployment-protection/protection-bypass-automation",
+            "Vercel dashboard → Project → Settings → Deployment Protection → Protection Bypass for Automation → Add Secret. Lets Playwright/Lighthouse reach preview URLs that are otherwise gated behind the Vercel login wall.",
+        ),
     }
 
     for name in gh_cfg.get("from_env", []):
