@@ -403,14 +403,14 @@ def step_vercel(
         teach("`vercel link` is interactive. It writes web/.vercel/project.json.")
         if runner.apply:
             runner.run(
-                npx("vercel@37", "link", "--yes", "--token", token),
+                npx("vercel@51", "link", "--yes", "--token", token),
                 cwd=project_dir,
                 capture=False,
                 quiet=True,
             )
             ids = read_vercel_ids(project_dir)
         else:
-            info(dim("(dry-run: would run `npx vercel@37 link --yes`)"))
+            info(dim("(dry-run: would run `npx vercel@51 link --yes`)"))
 
     if ids:
         ok(f"orgId={mask(ids[0])}  projectId={mask(ids[1])}")
