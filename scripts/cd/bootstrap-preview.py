@@ -470,7 +470,9 @@ def ensure_vercel_json_disables_main(runner: Runner, prompt: Prompt, project_dir
         return
 
     enabled["main"] = False
-    vjson_path.write_text(json.dumps(data, indent=2) + "\n")
+    # Use tab indent to match web/biome.jsonc formatter config — biome runs
+    # against web/**/*.json and will reject space-indented output on commit.
+    vjson_path.write_text(json.dumps(data, indent="\t") + "\n")
     ok(f"updated {rel}")
 
     offer_commit_vercel_json(prompt, str(rel))
