@@ -137,3 +137,4 @@ Read the diff against ${payload.baseRef}, explore the surrounding code, run swif
 	);
 	return session.id;
 }
+// smoke test v3 — 2026-04-19T02:09:34Z
