@@ -4,10 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
 
-import {
-	generateGitHubAppJWT,
-	getInstallationToken,
-} from "../github-app-auth";
+import { generateGitHubAppJWT, getInstallationToken } from "../github-app-auth";
 
 const { publicKey, privateKey } = crypto.generateKeyPairSync("rsa", {
 	modulusLength: 2048,
@@ -20,14 +17,10 @@ describe("generateGitHubAppJWT", () => {
 		const jwt = generateGitHubAppJWT("12345", privateKey);
 		const [headerB64, payloadB64, signatureB64] = jwt.split(".");
 
-		const header = JSON.parse(
-			Buffer.from(headerB64, "base64url").toString(),
-		);
+		const header = JSON.parse(Buffer.from(headerB64, "base64url").toString());
 		expect(header).toEqual({ alg: "RS256", typ: "JWT" });
 
-		const payload = JSON.parse(
-			Buffer.from(payloadB64, "base64url").toString(),
-		);
+		const payload = JSON.parse(Buffer.from(payloadB64, "base64url").toString());
 		expect(payload.iss).toBe("12345");
 		expect(payload.exp - payload.iat).toBe(660);
 
