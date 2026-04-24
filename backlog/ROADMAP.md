@@ -158,11 +158,11 @@ Separate `sessionRoutingID` from `remoteId`; resolve `@unchecked Sendable` and t
 
 ### Next (P1)
 
-#### 5. Terminal multiplexing direction
+#### 5. Terminal continuity — tmux + cross-session
 
-`backlog/terminal-multiplexing-decision_plan.md`
+`backlog/tmux-support_plan.md` (multiplexing implementation), `backlog/desktop-continuity_plan.md` (across-session restore)
 
-Lock one of pane-tree (`pane-tree-tiling_plan.md`) or tmux (`tmux-support_plan.md`). Decision session — not implementation. The losing plan archives to `backlog/done/`.
+Decided 2026-04-23 (`docs/decisions/terminal-multiplexing.md`): tmux primary; pane-tree deferred indefinitely. Two paired plans now sit under one theme. Tmux delivers reattach within a session. The continuity plan addresses the gap tmux does not close (close laptop, reopen, pick up where you left off). Implement tmux first; promote continuity to active when the gap is reproducible against the new model.
 
 #### 6. Lume runtime architecture cleanup
 
@@ -213,7 +213,7 @@ Theme-to-milestone map:
 | Core reliability and maintainability | Active P0 theme |
 | Lume runtime hardening | Queued after the current P0 theme clears |
 | Notification catch-up and reconnect correctness | Standalone after Lume unless activity work becomes urgent |
-| Terminal multiplexing direction | Session-sized decision, not a milestone, until a plan is chosen |
+| Terminal continuity (tmux + cross-session) | Decided 2026-04-23 (tmux primary). Implementation milestone after Lume runtime hardening unless continuity gap forces it sooner. |
 | Strategic isolation backend direction | Backlog/research until promoted by a fresh approved discussion |
 
 ---
@@ -236,9 +236,8 @@ Scope tags:
 | Ghostty appearance hardening | product | P0 | `backlog/ghostty-appearance-hardening_followup.md` |
 | Shared-desktop focus contention | quality | P0 | `backlog/shared-desktop-focus-contention-followup.md` |
 | Remote workspace identity + sendability | product | P0 | `backlog/remote-workspace-identity-sendability_followup.md` |
-| Terminal multiplexing direction (decision session) | product | P1 | `backlog/terminal-multiplexing-decision_plan.md` |
-| Pane-tree terminal tiling model | product | — | `backlog/pane-tree-tiling_plan.md` (pending multiplexing decision) |
-| Tmux per-worktree support | product | — | `backlog/tmux-support_plan.md` (pending multiplexing decision) |
+| Tmux per-worktree implementation | product | P1 | `backlog/tmux-support_plan.md` (chosen 2026-04-23 — `docs/decisions/terminal-multiplexing.md`) |
+| Desktop continuity (across-session restore) | product | P1 | `backlog/desktop-continuity_plan.md` (paired with tmux implementation) |
 | Lume runtime architecture follow-ups | product | P1 | `backlog/lume-runtime-architecture-followups_followup.md` |
 | Notification client catch-up | product | P1 | `backlog/notification-client-catchup-plan.md` |
 | Daytona native Swift API | product | — | `backlog/daytona-native-swift-api-plan.md` |
@@ -258,6 +257,8 @@ Scope tags:
 
 Archived (in `backlog/done/`):
 
+- Pane-tree terminal tiling model — not chosen; see `docs/decisions/terminal-multiplexing.md` (2026-04-23)
+- Terminal multiplexing decision session — resolved by `docs/decisions/terminal-multiplexing.md` (2026-04-23)
 - Isolation strategies (research) — superseded by Tahoe VZ execution brief
 - Cloudflare Sandbox live plan — scaffold deleted in PR #321
 - Landing page plan — shipped in PR #188
@@ -274,6 +275,13 @@ Archived (in `backlog/done/`):
 ---
 
 ## Learnings
+
+### 2026-04-23 — Terminal multiplexing decision session (PR #369)
+
+- **Decision sessions need one question, not a survey of opinions.** The plan asked Michael exactly one thing — "what is the daily-driver use case the chosen model must get right?" — and the rest of the four-options framing fell out of his answer. The pattern is briefing → one question → artifact, in that order.
+- **A capability clarification can change a decision's framing.** `#324` confirmed tmux-in-sandbox does not survive snapshot/restore. Without that fact, "hybrid" looked attractive; with it, the multiplexing question and the continuity question split apart cleanly. Worth re-reading the most recent capability-clarifying PR before any product decision in the same area.
+- **Pair the chosen plan with what it does *not* solve.** Naming `desktop-continuity_plan.md` alongside the tmux choice keeps the decision honest. If the accepted option only addresses part of the user need, the gap deserves its own paired plan in the same PR — otherwise the decision quietly over-promises.
+- **Subagent briefing keeps the main thread fit for the human conversation.** Delegating the "read both plans + skim 6 PRs + summarize" work to an `Explore` subagent meant the 5-minute conversation with Michael ran on synthesized context, not raw file content. The same pattern fits any decision session.
 
 ### 2026-03-30 — Chat timeline UX: collapsed events (#271)
 
