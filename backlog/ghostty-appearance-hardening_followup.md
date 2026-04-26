@@ -115,8 +115,8 @@ ps aux | rg '.build/arm64-apple-macosx/debug/WorkspaceManager'
 
 ## Roadmap Position
 
-- Place this follow-up in the same daily-driver hardening band as PR #18/#19 outcomes.
-- Sequence after the current maintainability pass, because both rely on stable routing semantics and benefit from cleaner seams.
+- Sits in P0 #2 as sub-track **2b** (narrow), alongside the structural main-window/sidebar maintainability work in 2a. See `backlog/ROADMAP.md` Priority Bands for the current pairing.
+- Either sub-track can move independently. This one is the smaller, lower-risk option — pick it when 2a is too large for the session shape.
 - Treat as a risk-reduction task, not a feature track.
 
 ## References

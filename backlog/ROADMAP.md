@@ -136,13 +136,18 @@ Priority is driven by three filters, in this order:
 
 `backlog/workspace-creation-hang-root-cause_followup.md`
 
-Diagnostics shipped in PR #190 (`os.Logger` signposts + a 30-second watchdog). Root cause still uncertain. Reliability blocker — hangs in the creation path erode core-loop trust the fastest.
+Diagnostics shipped in PR #190 (`os.Logger` signposts + a 30-second watchdog). Regression net for the PR #190 guard added in PR #372. Root cause still uncertain. Reliability blocker — hangs in the creation path erode core-loop trust the fastest.
+
+**Gate: live repro.** The hang has not been reproduced with the current diagnostics. In-vitro investigation has gone as far as it can — `WorkspaceCreationRaceTests` rules out a basic deadlock under in-memory SwiftData, and code reading shows the MainActor-serialized save path can't deadlock without an external factor (slow disk, vanished store path, SwiftData internal locks under WAL pressure). Tackle this after a deliberate interactive session at the keyboard, not as the first reach for an autonomous session.
 
 #### 2. Main-window + Ghostty boundaries maintainability
 
-`backlog/main-window-sidebar-maintainability_followup.md`, `backlog/ghostty-appearance-hardening_followup.md`
+Two parallel sub-tracks under one P0 theme. Either can move independently; pick by time/risk appetite.
 
-Sidebar Phase 1 landed (PR #36). Remaining sidebar scope plus Ghostty appearance hardening stays P0 because the AppKit bridge is still the riskiest surface to change.
+- **2a. Main-window + sidebar maintainability** (structural). `backlog/main-window-sidebar-maintainability_followup.md`. Sidebar Phase 1 landed (PR #36). Remaining sidebar scope + Ghostty boundary cleanup is the deeper structural work; high-leverage but high-blast-radius. Start here when you have a focused session and accept the surface area.
+- **2b. Ghostty appearance hardening** (narrow). `backlog/ghostty-appearance-hardening_followup.md`. Doc parity, test coverage, smoke verification. Smaller scope, lower risk, can ship in a single session. Start here when 2a is too large for the session shape.
+
+P0 because the AppKit bridge is still the riskiest surface to change as remote/activity work continues to land.
 
 #### 3. Shared-desktop + evidence-loop reliability — Phase 1 done; Phase 2 deferred to P2
 
