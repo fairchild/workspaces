@@ -249,7 +249,6 @@ private struct MainWindowRootView: View {
 class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var windowObserver: Any?
-    private static let noActivateOnLaunchEnvKey = "WORKSPACES_NO_ACTIVATE_ON_LAUNCH"
     private static let appVariantEnvKey = "WORKSPACES_APP_VARIANT"
 
     private enum AppVariant {
@@ -289,14 +288,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             // CI: fully invisible — no dock icon, no app-switcher, no focus steal.
             NSApp.setActivationPolicy(.accessory)
             NSLog("[AppDelegate] CI detected: .accessory policy (background)")
-        } else if !shouldActivateOnLaunch() {
-            // Shared-desktop: stay in dock/Cmd+Tab but don't steal focus.
-            NSApp.setActivationPolicy(.regular)
-            NSLog("[AppDelegate] No-activate mode: .regular policy, skipping activation")
         } else {
+            // Shared-desktop mode keeps .regular policy + dock presence but
+            // suppresses every NSApp.activate call (launch and runtime), via
+            // AppActivationPolicy. See WORKSPACES_NO_ACTIVATE_ON_LAUNCH.
             NSApp.setActivationPolicy(.regular)
-            NSApp.activate(ignoringOtherApps: true)
-            NSLog("[AppDelegate] Set activation policy to .regular and activated")
+            AppActivationPolicy.shared.activateIfAllowed()
+            NSLog(
+                "[AppDelegate] activation policy=.regular allowsActivation=\(AppActivationPolicy.shared.allowsActivation)"
+            )
         }
         // Applying after activation-policy setup avoids Dock showing the generic executable icon.
         applyApplicationIconIfAvailable()
@@ -321,19 +321,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     self.applyVariantPresentation(to: window)
                 }
             }
-        }
-    }
-
-    private func shouldActivateOnLaunch() -> Bool {
-        guard let rawValue = ProcessInfo.processInfo.environment[Self.noActivateOnLaunchEnvKey] else {
-            return true
-        }
-
-        switch rawValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
-        case "1", "true", "yes", "on":
-            return false
-        default:
-            return true
         }
     }
 

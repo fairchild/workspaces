@@ -1896,9 +1896,8 @@ struct ContentView: View {
     private func focusWorkspaceWindow() {
         // Window activation only — the coordinator drives terminal focus
         // via requestMainTerminalFocus called from the selection handlers.
-        NSApp.activate(ignoringOtherApps: true)
-        let window = NSApp.windows.first(where: \.isVisible) ?? NSApp.windows.first
-        window?.makeKeyAndOrderFront(nil)
+        // Gated by AppActivationPolicy so shared-desktop mode never steals focus.
+        AppActivationPolicy.shared.activateAndFocusFrontWindowIfAllowed()
     }
 
     private func preferredSessionDirectory(_ preferredDirectory: URL?, inside root: URL) -> URL {

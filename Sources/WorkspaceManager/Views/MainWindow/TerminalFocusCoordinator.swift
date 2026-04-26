@@ -95,9 +95,8 @@ final class TerminalFocusCoordinator: ObservableObject, TerminalFocusWindowDeleg
                 phase: "coordinator_activate_requested",
                 fields: focusFields
             )
-            NSApp.activate(ignoringOtherApps: true)
-            let window = NSApp.windows.first(where: \.isVisible) ?? NSApp.windows.first
-            window?.makeKeyAndOrderFront(nil)
+            // Gated by AppActivationPolicy so shared-desktop mode never steals focus.
+            AppActivationPolicy.shared.activateAndFocusFrontWindowIfAllowed()
         }
 
         guard let targetSessionID else {
