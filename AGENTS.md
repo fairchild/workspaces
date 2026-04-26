@@ -287,12 +287,12 @@ mise run web:deps:remove -- <pkg>           # pnpm remove + auto-fix formatting
 
 5. **Keyboard Focus**: Ghostty-style retry-based focus restoration. See `docs/development/solution-terminal-keyboard.md`.
 
-6. **CI Activation Policy**: The app auto-detects CI via the `CI` env var and uses `.accessory` activation policy (no dock, no Cmd+Tab, no focus steal). Three modes:
+6. **App Activation Policy**: All `NSApp.activate(ignoringOtherApps:)` calls — launch and runtime — route through `AppActivationPolicy` (`Sources/WorkspaceManager/App/AppActivationPolicy.swift`). Three modes:
    - Normal launch: `.regular` + `activate()` — full foreground
-   - `WORKSPACES_NO_ACTIVATE_ON_LAUNCH=1`: `.regular`, no `activate()` — dock visible, no focus steal
-   - `CI=true`: `.accessory` — fully invisible
+   - `WORKSPACES_NO_ACTIVATE_ON_LAUNCH=1`: `.regular`, no `activate()` on launch *or* during runtime focus restoration — dock visible, no focus steal ever
+   - `CI=true`: `.accessory` — fully invisible (no dock, no Cmd+Tab); the policy also blocks runtime activate calls for clarity
 
-   This prevents the app from stealing focus on self-hosted runners. Any script that launches the app headlessly should set `WORKSPACES_NO_ACTIVATE_ON_LAUNCH=1`. See `WorkspaceManagerApp.swift` `AppDelegate`.
+   This prevents the app from stealing focus on self-hosted runners *and* on a shared desktop during normal use (e.g., when a teammate's automation triggers a workspace selection). Any script that launches the app headlessly should set `WORKSPACES_NO_ACTIVATE_ON_LAUNCH=1`. The env var name is historical — it now governs runtime activation too. See `AppActivationPolicy.swift` and `WorkspaceManagerApp.swift` `AppDelegate`.
 
 ## Testing
 
