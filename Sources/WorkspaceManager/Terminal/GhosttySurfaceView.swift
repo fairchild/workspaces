@@ -25,7 +25,7 @@ final class GhosttySurfaceView: NSView {
     private(set) var terminalTitle: String = ""
     private(set) var currentWorkingDirectory: String?
     private var didProcessExit = false
-    private var lastScaleAndSize: (xScale: CGFloat, yScale: CGFloat, width: UInt32, height: UInt32)?
+    private var lastScaleAndSize: GhosttySurfaceScaleCalculator.ScaleAndSize?
     private var trackingAreaInstalled = false
     var workingDirectoryPath: String { workingDirectory.path }
     var contextMenuProvider: (() -> NSMenu?)?
@@ -226,24 +226,17 @@ final class GhosttySurfaceView: NSView {
         guard let surface else { return }
 
         let bounds = self.bounds
-        guard bounds.width > 0, bounds.height > 0 else { return }
+        let decision = GhosttySurfaceScaleCalculator.decide(
+            bounds: bounds,
+            backingBounds: convertToBacking(bounds),
+            last: lastScaleAndSize
+        )
 
-        let backingBounds = convertToBacking(bounds)
-        let xScale = backingBounds.width / bounds.width
-        let yScale = backingBounds.height / bounds.height
-        let width = UInt32(max(1, Int(backingBounds.width)))
-        let height = UInt32(max(1, Int(backingBounds.height)))
+        guard case .update(let next) = decision else { return }
 
-        if let last = lastScaleAndSize,
-            last.xScale == xScale, last.yScale == yScale,
-            last.width == width, last.height == height
-        {
-            return
-        }
-
-        lastScaleAndSize = (xScale, yScale, width, height)
-        ghostty_surface_set_content_scale(surface, xScale, yScale)
-        ghostty_surface_set_size(surface, width, height)
+        lastScaleAndSize = next
+        ghostty_surface_set_content_scale(surface, next.xScale, next.yScale)
+        ghostty_surface_set_size(surface, next.width, next.height)
     }
 
     // MARK: - Mouse input
