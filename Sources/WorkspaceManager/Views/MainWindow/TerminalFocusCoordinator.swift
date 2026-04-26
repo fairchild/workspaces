@@ -91,11 +91,15 @@ final class TerminalFocusCoordinator: ObservableObject, TerminalFocusWindowDeleg
         )
 
         if activateApp {
+            // Truthful diagnostic: the activation may be gated by AppActivationPolicy
+            // (shared-desktop mode), so the log says "attempted" and includes the
+            // policy outcome rather than implying activation always happened.
+            var activateFields = focusFields
+            activateFields["policy_allows"] = AppActivationPolicy.shared.allowsActivation ? "true" : "false"
             InvestigationDiagnostics.emitFocus(
-                phase: "coordinator_activate_requested",
-                fields: focusFields
+                phase: "coordinator_activate_attempted",
+                fields: activateFields
             )
-            // Gated by AppActivationPolicy so shared-desktop mode never steals focus.
             AppActivationPolicy.shared.activateAndFocusFrontWindowIfAllowed()
         }
 
