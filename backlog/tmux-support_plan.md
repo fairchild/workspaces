@@ -1,12 +1,17 @@
 ---
-status: pending
+status: active
 category: plan
+priority: P1
+chosen_by: docs/decisions/terminal-multiplexing.md
+related: backlog/desktop-continuity_plan.md
 pr: null
 branch: null
 score: null
 retro_summary: null
 completed: null
 ---
+
+> **Promoted 2026-04-23.** Chosen as the desktop multiplexing model in `docs/decisions/terminal-multiplexing.md`. Implementation runs against this plan. Continuity work is paired but tracked separately in `backlog/desktop-continuity_plan.md`.
 
 # tmux Per-Worktree Support Plan
 

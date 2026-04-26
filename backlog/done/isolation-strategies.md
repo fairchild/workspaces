@@ -1,13 +1,15 @@
 ---
-status: pending
+status: done
 category: plan
+resolution: superseded
+superseded_by: backlog/vz-tahoe-execution-brief-plan.md
 ---
 
 # Workspace Isolation Strategies
 
-> **GitHub Issue**: https://github.com/fairchild/workspaces/issues/1
+> **Archived 2026-04-20.** Historical options/research document. Superseded as an execution plan by `backlog/vz-tahoe-execution-brief-plan.md`. Current reality: Lume and Daytona providers already ship; VZ/Tahoe is the native-backend direction; Apple Containerization stays as an option to revisit, not an active plan. Preserved here for the option-tradeoff context.
 >
-> **Execution Note**: This file is the long-form options and research reference. The current roadmap does not treat it as an active execution plan. If isolation work is promoted, use a fresh milestone discussion plus `backlog/vz-tahoe-execution-brief-plan.md` or a replacement execution brief.
+> **GitHub Issue**: https://github.com/fairchild/workspaces/issues/1
 
 **TL;DR**: This is historical research on isolation options. Current product reality already includes active Lume and Daytona provider work, while Tahoe VZ remains the current native-backend planning track. Treat Apple Containerization as an option to revisit, not the current default execution path.
 

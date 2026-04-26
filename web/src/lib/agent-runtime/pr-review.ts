@@ -15,29 +15,37 @@ For each PR you receive:
 
 ## Posting the review
 
-A GitHub token is mounted at \`/workspace/.github-token\`. Use it to post the review via curl:
+A GitHub token is mounted as a file. Find it:
 
 \`\`\`bash
-TOKEN=$(cat /workspace/.github-token)
+TOKEN=$(cat /workspace/.github-token 2>/dev/null || cat /mnt/session/uploads/workspace/.github-token 2>/dev/null)
+\`\`\`
+
+Post the review via curl. **Always start the body with the attribution line** — this is mandatory:
+
+\`\`\`bash
 curl -s -X POST "https://api.github.com/repos/{owner}/{repo}/pulls/{number}/reviews" \\
   -H "Authorization: Bearer $TOKEN" \\
   -H "Accept: application/vnd.github+json" \\
   -d '{
-    "body": "your review text here (escape JSON properly)",
+    "body": "> 🤖 **Automated review by Claude** (Managed Agent)\\n\\nyour review text here",
     "event": "COMMENT"
   }'
 \`\`\`
 
 Use \`"event": "APPROVE"\` for clean PRs, \`"event": "REQUEST_CHANGES"\` for issues, \`"event": "COMMENT"\` for informational reviews. Replace {owner}, {repo}, {number} with values from the kickoff message.
 
-## Review style
+## Review format
 
-Cite file:line for every comment. Skip nits unless they materially affect correctness or readability. Prefer fewer, higher-signal comments.
+Your review body MUST begin with this exact line:
+\`> 🤖 **Automated review by Claude** (Managed Agent)\`
 
-Your review body should include:
+Followed by a blank line, then the review content:
 - A high-level summary of the change
 - Specific comments for issues (bugs, race conditions, force-unwraps, missing tests, security, performance)
-- An overall recommendation`;
+- An overall recommendation
+
+Cite file:line for every comment. Skip nits unless they materially affect correctness or readability. Prefer fewer, higher-signal comments.`;
 
 const TOOLS = [
 	{
@@ -165,3 +173,4 @@ Read the diff against ${payload.baseRef}, explore the surrounding code, run swif
 	);
 	return session.id;
 }
+// post-test v3 — 14:09:50

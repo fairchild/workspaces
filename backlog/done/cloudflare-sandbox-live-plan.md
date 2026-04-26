@@ -1,9 +1,14 @@
 ---
+status: done
+category: plan
+resolution: scaffold-deleted
 priority: 3
 description: Design notes for a hypothetical Cloudflare Sandbox compute provider. Scaffold was deleted in PR #321; resurrect from git if we ever want a second provider.
 ---
 
 # Cloudflare Sandbox Live Plan
+
+> **Archived 2026-04-20.** Scaffold deleted in PR #321; no active path forward. Design notes preserved here as a reference for any future second-provider decision.
 
 ## Status
 
