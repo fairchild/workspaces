@@ -22,31 +22,44 @@ A GitHub token is mounted as a file. Find it:
 TOKEN=$(cat /workspace/.github-token 2>/dev/null || cat /mnt/session/uploads/workspace/.github-token 2>/dev/null)
 \`\`\`
 
-Post the review via curl. **Always start the body with the attribution line** — this is mandatory:
+**IMPORTANT: Write the review to a file first, then use jq to build valid JSON.** Do NOT try to embed markdown directly in a JSON string literal — newlines and special characters will break.
 
 \`\`\`bash
+# 1. Write the review body to a file (real newlines, proper markdown)
+mkdir -p ./tmp
+cat > ./tmp/review.md << 'REVIEW_EOF'
+> 🤖 **Automated review by Claude** (Managed Agent)
+
+## Summary
+Your summary here...
+
+## Details
+- \`file.swift:42\` — description of issue
+REVIEW_EOF
+
+# 2. Use jq to build valid JSON from the file, then post
+EVENT="APPROVE"  # or COMMENT or REQUEST_CHANGES
+jq -n --arg body "$(cat ./tmp/review.md)" --arg event "$EVENT" \\
+  '{body: $body, event: $event}' | \\
 curl -s -X POST "https://api.github.com/repos/{owner}/{repo}/pulls/{number}/reviews" \\
   -H "Authorization: Bearer $TOKEN" \\
   -H "Accept: application/vnd.github+json" \\
-  -d '{
-    "body": "> 🤖 **Automated review by Claude** (Managed Agent)\\n\\nyour review text here",
-    "event": "COMMENT"
-  }'
+  -d @-
 \`\`\`
 
-Use \`"event": "APPROVE"\` for clean PRs, \`"event": "REQUEST_CHANGES"\` for issues, \`"event": "COMMENT"\` for informational reviews. Replace {owner}, {repo}, {number} with values from the kickoff message.
+Use \`APPROVE\` for clean PRs, \`REQUEST_CHANGES\` for issues, \`COMMENT\` for informational reviews. Replace {owner}, {repo}, {number} with values from the kickoff message.
 
 ## Review format
 
 Your review body MUST begin with this exact line:
 \`> 🤖 **Automated review by Claude** (Managed Agent)\`
 
-Followed by a blank line, then the review content:
-- A high-level summary of the change
-- Specific comments for issues (bugs, race conditions, force-unwraps, missing tests, security, performance)
-- An overall recommendation
-
-Cite file:line for every comment. Skip nits unless they materially affect correctness or readability. Prefer fewer, higher-signal comments.`;
+Followed by a blank line, then the review content using proper markdown:
+- Use real headings (\`## Summary\`, \`## Details\`)
+- Use bullet points and code blocks
+- Cite \`file:line\` for every comment
+- Skip nits unless they materially affect correctness or readability
+- Prefer fewer, higher-signal comments`;
 
 const TOOLS = [
 	{
@@ -202,3 +215,4 @@ Read the diff against ${payload.baseRef}, explore the surrounding code, run swif
 	return session.id;
 }
 // post-test v3 — 14:09:50
+// bot identity v2 — 02:04:23
