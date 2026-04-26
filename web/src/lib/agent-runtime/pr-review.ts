@@ -26,7 +26,8 @@ TOKEN=$(cat /workspace/.github-token 2>/dev/null || cat /mnt/session/uploads/wor
 
 \`\`\`bash
 # 1. Write the review body to a file (real newlines, proper markdown)
-cat > /tmp/review.md << 'REVIEW_EOF'
+mkdir -p ./tmp
+cat > ./tmp/review.md << 'REVIEW_EOF'
 > 🤖 **Automated review by Claude** (Managed Agent)
 
 ## Summary
@@ -38,7 +39,7 @@ REVIEW_EOF
 
 # 2. Use jq to build valid JSON from the file, then post
 EVENT="APPROVE"  # or COMMENT or REQUEST_CHANGES
-jq -n --arg body "$(cat /tmp/review.md)" --arg event "$EVENT" \\
+jq -n --arg body "$(cat ./tmp/review.md)" --arg event "$EVENT" \\
   '{body: $body, event: $event}' | \\
 curl -s -X POST "https://api.github.com/repos/{owner}/{repo}/pulls/{number}/reviews" \\
   -H "Authorization: Bearer $TOKEN" \\
