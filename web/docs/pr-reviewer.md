@@ -30,11 +30,24 @@ GitHub PR opened
 | Var | Where | Purpose |
 |-----|-------|---------|
 | `ANTHROPIC_API_KEY` | Vercel | Anthropic API authentication |
-| `GITHUB_TOKEN` | Vercel | PAT for cloning repos and posting reviews (needs `repo` scope) |
+| `PR_REVIEWER_APP_ID` | Vercel | GitHub App ID for bot identity |
+| `PR_REVIEWER_PRIVATE_KEY` | Vercel | GitHub App private key (PEM) |
+| `PR_REVIEWER_INSTALLATION_ID` | Vercel | GitHub App installation ID for this repo |
+| `GITHUB_TOKEN` | Vercel (fallback) | PAT fallback — used only if App credentials are missing |
 | `PR_REVIEWER_VAULT_ID` | Vercel (optional) | Vault for MCP credentials (not currently used) |
 | `PR_REVIEWER_MODEL` | Vercel (optional) | Override model (default: `claude-opus-4-6`) |
 
-**How the token reaches the agent:** `triggerPrReview()` uploads `GITHUB_TOKEN` as a file via the Files API and mounts it at `/workspace/.github-token`. The agent reads it with `cat` and uses `curl` to post the review via the GitHub API. The token never appears in the prompt or message stream.
+### GitHub App setup
+
+Reviews are posted by the `workspaces-pr-reviewer` GitHub App, which gives them a dedicated bot identity instead of being attributed to a personal account. To set up:
+
+1. Create a GitHub App at https://github.com/settings/apps with permissions: `contents:read`, `pull_requests:write`
+2. Install the app on `fairchild/workspaces` and note the installation ID
+3. Set `PR_REVIEWER_APP_ID`, `PR_REVIEWER_PRIVATE_KEY`, and `PR_REVIEWER_INSTALLATION_ID` in Vercel
+
+The app generates short-lived installation tokens (1-hour TTL) on demand — no manual token rotation needed. If the App credentials are missing or token exchange fails, `triggerPrReview()` falls back to `GITHUB_TOKEN`.
+
+**How the token reaches the agent:** `triggerPrReview()` calls `resolveGitHubToken()` which generates a short-lived installation token from the GitHub App credentials (or falls back to `GITHUB_TOKEN`). The token is uploaded as a file via the Files API and mounted at `/workspace/.github-token`. The agent reads it with `cat` and uses `curl` to post the review. The token never appears in the prompt or message stream.
 
 **Security:** Never print tokens to logs. Use pipes (`gh auth token | vercel env add ...`) or files, never standalone `echo`/`print` of credential values.
 
@@ -106,7 +119,9 @@ for line in sys.stdin:
 
 ### Session created but repo empty
 
-The `GITHUB_TOKEN` likely expired. OAuth tokens (`gho_`) are short-lived. Fix:
+If using the GitHub App: check that `PR_REVIEWER_APP_ID`, `PR_REVIEWER_PRIVATE_KEY`, and `PR_REVIEWER_INSTALLATION_ID` are set correctly. The private key PEM must have real newlines (Vercel handles this, but verify with `vercel env pull`).
+
+If using the PAT fallback: the `GITHUB_TOKEN` likely expired. OAuth tokens (`gho_`) are short-lived. Fix:
 
 ```bash
 # Rotate and set without printing the token value
@@ -116,14 +131,14 @@ gh auth token | vercel env add GITHUB_TOKEN production
 vercel deploy --prod
 ```
 
-For durable auth, create a GitHub App via the `/gh-apps` skill.
-
 ### Review not posted to GitHub
 
 Check the session events for the `curl` call. Common causes:
-- `GITHUB_TOKEN` expired — rotate with `gh auth refresh` then update Vercel (see above)
+- GitHub App token exchange failed — check Vercel logs for `[pr-review] GitHub App token failed`
+- `GITHUB_TOKEN` expired (PAT fallback) — rotate with `gh auth refresh` then update Vercel
 - Token file not mounted — check session resources for `/workspace/.github-token`
-- API response `401` — token lacks `repo` scope
+- API response `401` — App not installed on the repo, or PAT lacks `repo` scope
+- API response `403` — App missing `pull_requests:write` permission
 - API response `422` — review body has unescaped JSON characters
 
 ### Webhook fires but no session created
