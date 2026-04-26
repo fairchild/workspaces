@@ -144,11 +144,11 @@ Diagnostics shipped in PR #190 (`os.Logger` signposts + a 30-second watchdog). R
 
 Sidebar Phase 1 landed (PR #36). Remaining sidebar scope plus Ghostty appearance hardening stays P0 because the AppKit bridge is still the riskiest surface to change.
 
-#### 3. Shared-desktop + evidence-loop reliability
+#### 3. Shared-desktop + evidence-loop reliability — Phase 1 done; Phase 2 deferred to P2
 
 `backlog/shared-desktop-focus-contention-followup.md`
 
-`--no-activate` exists in `launch-dev.sh`, but Phase 1 (execution mode that never steals focus) is not complete. This slows every UI/terminal refactor's confidence gate.
+Phase 1 complete: `AppActivationPolicy` (PR #374) gates all `NSApp.activate` calls — launch *and* runtime — behind `WORKSPACES_NO_ACTIVATE_ON_LAUNCH=1` / `CI`. `scripts/capture-window.sh` provides window-id capture without activation. Remaining items (capture handshake, separate-user execution lane, VM-backed CI lane) drop to P2 — promote back when a concrete daily-driver scenario forces the issue.
 
 #### 4. Remote workspace identity + sendability cleanup
 
@@ -275,6 +275,13 @@ Archived (in `backlog/done/`):
 ---
 
 ## Learnings
+
+### 2026-04-25 — Workspace-creation regression net + shared-desktop Phase 1 (PRs #372, #374)
+
+- **Tests as a probe, even when they pass.** PR #372 added a deterministic regression surface for the workspace-creation hang. The tests passed cleanly under in-memory SwiftData, which doesn't prove the production hang is fixed, but the artifact is still load-bearing: it locks down PR #190's `insertedModelsArray` premise so a future refactor can't silently regress the guard. "Did the tests reproduce the bug?" is the wrong question — "do the tests prevent the regression we already fixed?" is the right one.
+- **Helper-based gates pay for themselves at three call sites.** `AppActivationPolicy` (PR #374) replaced three direct `NSApp.activate(ignoringOtherApps:)` sites with one-line calls into a tested helper. The dedup ratio was modest, but the *contract* is now centralized: when a fourth activation site shows up, the next person doesn't have to remember the env var. Helpers earn their keep when behavior must be uniform across many sites, not just when there's syntactic duplication.
+- **Truthful diagnostics survive review better than aspirational ones.** The first version of the policy-gated `TerminalFocusCoordinator` log said `coordinator_activate_requested` and fired before the gate. Code review caught it. The fix renamed to `_attempted` and added a `policy_allows` field so traces show whether the call actually happened. Diagnostic phase names are part of the contract — wrong names are quietly worse than missing logs.
+- **Shared-desktop is its own dependency loop for verification.** Verifying PR #374 needs interactive `launch-dev.sh --no-activate` + clicking around — exactly the workflow the PR is making safer. The PR body called this out explicitly rather than claiming verified behavior; the manual step belongs to Michael at the keyboard. Be honest about which loops your session can close and which it can't.
 
 ### 2026-04-23 — Terminal multiplexing decision session (PR #369)
 
