@@ -287,7 +287,7 @@ mise run web:deps:remove -- <pkg>           # pnpm remove + auto-fix formatting
 
 5. **Keyboard Focus**: Ghostty-style retry-based focus restoration. See `docs/development/solution-terminal-keyboard.md`.
 
-6. **App Activation Policy**: All `NSApp.activate(ignoringOtherApps:)` calls — launch and runtime — route through `AppActivationPolicy` (`Sources/WorkspaceManager/App/AppActivationPolicy.swift`). Two env vars suppress activation:
+6. **App Activation Policy**: All `NSApp.activate(ignoringOtherApps:)` calls — launch and runtime — route through `AppActivationPolicy` (`Sources/WorkspaceManager/App/AppActivationPolicy.swift`). Three modes:
    - Normal launch: `.regular` + `activate()` — full foreground
    - `WORKSPACES_NO_ACTIVATE_ON_LAUNCH=1`: `.regular`, no `activate()` on launch *or* during runtime focus restoration — dock visible, no focus steal ever
    - `CI=true`: `.accessory` — fully invisible (no dock, no Cmd+Tab); the policy also blocks runtime activate calls for clarity
