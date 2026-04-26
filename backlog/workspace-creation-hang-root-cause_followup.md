@@ -13,9 +13,10 @@ PR #190 added diagnostics (os.Logger, 30s watchdog) and a debounced save rollbac
 
 ## What was done
 
-- Added `os.Logger` tracing to `SidebarWorkspaceController`, `SidebarView`, and `ContentView` workspace creation paths
-- Guarded `modelContext.rollback()` in the debounced `saveAccessTimestampChanges` to skip rollback when pending inserts exist
-- Added 30-second watchdog that surfaces stalled creation in the UI and logs
+- Added `os.Logger` tracing to `SidebarWorkspaceController`, `SidebarView`, and `ContentView` workspace creation paths (PR #190)
+- Guarded `modelContext.rollback()` in the debounced `saveAccessTimestampChanges` to skip rollback when pending inserts exist (PR #190)
+- Added 30-second watchdog that surfaces stalled creation in the UI and logs (PR #190)
+- Added regression surface in `Tests/WorkspaceManagerAppTests/WorkspaceCreationRaceTests.swift` (PR #372): three Swift Testing tests exercise the debounced-save vs upsert race and lock down the PR #190 guard's behavioral premise (`insertedModelsArray` reflects pending inserts; `rollback()` discards them). Tests pass under in-memory SwiftData, which rules OUT a basic deadlock under unit-test conditions but does not prove the production hang is fixed.
 
 ## What remains
 
