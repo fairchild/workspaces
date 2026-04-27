@@ -107,6 +107,62 @@ struct SplitRoutingControllerTests {
         #expect(store.activeSessionID == primarySession.id)
     }
 
+    @Test("resize_split updates split fraction")
+    func resizeSplitUpdatesSplitFraction() throws {
+        let store = makeStoreWithActiveSession()
+        let primarySession = try #require(store.sessions.first)
+        let splitSession = try #require(
+            store.ensureSplit(
+                forPrimarySessionID: primarySession.id,
+                preferredLayout: .defaultTrailing
+            )
+        )
+        let splitSurface = store.surfaceStore.view(for: splitSession)
+        let notification = splitActionNotification(
+            kind: .resizeSplit,
+            directionRawValue: GhosttyAppManager.SplitResizeDirection.left.rawValue,
+            amount: 100,
+            source: splitSurface
+        )
+
+        SplitRoutingController().handle(
+            notification: notification,
+            terminalMultiplexingMode: .ghosttyManagedSplits,
+            hostTerminalState: store,
+            focusTerminal: { _ in }
+        )
+
+        #expect(store.splitFraction(for: primarySession.id) == 0.45)
+    }
+
+    @Test("equalize_splits resets split fraction")
+    func equalizeSplitsResetsSplitFraction() throws {
+        let store = makeStoreWithActiveSession()
+        let primarySession = try #require(store.sessions.first)
+        let splitSession = try #require(
+            store.ensureSplit(
+                forPrimarySessionID: primarySession.id,
+                preferredLayout: .defaultTrailing
+            )
+        )
+        #expect(store.updateSplitFraction(0.7, forPrimarySessionID: primarySession.id))
+        let splitSurface = store.surfaceStore.view(for: splitSession)
+        let notification = splitActionNotification(
+            kind: .equalizeSplits,
+            directionRawValue: nil,
+            source: splitSurface
+        )
+
+        SplitRoutingController().handle(
+            notification: notification,
+            terminalMultiplexingMode: .ghosttyManagedSplits,
+            hostTerminalState: store,
+            focusTerminal: { _ in }
+        )
+
+        #expect(store.splitFraction(for: primarySession.id) == HostTerminalStateStore.defaultSplitFraction)
+    }
+
     private func makeStoreWithActiveSession() -> HostTerminalStateStore {
         let store = HostTerminalStateStore()
         _ = store.activateSession(
@@ -119,6 +175,7 @@ struct SplitRoutingControllerTests {
     private func splitActionNotification(
         kind: GhosttyAppManager.SplitActionKind,
         directionRawValue: Int?,
+        amount: Int? = nil,
         source: GhosttySurfaceView? = nil
     ) -> Notification {
         var userInfo: [String: Any] = [
@@ -126,6 +183,9 @@ struct SplitRoutingControllerTests {
         ]
         if let directionRawValue {
             userInfo[GhosttyAppManager.splitActionDirectionUserInfoKey] = directionRawValue
+        }
+        if let amount {
+            userInfo[GhosttyAppManager.splitActionAmountUserInfoKey] = amount
         }
 
         return Notification(
