@@ -38,6 +38,9 @@ export default function Home() {
 
 				{/* Footer links */}
 				<nav className={styles.nav}>
+					<a href="/sign-in" className={styles.navLink}>
+						<span className={styles.navChevron}>&gt;</span> login
+					</a>
 					<a
 						href="https://github.com/fairchild/workspaces"
 						className={styles.navLink}
