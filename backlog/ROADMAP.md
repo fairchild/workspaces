@@ -233,7 +233,6 @@ Scope tags:
 | Workspace creation hang root cause | product | P0 | `backlog/workspace-creation-hang-root-cause_followup.md` |
 | Main-window + sidebar maintainability | product | P0 | `backlog/main-window-sidebar-maintainability_followup.md` |
 | Ghostty appearance hardening | product | P0 | `backlog/ghostty-appearance-hardening_followup.md` |
-| Shared-desktop focus contention | quality | P0 | `backlog/shared-desktop-focus-contention-followup.md` |
 | Tmux per-worktree implementation | product | P1 | `backlog/tmux-support_plan.md` (chosen 2026-04-23 — `docs/decisions/terminal-multiplexing.md`) |
 | Desktop continuity (across-session restore) | product | P1 | `backlog/desktop-continuity_plan.md` (paired with tmux implementation) |
 | Lume runtime architecture follow-ups | product | P1 | `backlog/lume-runtime-architecture-followups_followup.md` |
@@ -245,6 +244,7 @@ Scope tags:
 | Terminal polish follow-ups | product | — | `backlog/terminal-polish-followup.md` |
 | Web API authorization hardening (tests) | quality | — | `backlog/web-api-authorization-hardening-followup.md` |
 | Web dashboard component regression tests | quality | — | `backlog/web-dashboard-component-regression-tests_followup.md` |
+| Shared-desktop focus contention Phase 2 | quality | P2 | `backlog/shared-desktop-focus-contention-followup.md` |
 | Tahoe VZ backend execution brief | product | P2 | `backlog/vz-tahoe-execution-brief-plan.md` |
 | Web dashboard Phase 3 follow-ups | product | P2 | `backlog/web-dashboard-phase3-followups.md` |
 | Spaces agent discovery dashboard | product | P2 | `backlog/spaces-agent-discovery-dashboard-plan.md` |
