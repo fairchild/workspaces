@@ -145,7 +145,7 @@ Diagnostics shipped in PR #190 (`os.Logger` signposts + a 30-second watchdog). R
 Two parallel sub-tracks under one P0 theme. Either can move independently; pick by time/risk appetite.
 
 - **2a. Main-window + sidebar maintainability** (structural). `backlog/main-window-sidebar-maintainability_followup.md`. Sidebar Phase 1 landed (PR #36). Remaining sidebar scope + Ghostty boundary cleanup is the deeper structural work; high-leverage but high-blast-radius. Start here when you have a focused session and accept the surface area.
-- **2b. Ghostty appearance hardening** (narrow). `backlog/ghostty-appearance-hardening_followup.md`. Doc parity, test coverage, smoke verification. Smaller scope, lower risk, can ship in a single session. Start here when 2a is too large for the session shape.
+- **2b. Ghostty appearance hardening** (narrow). `backlog/ghostty-appearance-hardening_followup.md`. Doc parity and smoke verification remain; split-routing controller coverage shipped in PR #379. Smaller scope, lower risk, can ship in a single session. Start here when 2a is too large for the session shape.
 
 P0 because the AppKit bridge is still the riskiest surface to change as remote/activity work continues to land.
 
@@ -155,27 +155,21 @@ P0 because the AppKit bridge is still the riskiest surface to change as remote/a
 
 Phase 1 complete: `AppActivationPolicy` (PR #374) gates all `NSApp.activate` calls — launch *and* runtime — behind `WORKSPACES_NO_ACTIVATE_ON_LAUNCH=1` / `CI`. `scripts/capture-window.sh` provides window-id capture without activation. Remaining items (capture handshake, separate-user execution lane, VM-backed CI lane) drop to P2 — promote back when a concrete daily-driver scenario forces the issue.
 
-#### 4. Remote workspace identity + sendability cleanup
-
-`backlog/remote-workspace-identity-sendability_followup.md`
-
-Separate `sessionRoutingID` from `remoteId`; resolve `@unchecked Sendable` and temp-path sentinel. Low-risk, foundational for further remote work.
-
 ### Next (P1)
 
-#### 5. Terminal continuity — tmux + cross-session
+#### 4. Terminal continuity — tmux + cross-session
 
 `backlog/tmux-support_plan.md` (multiplexing implementation), `backlog/desktop-continuity_plan.md` (across-session restore)
 
 Decided 2026-04-23 (`docs/decisions/terminal-multiplexing.md`): tmux primary; pane-tree deferred indefinitely. Two paired plans now sit under one theme. Tmux delivers reattach within a session. The continuity plan addresses the gap tmux does not close (close laptop, reopen, pick up where you left off). Implement tmux first; promote continuity to active when the gap is reproducible against the new model.
 
-#### 6. Lume runtime architecture cleanup
+#### 5. Lume runtime architecture cleanup
 
 `backlog/lume-runtime-architecture-followups_followup.md`
 
 Contract proven (PR #54). Reduce reviewer friction and maintenance cost.
 
-#### 7. Notification client catch-up + reconnect correctness
+#### 6. Notification client catch-up + reconnect correctness
 
 `backlog/notification-client-catchup-plan.md`
 
@@ -183,7 +177,7 @@ Stable client identity, ACK cadence, duplicate/replay behavior. Reliability step
 
 ### Later (P2)
 
-#### 8. Strategic isolation backend direction
+#### 7. Strategic isolation backend direction
 
 `backlog/vz-tahoe-execution-brief-plan.md`
 
@@ -240,7 +234,6 @@ Scope tags:
 | Main-window + sidebar maintainability | product | P0 | `backlog/main-window-sidebar-maintainability_followup.md` |
 | Ghostty appearance hardening | product | P0 | `backlog/ghostty-appearance-hardening_followup.md` |
 | Shared-desktop focus contention | quality | P0 | `backlog/shared-desktop-focus-contention-followup.md` |
-| Remote workspace identity + sendability | product | P0 | `backlog/remote-workspace-identity-sendability_followup.md` |
 | Tmux per-worktree implementation | product | P1 | `backlog/tmux-support_plan.md` (chosen 2026-04-23 — `docs/decisions/terminal-multiplexing.md`) |
 | Desktop continuity (across-session restore) | product | P1 | `backlog/desktop-continuity_plan.md` (paired with tmux implementation) |
 | Lume runtime architecture follow-ups | product | P1 | `backlog/lume-runtime-architecture-followups_followup.md` |
@@ -276,10 +269,16 @@ Archived (in `backlog/done/`):
 - Refinement performance follow-up — shipped
 - Prek / githooks consolidation — shipped in PR #364
 - Agent Peter refactor follow-up — shipped
+- Remote workspace identity + sendability cleanup — shipped; see `backlog/done/remote-workspace-identity-sendability_followup.md`
 
 ---
 
 ## Learnings
+
+### 2026-04-27 — Split-routing tests + stale backlog reconciliation
+
+- **Cover the coordinator switch, not only the model underneath.** `HostTerminalStateStore` already covered split layout, resize, and equalize behavior, but PR #379 added direct `SplitRoutingController` coverage for `new_split`, `goto_split`, `resize_split`, `equalize_splits`, tmux-mode rejection, and invalid payloads. That protects the notification-routing contract where regressions would actually enter.
+- **Re-ground backlog items by symbols before selecting them.** The remote identity/sendability follow-up still looked active in the roadmap, but `sessionRoutingID`, `Workspace.remotePathSentinel`, `localWorkspaceContext`, and the `LocalBackend` value boundary were already on `main`. A fast `rg` pass prevented a second implementation of shipped work and turned the next unit into backlog cleanup instead.
 
 ### 2026-04-25 — Workspace-creation regression net + shared-desktop Phase 1 (PRs #372, #374)
 
