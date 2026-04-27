@@ -142,10 +142,10 @@ Diagnostics shipped in PR #190 (`os.Logger` signposts + a 30-second watchdog). R
 
 #### 2. Main-window + Ghostty boundaries maintainability
 
-Two parallel sub-tracks under one P0 theme. Either can move independently; pick by time/risk appetite.
+The remaining active P0 work is the structural maintainability lane. The narrow Ghostty appearance hardening lane has shipped.
 
 - **2a. Main-window + sidebar maintainability** (structural). `backlog/main-window-sidebar-maintainability_followup.md`. Sidebar Phase 1 landed (PR #36). Remaining sidebar scope + Ghostty boundary cleanup is the deeper structural work; high-leverage but high-blast-radius. Start here when you have a focused session and accept the surface area.
-- **2b. Ghostty appearance hardening** (narrow). `backlog/ghostty-appearance-hardening_followup.md`. Doc parity and smoke verification remain; split-routing controller coverage shipped in PR #379. Smaller scope, lower risk, can ship in a single session. Start here when 2a is too large for the session shape.
+- **2b. Ghostty appearance hardening** (completed). `backlog/ghostty-appearance-hardening_followup.md`. Split-routing controller coverage shipped in PR #379. Appearance dedupe coverage and docs parity shipped in PR #383, and current smoke docs/scripts already state the Ghostty-splits/tmux preconditions.
 
 P0 because the AppKit bridge is still the riskiest surface to change as remote/activity work continues to land.
 
@@ -219,7 +219,7 @@ Theme-to-milestone map:
 
 ## Backlog Index
 
-**Index policy** — one comprehensive index, tagged by Scope. Priority Bands above stay strategic-product-only. Quality, ops, and tooling items live in this index so nothing becomes an orphan, but they do not clutter the bands. Priority values match the bands; items not yet promoted show `—` (awaiting promotion or awaiting a dependent decision).
+**Index policy** — one comprehensive index, tagged by Scope. Priority Bands above stay strategic-product-only. Quality, ops, and tooling items live in this index so nothing becomes an orphan, but they do not clutter the bands. Priority values match the bands; completed items show `Done`, and items not yet promoted show `—` (awaiting promotion or awaiting a dependent decision).
 
 Scope tags:
 
@@ -232,7 +232,7 @@ Scope tags:
 |------|-------|----------|---------|
 | Workspace creation hang root cause | product | P0 | `backlog/workspace-creation-hang-root-cause_followup.md` |
 | Main-window + sidebar maintainability | product | P0 | `backlog/main-window-sidebar-maintainability_followup.md` |
-| Ghostty appearance hardening | product | P0 | `backlog/ghostty-appearance-hardening_followup.md` |
+| Ghostty appearance hardening | product | Done | `backlog/ghostty-appearance-hardening_followup.md` |
 | Tmux per-worktree implementation | product | P1 | `backlog/tmux-support_plan.md` (chosen 2026-04-23 — `docs/decisions/terminal-multiplexing.md`) |
 | Desktop continuity (across-session restore) | product | P1 | `backlog/desktop-continuity_plan.md` (paired with tmux implementation) |
 | Lume runtime architecture follow-ups | product | P1 | `backlog/lume-runtime-architecture-followups_followup.md` |
