@@ -50,6 +50,39 @@ struct GhosttyAppearanceSyncTests {
         )
     }
 
+    @Test("Next color scheme returns resolved scheme for first application")
+    func nextColorSchemeReturnsResolvedSchemeForFirstApplication() throws {
+        let appearance = try #require(NSAppearance(named: .darkAqua))
+        let darkScheme = GhosttyAppearanceSync.colorScheme(for: appearance)
+
+        let nextScheme = GhosttyAppearanceSync.nextColorScheme(
+            for: appearance,
+            currentColorScheme: nil
+        )
+
+        #expect(nextScheme?.rawValue == darkScheme.rawValue)
+    }
+
+    @Test("Resolved next color scheme skips duplicates unless forced")
+    func resolvedNextColorSchemeSkipsDuplicatesUnlessForced() throws {
+        let appearance = try #require(NSAppearance(named: .aqua))
+        let lightScheme = GhosttyAppearanceSync.colorScheme(for: appearance)
+
+        #expect(
+            GhosttyAppearanceSync.nextColorScheme(
+                resolvedColorScheme: lightScheme,
+                currentColorScheme: lightScheme
+            ) == nil
+        )
+        #expect(
+            GhosttyAppearanceSync.nextColorScheme(
+                resolvedColorScheme: lightScheme,
+                currentColorScheme: lightScheme,
+                force: true
+            )?.rawValue == lightScheme.rawValue
+        )
+    }
+
     @Test("Resolved next color scheme returns new values when the scheme changes")
     func resolvedNextColorSchemeReturnsChangedValues() throws {
         let darkAppearance = try #require(NSAppearance(named: .darkAqua))
