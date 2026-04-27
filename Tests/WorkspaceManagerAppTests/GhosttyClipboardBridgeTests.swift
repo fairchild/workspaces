@@ -22,7 +22,7 @@ struct GhosttyClipboardBridgeSelectWriteTextTests {
     func prefersTextPlainOverOtherMIME() {
         withContent([
             (mime: "text/html", data: "<b>hi</b>"),
-            (mime: "text/plain", data: "plain hi")
+            (mime: "text/plain", data: "plain hi"),
         ]) { buffer, count in
             #expect(GhosttyClipboardBridge.selectWriteText(from: buffer, count: count) == "plain hi")
         }
@@ -32,7 +32,7 @@ struct GhosttyClipboardBridgeSelectWriteTextTests {
     func fallsBackToFirstEntry() {
         withContent([
             (mime: "text/html", data: "<b>first</b>"),
-            (mime: "application/json", data: "{}")
+            (mime: "application/json", data: "{}"),
         ]) { buffer, count in
             #expect(GhosttyClipboardBridge.selectWriteText(from: buffer, count: count) == "<b>first</b>")
         }
@@ -75,7 +75,7 @@ private func withContent(
         for pointer in dataBuffers { pointer?.deallocate() }
     }
 
-    var content: [ghostty_clipboard_content_s] = items.map { item in
+    let content: [ghostty_clipboard_content_s] = items.map { item in
         var value = ghostty_clipboard_content_s()
         if let mime = item.mime {
             let buffer = copyCString(mime)

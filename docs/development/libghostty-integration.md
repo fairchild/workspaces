@@ -152,6 +152,23 @@ Link step may warn about missing `_ImFontConfig_ImFontConfig` /
 
 Treat both as watch items for future Ghostty pin updates.
 
+### Zig 0.15.2 with newer macOS SDKs
+
+Ghostty `v1.3.1` requires Zig `0.15.2`. The upstream Zig 0.15.2 binary can fail
+with Xcode 26.4 while linking its build runner with unresolved libSystem symbols.
+Homebrew's `zig@0.15` formula carries the Darwin linker patch needed on Tahoe
+hosts, so `scripts/build-ghosttykit.sh` prefers:
+- `GHOSTTY_ZIG_BIN`, if set
+- `/opt/homebrew/opt/zig@0.15/bin/zig`, if installed
+- `mise exec zig@0.15.2` as a fallback
+
+Do not bump Ghostty to Zig `0.16.0` for this release line: Ghostty `v1.3.1`
+explicitly rejects that compiler and uses Zig APIs removed in `0.16.0`.
+
+The script passes `-Demit-macos-app=false` because Workspaces only needs
+`GhosttyKit.xcframework`; building Ghostty's full app bundle adds an unrelated
+`xcodebuild` step that can fail after the xcframework has already been produced.
+
 ## Upgrade Procedure (when bumping Ghostty)
 
 1. Edit `GHOSTTY_COMMIT` in `scripts/build-ghosttykit.sh`.
