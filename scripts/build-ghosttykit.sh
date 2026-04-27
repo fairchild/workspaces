@@ -21,6 +21,8 @@ set -euo pipefail
 # Optional environment variables:
 #   GHOSTTY_DIR       Existing Ghostty checkout (must already be at pinned commit).
 #   GHOSTTY_CACHE_DIR Cache root for auto-cloned Ghostty checkout.
+#   GHOSTTY_ZIG_BIN   Zig executable to use for building Ghostty.
+#   GHOSTTY_ZIG_CACHE_DIR Zig cache root for building Ghostty.
 # -----------------------------------------------------------------------------
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -28,14 +30,18 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 OUT_DIR="$PROJECT_DIR/Frameworks"
 
 # Pinned versions for reproducible builds.
-GHOSTTY_COMMIT="da10707f93104c5466cd4e64b80ff48f789238a0"
+GHOSTTY_COMMIT="332b2aefc6e72d363aa93ab6ecfc86eeeeb5ed28"
 ZIG_VERSION="0.15.2"
+HOMEBREW_ZIG_BIN="/opt/homebrew/opt/zig@0.15/bin/zig"
 
 GHOSTTY_REPO_URL="https://github.com/ghostty-org/ghostty.git"
 CACHE_DIR="${GHOSTTY_CACHE_DIR:-$HOME/.cache/workspacemanager}"
+ZIG_CACHE_DIR="${GHOSTTY_ZIG_CACHE_DIR:-$CACHE_DIR/zig-cache/$GHOSTTY_COMMIT}"
 AUTO_CLONE_DIR="$CACHE_DIR/ghostty"
 EXPLICIT_GHOSTTY_DIR="${GHOSTTY_DIR:-}"
+EXPLICIT_ZIG_BIN="${GHOSTTY_ZIG_BIN:-}"
 GHOSTTY_DIR=""
+ZIG_RUNNER=()
 
 die() {
   echo "error: $*" >&2
@@ -53,6 +59,25 @@ require_cmd() {
   fi
 }
 
+resolve_zig_runner() {
+  if [[ -n "$EXPLICIT_ZIG_BIN" ]]; then
+    if [[ ! -x "$EXPLICIT_ZIG_BIN" ]]; then
+      die "GHOSTTY_ZIG_BIN is set but is not executable: $EXPLICIT_ZIG_BIN"
+    fi
+
+    ZIG_RUNNER=("$EXPLICIT_ZIG_BIN")
+    return
+  fi
+
+  if [[ -x "$HOMEBREW_ZIG_BIN" ]]; then
+    ZIG_RUNNER=("$HOMEBREW_ZIG_BIN")
+    return
+  fi
+
+  require_cmd mise "https://mise.jdx.dev/"
+  ZIG_RUNNER=(mise exec "zig@$ZIG_VERSION" -- zig)
+}
+
 rewrite_modulemap() {
   local modulemap_path="$1"
 
@@ -67,6 +92,65 @@ rewrite_modulemap() {
   } > "$modulemap_path"
 }
 
+archive_exports_ghostty_api() {
+  local archive="$1"
+  nm -gU "$archive" 2>/dev/null | grep ' _ghostty_init$' >/dev/null
+}
+
+find_ghostty_archives() {
+  local cache_root="$ZIG_CACHE_DIR/local/o"
+  local candidate
+
+  [[ -d "$cache_root" ]] || return 1
+
+  while IFS= read -r candidate; do
+    printf '%s\n' "$candidate"
+  done < <(find "$cache_root" -type f -name "*.a" -exec ls -1t {} + 2>/dev/null)
+}
+
+repair_ghostty_archive_if_needed() {
+  local archive="$1"
+
+  if archive_exports_ghostty_api "$archive"; then
+    return
+  fi
+
+  local archives_file
+  archives_file="$(mktemp "${TMPDIR:-/tmp}/workspaces-ghostty-archives.XXXXXX")"
+  if ! find_ghostty_archives > "$archives_file" || [[ ! -s "$archives_file" ]]; then
+    rm -f "$archives_file"
+    die "GhosttyKit archive does not export ghostty_init and no Zig cache archives were found"
+  fi
+
+  local tmp_dir
+  tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/workspaces-ghostty-archive.XXXXXX")"
+  trap 'rm -rf "$tmp_dir"' RETURN
+
+  local index=0
+  local source_archive
+  while IFS= read -r source_archive; do
+    local archive_dir="$tmp_dir/objects/$index"
+    mkdir -p "$archive_dir"
+    (
+      cd "$archive_dir"
+      ar -x "$source_archive"
+    )
+    index=$((index + 1))
+  done < "$archives_file"
+  rm -f "$archives_file"
+
+  chmod -R u+rwX "$tmp_dir"
+  find "$tmp_dir/objects" -type f -name "*.o" -print0 \
+    | xargs -0 libtool -static -o "$tmp_dir/libghostty-fat.a"
+  mv "$tmp_dir/libghostty-fat.a" "$archive"
+  rm -rf "$tmp_dir"
+  trap - RETURN
+
+  if ! archive_exports_ghostty_api "$archive"; then
+    die "repaired GhosttyKit archive still does not export ghostty_init"
+  fi
+}
+
 postprocess_xcframework() {
   local framework_dir="$1"
 
@@ -75,6 +159,7 @@ postprocess_xcframework() {
   done < <(find "$framework_dir" -type f -name module.modulemap)
 
   while IFS= read -r archive; do
+    repair_ghostty_archive_if_needed "$archive"
     xcrun strip -S -x "$archive"
   done < <(find "$framework_dir" -type f -name "libghostty-fat.a")
 }
@@ -115,7 +200,8 @@ ensure_pinned_commit() {
   fi
 
   if [[ "$current_commit" != "$GHOSTTY_COMMIT" ]]; then
-    git -C "$GHOSTTY_DIR" fetch --tags origin
+    # Ghostty's `tip` tag moves; force tag updates so it does not block pinned commits.
+    git -C "$GHOSTTY_DIR" fetch --force --tags origin
     git -C "$GHOSTTY_DIR" checkout --detach "$GHOSTTY_COMMIT"
   fi
 }
@@ -123,8 +209,12 @@ ensure_pinned_commit() {
 build_ghostty_xcframework() {
   (
     cd "$GHOSTTY_DIR"
-    mise exec "zig@$ZIG_VERSION" -- zig build \
+    mkdir -p "$ZIG_CACHE_DIR/local" "$ZIG_CACHE_DIR/global"
+    "${ZIG_RUNNER[@]}" build \
+      --cache-dir "$ZIG_CACHE_DIR/local" \
+      --global-cache-dir "$ZIG_CACHE_DIR/global" \
       -Demit-xcframework=true \
+      -Demit-macos-app=false \
       -Dxcframework-target=native \
       -Doptimize=ReleaseFast
   )
@@ -156,9 +246,9 @@ install_xcframework() {
 }
 
 main() {
-  require_cmd mise "https://mise.jdx.dev/"
   require_cmd git
   require_cmd xcrun
+  resolve_zig_runner
 
   resolve_ghostty_dir
   ensure_ghostty_checkout

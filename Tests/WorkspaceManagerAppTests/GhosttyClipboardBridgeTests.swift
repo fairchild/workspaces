@@ -75,7 +75,7 @@ private func withContent(
         for pointer in dataBuffers { pointer?.deallocate() }
     }
 
-    var content: [ghostty_clipboard_content_s] = items.map { item in
+    let content: [ghostty_clipboard_content_s] = items.map { item in
         var value = ghostty_clipboard_content_s()
         if let mime = item.mime {
             let buffer = copyCString(mime)

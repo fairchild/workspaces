@@ -39,12 +39,12 @@ enum GhosttyClipboardBridge {
         userdata: UnsafeMutableRawPointer?,
         location: ghostty_clipboard_e,
         state: UnsafeMutableRawPointer?
-    ) {
+    ) -> Bool {
         let surfaceAddress = GhosttyThreadingBridge.runOnMainSync {
             GhosttyCallbackUserdata.surfaceView(from: userdata)?.surface.map { UInt(bitPattern: $0) }
         }
         let surface = surfaceAddress.flatMap(UnsafeMutableRawPointer.init(bitPattern:))
-        guard let surface else { return }
+        guard let surface else { return false }
 
         let value = GhosttyThreadingBridge.runOnMainSync {
             let pasteboard: NSPasteboard =
@@ -60,6 +60,7 @@ enum GhosttyClipboardBridge {
         value.withCString { pointer in
             ghostty_surface_complete_clipboard_request(surface, pointer, state, false)
         }
+        return true
     }
 
     static func confirmRead(
