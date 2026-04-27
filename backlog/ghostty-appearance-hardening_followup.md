@@ -51,6 +51,9 @@ Recent hardening overlays:
   - `Sources/WorkspaceManager/Views/MainWindow/ContentView.swift:707`
 - Existing appearance mapping tests still pass:
   - `Tests/WorkspaceManagerAppTests/GhosttyAppearanceSyncTests.swift`
+- PR #379 added direct split-routing coverage for the terminal-mode overlay:
+  - `Tests/WorkspaceManagerAppTests/SplitRoutingControllerTests.swift`
+  - covered `new_split`, `goto_split`, `resize_split`, `equalize_splits`, tmux-mode rejection, and invalid payload rejection
 
 ## Implementation Phases
 
@@ -75,6 +78,9 @@ Recent hardening overlays:
 
 **Files to create:**
 - `Tests/WorkspaceManagerAppTests/GhosttyAppearanceIntegrationTests.swift` - Integration-focused test coverage for surface/app scheme application decisions (dedupe semantics).
+
+Status:
+- Split-routing controller coverage shipped in PR #379. Remaining test work should stay focused on appearance-specific dedupe/application behavior and shortcut override interplay.
 
 **Acceptance criteria:**
 - [ ] New tests fail when scheme application or route interactions regress.
