@@ -136,6 +136,7 @@ Reason: keep integration on stable C fields and avoid config file management in 
 
 - Surface-level updates call `ghostty_surface_set_color_scheme(...)` only when the resolved scheme actually changes, unless the caller explicitly forces a refresh.
 - App-level updates call `ghostty_app_set_color_scheme(...)` through the same dedupe helper so the global Ghostty app and the active surface stay in sync without duplicate writes.
+- `GhosttyAppearanceSync.nextColorScheme(...)` is the pure test seam for first application, duplicate skipping, forced refresh, and scheme-change decisions.
 - Current mapping stays intentionally small: Aqua -> light, Dark Aqua -> dark.
 
 ## Known Warnings / Quirks

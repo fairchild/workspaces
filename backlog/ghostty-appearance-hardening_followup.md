@@ -80,12 +80,14 @@ Recent hardening overlays:
 - `Tests/WorkspaceManagerAppTests/GhosttyAppearanceIntegrationTests.swift` - Integration-focused test coverage for surface/app scheme application decisions (dedupe semantics).
 
 Status:
-- Split-routing controller coverage shipped in PR #379. Remaining test work should stay focused on appearance-specific dedupe/application behavior and shortcut override interplay.
+- Split-routing controller coverage shipped in PR #379.
+- Appearance mapper and dedupe coverage now protects first-application, duplicate-skip, forced-refresh, and scheme-change decisions without UI automation.
+- Remaining test work should stay focused on shortcut override interplay if new behavior is added.
 
 **Acceptance criteria:**
-- [ ] New tests fail when scheme application or route interactions regress.
-- [ ] Existing shortcut and terminal-state suites remain green.
-- [ ] No brittle test dependence on interactive UI automation.
+- [x] New tests fail when scheme application or route interactions regress.
+- [x] Existing shortcut and terminal-state suites remain green.
+- [x] No brittle test dependence on interactive UI automation.
 
 ### Phase 3: Smoke + Verification Hardening
 
