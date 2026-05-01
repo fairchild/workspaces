@@ -1,8 +1,9 @@
 ---
-status: pending
+status: completed
 category: followup
 issue: 84
 milestone: 1
+completed_prs: [379, 383]
 ---
 
 # Ghostty Appearance Sync Hardening
@@ -11,7 +12,7 @@ milestone: 1
 
 Ghostty system appearance sync shipped in PR #14 and is now in mainline. Since then, PR #18 and PR #19 introduced additional hardening around open-in-editor shortcut flow, metrics, and broader terminal-mode behavior. The appearance sync remains relevant and active, but we now need a focused hardening pass to ensure it remains deterministic when combined with new routing and mode semantics.
 
-This work is deferred because the merged behavior is functionally correct today and current active priority is the maintainability-first quality pass in the main window/sidebar/Ghostty surfaces. The risk is not immediate feature breakage; it is regression risk as terminal routing continues to evolve.
+This focused hardening slice is complete for the currently shipped behavior. The remaining P0 #2 work now lives in the broader main-window/sidebar/Ghostty boundary maintainability track, not in this appearance-specific follow-up.
 
 ## Key Decisions
 
@@ -19,7 +20,7 @@ This work is deferred because the merged behavior is functionally correct today 
 |----------|--------|-----------|
 | Backlog category | `followup` | This is post-merge quality hardening, not new product surface area. |
 | Scope | Validate + harden interactions, not redesign appearance sync | The implementation in `/Sources/WorkspaceManager/Terminal` is already small and correct. |
-| Roadmap placement | Sequence as a small Ghostty-quality follow-up within or just after the current maintainability milestone | It directly depends on recent routing/mode changes and should ride the same quality-first execution wave. |
+| Roadmap placement | Completed P0 #2 sub-track | PR #379 covered split-routing mode behavior, and PR #383 covered appearance dedupe behavior plus docs parity. |
 | Risk control | Add explicit tests/smoke coverage for mode + shortcut interactions | Existing tests cover mapping, but not enough integration interaction points. |
 
 ## Architecture
@@ -54,6 +55,12 @@ Recent hardening overlays:
 - PR #379 added direct split-routing coverage for the terminal-mode overlay:
   - `Tests/WorkspaceManagerAppTests/SplitRoutingControllerTests.swift`
   - covered `new_split`, `goto_split`, `resize_split`, `equalize_splits`, tmux-mode rejection, and invalid payload rejection
+- PR #383 added deterministic appearance coverage for first application, duplicate skipping, forced refresh, and scheme-change decisions.
+- Current smoke docs and scripts already state the required `Terminal Multiplexing Mode = Ghostty Splits` precondition and the tmux-mode early-exit behavior:
+  - `scripts/shortcut-pass-through-smoke.sh`
+  - `scripts/README.md`
+  - `docs/development/libghostty-integration.md`
+  - `docs/development/shortcut-routing.md`
 
 ## Implementation Phases
 
@@ -65,9 +72,9 @@ Recent hardening overlays:
 - `docs/development/shortcut-routing.md` - Clarify open-in-editor override interplay and multiplexing-mode implications for terminal verification.
 
 **Acceptance criteria:**
-- [ ] Roadmap explicitly positions this follow-up among recent hardening items.
-- [ ] Terminal docs reflect current behavior and verification commands.
-- [ ] Shortcut docs match current app-owned and dynamic override behavior.
+- [x] Roadmap explicitly positions this follow-up among recent hardening items.
+- [x] Terminal docs reflect current behavior and verification commands.
+- [x] Shortcut docs match current app-owned and dynamic override behavior.
 
 ### Phase 2: Interaction Test Coverage
 
@@ -96,9 +103,12 @@ Status:
 - `scripts/README.md` - Document smoke semantics and expected logs when mode is tmux vs ghostty-managed.
 
 **Acceptance criteria:**
-- [ ] Smoke script outputs actionable failure reason if mode preconditions are not met.
-- [ ] Verification guidance includes appearance-related checks in the standard loop.
-- [ ] Shared-desktop runbook remains usable without forcing app activation.
+- [x] Smoke script outputs actionable failure reason if mode preconditions are not met.
+- [x] Verification guidance includes appearance-related checks in the standard loop.
+- [x] Shared-desktop runbook remains usable without forcing app activation.
+
+Status:
+- Satisfied by the current script/docs state on `main`. No new activation-driving smoke run was required for this docs reconciliation; running `shortcut-pass-through-smoke.sh` remains an explicit foreground-input action.
 
 ## Verification Commands
 
@@ -123,9 +133,8 @@ ps aux | rg '.build/arm64-apple-macosx/debug/WorkspaceManager'
 
 ## Roadmap Position
 
-- Sits in P0 #2 as sub-track **2b** (narrow), alongside the structural main-window/sidebar maintainability work in 2a. See `backlog/ROADMAP.md` Priority Bands for the current pairing.
-- Either sub-track can move independently. This one is the smaller, lower-risk option — pick it when 2a is too large for the session shape.
-- Treat as a risk-reduction task, not a feature track.
+- Completed former P0 #2 sub-track **2b**. See `backlog/ROADMAP.md` Priority Bands for the remaining active 2a work.
+- Treat future appearance-specific work as a new regression follow-up only when new shortcut, mode, or Ghostty lifecycle behavior creates a fresh gap.
 
 ## References
 
