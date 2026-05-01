@@ -40,8 +40,10 @@ enum GhosttyClipboardBridge {
         location: ghostty_clipboard_e,
         state: UnsafeMutableRawPointer?
     ) -> Bool {
+        let userdataAddress = userdata.map { UInt(bitPattern: $0) }
         let surfaceAddress = GhosttyThreadingBridge.runOnMainSync {
-            GhosttyCallbackUserdata.surfaceView(from: userdata)?.surface.map { UInt(bitPattern: $0) }
+            let userdata = userdataAddress.flatMap(UnsafeMutableRawPointer.init(bitPattern:))
+            return GhosttyCallbackUserdata.surfaceView(from: userdata)?.surface.map { UInt(bitPattern: $0) }
         }
         let surface = surfaceAddress.flatMap(UnsafeMutableRawPointer.init(bitPattern:))
         guard let surface else { return false }
@@ -67,8 +69,10 @@ enum GhosttyClipboardBridge {
         userdata: UnsafeMutableRawPointer?,
         state: UnsafeMutableRawPointer?
     ) {
+        let userdataAddress = userdata.map { UInt(bitPattern: $0) }
         let surfaceAddress = GhosttyThreadingBridge.runOnMainSync {
-            GhosttyCallbackUserdata.surfaceView(from: userdata)?.surface.map { UInt(bitPattern: $0) }
+            let userdata = userdataAddress.flatMap(UnsafeMutableRawPointer.init(bitPattern:))
+            return GhosttyCallbackUserdata.surfaceView(from: userdata)?.surface.map { UInt(bitPattern: $0) }
         }
         let surface = surfaceAddress.flatMap(UnsafeMutableRawPointer.init(bitPattern:))
         guard let surface else { return }

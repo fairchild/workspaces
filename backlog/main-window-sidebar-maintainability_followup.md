@@ -61,6 +61,9 @@ Status:
 - Preserve the current `@MainActor`/strict-concurrency guarantees while improving readability and testability.
 - Add tests only where the new seam is deterministic and does not require fragile UI automation.
 
+Status:
+- Started with a dedicated `GhosttyRuntimeConfigFactory` seam so raw `ghostty_runtime_config_s` callback wiring no longer lives inline in `GhosttyAppManager.initializeIfNeeded()`.
+
 ## Acceptance Criteria
 
 - `ContentView.swift` and `SidebarView.swift` are materially smaller or more clearly partitioned by concern.

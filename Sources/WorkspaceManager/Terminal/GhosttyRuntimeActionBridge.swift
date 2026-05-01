@@ -67,7 +67,7 @@ enum GhosttyRuntimeActionBridge {
         target: ghostty_target_s,
         action: ghostty_action_s,
         resolveSurfaceAddress: (ghostty_target_s) -> UInt?,
-        resolveSurfaceView: @MainActor @escaping (UInt?) -> GhosttySurfaceView?,
+        resolveSurfaceView: @MainActor @Sendable @escaping (UInt?) -> GhosttySurfaceView?,
         runOnMainAsync: (@escaping @MainActor @Sendable () -> Void) -> Void
     ) -> Bool {
         guard let sourceSurfaceAddress = resolveSurfaceAddress(target) else { return false }
@@ -172,7 +172,7 @@ enum GhosttyRuntimeActionBridge {
         directionRawValue: Int?,
         amount: Int?,
         sourceSurfaceAddress: UInt,
-        resolveSurfaceView: @MainActor @escaping (UInt?) -> GhosttySurfaceView?,
+        resolveSurfaceView: @MainActor @Sendable @escaping (UInt?) -> GhosttySurfaceView?,
         runOnMainAsync: (@escaping @MainActor @Sendable () -> Void) -> Void
     ) {
         runOnMainAsync {
