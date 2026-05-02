@@ -91,8 +91,12 @@ mkdir -p "$OUTPUT_DIR"
 run_capture() {
     local phase="$1"
     local phase_dir="$OUTPUT_DIR/$phase"
+    local runner_log="$phase_dir/perf-runner.log"
     mkdir -p "$phase_dir"
-    "$ROOT_DIR/scripts/perf-runner.sh" --scenario "$SCENARIO" --output-dir "$phase_dir"
+    if ! "$ROOT_DIR/scripts/perf-runner.sh" --scenario "$SCENARIO" --output-dir "$phase_dir" >"$runner_log" 2>&1; then
+        tail -n 120 "$runner_log" >&2 || true
+        exit 1
+    fi
     echo "$phase_dir/summary.json"
 }
 

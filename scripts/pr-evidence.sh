@@ -6,10 +6,13 @@
 # Usage:
 #   ./scripts/pr-evidence.sh --pr 387 --profile swift-unit --filter Ghostty
 #   ./scripts/pr-evidence.sh --pr 387 --profile ghostty-shortcuts
+#   ./scripts/pr-evidence.sh --pr 387 --profile performance --scenario debug_no_activate \
+#     --before-summary /tmp/before-summary.json --after-summary /tmp/after-summary.json
 #
 # Profiles:
 #   swift-unit        Run focused Swift tests, full Swift tests, diff check, upload summary.
 #   ghostty-shortcuts Build, launch debug app, drive Ghostty split shortcuts, upload log + window evidence.
+#   performance       Compare canonical before/after perf summaries and upload a delta summary.
 #
 # ==========================================================================
 
@@ -22,6 +25,12 @@ PR=""
 PROFILE=""
 NAME=""
 FILTER="Ghostty"
+SCENARIO="debug_no_activate"
+PERF_OUTPUT_DIR=""
+SKIP_BEFORE=0
+SKIP_AFTER=0
+BEFORE_SUMMARY=""
+AFTER_SUMMARY=""
 UPLOAD=true
 RUN_DIR=""
 LAUNCH_WATCH_PID=""
@@ -32,8 +41,14 @@ Usage: ./scripts/pr-evidence.sh --pr <number> --profile <profile> [options]
 
 Options:
   --pr <number>         PR number for evidence upload.
-  --profile <profile>   Evidence profile: swift-unit, ghostty-shortcuts.
+  --profile <profile>   Evidence profile: swift-unit, ghostty-shortcuts, performance.
   --filter <pattern>    Focused Swift test filter for swift-unit (default: Ghostty).
+  --scenario <id>       Canonical performance scenario (default: debug_no_activate).
+  --perf-output-dir <p> Performance evidence output directory (default: run dir/performance).
+  --skip-before         Performance profile: use --before-summary instead of capturing before.
+  --skip-after          Performance profile: use --after-summary instead of capturing after.
+  --before-summary <p>  Performance profile: existing before summary.json.
+  --after-summary <p>   Performance profile: existing after summary.json.
   --name <slug>         Evidence slug prefix (default: profile name).
   --no-upload           Generate local artifacts without uploading.
   --help, -h            Show this help.
@@ -41,6 +56,9 @@ Options:
 Examples:
   ./scripts/pr-evidence.sh --pr 387 --profile swift-unit --filter GhosttyRuntimeConfigFactory
   ./scripts/pr-evidence.sh --pr 387 --profile ghostty-shortcuts
+  ./scripts/pr-evidence.sh --pr 387 --profile performance --scenario debug_no_activate \
+    --before-summary /tmp/before/summary.json --after-summary /tmp/after/summary.json \
+    --skip-before --skip-after
 USAGE
 }
 
@@ -73,6 +91,34 @@ parse_args() {
             --filter)
                 [[ $# -ge 2 ]] || fail "--filter requires a value"
                 FILTER="$2"
+                shift 2
+                ;;
+            --scenario)
+                [[ $# -ge 2 ]] || fail "--scenario requires a value"
+                SCENARIO="$2"
+                shift 2
+                ;;
+            --perf-output-dir)
+                [[ $# -ge 2 ]] || fail "--perf-output-dir requires a value"
+                PERF_OUTPUT_DIR="$2"
+                shift 2
+                ;;
+            --skip-before)
+                SKIP_BEFORE=1
+                shift
+                ;;
+            --skip-after)
+                SKIP_AFTER=1
+                shift
+                ;;
+            --before-summary)
+                [[ $# -ge 2 ]] || fail "--before-summary requires a value"
+                BEFORE_SUMMARY="$2"
+                shift 2
+                ;;
+            --after-summary)
+                [[ $# -ge 2 ]] || fail "--after-summary requires a value"
+                AFTER_SUMMARY="$2"
                 shift 2
                 ;;
             --name)
@@ -353,6 +399,80 @@ profile_ghostty_shortcuts() {
     upload_artifact "$NAME-window" "$screenshot"
 }
 
+profile_performance() {
+    local perf_dir="$PERF_OUTPUT_DIR"
+    if [[ -z "$perf_dir" ]]; then
+        perf_dir="$RUN_DIR/performance"
+    fi
+    mkdir -p "$perf_dir"
+
+    local args=(--scenario "$SCENARIO" --output-dir "$perf_dir")
+    if [[ "$SKIP_BEFORE" -eq 1 ]]; then
+        args+=(--skip-before)
+    fi
+    if [[ "$SKIP_AFTER" -eq 1 ]]; then
+        args+=(--skip-after)
+    fi
+    if [[ -n "$BEFORE_SUMMARY" ]]; then
+        args+=(--before-summary "$BEFORE_SUMMARY")
+    fi
+    if [[ -n "$AFTER_SUMMARY" ]]; then
+        args+=(--after-summary "$AFTER_SUMMARY")
+    fi
+
+    run_logged "performance-evidence" "$REPO_ROOT/scripts/prepare-perf-evidence.sh" "${args[@]}"
+
+    local compare_output="$perf_dir/compare.txt"
+    [[ -f "$compare_output" ]] || fail "missing performance comparison output: $compare_output"
+
+    local before_path="$BEFORE_SUMMARY"
+    local after_path="$AFTER_SUMMARY"
+    if [[ -z "$before_path" ]]; then
+        before_path="$perf_dir/before/summary.json"
+    fi
+    if [[ -z "$after_path" ]]; then
+        after_path="$perf_dir/after/summary.json"
+    fi
+
+    local before_label="${before_path/#$REPO_ROOT\//}"
+    local after_label="${after_path/#$REPO_ROOT\//}"
+    local markdown_path="$RUN_DIR/$NAME.md"
+    {
+        echo "Performance evidence for PR #$PR"
+        echo ""
+        echo "- Scenario ID: \`$SCENARIO\`"
+        echo "- Before Summary: \`$before_path\`"
+        echo "- After Summary: \`$after_path\`"
+        echo "- Delta Summary:"
+        echo ""
+        echo '```'
+        cat "$compare_output"
+        echo '```'
+        echo ""
+        echo "Local artifacts: \`$perf_dir\`"
+    } >"$markdown_path"
+
+    local svg_lines=(
+        "Scenario: $SCENARIO"
+        "Before: $before_label"
+        "After: $after_label"
+        "Delta summary:"
+    )
+    local line
+    local count=0
+    while IFS= read -r line && [[ "$count" -lt 8 ]]; do
+        svg_lines+=("$line")
+        count=$((count + 1))
+    done <"$compare_output"
+
+    local svg_path="$RUN_DIR/$NAME.svg"
+    render_summary_svg "$svg_path" "PR #$PR Performance Evidence" "${svg_lines[@]}" \
+        "NOTE: PR markdown stored in $markdown_path"
+
+    upload_artifact "$NAME" "$svg_path"
+    log "Performance PR markdown: $markdown_path"
+}
+
 main() {
     parse_args "$@"
     init_run_dir
@@ -363,6 +483,9 @@ main() {
             ;;
         ghostty-shortcuts)
             profile_ghostty_shortcuts
+            ;;
+        performance)
+            profile_performance
             ;;
         *)
             fail "unknown profile: $PROFILE"

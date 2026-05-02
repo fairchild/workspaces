@@ -41,6 +41,11 @@ This directory contains build/release helpers plus UI test utilities.
   - Runs one canonical scenario and writes a canonical summary artifact.
 - `./scripts/perf-compare.py before.json after.json`
   - Compares two canonical summaries and prints metric deltas plus gate status.
+- `./scripts/pr-evidence.sh --pr <N> --profile performance`
+  - Runs the PR evidence wrapper around canonical performance comparison.
+  - Writes before/after artifacts under `./output/evidence/pr-<number>/.../performance/`.
+  - Uploads an SVG delta summary through `./scripts/evidence.sh`.
+  - Use `--before-summary`, `--after-summary`, `--skip-before`, and `--skip-after` when comparing summaries captured on separate commits.
 - Contract source of truth:
   - `./config/performance/contract.json`
 
@@ -71,9 +76,12 @@ Use these scripts for day-to-day UI verification:
 - Initial profiles:
   - `swift-unit`: focused Swift tests, full Swift tests, and `git diff --check`.
   - `ghostty-shortcuts`: GhosttyKit build, app build, watched debug launch, foreground `Cmd+D` / `Cmd+[` / `Cmd+]` shortcut smoke, runtime log summary, and window capture.
+  - `performance`: canonical before/after performance comparison rendered as uploadable PR evidence.
 - Examples:
   - `./scripts/pr-evidence.sh --pr 387 --profile swift-unit --filter GhosttyRuntimeConfigFactory`
   - `./scripts/pr-evidence.sh --pr 387 --profile ghostty-shortcuts`
+  - `./scripts/pr-evidence.sh --pr 387 --profile performance --scenario debug_no_activate`
+  - `./scripts/pr-evidence.sh --pr 387 --profile performance --scenario debug_no_activate --before-summary /tmp/before/summary.json --after-summary /tmp/after/summary.json --skip-before --skip-after`
 
 1. `./scripts/launch-dev.sh`
 - Canonical local launch for active development.
