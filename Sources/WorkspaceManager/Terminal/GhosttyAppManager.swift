@@ -67,29 +67,7 @@ final class GhosttyAppManager: NSObject {
         ghostty_config_finalize(config)
         self.config = config
 
-        var runtimeConfig = ghostty_runtime_config_s(
-            userdata: Unmanaged.passUnretained(self).toOpaque(),
-            supports_selection_clipboard: true,
-            wakeup_cb: { userdata in
-                GhosttyAppManager.wakeup(userdata)
-            },
-            action_cb: { app, target, action in
-                guard let app else { return false }
-                return GhosttyAppManager.action(app, target: target, action: action)
-            },
-            read_clipboard_cb: { userdata, location, state in
-                GhosttyClipboardBridge.read(userdata: userdata, location: location, state: state)
-            },
-            confirm_read_clipboard_cb: { userdata, _, state, _ in
-                GhosttyClipboardBridge.confirmRead(userdata: userdata, state: state)
-            },
-            write_clipboard_cb: { userdata, location, content, len, _ in
-                GhosttyClipboardBridge.write(userdata: userdata, location: location, content: content, len: len)
-            },
-            close_surface_cb: { userdata, processAlive in
-                GhosttyAppManager.closeSurface(userdata, processAlive: processAlive)
-            }
-        )
+        var runtimeConfig = GhosttyRuntimeConfigFactory.make(userdata: Unmanaged.passUnretained(self).toOpaque())
 
         guard let app = ghostty_app_new(&runtimeConfig, config) else {
             NSLog("[GhosttyAppManager] ghostty_app_new failed")
@@ -141,20 +119,24 @@ final class GhosttyAppManager: NSObject {
 
     // MARK: Runtime callbacks
 
-    private static func wakeup(_ userdata: UnsafeMutableRawPointer?) {
+    nonisolated static func wakeup(_ userdata: UnsafeMutableRawPointer?) {
+        let userdataAddress = userdata.map { UInt(bitPattern: $0) }
         GhosttyThreadingBridge.runOnMainAsync {
+            let userdata = userdataAddress.flatMap(UnsafeMutableRawPointer.init(bitPattern:))
             guard let manager = GhosttyCallbackUserdata.manager(from: userdata) else { return }
             manager.tick()
         }
     }
 
-    private static func action(_ app: ghostty_app_t, target: ghostty_target_s, action: ghostty_action_s) -> Bool {
+    nonisolated static func action(_ app: ghostty_app_t, target: ghostty_target_s, action: ghostty_action_s) -> Bool {
         _ = app
         return GhosttyRuntimeActionBridge.handle(
             target: target,
             action: action,
             resolveSurfaceAddress: GhosttyCallbackUserdata.surfaceAddress(from:),
-            resolveSurfaceView: GhosttyCallbackUserdata.surfaceView(from:),
+            resolveSurfaceView: { address in
+                GhosttyCallbackUserdata.surfaceView(from: address)
+            },
             runOnMainAsync: GhosttyThreadingBridge.runOnMainAsync(_:)
         )
     }
@@ -163,8 +145,10 @@ final class GhosttyAppManager: NSObject {
         GhosttyRuntimeActionBridge.splitActionRequest(from: notification)
     }
 
-    private static func closeSurface(_ userdata: UnsafeMutableRawPointer?, processAlive: Bool) {
+    nonisolated static func closeSurface(_ userdata: UnsafeMutableRawPointer?, processAlive: Bool) {
+        let userdataAddress = userdata.map { UInt(bitPattern: $0) }
         GhosttyThreadingBridge.runOnMainAsync {
+            let userdata = userdataAddress.flatMap(UnsafeMutableRawPointer.init(bitPattern:))
             guard let surfaceView = GhosttyCallbackUserdata.surfaceView(from: userdata) else { return }
             surfaceView.runtimeDidRequestClose(processAlive: processAlive)
         }
