@@ -64,6 +64,17 @@ This directory contains build/release helpers plus UI test utilities.
 
 Use these scripts for day-to-day UI verification:
 
+0. `./scripts/pr-evidence.sh`
+- Profile-driven evidence capture for PRs.
+- Creates a local evidence bundle under `./output/evidence/pr-<number>/`.
+- Uploads artifacts through `./scripts/evidence.sh` and prints Markdown links.
+- Initial profiles:
+  - `swift-unit`: focused Swift tests, full Swift tests, and `git diff --check`.
+  - `ghostty-shortcuts`: GhosttyKit build, app build, watched debug launch, foreground `Cmd+D` / `Cmd+[` / `Cmd+]` shortcut smoke, runtime log summary, and window capture.
+- Examples:
+  - `./scripts/pr-evidence.sh --pr 387 --profile swift-unit --filter GhosttyRuntimeConfigFactory`
+  - `./scripts/pr-evidence.sh --pr 387 --profile ghostty-shortcuts`
+
 1. `./scripts/launch-dev.sh`
 - Canonical local launch for active development.
 - Always launches latest debug binary (`.build/.../WorkspaceManager`) to avoid stale app bundle confusion.
