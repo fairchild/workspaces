@@ -12,9 +12,36 @@ import Testing
 @Suite("GhosttyCallbackUserdata")
 @MainActor
 struct GhosttyCallbackUserdataTests {
+    @Test("address(from:) returns nil for nil userdata")
+    func addressNilForNilUserdata() {
+        #expect(GhosttyCallbackUserdata.address(from: nil) == nil)
+    }
+
+    @Test("pointer(from:) returns nil for nil address")
+    func pointerNilForNilAddress() {
+        #expect(GhosttyCallbackUserdata.pointer(from: nil) == nil)
+    }
+
+    @Test("address and pointer round-trip an opaque userdata pointer")
+    func userdataAddressRoundTrip() {
+        let view = GhosttySurfaceView(workingDirectory: FileManager.default.temporaryDirectory)
+        let opaque = Unmanaged.passUnretained(view).toOpaque()
+
+        let address = GhosttyCallbackUserdata.address(from: opaque)
+
+        #expect(address == UInt(bitPattern: opaque))
+        #expect(GhosttyCallbackUserdata.pointer(from: address) == opaque)
+    }
+
     @Test("manager(from:) returns nil for a nil userdata pointer")
     func managerNilForNilUserdata() {
-        #expect(GhosttyCallbackUserdata.manager(from: nil) == nil)
+        #expect(GhosttyCallbackUserdata.manager(from: nil as UnsafeMutableRawPointer?) == nil)
+    }
+
+    @Test("manager(from address:) returns nil for a nil address")
+    func managerNilForNilAddress() {
+        let address: UInt? = nil
+        #expect(GhosttyCallbackUserdata.manager(from: address) == nil)
     }
 
     @Test("surfaceView(from:) returns nil for a nil userdata pointer")
@@ -46,6 +73,17 @@ struct GhosttyCallbackUserdataTests {
 
         let resolved = GhosttyCallbackUserdata.surfaceView(from: address)
         #expect(resolved === view)
+    }
+
+    @Test("surfaceAddress(from userdata:) returns nil for nil userdata")
+    func surfaceAddressFromNilUserdata() {
+        #expect(GhosttyCallbackUserdata.surfaceAddress(from: nil as UnsafeMutableRawPointer?) == nil)
+    }
+
+    @Test("surfaceAddress(from address:) returns nil for a nil address")
+    func surfaceAddressFromNilAddress() {
+        let address: UInt? = nil
+        #expect(GhosttyCallbackUserdata.surfaceAddress(from: address) == nil)
     }
 
     @Test("surfaceUserdata(from target:) returns nil when the target is an app target")

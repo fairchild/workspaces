@@ -120,10 +120,9 @@ final class GhosttyAppManager: NSObject {
     // MARK: Runtime callbacks
 
     nonisolated static func wakeup(_ userdata: UnsafeMutableRawPointer?) {
-        let userdataAddress = userdata.map { UInt(bitPattern: $0) }
+        let userdataAddress = GhosttyCallbackUserdata.address(from: userdata)
         GhosttyThreadingBridge.runOnMainAsync {
-            let userdata = userdataAddress.flatMap(UnsafeMutableRawPointer.init(bitPattern:))
-            guard let manager = GhosttyCallbackUserdata.manager(from: userdata) else { return }
+            guard let manager = GhosttyCallbackUserdata.manager(from: userdataAddress) else { return }
             manager.tick()
         }
     }
@@ -146,10 +145,9 @@ final class GhosttyAppManager: NSObject {
     }
 
     nonisolated static func closeSurface(_ userdata: UnsafeMutableRawPointer?, processAlive: Bool) {
-        let userdataAddress = userdata.map { UInt(bitPattern: $0) }
+        let userdataAddress = GhosttyCallbackUserdata.address(from: userdata)
         GhosttyThreadingBridge.runOnMainAsync {
-            let userdata = userdataAddress.flatMap(UnsafeMutableRawPointer.init(bitPattern:))
-            guard let surfaceView = GhosttyCallbackUserdata.surfaceView(from: userdata) else { return }
+            guard let surfaceView = GhosttyCallbackUserdata.surfaceView(from: userdataAddress) else { return }
             surfaceView.runtimeDidRequestClose(processAlive: processAlive)
         }
     }
