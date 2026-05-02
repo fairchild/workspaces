@@ -127,6 +127,15 @@ The script auto-sources `.env` for `EVIDENCE_UPLOAD_TOKEN`. Uploads go to `https
 - **Blocked evidence is an explicit state.** Say `blocked on evidence` in the PR, explain why, and do not merge without approval.
 - **Performance-sensitive changes need baselines.** Before/after/delta in the PR body.
 
+### PR summary style
+
+When reporting PR readiness or evidence, prefer concise Markdown links for completed checks/artifacts when URLs are available, for example:
+
+- [Web CI passed](https://...)
+- [Vercel preview passed](https://...)
+
+This is a readability preference, not a merge gate. If links are unavailable, a plain-text status summary is fine. Visible evidence links and performance gates keep reviews aligned with our quality and speed goals.
+
 ## High-Signal Lessons
 
 - **Never use bare `self-hosted` for workflows in this repo.** Use GitHub-hosted macOS (`macos-17`) for generic build/test jobs, `[self-hosted, tart-ui]` for UI/perf automation, `[self-hosted, lume-macos]` for agent execution (preferred, with ubuntu-latest fallback), and `[self-hosted, signing-host]` for release/signing/notarization.
