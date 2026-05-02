@@ -333,7 +333,7 @@ App settings (Cmd+,).
 │  General                                                │
 ├─────────────────────────────────────────────────────────┤
 │                                                         │
-│  Workspaces Location                                    │
+│  WorkSpaces Location                                    │
 │  ┌─────────────────────────────────────────┐            │
 │  │ ~/workspaces                        [📁]│            │
 │  └─────────────────────────────────────────┘            │
@@ -364,7 +364,7 @@ struct SettingsView: View {
         Form {
             Section("General") {
                 HStack {
-                    TextField("Workspaces Location", text: $workspacesRootPath)
+                    TextField("WorkSpaces Location", text: $workspacesRootPath)
                     Button("Choose...") {
                         // Open folder picker
                     }

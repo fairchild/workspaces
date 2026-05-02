@@ -291,7 +291,7 @@ WORKSPACES_NOTIFICATION_URL=http://localhost:8787 ./scripts/launch-dev.sh --no-b
 
 ## GitHub App
 
-- **App name**: Workspaces Notify
+- **App name**: WorkSpaces Notify
 - **Client ID**: `Iv23liJBRgQoWIWjtRoO` (in `NotificationConstants.gitHubAppClientID`)
 - **Subscribed events**: pull_request, discussion, discussion_comment, check_run, check_suite
 - **Webhook URL**: `https://webhooks.cloudcompute.com/webhook`

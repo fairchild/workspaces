@@ -739,9 +739,9 @@ struct WorkspaceEnvironmentOptionsController {
 
         switch snapshot.state {
         case .setupRequired:
-            return "\(base) Workspaces will install and verify Lume automatically the first time you use this."
+            return "\(base) WorkSpaces will install and verify Lume automatically the first time you use this."
         case .repairRequired:
-            return "\(base) Workspaces will repair the local VM runtime automatically before continuing."
+            return "\(base) WorkSpaces will repair the local VM runtime automatically before continuing."
         case .ready, .installing, .verifying, .unsupportedHost:
             break
         }
@@ -749,26 +749,26 @@ struct WorkspaceEnvironmentOptionsController {
         if let baseSnapshot = snapshot.baseVM {
             switch baseSnapshot.status {
             case .ready:
-                return "\(base) Workspaces will clone the prepared base VM for a faster macOS workspace start."
+                return "\(base) WorkSpaces will clone the prepared base VM for a faster macOS workspace start."
             case .preparing:
-                return "\(base) A prepared base VM is already being created. Workspaces will clone it once it is ready."
+                return "\(base) A prepared base VM is already being created. WorkSpaces will clone it once it is ready."
             case .missing:
                 if baseSnapshot.profile.imageReference != nil {
                     return """
-                        \(base) Workspaces will download the matching base VM once, then clone it for faster future macOS workspaces.
+                        \(base) WorkSpaces will download the matching base VM once, then clone it for faster future macOS workspaces.
                         """
                 }
                 return """
-                    \(base) No host-matched golden image is available yet, so Workspaces will prepare a stock macOS base VM once and clone it for faster future workspaces.
+                    \(base) No host-matched golden image is available yet, so WorkSpaces will prepare a stock macOS base VM once and clone it for faster future workspaces.
                     """
             case .repairRequired:
-                return "\(base) Workspaces will repair or recreate the prepared base VM before continuing."
+                return "\(base) WorkSpaces will repair or recreate the prepared base VM before continuing."
             }
         }
 
         if snapshot.defaultMacOSImage == nil, snapshot.defaultMacOSImageError != nil {
             return """
-                \(base) No host-matched golden image is available yet, so Workspaces will fall back to stock macOS setup automatically.
+                \(base) No host-matched golden image is available yet, so WorkSpaces will fall back to stock macOS setup automatically.
                 """
         }
 
@@ -785,9 +785,9 @@ struct WorkspaceEnvironmentOptionsController {
 
         switch snapshot.state {
         case .setupRequired:
-            return "\(base) Workspaces will install and verify Lume automatically the first time you use this."
+            return "\(base) WorkSpaces will install and verify Lume automatically the first time you use this."
         case .repairRequired:
-            return "\(base) Workspaces will repair the local VM runtime automatically before continuing."
+            return "\(base) WorkSpaces will repair the local VM runtime automatically before continuing."
         case .ready, .installing, .verifying, .unsupportedHost:
             return base
         }
@@ -801,7 +801,7 @@ struct WorkspaceEnvironmentOptionsController {
         }
 
         if snapshot.defaultMacOSImage == nil, snapshot.defaultMacOSImageError != nil {
-            return "Workspaces will use stock macOS because no host-matched golden image is available yet."
+            return "WorkSpaces will use stock macOS because no host-matched golden image is available yet."
         }
 
         return nil

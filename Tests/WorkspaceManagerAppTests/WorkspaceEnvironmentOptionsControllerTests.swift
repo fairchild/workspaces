@@ -224,7 +224,7 @@ struct WorkspaceEnvironmentOptionsControllerTests {
         #if arch(arm64)
             #expect(
                 option.availabilityReason
-                    == "Workspaces will use stock macOS because no host-matched golden image is available yet."
+                    == "WorkSpaces will use stock macOS because no host-matched golden image is available yet."
             )
         #endif
     }

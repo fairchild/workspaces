@@ -318,7 +318,7 @@ For testing or when CI isn't available.
    ```bash
    # Create release with GitHub CLI
    gh release create v0.3.1 \
-       --title "Workspaces v0.3.1" \
+       --title "WorkSpaces v0.3.1" \
        --notes "Release notes here" \
        build/WorkspaceManager-0.3.1.dmg
    ```
@@ -435,7 +435,7 @@ security find-identity -v -p codesigning
 When announcing a release:
 
 ```markdown
-## Workspaces v0.3.1
+## WorkSpaces v0.3.1
 
 ### What's New
 - Feature 1
@@ -451,6 +451,6 @@ When announcing a release:
 
 ### Installation
 1. Download the DMG
-2. Drag Workspaces to Applications
+2. Drag WorkSpaces to Applications
 3. Launch from Applications folder
 ```

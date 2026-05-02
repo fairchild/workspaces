@@ -1,4 +1,4 @@
-# Workspaces Branding
+# WorkSpaces Branding
 
 ## App Icon
 

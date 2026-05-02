@@ -2113,11 +2113,11 @@ struct MainTerminalDetailView: View {
             return selectedRepo.name
         }
 
-        guard let activeHostSession else { return "WorkspaceManager" }
+        guard let activeHostSession else { return "WorkSpaces" }
 
         switch activeHostSession.key {
         case .defaultHome:
-            return "WorkspaceManager"
+            return "WorkSpaces"
         case .repoPath, .hostPath:
             return activeHostSession.directoryURL.lastPathComponent
         case .backendSession(_, let instanceID):

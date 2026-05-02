@@ -119,7 +119,7 @@ enum DiagnosticReportExporter {
 
     private static func gatherSystemProfile(_ info: SystemInfo) -> String {
         var lines: [String] = []
-        lines.append("WorkspaceManager Diagnostic Report")
+        lines.append("WorkSpaces Diagnostic Report")
         lines.append("Generated: \(ISO8601DateFormatter().string(from: Date()))")
         lines.append("")
         lines.append("System:")

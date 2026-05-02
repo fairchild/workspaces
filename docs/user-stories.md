@@ -1,8 +1,8 @@
-# Workspaces User Stories
+# WorkSpaces User Stories
 
 ## Product Context
 
-Workspaces is a Mac app for managing isolated AI coding sessions. Users add git repos, fork them into workspaces, and run terminal-based coding agents (Claude Code, Aider, Codex CLI, or any shell command) in an embedded terminal. Each workspace is a clean copy with automatic setup.
+WorkSpaces is a Mac app for managing isolated AI coding sessions. Users add git repos, fork them into workspaces, and run terminal-based coding agents (Claude Code, Aider, Codex CLI, or any shell command) in an embedded terminal. Each workspace is a clean copy with automatic setup.
 
 ### Current Behavior Snapshot (2026-03-10)
 
@@ -20,7 +20,7 @@ Workspaces is a Mac app for managing isolated AI coding sessions. Users add git 
 
 ## Story 1: First-Time Setup (Repo-First)
 
-**As a** developer new to Workspaces
+**As a** developer new to WorkSpaces
 **I want to** add my first repository and create a workspace
 **So that** I can start an isolated AI coding session
 
@@ -29,7 +29,7 @@ Workspaces is a Mac app for managing isolated AI coding sessions. Users add git 
 ```mermaid
 sequenceDiagram
     actor User
-    participant App as Workspaces
+    participant App as WorkSpaces
     participant Finder
     participant Terminal
 
@@ -53,7 +53,7 @@ sequenceDiagram
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
-│  Workspaces                                              [−] [□] [×]     │
+│  WorkSpaces                                              [−] [□] [×]     │
 ├────────────────┬─────────────────────────────────────────┬───────────────┤
 │                │                                         │ [Files][∆ 3]  │
 │ M my-api    ⋯ +│  $ claude                               │───────────────│
@@ -288,7 +288,7 @@ sequenceDiagram
 │  Settings                                    [×]    │
 ├─────────────────────────────────────────────────────┤
 │                                                     │
-│  Workspaces Location                                │
+│  WorkSpaces Location                                │
 │  ┌───────────────────────────────────────┐          │
 │  │ /Volumes/Code/workspaces          [📁]│          │
 │  └───────────────────────────────────────┘          │
@@ -353,7 +353,7 @@ sequenceDiagram
 │ frontend                                │
 │ ~/code/frontend                         │
 │                                         │
-│  Workspaces                             │
+│  WorkSpaces                             │
 │   • sidebar-cleanup                     │
 │   • release-prep                        │
 │                                         │
@@ -375,7 +375,7 @@ sequenceDiagram
 
 **As a** terminal-first developer already fluent in Ghostty
 **I want to** keep expected Ghostty keybindings inside embedded terminals
-**So that** Workspaces feels like Ghostty with management chrome, not a different terminal
+**So that** WorkSpaces feels like Ghostty with management chrome, not a different terminal
 
 ### Flow Diagram
 
@@ -384,7 +384,7 @@ sequenceDiagram
     actor User
     participant Keyboard
     participant Router as Shortcut Router
-    participant AppChrome as Workspaces Chrome
+    participant AppChrome as WorkSpaces Chrome
     participant Ghostty as Embedded Ghostty
 
     User->>Keyboard: Presses shortcut
@@ -422,7 +422,7 @@ sequenceDiagram
 
 ### Acceptance Criteria
 
-1. Workspaces defines and documents a default-first routing policy: Ghostty gets terminal shortcuts by default.
+1. WorkSpaces defines and documents a default-first routing policy: Ghostty gets terminal shortcuts by default.
 2. App-level shortcuts are explicitly scoped to wrapper chrome behaviors only.
 3. Shortcut collisions are treated as policy decisions, not hardcoded one-off exceptions.
 4. Product backlog includes user-configurable routing overrides (`App` vs `Ghostty`) for conflicting shortcuts.

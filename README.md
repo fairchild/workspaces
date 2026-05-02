@@ -1,10 +1,10 @@
-# Workspaces
+# WorkSpaces
 
 **Terminal-first workspace manager for AI coding sessions on macOS.**
 
- Workspaces gives you a native app that wraps a terminal with some niceties for spinning up isolated workspaces. Designed to optimize terminal-based coding agent workflows.
+WorkSpaces gives you a native app that wraps a terminal with some niceties for spinning up isolated workspaces. Designed to optimize terminal-based coding agent workflows.
 
-![Workspaces main window][screenshot-main]
+![WorkSpaces main window][screenshot-main]
 
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
@@ -28,7 +28,7 @@
 ### From DMG (Recommended)
 
 1. Download the latest `.dmg` from [Releases](https://github.com/fairchild/workspaces/releases)
-2. Open the DMG and drag **Workspaces** to Applications
+2. Open the DMG and drag **WorkSpaces** to Applications
 3. Launch from Applications (first time: right-click > Open)
 
 ## Features
@@ -71,7 +71,7 @@ Open Settings (`Cmd+,`) to configure workspace root location.
 
 ## Fork & Customize
 
-Workspaces is designed to be forked. There's no plugin system or extension API — instead, the codebase itself is the API. Common customizations:
+WorkSpaces is designed to be forked. There's no plugin system or extension API — instead, the codebase itself is the API. Common customizations:
 
 - **Change the layout**: Edit `ContentView.swift` to rearrange panes
 - **Add lifecycle hooks**: Drop scripts into workspace directories (`setup.sh`, `archive.sh`)
@@ -109,7 +109,7 @@ For VM and provider-backed workspace architecture, see:
 - [docs/development/codespaces-claude-worker.md](./docs/development/codespaces-claude-worker.md)
 - [docs/development/evidence.md](./docs/development/evidence.md)
 
-The Lume validation flow uses isolated Workspaces-managed VM storage and a standalone validated-base manifest before the app will reuse a macOS base VM.
+The Lume validation flow uses isolated WorkSpaces-managed VM storage and a standalone validated-base manifest before the app will reuse a macOS base VM.
 
 For UI smoke/capture script entry points, see:
 
