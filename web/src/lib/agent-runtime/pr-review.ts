@@ -30,8 +30,6 @@ mkdir -p ./tmp
 cat > ./tmp/review.md << 'REVIEW_EOF'
 ✅ **Approve** — Clean, behavior-preserving change with no blocking issues.
 
-> 🤖 **Automated review by Claude** (Managed Agent)
-
 ## Summary
 Your summary here...
 
