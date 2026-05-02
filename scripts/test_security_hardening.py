@@ -155,6 +155,9 @@ class SecurityHardeningTests(unittest.TestCase):
         self.assertIn("gh release download", workflow)
         self.assertIn("xcrun stapler validate", workflow)
         self.assertIn("spctl --assess", workflow)
+        self.assertIn("APPLE_API_KEY_BASE64", workflow)
+        self.assertIn("APPLE_API_KEY_ID", workflow)
+        self.assertIn("APPLE_API_ISSUER_ID", workflow)
         self.assertIn("permissions:\n  contents: read", workflow)
         self.assertIn("permissions:\n      contents: write", workflow)
         for forbidden in (
@@ -165,8 +168,23 @@ class SecurityHardeningTests(unittest.TestCase):
             'echo "APP_PASSWORD=$APPLE_APP_PASSWORD" >> "$GITHUB_ENV"',
             'echo "APPLE_ID=$APPLE_ID" >> "$GITHUB_ENV"',
             'echo "TEAM_ID=$APPLE_TEAM_ID" >> "$GITHUB_ENV"',
+            'echo "APPLE_API_KEY_PATH=$API_KEY_PATH" >> "$GITHUB_ENV"',
+            'echo "APPLE_API_KEY_ID=$APPLE_API_KEY_ID" >> "$GITHUB_ENV"',
+            'echo "APPLE_API_ISSUER_ID=$APPLE_API_ISSUER_ID" >> "$GITHUB_ENV"',
         ):
             self.assertNotIn(forbidden, workflow)
+
+    def test_release_setup_uses_app_store_connect_api_key_notarization(self) -> None:
+        """Release setup should configure App Store Connect API-key notarization."""
+        setup_script = (REPO_ROOT / "scripts/setup-release-secrets.sh").read_text()
+        signing_template = (REPO_ROOT / "scripts/signing-config.sh.template").read_text()
+        releasing_doc = (REPO_ROOT / "RELEASING.md").read_text()
+
+        for content in (setup_script, signing_template, releasing_doc):
+            self.assertIn("APPLE_API_KEY_ID", content)
+            self.assertIn("APPLE_API_ISSUER_ID", content)
+            self.assertNotIn("APPLE_APP_PASSWORD", content)
+            self.assertNotIn("--app-password", content)
 
     def test_ci_workflows_have_explicit_permissions(self) -> None:
         """CI workflows should declare explicit top-level permissions to limit default token scope."""

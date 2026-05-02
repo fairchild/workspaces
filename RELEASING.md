@@ -78,23 +78,23 @@ mkdir -p ~/.config/apple
 mv ~/Downloads/WorkspaceManager.provisionprofile ~/.config/apple/workspaces.provisionprofile
 ```
 
-#### Step 4: Create an App-Specific Password
+#### Step 4: Create an App Store Connect API Key
 
-Notarization requires an app-specific password (your regular Apple ID password won't work).
+Notarization uses App Store Connect API-key authentication rather than an
+Apple ID app-specific password.
 
-1. Go to [account.apple.com](https://account.apple.com) > Sign-In and Security > App-Specific Passwords
-2. Click "Generate an app-specific password"
-3. Name it something like "workspaces-notarytool"
-4. Copy the generated `xxxx-xxxx-xxxx-xxxx` password
-
-You can optionally store this in Keychain instead of a file:
+1. Go to App Store Connect > Users and Access > Integrations > App Store Connect API
+2. Create an API key with notarization access
+3. Download the `.p8` private key once and store it outside the repository, for example:
 
 ```bash
-xcrun notarytool store-credentials "workspaces-notarize" \
-    --apple-id your@email.com \
-    --team-id XXXXXXXXXX \
-    --password xxxx-xxxx-xxxx-xxxx
+mkdir -p ~/.config/apple
+mv ~/Downloads/AuthKey_XXXXXXXXXX.p8 ~/.config/apple/
+chmod 600 ~/.config/apple/AuthKey_XXXXXXXXXX.p8
 ```
+
+Record the key ID and issuer ID shown in App Store Connect. The key ID is also
+embedded in the downloaded filename.
 
 #### Step 5: Configure Local Signing
 
@@ -108,6 +108,7 @@ Set both:
 
 - `SIGNING_IDENTITY` to your Developer ID Application certificate
 - `PROVISIONING_PROFILE_PATH` to the downloaded `.provisionprofile`
+- `APPLE_API_KEY_PATH`, `APPLE_API_KEY_ID`, and `APPLE_API_ISSUER_ID` for notarization
 
 Use `scripts/signing-config.sh` for local signing/notarization only. For GitHub Actions release setup, use `./scripts/setup-release-secrets.sh`.
 
@@ -177,7 +178,10 @@ Preferred setup path:
 ```bash
 ./scripts/setup-release-secrets.sh \
     --p12-path ~/.config/apple/Developer_ID_Application_<TEAM_ID>.p12 \
-    --profile-path ~/.config/apple/workspaces.provisionprofile
+    --profile-path ~/.config/apple/workspaces.provisionprofile \
+    --api-key-path ~/.config/apple/AuthKey_<KEY_ID>.p8 \
+    --api-key-id <KEY_ID> \
+    --api-issuer-id <ISSUER_ID>
 ```
 
 Notes:
@@ -193,13 +197,14 @@ If you prefer to configure GitHub manually, add these **secrets** to your GitHub
 | `APPLE_DEVELOPER_ID_CERT_BASE64` | Base64-encoded .p12 certificate |
 | `APPLE_DEVELOPER_ID_CERT_PASSWORD` | Password for the .p12 file |
 | `APPLE_DEVELOPER_ID_PROVISIONING_PROFILE_BASE64` | Base64-encoded Developer ID provisioning profile with keychain sharing |
-| `APPLE_APP_PASSWORD` | App-specific password |
+| `APPLE_API_KEY_BASE64` | Base64-encoded App Store Connect API `.p8` key |
+| `APPLE_API_KEY_ID` | App Store Connect API key ID |
+| `APPLE_API_ISSUER_ID` | App Store Connect issuer ID |
 
 Add these **variables** to your GitHub repository (Settings > Secrets and variables > Actions > Variables):
 
 | Variable | Description |
 |--------|-------------|
-| `APPLE_ID` | Your Apple ID email |
 | `APPLE_TEAM_ID` | 10-character Team ID |
 
 To export your certificate for CI or for `setup-release-secrets.sh`:
@@ -219,6 +224,13 @@ To export the provisioning profile for CI:
 ```bash
 base64 -i ~/.config/apple/workspaces.provisionprofile | pbcopy
 # Paste as APPLE_DEVELOPER_ID_PROVISIONING_PROFILE_BASE64 secret
+```
+
+To export the App Store Connect API key for CI:
+
+```bash
+base64 -i ~/.config/apple/AuthKey_<KEY_ID>.p8 | pbcopy
+# Paste as APPLE_API_KEY_BASE64 secret
 ```
 
 ---
@@ -417,9 +429,9 @@ Download the DMG from GitHub Releases onto a Mac that has never seen the app:
 View the notarization log:
 ```bash
 xcrun notarytool log <submission-id> \
-    --apple-id your@email.com \
-    --password xxxx-xxxx-xxxx-xxxx \
-    --team-id XXXXXXXXXX
+    --key "$APPLE_API_KEY_PATH" \
+    --key-id "$APPLE_API_KEY_ID" \
+    --issuer "$APPLE_API_ISSUER_ID"
 ```
 
 When `scripts/notarize.sh` fails, it also saves Apple's JSON response to:
