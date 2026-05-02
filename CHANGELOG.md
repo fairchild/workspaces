@@ -1,5 +1,52 @@
 # Changelog
 
+## [0.11.0] - 2026-05-02
+
+### Added
+- web: post PR reviews via GitHub API (#363)
+- cd: preview→validate→promote pipeline with bootstrap orchestrator (#344)
+- web: automated PR review via Managed Agents (#345)
+- web: qa-web skill + subagent with change-aware exploration and report presentation (#343)
+- web: E2E harness for managed-agents + dev-bypass token fix
+- web: Anthropic Managed Agents provider + unified terminal abstraction (#332)
+- web: install pi, skills, mise, uv in Vercel sandbox base snapshot (#329)
+- web: add Managed Agents as opt-in compute provider (#325)
+- web: Spaces welcome banner in terminal (v4-welcome) (#321)
+
+### Changed
+- terminal: extract Ghostty threading, userdata, clipboard, and scale seams (#371)
+- desktop: reduce render-cycle work and harden reliability (#341)
+- web: wrap remaining runCommand calls in assertRunCommand (#320)
+
+### Fixed
+- desktop: gate runtime NSApp.activate via AppActivationPolicy (shared-desktop Phase 1) (#374)
+- web: use ./tmp instead of /tmp for review temp files
+- web: use file + jq for PR review body to preserve markdown
+- web: attribute PR reviews to Claude + fix token mount path (#367)
+- cd: run vercel CLI from repo root (project has rootDirectory=web) (#359)
+- cd: bypass Vercel Deployment Protection for preview validators (#354)
+- cd: strip ANSI escapes from playwright findings
+- cd: checkout repo in fail-notify jobs
+- cd: resolve fail-notify module via absolute file URL
+- cd: deploy prebuilt artifact with --prod --skip-domain
+- cd: add VERCEL_PROJECT_ID to deploy + promote env blocks (#351)
+- cd: target Node 24 + Vercel CLI 51 to match project settings (#350)
+- cd: point pnpm/action-setup at web/package.json (#349)
+- web: stable sub-tab order (sort by created_at, not last_activity_at) (#333)
+- web: ensure tmux socket dir exists before ttyd launch (#331)
+- web: pass GitHub token to managed-agents provider (#330)
+- web: strip .git suffix from repo name in welcome banner (v4-welcome-c) (#323)
+- web: welcome banner via /etc/profile.d (v4-welcome-b) (#322)
+
+### Other
+- add landing login link (#384)
+- Update GhosttyKit to latest stable (#380)
+- Add GitHub App authentication for PR reviewer (#370)
+- refactor+fix(web): simplify shared patterns; close read-API authz gaps (#342)
+- [codex] Harden Workspaces performance system (#338)
+- add PostHog telemetry to web (#336)
+- Optimize Workspaces UI latency and expand perf diagnostics (#304)
+
 ## [0.10.0] - 2026-04-09
 
 ### Added
