@@ -30,10 +30,24 @@ This ensures perf changes are not hiding functional regressions.
 Performance-sensitive PRs must carry canonical before/after evidence in the PR body. The expected workflow is:
 
 ```bash
+./scripts/pr-evidence.sh --pr <N> --profile performance --scenario debug_no_activate
+```
+
+When the before/after summaries were captured on separate commits, reuse them through the same PR evidence wrapper:
+
+```bash
+./scripts/pr-evidence.sh --pr <N> --profile performance --scenario debug_no_activate \
+  --before-summary /tmp/before/summary.json --after-summary /tmp/after/summary.json \
+  --skip-before --skip-after
+```
+
+The lower-level helper remains available when you only need local Markdown fields without uploading an evidence artifact:
+
+```bash
 ./scripts/prepare-perf-evidence.sh --scenario debug_no_activate
 ```
 
-That script runs the canonical scenario, captures `before` and `after` summaries, compares them with `./scripts/perf-compare.py`, and prints PR-ready fields that match `.github/pull_request_template.md`.
+The PR evidence wrapper runs the canonical scenario, captures `before` and `after` summaries, compares them with `./scripts/perf-compare.py`, writes local PR-ready Markdown, and uploads an SVG delta summary through `./scripts/evidence.sh`.
 
 Required PR fields for `performance-sensitive` work:
 
