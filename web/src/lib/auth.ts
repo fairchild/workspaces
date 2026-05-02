@@ -1,9 +1,21 @@
 import { betterAuth } from "better-auth";
 import { getDialect } from "./db";
 
+function getAuthBaseURL() {
+	if (process.env.BETTER_AUTH_URL) return process.env.BETTER_AUTH_URL;
+	if (process.env.NODE_ENV === "development") {
+		return {
+			allowedHosts: ["localhost:*", "127.0.0.1:*"],
+			protocol: "http" as const,
+			fallback: "http://localhost:3000",
+		};
+	}
+	return "http://localhost:3000";
+}
+
 export const auth = betterAuth({
 	secret: process.env.BETTER_AUTH_SECRET,
-	baseURL: process.env.BETTER_AUTH_URL ?? "http://localhost:3000",
+	baseURL: getAuthBaseURL(),
 	database: { dialect: getDialect(), type: "sqlite" },
 	socialProviders: {
 		github: {

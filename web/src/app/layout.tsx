@@ -20,6 +20,9 @@ export const metadata: Metadata = {
 	title: "Spaces",
 	description: "Workspace management for AI coding sessions",
 	metadataBase: new URL("https://spaces.cloudcompute.com"),
+	icons: {
+		icon: "/favicon.svg",
+	},
 	openGraph: {
 		title: "Spaces",
 		description: "Workspace management for AI coding sessions",
@@ -36,6 +39,7 @@ export default function RootLayout({
 		<html
 			lang="en"
 			className={`${instrumentSerif.variable} ${jetbrainsMono.variable}`}
+			suppressHydrationWarning
 		>
 			<body>
 				{children}
