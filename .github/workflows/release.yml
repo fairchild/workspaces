@@ -190,6 +190,29 @@ jobs:
           echo "APP_PASSWORD=$APPLE_APP_PASSWORD" >> "$GITHUB_ENV"
           echo "BUNDLE_ID=com.cloudcompute.workspaces" >> "$GITHUB_ENV"
 
+      - name: Notarization preflight
+        run: |
+          set -euo pipefail
+          if [[ -n "${APPLE_API_KEY_PATH:-}" ]]; then
+            args=(--key "$APPLE_API_KEY_PATH" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER_ID")
+          elif [[ -n "${APPLE_ID:-}" ]]; then
+            args=(--apple-id "$APPLE_ID" --password "$APP_PASSWORD" --team-id "$TEAM_ID")
+          else
+            echo "::error::No Apple notarization credentials present in env"
+            exit 1
+          fi
+          if ! out=$(xcrun notarytool history "${args[@]}" 2>&1); then
+            if grep -qi "agreement" <<<"$out"; then
+              echo "::error::Apple notarization rejected: required agreement is missing or expired."
+              echo "::error::Account Holder for team $TEAM_ID must accept the pending Developer Program License Agreement at https://developer.apple.com/account/"
+            else
+              echo "::error::Apple notarization preflight failed:"
+              echo "$out"
+            fi
+            exit 1
+          fi
+          echo "Notarization credentials OK"
+
       - name: Validate app version metadata
         if: startsWith(github.ref, 'refs/tags/')
         run: |
