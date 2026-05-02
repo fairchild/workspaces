@@ -88,8 +88,14 @@ enum GhosttyClipboardBridge {
         content: UnsafePointer<ghostty_clipboard_content_s>?,
         len: Int
     ) {
-        guard GhosttyCallbackUserdata.surfaceView(from: userdata) != nil,
-            location == GHOSTTY_CLIPBOARD_STANDARD,
+        let userdataAddress = userdata.map { UInt(bitPattern: $0) }
+        let hasSurfaceView = GhosttyThreadingBridge.runOnMainSync {
+            let userdata = userdataAddress.flatMap(UnsafeMutableRawPointer.init(bitPattern:))
+            return GhosttyCallbackUserdata.surfaceView(from: userdata) != nil
+        }
+
+        guard location == GHOSTTY_CLIPBOARD_STANDARD,
+            hasSurfaceView,
             let content,
             len > 0,
             let value = selectWriteText(from: content, count: len)
