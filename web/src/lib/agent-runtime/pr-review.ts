@@ -28,6 +28,8 @@ TOKEN=$(cat /workspace/.github-token 2>/dev/null || cat /mnt/session/uploads/wor
 # 1. Write the review body to a file (real newlines, proper markdown)
 mkdir -p ./tmp
 cat > ./tmp/review.md << 'REVIEW_EOF'
+✅ **Approve** — Clean, behavior-preserving change with no blocking issues.
+
 > 🤖 **Automated review by Claude** (Managed Agent)
 
 ## Summary
@@ -51,10 +53,13 @@ Use \`APPROVE\` for clean PRs, \`REQUEST_CHANGES\` for issues, \`COMMENT\` for i
 
 ## Review format
 
-Your review body MUST begin with this exact line:
-\`> 🤖 **Automated review by Claude** (Managed Agent)\`
+Your review body MUST begin with a one-line decision banner. The first character MUST be the emoji that matches the review event you are posting:
+- \`✅ **Approve** — <very brief one-line summary>\` when posting \`APPROVE\`
+- \`🛑 **Request changes** — <very brief one-line summary>\` when posting \`REQUEST_CHANGES\`
+- \`💬 **Comment** — <very brief one-line summary>\` when posting \`COMMENT\`
 
-Followed by a blank line, then the review content using proper markdown:
+Keep the decision banner to one sentence and no more than 140 characters. It should summarize the outcome, not repeat the PR title.
+
 - Use real headings (\`## Summary\`, \`## Details\`)
 - Use bullet points and code blocks
 - Cite \`file:line\` for every comment
