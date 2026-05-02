@@ -120,6 +120,15 @@ if rg -n "CVDisplayLinkCreateWithCGDisplays error -6661|embedded_window: error i
     fail "Installed-build perf verification requires an interactive display-capable macOS session; Ghostty surface initialization failed in the current environment"
 fi
 
+# Apps launched in CI go into .accessory policy (no foreground activation),
+# so the terminal never becomes key and first_prompt_ready never fires. The
+# terminal surface itself is healthy — this is a foreground-session
+# limitation of the runner, not a perf regression.
+if rg -n "CI detected: \.accessory policy" "$LOG_FILE" >/dev/null \
+   && [[ "$ALLOW_SKIP_NONINTERACTIVE" -eq 1 ]]; then
+    skip_noninteractive "Installed-build perf verification requires a foreground GUI session; runner launched the app under .accessory policy"
+fi
+
 python3 - "$SUMMARY_JSON" <<'PY'
 import json
 import sys

@@ -475,7 +475,7 @@ struct MainWindowFocusedActions {
     var revealInFinder: Action? = nil
     var copyPath: Action? = nil
 
-    static let empty = MainWindowFocusedActions()
+    @MainActor static let empty = MainWindowFocusedActions()
 }
 
 struct MainWindowCommandAvailability: Equatable {
