@@ -3,7 +3,10 @@ import { createClient } from "@libsql/client";
 
 const TEST_USER_ID = "dev-user";
 const TEST_REPO = "fairchild/workspaces";
-const DB_PATH = "data/auth.db";
+const DB_URL =
+	process.env.PLAYWRIGHT_DATABASE_URL ??
+	(process.env.CI ? "file:data/e2e-auth.db" : process.env.TURSO_DATABASE_URL) ??
+	"file:data/auth.db";
 
 // Deterministic IDs for cleanup
 const EVENT_IDS = [
@@ -46,10 +49,8 @@ function minutesAgo(day: number, minutes: number): string {
 }
 
 export default async function globalSetup() {
-	if (process.env.CI) return;
-
 	mkdirSync("data", { recursive: true });
-	const db = createClient({ url: `file:${DB_PATH}` });
+	const db = createClient({ url: DB_URL });
 
 	await db.execute(`CREATE TABLE IF NOT EXISTS "user" (
 		id TEXT PRIMARY KEY,

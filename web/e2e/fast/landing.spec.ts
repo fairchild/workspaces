@@ -15,6 +15,11 @@ test.describe("Landing page", () => {
 	});
 
 	test("starts social login from the served origin", async ({ page }) => {
+		test.skip(
+			process.env.PLAYWRIGHT_SKIP_WEB_SERVER === "1",
+			"local server origin regression only",
+		);
+
 		await page.goto("/sign-in");
 
 		const response = await page.request.post("/api/auth/sign-in/social", {

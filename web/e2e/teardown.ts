@@ -1,5 +1,10 @@
 import { createClient } from "@libsql/client";
 
+const DB_URL =
+	process.env.PLAYWRIGHT_DATABASE_URL ??
+	(process.env.CI ? "file:data/e2e-auth.db" : process.env.TURSO_DATABASE_URL) ??
+	"file:data/auth.db";
+
 const EVENT_IDS = [
 	"e2e-event-ci-1",
 	"e2e-event-ci-2",
@@ -13,12 +18,17 @@ const EVENT_IDS = [
 	"e2e-event-ci-7",
 	"e2e-event-push-2",
 ];
-const CHAT_IDS = ["e2e-chat-1", "e2e-chat-2", "e2e-chat-3", "e2e-chat-4"];
+const CHAT_IDS = [
+	"e2e-chat-1",
+	"e2e-chat-2",
+	"e2e-chat-3",
+	"e2e-chat-4",
+	"e2e-chat-5",
+	"e2e-chat-6",
+];
 
 export default async function globalTeardown() {
-	if (process.env.CI) return;
-
-	const db = createClient({ url: "file:data/auth.db" });
+	const db = createClient({ url: DB_URL });
 
 	await db.execute({
 		sql: "DELETE FROM user_repos WHERE user_id = ?",
