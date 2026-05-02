@@ -127,6 +127,17 @@ jobs:
 
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 
+          # Add the release keychain to the user search list so codesign's
+          # securityd lookups succeed even when --keychain isn't passed.
+          # The Cleanup keychain step at the end restores the original list.
+          search_list_args=("$KEYCHAIN_PATH")
+          if [[ -n "$ORIGINAL_KEYCHAIN_LIST" ]]; then
+            while IFS= read -r kc; do
+              [[ -n "$kc" ]] && search_list_args+=("$kc")
+            done <<< "$ORIGINAL_KEYCHAIN_LIST"
+          fi
+          security list-keychains -d user -s "${search_list_args[@]}"
+
           SIGNING_IDENTITY="$(
             security find-identity -v -p codesigning "$KEYCHAIN_PATH" \
             | sed -n 's/.*"\(Developer ID Application:.*\)".*/\1/p' \

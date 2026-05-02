@@ -234,6 +234,12 @@ codesign_with_identity() {
     local target="$1"
     shift
 
+    # SwiftPM ad-hoc signs binaries at build time. Replacing that signature
+    # has surfaced errSecInternalComponent on self-hosted runners where
+    # securityd's access path is fragile; stripping first avoids the replace
+    # codepath entirely.
+    codesign --remove-signature "$target" 2>/dev/null || true
+
     local -a cmd=(
         codesign
         --sign "$SIGNING_IDENTITY"
@@ -251,7 +257,19 @@ codesign_with_identity() {
     fi
 
     cmd+=("$target")
-    "${cmd[@]}"
+
+    local attempt rc=0
+    for attempt in 1 2 3; do
+        if "${cmd[@]}"; then
+            return 0
+        fi
+        rc=$?
+        if (( attempt < 3 )); then
+            log_warning "codesign failed for $target (attempt $attempt/3), retrying in 2s..."
+            sleep 2
+        fi
+    done
+    return "$rc"
 }
 
 prepare_signing_assets() {
