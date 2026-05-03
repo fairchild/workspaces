@@ -14,6 +14,7 @@ Thanks for contributing to Workspaces.
 From repo root:
 
 ```bash
+./scripts/setup               # first-run: tools, dependencies, and prek hooks
 ./scripts/build-ghosttykit.sh  # one-time: build terminal framework
 swift build
 swift test
@@ -21,13 +22,13 @@ swift test
 
 Or with mask: `mask setup && mask build && mask test`
 
-Install git hooks so commits run lint automatically:
+To refresh git hooks without running full setup:
 
 ```bash
-mask hooks-install
+./scripts/setup --hooks-only
 ```
 
-`mask setup` now installs hooks for you as part of first-time setup.
+Or with mask: `mask hooks-install`
 
 To run the app in dev mode (isolated data directory):
 
