@@ -34,7 +34,9 @@ let package = Package(
         .executable(name: "workspaces", targets: ["WorkspaceManagerCLI"]),
         .executable(name: "WorkspaceManagerCLI", targets: ["WorkspaceManagerCLI"]),
     ],
-    dependencies: [],
+    dependencies: [
+        .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.9.1")
+    ],
     targets: [
         // ====================================================================
         // Core Library
@@ -61,7 +63,11 @@ let package = Package(
         // Resources are bundled for the .app bundle creation.
         .executableTarget(
             name: "WorkspaceManager",
-            dependencies: ["WorkspaceManagerCore", "GhosttyKit"],
+            dependencies: [
+                "WorkspaceManagerCore",
+                "GhosttyKit",
+                .product(name: "Sparkle", package: "Sparkle")
+            ],
             // Exclude Info.plist from automatic resource discovery
             // (SPM forbids Info.plist as a bundled resource; it's copied by build-release.sh)
             exclude: ["Resources/Info.plist"],
@@ -81,7 +87,13 @@ let package = Package(
                 .linkedFramework("QuartzCore"),
                 .linkedFramework("UniformTypeIdentifiers"),
                 .linkedFramework("UserNotifications"),
-                .linkedFramework("WebKit")
+                .linkedFramework("WebKit"),
+                .unsafeFlags([
+                    "-Xlinker",
+                    "-rpath",
+                    "-Xlinker",
+                    "@executable_path/../Frameworks"
+                ])
             ]
         ),
 

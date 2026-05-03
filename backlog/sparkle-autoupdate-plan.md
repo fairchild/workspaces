@@ -1,8 +1,8 @@
 ---
-status: pending
+status: in_progress
 category: plan
 pr: null
-branch: null
+branch: codex/privacy-first-sparkle-updates
 score: null
 retro_summary: null
 completed: null
@@ -10,306 +10,64 @@ completed: null
 
 > **GitHub Issue**: https://github.com/fairchild/workspaces/issues/2
 
-
-# Sparkle Auto-Update Integration
+# Privacy-First Sparkle Update Integration
 
 ## Problem Statement
 
-WorkspaceManager is distributed directly (notarized DMG) rather than through the Mac App Store. Without built-in auto-update capability, users must manually check for and download new versions, leading to:
-
-- Fragmented user base on different versions
-- Critical bug fixes not reaching users promptly
-- Poor user experience for a developer tool
-
-Sparkle is the de-facto standard for macOS app auto-updates, used by VS Code, Sublime Text, and most non-App Store apps.
+WorkSpaces is distributed directly as a notarized DMG, so users need a safer path than manually polling GitHub Releases. The updater must still fit highly restricted corporate environments: no update checks, telemetry, profiling, background downloads, or silent installs may happen by default.
 
 ## Key Decisions
 
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
-| Framework | Sparkle 2.x | Industry standard, Swift support, SPM compatible |
-| Signing | EdDSA (ed25519) | Sparkle 2.x default, more secure than DSA |
-| Appcast hosting | GitHub Pages | Free, reliable, version-controlled |
-| Update channel | Single (stable) | Start simple, add beta channel later if needed |
-| Check frequency | Weekly + manual | Balance between freshness and annoyance |
+| Framework | Sparkle 2.x | Native macOS updater with EdDSA verification and SwiftPM support |
+| Default network behavior | Off | No update request is made unless the user manually checks or explicitly enables automatic checks |
+| Telemetry/system profiling | Off, with delegate guardrails | Sparkle profiling remains disabled and the delegate returns no profile keys or feed parameters |
+| Automatic downloads/installs | Disabled | Corporate users should always confirm installs visibly |
+| Appcast hosting | GitHub Release asset | `latest/download/appcast.xml` avoids GitHub Pages cache lag |
+| Signing | Sparkle EdDSA | Private key stored outside the repo as `SPARKLE_PRIVATE_KEY`; public key committed in `Info.plist` |
 
-## Architecture
+## Implementation Shape
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    WorkspaceManager.app                     │
-│  ┌─────────────────────────────────────────────────────┐   │
-│  │ SPUStandardUpdaterController (Sparkle)               │   │
-│  │ - Automatic check on launch (configurable)           │   │
-│  │ - "Check for Updates" menu item                      │   │
-│  │ - EdDSA signature verification                       │   │
-│  └─────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────┘
-                              │
-                              ▼ HTTPS fetch
-┌─────────────────────────────────────────────────────────────┐
-│              GitHub Pages (appcast.xml)                     │
-│  - Version info, release notes                              │
-│  - Download URLs (GitHub Releases)                          │
-│  - EdDSA signatures                                         │
-└─────────────────────────────────────────────────────────────┘
-                              │
-                              ▼ Download
-┌─────────────────────────────────────────────────────────────┐
-│              GitHub Releases (DMG files)                    │
-│  - WorkspaceManager-1.0.0.dmg                              │
-│  - WorkspaceManager-1.1.0.dmg                              │
-└─────────────────────────────────────────────────────────────┘
-```
+The app owns a single `SoftwareUpdateController` that wraps `SPUStandardUpdaterController`. The controller is shared by:
 
-## Implementation Phases
+- App menu command: `Check for Updates...`
+- Settings > Updates toggle: `Automatically check for updates`
+- A defensive `SoftwareUpdateDelegate`
 
-### Phase 1: Add Sparkle Dependency
+The first manual check shows a disclosure before invoking Sparkle. The disclosure states that WorkSpaces contacts GitHub Releases, sends no telemetry/system profile/custom parameters, and that GitHub may receive normal HTTP request metadata such as IP address.
 
-**Files to modify:**
-- `Package.swift` - Add Sparkle package dependency
+Info.plist defaults:
 
-```swift
-dependencies: [
-    .package(url: "https://github.com/migueldeicaza/SwiftTerm", from: "1.2.0"),
-    .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.0.0")
-],
-targets: [
-    .executableTarget(
-        name: "WorkspaceManager",
-        dependencies: [
-            "WorkspaceManagerCore",
-            "SwiftTerm",
-            .product(name: "Sparkle", package: "Sparkle")
-        ],
-        ...
-    )
-]
-```
+- `SUFeedURL = https://github.com/fairchild/workspaces/releases/latest/download/appcast.xml`
+- `SUEnableAutomaticChecks = false`
+- `SUAutomaticallyUpdate = false`
+- `SUAllowsAutomaticUpdates = false`
+- `SUEnableSystemProfiling = false`
+- `SUScheduledCheckInterval = 604800`
+- `SUPublicEDKey = <production public key>`
 
-**Acceptance criteria:**
-- [ ] `swift build` succeeds with Sparkle dependency
-- [ ] Sparkle framework included in app bundle
+## Release Integration
 
-### Phase 2: Generate Signing Keys
+Release builds bundle `Sparkle.framework` into `Contents/Frameworks` and sign it with the rest of the app bundle. The release workflow requires `SPARKLE_PRIVATE_KEY`, generates `build/appcast.xml` after the DMG is created, and uploads the appcast beside the DMG assets.
 
-**Files to create:**
-- `scripts/generate-sparkle-keys.sh` - One-time key generation script
+The generated appcast uses:
 
-```bash
-#!/bin/bash
-# Generate EdDSA key pair for Sparkle updates
-# Run once, store private key securely (never commit!)
+- `CFBundleVersion` for `sparkle:version`
+- `CFBundleShortVersionString` for `sparkle:shortVersionString`
+- `LSMinimumSystemVersion` for `sparkle:minimumSystemVersion`
+- Sparkle `sign_update` output for `sparkle:edSignature` and `length`
+- the tagged GitHub Release DMG URL as the enclosure URL
 
-./Sparkle/bin/generate_keys
+## Verification
 
-# Output:
-# - Private key: Add to CI secrets as SPARKLE_PRIVATE_KEY
-# - Public key: Add to Info.plist as SUPublicEDKey
-```
-
-**Acceptance criteria:**
-- [ ] EdDSA key pair generated
-- [ ] Private key stored in secure location (1Password, GitHub Secrets)
-- [ ] Public key ready for Info.plist
-
-### Phase 3: Configure Info.plist
-
-**Files to modify:**
-- `Sources/WorkspaceManager/Resources/Info.plist` - Add Sparkle configuration
-
-Required keys:
-```xml
-<!-- Sparkle Configuration -->
-<key>SUFeedURL</key>
-<string>https://cloudcompute.github.io/workspaces/appcast.xml</string>
-
-<key>SUPublicEDKey</key>
-<string>{PUBLIC_EDKEY_FROM_GENERATION}</string>
-
-<key>SUEnableAutomaticChecks</key>
-<true/>
-
-<key>SUScheduledCheckInterval</key>
-<integer>604800</integer> <!-- Weekly (7 * 24 * 60 * 60) -->
-
-<key>SUAllowsAutomaticUpdates</key>
-<true/>
-```
-
-**Acceptance criteria:**
-- [ ] SUFeedURL points to valid appcast location
-- [ ] SUPublicEDKey contains generated public key
-
-### Phase 4: Integrate Updater in App
-
-**Files to modify:**
-- `WorkspaceManager/Sources/WorkspaceManager/App/WorkspaceManagerApp.swift` - Add updater controller
-
-```swift
-import Sparkle
-
-@main
-struct WorkspaceManagerApp: App {
-    private let updaterController: SPUStandardUpdaterController
-
-    init() {
-        updaterController = SPUStandardUpdaterController(
-            startingUpdater: true,
-            updaterDelegate: nil,
-            userDriverDelegate: nil
-        )
-    }
-
-    var body: some Scene {
-        WindowGroup {
-            ContentView()
-        }
-        .commands {
-            CommandGroup(after: .appInfo) {
-                CheckForUpdatesView(updater: updaterController.updater)
-            }
-        }
-    }
-}
-```
-
-**Files to create:**
-- `WorkspaceManager/Sources/WorkspaceManager/Views/CheckForUpdatesView.swift`
-
-```swift
-import SwiftUI
-import Sparkle
-
-struct CheckForUpdatesView: View {
-    @ObservedObject private var checkForUpdatesViewModel: CheckForUpdatesViewModel
-
-    init(updater: SPUUpdater) {
-        self.checkForUpdatesViewModel = CheckForUpdatesViewModel(updater: updater)
-    }
-
-    var body: some View {
-        Button("Check for Updates…", action: checkForUpdatesViewModel.checkForUpdates)
-            .disabled(!checkForUpdatesViewModel.canCheckForUpdates)
-    }
-}
-
-final class CheckForUpdatesViewModel: ObservableObject {
-    @Published var canCheckForUpdates = false
-
-    private let updater: SPUUpdater
-
-    init(updater: SPUUpdater) {
-        self.updater = updater
-        updater.publisher(for: \.canCheckForUpdates)
-            .assign(to: &$canCheckForUpdates)
-    }
-
-    func checkForUpdates() {
-        updater.checkForUpdates()
-    }
-}
-```
-
-**Acceptance criteria:**
-- [ ] "Check for Updates…" appears in app menu
-- [ ] Menu item disabled during check, enabled when idle
-- [ ] Automatic check runs on app launch
-
-### Phase 5: Set Up Appcast Infrastructure
-
-**Files to create:**
-- `docs/appcast.xml` - Initial appcast (empty or with v1.0.0)
-- `.github/workflows/update-appcast.yml` - Automation for appcast updates
-
-Appcast template:
-```xml
-<?xml version="1.0" encoding="utf-8"?>
-<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
-  <channel>
-    <title>WorkspaceManager Updates</title>
-    <link>https://cloudcompute.github.io/workspaces/appcast.xml</link>
-    <description>Most recent changes with links to updates.</description>
-    <language>en</language>
-    <item>
-      <title>Version 1.0.0</title>
-      <sparkle:version>1</sparkle:version>
-      <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <pubDate>Mon, 01 Jan 2026 00:00:00 +0000</pubDate>
-      <enclosure
-        url="https://github.com/cloudcompute/workspaces/releases/download/v1.0.0/WorkspaceManager-1.0.0.dmg"
-        sparkle:edSignature="{SIGNATURE}"
-        length="{FILE_SIZE}"
-        type="application/octet-stream" />
-      <description><![CDATA[
-        <h2>Initial Release</h2>
-        <ul>
-          <li>Terminal-based workspace management</li>
-          <li>Git integration</li>
-          <li>SwiftUI interface</li>
-        </ul>
-      ]]></description>
-    </item>
-  </channel>
-</rss>
-```
-
-**Acceptance criteria:**
-- [ ] Appcast accessible at SUFeedURL
-- [ ] GitHub Pages configured for docs/ folder
-- [ ] XML validates against Sparkle schema
-
-### Phase 6: Release Signing Script
-
-**Files to modify:**
-- `scripts/notarize.sh` - Add Sparkle signing step
-
-Add after DMG creation:
-```bash
-# Sign for Sparkle
-SIGNATURE=$(./Sparkle/bin/sign_update "$DMG_PATH" --ed-key-file "$SPARKLE_PRIVATE_KEY_FILE")
-echo "Sparkle signature: $SIGNATURE"
-```
-
-**Files to create:**
-- `scripts/update-appcast.sh` - Script to update appcast with new release
-
-**Acceptance criteria:**
-- [ ] DMG signed with EdDSA key during release
-- [ ] Signature included in appcast entry
-
-## Verification Commands
-
-```bash
-# Build with Sparkle
-swift build -c release
-
-# Verify Sparkle linked
-otool -L .build/release/WorkspaceManager | grep Sparkle
-
-# Test appcast fetch (after deployment)
-curl -s https://cloudcompute.github.io/workspaces/appcast.xml | xmllint --format -
-
-# Verify signature
-./Sparkle/bin/sign_update --verify "$DMG_PATH" --ed-key-file "$PUBLIC_KEY_FILE"
-```
+- `plutil -lint Sources/WorkspaceManager/Resources/Info.plist`
+- `swift build`
+- `swift test`
+- `./scripts/build-release.sh --no-sign`
+- `bash -n scripts/build-release.sh scripts/generate-sparkle-appcast.sh scripts/notarize.sh`
+- Runtime screenshots of Settings > Updates and the first manual-check disclosure uploaded with `./scripts/evidence.sh`
 
 ## Rollback Plan
 
-If Sparkle causes issues:
-1. Remove Sparkle dependency from Package.swift
-2. Remove updater code from WorkspaceManagerApp.swift
-3. Remove CheckForUpdatesView.swift
-4. Remove Sparkle keys from Info.plist
-5. Rebuild and release without auto-update
-
-Users on broken version can manually download from GitHub Releases.
-
-## References
-
-- [Sparkle Documentation](https://sparkle-project.org/documentation/)
-- [Sparkle 2 Migration Guide](https://sparkle-project.org/documentation/upgrading/)
-- [Sparkle SPM Integration](https://github.com/sparkle-project/Sparkle#swift-package-manager)
-- `Package.swift:1-29` - Current package configuration
-- `scripts/notarize.sh` - Current release script
+Remove the Sparkle dependency, updater controller, Settings section, Sparkle Info.plist keys, appcast generation step, and Sparkle framework bundling. Users can continue downloading DMGs manually from GitHub Releases.

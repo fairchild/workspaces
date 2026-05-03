@@ -30,9 +30,14 @@ struct SettingsView: View {
     @State private var isRunningRuntimeAction = false
 
     private let commandLineToolService: CommandLineToolService
+    private let softwareUpdateController: SoftwareUpdateController?
 
-    init(commandLineToolService: CommandLineToolService = CommandLineToolService()) {
+    init(
+        commandLineToolService: CommandLineToolService = CommandLineToolService(),
+        softwareUpdateController: SoftwareUpdateController? = nil
+    ) {
         self.commandLineToolService = commandLineToolService
+        self.softwareUpdateController = softwareUpdateController
         _commandLineToolStatus = State(initialValue: nil)
     }
 
@@ -92,6 +97,18 @@ struct SettingsView: View {
                 }
             } header: {
                 Text("General")
+            }
+
+            Section {
+                if let softwareUpdateController {
+                    SoftwareUpdateSettingsView(updater: softwareUpdateController.updater)
+                } else {
+                    Text("Update settings are unavailable in this preview.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } header: {
+                Text("Updates")
             }
 
             Section {

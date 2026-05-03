@@ -54,5 +54,19 @@
 	<string>NSApplication</string>
 	<key>NSSupportsSecureStateCoding</key>
 	<true/>
+	<key>SUAllowsAutomaticUpdates</key>
+	<false/>
+	<key>SUAutomaticallyUpdate</key>
+	<false/>
+	<key>SUEnableAutomaticChecks</key>
+	<false/>
+	<key>SUEnableSystemProfiling</key>
+	<false/>
+	<key>SUFeedURL</key>
+	<string>https://github.com/fairchild/workspaces/releases/latest/download/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>2iJCG30PnNC42c7NxxsMNFup+mnlKOU2/MZMEwm6lg4=</string>
+	<key>SUScheduledCheckInterval</key>
+	<integer>604800</integer>
 </dict>
 </plist>
