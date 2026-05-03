@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { ttydPathToken } from "../vercel-sandbox";
+import { buildGitCloneArgs, ttydPathToken } from "../vercel-sandbox";
 
 // process.env.X = undefined sets the env var to the literal string "undefined".
 // Reflect.deleteProperty actually removes the key, which is what we want when
@@ -67,5 +67,42 @@ describe("ttydPathToken", () => {
 		const b = ttydPathToken("sbx_y");
 		expect(a).toBe(b);
 		expect(a).toMatch(/^[0-9a-f]{24}$/);
+	});
+});
+
+describe("buildGitCloneArgs", () => {
+	it("uses a temporary credential helper without placing the token in argv", () => {
+		const args = buildGitCloneArgs({
+			cloneUrl: "https://github.com/fairchild/workspaces.git",
+			authToken: "gho_secret_token",
+			branch: "main",
+		});
+
+		expect(args).toEqual([
+			"-c",
+			expect.stringContaining("credential.helper="),
+			"clone",
+			"--depth",
+			"1",
+			"--branch",
+			"main",
+			"https://github.com/fairchild/workspaces.git",
+			"/vercel/sandbox/repo",
+		]);
+		expect(args.join(" ")).not.toContain("gho_secret_token");
+	});
+
+	it("clones public URLs directly when no auth token is provided", () => {
+		const args = buildGitCloneArgs({
+			cloneUrl: "https://github.com/fairchild/workspaces.git",
+		});
+
+		expect(args).toEqual([
+			"clone",
+			"--depth",
+			"1",
+			"https://github.com/fairchild/workspaces.git",
+			"/vercel/sandbox/repo",
+		]);
 	});
 });

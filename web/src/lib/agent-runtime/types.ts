@@ -122,6 +122,8 @@ export type SandboxState =
 export interface TerminalCapable {
 	createTerminalSandbox(params: {
 		cloneUrl: string;
+		/** Optional HTTPS clone token. Do not embed this in cloneUrl. */
+		authToken?: string;
 		branch?: string;
 	}): Promise<SandboxResult>;
 	resolveSandboxState(instanceId: string): Promise<SandboxState>;

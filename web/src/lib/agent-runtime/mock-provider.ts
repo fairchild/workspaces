@@ -84,6 +84,7 @@ export class MockComputeProvider
 
 	async createTerminalSandbox(params: {
 		cloneUrl: string;
+		authToken?: string;
 		branch?: string;
 	}): Promise<SandboxResult> {
 		const instanceId = `mock-terminal-${counter++}`;

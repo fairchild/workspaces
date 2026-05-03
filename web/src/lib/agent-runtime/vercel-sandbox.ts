@@ -74,6 +74,10 @@ const BASE_SNAPSHOT_VERSION = "v5-pi-skills";
 const TMUX_STATIC_URL =
 	"https://github.com/mjakob-gh/build-static-tmux/releases/latest/download/tmux.linux-amd64.stripped.gz";
 const PROVIDER_ID = "vercel-sandbox";
+const SANDBOX_REPO_DIR = "/vercel/sandbox/repo";
+const GIT_CREDENTIAL_TOKEN_PATH = "/vercel/sandbox/github-clone-token";
+const GIT_CREDENTIAL_HELPER_PATH =
+	"/vercel/sandbox/github-credential-helper.sh";
 
 /**
  * Run a command in a sandbox and throw if it exits non-zero. The
@@ -107,6 +111,85 @@ async function assertRunCommand(
 			`[vercel-sandbox] ${label} exited ${cmd.exitCode}\n${stderr.slice(0, 2000)}`,
 		);
 	}
+}
+
+function buildGitCredentialHelperFiles(
+	authToken: string,
+): Array<{ path: string; content: Buffer }> {
+	return [
+		{
+			path: GIT_CREDENTIAL_TOKEN_PATH,
+			content: Buffer.from(stripQuotes(authToken)),
+		},
+		{
+			path: GIT_CREDENTIAL_HELPER_PATH,
+			content: Buffer.from(`#!/bin/sh
+case "$1" in
+  get)
+    echo username=x-access-token
+    printf 'password='
+    cat ${GIT_CREDENTIAL_TOKEN_PATH}
+    printf '\\n'
+    ;;
+esac
+`),
+		},
+	];
+}
+
+export function buildGitCloneArgs(params: {
+	cloneUrl: string;
+	authToken?: string;
+	branch?: string;
+}): string[] {
+	const cloneArgs: string[] = [];
+	if (params.authToken) {
+		cloneArgs.push("-c", `credential.helper=${GIT_CREDENTIAL_HELPER_PATH}`);
+	}
+	cloneArgs.push("clone", "--depth", "1");
+	if (params.branch) {
+		cloneArgs.push("--branch", params.branch);
+	}
+	cloneArgs.push(params.cloneUrl, SANDBOX_REPO_DIR);
+	return cloneArgs;
+}
+
+async function prepareGitCloneAuth(
+	sandbox: Sandbox,
+	authToken: string | undefined,
+	label: string,
+): Promise<void> {
+	if (!authToken) return;
+	await sandbox.writeFiles(buildGitCredentialHelperFiles(authToken));
+	await assertRunCommand(sandbox, `chmod git token (${label})`, {
+		cmd: "chmod",
+		args: ["600", GIT_CREDENTIAL_TOKEN_PATH],
+	});
+	await assertRunCommand(sandbox, `chmod git credential helper (${label})`, {
+		cmd: "chmod",
+		args: ["700", GIT_CREDENTIAL_HELPER_PATH],
+	});
+}
+
+async function cleanupGitCloneAuth(
+	sandbox: Sandbox,
+	label: string,
+): Promise<void> {
+	await assertRunCommand(sandbox, `remove git clone credentials (${label})`, {
+		cmd: "rm",
+		args: ["-f", GIT_CREDENTIAL_TOKEN_PATH, GIT_CREDENTIAL_HELPER_PATH],
+	});
+}
+
+async function scrubGitOrigin(
+	sandbox: Sandbox,
+	cloneUrl: string,
+	label: string,
+): Promise<void> {
+	await assertRunCommand(sandbox, `scrub git origin (${label})`, {
+		cmd: "git",
+		args: ["-C", SANDBOX_REPO_DIR, "remote", "set-url", "origin", cloneUrl],
+	});
 }
 
 function stripQuotes(s: string): string {
@@ -659,6 +742,7 @@ export class VercelSandboxProvider
 	 */
 	async createTerminalSandbox(params: {
 		cloneUrl: string;
+		authToken?: string;
 		branch?: string;
 	}): Promise<SandboxResult> {
 		const baseSnapshotId = await getOrCreateBaseSnapshot();
@@ -684,16 +768,17 @@ export class VercelSandboxProvider
 		});
 
 		try {
-			// Clone the target repo
-			const cloneArgs = ["clone", "--depth", "1"];
-			if (params.branch) {
-				cloneArgs.push("--branch", params.branch);
-			}
-			cloneArgs.push(params.cloneUrl, "/vercel/sandbox/repo");
+			await prepareGitCloneAuth(sandbox, params.authToken, "terminal sandbox");
+
+			// Clone the target repo with a token-free URL. If auth is needed,
+			// Git uses a temporary credential helper that is removed below.
+			const cloneArgs = buildGitCloneArgs(params);
 			await assertRunCommand(sandbox, "git clone (terminal sandbox)", {
 				cmd: "git",
 				args: cloneArgs,
 			});
+			await scrubGitOrigin(sandbox, params.cloneUrl, "terminal sandbox");
+			await cleanupGitCloneAuth(sandbox, "terminal sandbox");
 
 			// Same claude auth setup as the agent path so `claude` works
 			// out of the box from the shell.
@@ -715,6 +800,7 @@ export class VercelSandboxProvider
 			activeSandboxes.set(instanceId, sandbox);
 			return { instanceId, status: "ready" };
 		} catch (err) {
+			await cleanupGitCloneAuth(sandbox, "terminal sandbox").catch(() => {});
 			await sandbox.stop().catch(() => {});
 			throw err;
 		}

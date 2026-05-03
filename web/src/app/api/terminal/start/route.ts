@@ -62,12 +62,13 @@ export async function POST(request: Request): Promise<Response> {
 		});
 	}
 
-	// Build clone URL — use token for private repos, fall back to public HTTPS
-	let cloneUrl = `https://github.com/${body.repo}.git`;
+	// Keep the clone URL token-free so it cannot persist in .git/config.
+	const cloneUrl = `https://github.com/${body.repo}.git`;
+	let authToken: string | undefined;
 	if (!getDevBypassToken()) {
 		const token = await getGitHubToken(session.user.id).catch(() => null);
 		if (token) {
-			cloneUrl = `https://x-access-token:${token}@github.com/${body.repo}.git`;
+			authToken = token;
 		}
 	}
 
@@ -101,6 +102,7 @@ export async function POST(request: Request): Promise<Response> {
 	try {
 		result = await provider.createTerminalSandbox({
 			cloneUrl,
+			authToken,
 			branch: body.branch,
 		});
 	} catch (err) {
