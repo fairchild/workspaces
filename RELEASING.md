@@ -146,6 +146,27 @@ Then test signing:
 
 ### GitHub Actions Setup (for CI/CD)
 
+Before adding release secrets, create a GitHub Actions environment named
+`release` in repository settings and require reviewer approval for deployments
+to that environment. The release workflow references this environment before it
+imports signing material, so environment protection is the approval gate for
+Developer ID, notarization, and Sparkle release secrets.
+
+The workflow is split into two jobs:
+
+- `build-sign-notarize-release` runs on `[self-hosted, signing-host]` with
+  read-only repository permissions. It imports the Developer ID certificate into
+  a temporary keychain, builds and signs the app, notarizes the DMG, generates
+  the Sparkle appcast, uploads release assets as workflow artifacts, then
+  deletes the temporary keychain.
+- `publish-github-release` runs on `ubuntu-latest` with `contents: write`. It
+  downloads the signed artifacts and creates or updates the GitHub Release.
+
+Keep signing/notarization credentials scoped to the steps that need them. Do not
+write generated keychain passwords or Apple notarization credentials to
+`$GITHUB_ENV`; generated keychain passwords should be masked immediately with
+`::add-mask::` before they can appear in logs.
+
 Preferred setup path:
 
 ```bash

@@ -91,11 +91,14 @@ User sends message
     → Snapshot and release (save state, stop sandbox)
 ```
 
-Sessions persist across messages via snapshot/restore. The `agent_sessions` table tracks `computeBackend`, `computeInstanceId`, `snapshotId`, and `claudeSessionId` per session.
+Sessions persist across messages via snapshot/restore. The `agent_sessions` table tracks `userId`, `computeBackend`, `computeInstanceId`, `snapshotId`, and `claudeSessionId` per session.
 
 ## Terminal Architecture
 
-The Terminal tab provides shell access to active agent sandboxes.
+The Terminal tab provides shell access to active agent sandboxes. Starting a
+hosted terminal follows the same trusted-operator boundary as hosted agent chat:
+the authenticated user's GitHub login must be present in `ALLOWED_AGENT_LOGINS`
+before the API creates or reuses a terminal-capable sandbox.
 
 ### Direct connection
 
@@ -129,7 +132,7 @@ Every API route that reads or mutates repo-scoped data passes through the two he
 
 The ownership check is backed by `isRepoOwnedByUser` in `src/lib/repos.ts`, which does a pinpoint `SELECT 1 FROM user_repos WHERE user_id=? AND owner=? AND repo=? LIMIT 1` — hits the table's primary key index, one row read per request.
 
-Routes that accept a session or sandbox identifier instead of a repo (e.g. `/api/managed-agents/transcript?sessionId=`) resolve the identifier to its repo via `getSessionByInstanceId` in `src/lib/agent-sessions.ts`, then authorize against that repo. `agent_sessions` has no `user_id` column by design — session ownership is derived from the repo so co-owners can see each other's agent activity on the same repo.
+Routes that accept a session or sandbox identifier instead of a repo (e.g. `/api/managed-agents/transcript?sessionId=`) resolve the identifier through `src/lib/agent-sessions.ts` with the authenticated `user_id`, then authorize against the resolved repo. `agent_sessions` stores `user_id`; terminal status, stop, resume, and transcript lookups must include it so one user cannot attach to another user's live sandbox just because both can access the same repo.
 
 Webhook intake routes (`/api/webhooks/*`) are intentionally unauthenticated and verify GitHub's HMAC signature instead. The Better Auth handler at `/api/auth/[...all]` owns its own auth flow.
 
