@@ -5,19 +5,19 @@ that uses markdown. Install with `brew install mask`, then run `mask <task>`.
 
 ## setup
 
-> One-time setup: install repo hooks + build GhosttyKit (required before build/test)
+> One-time setup: install tools, dependencies, prek hooks, and GhosttyKit
 
 ```bash
-./scripts/install-git-hooks.sh
+./scripts/setup
 ./scripts/build-ghosttykit.sh
 ```
 
 ## hooks-install
 
-> Install repo-managed git hooks (enables pre-commit lint check)
+> Install or refresh prek git hooks
 
 ```bash
-./scripts/install-git-hooks.sh
+./scripts/setup --hooks-only
 ```
 
 ## build

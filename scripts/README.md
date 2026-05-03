@@ -2,6 +2,12 @@
 
 This directory contains build/release helpers plus UI test utilities.
 
+## First-Run Setup
+
+- `./scripts/setup` is the canonical first-run path. It links local env files from the main worktree when needed, trusts checked-in mise configs, installs mise-managed tools and lockfile dependencies, unsets legacy `core.hooksPath`, and runs `prek install`.
+- `./scripts/setup --hooks-only` installs or refreshes the prek git hooks without running dependency setup.
+- `./scripts/install-git-hooks.sh` remains only as a compatibility wrapper around `./scripts/setup --hooks-only`; prefer `./scripts/setup` in new docs and task definitions.
+
 ## Ops Reporting
 
 - `uv run --script ./scripts/ops-report.py`

@@ -5,6 +5,65 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
+usage() {
+  cat <<'USAGE'
+Usage: ./scripts/setup [--hooks-only]
+
+Canonical first-run setup for this repository.
+
+Options:
+  --hooks-only  Install or refresh prek git hooks, then exit.
+  -h, --help    Show this help.
+USAGE
+}
+
+HOOKS_ONLY=0
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --hooks-only)
+      HOOKS_ONLY=1
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "error: unknown setup option: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+  shift
+done
+
+print_prek_install_instructions() {
+  echo "error: prek not found in PATH but prek.toml is present." >&2
+  echo "Install it with one of:" >&2
+  echo "  brew install prek           # macOS" >&2
+  echo "  cargo install --locked prek # cargo" >&2
+  echo "  curl -LsSf https://prek.j178.dev/install.sh | sh" >&2
+}
+
+install_prek_hooks() {
+  [[ -f "$REPO_ROOT/prek.toml" ]] || return 0
+
+  if ! command -v prek >/dev/null 2>&1; then
+    print_prek_install_instructions
+    exit 1
+  fi
+
+  # Remove any legacy core.hooksPath so prek can install into the per-worktree hooks dir.
+  git config --unset-all --worktree core.hooksPath 2>/dev/null || true
+  git config --unset-all --local core.hooksPath 2>/dev/null || true
+  echo "=> Installing prek hooks"
+  prek install
+}
+
+if [[ "$HOOKS_ONLY" == "1" ]]; then
+  install_prek_hooks
+  exit 0
+fi
+
 # Symlink .env from main worktree if we're in a worktree and missing it
 link_env_from_main() {
   local git_common git_dir main_wt
@@ -58,21 +117,7 @@ install_deps() {
 }
 
 # Install prek pre-commit hooks (idempotent, required)
-if [[ -f "$REPO_ROOT/prek.toml" ]]; then
-  if ! command -v prek >/dev/null 2>&1; then
-    echo "error: prek not found in PATH but prek.toml is present." >&2
-    echo "Install it with one of:" >&2
-    echo "  brew install prek           # macOS" >&2
-    echo "  cargo install --locked prek # cargo" >&2
-    echo "  curl -LsSf https://prek.j178.dev/install.sh | sh" >&2
-    exit 1
-  fi
-  # Remove any legacy core.hooksPath so prek can install into the per-worktree hooks dir.
-  git config --unset-all --worktree core.hooksPath 2>/dev/null || true
-  git config --unset-all --local core.hooksPath 2>/dev/null || true
-  echo "=> Installing prek hooks"
-  prek install
-fi
+install_prek_hooks
 
 # Root dependencies
 install_deps "$REPO_ROOT"
