@@ -4,7 +4,13 @@ Mac-native app for managing AI coding sessions with embedded terminal.
 
 ## Quality and Mergeability
 
-Craft matters. Work is mergeable when it is correct, coherent with the product, reviewable, verified, and leaves the system easier to operate. Keep changes native-feeling, tightly scoped, evidence-backed, and consistent with existing architecture and UI patterns. Before opening or reviewing a PR, use `docs/development/mergeability-standard.md` for the surface-specific checklist.
+Craft matters. Plan work so it can land mergeably: correct, coherent with the product, reviewable, verified, and leaving the system easier to operate. Keep changes native-feeling, tightly scoped, evidence-backed, and consistent with existing architecture and UI patterns. Before opening or reviewing a PR, use `docs/development/mergeability-standard.md` for the surface-specific checklist.
+
+## Startup Instruction Budget
+
+`AGENTS.md` is startup context for every repo session. Keep it under about **4,500 tokens** (roughly **3,300 words**) unless the added guidance is more important than the recurring context cost. Prefer tightening, deduplicating, or moving detailed policy into linked docs over expanding this file.
+
+Continuous improvement of `AGENTS.md` is important to the health and longevity of the codebase: it is how this repo teaches future agents to meet product, quality, evidence, and operational objectives. Improve it when the guidance becomes clearer, shorter, or more actionable.
 
 ## Dev Verification Practice (required)
 
