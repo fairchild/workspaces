@@ -54,6 +54,7 @@ Status:
 - `MainWindowNavigationStateController`, `MainWindowSurfaceResolutionController`, and `MainWindowRemoteWorkspaceStateController` now centralize previously ad hoc selection and lifecycle behavior.
 - Selection state now stores stable IDs/lightweight structs instead of live SwiftData objects to avoid stale-object hazards after deletion or async completion.
 - `SidebarRepoSortController` now holds stable repository sorting rules instead of burying sort policy in `SidebarView`.
+- `SidebarExpansionStateController` now holds repo/workspace expansion state, selected-container expansion, and stale-ID pruning rules instead of keeping those transitions inline in `SidebarView`.
 
 ### Phase 3: Ghostty boundary cleanup
 
