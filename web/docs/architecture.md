@@ -39,12 +39,12 @@
 │  - user_repos    │ │  - Discussions│ │  │ (Firecracker microVM)│   │
 │  - webhook_events│ │  - Webhooks   │ │  └─────────────────────┘   │
 │                  │ │               │ │  ┌─────────────────────┐   │
-│                  │ │               │ │  │ Cloudflare Sandbox  │   │
-│                  │ │               │ │  │ (Container)         │   │
+│                  │ │               │ │  │ Anthropic Managed   │   │
+│                  │ │               │ │  │ Agents              │   │
 │                  │ │               │ │  └─────────────────────┘   │
 │                  │ │               │ │  ┌─────────────────────┐   │
 │                  │ │               │ │  │ Daytona / GitHub    │   │
-│                  │ │               │ │  │ Actions / Mock      │   │
+│                  │ │               │ │  │ Actions stubs / Mock│   │
 │                  │ │               │ │  └─────────────────────┘   │
 └──────────────────┘ └───────────────┘ └─────────────────────────────┘
 ```
@@ -58,7 +58,7 @@
 | Database | LibSQL + Kysely | Chat messages, sessions, repos, events |
 | Styling | CSS Modules + CSS custom properties | Dark theme, no Tailwind |
 | Terminal | ghostty-web (WASM) | Browser terminal emulator |
-| Agent runtime | Vercel Sandbox SDK | Sandboxed Claude Code sessions |
+| Agent runtime | Compute provider registry | Vercel Sandbox and Anthropic Managed Agents sessions |
 | Linting | Biome | Format + lint |
 | Unit tests | Vitest | Fast unit/integration tests |
 | E2E tests | Playwright | Browser tests with video capture |
@@ -67,14 +67,15 @@
 
 ## Agent Runtime
 
-The agent runtime executes Claude Code inside sandboxed environments. The `ComputeProviderRegistry` at `src/lib/agent-runtime/provider-registry.ts` supports multiple backends:
+The agent runtime executes Claude Code through the `ComputeProviderRegistry` at `src/lib/agent-runtime/provider-registry.ts`. The registry loads Vercel Sandbox, Daytona, GitHub Actions, and Anthropic Managed Agents providers by default; Daytona and GitHub Actions are registered stubs that currently report unavailable. `MOCK_AGENT=1` adds the test-only mock provider and makes it the default.
 
 | Provider | Backend | Snapshot | Terminal |
 |----------|---------|----------|----------|
 | `vercel-sandbox` | Firecracker microVM | Yes (ephemeral) | Via ttyd + tmux |
-| `daytona` | VM | No | — |
-| `github-actions` | Runner | No | — |
-| `mock` | In-process | Yes | — |
+| `managed-agents` | Anthropic Managed Agents | No | Transcript |
+| `daytona` | VM stub | No | Transcript stub |
+| `github-actions` | Runner stub | No | Transcript stub |
+| `mock` | In-process test provider | Yes | PTY stub |
 
 > Historical note: `cloudflare-sandbox` was scaffolded alongside the Vercel provider as a multi-provider proof-of-concept. The Worker and provider class were deleted in PR #321 because the scaffold had never been wired to a real Cloudflare account and was sitting in the runtime as ~500 lines of dead code. Design notes preserved in `backlog/cloudflare-sandbox-live-plan.md`.
 
