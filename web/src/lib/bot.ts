@@ -5,7 +5,11 @@ import { Chat, toAiMessages } from "chat";
 import type { Message, Thread } from "chat";
 import { isAiConfigured, streamResponse } from "./ai";
 import { getEventStats } from "./events";
-import { formatWorkspaceStatusCard, getWorkspaces } from "./workspaces";
+import {
+	DEFAULT_WORKSPACE_OWNER_ID,
+	formatWorkspaceStatusCard,
+	getWorkspaces,
+} from "./workspaces";
 
 let _bot: Chat | undefined;
 
@@ -52,7 +56,7 @@ export function getBot(): Chat {
 		_bot.onNewMessage(/status/i, async (thread) => {
 			const [stats, workspaces] = await Promise.all([
 				getEventStats(),
-				getWorkspaces("default"),
+				getWorkspaces(DEFAULT_WORKSPACE_OWNER_ID),
 			]);
 			const repoList =
 				stats.repos.length > 0
@@ -83,7 +87,7 @@ async function handleAiResponse(
 	if (!isAiConfigured()) {
 		const [stats, workspaces] = await Promise.all([
 			getEventStats(),
-			getWorkspaces("default"),
+			getWorkspaces(DEFAULT_WORKSPACE_OWNER_ID),
 		]);
 		const card = formatWorkspaceStatusCard(workspaces);
 		await thread.post(

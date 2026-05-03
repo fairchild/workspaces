@@ -3,33 +3,39 @@ import { unauthorizedResponse } from "@/lib/api-auth";
 import { getSession } from "@/lib/auth-server";
 import { isWorkspace } from "@/lib/workspace-utils";
 import {
+	DEFAULT_WORKSPACE_OWNER_ID,
 	type SyncWorkspaceInput,
 	getWorkspaces,
 	syncWorkspaces,
 } from "@/lib/workspaces";
-
-const SYNC_API_KEY = process.env.WORKSPACE_SYNC_API_KEY;
 
 function safeEqual(a: string, b: string): boolean {
 	if (a.length !== b.length) return false;
 	return timingSafeEqual(Buffer.from(a), Buffer.from(b));
 }
 
-/** Resolve user ID from API key header or session cookie. */
-async function authenticateRequest(request: Request): Promise<string | null> {
-	const authHeader = request.headers.get("authorization");
-	if (authHeader?.startsWith("Bearer ") && SYNC_API_KEY) {
-		const token = authHeader.slice(7);
-		if (safeEqual(token, SYNC_API_KEY)) return "default";
-	}
+function syncApiKey(): string | undefined {
+	return process.env.WORKSPACE_SYNC_API_KEY;
+}
 
+function hasSyncApiKey(request: Request): boolean {
+	const authHeader = request.headers.get("authorization");
+	const key = syncApiKey();
+	if (authHeader?.startsWith("Bearer ") && key) {
+		const token = authHeader.slice(7);
+		return safeEqual(token, key);
+	}
+	return false;
+}
+
+async function readOwnerId(request: Request): Promise<string | null> {
+	if (hasSyncApiKey(request)) return DEFAULT_WORKSPACE_OWNER_ID;
 	const session = await getSession();
 	return session?.user.id ?? null;
 }
 
 export async function POST(request: Request): Promise<Response> {
-	const userId = await authenticateRequest(request);
-	if (!userId) return unauthorizedResponse();
+	if (!hasSyncApiKey(request)) return unauthorizedResponse();
 
 	let body: unknown;
 	try {
@@ -55,15 +61,18 @@ export async function POST(request: Request): Promise<Response> {
 		}
 	}
 
-	const count = await syncWorkspaces(workspaces as SyncWorkspaceInput[]);
+	const count = await syncWorkspaces(
+		DEFAULT_WORKSPACE_OWNER_ID,
+		workspaces as SyncWorkspaceInput[],
+	);
 	return Response.json({ ok: true, count });
 }
 
-export async function GET(): Promise<Response> {
-	const session = await getSession();
-	if (!session) return unauthorizedResponse();
+export async function GET(request: Request): Promise<Response> {
+	const ownerId = await readOwnerId(request);
+	if (!ownerId) return unauthorizedResponse();
 
-	const workspaces = await getWorkspaces();
+	const workspaces = await getWorkspaces(ownerId);
 
 	return Response.json({ workspaces });
 }
