@@ -55,6 +55,7 @@ Status:
 - Selection state now stores stable IDs/lightweight structs instead of live SwiftData objects to avoid stale-object hazards after deletion or async completion.
 - `SidebarRepoSortController` now holds stable repository sorting rules instead of burying sort policy in `SidebarView`.
 - `SidebarExpansionStateController` now holds repo/workspace expansion state, selected-container expansion, and stale-ID pruning rules instead of keeping those transitions inline in `SidebarView`.
+- `SidebarWorkspacePresentationController` now holds workspace row presentation rules for session activity, pane counts, provider display names, host-file availability, and transient status messages.
 
 ### Phase 3: Ghostty boundary cleanup
 

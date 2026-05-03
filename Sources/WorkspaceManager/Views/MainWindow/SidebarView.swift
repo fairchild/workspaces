@@ -103,6 +103,7 @@ struct SidebarView: View {
     }
 
     private let workspaceEnvironmentOptionsController = WorkspaceEnvironmentOptionsController()
+    private let workspacePresentationController = SidebarWorkspacePresentationController()
 
     private var repoSortMode: SidebarRepoSortMode {
         SidebarRepoSortMode(rawValue: repoSortModeRawValue) ?? .alphabetical
@@ -1198,40 +1199,55 @@ struct SidebarView: View {
     }
 
     private func paneCount(for key: HostTerminalSessionKey) -> Int {
-        paneCountBySessionKey[key] ?? 0
+        workspacePresentationController.paneCount(
+            for: key,
+            paneCountBySessionKey: paneCountBySessionKey
+        )
     }
 
     private func sessionKey(for workspace: Workspace) -> HostTerminalSessionKey {
-        if let provider = workspaceProviderRegistry.provider(for: workspace) {
-            return provider.sessionKey(for: WorkspaceProviderTarget(workspace))
-        }
-
-        return .hostPath(normalizePath(workspace.workspaceURL))
+        workspacePresentationController.sessionKey(
+            for: workspace,
+            registry: workspaceProviderRegistry,
+            normalizePath: normalizePath(_:)
+        )
     }
 
     private func sessionActivity(for key: HostTerminalSessionKey) -> SidebarSessionActivity {
-        SidebarSessionActivity(
-            hasLiveSession: paneCount(for: key) > 0,
-            isActiveSession: activeSessionKey == key
+        workspacePresentationController.sessionActivity(
+            for: key,
+            paneCountBySessionKey: paneCountBySessionKey,
+            activeSessionKey: activeSessionKey
         )
     }
 
     private func workspaceStatusMessage(_ workspace: Workspace) -> String? {
-        if connectingWorkspaceID == workspace.id { return "Connecting..." }
-        if let action = workspaceAction, action.workspaceID == workspace.id { return action.message }
-        return nil
+        workspacePresentationController.workspaceStatusMessage(
+            workspaceID: workspace.id,
+            connectingWorkspaceID: connectingWorkspaceID,
+            workspaceAction: workspaceAction
+        )
     }
 
     private func usesHostWorkspaceFiles(for workspace: Workspace) -> Bool {
-        providerDescriptor(for: workspace)?.usesHostWorkspaceFiles ?? !workspace.isRemote
+        workspacePresentationController.usesHostWorkspaceFiles(
+            for: workspace,
+            registry: workspaceProviderRegistry
+        )
     }
 
     private func providerDescriptor(for workspace: Workspace) -> WorkspaceProviderDescriptor? {
-        workspaceProviderRegistry.provider(for: workspace)?.descriptor
+        workspacePresentationController.providerDescriptor(
+            for: workspace,
+            registry: workspaceProviderRegistry
+        )
     }
 
     private func providerDisplayName(for providerID: String) -> String {
-        workspaceProviderRegistry.provider(for: providerID)?.descriptor.displayName ?? providerID
+        workspacePresentationController.providerDisplayName(
+            for: providerID,
+            registry: workspaceProviderRegistry
+        )
     }
 
     private func environmentOptions(for repo: Repo) -> [WorkspaceEnvironmentSheetOption] {
