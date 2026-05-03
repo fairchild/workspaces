@@ -8,7 +8,7 @@ Next.js dashboard for the Workspaces app — chat with AI agents, manage sandbox
 - **Better Auth** for GitHub OAuth
 - **LibSQL / Kysely** for persistence
 - **ghostty-web** (WASM-compiled Ghostty) for browser terminal
-- **Vercel Sandbox SDK** for agent compute (multi-provider: Vercel, Cloudflare, Daytona)
+- **Compute provider registry** for agent compute (Vercel Sandbox and Anthropic Managed Agents; Daytona/GitHub Actions stubs; mock for tests)
 - **Biome** for linting
 - **Vitest** for unit tests, **Playwright** for E2E
 - **pnpm** package manager

@@ -24,11 +24,11 @@ Workspaces now spans three surfaces — a Mac-native app, a web dashboard, and a
 
 **Desktop app.** Terminal-first main window with repo overview and persistent repo/workspace terminals. Calmer repo-first sidebar with explicit sorting and per-window last-surface restoration. Ghostty-backed terminal with split/focus/resize/equalize and working shortcut routing. Local workspaces plus Lume and Daytona provider tracks, including host-side validation and setup flows for Lume. Notification/auth/activity infrastructure, workspace process monitoring, and agent-awareness in repo overview cards. A canonical performance system (`workspaces-performance-system` skill + `config/performance/contract.json`) enforces scenario budgets across debug, installed, release, and CI environments.
 
-**Web dashboard** (`web/`). Next.js 15 on Vercel with GitHub OAuth (Better Auth) and LibSQL+Kysely persistence. A ghostty-web terminal tab and a TerminalShare Cloudflare Worker proxy. A multi-provider agent runtime now covering Vercel Sandbox, Cloudflare Sandbox, Daytona, GitHub Actions, and Anthropic Managed Agents (#332). Persistent-sandbox snapshot/restore for conversation continuity (#277); tmux inside the sandbox for real resume continuity (#311/#312/#315, clarified in #324). Automated PR review posted by Managed Agents (#345). Preview → validate → promote CD pipeline with a bootstrap orchestrator (#344). PostHog telemetry (#336). A `qa-web` skill + subagent (#343) covers black-box exploratory testing, author-mode spec generation, and heal-mode regression-vs-selector-drift triage.
+**Web dashboard** (`web/`). Next.js 15 on Vercel with GitHub OAuth (Better Auth) and LibSQL+Kysely persistence. A ghostty-web terminal tab and a TerminalShare Cloudflare Worker proxy. A multi-provider agent runtime now covering Vercel Sandbox and Anthropic Managed Agents, with Daytona/GitHub Actions registered as unavailable stubs and `mock` available for tests (#332). Persistent-sandbox snapshot/restore for conversation continuity (#277); tmux inside the sandbox for real resume continuity (#311/#312/#315, clarified in #324). Automated PR review posted by Managed Agents (#345). Preview → validate → promote CD pipeline with a bootstrap orchestrator (#344). PostHog telemetry (#336). A `qa-web` skill + subagent (#343) covers black-box exploratory testing, author-mode spec generation, and heal-mode regression-vs-selector-drift triage.
 
 **Agent automation.** The `.agents/skills/` library (`workspaces-performance-system`, `workspaces-optimization`, `drive`, `peter-planner`, `gh-discuss`, and others). April agent workflow runs on a Lume self-hosted runner. Most autonomous automations are currently gated off behind `AGENT_AUTOMATIONS_ENABLED`, pending runner policy and prompt-injection defense hardening.
 
-**Shipping cadence.** Weekly-ish releases. Latest release `v0.10.0`.
+**Shipping cadence.** Weekly-ish releases. Latest release `v0.11.1`.
 
 What this means for planning.
 
@@ -57,7 +57,7 @@ Web:
 
 - dashboard with repo browsing, workspace/agent activity feeds, and terminal attachment
 - ghostty-web terminal tab; TerminalShare Cloudflare Worker proxy
-- multi-provider agent runtime (Vercel Sandbox, Cloudflare Sandbox, Daytona, GitHub Actions, Anthropic Managed Agents)
+- multi-provider agent runtime (Vercel Sandbox and Anthropic Managed Agents; Daytona/GitHub Actions unavailable stubs; mock test provider)
 - persistent sandbox snapshot/restore; tmux-in-sandbox for resume continuity
 - automated PR review via Managed Agents
 - preview → validate → promote CD pipeline with bootstrap orchestrator
@@ -259,7 +259,7 @@ Archived (in `backlog/done/`):
 - Pane-tree terminal tiling model — not chosen; see `docs/decisions/terminal-multiplexing.md` (2026-04-23)
 - Terminal multiplexing decision session — resolved by `docs/decisions/terminal-multiplexing.md` (2026-04-23)
 - Isolation strategies (research) — superseded by Tahoe VZ execution brief
-- Cloudflare Sandbox live plan — scaffold deleted in PR #321
+- `cloudflare-sandbox` live plan — scaffold deleted in PR #321
 - Landing page plan — shipped in PR #188
 - Persistent sandbox conversation continuity — shipped in PR #277
 - Main window composition and inspector tests — shipped
