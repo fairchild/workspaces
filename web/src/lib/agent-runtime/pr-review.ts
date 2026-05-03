@@ -59,6 +59,7 @@ Your review body MUST begin with a one-line decision banner. The first character
 Keep the decision banner to one sentence and no more than 140 characters. It should summarize the outcome, not repeat the PR title.
 
 - Use real headings (\`## Summary\`, \`## Details\`)
+- Include a short \`## Project Thread\` section that references at least one previous PR by number and explains the relationship when previous PR context is available
 - Use bullet points and code blocks
 - Cite \`file:line\` for every comment
 - Skip nits unless they materially affect correctness or readability
@@ -76,6 +77,11 @@ const TOOLS = [
 	},
 ];
 
+const GITHUB_API = "https://api.github.com";
+const RECENT_DESCRIPTION_COUNT = 3;
+const RELATIONSHIP_CANDIDATE_COUNT = 5;
+const BODY_TRUNCATE_LENGTH = 1200;
+
 export interface PrReviewPayload {
 	number: number;
 	title: string;
@@ -85,6 +91,34 @@ export interface PrReviewPayload {
 	repoUrl: string;
 	repoFullName: string;
 	repoName: string;
+}
+
+export interface PrContextItem {
+	number: number;
+	title: string;
+	url: string;
+	state: string;
+	updatedAt: string;
+	headRef: string;
+	baseRef: string;
+	body: string;
+}
+
+export interface PrNarrativeContext {
+	recentDescriptions: PrContextItem[];
+	relationshipCandidates: PrContextItem[];
+	unavailableReason?: string;
+}
+
+interface GitHubPullRequest {
+	number: number;
+	title: string | null;
+	html_url: string | null;
+	state: string | null;
+	updated_at: string | null;
+	body: string | null;
+	head?: { ref?: string | null } | null;
+	base?: { ref?: string | null } | null;
 }
 
 async function resolveGitHubToken(): Promise<string | null> {
@@ -114,6 +148,102 @@ async function resolveGitHubToken(): Promise<string | null> {
 	return process.env.GITHUB_TOKEN ?? null;
 }
 
+function truncateBody(body: string): string {
+	if (body.length <= BODY_TRUNCATE_LENGTH) return body;
+	return `${body.slice(0, BODY_TRUNCATE_LENGTH).trimEnd()}\n...[truncated]`;
+}
+
+function toPrContextItem(pr: GitHubPullRequest): PrContextItem {
+	return {
+		number: Number(pr.number),
+		title: pr.title ?? "",
+		url: pr.html_url ?? "",
+		state: pr.state ?? "",
+		updatedAt: pr.updated_at ?? "",
+		headRef: pr.head?.ref ?? "",
+		baseRef: pr.base?.ref ?? "",
+		body: truncateBody(pr.body ?? ""),
+	};
+}
+
+export async function fetchPrNarrativeContext(
+	githubToken: string,
+	payload: PrReviewPayload,
+): Promise<PrNarrativeContext> {
+	const [owner, repo] = payload.repoFullName.split("/");
+	if (!owner || !repo) {
+		return {
+			recentDescriptions: [],
+			relationshipCandidates: [],
+			unavailableReason: "Repository owner/name was unavailable.",
+		};
+	}
+
+	const url = `${GITHUB_API}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls?state=all&sort=updated&direction=desc&per_page=10`;
+
+	try {
+		const res = await fetch(url, {
+			headers: {
+				Authorization: `Bearer ${githubToken}`,
+				Accept: "application/vnd.github+json",
+				"X-GitHub-Api-Version": "2022-11-28",
+			},
+		});
+		if (!res.ok) {
+			throw new Error(`GitHub API ${res.status}`);
+		}
+		const prs = ((await res.json()) as GitHubPullRequest[])
+			.filter((pr) => Number(pr.number) !== payload.number)
+			.map(toPrContextItem);
+
+		return {
+			recentDescriptions: prs.slice(0, RECENT_DESCRIPTION_COUNT),
+			relationshipCandidates: prs.slice(0, RELATIONSHIP_CANDIDATE_COUNT),
+		};
+	} catch (err) {
+		const reason = err instanceof Error ? err.message : String(err);
+		console.warn("[pr-review] previous PR context unavailable:", reason);
+		return {
+			recentDescriptions: [],
+			relationshipCandidates: [],
+			unavailableReason: reason,
+		};
+	}
+}
+
+function formatPrContextItem(item: PrContextItem): string {
+	const description = item.body.trim() || "(no description)";
+	return `- PR #${item.number}: ${item.title}
+  URL: ${item.url}
+  State: ${item.state}
+  Updated: ${item.updatedAt}
+  Branches: ${item.headRef} -> ${item.baseRef}
+  Description:
+${description
+	.split("\n")
+	.map((line) => `    ${line}`)
+	.join("\n")}`;
+}
+
+export function formatPrNarrativeContext(context: PrNarrativeContext): string {
+	if (context.unavailableReason) {
+		return `Previous PR context unavailable: ${context.unavailableReason}`;
+	}
+
+	if (
+		context.recentDescriptions.length === 0 &&
+		context.relationshipCandidates.length === 0
+	) {
+		return "No previous PRs were found for this repository.";
+	}
+
+	return `Most recently updated PR descriptions (always scan these 3 if present):
+${context.recentDescriptions.map(formatPrContextItem).join("\n\n")}
+
+Relationship candidates (scan the first 3; if none are clearly related, scan up to 5 and use the most clearly related):
+${context.relationshipCandidates.map(formatPrContextItem).join("\n\n")}`;
+}
+
 /**
  * Fire-and-forget: creates a Managed Agents session that reviews the PR
  * and posts a review via the GitHub API. Returns the session ID,
@@ -133,6 +263,7 @@ export async function triggerPrReview(
 		return null;
 	}
 
+	const narrativeContext = await fetchPrNarrativeContext(githubToken, payload);
 	const client = new Anthropic({ apiKey });
 	const model = process.env.PR_REVIEWER_MODEL ?? "claude-opus-4-6";
 
@@ -202,10 +333,15 @@ Head branch: ${payload.headRef}
 Base branch: ${payload.baseRef}
 Repo mounted at: ${mountPath}
 
+Previous PR narrative context:
+${formatPrNarrativeContext(narrativeContext)}
+
 GitHub API endpoint for posting the review:
 POST https://api.github.com/repos/${owner}/${repo}/pulls/${payload.number}/reviews
 
-Read the diff against ${payload.baseRef}, explore the surrounding code, run swift build and swift test if the project supports them, then post the review using the GitHub API with the token at /workspace/.github-token.`,
+Read the diff against ${payload.baseRef}, explore the surrounding code, run swift build and swift test if the project supports them, then post the review using the GitHub API with the token at /workspace/.github-token.
+
+Your review must include a short "## Project Thread" section. Reference at least one previous PR by number and explain how this PR relates to it when previous PR context is available. If one of the first 3 relationship candidates is clearly related, use it. If none are clearly related, inspect up to 5 candidates and reference the most clearly related one. If no previous PR exists or the previous PR context is unavailable, say that explicitly instead of inventing a relationship.`,
 					},
 				],
 			},
