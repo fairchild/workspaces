@@ -8,6 +8,40 @@ This directory contains build/release helpers plus UI test utilities.
 - `./scripts/setup --hooks-only` installs or refreshes the prek git hooks without running dependency setup.
 - `./scripts/install-git-hooks.sh` remains only as a compatibility wrapper around `./scripts/setup --hooks-only`; prefer `./scripts/setup` in new docs and task definitions.
 
+## Root Mise Task Catalog
+
+Use `./scripts/setup` for first-run bootstrap. After that, prefer the root `mise` tasks for common flows; they wrap the scripts and stable commands listed in this guide.
+
+| Task | Backend | Purpose |
+|------|---------|---------|
+| `mise run setup` | `./scripts/setup` | Re-run bootstrap setup after the checkout is trusted. |
+| `mise run hooks-install` | `./scripts/setup --hooks-only` | Refresh prek hooks only. |
+| `mise run build-ghosttykit` | `./scripts/build-ghosttykit.sh` | Build the pinned GhosttyKit framework. |
+| `mise run lint` | `swift-format lint --strict --recursive Sources/ Tests/` | Check Swift formatting. |
+| `mise run build` | `swift build` | Build the app and CLI targets. |
+| `mise run test` | `swift test` | Run the Swift test suite. |
+| `mise run check` | Swift format lint, build, and test | Run the local Swift validation gate. |
+| `mise run dev-launch` | `./scripts/launch-dev.sh` | Launch the debug app with isolated data. |
+| `mise run dev-watch` | `./scripts/launch-dev.sh --watch` | Launch and keep logs attached. |
+| `mise run dev-smoke` | `./scripts/dev-smoke.sh` | Run the fast debug startup smoke. |
+| `mise run evidence -- --pr <N> --name <slug>` | `./scripts/evidence.sh` | Capture and upload PR evidence. |
+
+Lume entry points:
+
+| Task | Backend |
+|------|---------|
+| `mise run lume-status` | `uv run --script ./scripts/lume-status.py` |
+| `mise run dev-lume-ensure` | `./scripts/lume-ensure-daemon.sh` |
+| `mise run dev-lume-preflight` | `./scripts/lume-host-preflight.sh` |
+| `mise run dev-lume-standalone-preflight` | `./scripts/lume-standalone-preflight.sh` |
+| `mise run dev-lume-standalone-prepare-base` | `./scripts/lume-standalone-prepare-base.sh` |
+| `mise run dev-lume-standalone-verify-base` | `./scripts/lume-standalone-verify-base.sh` |
+| `mise run dev-lume-standalone-clone-smoke` | `./scripts/lume-standalone-clone-smoke.sh` |
+| `mise run dev-lume-standalone-validate` | `./scripts/lume-standalone-validate.sh` |
+| `mise run dev-lume-macos-smoke` | `./scripts/lume-host-macos-smoke.sh` |
+
+Run `mise tasks` from the repo root for the current catalog. Web dashboard tasks live in `web/.mise.toml`; use `mise -C web run <task>` for those.
+
 ## Ops Reporting
 
 - `uv run --script ./scripts/ops-report.py`
@@ -252,10 +286,11 @@ Activation-driving shortcut smoke:
 - Requires `Terminal Multiplexing Mode = Ghostty Splits`; the script exits early in `tmux` mode.
 - Intentionally not shared-desktop-safe. Use it only when foreground input is acceptable, or move to Tart/Lume / a separate user session.
 
-If you use `mise`, equivalent convenience tasks are:
+Root `mise` equivalents for this loop:
 - `mise run build-ghosttykit`
 - `mise run build`
 - `mise run test`
+- `mise run check`
 - `mise run dev-launch`
 - `mise run dev-watch`
 - `mise run dev-smoke`

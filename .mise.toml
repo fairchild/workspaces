@@ -1,9 +1,21 @@
 [tools]
 zig = "0.15.2"
 
+[tasks.setup]
+description = "Bootstrap this checkout with tools, dependencies, env links, and prek hooks."
+run = "./scripts/setup"
+
+[tasks."hooks-install"]
+description = "Install or refresh prek git hooks without running dependency setup."
+run = "./scripts/setup --hooks-only"
+
 [tasks.build-ghosttykit]
 description = "Build GhosttyKit.xcframework (required once or after pin changes)."
 run = "./scripts/build-ghosttykit.sh"
+
+[tasks.lint]
+description = "Lint Swift formatting without modifying files."
+run = "swift-format lint --strict --recursive Sources/ Tests/"
 
 [tasks.build]
 description = "Build the WorkspaceManager app."
@@ -12,6 +24,15 @@ run = "swift build"
 [tasks.test]
 description = "Run the test suite."
 run = "swift test"
+
+[tasks.check]
+description = "Run the local Swift validation gate: lint, build, and tests."
+run = """
+set -e
+swift-format lint --strict --recursive Sources/ Tests/
+swift build
+swift test
+"""
 
 [tasks."dev-launch"]
 description = "Launch the debug app and require a visible window."
