@@ -156,6 +156,7 @@ export async function POST(request: Request): Promise<Response> {
 				number: Number(pr.number ?? 0),
 				title: String(pr.title ?? ""),
 				htmlUrl: String(pr.html_url ?? ""),
+				body: String(pr.body ?? ""),
 				headRef: String(head?.ref ?? ""),
 				baseRef: String(base?.ref ?? ""),
 				repoUrl: String(repoObj.html_url ?? ""),
