@@ -61,6 +61,7 @@ function githubPr(number: number, overrides: Record<string, unknown> = {}) {
 		state: number % 2 === 0 ? "closed" : "open",
 		updated_at: `2026-05-0${number}T12:00:00Z`,
 		body: `Description for PR ${number}`,
+		labels: [],
 		head: { ref: `branch-${number}` },
 		base: { ref: "main" },
 		...overrides,
@@ -145,6 +146,22 @@ describe("fetchPrNarrativeContext", () => {
 		expect(context.unavailableReason).toBeUndefined();
 	});
 
+	it("includes labels from previous PRs in narrative context", async () => {
+		mockPrList([
+			githubPr(9),
+			githubPr(8, {
+				labels: [{ name: "security" }, { name: "agent-runtime" }],
+			}),
+		]);
+
+		const context = await fetchPrNarrativeContext("ghp_test", payload());
+
+		expect(context.relationshipCandidates[0].labels).toEqual([
+			"security",
+			"agent-runtime",
+		]);
+	});
+
 	it("returns a non-fatal unavailable reason on GitHub API failure", async () => {
 		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 		mocks.fetch.mockResolvedValue({
@@ -198,8 +215,30 @@ describe("triggerPrReview", () => {
 		expect(message).toContain("Previous PR narrative context:");
 		expect(message).toContain("Most recently updated PR descriptions");
 		expect(message).toContain("PR #8: PR 8");
+		expect(message).toContain("Labels: (none)");
 		expect(message).toContain("## Project Thread");
 		expect(message).toContain("Reference at least one previous PR by number");
+	});
+
+	it("instructs the reviewer to apply high-confidence related labels and suggest label opportunities", async () => {
+		mockPrList([githubPr(9), githubPr(8, { labels: [{ name: "security" }] })]);
+
+		await expect(triggerPrReview(payload())).resolves.toBe("sesn_01");
+
+		const [, params] = mocks.sendEvent.mock.calls[0];
+		const message = params.events[0].content[0].text;
+		expect(message).toContain("Labels: security");
+		expect(message).toContain(
+			"POST https://api.github.com/repos/fairchild/workspaces/issues/9/labels",
+		);
+		expect(message).toContain(
+			"apply that label using the labels endpoint before posting the review",
+		);
+		expect(message).toContain(
+			'Mention the applied label in "## Project Thread"',
+		);
+		expect(message).toContain("Label suggestion:");
+		expect(message).toContain("Do not create labels");
 	});
 
 	it("still starts the reviewer when previous PR context is unavailable", async () => {
