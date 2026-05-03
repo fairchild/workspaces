@@ -15,6 +15,7 @@ Work is mergeable when it is correct, coherent with the product, reviewable, ver
 - Match tests and evidence to the risk and blast radius. For docs-only changes, `git diff --check` plus a clear note is usually enough.
 - State what changed, how it was verified, and what residual risk or follow-up remains.
 - If evidence is blocked, say so explicitly before merge and explain what approval or environment is needed.
+- Use machine-readable blocker labels when a PR is not merge-ready: `blocked:ci`, `blocked:secrets`, `blocked:evidence`, or `blocked:review`.
 
 ## Surface Checklists
 
@@ -42,6 +43,7 @@ Work is mergeable when it is correct, coherent with the product, reviewable, ver
 ### Infrastructure, CI, and Release
 
 - Runner choice, secrets, permissions, rollback, and failure notifications are explicit.
+- Release-sensitive PRs fill `Release/ops preconditions` in the PR template and should not merge while required secrets, credentials, or operator steps remain incomplete.
 - Performance-sensitive changes include canonical before/after/delta evidence from the configured scenario contract.
 - CI changes avoid bare `self-hosted` labels and preserve the repo's runner policy.
 - Release/signing/notarization changes keep version metadata and artifact provenance aligned.
