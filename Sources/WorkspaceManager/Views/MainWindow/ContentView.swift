@@ -34,6 +34,8 @@ struct ContentView: View {
     @Query(sort: \WebSource.addedAt, order: .reverse) private var webSources: [WebSource]
     @AppStorage(TerminalMultiplexingMode.storageKey)
     private var terminalMultiplexingModeRawValue: String = TerminalMultiplexingMode.defaultValue.rawValue
+    @AppStorage(TerminalContinuityManifest.storageKey)
+    private var terminalContinuityManifestRawValue = ""
     @AppStorage(NotificationConstants.enabledKey)
     private var notificationsEnabled = NotificationConstants.defaultEnabled
     @Environment(\.externalEditorService) private var externalEditorService
@@ -1098,9 +1100,15 @@ struct ContentView: View {
         case .repoOverview(let repo):
             handleRepoSelection(repo)
         case .repoTerminal(let repo):
-            handleRepoTerminalSelection(repo)
+            handleRepoTerminalSelection(
+                repo,
+                preferredDirectory: restoredLaunchDirectory(for: repo)
+            )
         case .workspace(let workspace):
-            handleWorkspaceSelection(workspace)
+            handleWorkspaceSelection(
+                workspace,
+                preferredDirectory: restoredLaunchDirectory(for: workspace)
+            )
         case .webView(let source):
             handleWebSourceSelection(source)
         }
@@ -1134,6 +1142,12 @@ struct ContentView: View {
         let session = activateHostSession(
             key: .repoPath(repoDirectory.path),
             directory: launchDirectory
+        )
+        persistTerminalContinuity(
+            targetKind: .repo,
+            targetID: repo.id,
+            rootURL: repoDirectory,
+            launchURL: launchDirectory
         )
         terminalFocusCoordinator.beginRepoClickMeasurement(
             sessionID: session.id,
@@ -1176,6 +1190,12 @@ struct ContentView: View {
             let session = activateHostSession(
                 key: .hostPath(workspaceDirectory.path),
                 directory: launchDirectory
+            )
+            persistTerminalContinuity(
+                targetKind: .workspace,
+                targetID: workspace.id,
+                rootURL: workspaceDirectory,
+                launchURL: launchDirectory
             )
             terminalFocusCoordinator.beginWorkspaceClickMeasurement(
                 sessionID: session.id,
@@ -1931,6 +1951,53 @@ struct ContentView: View {
 
     private func persistLastSurface(_ surface: MainWindowLastSurface) {
         lastSurfaceRawValue = surface.rawValue
+    }
+
+    private func persistTerminalContinuity(
+        targetKind: TerminalContinuityManifest.TargetKind,
+        targetID: UUID,
+        rootURL: URL,
+        launchURL: URL
+    ) {
+        let manifest = TerminalContinuityManifest(
+            targetKind: targetKind,
+            targetID: targetID,
+            rootURL: rootURL,
+            launchURL: launchURL,
+            terminalMode: TerminalMultiplexingMode(rawValue: terminalMultiplexingModeRawValue)
+                ?? TerminalMultiplexingMode.defaultValue
+        )
+        terminalContinuityManifestRawValue = manifest.rawValue
+        NSLog(
+            "[TerminalContinuity] persisted kind=%@ id=%@ root=%@ launch=%@ tmux_session=%@ mode=%@",
+            targetKind.rawValue,
+            targetID.uuidString,
+            manifest.rootPath,
+            manifest.launchPath,
+            manifest.tmuxSessionName,
+            manifest.terminalMode.rawValue
+        )
+    }
+
+    private func restoredLaunchDirectory(for repo: Repo) -> URL? {
+        let repoDirectory = repo.localURL.standardizedFileURL.resolvingSymlinksInPath()
+        return TerminalContinuityManifest.decode(from: terminalContinuityManifestRawValue)?
+            .launchDirectory(
+                for: .repo,
+                targetID: repo.id,
+                rootURL: repoDirectory
+            )
+    }
+
+    private func restoredLaunchDirectory(for workspace: Workspace) -> URL? {
+        guard workspace.backend == .local else { return nil }
+        let workspaceDirectory = workspace.workspaceURL.standardizedFileURL.resolvingSymlinksInPath()
+        return TerminalContinuityManifest.decode(from: terminalContinuityManifestRawValue)?
+            .launchDirectory(
+                for: .workspace,
+                targetID: workspace.id,
+                rootURL: workspaceDirectory
+            )
     }
 
     private func terminalContextMenu(for session: HostTerminalSession) -> NSMenu? {

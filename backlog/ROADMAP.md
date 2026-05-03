@@ -162,7 +162,7 @@ Phase 1 complete: `AppActivationPolicy` (PR #374) gates all `NSApp.activate` cal
 
 `backlog/tmux-support_plan.md` (multiplexing implementation), `backlog/desktop-continuity_plan.md` (across-session restore)
 
-Decided 2026-04-23 (`docs/decisions/terminal-multiplexing.md`): tmux primary; pane-tree deferred indefinitely. Two paired plans now sit under one theme. Tmux delivers reattach within a session. The continuity plan addresses the gap tmux does not close (close laptop, reopen, pick up where you left off). Implement tmux first; promote continuity to active when the gap is reproducible against the new model.
+Decided 2026-04-23 (`docs/decisions/terminal-multiplexing.md`): tmux primary; pane-tree deferred indefinitely. Two paired plans now sit under one theme. Tmux delivers reattach within a session. The continuity plan addresses the gap tmux does not close (close laptop, reopen, pick up where you left off). First continuity slice is active on `codex-continuity-dimension`: tmux preserves live process state when the server survives, and a terminal continuity manifest records the target plus launch directory for the honest fallback when it does not.
 
 #### 5. Lume runtime architecture cleanup
 
