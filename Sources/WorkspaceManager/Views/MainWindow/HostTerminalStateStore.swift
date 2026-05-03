@@ -28,6 +28,7 @@ final class HostTerminalStateStore: ObservableObject {
     @Published private(set) var splitSessionsByPrimaryID: [UUID: HostTerminalSession] = [:]
     @Published private(set) var splitLayoutsByPrimaryID: [UUID: SplitPaneLayout] = [:]
     @Published private(set) var splitFractionsByPrimaryID: [UUID: CGFloat] = [:]
+    @Published private(set) var tabTitleOverridesBySessionID: [UUID: String] = [:]
     @Published private(set) var sessionPresentation = HostTerminalSessionPresentation()
 
     let surfaceStore = HostTerminalSurfaceStore()
@@ -59,6 +60,90 @@ final class HostTerminalStateStore: ObservableObject {
         return true
     }
 
+    @discardableResult
+    func createTab(from sourceSessionID: UUID? = nil) -> HostTerminalSession? {
+        let sourceSession: HostTerminalSession?
+        if let sourceSessionID,
+            let primarySessionID = primarySessionID(containing: sourceSessionID)
+        {
+            sourceSession = coordinator.sessions.first(where: { $0.id == primarySessionID })
+        } else if let activeSessionID {
+            sourceSession = coordinator.sessions.first(where: { $0.id == activeSessionID })
+        } else {
+            sourceSession = coordinator.sessions.last
+        }
+
+        guard let sourceSession else { return nil }
+        let session = coordinator.createTab(from: sourceSession)
+        publishSnapshot()
+        return session
+    }
+
+    @discardableResult
+    func activateAdjacentTab(offset: Int, from sourceSessionID: UUID? = nil) -> HostTerminalSession? {
+        guard let sourceSessionID = resolvedPrimarySessionID(sourceSessionID) else { return nil }
+        let session = coordinator.activateAdjacent(to: sourceSessionID, offset: offset)
+        publishSnapshot()
+        return session
+    }
+
+    @discardableResult
+    func activateTab(atOneBasedIndex index: Int) -> HostTerminalSession? {
+        let session = coordinator.activateTab(atOneBasedIndex: index)
+        publishSnapshot()
+        return session
+    }
+
+    @discardableResult
+    func activateLastTab() -> HostTerminalSession? {
+        let session = coordinator.activateLastTab()
+        publishSnapshot()
+        return session
+    }
+
+    @discardableResult
+    func moveTab(containing sourceSessionID: UUID?, offset: Int) -> Bool {
+        guard let primarySessionID = resolvedPrimarySessionID(sourceSessionID) else { return false }
+        guard coordinator.moveTab(sessionID: primarySessionID, offset: offset) else { return false }
+        publishSnapshot()
+        return true
+    }
+
+    func tabIDsForClose(mode: GhosttyAppManager.TabCloseMode, sourceSessionID: UUID?) -> [UUID] {
+        guard let primarySessionID = resolvedPrimarySessionID(sourceSessionID),
+            let primaryIndex = coordinator.sessions.firstIndex(where: { $0.id == primarySessionID })
+        else {
+            return []
+        }
+
+        switch mode {
+        case .this:
+            return [primarySessionID]
+        case .other:
+            return coordinator.sessions.map(\.id).filter { $0 != primarySessionID }
+        case .right:
+            let rightStart = coordinator.sessions.index(after: primaryIndex)
+            guard rightStart < coordinator.sessions.endIndex else { return [] }
+            return coordinator.sessions[rightStart...].map(\.id)
+        }
+    }
+
+    @discardableResult
+    func setTabTitle(_ title: String?, for sourceSessionID: UUID?) -> Bool {
+        guard let primarySessionID = resolvedPrimarySessionID(sourceSessionID) else { return false }
+        let normalizedTitle = title?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let normalizedTitle, !normalizedTitle.isEmpty {
+            tabTitleOverridesBySessionID[primarySessionID] = normalizedTitle
+        } else {
+            tabTitleOverridesBySessionID.removeValue(forKey: primarySessionID)
+        }
+        return true
+    }
+
+    func tabTitleOverride(for sessionID: UUID) -> String? {
+        tabTitleOverridesBySessionID[sessionID]
+    }
+
     func primarySessionID(containing sessionID: UUID) -> UUID? {
         if coordinator.sessions.contains(where: { $0.id == sessionID }) {
             return sessionID
@@ -86,6 +171,7 @@ final class HostTerminalStateStore: ObservableObject {
         for removedSessionID in removedSessionIDs {
             surfaceStore.invalidate(sessionID: removedSessionID)
             removeSplitState(forPrimarySessionID: removedSessionID)
+            tabTitleOverridesBySessionID.removeValue(forKey: removedSessionID)
         }
 
         publishSnapshot()
@@ -103,6 +189,7 @@ final class HostTerminalStateStore: ObservableObject {
         if coordinator.remove(sessionID: sessionID) != nil {
             surfaceStore.invalidate(sessionID: sessionID)
             removeSplitState(forPrimarySessionID: sessionID)
+            tabTitleOverridesBySessionID.removeValue(forKey: sessionID)
             removed = true
         }
 
@@ -317,6 +404,13 @@ final class HostTerminalStateStore: ObservableObject {
         }
         splitLayoutsByPrimaryID.removeValue(forKey: primarySessionID)
         splitFractionsByPrimaryID.removeValue(forKey: primarySessionID)
+    }
+
+    private func resolvedPrimarySessionID(_ sourceSessionID: UUID?) -> UUID? {
+        if let sourceSessionID {
+            return primarySessionID(containing: sourceSessionID)
+        }
+        return activeSessionID
     }
 
     private func resizeDelta(

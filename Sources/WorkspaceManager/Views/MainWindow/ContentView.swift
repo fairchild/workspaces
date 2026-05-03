@@ -65,6 +65,7 @@ struct ContentView: View {
     private let surfaceResolutionController = MainWindowSurfaceResolutionController()
     private let presentationController = MainWindowPresentationController()
     private let splitRoutingController = SplitRoutingController()
+    private let tabRoutingController = TabRoutingController()
     private let workspaceEnvironmentOptionsController = WorkspaceEnvironmentOptionsController()
 
     private var launchRepositoryService: LaunchRepositoryService {
@@ -261,6 +262,10 @@ struct ContentView: View {
             toggleSidebar: toggleSidebarVisibility,
             toggleInspector: toggleInspectorVisibility,
             toggleTerminalPanel: toggleTerminalPanelVisibility,
+            newTerminalTab: createTerminalTabFromCurrentContext,
+            closeTerminalTab: closeActiveTerminalTab,
+            selectNextTerminalTab: { selectAdjacentTerminalTab(offset: 1) },
+            selectPreviousTerminalTab: { selectAdjacentTerminalTab(offset: -1) },
             openInEditor: openInEditorFocusedAction,
             openInBrowser: openInBrowserFocusedAction,
             reloadWebSource: reloadWebSourceFocusedAction,
@@ -275,6 +280,10 @@ struct ContentView: View {
             canToggleSidebar: true,
             canToggleInspector: true,
             canToggleTerminalPanel: true,
+            canCreateTerminalTab: hostTerminalState.hasSessions,
+            canCloseTerminalTab: hostTerminalState.hasSessions,
+            canSelectNextTerminalTab: hostTerminalState.sessions.count > 1,
+            canSelectPreviousTerminalTab: hostTerminalState.sessions.count > 1,
             canOpenInEditor: openInEditorFocusedAction != nil,
             canOpenInBrowser: openInBrowserFocusedAction != nil,
             canReloadWebSource: reloadWebSourceFocusedAction != nil,
@@ -320,6 +329,7 @@ struct ContentView: View {
             activeSplitLayout: hostTerminalState.splitLayout(for: hostTerminalState.activeSessionID),
             activeSplitFraction: hostTerminalState.splitFraction(for: hostTerminalState.activeSessionID),
             hostSurfaceStore: hostTerminalState.surfaceStore,
+            tabTitleOverrides: hostTerminalState.tabTitleOverridesBySessionID,
             terminalContextMenuProvider: terminalContextMenu(for:),
             onSplitFractionChanged: { nextFraction in
                 guard let activeSessionID = hostTerminalState.activeSessionID else { return }
@@ -328,6 +338,9 @@ struct ContentView: View {
                     forPrimarySessionID: activeSessionID
                 )
             },
+            onSelectTerminalTab: selectTerminalTab(sessionID:),
+            onCloseTerminalTab: closeTerminalTab(sessionID:),
+            onTerminalCloseConfirmationRequired: requestCloseConfirmationForTerminalTab(sessionID:),
             onTerminalProcessExit: handleTerminalProcessExit(sessionID:),
             selectedCodePreview: $viewState.selectedCodePreview,
             isTerminalPanelVisible: $viewState.isTerminalPanelVisible,
@@ -520,6 +533,25 @@ struct ContentView: View {
                     )
                 }
             }
+            .onReceive(NotificationCenter.default.publisher(for: GhosttyAppManager.tabActionNotification)) {
+                notification in
+                Task { @MainActor in
+                    tabRoutingController.handle(
+                        notification: notification,
+                        hostTerminalState: hostTerminalState,
+                        focusTerminal: { sessionID in
+                            terminalFocusCoordinator.focusTerminal(
+                                sessionID: sessionID,
+                                surfaceStore: hostTerminalState.surfaceStore
+                            )
+                        },
+                        requestCloseTabs: { sessionIDs in
+                            requestCloseTerminalTabs(sessionIDs)
+                        }
+                    )
+                    syncSidebarSelectionToActiveSession()
+                }
+            }
     }
 
     private var splitViewWithFocusAndAlerts: some View {
@@ -555,6 +587,24 @@ struct ContentView: View {
                 Button("OK", role: .cancel) { workspaceProviderSetupCoordinator.clearError() }
             } message: {
                 Text(workspaceProviderSetupCoordinator.errorMessage ?? "Unknown error.")
+            }
+            .alert(
+                "Close Terminal?",
+                isPresented: Binding(
+                    get: { viewState.terminalCloseConfirmation != nil },
+                    set: { if !$0 { viewState.terminalCloseConfirmation = nil } }
+                )
+            ) {
+                Button("Close", role: .destructive) {
+                    guard let confirmation = viewState.terminalCloseConfirmation else { return }
+                    viewState.terminalCloseConfirmation = nil
+                    forceCloseTerminalTab(sessionID: confirmation.sessionID)
+                }
+                Button("Cancel", role: .cancel) {
+                    viewState.terminalCloseConfirmation = nil
+                }
+            } message: {
+                Text("The terminal still has a running process. Closing '\(viewState.terminalCloseConfirmation?.title ?? "Terminal")' will end it.")
             }
             .sheet(
                 item: Binding(
@@ -1471,6 +1521,90 @@ struct ContentView: View {
     }
 
     @MainActor
+    private func createTerminalTabFromCurrentContext() {
+        if !hostTerminalState.hasSessions {
+            ensureInitialHostSession()
+        }
+
+        guard let session = hostTerminalState.createTab() else { return }
+        syncSidebarSelectionToActiveSession()
+        focusTerminalTab(session.id)
+    }
+
+    @MainActor
+    private func selectTerminalTab(sessionID: UUID) {
+        guard hostTerminalState.activateExistingSession(sessionID: sessionID) else { return }
+        syncSidebarSelectionToActiveSession()
+        focusTerminalTab(sessionID)
+    }
+
+    @MainActor
+    private func selectAdjacentTerminalTab(offset: Int) {
+        guard let session = hostTerminalState.activateAdjacentTab(offset: offset) else { return }
+        syncSidebarSelectionToActiveSession()
+        focusTerminalTab(session.id)
+    }
+
+    @MainActor
+    private func closeActiveTerminalTab() {
+        guard let activeSessionID = hostTerminalState.activeSessionID else { return }
+        closeTerminalTab(sessionID: activeSessionID)
+    }
+
+    @MainActor
+    private func closeTerminalTab(sessionID: UUID) {
+        requestCloseTerminalTabs([sessionID])
+    }
+
+    @MainActor
+    private func requestCloseTerminalTabs(_ sessionIDs: [UUID]) {
+        for sessionID in sessionIDs {
+            if let terminal = hostTerminalState.surfaceStore.terminal(for: sessionID) {
+                terminal.requestClose()
+            } else {
+                forceCloseTerminalTab(sessionID: sessionID)
+            }
+        }
+    }
+
+    @MainActor
+    private func requestCloseConfirmationForTerminalTab(sessionID: UUID) {
+        let title =
+            hostTerminalState.sessions.first(where: { $0.id == sessionID })
+            .map { hostTerminalState.tabTitleOverride(for: $0.id) ?? hostTerminalState.surfaceStore.displayTitle(for: $0) }
+            ?? "Terminal"
+        viewState.terminalCloseConfirmation = TerminalCloseConfirmation(
+            sessionID: sessionID,
+            title: title
+        )
+    }
+
+    @MainActor
+    private func forceCloseTerminalTab(sessionID: UUID) {
+        guard
+            let focusSessionID = hostTerminalState.handleProcessExitAndResolveFocusTarget(
+                for: sessionID,
+                defaultHomeDirectory: resolvedDefaultHostDirectory
+            )
+        else {
+            return
+        }
+
+        syncSidebarSelectionToActiveSession()
+        focusTerminalTab(focusSessionID)
+    }
+
+    @MainActor
+    private func focusTerminalTab(_ sessionID: UUID) {
+        terminalFocusCoordinator.requestMainTerminalFocus(
+            targetSessionID: sessionID,
+            activateApp: false,
+            surfaceStore: hostTerminalState.surfaceStore,
+            activeSessionID: hostTerminalState.activeSessionID
+        )
+    }
+
+    @MainActor
     private func syncSidebarSelectionToActiveSession() {
         let syncedWorkspace = mainSelectionCoordinator.syncedWorkspaceSelection(
             for: activeHostSession,
@@ -2013,8 +2147,12 @@ struct MainTerminalDetailView: View {
     let activeSplitLayout: HostTerminalStateStore.SplitPaneLayout?
     let activeSplitFraction: CGFloat?
     let hostSurfaceStore: HostTerminalSurfaceStore
+    let tabTitleOverrides: [UUID: String]
     let terminalContextMenuProvider: (HostTerminalSession) -> NSMenu?
     let onSplitFractionChanged: (CGFloat) -> Void
+    var onSelectTerminalTab: ((UUID) -> Void)?
+    var onCloseTerminalTab: ((UUID) -> Void)?
+    var onTerminalCloseConfirmationRequired: ((UUID) -> Void)?
     var onTerminalProcessExit: ((UUID) -> Void)?
     @Binding var selectedCodePreview: CodePreviewSelection?
     @Binding var isTerminalPanelVisible: Bool
@@ -2098,7 +2236,11 @@ struct MainTerminalDetailView: View {
             splitLayout: activeSplitLayout,
             splitFraction: activeSplitFraction,
             surfaceStore: hostSurfaceStore,
+            tabTitleOverrides: tabTitleOverrides,
             onSplitFractionChanged: onSplitFractionChanged,
+            onSelectTab: onSelectTerminalTab,
+            onCloseTab: onCloseTerminalTab,
+            onCloseConfirmationRequired: onTerminalCloseConfirmationRequired,
             onTerminalProcessExit: onTerminalProcessExit,
             contextMenuProvider: terminalContextMenuProvider
         )

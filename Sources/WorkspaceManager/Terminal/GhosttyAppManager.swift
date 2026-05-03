@@ -14,6 +14,10 @@ final class GhosttyAppManager: NSObject {
     typealias SplitFocusDirection = GhosttyRuntimeActionBridge.SplitFocusDirection
     typealias SplitResizeDirection = GhosttyRuntimeActionBridge.SplitResizeDirection
     typealias SplitActionRequest = GhosttyRuntimeActionBridge.SplitActionRequest
+    typealias TabActionKind = GhosttyRuntimeActionBridge.TabActionKind
+    typealias TabCloseMode = GhosttyRuntimeActionBridge.TabCloseMode
+    typealias TabGotoTarget = GhosttyRuntimeActionBridge.TabGotoTarget
+    typealias TabActionRequest = GhosttyRuntimeActionBridge.TabActionRequest
 
     static let shared = GhosttyAppManager()
     nonisolated static let splitActionNotification = GhosttyRuntimeActionBridge.splitActionNotification
@@ -21,6 +25,12 @@ final class GhosttyAppManager: NSObject {
     nonisolated static let splitActionDirectionUserInfoKey =
         GhosttyRuntimeActionBridge.splitActionDirectionUserInfoKey
     nonisolated static let splitActionAmountUserInfoKey = GhosttyRuntimeActionBridge.splitActionAmountUserInfoKey
+    nonisolated static let tabActionNotification = GhosttyRuntimeActionBridge.tabActionNotification
+    nonisolated static let tabActionKindUserInfoKey = GhosttyRuntimeActionBridge.tabActionKindUserInfoKey
+    nonisolated static let tabActionCloseModeUserInfoKey = GhosttyRuntimeActionBridge.tabActionCloseModeUserInfoKey
+    nonisolated static let tabActionGotoUserInfoKey = GhosttyRuntimeActionBridge.tabActionGotoUserInfoKey
+    nonisolated static let tabActionMoveAmountUserInfoKey = GhosttyRuntimeActionBridge.tabActionMoveAmountUserInfoKey
+    nonisolated static let tabActionTitleUserInfoKey = GhosttyRuntimeActionBridge.tabActionTitleUserInfoKey
 
     private(set) var app: ghostty_app_t?
     private var config: ghostty_config_t?
@@ -143,6 +153,10 @@ final class GhosttyAppManager: NSObject {
 
     nonisolated static func splitActionRequest(from notification: Notification) -> SplitActionRequest? {
         GhosttyRuntimeActionBridge.splitActionRequest(from: notification)
+    }
+
+    nonisolated static func tabActionRequest(from notification: Notification) -> TabActionRequest? {
+        GhosttyRuntimeActionBridge.tabActionRequest(from: notification)
     }
 
     nonisolated static func closeSurface(_ userdata: UnsafeMutableRawPointer?, processAlive: Bool) {

@@ -46,6 +46,12 @@ struct ShortcutRoutingPolicyTests {
         #expect(policy.route(for: AppChromeShortcut.toggleInspector.chord) == .appChrome)
         #expect(policy.route(for: AppChromeShortcut.toggleTerminalPanel.chord) == .appChrome)
         #expect(policy.route(for: AppChromeShortcut.newWorkspace.chord) == .appChrome)
+        #expect(policy.route(for: AppChromeShortcut.newTerminalTab.chord) == .appChrome)
+        #expect(policy.route(for: AppChromeShortcut.closeTerminalTab.chord) == .appChrome)
+        #expect(policy.route(for: AppChromeShortcut.nextTerminalTab.chord) == .appChrome)
+        #expect(policy.route(for: AppChromeShortcut.previousTerminalTab.chord) == .appChrome)
+        #expect(policy.route(for: AppChromeShortcut.alternateNextTerminalTab.chord) == .appChrome)
+        #expect(policy.route(for: AppChromeShortcut.alternatePreviousTerminalTab.chord) == .appChrome)
     }
 
     @Test("Non-reserved shortcuts route to Ghostty by default")

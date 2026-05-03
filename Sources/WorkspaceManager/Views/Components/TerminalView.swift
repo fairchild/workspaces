@@ -31,18 +31,9 @@ final class HostTerminalSurfaceStore {
     func view(
         for session: HostTerminalSession,
         onProcessExit: (() -> Void)? = nil,
+        onCloseConfirmationRequired: (() -> Void)? = nil,
         contextMenuProvider: (() -> NSMenu?)? = nil
     ) -> GhosttySurfaceView {
-        if let existing = surfaces[session.id] {
-            InvestigationDiagnostics.emitFocus(
-                phase: "surface_store_reused",
-                fields: ["session_id": session.id.uuidString]
-            )
-            sessionIDsBySurfaceIdentity[ObjectIdentifier(existing)] = session.id
-            existing.contextMenuProvider = contextMenuProvider
-            return existing
-        }
-
         let sessionID = session.id
         let wrappedOnProcessExit: () -> Void = { [weak self] in
             Task { @MainActor in
@@ -51,16 +42,30 @@ final class HostTerminalSurfaceStore {
             }
         }
 
+        if let existing = surfaces[session.id] {
+            InvestigationDiagnostics.emitFocus(
+                phase: "surface_store_reused",
+                fields: ["session_id": session.id.uuidString]
+            )
+            sessionIDsBySurfaceIdentity[ObjectIdentifier(existing)] = session.id
+            existing.onProcessExit = wrappedOnProcessExit
+            existing.onCloseConfirmationRequired = onCloseConfirmationRequired
+            existing.contextMenuProvider = contextMenuProvider
+            return existing
+        }
+
         let created: GhosttySurfaceView
         if let customCommand = session.customCommand {
             created = GhosttySurfaceView(
                 customCommand: customCommand,
-                onProcessExit: wrappedOnProcessExit
+                onProcessExit: wrappedOnProcessExit,
+                onCloseConfirmationRequired: onCloseConfirmationRequired
             )
         } else {
             created = GhosttySurfaceView(
                 workingDirectory: session.directoryURL,
-                onProcessExit: wrappedOnProcessExit
+                onProcessExit: wrappedOnProcessExit,
+                onCloseConfirmationRequired: onCloseConfirmationRequired
             )
         }
         surfaces[session.id] = created
@@ -89,6 +94,17 @@ final class HostTerminalSurfaceStore {
 
     func sessionID(for terminal: GhosttySurfaceView) -> UUID? {
         sessionIDsBySurfaceIdentity[ObjectIdentifier(terminal)]
+    }
+
+    func displayTitle(for session: HostTerminalSession) -> String {
+        if let terminalTitle = surfaces[session.id]?.terminalTitle,
+            !terminalTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+            return terminalTitle
+        }
+
+        let fallback = session.directoryURL.lastPathComponent
+        return fallback.isEmpty ? "Terminal" : fallback
     }
 
     func invalidate(sessionID: UUID) {
@@ -164,6 +180,7 @@ struct PersistentHostTerminalContainerView: View {
     let session: HostTerminalSession
     let surfaceStore: HostTerminalSurfaceStore
     var onProcessExit: (() -> Void)?
+    var onCloseConfirmationRequired: (() -> Void)?
     var contextMenuProvider: (() -> NSMenu?)?
     let chromePolicy: TerminalPaneChromePolicy = .current
 
@@ -179,6 +196,7 @@ struct PersistentHostTerminalContainerView: View {
                 session: session,
                 surfaceStore: surfaceStore,
                 contextMenuProvider: contextMenuProvider,
+                onCloseConfirmationRequired: onCloseConfirmationRequired,
                 onProcessExit: {
                     NSLog("[GhosttyTerminal] Process exited for host session %@", session.id.uuidString)
                     onProcessExit?()
@@ -197,18 +215,21 @@ private struct PersistentHostGhosttyRepresentable: NSViewRepresentable {
     let session: HostTerminalSession
     let surfaceStore: HostTerminalSurfaceStore
     var contextMenuProvider: (() -> NSMenu?)?
+    var onCloseConfirmationRequired: (() -> Void)?
     var onProcessExit: (() -> Void)?
 
     func makeNSView(context: Context) -> GhosttySurfaceView {
         surfaceStore.view(
             for: session,
             onProcessExit: onProcessExit,
+            onCloseConfirmationRequired: onCloseConfirmationRequired,
             contextMenuProvider: contextMenuProvider
         )
     }
 
     func updateNSView(_ nsView: GhosttySurfaceView, context: Context) {
         _ = context
+        nsView.onCloseConfirmationRequired = onCloseConfirmationRequired
         nsView.contextMenuProvider = contextMenuProvider
     }
 }

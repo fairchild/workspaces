@@ -13,9 +13,15 @@ enum AppChromeShortcut: CaseIterable {
     case toggleInspector
     case toggleTerminalPanel
     case newWorkspace
+    case newTerminalTab
+    case closeTerminalTab
+    case nextTerminalTab
+    case previousTerminalTab
+    case alternateNextTerminalTab
+    case alternatePreviousTerminalTab
     case openInEditor
 
-    var keyCharacter: Character {
+    var keyString: String {
         switch self {
         case .toggleSidebar:
             return "b"
@@ -24,10 +30,24 @@ enum AppChromeShortcut: CaseIterable {
         case .toggleTerminalPanel:
             return "j"
         case .newWorkspace:
+            return "n"
+        case .newTerminalTab:
             return "t"
+        case .closeTerminalTab:
+            return "w"
+        case .nextTerminalTab, .previousTerminalTab:
+            return "\t"
+        case .alternateNextTerminalTab:
+            return "]"
+        case .alternatePreviousTerminalTab:
+            return "["
         case .openInEditor:
             return "o"
         }
+    }
+
+    var keyCharacter: Character {
+        Character(keyString)
     }
 
     var appKitModifiers: NSEvent.ModifierFlags {
@@ -39,6 +59,16 @@ enum AppChromeShortcut: CaseIterable {
         case .toggleTerminalPanel:
             return [.command]
         case .newWorkspace:
+            return [.command]
+        case .newTerminalTab:
+            return [.command]
+        case .closeTerminalTab:
+            return [.command]
+        case .nextTerminalTab:
+            return [.control]
+        case .previousTerminalTab:
+            return [.control, .shift]
+        case .alternateNextTerminalTab, .alternatePreviousTerminalTab:
             return [.command, .shift]
         case .openInEditor:
             return [.command, .shift]
@@ -54,6 +84,16 @@ enum AppChromeShortcut: CaseIterable {
         case .toggleTerminalPanel:
             return [.command]
         case .newWorkspace:
+            return [.command]
+        case .newTerminalTab:
+            return [.command]
+        case .closeTerminalTab:
+            return [.command]
+        case .nextTerminalTab:
+            return [.control]
+        case .previousTerminalTab:
+            return [.control, .shift]
+        case .alternateNextTerminalTab, .alternatePreviousTerminalTab:
             return [.command, .shift]
         case .openInEditor:
             return [.command, .shift]
@@ -80,6 +120,12 @@ enum AppChromeShortcutCatalog {
         .toggleInspector,
         .toggleTerminalPanel,
         .newWorkspace,
+        .newTerminalTab,
+        .closeTerminalTab,
+        .nextTerminalTab,
+        .previousTerminalTab,
+        .alternateNextTerminalTab,
+        .alternatePreviousTerminalTab,
     ]
 
     static let appOwnedDefaultChords: Set<ShortcutChord> = Set(appOwnedDefaults.map(\.chord))
