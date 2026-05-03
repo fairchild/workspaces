@@ -139,10 +139,15 @@ interface GHRepo {
 export function fetchUserRepos(token: string): Promise<GitHubRepo[]> {
 	const keyHash = token.slice(-8);
 	return cached(`repos:${keyHash}`, FIVE_MIN, async () => {
-		const repos = await ghFetch<GHRepo[]>(
-			"/user/repos?sort=pushed&direction=desc&per_page=100",
-			token,
-		);
+		const repos: GHRepo[] = [];
+		for (let page = 1; page <= 10; page++) {
+			const batch = await ghFetch<GHRepo[]>(
+				`/user/repos?sort=pushed&direction=desc&per_page=100&page=${page}`,
+				token,
+			);
+			repos.push(...batch);
+			if (batch.length < 100) break;
+		}
 		return repos.map((r) => ({
 			full_name: r.full_name,
 			owner: r.owner.login,
