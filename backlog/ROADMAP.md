@@ -142,12 +142,13 @@ Diagnostics shipped in PR #190 (`os.Logger` signposts + a 30-second watchdog). R
 
 #### 2. Main-window + Ghostty boundaries maintainability
 
-The remaining active P0 work is the structural maintainability lane. The narrow Ghostty appearance hardening lane has shipped.
+The remaining active P0 work is the structural maintainability lane. The narrow Ghostty appearance hardening lane has shipped, and the first Ghostty boundary seams have landed.
 
-- **2a. Main-window + sidebar maintainability** (structural). `backlog/main-window-sidebar-maintainability_followup.md`. Sidebar Phase 1 landed (PR #36). Remaining sidebar scope + Ghostty boundary cleanup is the deeper structural work; high-leverage but high-blast-radius. Start here when you have a focused session and accept the surface area.
-- **2b. Ghostty appearance hardening** (completed). `backlog/ghostty-appearance-hardening_followup.md`. Split-routing controller coverage shipped in PR #379. Appearance dedupe coverage and docs parity shipped in PR #383, and current smoke docs/scripts already state the Ghostty-splits/tmux preconditions.
+- **2a. Main-window + sidebar maintainability** (structural). `backlog/main-window-sidebar-maintainability_followup.md`. Sidebar Phase 1 landed (PR #36), and later controller seams moved more selection, bootstrap, surface-resolution, remote-workspace, and sorting behavior out of the root view. Remaining scope is still actionable but should stay incremental: shrink `ContentView.swift` / `SidebarView.swift` integration hotspots without changing navigation, workspace creation, split handling, or inspector behavior.
+- **2b. Ghostty boundary cleanup** (structural). `backlog/main-window-sidebar-maintainability_followup.md`. PR #387 extracted runtime callback config wiring into `GhosttyRuntimeConfigFactory`; PR #394 centralized callback userdata and main-thread bridging. Remaining Ghostty work should now focus on the still-dense `GhosttySurfaceView` / AppKit lifecycle boundary, not on the completed callback userdata/config seams.
+- **2c. Ghostty appearance hardening** (completed). `backlog/ghostty-appearance-hardening_followup.md`. Split-routing controller coverage shipped in PR #379. Appearance dedupe coverage and docs parity shipped in PR #383, and current smoke docs/scripts already state the Ghostty-splits/tmux preconditions.
 
-P0 because the AppKit bridge is still the riskiest surface to change as remote/activity work continues to land.
+P0 because these integration files still carry the highest regression risk when terminal, workspace, and activity behavior changes land. Treat this as a sequence of small behavior-preserving refactors with focused tests, not a broad rewrite.
 
 #### 3. Shared-desktop + evidence-loop reliability — Phase 1 done; Phase 2 deferred to P2
 

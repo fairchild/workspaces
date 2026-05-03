@@ -87,7 +87,36 @@ If you build something interesting on top of this, open an issue.
 
 ## Developer Setup and Contributing
 
-For all development setup, local build/test workflows, contribution guidelines, and project structure, see:
+Bootstrap a fresh checkout with:
+
+```bash
+./scripts/setup
+```
+
+After bootstrap, use the root `mise` catalog for day-to-day work:
+
+```bash
+mise run build-ghosttykit
+mise run build
+mise run test
+mise run check
+mise run dev-launch
+mise run dev-smoke
+mise run evidence -- --pr <number> --name <slug>
+```
+
+Lume validation entry points are also available from the root catalog:
+
+```bash
+mise run dev-lume-ensure
+mise run dev-lume-preflight
+mise run dev-lume-standalone-validate
+mise run dev-lume-macos-smoke
+```
+
+Run `mise tasks` for the full top-level catalog. Web dashboard tasks stay in `web/.mise.toml`; run them with `mise -C web run <task>`.
+
+For contribution guidelines and project structure, see:
 
 - [CONTRIBUTING.md](./CONTRIBUTING.md)
 
@@ -114,15 +143,6 @@ The Lume validation flow uses isolated WorkSpaces-managed VM storage and a stand
 For UI smoke/capture script entry points, see:
 
 - [scripts/README.md](./scripts/README.md)
-
-If you use `mise`, developer convenience tasks include:
-
-- `mise run dev-launch`
-- `mise run dev-watch`
-- `mise run dev-smoke`
-- `mise run dev-lume-preflight`
-- `mise run dev-lume-standalone-validate`
-- `mise run dev-lume-macos-smoke`
 
 ## License
 

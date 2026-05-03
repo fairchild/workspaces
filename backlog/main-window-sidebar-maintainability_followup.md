@@ -3,20 +3,20 @@ status: in-progress
 category: followup
 issue: 81
 milestone: 1
-pr: 36
+completed_prs: [36, 387, 394]
 branch: codex/apple-native-main-window-redesign-backlog
-retro_summary: Main-window state, navigation transitions, launch-surface resolution, and remote-workspace selection now have dedicated controller seams; sidebar sorting also moved into a small pure controller. Ghostty boundary cleanup remains.
+retro_summary: Main-window state, navigation transitions, launch-surface resolution, and remote-workspace selection now have dedicated controller seams; sidebar sorting also moved into a small pure controller. Ghostty runtime callback config and callback userdata/main-thread bridging now have focused seams. Remaining work is incremental integration-file shrinkage, especially ContentView/SidebarView hotspots and the GhosttySurfaceView AppKit lifecycle boundary.
 ---
 
 # Main Window + Sidebar Maintainability Pass
 
 ## Problem
 
-The recent refinement work made behavior materially safer, but the main integration files are still too large and mixed-purpose for comfortable iteration:
+The recent refinement work made behavior materially safer, but a few integration files are still too large and mixed-purpose for comfortable iteration:
 
 - `Sources/WorkspaceManager/Views/MainWindow/ContentView.swift` remains the main app-level orchestration surface.
 - `Sources/WorkspaceManager/Views/MainWindow/SidebarView.swift` still mixes view composition with repo/workspace/web-source lifecycle actions.
-- `Sources/WorkspaceManager/Terminal/GhosttySurfaceView.swift` and `Sources/WorkspaceManager/Terminal/GhosttyAppManager.swift` remain dense AppKit/C-interop surfaces.
+- `Sources/WorkspaceManager/Terminal/GhosttySurfaceView.swift` remains the densest AppKit/C-interop surface; `GhosttyAppManager.swift` is smaller after the callback-config and userdata extractions, but still sits on a sensitive runtime boundary.
 
 The codebase is stable (`swift test` and `swift build -Xswiftc -warn-concurrency` are green), so the highest-value next quality move is maintainability rather than more feature breadth.
 
@@ -62,11 +62,14 @@ Status:
 - Add tests only where the new seam is deterministic and does not require fragile UI automation.
 
 Status:
-- Started with a dedicated `GhosttyRuntimeConfigFactory` seam so raw `ghostty_runtime_config_s` callback wiring no longer lives inline in `GhosttyAppManager.initializeIfNeeded()`.
+- PR #387 added a dedicated `GhosttyRuntimeConfigFactory` seam so raw `ghostty_runtime_config_s` callback wiring no longer lives inline in `GhosttyAppManager.initializeIfNeeded()`.
+- PR #394 added `GhosttyCallbackUserdata` and `GhosttyThreadingBridge`, centralizing unsafe pointer/address resolution and main-thread callback hopping for runtime, action, close-surface, and clipboard paths.
+- Remaining work should avoid revisiting those completed seams unless a concrete regression appears. Prefer the next narrow slice in `GhosttySurfaceView` lifecycle/input boundaries or a small `ContentView`/`SidebarView` orchestration extraction.
 
 ## Acceptance Criteria
 
 - `ContentView.swift` and `SidebarView.swift` are materially smaller or more clearly partitioned by concern.
+- Completed Ghostty callback seams stay covered by focused tests instead of relying on runtime smoke alone.
 - No behavior regressions in session routing, inspector state, workspace creation, or split handling.
 - `swift build -Xswiftc -warn-concurrency` stays clean.
 - `swift test` remains green.

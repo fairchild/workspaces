@@ -7,42 +7,42 @@ Thanks for contributing to Workspaces.
 - macOS 14.0+ (Sonoma or newer)
 - Xcode 15.0+ or Swift 5.10+
 - [mise](https://mise.jdx.dev/) (toolchain management)
-- Optional: [mask](https://github.com/jacobdeichert/mask) (`brew install mask`) — a markdown-based task runner. If installed, you can use `mask <task>` as a shorthand for the commands below. See [maskfile.md](./maskfile.md) for all available tasks.
 
 ## Local Setup
 
 From repo root:
 
 ```bash
-./scripts/setup               # first-run: tools, dependencies, and prek hooks
-./scripts/build-ghosttykit.sh  # one-time: build terminal framework
-swift build
-swift test
+./scripts/setup  # first-run: tools, dependencies, env links, and prek hooks
 ```
 
-Or with mask: `mask setup && mask build && mask test`
+After the first-run bootstrap, use the root `mise` tasks for normal development:
+
+```bash
+mise run build-ghosttykit  # one-time or after Ghostty pin changes
+mise run build
+mise run test
+```
 
 To refresh git hooks without running full setup:
 
 ```bash
-./scripts/setup --hooks-only
+mise run hooks-install
 ```
 
-Or with mask: `mask hooks-install`
+The underlying script path remains `./scripts/setup --hooks-only`.
 
 To run the app in dev mode (isolated data directory):
 
 ```bash
-./scripts/launch-dev.sh
+mise run dev-launch
 ```
-
-Or with mask: `mask dev`
 
 `launch-dev.sh` runs the debug binary from `.build/` with an isolated local data root. Useful options:
 
 ```bash
-./scripts/launch-dev.sh --no-build      # skip rebuild, launch existing binary
-./scripts/launch-dev.sh --no-activate    # don't steal foreground focus
+mise run dev-launch -- --no-build       # skip rebuild, launch existing binary
+mise run dev-launch -- --no-activate    # don't steal foreground focus
 ```
 
 If your shell restricts writes to `~/Library/Application Support`, set a custom data dir:
@@ -56,12 +56,10 @@ WORKSPACES_DATA_DIR="$PWD/.workspacemanager-data" swift run WorkspaceManager
 Run before and after non-trivial changes:
 
 ```bash
-swift-format lint --strict --recursive Sources/ Tests/
-swift build
-swift test
+mise run check
 ```
 
-Or with mask: `mask ci`
+`mise run check` runs Swift format lint, `swift build`, and `swift test`.
 
 ## Local Install Workflow
 
@@ -105,7 +103,7 @@ workspaces/
 
 1. Keep scope focused and prefer incremental, testable changes.
 2. Add or update tests when behavior changes.
-3. Run local checks (`swift test`, `swift build`, lint when relevant).
+3. Run local checks (`mise run check`, or focused build/test commands when appropriate).
 4. Include a concise summary of behavior changes and verification results in the PR.
 
 ## CI Runner Lanes
