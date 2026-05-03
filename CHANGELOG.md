@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.11.2] - 2026-05-03
+
+### Other
+- web: make PR reviewer kickoff reliable (#421)
+- repair first-run hook setup
+- reconcile current P0 maintainability state
+- add root mise task catalog
+- align roadmap web runtime facts (#428)
+- extract expansion state controller
+- security: harden release and terminal compute
+- document release hardening mechanics
+- refresh improve codebase command flow
+- web: target Vercel PR previews
+- allow web preview PR comments
+- web: teach PR reviewer narrative labels
+- clarify release workflow publication
+
 ## [0.11.1] - 2026-05-03
 
 ### Changed
