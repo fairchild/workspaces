@@ -374,7 +374,16 @@ verify_sparkle_bundle_linkage() {
 
 sign_framework_nested_code() {
     local framework_path="$1"
+    local sparkle_base="$framework_path/Versions/B"
     local sparkle_autoupdate="$framework_path/Versions/B/Autoupdate"
+    local nested_bundle=""
+
+    shopt -s nullglob
+    for nested_bundle in "$sparkle_base/XPCServices"/*.xpc "$sparkle_base/Updater.app"; do
+        codesign_with_identity "$nested_bundle"
+        log_success "Signed nested Sparkle bundle $(basename "$nested_bundle")"
+    done
+    shopt -u nullglob
 
     if [[ -x "$sparkle_autoupdate" ]]; then
         codesign_with_identity "$sparkle_autoupdate"
