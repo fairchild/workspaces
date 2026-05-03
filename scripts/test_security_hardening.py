@@ -114,10 +114,7 @@ class SecurityHardeningTests(unittest.TestCase):
         """Every `uses:` reference to a third-party action must be pinned to a full SHA."""
         workflows_dir = REPO_ROOT / ".github/workflows"
         floating_refs: list[str] = []
-        tag_pattern = re.compile(
-            r"^\s*uses:\s+(?!\./)(\S+)@([a-z0-9]{40})\b",
-        )
-        uses_pattern = re.compile(r"^\s*uses:\s+(?!\./)(\S+)@(\S+)")
+        uses_pattern = re.compile(r"^\s*(?:-\s*)?uses:\s+(?!\./)(\S+)@(\S+)")
         for wf in sorted(workflows_dir.glob("*.yml")):
             for i, line in enumerate(wf.read_text().splitlines(), 1):
                 m = uses_pattern.match(line)
@@ -131,6 +128,13 @@ class SecurityHardeningTests(unittest.TestCase):
             [],
             "Actions with floating (non-SHA) refs found:\n" + "\n".join(floating_refs),
         )
+
+    def test_pull_request_ci_uses_github_hosted_runner(self) -> None:
+        """Untrusted PR code must not run on persistent self-hosted macOS runners."""
+        workflow = (REPO_ROOT / ".github/workflows/ci.yml").read_text()
+        self.assertIn("pull_request:", workflow)
+        self.assertIn("runs-on: macos-17", workflow)
+        self.assertNotIn("runs-on: [self-hosted, lume-macos]", workflow)
 
     def test_ci_workflows_have_explicit_permissions(self) -> None:
         """CI workflows should declare explicit top-level permissions to limit default token scope."""
