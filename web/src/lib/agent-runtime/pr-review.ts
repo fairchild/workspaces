@@ -33,8 +33,12 @@ cat > ./tmp/review.md << 'REVIEW_EOF'
 ## Summary
 Your summary here...
 
-## Details
+<details>
+<summary>Details</summary>
+
 - \`file.swift:42\` — description of issue
+
+</details>
 REVIEW_EOF
 
 # 2. Use jq to build valid JSON from the file, then post
@@ -58,7 +62,10 @@ Your review body MUST begin with a one-line decision banner. The first character
 
 Keep the decision banner to one sentence and no more than 140 characters. It should summarize the outcome, not repeat the PR title.
 
-- Use real headings (\`## Summary\`, \`## Details\`)
+- Use \`## Summary\` as a real heading
+- Put the details section in a GitHub-rendered HTML details block that is collapsed by default:
+  \`<details><summary>Details</summary> ... </details>\`
+- Do not add the \`open\` attribute to the \`<details>\` tag
 - Include a short \`## Project Thread\` section that references at least one previous PR by number and explains the relationship when previous PR context is available
 - Use bullet points and code blocks
 - Cite \`file:line\` for every comment

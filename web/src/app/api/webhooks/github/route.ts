@@ -144,7 +144,8 @@ export async function POST(request: Request): Promise<Response> {
 		await updateDispatchFromWebhook(eventType, action, payload);
 	}
 
-	// Trigger automated PR review via Managed Agents (fire-and-forget)
+	// Trigger automated PR review via Managed Agents before returning so
+	// serverless teardown cannot drop the session kickoff event.
 	if (eventType === "pull_request" && action === "opened") {
 		const pr = payload.pull_request as Record<string, unknown> | undefined;
 		const repoObj = payload.repository as Record<string, unknown> | undefined;
@@ -161,9 +162,11 @@ export async function POST(request: Request): Promise<Response> {
 				repoFullName: String(repoObj.full_name ?? ""),
 				repoName: String(repoObj.name ?? ""),
 			};
-			triggerPrReview(reviewPayload).catch((err) => {
+			try {
+				await triggerPrReview(reviewPayload);
+			} catch (err) {
 				console.error("[pr-review] failed:", err);
-			});
+			}
 		}
 	}
 

@@ -168,6 +168,24 @@ describe("fetchPrNarrativeContext", () => {
 });
 
 describe("triggerPrReview", () => {
+	it("configures the review prompt to render details collapsed by default", async () => {
+		mockPrList([githubPr(9), githubPr(8)]);
+
+		await expect(triggerPrReview(payload())).resolves.toBe("sesn_01");
+
+		expect(mocks.getOrCreateAgent).toHaveBeenCalledTimes(1);
+		const [, config] = mocks.getOrCreateAgent.mock.calls[0];
+		const prompt = config.systemPrompt;
+		expect(prompt).toContain("<details>\n<summary>Details</summary>");
+		expect(prompt).toContain(
+			"<details><summary>Details</summary> ... </details>",
+		);
+		expect(prompt).toContain("Do not add the `open` attribute");
+		expect(prompt).not.toContain(
+			"Use real headings (`## Summary`, `## Details`)",
+		);
+	});
+
 	it("sends previous PR context and narrative instructions in the kickoff message", async () => {
 		mockPrList([githubPr(9), githubPr(8), githubPr(7), githubPr(6)]);
 
