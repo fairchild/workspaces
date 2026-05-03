@@ -1,0 +1,69 @@
+name: PR Readiness
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, labeled, unlabeled, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: pr-readiness-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  readiness:
+    if: "!github.event.pull_request.draft"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+
+      - uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
+        env:
+          CHANGED_FILES_PATH: ${{ runner.temp }}/changed-files.json
+        with:
+          script: |
+            const fs = require('fs');
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+              per_page: 100,
+            });
+            fs.writeFileSync(process.env.CHANGED_FILES_PATH, JSON.stringify(files.map((file) => file.filename)));
+
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+
+      - name: Validate PR readiness
+        run: uv run --script scripts/pr-readiness.py --event "$GITHUB_EVENT_PATH" --changed-files "$RUNNER_TEMP/changed-files.json"
+
+  release-change-validation:
+    if: "!github.event.pull_request.draft"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
+        env:
+          CHANGED_FILES_PATH: ${{ runner.temp }}/changed-files.json
+        with:
+          script: |
+            const fs = require('fs');
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+              per_page: 100,
+            });
+            fs.writeFileSync(process.env.CHANGED_FILES_PATH, JSON.stringify(files.map((file) => file.filename)));
+
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+
+      - name: Validate release-sensitive changes
+        run: uv run --script scripts/validate-release-changes.py --changed-files "$RUNNER_TEMP/changed-files.json"

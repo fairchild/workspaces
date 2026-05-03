@@ -129,7 +129,7 @@ jobs:
           node scripts/playwright-findings.js playwright-report.json > findings.md || echo "_findings script failed_" > findings.md
           exit $PW_EXIT
       - if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: playwright-findings
           path: web/findings.md
@@ -171,7 +171,7 @@ jobs:
           node scripts/lhci-findings.js .lighthouseci/assertion-results.json > findings.md || echo "_findings script failed_" > findings.md
           exit $LHCI_EXIT
       - if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: lighthouse-findings
           path: web/findings.md
@@ -298,7 +298,7 @@ jobs:
           node scripts/playwright-findings.js prod-report.json > findings.md || echo "_findings script failed_" > findings.md
           exit $PW_EXIT
       - if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: prod-validate-findings
           path: web/findings.md

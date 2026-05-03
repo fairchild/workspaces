@@ -7,6 +7,7 @@
 - Surface: desktop / web / agent-runtime / infra / docs
 - User-facing behavior changed:
 - Non-happy paths considered:
+- Release/ops preconditions:
 - Residual risk or follow-up:
 
 ## Validation
@@ -68,4 +69,4 @@ Evidence links:
 - [ ] None
 - [ ] Blocked on evidence
 
-If blocked on evidence, explain why here. Do not merge UI-affecting work without explicit approval to ship without visual proof.
+If blocked on evidence, explain why here. UI-affecting work needs explicit approval before shipping without visual proof.
