@@ -370,7 +370,7 @@ def step_vercel(
     env: dict[str, str],
     cfg: dict,
 ) -> tuple[str, str] | None:
-    step(2, "Vercel link + auto-promote guard")
+    step(2, "Vercel link + Git auto-deploy guard")
     vercel_cfg = cfg.get("vercel", {})
     project_dir = ROOT / vercel_cfg.get("project_dir", "web")
 
@@ -415,21 +415,25 @@ def step_vercel(
     if ids:
         ok(f"orgId={mask(ids[0])}  projectId={mask(ids[1])}")
 
-    # Disable Vercel's git auto-promote for main, in code (no dashboard step).
+    # Disable Vercel's git auto-deployments in code (no dashboard step).
     print()
-    info(bold("Disable Vercel auto-promote for main (via vercel.json)"))
+    info(bold("Disable Vercel Git auto-deployments (via vercel.json)"))
     teach(
-        "Sets `git.deploymentEnabled.main = false` in web/vercel.json so pushes to main "
-        "no longer auto-promote to prod. The guard travels with the code — no dashboard "
-        "step required, and it survives project recreation."
+        "Sets `git.deploymentEnabled = false` in web/vercel.json so Vercel's Git "
+        "integration stays connected for metadata without auto-deploying pushes or PRs. "
+        "GitHub Actions owns PR previews and production promotion."
     )
-    ensure_vercel_json_disables_main(runner, prompt, project_dir)
+    ensure_vercel_json_disables_git_auto_deploys(runner, prompt, project_dir)
 
     return ids
 
 
-def ensure_vercel_json_disables_main(runner: Runner, prompt: Prompt, project_dir: Path) -> None:
-    """Idempotently set git.deploymentEnabled.main = false in vercel.json.
+def ensure_vercel_json_disables_git_auto_deploys(
+    runner: Runner,
+    prompt: Prompt,
+    project_dir: Path,
+) -> None:
+    """Idempotently set git.deploymentEnabled = false in vercel.json.
 
     Local file write — gated on runner.apply so dry-run mode shows the intent
     without modifying the working tree.
@@ -448,28 +452,27 @@ def ensure_vercel_json_disables_main(runner: Runner, prompt: Prompt, project_dir
             return
 
     git_block = data.setdefault("git", {})
-    enabled = git_block.setdefault("deploymentEnabled", {})
+    if not isinstance(git_block, dict):
+        err(f"{rel} has non-object `git` config; update it manually")
+        return
 
-    if enabled.get("main") is False:
-        ok(f"{rel} already disables main auto-deploy")
+    if git_block.get("deploymentEnabled") is False:
+        ok(f"{rel} already disables Vercel Git auto-deployments")
         return
 
     if is_new:
         # Add $schema so editors get autocomplete and validation.
         # https://vercel.com/docs/project-configuration/git-configuration
         data["$schema"] = "https://openapi.vercel.sh/vercel.json"
-        # Re-fetch git/enabled refs after $schema mutation (dict order)
-        git_block = data["git"]
-        enabled = git_block["deploymentEnabled"]
-        info(f"will create {rel} with `git.deploymentEnabled.main = false`")
+        info(f"will create {rel} with `git.deploymentEnabled = false`")
     else:
-        info(f"will merge `git.deploymentEnabled.main = false` into {rel}")
+        info(f"will set `git.deploymentEnabled = false` in {rel}")
 
     if not runner.apply:
         info(dim("(dry-run: no file write)"))
         return
 
-    enabled["main"] = False
+    git_block["deploymentEnabled"] = False
     # Use tab indent to match web/biome.jsonc formatter config — biome runs
     # against web/**/*.json and will reject space-indented output on commit.
     vjson_path.write_text(json.dumps(data, indent="\t") + "\n")
@@ -481,7 +484,7 @@ def ensure_vercel_json_disables_main(runner: Runner, prompt: Prompt, project_dir
 def offer_commit_vercel_json(prompt: Prompt, rel: str) -> None:
     """If vercel.json isn't committed, offer to commit it (or print the command)."""
     state = git_file_state(rel)
-    commit_msg = "chore(web): disable Vercel git auto-promote for main"
+    commit_msg = "chore(web): disable Vercel git auto-deployments"
     commit_cmd = f'git add {rel} && git commit -m "{commit_msg}"'
 
     if state == "clean":
@@ -493,7 +496,7 @@ def offer_commit_vercel_json(prompt: Prompt, rel: str) -> None:
 
     teach(
         "Until this file reaches main, Vercel's git integration will continue to "
-        "auto-promote pushes — making every merge a potential prod surprise."
+        "auto-deploy pushes and PRs."
     )
     if prompt.interactive and prompt.yes_no(f"Commit {rel} now?", default=True):
         try:
@@ -825,13 +828,13 @@ def step_summary(
         )
     print()
 
-    # 2. Vercel auto-promote guard
+    # 2. Vercel Git auto-deploy guard
     vjson_state = git_file_state("web/vercel.json")
-    info(bold("Vercel auto-promote guard"))
+    info(bold("Vercel Git auto-deploy guard"))
     if vjson_state == "clean":
         ok("web/vercel.json committed — guard reaches main on next push")
     elif vjson_state in ("untracked", "modified"):
-        commit_cmd = 'git add web/vercel.json && git commit -m "chore(web): disable Vercel git auto-promote for main"'
+        commit_cmd = 'git add web/vercel.json && git commit -m "chore(web): disable Vercel git auto-deployments"'
         warn(f"web/vercel.json not committed ({vjson_state}). Run: {bold(commit_cmd)}")
     else:
         warn("web/vercel.json missing — re-run `--only vercel --apply`")

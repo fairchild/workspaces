@@ -42,6 +42,10 @@ NEXT_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com
 
 Deployed to Vercel with root directory set to `web/`.
 
+PR previews are deployed by `.github/workflows/web-preview.yml` only when a PR
+touches `web/**`. Vercel's Git integration remains connected for metadata but
+does not automatically deploy branches.
+
 Infrastructure workers deployed separately:
 - `infra/cloudflare-webhook-relay/` — GitHub webhook ingestion
 - `infra/cloudflare-evidence-store/` — PR evidence uploads
