@@ -263,6 +263,7 @@ async function testSessionPersistence() {
 	await test("createSession inserts a row", async () => {
 		await agentSessions.createSession({
 			id: sessionId,
+			userId: "test-user",
 			repo: "fairchild/workspaces",
 			agentName: "april-clearwater",
 			computeBackend: "vercel-sandbox",
@@ -302,6 +303,7 @@ async function testSessionPersistence() {
 	await test("getActiveSessionForThread finds active session", async () => {
 		await agentSessions.updateSessionStatus(sessionId, "active");
 		const session = await agentSessions.getActiveSessionForThread(
+			"test-user",
 			"fairchild/workspaces",
 			"april-clearwater",
 			"test-thread-1",
@@ -313,6 +315,7 @@ async function testSessionPersistence() {
 	await test("getActiveSessionForThread ignores completed sessions", async () => {
 		await agentSessions.updateSessionStatus(sessionId, "completed");
 		const session = await agentSessions.getActiveSessionForThread(
+			"test-user",
 			"fairchild/workspaces",
 			"april-clearwater",
 			"test-thread-1",

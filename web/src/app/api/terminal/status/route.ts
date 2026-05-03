@@ -94,7 +94,7 @@ export async function GET(request: Request): Promise<Response> {
 	const unauthorized = await authorizeRepoAccess(session.user.id, repo);
 	if (unauthorized) return unauthorized;
 
-	const dbSessions = await getSessionsForRepo(repo);
+	const dbSessions = await getSessionsForRepo(session.user.id, repo);
 	const resolved = await Promise.all(dbSessions.map(resolveSession));
 	const sessions = resolved.filter((s): s is TerminalSessionInfo => s !== null);
 

@@ -172,6 +172,7 @@ describe("SessionManager", () => {
 		const params = makeParams();
 		vi.mocked(getSnapshotSessionForThread).mockResolvedValue({
 			id: "session-snap",
+			userId: "user-1",
 			repo: "acme/app",
 			agentName: "april-clearwater",
 			computeBackend: "vercel-sandbox",
@@ -204,6 +205,7 @@ describe("SessionManager", () => {
 		const params = makeParams();
 		vi.mocked(getActiveSessionForThread).mockResolvedValue({
 			id: "session-active",
+			userId: "user-1",
 			repo: "acme/app",
 			agentName: "april-clearwater",
 			computeBackend: "vercel-sandbox",
@@ -234,6 +236,7 @@ describe("SessionManager", () => {
 		const params = makeParams();
 		vi.mocked(getActiveSessionForThread).mockResolvedValue({
 			id: "session-stale",
+			userId: "user-1",
 			repo: "acme/app",
 			agentName: "april-clearwater",
 			computeBackend: "vercel-sandbox",
@@ -269,6 +272,7 @@ describe("SessionManager", () => {
 		const params = makeParams();
 		vi.mocked(getSnapshotSessionForThread).mockResolvedValue({
 			id: "session-race",
+			userId: "user-1",
 			repo: "acme/app",
 			agentName: "april-clearwater",
 			computeBackend: "vercel-sandbox",
@@ -297,6 +301,7 @@ describe("SessionManager", () => {
 		const params = makeParams();
 		vi.mocked(getSnapshotSessionForThread).mockResolvedValue({
 			id: "session-restore-fail",
+			userId: "user-1",
 			repo: "acme/app",
 			agentName: "april-clearwater",
 			computeBackend: "vercel-sandbox",

@@ -222,6 +222,7 @@ export type ComputeBackendId =
 
 export interface AgentSession {
 	id: string;
+	userId: string;
 	repo: string;
 	agentName: string;
 	computeBackend: ComputeBackendId;

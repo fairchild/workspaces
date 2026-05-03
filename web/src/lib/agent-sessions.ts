@@ -14,6 +14,7 @@ async function ensureSessionTable(): Promise<void> {
 		.createTable("agent_sessions")
 		.ifNotExists()
 		.addColumn("id", "text", (c) => c.primaryKey())
+		.addColumn("user_id", "text", (c) => c.notNull())
 		.addColumn("repo", "text", (c) => c.notNull())
 		.addColumn("agent_name", "text", (c) => c.notNull())
 		.addColumn("compute_backend", "text", (c) => c.notNull())
@@ -33,7 +34,7 @@ async function ensureSessionTable(): Promise<void> {
 		.columns(["repo", "agent_name", "thread_id"])
 		.execute();
 	// Migrate: add columns if table already existed without them
-	for (const col of ["snapshot_id", "claude_session_id"] as const) {
+	for (const col of ["snapshot_id", "claude_session_id", "user_id"] as const) {
 		try {
 			await db.schema
 				.alterTable("agent_sessions")
@@ -43,6 +44,12 @@ async function ensureSessionTable(): Promise<void> {
 			// Column already exists
 		}
 	}
+	await db.schema
+		.createIndex("idx_agent_sessions_user_thread")
+		.ifNotExists()
+		.on("agent_sessions")
+		.columns(["user_id", "repo", "agent_name", "thread_id"])
+		.execute();
 	// Migrate: rename the synthetic terminal slot from "terminal" to "shell".
 	// PR #299 changed the default fallback from "terminal" to "shell" but
 	// existing rows weren't updated. Without this, those rows are orphaned —
@@ -64,6 +71,7 @@ async function ensureSessionTable(): Promise<void> {
 
 function rowToSession(r: {
 	id: string;
+	user_id: string | null;
 	repo: string;
 	agent_name: string;
 	compute_backend: string;
@@ -78,6 +86,7 @@ function rowToSession(r: {
 }): AgentSession {
 	return {
 		id: r.id,
+		userId: r.user_id ?? "",
 		repo: r.repo,
 		agentName: r.agent_name,
 		computeBackend: r.compute_backend as ComputeBackendId,
@@ -99,6 +108,7 @@ export async function createSession(session: AgentSession): Promise<void> {
 		.insertInto("agent_sessions")
 		.values({
 			id: session.id,
+			user_id: session.userId,
 			repo: session.repo,
 			agent_name: session.agentName,
 			compute_backend: session.computeBackend,
@@ -127,6 +137,7 @@ export async function getSession(id: string): Promise<AgentSession | null> {
 }
 
 export async function getSessionByInstanceId(
+	userId: string,
 	instanceId: string,
 ): Promise<AgentSession | null> {
 	await ensureSessionTable();
@@ -134,6 +145,7 @@ export async function getSessionByInstanceId(
 	const row = await db
 		.selectFrom("agent_sessions")
 		.selectAll()
+		.where("user_id", "=", userId)
 		.where("compute_instance_id", "=", instanceId)
 		.orderBy("last_activity_at", "desc")
 		.limit(1)
@@ -142,6 +154,7 @@ export async function getSessionByInstanceId(
 }
 
 export async function getActiveSessionForThread(
+	userId: string,
 	repo: string,
 	agentName: string,
 	threadId: string,
@@ -151,6 +164,7 @@ export async function getActiveSessionForThread(
 	const row = await db
 		.selectFrom("agent_sessions")
 		.selectAll()
+		.where("user_id", "=", userId)
 		.where("repo", "=", repo)
 		.where("agent_name", "=", agentName)
 		.where("thread_id", "=", threadId)
@@ -221,6 +235,7 @@ export async function claimSnapshotSession(id: string): Promise<boolean> {
 
 /** Find the most recent active or snapshotted session for a repo (any agent). */
 export async function getActiveSessionForRepo(
+	userId: string,
 	repo: string,
 ): Promise<AgentSession | null> {
 	await ensureSessionTable();
@@ -228,6 +243,7 @@ export async function getActiveSessionForRepo(
 	const row = await db
 		.selectFrom("agent_sessions")
 		.selectAll()
+		.where("user_id", "=", userId)
 		.where("repo", "=", repo)
 		.where("status", "in", ["active", "streaming", "snapshotted"])
 		.where("compute_instance_id", "is not", null)
@@ -243,6 +259,7 @@ export async function getActiveSessionForRepo(
  * Used by the terminal tab to render agent sub-tabs.
  */
 export async function getSessionsForRepo(
+	userId: string,
 	repo: string,
 ): Promise<AgentSession[]> {
 	await ensureSessionTable();
@@ -250,6 +267,7 @@ export async function getSessionsForRepo(
 	const rows = await db
 		.selectFrom("agent_sessions")
 		.selectAll()
+		.where("user_id", "=", userId)
 		.where("repo", "=", repo)
 		.where("status", "in", ["active", "streaming", "snapshotted"])
 		.where("compute_instance_id", "is not", null)
@@ -275,6 +293,7 @@ export async function getSessionsForRepo(
 
 /** Find the most recent live session for a specific (repo, agent). */
 export async function getSessionForAgent(
+	userId: string,
 	repo: string,
 	agentName: string,
 ): Promise<AgentSession | null> {
@@ -283,6 +302,7 @@ export async function getSessionForAgent(
 	const row = await db
 		.selectFrom("agent_sessions")
 		.selectAll()
+		.where("user_id", "=", userId)
 		.where("repo", "=", repo)
 		.where("agent_name", "=", agentName)
 		.where("status", "in", ["active", "streaming", "snapshotted"])
@@ -295,6 +315,7 @@ export async function getSessionForAgent(
 
 /** Find the most recent snapshotted session for a thread (for restore). */
 export async function getSnapshotSessionForThread(
+	userId: string,
 	repo: string,
 	agentName: string,
 	threadId: string,
@@ -304,6 +325,7 @@ export async function getSnapshotSessionForThread(
 	const row = await db
 		.selectFrom("agent_sessions")
 		.selectAll()
+		.where("user_id", "=", userId)
 		.where("repo", "=", repo)
 		.where("agent_name", "=", agentName)
 		.where("thread_id", "=", threadId)

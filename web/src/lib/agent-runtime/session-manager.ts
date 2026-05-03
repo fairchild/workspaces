@@ -72,6 +72,7 @@ export class SessionManager {
 
 		// 2. Check for existing active session
 		const existing = await getActiveSessionForThread(
+			params.userId,
 			params.repo,
 			params.agentName,
 			threadId,
@@ -125,6 +126,7 @@ export class SessionManager {
 
 		// 2b. Check for snapshotted session to restore
 		const snapshotted = await getSnapshotSessionForThread(
+			params.userId,
 			params.repo,
 			params.agentName,
 			threadId,
@@ -212,6 +214,7 @@ export class SessionManager {
 		const claudeSessionId = crypto.randomUUID();
 		const session: AgentSession = {
 			id: sessionId,
+			userId: params.userId,
 			repo: params.repo,
 			agentName: params.agentName,
 			computeBackend: provider.descriptor.id,
