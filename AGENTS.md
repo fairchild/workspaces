@@ -2,29 +2,9 @@
 
 Mac-native app for managing AI coding sessions with embedded terminal.
 
-## Craft and Quality Bar
+## Quality and Mergeability
 
-Craft matters in this codebase. Treat quality as part of the requested work, not as optional polish after functionality lands.
-
-- Prefer solutions that feel native, coherent, and durable over quick patches that only satisfy the narrow repro.
-- Match the existing architecture, naming, interaction patterns, and visual language before introducing new conventions.
-- Keep user-facing flows quiet, focused, and reliable; avoid adding persistent chrome, noisy affordances, or explanatory UI unless the workflow truly needs it.
-- For UI work, verify fit, spacing, focus behavior, keyboard behavior, and empty/error/loading states. A feature is not done just because the happy path compiles.
-- For service and infrastructure work, preserve clear contracts, observable error handling, and diagnostics that make production failures easier to understand.
-- Prefer small, well-finished changes with evidence over broad changes with unclear blast radius.
-
-## Definition of Mergeable
-
-Work is mergeable when it is correct, coherent with the product, reviewable, verified, and leaves the system easier to operate.
-
-- The change solves the real user or maintainer problem, not only the narrow symptom in the first repro.
-- The implementation matches existing architecture, naming, data flow, UI language, and operational conventions.
-- The scope is tight: no unrelated refactors, formatting churn, dependency changes, generated artifacts, or opportunistic rewrites.
-- User-facing work covers the non-happy paths a reviewer would expect: empty, loading, error, permissions, timing, focus, and recovery states.
-- Service and infrastructure work has clear contracts, observable failure modes, useful logs or diagnostics, and no hidden production assumptions.
-- Tests or verification evidence match the risk and blast radius. For docs-only changes, `git diff --check` plus a clear note is usually enough.
-- The PR tells a reviewer what changed, how it was verified, and what residual risk or follow-up remains.
-- If evidence is blocked, say so explicitly before merge and explain what approval or environment is needed.
+Craft matters. Work is mergeable when it is correct, coherent with the product, reviewable, verified, and leaves the system easier to operate. Keep changes native-feeling, tightly scoped, evidence-backed, and consistent with existing architecture and UI patterns. Before opening or reviewing a PR, use `docs/development/mergeability-standard.md` for the surface-specific checklist.
 
 ## Dev Verification Practice (required)
 

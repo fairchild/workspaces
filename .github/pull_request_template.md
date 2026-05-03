@@ -2,6 +2,13 @@
 
 -
 
+## Mergeability
+
+- Surface: desktop / web / agent-runtime / infra / docs
+- User-facing behavior changed:
+- Non-happy paths considered:
+- Residual risk or follow-up:
+
 ## Validation
 
 - [ ] `swift build`
