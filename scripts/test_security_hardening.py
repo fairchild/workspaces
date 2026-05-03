@@ -133,7 +133,7 @@ class SecurityHardeningTests(unittest.TestCase):
         """Untrusted PR code must not run on persistent self-hosted macOS runners."""
         workflow = (REPO_ROOT / ".github/workflows/ci.yml").read_text()
         self.assertIn("pull_request:", workflow)
-        self.assertIn("runs-on: macos-17", workflow)
+        self.assertIn("runs-on: macos-15", workflow)
         self.assertNotIn("runs-on: [self-hosted, lume-macos]", workflow)
 
     def test_ci_workflows_have_explicit_permissions(self) -> None:
