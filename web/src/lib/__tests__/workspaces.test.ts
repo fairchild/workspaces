@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatRelativeTime } from "../timeline-utils";
 import type { Workspace } from "../types";
 import {
+	DEFAULT_WORKSPACE_OWNER_ID,
 	type SyncWorkspaceInput,
 	formatWorkspaceStatusCard,
 	getWorkspaces,
@@ -126,24 +127,45 @@ describe("syncWorkspaces (parallel upserts)", () => {
 			makeInput(`${prefix}-${i}`, { repoName: `acme/repo-${i}` }),
 		);
 
-		const count = await syncWorkspaces(inputs);
+		const count = await syncWorkspaces(DEFAULT_WORKSPACE_OWNER_ID, inputs);
 		expect(count).toBe(20);
 
 		// Pull each back individually to avoid accidentally matching rows from
 		// other tests in the shared DB.
-		const all = await getWorkspaces();
+		const all = await getWorkspaces(DEFAULT_WORKSPACE_OWNER_ID);
 		const ours = all.filter((w) => w.id.startsWith(prefix));
 		expect(ours).toHaveLength(20);
 	});
 
 	it("upserts existing rows with new field values", async () => {
 		const id = `upsert-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-		await syncWorkspaces([makeInput(id, { status: "active" })]);
-		await syncWorkspaces([makeInput(id, { status: "stopped" })]);
+		await syncWorkspaces(DEFAULT_WORKSPACE_OWNER_ID, [
+			makeInput(id, { status: "active" }),
+		]);
+		await syncWorkspaces(DEFAULT_WORKSPACE_OWNER_ID, [
+			makeInput(id, { status: "stopped" }),
+		]);
 
-		const all = await getWorkspaces();
+		const all = await getWorkspaces(DEFAULT_WORKSPACE_OWNER_ID);
 		const ours = all.filter((w) => w.id === id);
 		expect(ours).toHaveLength(1);
 		expect(ours[0].status).toBe("stopped");
+	});
+
+	it("lists only workspaces for the requested owner", async () => {
+		const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+		const ownerOne = `owner-1-${suffix}`;
+		const ownerTwo = `owner-2-${suffix}`;
+		await syncWorkspaces(ownerOne, [
+			makeInput(`scoped-a-${suffix}`, { name: "owner-one" }),
+		]);
+		await syncWorkspaces(ownerTwo, [
+			makeInput(`scoped-b-${suffix}`, { name: "owner-two" }),
+		]);
+
+		const workspaces = await getWorkspaces(ownerOne);
+
+		expect(workspaces.map((w) => w.name)).toContain("owner-one");
+		expect(workspaces.map((w) => w.name)).not.toContain("owner-two");
 	});
 });

@@ -27,6 +27,7 @@ export interface ChatMessagesTable {
 }
 
 export interface WorkspacesTable {
+	owner_id: string | null;
 	id: string;
 	name: string;
 	path: string;
