@@ -141,6 +141,7 @@ export default async function globalSetup() {
 
 	await db.execute(`CREATE TABLE IF NOT EXISTS agent_sessions (
 		id TEXT PRIMARY KEY,
+		user_id TEXT,
 		repo TEXT NOT NULL,
 		agent_name TEXT NOT NULL,
 		compute_backend TEXT NOT NULL,
@@ -223,11 +224,12 @@ export default async function globalSetup() {
 	const now = new Date().toISOString();
 	await db.execute({
 		sql: `INSERT OR REPLACE INTO agent_sessions (
-			id, repo, agent_name, compute_backend, compute_instance_id,
+			id, user_id, repo, agent_name, compute_backend, compute_instance_id,
 			snapshot_id, thread_id, status, created_at, last_activity_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		args: [
 			SESSION_IDS[0],
+			TEST_USER_ID,
 			TEST_REPO,
 			"april-clearwater",
 			"vercel-sandbox",

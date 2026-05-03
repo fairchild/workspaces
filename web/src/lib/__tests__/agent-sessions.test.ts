@@ -12,6 +12,7 @@ function uniqueThread(): string {
 function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
 	return {
 		id: `test-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+		userId: "user-1",
 		repo: "owner/repo",
 		agentName: "test-agent",
 		computeBackend: "vercel-sandbox",
@@ -57,6 +58,7 @@ describe("snapshot session lifecycle", () => {
 		await mod.createSession(session);
 
 		const found = await mod.getSnapshotSessionForThread(
+			session.userId,
 			session.repo,
 			session.agentName,
 			session.threadId,
@@ -73,6 +75,7 @@ describe("snapshot session lifecycle", () => {
 		await mod.createSession(session);
 
 		const found = await mod.getSnapshotSessionForThread(
+			session.userId,
 			session.repo,
 			session.agentName,
 			session.threadId,
@@ -98,6 +101,7 @@ describe("snapshot session lifecycle", () => {
 		await mod.createSession(newer);
 
 		const found = await mod.getSnapshotSessionForThread(
+			newer.userId,
 			older.repo,
 			older.agentName,
 			sharedThread,
@@ -156,6 +160,7 @@ describe("getActiveSessionForThread", () => {
 		await mod.createSession(session);
 
 		const found = await mod.getActiveSessionForThread(
+			session.userId,
 			session.repo,
 			session.agentName,
 			session.threadId,
@@ -171,10 +176,110 @@ describe("getActiveSessionForThread", () => {
 		await mod.createSession(session);
 
 		const found = await mod.getActiveSessionForThread(
+			session.userId,
 			session.repo,
 			session.agentName,
 			session.threadId,
 		);
 		expect(found).toBeNull();
+	});
+
+	it("scopes active sessions by user", async () => {
+		const sharedThread = uniqueThread();
+		const userOne = makeSession({
+			userId: "user-1",
+			status: "active",
+			computeInstanceId: "inst-user-1",
+			threadId: sharedThread,
+		});
+		const userTwo = makeSession({
+			userId: "user-2",
+			status: "active",
+			computeInstanceId: "inst-user-2",
+			threadId: sharedThread,
+		});
+		await mod.createSession(userOne);
+		await mod.createSession(userTwo);
+
+		const found = await mod.getActiveSessionForThread(
+			"user-1",
+			userOne.repo,
+			userOne.agentName,
+			sharedThread,
+		);
+
+		expect(found?.id).toBe(userOne.id);
+		expect(found?.computeInstanceId).toBe("inst-user-1");
+	});
+});
+
+describe("repo session lookups", () => {
+	it("lists only the current user's live sessions for a repo", async () => {
+		const repo = `owner/repo-${uniqueThread()}`;
+		const userOne = makeSession({
+			userId: "user-1",
+			repo,
+			agentName: "april",
+			status: "active",
+			computeInstanceId: "inst-user-1",
+		});
+		const userTwo = makeSession({
+			userId: "user-2",
+			repo,
+			agentName: "april",
+			status: "active",
+			computeInstanceId: "inst-user-2",
+		});
+		await mod.createSession(userOne);
+		await mod.createSession(userTwo);
+
+		const sessions = await mod.getSessionsForRepo("user-1", userOne.repo);
+
+		expect(sessions.map((session) => session.id)).toEqual([userOne.id]);
+	});
+
+	it("finds an agent session only for the current user", async () => {
+		const repo = `owner/repo-${uniqueThread()}`;
+		const userOne = makeSession({
+			userId: "user-1",
+			repo,
+			agentName: "april",
+			status: "active",
+			computeInstanceId: "inst-user-1",
+		});
+		const userTwo = makeSession({
+			userId: "user-2",
+			repo,
+			agentName: "april",
+			status: "active",
+			computeInstanceId: "inst-user-2",
+			lastActivityAt: "2030-01-01T00:00:00Z",
+		});
+		await mod.createSession(userOne);
+		await mod.createSession(userTwo);
+
+		const found = await mod.getSessionForAgent(
+			"user-1",
+			userOne.repo,
+			userOne.agentName,
+		);
+
+		expect(found?.id).toBe(userOne.id);
+	});
+
+	it("finds a transcript session by instance id only for the owner", async () => {
+		const session = makeSession({
+			userId: "user-1",
+			status: "active",
+			computeInstanceId: "shared-instance",
+		});
+		await mod.createSession(session);
+
+		await expect(
+			mod.getSessionByInstanceId("user-2", "shared-instance"),
+		).resolves.toBeNull();
+		await expect(
+			mod.getSessionByInstanceId("user-1", "shared-instance"),
+		).resolves.toMatchObject({ id: session.id });
 	});
 });

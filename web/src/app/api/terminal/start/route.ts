@@ -48,7 +48,11 @@ export async function POST(request: Request): Promise<Response> {
 	const agentName = body.agentName ?? process.env.DEFAULT_AGENT ?? "shell";
 
 	// If a live session already exists for this (repo, agent), reuse it
-	const existing = await getSessionForAgent(body.repo, agentName);
+	const existing = await getSessionForAgent(
+		session.user.id,
+		body.repo,
+		agentName,
+	);
 	if (existing?.computeInstanceId && existing.status !== "snapshotted") {
 		return Response.json({
 			sessionId: existing.id,
@@ -114,6 +118,7 @@ export async function POST(request: Request): Promise<Response> {
 	const now = new Date().toISOString();
 	await createSession({
 		id: sessionId,
+		userId: session.user.id,
 		repo: body.repo,
 		agentName,
 		computeBackend: provider.descriptor.id,

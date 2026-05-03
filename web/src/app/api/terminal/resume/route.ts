@@ -36,7 +36,11 @@ export async function POST(request: Request): Promise<Response> {
 	const unauthorized = await authorizeRepoAccess(session.user.id, body.repo);
 	if (unauthorized) return unauthorized;
 
-	const agentSession = await getSessionForAgent(body.repo, body.agentName);
+	const agentSession = await getSessionForAgent(
+		session.user.id,
+		body.repo,
+		body.agentName,
+	);
 	if (!agentSession) {
 		return Response.json(
 			{ error: "no session found for agent" },

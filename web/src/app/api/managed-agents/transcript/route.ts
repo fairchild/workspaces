@@ -22,7 +22,7 @@ export async function GET(request: Request): Promise<Response> {
 		return new Response("sessionId required", { status: 400 });
 	}
 
-	const agentSession = await getSessionByInstanceId(sessionId);
+	const agentSession = await getSessionByInstanceId(authed.user.id, sessionId);
 	if (!agentSession) {
 		return new Response("session not found", { status: 404 });
 	}

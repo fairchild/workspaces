@@ -42,6 +42,7 @@ export interface WorkspacesTable {
 
 export interface AgentSessionsTable {
 	id: string;
+	user_id: string | null;
 	repo: string;
 	agent_name: string;
 	compute_backend: string;

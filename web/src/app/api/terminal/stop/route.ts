@@ -30,7 +30,11 @@ export async function POST(request: Request): Promise<Response> {
 
 	const agentName = body.agentName ?? process.env.DEFAULT_AGENT ?? "shell";
 
-	const agentSession = await getSessionForAgent(body.repo, agentName);
+	const agentSession = await getSessionForAgent(
+		session.user.id,
+		body.repo,
+		agentName,
+	);
 	if (!agentSession?.computeInstanceId) {
 		return Response.json({ stopped: false, reason: "no active session" });
 	}
