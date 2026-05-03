@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.11.1] - 2026-05-03
+
+### Changed
+- centralize Ghostty callback userdata resolution
+- desktop: isolate Ghostty runtime config callbacks (#387)
+
+### Fixed
+- release: skip perf parity when runner has no foreground GUI session (#389)
+- release: harden codesign against errSecInternalComponent (#388)
+
+### Other
+- add notarization preflight step before heavy build work (#399)
+- scope workspace sync by owner
+- resolve production dependency audit
+- fail closed without ttyd token secret
+- keep terminal clone tokens out of URLs
+- Add privacy-first Sparkle updates (#413)
+- scope agent sessions to users
+- verify repo selections server-side
+- make setup pnpm install noninteractive
+- add PR review narrative context
+- remove legacy Workspaces display fallbacks
+- Add app-owned terminal tabs and shortcuts (#401)
+- fix local login setup flow (#400)
+- rename displayed app brand to WorkSpaces
+- remove PR reviewer attribution line
+- add performance PR evidence profile (#391)
+- add PR reviewer decision banner (#390)
+
 ## [0.11.0] - 2026-05-02
 
 ### Added
