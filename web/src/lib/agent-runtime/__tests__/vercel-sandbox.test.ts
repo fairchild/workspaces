@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { buildGitCloneArgs, ttydPathToken } from "../vercel-sandbox";
+import {
+	VercelSandboxProvider,
+	buildGitCloneArgs,
+	ttydPathToken,
+} from "../vercel-sandbox";
 
 // process.env.X = undefined sets the env var to the literal string "undefined".
 // Reflect.deleteProperty actually removes the key, which is what we want when
@@ -9,20 +13,26 @@ function unset(name: string): void {
 	Reflect.deleteProperty(process.env, name);
 }
 
+function restoreEnv(name: string, value: string | undefined): void {
+	if (value === undefined) unset(name);
+	else Reflect.set(process.env, name, value);
+}
+
 describe("ttydPathToken", () => {
 	const originalSecret = process.env.TTYD_TOKEN_SECRET;
 	const originalAuth = process.env.BETTER_AUTH_SECRET;
+	const originalNodeEnv = process.env.NODE_ENV;
 
 	beforeEach(() => {
+		Reflect.set(process.env, "NODE_ENV", "test");
 		process.env.TTYD_TOKEN_SECRET = "test-secret-fixed";
 		unset("BETTER_AUTH_SECRET");
 	});
 
 	afterEach(() => {
-		if (originalSecret === undefined) unset("TTYD_TOKEN_SECRET");
-		else process.env.TTYD_TOKEN_SECRET = originalSecret;
-		if (originalAuth === undefined) unset("BETTER_AUTH_SECRET");
-		else process.env.BETTER_AUTH_SECRET = originalAuth;
+		restoreEnv("TTYD_TOKEN_SECRET", originalSecret);
+		restoreEnv("BETTER_AUTH_SECRET", originalAuth);
+		restoreEnv("NODE_ENV", originalNodeEnv);
 	});
 
 	it("returns a deterministic 24-char hex string for the same sandbox id", () => {
@@ -67,6 +77,53 @@ describe("ttydPathToken", () => {
 		const b = ttydPathToken("sbx_y");
 		expect(a).toBe(b);
 		expect(a).toMatch(/^[0-9a-f]{24}$/);
+	});
+
+	it("throws in production when neither secret is set", () => {
+		Reflect.set(process.env, "NODE_ENV", "production");
+		unset("TTYD_TOKEN_SECRET");
+		unset("BETTER_AUTH_SECRET");
+
+		expect(() => ttydPathToken("sbx_y")).toThrow(/TTYD_TOKEN_SECRET/);
+	});
+});
+
+describe("VercelSandboxProvider.checkAvailability", () => {
+	const originalNodeEnv = process.env.NODE_ENV;
+	const originalOidc = process.env.VERCEL_OIDC_TOKEN;
+	const originalSecret = process.env.TTYD_TOKEN_SECRET;
+	const originalAuth = process.env.BETTER_AUTH_SECRET;
+
+	beforeEach(() => {
+		Reflect.set(process.env, "NODE_ENV", "production");
+		process.env.VERCEL_OIDC_TOKEN = "oidc-token";
+		unset("TTYD_TOKEN_SECRET");
+		unset("BETTER_AUTH_SECRET");
+	});
+
+	afterEach(() => {
+		restoreEnv("NODE_ENV", originalNodeEnv);
+		restoreEnv("VERCEL_OIDC_TOKEN", originalOidc);
+		restoreEnv("TTYD_TOKEN_SECRET", originalSecret);
+		restoreEnv("BETTER_AUTH_SECRET", originalAuth);
+	});
+
+	it("fails closed in production without a terminal token secret", async () => {
+		const provider = new VercelSandboxProvider();
+
+		await expect(provider.checkAvailability()).resolves.toMatchObject({
+			available: false,
+			reason: expect.stringContaining("TTYD_TOKEN_SECRET"),
+		});
+	});
+
+	it("is available in production when BETTER_AUTH_SECRET can gate terminal URLs", async () => {
+		process.env.BETTER_AUTH_SECRET = "auth-secret";
+		const provider = new VercelSandboxProvider();
+
+		await expect(provider.checkAvailability()).resolves.toEqual({
+			available: true,
+		});
 	});
 });
 

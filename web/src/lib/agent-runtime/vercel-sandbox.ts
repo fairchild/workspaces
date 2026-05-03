@@ -78,6 +78,7 @@ const SANDBOX_REPO_DIR = "/vercel/sandbox/repo";
 const GIT_CREDENTIAL_TOKEN_PATH = "/vercel/sandbox/github-clone-token";
 const GIT_CREDENTIAL_HELPER_PATH =
 	"/vercel/sandbox/github-credential-helper.sh";
+const DEV_TTYD_TOKEN_SECRET = "dev-only-fallback-do-not-use-in-prod";
 
 /**
  * Run a command in a sandbox and throw if it exits non-zero. The
@@ -194,6 +195,21 @@ async function scrubGitOrigin(
 
 function stripQuotes(s: string): string {
 	return s.replace(/^["']|["']$/g, "");
+}
+
+function configuredTtydTokenSecret(): string | null {
+	return (
+		process.env.TTYD_TOKEN_SECRET ?? process.env.BETTER_AUTH_SECRET ?? null
+	);
+}
+
+function resolveTtydTokenSecret(): string {
+	const secret = configuredTtydTokenSecret();
+	if (secret) return secret;
+	if (process.env.NODE_ENV !== "production") return DEV_TTYD_TOKEN_SECRET;
+	throw new Error(
+		"TTYD_TOKEN_SECRET or BETTER_AUTH_SECRET is required for terminal access in production",
+	);
 }
 
 /**
@@ -480,14 +496,23 @@ export class VercelSandboxProvider
 			!!process.env.VERCEL_TEAM_ID &&
 			!!process.env.VERCEL_PROJECT_ID;
 
-		if (hasOidc || hasToken) {
-			return { available: true };
+		if (!hasOidc && !hasToken) {
+			return {
+				available: false,
+				reason:
+					"Missing Vercel credentials (VERCEL_OIDC_TOKEN or VERCEL_TOKEN + VERCEL_TEAM_ID + VERCEL_PROJECT_ID)",
+			};
 		}
-		return {
-			available: false,
-			reason:
-				"Missing Vercel credentials (VERCEL_OIDC_TOKEN or VERCEL_TOKEN + VERCEL_TEAM_ID + VERCEL_PROJECT_ID)",
-		};
+
+		if (!configuredTtydTokenSecret() && process.env.NODE_ENV === "production") {
+			return {
+				available: false,
+				reason:
+					"Missing TTYD_TOKEN_SECRET or BETTER_AUTH_SECRET (required for terminal URL authentication)",
+			};
+		}
+
+		return { available: true };
 	}
 
 	async createSandbox(request: SandboxRequest): Promise<SandboxResult> {
@@ -849,10 +874,7 @@ const ALIVE_STATUSES: ReadonlySet<string> = new Set(["running", "pending"]);
  * Exported for testing.
  */
 export function ttydPathToken(sandboxId: string): string {
-	const secret =
-		process.env.TTYD_TOKEN_SECRET ??
-		process.env.BETTER_AUTH_SECRET ??
-		"dev-only-fallback-do-not-use-in-prod";
+	const secret = resolveTtydTokenSecret();
 	return crypto
 		.createHmac("sha256", secret)
 		.update(sandboxId)
@@ -867,6 +889,24 @@ export function ttydPathToken(sandboxId: string): string {
 function ttydUrl(domain: string, sandboxId: string): string {
 	const token = ttydPathToken(sandboxId);
 	return `${domain.replace(/\/$/, "")}/${token}/ws`;
+}
+
+function sandboxTerminalState(
+	sandbox: Sandbox,
+	instanceId: string,
+): SandboxState {
+	let domain: string;
+	try {
+		domain = sandbox.domain(7681);
+	} catch {
+		// Pre-v2 sandbox without port 7681 published. We have no way to
+		// connect a terminal to it, so treat it as dead for our purposes.
+		return { alive: false };
+	}
+	return {
+		alive: true,
+		terminalUrl: ttydUrl(domain, instanceId),
+	};
 }
 
 /**
@@ -1031,39 +1071,22 @@ export async function resolveSandboxState(
 	// Fast path: in-memory map (same serverless instance)
 	const cached = activeSandboxes.get(instanceId);
 	if (cached && ALIVE_STATUSES.has(cached.status)) {
-		try {
-			return {
-				alive: true,
-				terminalUrl: ttydUrl(cached.domain(7681), instanceId),
-			};
-		} catch {
-			// Pre-v2 sandbox without port 7681 published. We have no way to
-			// connect a terminal to it, so treat it as dead for our purposes —
-			// reconciliation will mark the session completed and the user can
-			// start a fresh sandbox that has ttyd.
-			return { alive: false };
-		}
+		return sandboxTerminalState(cached, instanceId);
 	}
 
 	// Cross-instance path: single HTTP call to Vercel API
+	let sandbox: Sandbox;
 	try {
-		const sandbox = await Sandbox.get({
+		sandbox = await Sandbox.get({
 			sandboxId: instanceId,
 			...getCredentials(),
 		});
-		if (!ALIVE_STATUSES.has(sandbox.status)) {
-			return { alive: false };
-		}
-		try {
-			return {
-				alive: true,
-				terminalUrl: ttydUrl(sandbox.domain(7681), instanceId),
-			};
-		} catch {
-			return { alive: false };
-		}
 	} catch {
 		// Sandbox record doesn't exist at all (never created, or purged)
 		return { alive: false };
 	}
+	if (!ALIVE_STATUSES.has(sandbox.status)) {
+		return { alive: false };
+	}
+	return sandboxTerminalState(sandbox, instanceId);
 }
