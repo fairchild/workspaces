@@ -8,6 +8,11 @@ The release workflow intentionally does not run on a generic self-hosted runner.
 
 `signing-host` is a mutable GitHub runner label, not repo state. If no online runner advertises it, `Release` jobs will remain queued even when self-hosted runners are otherwise healthy.
 
+Runner readiness is separate from protected environment approval. The release
+workflow may wait on the GitHub `release` environment before checkout, signing
+material import, or notarization begins. Approve that environment only after the
+release tag, version metadata, and changelog are ready to publish.
+
 ## Prerequisites
 
 - GitHub CLI authenticated with permission to inspect and update Actions runners for `fairchild/workspaces`
@@ -65,6 +70,9 @@ gh api repos/fairchild/workspaces/actions/runs/<run-id>/jobs \
 ```
 
 The job should report labels including `self-hosted` and `signing-host`, and `runner_name` should resolve to the designated signing runner instead of remaining empty while queued.
+
+If the run is waiting on the protected `release` environment, approve or reject
+that gate in GitHub Actions before expecting the runner assignment to proceed.
 
 If repository release credentials are intentionally unavailable in the current environment, stop after the job is claimed by the correct runner.
 
