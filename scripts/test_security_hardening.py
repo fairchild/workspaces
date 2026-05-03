@@ -136,6 +136,31 @@ class SecurityHardeningTests(unittest.TestCase):
         self.assertIn("runs-on: macos-15", workflow)
         self.assertNotIn("runs-on: [self-hosted, lume-macos]", workflow)
 
+    def test_ci_fallback_uses_github_hosted_runner(self) -> None:
+        """Failed PR fallback must not execute untrusted commits on self-hosted runners."""
+        workflow = (REPO_ROOT / ".github/workflows/ci-fallback.yml").read_text()
+        self.assertIn("workflow_run:", workflow)
+        self.assertIn("runs-on: macos-15", workflow)
+        self.assertNotIn("runs-on: [self-hosted, lume-macos]", workflow)
+        self.assertNotIn("runs-on: [self-hosted, signing-host]", workflow)
+
+    def test_release_workflow_does_not_export_secrets_job_wide(self) -> None:
+        """Generated and notarization secrets must not be written into GITHUB_ENV."""
+        workflow = (REPO_ROOT / ".github/workflows/release.yml").read_text()
+        self.assertIn("::add-mask::$KEYCHAIN_PASSWORD", workflow)
+        self.assertIn("environment: release", workflow)
+        self.assertIn("persist-credentials: false", workflow)
+        self.assertIn("publish-github-release:", workflow)
+        self.assertIn("permissions:\n  contents: read", workflow)
+        self.assertIn("permissions:\n      contents: write", workflow)
+        for forbidden in (
+            'echo "KEYCHAIN_PASSWORD=$KEYCHAIN_PASSWORD" >> "$GITHUB_ENV"',
+            'echo "APP_PASSWORD=$APPLE_APP_PASSWORD" >> "$GITHUB_ENV"',
+            'echo "APPLE_ID=$APPLE_ID" >> "$GITHUB_ENV"',
+            'echo "TEAM_ID=$APPLE_TEAM_ID" >> "$GITHUB_ENV"',
+        ):
+            self.assertNotIn(forbidden, workflow)
+
     def test_ci_workflows_have_explicit_permissions(self) -> None:
         """CI workflows should declare explicit top-level permissions to limit default token scope."""
         for name in ("ci.yml", "ci-agents.yml", "web-ci.yml"):

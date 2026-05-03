@@ -15,9 +15,11 @@ const mocks = vi.hoisted(() => {
 	};
 
 	return {
+		allowedAgentLogins: new Set(["fairchild"]),
 		authorizeRepoAccess: vi.fn(),
 		bypassToken: null as string | null,
 		createSession: vi.fn(),
+		fetchGitHubLogin: vi.fn(),
 		getGitHubToken: vi.fn(),
 		getSessionForAgent: vi.fn(),
 		provider,
@@ -30,6 +32,10 @@ vi.mock("@/lib/agent-runtime/provider-registry", () => ({
 		getDefault: () => mocks.provider,
 		all: () => [mocks.provider],
 	}),
+}));
+
+vi.mock("@/lib/agent-runtime/config", () => ({
+	ALLOWED_AGENT_LOGINS: mocks.allowedAgentLogins,
 }));
 
 vi.mock("@/lib/agent-sessions", () => ({
@@ -48,6 +54,7 @@ vi.mock("@/lib/auth-server", () => ({
 }));
 
 vi.mock("@/lib/github", () => ({
+	fetchGitHubLogin: mocks.fetchGitHubLogin,
 	getGitHubToken: mocks.getGitHubToken,
 }));
 
@@ -60,10 +67,14 @@ function jsonRequest(body: unknown): Request {
 
 describe("/api/terminal/start POST", () => {
 	beforeEach(() => {
+		mocks.allowedAgentLogins.clear();
+		mocks.allowedAgentLogins.add("fairchild");
 		mocks.authorizeRepoAccess.mockReset();
 		mocks.authorizeRepoAccess.mockResolvedValue(null);
 		mocks.bypassToken = null;
 		mocks.createSession.mockReset();
+		mocks.fetchGitHubLogin.mockReset();
+		mocks.fetchGitHubLogin.mockResolvedValue("fairchild");
 		mocks.getGitHubToken.mockReset();
 		mocks.getGitHubToken.mockResolvedValue("oauth-token");
 		mocks.getSessionForAgent.mockReset();
@@ -85,6 +96,7 @@ describe("/api/terminal/start POST", () => {
 		);
 
 		expect(response.status).toBe(200);
+		expect(mocks.fetchGitHubLogin).toHaveBeenCalledWith("oauth-token");
 		expect(mocks.provider.createTerminalSandbox).toHaveBeenCalledWith({
 			cloneUrl: "https://github.com/fairchild/workspaces.git",
 			authToken: "oauth-token",
@@ -106,10 +118,44 @@ describe("/api/terminal/start POST", () => {
 
 		expect(response.status).toBe(200);
 		expect(mocks.getGitHubToken).not.toHaveBeenCalled();
+		expect(mocks.fetchGitHubLogin).not.toHaveBeenCalled();
 		expect(mocks.provider.createTerminalSandbox).toHaveBeenCalledWith({
 			cloneUrl: "https://github.com/fairchild/workspaces.git",
 			authToken: undefined,
 			branch: undefined,
 		});
+	});
+
+	it("rejects non-allowlisted users before provider work", async () => {
+		mocks.fetchGitHubLogin.mockResolvedValue("external-user");
+
+		const { POST } = await import("./route");
+		const response = await POST(jsonRequest({ repo: "fairchild/workspaces" }));
+
+		expect(response.status).toBe(403);
+		await expect(response.json()).resolves.toEqual({
+			error: "Terminal sessions are not yet available for your account",
+		});
+		expect(mocks.getSessionForAgent).not.toHaveBeenCalled();
+		expect(mocks.provider.checkAvailability).not.toHaveBeenCalled();
+		expect(mocks.provider.createTerminalSandbox).not.toHaveBeenCalled();
+		expect(mocks.createSession).not.toHaveBeenCalled();
+	});
+
+	it("does not create a sandbox when repo authorization fails", async () => {
+		mocks.authorizeRepoAccess.mockResolvedValue(
+			Response.json({ error: "repo not in your workspace" }, { status: 403 }),
+		);
+
+		const { POST } = await import("./route");
+		const response = await POST(jsonRequest({ repo: "fairchild/workspaces" }));
+
+		expect(response.status).toBe(403);
+		expect(mocks.getGitHubToken).not.toHaveBeenCalled();
+		expect(mocks.fetchGitHubLogin).not.toHaveBeenCalled();
+		expect(mocks.getSessionForAgent).not.toHaveBeenCalled();
+		expect(mocks.provider.checkAvailability).not.toHaveBeenCalled();
+		expect(mocks.provider.createTerminalSandbox).not.toHaveBeenCalled();
+		expect(mocks.createSession).not.toHaveBeenCalled();
 	});
 });
