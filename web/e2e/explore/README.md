@@ -20,7 +20,7 @@ Video and trace are always on for this project. Artifacts land under `web/playwr
 When an exploratory spec finds a behavior worth locking in, `qa-web-agent` promotes it via its Author phase:
 1. Write a spec under `web/specs/<slug>.md`.
 2. Human approves.
-3. `mise run web:qa:generate` emits a durable test under `web/e2e/full/<slug>.spec.ts`.
+3. `mise run web:qa:codegen [url]` launches interactive Playwright codegen so the author can record the durable test under `web/e2e/full/<slug>.spec.ts`.
 4. `web/tests/LEDGER.md` gets a row.
 
 The exploratory spec can then be deleted — the durable test is the new source of truth.
