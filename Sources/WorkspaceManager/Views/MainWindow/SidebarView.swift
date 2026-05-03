@@ -69,9 +69,7 @@ struct SidebarView: View {
     @State private var showingDeleteConfirmation = false
 
     @State private var didAttemptDefaultRepoImport = false
-    @State private var expandedRepoIDs: Set<UUID> = []
-    @State private var expandedWorkspaceIDs: Set<UUID> = []
-    @State private var didInitializeRepoExpansion = false
+    @State private var expansionController = SidebarExpansionStateController()
     @State private var workspaceAction: WorkspaceActionState?
     @State private var workspaceCreationStatusByRepoID: [UUID: WorkspaceCreationStatus] = [:]
     @State private var repoLastAccessedSnapshotByID: [UUID: Date] = [:]
@@ -225,8 +223,7 @@ struct SidebarView: View {
             expandContainersForSelectedWebSource()
         }
         .onChange(of: repos.map(\.id)) { _, _ in
-            pruneExpandedRepos()
-            pruneExpandedWorkspaces()
+            pruneExpandedContainers()
             syncRepoSortSnapshot()
             Task { @MainActor in
                 await maybeDriveHostLumeSmokeAutomation()
@@ -394,7 +391,7 @@ struct SidebarView: View {
             },
             onSelectRepo: {
                 if !isRepoExpanded(repo) {
-                    expandedRepoIDs.insert(repo.id)
+                    expansionController.expandRepo(repo.id)
                 }
                 onRepoSelected(repo)
             },
@@ -736,7 +733,7 @@ struct SidebarView: View {
     ) async {
         let repoID = repo.id
         guard !isCreatingWorkspace(for: repoID) else { return }
-        expandedRepoIDs.insert(repoID)
+        expansionController.expandRepo(repoID)
         workspaceCreationStatusByRepoID[repoID] = WorkspaceCreationStatus(
             message: initialCreationMessage(for: providerID)
         )
@@ -1311,73 +1308,52 @@ struct SidebarView: View {
     }
 
     private func isRepoExpanded(_ repo: Repo) -> Bool {
-        expandedRepoIDs.contains(repo.id)
+        expansionController.isRepoExpanded(repo.id)
     }
 
     private func toggleRepoExpansion(_ repo: Repo) {
-        if expandedRepoIDs.contains(repo.id) {
-            expandedRepoIDs.remove(repo.id)
-        } else {
-            expandedRepoIDs.insert(repo.id)
-        }
+        expansionController.toggleRepoExpansion(repo.id)
     }
 
     private func isWorkspaceExpanded(_ workspace: Workspace) -> Bool {
-        expandedWorkspaceIDs.contains(workspace.id)
+        expansionController.isWorkspaceExpanded(workspace.id)
     }
 
     private func toggleWorkspaceExpansion(_ workspace: Workspace) {
-        guard !workspace.webSources.isEmpty else { return }
-
-        if expandedWorkspaceIDs.contains(workspace.id) {
-            expandedWorkspaceIDs.remove(workspace.id)
-        } else {
-            expandedWorkspaceIDs.insert(workspace.id)
-        }
+        expansionController.toggleWorkspaceExpansion(
+            workspace.id,
+            hasWebSources: !workspace.webSources.isEmpty
+        )
     }
 
     private func initializeExpandedReposIfNeeded() {
-        guard !didInitializeRepoExpansion else { return }
-        didInitializeRepoExpansion = true
-
-        if isUIFixtureMode {
-            expandedRepoIDs = Set(repos.map(\.id))
-            return
-        }
-
-        guard let selectedRepoID = selectedWorkspace?.sourceRepo?.id else { return }
-        expandedRepoIDs.insert(selectedRepoID)
+        expansionController.initializeRepoExpansionIfNeeded(
+            repoIDs: repos.map(\.id),
+            selectedWorkspaceRepoID: selectedWorkspace?.sourceRepo?.id,
+            isUIFixtureMode: isUIFixtureMode
+        )
     }
 
     private func expandRepoForSelectedWorkspace() {
-        guard let selectedWorkspace else { return }
-        guard let selectedRepoID = selectedWorkspace.sourceRepo?.id else { return }
-        expandedRepoIDs.insert(selectedRepoID)
-        if !selectedWorkspace.webSources.isEmpty {
-            expandedWorkspaceIDs.insert(selectedWorkspace.id)
-        }
+        expansionController.expandSelectedWorkspace(
+            workspaceID: selectedWorkspace?.id,
+            repoID: selectedWorkspace?.sourceRepo?.id,
+            hasWebSources: selectedWorkspace?.webSources.isEmpty == false
+        )
     }
 
     private func expandContainersForSelectedWebSource() {
-        guard let selectedWebSource else { return }
-
-        if let repoID = selectedWebSource.ownerRepo?.id {
-            expandedRepoIDs.insert(repoID)
-        }
-
-        if let workspaceID = selectedWebSource.sourceWorkspace?.id {
-            expandedWorkspaceIDs.insert(workspaceID)
-        }
+        expansionController.expandSelectedWebSource(
+            repoID: selectedWebSource?.ownerRepo?.id,
+            workspaceID: selectedWebSource?.sourceWorkspace?.id
+        )
     }
 
-    private func pruneExpandedRepos() {
-        let currentRepoIDs = Set(repos.map(\.id))
-        expandedRepoIDs.formIntersection(currentRepoIDs)
-    }
-
-    private func pruneExpandedWorkspaces() {
-        let currentWorkspaceIDs = Set(repos.flatMap(\.workspaces).map(\.id))
-        expandedWorkspaceIDs.formIntersection(currentWorkspaceIDs)
+    private func pruneExpandedContainers() {
+        expansionController.prune(
+            validRepoIDs: Set(repos.map(\.id)),
+            validWorkspaceIDs: Set(repos.flatMap(\.workspaces).map(\.id))
+        )
     }
 
     private func updateRepoSortMode(_ mode: SidebarRepoSortMode) {
