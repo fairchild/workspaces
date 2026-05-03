@@ -1,10 +1,11 @@
 import crypto from "node:crypto";
+import { ALLOWED_AGENT_LOGINS } from "@/lib/agent-runtime/config";
 import { getRegistry } from "@/lib/agent-runtime/provider-registry";
 import { isTerminalCapable } from "@/lib/agent-runtime/types";
 import { createSession, getSessionForAgent } from "@/lib/agent-sessions";
 import { authorizeRepoAccess, unauthorizedResponse } from "@/lib/api-auth";
 import { getDevBypassToken, getSession } from "@/lib/auth-server";
-import { getGitHubToken } from "@/lib/github";
+import { fetchGitHubLogin, getGitHubToken } from "@/lib/github";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -45,6 +46,30 @@ export async function POST(request: Request): Promise<Response> {
 	const unauthorized = await authorizeRepoAccess(session.user.id, body.repo);
 	if (unauthorized) return unauthorized;
 
+	let authToken: string | undefined;
+	let login: string;
+	const bypass = getDevBypassToken();
+	if (bypass) {
+		login = "fairchild";
+	} else {
+		const token = await getGitHubToken(session.user.id).catch(() => null);
+		if (!token) {
+			return Response.json(
+				{ error: "GitHub token not found" },
+				{ status: 403 },
+			);
+		}
+		authToken = token;
+		login = await fetchGitHubLogin(token);
+	}
+
+	if (!ALLOWED_AGENT_LOGINS.has(login)) {
+		return Response.json(
+			{ error: "Terminal sessions are not yet available for your account" },
+			{ status: 403 },
+		);
+	}
+
 	const agentName = body.agentName ?? process.env.DEFAULT_AGENT ?? "shell";
 
 	// If a live session already exists for this (repo, agent), reuse it
@@ -64,13 +89,6 @@ export async function POST(request: Request): Promise<Response> {
 
 	// Keep the clone URL token-free so it cannot persist in .git/config.
 	const cloneUrl = `https://github.com/${body.repo}.git`;
-	let authToken: string | undefined;
-	if (!getDevBypassToken()) {
-		const token = await getGitHubToken(session.user.id).catch(() => null);
-		if (token) {
-			authToken = token;
-		}
-	}
 
 	const registry = await getRegistry();
 

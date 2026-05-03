@@ -12,18 +12,27 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build-sign-notarize-release:
     # Release signing/notarization stays on the dedicated signing lane so it
     # never contends with generic CI or Tart UI automation.
     runs-on: [self-hosted, signing-host]
+    environment: release
     timeout-minutes: 120
+    permissions:
+      contents: read
+      checks: read
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      build: ${{ steps.meta.outputs.build }}
+      tag: ${{ steps.meta.outputs.tag }}
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Enforce release source branch policy
         run: |
@@ -105,8 +114,10 @@ jobs:
           CERT_PATH="$RUNNER_TEMP/developer-id-application.p12"
           KEYCHAIN_PATH="$RUNNER_TEMP/workspaces-release.keychain-db"
           KEYCHAIN_PASSWORD="$(uuidgen)"
+          echo "::add-mask::$KEYCHAIN_PASSWORD"
           ORIGINAL_DEFAULT_KEYCHAIN="$(
-            security default-keychain -d user 2>/dev/null | tr -d '"' || true
+            security default-keychain -d user 2>/dev/null \
+            | sed -E 's/^[[:space:]]*"//; s/"$//' || true
           )"
           ORIGINAL_KEYCHAIN_LIST="$(
             security list-keychains -d user 2>/dev/null \
@@ -153,7 +164,6 @@ jobs:
           fi
 
           echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
-          echo "KEYCHAIN_PASSWORD=$KEYCHAIN_PASSWORD" >> "$GITHUB_ENV"
           echo "SIGNING_IDENTITY=$SIGNING_IDENTITY" >> "$GITHUB_ENV"
           echo "CODESIGN_KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
           echo "ORIGINAL_DEFAULT_KEYCHAIN=$ORIGINAL_DEFAULT_KEYCHAIN" >> "$GITHUB_ENV"
@@ -178,19 +188,11 @@ jobs:
           security cms -D -i "$PROFILE_PATH" >/dev/null
           echo "PROVISIONING_PROFILE_PATH=$PROFILE_PATH" >> "$GITHUB_ENV"
 
-      - name: Export signing environment
+      - name: Notarization preflight
         env:
           APPLE_ID: ${{ vars.APPLE_ID != '' && vars.APPLE_ID || secrets.APPLE_ID }}
-          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
-          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID != '' && vars.APPLE_TEAM_ID || secrets.APPLE_TEAM_ID }}
-        run: |
-          set -euo pipefail
-          echo "TEAM_ID=$APPLE_TEAM_ID" >> "$GITHUB_ENV"
-          echo "APPLE_ID=$APPLE_ID" >> "$GITHUB_ENV"
-          echo "APP_PASSWORD=$APPLE_APP_PASSWORD" >> "$GITHUB_ENV"
-          echo "BUNDLE_ID=com.cloudcompute.workspaces" >> "$GITHUB_ENV"
-
-      - name: Notarization preflight
+          APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          TEAM_ID: ${{ vars.APPLE_TEAM_ID != '' && vars.APPLE_TEAM_ID || secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
           if [[ -n "${APPLE_API_KEY_PATH:-}" ]]; then
@@ -220,6 +222,9 @@ jobs:
           ./scripts/release-version.sh assert-tag-match "${GITHUB_REF_NAME}"
 
       - name: Build signed app
+        env:
+          BUNDLE_ID: com.cloudcompute.workspaces
+          TEAM_ID: ${{ vars.APPLE_TEAM_ID != '' && vars.APPLE_TEAM_ID || secrets.APPLE_TEAM_ID }}
         run: ./scripts/build-release.sh
 
       - name: Verify signed app bundle
@@ -237,6 +242,11 @@ jobs:
           if-no-files-found: warn
 
       - name: Notarize and package DMG
+        env:
+          APPLE_ID: ${{ vars.APPLE_ID != '' && vars.APPLE_ID || secrets.APPLE_ID }}
+          APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          BUNDLE_ID: com.cloudcompute.workspaces
+          TEAM_ID: ${{ vars.APPLE_TEAM_ID != '' && vars.APPLE_TEAM_ID || secrets.APPLE_TEAM_ID }}
         run: bash ./scripts/notarize.sh
 
       - name: Read release metadata
@@ -280,6 +290,50 @@ jobs:
             --repo "${GITHUB_REPOSITORY}" \
             --output "${{ steps.meta.outputs.appcast_path }}"
 
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: release-assets-${{ github.run_id }}
+          path: |
+            ${{ steps.meta.outputs.dmg_path }}
+            build/WorkspaceManager-latest.dmg
+            ${{ steps.meta.outputs.appcast_path }}
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Cleanup keychain
+        if: always()
+        run: |
+          set -euo pipefail
+          # Restore prior keychain search/default state on shared self-hosted machines.
+          if [[ -n "${ORIGINAL_KEYCHAIN_LIST:-}" ]]; then
+            keychains=()
+            while IFS= read -r line; do
+              [[ -n "$line" ]] && keychains+=("$line")
+            done <<< "${ORIGINAL_KEYCHAIN_LIST}"
+            if (( ${#keychains[@]} > 0 )); then
+              security list-keychains -d user -s "${keychains[@]}" || true
+            fi
+          fi
+          if [[ -n "${ORIGINAL_DEFAULT_KEYCHAIN:-}" ]]; then
+            security default-keychain -d user -s "${ORIGINAL_DEFAULT_KEYCHAIN}" || true
+          fi
+          if [[ -n "${KEYCHAIN_PATH:-}" ]] && [[ -f "${KEYCHAIN_PATH}" ]]; then
+            security delete-keychain "$KEYCHAIN_PATH" || true
+          fi
+
+  publish-github-release:
+    needs: build-sign-notarize-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-assets-${{ github.run_id }}
+          path: release-assets
+
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -290,13 +344,21 @@ jobs:
             exit 1
           }
 
-          TAG="${{ steps.meta.outputs.tag }}"
+          TAG="${{ needs.build-sign-notarize-release.outputs.tag }}"
+          VERSION="${{ needs.build-sign-notarize-release.outputs.version }}"
           TITLE="Workspaces ${TAG}"
-          DMG_PATH="${{ steps.meta.outputs.dmg_path }}"
-          APPCAST_PATH="${{ steps.meta.outputs.appcast_path }}"
-          LATEST_DMG_PATH="build/WorkspaceManager-latest.dmg"
+          DMG_PATH="$(find release-assets -type f -name "WorkspaceManager-${VERSION}.dmg" -print -quit)"
+          APPCAST_PATH="$(find release-assets -type f -name "appcast.xml" -print -quit)"
+          LATEST_DMG_PATH="$(find release-assets -type f -name "WorkspaceManager-latest.dmg" -print -quit)"
           GENERATED_NOTES_PATH="$RUNNER_TEMP/release-notes.md"
           IS_PRERELEASE=false
+
+          for asset in "$DMG_PATH" "$LATEST_DMG_PATH" "$APPCAST_PATH"; do
+            if [[ ! -f "$asset" ]]; then
+              echo "::error::Release artifact missing: $asset"
+              exit 1
+            fi
+          done
 
           case "$TAG" in
             v[0-9]*.[0-9]*.[0-9]*-[A-Za-z0-9]*|v[0-9]*.[0-9]*.[0-9]*-[A-Za-z0-9]*.*|workspaces-v*)
@@ -344,25 +406,4 @@ jobs:
                 --generate-notes \
                 --latest
             fi
-          fi
-
-      - name: Cleanup keychain
-        if: always()
-        run: |
-          set -euo pipefail
-          # Restore prior keychain search/default state on shared self-hosted machines.
-          if [[ -n "${ORIGINAL_KEYCHAIN_LIST:-}" ]]; then
-            keychains=()
-            while IFS= read -r line; do
-              [[ -n "$line" ]] && keychains+=("$line")
-            done <<< "${ORIGINAL_KEYCHAIN_LIST}"
-            if (( ${#keychains[@]} > 0 )); then
-              security list-keychains -d user -s "${keychains[@]}" || true
-            fi
-          fi
-          if [[ -n "${ORIGINAL_DEFAULT_KEYCHAIN:-}" ]]; then
-            security default-keychain -d user -s "${ORIGINAL_DEFAULT_KEYCHAIN}" || true
-          fi
-          if [[ -n "${KEYCHAIN_PATH:-}" ]] && [[ -f "${KEYCHAIN_PATH}" ]]; then
-            security delete-keychain "$KEYCHAIN_PATH" || true
           fi
