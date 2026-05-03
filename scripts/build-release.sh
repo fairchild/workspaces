@@ -350,6 +350,28 @@ verify_release_bundle_signing() {
     log_success "$output"
 }
 
+verify_sparkle_bundle_linkage() {
+    local executable="$APP_BUNDLE/Contents/MacOS/$APP_NAME"
+    local framework_binary="$APP_BUNDLE/Contents/Frameworks/Sparkle.framework/Versions/B/Sparkle"
+
+    log_step "Verifying Sparkle bundle linkage"
+
+    [[ -x "$executable" ]] || fail "Release executable not found: $executable"
+    [[ -f "$framework_binary" ]] || fail "Bundled Sparkle framework binary not found: $framework_binary"
+
+    if otool -L "$executable" | grep -q "@rpath/Sparkle.framework/Versions/B/Sparkle"; then
+        log_success "Verified Sparkle framework load command"
+    else
+        fail "Release executable is not linked against @rpath/Sparkle.framework/Versions/B/Sparkle"
+    fi
+
+    if otool -l "$executable" | grep -q "@executable_path/../Frameworks"; then
+        log_success "Verified executable rpath includes Contents/Frameworks"
+    else
+        fail "Release executable is missing @executable_path/../Frameworks rpath for Sparkle.framework"
+    fi
+}
+
 for arg in "$@"; do
     case "$arg" in
         --no-sign)
@@ -409,6 +431,7 @@ log_success "Build complete"
 log_step "Creating app bundle"
 
 mkdir -p "$APP_BUNDLE/Contents/MacOS"
+mkdir -p "$APP_BUNDLE/Contents/Frameworks"
 mkdir -p "$APP_BUNDLE/Contents/Helpers"
 mkdir -p "$APP_BUNDLE/Contents/Resources"
 
@@ -435,6 +458,14 @@ SPM_RESOURCES=".build/release/WorkspaceManager_WorkspaceManager.bundle"
 if [[ -d "$SPM_RESOURCES" ]]; then
     cp -R "$SPM_RESOURCES"/* "$APP_BUNDLE/Contents/Resources/" 2>/dev/null || true
     log_success "Copied SPM resources"
+fi
+
+SPARKLE_FRAMEWORK=".build/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework"
+if [[ -d "$SPARKLE_FRAMEWORK" ]]; then
+    cp -R "$SPARKLE_FRAMEWORK" "$APP_BUNDLE/Contents/Frameworks/"
+    log_success "Copied Sparkle.framework"
+else
+    fail "Sparkle.framework not found at $SPARKLE_FRAMEWORK; run swift package resolve"
 fi
 
 if GHOSTTY_SHARE_DIR_RESOLVED="$(resolve_ghostty_share_dir)"; then
@@ -505,6 +536,8 @@ if [[ "$SIGN_APP" == true ]] && [[ -n "${SIGNING_IDENTITY:-}" ]]; then
 else
     log_warning "Skipping code signing"
 fi
+
+verify_sparkle_bundle_linkage
 
 echo ""
 echo "============================================================================"

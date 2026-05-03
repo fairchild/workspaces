@@ -16,6 +16,7 @@ struct WorkspaceManagerApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @StateObject private var appCommandState: AppCommandState
     @StateObject private var modelStoreStatusController: ModelStoreStatusController
+    @StateObject private var softwareUpdateController: SoftwareUpdateController
     private let appRuntimeDependencies = AppRuntimeDependencies.resolved()
     let sharedModelContainer: ModelContainer
 
@@ -32,6 +33,7 @@ struct WorkspaceManagerApp: App {
         ModelStoreStatusController.shared.apply(bootstrap)
         _appCommandState = StateObject(wrappedValue: AppCommandState())
         _modelStoreStatusController = StateObject(wrappedValue: .shared)
+        _softwareUpdateController = StateObject(wrappedValue: SoftwareUpdateController())
         self.sharedModelContainer = bootstrap.container
     }
 
@@ -48,6 +50,9 @@ struct WorkspaceManagerApp: App {
             )
             .environmentObject(modelStoreStatusController)
             .frame(minWidth: 1000, minHeight: 700)
+            .onAppear {
+                softwareUpdateController.installCheckForUpdatesMenuItem()
+            }
         }
         .modelContainer(sharedModelContainer)
         .defaultSize(width: 1400, height: 900)
@@ -56,6 +61,13 @@ struct WorkspaceManagerApp: App {
         .windowStyle(.automatic)
         .windowToolbarStyle(.unifiedCompact(showsTitle: true))
         .commands {
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates...") {
+                    softwareUpdateController.checkForUpdatesWithDisclosure()
+                }
+                .disabled(!softwareUpdateController.canCheckForUpdates)
+            }
+
             CommandGroup(replacing: .newItem) {
                 Button("New Workspace...") {
                     appCommandState.performNewWorkspace()
@@ -198,7 +210,7 @@ struct WorkspaceManagerApp: App {
         }
 
         Settings {
-            SettingsView()
+            SettingsView(softwareUpdateController: softwareUpdateController)
                 .environment(\.lumeRuntimeService, appRuntimeDependencies.lumeRuntimeService)
                 .environment(\.workspaceProviderRegistry, appRuntimeDependencies.workspaceProviderRegistry)
                 .environmentObject(modelStoreStatusController)
