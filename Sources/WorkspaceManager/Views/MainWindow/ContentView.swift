@@ -604,7 +604,12 @@ struct ContentView: View {
                     viewState.terminalCloseConfirmation = nil
                 }
             } message: {
-                Text("The terminal still has a running process. Closing '\(viewState.terminalCloseConfirmation?.title ?? "Terminal")' will end it.")
+                Text(
+                    """
+                    The terminal still has a running process. Closing \
+                    '\(viewState.terminalCloseConfirmation?.title ?? "Terminal")' will end it.
+                    """
+                )
             }
             .sheet(
                 item: Binding(
@@ -1571,7 +1576,10 @@ struct ContentView: View {
     private func requestCloseConfirmationForTerminalTab(sessionID: UUID) {
         let title =
             hostTerminalState.sessions.first(where: { $0.id == sessionID })
-            .map { hostTerminalState.tabTitleOverride(for: $0.id) ?? hostTerminalState.surfaceStore.displayTitle(for: $0) }
+            .map {
+                hostTerminalState.tabTitleOverride(for: $0.id)
+                    ?? hostTerminalState.surfaceStore.displayTitle(for: $0)
+            }
             ?? "Terminal"
         viewState.terminalCloseConfirmation = TerminalCloseConfirmation(
             sessionID: sessionID,

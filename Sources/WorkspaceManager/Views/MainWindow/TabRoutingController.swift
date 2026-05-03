@@ -39,7 +39,11 @@ struct TabRoutingController {
 
         case .gotoTab:
             guard let target = request.gotoTarget,
-                let session = activateTab(target, hostTerminalState: hostTerminalState, sourceSessionID: sourceSessionID)
+                let session = activateTab(
+                    target,
+                    hostTerminalState: hostTerminalState,
+                    sourceSessionID: sourceSessionID
+                )
             else {
                 NSLog("[TabRouting] goto_tab no-op target=%@", String(describing: request.gotoTarget))
                 return
