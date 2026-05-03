@@ -67,6 +67,8 @@ Keep the decision banner to one sentence and no more than 140 characters. It sho
   \`<details><summary>Details</summary> ... </details>\`
 - Do not add the \`open\` attribute to the \`<details>\` tag
 - Include a short \`## Project Thread\` section that references at least one previous PR by number and explains the relationship when previous PR context is available
+- In \`## Project Thread\`, mention any labels you applied because of that relationship
+- If you notice a distinct dimension of work that deserves a repo label, suggest it as a brief \`Label suggestion:\` trailer at the end of \`## Project Thread\`; prefer reusing or consolidating labels over increasing label count
 - Use bullet points and code blocks
 - Cite \`file:line\` for every comment
 - Skip nits unless they materially affect correctness or readability
@@ -108,6 +110,7 @@ export interface PrContextItem {
 	updatedAt: string;
 	headRef: string;
 	baseRef: string;
+	labels: string[];
 	body: string;
 }
 
@@ -124,6 +127,7 @@ interface GitHubPullRequest {
 	state: string | null;
 	updated_at: string | null;
 	body: string | null;
+	labels?: Array<{ name?: string | null }> | null;
 	head?: { ref?: string | null } | null;
 	base?: { ref?: string | null } | null;
 }
@@ -169,6 +173,9 @@ function toPrContextItem(pr: GitHubPullRequest): PrContextItem {
 		updatedAt: pr.updated_at ?? "",
 		headRef: pr.head?.ref ?? "",
 		baseRef: pr.base?.ref ?? "",
+		labels: (pr.labels ?? [])
+			.map((label) => label.name?.trim() ?? "")
+			.filter((name) => name.length > 0),
 		body: truncateBody(pr.body ?? ""),
 	};
 }
@@ -225,6 +232,7 @@ function formatPrContextItem(item: PrContextItem): string {
   State: ${item.state}
   Updated: ${item.updatedAt}
   Branches: ${item.headRef} -> ${item.baseRef}
+  Labels: ${item.labels.length > 0 ? item.labels.join(", ") : "(none)"}
   Description:
 ${description
 	.split("\n")
@@ -346,9 +354,16 @@ ${formatPrNarrativeContext(narrativeContext)}
 GitHub API endpoint for posting the review:
 POST https://api.github.com/repos/${owner}/${repo}/pulls/${payload.number}/reviews
 
+GitHub API endpoint for applying labels when you are highly confident a label from a related PR also applies:
+POST https://api.github.com/repos/${owner}/${repo}/issues/${payload.number}/labels
+
 Read the diff against ${payload.baseRef}, explore the surrounding code, run swift build and swift test if the project supports them, then post the review using the GitHub API with the token at /workspace/.github-token.
 
-Your review must include a short "## Project Thread" section. Reference at least one previous PR by number and explain how this PR relates to it when previous PR context is available. If one of the first 3 relationship candidates is clearly related, use it. If none are clearly related, inspect up to 5 candidates and reference the most clearly related one. If no previous PR exists or the previous PR context is unavailable, say that explicitly instead of inventing a relationship.`,
+Your review must include a short "## Project Thread" section. Reference at least one previous PR by number and explain how this PR relates to it when previous PR context is available. If one of the first 3 relationship candidates is clearly related, use it. If none are clearly related, inspect up to 5 candidates and reference the most clearly related one. If no previous PR exists or the previous PR context is unavailable, say that explicitly instead of inventing a relationship.
+
+Pay attention to labels on related PRs. When you are highly confident an existing label from a related PR should also apply to this PR, apply that label using the labels endpoint before posting the review. Mention the applied label in "## Project Thread". Do not apply labels on weak or speculative matches.
+
+Also consider whether this PR reveals a distinct dimension of work that would be worth tagging with a label. The repo label set is not well managed yet; prefer labels that improve review/routing clarity while staying within the current label count or reducing it through consolidation. Do not create labels. If you see a high-value new-label opportunity, add a brief "Label suggestion:" trailer at the end of "## Project Thread".`,
 					},
 				],
 			},

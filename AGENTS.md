@@ -6,6 +6,8 @@ Mac-native app for managing AI coding sessions with embedded terminal.
 
 Craft matters. Plan work so it can land mergeably: correct, coherent with the product, reviewable, verified, and leaving the system easier to operate. Keep changes native-feeling, tightly scoped, evidence-backed, and consistent with existing architecture and UI patterns. Before opening or reviewing a PR, use `docs/development/mergeability-standard.md` for the surface-specific checklist.
 
+When the user asks to implement a change, default to carrying it through to a PR: branch if needed, make the edit, verify it, commit, rebase on the latest `origin/main`, push, open the PR, and report its status. Treat this as a strong default, not a mandate; pause short of PR creation when the user asks for exploration only, says not to publish, or evidence/permissions are blocked.
+
 ## Startup Instruction Budget
 
 `AGENTS.md` is startup context for every repo session. Keep it under about **4,500 tokens** (roughly **3,300 words**) unless the added guidance is more important than the recurring context cost. Prefer tightening, deduplicating, or moving detailed policy into linked docs over expanding this file.
