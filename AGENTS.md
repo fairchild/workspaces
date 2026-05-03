@@ -2,6 +2,17 @@
 
 Mac-native app for managing AI coding sessions with embedded terminal.
 
+## Craft and Quality Bar
+
+Craft matters in this codebase. Treat quality as part of the requested work, not as optional polish after functionality lands.
+
+- Prefer solutions that feel native, coherent, and durable over quick patches that only satisfy the narrow repro.
+- Match the existing architecture, naming, interaction patterns, and visual language before introducing new conventions.
+- Keep user-facing flows quiet, focused, and reliable; avoid adding persistent chrome, noisy affordances, or explanatory UI unless the workflow truly needs it.
+- For UI work, verify fit, spacing, focus behavior, keyboard behavior, and empty/error/loading states. A feature is not done just because the happy path compiles.
+- For service and infrastructure work, preserve clear contracts, observable error handling, and diagnostics that make production failures easier to understand.
+- Prefer small, well-finished changes with evidence over broad changes with unclear blast radius.
+
 ## Dev Verification Practice (required)
 
 When changing terminal/keyboard/sidebar behavior, use this loop so future sessions can self-verify reliably:
