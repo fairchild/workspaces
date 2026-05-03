@@ -40,12 +40,11 @@ enum GhosttyClipboardBridge {
         location: ghostty_clipboard_e,
         state: UnsafeMutableRawPointer?
     ) -> Bool {
-        let userdataAddress = userdata.map { UInt(bitPattern: $0) }
+        let userdataAddress = GhosttyCallbackUserdata.address(from: userdata)
         let surfaceAddress = GhosttyThreadingBridge.runOnMainSync {
-            let userdata = userdataAddress.flatMap(UnsafeMutableRawPointer.init(bitPattern:))
-            return GhosttyCallbackUserdata.surfaceView(from: userdata)?.surface.map { UInt(bitPattern: $0) }
+            GhosttyCallbackUserdata.surfaceAddress(from: userdataAddress)
         }
-        let surface = surfaceAddress.flatMap(UnsafeMutableRawPointer.init(bitPattern:))
+        let surface = GhosttyCallbackUserdata.pointer(from: surfaceAddress)
         guard let surface else { return false }
 
         let value = GhosttyThreadingBridge.runOnMainSync {
@@ -69,12 +68,11 @@ enum GhosttyClipboardBridge {
         userdata: UnsafeMutableRawPointer?,
         state: UnsafeMutableRawPointer?
     ) {
-        let userdataAddress = userdata.map { UInt(bitPattern: $0) }
+        let userdataAddress = GhosttyCallbackUserdata.address(from: userdata)
         let surfaceAddress = GhosttyThreadingBridge.runOnMainSync {
-            let userdata = userdataAddress.flatMap(UnsafeMutableRawPointer.init(bitPattern:))
-            return GhosttyCallbackUserdata.surfaceView(from: userdata)?.surface.map { UInt(bitPattern: $0) }
+            GhosttyCallbackUserdata.surfaceAddress(from: userdataAddress)
         }
-        let surface = surfaceAddress.flatMap(UnsafeMutableRawPointer.init(bitPattern:))
+        let surface = GhosttyCallbackUserdata.pointer(from: surfaceAddress)
         guard let surface else { return }
 
         "".withCString { pointer in
@@ -88,10 +86,9 @@ enum GhosttyClipboardBridge {
         content: UnsafePointer<ghostty_clipboard_content_s>?,
         len: Int
     ) {
-        let userdataAddress = userdata.map { UInt(bitPattern: $0) }
+        let userdataAddress = GhosttyCallbackUserdata.address(from: userdata)
         let hasSurfaceView = GhosttyThreadingBridge.runOnMainSync {
-            let userdata = userdataAddress.flatMap(UnsafeMutableRawPointer.init(bitPattern:))
-            return GhosttyCallbackUserdata.surfaceView(from: userdata) != nil
+            GhosttyCallbackUserdata.surfaceView(from: userdataAddress) != nil
         }
 
         guard location == GHOSTTY_CLIPBOARD_STANDARD,
