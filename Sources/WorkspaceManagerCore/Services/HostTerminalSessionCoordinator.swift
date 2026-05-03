@@ -146,6 +146,69 @@ public struct HostTerminalSessionCoordinator: Sendable {
         return HostTerminalSessionActivationResult(session: session, created: true)
     }
 
+    @discardableResult
+    public mutating func createTab(from source: HostTerminalSession) -> HostTerminalSession {
+        let session = HostTerminalSession(
+            key: source.key,
+            directory: source.directoryURL,
+            customCommand: source.customCommand
+        )
+        sessions.append(session)
+        activeSessionID = session.id
+        return session
+    }
+
+    @discardableResult
+    public mutating func activateAdjacent(to sessionID: UUID, offset: Int) -> HostTerminalSession? {
+        guard !sessions.isEmpty,
+            let currentIndex = sessions.firstIndex(where: { $0.id == sessionID })
+        else {
+            return nil
+        }
+
+        let nextIndex = wrappedIndex(currentIndex + offset, count: sessions.count)
+        let session = sessions[nextIndex]
+        activeSessionID = session.id
+        return session
+    }
+
+    @discardableResult
+    public mutating func activateTab(atOneBasedIndex index: Int) -> HostTerminalSession? {
+        guard !sessions.isEmpty else { return nil }
+        let clampedIndex = min(max(index - 1, 0), sessions.count - 1)
+        let session = sessions[clampedIndex]
+        activeSessionID = session.id
+        return session
+    }
+
+    @discardableResult
+    public mutating func activateLastTab() -> HostTerminalSession? {
+        guard let session = sessions.last else { return nil }
+        activeSessionID = session.id
+        return session
+    }
+
+    @discardableResult
+    public mutating func moveTab(sessionID: UUID, offset: Int) -> Bool {
+        guard sessions.count > 1,
+            offset != 0,
+            let currentIndex = sessions.firstIndex(where: { $0.id == sessionID })
+        else {
+            return false
+        }
+
+        let session = sessions.remove(at: currentIndex)
+        let nextIndex = wrappedIndex(currentIndex + offset, count: sessions.count + 1)
+        sessions.insert(session, at: nextIndex)
+        activeSessionID = session.id
+        return true
+    }
+
+    private func wrappedIndex(_ index: Int, count: Int) -> Int {
+        guard count > 0 else { return 0 }
+        return (index % count + count) % count
+    }
+
     private func shouldReuseByDirectoryPath(for key: HostTerminalSessionKey) -> Bool {
         switch key {
         case .backendSession:

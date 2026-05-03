@@ -51,11 +51,12 @@ struct WorkspaceManagerApp: App {
         }
         .modelContainer(sharedModelContainer)
         .defaultSize(width: 1400, height: 900)
+        .keyboardShortcut(nil)
         .windowResizability(.contentSize)
         .windowStyle(.automatic)
         .windowToolbarStyle(.unifiedCompact(showsTitle: true))
         .commands {
-            CommandGroup(after: .newItem) {
+            CommandGroup(replacing: .newItem) {
                 Button("New Workspace...") {
                     appCommandState.performNewWorkspace()
                 }
@@ -73,6 +74,60 @@ struct WorkspaceManagerApp: App {
                     modifiers: AppChromeShortcut.openInEditor.eventModifiers
                 )
                 .disabled(!appCommandState.mainWindowAvailability.canOpenInEditor)
+
+                Button("New Terminal Tab") {
+                    appCommandState.perform(.newTerminalTab)
+                }
+                .keyboardShortcut(
+                    AppChromeShortcut.newTerminalTab.keyEquivalent,
+                    modifiers: AppChromeShortcut.newTerminalTab.eventModifiers
+                )
+                .disabled(!appCommandState.mainWindowAvailability.canCreateTerminalTab)
+
+                Button("Close Terminal Tab") {
+                    appCommandState.perform(.closeTerminalTab)
+                }
+                .keyboardShortcut(
+                    AppChromeShortcut.closeTerminalTab.keyEquivalent,
+                    modifiers: AppChromeShortcut.closeTerminalTab.eventModifiers
+                )
+                .disabled(!appCommandState.mainWindowAvailability.canCloseTerminalTab)
+
+                Button("Next Terminal Tab") {
+                    appCommandState.perform(.selectNextTerminalTab)
+                }
+                .keyboardShortcut(
+                    AppChromeShortcut.nextTerminalTab.keyEquivalent,
+                    modifiers: AppChromeShortcut.nextTerminalTab.eventModifiers
+                )
+                .disabled(!appCommandState.mainWindowAvailability.canSelectNextTerminalTab)
+
+                Button("Previous Terminal Tab") {
+                    appCommandState.perform(.selectPreviousTerminalTab)
+                }
+                .keyboardShortcut(
+                    AppChromeShortcut.previousTerminalTab.keyEquivalent,
+                    modifiers: AppChromeShortcut.previousTerminalTab.eventModifiers
+                )
+                .disabled(!appCommandState.mainWindowAvailability.canSelectPreviousTerminalTab)
+
+                Button("Next Terminal Tab") {
+                    appCommandState.perform(.selectNextTerminalTab)
+                }
+                .keyboardShortcut(
+                    AppChromeShortcut.alternateNextTerminalTab.keyEquivalent,
+                    modifiers: AppChromeShortcut.alternateNextTerminalTab.eventModifiers
+                )
+                .disabled(!appCommandState.mainWindowAvailability.canSelectNextTerminalTab)
+
+                Button("Previous Terminal Tab") {
+                    appCommandState.perform(.selectPreviousTerminalTab)
+                }
+                .keyboardShortcut(
+                    AppChromeShortcut.alternatePreviousTerminalTab.keyEquivalent,
+                    modifiers: AppChromeShortcut.alternatePreviousTerminalTab.eventModifiers
+                )
+                .disabled(!appCommandState.mainWindowAvailability.canSelectPreviousTerminalTab)
 
                 Button("Toggle Sidebar") {
                     appCommandState.perform(.toggleSidebar)
@@ -468,6 +523,10 @@ struct MainWindowFocusedActions {
     var toggleSidebar: Action? = nil
     var toggleInspector: Action? = nil
     var toggleTerminalPanel: Action? = nil
+    var newTerminalTab: Action? = nil
+    var closeTerminalTab: Action? = nil
+    var selectNextTerminalTab: Action? = nil
+    var selectPreviousTerminalTab: Action? = nil
     var openInEditor: Action? = nil
     var openInBrowser: Action? = nil
     var reloadWebSource: Action? = nil
@@ -482,6 +541,10 @@ struct MainWindowCommandAvailability: Equatable {
     let canToggleSidebar: Bool
     let canToggleInspector: Bool
     let canToggleTerminalPanel: Bool
+    let canCreateTerminalTab: Bool
+    let canCloseTerminalTab: Bool
+    let canSelectNextTerminalTab: Bool
+    let canSelectPreviousTerminalTab: Bool
     let canOpenInEditor: Bool
     let canOpenInBrowser: Bool
     let canReloadWebSource: Bool
@@ -493,6 +556,10 @@ struct MainWindowCommandAvailability: Equatable {
         canToggleSidebar: false,
         canToggleInspector: false,
         canToggleTerminalPanel: false,
+        canCreateTerminalTab: false,
+        canCloseTerminalTab: false,
+        canSelectNextTerminalTab: false,
+        canSelectPreviousTerminalTab: false,
         canOpenInEditor: false,
         canOpenInBrowser: false,
         canReloadWebSource: false,
@@ -506,6 +573,10 @@ enum MainWindowCommand {
     case toggleSidebar
     case toggleInspector
     case toggleTerminalPanel
+    case newTerminalTab
+    case closeTerminalTab
+    case selectNextTerminalTab
+    case selectPreviousTerminalTab
     case openInEditor
     case openInBrowser
     case reloadWebSource
@@ -554,6 +625,14 @@ final class AppCommandState: ObservableObject {
             mainWindowActions.toggleInspector?()
         case .toggleTerminalPanel:
             mainWindowActions.toggleTerminalPanel?()
+        case .newTerminalTab:
+            mainWindowActions.newTerminalTab?()
+        case .closeTerminalTab:
+            mainWindowActions.closeTerminalTab?()
+        case .selectNextTerminalTab:
+            mainWindowActions.selectNextTerminalTab?()
+        case .selectPreviousTerminalTab:
+            mainWindowActions.selectPreviousTerminalTab?()
         case .openInEditor:
             mainWindowActions.openInEditor?()
         case .openInBrowser:

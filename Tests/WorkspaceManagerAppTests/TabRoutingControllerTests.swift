@@ -1,0 +1,155 @@
+import Foundation
+import Testing
+
+@testable import WorkspaceManager
+@testable import WorkspaceManagerCore
+
+@MainActor
+@Suite("TabRoutingController")
+struct TabRoutingControllerTests {
+    @Test("new_tab creates a duplicate terminal tab")
+    func newTabCreatesDuplicateTerminalTab() throws {
+        let store = makeStore()
+        let first = try #require(store.sessions.first)
+        let source = store.surfaceStore.view(for: first)
+        var focusedSessionIDs: [UUID] = []
+
+        TabRoutingController().handle(
+            notification: tabActionNotification(kind: .newTab, source: source),
+            hostTerminalState: store,
+            focusTerminal: { focusedSessionIDs.append($0) },
+            requestCloseTabs: { _ in }
+        )
+
+        #expect(store.sessions.count == 2)
+        #expect(store.sessions[1].key == first.key)
+        #expect(focusedSessionIDs == [store.sessions[1].id])
+    }
+
+    @Test("goto_tab activates next previous and indexed tabs")
+    func gotoTabActivatesTargets() throws {
+        let store = makeStore()
+        let first = try #require(store.sessions.first)
+        let second = try #require(store.createTab())
+        let third = try #require(store.createTab())
+        let source = store.surfaceStore.view(for: second)
+        var focusedSessionIDs: [UUID] = []
+
+        TabRoutingController().handle(
+            notification: tabActionNotification(kind: .gotoTab, gotoRawValue: -2, source: source),
+            hostTerminalState: store,
+            focusTerminal: { focusedSessionIDs.append($0) },
+            requestCloseTabs: { _ in }
+        )
+
+        TabRoutingController().handle(
+            notification: tabActionNotification(kind: .gotoTab, gotoRawValue: -1, source: source),
+            hostTerminalState: store,
+            focusTerminal: { focusedSessionIDs.append($0) },
+            requestCloseTabs: { _ in }
+        )
+
+        TabRoutingController().handle(
+            notification: tabActionNotification(kind: .gotoTab, gotoRawValue: 1, source: source),
+            hostTerminalState: store,
+            focusTerminal: { focusedSessionIDs.append($0) },
+            requestCloseTabs: { _ in }
+        )
+
+        #expect(focusedSessionIDs == [third.id, first.id, first.id])
+    }
+
+    @Test("move_tab reorders the source tab")
+    func moveTabReordersSourceTab() throws {
+        let store = makeStore()
+        let first = try #require(store.sessions.first)
+        let second = try #require(store.createTab())
+        let source = store.surfaceStore.view(for: second)
+
+        TabRoutingController().handle(
+            notification: tabActionNotification(kind: .moveTab, moveAmount: -1, source: source),
+            hostTerminalState: store,
+            focusTerminal: { _ in },
+            requestCloseTabs: { _ in }
+        )
+
+        #expect(store.sessions.map(\.id) == [second.id, first.id])
+    }
+
+    @Test("close_tab asks caller to close resolved tabs")
+    func closeTabRequestsResolvedTabs() throws {
+        let store = makeStore()
+        let first = try #require(store.sessions.first)
+        let second = try #require(store.createTab())
+        let third = try #require(store.createTab())
+        let source = store.surfaceStore.view(for: second)
+        var closeRequests: [[UUID]] = []
+
+        TabRoutingController().handle(
+            notification: tabActionNotification(kind: .closeTab, closeModeRawValue: 2, source: source),
+            hostTerminalState: store,
+            focusTerminal: { _ in },
+            requestCloseTabs: { closeRequests.append($0) }
+        )
+
+        #expect(first.id != second.id)
+        #expect(closeRequests == [[third.id]])
+    }
+
+    @Test("set_tab_title updates primary tab title")
+    func setTabTitleUpdatesPrimaryTabTitle() throws {
+        let store = makeStore()
+        let primary = try #require(store.sessions.first)
+        let split = try #require(store.ensureSplit(forPrimarySessionID: primary.id))
+        let source = store.surfaceStore.view(for: split)
+
+        TabRoutingController().handle(
+            notification: tabActionNotification(kind: .setTabTitle, title: "CI", source: source),
+            hostTerminalState: store,
+            focusTerminal: { _ in },
+            requestCloseTabs: { _ in }
+        )
+
+        #expect(store.tabTitleOverride(for: primary.id) == "CI")
+    }
+
+    private func makeStore() -> HostTerminalStateStore {
+        let store = HostTerminalStateStore()
+        _ = store.activateSession(
+            key: .repoPath("/Users/test/repo"),
+            directory: URL(fileURLWithPath: "/Users/test/repo")
+        )
+        return store
+    }
+
+    private func tabActionNotification(
+        kind: GhosttyAppManager.TabActionKind,
+        closeModeRawValue: Int? = nil,
+        gotoRawValue: Int? = nil,
+        moveAmount: Int? = nil,
+        title: String? = nil,
+        source: GhosttySurfaceView? = nil
+    ) -> Notification {
+        var userInfo: [String: Any] = [
+            GhosttyAppManager.tabActionKindUserInfoKey: kind.rawValue
+        ]
+        if let closeModeRawValue {
+            userInfo[GhosttyAppManager.tabActionCloseModeUserInfoKey] = closeModeRawValue
+        }
+        if let gotoRawValue {
+            userInfo[GhosttyAppManager.tabActionGotoUserInfoKey] = gotoRawValue
+        }
+        if let moveAmount {
+            userInfo[GhosttyAppManager.tabActionMoveAmountUserInfoKey] = moveAmount
+        }
+        if let title {
+            userInfo[GhosttyAppManager.tabActionTitleUserInfoKey] = title
+        }
+
+        return Notification(
+            name: GhosttyAppManager.tabActionNotification,
+            object: source,
+            userInfo: userInfo
+        )
+    }
+}

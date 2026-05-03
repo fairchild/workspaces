@@ -10,7 +10,8 @@ import GhosttyKit
 @MainActor
 final class GhosttySurfaceView: NSView {
     private let workingDirectory: URL
-    private let onProcessExit: (() -> Void)?
+    var onProcessExit: (() -> Void)?
+    var onCloseConfirmationRequired: (() -> Void)?
 
     private var terminalConfig: GhosttyTerminalConfig
     private let readinessDiagnostics: TerminalReadinessDiagnostics
@@ -30,9 +31,14 @@ final class GhosttySurfaceView: NSView {
     var workingDirectoryPath: String { workingDirectory.path }
     var contextMenuProvider: (() -> NSMenu?)?
 
-    init(workingDirectory: URL, onProcessExit: (() -> Void)? = nil) {
+    init(
+        workingDirectory: URL,
+        onProcessExit: (() -> Void)? = nil,
+        onCloseConfirmationRequired: (() -> Void)? = nil
+    ) {
         self.workingDirectory = workingDirectory
         self.onProcessExit = onProcessExit
+        self.onCloseConfirmationRequired = onCloseConfirmationRequired
         self.terminalConfig = GhosttyTerminalConfig(workingDirectory: workingDirectory)
         self.readinessDiagnostics = TerminalReadinessDiagnostics(
             workingDirectoryName: workingDirectory.lastPathComponent,
@@ -44,9 +50,14 @@ final class GhosttySurfaceView: NSView {
         createSurfaceIfNeeded()
     }
 
-    init(customCommand: String, onProcessExit: (() -> Void)? = nil) {
+    init(
+        customCommand: String,
+        onProcessExit: (() -> Void)? = nil,
+        onCloseConfirmationRequired: (() -> Void)? = nil
+    ) {
         self.workingDirectory = FileManager.default.temporaryDirectory
         self.onProcessExit = onProcessExit
+        self.onCloseConfirmationRequired = onCloseConfirmationRequired
         self.terminalConfig = GhosttyTerminalConfig(customCommand: customCommand)
         self.readinessDiagnostics = TerminalReadinessDiagnostics(
             workingDirectoryName: workingDirectory.lastPathComponent,
@@ -164,10 +175,23 @@ final class GhosttySurfaceView: NSView {
     }
 
     func runtimeDidRequestClose(processAlive: Bool) {
+        if processAlive {
+            onCloseConfirmationRequired?()
+            return
+        }
+
         if !processAlive, !didProcessExit {
             didProcessExit = true
             onProcessExit?()
         }
+    }
+
+    func requestClose() {
+        guard let surface else {
+            runtimeDidRequestClose(processAlive: false)
+            return
+        }
+        ghostty_surface_request_close(surface)
     }
 
     // MARK: - Local event monitor

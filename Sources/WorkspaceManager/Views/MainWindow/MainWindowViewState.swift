@@ -35,6 +35,13 @@ struct MainWindowPendingRemoteWorkspaceSelection: Equatable {
     }
 }
 
+struct TerminalCloseConfirmation: Identifiable, Equatable {
+    let sessionID: UUID
+    let title: String
+
+    var id: UUID { sessionID }
+}
+
 struct MainWindowViewState {
     var selectedWorkspace: MainWindowWorkspaceSelection?
     var selectedWebSource: MainWindowWebSourceSelection?
@@ -52,6 +59,7 @@ struct MainWindowViewState {
     var openInEditorErrorMessage: String?
     var workspaceOperationErrorMessage: String?
     var connectingWorkspaceID: UUID?
+    var terminalCloseConfirmation: TerminalCloseConfirmation?
 }
 
 enum MainWindowOpenInEditorContextKey: Equatable {

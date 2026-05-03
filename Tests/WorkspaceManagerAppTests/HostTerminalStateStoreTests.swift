@@ -14,6 +14,81 @@ import Testing
 @MainActor
 @Suite("HostTerminalStateStore")
 struct HostTerminalStateStoreTests {
+    @Test("Creating a tab duplicates the active session without reusing by path")
+    func createTabDuplicatesActiveSessionWithoutReusingByPath() throws {
+        let store = HostTerminalStateStore()
+        let repoURL = URL(fileURLWithPath: "/Users/test/code/repo")
+        let first = store.activateSession(
+            key: .repoPath(repoURL.path),
+            directory: repoURL
+        ).session
+
+        let second = try #require(store.createTab())
+
+        #expect(store.sessions.count == 2)
+        #expect(second.id != first.id)
+        #expect(second.key == first.key)
+        #expect(second.directoryPath == first.directoryPath)
+        #expect(store.activeSessionID == second.id)
+    }
+
+    @Test("Adjacent tab activation wraps in both directions")
+    func adjacentTabActivationWraps() throws {
+        let store = HostTerminalStateStore()
+        let first = store.activateSession(
+            key: .defaultHome,
+            directory: URL(fileURLWithPath: "/Users/test")
+        ).session
+        let second = try #require(store.createTab())
+
+        #expect(store.activateAdjacentTab(offset: 1)?.id == first.id)
+        #expect(store.activateAdjacentTab(offset: -1)?.id == second.id)
+    }
+
+    @Test("Moving tabs reorders sessions and keeps moved tab active")
+    func movingTabsReordersSessions() throws {
+        let store = HostTerminalStateStore()
+        let first = store.activateSession(
+            key: .defaultHome,
+            directory: URL(fileURLWithPath: "/Users/test")
+        ).session
+        let second = try #require(store.createTab())
+        let third = try #require(store.createTab())
+
+        #expect(store.moveTab(containing: third.id, offset: -2))
+
+        #expect(store.sessions.map(\.id) == [third.id, first.id, second.id])
+        #expect(store.activeSessionID == third.id)
+    }
+
+    @Test("Tab title overrides are scoped to primary sessions")
+    func tabTitleOverridesAreScopedToPrimarySessions() throws {
+        let store = HostTerminalStateStore()
+        let primary = store.activateSession(
+            key: .defaultHome,
+            directory: URL(fileURLWithPath: "/Users/test")
+        ).session
+        let split = try #require(store.ensureSplit(forPrimarySessionID: primary.id))
+
+        #expect(store.setTabTitle("Build", for: split.id))
+        #expect(store.tabTitleOverride(for: primary.id) == "Build")
+    }
+
+    @Test("Close tab candidates support this other and right")
+    func closeTabCandidatesSupportModes() throws {
+        let store = HostTerminalStateStore()
+        let first = store.activateSession(
+            key: .defaultHome,
+            directory: URL(fileURLWithPath: "/Users/test")
+        ).session
+        let second = try #require(store.createTab())
+        let third = try #require(store.createTab())
+
+        #expect(store.tabIDsForClose(mode: .this, sourceSessionID: second.id) == [second.id])
+        #expect(store.tabIDsForClose(mode: .other, sourceSessionID: second.id) == [first.id, third.id])
+        #expect(store.tabIDsForClose(mode: .right, sourceSessionID: second.id) == [third.id])
+    }
+
     @Test("ensureSplit stores preferred top-bottom layout")
     func ensureSplitStoresPreferredLayout() {
         let store = HostTerminalStateStore()
