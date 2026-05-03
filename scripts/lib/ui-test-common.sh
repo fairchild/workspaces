@@ -126,7 +126,7 @@ ws_get_window_geometry() {
 import CoreGraphics
 import Foundation
 
-let ownerCandidates: Set<String> = ["WorkSpaces", "Workspaces", "WorkspaceManager"]
+let ownerCandidates: Set<String> = ["WorkSpaces", "WorkspaceManager"]
 let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
 let windows = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] ?? []
 
@@ -240,7 +240,7 @@ ws_get_window_id() {
 import CoreGraphics
 import Foundation
 
-let ownerCandidates: Set<String> = ["WorkSpaces", "Workspaces", "WorkspaceManager"]
+let ownerCandidates: Set<String> = ["WorkSpaces", "WorkspaceManager"]
 let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
 let windows = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] ?? []
 
