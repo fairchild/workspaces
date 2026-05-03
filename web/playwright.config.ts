@@ -2,6 +2,9 @@ import { defineConfig, devices } from "@playwright/test";
 
 const BASE_URL = process.env.PLAYWRIGHT_BASE_URL ?? "http://localhost:3000";
 const SKIP_WEB_SERVER = process.env.PLAYWRIGHT_SKIP_WEB_SERVER === "1";
+const E2E_DATABASE_URL =
+	process.env.PLAYWRIGHT_DATABASE_URL ??
+	(process.env.CI ? "file:data/e2e-auth.db" : process.env.TURSO_DATABASE_URL);
 
 // Vercel Deployment Protection: preview URLs redirect to vercel.com/login
 // unless callers supply the Protection Bypass for Automation secret. When
@@ -69,6 +72,7 @@ export default defineConfig({
 				env: {
 					DEV_BYPASS_AUTH: "1",
 					MOCK_AGENT: "1",
+					...(E2E_DATABASE_URL ? { TURSO_DATABASE_URL: E2E_DATABASE_URL } : {}),
 				},
 			},
 });

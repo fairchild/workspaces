@@ -9,6 +9,7 @@ import {
 	fetchRepoTree,
 	getGitHubToken,
 } from "@/lib/github";
+import { isRepoOwnedByUser } from "@/lib/repos";
 import type { AgentDiscoveryResponse } from "@/lib/types";
 import { PIPELINE_GITHUB_LABELS } from "@/lib/types";
 
@@ -20,15 +21,19 @@ export async function GET(
 	if (!session) return unauthorizedResponse();
 
 	const { owner, repo } = await params;
-	const unauthorized = await authorizeRepoAccess(
-		session.user.id,
-		`${owner}/${repo}`,
-	);
-	if (unauthorized) return unauthorized;
+	const repoFullName = `${owner}/${repo}`;
+	const repoIsSaved = await isRepoOwnedByUser(session.user.id, repoFullName);
 
 	let token: string;
 	const bypassToken = getDevBypassToken();
 	if (bypassToken) {
+		if (!repoIsSaved) {
+			const unauthorized = await authorizeRepoAccess(
+				session.user.id,
+				repoFullName,
+			);
+			if (unauthorized) return unauthorized;
+		}
 		token = bypassToken;
 	} else {
 		const ghToken = await getGitHubToken(session.user.id);

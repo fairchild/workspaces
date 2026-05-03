@@ -3,7 +3,10 @@ import { createClient } from "@libsql/client";
 
 const TEST_USER_ID = "dev-user";
 const TEST_REPO = "fairchild/workspaces";
-const DB_PATH = "data/auth.db";
+const DB_URL =
+	process.env.PLAYWRIGHT_DATABASE_URL ??
+	(process.env.CI ? "file:data/e2e-auth.db" : process.env.TURSO_DATABASE_URL) ??
+	"file:data/auth.db";
 
 // Deterministic IDs for cleanup
 const EVENT_IDS = [
@@ -46,10 +49,65 @@ function minutesAgo(day: number, minutes: number): string {
 }
 
 export default async function globalSetup() {
-	if (process.env.CI) return;
-
 	mkdirSync("data", { recursive: true });
-	const db = createClient({ url: `file:${DB_PATH}` });
+	const db = createClient({ url: DB_URL });
+
+	await db.execute(`CREATE TABLE IF NOT EXISTS "user" (
+		id TEXT PRIMARY KEY,
+		name TEXT NOT NULL,
+		email TEXT NOT NULL UNIQUE,
+		emailVerified INTEGER NOT NULL DEFAULT 0,
+		image TEXT,
+		createdAt TEXT NOT NULL DEFAULT (datetime('now')),
+		updatedAt TEXT NOT NULL DEFAULT (datetime('now'))
+	)`);
+
+	await db.execute(`CREATE TABLE IF NOT EXISTS session (
+		id TEXT PRIMARY KEY,
+		expiresAt TEXT NOT NULL,
+		token TEXT NOT NULL UNIQUE,
+		createdAt TEXT NOT NULL DEFAULT (datetime('now')),
+		updatedAt TEXT NOT NULL DEFAULT (datetime('now')),
+		ipAddress TEXT,
+		userAgent TEXT,
+		userId TEXT NOT NULL,
+		FOREIGN KEY (userId) REFERENCES "user"(id) ON DELETE CASCADE
+	)`);
+	await db.execute(
+		"CREATE INDEX IF NOT EXISTS idx_session_userId ON session(userId)",
+	);
+
+	await db.execute(`CREATE TABLE IF NOT EXISTS account (
+		id TEXT PRIMARY KEY,
+		accountId TEXT NOT NULL,
+		providerId TEXT NOT NULL,
+		userId TEXT NOT NULL,
+		accessToken TEXT,
+		refreshToken TEXT,
+		idToken TEXT,
+		accessTokenExpiresAt TEXT,
+		refreshTokenExpiresAt TEXT,
+		scope TEXT,
+		password TEXT,
+		createdAt TEXT NOT NULL DEFAULT (datetime('now')),
+		updatedAt TEXT NOT NULL DEFAULT (datetime('now')),
+		FOREIGN KEY (userId) REFERENCES "user"(id) ON DELETE CASCADE
+	)`);
+	await db.execute(
+		"CREATE INDEX IF NOT EXISTS idx_account_userId ON account(userId)",
+	);
+
+	await db.execute(`CREATE TABLE IF NOT EXISTS verification (
+		id TEXT PRIMARY KEY,
+		identifier TEXT NOT NULL,
+		value TEXT NOT NULL,
+		expiresAt TEXT NOT NULL,
+		createdAt TEXT NOT NULL DEFAULT (datetime('now')),
+		updatedAt TEXT NOT NULL DEFAULT (datetime('now'))
+	)`);
+	await db.execute(
+		"CREATE INDEX IF NOT EXISTS idx_verification_identifier ON verification(identifier)",
+	);
 
 	await db.execute(`CREATE TABLE IF NOT EXISTS user_repos (
 		user_id TEXT NOT NULL,
