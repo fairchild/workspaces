@@ -35,7 +35,9 @@ install_deps() {
     (cd "$dir" && bun install)
   elif [[ -f "$dir/pnpm-lock.yaml" ]]; then
     echo "=> $dir: pnpm install"
-    (cd "$dir" && pnpm install)
+    # Codex and CI run setup without a TTY; CI=1 prevents pnpm from aborting
+    # when it needs to recreate node_modules.
+    (cd "$dir" && CI=1 pnpm install)
   elif [[ -f "$dir/package-lock.json" ]]; then
     echo "=> $dir: npm install"
     (cd "$dir" && npm install)
