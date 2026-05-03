@@ -13,6 +13,19 @@ Craft matters in this codebase. Treat quality as part of the requested work, not
 - For service and infrastructure work, preserve clear contracts, observable error handling, and diagnostics that make production failures easier to understand.
 - Prefer small, well-finished changes with evidence over broad changes with unclear blast radius.
 
+## Definition of Mergeable
+
+Work is mergeable when it is correct, coherent with the product, reviewable, verified, and leaves the system easier to operate.
+
+- The change solves the real user or maintainer problem, not only the narrow symptom in the first repro.
+- The implementation matches existing architecture, naming, data flow, UI language, and operational conventions.
+- The scope is tight: no unrelated refactors, formatting churn, dependency changes, generated artifacts, or opportunistic rewrites.
+- User-facing work covers the non-happy paths a reviewer would expect: empty, loading, error, permissions, timing, focus, and recovery states.
+- Service and infrastructure work has clear contracts, observable failure modes, useful logs or diagnostics, and no hidden production assumptions.
+- Tests or verification evidence match the risk and blast radius. For docs-only changes, `git diff --check` plus a clear note is usually enough.
+- The PR tells a reviewer what changed, how it was verified, and what residual risk or follow-up remains.
+- If evidence is blocked, say so explicitly before merge and explain what approval or environment is needed.
+
 ## Dev Verification Practice (required)
 
 When changing terminal/keyboard/sidebar behavior, use this loop so future sessions can self-verify reliably:
