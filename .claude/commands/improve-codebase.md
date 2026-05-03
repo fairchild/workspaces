@@ -30,7 +30,7 @@ Read live state and write yourself a short inventory. Batch these where possible
 
 1. **Repo state** — `git status`, current branch, open PRs (`gh pr list --state open`), recent activity (`git log --oneline -20`). If the current branch is not `main` or a working branch you intentionally chose, treat the worktree as untrusted and resolve before proposing.
 2. **Roadmap** — `backlog/ROADMAP.md`. Identify active P0 theme and active milestone. **If any open PR touches `backlog/ROADMAP.md` or files in your focus area's planning surface, also read the PR-branch version (`git show origin/<branch>:<path>`) before forming hypotheses** — working-tree state is stale relative to in-flight planning changes.
-3. **TODO** — `TODO.md`. These are ideas to challenge, not a worklist. Convert at most one to a backlog item per session, and only if it clearly belongs.
+3. **TODO (optional)** — If `TODO.md` exists, read it. These are ideas to challenge, not a worklist. Convert at most one to a backlog item per session, and only if it clearly belongs. Do not block if the file is absent.
 4. **Drift** — skim `backlog/*.md` and `docs/` for items stale relative to what the code and ROADMAP now say.
 5. **Focus-area inputs**:
    - `desktop` → `config/performance/contract.json`, latest `docs/performance/*`, current baselines, known symptoms. Load the `workspaces-performance-system` skill if perf is in scope.
@@ -56,7 +56,7 @@ While waiting, you may do the following without further approval (Michael said "
 
 - Fix obvious stale pointers in `backlog/` and `docs/`.
 - Normalize whitespace, broken links, or outdated file references in docs you already read.
-- Convert a single uncontroversial `TODO.md` line into a `backlog/*.md` stub (do not delete the TODO entry; link it).
+- If `TODO.md` exists, convert a single uncontroversial line into a `backlog/*.md` stub (do not delete the TODO entry; link it).
 
 Do not touch source, tests, scripts, CI, or perf baselines before approval.
 

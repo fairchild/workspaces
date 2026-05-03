@@ -34,7 +34,7 @@ A test written from the implementation tends to mirror the implementation — an
 
 1. `qa-web-agent` writes a spec here from an exploratory finding or an uncovered behavior in `web/tests/LEDGER.md`.
 2. A human reviews the spec. Common feedback: wrong oracle, missing negative case, wrong layer.
-3. On approval, `mise run web:qa:generate` invokes Playwright's Generator (Test Agents 1.56+), which writes `web/e2e/<layer>/<slug>.spec.ts` with live-verified selectors.
+3. On approval, `mise run web:qa:codegen [url]` launches Playwright codegen against the dev server so the author can record live-verified selectors into `web/e2e/<layer>/<slug>.spec.ts`.
 4. `web/tests/LEDGER.md` gets a new row.
 5. The spec stays in this directory as the durable source of intent — do not delete specs after generation.
 
