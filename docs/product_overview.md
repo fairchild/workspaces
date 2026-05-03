@@ -1,4 +1,4 @@
-# Workspaces — Product Overview
+# WorkSpaces — Product Overview
 
 ## Problem Statement
 
@@ -11,7 +11,7 @@ Developers using terminal-based coding agents (Claude Code, Aider, Codex CLI, Co
 
 ## Solution Summary
 
-**Workspaces** is a Mac-native app for terminal-first AI coding with fast context switching. It discovers local repositories in `~/code`, restores the last surface you were using, opens repo overviews for navigation and launch actions, and lets you spin up isolated workspace copies when needed.
+**WorkSpaces** is a Mac-native app for terminal-first AI coding with fast context switching. It discovers local repositories in `~/code`, restores the last surface you were using, opens repo overviews for navigation and launch actions, and lets you spin up isolated workspace copies when needed.
 
 Think of it as **a terminal session manager for your code portfolio, with workspace isolation when you need it**.
 
@@ -73,7 +73,7 @@ Developers who regularly use terminal-based coding agents (Claude Code, Aider, C
 
 1. **Terminal-First**: The embedded terminal IS the experience. This is not a code editor — use your preferred external editor alongside.
 
-2. **Ghostty-First Input Model**: Workspaces wraps a fully functional embedded Ghostty experience. Shortcut handling defaults to Ghostty unless a shortcut is explicitly reserved for app chrome.
+2. **Ghostty-First Input Model**: WorkSpaces wraps a fully functional embedded Ghostty experience. Shortcut handling defaults to Ghostty unless a shortcut is explicitly reserved for app chrome.
 
 3. **Native Mac Feel**: SwiftUI + AppKit patterns. Three-column layout like Finder/Mail. Keyboard shortcuts that feel familiar.
 

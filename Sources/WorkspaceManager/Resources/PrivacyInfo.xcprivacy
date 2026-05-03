@@ -40,7 +40,7 @@
          Required API declarations for APIs that Apple considers
          privacy-sensitive and requires justification for use.
 
-         Workspaces accesses:
+         WorkSpaces accesses:
          - File system (for workspace management)
          - Process APIs (for terminal/shell execution)
          - System boot time (for session management)

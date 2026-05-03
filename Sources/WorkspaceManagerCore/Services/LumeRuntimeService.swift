@@ -757,7 +757,7 @@ public actor LumeRuntimeService: LumeRuntimeServiceProtocol {
                     sourceKind: sourceKind,
                     vmStatus: details.status,
                     reason: validationReason
-                        ?? "The validated base macOS VM is running. Workspaces will stop it before cloning."
+                        ?? "The validated base macOS VM is running. WorkSpaces will stop it before cloning."
                 )
             case .stopped:
                 snapshot = LumeBaseVMSnapshot(

@@ -118,14 +118,14 @@ private final class CLIApp {
         guard let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: Self.appBundleIdentifier)
         else {
             throw CLIError(
-                "Could not find the Workspaces app. Install it first so the 'workspaces' launcher can hand off to the GUI."
+                "Could not find the WorkSpaces app. Install it first so the 'workspaces' launcher can hand off to the GUI."
             )
         }
 
         if let request {
             let deepLinkURL = request.deepLinkURL
             guard NSWorkspace.shared.open(deepLinkURL) else {
-                throw CLIError("Failed to open Workspaces for path: \(request.launchDirectory.path)")
+                throw CLIError("Failed to open WorkSpaces for path: \(request.launchDirectory.path)")
             }
             return 0
         }
@@ -825,7 +825,7 @@ private func openApplication(at appURL: URL, configuration: NSWorkspace.OpenConf
     try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
         NSWorkspace.shared.openApplication(at: appURL, configuration: configuration) { _, error in
             if let error {
-                continuation.resume(throwing: CLIError("Failed to launch Workspaces: \(error.localizedDescription)"))
+                continuation.resume(throwing: CLIError("Failed to launch WorkSpaces: \(error.localizedDescription)"))
                 return
             }
 
@@ -920,7 +920,7 @@ private func writeStderr(_ message: String) {
 private func printHelp() {
     print(
         """
-        WorkspaceManager CLI
+        WorkSpaces CLI
 
         Usage:
           workspaces
@@ -941,7 +941,7 @@ private func printHelp() {
           workspaces help
 
         Launch behavior:
-          - no args: open the Workspaces app
+          - no args: open the WorkSpaces app
           - path arg: open the app and focus the matching workspace or repo
 
         Workspace selectors:

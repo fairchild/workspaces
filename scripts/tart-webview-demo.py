@@ -32,7 +32,7 @@ WINDOW_PROBE_SWIFT = r"""swift - <<'SWIFT'
 import CoreGraphics
 import Foundation
 
-let ownerCandidates: Set<String> = ["Workspaces", "WorkspaceManager"]
+let ownerCandidates: Set<String> = ["WorkSpaces", "Workspaces", "WorkspaceManager"]
 let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
 let windows = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] ?? []
 
@@ -597,7 +597,8 @@ def main() -> int:
 
         def activate_workspace_manager() -> None:
             activate_cmd = (
-                "osascript -e 'tell application \"Workspaces\" to activate' "
+                "osascript -e 'tell application \"WorkSpaces\" to activate' "
+                "|| osascript -e 'tell application \"Workspaces\" to activate' "
                 "|| osascript -e 'tell application \"WorkspaceManager\" to activate'"
             )
             ssh_exec(ssh_client, f"{activate_cmd} >/dev/null 2>&1 || true", timeout=20)

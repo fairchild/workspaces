@@ -1321,13 +1321,13 @@ extension LumeWorkspaceProvider: WorkspaceProviderSetupCapable {
                     primaryButtonTitle: primaryButtonTitle,
                     introductoryText: [
                         "Lume is an MIT open-source VM runtime that uses Apple's native Virtualization Framework to run macOS and Linux VMs at near-native speed on Apple Silicon.",
-                        "Workspaces needs it so it can create VM-backed workspaces, open an in-app terminal with `lume ssh`, and launch full desktop access via VNC.",
+                        "WorkSpaces needs it so it can create VM-backed workspaces, open an in-app terminal with `lume ssh`, and launch full desktop access via VNC.",
                     ],
                     learnMoreLabel: "Learn more about Lume",
                     learnMoreURL: URL(
                         string: "https://cua.ai/docs/lume/guide/getting-started/introduction"
                     ),
-                    explanatoryStepsTitle: "What Workspaces will do",
+                    explanatoryStepsTitle: "What WorkSpaces will do",
                     explanatorySteps: [
                         "Install the official Lume CLI in ~/.local/bin",
                         "Install and load the user LaunchAgent on localhost:7777",
@@ -1341,10 +1341,10 @@ extension LumeWorkspaceProvider: WorkspaceProviderSetupCapable {
                             "Default macOS VM: \($0.displayName)"
                         },
                     footerText:
-                        "This is a one-time setup on this Mac. No admin access is required. After setup finishes, Workspaces will continue automatically.",
+                        "This is a one-time setup on this Mac. No admin access is required. After setup finishes, WorkSpaces will continue automatically.",
                     progressTitle: "Preparing macOS VM Support",
                     progressBody:
-                        "Workspaces is setting up the local Lume runtime and will continue automatically when it is ready.",
+                        "WorkSpaces is setting up the local Lume runtime and will continue automatically when it is ready.",
                     initialProgress: WorkspaceProviderSetupProgress(
                         id: LumeRuntimeSetupStep.checkingHost.rawValue,
                         label: LumeRuntimeSetupStep.checkingHost.label

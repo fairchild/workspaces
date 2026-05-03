@@ -288,6 +288,7 @@ fi
 log_step "Stopping running app (if open)"
 osascript -e 'tell application id "com.cloudcompute.workspaces" to quit' >/dev/null 2>&1 || true
 osascript -e 'tell application "WorkspaceManager" to quit' >/dev/null 2>&1 || true
+osascript -e 'tell application "WorkSpaces" to quit' >/dev/null 2>&1 || true
 osascript -e 'tell application "Workspaces" to quit' >/dev/null 2>&1 || true
 pkill -x WorkspaceManager >/dev/null 2>&1 || true
 sleep 1

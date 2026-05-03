@@ -107,7 +107,7 @@ window_click_coordinates() {
 import CoreGraphics
 import Foundation
 
-let ownerCandidates: Set<String> = ["Workspaces", "WorkspaceManager"]
+let ownerCandidates: Set<String> = ["WorkSpaces", "Workspaces", "WorkspaceManager"]
 let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
 let windows = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] ?? []
 

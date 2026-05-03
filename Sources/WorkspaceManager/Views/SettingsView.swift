@@ -55,7 +55,7 @@ struct SettingsView: View {
         Form {
             Section {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Workspaces Location")
+                    Text("WorkSpaces Location")
                         .font(.headline)
 
                     HStack {
@@ -96,7 +96,7 @@ struct SettingsView: View {
 
             Section {
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("Use Workspaces from Terminal")
+                    Text("Use WorkSpaces from Terminal")
                         .font(.headline)
 
                     if let commandLineToolStatus {
@@ -629,7 +629,7 @@ struct SettingsView: View {
 
         switch status.reason {
         case .active:
-            return "The `workspaces` command is ready to open Workspaces from Terminal."
+            return "The `workspaces` command is ready to open WorkSpaces from Terminal."
         case .missing:
             return "Install the `workspaces` command at \(commandPath) so `workspaces .` opens the current folder."
         case .missingFromPath:

@@ -99,7 +99,7 @@ struct WorkspaceProviderSetupCoordinatorTests {
             introductoryText: ["Intro"],
             learnMoreLabel: "Learn more",
             learnMoreURL: URL(string: "https://example.com/setup"),
-            explanatoryStepsTitle: "What Workspaces will do",
+            explanatoryStepsTitle: "What WorkSpaces will do",
             explanatorySteps: ["Step 1", "Step 2"],
             supplementaryText: "Default macOS VM: Tahoe",
             footerText: "Footer",

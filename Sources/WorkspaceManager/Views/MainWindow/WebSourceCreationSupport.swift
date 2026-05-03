@@ -29,7 +29,7 @@ enum WebSourceCreationTarget: Identifiable {
     var subtitle: String {
         switch self {
         case .global:
-            return "Browse a domain inside Workspaces"
+            return "Browse a domain inside WorkSpaces"
         case .repo(let repo):
             return "Attach a web view to \(repo.name)"
         case .workspace(let workspace):
