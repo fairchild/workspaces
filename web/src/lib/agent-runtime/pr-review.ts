@@ -5,6 +5,8 @@ import {
 	getOrCreateEnvironment,
 } from "./managed-agents-cache";
 
+const MANAGED_REVIEWER_LOGIN = "workspaces-claude-pr-reviewer[bot]";
+
 const SYSTEM_PROMPT = `You are a code reviewer for a Swift project (SwiftUI / Swift Package Manager).
 
 For each PR you receive:
@@ -67,7 +69,7 @@ Keep the decision banner to one sentence and no more than 140 characters. It sho
   \`<details><summary>Details</summary> ... </details>\`
 - Do not add the \`open\` attribute to the \`<details>\` tag
 - Include a short \`## Project Thread\` section that references at least one previous PR by number and explains the relationship when previous PR context is available
-- In \`## Project Thread\`, mention any labels you applied because of that relationship
+- In \`## Project Thread\`, include a short label rationale when you apply or suggest labels: \`Inherited label applied:\`, \`Existing label applied:\`, or \`Label suggestion:\`
 - If you notice a distinct dimension of work that deserves a repo label, suggest it as a brief \`Label suggestion:\` trailer at the end of \`## Project Thread\`; prefer reusing or consolidating labels over increasing label count
 - Use bullet points and code blocks
 - Cite \`file:line\` for every comment
@@ -111,13 +113,22 @@ export interface PrContextItem {
 	headRef: string;
 	baseRef: string;
 	labels: string[];
+	reviewedByManagedReviewer: boolean;
 	body: string;
+}
+
+export interface PrLabelItem {
+	name: string;
+	description: string;
+	color: string;
 }
 
 export interface PrNarrativeContext {
 	recentDescriptions: PrContextItem[];
 	relationshipCandidates: PrContextItem[];
+	availableLabels: PrLabelItem[];
 	unavailableReason?: string;
+	labelInventoryUnavailableReason?: string;
 }
 
 interface GitHubPullRequest {
@@ -130,6 +141,16 @@ interface GitHubPullRequest {
 	labels?: Array<{ name?: string | null }> | null;
 	head?: { ref?: string | null } | null;
 	base?: { ref?: string | null } | null;
+}
+
+interface GitHubLabel {
+	name: string | null;
+	description: string | null;
+	color: string | null;
+}
+
+interface GitHubReview {
+	user?: { login?: string | null } | null;
 }
 
 async function resolveGitHubToken(): Promise<string | null> {
@@ -176,8 +197,49 @@ function toPrContextItem(pr: GitHubPullRequest): PrContextItem {
 		labels: (pr.labels ?? [])
 			.map((label) => label.name?.trim() ?? "")
 			.filter((name) => name.length > 0),
+		reviewedByManagedReviewer: false,
 		body: truncateBody(pr.body ?? ""),
 	};
+}
+
+async function fetchGitHubJson<T>(
+	url: string,
+	githubToken: string,
+): Promise<T> {
+	const res = await fetch(url, {
+		headers: {
+			Authorization: `Bearer ${githubToken}`,
+			Accept: "application/vnd.github+json",
+			"X-GitHub-Api-Version": "2022-11-28",
+		},
+	});
+	if (!res.ok) {
+		throw new Error(`GitHub API ${res.status}`);
+	}
+	return (await res.json()) as T;
+}
+
+function toPrLabelItem(label: GitHubLabel): PrLabelItem | null {
+	const name = label.name?.trim();
+	if (!name) return null;
+	return {
+		name,
+		description: label.description?.trim() ?? "",
+		color: label.color?.trim() ?? "",
+	};
+}
+
+async function hasManagedReviewerReview(
+	githubToken: string,
+	owner: string,
+	repo: string,
+	prNumber: number,
+): Promise<boolean> {
+	const url = `${GITHUB_API}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls/${prNumber}/reviews?per_page=100`;
+	const reviews = await fetchGitHubJson<GitHubReview[]>(url, githubToken);
+	return reviews.some(
+		(review) => review.user?.login === MANAGED_REVIEWER_LOGIN,
+	);
 }
 
 export async function fetchPrNarrativeContext(
@@ -189,30 +251,67 @@ export async function fetchPrNarrativeContext(
 		return {
 			recentDescriptions: [],
 			relationshipCandidates: [],
+			availableLabels: [],
 			unavailableReason: "Repository owner/name was unavailable.",
 		};
 	}
 
-	const url = `${GITHUB_API}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls?state=all&sort=updated&direction=desc&per_page=10`;
+	const pullsUrl = `${GITHUB_API}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls?state=all&sort=updated&direction=desc&per_page=10`;
+	const labelsUrl = `${GITHUB_API}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/labels?per_page=100`;
 
 	try {
-		const res = await fetch(url, {
-			headers: {
-				Authorization: `Bearer ${githubToken}`,
-				Accept: "application/vnd.github+json",
-				"X-GitHub-Api-Version": "2022-11-28",
-			},
-		});
-		if (!res.ok) {
-			throw new Error(`GitHub API ${res.status}`);
-		}
-		const prs = ((await res.json()) as GitHubPullRequest[])
+		const prs = (
+			await fetchGitHubJson<GitHubPullRequest[]>(pullsUrl, githubToken)
+		)
 			.filter((pr) => Number(pr.number) !== payload.number)
 			.map(toPrContextItem);
+		const relationshipCandidates = prs.slice(0, RELATIONSHIP_CANDIDATE_COUNT);
+
+		const reviewedCandidates = await Promise.all(
+			relationshipCandidates.map(async (pr) => {
+				try {
+					return {
+						...pr,
+						reviewedByManagedReviewer: await hasManagedReviewerReview(
+							githubToken,
+							owner,
+							repo,
+							pr.number,
+						),
+					};
+				} catch (err) {
+					const reason = err instanceof Error ? err.message : String(err);
+					console.warn(
+						`[pr-review] managed reviewer status unavailable for PR #${pr.number}:`,
+						reason,
+					);
+					return pr;
+				}
+			}),
+		);
+
+		let availableLabels: PrLabelItem[] = [];
+		let labelInventoryUnavailableReason: string | undefined;
+		try {
+			availableLabels = (
+				await fetchGitHubJson<GitHubLabel[]>(labelsUrl, githubToken)
+			)
+				.map(toPrLabelItem)
+				.filter((label): label is PrLabelItem => label !== null);
+		} catch (err) {
+			labelInventoryUnavailableReason =
+				err instanceof Error ? err.message : String(err);
+			console.warn(
+				"[pr-review] label inventory unavailable:",
+				labelInventoryUnavailableReason,
+			);
+		}
 
 		return {
 			recentDescriptions: prs.slice(0, RECENT_DESCRIPTION_COUNT),
-			relationshipCandidates: prs.slice(0, RELATIONSHIP_CANDIDATE_COUNT),
+			relationshipCandidates: reviewedCandidates,
+			availableLabels,
+			labelInventoryUnavailableReason,
 		};
 	} catch (err) {
 		const reason = err instanceof Error ? err.message : String(err);
@@ -220,6 +319,7 @@ export async function fetchPrNarrativeContext(
 		return {
 			recentDescriptions: [],
 			relationshipCandidates: [],
+			availableLabels: [],
 			unavailableReason: reason,
 		};
 	}
@@ -233,6 +333,7 @@ function formatPrContextItem(item: PrContextItem): string {
   Updated: ${item.updatedAt}
   Branches: ${item.headRef} -> ${item.baseRef}
   Labels: ${item.labels.length > 0 ? item.labels.join(", ") : "(none)"}
+  Prior managed review: ${item.reviewedByManagedReviewer ? "yes" : "no"}
   Description:
 ${description
 	.split("\n")
@@ -245,18 +346,38 @@ export function formatPrNarrativeContext(context: PrNarrativeContext): string {
 		return `Previous PR context unavailable: ${context.unavailableReason}`;
 	}
 
+	const labelInventory =
+		context.availableLabels.length > 0
+			? context.availableLabels
+					.map((label) => {
+						const description = label.description
+							? ` — ${label.description}`
+							: "";
+						return `- ${label.name}${description}`;
+					})
+					.join("\n")
+			: context.labelInventoryUnavailableReason
+				? `Label inventory unavailable: ${context.labelInventoryUnavailableReason}`
+				: "No repository labels were found.";
+
 	if (
 		context.recentDescriptions.length === 0 &&
 		context.relationshipCandidates.length === 0
 	) {
-		return "No previous PRs were found for this repository.";
+		return `No previous PRs were found for this repository.
+
+Repository label inventory:
+${labelInventory}`;
 	}
 
 	return `Most recently updated PR descriptions (always scan these 3 if present):
 ${context.recentDescriptions.map(formatPrContextItem).join("\n\n")}
 
 Relationship candidates (scan the first 3; if none are clearly related, scan up to 5 and use the most clearly related):
-${context.relationshipCandidates.map(formatPrContextItem).join("\n\n")}`;
+${context.relationshipCandidates.map(formatPrContextItem).join("\n\n")}
+
+Repository label inventory:
+${labelInventory}`;
 }
 
 /**
@@ -354,16 +475,22 @@ ${formatPrNarrativeContext(narrativeContext)}
 GitHub API endpoint for posting the review:
 POST https://api.github.com/repos/${owner}/${repo}/pulls/${payload.number}/reviews
 
-GitHub API endpoint for applying labels when you are highly confident a label from a related PR also applies:
+GitHub API endpoint for applying labels when you are highly confident an existing repository label applies:
 POST https://api.github.com/repos/${owner}/${repo}/issues/${payload.number}/labels
 
-Read the diff against ${payload.baseRef}, explore the surrounding code, run swift build and swift test if the project supports them, then post the review using the GitHub API with the token at /workspace/.github-token.
+Use the same token fallback for label application that you use for posting reviews:
+\`TOKEN=$(cat /workspace/.github-token 2>/dev/null || cat /mnt/session/uploads/workspace/.github-token 2>/dev/null)\`
+
+Read the diff against ${payload.baseRef}, explore the surrounding code, run swift build and swift test if the project supports them, then post the review using the GitHub API with the token at /workspace/.github-token or /mnt/session/uploads/workspace/.github-token.
 
 Your review must include a short "## Project Thread" section. Reference at least one previous PR by number and explain how this PR relates to it when previous PR context is available. If one of the first 3 relationship candidates is clearly related, use it. If none are clearly related, inspect up to 5 candidates and reference the most clearly related one. If no previous PR exists or the previous PR context is unavailable, say that explicitly instead of inventing a relationship.
 
-Pay attention to labels on related PRs. When you are highly confident an existing label from a related PR should also apply to this PR, apply that label using the labels endpoint before posting the review. Mention the applied label in "## Project Thread". Do not apply labels on weak or speculative matches.
+Pay attention to the full repository label inventory and labels on previous PRs. Labels on previous PRs that were already reviewed by ${MANAGED_REVIEWER_LOGIN} are stronger evidence than labels on unreviewed PRs, but prior managed review is a weighting signal, not a hard requirement. When you are highly confident an existing repository label applies to this PR, apply that label using the labels endpoint before posting the review. Existing labels may be applied even when they were not present on the selected related PR if the current PR clearly fits the label. Avoid over-tagging small PRs; prefer one or two high-signal labels. Do not apply labels on weak or speculative matches.
 
-Also consider whether this PR reveals a distinct dimension of work that would be worth tagging with a label. The repo label set is not well managed yet; prefer labels that improve review/routing clarity while staying within the current label count or reducing it through consolidation. Do not create labels. If you see a high-value new-label opportunity, add a brief "Label suggestion:" trailer at the end of "## Project Thread".`,
+In "## Project Thread", include a short label rationale using the first applicable trailer:
+- "Inherited label applied:" when you copied an existing label from a related PR.
+- "Existing label applied:" when you chose an existing label from the repository inventory based on high confidence.
+- "Label suggestion:" when a useful missing or consolidation label would improve routing. Do not create labels.`,
 					},
 				],
 			},

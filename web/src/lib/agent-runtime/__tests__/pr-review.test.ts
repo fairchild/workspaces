@@ -36,6 +36,7 @@ vi.stubGlobal("fetch", mocks.fetch);
 import {
 	type PrReviewPayload,
 	fetchPrNarrativeContext,
+	formatPrNarrativeContext,
 	triggerPrReview,
 } from "../pr-review";
 
@@ -68,10 +69,64 @@ function githubPr(number: number, overrides: Record<string, unknown> = {}) {
 	};
 }
 
+function githubLabel(name: string, description = "") {
+	return {
+		name,
+		description,
+		color: "ededed",
+	};
+}
+
 function mockPrList(prs: unknown[]) {
-	mocks.fetch.mockResolvedValue({
-		ok: true,
-		json: async () => prs,
+	mockNarrativeFetch({ prs });
+}
+
+function mockNarrativeFetch({
+	prs,
+	labels = [],
+	reviewedPrs = [],
+	failLabels = false,
+}: {
+	prs: unknown[];
+	labels?: unknown[];
+	reviewedPrs?: number[];
+	failLabels?: boolean;
+}) {
+	mocks.fetch.mockImplementation(async (url: string) => {
+		if (url.includes("/pulls?")) {
+			return {
+				ok: true,
+				json: async () => prs,
+			};
+		}
+
+		if (url.includes("/labels?")) {
+			if (failLabels) {
+				return {
+					ok: false,
+					status: 502,
+					json: async () => ({ message: "bad gateway" }),
+				};
+			}
+			return {
+				ok: true,
+				json: async () => labels,
+			};
+		}
+
+		const reviewMatch = url.match(/\/pulls\/(\d+)\/reviews\?/);
+		if (reviewMatch) {
+			const prNumber = Number(reviewMatch[1]);
+			return {
+				ok: true,
+				json: async () =>
+					reviewedPrs.includes(prNumber)
+						? [{ user: { login: "workspaces-claude-pr-reviewer[bot]" } }]
+						: [{ user: { login: "fairchild" } }],
+			};
+		}
+
+		throw new Error(`Unexpected fetch URL: ${url}`);
 	});
 }
 
@@ -121,6 +176,7 @@ describe("fetchPrNarrativeContext", () => {
 		expect(context.relationshipCandidates.map((pr) => pr.number)).toEqual([
 			8, 7, 6, 5, 4,
 		]);
+		expect(context.availableLabels).toEqual([]);
 		expect(context.relationshipCandidates.some((pr) => pr.number === 9)).toBe(
 			false,
 		);
@@ -132,6 +188,31 @@ describe("fetchPrNarrativeContext", () => {
 				}),
 			}),
 		);
+	});
+
+	it("includes the full repository label inventory", async () => {
+		mockNarrativeFetch({
+			prs: [githubPr(9), githubPr(8)],
+			labels: [
+				githubLabel("documentation", "Improvements or additions to docs"),
+				githubLabel("security", "Security related work"),
+			],
+		});
+
+		const context = await fetchPrNarrativeContext("ghp_test", payload());
+
+		expect(context.availableLabels).toEqual([
+			{
+				name: "documentation",
+				description: "Improvements or additions to docs",
+				color: "ededed",
+			},
+			{
+				name: "security",
+				description: "Security related work",
+				color: "ededed",
+			},
+		]);
 	});
 
 	it("handles fewer than three previous PRs", async () => {
@@ -162,6 +243,58 @@ describe("fetchPrNarrativeContext", () => {
 		]);
 	});
 
+	it("marks relationship candidates that have a managed reviewer review", async () => {
+		mockNarrativeFetch({
+			prs: [githubPr(9), githubPr(8), githubPr(7)],
+			reviewedPrs: [8],
+		});
+
+		const context = await fetchPrNarrativeContext("ghp_test", payload());
+
+		expect(context.relationshipCandidates).toMatchObject([
+			{ number: 8, reviewedByManagedReviewer: true },
+			{ number: 7, reviewedByManagedReviewer: false },
+		]);
+	});
+
+	it("continues when the repository label inventory is unavailable", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		mockNarrativeFetch({
+			prs: [githubPr(9), githubPr(8)],
+			failLabels: true,
+		});
+
+		const context = await fetchPrNarrativeContext("ghp_test", payload());
+
+		expect(context.relationshipCandidates.map((pr) => pr.number)).toEqual([8]);
+		expect(context.availableLabels).toEqual([]);
+		expect(context.labelInventoryUnavailableReason).toBe("GitHub API 502");
+		expect(warn).toHaveBeenCalledWith(
+			"[pr-review] label inventory unavailable:",
+			"GitHub API 502",
+		);
+	});
+
+	it("formats label inventory even when no previous PRs exist", () => {
+		const context = formatPrNarrativeContext({
+			recentDescriptions: [],
+			relationshipCandidates: [],
+			availableLabels: [
+				{
+					name: "documentation",
+					description: "Improvements or additions to docs",
+					color: "ededed",
+				},
+			],
+		});
+
+		expect(context).toContain("No previous PRs were found");
+		expect(context).toContain("Repository label inventory:");
+		expect(context).toContain(
+			"- documentation — Improvements or additions to docs",
+		);
+	});
+
 	it("returns a non-fatal unavailable reason on GitHub API failure", async () => {
 		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 		mocks.fetch.mockResolvedValue({
@@ -175,6 +308,7 @@ describe("fetchPrNarrativeContext", () => {
 		expect(context).toEqual({
 			recentDescriptions: [],
 			relationshipCandidates: [],
+			availableLabels: [],
 			unavailableReason: "GitHub API 500",
 		});
 		expect(warn).toHaveBeenCalledWith(
@@ -204,7 +338,11 @@ describe("triggerPrReview", () => {
 	});
 
 	it("sends previous PR context and narrative instructions in the kickoff message", async () => {
-		mockPrList([githubPr(9), githubPr(8), githubPr(7), githubPr(6)]);
+		mockNarrativeFetch({
+			prs: [githubPr(9), githubPr(8), githubPr(7), githubPr(6)],
+			labels: [githubLabel("documentation", "Documentation changes")],
+			reviewedPrs: [8],
+		});
 
 		await expect(triggerPrReview(payload())).resolves.toBe("sesn_01");
 
@@ -216,12 +354,22 @@ describe("triggerPrReview", () => {
 		expect(message).toContain("Most recently updated PR descriptions");
 		expect(message).toContain("PR #8: PR 8");
 		expect(message).toContain("Labels: (none)");
+		expect(message).toContain("Prior managed review: yes");
+		expect(message).toContain("Repository label inventory:");
+		expect(message).toContain("- documentation — Documentation changes");
 		expect(message).toContain("## Project Thread");
 		expect(message).toContain("Reference at least one previous PR by number");
 	});
 
 	it("instructs the reviewer to apply high-confidence related labels and suggest label opportunities", async () => {
-		mockPrList([githubPr(9), githubPr(8, { labels: [{ name: "security" }] })]);
+		mockNarrativeFetch({
+			prs: [githubPr(9), githubPr(8, { labels: [{ name: "security" }] })],
+			labels: [
+				githubLabel("documentation", "Improvements or additions to docs"),
+				githubLabel("security", "Security related work"),
+			],
+			reviewedPrs: [8],
+		});
 
 		await expect(triggerPrReview(payload())).resolves.toBe("sesn_01");
 
@@ -232,11 +380,16 @@ describe("triggerPrReview", () => {
 			"POST https://api.github.com/repos/fairchild/workspaces/issues/9/labels",
 		);
 		expect(message).toContain(
-			"apply that label using the labels endpoint before posting the review",
+			"cat /workspace/.github-token 2>/dev/null || cat /mnt/session/uploads/workspace/.github-token",
 		);
 		expect(message).toContain(
-			'Mention the applied label in "## Project Thread"',
+			"Labels on previous PRs that were already reviewed by workspaces-claude-pr-reviewer[bot] are stronger evidence",
 		);
+		expect(message).toContain(
+			"Existing labels may be applied even when they were not present on the selected related PR",
+		);
+		expect(message).toContain("Inherited label applied:");
+		expect(message).toContain("Existing label applied:");
 		expect(message).toContain("Label suggestion:");
 		expect(message).toContain("Do not create labels");
 	});
