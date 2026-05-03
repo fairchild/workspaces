@@ -334,10 +334,15 @@ For testing or when CI isn't available.
    mask release near-prod
    ```
 
-4. **Upload to GitHub**
+4. **Exceptional Manual Upload**
+
+   The normal publication path is still the protected GitHub Actions release
+   workflow. Use direct `gh release create` only when intentionally bypassing
+   automation, such as an incident recovery where signed/notarized artifacts
+   already exist and the workflow cannot publish them.
 
    ```bash
-   # Create release with GitHub CLI
+   # Exceptional recovery only: publish already-built release assets directly.
    gh release create v0.3.1 \
        --title "WorkSpaces v0.3.1" \
        --notes "Release notes here" \
