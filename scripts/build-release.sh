@@ -372,6 +372,16 @@ verify_sparkle_bundle_linkage() {
     fi
 }
 
+sign_framework_nested_code() {
+    local framework_path="$1"
+    local sparkle_autoupdate="$framework_path/Versions/B/Autoupdate"
+
+    if [[ -x "$sparkle_autoupdate" ]]; then
+        codesign_with_identity "$sparkle_autoupdate"
+        log_success "Signed Sparkle Autoupdate helper"
+    fi
+}
+
 for arg in "$@"; do
     case "$arg" in
         --no-sign)
@@ -515,6 +525,7 @@ if [[ "$SIGN_APP" == true ]] && [[ -n "${SIGNING_IDENTITY:-}" ]]; then
         local_framework=""
         shopt -s nullglob
         for local_framework in "$APP_BUNDLE/Contents/Frameworks"/*; do
+            sign_framework_nested_code "$local_framework"
             codesign_with_identity "$local_framework"
         done
         shopt -u nullglob

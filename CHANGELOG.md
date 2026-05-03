@@ -9,6 +9,7 @@
 ### Fixed
 - release: skip perf parity when runner has no foreground GUI session (#389)
 - release: harden codesign against errSecInternalComponent (#388)
+- release: sign Sparkle Autoupdate helper for Developer ID builds
 
 ### Other
 - add notarization preflight step before heavy build work (#399)
