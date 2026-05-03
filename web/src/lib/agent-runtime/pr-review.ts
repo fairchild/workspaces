@@ -71,6 +71,9 @@ Keep the decision banner to one sentence and no more than 140 characters. It sho
 - Include a short \`## Project Thread\` section that references at least one previous PR by number and explains the relationship when previous PR context is available
 - In \`## Project Thread\`, include a short label rationale when you apply or suggest labels: \`Inherited label applied:\`, \`Existing label applied:\`, or \`Label suggestion:\`
 - If you notice a distinct dimension of work that deserves a repo label, suggest it as a brief \`Label suggestion:\` trailer at the end of \`## Project Thread\`; prefer reusing or consolidating labels over increasing label count
+- Include a required \`## Evidence\` section that judges whether the PR has enough verification evidence for the risk and surface area of the change
+- In \`## Evidence\`, confirm sufficient provided evidence, explain why no evidence is acceptable for docs-only/config-only/non-testable changes, or request changes when evidence is missing or insufficient
+- If evidence is missing or insufficient for a code, UI, behavioral, or risky change, post \`REQUEST_CHANGES\` and include a concrete example of evidence that would satisfy the review
 - Use bullet points and code blocks
 - Cite \`file:line\` for every comment
 - Skip nits unless they materially affect correctness or readability
@@ -91,12 +94,15 @@ const TOOLS = [
 const GITHUB_API = "https://api.github.com";
 const RECENT_DESCRIPTION_COUNT = 3;
 const RELATIONSHIP_CANDIDATE_COUNT = 5;
+const EVIDENCE_COMMENT_COUNT = 20;
 const BODY_TRUNCATE_LENGTH = 1200;
+const CURRENT_PR_BODY_TRUNCATE_LENGTH = 6000;
 
 export interface PrReviewPayload {
 	number: number;
 	title: string;
 	htmlUrl: string;
+	body: string;
 	headRef: string;
 	baseRef: string;
 	repoUrl: string;
@@ -131,6 +137,18 @@ export interface PrNarrativeContext {
 	labelInventoryUnavailableReason?: string;
 }
 
+export interface PrEvidenceComment {
+	author: string;
+	url: string;
+	createdAt: string;
+	body: string;
+}
+
+export interface PrEvidenceContext {
+	comments: PrEvidenceComment[];
+	unavailableReason?: string;
+}
+
 interface GitHubPullRequest {
 	number: number;
 	title: string | null;
@@ -150,6 +168,13 @@ interface GitHubLabel {
 }
 
 interface GitHubReview {
+	user?: { login?: string | null } | null;
+}
+
+interface GitHubIssueComment {
+	body: string | null;
+	html_url: string | null;
+	created_at: string | null;
 	user?: { login?: string | null } | null;
 }
 
@@ -180,9 +205,9 @@ async function resolveGitHubToken(): Promise<string | null> {
 	return process.env.GITHUB_TOKEN ?? null;
 }
 
-function truncateBody(body: string): string {
-	if (body.length <= BODY_TRUNCATE_LENGTH) return body;
-	return `${body.slice(0, BODY_TRUNCATE_LENGTH).trimEnd()}\n...[truncated]`;
+function truncateBody(body: string, maxLength = BODY_TRUNCATE_LENGTH): string {
+	if (body.length <= maxLength) return body;
+	return `${body.slice(0, maxLength).trimEnd()}\n...[truncated]`;
 }
 
 function toPrContextItem(pr: GitHubPullRequest): PrContextItem {
@@ -226,6 +251,15 @@ function toPrLabelItem(label: GitHubLabel): PrLabelItem | null {
 		name,
 		description: label.description?.trim() ?? "",
 		color: label.color?.trim() ?? "",
+	};
+}
+
+function toPrEvidenceComment(comment: GitHubIssueComment): PrEvidenceComment {
+	return {
+		author: comment.user?.login?.trim() ?? "",
+		url: comment.html_url ?? "",
+		createdAt: comment.created_at ?? "",
+		body: truncateBody(comment.body ?? ""),
 	};
 }
 
@@ -325,6 +359,43 @@ export async function fetchPrNarrativeContext(
 	}
 }
 
+export async function fetchPrEvidenceContext(
+	githubToken: string,
+	payload: PrReviewPayload,
+): Promise<PrEvidenceContext> {
+	const [owner, repo] = payload.repoFullName.split("/");
+	if (!owner || !repo) {
+		return {
+			comments: [],
+			unavailableReason: "Repository owner/name was unavailable.",
+		};
+	}
+
+	const commentsUrl = `${GITHUB_API}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/${payload.number}/comments?per_page=100`;
+	try {
+		const comments = (
+			await fetchGitHubJson<GitHubIssueComment[]>(commentsUrl, githubToken)
+		)
+			.map(toPrEvidenceComment)
+			.filter(
+				(comment) =>
+					comment.body.trim() ||
+					comment.author ||
+					comment.url ||
+					comment.createdAt,
+			)
+			.slice(-EVIDENCE_COMMENT_COUNT);
+		return { comments };
+	} catch (err) {
+		const reason = err instanceof Error ? err.message : String(err);
+		console.warn("[pr-review] evidence comments unavailable:", reason);
+		return {
+			comments: [],
+			unavailableReason: reason,
+		};
+	}
+}
+
 function formatPrContextItem(item: PrContextItem): string {
 	const description = item.body.trim() || "(no description)";
 	return `- PR #${item.number}: ${item.title}
@@ -380,6 +451,37 @@ Repository label inventory:
 ${labelInventory}`;
 }
 
+function formatPrDescription(body: string): string {
+	const description = truncateBody(
+		body,
+		CURRENT_PR_BODY_TRUNCATE_LENGTH,
+	).trim();
+	return description || "(no PR description provided)";
+}
+
+function formatPrEvidenceComment(comment: PrEvidenceComment): string {
+	const body = comment.body.trim() || "(empty comment)";
+	return `- ${comment.author || "unknown"} at ${comment.createdAt || "(unknown date)"}
+  URL: ${comment.url || "(no URL)"}
+  Comment:
+${body
+	.split("\n")
+	.map((line) => `    ${line}`)
+	.join("\n")}`;
+}
+
+export function formatPrEvidenceContext(context: PrEvidenceContext): string {
+	if (context.unavailableReason) {
+		return `PR comments unavailable: ${context.unavailableReason}`;
+	}
+
+	if (context.comments.length === 0) {
+		return "No PR comments were available.";
+	}
+
+	return context.comments.map(formatPrEvidenceComment).join("\n\n");
+}
+
 /**
  * Fire-and-forget: creates a Managed Agents session that reviews the PR
  * and posts a review via the GitHub API. Returns the session ID,
@@ -399,7 +501,10 @@ export async function triggerPrReview(
 		return null;
 	}
 
-	const narrativeContext = await fetchPrNarrativeContext(githubToken, payload);
+	const [narrativeContext, evidenceContext] = await Promise.all([
+		fetchPrNarrativeContext(githubToken, payload),
+		fetchPrEvidenceContext(githubToken, payload),
+	]);
 	const client = new Anthropic({ apiKey });
 	const model = process.env.PR_REVIEWER_MODEL ?? "claude-opus-4-6";
 
@@ -469,8 +574,14 @@ Head branch: ${payload.headRef}
 Base branch: ${payload.baseRef}
 Repo mounted at: ${mountPath}
 
+Current PR description:
+${formatPrDescription(payload.body)}
+
 Previous PR narrative context:
 ${formatPrNarrativeContext(narrativeContext)}
+
+Recent PR comments for evidence context:
+${formatPrEvidenceContext(evidenceContext)}
 
 GitHub API endpoint for posting the review:
 POST https://api.github.com/repos/${owner}/${repo}/pulls/${payload.number}/reviews
@@ -478,10 +589,15 @@ POST https://api.github.com/repos/${owner}/${repo}/pulls/${payload.number}/revie
 GitHub API endpoint for applying labels when you are highly confident an existing repository label applies:
 POST https://api.github.com/repos/${owner}/${repo}/issues/${payload.number}/labels
 
+GitHub API endpoint for reading PR comments if you need to re-check evidence after inspecting the diff:
+GET https://api.github.com/repos/${owner}/${repo}/issues/${payload.number}/comments
+
 Use the same token fallback for label application that you use for posting reviews:
 \`TOKEN=$(cat /workspace/.github-token 2>/dev/null || cat /mnt/session/uploads/workspace/.github-token 2>/dev/null)\`
 
 Read the diff against ${payload.baseRef}, explore the surrounding code, run swift build and swift test if the project supports them, then post the review using the GitHub API with the token at /workspace/.github-token or /mnt/session/uploads/workspace/.github-token.
+
+Your review must include a short "## Evidence" section. Judge whether the PR has enough evidence for the actual risk and surface area of the diff. Use the PR description, evidence links, checklist state, and PR comments as evidence inputs; treat bot reminders as prompts to inspect evidence, not as proof. Confirm sufficient provided evidence when it is adequate. If no evidence is provided, say whether that is acceptable and why; this should only be acceptable for docs-only, config-only, or genuinely non-testable changes. If evidence is missing or insufficient for a code, UI, behavioral, or risky change, post REQUEST_CHANGES and give a concrete example of acceptable evidence, such as an uploaded test-output artifact, an exact-commit screenshot or recording, or a checked "Not a testable change" rationale for docs-only/config-only work.
 
 Your review must include a short "## Project Thread" section. Reference at least one previous PR by number and explain how this PR relates to it when previous PR context is available. If one of the first 3 relationship candidates is clearly related, use it. If none are clearly related, inspect up to 5 candidates and reference the most clearly related one. If no previous PR exists or the previous PR context is unavailable, say that explicitly instead of inventing a relationship.
 

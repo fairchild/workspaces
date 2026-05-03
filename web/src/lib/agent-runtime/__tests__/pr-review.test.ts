@@ -35,7 +35,9 @@ vi.stubGlobal("fetch", mocks.fetch);
 
 import {
 	type PrReviewPayload,
+	fetchPrEvidenceContext,
 	fetchPrNarrativeContext,
+	formatPrEvidenceContext,
 	formatPrNarrativeContext,
 	triggerPrReview,
 } from "../pr-review";
@@ -45,6 +47,12 @@ function payload(overrides: Partial<PrReviewPayload> = {}): PrReviewPayload {
 		number: 9,
 		title: "Add narrative review context",
 		htmlUrl: "https://github.com/fairchild/workspaces/pull/9",
+		body: `## Summary
+Adds narrative review context.
+
+## Evidence
+- [x] Test evidence attached (Playwright report, test output, or equivalent)
+- https://evidence.cloudcompute.com/pr-9.png`,
 		headRef: "feature/pr-narrative",
 		baseRef: "main",
 		repoUrl: "https://github.com/fairchild/workspaces",
@@ -77,6 +85,19 @@ function githubLabel(name: string, description = "") {
 	};
 }
 
+function githubIssueComment(
+	body: string,
+	overrides: Record<string, unknown> = {},
+) {
+	return {
+		body,
+		html_url: "https://github.com/fairchild/workspaces/pull/9#issuecomment-1",
+		created_at: "2026-05-03T12:00:00Z",
+		user: { login: "fairchild" },
+		...overrides,
+	};
+}
+
 function mockPrList(prs: unknown[]) {
 	mockNarrativeFetch({ prs });
 }
@@ -85,12 +106,16 @@ function mockNarrativeFetch({
 	prs,
 	labels = [],
 	reviewedPrs = [],
+	comments = [],
 	failLabels = false,
+	failComments = false,
 }: {
 	prs: unknown[];
 	labels?: unknown[];
 	reviewedPrs?: number[];
+	comments?: unknown[];
 	failLabels?: boolean;
+	failComments?: boolean;
 }) {
 	mocks.fetch.mockImplementation(async (url: string) => {
 		if (url.includes("/pulls?")) {
@@ -111,6 +136,20 @@ function mockNarrativeFetch({
 			return {
 				ok: true,
 				json: async () => labels,
+			};
+		}
+
+		if (url.includes("/issues/9/comments?")) {
+			if (failComments) {
+				return {
+					ok: false,
+					status: 503,
+					json: async () => ({ message: "unavailable" }),
+				};
+			}
+			return {
+				ok: true,
+				json: async () => comments,
 			};
 		}
 
@@ -154,6 +193,67 @@ beforeEach(() => {
 afterEach(() => {
 	vi.unstubAllEnvs();
 	vi.restoreAllMocks();
+});
+
+describe("fetchPrEvidenceContext", () => {
+	it("returns recent PR comments for evidence judgement", async () => {
+		mockNarrativeFetch({
+			prs: [githubPr(9), githubPr(8)],
+			comments: [
+				githubIssueComment(
+					"Evidence: https://evidence.cloudcompute.com/pr-9-check.png",
+				),
+			],
+		});
+
+		const context = await fetchPrEvidenceContext("ghp_test", payload());
+
+		expect(context).toEqual({
+			comments: [
+				{
+					author: "fairchild",
+					url: "https://github.com/fairchild/workspaces/pull/9#issuecomment-1",
+					createdAt: "2026-05-03T12:00:00Z",
+					body: "Evidence: https://evidence.cloudcompute.com/pr-9-check.png",
+				},
+			],
+		});
+	});
+
+	it("continues when evidence comments are unavailable", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		mockNarrativeFetch({
+			prs: [githubPr(9), githubPr(8)],
+			failComments: true,
+		});
+
+		const context = await fetchPrEvidenceContext("ghp_test", payload());
+
+		expect(context).toEqual({
+			comments: [],
+			unavailableReason: "GitHub API 503",
+		});
+		expect(warn).toHaveBeenCalledWith(
+			"[pr-review] evidence comments unavailable:",
+			"GitHub API 503",
+		);
+	});
+
+	it("formats evidence context comments", () => {
+		const context = formatPrEvidenceContext({
+			comments: [
+				{
+					author: "github-actions[bot]",
+					url: "https://github.com/fairchild/workspaces/pull/9#issuecomment-2",
+					createdAt: "2026-05-03T12:15:00Z",
+					body: "Evidence reminder — missing uploaded evidence.",
+				},
+			],
+		});
+
+		expect(context).toContain("github-actions[bot] at 2026-05-03T12:15:00Z");
+		expect(context).toContain("Evidence reminder — missing uploaded evidence.");
+	});
 });
 
 describe("fetchPrNarrativeContext", () => {
@@ -359,6 +459,71 @@ describe("triggerPrReview", () => {
 		expect(message).toContain("- documentation — Documentation changes");
 		expect(message).toContain("## Project Thread");
 		expect(message).toContain("Reference at least one previous PR by number");
+	});
+
+	it("sends current PR evidence context and evidence judgement instructions in the kickoff message", async () => {
+		mockNarrativeFetch({
+			prs: [githubPr(9), githubPr(8)],
+			comments: [
+				githubIssueComment(
+					"Evidence: https://evidence.cloudcompute.com/pr-9-check.png",
+				),
+			],
+		});
+
+		await expect(triggerPrReview(payload())).resolves.toBe("sesn_01");
+
+		const [, agentConfig] = mocks.getOrCreateAgent.mock.calls[0];
+		const prompt = agentConfig.systemPrompt;
+		expect(prompt).toContain("## Evidence");
+		expect(prompt).toContain("post `REQUEST_CHANGES`");
+		expect(prompt).toContain("concrete example of evidence");
+
+		const [, params] = mocks.sendEvent.mock.calls[0];
+		const message = params.events[0].content[0].text;
+		expect(message).toContain("Current PR description:");
+		expect(message).toContain("Adds narrative review context.");
+		expect(message).toContain("Recent PR comments for evidence context:");
+		expect(message).toContain(
+			"Evidence: https://evidence.cloudcompute.com/pr-9-check.png",
+		);
+		expect(message).toContain(
+			"GET https://api.github.com/repos/fairchild/workspaces/issues/9/comments",
+		);
+		expect(message).toContain(
+			'Your review must include a short "## Evidence" section',
+		);
+		expect(message).toContain("Confirm sufficient provided evidence");
+		expect(message).toContain(
+			"If no evidence is provided, say whether that is acceptable",
+		);
+		expect(message).toContain("post REQUEST_CHANGES");
+		expect(message).toContain("concrete example of acceptable evidence");
+		expect(message).toContain("bot reminders as prompts to inspect evidence");
+	});
+
+	it("keeps the PR template evidence section visible when the body is long", async () => {
+		mockNarrativeFetch({
+			prs: [githubPr(9), githubPr(8)],
+		});
+
+		await expect(
+			triggerPrReview(
+				payload({
+					body: `${"Long summary line.\n".repeat(90)}
+## Evidence
+- [x] Test evidence attached (Playwright report, test output, or equivalent)
+- https://evidence.cloudcompute.com/pr-9-check.png`,
+				}),
+			),
+		).resolves.toBe("sesn_01");
+
+		const [, params] = mocks.sendEvent.mock.calls[0];
+		const message = params.events[0].content[0].text;
+		expect(message).toContain("## Evidence");
+		expect(message).toContain(
+			"https://evidence.cloudcompute.com/pr-9-check.png",
+		);
 	});
 
 	it("instructs the reviewer to apply high-confidence related labels and suggest label opportunities", async () => {
