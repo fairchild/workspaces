@@ -1,0 +1,4 @@
+name = "WorkSpaces"
+
+[setup]
+script = "./scripts/setup"

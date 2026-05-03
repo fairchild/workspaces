@@ -24,8 +24,18 @@ link_env_from_main() {
 }
 link_env_from_main
 
-# Trust and install mise-managed tools
-[[ -f .mise.toml ]] && mise trust && mise install
+# Trust and install mise-managed tools. Codex worktrees run setup without an
+# interactive terminal, so trust every checked-in project config up front.
+while IFS= read -r mise_config; do
+  echo "=> Trusting mise config ${mise_config#$REPO_ROOT/}"
+  mise trust "$mise_config"
+done < <(
+  find "$REPO_ROOT" \
+    -path "*/.git" -prune -o \
+    -path "*/node_modules" -prune -o \
+    -name ".mise.toml" -print | sort
+)
+[[ -f .mise.toml ]] && mise install
 
 # Install dependencies per lockfile
 install_deps() {
