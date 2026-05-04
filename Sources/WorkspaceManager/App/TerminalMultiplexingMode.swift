@@ -5,7 +5,7 @@
 
 import Foundation
 
-enum TerminalMultiplexingMode: String, CaseIterable, Identifiable {
+enum TerminalMultiplexingMode: String, CaseIterable, Identifiable, Codable {
     case ghosttyManagedSplits = "ghostty_managed_splits"
     case tmuxPerSession = "tmux_per_session"
 

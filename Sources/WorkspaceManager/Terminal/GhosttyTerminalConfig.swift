@@ -136,7 +136,7 @@ struct GhosttyTerminalConfig {
         return false
     }
 
-    private static func tmuxSessionName(for directory: URL) -> String {
+    static func tmuxSessionName(for directory: URL) -> String {
         let normalizedPath = directory
             .standardizedFileURL
             .resolvingSymlinksInPath()
