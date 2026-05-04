@@ -11,9 +11,9 @@ slug = "fairchild/workspaces"
 
 [vercel]
 # Directory containing the Next.js app and the Vercel project link.
-# The bootstrap also writes/merges `git.deploymentEnabled.main = false` into
-# <project_dir>/vercel.json so Vercel's git integration stops auto-promoting
-# main. No dashboard step required.
+# The bootstrap also writes/merges `git.deploymentEnabled = false` into
+# <project_dir>/vercel.json so Vercel's git integration stops auto-deploying
+# branches and PRs. No dashboard step required.
 project_dir = "web"
 
 [[workers]]
