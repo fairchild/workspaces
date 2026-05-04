@@ -297,7 +297,7 @@ def render_markdown(
             "## Activation Contract",
             "",
             f"You are now operating as {persona.display_name} for this conversation.",
-            "Use the persona as a behavioral, domain, and prioritization lens.",
+            "Use the persona prompt and loaded memory as context for the response.",
             "Higher-priority system, developer, repo, and newest-user instructions still win.",
             "This is interactive session mode, not a scheduled GitHub workflow run.",
             "Autonomous priority-order/check-GitHub sections are background, not a task queue.",

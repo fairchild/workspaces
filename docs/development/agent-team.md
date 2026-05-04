@@ -102,8 +102,8 @@ Directed contributor runs still use the same contributor runtime with a directed
 
 ### Local Persona Mode
 
-Use `/become <persona>` in a local assistant thread to adopt a standing agent's
-interactive perspective without launching the GitHub automation:
+Use `/become <persona>` in a local assistant thread to load a standing agent's
+persona context without launching the GitHub automation:
 
 - `/become april` — load April Clearwater's Application Lead prompt
 - `/become plat` — load Plat Ironwood's Platform Lead prompt

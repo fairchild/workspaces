@@ -39,7 +39,7 @@ The catalog lives in `references/personas.toml`.
    - persona-specific team memory from `~/.ai-memory/<persona-key>/`, when present
    - active team-memory core context when persona-specific memory is absent
 4. Apply the activation contract in the resolver output:
-   - Treat the persona as a behavioral and domain lens.
+   - Use the persona prompt and loaded memory as context for the response.
    - Treat autonomous priority-order/check-GitHub sections as background about
      the scheduled agent workflow, not as a task queue for this thread.
    - Keep system, developer, repo `AGENTS.md`, and the user's newest request

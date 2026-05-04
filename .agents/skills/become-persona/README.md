@@ -7,8 +7,7 @@ april`, `/become plat`, and `/become peter`.
 This is not the scheduled GitHub automation path. It does not claim issues,
 open PRs, post discussion comments, or run the contributor/planner runtimes by
 itself. It only loads the persona prompt and relevant memory context, preferably
-from `team-memory` when available, so the current interactive thread can answer
-from that perspective.
+from `team-memory` when available, for the current interactive thread.
 
 ## Why this exists
 
@@ -64,9 +63,9 @@ the command/skill flow is:
    - persona team memory from `~/.ai-memory/<persona-key>/` or
      `~/.ai-memory/profiles/<persona-key>/`
    - active team-memory core context when persona-specific memory is absent
-7. Render an activation contract that tells the assistant to use the persona as
-   a lens while keeping system, developer, repo, and newest-user instructions
-   higher priority.
+7. Render an activation contract that tells the assistant to use the persona
+   prompt and memory as context while keeping system, developer, repo, and
+   newest-user instructions higher priority.
 
 ## Resolver usage
 
