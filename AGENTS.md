@@ -33,7 +33,7 @@ When changing terminal/keyboard/sidebar behavior, use this loop so future sessio
 4. Distinguish the debug app from the installed app:
    - debug launches set `WORKSPACES_APP_VARIANT=dev`
    - the debug app shows a `DEV` Dock badge and `Development Build` window subtitle
-   - if both apps are running, kill `/Applications/WorkspaceManager.app` before testing
+   - if both apps are running, kill `/Applications/WorkSpaces.app` before testing
 5. Verify shortcut behavior:
    - `Cmd+B` toggles left sidebar
    - `Cmd+D` creates a visible right split for the focused terminal
@@ -81,7 +81,7 @@ For real-host Lume validation:
    - standalone validated bases live under `~/Library/Application Support/WorkspaceManager/LumeStorage/validated-bases`
    - app-created workspace VMs live under `~/Library/Application Support/WorkspaceManager/LumeStorage/workspace-vms`
    - only the standalone validator may mark a base ready, via `~/Library/Application Support/WorkspaceManager/LumeValidatedBases/<vmName>.json`
-6. Workspaces-owned unattended overrides for stock base prep live under:
+6. WorkSpaces-owned unattended overrides for stock base prep live under:
    - `config/lume/unattended/`
    - current default NAT Tahoe override: `config/lume/unattended/tahoe-workspaces-v26.yml`
    - bridged Tahoe diagnostics override: `config/lume/unattended/tahoe-workspaces-bridged-v27.yml`
@@ -89,7 +89,7 @@ For real-host Lume validation:
 7. Upstream Lume local-testing note:
    - do not point the standalone validator at raw `libs/lume/.build/debug/lume`
    - for local upstream validation, use `libs/lume/scripts/install-local.sh` into an isolated install dir and point `LUME_BIN` at that installed binary
-   - `install-local.sh --no-background-service` unloads the current `com.trycua.lume_daemon` LaunchAgent during cleanup, so restart the daemon manually or reinstall the LaunchAgent before normal Workspaces validation
+   - `install-local.sh --no-background-service` unloads the current `com.trycua.lume_daemon` LaunchAgent during cleanup, so restart the daemon manually or reinstall the LaunchAgent before normal WorkSpaces validation
 8. Canonical Lume docs:
    - `docs/development/lume-integration.md`
    - `docs/development/lume-validation.md`

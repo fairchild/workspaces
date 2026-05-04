@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for contributing to Workspaces.
+Thanks for contributing to WorkSpaces.
 
 ## Prerequisites
 
@@ -76,7 +76,7 @@ Useful options:
 ```bash
 ./scripts/install-local.sh --no-build --no-open
 ./scripts/install-local.sh --signed
-./scripts/install-local.sh --dest ~/Applications/WorkspaceManager.app
+./scripts/install-local.sh --dest ~/Applications/WorkSpaces.app
 ./scripts/install-local.sh --cli-link ~/.local/bin/workspaces
 ```
 

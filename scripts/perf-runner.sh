@@ -30,7 +30,7 @@ EOF
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 SCENARIO=""
-APP_PATH="/Applications/WorkspaceManager.app/Contents/MacOS/WorkspaceManager"
+APP_PATH="/Applications/WorkSpaces.app/Contents/MacOS/WorkspaceManager"
 RUNS=5
 SLEEP_SECONDS=8
 CAPTURE_SECONDS=12

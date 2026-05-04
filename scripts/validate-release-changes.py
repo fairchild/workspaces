@@ -20,6 +20,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 RELEASE_PATHS = {
     ".github/workflows/release.yml",
     "scripts/build-release.sh",
+    "scripts/generate-sparkle-appcast.sh",
+    "scripts/install-local.sh",
     "scripts/notarize.sh",
     "scripts/prepare-release.sh",
     "scripts/release-preflight.sh",

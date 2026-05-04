@@ -228,10 +228,10 @@ jobs:
         run: ./scripts/build-release.sh
 
       - name: Verify signed app bundle
-        run: ./scripts/verify-release-bundle.sh build/WorkspaceManager.app
+        run: ./scripts/verify-release-bundle.sh build/WorkSpaces.app
 
       - name: Verify installed-build perf parity
-        run: ./scripts/verify-installed-perf.sh --allow-skip-noninteractive build/WorkspaceManager.app build/release-installed-perf
+        run: ./scripts/verify-installed-perf.sh --allow-skip-noninteractive build/WorkSpaces.app build/release-installed-perf
 
       - name: Upload installed-build perf verification artifact
         if: always()
@@ -265,7 +265,7 @@ jobs:
               TAG="workspaces-v${VERSION}-main.${GITHUB_RUN_NUMBER}"
             fi
           fi
-          DMG_PATH="build/WorkspaceManager-${VERSION}.dmg"
+          DMG_PATH="build/WorkSpaces-${VERSION}.dmg"
           APPCAST_PATH="build/appcast.xml"
 
           if [[ ! -f "$DMG_PATH" ]]; then
@@ -296,7 +296,7 @@ jobs:
           name: release-assets-${{ github.run_id }}
           path: |
             ${{ steps.meta.outputs.dmg_path }}
-            build/WorkspaceManager-latest.dmg
+            build/WorkSpaces-latest.dmg
             ${{ steps.meta.outputs.appcast_path }}
           if-no-files-found: error
           retention-days: 7
@@ -346,10 +346,10 @@ jobs:
 
           TAG="${{ needs.build-sign-notarize-release.outputs.tag }}"
           VERSION="${{ needs.build-sign-notarize-release.outputs.version }}"
-          TITLE="Workspaces ${TAG}"
-          DMG_PATH="$(find release-assets -type f -name "WorkspaceManager-${VERSION}.dmg" -print -quit)"
+          TITLE="WorkSpaces ${TAG}"
+          DMG_PATH="$(find release-assets -type f -name "WorkSpaces-${VERSION}.dmg" -print -quit)"
           APPCAST_PATH="$(find release-assets -type f -name "appcast.xml" -print -quit)"
-          LATEST_DMG_PATH="$(find release-assets -type f -name "WorkspaceManager-latest.dmg" -print -quit)"
+          LATEST_DMG_PATH="$(find release-assets -type f -name "WorkSpaces-latest.dmg" -print -quit)"
           GENERATED_NOTES_PATH="$RUNNER_TEMP/release-notes.md"
           IS_PRERELEASE=false
 

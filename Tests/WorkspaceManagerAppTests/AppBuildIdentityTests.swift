@@ -30,10 +30,10 @@ struct AppBuildIdentityTests {
     @Test("Installed app stays unbadged outside debug builds")
     func installedAppStaysUnbadged() {
         let bundleURL = URL(
-            fileURLWithPath: "/Applications/WorkspaceManager.app"
+            fileURLWithPath: "/Applications/WorkSpaces.app"
         )
         let executableURL = URL(
-            fileURLWithPath: "/Applications/WorkspaceManager.app/Contents/MacOS/WorkspaceManager"
+            fileURLWithPath: "/Applications/WorkSpaces.app/Contents/MacOS/WorkspaceManager"
         )
 
         let identity = AppBuildIdentity.resolve(

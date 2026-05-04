@@ -1,5 +1,5 @@
 #!/bin/bash
-# Launch the installed WorkspaceManager app with diagnostics-friendly env vars.
+# Launch the installed WorkSpaces app with diagnostics-friendly env vars.
 
 set -euo pipefail
 
@@ -25,11 +25,11 @@ Defaults:
   - leaves input diagnostics off unless explicitly requested
   - disables repo auto-import to reduce unrelated startup noise
   - launches the installed app at:
-    /Applications/WorkspaceManager.app/Contents/MacOS/WorkspaceManager
+    /Applications/WorkSpaces.app/Contents/MacOS/WorkspaceManager
 EOF
 }
 
-APP_PATH="/Applications/WorkspaceManager.app/Contents/MacOS/WorkspaceManager"
+APP_PATH="/Applications/WorkSpaces.app/Contents/MacOS/WorkspaceManager"
 LOG_FILE="/tmp/workspaces-installed-diagnostics-$(date +%Y%m%d-%H%M%S).log"
 SHELL_MODE=""
 NO_ACTIVATE=0

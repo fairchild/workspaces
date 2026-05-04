@@ -10,7 +10,7 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 PLIST_BUDDY="/usr/libexec/PlistBuddy"
 
 DMG_PATH=""
-APP_BUNDLE="$PROJECT_DIR/build/WorkspaceManager.app"
+APP_BUNDLE="$PROJECT_DIR/build/WorkSpaces.app"
 OUTPUT_PATH="$PROJECT_DIR/build/appcast.xml"
 REPO="${GITHUB_REPOSITORY:-fairchild/workspaces}"
 TAG=""
@@ -21,7 +21,7 @@ Usage:
   scripts/generate-sparkle-appcast.sh --dmg <path> --tag <tag> [options]
 
 Options:
-  --app <path>       App bundle used for version metadata (default: build/WorkspaceManager.app)
+  --app <path>       App bundle used for version metadata (default: build/WorkSpaces.app)
   --output <path>    Output appcast path (default: build/appcast.xml)
   --repo <owner/repo> GitHub repository for release asset URLs (default: GITHUB_REPOSITORY or fairchild/workspaces)
   --help            Show this help

@@ -27,11 +27,21 @@ class ValidateReleaseChangesTests(unittest.TestCase):
             [
                 "README.md",
                 ".github/workflows/release.yml",
+                "scripts/generate-sparkle-appcast.sh",
+                "scripts/install-local.sh",
                 "scripts/notarize.sh",
                 "scripts/unrelated.sh",
             ]
         )
-        self.assertEqual(files, [".github/workflows/release.yml", "scripts/notarize.sh"])
+        self.assertEqual(
+            files,
+            [
+                ".github/workflows/release.yml",
+                "scripts/generate-sparkle-appcast.sh",
+                "scripts/install-local.sh",
+                "scripts/notarize.sh",
+            ],
+        )
 
     def test_no_release_files_returns_empty(self) -> None:
         self.assertEqual(validate_release_changes.release_files(["README.md"]), [])

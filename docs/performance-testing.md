@@ -119,10 +119,10 @@ The dedicated GitHub Actions workflow is `.github/workflows/perf-validation.yml`
 Use the canonical installed-build wrapper when validating packaged or installed apps:
 
 ```bash
-./scripts/perf-runner.sh --scenario installed_clean_shell --app /Applications/WorkspaceManager.app/Contents/MacOS/WorkspaceManager
-./scripts/perf-runner.sh --scenario installed_login_shell --app /Applications/WorkspaceManager.app/Contents/MacOS/WorkspaceManager
+./scripts/perf-runner.sh --scenario installed_clean_shell --app /Applications/WorkSpaces.app/Contents/MacOS/WorkspaceManager
+./scripts/perf-runner.sh --scenario installed_login_shell --app /Applications/WorkSpaces.app/Contents/MacOS/WorkspaceManager
 ./scripts/perf-runner.sh --scenario installed_input_short_capture --capture-seconds 15
-./scripts/verify-installed-perf.sh build/WorkspaceManager.app
+./scripts/verify-installed-perf.sh build/WorkSpaces.app
 ```
 
 These runs use the same summary schema as the debug baseline, so before/after comparisons can flow through `./scripts/perf-compare.py`.

@@ -43,7 +43,7 @@ struct SparkleAppcastScriptTests {
         #expect(xml.contains("<sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>"))
         let dmgURL =
             "https://github.com/fairchild/workspaces/releases/download/v9.9.9/"
-            + "WorkspaceManager-9.9.9.dmg"
+            + "WorkSpaces-9.9.9.dmg"
         #expect(xml.contains(dmgURL))
         #expect(xml.contains("sparkle:edSignature="))
         #expect(xml.contains("length=\"4\""))
@@ -52,9 +52,9 @@ struct SparkleAppcastScriptTests {
     private func makeFixture() throws -> (app: URL, dmg: URL, output: URL) {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("SparkleAppcastScriptTests-\(UUID().uuidString)", isDirectory: true)
-        let app = root.appendingPathComponent("WorkspaceManager.app", isDirectory: true)
+        let app = root.appendingPathComponent("WorkSpaces.app", isDirectory: true)
         let contents = app.appendingPathComponent("Contents", isDirectory: true)
-        let dmg = root.appendingPathComponent("WorkspaceManager-9.9.9.dmg")
+        let dmg = root.appendingPathComponent("WorkSpaces-9.9.9.dmg")
         let output = root.appendingPathComponent("appcast.xml")
 
         try FileManager.default.createDirectory(at: contents, withIntermediateDirectories: true)
