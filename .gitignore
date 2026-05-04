@@ -6,6 +6,8 @@ DerivedData/
 
 # Xcode
 *.xcodeproj/
+!WorkSpacesCloudCI.xcodeproj/
+!WorkSpacesCloudCI.xcodeproj/**
 *.xcworkspace/
 xcuserdata/
 
