@@ -17,6 +17,7 @@ struct WorkspaceManagerApp: App {
     @StateObject private var appCommandState: AppCommandState
     @StateObject private var modelStoreStatusController: ModelStoreStatusController
     @StateObject private var softwareUpdateController: SoftwareUpdateController
+    @StateObject private var agentSessionRegistry: AgentSessionRegistry
     private let appRuntimeDependencies = AppRuntimeDependencies.resolved()
     let sharedModelContainer: ModelContainer
 
@@ -34,7 +35,16 @@ struct WorkspaceManagerApp: App {
         _appCommandState = StateObject(wrappedValue: AppCommandState())
         _modelStoreStatusController = StateObject(wrappedValue: .shared)
         _softwareUpdateController = StateObject(wrappedValue: SoftwareUpdateController())
+        let registry = AgentSessionRegistry()
+        _agentSessionRegistry = StateObject(wrappedValue: registry)
         self.sharedModelContainer = bootstrap.container
+
+        // Stand up the hook listener and notification poster on the same registry instance.
+        // The listener binds to a Unix socket under Application Support keyed by pid.
+        // Disabled in CI to avoid cluttering the runner's filesystem.
+        if ProcessInfo.processInfo.environment["CI"] == nil {
+            ClaudeIntegrationLifecycle.shared.start(registry: registry)
+        }
     }
 
     var body: some Scene {
@@ -49,6 +59,8 @@ struct WorkspaceManagerApp: App {
                 appRuntimeDependencies.workspaceProviderRegistry
             )
             .environmentObject(modelStoreStatusController)
+            .environmentObject(agentSessionRegistry)
+            .environment(\.agentSessionRegistry, agentSessionRegistry)
             .frame(minWidth: 1000, minHeight: 700)
             .onAppear {
                 softwareUpdateController.installCheckForUpdatesMenuItem()
@@ -497,6 +509,10 @@ private struct WorkspaceProviderRegistryKey: EnvironmentKey {
     static let defaultValue = WorkspaceProviderRegistry.live
 }
 
+private struct AgentSessionRegistryKey: EnvironmentKey {
+    static let defaultValue: AgentSessionRegistry? = nil
+}
+
 extension EnvironmentValues {
     var gitService: any GitServiceProtocol {
         get { self[GitServiceKey.self] }
@@ -526,6 +542,11 @@ extension EnvironmentValues {
     var workspaceProviderRegistry: WorkspaceProviderRegistry {
         get { self[WorkspaceProviderRegistryKey.self] }
         set { self[WorkspaceProviderRegistryKey.self] = newValue }
+    }
+
+    var agentSessionRegistry: AgentSessionRegistry? {
+        get { self[AgentSessionRegistryKey.self] }
+        set { self[AgentSessionRegistryKey.self] = newValue }
     }
 }
 

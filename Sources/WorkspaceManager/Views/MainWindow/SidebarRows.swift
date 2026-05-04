@@ -18,6 +18,10 @@ enum SidebarSessionActivity: Equatable {
     case inactive
     case live
     case active
+    case thinking
+    case runningTool
+    case awaitingInput
+    case errored(category: AgentErrorCategory)
 
     init(hasLiveSession: Bool, isActiveSession: Bool) {
         if isActiveSession {
@@ -29,12 +33,36 @@ enum SidebarSessionActivity: Equatable {
         }
     }
 
+    /// Map an agent registry status to a sidebar activity. Returns `.inactive` when
+    /// the host has no registered agent status.
+    static func from(_ status: AgentSessionStatus?) -> SidebarSessionActivity {
+        guard let status else { return .inactive }
+        switch status.run {
+        case .idle:
+            return .live
+        case .thinking:
+            return .thinking
+        case .runningTool:
+            return .runningTool
+        case .awaitingInput:
+            return .awaitingInput
+        case .complete:
+            return .live
+        case .errored(let category, _):
+            return .errored(category: category)
+        }
+    }
+
     var isActive: Bool {
         self == .active
     }
 
     var hasLiveSession: Bool {
-        self != .inactive
+        switch self {
+        case .inactive: return false
+        case .live, .active, .thinking, .runningTool, .awaitingInput, .errored:
+            return true
+        }
     }
 
     var indicatorColor: Color {
@@ -45,6 +73,12 @@ enum SidebarSessionActivity: Equatable {
             return Color.accentColor.opacity(0.75)
         case .active:
             return .accentColor
+        case .thinking, .runningTool:
+            return .blue
+        case .awaitingInput:
+            return .yellow
+        case .errored:
+            return .red
         }
     }
 
@@ -70,6 +104,14 @@ enum SidebarSessionActivity: Equatable {
             return "live session"
         case .active:
             return "active session"
+        case .thinking:
+            return "agent thinking"
+        case .runningTool:
+            return "agent running tool"
+        case .awaitingInput:
+            return "agent awaiting input"
+        case .errored(let category):
+            return "agent errored (\(category.rawValue))"
         }
     }
 
