@@ -108,7 +108,7 @@ workspaces/
 
 ## CI Runner Lanes
 
-Generic lint/build/test CI runs on GitHub-hosted macOS (`macos-17`) and is path-scoped to product, test, build, and release inputs so docs, backlog, skill, and changelog-only pushes do not consume the hosted macOS queue. Self-hosted jobs must use explicit lanes: `[self-hosted, tart-ui]` for UI/perf automation and `[self-hosted, signing-host]` for release/signing/notarization. The `Perf Validation` workflow runs separately from the main CI workflow via `workflow_dispatch`, a nightly schedule, and scoped `codex/**` pushes so app-launching checks stay off the default path.
+Generic lint/build/test CI runs on GitHub-hosted macOS (`macos-15`) and is path-scoped to product, test, build, and release inputs so docs, backlog, skill, and changelog-only pushes do not consume the hosted macOS queue. Self-hosted jobs must use explicit lanes: `[self-hosted, tart-ui]` for UI/perf automation and `[self-hosted, signing-host]` for release/signing/notarization. The `Perf Validation` workflow runs separately from the main CI workflow via `workflow_dispatch`, a nightly schedule, and scoped `codex/**` pushes so app-launching checks stay off the default path.
 
 For this repo, the default self-hosted runner layout is:
 
