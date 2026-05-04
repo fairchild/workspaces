@@ -24,6 +24,8 @@ CATALOG_PATH = SKILL_ROOT / "references" / "personas.toml"
 DEFAULT_MEMORY_ROOT = Path.home() / ".ai-memory"
 DEFAULT_MAX_FILE_CHARS = 8000
 DEFAULT_MAX_TOTAL_CHARS = 32000
+PERSONA_INLINE_FILES = ("AGENTS.md", "CLAUDE.md", "personality.md", "relationship.md")
+OPTIONAL_MEMORY_DIRS = ("recall", "journal", "archival")
 
 
 @dataclass(frozen=True)
@@ -150,11 +152,6 @@ def discover_memory_files(
     if repo_memory.exists():
         required.append(MemoryFile("Repo Memory", repo_memory))
 
-    shared_dir = memory_root / "shared"
-    if shared_dir.is_dir():
-        for path in sorted(shared_dir.glob("*.md")):
-            required.append(MemoryFile("Shared Memory", path))
-
     found_persona_dir = False
     for key in persona.memory_keys:
         for directory in (memory_root / key, memory_root / "profiles" / key):
@@ -163,27 +160,77 @@ def discover_memory_files(
                 continue
 
             found_persona_dir = True
-            for name in ("personality.md", "CLAUDE.md", "relationship.md"):
-                path = directory / name
-                if path.exists():
-                    required.append(MemoryFile("Persona Memory", path))
-
-            core_dir = directory / "core"
-            if core_dir.is_dir():
-                for path in sorted(core_dir.glob("*.md")):
-                    required.append(MemoryFile("Persona Core Memory", path))
-
-            for optional_dir_name in ("recall", "journal", "archival"):
-                optional_dir = directory / optional_dir_name
-                if optional_dir.is_dir():
-                    optional.extend(sorted(optional_dir.glob("*.md")))
+            append_teammate_memory(required, optional, directory, "Persona Team Memory")
 
     if not found_persona_dir:
         # Keep the checked list in the output so setup problems are visible
         # without making the normal no-memory case fail.
         missing_dirs = sorted(set(missing_dirs))
+        active_dir = active_team_memory_dir(memory_root)
+        if active_dir is not None:
+            append_active_team_context(required, optional, active_dir)
+
+    shared_dir = memory_root / "shared"
+    if shared_dir.is_dir():
+        for path in sorted(shared_dir.glob("*.md")):
+            required.append(MemoryFile("Shared Memory", path))
 
     return tuple(required), tuple(optional), tuple(missing_dirs)
+
+
+def append_teammate_memory(
+    required: list[MemoryFile],
+    optional: list[Path],
+    directory: Path,
+    label_prefix: str,
+) -> None:
+    """Append a team-memory/persona-memory directory without assuming it exists."""
+    for name in PERSONA_INLINE_FILES:
+        path = directory / name
+        if path.exists():
+            required.append(MemoryFile(label_prefix, path))
+
+    core_dir = directory / "core"
+    if core_dir.is_dir():
+        for path in sorted(core_dir.glob("*.md")):
+            required.append(MemoryFile(f"{label_prefix} Core", path))
+
+    for optional_dir_name in OPTIONAL_MEMORY_DIRS:
+        optional_dir = directory / optional_dir_name
+        if optional_dir.is_dir():
+            optional.extend(sorted(optional_dir.glob("*.md")))
+
+
+def active_team_memory_dir(memory_root: Path) -> Path | None:
+    """Return the active team-memory teammate directory when one is configured."""
+    active = memory_root / "active"
+    try:
+        if not active.exists():
+            return None
+        resolved = active.resolve()
+    except OSError:
+        return None
+
+    if resolved.is_dir() and resolved != memory_root:
+        return resolved
+    return None
+
+
+def append_active_team_context(
+    required: list[MemoryFile],
+    optional: list[Path],
+    active_dir: Path,
+) -> None:
+    """Use active team memory as context without importing another teammate identity."""
+    core_dir = active_dir / "core"
+    if core_dir.is_dir():
+        for path in sorted(core_dir.glob("*.md")):
+            required.append(MemoryFile("Active Team Memory Core", path))
+
+    for optional_dir_name in OPTIONAL_MEMORY_DIRS:
+        optional_dir = active_dir / optional_dir_name
+        if optional_dir.is_dir():
+            optional.extend(sorted(optional_dir.glob("*.md")))
 
 
 def resolve_persona_context(

@@ -6,8 +6,9 @@ april`, `/become plat`, and `/become peter`.
 
 This is not the scheduled GitHub automation path. It does not claim issues,
 open PRs, post discussion comments, or run the contributor/planner runtimes by
-itself. It only loads the persona prompt and relevant memory context so the
-current interactive thread can answer from that perspective.
+itself. It only loads the persona prompt and relevant memory context, preferably
+from `team-memory` when available, so the current interactive thread can answer
+from that perspective.
 
 ## Why this exists
 
@@ -59,9 +60,10 @@ the command/skill flow is:
    `/become` mode should not emit scheduled-agent YAML frontmatter.
 6. Attach memory context:
    - repo memory from `.agents/MEMORY.md`
-   - shared memory from `~/.ai-memory/shared/*.md`
-   - persona memory from `~/.ai-memory/<persona-key>/` or
+   - team-memory shared memory from `~/.ai-memory/shared/*.md`
+   - persona team memory from `~/.ai-memory/<persona-key>/` or
      `~/.ai-memory/profiles/<persona-key>/`
+   - active team-memory core context when persona-specific memory is absent
 7. Render an activation contract that tells the assistant to use the persona as
    a lens while keeping system, developer, repo, and newest-user instructions
    higher priority.
@@ -92,20 +94,42 @@ Limit memory output while testing:
 uv run --script .agents/skills/become-persona/scripts/resolve_persona.py --max-total-chars 1000 peter
 ```
 
-## Memory model
+## Team-memory integration
 
 The resolver treats memory as context, not as higher-priority instructions.
 Current user intent and repo policy still win.
 
-It looks for:
+The preferred memory shape is the `team-memory` layout:
+
+```text
+~/.ai-memory/
+  active -> scout
+  shared/
+  <teammate>/
+    AGENTS.md
+    personality.md
+    relationship.md
+    core/
+    archival/
+    journal/
+```
+
+For `/become <persona>`, the resolver looks for:
 
 - `.agents/MEMORY.md`
 - `~/.ai-memory/shared/*.md`
+- `~/.ai-memory/<memory-key>/AGENTS.md`
 - `~/.ai-memory/<memory-key>/personality.md`
-- `~/.ai-memory/<memory-key>/CLAUDE.md`
 - `~/.ai-memory/<memory-key>/relationship.md`
 - `~/.ai-memory/<memory-key>/core/*.md`
 - the same files under `~/.ai-memory/profiles/<memory-key>/`
+
+It still recognizes `CLAUDE.md` for older persona-memory directories.
+
+When a persona-specific memory directory is missing, the resolver uses the
+active team-memory teammate's `core/*.md` files as general context. It does not
+inline the active teammate's `AGENTS.md`, `personality.md`, or `relationship.md`
+in that fallback path, because those files describe a different identity.
 
 Recall, journal, and archival files are listed as additional memory files but
 not inlined by default. That keeps activation output useful without dumping an
@@ -113,6 +137,10 @@ entire long-term archive into every persona switch.
 
 If no persona-specific memory exists, the resolver reports the checked paths.
 That is a setup signal, not a failure.
+
+If `~/.ai-memory` does not exist at all, the skill still succeeds with the
+repo-owned persona prompt and `.agents/MEMORY.md` when present. That keeps the
+skill portable to repos that have personas but have not adopted team-memory.
 
 ## Adding a persona
 
@@ -152,6 +180,7 @@ That is a setup signal, not a failure.
   sections as non-interactive.
 - The skill does not write memory. Remembering something should be an explicit
   user request.
+- Team-memory is opportunistic. Missing memory never blocks persona activation.
 - The activation contract prevents scheduled-agent priority queues from taking
   over the local thread.
 - The resolver is a single-file UV script with no dependencies, matching this

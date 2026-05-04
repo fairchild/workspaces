@@ -65,8 +65,13 @@ class ResolvePersonaTests(unittest.TestCase):
             (memory_root / "shared").mkdir()
             (memory_root / "shared" / "human.md").write_text("Shared note", encoding="utf-8")
             (memory_root / "april").mkdir()
+            (memory_root / "april" / "AGENTS.md").write_text("Team bootstrap", encoding="utf-8")
             (memory_root / "april" / "personality.md").write_text(
                 "April memory", encoding="utf-8"
+            )
+            (memory_root / "april" / "core").mkdir()
+            (memory_root / "april" / "core" / "pattern.md").write_text(
+                "Team core", encoding="utf-8"
             )
 
             context = resolver.resolve_persona_context(
@@ -77,8 +82,31 @@ class ResolvePersonaTests(unittest.TestCase):
             paths = {item.path.name for item in context.memory_files}
 
         self.assertIn("MEMORY.md", paths)
+        self.assertIn("AGENTS.md", paths)
         self.assertIn("human.md", paths)
         self.assertIn("personality.md", paths)
+        self.assertIn("pattern.md", paths)
+
+    def test_uses_active_team_core_when_persona_memory_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory_root = Path(tmp)
+            (memory_root / "shared").mkdir()
+            (memory_root / "shared" / "human.md").write_text("Shared note", encoding="utf-8")
+            scout = memory_root / "scout"
+            (scout / "core").mkdir(parents=True)
+            (scout / "core" / "workflow.md").write_text("Active core", encoding="utf-8")
+            (memory_root / "active").symlink_to(scout, target_is_directory=True)
+
+            context = resolver.resolve_persona_context(
+                ["april"],
+                repo_root=REPO_ROOT,
+                memory_root=memory_root,
+            )
+            memory_by_name = {item.path.name: item.label for item in context.memory_files}
+            names = [item.path.name for item in context.memory_files]
+
+        self.assertEqual(memory_by_name["workflow.md"], "Active Team Memory Core")
+        self.assertLess(names.index("workflow.md"), names.index("human.md"))
 
     def test_unknown_persona_lists_available_personas(self) -> None:
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
