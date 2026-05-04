@@ -9,10 +9,11 @@
 #   - APPLE_DEVELOPER_ID_CERT_BASE64
 #   - APPLE_DEVELOPER_ID_CERT_PASSWORD
 #   - APPLE_DEVELOPER_ID_PROVISIONING_PROFILE_BASE64
-#   - APPLE_APP_PASSWORD
+#   - APPLE_API_KEY_BASE64
+#   - APPLE_API_KEY_ID
+#   - APPLE_API_ISSUER_ID
 #
 # Variables (non-sensitive):
-#   - APPLE_ID
 #   - APPLE_TEAM_ID
 #
 # Behavior:
@@ -25,10 +26,11 @@
 # Usage (interactive):
 #   ./scripts/setup-release-secrets.sh \
 #     --p12-path ~/.config/apple/Developer_ID_Application_LKVN4J3C6C.p12 \
-#     --profile-path ~/.config/apple/workspaces.provisionprofile
+#     --profile-path ~/.config/apple/workspaces.provisionprofile \
+#     --api-key-path ~/.config/apple/AuthKey_XXXXXXXXXX.p8
 #
 # Usage (non-interactive):
-#   P12_PASSWORD='...' APPLE_ID='...' APPLE_APP_PASSWORD='...' \
+#   P12_PASSWORD='...' APPLE_API_KEY_PATH='...' APPLE_API_KEY_ID='...' APPLE_API_ISSUER_ID='...' \
 #   ./scripts/setup-release-secrets.sh \
 #     --p12-path ~/.config/apple/Developer_ID_Application_LKVN4J3C6C.p12 \
 #     --profile-path ~/.config/apple/workspaces.provisionprofile \
@@ -53,8 +55,10 @@ EXPECTED_BUNDLE_ID="com.cloudcompute.workspaces"
 P12_PATH="${P12:-$DEFAULT_P12_PATH}"
 PROFILE_PATH="${PROVISIONING_PROFILE_PATH:-$DEFAULT_PROFILE_PATH}"
 TEAM_ID="${APPLE_TEAM_ID:-$DEFAULT_TEAM_ID}"
-APPLE_ID_VALUE="${APPLE_ID:-}"
-APPLE_APP_PASSWORD_VALUE="${APPLE_APP_PASSWORD:-}"
+APPLE_API_KEY_PATH_VALUE="${APPLE_API_KEY_PATH:-}"
+APPLE_API_KEY_BASE64_VALUE="${APPLE_API_KEY_BASE64:-}"
+APPLE_API_KEY_ID_VALUE="${APPLE_API_KEY_ID:-}"
+APPLE_API_ISSUER_ID_VALUE="${APPLE_API_ISSUER_ID:-}"
 P12_PASSWORD_VALUE="${P12_PASSWORD:-}"
 
 NON_INTERACTIVE=false
@@ -71,8 +75,10 @@ Options:
   --p12-path PATH         Path to Developer ID Application .p12
   --profile-path PATH     Path to Developer ID provisioning profile
   --team-id TEAM          Apple Team ID (default: LKVN4J3C6C)
-  --apple-id EMAIL        Apple ID for notarization
-  --app-password PASS     App-specific password for notarization
+  --api-key-path PATH     Path to App Store Connect notarization .p8 key
+  --api-key-base64 VALUE  Base64-encoded App Store Connect notarization .p8 key
+  --api-key-id ID         App Store Connect API key ID
+  --api-issuer-id UUID    App Store Connect issuer ID
   --p12-password PASS     Export password used to protect the .p12
   --non-interactive       Do not prompt; fail if required values are missing
   --force                 Overwrite existing secrets/variables
@@ -82,7 +88,8 @@ Options:
   --help                  Show this help
 
 Env alternatives:
-  P12, P12_PASSWORD, PROVISIONING_PROFILE_PATH, APPLE_ID, APPLE_APP_PASSWORD, APPLE_TEAM_ID
+  P12, P12_PASSWORD, PROVISIONING_PROFILE_PATH, APPLE_API_KEY_PATH,
+  APPLE_API_KEY_BASE64, APPLE_API_KEY_ID, APPLE_API_ISSUER_ID, APPLE_TEAM_ID
 
 Defaults:
   p12 path: ~/.config/apple/Developer_ID_Application_LKVN4J3C6C.p12
@@ -193,14 +200,24 @@ while [[ $# -gt 0 ]]; do
             PROFILE_PATH="$2"
             shift 2
             ;;
-        --apple-id)
-            [[ $# -ge 2 ]] || fail "--apple-id requires a value"
-            APPLE_ID_VALUE="$2"
+        --api-key-path)
+            [[ $# -ge 2 ]] || fail "--api-key-path requires a value"
+            APPLE_API_KEY_PATH_VALUE="$2"
             shift 2
             ;;
-        --app-password)
-            [[ $# -ge 2 ]] || fail "--app-password requires a value"
-            APPLE_APP_PASSWORD_VALUE="$2"
+        --api-key-base64)
+            [[ $# -ge 2 ]] || fail "--api-key-base64 requires a value"
+            APPLE_API_KEY_BASE64_VALUE="$2"
+            shift 2
+            ;;
+        --api-key-id)
+            [[ $# -ge 2 ]] || fail "--api-key-id requires a value"
+            APPLE_API_KEY_ID_VALUE="$2"
+            shift 2
+            ;;
+        --api-issuer-id)
+            [[ $# -ge 2 ]] || fail "--api-issuer-id requires a value"
+            APPLE_API_ISSUER_ID_VALUE="$2"
             shift 2
             ;;
         --p12-password)
@@ -251,8 +268,9 @@ gh auth status >/dev/null
 NEED_CERT_B64=false
 NEED_CERT_PASSWORD=false
 NEED_PROFILE_B64=false
-NEED_APP_PASSWORD=false
-NEED_APPLE_ID_VAR=false
+NEED_API_KEY_B64=false
+NEED_API_KEY_ID=false
+NEED_API_ISSUER_ID=false
 NEED_TEAM_ID_VAR=false
 
 if [[ "$FORCE" == true ]] || ! have_secret "APPLE_DEVELOPER_ID_CERT_BASE64"; then
@@ -264,11 +282,14 @@ fi
 if [[ "$FORCE" == true ]] || ! have_secret "APPLE_DEVELOPER_ID_PROVISIONING_PROFILE_BASE64"; then
     NEED_PROFILE_B64=true
 fi
-if [[ "$FORCE" == true ]] || ! have_secret "APPLE_APP_PASSWORD"; then
-    NEED_APP_PASSWORD=true
+if [[ "$FORCE" == true ]] || ! have_secret "APPLE_API_KEY_BASE64"; then
+    NEED_API_KEY_B64=true
 fi
-if [[ "$FORCE" == true ]] || ! have_variable "APPLE_ID"; then
-    NEED_APPLE_ID_VAR=true
+if [[ "$FORCE" == true ]] || ! have_secret "APPLE_API_KEY_ID"; then
+    NEED_API_KEY_ID=true
+fi
+if [[ "$FORCE" == true ]] || ! have_secret "APPLE_API_ISSUER_ID"; then
+    NEED_API_ISSUER_ID=true
 fi
 if [[ "$FORCE" == true ]] || ! have_variable "APPLE_TEAM_ID"; then
     NEED_TEAM_ID_VAR=true
@@ -345,23 +366,37 @@ if [[ "$NEED_PROFILE_B64" == true ]]; then
     rm -f "$PROFILE_PLIST"
 fi
 
-if [[ "$NEED_APPLE_ID_VAR" == true ]]; then
-    if [[ "$NON_INTERACTIVE" == true ]]; then
-        [[ -n "$APPLE_ID_VALUE" ]] || fail "APPLE_ID/--apple-id is required in non-interactive mode."
-    elif [[ -z "$APPLE_ID_VALUE" ]]; then
-        read -r -p "Enter Apple ID for notarization: " APPLE_ID_VALUE
+if [[ "$NEED_API_KEY_B64" == true ]]; then
+    if [[ -z "$APPLE_API_KEY_BASE64_VALUE" ]]; then
+        if [[ "$NON_INTERACTIVE" == true ]]; then
+            [[ -n "$APPLE_API_KEY_PATH_VALUE" ]] || fail "APPLE_API_KEY_PATH/--api-key-path or APPLE_API_KEY_BASE64/--api-key-base64 is required in non-interactive mode."
+        elif [[ -z "$APPLE_API_KEY_PATH_VALUE" ]]; then
+            read -r -p "Enter path to App Store Connect API .p8 key: " APPLE_API_KEY_PATH_VALUE
+        fi
+        [[ -n "$APPLE_API_KEY_PATH_VALUE" ]] || fail "App Store Connect API key path cannot be empty."
+        APPLE_API_KEY_PATH_VALUE="${APPLE_API_KEY_PATH_VALUE/#\~/$HOME}"
+        APPLE_API_KEY_PATH_VALUE="$(cd "$(dirname "$APPLE_API_KEY_PATH_VALUE")" && pwd)/$(basename "$APPLE_API_KEY_PATH_VALUE")"
+        [[ -f "$APPLE_API_KEY_PATH_VALUE" ]] || fail "App Store Connect API key file not found: $APPLE_API_KEY_PATH_VALUE"
+        grep -Eq "BEGIN .*PRIVATE KEY" "$APPLE_API_KEY_PATH_VALUE" || fail "App Store Connect API key does not look like a .p8 private key: $APPLE_API_KEY_PATH_VALUE"
     fi
-    [[ -n "$APPLE_ID_VALUE" ]] || fail "Apple ID cannot be empty."
 fi
 
-if [[ "$NEED_APP_PASSWORD" == true ]]; then
+if [[ "$NEED_API_KEY_ID" == true ]]; then
     if [[ "$NON_INTERACTIVE" == true ]]; then
-        [[ -n "$APPLE_APP_PASSWORD_VALUE" ]] || fail "APPLE_APP_PASSWORD/--app-password is required in non-interactive mode."
-    elif [[ -z "$APPLE_APP_PASSWORD_VALUE" ]]; then
-        read -r -s -p "Enter Apple app-specific password: " APPLE_APP_PASSWORD_VALUE
-        echo ""
+        [[ -n "$APPLE_API_KEY_ID_VALUE" ]] || fail "APPLE_API_KEY_ID/--api-key-id is required in non-interactive mode."
+    elif [[ -z "$APPLE_API_KEY_ID_VALUE" ]]; then
+        read -r -p "Enter App Store Connect API key ID: " APPLE_API_KEY_ID_VALUE
     fi
-    [[ -n "$APPLE_APP_PASSWORD_VALUE" ]] || fail "Apple app-specific password cannot be empty."
+    [[ -n "$APPLE_API_KEY_ID_VALUE" ]] || fail "App Store Connect API key ID cannot be empty."
+fi
+
+if [[ "$NEED_API_ISSUER_ID" == true ]]; then
+    if [[ "$NON_INTERACTIVE" == true ]]; then
+        [[ -n "$APPLE_API_ISSUER_ID_VALUE" ]] || fail "APPLE_API_ISSUER_ID/--api-issuer-id is required in non-interactive mode."
+    elif [[ -z "$APPLE_API_ISSUER_ID_VALUE" ]]; then
+        read -r -p "Enter App Store Connect issuer ID: " APPLE_API_ISSUER_ID_VALUE
+    fi
+    [[ -n "$APPLE_API_ISSUER_ID_VALUE" ]] || fail "App Store Connect issuer ID cannot be empty."
 fi
 
 if [[ "$NEED_TEAM_ID_VAR" == true ]]; then
@@ -370,12 +405,16 @@ fi
 
 TMP_B64=""
 TMP_PROFILE_B64=""
+TMP_API_KEY_B64=""
 cleanup() {
     if [[ -n "$TMP_B64" ]]; then
         rm -f "$TMP_B64"
     fi
     if [[ -n "$TMP_PROFILE_B64" ]]; then
         rm -f "$TMP_PROFILE_B64"
+    fi
+    if [[ -n "$TMP_API_KEY_B64" ]]; then
+        rm -f "$TMP_API_KEY_B64"
     fi
 }
 trap cleanup EXIT
@@ -395,6 +434,15 @@ if [[ "$NEED_PROFILE_B64" == true ]]; then
         base64 -i "$PROFILE_PATH" > "$TMP_PROFILE_B64"
     else
         base64 "$PROFILE_PATH" > "$TMP_PROFILE_B64"
+    fi
+fi
+
+if [[ "$NEED_API_KEY_B64" == true && -z "$APPLE_API_KEY_BASE64_VALUE" ]]; then
+    TMP_API_KEY_B64="$(mktemp)"
+    if base64 -i "$APPLE_API_KEY_PATH_VALUE" >/dev/null 2>&1; then
+        base64 -i "$APPLE_API_KEY_PATH_VALUE" > "$TMP_API_KEY_B64"
+    else
+        base64 "$APPLE_API_KEY_PATH_VALUE" > "$TMP_API_KEY_B64"
     fi
 fi
 
@@ -421,18 +469,29 @@ else
     log "Skip secret APPLE_DEVELOPER_ID_PROVISIONING_PROFILE_BASE64 (already set)"
 fi
 
-if [[ "$NEED_APP_PASSWORD" == true ]]; then
-    gh secret set APPLE_APP_PASSWORD -b "$APPLE_APP_PASSWORD_VALUE"
-    log "Set secret APPLE_APP_PASSWORD"
+if [[ "$NEED_API_KEY_B64" == true ]]; then
+    if [[ -n "$APPLE_API_KEY_BASE64_VALUE" ]]; then
+        gh secret set APPLE_API_KEY_BASE64 -b "$APPLE_API_KEY_BASE64_VALUE"
+    else
+        gh secret set APPLE_API_KEY_BASE64 < "$TMP_API_KEY_B64"
+    fi
+    log "Set secret APPLE_API_KEY_BASE64"
 else
-    log "Skip secret APPLE_APP_PASSWORD (already set)"
+    log "Skip secret APPLE_API_KEY_BASE64 (already set)"
 fi
 
-if [[ "$NEED_APPLE_ID_VAR" == true ]]; then
-    gh variable set APPLE_ID -b "$APPLE_ID_VALUE"
-    log "Set variable APPLE_ID"
+if [[ "$NEED_API_KEY_ID" == true ]]; then
+    gh secret set APPLE_API_KEY_ID -b "$APPLE_API_KEY_ID_VALUE"
+    log "Set secret APPLE_API_KEY_ID"
 else
-    log "Skip variable APPLE_ID (already set)"
+    log "Skip secret APPLE_API_KEY_ID (already set)"
+fi
+
+if [[ "$NEED_API_ISSUER_ID" == true ]]; then
+    gh secret set APPLE_API_ISSUER_ID -b "$APPLE_API_ISSUER_ID_VALUE"
+    log "Set secret APPLE_API_ISSUER_ID"
+else
+    log "Skip secret APPLE_API_ISSUER_ID (already set)"
 fi
 
 if [[ "$NEED_TEAM_ID_VAR" == true ]]; then

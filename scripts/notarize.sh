@@ -67,7 +67,16 @@ for arg in "$@"; do
             shift
             ;;
         --help|-h)
-            head -n 25 "$0" | tail -n +2 | sed 's/^# //' | sed 's/^#//'
+            awk '
+                NR == 1 { next }
+                /^set -e/ { exit }
+                /^#/ {
+                    sub(/^# ?/, "")
+                    print
+                    next
+                }
+                { exit }
+            ' "$0"
             exit 0
             ;;
         *)
@@ -134,13 +143,18 @@ if [[ -z "$TEAM_ID" ]] || [[ "$TEAM_ID" == "XXXXXXXXXX" ]]; then
     exit 1
 fi
 
-if [[ -z "$APPLE_ID" ]] || [[ "$APPLE_ID" == *"example.com" ]]; then
-    log_error "APPLE_ID not configured (set in scripts/signing-config.sh or environment; see RELEASING.md)"
+if [[ -z "$APPLE_API_KEY_PATH" ]]; then
+    log_error "APPLE_API_KEY_PATH not configured (path to .p8 private key; set in scripts/signing-config.sh or environment; see RELEASING.md)"
     exit 1
 fi
 
-if [[ -z "$APP_PASSWORD" ]] || [[ "$APP_PASSWORD" == "xxxx-xxxx-xxxx-xxxx" ]]; then
-    log_error "APP_PASSWORD not configured (set in scripts/signing-config.sh or environment; see RELEASING.md)"
+if [[ -z "$APPLE_API_KEY_ID" ]]; then
+    log_error "APPLE_API_KEY_ID not configured (10-character key ID from App Store Connect; see RELEASING.md)"
+    exit 1
+fi
+
+if [[ -z "$APPLE_API_ISSUER_ID" ]]; then
+    log_error "APPLE_API_ISSUER_ID not configured (Issuer UUID from App Store Connect; see RELEASING.md)"
     exit 1
 fi
 
@@ -245,9 +259,9 @@ else
 
     # Submit and wait for result
     xcrun notarytool submit "$DMG_PATH" \
-        --apple-id "$APPLE_ID" \
-        --password "$APP_PASSWORD" \
-        --team-id "$TEAM_ID" \
+        --key "$APPLE_API_KEY_PATH" \
+        --key-id "$APPLE_API_KEY_ID" \
+        --issuer "$APPLE_API_ISSUER_ID" \
         --wait \
         --output-format plist >"$NOTARY_RESULT_PLIST"
 
@@ -256,7 +270,7 @@ else
         log_error "Notarization failed"
         echo ""
         echo "To see detailed logs, run:"
-        echo "  xcrun notarytool log <submission-id> --apple-id $APPLE_ID --password <password> --team-id $TEAM_ID"
+        echo "  xcrun notarytool log <submission-id> --key <path-to.p8> --key-id $APPLE_API_KEY_ID --issuer $APPLE_API_ISSUER_ID"
         exit 1
     fi
 
@@ -269,9 +283,9 @@ else
         if [[ -n "$NOTARY_SUBMISSION_ID" ]]; then
             echo "Submission ID: $NOTARY_SUBMISSION_ID"
             xcrun notarytool log "$NOTARY_SUBMISSION_ID" \
-                --apple-id "$APPLE_ID" \
-                --password "$APP_PASSWORD" \
-                --team-id "$TEAM_ID" \
+                --key "$APPLE_API_KEY_PATH" \
+                --key-id "$APPLE_API_KEY_ID" \
+                --issuer "$APPLE_API_ISSUER_ID" \
                 --output-format json >"$NOTARY_LOG_PATH" || true
             if [[ -f "$NOTARY_LOG_PATH" ]]; then
                 echo "Saved notarization log to $NOTARY_LOG_PATH"
