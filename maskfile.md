@@ -1,4 +1,4 @@
-# WorkspaceManager
+# WorkSpaces
 
 This is a [maskfile](https://github.com/jacobdeichert/mask) — a task runner
 that uses markdown. Install with `brew install mask`, then run `mask <task>`.
@@ -68,13 +68,13 @@ swift test
 set -euo pipefail
 ./scripts/build-ghosttykit.sh
 swift build
-if pgrep -f '/Applications/WorkspaceManager.app/Contents/MacOS/WorkspaceManager' >/dev/null 2>&1; then
-  echo "ERROR: /Applications/WorkspaceManager.app is running; quit it before verify-dev"
+if pgrep -f '/Applications/WorkSpaces.app/Contents/MacOS/WorkspaceManager' >/dev/null 2>&1; then
+  echo "ERROR: /Applications/WorkSpaces.app is running; quit it before verify-dev"
   exit 1
 fi
 ./scripts/launch-dev.sh --no-build --no-activate
-if pgrep -f '/Applications/WorkspaceManager.app/Contents/MacOS/WorkspaceManager' >/dev/null 2>&1; then
-  echo "ERROR: /Applications/WorkspaceManager.app started unexpectedly during verify-dev"
+if pgrep -f '/Applications/WorkSpaces.app/Contents/MacOS/WorkspaceManager' >/dev/null 2>&1; then
+  echo "ERROR: /Applications/WorkSpaces.app started unexpectedly during verify-dev"
   exit 1
 fi
 ps aux | rg '.build/arm64-apple-macosx/debug/WorkspaceManager'
