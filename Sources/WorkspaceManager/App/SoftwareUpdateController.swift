@@ -34,6 +34,7 @@ private protocol SoftwareUpdateCheckGate: AnyObject {
 final class SoftwareUpdateDelegate: NSObject, SPUUpdaterDelegate {
     fileprivate weak var checkGate: SoftwareUpdateCheckGate?
 
+    @objc(updater:mayPerformUpdateCheck:error:)
     func updater(_ updater: SPUUpdater, mayPerform updateCheck: SPUUpdateCheck) throws {
         guard checkGate?.shouldAllowSparkleUpdateCheck(updateCheck) ?? true else {
             throw NSError(domain: NSCocoaErrorDomain, code: NSUserCancelledError)
@@ -65,6 +66,7 @@ final class SoftwareUpdateController: NSObject, ObservableObject, NSMenuItemVali
     private let updaterController: SPUStandardUpdaterController
     private let updaterDelegate: SoftwareUpdateDelegate
     private let userDefaults: UserDefaults
+    private let manualCheckDisclosurePresenter: @MainActor () -> Bool
     private var canCheckForUpdatesCancellable: AnyCancellable?
 
     var updater: SPUUpdater {
@@ -73,10 +75,13 @@ final class SoftwareUpdateController: NSObject, ObservableObject, NSMenuItemVali
 
     init(
         startUpdater: Bool = true,
-        userDefaults: UserDefaults = .standard
+        userDefaults: UserDefaults = .standard,
+        manualCheckDisclosurePresenter: @escaping @MainActor () -> Bool = SoftwareUpdateController
+            .presentManualCheckDisclosure
     ) {
         self.updaterDelegate = SoftwareUpdateDelegate()
         self.userDefaults = userDefaults
+        self.manualCheckDisclosurePresenter = manualCheckDisclosurePresenter
         let shouldStartUpdater = startUpdater && Self.isSparkleConfigured()
         self.updaterController = SPUStandardUpdaterController(
             startingUpdater: shouldStartUpdater,
@@ -135,18 +140,24 @@ final class SoftwareUpdateController: NSObject, ObservableObject, NSMenuItemVali
         checkForUpdatesWithDisclosure()
     }
 
-    fileprivate func shouldAllowSparkleUpdateCheck(_ updateCheck: SPUUpdateCheck) -> Bool {
+    func shouldAllowSparkleUpdateCheck(_ updateCheck: SPUUpdateCheck) -> Bool {
         guard updateCheck == .updates else {
             return true
         }
         return confirmManualCheckDisclosureIfNeeded()
     }
 
-    private func confirmManualCheckDisclosureIfNeeded() -> Bool {
+    func confirmManualCheckDisclosureIfNeeded() -> Bool {
         if userDefaults.bool(forKey: SoftwareUpdateConstants.manualCheckDisclosureAcceptedKey) {
             return true
         }
 
+        guard manualCheckDisclosurePresenter() else { return false }
+        userDefaults.set(true, forKey: SoftwareUpdateConstants.manualCheckDisclosureAcceptedKey)
+        return true
+    }
+
+    private static func presentManualCheckDisclosure() -> Bool {
         let alert = NSAlert()
         alert.messageText = "Check for WorkSpaces Updates?"
         alert.informativeText = SoftwareUpdateConstants.manualCheckDisclosure
@@ -155,8 +166,6 @@ final class SoftwareUpdateController: NSObject, ObservableObject, NSMenuItemVali
         alert.addButton(withTitle: "Cancel")
 
         let response = alert.runModal()
-        guard response == .alertFirstButtonReturn else { return false }
-        userDefaults.set(true, forKey: SoftwareUpdateConstants.manualCheckDisclosureAcceptedKey)
-        return true
+        return response == .alertFirstButtonReturn
     }
 }
