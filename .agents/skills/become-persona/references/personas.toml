@@ -1,0 +1,23 @@
+[personas.april]
+display_name = "April Clearwater"
+role = "Application Lead"
+persona_path = ".agents/skills/cofounder-contributor/references/april-clearwater.md"
+aliases = ["april", "april-clearwater", "application-lead"]
+memory_keys = ["april-clearwater", "april"]
+strip_sections_from = ["## Output Format"]
+
+[personas.plat]
+display_name = "Plat Ironwood"
+role = "Platform Lead"
+persona_path = ".agents/skills/cofounder-contributor/references/plat-ironwood.md"
+aliases = ["plat", "plat-ironwood", "platform-lead"]
+memory_keys = ["plat-ironwood", "plat"]
+strip_sections_from = ["## Output Format"]
+
+[personas.peter]
+display_name = "Peter Planner"
+role = "Planning Lead"
+persona_path = ".agents/skills/peter-planner/references/peter-planner.md"
+aliases = ["peter", "peter-planner", "planner"]
+memory_keys = ["peter-planner", "peter"]
+strip_sections_from = ["## Output Format"]

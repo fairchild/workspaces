@@ -100,6 +100,20 @@ Public requests must mention exactly one agent. If multiple agents are mentioned
 
 Directed contributor runs still use the same contributor runtime with a directed message (`--message`), which overrides the normal priority order. Mention-triggered executor runs use separate concurrency groups (`agent-approved-april-*`, etc.) so they do not interfere with scheduled cron runs.
 
+### Local Persona Mode
+
+Use `/become <persona>` in a local assistant thread to adopt a standing agent's
+interactive perspective without launching the GitHub automation:
+
+- `/become april` — load April Clearwater's Application Lead prompt
+- `/become plat` — load Plat Ironwood's Platform Lead prompt
+- `/become peter` — load Peter Planner's planning prompt
+
+The command is backed by `.agents/skills/become-persona/SKILL.md`. It resolves
+aliases through `.agents/skills/become-persona/references/personas.toml`, strips
+runtime-only YAML output sections from the persona prompts, and loads repo,
+shared, and persona-specific memory context when available.
+
 ### Approval Keywords
 
 Reply to any `[idea]` discussion with one of these to trigger Peter Planner:
