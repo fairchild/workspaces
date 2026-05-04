@@ -219,7 +219,7 @@ class PerfSummarizerTests(unittest.TestCase):
             }
             with zipfile.ZipFile(zip_path, "w") as archive:
                 archive.writestr("report.json", json.dumps(report))
-                archive.writestr("system-profile.txt", "Path: /Applications/WorkspaceManager.app\n")
+                archive.writestr("system-profile.txt", "Path: /Applications/WorkSpaces.app\n")
                 archive.writestr("recent-logs.txt", "Timestamp Message\n")
 
             payload = self.run_json(

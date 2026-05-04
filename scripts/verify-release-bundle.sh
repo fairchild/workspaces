@@ -7,13 +7,17 @@
 # signed for Developer ID distribution before notarization.
 #
 # Usage:
-#   ./scripts/verify-release-bundle.sh build/WorkspaceManager.app
+#   ./scripts/verify-release-bundle.sh build/WorkSpaces.app
 #
 # ============================================================================
 
 set -euo pipefail
 
 APP_BUNDLE="${1:-}"
+EXPECTED_BUNDLE_NAME="WorkSpaces.app"
+EXPECTED_DISPLAY_NAME="WorkSpaces"
+EXPECTED_EXECUTABLE_NAME="WorkspaceManager"
+PLIST_BUDDY="/usr/libexec/PlistBuddy"
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/workspaces-release-bundle.XXXXXX")"
 
 cleanup() {
@@ -23,11 +27,12 @@ trap cleanup EXIT
 
 usage() {
     cat <<'EOF'
-Usage: ./scripts/verify-release-bundle.sh <WorkspaceManager.app>
+Usage: ./scripts/verify-release-bundle.sh <WorkSpaces.app>
 
 Verifies that the packaged app bundle and nested Mach-O code objects are signed
 with a non-ad-hoc Developer ID signature and a real team identifier. Also
-verifies that the bundled Ghostty resources required at runtime are present.
+verifies release identity metadata and bundled Ghostty resources required at
+runtime are present.
 EOF
 }
 
@@ -38,6 +43,42 @@ fail() {
 
 require_cmd() {
     command -v "$1" >/dev/null 2>&1 || fail "Required command not found: $1"
+}
+
+plist_print() {
+    local plist_path="$1"
+    local key_path="$2"
+    "$PLIST_BUDDY" -c "Print :$key_path" "$plist_path" 2>/dev/null || true
+}
+
+verify_bundle_identity() {
+    local bundle_path="$1"
+    local info_plist="$bundle_path/Contents/Info.plist"
+    local bundle_name=""
+    local display_name=""
+    local bundle_display_name=""
+    local executable_name=""
+
+    bundle_name="$(basename "$bundle_path")"
+    [[ "$bundle_name" == "$EXPECTED_BUNDLE_NAME" ]] \
+        || fail "Release app bundle must be named $EXPECTED_BUNDLE_NAME (got $bundle_name)"
+
+    [[ -f "$info_plist" ]] || fail "Missing Info.plist in app bundle"
+
+    bundle_display_name="$(plist_print "$info_plist" "CFBundleDisplayName")"
+    [[ "$bundle_display_name" == "$EXPECTED_DISPLAY_NAME" ]] \
+        || fail "CFBundleDisplayName must be $EXPECTED_DISPLAY_NAME (got ${bundle_display_name:-<missing>})"
+
+    display_name="$(plist_print "$info_plist" "CFBundleName")"
+    [[ "$display_name" == "$EXPECTED_DISPLAY_NAME" ]] \
+        || fail "CFBundleName must be $EXPECTED_DISPLAY_NAME (got ${display_name:-<missing>})"
+
+    executable_name="$(plist_print "$info_plist" "CFBundleExecutable")"
+    [[ "$executable_name" == "$EXPECTED_EXECUTABLE_NAME" ]] \
+        || fail "CFBundleExecutable must be $EXPECTED_EXECUTABLE_NAME (got ${executable_name:-<missing>})"
+
+    [[ -x "$bundle_path/Contents/MacOS/$EXPECTED_EXECUTABLE_NAME" ]] \
+        || fail "Expected executable missing: Contents/MacOS/$EXPECTED_EXECUTABLE_NAME"
 }
 
 is_mach_o() {
@@ -99,9 +140,11 @@ collect_code_objects() {
 require_cmd codesign
 require_cmd file
 require_cmd find
+[[ -x "$PLIST_BUDDY" ]] || fail "PlistBuddy not found at $PLIST_BUDDY"
 
 APP_BUNDLE="${APP_BUNDLE/#\~/$HOME}"
 [[ -d "$APP_BUNDLE" ]] || fail "App bundle not found: $APP_BUNDLE"
+verify_bundle_identity "$APP_BUNDLE"
 [[ -d "$APP_BUNDLE/Contents/Resources/ghostty" ]] || fail "Missing Ghostty resources directory"
 [[ -d "$APP_BUNDLE/Contents/Resources/terminfo" ]] || fail "Missing bundled terminfo directory"
 

@@ -16,7 +16,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 DEBUG_BINARY="$REPO_ROOT/.build/arm64-apple-macosx/debug/WorkspaceManager"
-INSTALLED_APP_BINARY="/Applications/WorkspaceManager.app/Contents/MacOS/WorkspaceManager"
+INSTALLED_APP_BINARY="/Applications/WorkSpaces.app/Contents/MacOS/WorkspaceManager"
 BUNDLE_ID="com.cloudcompute.workspaces"
 GHOSTTY_MANAGED_MODE="ghostty_managed_splits"
 

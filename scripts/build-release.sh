@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================================
-# build-release.sh - Build a release version of WorkspaceManager
+# build-release.sh - Build a release version of WorkSpaces
 # ============================================================================
 #
 # Creates a packaged .app bundle from the Swift Package Manager build.
@@ -11,7 +11,7 @@
 #   ./scripts/build-release.sh --help    # Show this help
 #
 # Output:
-#   build/WorkspaceManager.app - The packaged application bundle
+#   build/WorkSpaces.app - The packaged application bundle
 #
 # Signed builds require:
 #   1. Copy scripts/signing-config.sh.template to scripts/signing-config.sh
@@ -34,9 +34,10 @@ NC='\033[0m'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 BUILD_DIR="$PROJECT_DIR/build"
-APP_NAME="WorkspaceManager"
+APP_BUNDLE_NAME="WorkSpaces"
+EXECUTABLE_NAME="WorkspaceManager"
 CLI_NAME="workspaces"
-APP_BUNDLE="$BUILD_DIR/$APP_NAME.app"
+APP_BUNDLE="$BUILD_DIR/$APP_BUNDLE_NAME.app"
 VERIFY_KEYCHAIN_SIGNING_SCRIPT="$SCRIPT_DIR/verify-app-keychain-signing.sh"
 VERIFY_RELEASE_BUNDLE_SCRIPT="$SCRIPT_DIR/verify-release-bundle.sh"
 PLIST_BUDDY="/usr/libexec/PlistBuddy"
@@ -65,7 +66,7 @@ trap cleanup EXIT
 
 usage() {
     cat <<'EOF'
-build-release.sh - Build a release version of WorkspaceManager
+build-release.sh - Build a release version of WorkSpaces
 
 Usage:
   ./scripts/build-release.sh           Build and sign with provisioning profile
@@ -351,7 +352,7 @@ verify_release_bundle_signing() {
 }
 
 verify_sparkle_bundle_linkage() {
-    local executable="$APP_BUNDLE/Contents/MacOS/$APP_NAME"
+    local executable="$APP_BUNDLE/Contents/MacOS/$EXECUTABLE_NAME"
     local framework_binary="$APP_BUNDLE/Contents/Frameworks/Sparkle.framework/Versions/B/Sparkle"
 
     log_step "Verifying Sparkle bundle linkage"
@@ -408,7 +409,7 @@ done
 
 log_step "Pre-flight checks"
 
-[[ -f "$PROJECT_DIR/Package.swift" ]] || fail "Package.swift not found. Run from the WorkspaceManager directory."
+[[ -f "$PROJECT_DIR/Package.swift" ]] || fail "Package.swift not found. Run from the WorkSpaces repo directory."
 log_success "Package.swift found"
 
 if [[ "$SIGN_APP" == true ]]; then
@@ -444,7 +445,7 @@ swift build -c release 2>&1 | while read -r line; do
     fi
 done
 
-[[ -f ".build/release/$APP_NAME" ]] || fail "Build failed - executable not found"
+[[ -f ".build/release/$EXECUTABLE_NAME" ]] || fail "Build failed - executable not found"
 log_success "Build complete"
 
 log_step "Creating app bundle"
@@ -454,7 +455,7 @@ mkdir -p "$APP_BUNDLE/Contents/Frameworks"
 mkdir -p "$APP_BUNDLE/Contents/Helpers"
 mkdir -p "$APP_BUNDLE/Contents/Resources"
 
-cp ".build/release/$APP_NAME" "$APP_BUNDLE/Contents/MacOS/"
+cp ".build/release/$EXECUTABLE_NAME" "$APP_BUNDLE/Contents/MacOS/"
 log_success "Copied executable"
 
 if [[ -f ".build/release/$CLI_NAME" ]]; then

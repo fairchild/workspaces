@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================================
-# notarize.sh - Notarize and create DMG for WorkspaceManager
+# notarize.sh - Notarize and create DMG for WorkSpaces
 # ============================================================================
 #
 # This script takes a signed .app bundle (from build-release.sh), creates a
@@ -18,7 +18,7 @@
 #   3. Apple Developer Program membership ($99/year)
 #
 # Output:
-#   build/WorkspaceManager-{version}.dmg - Notarized disk image
+#   build/WorkSpaces-{version}.dmg - Notarized disk image
 #
 # ============================================================================
 
@@ -39,8 +39,8 @@ NC='\033[0m' # No Color
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 BUILD_DIR="$PROJECT_DIR/build"
-APP_NAME="WorkspaceManager"
-APP_BUNDLE="$BUILD_DIR/$APP_NAME.app"
+APP_BUNDLE_NAME="WorkSpaces"
+APP_BUNDLE="$BUILD_DIR/$APP_BUNDLE_NAME.app"
 SIGNING_CONFIG="${SIGNING_CONFIG:-$SCRIPT_DIR/signing-config.sh}"
 CODESIGN_KEYCHAIN_PATH="${CODESIGN_KEYCHAIN_PATH:-}"
 PLIST_BUDDY="/usr/libexec/PlistBuddy"
@@ -182,7 +182,7 @@ log_success "Signature verified"
 
 VERSION=$(get_version)
 BUILD_NUM=$(get_build)
-DMG_NAME="${APP_NAME}-${VERSION}"
+DMG_NAME="${APP_BUNDLE_NAME}-${VERSION}"
 DMG_PATH="$BUILD_DIR/${DMG_NAME}.dmg"
 
 log_step "Creating DMG: $DMG_NAME.dmg"
@@ -203,7 +203,7 @@ ln -s /Applications "$DMG_TEMP/Applications"
 
 # Create DMG
 hdiutil create \
-    -volname "Workspaces $VERSION" \
+    -volname "WorkSpaces $VERSION" \
     -srcfolder "$DMG_TEMP" \
     -ov \
     -format UDZO \
@@ -330,5 +330,5 @@ echo "  [ ] Announce release"
 echo ""
 
 # Copy to a version-agnostic name for CI convenience
-cp "$DMG_PATH" "$BUILD_DIR/${APP_NAME}-latest.dmg"
-echo "Also available as: $BUILD_DIR/${APP_NAME}-latest.dmg"
+cp "$DMG_PATH" "$BUILD_DIR/${APP_BUNDLE_NAME}-latest.dmg"
+echo "Also available as: $BUILD_DIR/${APP_BUNDLE_NAME}-latest.dmg"

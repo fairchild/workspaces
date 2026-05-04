@@ -131,15 +131,15 @@ Run a local unsigned build first to confirm the toolchain works:
 
 ```bash
 ./scripts/build-release.sh --no-sign
-open build/WorkspaceManager.app
+open build/WorkSpaces.app
 ```
 
 Then test signing:
 
 ```bash
 ./scripts/build-release.sh
-./scripts/verify-app-keychain-signing.sh build/WorkspaceManager.app
-./scripts/verify-release-bundle.sh build/WorkspaceManager.app
+./scripts/verify-app-keychain-signing.sh build/WorkSpaces.app
+./scripts/verify-release-bundle.sh build/WorkSpaces.app
 # Should confirm the embedded provisioning profile, keychain access group,
 # and Developer ID signing across nested code objects
 ```
@@ -284,8 +284,8 @@ The recommended method for production releases.
    - Tag-push run: supports both `v<version>` and `workspaces-v*`
    - Rerunning the workflow for an existing tag replaces assets in place and refreshes generated release notes; no GitHub release cleanup is required.
    - Assets:
-      - `WorkspaceManager-<version>.dmg`
-      - `WorkspaceManager-latest.dmg`
+      - `WorkSpaces-<version>.dmg`
+      - `WorkSpaces-latest.dmg`
 
 ### Method 1B: Tag-Driven Release (Main Commit Only)
 
@@ -346,7 +346,7 @@ For testing or when CI isn't available.
    gh release create v0.3.1 \
        --title "WorkSpaces v0.3.1" \
        --notes "Release notes here" \
-       build/WorkspaceManager-0.3.1.dmg
+       build/WorkSpaces-0.3.1.dmg
    ```
 
 ---
@@ -373,21 +373,21 @@ After creating a release, verify:
 
 ### Code Signature
 ```bash
-./scripts/verify-app-keychain-signing.sh build/WorkspaceManager.app
-./scripts/verify-release-bundle.sh build/WorkspaceManager.app
+./scripts/verify-app-keychain-signing.sh build/WorkSpaces.app
+./scripts/verify-release-bundle.sh build/WorkSpaces.app
 # Should confirm the embedded provisioning profile, keychain access group,
 # and Developer ID signing across nested code objects
 ```
 
 ### Gatekeeper
 ```bash
-spctl --assess --type execute --verbose build/WorkspaceManager.app
+spctl --assess --type execute --verbose build/WorkSpaces.app
 # Should say "accepted"
 ```
 
 ### Notarization
 ```bash
-xcrun stapler validate build/WorkspaceManager-0.3.1.dmg
+xcrun stapler validate build/WorkSpaces-0.3.1.dmg
 # Should say "The validate action worked!"
 ```
 
@@ -469,7 +469,7 @@ When announcing a release:
 - Bug fix 1
 
 ### Download
-[WorkspaceManager-0.3.1.dmg](link)
+[WorkSpaces-0.3.1.dmg](link)
 
 ### Requirements
 - macOS 14.0 (Sonoma) or later

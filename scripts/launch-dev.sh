@@ -5,7 +5,7 @@
 #
 # Why this script exists:
 # - Avoid stale bundle confusion:
-#   `build/WorkspaceManager.app` can be outdated unless explicitly rebuilt/copied.
+#   `build/WorkSpaces.app` can be outdated unless explicitly rebuilt/copied.
 #   This script always launches `.build/arm64-apple-macosx/debug/WorkspaceManager`
 #   after an optional `swift build`.
 #
@@ -46,8 +46,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 APP_NAME="WorkspaceManager"
+INSTALLED_APP_BUNDLE_NAME="WorkSpaces"
 DEBUG_BINARY="$REPO_ROOT/.build/arm64-apple-macosx/debug/$APP_NAME"
-INSTALLED_APP_BINARY="/Applications/$APP_NAME.app/Contents/MacOS/$APP_NAME"
+INSTALLED_APP_BINARY="/Applications/$INSTALLED_APP_BUNDLE_NAME.app/Contents/MacOS/$APP_NAME"
 GHOSTTYKIT_FRAMEWORK="$REPO_ROOT/Frameworks/GhosttyKit.xcframework"
 MISE_CONFIG_PATH="$REPO_ROOT/.mise.toml"
 DEFAULT_DATA_DIR="$REPO_ROOT/.dev-data/workspacemanager"
@@ -297,6 +298,8 @@ stop_existing_if_requested() {
     log "Stopping any running WorkspaceManager instances..."
     pkill -x "$APP_NAME" >/dev/null 2>&1 || true
     pkill -f "$INSTALLED_APP_BINARY" >/dev/null 2>&1 || true
+    pkill -f "$REPO_ROOT/build/WorkSpaces.app/Contents/MacOS/WorkspaceManager" >/dev/null 2>&1 || true
+    # Legacy bundle name from before the public WorkSpaces rename.
     pkill -f "$REPO_ROOT/build/WorkspaceManager.app/Contents/MacOS/WorkspaceManager" >/dev/null 2>&1 || true
     pkill -f "$DEBUG_BINARY" >/dev/null 2>&1 || true
     sleep 1

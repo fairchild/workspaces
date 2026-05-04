@@ -4,7 +4,7 @@
 # ==========================================================================
 #
 # Common local testing workflow:
-#   1) Build WorkspaceManager.app
+#   1) Build WorkSpaces.app
 #   2) Replace the local installed app bundle
 #   3) Optionally relaunch the app
 #
@@ -34,12 +34,13 @@ NC='\033[0m'
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-APP_NAME="WorkspaceManager"
+APP_BUNDLE_NAME="WorkSpaces"
+EXECUTABLE_NAME="WorkspaceManager"
 CLI_NAME="workspaces"
 CLI_HELPER_RELATIVE_PATH="Contents/Helpers/$CLI_NAME"
 CLI_LEGACY_RELATIVE_PATH="Contents/MacOS/$CLI_NAME"
-SOURCE_APP="$PROJECT_DIR/build/$APP_NAME.app"
-DEST_APP="/Applications/$APP_NAME.app"
+SOURCE_APP="$PROJECT_DIR/build/$APP_BUNDLE_NAME.app"
+DEST_APP="/Applications/$APP_BUNDLE_NAME.app"
 SIGNING_CONFIG="${SIGNING_CONFIG:-$SCRIPT_DIR/signing-config.sh}"
 VERIFY_KEYCHAIN_SIGNING_SCRIPT="$SCRIPT_DIR/verify-app-keychain-signing.sh"
 
@@ -59,7 +60,7 @@ Usage: ./scripts/install-local.sh [options]
 Options:
   --signed        Require a signed/provisioned packaged build
   --unsigned      Force an unsigned/ad-hoc packaged build
-  --no-build      Skip build and install existing build/WorkspaceManager.app
+  --no-build      Skip build and install existing build/WorkSpaces.app
   --no-open       Do not relaunch app after install
   --no-cli-link   Do not update the `workspaces` CLI symlink
   --cli-link <path>
@@ -310,8 +311,8 @@ rm -rf "$DEST_APP"
 mv "$TMP_DEST" "$DEST_APP"
 log_success "Installed: $DEST_APP"
 
-SOURCE_BIN="$SOURCE_APP/Contents/MacOS/$APP_NAME"
-DEST_BIN="$DEST_APP/Contents/MacOS/$APP_NAME"
+SOURCE_BIN="$SOURCE_APP/Contents/MacOS/$EXECUTABLE_NAME"
+DEST_BIN="$DEST_APP/Contents/MacOS/$EXECUTABLE_NAME"
 if [[ -f "$SOURCE_BIN" && -f "$DEST_BIN" ]]; then
     SOURCE_SHA="$(shasum -a 256 "$SOURCE_BIN" | awk '{print $1}')"
     DEST_SHA="$(shasum -a 256 "$DEST_BIN" | awk '{print $1}')"

@@ -6,7 +6,7 @@ set -euo pipefail
 usage() {
     cat <<'EOF'
 Usage:
-  ./scripts/verify-installed-perf.sh [--allow-skip-noninteractive] <WorkspaceManager.app|binary> [output_dir]
+  ./scripts/verify-installed-perf.sh [--allow-skip-noninteractive] <WorkSpaces.app|binary> [output_dir]
 
 Checks:
   - bundled Ghostty resources exist

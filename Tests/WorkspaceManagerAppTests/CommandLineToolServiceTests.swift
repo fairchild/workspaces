@@ -212,7 +212,7 @@ struct CommandLineToolServiceTests {
         let sourceCommandURL = try makeExecutable(
             at:
                 root
-                .appendingPathComponent("WorkspaceManager.app", isDirectory: true)
+                .appendingPathComponent("WorkSpaces.app", isDirectory: true)
                 .appendingPathComponent("Contents", isDirectory: true)
                 .appendingPathComponent("MacOS", isDirectory: true)
                 .appendingPathComponent("workspaces", isDirectory: false),

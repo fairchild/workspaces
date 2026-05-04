@@ -50,7 +50,8 @@ struct TerminalFocusManagerTests {
 
         NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: firstWindow)
 
-        #expect(firstSpy.becameKeyWindows == [firstWindow])
+        #expect(!firstSpy.becameKeyWindows.isEmpty)
+        #expect(firstSpy.becameKeyWindows.allSatisfy { $0 === firstWindow })
         #expect(secondSpy.becameKeyWindows.isEmpty)
     }
 

@@ -9,7 +9,7 @@
 #   3. claims the expected keychain access group for its bundle identifier
 #
 # Usage:
-#   ./scripts/verify-app-keychain-signing.sh build/WorkspaceManager.app
+#   ./scripts/verify-app-keychain-signing.sh build/WorkSpaces.app
 #
 # ============================================================================
 
@@ -26,7 +26,7 @@ trap cleanup EXIT
 
 usage() {
     cat <<'EOF'
-Usage: ./scripts/verify-app-keychain-signing.sh <WorkspaceManager.app>
+Usage: ./scripts/verify-app-keychain-signing.sh <WorkSpaces.app>
 
 Verifies that the app bundle is provisioned and signed for the data protection
 keychain. Exits non-zero if the embedded provisioning profile or signed
