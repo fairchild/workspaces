@@ -151,10 +151,17 @@ class SecurityHardeningTests(unittest.TestCase):
         self.assertIn("environment: release", workflow)
         self.assertIn("persist-credentials: false", workflow)
         self.assertIn("publish-github-release:", workflow)
+        self.assertIn("validate-published-release-assets:", workflow)
+        self.assertIn("gh release download", workflow)
+        self.assertIn("xcrun stapler validate", workflow)
+        self.assertIn("spctl --assess", workflow)
         self.assertIn("permissions:\n  contents: read", workflow)
         self.assertIn("permissions:\n      contents: write", workflow)
         for forbidden in (
             'echo "KEYCHAIN_PASSWORD=$KEYCHAIN_PASSWORD" >> "$GITHUB_ENV"',
+            'echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"',
+            'echo "CODESIGN_KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"',
+            'echo "PROVISIONING_PROFILE_PATH=$PROFILE_PATH" >> "$GITHUB_ENV"',
             'echo "APP_PASSWORD=$APPLE_APP_PASSWORD" >> "$GITHUB_ENV"',
             'echo "APPLE_ID=$APPLE_ID" >> "$GITHUB_ENV"',
             'echo "TEAM_ID=$APPLE_TEAM_ID" >> "$GITHUB_ENV"',

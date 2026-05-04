@@ -28,6 +28,7 @@ RELEASE_PATHS = {
     "scripts/release-version.sh",
     "scripts/setup-release-secrets.sh",
     "scripts/verify-app-keychain-signing.sh",
+    "scripts/verify-installed-perf.sh",
     "scripts/verify-p12.sh",
     "scripts/verify-release-bundle.sh",
 }
