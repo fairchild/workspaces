@@ -36,6 +36,11 @@ export default defineConfig({
 			use: { ...devices["Desktop Chrome"] },
 		},
 		{
+			name: "deployment-smoke",
+			testMatch: "deployment-smoke/**",
+			use: { ...devices["Desktop Chrome"] },
+		},
+		{
 			name: "full",
 			testMatch: "full/**",
 			use: { ...devices["Desktop Chrome"] },
@@ -60,8 +65,8 @@ export default defineConfig({
 			},
 		},
 	],
-	globalSetup: "./e2e/seed.ts",
-	globalTeardown: "./e2e/teardown.ts",
+	globalSetup: SKIP_WEB_SERVER ? undefined : "./e2e/seed.ts",
+	globalTeardown: SKIP_WEB_SERVER ? undefined : "./e2e/teardown.ts",
 	webServer: SKIP_WEB_SERVER
 		? undefined
 		: {

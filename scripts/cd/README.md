@@ -46,7 +46,8 @@ After: every push to `main` produces a preview deployment, gets validated agains
              ▼         ▼                    │
       ┌──────────┐ ┌──────────┐             │
       │playwright│ │lighthouse│             │
-      │  fast    │ │ 3 runs   │             │
+      │deployment│ │ 3 runs   │             │
+      │  smoke   │ │ desktop  │             │
       │  project │ │ desktop  │             │
       └────┬─────┘ └────┬─────┘             │
            │            │                   │
@@ -72,15 +73,15 @@ After: every push to `main` produces a preview deployment, gets validated agains
 
 | File | What it does |
 |---|---|
-| `.github/workflows/cd.yml` | The 7-job CD pipeline: preview-web, preview-workers, playwright-validate, lighthouse, promote, fail-notify-{playwright,lighthouse}. |
+| `.github/workflows/cd.yml` | The CD pipeline: preview-web, preview-workers, deployment-smoke Playwright validation, lighthouse, promote, and failure notification. |
 | `.github/workflows/web-preview.yml` | Path-filtered PR preview deployment for `web/**`, with a single updated PR comment. |
 | `scripts/cd/bootstrap-preview.py` | Interactive setup wizard for first-time configuration. Prompts for tokens, writes secrets to GitHub + Cloudflare, generates `web/vercel.json`. |
 | `scripts/cd/config.toml` | Declarative manifest. Workers, preview health URLs, secret names, GitHub Actions secrets. **Add a worker = one TOML block.** |
 | `scripts/cd/.env.bootstrap.example` | Template for the gitignored `.env.bootstrap` where the operator's tokens live locally. |
 | `web/vercel.json` | Generated. Contains `git.deploymentEnabled = false` — disables Vercel's automatic Git deployments so Actions owns PR previews and production promotion. |
-| `web/playwright.config.ts` | Honors `PLAYWRIGHT_BASE_URL` to target the preview URL; skips the local `webServer` block when set. |
+| `web/playwright.config.ts` | Honors `PLAYWRIGHT_BASE_URL` to target the preview URL; skips the local `webServer` and seed/teardown blocks when `PLAYWRIGHT_SKIP_WEB_SERVER=1`. |
 | `web/lighthouserc.json` | Perf budgets: LCP ≤2500ms, CLS ≤0.1, TBT ≤200ms, perf score ≥0.9. Desktop preset, 3 runs, median assertions. URL passed at invocation via `--collect.url`. |
-| `web/scripts/{playwright,lhci}-findings.mjs` | Render validator JSON output into markdown tables for the failure-issue body. |
+| `web/scripts/{playwright,lhci}-findings.*` | Render validator JSON output into markdown tables for the failure-issue body. |
 | `infra/<worker>/wrangler.toml` | Each in-tree worker has an `[env.preview]` block with separate routes/bindings (e.g. `evidence-screenshots-preview` R2 bucket). |
 
 ## Bootstrap (first-time setup)
@@ -99,12 +100,14 @@ What gets set up automatically:
 - `web/vercel.json` — Git auto-deploy guard (offered-to-commit interactively)
 - Cloudflare Worker preview secrets — per worker, per `wrangler secret put`
 - GitHub Actions repo secrets — `VERCEL_TOKEN`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` — verified via `gh secret list` after push
+- Vercel runtime env presence — `BETTER_AUTH_SECRET`, `GITHUB_WEB_WORKSPACES_CLIENT_ID`, and `GITHUB_WEB_WORKSPACES_CLIENT_SECRET` are checked in Preview and Production during validation
 - Vercel project link — runs `vercel link` if `web/.vercel/project.json` doesn't exist
 - Preview worker custom-domain DNS — when a health URL is unreachable but dry-run passes, the script offers to run a real `wrangler deploy --env preview`. Wrangler provisions DNS for any `custom_domain = true` route automatically.
 
 What still requires you (no API exists for these):
 - Creating the Vercel token (dashboard)
 - Creating the Cloudflare API token (dashboard)
+- Setting Vercel runtime auth values in Project Settings; the bootstrap validates names only and never stores these secrets in repo files
 
 ## Adding a new worker to CD
 
@@ -140,7 +143,7 @@ What still requires you (no API exists for these):
 ## Design decisions worth understanding
 
 - **Why monolithic `cd.yml` not split workflows.** Promote needs `needs:` semantics across web + workers. Splitting loses the "all validators must pass before any promote" atomicity.
-- **Why `fast` Playwright project only.** `full` needs a seeded DB; preview targets Vercel's serverless DB which we can't seed from CI. Future: staging env with seeded Turso.
+- **Why `deployment-smoke` Playwright project only.** CD runs deployed-app-safe tests that prove the preview/prod artifact serves, redirects, and rejects unauthenticated API calls correctly without relying on runner-local seeded data. Local integration and cross-tenant authorization coverage stay in the `fast` project under Web CI.
 - **Why separate R2 bucket for evidence-store preview.** Preview test writes would otherwise pollute the prod keyspace and share the prod auth token's blast radius. 7-day lifecycle on `evidence-screenshots-preview` keeps storage cost ~$0.
 - **Why `vercel.json` over dashboard branch flip.** Code-controlled, survives project recreation, visible in diffs. Vercel's deprecated `github.enabled` is the legacy form; `git.deploymentEnabled` is current.
 - **Why Actions-owned PR previews.** Vercel's ignored-build path still creates canceled deployments; the path-filtered workflow avoids deployments entirely for non-web PRs.

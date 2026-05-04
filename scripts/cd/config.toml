@@ -15,6 +15,11 @@ slug = "fairchild/workspaces"
 # <project_dir>/vercel.json so Vercel's git integration stops auto-deploying
 # branches and PRs. No dashboard step required.
 project_dir = "web"
+runtime_env = [
+  "BETTER_AUTH_SECRET",
+  "GITHUB_WEB_WORKSPACES_CLIENT_ID",
+  "GITHUB_WEB_WORKSPACES_CLIENT_SECRET",
+]
 
 [[workers]]
 dir = "infra/cloudflare-webhook-relay"

@@ -14,6 +14,7 @@
 		"test:unit": "vitest run",
 		"test:e2e": "playwright test",
 		"test:e2e:fast": "playwright test --project fast",
+		"test:e2e:deployment-smoke": "playwright test --project deployment-smoke",
 		"test:e2e:full": "playwright test --project full",
 		"lhci": "lhci autorun --config=./lighthouserc.json --collect.url=$LHCI_COLLECT_URL"
 	},

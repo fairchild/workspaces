@@ -32,6 +32,9 @@ import sys
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 CD_DIR = Path(__file__).resolve().parent
@@ -741,10 +744,106 @@ def deploy_preview_real(runner: Runner, worker_dir: Path) -> bool:
         return False
 
 
-def step_validate(runner: Runner, prompt: Prompt, cfg: dict) -> bool:
+def vercel_env_keys_from_payload(payload: object) -> set[str] | None:
+    if isinstance(payload, dict):
+        envs = payload.get("envs", [])
+    elif isinstance(payload, list):
+        envs = payload
+    else:
+        return None
+
+    return {
+        item["key"]
+        for item in envs
+        if isinstance(item, dict) and isinstance(item.get("key"), str)
+    }
+
+
+def parse_vercel_env_keys(raw: str) -> set[str] | None:
+    text = raw.strip()
+    starts = [idx for idx in (text.find("{"), text.find("[")) if idx >= 0]
+    if not starts:
+        return None
+
+    try:
+        payload = json.loads(text[min(starts) :])
+    except json.JSONDecodeError:
+        return None
+    return vercel_env_keys_from_payload(payload)
+
+
+def list_vercel_env_keys_via_api(env: dict[str, str], target: str) -> set[str] | None:
+    token = env.get("VERCEL_TOKEN")
+    project_id = env.get("VERCEL_PROJECT_ID")
+    org_id = env.get("VERCEL_ORG_ID")
+    if not token or not project_id:
+        return None
+
+    query = urlencode({"target": target, **({"teamId": org_id} if org_id else {})})
+    url = f"https://api.vercel.com/v10/projects/{project_id}/env?{query}"
+    request = Request(url)
+    request.add_header("Authorization", f"Bearer {token}")
+    try:
+        with urlopen(request, timeout=15) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (HTTPError, URLError, TimeoutError, json.JSONDecodeError):
+        return None
+
+    return vercel_env_keys_from_payload(payload)
+
+
+def list_vercel_env_keys(
+    project_dir: Path,
+    target: str,
+    env: dict[str, str],
+) -> set[str] | None:
+    try:
+        result = subprocess.run(
+            npx("vercel@51", "env", "ls", target, "--format", "json"),
+            cwd=project_dir,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        keys = parse_vercel_env_keys(result.stdout)
+        if keys is not None:
+            return keys
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return list_vercel_env_keys_via_api(env, target)
+    return list_vercel_env_keys_via_api(env, target)
+
+
+def step_validate(
+    runner: Runner,
+    prompt: Prompt,
+    cfg: dict,
+    env: dict[str, str],
+) -> bool:
     step(5, "Validate wiring")
-    teach("Dry-runs `wrangler deploy --env preview` and hits each preview /health URL.")
+    teach(
+        "Checks Vercel runtime env, dry-runs `wrangler deploy --env preview`, "
+        "and hits each preview /health URL."
+    )
     all_ok = True
+
+    vercel_cfg = cfg.get("vercel", {})
+    project_dir = ROOT / vercel_cfg.get("project_dir", "web")
+    required_env = vercel_cfg.get("runtime_env", [])
+    if required_env:
+        info(bold("Vercel runtime env"))
+        for target in ("preview", "production"):
+            existing = list_vercel_env_keys(project_dir, target, env)
+            if existing is None:
+                warn(f"could not list Vercel {target} env vars")
+                all_ok = False
+                continue
+            missing = [name for name in required_env if name not in existing]
+            if missing:
+                warn(f"{target}: missing {', '.join(missing)}")
+                all_ok = False
+            else:
+                ok(f"{target}: required auth env present")
+
     for w in cfg.get("workers", []):
         worker_dir = ROOT / w["dir"]
         if not validate_worker_wiring(runner, worker_dir):
@@ -932,7 +1031,7 @@ def main() -> int:
 
     validate_ok = True
     if only in (None, "validate"):
-        validate_ok = step_validate(runner, prompt, cfg)
+        validate_ok = step_validate(runner, prompt, cfg, env)
 
     if only is None:
         gh_cfg = cfg.get("github_secrets", {})

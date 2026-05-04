@@ -1,7 +1,14 @@
 ---
+status: done
+category: plan
 topic: web-cd
 priority: 2
 description: Add a remote-safe, skippable Playwright smoke lane for CD preview and prod validation.
+pr: 442
+branch: codex-deployment-smoke-auth-env
+score: null
+retro_summary: CD now runs a remote-safe deployment-smoke Playwright lane and validates required Vercel auth runtime env by name.
+completed: 2026-05-04
 ---
 
 # Pre-Release Deployment Smoke
@@ -69,10 +76,10 @@ Main CD
   behavior without depending on runner-local seeded data.
 
 **Acceptance criteria:**
-- [ ] CD preview validation runs only deployment-safe tests against the preview URL.
-- [ ] CD prod validation runs the same deployment-safe tests against the prod URL.
-- [ ] Local seeded-DB tests still run under Web CI's `fast` project.
-- [ ] A new local-only Playwright spec cannot accidentally run in CD unless it is
+- [x] CD preview validation runs only deployment-safe tests against the preview URL.
+- [x] CD prod validation runs the same deployment-safe tests against the prod URL.
+- [x] Local seeded-DB tests still run under Web CI's `fast` project.
+- [x] A new local-only Playwright spec cannot accidentally run in CD unless it is
   placed in the deployment-smoke project or tagged for it.
 
 ### Phase 2: Improve validator diagnostics
@@ -85,9 +92,9 @@ Main CD
   deployment-smoke failures, not only `findings.md`.
 
 **Acceptance criteria:**
-- [ ] A deployment-smoke failure artifact identifies the failing URL, project,
+- [x] A deployment-smoke failure artifact identifies the failing URL, project,
   spec, assertion, and any redirect target.
-- [ ] Skipped tests are visible in the report but do not cause CD failure.
+- [x] Skipped tests are visible in the report but do not cause CD failure.
 
 ## Verification Commands
 

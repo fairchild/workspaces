@@ -25,6 +25,10 @@ Add a `[gap]` row for behaviors you know matter but aren't yet tested. `qa-web-a
 | Landing page loads with Spaces branding | e2e-fast | `fast/landing.spec.ts :: loads with Spaces branding` | 2026-04-17 | qa-web-agent |
 | `POST /api/workspaces/sync` rejects unauthenticated requests | e2e-fast | `fast/unauth-api.spec.ts :: POST /api/workspaces/sync without auth returns unauthorized` | 2026-04-17 | qa-web-agent |
 | `GET /dashboard` redirects unauthenticated users to sign-in | e2e-fast | `fast/unauth-redirect.spec.ts :: GET /dashboard without auth redirects to sign-in` | 2026-04-17 | qa-web-agent |
+| Deployed app serves landing page and sign-in path | e2e-deployment-smoke | `deployment-smoke/landing.spec.ts :: serves the Spaces landing page with a sign-in path` | 2026-05-04 | qa-web-agent |
+| Deployed app redirects unauthenticated dashboard visits to sign-in | e2e-deployment-smoke | `deployment-smoke/landing.spec.ts :: redirects dashboard visitors without a session to sign-in` | 2026-05-04 | qa-web-agent |
+| Deployed app rejects unauthenticated workspace sync requests | e2e-deployment-smoke | `deployment-smoke/api.spec.ts :: rejects unauthenticated workspace sync requests` | 2026-05-04 | qa-web-agent |
+| Deployed app starts GitHub social sign-in without localhost callback origin | e2e-deployment-smoke | `deployment-smoke/api.spec.ts :: starts GitHub social sign-in from the served origin` | 2026-05-04 | qa-web-agent |
 
 ### API authorization
 

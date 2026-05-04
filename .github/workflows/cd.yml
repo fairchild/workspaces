@@ -117,14 +117,14 @@ jobs:
           cache-dependency-path: web/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec playwright install chromium --with-deps
-      - name: Run Playwright fast against preview
+      - name: Run Playwright deployment smoke against preview
         env:
           PLAYWRIGHT_BASE_URL: ${{ needs.preview-web.outputs.preview_url }}
           PLAYWRIGHT_SKIP_WEB_SERVER: "1"
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
         run: |
           set +e
-          pnpm exec playwright test --project fast --reporter=json > playwright-report.json
+          pnpm exec playwright test --project deployment-smoke --reporter=json > playwright-report.json
           PW_EXIT=$?
           node scripts/playwright-findings.js playwright-report.json > findings.md || echo "_findings script failed_" > findings.md
           exit $PW_EXIT
@@ -132,7 +132,9 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: playwright-findings
-          path: web/findings.md
+          path: |
+            web/findings.md
+            web/playwright-report.json
 
   lighthouse:
     needs: preview-web
@@ -221,7 +223,7 @@ jobs:
         env:
           VALIDATOR: playwright
           PREVIEW_URL: ${{ needs.preview-web.outputs.preview_url }}
-          REPRO_HINT: cd web && PLAYWRIGHT_BASE_URL=${{ needs.preview-web.outputs.preview_url }} PLAYWRIGHT_SKIP_WEB_SERVER=1 pnpm exec playwright test --project fast
+          REPRO_HINT: cd web && PLAYWRIGHT_BASE_URL=${{ needs.preview-web.outputs.preview_url }} PLAYWRIGHT_SKIP_WEB_SERVER=1 pnpm exec playwright test --project deployment-smoke
         with:
           script: |
             // github-script runs from its own dist dir; relative imports look
@@ -287,13 +289,13 @@ jobs:
           done
           echo "::error::Prod unreachable after 5 attempts"
           exit 1
-      - name: Playwright fast against prod
+      - name: Playwright deployment smoke against prod
         env:
           PLAYWRIGHT_BASE_URL: https://spaces.cloudcompute.com
           PLAYWRIGHT_SKIP_WEB_SERVER: "1"
         run: |
           set +e
-          pnpm exec playwright test --project fast --reporter=json > prod-report.json
+          pnpm exec playwright test --project deployment-smoke --reporter=json > prod-report.json
           PW_EXIT=$?
           node scripts/playwright-findings.js prod-report.json > findings.md || echo "_findings script failed_" > findings.md
           exit $PW_EXIT
@@ -301,7 +303,9 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: prod-validate-findings
-          path: web/findings.md
+          path: |
+            web/findings.md
+            web/prod-report.json
 
   post-prod-alert:
     needs: [promote, validate-prod]

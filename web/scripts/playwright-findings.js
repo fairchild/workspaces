@@ -20,10 +20,12 @@ const ansiRegex = new RegExp(
 const stripAnsi = (s) => s.replace(ansiRegex, "");
 
 const failures = [];
+const projects = new Set();
 function walk(suite, trail) {
 	const here = trail.concat(suite.title ? [suite.title] : []);
 	for (const spec of suite.specs ?? []) {
 		for (const test of spec.tests ?? []) {
+			if (test.projectName) projects.add(test.projectName);
 			for (const result of test.results ?? []) {
 				if (result.status === "failed" || result.status === "timedOut") {
 					const rawErr =
@@ -45,9 +47,19 @@ function walk(suite, trail) {
 for (const suite of report.suites ?? []) walk(suite, []);
 
 const stats = report.stats ?? {};
+const skipped = stats.skipped ?? 0;
+const failed = stats.unexpected ?? failures.length;
+const passed = stats.expected ?? "?";
+const projectNames = [
+	...new Set([...projects, ...failures.map((f) => f.project).filter(Boolean)]),
+].sort();
 const lines = [];
 lines.push(
-	`**Summary:** ${stats.unexpected ?? failures.length} failed / ${stats.expected ?? "?"} passed / ${stats.flaky ?? 0} flaky`,
+	`**Summary:** ${failed} failed / ${passed} passed / ${skipped} skipped / ${stats.flaky ?? 0} flaky`,
+);
+lines.push(`**Base URL:** ${process.env.PLAYWRIGHT_BASE_URL ?? "not set"}`);
+lines.push(
+	`**Project(s):** ${projectNames.length ? projectNames.join(", ") : "unknown"}`,
 );
 lines.push("");
 if (failures.length === 0) {
