@@ -152,7 +152,7 @@ to that environment. The release workflow references this environment before it
 imports signing material, so environment protection is the approval gate for
 Developer ID, notarization, and Sparkle release secrets.
 
-The workflow is split into two jobs:
+The workflow is split into three jobs:
 
 - `build-sign-notarize-release` runs on `[self-hosted, signing-host]` with
   read-only repository permissions. It imports the Developer ID certificate into
@@ -161,6 +161,11 @@ The workflow is split into two jobs:
   deletes the temporary keychain.
 - `publish-github-release` runs on `ubuntu-latest` with `contents: write`. It
   downloads the signed artifacts and creates or updates the GitHub Release.
+- `validate-published-release-assets` runs on GitHub-hosted macOS with
+  read-only repository permissions after publication. It downloads the public
+  release assets, validates the Sparkle appcast, confirms the latest DMG
+  matches the versioned DMG, and runs macOS DMG notarization/Gatekeeper checks
+  against the published asset.
 
 Keep signing/notarization credentials scoped to the steps that need them. Do not
 write generated keychain passwords or Apple notarization credentials to
@@ -262,6 +267,9 @@ The recommended method for production releases.
    - Guardrails:
      - Manual releases fail if started from a non-`main` branch.
      - Release commit must be reachable from `origin/main`.
+     - Release preflight waits for in-flight `build-and-test` checks on source
+       changes before signing starts, so tag-triggered releases do not fail
+       only because CI has not finished yet.
      - Tag-driven releases fail fast if app version metadata does not match the requested release tag.
      - Temporary signing keychain is cleaned up and prior keychain defaults are restored on the shared `signing-host` runner.
    - Actions performed:
@@ -272,6 +280,8 @@ The recommended method for production releases.
      - Verify nested bundle signing before notarization
      - Notarize and staple `.dmg`
      - Publish or refresh a GitHub release with artifacts via `gh`
+     - Download the published assets on hosted macOS and re-check appcast XML,
+       DMG identity, stapling, and Gatekeeper assessment
 
 4. **Release Tag and Assets**
 

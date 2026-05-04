@@ -30,6 +30,8 @@ class ValidateReleaseChangesTests(unittest.TestCase):
                 "scripts/generate-sparkle-appcast.sh",
                 "scripts/install-local.sh",
                 "scripts/notarize.sh",
+                "scripts/release-preflight.sh",
+                "scripts/verify-installed-perf.sh",
                 "scripts/unrelated.sh",
             ]
         )
@@ -40,6 +42,8 @@ class ValidateReleaseChangesTests(unittest.TestCase):
                 "scripts/generate-sparkle-appcast.sh",
                 "scripts/install-local.sh",
                 "scripts/notarize.sh",
+                "scripts/release-preflight.sh",
+                "scripts/verify-installed-perf.sh",
             ],
         )
 

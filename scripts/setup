@@ -12,14 +12,19 @@ Usage: ./scripts/setup [--hooks-only]
 Canonical first-run setup for this repository.
 
 Options:
+  --env-only    Link local env files from another worktree, then exit.
   --hooks-only  Install or refresh prek git hooks, then exit.
   -h, --help    Show this help.
 USAGE
 }
 
+ENV_ONLY=0
 HOOKS_ONLY=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --env-only)
+      ENV_ONLY=1
+      ;;
     --hooks-only)
       HOOKS_ONLY=1
       ;;
@@ -64,24 +69,55 @@ if [[ "$HOOKS_ONLY" == "1" ]]; then
   exit 0
 fi
 
-# Symlink .env from main worktree if we're in a worktree and missing it
+# Symlink local env files from another worktree if we're in a worktree and
+# missing them. Prefer the conventional ~/code/<repo> checkout, but fall back to
+# any sibling worktree that actually has the env file.
+env_source_for() {
+  local envfile="$1"
+  local preferred_source="$HOME/code/$(basename "$REPO_ROOT")/$envfile"
+  local worktree_path=""
+
+  if [[ "$preferred_source" != "$REPO_ROOT/$envfile" && -f "$preferred_source" ]]; then
+    printf '%s\n' "$preferred_source"
+    return 0
+  fi
+
+  while IFS= read -r line; do
+    case "$line" in
+      worktree\ *)
+        worktree_path="${line#worktree }"
+        if [[ "$worktree_path" != "$REPO_ROOT" && -f "$worktree_path/$envfile" ]]; then
+          printf '%s\n' "$worktree_path/$envfile"
+          return 0
+        fi
+        ;;
+    esac
+  done < <(git worktree list --porcelain 2>/dev/null)
+
+  return 1
+}
+
 link_env_from_main() {
-  local git_common git_dir main_wt
+  local env_source envfile git_common git_dir
   git_common="$(git rev-parse --git-common-dir 2>/dev/null)" || return 0
   git_dir="$(git rev-parse --git-dir 2>/dev/null)" || return 0
   [[ "$git_common" != "$git_dir" ]] || return 0  # not a worktree
 
-  main_wt="$(git worktree list --porcelain | head -1 | sed 's/^worktree //')"
-  [[ -n "$main_wt" ]] || return 0
-
   for envfile in .env .env.local; do
-    if [[ -f "$main_wt/$envfile" && ! -e "$REPO_ROOT/$envfile" ]]; then
-      echo "=> Symlinking $envfile from main worktree"
-      ln -s "$main_wt/$envfile" "$REPO_ROOT/$envfile"
+    if [[ ! -e "$REPO_ROOT/$envfile" && ! -L "$REPO_ROOT/$envfile" ]]; then
+      env_source="$(env_source_for "$envfile" || true)"
+      if [[ -n "$env_source" ]]; then
+        echo "=> Symlinking $envfile from ${env_source%/*}"
+        ln -s "$env_source" "$REPO_ROOT/$envfile"
+      fi
     fi
   done
 }
 link_env_from_main
+
+if [[ "$ENV_ONLY" == "1" ]]; then
+  exit 0
+fi
 
 # Trust and install mise-managed tools. Codex worktrees run setup without an
 # interactive terminal, so trust every checked-in project config up front.

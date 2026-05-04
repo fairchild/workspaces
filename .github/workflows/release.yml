@@ -105,6 +105,7 @@ jobs:
         run: ./scripts/build-ghosttykit.sh
 
       - name: Import signing certificate
+        id: signing
         env:
           APPLE_DEVELOPER_ID_CERT_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_CERT_BASE64 }}
           APPLE_DEVELOPER_ID_CERT_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_CERT_PASSWORD }}
@@ -123,6 +124,13 @@ jobs:
             security list-keychains -d user 2>/dev/null \
             | sed -E 's/^[[:space:]]*"//; s/"$//' || true
           )"
+          echo "keychain_path=$KEYCHAIN_PATH" >> "$GITHUB_OUTPUT"
+          echo "original_default_keychain=$ORIGINAL_DEFAULT_KEYCHAIN" >> "$GITHUB_OUTPUT"
+          {
+            echo "original_keychain_list<<EOF"
+            echo "$ORIGINAL_KEYCHAIN_LIST"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
           if ! (echo "$APPLE_DEVELOPER_ID_CERT_BASE64" | base64 --decode > "$CERT_PATH" 2>/dev/null); then
             echo "$APPLE_DEVELOPER_ID_CERT_BASE64" | base64 -D > "$CERT_PATH"
@@ -163,17 +171,10 @@ jobs:
             exit 1
           fi
 
-          echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
-          echo "SIGNING_IDENTITY=$SIGNING_IDENTITY" >> "$GITHUB_ENV"
-          echo "CODESIGN_KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
-          echo "ORIGINAL_DEFAULT_KEYCHAIN=$ORIGINAL_DEFAULT_KEYCHAIN" >> "$GITHUB_ENV"
-          {
-            echo "ORIGINAL_KEYCHAIN_LIST<<EOF"
-            echo "$ORIGINAL_KEYCHAIN_LIST"
-            echo "EOF"
-          } >> "$GITHUB_ENV"
+          echo "signing_identity=$SIGNING_IDENTITY" >> "$GITHUB_OUTPUT"
 
       - name: Prepare provisioning profile
+        id: profile
         env:
           APPLE_DEVELOPER_ID_PROVISIONING_PROFILE_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_PROVISIONING_PROFILE_BASE64 }}
         run: |
@@ -186,7 +187,7 @@ jobs:
           fi
 
           security cms -D -i "$PROFILE_PATH" >/dev/null
-          echo "PROVISIONING_PROFILE_PATH=$PROFILE_PATH" >> "$GITHUB_ENV"
+          echo "profile_path=$PROFILE_PATH" >> "$GITHUB_OUTPUT"
 
       - name: Notarization preflight
         env:
@@ -224,6 +225,9 @@ jobs:
       - name: Build signed app
         env:
           BUNDLE_ID: com.cloudcompute.workspaces
+          CODESIGN_KEYCHAIN_PATH: ${{ steps.signing.outputs.keychain_path }}
+          PROVISIONING_PROFILE_PATH: ${{ steps.profile.outputs.profile_path }}
+          SIGNING_IDENTITY: ${{ steps.signing.outputs.signing_identity }}
           TEAM_ID: ${{ vars.APPLE_TEAM_ID != '' && vars.APPLE_TEAM_ID || secrets.APPLE_TEAM_ID }}
         run: ./scripts/build-release.sh
 
@@ -246,6 +250,9 @@ jobs:
           APPLE_ID: ${{ vars.APPLE_ID != '' && vars.APPLE_ID || secrets.APPLE_ID }}
           APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
           BUNDLE_ID: com.cloudcompute.workspaces
+          CODESIGN_KEYCHAIN_PATH: ${{ steps.signing.outputs.keychain_path }}
+          PROVISIONING_PROFILE_PATH: ${{ steps.profile.outputs.profile_path }}
+          SIGNING_IDENTITY: ${{ steps.signing.outputs.signing_identity }}
           TEAM_ID: ${{ vars.APPLE_TEAM_ID != '' && vars.APPLE_TEAM_ID || secrets.APPLE_TEAM_ID }}
         run: bash ./scripts/notarize.sh
 
@@ -303,6 +310,10 @@ jobs:
 
       - name: Cleanup keychain
         if: always()
+        env:
+          KEYCHAIN_PATH: ${{ steps.signing.outputs.keychain_path }}
+          ORIGINAL_DEFAULT_KEYCHAIN: ${{ steps.signing.outputs.original_default_keychain }}
+          ORIGINAL_KEYCHAIN_LIST: ${{ steps.signing.outputs.original_keychain_list }}
         run: |
           set -euo pipefail
           # Restore prior keychain search/default state on shared self-hosted machines.
@@ -407,3 +418,61 @@ jobs:
                 --latest
             fi
           fi
+
+  validate-published-release-assets:
+    needs:
+      - build-sign-notarize-release
+      - publish-github-release
+    runs-on: macos-15
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Download published release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.build-sign-notarize-release.outputs.tag }}
+          VERSION: ${{ needs.build-sign-notarize-release.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p release-downloads
+          gh release download "$TAG" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --pattern "WorkSpaces-${VERSION}.dmg" \
+            --pattern "WorkSpaces-latest.dmg" \
+            --pattern "appcast.xml" \
+            --dir release-downloads
+
+      - name: Validate published release assets
+        env:
+          BUILD: ${{ needs.build-sign-notarize-release.outputs.build }}
+          TAG: ${{ needs.build-sign-notarize-release.outputs.tag }}
+          VERSION: ${{ needs.build-sign-notarize-release.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          DMG_PATH="release-downloads/WorkSpaces-${VERSION}.dmg"
+          LATEST_DMG_PATH="release-downloads/WorkSpaces-latest.dmg"
+          APPCAST_PATH="release-downloads/appcast.xml"
+
+          for asset in "$DMG_PATH" "$LATEST_DMG_PATH" "$APPCAST_PATH"; do
+            if [[ ! -f "$asset" ]]; then
+              echo "::error::Published release asset missing: $asset"
+              exit 1
+            fi
+          done
+
+          shasum -a 256 "$DMG_PATH" "$LATEST_DMG_PATH" "$APPCAST_PATH"
+          if ! cmp -s "$DMG_PATH" "$LATEST_DMG_PATH"; then
+            echo "::error::Latest DMG asset does not match versioned DMG asset"
+            exit 1
+          fi
+
+          xmllint --noout "$APPCAST_PATH"
+          grep -Fq "releases/download/${TAG}/WorkSpaces-${VERSION}.dmg" "$APPCAST_PATH"
+          grep -Fq "<sparkle:shortVersionString>${VERSION}</sparkle:shortVersionString>" "$APPCAST_PATH"
+          grep -Fq "<sparkle:version>${BUILD}</sparkle:version>" "$APPCAST_PATH"
+
+          hdiutil imageinfo "$DMG_PATH"
+          xcrun stapler validate "$DMG_PATH"
+          spctl --assess --type open --context context:primary-signature --verbose "$DMG_PATH"

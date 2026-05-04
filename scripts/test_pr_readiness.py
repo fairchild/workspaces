@@ -90,7 +90,7 @@ class PRReadinessTests(unittest.TestCase):
 
     def test_release_pr_requires_preconditions(self) -> None:
         body = GOOD_BODY.replace("- Release/ops preconditions: not applicable", "- Release/ops preconditions:")
-        result = pr_readiness.evaluate(pr(body), [".github/workflows/release.yml"])
+        result = pr_readiness.evaluate(pr(body), ["scripts/verify-installed-perf.sh"])
         self.assertIn(
             "Release-sensitive files changed; fill 'Release/ops preconditions' in the PR body.",
             result.failures,

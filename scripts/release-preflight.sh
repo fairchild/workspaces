@@ -13,41 +13,93 @@
 # Exit codes:
 #   0  all required checks passed
 #   1  a required check failed or was not found
+#   2  invalid arguments or environment configuration
 
 set -euo pipefail
 
+REQUIRED_CI_CHECK="build-and-test"
+ADVISORY_PERF_CHECKS=("perf-validation" "capture")
+
 DRY_RUN=false
-if [[ "${1:-}" == "--dry-run" ]]; then
-    DRY_RUN=true
-    shift
-fi
+SHA=""
+REPO="${GITHUB_REPOSITORY:-fairchild/workspaces}"
+POLL_SECONDS="${RELEASE_PREFLIGHT_POLL_SECONDS:-15}"
+TIMEOUT_SECONDS="${RELEASE_PREFLIGHT_TIMEOUT_SECONDS:-900}"
+CI_RESULT="not_found"
+CI_ELAPSED=0
 
-SHA="${1:?Usage: release-preflight.sh [--dry-run] <sha> [repo]}"
-REPO="${2:-${GITHUB_REPOSITORY:-fairchild/workspaces}}"
+usage() {
+    cat <<'USAGE'
+Usage: ./scripts/release-preflight.sh [--dry-run] <sha> [repo]
 
-echo "=== Release Preflight ==="
-echo "SHA:  $SHA"
-echo "Repo: $REPO"
-echo ""
+Verify release-blocking checks for the exact commit being published.
+USAGE
+}
 
-# Check a check-run's conclusion for a given SHA.
-# Returns: "success", "failure", "neutral", "cancelled", "skipped",
-#          "timed_out", "action_required", or "not_found"
-check_workflow() {
+parse_args() {
+    if [[ "${1:-}" == "--dry-run" ]]; then
+        DRY_RUN=true
+        shift
+    fi
+
+    if [[ $# -lt 1 || $# -gt 2 ]]; then
+        usage >&2
+        exit 2
+    fi
+
+    SHA="$1"
+    REPO="${2:-$REPO}"
+}
+
+validate_config() {
+    if ! [[ "$POLL_SECONDS" =~ ^[0-9]+$ ]] || (( POLL_SECONDS < 1 )); then
+        echo "RELEASE_PREFLIGHT_POLL_SECONDS must be a positive integer" >&2
+        exit 2
+    fi
+    if ! [[ "$TIMEOUT_SECONDS" =~ ^[0-9]+$ ]]; then
+        echo "RELEASE_PREFLIGHT_TIMEOUT_SECONDS must be a non-negative integer" >&2
+        exit 2
+    fi
+}
+
+print_header() {
+    echo "=== Release Preflight ==="
+    echo "SHA:  $SHA"
+    echo "Repo: $REPO"
+    echo ""
+}
+
+# Return the latest check-run state for this release SHA:
+# - terminal conclusions such as success, failure, cancelled
+# - queued or in_progress while GitHub Actions is still running
+# - not_found when no matching check run exists on the commit
+check_workflow_state() {
     local workflow_name="$1"
-    local conclusion
-    conclusion=$(gh api \
+    local jq_filter
+    local state
+
+    jq_filter=".check_runs
+        | map(select(.name == \"$workflow_name\"))
+        | sort_by(.started_at // .created_at // \"\")
+        | last
+        | if . == null then empty
+          elif .status == \"completed\" then .conclusion
+          else .status
+          end"
+
+    state=$(gh api \
         "repos/$REPO/commits/$SHA/check-runs" \
-        --jq ".check_runs[] | select(.name == \"$workflow_name\") | .conclusion" \
-        2>/dev/null | head -1)
-    echo "${conclusion:-not_found}"
+        --jq "$jq_filter" \
+        2>/dev/null)
+    echo "${state:-not_found}"
 }
 
 check_any_workflow() {
-    local workflow_name=""
+    local workflow_name
     local result="not_found"
+
     for workflow_name in "$@"; do
-        result=$(check_workflow "$workflow_name")
+        result=$(check_workflow_state "$workflow_name")
         if [[ "$result" != "not_found" ]]; then
             echo "$result"
             return
@@ -56,65 +108,199 @@ check_any_workflow() {
     echo "not_found"
 }
 
-EXIT_CODE=0
+is_ci_relevant_path() {
+    local path="$1"
 
-# --- Required: build-and-test (CI) ---
-echo -n "CI (build-and-test): "
-CI_RESULT=$(check_workflow "build-and-test")
-case "$CI_RESULT" in
-    success)
-        echo "PASS"
-        ;;
-    not_found)
-        # Release commits typically only touch CHANGELOG.md and don't trigger CI.
-        # Check if the commit contains any source changes that would need CI.
-        SOURCE_CHANGES=$(gh api "repos/$REPO/commits/$SHA" \
-            --jq '[.files[].filename | select(
-                startswith("Sources/") or
-                startswith("Tests/") or
-                startswith("scripts/build") or
-                startswith("scripts/release") or
-                startswith("scripts/notarize") or
-                . == "Package.swift"
-            )] | length' 2>/dev/null || echo "unknown")
-        if [[ "$SOURCE_CHANGES" == "0" ]]; then
-            echo "SKIPPED (no source changes in commit)"
-        elif [[ "$DRY_RUN" == true ]]; then
-            echo "NOT FOUND (dry-run: continuing)"
-        else
-            echo "NOT FOUND"
+    case "$path" in
+        Sources/* | Tests/*)
+            return 0
+            ;;
+        .github/workflows/ci.yml | \
+            .github/workflows/ci-fallback.yml | \
+            .github/workflows/release.yml | \
+            .swift-format | \
+            Package.swift | \
+            Package.resolved | \
+            WorkspaceManager.entitlements | \
+            scripts/build-ghosttykit.sh | \
+            scripts/build-release.sh | \
+            scripts/generate-sparkle-appcast.sh | \
+            scripts/install-local.sh | \
+            scripts/notarize.sh | \
+            scripts/prepare-release.sh | \
+            scripts/release-preflight.sh | \
+            scripts/release-version.sh | \
+            scripts/setup-release-secrets.sh | \
+            scripts/verify-app-keychain-signing.sh | \
+            scripts/verify-installed-perf.sh | \
+            scripts/verify-p12.sh | \
+            scripts/verify-release-bundle.sh)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+source_change_count() {
+    local changed_files
+    local changed_file
+    local count=0
+
+    if ! changed_files=$(gh api \
+        "repos/$REPO/commits/$SHA" \
+        --jq '.files[].filename' \
+        2>/dev/null); then
+        echo "unknown"
+        return
+    fi
+
+    while IFS= read -r changed_file; do
+        [[ -n "$changed_file" ]] || continue
+        if is_ci_relevant_path "$changed_file"; then
+            count=$((count + 1))
+        fi
+    done <<<"$changed_files"
+
+    echo "$count"
+}
+
+should_stop_waiting_for_ci() {
+    local source_changes="$1"
+
+    if [[ "$source_changes" == "0" && "$CI_RESULT" == "not_found" ]]; then
+        return 0
+    fi
+    if [[ "$DRY_RUN" == true ]]; then
+        return 0
+    fi
+    if (( CI_ELAPSED >= TIMEOUT_SECONDS )); then
+        return 0
+    fi
+    return 1
+}
+
+wait_for_required_ci() {
+    local source_changes="$1"
+
+    CI_RESULT="not_found"
+    CI_ELAPSED=0
+
+    echo -n "CI ($REQUIRED_CI_CHECK): "
+    while true; do
+        CI_RESULT=$(check_workflow_state "$REQUIRED_CI_CHECK")
+        case "$CI_RESULT" in
+            queued | in_progress | not_found)
+                if should_stop_waiting_for_ci "$source_changes"; then
+                    break
+                fi
+                echo "${CI_RESULT}; waiting ${POLL_SECONDS}s"
+                sleep "$POLL_SECONDS"
+                CI_ELAPSED=$((CI_ELAPSED + POLL_SECONDS))
+                echo -n "CI ($REQUIRED_CI_CHECK): "
+                ;;
+            *)
+                break
+                ;;
+        esac
+    done
+}
+
+report_required_ci() {
+    local source_changes="$1"
+
+    case "$CI_RESULT" in
+        success)
+            echo "PASS"
+            return 0
+            ;;
+        queued | in_progress)
+            if [[ "$DRY_RUN" == true ]]; then
+                echo "${CI_RESULT} (dry-run: continuing)"
+                return 0
+            fi
+            echo "TIMEOUT ($CI_RESULT after ${CI_ELAPSED}s)"
+            return 1
+            ;;
+        not_found)
+            # Release commits typically only touch CHANGELOG.md and do not
+            # trigger CI. For source-affecting commits, absence of CI remains a
+            # hard release blocker.
+            if [[ "$source_changes" == "0" ]]; then
+                echo "SKIPPED (no source changes in commit)"
+                return 0
+            fi
+            if [[ "$DRY_RUN" == true ]]; then
+                echo "NOT FOUND (dry-run: continuing)"
+                return 0
+            fi
+            echo "NOT FOUND after ${CI_ELAPSED}s"
             echo "  Warning: CI may not have run but source files were changed."
             echo "  Verify manually that no regressions were introduced."
-            EXIT_CODE=1
-        fi
-        ;;
-    *)
-        echo "FAIL ($CI_RESULT)"
-        EXIT_CODE=1
-        ;;
-esac
+            return 1
+            ;;
+        *)
+            echo "FAIL ($CI_RESULT)"
+            return 1
+            ;;
+    esac
+}
 
-# --- Advisory: perf-validation ---
-echo -n "Perf validation: "
-PERF_RESULT=$(check_any_workflow "perf-validation" "capture")
-case "$PERF_RESULT" in
-    success)
-        echo "PASS"
-        ;;
-    not_found)
-        echo "NOT FOUND (advisory — perf may not have run on this SHA)"
-        ;;
-    *)
-        echo "WARN ($PERF_RESULT) — perf regression detected but not blocking release"
-        ;;
-esac
+report_perf_validation() {
+    local perf_result
 
-echo ""
-if [[ "$EXIT_CODE" -eq 0 ]]; then
-    echo "Preflight passed."
-else
-    echo "Preflight FAILED — required checks did not pass on $SHA."
-    echo "Do not publish this release until CI is green."
-fi
+    echo -n "Perf validation: "
+    perf_result=$(check_any_workflow "${ADVISORY_PERF_CHECKS[@]}")
+    case "$perf_result" in
+        success)
+            echo "PASS"
+            ;;
+        not_found)
+            echo "NOT FOUND (advisory — perf may not have run on this SHA)"
+            ;;
+        *)
+            echo "WARN ($perf_result) — perf regression detected but not blocking release"
+            ;;
+    esac
+}
 
-exit "$EXIT_CODE"
+finish_preflight() {
+    local exit_code="$1"
+
+    echo ""
+    if [[ "$exit_code" -eq 0 ]]; then
+        echo "Preflight passed."
+    else
+        echo "Preflight FAILED — required checks did not pass on $SHA."
+        echo "Do not publish this release until CI is green."
+    fi
+
+    exit "$exit_code"
+}
+
+main() {
+    local source_changes
+    local exit_code=0
+
+    parse_args "$@"
+    validate_config
+    print_header
+
+    source_changes="$(source_change_count)"
+
+    # Required gate: the release SHA must either have passing CI or contain no
+    # source-affecting changes that would have triggered CI.
+    wait_for_required_ci "$source_changes"
+    if ! report_required_ci "$source_changes"; then
+        exit_code=1
+    fi
+
+    # Advisory gate: performance validation is useful release context, but it
+    # should not block signing/publishing by itself.
+    report_perf_validation
+
+    finish_preflight "$exit_code"
+}
+
+main "$@"
