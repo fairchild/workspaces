@@ -60,12 +60,8 @@ jobs:
         working-directory: web
         run: pnpm install --frozen-lockfile
 
-      - name: Pull Vercel prod env + config
-        # The generated PR URL is still a protected preview deployment, but
-        # auth-backed routes need the same runtime secrets as production. The
-        # Vercel preview env is intentionally sparse today and produces a
-        # Better Auth default-secret 500 on /api/auth/sign-in/social.
-        run: npx vercel@51 pull --yes --environment=production --token="$VERCEL_TOKEN" --scope="$VERCEL_ORG_ID"
+      - name: Pull Vercel preview env + config
+        run: npx vercel@51 pull --yes --environment=preview --token="$VERCEL_TOKEN" --scope="$VERCEL_ORG_ID"
 
       - name: Build preview artifact
         run: npx vercel@51 build --token="$VERCEL_TOKEN" --scope="$VERCEL_ORG_ID"
