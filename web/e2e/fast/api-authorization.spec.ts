@@ -7,6 +7,8 @@ const DB_URL =
 	(process.env.CI ? "file:data/e2e-auth.db" : process.env.TURSO_DATABASE_URL) ??
 	"file:data/auth.db";
 const BASE_URL = process.env.PLAYWRIGHT_BASE_URL ?? "http://localhost:3000";
+const RUNNING_AGAINST_DEPLOYED_APP =
+	process.env.PLAYWRIGHT_SKIP_WEB_SERVER === "1";
 
 const USER_A = {
 	id: "e2e-authz-user-a",
@@ -150,6 +152,10 @@ function expectForbidden(response: { status(): number }) {
 
 test.describe("API authorization", () => {
 	test.describe.configure({ mode: "serial" });
+	test.skip(
+		RUNNING_AGAINST_DEPLOYED_APP,
+		"local seeded-DB authorization coverage cannot run against deployed apps",
+	);
 
 	let db: Client | undefined;
 
