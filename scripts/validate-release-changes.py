@@ -24,6 +24,7 @@ RELEASE_PATHS = {
     "scripts/install-local.sh",
     "scripts/notarize.sh",
     "scripts/prepare-release.sh",
+    "scripts/release-manifest.sh",
     "scripts/release-preflight.sh",
     "scripts/release-version.sh",
     "scripts/setup-release-secrets.sh",
@@ -31,6 +32,7 @@ RELEASE_PATHS = {
     "scripts/verify-installed-perf.sh",
     "scripts/verify-p12.sh",
     "scripts/verify-release-bundle.sh",
+    "scripts/verify-sparkle-appcast.swift",
 }
 
 
@@ -60,6 +62,13 @@ def validate_workflow_yaml(path: str) -> int:
     return run(["ruby", "-e", script, path])
 
 
+def validate_swift_parse(path: str) -> int:
+    if not shutil.which("swift"):
+        print("notice: swift unavailable; skipping Swift parser check")
+        return 0
+    return run(["swift", "-frontend", "-parse", path])
+
+
 def release_files(files: list[str]) -> list[str]:
     return [path for path in files if path in RELEASE_PATHS]
 
@@ -85,6 +94,8 @@ def main(argv: list[str]) -> int:
     for path in files:
         if path.endswith(".sh") and (REPO_ROOT / path).exists():
             status |= validate_shell(path)
+        if path.endswith(".swift") and (REPO_ROOT / path).exists():
+            status |= validate_swift_parse(path)
 
     if ".github/workflows/release.yml" in files:
         status |= validate_workflow_yaml(".github/workflows/release.yml")

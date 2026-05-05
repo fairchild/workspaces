@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { Sandbox, Snapshot } from "@vercel/sandbox";
 import ms from "ms";
 import { getBaseSnapshotId, recordBaseSnapshot } from "../base-snapshots";
+import { shouldExposeAnthropicKeyToTerminal } from "./config";
 import {
 	type ComputeProvider,
 	type ComputeProviderAvailability,
@@ -195,6 +196,14 @@ async function scrubGitOrigin(
 
 function stripQuotes(s: string): string {
 	return s.replace(/^["']|["']$/g, "");
+}
+
+export function terminalAnthropicApiKey(
+	env: Partial<NodeJS.ProcessEnv> = process.env,
+): string | null {
+	if (!shouldExposeAnthropicKeyToTerminal(env)) return null;
+	const apiKey = env.ANTHROPIC_API_KEY;
+	return apiKey ? stripQuotes(apiKey) : null;
 }
 
 function configuredTtydTokenSecret(): string | null {
@@ -771,7 +780,7 @@ export class VercelSandboxProvider
 		branch?: string;
 	}): Promise<SandboxResult> {
 		const baseSnapshotId = await getOrCreateBaseSnapshot();
-		const apiKey = process.env.ANTHROPIC_API_KEY;
+		const terminalApiKey = terminalAnthropicApiKey();
 
 		const sandbox = await Sandbox.create({
 			...getCredentials(),
@@ -779,13 +788,9 @@ export class VercelSandboxProvider
 			timeout: ms("30m"),
 			resources: { vcpus: 2 },
 			ports: [7681],
-			// Pass ANTHROPIC_API_KEY + CLAUDE_CONFIG_DIR so a user who runs
-			// `claude` from the terminal shell isn't greeted with "Not
-			// logged in". The terminal is auth-gated by ttydPathToken, so
-			// only the authenticated user can read these env vars.
-			env: apiKey
+			env: terminalApiKey
 				? {
-						ANTHROPIC_API_KEY: stripQuotes(apiKey),
+						ANTHROPIC_API_KEY: terminalApiKey,
 						CLAUDE_CONFIG_DIR,
 					}
 				: undefined,
@@ -805,10 +810,10 @@ export class VercelSandboxProvider
 			await scrubGitOrigin(sandbox, params.cloneUrl, "terminal sandbox");
 			await cleanupGitCloneAuth(sandbox, "terminal sandbox");
 
-			// Same claude auth setup as the agent path so `claude` works
-			// out of the box from the shell.
-			if (apiKey) {
-				await sandbox.writeFiles(claudeAuthFiles(apiKey));
+			// User-facing terminal shells do not receive the host Anthropic key
+			// unless explicitly opted in. Agent chat keeps its separate auth path.
+			if (terminalApiKey) {
+				await sandbox.writeFiles(claudeAuthFiles(terminalApiKey));
 				await assertRunCommand(
 					sandbox,
 					"chmod api-key-helper (terminal sandbox)",
@@ -863,10 +868,10 @@ const ALIVE_STATUSES: ReadonlySet<string> = new Set(["running", "pending"]);
 /**
  * Derive a stable per-sandbox path token used as ttyd's `--base-path`.
  *
- * The terminal URL `https://sb-xxx.vercel.run/<token>/ws` is the only
- * gate between an attacker and shell access. By making the path a 24-char
- * HMAC of the sandbox ID + a server-side secret, an attacker who guesses
- * a sandbox ID still can't connect without knowing the secret.
+ * The terminal URL `https://sb-xxx.vercel.run/<token>/ws` is the final ttyd
+ * gate after the app's authenticated one-time ticket exchange. By making the
+ * path a 24-char HMAC of the sandbox ID + a server-side secret, an attacker
+ * who guesses a sandbox ID still can't connect without knowing the secret.
  *
  * The token is stateless — anywhere we know the sandbox ID, we can
  * recompute it. No DB column needed.

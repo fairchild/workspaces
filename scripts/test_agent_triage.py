@@ -162,6 +162,18 @@ class AgentTriageTests(unittest.TestCase):
             self.assertIn("matched=false", output)
             self.assertIn("reason=label_mismatch", output)
 
+    def test_payload_label_names_detects_privileged_patch_label(self) -> None:
+        names = triage.payload_label_names(
+            {
+                "labels": [
+                    {"name": "safe-to-run-agent"},
+                    {"name": triage.PRIVILEGED_PATCH_LABEL},
+                ]
+            }
+        )
+
+        self.assertIn(triage.PRIVILEGED_PATCH_LABEL, names)
+
 
 if __name__ == "__main__":
     unittest.main()

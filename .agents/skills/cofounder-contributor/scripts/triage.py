@@ -821,6 +821,7 @@ def classify_execution_work(
             "issue_number": issue_number,
             "title": issue.get("title"),
             "url": issue.get("url"),
+            "labels": sorted(labels),
             "discussion_number": discussion_number,
             "priority": priority,
             "blocked_by": blocked_by,

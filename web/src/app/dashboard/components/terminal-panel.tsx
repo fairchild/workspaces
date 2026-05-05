@@ -63,6 +63,7 @@ export function TerminalPanel({
 			</div>
 		);
 	}
+	const selectedRepoName = `${selectedRepo.owner}/${selectedRepo.repo}`;
 
 	// Build the sub-tab list: sessions + any provisioning slots not yet
 	// in sessions (so the placeholder shows up immediately on click).
@@ -209,7 +210,7 @@ export function TerminalPanel({
 	const runningSessions = sessions.filter(
 		(s) =>
 			s.state === "running" &&
-			(s.provider === "managed-agents" || !!s.terminalUrl),
+			(s.provider === "managed-agents" || s.terminalAccess === "ticket"),
 	);
 
 	return (
@@ -234,7 +235,8 @@ export function TerminalPanel({
 							<TerminalCanvas
 								key={s.agentName}
 								agentName={s.agentName}
-								terminalUrl={s.terminalUrl as string}
+								repo={selectedRepoName}
+								sessionId={s.sessionId}
 								active={s.agentName === selectedAgent}
 							/>
 						),

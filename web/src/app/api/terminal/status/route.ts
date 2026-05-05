@@ -13,11 +13,12 @@ export const dynamic = "force-dynamic";
 export type TerminalSessionState = "running" | "paused";
 
 export interface TerminalSessionInfo {
+	sessionId: string;
 	agentName: string;
 	state: TerminalSessionState;
 	sandboxId: string;
 	provider: string;
-	terminalUrl?: string;
+	terminalAccess?: "ticket";
 }
 
 async function resolveState(
@@ -48,6 +49,7 @@ async function resolveSession(
 	// Unknown backend — trust the DB
 	if (state === null) {
 		return {
+			sessionId: session.id,
 			agentName: session.agentName,
 			state: session.status === "snapshotted" ? "paused" : "running",
 			sandboxId: session.computeInstanceId,
@@ -59,6 +61,7 @@ async function resolveSession(
 		// Snapshotted sessions are expected to not be running — they're paused
 		if (session.status === "snapshotted") {
 			return {
+				sessionId: session.id,
 				agentName: session.agentName,
 				state: "paused",
 				sandboxId: session.computeInstanceId,
@@ -73,11 +76,12 @@ async function resolveSession(
 	}
 
 	return {
+		sessionId: session.id,
 		agentName: session.agentName,
 		state: "running",
 		sandboxId: session.computeInstanceId,
 		provider: session.computeBackend,
-		terminalUrl: state.terminalUrl,
+		terminalAccess: state.terminalUrl ? "ticket" : undefined,
 	};
 }
 

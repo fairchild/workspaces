@@ -104,20 +104,26 @@ export class ManagedAgentsProvider implements ComputeProvider {
 			config: this.buildEnvironmentConfig(),
 		});
 
-		const githubToken = request.envVars?.GITHUB_TOKEN ?? "";
+		const githubToken = request.readOnly
+			? ""
+			: (request.envVars?.GITHUB_TOKEN ?? "");
 		// Managed Agents requires https://github.com/{owner}/{repo} with no .git suffix
 		const repoUrl = request.cloneUrl.replace(/\.git$/, "");
-		const resources: BetaManagedAgentsGitHubRepositoryResourceParams[] = [
-			{
-				type: "github_repository",
-				url: repoUrl,
-				mount_path: "/workspace/repo",
-				authorization_token: githubToken,
-				...(request.branch
-					? { checkout: { type: "branch", name: request.branch } }
-					: {}),
-			},
-		];
+		const repositoryResource = {
+			type: "github_repository" as const,
+			url: repoUrl,
+			mount_path: "/workspace/repo",
+			...(request.branch
+				? { checkout: { type: "branch" as const, name: request.branch } }
+				: {}),
+		};
+		// The SDK marks authorization_token as required, but public, read-only
+		// repository mounts are tokenless by policy for user-triggered sessions.
+		const resources = [
+			githubToken
+				? { ...repositoryResource, authorization_token: githubToken }
+				: repositoryResource,
+		] as unknown as BetaManagedAgentsGitHubRepositoryResourceParams[];
 
 		const session = await client.beta.sessions.create({
 			agent: agentId,

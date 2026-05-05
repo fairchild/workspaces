@@ -29,6 +29,7 @@ if str(SHARED_SCRIPTS_DIR) not in sys.path:
 from prompt_context import normalize_trust_level  # noqa: E402
 
 APPROVAL_LABEL = "safe-to-run-agent"
+PRIVILEGED_PATCH_LABEL = "privileged-agent-patch"
 TRIAGE_COMMENT_AUTHOR = "github-actions[bot]"
 TRIAGE_MARKER_RE = re.compile(r"<!-- agent-triage-request:v1:([A-Za-z0-9_\-=]+) -->")
 SUPPORTED_AGENTS = ("april", "plat", "peter", "claude")
@@ -420,6 +421,10 @@ def delete_label(api_url: str, token: str, repo: str, issue_number: int, label_n
 
 
 def ensure_label_exists(api_url: str, token: str, repo: str, label_name: str) -> None:
+    descriptions = {
+        APPROVAL_LABEL: "Maintainer approval for agent execution",
+        PRIVILEGED_PATCH_LABEL: "Maintainer approval for agent patches touching privileged repo-control paths",
+    }
     try:
         github_request(
             api_url,
@@ -429,7 +434,7 @@ def ensure_label_exists(api_url: str, token: str, repo: str, label_name: str) ->
             data={
                 "name": label_name,
                 "color": "0e8a16",
-                "description": "Maintainer approval for agent execution",
+                "description": descriptions.get(label_name, "Maintainer approval for agent automation"),
             },
         )
     except GitHubAPIError as error:
@@ -456,6 +461,19 @@ def trusted_labeler(repo_owner: str, username: str, permission: str) -> bool:
     if (username or "").casefold() == (repo_owner or "").casefold():
         return True
     return permission in {"write", "maintain", "admin"}
+
+
+def payload_label_names(target: dict[str, Any]) -> set[str]:
+    raw_labels = target.get("labels") or []
+    if isinstance(raw_labels, dict):
+        raw_labels = raw_labels.get("nodes") or []
+    names: set[str] = set()
+    for item in raw_labels:
+        if isinstance(item, str):
+            names.add(item)
+        elif isinstance(item, dict) and item.get("name"):
+            names.add(str(item["name"]))
+    return names
 
 
 def parse_triage_comments(comments: list[dict[str, Any]]) -> list[ParsedTriageComment]:
@@ -528,6 +546,7 @@ def command_triage(args: argparse.Namespace) -> int:
         return 0
 
     ensure_label_exists(args.github_api_url, args.github_token, args.github_repository, APPROVAL_LABEL)
+    ensure_label_exists(args.github_api_url, args.github_token, args.github_repository, PRIVILEGED_PATCH_LABEL)
     if len(agents) != 1:
         post_issue_comment(
             args.github_api_url,
@@ -577,11 +596,14 @@ def command_claim(args: argparse.Namespace) -> int:
         return 0
 
     if event_name == "issues":
-        target_number = int(payload["issue"]["number"])
+        target = payload["issue"]
+        target_number = int(target["number"])
     elif event_name == "pull_request":
-        target_number = int(payload["pull_request"]["number"])
+        target = payload["pull_request"]
+        target_number = int(target["number"])
     else:
         raise ValueError(f"Unsupported claim event type: {event_name}")
+    privileged_patch_approved = PRIVILEGED_PATCH_LABEL in payload_label_names(target)
 
     permission = collaborator_permission(
         args.github_api_url,
@@ -624,6 +646,7 @@ def command_claim(args: argparse.Namespace) -> int:
     write_output(args.github_output, "target_type", str(claimed["target_type"]))
     write_output(args.github_output, "target_number", str(claimed["target_number"]))
     write_output(args.github_output, "request_id", str(claimed["request_id"]))
+    write_output(args.github_output, "privileged_patch_approved", "true" if privileged_patch_approved else "false")
     write_output(args.github_output, "request_payload_json", request_json)
     write_output(args.github_output, "contributor_prompt", render_contributor_prompt(claimed))
     write_output(args.github_output, "claude_prompt", render_claude_prompt(claimed))

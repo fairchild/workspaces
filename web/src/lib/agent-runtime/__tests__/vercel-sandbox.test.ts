@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
 	VercelSandboxProvider,
 	buildGitCloneArgs,
+	terminalAnthropicApiKey,
 	ttydPathToken,
 } from "../vercel-sandbox";
 
@@ -161,5 +162,24 @@ describe("buildGitCloneArgs", () => {
 			"https://github.com/fairchild/workspaces.git",
 			"/vercel/sandbox/repo",
 		]);
+	});
+});
+
+describe("terminalAnthropicApiKey", () => {
+	it("does not expose the global Anthropic key to terminal sandboxes by default", () => {
+		expect(
+			terminalAnthropicApiKey({
+				ANTHROPIC_API_KEY: "sk-test",
+			}),
+		).toBeNull();
+	});
+
+	it("exposes a stripped Anthropic key only with explicit terminal opt-in", () => {
+		expect(
+			terminalAnthropicApiKey({
+				ANTHROPIC_API_KEY: '"sk-test"',
+				TERMINAL_ANTHROPIC_API_KEY: "1",
+			}),
+		).toBe("sk-test");
 	});
 });

@@ -28,6 +28,9 @@ jobs:
       version: ${{ steps.meta.outputs.version }}
       build: ${{ steps.meta.outputs.build }}
       tag: ${{ steps.meta.outputs.tag }}
+      bundle_id: ${{ steps.meta.outputs.bundle_id }}
+      team_id: ${{ steps.meta.outputs.team_id }}
+      sparkle_public_key: ${{ steps.meta.outputs.sparkle_public_key }}
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
@@ -97,10 +100,12 @@ jobs:
 
       - name: Ensure mise
         run: |
+          set -euo pipefail
           if command -v mise >/dev/null 2>&1; then
             mise --version
           else
-            brew install mise
+            echo "::error::mise is required on the signing host; install it out of band before running release"
+            exit 1
           fi
 
       - name: Build GhosttyKit
@@ -126,6 +131,7 @@ jobs:
             security list-keychains -d user 2>/dev/null \
             | sed -E 's/^[[:space:]]*"//; s/"$//' || true
           )"
+          echo "cert_path=$CERT_PATH" >> "$GITHUB_OUTPUT"
           echo "keychain_path=$KEYCHAIN_PATH" >> "$GITHUB_OUTPUT"
           echo "original_default_keychain=$ORIGINAL_DEFAULT_KEYCHAIN" >> "$GITHUB_OUTPUT"
           {
@@ -183,13 +189,13 @@ jobs:
           set -euo pipefail
 
           PROFILE_PATH="$RUNNER_TEMP/workspaces-release.provisionprofile"
+          echo "profile_path=$PROFILE_PATH" >> "$GITHUB_OUTPUT"
 
           if ! (echo "$APPLE_DEVELOPER_ID_PROVISIONING_PROFILE_BASE64" | base64 --decode > "$PROFILE_PATH" 2>/dev/null); then
             echo "$APPLE_DEVELOPER_ID_PROVISIONING_PROFILE_BASE64" | base64 -D > "$PROFILE_PATH"
           fi
 
           security cms -D -i "$PROFILE_PATH" >/dev/null
-          echo "profile_path=$PROFILE_PATH" >> "$GITHUB_OUTPUT"
 
       - name: Notarization preflight
         id: notarization
@@ -260,6 +266,8 @@ jobs:
 
       - name: Read release metadata
         id: meta
+        env:
+          TEAM_ID: ${{ vars.APPLE_TEAM_ID != '' && vars.APPLE_TEAM_ID || secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
 
@@ -276,17 +284,33 @@ jobs:
           fi
           DMG_PATH="build/WorkSpaces-${VERSION}.dmg"
           APPCAST_PATH="build/appcast.xml"
+          MANIFEST_PATH="build/release-manifest.json"
+          INFO_PLIST="build/WorkSpaces.app/Contents/Info.plist"
 
           if [[ ! -f "$DMG_PATH" ]]; then
             echo "::error::Expected DMG not found at $DMG_PATH"
             exit 1
           fi
+          if [[ ! -f "$INFO_PLIST" ]]; then
+            echo "::error::Expected app Info.plist not found at $INFO_PLIST"
+            exit 1
+          fi
+
+          BUNDLE_ID="$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$INFO_PLIST")"
+          SPARKLE_PUBLIC_KEY="$(/usr/libexec/PlistBuddy -c "Print :SUPublicEDKey" "$INFO_PLIST")"
+          [[ -n "$TEAM_ID" ]] || { echo "::error::TEAM_ID is required"; exit 1; }
+          [[ -n "$BUNDLE_ID" ]] || { echo "::error::CFBundleIdentifier is required"; exit 1; }
+          [[ -n "$SPARKLE_PUBLIC_KEY" ]] || { echo "::error::SUPublicEDKey is required"; exit 1; }
 
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "build=$BUILD" >> "$GITHUB_OUTPUT"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "dmg_path=$DMG_PATH" >> "$GITHUB_OUTPUT"
           echo "appcast_path=$APPCAST_PATH" >> "$GITHUB_OUTPUT"
+          echo "manifest_path=$MANIFEST_PATH" >> "$GITHUB_OUTPUT"
+          echo "bundle_id=$BUNDLE_ID" >> "$GITHUB_OUTPUT"
+          echo "team_id=$TEAM_ID" >> "$GITHUB_OUTPUT"
+          echo "sparkle_public_key=$SPARKLE_PUBLIC_KEY" >> "$GITHUB_OUTPUT"
 
       - name: Generate Sparkle appcast
         env:
@@ -299,6 +323,47 @@ jobs:
             --repo "${GITHUB_REPOSITORY}" \
             --output "${{ steps.meta.outputs.appcast_path }}"
 
+      - name: Verify Sparkle appcast
+        env:
+          APPCAST_PATH: ${{ steps.meta.outputs.appcast_path }}
+          BUILD: ${{ steps.meta.outputs.build }}
+          DMG_PATH: ${{ steps.meta.outputs.dmg_path }}
+          SPARKLE_PUBLIC_KEY: ${{ steps.meta.outputs.sparkle_public_key }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          ./scripts/verify-sparkle-appcast.swift \
+            --appcast "$APPCAST_PATH" \
+            --dmg "$DMG_PATH" \
+            --public-key "$SPARKLE_PUBLIC_KEY" \
+            --expected-url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/WorkSpaces-${VERSION}.dmg" \
+            --expected-version "$BUILD" \
+            --expected-short-version "$VERSION"
+
+      - name: Generate release manifest
+        env:
+          BUILD: ${{ steps.meta.outputs.build }}
+          DMG_PATH: ${{ steps.meta.outputs.dmg_path }}
+          APPCAST_PATH: ${{ steps.meta.outputs.appcast_path }}
+          MANIFEST_PATH: ${{ steps.meta.outputs.manifest_path }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          TEAM_ID: ${{ steps.meta.outputs.team_id }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          ./scripts/release-manifest.sh generate \
+            --output "$MANIFEST_PATH" \
+            --commit "$GITHUB_SHA" \
+            --tag "$TAG" \
+            --version "$VERSION" \
+            --build "$BUILD" \
+            --app build/WorkSpaces.app \
+            --dmg "$DMG_PATH" \
+            --latest-dmg build/WorkSpaces-latest.dmg \
+            --appcast "$APPCAST_PATH" \
+            --team-id "$TEAM_ID"
+
       - name: Upload release artifacts
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
@@ -307,6 +372,7 @@ jobs:
             ${{ steps.meta.outputs.dmg_path }}
             build/WorkSpaces-latest.dmg
             ${{ steps.meta.outputs.appcast_path }}
+            ${{ steps.meta.outputs.manifest_path }}
           if-no-files-found: error
           retention-days: 7
 
@@ -314,9 +380,11 @@ jobs:
         if: always()
         env:
           APPLE_API_KEY_PATH: ${{ steps.notarization.outputs.api_key_path }}
+          CERT_PATH: ${{ steps.signing.outputs.cert_path }}
           KEYCHAIN_PATH: ${{ steps.signing.outputs.keychain_path }}
           ORIGINAL_DEFAULT_KEYCHAIN: ${{ steps.signing.outputs.original_default_keychain }}
           ORIGINAL_KEYCHAIN_LIST: ${{ steps.signing.outputs.original_keychain_list }}
+          PROFILE_PATH: ${{ steps.profile.outputs.profile_path }}
         run: |
           set -euo pipefail
           # Restore prior keychain search/default state on shared self-hosted machines.
@@ -335,8 +403,25 @@ jobs:
           if [[ -n "${KEYCHAIN_PATH:-}" ]] && [[ -f "${KEYCHAIN_PATH}" ]]; then
             security delete-keychain "$KEYCHAIN_PATH" || true
           fi
-          if [[ -n "${APPLE_API_KEY_PATH:-}" ]] && [[ -f "${APPLE_API_KEY_PATH}" ]]; then
-            rm -f "$APPLE_API_KEY_PATH" || true
+          cleanup_files=(
+            "${CERT_PATH:-}"
+            "${PROFILE_PATH:-}"
+            "${APPLE_API_KEY_PATH:-}"
+          )
+          if [[ -n "${RUNNER_TEMP:-}" ]]; then
+            cleanup_files+=(
+              "$RUNNER_TEMP/developer-id-application.p12"
+              "$RUNNER_TEMP/workspaces-release.provisionprofile"
+              "$RUNNER_TEMP/notary-api-key.p8"
+            )
+          fi
+          for file in "${cleanup_files[@]}"; do
+            if [[ -n "$file" ]] && [[ -f "$file" ]]; then
+              rm -f "$file" || true
+            fi
+          done
+          if [[ -n "${KEYCHAIN_PATH:-}" ]]; then
+            rm -f "$KEYCHAIN_PATH" "$KEYCHAIN_PATH-shm" "$KEYCHAIN_PATH-wal" || true
           fi
 
   publish-github-release:
@@ -367,10 +452,11 @@ jobs:
           DMG_PATH="$(find release-assets -type f -name "WorkSpaces-${VERSION}.dmg" -print -quit)"
           APPCAST_PATH="$(find release-assets -type f -name "appcast.xml" -print -quit)"
           LATEST_DMG_PATH="$(find release-assets -type f -name "WorkSpaces-latest.dmg" -print -quit)"
+          MANIFEST_PATH="$(find release-assets -type f -name "release-manifest.json" -print -quit)"
           GENERATED_NOTES_PATH="$RUNNER_TEMP/release-notes.md"
           IS_PRERELEASE=false
 
-          for asset in "$DMG_PATH" "$LATEST_DMG_PATH" "$APPCAST_PATH"; do
+          for asset in "$DMG_PATH" "$LATEST_DMG_PATH" "$APPCAST_PATH" "$MANIFEST_PATH"; do
             if [[ ! -f "$asset" ]]; then
               echo "::error::Release artifact missing: $asset"
               exit 1
@@ -391,8 +477,7 @@ jobs:
               -f target_commitish="${GITHUB_SHA}" \
               --jq '.body' >"$GENERATED_NOTES_PATH"
 
-            gh release upload "$TAG" "$DMG_PATH" "$LATEST_DMG_PATH" --clobber --repo "${GITHUB_REPOSITORY}"
-            gh release upload "$TAG" "$APPCAST_PATH" --clobber --repo "${GITHUB_REPOSITORY}"
+            gh release upload "$TAG" "$DMG_PATH" "$LATEST_DMG_PATH" "$APPCAST_PATH" "$MANIFEST_PATH" --clobber --repo "${GITHUB_REPOSITORY}"
             if [[ "$IS_PRERELEASE" == true ]]; then
               gh release edit "$TAG" \
                 --title "$TITLE" \
@@ -408,7 +493,7 @@ jobs:
             fi
           else
             if [[ "$IS_PRERELEASE" == true ]]; then
-              gh release create "$TAG" "$DMG_PATH" "$LATEST_DMG_PATH" "$APPCAST_PATH" \
+              gh release create "$TAG" "$DMG_PATH" "$LATEST_DMG_PATH" "$APPCAST_PATH" "$MANIFEST_PATH" \
                 --repo "${GITHUB_REPOSITORY}" \
                 --title "$TITLE" \
                 --target "${GITHUB_SHA}" \
@@ -416,7 +501,7 @@ jobs:
                 --prerelease \
                 --latest=false
             else
-              gh release create "$TAG" "$DMG_PATH" "$LATEST_DMG_PATH" "$APPCAST_PATH" \
+              gh release create "$TAG" "$DMG_PATH" "$LATEST_DMG_PATH" "$APPCAST_PATH" "$MANIFEST_PATH" \
                 --repo "${GITHUB_REPOSITORY}" \
                 --title "$TITLE" \
                 --target "${GITHUB_SHA}" \
@@ -434,6 +519,10 @@ jobs:
     permissions:
       contents: read
     steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+
       - name: Download published release assets
         env:
           GH_TOKEN: ${{ github.token }}
@@ -447,12 +536,16 @@ jobs:
             --pattern "WorkSpaces-${VERSION}.dmg" \
             --pattern "WorkSpaces-latest.dmg" \
             --pattern "appcast.xml" \
+            --pattern "release-manifest.json" \
             --dir release-downloads
 
       - name: Validate published release assets
         env:
           BUILD: ${{ needs.build-sign-notarize-release.outputs.build }}
+          BUNDLE_ID: ${{ needs.build-sign-notarize-release.outputs.bundle_id }}
+          EXPECTED_SPARKLE_PUBLIC_KEY: ${{ needs.build-sign-notarize-release.outputs.sparkle_public_key }}
           TAG: ${{ needs.build-sign-notarize-release.outputs.tag }}
+          TEAM_ID: ${{ needs.build-sign-notarize-release.outputs.team_id }}
           VERSION: ${{ needs.build-sign-notarize-release.outputs.version }}
         run: |
           set -euo pipefail
@@ -460,15 +553,21 @@ jobs:
           DMG_PATH="release-downloads/WorkSpaces-${VERSION}.dmg"
           LATEST_DMG_PATH="release-downloads/WorkSpaces-latest.dmg"
           APPCAST_PATH="release-downloads/appcast.xml"
+          MANIFEST_PATH="release-downloads/release-manifest.json"
+          COMMITTED_SPARKLE_PUBLIC_KEY="$(/usr/libexec/PlistBuddy -c "Print :SUPublicEDKey" Sources/WorkspaceManager/Resources/Info.plist)"
 
-          for asset in "$DMG_PATH" "$LATEST_DMG_PATH" "$APPCAST_PATH"; do
+          for asset in "$DMG_PATH" "$LATEST_DMG_PATH" "$APPCAST_PATH" "$MANIFEST_PATH"; do
             if [[ ! -f "$asset" ]]; then
               echo "::error::Published release asset missing: $asset"
               exit 1
             fi
           done
+          if [[ "$COMMITTED_SPARKLE_PUBLIC_KEY" != "$EXPECTED_SPARKLE_PUBLIC_KEY" ]]; then
+            echo "::error::Workflow Sparkle public key does not match committed SUPublicEDKey"
+            exit 1
+          fi
 
-          shasum -a 256 "$DMG_PATH" "$LATEST_DMG_PATH" "$APPCAST_PATH"
+          shasum -a 256 "$DMG_PATH" "$LATEST_DMG_PATH" "$APPCAST_PATH" "$MANIFEST_PATH"
           if ! cmp -s "$DMG_PATH" "$LATEST_DMG_PATH"; then
             echo "::error::Latest DMG asset does not match versioned DMG asset"
             exit 1
@@ -478,6 +577,25 @@ jobs:
           grep -Fq "releases/download/${TAG}/WorkSpaces-${VERSION}.dmg" "$APPCAST_PATH"
           grep -Fq "<sparkle:shortVersionString>${VERSION}</sparkle:shortVersionString>" "$APPCAST_PATH"
           grep -Fq "<sparkle:version>${BUILD}</sparkle:version>" "$APPCAST_PATH"
+          ./scripts/verify-sparkle-appcast.swift \
+            --appcast "$APPCAST_PATH" \
+            --dmg "$DMG_PATH" \
+            --public-key "$COMMITTED_SPARKLE_PUBLIC_KEY" \
+            --expected-url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/WorkSpaces-${VERSION}.dmg" \
+            --expected-version "$BUILD" \
+            --expected-short-version "$VERSION"
+          ./scripts/release-manifest.sh validate \
+            --manifest "$MANIFEST_PATH" \
+            --commit "$GITHUB_SHA" \
+            --tag "$TAG" \
+            --version "$VERSION" \
+            --build "$BUILD" \
+            --dmg "$DMG_PATH" \
+            --latest-dmg "$LATEST_DMG_PATH" \
+            --appcast "$APPCAST_PATH" \
+            --bundle-id "$BUNDLE_ID" \
+            --team-id "$TEAM_ID" \
+            --sparkle-public-key "$COMMITTED_SPARKLE_PUBLIC_KEY"
 
           hdiutil imageinfo "$DMG_PATH"
           xcrun stapler validate "$DMG_PATH"

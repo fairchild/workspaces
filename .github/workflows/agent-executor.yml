@@ -22,6 +22,7 @@ jobs:
       target_type: ${{ steps.claim.outputs.target_type }}
       target_number: ${{ steps.claim.outputs.target_number }}
       request_id: ${{ steps.claim.outputs.request_id }}
+      privileged_patch_approved: ${{ steps.claim.outputs.privileged_patch_approved }}
       request_payload_json: ${{ steps.claim.outputs.request_payload_json }}
       contributor_prompt: ${{ steps.claim.outputs.contributor_prompt }}
       claude_prompt: ${{ steps.claim.outputs.claude_prompt }}
@@ -128,6 +129,9 @@ jobs:
           ARGS=(--prompt-file .agents/skills/cofounder-contributor/references/april-clearwater.md)
           ARGS+=(--mode cli)
           ARGS+=(--message "$(cat /tmp/directed-message.txt)")
+          if [ "$ALLOW_PRIVILEGED_PATCH" = "true" ]; then
+            ARGS+=(--allow-privileged-patches)
+          fi
           uv run .agents/skills/cofounder-contributor/scripts/run-contributor.py "${ARGS[@]}"
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -135,6 +139,7 @@ jobs:
           GH_APP_SLUG: april-clearwater
           CONTRIBUTOR_MODEL_CWD: ${{ steps.target-workspace.outputs.model_cwd }}
           EVIDENCE_UPLOAD_TOKEN: ${{ secrets.EVIDENCE_UPLOAD_TOKEN }}
+          ALLOW_PRIVILEGED_PATCH: ${{ needs.claim.outputs.privileged_patch_approved }}
 
   april-evidence:
     needs: [claim, april-check-runner, april]
@@ -205,12 +210,16 @@ jobs:
           ARGS=(--prompt-file .agents/skills/cofounder-contributor/references/plat-ironwood.md)
           ARGS+=(--mode cli)
           ARGS+=(--message "$(cat /tmp/directed-message.txt)")
+          if [ "$ALLOW_PRIVILEGED_PATCH" = "true" ]; then
+            ARGS+=(--allow-privileged-patches)
+          fi
           uv run .agents/skills/cofounder-contributor/scripts/run-contributor.py "${ARGS[@]}"
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           GH_APP_SLUG: workspace-agents
           CONTRIBUTOR_MODEL_CWD: ${{ steps.target-workspace.outputs.model_cwd }}
+          ALLOW_PRIVILEGED_PATCH: ${{ needs.claim.outputs.privileged_patch_approved }}
 
   plat-evidence:
     needs: [claim, plat]
