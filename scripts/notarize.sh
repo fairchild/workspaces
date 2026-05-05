@@ -143,23 +143,36 @@ if [[ -z "$TEAM_ID" ]] || [[ "$TEAM_ID" == "XXXXXXXXXX" ]]; then
     exit 1
 fi
 
-if [[ -z "$APPLE_API_KEY_PATH" ]]; then
-    log_error "APPLE_API_KEY_PATH not configured (path to .p8 private key; set in scripts/signing-config.sh or environment; see RELEASING.md)"
-    exit 1
-fi
-
-if [[ -z "$APPLE_API_KEY_ID" ]]; then
-    log_error "APPLE_API_KEY_ID not configured (10-character key ID from App Store Connect; see RELEASING.md)"
-    exit 1
-fi
-
-if [[ -z "$APPLE_API_ISSUER_ID" ]]; then
-    log_error "APPLE_API_ISSUER_ID not configured (Issuer UUID from App Store Connect; see RELEASING.md)"
-    exit 1
-fi
-
 if [[ -z "$SIGNING_IDENTITY" ]] || [[ "$SIGNING_IDENTITY" == *"Your Name"* ]]; then
     log_error "SIGNING_IDENTITY not configured (set in scripts/signing-config.sh or environment; see RELEASING.md)"
+    exit 1
+fi
+
+APPLE_API_KEY_PATH="${APPLE_API_KEY_PATH:-}"
+APPLE_API_KEY_ID="${APPLE_API_KEY_ID:-}"
+APPLE_API_ISSUER_ID="${APPLE_API_ISSUER_ID:-}"
+APPLE_ID="${APPLE_ID:-}"
+APP_PASSWORD="${APP_PASSWORD:-${APPLE_APP_PASSWORD:-}}"
+NOTARY_AUTH_ARGS=()
+
+if [[ -n "$APPLE_API_KEY_ID" || -n "$APPLE_API_ISSUER_ID" ]]; then
+    if [[ -z "$APPLE_API_KEY_PATH" || ! -f "$APPLE_API_KEY_PATH" ]]; then
+        log_error "APPLE_API_KEY_PATH not configured or not readable (path to .p8 private key; see RELEASING.md)"
+        exit 1
+    fi
+    if [[ -z "$APPLE_API_KEY_ID" ]]; then
+        log_error "APPLE_API_KEY_ID not configured (10-character key ID from App Store Connect; see RELEASING.md)"
+        exit 1
+    fi
+    if [[ -z "$APPLE_API_ISSUER_ID" ]]; then
+        log_error "APPLE_API_ISSUER_ID not configured (Issuer UUID from App Store Connect; see RELEASING.md)"
+        exit 1
+    fi
+    NOTARY_AUTH_ARGS=(--key "$APPLE_API_KEY_PATH" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER_ID")
+elif [[ -n "$APPLE_ID" && -n "$APP_PASSWORD" ]]; then
+    NOTARY_AUTH_ARGS=(--apple-id "$APPLE_ID" --password "$APP_PASSWORD" --team-id "$TEAM_ID")
+else
+    log_error "Notarization credentials not configured. Set either APPLE_API_KEY_PATH/APPLE_API_KEY_ID/APPLE_API_ISSUER_ID or APPLE_ID/APP_PASSWORD."
     exit 1
 fi
 
@@ -259,9 +272,7 @@ else
 
     # Submit and wait for result
     xcrun notarytool submit "$DMG_PATH" \
-        --key "$APPLE_API_KEY_PATH" \
-        --key-id "$APPLE_API_KEY_ID" \
-        --issuer "$APPLE_API_ISSUER_ID" \
+        "${NOTARY_AUTH_ARGS[@]}" \
         --wait \
         --output-format plist >"$NOTARY_RESULT_PLIST"
 
@@ -270,7 +281,7 @@ else
         log_error "Notarization failed"
         echo ""
         echo "To see detailed logs, run:"
-        echo "  xcrun notarytool log <submission-id> --key <path-to.p8> --key-id $APPLE_API_KEY_ID --issuer $APPLE_API_ISSUER_ID"
+        echo "  xcrun notarytool log <submission-id> <notarization-auth-args>"
         exit 1
     fi
 
@@ -283,9 +294,7 @@ else
         if [[ -n "$NOTARY_SUBMISSION_ID" ]]; then
             echo "Submission ID: $NOTARY_SUBMISSION_ID"
             xcrun notarytool log "$NOTARY_SUBMISSION_ID" \
-                --key "$APPLE_API_KEY_PATH" \
-                --key-id "$APPLE_API_KEY_ID" \
-                --issuer "$APPLE_API_ISSUER_ID" \
+                "${NOTARY_AUTH_ARGS[@]}" \
                 --output-format json >"$NOTARY_LOG_PATH" || true
             if [[ -f "$NOTARY_LOG_PATH" ]]; then
                 echo "Saved notarization log to $NOTARY_LOG_PATH"
