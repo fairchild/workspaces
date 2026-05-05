@@ -43,13 +43,15 @@ public final class AgentSessionRegistry: ObservableObject, AgentSessionRegistryP
 
     public func register(hostSessionID: UUID, cwd: String, kind: AgentKind) {
         if statuses[hostSessionID] != nil { return }
+        let now = clock()
         statuses[hostSessionID] = AgentSessionStatus(
             hostSessionID: hostSessionID,
             kind: kind,
             cwd: Self.normalizePath(cwd),
             run: .idle,
-            lastEventAt: clock(),
-            hookActive: false
+            lastEventAt: now,
+            hookActive: false,
+            createdAt: now
         )
         bookkeeping[hostSessionID] = Bookkeeping()
     }
@@ -160,18 +162,40 @@ public final class AgentSessionRegistry: ObservableObject, AgentSessionRegistryP
         statuses[hostSessionID] = status
     }
 
-    /// Resolve a host session by cwd first, falling back to a previously bound `agentSessionID`.
+    /// Resolve a host session for a hook payload. The rule is `agentSessionID`-first
+    /// — once a host session has been bound to a Claude session id, that binding is
+    /// canonical for the rest of the session. Cwd is only consulted as a *fallback*
+    /// for the very first event in a session (which is always a `SessionStart` and
+    /// therefore arrives before any binding exists).
+    ///
+    /// Behaviour:
+    ///   1. If `agentSessionID` is non-nil and matches a bound entry → return it.
+    ///   2. Otherwise, collect host sessions whose cwd matches AND that have no
+    ///      agentSessionID bound yet. Pick the most recently-registered one.
+    ///   3. If no candidate, return nil; the listener will drop the event.
+    ///
+    /// This is what makes the registry safe for duplicate tabs and split panes on
+    /// the same workspace — two `HostTerminalSession`s with the same cwd no longer
+    /// collapse onto a single entry. See defect 2 from the round-2 review.
     public func resolveHostSession(cwd: String, agentSessionID: String?) -> UUID? {
-        let normalized = Self.normalizePath(cwd)
-        for (hostID, status) in statuses where status.cwd == normalized {
-            return hostID
-        }
         if let agentSessionID {
             for (hostID, status) in statuses where status.agentSessionID == agentSessionID {
                 return hostID
             }
         }
-        return nil
+
+        let normalized = Self.normalizePath(cwd)
+        let unboundCandidates = statuses.values.filter {
+            $0.cwd == normalized && $0.agentSessionID == nil
+        }
+        guard !unboundCandidates.isEmpty else { return nil }
+        // Most recently registered wins — matches the user's expectation that the
+        // newest terminal owns the next SessionStart.
+        return
+            unboundCandidates
+            .sorted { $0.createdAt > $1.createdAt }
+            .first?
+            .hostSessionID
     }
 
     // MARK: - Internal

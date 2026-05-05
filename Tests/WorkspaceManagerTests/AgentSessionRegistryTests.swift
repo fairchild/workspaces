@@ -237,22 +237,32 @@ struct AgentSessionRegistryTests {
         #expect(registry.statuses[id]?.cwd == "/tmp/new")
     }
 
-    @Test("resolveHostSession finds by cwd, then by agentSessionID")
+    @Test("resolveHostSession is agentSessionID-first, with cwd as SessionStart fallback")
     func resolveHostSession() async {
         let registry = AgentSessionRegistry()
         let id = UUID()
         registry.register(hostSessionID: id, cwd: "/tmp/resolve", kind: .claudeCode)
+
+        // Before any binding: cwd matches an unbound entry → returns it.
+        let preBindByCwd = registry.resolveHostSession(cwd: "/tmp/resolve", agentSessionID: nil)
+        #expect(preBindByCwd == id)
+
         registry.ingest(
             .sessionStart(agentSessionID: "agent-x", cwd: "/tmp/resolve", kind: .claudeCode),
             for: id,
             origin: .hook
         )
 
-        let byCwd = registry.resolveHostSession(cwd: "/tmp/resolve", agentSessionID: nil)
-        #expect(byCwd == id)
-
+        // After binding: agentSessionID is the canonical key.
         let byAgentID = registry.resolveHostSession(cwd: "/elsewhere", agentSessionID: "agent-x")
         #expect(byAgentID == id)
+
+        // After binding: a cwd-only lookup (no agentSessionID) no longer matches the
+        // bound entry — the binding takes it out of the unbound-candidate pool. This
+        // is the defect 2 contract: cwd is only a SessionStart fallback, not a
+        // routing key for events that already carry a session_id.
+        let cwdOnlyAfterBind = registry.resolveHostSession(cwd: "/tmp/resolve", agentSessionID: nil)
+        #expect(cwdOnlyAfterBind == nil)
 
         let miss = registry.resolveHostSession(cwd: "/none", agentSessionID: nil)
         #expect(miss == nil)

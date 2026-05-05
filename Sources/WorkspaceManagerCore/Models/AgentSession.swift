@@ -43,6 +43,12 @@ public struct AgentSessionStatus: Sendable, Equatable {
     public var modelDisplayName: String?
     public var lastEventAt: Date
     public var hookActive: Bool
+    /// When the host session was first registered with the registry. Used by
+    /// `resolveHostSession` to disambiguate multiple unbound entries with the same
+    /// cwd (e.g. duplicate tabs or split panes on the same workspace) — newer
+    /// entries win, matching the user's expectation that the most recently spawned
+    /// terminal owns the next `SessionStart`.
+    public var createdAt: Date
 
     public init(
         hostSessionID: UUID,
@@ -56,7 +62,8 @@ public struct AgentSessionStatus: Sendable, Equatable {
         costUSD: Double? = nil,
         modelDisplayName: String? = nil,
         lastEventAt: Date = Date(),
-        hookActive: Bool = false
+        hookActive: Bool = false,
+        createdAt: Date = Date()
     ) {
         self.hostSessionID = hostSessionID
         self.agentSessionID = agentSessionID
@@ -70,5 +77,6 @@ public struct AgentSessionStatus: Sendable, Equatable {
         self.modelDisplayName = modelDisplayName
         self.lastEventAt = lastEventAt
         self.hookActive = hookActive
+        self.createdAt = createdAt
     }
 }
