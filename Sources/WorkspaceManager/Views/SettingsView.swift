@@ -11,6 +11,7 @@ import WorkspaceManagerCore
 
 struct SettingsView: View {
     @Environment(\.lumeRuntimeService) private var lumeRuntimeService
+    @Environment(\.claudeSettingsInstaller) private var claudeSettingsInstaller
     @EnvironmentObject private var modelStoreStatusController: ModelStoreStatusController
 
     @AppStorage("workspacesRoot") private var workspacesRootPath: String = ""
@@ -254,6 +255,12 @@ struct SettingsView: View {
                 }
             } header: {
                 Text("Notifications")
+            }
+
+            Section {
+                AgentsSettingsView(installer: claudeSettingsInstaller)
+            } header: {
+                Text("Agents")
             }
 
             Section {

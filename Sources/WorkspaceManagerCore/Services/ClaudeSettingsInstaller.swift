@@ -37,9 +37,21 @@ public struct ClaudeSettingsContribution: Sendable {
     }
 }
 
-public actor ClaudeSettingsInstaller {
+/// Read/write surface for the installer. Views and tests depend on this protocol so
+/// the live actor can be stubbed without subclassing or mocking SwiftUI bindings.
+public protocol ClaudeSettingsInstalling: Sendable {
+    func renderPreview() async throws -> String
+    func install() async throws
+    func isInstalled() async -> Bool
+    func userSettingsURL() async -> URL
+    func mostRecentBackupPath() async -> String?
+    func userSettingsModificationDate() async -> Date?
+}
+
+public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
     private let homeDirectory: URL
     private var contributions: [ClaudeSettingsContribution] = []
+    private var lastBackupPath: String?
 
     public init(homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser) {
         self.homeDirectory = homeDirectory
@@ -51,6 +63,20 @@ public actor ClaudeSettingsInstaller {
 
     public func registeredIDs() -> [String] {
         contributions.map(\.id)
+    }
+
+    public func userSettingsURL() -> URL {
+        pathFor(target: .userSettingsJSON)
+    }
+
+    public func mostRecentBackupPath() -> String? {
+        lastBackupPath
+    }
+
+    public func userSettingsModificationDate() -> Date? {
+        let url = pathFor(target: .userSettingsJSON)
+        let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
+        return attrs?[.modificationDate] as? Date
     }
 
     /// Render a multi-line preview describing what `install()` would do per file.
@@ -94,6 +120,9 @@ public actor ClaudeSettingsInstaller {
                     "workspaces-backup-\(Self.iso8601Timestamp())"
                 )
                 try originalDataIfPresent.write(to: backupURL)
+                if target == .userSettingsJSON {
+                    lastBackupPath = backupURL.path
+                }
             }
 
             try writeJSON(current, to: url)

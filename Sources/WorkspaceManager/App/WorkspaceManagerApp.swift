@@ -225,6 +225,7 @@ struct WorkspaceManagerApp: App {
             SettingsView(softwareUpdateController: softwareUpdateController)
                 .environment(\.lumeRuntimeService, appRuntimeDependencies.lumeRuntimeService)
                 .environment(\.workspaceProviderRegistry, appRuntimeDependencies.workspaceProviderRegistry)
+                .environment(\.claudeSettingsInstaller, ClaudeIntegrationLifecycle.shared.settingsInstaller)
                 .environmentObject(modelStoreStatusController)
         }
     }
@@ -513,6 +514,10 @@ private struct AgentSessionRegistryKey: EnvironmentKey {
     static let defaultValue: AgentSessionRegistry? = nil
 }
 
+private struct ClaudeSettingsInstallerKey: EnvironmentKey {
+    static let defaultValue: (any ClaudeSettingsInstalling)? = nil
+}
+
 extension EnvironmentValues {
     var gitService: any GitServiceProtocol {
         get { self[GitServiceKey.self] }
@@ -547,6 +552,11 @@ extension EnvironmentValues {
     var agentSessionRegistry: AgentSessionRegistry? {
         get { self[AgentSessionRegistryKey.self] }
         set { self[AgentSessionRegistryKey.self] = newValue }
+    }
+
+    var claudeSettingsInstaller: (any ClaudeSettingsInstalling)? {
+        get { self[ClaudeSettingsInstallerKey.self] }
+        set { self[ClaudeSettingsInstallerKey.self] = newValue }
     }
 }
 

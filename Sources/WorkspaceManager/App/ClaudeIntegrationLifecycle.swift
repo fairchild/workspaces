@@ -17,6 +17,7 @@ final class ClaudeIntegrationLifecycle {
 
     private(set) var listener: AgentHookListener?
     private(set) var notificationPoster: AgentNotificationPoster?
+    private(set) var settingsInstaller: ClaudeSettingsInstaller?
     private(set) var socketPath: String?
     private var teardownObserver: Any?
     private var didStart = false
@@ -32,11 +33,19 @@ final class ClaudeIntegrationLifecycle {
         self.listener = listener
         self.notificationPoster = AgentNotificationPoster(registry: registry)
 
+        // Build the settings installer immediately so the Settings UI can render the
+        // merge preview. The contribution targets the live socket path, which we know
+        // synchronously via the AgentHookListener init contract.
+        let installer = ClaudeSettingsInstaller()
+        self.settingsInstaller = installer
+
         Task {
-            self.socketPath = await listener.socketPath
+            let resolvedSocketPath = await listener.socketPath
+            self.socketPath = resolvedSocketPath
+            await installer.register(workspacesHooksContribution(socketPath: resolvedSocketPath))
             do {
                 try await listener.start()
-                NSLog("[ClaudeIntegration] hook listener started at %@", await listener.socketPath)
+                NSLog("[ClaudeIntegration] hook listener started at %@", resolvedSocketPath)
             } catch {
                 NSLog("[ClaudeIntegration] hook listener failed to start: %@", "\(error)")
             }

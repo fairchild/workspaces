@@ -26,16 +26,20 @@ public struct PTYForegroundProbe: Sendable {
 
     public init() {}
 
-    /// Detect the agent kind for the given libghostty surface.
-    ///
-    /// PR #1: returns `.claudeCode` unconditionally — the safe default. The probe is
-    /// fail-safe because:
-    ///   1. Claude is the only adapter that decodes hooks (other agents are no-ops there).
-    ///   2. The OSC fallback works for every adapter regardless of detected kind.
-    ///
-    /// Real implementation requires either an upstream libghostty addition that exposes
-    /// the slave-side PTY fd, or platform-specific traversal of the surface's child
-    /// process tree via `proc_listpids` + `proc_pidpath`. Tracked in coordination.md.
+    // MARK: - Stub — see coordination.md
+    //
+    // PR #1 ships this method as a deliberate stub that returns `.claudeCode` for
+    // every surface. The probe is fail-safe because Claude is the only adapter that
+    // decodes hook payloads, and the OSC fallback covers every other agent
+    // regardless of detected kind.
+    //
+    // Real foreground-process detection becomes a Channel 3 concern when opencode
+    // or aider parity matters. At that point, replace the body with
+    // `tcgetpgrp` + a `proc_pidpath` lookup against the slave-side PTY fd (requires
+    // either an upstream libghostty addition that exposes the fd, or platform
+    // traversal of the surface's child-process tree via `proc_listpids`). The
+    // cache, the public surface, and the call sites are stable — only the body
+    // changes.
     public func detect(surfaceID: UInt64) -> AgentKind {
         if let cached = Self.cache.read(surfaceID: surfaceID),
            Date().timeIntervalSince(cached.recordedAt) < Self.cacheTTL
