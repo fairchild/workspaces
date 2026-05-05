@@ -1,9 +1,10 @@
 import { betterAuth } from "better-auth";
+import { resolveBetterAuthSecret } from "./agent-runtime/config";
 import { getAuthBaseURL } from "./auth-base-url";
 import { getDialect } from "./db";
 
 export const auth = betterAuth({
-	secret: process.env.BETTER_AUTH_SECRET,
+	secret: resolveBetterAuthSecret(),
 	baseURL: getAuthBaseURL(),
 	database: { dialect: getDialect(), type: "sqlite" },
 	socialProviders: {

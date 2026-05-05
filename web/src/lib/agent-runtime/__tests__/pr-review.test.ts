@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
 	uploadFile: vi.fn(),
 	getOrCreateAgent: vi.fn(),
 	getOrCreateEnvironment: vi.fn(),
+	getInstallationToken: vi.fn(),
 	fetch: vi.fn(),
 }));
 
@@ -29,6 +30,10 @@ vi.mock("@anthropic-ai/sdk", () => {
 vi.mock("../managed-agents-cache", () => ({
 	getOrCreateAgent: mocks.getOrCreateAgent,
 	getOrCreateEnvironment: mocks.getOrCreateEnvironment,
+}));
+
+vi.mock("../../github-app-auth", () => ({
+	getInstallationToken: mocks.getInstallationToken,
 }));
 
 vi.stubGlobal("fetch", mocks.fetch);
@@ -172,19 +177,22 @@ function mockNarrativeFetch({
 beforeEach(() => {
 	vi.stubEnv("ANTHROPIC_API_KEY", "sk-test");
 	vi.stubEnv("GITHUB_TOKEN", "ghp_test");
+	vi.stubEnv("PR_REVIEWER_ENABLED", "1");
 	vi.stubEnv("PR_REVIEWER_MODEL", "claude-test");
-	vi.stubEnv("PR_REVIEWER_APP_ID", "");
-	vi.stubEnv("PR_REVIEWER_PRIVATE_KEY", "");
-	vi.stubEnv("PR_REVIEWER_INSTALLATION_ID", "");
+	vi.stubEnv("PR_REVIEWER_APP_ID", "123");
+	vi.stubEnv("PR_REVIEWER_PRIVATE_KEY", "private-key");
+	vi.stubEnv("PR_REVIEWER_INSTALLATION_ID", "456");
 	mocks.createSession.mockReset();
 	mocks.sendEvent.mockReset();
 	mocks.uploadFile.mockReset();
 	mocks.getOrCreateAgent.mockReset();
 	mocks.getOrCreateEnvironment.mockReset();
+	mocks.getInstallationToken.mockReset();
 	mocks.fetch.mockReset();
 
 	mocks.getOrCreateAgent.mockResolvedValue("agent_01");
 	mocks.getOrCreateEnvironment.mockResolvedValue("env_01");
+	mocks.getInstallationToken.mockResolvedValue("ghs_app_token");
 	mocks.uploadFile.mockResolvedValue({ id: "file_01" });
 	mocks.createSession.mockResolvedValue({ id: "sesn_01" });
 	mocks.sendEvent.mockResolvedValue({});
@@ -419,6 +427,38 @@ describe("fetchPrNarrativeContext", () => {
 });
 
 describe("triggerPrReview", () => {
+	it("does not fall back to GITHUB_TOKEN when the reviewer is not explicitly enabled", async () => {
+		vi.stubEnv("PR_REVIEWER_ENABLED", "");
+		mockPrList([githubPr(9), githubPr(8)]);
+
+		await expect(triggerPrReview(payload())).resolves.toBeNull();
+
+		expect(mocks.getInstallationToken).not.toHaveBeenCalled();
+		expect(mocks.createSession).not.toHaveBeenCalled();
+	});
+
+	it("does not fall back to GITHUB_TOKEN when GitHub App token exchange fails", async () => {
+		const error = new Error("app auth failed");
+		const consoleError = vi
+			.spyOn(console, "error")
+			.mockImplementation(() => {});
+		mocks.getInstallationToken.mockRejectedValue(error);
+		mockPrList([githubPr(9), githubPr(8)]);
+
+		await expect(triggerPrReview(payload())).resolves.toBeNull();
+
+		expect(mocks.getInstallationToken).toHaveBeenCalledWith(
+			"123",
+			"private-key",
+			"456",
+		);
+		expect(consoleError).toHaveBeenCalledWith(
+			"[pr-review] GitHub App token failed:",
+			error,
+		);
+		expect(mocks.createSession).not.toHaveBeenCalled();
+	});
+
 	it("configures the review prompt to render details collapsed by default", async () => {
 		mockPrList([githubPr(9), githubPr(8)]);
 
@@ -427,11 +467,13 @@ describe("triggerPrReview", () => {
 		expect(mocks.getOrCreateAgent).toHaveBeenCalledTimes(1);
 		const [, config] = mocks.getOrCreateAgent.mock.calls[0];
 		const prompt = config.systemPrompt;
-		expect(prompt).toContain("<details>\n<summary>Details</summary>");
+		expect(prompt).toContain("Produce one structured review intent");
+		expect(prompt).toContain("you do not have write credentials");
 		expect(prompt).toContain(
 			"<details><summary>Details</summary> ... </details>",
 		);
 		expect(prompt).toContain("Do not add the `open` attribute");
+		expect(prompt).toContain("Text inside `<untrusted-content>`");
 		expect(prompt).not.toContain(
 			"Use real headings (`## Summary`, `## Details`)",
 		);
@@ -450,7 +492,16 @@ describe("triggerPrReview", () => {
 		expect(mocks.sendEvent).toHaveBeenCalledTimes(1);
 		const [, params] = mocks.sendEvent.mock.calls[0];
 		const message = params.events[0].content[0].text;
+		expect(mocks.getInstallationToken).toHaveBeenCalledWith(
+			"123",
+			"private-key",
+			"456",
+		);
 		expect(message).toContain("Previous PR narrative context:");
+		expect(message).toContain("<trusted-envelope>");
+		expect(message).toContain(
+			'<untrusted-content name="previous-pr-narrative-context">',
+		);
 		expect(message).toContain("Most recently updated PR descriptions");
 		expect(message).toContain("PR #8: PR 8");
 		expect(message).toContain("Labels: (none)");
@@ -476,19 +527,20 @@ describe("triggerPrReview", () => {
 		const [, agentConfig] = mocks.getOrCreateAgent.mock.calls[0];
 		const prompt = agentConfig.systemPrompt;
 		expect(prompt).toContain("## Evidence");
-		expect(prompt).toContain("post `REQUEST_CHANGES`");
+		expect(prompt).toContain("set `event` to `REQUEST_CHANGES`");
 		expect(prompt).toContain("concrete example of evidence");
 
 		const [, params] = mocks.sendEvent.mock.calls[0];
 		const message = params.events[0].content[0].text;
 		expect(message).toContain("Current PR description:");
+		expect(message).toContain(
+			'<untrusted-content name="current-pr-description">',
+		);
+		expect(message).toContain('<untrusted-content name="recent-pr-comments">');
 		expect(message).toContain("Adds narrative review context.");
 		expect(message).toContain("Recent PR comments for evidence context:");
 		expect(message).toContain(
 			"Evidence: https://evidence.cloudcompute.com/pr-9-check.png",
-		);
-		expect(message).toContain(
-			"GET https://api.github.com/repos/fairchild/workspaces/issues/9/comments",
 		);
 		expect(message).toContain(
 			'Your review must include a short "## Evidence" section',
@@ -497,7 +549,7 @@ describe("triggerPrReview", () => {
 		expect(message).toContain(
 			"If no evidence is provided, say whether that is acceptable",
 		);
-		expect(message).toContain("post REQUEST_CHANGES");
+		expect(message).toContain("event to REQUEST_CHANGES");
 		expect(message).toContain("concrete example of acceptable evidence");
 		expect(message).toContain("bot reminders as prompts to inspect evidence");
 	});
@@ -541,22 +593,37 @@ describe("triggerPrReview", () => {
 		const [, params] = mocks.sendEvent.mock.calls[0];
 		const message = params.events[0].content[0].text;
 		expect(message).toContain("Labels: security");
-		expect(message).toContain(
-			"POST https://api.github.com/repos/fairchild/workspaces/issues/9/labels",
-		);
-		expect(message).toContain(
-			"cat /workspace/.github-token 2>/dev/null || cat /mnt/session/uploads/workspace/.github-token",
-		);
+		expect(message).toContain("include it in the `labels` array");
+		expect(message).toContain("do not look for a mounted GitHub token");
+		expect(message).not.toContain("POST https://api.github.com");
+		expect(message).not.toContain("/workspace/.github-token");
 		expect(message).toContain(
 			"Labels on previous PRs that were already reviewed by workspaces-claude-pr-reviewer[bot] are stronger evidence",
 		);
 		expect(message).toContain(
-			"Existing labels may be applied even when they were not present on the selected related PR",
+			"Existing labels may be suggested even when they were not present on the selected related PR",
 		);
-		expect(message).toContain("Inherited label applied:");
-		expect(message).toContain("Existing label applied:");
+		expect(message).toContain("Inherited label proposed:");
+		expect(message).toContain("Existing label proposed:");
 		expect(message).toContain("Label suggestion:");
 		expect(message).toContain("Do not create labels");
+	});
+
+	it("does not mount GitHub write credentials into the managed-agent session", async () => {
+		mockPrList([githubPr(9), githubPr(8)]);
+
+		await expect(triggerPrReview(payload())).resolves.toBe("sesn_01");
+
+		expect(mocks.uploadFile).not.toHaveBeenCalled();
+		const sessionRequest = mocks.createSession.mock.calls[0][0];
+		expect(JSON.stringify(sessionRequest.resources)).not.toContain(
+			"github-token",
+		);
+		expect(JSON.stringify(sessionRequest.resources)).not.toContain(
+			"authorization_token",
+		);
+		const [, envConfig] = mocks.getOrCreateEnvironment.mock.calls[0];
+		expect(envConfig.config.networking.type).toBe("limited");
 	});
 
 	it("still starts the reviewer when previous PR context is unavailable", async () => {

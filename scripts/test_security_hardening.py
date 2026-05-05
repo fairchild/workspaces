@@ -8,7 +8,9 @@
 from __future__ import annotations
 
 import os
+import plistlib
 import re
+import shutil
 import stat
 import subprocess
 import tempfile
@@ -109,6 +111,45 @@ class SecurityHardeningTests(unittest.TestCase):
         self.assertIn("pull_request:", on_block)
         self.assertIn("types: [labeled]", on_block)
         self.assertIn("safe-to-run-agent", workflow)
+        self.assertIn("privileged_patch_approved:", workflow)
+        self.assertIn("--allow-privileged-patches", workflow)
+
+    def test_codespaces_claude_worker_is_break_glass_ref_gated(self) -> None:
+        workflow = (REPO_ROOT / ".github/workflows/codespaces-claude-worker.yml").read_text()
+        self.assertIn("environment:\n      name: codespaces-claude-break-glass", workflow)
+        self.assertIn("allow_ref_override:", workflow)
+        self.assertIn("Break-glass ref override enabled", workflow)
+        self.assertIn('[[ "$WORKER_REF" == "main" ]]', workflow)
+        self.assertIn('[[ "$WORKER_REF" == refs/* ]]', workflow)
+        self.assertIn('git ls-remote --exit-code --heads origin "$WORKER_REF"', workflow)
+
+    def test_public_content_agent_triggers_do_not_receive_privileged_secrets(self) -> None:
+        privileged_secrets = (
+            "CLAUDE_CODE_OAUTH_TOKEN",
+            "ANTHROPIC_API_KEY",
+            "APRIL_PRIVATE_KEY",
+            "WORKSPACE_AGENTS_PRIVATE_KEY",
+            "EVIDENCE_UPLOAD_TOKEN",
+            "CODESPACES_WORKER_GITHUB_TOKEN",
+        )
+        public_content_triggers = (
+            "issue_comment:",
+            "pull_request_review_comment:",
+            "pull_request_review:",
+            "types: [opened, assigned]",
+        )
+        workflows_dir = REPO_ROOT / ".github/workflows"
+        for wf in sorted(workflows_dir.glob("agent-*.yml")):
+            workflow = wf.read_text()
+            on_block = workflow.split("\npermissions:\n", 1)[0]
+            if not any(trigger in on_block for trigger in public_content_triggers):
+                continue
+            for secret_name in privileged_secrets:
+                self.assertNotIn(
+                    secret_name,
+                    workflow,
+                    f"{wf.name} must not expose {secret_name} from public content triggers",
+                )
 
     def test_all_actions_pinned_to_sha(self) -> None:
         """Every `uses:` reference to a third-party action must be pinned to a full SHA."""
@@ -158,6 +199,10 @@ class SecurityHardeningTests(unittest.TestCase):
         self.assertIn("APPLE_API_KEY_BASE64", workflow)
         self.assertIn("APPLE_API_KEY_ID", workflow)
         self.assertIn("APPLE_API_ISSUER_ID", workflow)
+        self.assertIn("security delete-keychain \"$KEYCHAIN_PATH\"", workflow)
+        self.assertIn("${CERT_PATH:-}", workflow)
+        self.assertIn("${PROFILE_PATH:-}", workflow)
+        self.assertIn("${APPLE_API_KEY_PATH:-}", workflow)
         self.assertIn("permissions:\n  contents: read", workflow)
         self.assertIn("permissions:\n      contents: write", workflow)
         for forbidden in (
@@ -173,6 +218,188 @@ class SecurityHardeningTests(unittest.TestCase):
             'echo "APPLE_API_ISSUER_ID=$APPLE_API_ISSUER_ID" >> "$GITHUB_ENV"',
         ):
             self.assertNotIn(forbidden, workflow)
+
+    def test_release_workflow_fails_closed_when_mise_is_missing(self) -> None:
+        workflow = (REPO_ROOT / ".github/workflows/release.yml").read_text()
+        self.assertIn("mise is required on the signing host", workflow)
+        self.assertIn("exit 1", workflow)
+        self.assertNotIn("brew install mise", workflow)
+
+    def test_release_workflow_publishes_and_validates_manifest_and_appcast_signature(self) -> None:
+        workflow = (REPO_ROOT / ".github/workflows/release.yml").read_text()
+        for expected in (
+            "release-manifest.json",
+            "scripts/verify-sparkle-appcast.swift",
+            "scripts/release-manifest.sh generate",
+            "scripts/release-manifest.sh validate",
+            "COMMITTED_SPARKLE_PUBLIC_KEY",
+            "SUPublicEDKey",
+            "--sparkle-public-key \"$COMMITTED_SPARKLE_PUBLIC_KEY\"",
+        ):
+            self.assertIn(expected, workflow)
+
+    def test_release_change_validator_covers_release_manifest_and_appcast_verifier(self) -> None:
+        validator = (REPO_ROOT / "scripts/validate-release-changes.py").read_text()
+        self.assertIn('"scripts/release-manifest.sh"', validator)
+        self.assertIn('"scripts/verify-sparkle-appcast.swift"', validator)
+        self.assertIn("validate_swift_parse", validator)
+
+    def test_web_terminal_status_does_not_return_direct_ttyd_urls(self) -> None:
+        status_route = (REPO_ROOT / "web/src/app/api/terminal/status/route.ts").read_text()
+        ticket_route = (REPO_ROOT / "web/src/app/api/terminal/ticket/route.ts").read_text()
+        terminal_canvas = (REPO_ROOT / "web/src/app/dashboard/components/terminal-canvas.tsx").read_text()
+
+        self.assertNotIn("terminalUrl: state.terminalUrl", status_route)
+        self.assertIn('terminalAccess: state.terminalUrl ? "ticket" : undefined', status_route)
+        self.assertIn("issueTerminalTicket", ticket_route)
+        self.assertIn("consumeTerminalTicket", ticket_route)
+        self.assertIn('fetch("/api/terminal/ticket"', terminal_canvas)
+
+    def test_pr_reviewer_does_not_mount_github_write_tokens(self) -> None:
+        reviewer = (REPO_ROOT / "web/src/lib/agent-runtime/pr-review.ts").read_text()
+        self.assertNotIn(".github-token", reviewer)
+        self.assertNotIn("authorization_token: githubToken", reviewer)
+        self.assertNotIn('networking: { type: "unrestricted" }', reviewer)
+        self.assertIn("The managed-agent workspace is intentionally tokenless", reviewer)
+
+    def test_sparkle_appcast_verifier_accepts_valid_ed25519_signature(self) -> None:
+        if shutil.which("swift") is None:
+            self.skipTest("swift is required for Sparkle appcast verifier")
+
+        # RFC 8032 Ed25519 test vector 1: signature for an empty message.
+        public_key = "11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo="
+        signature = (
+            "5VZDAMNgrHKQhuLMgG6CioSHfx645dl02HPgZSJJAVVfuIIVkKM7"
+            "rMYeOXAc+bRr0lv18FlbviRlUUFDjnoQCw=="
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            dmg = tmp / "WorkSpaces-9.9.9.dmg"
+            appcast = tmp / "appcast.xml"
+            dmg.write_bytes(b"")
+            appcast.write_text(
+                f"""<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+  <channel>
+    <item>
+      <sparkle:version>999</sparkle:version>
+      <sparkle:shortVersionString>9.9.9</sparkle:shortVersionString>
+      <enclosure url="https://example.com/WorkSpaces-9.9.9.dmg" sparkle:edSignature="{signature}" length="0" />
+    </item>
+  </channel>
+</rss>
+""",
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [
+                    "./scripts/verify-sparkle-appcast.swift",
+                    "--appcast",
+                    str(appcast),
+                    "--dmg",
+                    str(dmg),
+                    "--public-key",
+                    public_key,
+                    "--expected-url",
+                    "https://example.com/WorkSpaces-9.9.9.dmg",
+                    "--expected-version",
+                    "999",
+                    "--expected-short-version",
+                    "9.9.9",
+                ],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_release_manifest_script_validates_hash_bound_assets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            app = tmp / "WorkSpaces.app"
+            contents = app / "Contents"
+            contents.mkdir(parents=True)
+            info = {
+                "CFBundleIdentifier": "com.cloudcompute.workspaces",
+                "SUPublicEDKey": "2iJCG30PnNC42c7NxxsMNFup+mnlKOU2/MZMEwm6lg4=",
+            }
+            with (contents / "Info.plist").open("wb") as f:
+                plistlib.dump(info, f)
+
+            dmg = tmp / "WorkSpaces-9.9.9.dmg"
+            latest = tmp / "WorkSpaces-latest.dmg"
+            appcast = tmp / "appcast.xml"
+            manifest = tmp / "release-manifest.json"
+            dmg.write_bytes(b"dmg")
+            latest.write_bytes(b"dmg")
+            appcast.write_text("<rss />", encoding="utf-8")
+
+            generate = subprocess.run(
+                [
+                    "./scripts/release-manifest.sh",
+                    "generate",
+                    "--output",
+                    str(manifest),
+                    "--commit",
+                    "abc123",
+                    "--tag",
+                    "v9.9.9",
+                    "--version",
+                    "9.9.9",
+                    "--build",
+                    "999",
+                    "--app",
+                    str(app),
+                    "--dmg",
+                    str(dmg),
+                    "--latest-dmg",
+                    str(latest),
+                    "--appcast",
+                    str(appcast),
+                    "--team-id",
+                    "LKVN4J3C6C",
+                ],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(generate.returncode, 0, generate.stderr)
+
+            validate = subprocess.run(
+                [
+                    "./scripts/release-manifest.sh",
+                    "validate",
+                    "--manifest",
+                    str(manifest),
+                    "--commit",
+                    "abc123",
+                    "--tag",
+                    "v9.9.9",
+                    "--version",
+                    "9.9.9",
+                    "--build",
+                    "999",
+                    "--dmg",
+                    str(dmg),
+                    "--latest-dmg",
+                    str(latest),
+                    "--appcast",
+                    str(appcast),
+                    "--bundle-id",
+                    "com.cloudcompute.workspaces",
+                    "--team-id",
+                    "LKVN4J3C6C",
+                    "--sparkle-public-key",
+                    "2iJCG30PnNC42c7NxxsMNFup+mnlKOU2/MZMEwm6lg4=",
+                ],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(validate.returncode, 0, validate.stderr)
 
     def test_release_setup_uses_app_store_connect_api_key_notarization(self) -> None:
         """Release setup should configure App Store Connect API-key notarization."""

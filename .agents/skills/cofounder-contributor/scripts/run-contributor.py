@@ -19,6 +19,7 @@ import tarfile
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from pathlib import PurePosixPath
 from typing import Any
 
 # Ensure the scripts directory is importable so domain modules resolve.
@@ -268,6 +269,32 @@ DIRECTED_ACTION_TASK = (
 SELECTOR_TOOLS = "Read,Grep,Glob"
 READ_ONLY_MODEL_TOOLS = "Read,Grep,Glob"
 EXECUTION_TOOLS = "Read,Grep,Glob,Edit,Write,MultiEdit"
+PRIVILEGED_PATCH_LABEL = "privileged-agent-patch"
+PRIVILEGED_PATCH_ENV = "AGENT_ALLOW_PRIVILEGED_PATCHES"
+
+SENSITIVE_PATH_PREFIXES = (
+    ".github/",
+    ".agents/",
+)
+SENSITIVE_RELEASE_SCRIPT_PATHS = {
+    "scripts/build-release.sh",
+    "scripts/notarize.sh",
+    "scripts/prepare-release.sh",
+    "scripts/release-preflight.sh",
+    "scripts/release-version.sh",
+    "scripts/setup-release-secrets.sh",
+    "scripts/signing-config.sh.template",
+    "scripts/validate-release-changes.py",
+    "scripts/verify-app-keychain-signing.sh",
+    "scripts/verify-release-bundle.sh",
+}
+SENSITIVE_NAME_MARKERS = (
+    "auth",
+    "credential",
+    "secret",
+    "sandbox",
+    "token",
+)
 
 ALLOWED_SELECTION_KINDS = {
     "review_followup_pr",
@@ -521,6 +548,81 @@ def build_scratch_patch_artifact(
     )
 
 
+def _truthy(value: object) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _normal_patch_path(raw_path: str) -> str | None:
+    path = PurePosixPath(raw_path)
+    if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
+        return None
+    return path.as_posix()
+
+
+def sensitive_agent_patch_paths(changed_files: list[str]) -> list[str]:
+    sensitive: list[str] = []
+    for raw_path in changed_files:
+        rel_path = _normal_patch_path(raw_path)
+        if rel_path is None:
+            sensitive.append(raw_path)
+            continue
+        lower_path = rel_path.lower()
+        lower_parts = PurePosixPath(lower_path).parts
+        lower_name = lower_parts[-1] if lower_parts else lower_path
+
+        if lower_path in SENSITIVE_RELEASE_SCRIPT_PATHS:
+            sensitive.append(rel_path)
+            continue
+        if any(lower_path == prefix.rstrip("/") or lower_path.startswith(prefix) for prefix in SENSITIVE_PATH_PREFIXES):
+            sensitive.append(rel_path)
+            continue
+        if any(marker in part for part in lower_parts for marker in SENSITIVE_NAME_MARKERS):
+            sensitive.append(rel_path)
+            continue
+        if lower_path.startswith("infra/") and any(
+            marker in part
+            for part in lower_parts
+            for marker in ("credential", "secret", "token", "key")
+        ):
+            sensitive.append(rel_path)
+            continue
+    return sensitive
+
+
+def privileged_patch_allowed(selection_item: dict[str, object] | None, env: dict[str, str], *, cli_override: bool) -> bool:
+    if cli_override or _truthy(env.get(PRIVILEGED_PATCH_ENV, "")):
+        return True
+    if selection_item is None:
+        return False
+    labels = selection_item.get("labels")
+    if isinstance(labels, list):
+        return any(str(label).casefold() == PRIVILEGED_PATCH_LABEL for label in labels)
+    return bool(selection_item.get("privileged_patch_approved"))
+
+
+def enforce_agent_patch_policy(
+    artifact: ScratchPatchArtifact,
+    env: dict[str, str],
+    *,
+    selection_item: dict[str, object] | None,
+    cli_override: bool,
+) -> None:
+    sensitive = sensitive_agent_patch_paths(artifact.changed_files)
+    if not sensitive or privileged_patch_allowed(selection_item, env, cli_override=cli_override):
+        return
+    print(
+        "error: agent-generated patch touches privileged paths without explicit approval.",
+        file=sys.stderr,
+    )
+    print(
+        f"Apply the `{PRIVILEGED_PATCH_LABEL}` label to the target or pass --allow-privileged-patches for a manual break-glass run.",
+        file=sys.stderr,
+    )
+    for path in sensitive:
+        print(f"  - {path}", file=sys.stderr)
+    raise SystemExit(1)
+
+
 def apply_scratch_patch_artifact(artifact: ScratchPatchArtifact, env: dict[str, str]) -> None:
     if not artifact.patch_text.strip():
         return
@@ -705,6 +807,8 @@ def build_selection_index(
                 "issue_number": int(item["issue_number"]),
                 "review_decision": str(item["review_decision"]),
                 "pr_branch": str(item["pr_branch"]),
+                "labels": sorted(str(label) for label in item.get("labels", [])),
+                "privileged_patch_approved": PRIVILEGED_PATCH_LABEL in item.get("labels", []),
                 "requested_evidence_count": len(list(item["requested_evidence"])),
                 "has_external_review": item.get("latest_external_review") is not None,
             }
@@ -719,6 +823,8 @@ def build_selection_index(
                 "number": int(item["issue_number"]),
                 "priority_value": item.get("priority"),
                 "claim_branch": str(item.get("claim_branch", "")),
+                "labels": sorted(str(label) for label in item.get("labels", [])),
+                "privileged_patch_approved": PRIVILEGED_PATCH_LABEL in item.get("labels", []),
                 "requested_evidence_count": len(list(item["requested_evidence"])),
             }
             for item in execution_state["claimed_issues"]
@@ -732,6 +838,8 @@ def build_selection_index(
                 "number": int(item["issue_number"]),
                 "priority_value": item.get("priority"),
                 "discussion_number": item.get("discussion_number"),
+                "labels": sorted(str(label) for label in item.get("labels", [])),
+                "privileged_patch_approved": PRIVILEGED_PATCH_LABEL in item.get("labels", []),
                 "approval_reason": str(item["approval_reason"]),
                 "requested_evidence_count": len(list(item["requested_evidence"])),
             }
@@ -1126,6 +1234,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--prompt-file", required=True, type=Path)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--mode", choices=["cli", "print"], default="cli")
+    parser.add_argument(
+        "--allow-privileged-patches",
+        action="store_true",
+        help=f"Allow agent patches to touch paths gated by the {PRIVILEGED_PATCH_LABEL} policy.",
+    )
     parser.add_argument("--message", type=str, default="",
                         help="Directed task — overrides periodic priority order")
     return parser.parse_args()
@@ -1228,6 +1341,12 @@ def main() -> int:
         if scratch_workspace is not None and not args.dry_run:
             artifact = build_scratch_patch_artifact(scratch_workspace, env)
             log(f"Applying scratch patch with {len(artifact.changed_files)} changed files")
+            enforce_agent_patch_policy(
+                artifact,
+                env,
+                selection_item=selection_item,
+                cli_override=bool(args.allow_privileged_patches),
+            )
             apply_scratch_patch_artifact(artifact, env)
 
         result = route_action(validated_json, args.dry_run, env)

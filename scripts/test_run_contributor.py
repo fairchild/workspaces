@@ -7,9 +7,12 @@
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
 import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -33,6 +36,70 @@ run_contributor = load_module("run_contributor", SCRIPT_PATH)
 
 class RunContributorEvidenceTests(unittest.TestCase):
     maxDiff = None
+
+    def test_sensitive_agent_patch_paths_are_deterministic(self) -> None:
+        sensitive = run_contributor.sensitive_agent_patch_paths(
+            [
+                "Sources/WorkspaceManager/Views/MainWindow/ContentView.swift",
+                ".github/workflows/agent-april.yml",
+                ".agents/skills/cofounder-contributor/SKILL.md",
+                "scripts/build-release.sh",
+                "scripts/verify-app-keychain-signing.sh",
+                "web/src/lib/auth-server.ts",
+                "web/src/app/api/auth/[...all]/route.ts",
+                "web/src/lib/github-token.ts",
+                "web/src/lib/agent-runtime/vercel-sandbox.ts",
+                "infra/cloudflare-webhook-relay/secret.txt",
+            ]
+        )
+
+        self.assertEqual(
+            sensitive,
+            [
+                ".github/workflows/agent-april.yml",
+                ".agents/skills/cofounder-contributor/SKILL.md",
+                "scripts/build-release.sh",
+                "scripts/verify-app-keychain-signing.sh",
+                "web/src/lib/auth-server.ts",
+                "web/src/app/api/auth/[...all]/route.ts",
+                "web/src/lib/github-token.ts",
+                "web/src/lib/agent-runtime/vercel-sandbox.ts",
+                "infra/cloudflare-webhook-relay/secret.txt",
+            ],
+        )
+
+    def test_agent_patch_policy_requires_privileged_label_or_override(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            artifact = run_contributor.ScratchPatchArtifact(
+                temp_root=root,
+                baseline_dir=root / "baseline",
+                scratch_dir=root / "scratch",
+                changed_files=[".github/workflows/agent-april.yml"],
+                patch_text="diff --git a/.github/workflows/agent-april.yml b/.github/workflows/agent-april.yml\n",
+            )
+
+            with io.StringIO() as stderr, contextlib.redirect_stderr(stderr):
+                with self.assertRaises(SystemExit):
+                    run_contributor.enforce_agent_patch_policy(
+                        artifact,
+                        {},
+                        selection_item={"labels": ["agent:task"]},
+                        cli_override=False,
+                    )
+
+            run_contributor.enforce_agent_patch_policy(
+                artifact,
+                {},
+                selection_item={"labels": [run_contributor.PRIVILEGED_PATCH_LABEL]},
+                cli_override=False,
+            )
+            run_contributor.enforce_agent_patch_policy(
+                artifact,
+                {},
+                selection_item={"labels": []},
+                cli_override=True,
+            )
 
     def test_reconcile_pending_ci_evidence_includes_uploaded_screenshot_links(self) -> None:
         body = "\n".join(

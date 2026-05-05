@@ -1,4 +1,5 @@
 import type { ComputeBackendId } from "../types";
+import { validateProductionAgentRuntimeConfig } from "./config";
 import type { ComputeProvider, ComputeProviderAvailability } from "./types";
 
 /**
@@ -56,6 +57,8 @@ let _registry: ComputeProviderRegistry | undefined;
 let _registryPromise: Promise<ComputeProviderRegistry> | undefined;
 
 export async function getRegistry(): Promise<ComputeProviderRegistry> {
+	validateProductionAgentRuntimeConfig();
+
 	if (_registry) return _registry;
 	if (_registryPromise) return _registryPromise;
 

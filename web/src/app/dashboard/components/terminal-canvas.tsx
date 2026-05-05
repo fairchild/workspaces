@@ -11,8 +11,9 @@ interface TerminalCanvasProps {
 	 * the ghostty-web instance (and its scrollback) across the round-trip.
 	 */
 	agentName: string;
-	/** ttyd WebSocket URL with the auth path token already included */
-	terminalUrl: string;
+	/** Repo/session identity used to request a one-time terminal ticket. */
+	repo: string;
+	sessionId: string;
 	/** Whether this canvas is currently the active sub-tab */
 	active: boolean;
 }
@@ -25,7 +26,7 @@ interface MountedState {
 	fitAddon: GhosttyFitAddon;
 	ws: WebSocket | null;
 	disposed: boolean;
-	currentUrl: string | null;
+	currentSessionId: string | null;
 	reconnectTimer: number | null;
 }
 
@@ -33,26 +34,27 @@ interface MountedState {
  * One ghostty-web canvas wired up to one ttyd WebSocket. The terminal
  * persists across:
  *   - sub-tab switches (toggled via display: none)
- *   - sandbox restart (paused → resumed): the WebSocket reconnects to the
- *     new URL but the canvas, scrollback, and process state in the user's
+ *   - sandbox restart (paused → resumed): the WebSocket reconnects through
+ *     a new one-time ticket but the canvas, scrollback, and process state in the user's
  *     mental model are continuous
  *
  * Two effects:
  *   - Mount effect (deps: agentName): creates the term + canvas, runs once
  *     per agent. Tear-down disposes the term.
- *   - WebSocket effect (deps: terminalUrl): connects/reconnects the WS.
+ *   - WebSocket effect (deps: repo/sessionId): connects/reconnects the WS.
  *     The term lives on while the WS is being torn down and re-established.
  */
 export function TerminalCanvas({
 	agentName,
-	terminalUrl,
+	repo,
+	sessionId,
 	active,
 }: TerminalCanvasProps) {
 	const containerRef = useRef<HTMLDivElement>(null);
 	const stateRef = useRef<MountedState | null>(null);
 
 	// Mount effect — creates the ghostty-web canvas once per agent. Does
-	// NOT depend on terminalUrl, so a sandbox restart doesn't tear down
+	// NOT depend on sessionId, so a sandbox restart doesn't tear down
 	// the canvas.
 	useEffect(() => {
 		const container = containerRef.current;
@@ -96,7 +98,7 @@ export function TerminalCanvas({
 				fitAddon,
 				ws: null,
 				disposed: false,
-				currentUrl: null,
+				currentSessionId: null,
 				reconnectTimer: null,
 			};
 			stateRef.current = state;
@@ -168,9 +170,9 @@ export function TerminalCanvas({
 		// Mount per agent — sandbox restarts won't recreate the term.
 	}, [agentName]);
 
-	// WebSocket effect — connects when terminalUrl is set or changes.
+	// WebSocket effect — connects when sessionId is set or changes.
 	// On reconnect (e.g. after Resume), we close the old socket and open
-	// a new one against the new URL while keeping the term alive.
+	// a new one through a fresh one-time ticket while keeping the term alive.
 	useEffect(() => {
 		const state = stateRef.current;
 		if (!state) {
@@ -185,7 +187,10 @@ export function TerminalCanvas({
 		function connectIfReady() {
 			const s = stateRef.current;
 			if (!s || s.disposed) return;
-			if (s.currentUrl === terminalUrl && s.ws?.readyState === WebSocket.OPEN) {
+			if (
+				s.currentSessionId === sessionId &&
+				s.ws?.readyState === WebSocket.OPEN
+			) {
 				return; // already on the right URL
 			}
 			// Tear down any pending reconnect timer and existing WS
@@ -202,12 +207,62 @@ export function TerminalCanvas({
 					// ignore
 				}
 			}
-			s.currentUrl = terminalUrl;
-			openWebSocket(s, terminalUrl);
+			s.currentSessionId = sessionId;
+			void openWebSocket(s, sessionId);
 		}
 
-		function openWebSocket(s: MountedState, url: string) {
+		async function resolveTerminalUrl(): Promise<string> {
+			const ticketResponse = await fetch("/api/terminal/ticket", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ repo, sessionId }),
+			});
+			if (!ticketResponse.ok) {
+				throw new Error(`ticket request failed: HTTP ${ticketResponse.status}`);
+			}
+			const { ticket } = (await ticketResponse.json()) as { ticket?: string };
+			if (!ticket) throw new Error("ticket response did not include a ticket");
+
+			const terminalResponse = await fetch(
+				`/api/terminal/ticket?ticket=${encodeURIComponent(ticket)}`,
+				{ cache: "no-store" },
+			);
+			if (!terminalResponse.ok) {
+				throw new Error(
+					`ticket redemption failed: HTTP ${terminalResponse.status}`,
+				);
+			}
+			const { terminalUrl } = (await terminalResponse.json()) as {
+				terminalUrl?: string;
+			};
+			if (!terminalUrl) {
+				throw new Error("ticket redemption did not include a terminal URL");
+			}
+			return terminalUrl;
+		}
+
+		async function openWebSocket(s: MountedState, activeSessionId: string) {
 			if (s.disposed) return;
+			let url: string;
+			try {
+				url = await resolveTerminalUrl();
+			} catch (err) {
+				if (!s.disposed && s.currentSessionId === activeSessionId) {
+					s.term.write(
+						`\x1b[31mTerminal access denied: ${
+							err instanceof Error ? err.message : "unknown error"
+						}\x1b[0m\r\n`,
+					);
+					s.reconnectTimer = window.setTimeout(() => {
+						s.reconnectTimer = null;
+						if (!s.disposed && s.currentSessionId === activeSessionId) {
+							void openWebSocket(s, activeSessionId);
+						}
+					}, 2000);
+				}
+				return;
+			}
+			if (s.disposed || s.currentSessionId !== activeSessionId) return;
 			const ws = new WebSocket(url, ["tty"]);
 			ws.binaryType = "arraybuffer";
 			s.ws = ws;
@@ -248,21 +303,21 @@ export function TerminalCanvas({
 			ws.onclose = () => {
 				if (s.ws === ws) s.ws = null;
 				if (s.disposed) return;
-				// Only auto-reconnect if the URL hasn't changed; if it has, the
-				// WebSocket effect will run again with the new URL on its own.
-				if (s.currentUrl !== url) return;
+				// Only auto-reconnect if the session hasn't changed; if it has, the
+				// WebSocket effect will run again for the new session on its own.
+				if (s.currentSessionId !== activeSessionId) return;
 				s.term.write(
 					"\r\n\x1b[33mDisconnected. Reconnecting in 2s...\x1b[0m\r\n",
 				);
 				s.reconnectTimer = window.setTimeout(() => {
 					s.reconnectTimer = null;
-					if (!s.disposed && s.currentUrl === url) {
-						openWebSocket(s, url);
+					if (!s.disposed && s.currentSessionId === activeSessionId) {
+						void openWebSocket(s, activeSessionId);
 					}
 				}, 2000);
 			};
 		}
-	}, [terminalUrl]);
+	}, [repo, sessionId]);
 
 	// When the canvas becomes active, refit. The container's dimensions
 	// might have changed while it was display:none.

@@ -1,4 +1,5 @@
 import { headers } from "next/headers";
+import { validateProductionAuthConfig } from "./agent-runtime/config";
 
 /**
  * Dev bypass is active only in development, when `DEV_BYPASS_AUTH=1`,
@@ -31,6 +32,7 @@ export async function getSession() {
 			},
 		};
 	}
+	validateProductionAuthConfig();
 	const { auth } = await import("./auth");
 	return auth.api.getSession({ headers: await headers() });
 }

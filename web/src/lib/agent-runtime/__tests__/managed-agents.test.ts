@@ -112,7 +112,7 @@ describe("ManagedAgentsProvider.createSandbox", () => {
 		expect(createSessionMock).toHaveBeenCalledTimes(2);
 	});
 
-	it("mounts the GitHub repo with the provided token", async () => {
+	it("does not mount a GitHub token for read-only sessions", async () => {
 		const provider = await loadProvider();
 
 		await provider.createSandbox(baseRequest());
@@ -120,6 +120,20 @@ describe("ManagedAgentsProvider.createSandbox", () => {
 		const call = createSessionMock.mock.calls[0][0];
 		expect(call.agent).toBe("agent_01");
 		expect(call.environment_id).toBe("env_01");
+		expect(call.resources?.[0]).toMatchObject({
+			type: "github_repository",
+			url: "https://github.com/fairchild/workspaces",
+			mount_path: "/workspace/repo",
+		});
+		expect(call.resources?.[0]).not.toHaveProperty("authorization_token");
+	});
+
+	it("mounts the provided GitHub token only for write-capable sessions", async () => {
+		const provider = await loadProvider();
+
+		await provider.createSandbox(baseRequest({ readOnly: false }));
+
+		const call = createSessionMock.mock.calls[0][0];
 		expect(call.resources?.[0]).toMatchObject({
 			type: "github_repository",
 			url: "https://github.com/fairchild/workspaces",

@@ -3,11 +3,12 @@
 import { useCallback, useEffect, useState } from "react";
 
 export interface TerminalSessionInfo {
+	sessionId: string;
 	agentName: string;
 	state: "running" | "paused";
 	sandboxId: string;
 	provider: string;
-	terminalUrl?: string;
+	terminalAccess?: "ticket";
 }
 
 interface StatusResponse {
@@ -105,7 +106,12 @@ export function useTerminalSessions(repo: string | null): UseTerminalSessions {
 					await new Promise((r) => setTimeout(r, PROVISIONING_POLL_MS));
 					const list = await refresh();
 					const found = list.find((s) => s.agentName === slot);
-					if (found && found.state === "running" && found.terminalUrl) {
+					if (
+						found &&
+						found.state === "running" &&
+						(found.provider === "managed-agents" ||
+							found.terminalAccess === "ticket")
+					) {
 						return;
 					}
 				}
