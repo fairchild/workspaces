@@ -268,6 +268,87 @@ struct AgentSessionRegistryTests {
         #expect(miss == nil)
     }
 
+    @Test("Two host sessions on the same cwd resolve to distinct entries on SessionStart")
+    func twoSessionsSameCwdNoCollapse() async {
+        let registry = AgentSessionRegistry()
+        let idA = UUID()
+        let idB = UUID()
+        registry.register(hostSessionID: idA, cwd: "/repo", kind: .claudeCode)
+        // Tiny delay so createdAt strictly orders A before B.
+        try? await Task.sleep(nanoseconds: 1_000_000)
+        registry.register(hostSessionID: idB, cwd: "/repo", kind: .claudeCode)
+
+        // First SessionStart with no binding yet → most recent unbound entry wins.
+        let firstHost = registry.resolveHostSession(cwd: "/repo", agentSessionID: "claude-1")
+        #expect(firstHost == idB)
+        registry.ingest(
+            .sessionStart(agentSessionID: "claude-1", cwd: "/repo", kind: .claudeCode),
+            for: idB,
+            origin: .hook
+        )
+
+        // Second SessionStart for a different agent session → only idA is unbound now.
+        let secondHost = registry.resolveHostSession(cwd: "/repo", agentSessionID: "claude-2")
+        #expect(secondHost == idA)
+        registry.ingest(
+            .sessionStart(agentSessionID: "claude-2", cwd: "/repo", kind: .claudeCode),
+            for: idA,
+            origin: .hook
+        )
+
+        // Both bindings stick; A's id was not overwritten by B's later events.
+        #expect(registry.statuses[idA]?.agentSessionID == "claude-2")
+        #expect(registry.statuses[idB]?.agentSessionID == "claude-1")
+
+        // Subsequent events for each session_id route to the correct host.
+        let routeA = registry.resolveHostSession(cwd: "/repo", agentSessionID: "claude-2")
+        let routeB = registry.resolveHostSession(cwd: "/repo", agentSessionID: "claude-1")
+        #expect(routeA == idA)
+        #expect(routeB == idB)
+    }
+
+    @Test("Bound session routes by id even when payload cwd has drifted")
+    func boundSessionRoutesByIDDespiteCwdDrift() async {
+        let registry = AgentSessionRegistry()
+        let id = UUID()
+        registry.register(hostSessionID: id, cwd: "/repo", kind: .claudeCode)
+        registry.ingest(
+            .sessionStart(agentSessionID: "claude-z", cwd: "/repo", kind: .claudeCode),
+            for: id,
+            origin: .hook
+        )
+
+        // User cd'd into a subdir — the next hook payload's cwd no longer matches.
+        // Routing must still find the host session by agentSessionID.
+        let resolved = registry.resolveHostSession(
+            cwd: "/repo/subdir/path",
+            agentSessionID: "claude-z"
+        )
+        #expect(resolved == id)
+    }
+
+    @Test("Cwd fallback only matches unbound entries (no overwrite on second SessionStart)")
+    func cwdFallbackOnlyMatchesUnboundEntries() async {
+        let registry = AgentSessionRegistry()
+        let idBound = UUID()
+        let idUnbound = UUID()
+        registry.register(hostSessionID: idBound, cwd: "/repo", kind: .claudeCode)
+        registry.ingest(
+            .sessionStart(agentSessionID: "claude-1", cwd: "/repo", kind: .claudeCode),
+            for: idBound,
+            origin: .hook
+        )
+        try? await Task.sleep(nanoseconds: 1_000_000)
+        registry.register(hostSessionID: idUnbound, cwd: "/repo", kind: .claudeCode)
+
+        // A new SessionStart's cwd matches both, but only idUnbound is eligible.
+        let resolved = registry.resolveHostSession(cwd: "/repo", agentSessionID: "claude-2")
+        #expect(resolved == idUnbound)
+
+        // Sanity: the bound entry is not clobbered.
+        #expect(registry.statuses[idBound]?.agentSessionID == "claude-1")
+    }
+
     @Test("deregister removes a session entry")
     func deregisterRemoves() async {
         let registry = AgentSessionRegistry()
