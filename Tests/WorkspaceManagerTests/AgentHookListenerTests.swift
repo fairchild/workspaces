@@ -148,7 +148,10 @@ struct AgentHookListenerTests {
         let status = await Self.curlPost(socket: socket, path: "/event", body: data)
         #expect(status == 0)
 
-        try await Task.sleep(nanoseconds: 400_000_000)
+        let bound = await waitUntil {
+            await MainActor.run { registry.statuses[registeredID]?.agentSessionID == "abc-123" }
+        }
+        #expect(bound)
         let registryStatus = await registry.statuses[registeredID]
         #expect(registryStatus?.agentSessionID == "abc-123")
         #expect(registryStatus?.run == .idle)
@@ -183,7 +186,13 @@ struct AgentHookListenerTests {
         preBody["tool_input"] = ["file_path": "/tmp/x.swift"]
         let preData = try JSONSerialization.data(withJSONObject: preBody)
         _ = await Self.curlPost(socket: socket, path: "/event", body: preData)
-        try await Task.sleep(nanoseconds: 400_000_000)
+        let preReached = await waitUntil {
+            await MainActor.run {
+                if case .runningTool = registry.statuses[registeredID]?.run { return true }
+                return false
+            }
+        }
+        #expect(preReached)
         if case .runningTool(let name, let detail) = await registry.statuses[registeredID]?.run {
             #expect(name == "Read")
             #expect(detail == "/tmp/x.swift")
@@ -197,17 +206,19 @@ struct AgentHookListenerTests {
         postBody["duration_ms"] = 5
         let postData = try JSONSerialization.data(withJSONObject: postBody)
         _ = await Self.curlPost(socket: socket, path: "/event", body: postData)
-        try await Task.sleep(nanoseconds: 400_000_000)
-        let runAfterPost = await registry.statuses[registeredID]?.run
-        #expect(runAfterPost == .thinking)
+        let postReached = await waitUntil {
+            await MainActor.run { registry.statuses[registeredID]?.run == .thinking }
+        }
+        #expect(postReached)
 
         var stopBody = common
         stopBody["hook_event_name"] = "Stop"
         let stopData = try JSONSerialization.data(withJSONObject: stopBody)
         _ = await Self.curlPost(socket: socket, path: "/event", body: stopData)
-        try await Task.sleep(nanoseconds: 400_000_000)
-        let runAfterStop = await registry.statuses[registeredID]?.run
-        #expect(runAfterStop == .complete)
+        let stopReached = await waitUntil {
+            await MainActor.run { registry.statuses[registeredID]?.run == .complete }
+        }
+        #expect(stopReached)
 
         await listener.stop()
     }
@@ -238,12 +249,15 @@ struct AgentHookListenerTests {
         ]
         let data = try JSONSerialization.data(withJSONObject: body)
         _ = await Self.curlPost(socket: socket, path: "/event", body: data)
-        try await Task.sleep(nanoseconds: 400_000_000)
-        if case .awaitingInput(.permissionPrompt) = await registry.statuses[registeredID]?.run {
-            // ok
-        } else {
-            Issue.record("expected awaitingInput(.permissionPrompt)")
+        let reached = await waitUntil {
+            await MainActor.run {
+                if case .awaitingInput(.permissionPrompt) = registry.statuses[registeredID]?.run {
+                    return true
+                }
+                return false
+            }
         }
+        #expect(reached)
 
         await listener.stop()
     }
@@ -274,7 +288,13 @@ struct AgentHookListenerTests {
         ]
         let data = try JSONSerialization.data(withJSONObject: body)
         _ = await Self.curlPost(socket: socket, path: "/event", body: data)
-        try await Task.sleep(nanoseconds: 400_000_000)
+        let reached = await waitUntil {
+            await MainActor.run {
+                if case .errored = registry.statuses[registeredID]?.run { return true }
+                return false
+            }
+        }
+        #expect(reached)
         if case .errored(let category, _) = await registry.statuses[registeredID]?.run {
             #expect(category == .rateLimit)
         } else {
@@ -311,7 +331,13 @@ struct AgentHookListenerTests {
         ]
         let data = try JSONSerialization.data(withJSONObject: body)
         _ = await Self.curlPost(socket: socket, path: "/event", body: data)
-        try await Task.sleep(nanoseconds: 400_000_000)
+        let reached = await waitUntil {
+            await MainActor.run {
+                if case .errored = registry.statuses[registeredID]?.run { return true }
+                return false
+            }
+        }
+        #expect(reached)
         if case .errored(let category, _) = await registry.statuses[registeredID]?.run {
             #expect(category == .toolFailure)
         } else {
@@ -347,9 +373,10 @@ struct AgentHookListenerTests {
         ]
         let data = try JSONSerialization.data(withJSONObject: body)
         _ = await Self.curlPost(socket: socket, path: "/event", body: data)
-        try await Task.sleep(nanoseconds: 400_000_000)
-        let run = await registry.statuses[registeredID]?.run
-        #expect(run == .thinking)
+        let reached = await waitUntil {
+            await MainActor.run { registry.statuses[registeredID]?.run == .thinking }
+        }
+        #expect(reached)
 
         await listener.stop()
     }
@@ -383,6 +410,9 @@ struct AgentHookListenerTests {
         let status = await Self.curlPost(socket: socket, path: "/event", body: data)
         #expect(status == 0)
 
+        // Absence-of-mutation check — give the listener mailbox room to drain
+        // before sampling. A short fixed wait is fine here because there is no
+        // condition we could poll on.
         try await Task.sleep(nanoseconds: 400_000_000)
         let runAfter = await registry.statuses[registeredID]?.run
         #expect(runAfter == runBefore)

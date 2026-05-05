@@ -101,8 +101,8 @@ struct AgentSessionRegistryTests {
 
     @Test("OSC dedup suppresses event when hook recently produced same state")
     func oscDedupSuppression() async {
-        var now = Date(timeIntervalSince1970: 1_000_000)
-        let registry = AgentSessionRegistry { now }
+        let clock = TestClock(start: Date(timeIntervalSince1970: 1_000_000))
+        let registry = AgentSessionRegistry(clock: clock.now)
         let id = UUID()
         registry.register(hostSessionID: id, cwd: "/tmp/dedup", kind: .claudeCode)
         registry.ingest(
@@ -119,7 +119,7 @@ struct AgentSessionRegistryTests {
         let runAfterHook = registry.statuses[id]?.run
 
         // Advance 200ms; OSC event with same effective state should be suppressed.
-        now = now.addingTimeInterval(0.2)
+        clock.advance(by: 0.2)
         registry.ingest(
             .awaitingInput(reason: .permissionPrompt, title: nil, message: nil),
             for: id,
@@ -130,8 +130,8 @@ struct AgentSessionRegistryTests {
 
     @Test("OSC fall-through past dedup window applies the OSC state")
     func oscFallThroughAfterWindow() async {
-        var now = Date(timeIntervalSince1970: 1_000_000)
-        let registry = AgentSessionRegistry { now }
+        let clock = TestClock(start: Date(timeIntervalSince1970: 1_000_000))
+        let registry = AgentSessionRegistry(clock: clock.now)
         let id = UUID()
         registry.register(hostSessionID: id, cwd: "/tmp/fall", kind: .claudeCode)
         registry.ingest(
@@ -142,7 +142,7 @@ struct AgentSessionRegistryTests {
         registry.ingest(.toolStart(name: "Read", detail: nil), for: id, origin: .hook)
 
         // Advance past the 750ms dedup window.
-        now = now.addingTimeInterval(1.0)
+        clock.advance(by: 1.0)
         registry.ingest(
             .awaitingInput(reason: .permissionPrompt, title: nil, message: nil),
             for: id,
