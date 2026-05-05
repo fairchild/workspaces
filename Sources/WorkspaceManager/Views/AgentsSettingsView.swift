@@ -15,14 +15,17 @@ import SwiftUI
 import WorkspaceManagerCore
 
 private enum AgentsSettingsStorage {
-    static let toggleKey = "agents.claudeHooks.enabled"
     static let bannerDismissedKey = "agents.claudeHooks.bannerDismissed"
 }
 
 struct AgentsSettingsView: View {
     let installer: (any ClaudeSettingsInstalling)?
 
-    @AppStorage(AgentsSettingsStorage.toggleKey)
+    /// Shared with `ClaudeIntegrationLifecycle` so silent reinstall on launch sees
+    /// the same opt-in state the user toggled here. `true` once the user accepted
+    /// the merge preview at least once; flipped `false` on the manual-revert sheet
+    /// confirm so subsequent launches stop reinstalling.
+    @AppStorage(ClaudeIntegrationDefaults.optedInKey)
     private var hooksEnabled: Bool = false
 
     @State private var isInstalled = false
@@ -97,10 +100,17 @@ struct AgentsSettingsView: View {
         .sheet(isPresented: $showRevertSheet) {
             ClaudeHookRevertSheet(
                 backupPath: lastBackupPath,
-                settingsPath: settingsURL?.path
-            ) {
-                showRevertSheet = false
-            }
+                settingsPath: settingsURL?.path,
+                onClose: { showRevertSheet = false },
+                onConfirmReverted: {
+                    // User asserts they have restored the backup. Stop reinstalling
+                    // on launch and reflect the deopt-in in the toggle. The status
+                    // row will refresh on the next .task run.
+                    hooksEnabled = false
+                    showRevertSheet = false
+                    Task { await refresh() }
+                }
+            )
         }
         .alert(
             "Could Not Update Claude Settings",
@@ -151,6 +161,24 @@ struct AgentsSettingsView: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
+
+            // Mismatch affordance: user opted in via the toggle, but the on-disk
+            // settings file no longer contains our hooks (likely external edit).
+            // Don't auto-uninstall — offer a re-install instead.
+            if hooksEnabled, !isInstalled, !isLoading {
+                HStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                    Text("Your Claude config no longer contains our hooks.")
+                        .font(.caption)
+                    Spacer()
+                    Button("Re-install") {
+                        Task { await loadAndShowPreview() }
+                    }
+                    .controlSize(.small)
+                }
+                .padding(.top, 4)
+            }
         }
         .padding(8)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -198,19 +226,25 @@ struct AgentsSettingsView: View {
             self.settingsURL = url
             self.settingsModificationDate = modDate
             if let backup { self.lastBackupPath = backup }
-            if installed && !hooksEnabled { hooksEnabled = true }
-            if !installed && hooksEnabled { hooksEnabled = false }
+            // Important: do NOT auto-flip the opt-in toggle to match the on-disk
+            // state. If the user opted in but later edited settings.json by hand
+            // (e.g. removed the http hooks), surface a re-install affordance via
+            // the status row rather than silently resetting their preference.
         }
     }
 
     private func handleToggleChange(to newValue: Bool) async {
         guard installer != nil else { return }
         if newValue && !isInstalled {
+            // Don't flip the persisted opt-in until the user accepts the merge.
             await loadAndShowPreview()
         } else if !newValue && isInstalled {
-            showRevertSheet = true
-            // Optimistically reflect the on-disk state until the user reverts.
+            // Show the revert sheet but keep the persisted opt-in `true` until the
+            // user confirms they have restored the backup. The sheet's
+            // `onConfirmReverted` callback flips `hooksEnabled` to false; closing
+            // without confirming leaves the opt-in intact.
             hooksEnabled = true
+            showRevertSheet = true
         } else {
             hooksEnabled = newValue
         }
@@ -238,6 +272,9 @@ struct AgentsSettingsView: View {
             try await installer.install()
             await refresh()
             await MainActor.run {
+                // Persist the opt-in so silent reinstall on next launch re-runs
+                // install() against the new (pid-scoped) socket path.
+                self.hooksEnabled = true
                 self.showPreviewSheet = false
                 self.transientFeedback =
                     "Installed. Backup at \(self.lastBackupPath ?? "—")."
@@ -248,7 +285,8 @@ struct AgentsSettingsView: View {
             await MainActor.run {
                 self.pendingError = error.localizedDescription
                 self.showPreviewSheet = false
-                self.hooksEnabled = self.isInstalled
+                // Install failed — leave the persisted opt-in unchanged. If the
+                // user wasn't opted-in before, they still aren't.
             }
         }
     }
@@ -310,6 +348,7 @@ private struct ClaudeHookRevertSheet: View {
     let backupPath: String?
     let settingsPath: String?
     let onClose: () -> Void
+    let onConfirmReverted: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -350,6 +389,8 @@ private struct ClaudeHookRevertSheet: View {
             }
 
             HStack {
+                Button("I've reverted manually", action: onConfirmReverted)
+                    .help("Stop reinstalling on launch. Run the cp command first.")
                 Spacer()
                 Button("Close", action: onClose)
                     .keyboardShortcut(.defaultAction)
