@@ -2,6 +2,9 @@ import Foundation
 import WorkspaceManagerCore
 
 struct MainWindowBootstrapController {
+    private static let perfAutoSelectFlagKey = "WORKSPACES_PERF_AUTO_SELECT_FIRST_REPO"
+    private static let perfAutoSelectRepoPathKey = "WORKSPACES_PERF_AUTO_SELECT_REPO_PATH"
+
     enum DeepLinkDecision {
         case none
         case waitForRepos(WorkspaceDeepLink)
@@ -77,10 +80,31 @@ struct MainWindowBootstrapController {
         pendingRequest: WorkspaceDeepLink?,
         repos: [Repo]
     ) -> Repo? {
-        guard environment["WORKSPACES_PERF_AUTO_SELECT_FIRST_REPO"] == "1" else { return nil }
+        guard environment[Self.perfAutoSelectFlagKey] == "1" else { return nil }
         guard !didRun else { return nil }
         guard pendingRequest == nil else { return nil }
+        if let targetPath = Self.perfAutoSelectRepoPath(environment: environment) {
+            return repos.first { Self.normalizedPath($0.localPath) == targetPath }
+        }
         return repos.first
+    }
+
+    func shouldWaitForPerfAutoSelectedRepo(
+        environment: [String: String],
+        didRun: Bool,
+        pendingRequest: WorkspaceDeepLink?,
+        repos: [Repo]
+    ) -> Bool {
+        guard environment[Self.perfAutoSelectFlagKey] == "1" else { return false }
+        guard !didRun else { return false }
+        guard pendingRequest == nil else { return false }
+        guard Self.perfAutoSelectRepoPath(environment: environment) != nil else { return false }
+        return perfAutoSelectedRepo(
+            environment: environment,
+            didRun: didRun,
+            pendingRequest: pendingRequest,
+            repos: repos
+        ) == nil
     }
 
     func shouldPerfAutoOpenNewWorkspace(
@@ -88,11 +112,23 @@ struct MainWindowBootstrapController {
         didRun: Bool,
         pendingRequest: WorkspaceDeepLink?
     ) -> Bool {
-        guard environment["WORKSPACES_PERF_AUTO_SELECT_FIRST_REPO"] == "1" else { return false }
+        guard environment[Self.perfAutoSelectFlagKey] == "1" else { return false }
         guard environment["WORKSPACES_PERF_AUTO_OPEN_NEW_WORKSPACE"] == "1" else { return false }
         guard !didRun else { return false }
         guard pendingRequest == nil else { return false }
         return true
+    }
+
+    private static func perfAutoSelectRepoPath(environment: [String: String]) -> String? {
+        guard let rawValue = environment[perfAutoSelectRepoPathKey] else { return nil }
+        let trimmedValue = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedValue.isEmpty else { return nil }
+        return normalizedPath(trimmedValue)
+    }
+
+    private static func normalizedPath(_ rawPath: String) -> String {
+        let expandedPath = NSString(string: rawPath).expandingTildeInPath
+        return URL(fileURLWithPath: expandedPath).standardizedFileURL.resolvingSymlinksInPath().path
     }
 
     func previewBootstrapDecision(

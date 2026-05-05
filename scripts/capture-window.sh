@@ -9,6 +9,7 @@
 # Usage:
 #   ./scripts/capture-window.sh
 #   ./scripts/capture-window.sh --output ./output/window/custom.png
+#   ./scripts/capture-window.sh --pid 12345 --output ./output/window/custom.png
 #   ./scripts/capture-window.sh --activate
 #
 # ==========================================================================
@@ -23,6 +24,7 @@ INSTALLED_APP_BINARY="/Applications/$APP_NAME.app/Contents/MacOS/$APP_NAME"
 DEFAULT_OUTPUT_DIR="$REPO_ROOT/output/window"
 OUTPUT_PATH=""
 ACTIVATE_APP=false
+TARGET_PID=""
 LATEST_PATH=""
 CAPTURE_RETRIES=5
 CAPTURE_RETRY_DELAY_SECONDS=1
@@ -42,6 +44,7 @@ Usage: ./scripts/capture-window.sh [options]
 
 Options:
   --output <path>      Output png path (default: ./output/window/window-<timestamp>.png)
+  --pid <pid>          Capture only a window owned by this process id
   --activate           Activate WorkspaceManager before capture
   --help, -h           Show this help
 
@@ -49,6 +52,7 @@ Notes:
 - Default mode avoids app activation to reduce focus contention on shared desktops.
 - Requires Screen Recording permission for this terminal.
 - Uses CoreGraphics window enumeration for window-id lookup (no Accessibility dependency).
+- Use --pid when multiple WorkSpaces/WorkspaceManager debug windows may be visible.
 - `--activate` uses System Events to focus a running process and never launches by bundle id.
 USAGE
 }
@@ -59,6 +63,12 @@ parse_args() {
             --output)
                 [[ $# -ge 2 ]] || fail "--output requires a value"
                 OUTPUT_PATH="$2"
+                shift 2
+                ;;
+            --pid)
+                [[ $# -ge 2 ]] || fail "--pid requires a value"
+                [[ "$2" =~ ^[0-9]+$ ]] || fail "--pid must be a process id"
+                TARGET_PID="$2"
                 shift 2
                 ;;
             --activate)
@@ -80,6 +90,9 @@ ensure_dependencies() {
     command -v swift >/dev/null 2>&1 || fail "swift is required"
     command -v screencapture >/dev/null 2>&1 || fail "screencapture is required"
     pgrep -x "$APP_NAME" >/dev/null 2>&1 || fail "$APP_NAME is not running"
+    if [[ -n "$TARGET_PID" ]]; then
+        kill -0 "$TARGET_PID" 2>/dev/null || fail "target pid is not running: $TARGET_PID"
+    fi
     if pgrep -f "$INSTALLED_APP_BINARY" >/dev/null 2>&1; then
         fail "Installed app process detected at $INSTALLED_APP_BINARY; quit it before capture"
     fi
@@ -116,11 +129,13 @@ resolve_output_paths() {
 read_window_id() {
     local win_id
     win_id="$(
+        WORKSPACES_CAPTURE_OWNER_PID="$TARGET_PID" \
         swift - <<'SWIFT'
 import CoreGraphics
 import Foundation
 
 let ownerCandidates: Set<String> = ["WorkSpaces", "WorkspaceManager"]
+let targetPID = Int(ProcessInfo.processInfo.environment["WORKSPACES_CAPTURE_OWNER_PID"] ?? "")
 let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
 let windows = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] ?? []
 
@@ -128,6 +143,10 @@ for window in windows {
     let owner = window[kCGWindowOwnerName as String] as? String ?? ""
     let layer = window[kCGWindowLayer as String] as? Int ?? 1
     guard ownerCandidates.contains(owner), layer == 0 else { continue }
+    if let targetPID {
+        let ownerPID = window[kCGWindowOwnerPID as String] as? Int ?? -1
+        guard ownerPID == targetPID else { continue }
+    }
 
     if let windowID = window[kCGWindowNumber as String] as? Int {
         print(windowID)
@@ -151,6 +170,9 @@ main() {
     resolve_output_paths
     ensure_dependencies
     activate_if_requested
+    if [[ -n "$TARGET_PID" ]]; then
+        log "Capture target pid: $TARGET_PID"
+    fi
 
     local attempt win_id
     for ((attempt = 1; attempt <= CAPTURE_RETRIES; attempt++)); do

@@ -24,4 +24,42 @@ struct TerminalMultiplexingModeTests {
 
         #expect(TerminalMultiplexingMode.resolve(from: defaults) == .tmuxPerSession)
     }
+
+    @Test("Environment override wins over stored mode")
+    func environmentOverrideWinsOverStoredMode() {
+        let suiteName = "TerminalMultiplexingModeTests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        defaults.set(
+            TerminalMultiplexingMode.ghosttyManagedSplits.rawValue,
+            forKey: TerminalMultiplexingMode.storageKey
+        )
+
+        #expect(
+            TerminalMultiplexingMode.resolve(
+                from: defaults,
+                environment: [
+                    TerminalMultiplexingMode.environmentOverrideKey:
+                        TerminalMultiplexingMode.tmuxPerSession.rawValue
+                ]
+            ) == .tmuxPerSession
+        )
+    }
+
+    @Test("Invalid environment override falls back to stored mode")
+    func invalidEnvironmentOverrideFallsBackToStoredMode() {
+        let suiteName = "TerminalMultiplexingModeTests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        defaults.set(TerminalMultiplexingMode.tmuxPerSession.rawValue, forKey: TerminalMultiplexingMode.storageKey)
+
+        #expect(
+            TerminalMultiplexingMode.resolve(
+                from: defaults,
+                environment: [TerminalMultiplexingMode.environmentOverrideKey: "unsupported"]
+            ) == .tmuxPerSession
+        )
+    }
 }

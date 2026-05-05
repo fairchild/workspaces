@@ -178,12 +178,20 @@ Use these scripts for day-to-day UI verification:
 7. `./scripts/capture-window.sh`
 - One-shot window-only capture for shared-desktop workflows.
 - Captures by window id (`screencapture -l`) and **does not activate the app by default**.
+- Use `--pid <pid>` when multiple WorkSpaces/WorkspaceManager debug windows are visible.
 - Makes no frontmost-app assumption; pause your own keyboard/mouse input while the capture runs, then resume.
 - Default output:
   - timestamped: `./output/window/window-<timestamp>.png`
   - latest copy: `./output/window/latest.png`
 
-8. `./scripts/open-in-editor-shortcut-smoke.sh`
+8. `./scripts/continuity-evidence.sh`
+- App terminate/relaunch evidence for local repo/workspace terminal continuity.
+- Launches the debug app with isolated data, forces `tmux_per_session` through a dev-only environment override, captures before/closed/after proof, and writes artifacts under:
+  - `./output/continuity-evidence/<timestamp>/`
+- Use for PRs that touch terminal continuity restore behavior:
+  - `./scripts/continuity-evidence.sh --target "$HOME/code/workspaces" --no-build --trust-mise`
+
+9. `./scripts/open-in-editor-shortcut-smoke.sh`
 - End-to-end regression smoke for `Cmd+Shift+O` editor launch.
 - Covers both target paths:
   - repo selected, no file preview -> open project root only
@@ -191,7 +199,7 @@ Use these scripts for day-to-day UI verification:
 - Uses fixture mode and a fake Zed CLI shim to verify launched arguments.
 - Verifies `[Perf] metric=open_in_editor_launch ... outcome=success` log evidence.
 
-9. `./scripts/tart-webview-demo.sh`
+10. `./scripts/tart-webview-demo.sh`
 - Runs the repo/webview transition flow inside an isolated Tart VM.
 - Clones a prepared base VM, boots it with this repo mounted, drives the guest
   UI over SSH + VNC, and outputs capture artifacts under:

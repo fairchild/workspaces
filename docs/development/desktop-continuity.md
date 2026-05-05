@@ -29,6 +29,38 @@ Expected result for an app quit/reopen inside the same login session: `check` re
 
 Expected result after reboot may be `missing`; in that case the manifest fallback is the intended recovery behavior.
 
+## Evidence matrix
+
+| Lifecycle boundary | Evidence status | Merge expectation |
+| --- | --- | --- |
+| App terminate/relaunch | Automated by `scripts/continuity-evidence.sh` | Required for PRs that touch desktop terminal continuity |
+| Sleep/wake | Manual with `scripts/tmux-continuity-probe.sh start/check` | Useful evidence, not a merge gate for the current slice |
+| Logout/reboot | Deferred and explicitly unproven | Not required without a scheduled host validation window |
+
+The automated lane intentionally uses local repo/workspace terminals only. Remote/provider-backed workspace continuity remains provider-specific and out of scope for this slice.
+
+## Automated app relaunch evidence
+
+Use the continuity evidence harness when a PR changes restore behavior, terminal continuity manifests, or the tmux continuity contract:
+
+```bash
+./scripts/continuity-evidence.sh --target "$HOME/code/workspaces" --no-build --trust-mise
+```
+
+The harness:
+
+1. launches with `WORKSPACES_TERMINAL_MULTIPLEXING_MODE=tmux_per_session`;
+2. launches the debug app with isolated SwiftData under `output/continuity-evidence/<timestamp>/data`;
+3. opens the requested local repo terminal using the existing startup auto-selection path;
+4. captures `before-close.png` by exact window id;
+5. terminates the exact app PID with `NSRunningApplication.terminate()`;
+6. writes and renders a close proof PNG;
+7. relaunches without auto-selection and captures `after-reopen.png`;
+8. checks tmux survival with `scripts/tmux-continuity-probe.sh`;
+9. writes `summary.json` with PIDs, window ids, tmux session, artifact paths, and restore timing.
+
+If multiple debug WorkSpaces windows are visible, use `scripts/capture-window.sh --pid <pid>` for manual follow-up captures. The harness already uses exact-window capture first and PID-filtered capture as its fallback.
+
 ## Verification
 
 For code changes touching this area:
@@ -37,6 +69,7 @@ For code changes touching this area:
 ./scripts/build-ghosttykit.sh
 swift build
 swift test
+./scripts/continuity-evidence.sh --target "$HOME/code/workspaces" --no-build --trust-mise
 ./scripts/launch-dev.sh --no-build --no-activate
 ps aux | rg '.build/arm64-apple-macosx/debug/WorkspaceManager'
 scripts/tmux-continuity-probe.sh start "$PWD" app-restart

@@ -10,6 +10,7 @@ enum TerminalMultiplexingMode: String, CaseIterable, Identifiable, Codable {
     case tmuxPerSession = "tmux_per_session"
 
     static let storageKey = "terminalMultiplexingMode"
+    static let environmentOverrideKey = "WORKSPACES_TERMINAL_MULTIPLEXING_MODE"
     static let defaultValue: TerminalMultiplexingMode = .ghosttyManagedSplits
 
     var id: String { rawValue }
@@ -34,14 +35,26 @@ enum TerminalMultiplexingMode: String, CaseIterable, Identifiable, Codable {
     }
 
     static func resolve(
-        from userDefaults: UserDefaults = .standard
+        from userDefaults: UserDefaults = .standard,
+        environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> TerminalMultiplexingMode {
-        guard
-            let rawValue = userDefaults.string(forKey: storageKey),
-            let mode = TerminalMultiplexingMode(rawValue: rawValue)
-        else {
-            return defaultValue
+        resolve(rawValue: userDefaults.string(forKey: storageKey), environment: environment)
+    }
+
+    static func resolve(
+        rawValue: String?,
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> TerminalMultiplexingMode {
+        if let override = environment[environmentOverrideKey],
+            let mode = TerminalMultiplexingMode(rawValue: override)
+        {
+            return mode
         }
-        return mode
+
+        if let rawValue, let mode = TerminalMultiplexingMode(rawValue: rawValue) {
+            return mode
+        }
+
+        return defaultValue
     }
 }

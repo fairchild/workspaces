@@ -83,7 +83,7 @@ struct ContentView: View {
     }
 
     private var terminalMultiplexingMode: TerminalMultiplexingMode {
-        TerminalMultiplexingMode(rawValue: terminalMultiplexingModeRawValue) ?? .defaultValue
+        TerminalMultiplexingMode.resolve(rawValue: terminalMultiplexingModeRawValue)
     }
 
     private var activeHostSession: HostTerminalSession? {
@@ -1964,8 +1964,7 @@ struct ContentView: View {
             targetID: targetID,
             rootURL: rootURL,
             launchURL: launchURL,
-            terminalMode: TerminalMultiplexingMode(rawValue: terminalMultiplexingModeRawValue)
-                ?? TerminalMultiplexingMode.defaultValue
+            terminalMode: terminalMultiplexingMode
         )
         terminalContinuityManifestRawValue = manifest.rawValue
         NSLog(
