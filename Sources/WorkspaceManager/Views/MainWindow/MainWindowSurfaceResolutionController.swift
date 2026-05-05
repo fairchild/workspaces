@@ -66,6 +66,14 @@ struct MainWindowSurfaceResolutionController {
         ) {
             return .perfAutoSelect(repo)
         }
+        if bootstrapController.shouldWaitForPerfAutoSelectedRepo(
+            environment: context.environment,
+            didRun: context.didRunPerfAutoSelection,
+            pendingRequest: context.pendingRequest,
+            repos: context.repos
+        ) {
+            return .waitForRepos
+        }
 
         switch bootstrapController.previewBootstrapDecision(
             didApply: context.didApplyFixturePreviewBootstrap,

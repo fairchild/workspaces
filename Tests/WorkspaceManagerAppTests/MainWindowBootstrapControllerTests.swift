@@ -122,6 +122,52 @@ struct MainWindowBootstrapControllerTests {
         #expect(skippedBecausePendingDeepLink == nil)
     }
 
+    @Test("Perf auto select can target a specific repo path")
+    func perfAutoSelectCanTargetSpecificRepoPath() {
+        let firstRepo = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))
+        let secondRepo = Repo(name: "beta", localPath: URL(fileURLWithPath: "/tmp/beta"))
+
+        let selectedRepo = controller.perfAutoSelectedRepo(
+            environment: [
+                "WORKSPACES_PERF_AUTO_SELECT_FIRST_REPO": "1",
+                "WORKSPACES_PERF_AUTO_SELECT_REPO_PATH": "/tmp/beta",
+            ],
+            didRun: false,
+            pendingRequest: nil,
+            repos: [firstRepo, secondRepo]
+        )
+        #expect(selectedRepo?.id == secondRepo.id)
+    }
+
+    @Test("Perf auto select waits when requested repo path is not yet available")
+    func perfAutoSelectWaitsForRequestedRepoPath() {
+        let repo = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))
+
+        #expect(
+            controller.shouldWaitForPerfAutoSelectedRepo(
+                environment: [
+                    "WORKSPACES_PERF_AUTO_SELECT_FIRST_REPO": "1",
+                    "WORKSPACES_PERF_AUTO_SELECT_REPO_PATH": "/tmp/beta",
+                ],
+                didRun: false,
+                pendingRequest: nil,
+                repos: [repo]
+            )
+        )
+
+        #expect(
+            controller.shouldWaitForPerfAutoSelectedRepo(
+                environment: [
+                    "WORKSPACES_PERF_AUTO_SELECT_FIRST_REPO": "1",
+                    "WORKSPACES_PERF_AUTO_SELECT_REPO_PATH": "/tmp/alpha",
+                ],
+                didRun: false,
+                pendingRequest: nil,
+                repos: [repo]
+            ) == false
+        )
+    }
+
     @Test("Perf auto open New Workspace is gated behind both perf flags and idle state")
     func perfAutoOpenNewWorkspaceHonorsFlags() {
         #expect(
