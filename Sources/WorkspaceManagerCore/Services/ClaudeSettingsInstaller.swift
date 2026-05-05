@@ -147,7 +147,8 @@ public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
     private func pathFor(target: ClaudeSettingsContribution.Target) -> URL {
         switch target {
         case .userSettingsJSON:
-            return homeDirectory
+            return
+                homeDirectory
                 .appendingPathComponent(".claude", isDirectory: true)
                 .appendingPathComponent("settings.json")
         case .userClaudeJSON:
@@ -197,10 +198,12 @@ public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
     }
 
     private func areJSONEqual(_ lhs: [String: AnyCodable], _ rhs: [String: AnyCodable]) -> Bool {
-        let a = (try? JSONSerialization.data(
-            withJSONObject: Self.lower(lhs), options: [.sortedKeys])) ?? Data()
-        let b = (try? JSONSerialization.data(
-            withJSONObject: Self.lower(rhs), options: [.sortedKeys])) ?? Data()
+        let a =
+            (try? JSONSerialization.data(
+                withJSONObject: Self.lower(lhs), options: [.sortedKeys])) ?? Data()
+        let b =
+            (try? JSONSerialization.data(
+                withJSONObject: Self.lower(rhs), options: [.sortedKeys])) ?? Data()
         return a == b
     }
 }
@@ -214,9 +217,10 @@ public func workspacesHooksContribution(
 ) -> ClaudeSettingsContribution {
     // Per spec § Channel 1, point each interesting event at our /event route.
     // `http+unix://<encoded-socket>/event` is the de-facto convention used by Claude Code.
-    let encodedSocket = socketPath.addingPercentEncoding(
-        withAllowedCharacters: .alphanumerics
-    ) ?? socketPath
+    let encodedSocket =
+        socketPath.addingPercentEncoding(
+            withAllowedCharacters: .alphanumerics
+        ) ?? socketPath
     let endpoint = "http+unix://\(encodedSocket)/event"
 
     let eventNames: [String] = [

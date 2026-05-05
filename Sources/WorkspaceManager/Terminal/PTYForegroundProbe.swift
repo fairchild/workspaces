@@ -42,7 +42,7 @@ public struct PTYForegroundProbe: Sendable {
     // changes.
     public func detect(surfaceID: UInt64) -> AgentKind {
         if let cached = Self.cache.read(surfaceID: surfaceID),
-           Date().timeIntervalSince(cached.recordedAt) < Self.cacheTTL
+            Date().timeIntervalSince(cached.recordedAt) < Self.cacheTTL
         {
             return cached.kind
         }
@@ -56,12 +56,14 @@ public struct PTYForegroundProbe: Sendable {
         private let lock = NSLock()
 
         func read(surfaceID: UInt64) -> CacheEntry? {
-            lock.lock(); defer { lock.unlock() }
+            lock.lock()
+            defer { lock.unlock() }
             return entries[surfaceID]
         }
 
         func write(surfaceID: UInt64, kind: AgentKind) {
-            lock.lock(); defer { lock.unlock() }
+            lock.lock()
+            defer { lock.unlock() }
             entries[surfaceID] = CacheEntry(kind: kind, recordedAt: Date())
         }
     }

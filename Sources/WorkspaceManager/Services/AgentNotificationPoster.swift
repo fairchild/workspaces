@@ -52,7 +52,7 @@ public final class AgentNotificationPoster {
             // Coalesce.
             let now = Date()
             if let last = lastPosted[hostID],
-               now.timeIntervalSince(last) < Self.coalescingWindow
+                now.timeIntervalSince(last) < Self.coalescingWindow
             {
                 continue
             }

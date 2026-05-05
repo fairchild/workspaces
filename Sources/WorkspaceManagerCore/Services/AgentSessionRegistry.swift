@@ -71,9 +71,9 @@ public final class AgentSessionRegistry: ObservableObject, AgentSessionRegistryP
         // suppress this OSC event.
         if case .osc = origin, status.hookActive {
             if let lastRun = book.lastHookRunStateApplied,
-               let lastAt = book.lastHookEventAt,
-               lastRun == mappedRun,
-               now.timeIntervalSince(lastAt) < Self.oscDedupWindow
+                let lastAt = book.lastHookEventAt,
+                lastRun == mappedRun,
+                now.timeIntervalSince(lastAt) < Self.oscDedupWindow
             {
                 return
             }

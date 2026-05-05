@@ -52,10 +52,11 @@ public actor AgentHookListener {
         if let override = socketURLOverride {
             self.socketURL = override
         } else {
-            let appSupport = FileManager.default.urls(
-                for: .applicationSupportDirectory,
-                in: .userDomainMask
-            ).first ?? FileManager.default.temporaryDirectory
+            let appSupport =
+                FileManager.default.urls(
+                    for: .applicationSupportDirectory,
+                    in: .userDomainMask
+                ).first ?? FileManager.default.temporaryDirectory
             let dir = appSupport.appendingPathComponent(bundleIdentifier, isDirectory: true)
             self.socketURL = dir.appendingPathComponent("hooks-\(getpid()).sock", isDirectory: false)
         }
@@ -166,9 +167,11 @@ public actor AgentHookListener {
         let (status, body) = route(request)
         statistics.requestCount += 1
         let response = Self.httpResponse(status: status, body: body)
-        connection.send(content: response, completion: .contentProcessed { _ in
-            connection.cancel()
-        })
+        connection.send(
+            content: response,
+            completion: .contentProcessed { _ in
+                connection.cancel()
+            })
 
         // Process payload off the response path so the hook caller never blocks on us.
         Task { [request] in
@@ -248,11 +251,13 @@ public actor AgentHookListener {
         guard let raw = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else {
             return ("", nil)
         }
-        let cwd = (raw["cwd"] as? String)
+        let cwd =
+            (raw["cwd"] as? String)
             ?? (raw["working_directory"] as? String)
             ?? (raw["workingDirectory"] as? String)
             ?? ""
-        let sessionID = (raw["session_id"] as? String)
+        let sessionID =
+            (raw["session_id"] as? String)
             ?? (raw["sessionId"] as? String)
             ?? (raw["sessionID"] as? String)
         return (cwd, sessionID)
@@ -269,9 +274,11 @@ public actor AgentHookListener {
 
     private func sweepStaleSiblingSockets() {
         let dir = socketURL.deletingLastPathComponent()
-        guard let entries = try? FileManager.default.contentsOfDirectory(
-            at: dir, includingPropertiesForKeys: nil
-        ) else { return }
+        guard
+            let entries = try? FileManager.default.contentsOfDirectory(
+                at: dir, includingPropertiesForKeys: nil
+            )
+        else { return }
         for entry in entries {
             let name = entry.lastPathComponent
             guard name.hasPrefix("hooks-"), name.hasSuffix(".sock") else { continue }
