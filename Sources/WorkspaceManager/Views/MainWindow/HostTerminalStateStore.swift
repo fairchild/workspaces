@@ -34,6 +34,23 @@ final class HostTerminalStateStore: ObservableObject {
     let surfaceStore = HostTerminalSurfaceStore()
     private var coordinator = HostTerminalSessionCoordinator()
 
+    /// Agent session registry attached at scene mount. Optional because previews and
+    /// fixtures construct stores without an app-scoped registry.
+    private weak var agentSessionRegistry: AgentSessionRegistry?
+    /// Stub probe used to seed `kind` on register; PR #1 ships a fail-safe
+    /// `.claudeCode` default. Replace with the real probe in a Channel 3 follow-up.
+    private let foregroundProbe = PTYForegroundProbe()
+    /// Set of session IDs the store has already registered with the agent registry,
+    /// so we only register/deregister on real edge transitions.
+    private var registeredAgentSessionIDs: Set<UUID> = []
+
+    func attach(agentSessionRegistry: AgentSessionRegistry) {
+        guard self.agentSessionRegistry !== agentSessionRegistry else { return }
+        self.agentSessionRegistry = agentSessionRegistry
+        // Backfill: any sessions already in the coordinator should be registered.
+        syncRegistry(forSessions: coordinator.sessions)
+    }
+
     var hasSessions: Bool {
         !sessions.isEmpty
     }
@@ -396,6 +413,36 @@ final class HostTerminalStateStore: ObservableObject {
         for primaryID in stalePrimaryIDs {
             removeSplitState(forPrimarySessionID: primaryID)
         }
+
+        syncRegistry(forSessions: coordinator.sessions)
+    }
+
+    /// Mirror the coordinator's session list into the agent session registry so the
+    /// hook listener has somewhere to land payloads. Idempotent — `register` and
+    /// `deregister` are no-ops on already-registered / already-removed ids.
+    private func syncRegistry(forSessions sessions: [HostTerminalSession]) {
+        guard let registry = agentSessionRegistry else { return }
+        let liveIDs = Set(sessions.map(\.id))
+
+        // Register newly-seen sessions.
+        for session in sessions where !registeredAgentSessionIDs.contains(session.id) {
+            // PR #1: probe is a stub returning `.claudeCode` for every surface.
+            // Replace surfaceID with a real value when the Channel 3 probe lands.
+            let kind = foregroundProbe.detect(surfaceID: 0)
+            registry.register(
+                hostSessionID: session.id,
+                cwd: session.directoryPath,
+                kind: kind
+            )
+            registeredAgentSessionIDs.insert(session.id)
+        }
+
+        // Deregister sessions that have left the coordinator.
+        let removed = registeredAgentSessionIDs.subtracting(liveIDs)
+        for sessionID in removed {
+            registry.deregister(hostSessionID: sessionID)
+        }
+        registeredAgentSessionIDs.subtract(removed)
     }
 
     private func removeSplitState(forPrimarySessionID primarySessionID: UUID) {

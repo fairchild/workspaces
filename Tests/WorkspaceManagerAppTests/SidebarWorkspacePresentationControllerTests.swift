@@ -44,6 +44,103 @@ struct SidebarWorkspacePresentationControllerTests {
         )
     }
 
+    @Test("Agent-derived activity is preferred over baseline pane-count signal")
+    func agentDerivedActivityWinsWhenRegistryHasState() {
+        let key = HostTerminalSessionKey.repoPath("/repo")
+        let session = HostTerminalSession(key: key, directory: URL(fileURLWithPath: "/repo"))
+        let status = AgentSessionStatus(
+            hostSessionID: session.id,
+            kind: .claudeCode,
+            cwd: "/repo",
+            run: .awaitingInput(reason: .permissionPrompt),
+            lastEventAt: Date(),
+            hookActive: true
+        )
+
+        let activity = controller.sessionActivity(
+            for: key,
+            paneCountBySessionKey: [key: 1],
+            activeSessionKey: nil,
+            sessions: [session],
+            agentStatusBySessionID: [session.id: status]
+        )
+        #expect(activity == .awaitingInput)
+    }
+
+    @Test("Errored agent state surfaces error category in sidebar")
+    func erroredAgentStateSurfaces() {
+        let key = HostTerminalSessionKey.repoPath("/repo")
+        let session = HostTerminalSession(key: key, directory: URL(fileURLWithPath: "/repo"))
+        let status = AgentSessionStatus(
+            hostSessionID: session.id,
+            kind: .claudeCode,
+            cwd: "/repo",
+            run: .errored(category: .rateLimit, message: "rate limit"),
+            lastEventAt: Date(),
+            hookActive: true
+        )
+
+        let activity = controller.sessionActivity(
+            for: key,
+            paneCountBySessionKey: [key: 1],
+            activeSessionKey: key,
+            sessions: [session],
+            agentStatusBySessionID: [session.id: status]
+        )
+        if case .errored(let category) = activity {
+            #expect(category == .rateLimit)
+        } else {
+            Issue.record("expected errored(.rateLimit)")
+        }
+    }
+
+    @Test("Idle agent state defers to baseline pane-count signal")
+    func idleAgentStateDefersToBaseline() {
+        let key = HostTerminalSessionKey.repoPath("/repo")
+        let session = HostTerminalSession(key: key, directory: URL(fileURLWithPath: "/repo"))
+        let status = AgentSessionStatus(
+            hostSessionID: session.id,
+            kind: .claudeCode,
+            cwd: "/repo",
+            run: .idle,
+            lastEventAt: Date(),
+            hookActive: false
+        )
+
+        let activeActivity = controller.sessionActivity(
+            for: key,
+            paneCountBySessionKey: [key: 1],
+            activeSessionKey: key,
+            sessions: [session],
+            agentStatusBySessionID: [session.id: status]
+        )
+        #expect(activeActivity == .active)
+
+        let liveActivity = controller.sessionActivity(
+            for: key,
+            paneCountBySessionKey: [key: 1],
+            activeSessionKey: nil,
+            sessions: [session],
+            agentStatusBySessionID: [session.id: status]
+        )
+        #expect(liveActivity == .live)
+    }
+
+    @Test("Empty agent map preserves the existing pane-count + active signal")
+    func emptyAgentMapKeepsBaseline() {
+        let key = HostTerminalSessionKey.repoPath("/repo")
+        let session = HostTerminalSession(key: key, directory: URL(fileURLWithPath: "/repo"))
+
+        let activity = controller.sessionActivity(
+            for: key,
+            paneCountBySessionKey: [key: 2],
+            activeSessionKey: key,
+            sessions: [session],
+            agentStatusBySessionID: [:]
+        )
+        #expect(activity == .active)
+    }
+
     @Test("Local workspace session key falls back to normalized host path")
     func localWorkspaceSessionKeyUsesNormalizedHostPath() {
         let repo = Repo(name: "repo", localPath: URL(fileURLWithPath: "/tmp/repo"))

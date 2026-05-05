@@ -320,6 +320,21 @@ private struct MainWindowRootView: View {
                 NSLog("[DeepLink] Ignored unsupported URL: %@", url.absoluteString)
             }
         }
+        .modifier(AgentSessionRegistryAttacher(hostTerminalState: hostTerminalState))
+    }
+}
+
+/// Attaches the app-scoped `AgentSessionRegistry` to the host terminal store so the
+/// store can register/deregister host sessions with the registry — closes the gap
+/// where production POSTs to `/event` had nowhere to land.
+private struct AgentSessionRegistryAttacher: ViewModifier {
+    @EnvironmentObject private var registry: AgentSessionRegistry
+    let hostTerminalState: HostTerminalStateStore
+
+    func body(content: Content) -> some View {
+        content.onAppear {
+            hostTerminalState.attach(agentSessionRegistry: registry)
+        }
     }
 }
 
