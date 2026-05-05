@@ -275,7 +275,7 @@ private struct MainWindowRootView: View {
     private let appRuntimeDependencies: AppRuntimeDependencies
     @ObservedObject private var appCommandState: AppCommandState
     @State private var deepLinkState = WorkspaceDeepLinkState()
-    @SceneStorage(MainWindowLastSurface.storageKey) private var lastSurfaceRawValue = ""
+    @AppStorage(MainWindowLastSurface.storageKey) private var lastSurfaceRawValue = ""
     @StateObject private var hostTerminalState = HostTerminalStateStore()
     @StateObject private var workspaceProviderSetupCoordinator = WorkspaceProviderSetupCoordinator()
     @StateObject private var hostLumeSmokeAutomation: HostLumeSmokeAutomationController
