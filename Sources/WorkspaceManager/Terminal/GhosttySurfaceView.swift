@@ -6,6 +6,7 @@
 import AppKit
 import Foundation
 import GhosttyKit
+import QuartzCore
 
 @MainActor
 final class GhosttySurfaceView: NSView {
@@ -94,6 +95,7 @@ final class GhosttySurfaceView: NSView {
         if let window {
             TerminalFocusManager.shared.registerWindow(window)
             setupEventMonitor()
+            syncLayerContentsScale()
             updateScaleAndSize()
             applySystemColorSchemeIfNeeded(force: true)
             let shouldSkipRestore =
@@ -142,6 +144,7 @@ final class GhosttySurfaceView: NSView {
 
     override func viewDidChangeBackingProperties() {
         super.viewDidChangeBackingProperties()
+        syncLayerContentsScale()
         updateScaleAndSize()
     }
 
@@ -261,6 +264,15 @@ final class GhosttySurfaceView: NSView {
         lastScaleAndSize = next
         ghostty_surface_set_content_scale(surface, next.xScale, next.yScale)
         ghostty_surface_set_size(surface, next.width, next.height)
+    }
+
+    private func syncLayerContentsScale() {
+        guard let backingScaleFactor = window?.backingScaleFactor else { return }
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer?.contentsScale = backingScaleFactor
+        CATransaction.commit()
     }
 
     // MARK: - Mouse input
