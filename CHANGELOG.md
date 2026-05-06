@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.12.0] - 2026-05-06
+
+### Added
+- use team memory for personas
+- add become persona skill
+
+### Changed
+- sidebar: extract workspace presentation controller (#431)
+
+### Fixed
+- sync ghostty layer backing scale
+- persist main window surface across relaunch
+- gate update checks behind disclosure
+
+### Other
+- harden agent compute and release paths
+- migrate notarize to App Store Connect API-key auth (#398)
+- Add desktop terminal continuity manifest (#408)
+- Fix CD authz Playwright validation (#439)
+- rename public app bundle to WorkSpaces (#437)
+- add PR reviewer evidence judgement
+- add PR reviewer label intelligence
+
 ## [0.11.2] - 2026-05-03
 
 ### Other
