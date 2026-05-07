@@ -465,7 +465,7 @@ struct PerfChannel1Tests {
 
     // MARK: - Risk: backup file accumulation
 
-    @Test("risk_backup_accumulation: 10 installs produce 10 backups, no rotation")
+    @Test("risk_backup_accumulation: 10 installs leave 5 backups (rotation active)")
     func backupAccumulation() async throws {
         let homeDir = URL(fileURLWithPath: "/tmp")
             .appendingPathComponent("perf-backup-home-\(UUID().uuidString.prefix(6))")
@@ -502,21 +502,23 @@ struct PerfChannel1Tests {
 
         let payload: [String: Any] = [
             "scenario": "channel1_risk_backup_accumulation",
-            "backups_created": backups.count,
+            "backups_retained": backups.count,
             "backup_paths": backups.map(\.path),
+            "rotation_active": true,
             "metrics": [
-                "channel1_backup_files_per_install": [
-                    "value": Double(backups.count) / 10.0
+                "channel1_backup_files_retained": [
+                    "value": Double(backups.count)
                 ]
             ],
         ]
         try Self.writeResult(
             payload, to: Self.resultPath(scenario: "channel1_risk_backup_accumulation"))
 
-        // Finding: no rotation is implemented yet — this is by design (PR #1 has
-        // no rotation). Test asserts the count to guard against accidental
-        // future regressions.
-        #expect(backups.count == 10)
+        // Channel 3 mitigation: backup rotation is now active. After 10 installs
+        // we expect exactly `maxBackupsPerFile` backups on disk (the newest 5),
+        // not 10. Asserts both the cap and the rotation-on guarantee.
+        #expect(backups.count == ClaudeSettingsInstaller.maxBackupsPerFile)
+        #expect(backups.count == 5)
     }
 
     // MARK: - Risk: malformed settings.json

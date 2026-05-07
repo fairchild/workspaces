@@ -76,7 +76,11 @@ let package = Package(
                 .copy("Resources/PrivacyInfo.xcprivacy"),
 
                 // App icons and assets
-                .process("Resources/Assets.xcassets")
+                .process("Resources/Assets.xcassets"),
+
+                // Channel 3 (Claude Code) hook forwarders — extracted to a writable
+                // path on opt-in install; the .sh files are the source of truth.
+                .copy("Resources/HookForwarders")
             ],
             swiftSettings: [.enableUpcomingFeature("BareSlashRegexLiterals")],
             linkerSettings: [

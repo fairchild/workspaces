@@ -177,6 +177,31 @@ final class GhosttySurfaceView: NSView {
         readinessDiagnostics.observeShellSignal(.pwd)
     }
 
+    /// Channel 3: an OSC 9 / OSC 777 notification from the agent. Forward to the
+    /// registry via the OSC router so the sidebar dot, macOS notifications, and
+    /// the dedup window all see the same event.
+    func handleDesktopNotification(
+        title: String?,
+        body: String,
+        surfaceAddress: UInt
+    ) {
+        AgentOSCRouter.shared.handleDesktopNotification(
+            title: title,
+            body: body,
+            surfaceView: self,
+            surfaceAddress: surfaceAddress
+        )
+    }
+
+    /// Channel 3: terminal BEL. Routed through the OSC router so the registry's
+    /// adapter has a single ingestion path for non-hook attention signals.
+    func handleRingBell(surfaceAddress: UInt) {
+        AgentOSCRouter.shared.handleRingBell(
+            surfaceView: self,
+            surfaceAddress: surfaceAddress
+        )
+    }
+
     func runtimeDidRequestClose(processAlive: Bool) {
         if processAlive {
             onCloseConfirmationRequired?()
