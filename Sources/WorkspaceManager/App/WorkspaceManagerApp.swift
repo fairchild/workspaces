@@ -17,6 +17,7 @@ struct WorkspaceManagerApp: App {
     @StateObject private var appCommandState: AppCommandState
     @StateObject private var modelStoreStatusController: ModelStoreStatusController
     @StateObject private var softwareUpdateController: SoftwareUpdateController
+    @StateObject private var agentSessionRegistry: AgentSessionRegistry
     private let appRuntimeDependencies = AppRuntimeDependencies.resolved()
     let sharedModelContainer: ModelContainer
 
@@ -34,7 +35,16 @@ struct WorkspaceManagerApp: App {
         _appCommandState = StateObject(wrappedValue: AppCommandState())
         _modelStoreStatusController = StateObject(wrappedValue: .shared)
         _softwareUpdateController = StateObject(wrappedValue: SoftwareUpdateController())
+        let registry = AgentSessionRegistry()
+        _agentSessionRegistry = StateObject(wrappedValue: registry)
         self.sharedModelContainer = bootstrap.container
+
+        // Stand up the hook listener and notification poster on the same registry instance.
+        // The listener binds to a Unix socket under Application Support keyed by pid.
+        // Disabled in CI to avoid cluttering the runner's filesystem.
+        if ProcessInfo.processInfo.environment["CI"] == nil {
+            ClaudeIntegrationLifecycle.shared.start(registry: registry)
+        }
     }
 
     var body: some Scene {
@@ -49,6 +59,8 @@ struct WorkspaceManagerApp: App {
                 appRuntimeDependencies.workspaceProviderRegistry
             )
             .environmentObject(modelStoreStatusController)
+            .environmentObject(agentSessionRegistry)
+            .environment(\.agentSessionRegistry, agentSessionRegistry)
             .frame(minWidth: 1000, minHeight: 700)
             .onAppear {
                 softwareUpdateController.installCheckForUpdatesMenuItem()
@@ -213,6 +225,7 @@ struct WorkspaceManagerApp: App {
             SettingsView(softwareUpdateController: softwareUpdateController)
                 .environment(\.lumeRuntimeService, appRuntimeDependencies.lumeRuntimeService)
                 .environment(\.workspaceProviderRegistry, appRuntimeDependencies.workspaceProviderRegistry)
+                .environment(\.claudeSettingsInstaller, ClaudeIntegrationLifecycle.shared.settingsInstaller)
                 .environmentObject(modelStoreStatusController)
         }
     }
@@ -306,6 +319,21 @@ private struct MainWindowRootView: View {
             } else {
                 NSLog("[DeepLink] Ignored unsupported URL: %@", url.absoluteString)
             }
+        }
+        .modifier(AgentSessionRegistryAttacher(hostTerminalState: hostTerminalState))
+    }
+}
+
+/// Attaches the app-scoped `AgentSessionRegistry` to the host terminal store so the
+/// store can register/deregister host sessions with the registry — closes the gap
+/// where production POSTs to `/event` had nowhere to land.
+private struct AgentSessionRegistryAttacher: ViewModifier {
+    @EnvironmentObject private var registry: AgentSessionRegistry
+    let hostTerminalState: HostTerminalStateStore
+
+    func body(content: Content) -> some View {
+        content.onAppear {
+            hostTerminalState.attach(agentSessionRegistry: registry)
         }
     }
 }
@@ -497,6 +525,14 @@ private struct WorkspaceProviderRegistryKey: EnvironmentKey {
     static let defaultValue = WorkspaceProviderRegistry.live
 }
 
+private struct AgentSessionRegistryKey: EnvironmentKey {
+    static let defaultValue: AgentSessionRegistry? = nil
+}
+
+private struct ClaudeSettingsInstallerKey: EnvironmentKey {
+    static let defaultValue: (any ClaudeSettingsInstalling)? = nil
+}
+
 extension EnvironmentValues {
     var gitService: any GitServiceProtocol {
         get { self[GitServiceKey.self] }
@@ -526,6 +562,16 @@ extension EnvironmentValues {
     var workspaceProviderRegistry: WorkspaceProviderRegistry {
         get { self[WorkspaceProviderRegistryKey.self] }
         set { self[WorkspaceProviderRegistryKey.self] = newValue }
+    }
+
+    var agentSessionRegistry: AgentSessionRegistry? {
+        get { self[AgentSessionRegistryKey.self] }
+        set { self[AgentSessionRegistryKey.self] = newValue }
+    }
+
+    var claudeSettingsInstaller: (any ClaudeSettingsInstalling)? {
+        get { self[ClaudeSettingsInstallerKey.self] }
+        set { self[ClaudeSettingsInstallerKey.self] = newValue }
     }
 }
 

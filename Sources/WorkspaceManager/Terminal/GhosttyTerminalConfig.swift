@@ -36,7 +36,9 @@ struct GhosttyTerminalConfig {
         fontSize: Float32 = 13,
         environment: [String: String] = ProcessInfo.processInfo.environment,
         terminalMultiplexingMode: TerminalMultiplexingMode? = nil,
-        isTmuxAvailableOverride: Bool? = nil
+        isTmuxAvailableOverride: Bool? = nil,
+        hostSessionID: UUID? = nil,
+        hooksSocketPath: String? = nil
     ) {
         self.fontSize = fontSize
         self.workingDirectory = workingDirectory.path
@@ -45,6 +47,14 @@ struct GhosttyTerminalConfig {
         environment["TERM"] = "xterm-256color"
         environment["COLORTERM"] = "truecolor"
         environment["LANG"] = "en_US.UTF-8"
+
+        // Channel 1 plumbing: when both pieces of context are available, expose them to
+        // the embedded shell so Claude Code (and any forwarder script) can address the
+        // host's hook listener over its Unix socket without per-process discovery.
+        if let hooksSocketPath, let hostSessionID {
+            environment["WORKSPACES_HOOKS_SOCKET"] = hooksSocketPath
+            environment["WORKSPACES_HOST_SESSION_ID"] = hostSessionID.uuidString
+        }
 
         if let path = environment["PATH"] {
             environment["PATH"] = [

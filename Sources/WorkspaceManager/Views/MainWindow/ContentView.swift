@@ -43,6 +43,7 @@ struct ContentView: View {
     @EnvironmentObject private var modelStoreStatusController: ModelStoreStatusController
     @Environment(\.workspaceService) private var workspaceService
     @Environment(\.workspaceProviderRegistry) private var workspaceProviderRegistry
+    @EnvironmentObject private var agentSessionRegistry: AgentSessionRegistry
     @ObservedObject private var notificationCoordinator = NotificationCoordinator.shared
 
     @State private var viewState = MainWindowViewState()
@@ -409,6 +410,8 @@ struct ContentView: View {
                 selectedWebSource: selectedWebSourceBinding,
                 paneCountBySessionKey: paneCountBySessionKeyForSidebar,
                 activeSessionKey: activeSessionKeyForSidebar,
+                hostSessions: hostTerminalState.sessions,
+                agentStatusBySessionID: agentSessionRegistry.statuses,
                 connectingWorkspaceID: viewState.connectingWorkspaceID,
                 onRepoSelected: handleRepoSelection,
                 onRepoTerminalSelected: handleRepoTerminalSelection,

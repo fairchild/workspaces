@@ -49,6 +49,21 @@
       "id": "installed_input_short_capture",
       "build_kind": "installed",
       "description": "Short interactive focused typing capture on the installed app for event-age and handler timing."
+    },
+    {
+      "id": "channel1_hook_ingest_burst",
+      "build_kind": "debug",
+      "description": "In-process burst of 1000 PreToolUse hook events at parallelism=8 against AgentHookListener; measures end-to-end HTTP and registry-update latency."
+    },
+    {
+      "id": "channel1_sidebar_churn",
+      "build_kind": "debug",
+      "description": "Steady-state hook flow at 40 ev/s across 8 host sessions for 60s; measures CPU% and RSS growth on the host process."
+    },
+    {
+      "id": "channel1_long_session_memory",
+      "build_kind": "debug",
+      "description": "Long-running register/deregister cycles (10 min default, 60 min target) with 30 events per cycle; measures RSS delta and registry-size symmetry."
     }
   ],
   "metrics": [
@@ -203,6 +218,85 @@
         "installed_input_short_capture": {
           "median_ms": 1,
           "p95_ms": 4
+        }
+      }
+    },
+    {
+      "name": "channel1_ingest_http_200_latency_ms",
+      "unit": "ms",
+      "supported_scenarios": [
+        "channel1_hook_ingest_burst"
+      ],
+      "reference_baselines": {
+        "channel1_hook_ingest_burst": {
+          "median_ms": 5,
+          "p95_ms": 25,
+          "p99_ms": 50
+        }
+      }
+    },
+    {
+      "name": "channel1_ingest_registry_update_latency_ms",
+      "unit": "ms",
+      "supported_scenarios": [
+        "channel1_hook_ingest_burst"
+      ],
+      "reference_baselines": {
+        "channel1_hook_ingest_burst": {
+          "median_ms": 8,
+          "p95_ms": 40,
+          "p99_ms": 80
+        }
+      }
+    },
+    {
+      "name": "channel1_steady_state_cpu_percent",
+      "unit": "percent",
+      "supported_scenarios": [
+        "channel1_sidebar_churn"
+      ],
+      "reference_baselines": {
+        "channel1_sidebar_churn": {
+          "median": 5,
+          "p95": 12
+        }
+      }
+    },
+    {
+      "name": "channel1_steady_state_rss_delta_mb",
+      "unit": "MB",
+      "supported_scenarios": [
+        "channel1_sidebar_churn"
+      ],
+      "reference_baselines": {
+        "channel1_sidebar_churn": {
+          "median_mb": 0,
+          "p95_mb": 5
+        }
+      }
+    },
+    {
+      "name": "channel1_long_session_rss_delta_mb",
+      "unit": "MB",
+      "supported_scenarios": [
+        "channel1_long_session_memory"
+      ],
+      "reference_baselines": {
+        "channel1_long_session_memory": {
+          "ten_minute_max_mb": 1,
+          "sixty_minute_max_mb": 5
+        }
+      }
+    },
+    {
+      "name": "channel1_registry_size_after_close",
+      "unit": "entries",
+      "supported_scenarios": [
+        "channel1_long_session_memory"
+      ],
+      "reference_baselines": {
+        "channel1_long_session_memory": {
+          "max_entries": 0
         }
       }
     }

@@ -44,6 +44,8 @@ struct SidebarView: View {
     @Binding var selectedWebSource: WebSource?
     let paneCountBySessionKey: [HostTerminalSessionKey: Int]
     let activeSessionKey: HostTerminalSessionKey?
+    let hostSessions: [HostTerminalSession]
+    let agentStatusBySessionID: [UUID: AgentSessionStatus]
     let connectingWorkspaceID: UUID?
     let onRepoSelected: (Repo) -> Void
     let onRepoTerminalSelected: (Repo) -> Void
@@ -1217,7 +1219,9 @@ struct SidebarView: View {
         workspacePresentationController.sessionActivity(
             for: key,
             paneCountBySessionKey: paneCountBySessionKey,
-            activeSessionKey: activeSessionKey
+            activeSessionKey: activeSessionKey,
+            sessions: hostSessions,
+            agentStatusBySessionID: agentStatusBySessionID
         )
     }
 

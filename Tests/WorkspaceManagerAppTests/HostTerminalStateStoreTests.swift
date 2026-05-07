@@ -344,6 +344,34 @@ struct HostTerminalStateStoreTests {
         #expect(store.sessions.first?.key == .defaultHome)
     }
 
+    @Test("Attaching the agent registry registers existing and new host sessions")
+    func attachRegistersHostSessionsWithAgentRegistry() throws {
+        let store = HostTerminalStateStore()
+        let repoURL = URL(fileURLWithPath: "/Users/test/code/repo")
+        let pre = store.activateSession(key: .repoPath(repoURL.path), directory: repoURL).session
+
+        let registry = AgentSessionRegistry()
+        store.attach(agentSessionRegistry: registry)
+
+        // Backfill: pre-existing session is registered on attach.
+        #expect(registry.statuses[pre.id] != nil)
+        #expect(registry.statuses[pre.id]?.kind == .claudeCode)
+        #expect(registry.statuses[pre.id]?.cwd.contains("/repo") == true)
+
+        // Newly created session also registers via publishSnapshot.
+        let next = store.activateSession(
+            key: .repoPath("/Users/test/code/another"),
+            directory: URL(fileURLWithPath: "/Users/test/code/another")
+        ).session
+        #expect(registry.statuses[next.id] != nil)
+        #expect(registry.statuses[pre.id] != nil)
+
+        // Process exit deregisters.
+        _ = store.handleProcessExit(for: pre.id)
+        #expect(registry.statuses[pre.id] == nil)
+        #expect(registry.statuses[next.id] != nil)
+    }
+
     @Test("Process exit helper returns active fallback session when others remain")
     func processExitHelperReturnsRemainingActiveSession() throws {
         let store = HostTerminalStateStore()

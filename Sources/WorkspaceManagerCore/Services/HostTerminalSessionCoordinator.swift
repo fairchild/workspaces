@@ -27,7 +27,7 @@ public enum HostTerminalSessionKey: Hashable, Sendable, CustomDebugStringConvert
         }
     }
 
-    func normalized() -> HostTerminalSessionKey {
+    public func normalized() -> HostTerminalSessionKey {
         switch self {
         case .defaultHome:
             return .defaultHome
