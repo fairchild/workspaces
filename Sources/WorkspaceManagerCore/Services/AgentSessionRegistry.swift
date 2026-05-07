@@ -155,6 +155,107 @@ public final class AgentSessionRegistry: ObservableObject, AgentSessionRegistryP
         bookkeeping[hostSessionID] = book
     }
 
+    /// Apply a batch of events to a single host session in one published mutation.
+    ///
+    /// Channel 4 transcript replay can deliver hundreds-to-thousands of events for
+    /// a single cold-started session. The naive shape — calling `ingest(_:for:origin:)`
+    /// in a loop — fires `@Published` once per event and reproduces the allocator-
+    /// pressure pattern observed in the 10-minute long-session perf run
+    /// (~43 bytes/event sustained at high throughput; see
+    /// `.context/claude-integration/perf-audit-pr443-final.md`).
+    ///
+    /// `ingestBatch` builds the new `AgentSessionStatus` by replaying every event
+    /// in order, then writes `statuses[hostSessionID] = newStatus` exactly once.
+    /// SwiftUI sees a single rebind regardless of batch size.
+    ///
+    /// Bookkeeping (`hookActive`, dedup state, hook-expiration task) is preserved —
+    /// transcript-origin batches do not flip `hookActive`.
+    public func ingestBatch(
+        events: [AgentEvent],
+        for hostSessionID: UUID,
+        origin: AgentEventOrigin
+    ) {
+        guard !events.isEmpty else { return }
+        guard var status = statuses[hostSessionID] else { return }
+        var book = bookkeeping[hostSessionID] ?? Bookkeeping()
+        let now = clock()
+
+        for event in events {
+            // OSC dedup applies per-event even in batch form, but for the cold-start
+            // transcript path origin is `.transcript` and the dedup branch is skipped.
+            if case .osc = origin, status.hookActive {
+                let mappedRun = Self.runState(for: event)
+                if let lastRun = book.lastHookRunStateApplied,
+                    let lastAt = book.lastHookEventAt,
+                    lastRun == mappedRun,
+                    now.timeIntervalSince(lastAt) < Self.oscDedupWindow
+                {
+                    continue
+                }
+            }
+
+            switch event {
+            case .sessionStart(let agentSessionID, let cwd, let kind):
+                status.agentSessionID = agentSessionID
+                status.kind = kind
+                status.cwd = Self.normalizePath(cwd)
+                status.run = .idle
+
+            case .userPrompt:
+                status.run = .thinking
+
+            case .toolStart(let name, let detail):
+                status.run = .runningTool(name: name, detail: detail)
+
+            case .toolEnd, .toolBatchEnd:
+                status.run = .thinking
+
+            case .toolFailed(let name, let error):
+                status.run = .errored(
+                    category: .toolFailure,
+                    message: error ?? "tool '\(name)' failed"
+                )
+
+            case .awaitingInput(let reason, _, _):
+                status.run = .awaitingInput(reason: reason)
+
+            case .stopped(let error):
+                status.run =
+                    error == nil ? .complete : .errored(category: .unknown, message: error)
+
+            case .errored(let category, let message):
+                status.run = .errored(category: category, message: message)
+
+            case .statusFields(let fields):
+                mergeStatusFields(fields, into: &status)
+
+            case .workingDirectory(let path):
+                status.cwd = Self.normalizePath(path)
+
+            case .bell:
+                continue
+            }
+
+            if case .hook = origin {
+                book.lastHookRunStateApplied = status.run
+                book.lastHookEventAt = now
+                status.hookActive = true
+            }
+        }
+
+        status.lastEventAt = now
+        if case .hook = origin {
+            book.hookExpirationTask?.cancel()
+            book.hookExpirationTask = scheduleHookExpiration(
+                for: hostSessionID,
+                timeout: Self.hookActivityTimeout
+            )
+        }
+
+        statuses[hostSessionID] = status
+        bookkeeping[hostSessionID] = book
+    }
+
     public func updateStatusFields(_ fields: AgentEvent.StatusFields, for hostSessionID: UUID) {
         guard var status = statuses[hostSessionID] else { return }
         mergeStatusFields(fields, into: &status)
