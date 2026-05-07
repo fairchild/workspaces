@@ -227,6 +227,7 @@ struct WorkspaceManagerApp: App {
                 .environment(\.workspaceProviderRegistry, appRuntimeDependencies.workspaceProviderRegistry)
                 .environment(\.claudeSettingsInstaller, ClaudeIntegrationLifecycle.shared.settingsInstaller)
                 .environmentObject(modelStoreStatusController)
+                .environmentObject(agentSessionRegistry)
         }
     }
 }

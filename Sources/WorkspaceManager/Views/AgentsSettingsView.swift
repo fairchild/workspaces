@@ -28,6 +28,11 @@ struct AgentsSettingsView: View {
     @AppStorage(ClaudeIntegrationDefaults.optedInKey)
     private var hooksEnabled: Bool = false
 
+    /// The registry is owned by the app; in `#Preview` it's absent and the status
+    /// section renders an empty placeholder. Use `Environment` (not
+    /// `EnvironmentObject`) so the preview path doesn't crash.
+    @Environment(\.agentSessionRegistry) private var agentSessionRegistry: AgentSessionRegistry?
+
     @State private var isInstalled = false
     @State private var isLoading = true
     @State private var showPreviewSheet = false
@@ -64,6 +69,10 @@ struct AgentsSettingsView: View {
             .foregroundStyle(.secondary)
 
             statusRow
+
+            if let registry = agentSessionRegistry {
+                AgentStatusFieldsIndicator(registry: registry)
+            }
 
             if isInstalled {
                 Button("Show preview again") {
@@ -399,6 +408,89 @@ private struct ClaudeHookRevertSheet: View {
         .padding(20)
         .frame(width: 520)
     }
+}
+
+/// Compact status row that surfaces the live status fields populated by Channel 2
+/// (status-line forwarder). Reads `AgentSessionRegistry.statuses` directly — no
+/// new `@Published` publisher; we observe via the registry's own `objectWillChange`.
+///
+/// "Focused session" is the most-recently-updated session in the registry. PR #2
+/// avoids reaching into `HostTerminalSession` so the indicator works during dev
+/// before any sidebar selection is available; richer focus-aware variants land
+/// when sidebar binding stabilizes (PR #3+).
+private struct AgentStatusFieldsIndicator: View {
+    @ObservedObject var registry: AgentSessionRegistry
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Live Status (Channel 2)")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            if let status = focusedStatus {
+                statusGrid(status)
+            } else {
+                Text("No active session yet — start `claude` in an embedded terminal.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(nsColor: .textBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+
+    private var focusedStatus: AgentSessionStatus? {
+        registry.statuses.values
+            .sorted { $0.lastEventAt > $1.lastEventAt }
+            .first
+    }
+
+    @ViewBuilder
+    private func statusGrid(_ status: AgentSessionStatus) -> some View {
+        HStack(alignment: .top, spacing: 16) {
+            field(title: "Model", value: status.modelDisplayName ?? "—")
+            field(title: "Context", value: percentString(status.contextUsedPercent))
+            field(title: "Cost", value: costString(status.costUSD))
+            field(title: "5h limit", value: percentString(status.fiveHourLimitUsedPercent))
+            if let resetsAt = status.fiveHourLimitResetsAt {
+                field(title: "Resets", value: Self.timeFormatter.string(from: resetsAt))
+            }
+        }
+        Text(status.cwd)
+            .font(.system(.caption2, design: .monospaced))
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .truncationMode(.middle)
+    }
+
+    private func field(title: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.callout.monospacedDigit())
+        }
+    }
+
+    private func percentString(_ value: Double?) -> String {
+        guard let value else { return "—" }
+        return String(format: "%.0f%%", value)
+    }
+
+    private func costString(_ value: Double?) -> String {
+        guard let value else { return "—" }
+        return String(format: "$%.3f", value)
+    }
+
+    private static let timeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .none
+        f.timeStyle = .short
+        return f
+    }()
 }
 
 #Preview {

@@ -390,6 +390,150 @@ struct AgentHookListenerTests {
         await listener.stop()
     }
 
+    @Test("statusline POST updates registry status fields by cwd")
+    func statusLineUpdatesByCwd() async throws {
+        let cwd = "/tmp/hook-test-\(UUID().uuidString.prefix(6))"
+        try? FileManager.default.createDirectory(atPath: cwd, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: cwd) }
+
+        let socket = Self.makeTempSocketURL()
+        let registry = await TestRegistry(cwd: cwd)
+        let registeredID = await registry.registeredID
+        let listener = AgentHookListener(
+            bundleIdentifier: "com.test.workspaces",
+            registry: registry,
+            socketURLOverride: socket
+        )
+        try await listener.start()
+        defer { Task { await listener.stop() } }
+        try await Task.sleep(nanoseconds: 250_000_000)
+
+        let body: [String: Any] = [
+            "model": ["id": "claude-sonnet", "display_name": "Claude Sonnet 4.5"],
+            "workspace": ["current_dir": cwd],
+            "cost": ["total_cost_usd": 0.123],
+            "context_window": ["used_percentage": 12.5, "context_window_size": 200_000],
+            "rate_limits": [
+                "five_hour": [
+                    "used_percentage": 33.3,
+                    "resets_at": "2026-05-07T20:00:00Z",
+                ]
+            ],
+        ]
+        let data = try JSONSerialization.data(withJSONObject: body)
+        let status = await Self.curlPost(socket: socket, path: "/statusline", body: data)
+        #expect(status == 0)
+
+        let reached = await waitUntil {
+            await MainActor.run {
+                registry.statuses[registeredID]?.modelDisplayName == "Claude Sonnet 4.5"
+            }
+        }
+        #expect(reached)
+        let live = await registry.statuses[registeredID]
+        #expect(live?.contextUsedPercent == 12.5)
+        #expect(live?.fiveHourLimitUsedPercent == 33.3)
+        #expect(live?.costUSD == 0.123)
+        #expect(live?.fiveHourLimitResetsAt != nil)
+        // Status-line ticks must NOT change the run state.
+        #expect(live?.run == .idle)
+
+        await listener.stop()
+    }
+
+    @Test("statusline POST resolves by agent_session_id once SessionStart bound")
+    func statusLineResolvesByAgentSessionID() async throws {
+        let cwd = "/tmp/hook-test-\(UUID().uuidString.prefix(6))"
+        try? FileManager.default.createDirectory(atPath: cwd, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: cwd) }
+
+        let socket = Self.makeTempSocketURL()
+        let registry = await TestRegistry(cwd: cwd)
+        let registeredID = await registry.registeredID
+        let listener = AgentHookListener(
+            bundleIdentifier: "com.test.workspaces",
+            registry: registry,
+            socketURLOverride: socket
+        )
+        try await listener.start()
+        defer { Task { await listener.stop() } }
+        try await Task.sleep(nanoseconds: 250_000_000)
+
+        let bind: [String: Any] = [
+            "hook_event_name": "SessionStart",
+            "session_id": "session-xyz",
+            "cwd": cwd,
+        ]
+        _ = await Self.curlPost(
+            socket: socket, path: "/event",
+            body: try JSONSerialization.data(withJSONObject: bind)
+        )
+        let bound = await waitUntil {
+            await MainActor.run {
+                registry.statuses[registeredID]?.agentSessionID == "session-xyz"
+            }
+        }
+        #expect(bound)
+
+        let body: [String: Any] = [
+            "session_id": "session-xyz",
+            "workspace": ["current_dir": "/some/other/path"],
+            "model": ["display_name": "Sonnet"],
+            "cost": ["total_cost_usd": 0.01],
+        ]
+        _ = await Self.curlPost(
+            socket: socket, path: "/statusline",
+            body: try JSONSerialization.data(withJSONObject: body)
+        )
+
+        let reached = await waitUntil {
+            await MainActor.run { registry.statuses[registeredID]?.modelDisplayName == "Sonnet" }
+        }
+        #expect(reached)
+        let live = await registry.statuses[registeredID]
+        #expect(live?.costUSD == 0.01)
+
+        await listener.stop()
+    }
+
+    @Test("statusline POST with no matching session is dropped without crashing")
+    func statusLineNoMatchingSession() async throws {
+        let cwd = "/tmp/hook-test-\(UUID().uuidString.prefix(6))"
+        try? FileManager.default.createDirectory(atPath: cwd, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: cwd) }
+
+        let socket = Self.makeTempSocketURL()
+        let registry = await TestRegistry(cwd: cwd)
+        let registeredID = await registry.registeredID
+        let listener = AgentHookListener(
+            bundleIdentifier: "com.test.workspaces",
+            registry: registry,
+            socketURLOverride: socket
+        )
+        try await listener.start()
+        defer { Task { await listener.stop() } }
+        try await Task.sleep(nanoseconds: 250_000_000)
+
+        let runBefore = await registry.statuses[registeredID]?.modelDisplayName
+
+        let body: [String: Any] = [
+            "session_id": "unknown-session-id",
+            "workspace": ["current_dir": "/somewhere/else"],
+            "model": ["display_name": "Should not apply"],
+        ]
+        let posted = await Self.curlPost(
+            socket: socket, path: "/statusline",
+            body: try JSONSerialization.data(withJSONObject: body)
+        )
+        #expect(posted == 0)
+
+        try await Task.sleep(nanoseconds: 300_000_000)
+        let runAfter = await registry.statuses[registeredID]?.modelDisplayName
+        #expect(runAfter == runBefore)
+
+        await listener.stop()
+    }
+
     @Test("Unknown event payload returns 200 without state mutation")
     func unknownEventDoesNotError() async throws {
         let cwd = "/tmp/hook-test-\(UUID().uuidString.prefix(6))"

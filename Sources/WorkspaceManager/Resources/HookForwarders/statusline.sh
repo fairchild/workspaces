@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+#
+# statusline.sh — Claude Code status-line forwarder.
+#
+# Configured in ~/.claude/settings.json under `statusLine.command`. Claude Code
+# invokes this script ~every 5 s with the current status JSON on stdin. We POST
+# the body unchanged to the host's Unix socket on /statusline, then print a
+# single space so the terminal status row stays empty (the host owns
+# visualization).
+#
+# Spec: pasted_text_2026-05-03_22-18-10.txt § Channel 2.
+#
+# Hard requirements:
+#   * stdlib bash + curl only — no jq, no python.
+#   * Never block; if the socket is unreachable, drop the payload and exit 0.
+#   * Always print a single space and exit 0 so Claude doesn't render an error.
+
+set -u
+
+socket="${WORKSPACES_HOOKS_SOCKET:-}"
+
+if [[ -n "$socket" && -S "$socket" ]]; then
+    /usr/bin/curl \
+        --silent \
+        --show-error \
+        --max-time 1 \
+        --unix-socket "$socket" \
+        -X POST \
+        -H 'Content-Type: application/json' \
+        --data-binary @- \
+        'http://localhost/statusline' \
+        >/dev/null 2>&1 || true
+else
+    # No socket means the host isn't running or the env var didn't propagate.
+    # Drain stdin so Claude doesn't block on the pipe.
+    cat >/dev/null 2>&1 || true
+fi
+
+printf ' '
+exit 0
