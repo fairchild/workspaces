@@ -268,6 +268,11 @@ public protocol AgentSessionRegistryProtocol: AnyObject {
     var statuses: [UUID: AgentSessionStatus] { get }
     func register(hostSessionID: UUID, cwd: String, kind: AgentKind)
     func ingest(_ event: AgentEvent, for hostSessionID: UUID, origin: AgentEventOrigin)
+    func ingestBatch(
+        events: [AgentEvent],
+        for hostSessionID: UUID,
+        origin: AgentEventOrigin
+    )
     func updateStatusFields(_ fields: AgentEvent.StatusFields, for hostSessionID: UUID)
     func resolveHostSession(cwd: String, agentSessionID: String?) -> UUID?
     func deregister(hostSessionID: UUID)

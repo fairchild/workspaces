@@ -75,6 +75,15 @@ struct AgentHookListenerTests {
             statuses = underlying.statuses
         }
 
+        func ingestBatch(
+            events: [AgentEvent],
+            for hostSessionID: UUID,
+            origin: AgentEventOrigin
+        ) {
+            underlying.ingestBatch(events: events, for: hostSessionID, origin: origin)
+            statuses = underlying.statuses
+        }
+
         func updateStatusFields(_ fields: AgentEvent.StatusFields, for hostSessionID: UUID) {
             underlying.updateStatusFields(fields, for: hostSessionID)
             statuses = underlying.statuses
