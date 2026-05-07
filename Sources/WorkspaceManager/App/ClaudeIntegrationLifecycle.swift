@@ -43,7 +43,34 @@ final class ClaudeIntegrationLifecycle {
             )
         )
         await installer.register(workspacesNotifChannelContribution())
+        if let forwarderPath = ClaudeIntegrationLifecycle.bundledStatusLineForwarderPath() {
+            await installer.register(
+                workspacesStatusLineContribution(forwarderPath: forwarderPath)
+            )
+        } else {
+            NSLog(
+                "[ClaudeIntegration] statusline.sh not found in bundle; skipping Channel 2 contribution"
+            )
+        }
         return installer
+    }
+
+    /// Locate the Channel 2 status-line forwarder shell shipped alongside the app.
+    /// The script is added to the SPM bundle via `Resources/HookForwarders` (see
+    /// Package.swift). Returns nil if the bundle was assembled without it — caller
+    /// logs and proceeds without registering Channel 2.
+    nonisolated static func bundledStatusLineForwarderPath() -> String? {
+        if let url = Bundle.module.url(
+            forResource: "statusline",
+            withExtension: "sh",
+            subdirectory: "HookForwarders"
+        ) {
+            return url.path
+        }
+        if let url = Bundle.module.url(forResource: "statusline", withExtension: "sh") {
+            return url.path
+        }
+        return nil
     }
 
     private init() {}

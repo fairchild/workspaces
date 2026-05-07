@@ -78,8 +78,11 @@ let package = Package(
                 // App icons and assets
                 .process("Resources/Assets.xcassets"),
 
-                // Channel 3 (Claude Code) hook forwarders — extracted to a writable
-                // path on opt-in install; the .sh files are the source of truth.
+                // Claude Code hook forwarders — bundled .sh files for both
+                // Channel 2 (statusline.sh) and Channel 3 (title-emit.sh).
+                // The installer wires them into ~/.claude/settings.json by
+                // absolute path, extracting them to a writable path on opt-in
+                // install when needed.
                 .copy("Resources/HookForwarders")
             ],
             swiftSettings: [.enableUpcomingFeature("BareSlashRegexLiterals")],

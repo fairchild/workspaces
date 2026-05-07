@@ -403,3 +403,46 @@ public func workspacesNotifChannelContribution() -> ClaudeSettingsContribution {
         }
     )
 }
+
+// MARK: - PR #2 contribution: workspaces.statusLine
+
+/// Build the contribution that registers the status-line forwarder in
+/// `~/.claude/settings.json`. `forwarderPath` is the absolute path to the
+/// `statusline.sh` script bundled with the running app. `refreshInterval` is in
+/// milliseconds — Claude Code triggers an update on every conversation change
+/// anyway, so this only governs the idle tick rate.
+///
+/// Spec: pasted_text_2026-05-03_22-18-10.txt § Channel 2.
+public func workspacesStatusLineContribution(
+    forwarderPath: String,
+    refreshInterval: Int = 5000
+) -> ClaudeSettingsContribution {
+    return ClaudeSettingsContribution(
+        id: "workspaces.statusLine",
+        target: .userSettingsJSON,
+        merge: { current in
+            var dict = current
+            // Settings layout:
+            //   { "statusLine": { "type": "command", "command": "...", "refreshInterval": 5000 } }
+            // We replace our own block in place but never remove pre-existing keys
+            // we don't recognize on the same object (defensive: future Claude Code
+            // versions may add fields to statusLine).
+            var block: [String: Any] =
+                (current["statusLine"]?.value as? [String: Any]) ?? [:]
+            block["type"] = "command"
+            block["command"] = forwarderPath
+            block["refreshInterval"] = refreshInterval
+            dict["statusLine"] = AnyCodable(block)
+            return dict
+        },
+        preview: { current in
+            let block = (current["statusLine"]?.value as? [String: Any]) ?? [:]
+            let presentCommand = block["command"] as? String
+            let presentInterval = block["refreshInterval"] as? Int
+            if presentCommand == forwarderPath && presentInterval == refreshInterval {
+                return "no changes (statusLine already wired → \(forwarderPath))"
+            }
+            return "set statusLine → command=\(forwarderPath), refreshInterval=\(refreshInterval)ms"
+        }
+    )
+}

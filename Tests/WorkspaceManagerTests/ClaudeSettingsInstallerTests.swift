@@ -133,4 +133,104 @@ struct ClaudeSettingsInstallerTests {
         let afterInstall = await installer.isInstalled()
         #expect(afterInstall == true)
     }
+
+    @Test("statusLine contribution writes the spec-shaped block")
+    func statusLineContributionWritesBlock() async throws {
+        let home = makeTempHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        let installer = ClaudeSettingsInstaller(homeDirectory: home)
+        await installer.register(
+            workspacesStatusLineContribution(
+                forwarderPath: "/tmp/statusline.sh", refreshInterval: 5000
+            )
+        )
+        try await installer.install()
+
+        let settingsURL = home.appendingPathComponent(".claude/settings.json")
+        let data = try Data(contentsOf: settingsURL)
+        let updated = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
+        let block = updated["statusLine"] as? [String: Any] ?? [:]
+        #expect(block["type"] as? String == "command")
+        #expect(block["command"] as? String == "/tmp/statusline.sh")
+        #expect(block["refreshInterval"] as? Int == 5000)
+    }
+
+    @Test("hooks + statusLine contributions merge cleanly into the same file")
+    func hooksAndStatusLineMerge() async throws {
+        let home = makeTempHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        let claudeDir = home.appendingPathComponent(".claude", isDirectory: true)
+        try FileManager.default.createDirectory(at: claudeDir, withIntermediateDirectories: true)
+        let settingsURL = claudeDir.appendingPathComponent("settings.json")
+
+        let existing: [String: Any] = [
+            "theme": "dark",
+            "statusLine": [
+                "type": "command",
+                "command": "/old/statusline",
+                // A field we don't recognize — must survive.
+                "padding": 1,
+            ],
+        ]
+        let original = try JSONSerialization.data(withJSONObject: existing, options: [.prettyPrinted])
+        try original.write(to: settingsURL)
+
+        let installer = ClaudeSettingsInstaller(homeDirectory: home)
+        await installer.register(workspacesHooksContribution(socketPath: "/tmp/hooks.sock"))
+        await installer.register(
+            workspacesStatusLineContribution(forwarderPath: "/tmp/statusline.sh")
+        )
+        try await installer.install()
+
+        let updatedData = try Data(contentsOf: settingsURL)
+        let updated = try JSONSerialization.jsonObject(with: updatedData) as? [String: Any] ?? [:]
+
+        // Theme survives.
+        #expect(updated["theme"] as? String == "dark")
+
+        // Hook routes wired up for all spec-listed events.
+        let hooks = updated["hooks"] as? [String: Any] ?? [:]
+        let stop = hooks["Stop"] as? [[String: Any]] ?? []
+        #expect(stop.contains { ($0["type"] as? String) == "http" })
+
+        // statusLine block points at our forwarder; original `padding` field is
+        // preserved — the merge replaces our owned keys but never strips others.
+        let block = updated["statusLine"] as? [String: Any] ?? [:]
+        #expect(block["command"] as? String == "/tmp/statusline.sh")
+        #expect(block["refreshInterval"] as? Int == 5000)
+        #expect(block["type"] as? String == "command")
+        #expect(block["padding"] as? Int == 1)
+    }
+
+    @Test("statusLine re-install is idempotent")
+    func statusLineIdempotent() async throws {
+        let home = makeTempHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        let installer = ClaudeSettingsInstaller(homeDirectory: home)
+        await installer.register(
+            workspacesStatusLineContribution(forwarderPath: "/tmp/statusline.sh")
+        )
+        try await installer.install()
+        try await installer.install()
+
+        let installed = await installer.isInstalled()
+        #expect(installed == true)
+    }
+
+    @Test("statusLine renderPreview reflects pending changes")
+    func statusLinePreviewWording() async throws {
+        let home = makeTempHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        let installer = ClaudeSettingsInstaller(homeDirectory: home)
+        await installer.register(
+            workspacesStatusLineContribution(forwarderPath: "/tmp/statusline.sh")
+        )
+        let preview = try await installer.renderPreview()
+        #expect(preview.contains("workspaces.statusLine"))
+        #expect(preview.contains("/tmp/statusline.sh"))
+    }
 }

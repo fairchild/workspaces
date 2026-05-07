@@ -7,7 +7,8 @@
 //
 //  Routes:
 //    POST /event       — hook event, decoded via the registered ClaudeCode adapter
-//    POST /statusline  — reserved for PR #2 (status-line forwarder); 200 OK with no-op
+//    POST /statusline  — Channel 2 status-line forwarder; decodes StatusLinePayload
+//                        and updates the registry's status fields for the matching session
 //    GET  /healthz     — 200 OK "OK"
 //
 //  Framing: minimal HTTP/1.1 — request line, headers, body. We respond 200 OK
@@ -30,6 +31,7 @@ public actor AgentHookListener {
         public var decodeFailures: Int = 0
         public var unsupportedRoutes: Int = 0
         public var ingestedEvents: Int = 0
+        public var statusLineUpdates: Int = 0
     }
 
     private let socketURL: URL
@@ -197,8 +199,7 @@ public actor AgentHookListener {
         case ("POST", "/event"):
             await processEvent(body: request.body)
         case ("POST", "/statusline"):
-            statistics.unsupportedRoutes += 1
-            logger("unsupported route /statusline (reserved for PR #2)")
+            await processStatusLine(body: request.body)
         default:
             break
         }
@@ -245,6 +246,31 @@ public actor AgentHookListener {
             registry.ingest(event, for: hostSessionID, origin: .hook)
         }
         statistics.ingestedEvents += 1
+    }
+
+    private func processStatusLine(body: Data) async {
+        guard let payload = StatusLinePayload.decode(from: body) else {
+            statistics.decodeFailures += 1
+            logger("statusline decode failed")
+            return
+        }
+
+        let cwd = payload.resolvedCwd() ?? ""
+        let hostSessionID = await MainActor.run { [registry] in
+            registry.resolveHostSession(cwd: cwd, agentSessionID: payload.agentSessionID)
+        }
+
+        guard let hostSessionID else {
+            // Status-line ticks before SessionStart are common and not worth a
+            // decode-failure log entry.
+            return
+        }
+
+        let fields = payload.toStatusFields()
+        await MainActor.run { [registry] in
+            registry.updateStatusFields(fields, for: hostSessionID)
+        }
+        statistics.statusLineUpdates += 1
     }
 
     private static func extractCommon(body: Data) -> (cwd: String, agentSessionID: String?) {
