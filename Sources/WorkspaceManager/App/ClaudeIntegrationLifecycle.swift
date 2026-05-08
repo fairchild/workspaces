@@ -35,7 +35,14 @@ final class ClaudeIntegrationLifecycle {
     private var installerFactory: @Sendable (String) async -> any ClaudeSettingsInstalling = {
         socketPath in
         let installer = ClaudeSettingsInstaller()
-        await installer.register(workspacesHooksContribution(socketPath: socketPath))
+        let scriptPath = ClaudeIntegrationLifecycle.extractTitleEmitScript()
+        await installer.register(
+            workspacesHooksContribution(
+                socketPath: socketPath,
+                titleEmitScriptPath: scriptPath
+            )
+        )
+        await installer.register(workspacesNotifChannelContribution())
         return installer
     }
 
@@ -111,6 +118,50 @@ final class ClaudeIntegrationLifecycle {
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor [weak self] in await self?.stop() }
+        }
+    }
+
+    /// Copy the bundled `title-emit.sh` (Channel 3 hook forwarder) to a stable
+    /// location under Application Support and chmod it executable. Returns the
+    /// destination path, or nil if extraction failed — the contribution then
+    /// degrades gracefully to HTTP-only hooks.
+    nonisolated static func extractTitleEmitScript() -> String? {
+        let bundleID = Bundle.main.bundleIdentifier ?? "com.cloudcompute.workspaces"
+        let appSupport = FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first
+        guard let appSupport else { return nil }
+        let dir =
+            appSupport
+            .appendingPathComponent(bundleID, isDirectory: true)
+            .appendingPathComponent("HookForwarders", isDirectory: true)
+        try? FileManager.default.createDirectory(
+            at: dir, withIntermediateDirectories: true
+        )
+        let dest = dir.appendingPathComponent("title-emit.sh")
+
+        // Source: bundled .sh file. Falls back to nil silently — most tests
+        // and previews don't run inside a real .app bundle.
+        guard
+            let bundleURL = Bundle.main.url(
+                forResource: "title-emit",
+                withExtension: "sh",
+                subdirectory: "HookForwarders"
+            )
+        else {
+            return nil
+        }
+        do {
+            let contents = try Data(contentsOf: bundleURL)
+            try contents.write(to: dest, options: .atomic)
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o755],
+                ofItemAtPath: dest.path
+            )
+            return dest.path
+        } catch {
+            return nil
         }
     }
 

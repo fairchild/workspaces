@@ -278,6 +278,26 @@ enum GhosttyRuntimeActionBridge {
             }
             return true
 
+        case GHOSTTY_ACTION_DESKTOP_NOTIFICATION:
+            let title = action.action.desktop_notification.title.flatMap { String(cString: $0) }
+            let body = action.action.desktop_notification.body.flatMap { String(cString: $0) } ?? ""
+            runOnMainAsync {
+                guard let surfaceView = resolveSurfaceView(sourceSurfaceAddress) else { return }
+                surfaceView.handleDesktopNotification(
+                    title: title,
+                    body: body,
+                    surfaceAddress: sourceSurfaceAddress
+                )
+            }
+            return true
+
+        case GHOSTTY_ACTION_RING_BELL:
+            runOnMainAsync {
+                guard let surfaceView = resolveSurfaceView(sourceSurfaceAddress) else { return }
+                surfaceView.handleRingBell(surfaceAddress: sourceSurfaceAddress)
+            }
+            return true
+
         default:
             return false
         }

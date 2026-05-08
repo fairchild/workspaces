@@ -14,6 +14,7 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
     public static let shared = WorkspaceService()
 
     private let gitService: any GitServiceProtocol
+    private let claudeRunnerFactory: (@Sendable () -> HeadlessClaudeRunner)?
 
     // MARK: - Workspace Root Configuration
 
@@ -41,6 +42,7 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
 
     public init(gitService: any GitServiceProtocol = GitService.shared) {
         self.gitService = gitService
+        self.claudeRunnerFactory = { HeadlessClaudeRunner() }
         do {
             try FileManager.default.createDirectory(
                 at: Self.defaultWorkspacesRoot,
@@ -51,6 +53,17 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
                 "Failed to create default workspaces root at \(Self.defaultWorkspacesRoot.path): \(error.localizedDescription)"
             )
         }
+    }
+
+    /// Test-only initializer. Lets tests inject a stub
+    /// `HeadlessClaudeRunner` (or skip the warm-up entirely with `nil`).
+    /// Production code uses the zero-arg `init`.
+    public init(
+        gitService: any GitServiceProtocol,
+        claudeRunnerFactory: (@Sendable () -> HeadlessClaudeRunner)?
+    ) {
+        self.gitService = gitService
+        self.claudeRunnerFactory = claudeRunnerFactory
     }
 
     // MARK: - Create Workspace
@@ -112,6 +125,12 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
             log.warning("\(msg)")
             warnings.append(msg)
         }
+
+        // Channel 5: optional headless `claude -p` warm-up. Driven by
+        // `.workspaces/claude-setup.json` (per-project) or
+        // `Resources/Defaults/claude-setup.json` (app default). Failures here
+        // never fail workspace creation — we log + continue.
+        await runClaudeWarmupIfConfigured(in: workspaceDir)
 
         await progress?(.finished)
 
@@ -180,6 +199,31 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
             self.stdout = stdout
             self.stderr = stderr
         }
+    }
+
+    // MARK: - Claude Warm-up (Channel 5)
+
+    /// Runs the optional Channel-5 `claude -p` warm-up if a config is found
+    /// for the workspace. Internal — exposed indirectly through
+    /// `createWorkspace`. Never throws: the warm-up is best-effort.
+    func runClaudeWarmupIfConfigured(in workspaceDir: URL) async {
+        guard let factory = claudeRunnerFactory else { return }
+        guard let config = WorkspaceClaudeSetup.loadConfig(for: workspaceDir) else { return }
+
+        let runner = factory()
+        log.info(
+            "running headless claude warm-up in \(workspaceDir.path, privacy: .public)"
+        )
+        _ = await WorkspaceClaudeSetup.runWarmup(
+            config: config,
+            in: workspaceDir,
+            runner: runner,
+            eventSink: { event in
+                if case .textDelta = event { return }  // log noise
+                if case .unknown = event { return }
+                log.info("headless event: \(String(describing: event), privacy: .public)")
+            }
+        )
     }
 
     public func runLifecycleScript(_ scriptName: String, in directory: URL) async throws -> ScriptResult {

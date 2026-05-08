@@ -49,6 +49,13 @@ final class HostTerminalStateStore: ObservableObject {
         self.agentSessionRegistry = agentSessionRegistry
         // Backfill: any sessions already in the coordinator should be registered.
         syncRegistry(forSessions: coordinator.sessions)
+
+        // Channel 3: hook the surface→host-session resolver into the OSC router so
+        // libghostty desktop notifications and BEL events can find their session.
+        let store = self.surfaceStore
+        AgentOSCRouter.shared.attach(registry: agentSessionRegistry) { surfaceView in
+            store.sessionID(for: surfaceView)
+        }
     }
 
     var hasSessions: Bool {

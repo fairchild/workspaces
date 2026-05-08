@@ -49,6 +49,10 @@ public protocol ClaudeSettingsInstalling: Sendable {
 }
 
 public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
+    /// Maximum number of `*.workspaces-backup-*` files to retain per settings file.
+    /// Older backups beyond this count are deleted on each `install()` call.
+    public static let maxBackupsPerFile: Int = 5
+
     private let homeDirectory: URL
     private var contributions: [ClaudeSettingsContribution] = []
     private var lastBackupPath: String?
@@ -123,9 +127,44 @@ public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
                 if target == .userSettingsJSON {
                     lastBackupPath = backupURL.path
                 }
+                rotateBackups(forSettingsFile: url)
             }
 
             try writeJSON(current, to: url)
+        }
+    }
+
+    /// Trim the per-file backup set to `maxBackupsPerFile`, keeping the newest
+    /// entries by mtime. Lives at the file-IO layer (the merge algorithm is
+    /// untouched). Errors here are non-fatal — a missing parent or permission
+    /// failure just leaves stale backups in place.
+    private func rotateBackups(forSettingsFile url: URL) {
+        let parent = url.deletingLastPathComponent()
+        let baseName = url.lastPathComponent
+        let prefix = "\(baseName).workspaces-backup-"
+        // Don't skip hidden files: backups for `~/.claude.json` (note the dot)
+        // are themselves dot-prefixed, so `.skipsHiddenFiles` would exclude them
+        // and rotation would silently no-op for that file.
+        let entries =
+            (try? FileManager.default.contentsOfDirectory(
+                at: parent,
+                includingPropertiesForKeys: [.contentModificationDateKey],
+                options: []
+            )) ?? []
+        let backups =
+            entries
+            .filter { $0.lastPathComponent.hasPrefix(prefix) }
+            .map { url -> (URL, Date) in
+                let date =
+                    (try? url.resourceValues(forKeys: [.contentModificationDateKey])
+                        .contentModificationDate) ?? .distantPast
+                return (url, date)
+            }
+            .sorted { $0.1 > $1.1 }  // newest first
+
+        guard backups.count > Self.maxBackupsPerFile else { return }
+        for (oldBackup, _) in backups.dropFirst(Self.maxBackupsPerFile) {
+            try? FileManager.default.removeItem(at: oldBackup)
         }
     }
 
@@ -179,10 +218,16 @@ public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
     }
 
     private static func iso8601Timestamp() -> String {
+        // Millisecond resolution so back-to-back installs produce distinct
+        // backup filenames; the rotation logic then sorts by mtime.
+        let now = Date()
         let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withColonSeparatorInTime]
-        return formatter.string(from: Date())
+        formatter.formatOptions = [
+            .withInternetDateTime, .withColonSeparatorInTime, .withFractionalSeconds,
+        ]
+        return formatter.string(from: now)
             .replacingOccurrences(of: ":", with: "-")
+            .replacingOccurrences(of: ".", with: "-")
     }
 
     static func lift(_ raw: [String: Any]) -> [String: AnyCodable] {
@@ -211,9 +256,13 @@ public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
 // MARK: - PR #1 contribution: workspaces.hooks
 
 /// Build the contribution that registers our HTTP hook routes in `~/.claude/settings.json`.
-/// `socketPath` is the Unix socket the running app is listening on.
+/// `socketPath` is the Unix socket the running app is listening on. When
+/// `titleEmitScriptPath` is non-nil the contribution also registers a
+/// `UserPromptSubmit`/`Stop` command hook that emits OSC 2 — the Channel 3 path
+/// that updates the embedded terminal's tab title without app-side polling.
 public func workspacesHooksContribution(
-    socketPath: String
+    socketPath: String,
+    titleEmitScriptPath: String? = nil
 ) -> ClaudeSettingsContribution {
     // Per spec § Channel 1, point each interesting event at our /event route.
     // `http+unix://<encoded-socket>/event` is the de-facto convention used by Claude Code.
@@ -240,6 +289,11 @@ public func workspacesHooksContribution(
         "TaskCompleted",
     ]
 
+    // Channel 3: a small set of events also gets a `command` hook that runs the
+    // bundled `title-emit.sh` so the embedded terminal's tab title tracks the
+    // agent's lifecycle (prompt submitted → "thinking", stop → "ready").
+    let titleEmitEvents: Set<String> = ["UserPromptSubmit", "Stop"]
+
     return ClaudeSettingsContribution(
         id: "workspaces.hooks",
         target: .userSettingsJSON,
@@ -263,6 +317,19 @@ public func workspacesHooksContribution(
                         "async": true,
                     ])
                 }
+                if let scriptPath = titleEmitScriptPath, titleEmitEvents.contains(name) {
+                    let cmdAlreadyPresent = arr.contains { entry in
+                        (entry["type"] as? String) == "command"
+                            && (entry["command"] as? String) == scriptPath
+                    }
+                    if !cmdAlreadyPresent {
+                        arr.append([
+                            "type": "command",
+                            "command": scriptPath,
+                            "async": true,
+                        ])
+                    }
+                }
                 hooks[name] = arr
             }
             dict["hooks"] = AnyCodable(hooks)
@@ -270,19 +337,69 @@ public func workspacesHooksContribution(
         },
         preview: { current in
             let hooks = (current["hooks"]?.value as? [String: Any]) ?? [:]
-            var added: [String] = []
+            var addedHTTP: [String] = []
+            var addedCommand: [String] = []
             for name in eventNames {
                 let entries = (hooks[name] as? [[String: Any]]) ?? []
-                let present = entries.contains { entry in
+                let httpPresent = entries.contains { entry in
                     (entry["type"] as? String) == "http"
                         && (entry["url"] as? String) == endpoint
                 }
-                if !present { added.append(name) }
+                if !httpPresent { addedHTTP.append(name) }
+
+                if let scriptPath = titleEmitScriptPath, titleEmitEvents.contains(name) {
+                    let cmdPresent = entries.contains { entry in
+                        (entry["type"] as? String) == "command"
+                            && (entry["command"] as? String) == scriptPath
+                    }
+                    if !cmdPresent { addedCommand.append(name) }
+                }
             }
-            if added.isEmpty {
+            if addedHTTP.isEmpty && addedCommand.isEmpty {
                 return "no changes (already wired for \(eventNames.count) events → \(endpoint))"
             }
-            return "add \(added.count) hook(s) → \(endpoint): \(added.joined(separator: ", "))"
+            var parts: [String] = []
+            if !addedHTTP.isEmpty {
+                parts.append(
+                    "add \(addedHTTP.count) http hook(s) → \(endpoint): \(addedHTTP.joined(separator: ", "))"
+                )
+            }
+            if !addedCommand.isEmpty, let scriptPath = titleEmitScriptPath {
+                parts.append(
+                    "add \(addedCommand.count) command hook(s) → \(scriptPath): \(addedCommand.joined(separator: ", "))"
+                )
+            }
+            return parts.joined(separator: "; ")
+        }
+    )
+}
+
+// MARK: - PR #3 contribution: workspaces.notifChannel
+
+/// Pin Claude Code's notification channel to `iterm2` (OSC 9). The Ghostty
+/// channel still has reliability bugs through 2026, so we route notifications
+/// via the universally-supported OSC 9 path that libghostty already surfaces
+/// as `GHOSTTY_ACTION_DESKTOP_NOTIFICATION`. Lives in `~/.claude.json` (the
+/// per-user CLI preferences file), separate from `~/.claude/settings.json`.
+public func workspacesNotifChannelContribution() -> ClaudeSettingsContribution {
+    let preferredChannel = "iterm2"
+    return ClaudeSettingsContribution(
+        id: "workspaces.notifChannel",
+        target: .userClaudeJSON,
+        merge: { current in
+            var dict = current
+            dict["preferredNotifChannel"] = AnyCodable(preferredChannel)
+            return dict
+        },
+        preview: { current in
+            let existing = current["preferredNotifChannel"]?.value as? String
+            if existing == preferredChannel {
+                return "no changes (preferredNotifChannel already \"\(preferredChannel)\")"
+            }
+            if let existing {
+                return "change preferredNotifChannel: \"\(existing)\" → \"\(preferredChannel)\""
+            }
+            return "set preferredNotifChannel: \"\(preferredChannel)\""
         }
     )
 }
