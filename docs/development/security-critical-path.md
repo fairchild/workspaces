@@ -45,6 +45,9 @@ not a broad public security stance.
   the published DMG.
 - `release-manifest.json` binds commit SHA, tag, version/build, bundle id, team
   id, Sparkle public key, and artifact hashes/sizes.
+- mise tool resolution is locked for the pinned Zig toolchain, setup only trusts
+  the reviewed root/web configs, and hosted agent sandboxes verify the pinned
+  mise binary checksum before use. See [mise Security](./mise-security.md).
 
 ## Operator Checks
 

@@ -14,6 +14,7 @@ import shutil
 import stat
 import subprocess
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -224,6 +225,61 @@ class SecurityHardeningTests(unittest.TestCase):
         self.assertIn("mise is required on the signing host", workflow)
         self.assertIn("exit 1", workflow)
         self.assertNotIn("brew install mise", workflow)
+
+    def test_mise_configs_keep_trust_surface_small(self) -> None:
+        allowed = {
+            REPO_ROOT / ".mise.toml",
+            REPO_ROOT / "web/.mise.toml",
+        }
+        configs = {
+            path
+            for path in REPO_ROOT.rglob(".mise.toml")
+            if "node_modules" not in path.parts and ".git" not in path.parts
+        }
+        self.assertEqual(configs, allowed)
+
+        forbidden = re.compile(
+            r"(?m)(^\s*\[(env|hooks)\]\s*$|trusted_config_paths|^\s*(yes|ci)\s*=\s*true\s*(#.*)?$|_[.](source|file)\s*=)"
+        )
+        for config in configs:
+            body = config.read_text()
+            self.assertIsNone(forbidden.search(body), config)
+
+        root_mise = tomllib.loads((REPO_ROOT / ".mise.toml").read_text())
+        self.assertTrue(root_mise["settings"]["lockfile"])
+
+    def test_mise_lock_pins_zig_for_ci_platforms(self) -> None:
+        lock_path = REPO_ROOT / "mise.lock"
+        self.assertTrue(lock_path.exists())
+        lock = tomllib.loads(lock_path.read_text())
+        zig_entries = lock["tools"]["zig"]
+        self.assertEqual(len(zig_entries), 1)
+        zig = zig_entries[0]
+        self.assertEqual(zig["version"], "0.15.2")
+        self.assertEqual(zig["backend"], "core:zig")
+        for platform in ("linux-x64", "macos-arm64"):
+            entry = zig[f"platforms.{platform}"]
+            self.assertRegex(entry["checksum"], r"^sha256:[a-f0-9]{64}$")
+            self.assertTrue(entry["url"].startswith("https://"))
+
+    def test_mise_invocations_are_locked_and_pinned(self) -> None:
+        build_ghosttykit = (REPO_ROOT / "scripts/build-ghosttykit.sh").read_text()
+        self.assertIn('mise exec --locked "zig@$ZIG_VERSION" -- zig', build_ghosttykit)
+        self.assertIn("MISE_CONFIG_FILE=$PROJECT_DIR/.mise.toml", build_ghosttykit)
+        self.assertIn("MISE_CONFIG_ROOT=$PROJECT_DIR", build_ghosttykit)
+        self.assertIn("MISE_IGNORED_CONFIG_PATHS=$HOME/.config/mise", build_ghosttykit)
+
+        setup = (REPO_ROOT / "scripts/setup").read_text()
+        self.assertIn('"$REPO_ROOT/.mise.toml"|"$REPO_ROOT/web/.mise.toml"', setup)
+        self.assertIn("mise install --locked zig@0.15.2", setup)
+        self.assertIn("MISE_IGNORED_CONFIG_PATHS=", setup)
+        self.assertNotIn("trust every checked-in project config", setup)
+
+        sandbox = (REPO_ROOT / "web/src/lib/agent-runtime/vercel-sandbox.ts").read_text()
+        self.assertIn("MISE_VERSION='v2026.5.3'", sandbox)
+        self.assertIn("MISE_SHA256='9a4f228158a316b236653ff615e9955f50c56c6a3ef719135d327c7fc632b89b'", sandbox)
+        self.assertIn("sha256sum -c -", sandbox)
+        self.assertNotIn("mise-latest-linux-x64", sandbox)
 
     def test_release_workflow_publishes_and_validates_manifest_and_appcast_signature(self) -> None:
         workflow = (REPO_ROOT / ".github/workflows/release.yml").read_text()
