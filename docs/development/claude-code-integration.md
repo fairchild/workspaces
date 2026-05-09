@@ -151,12 +151,15 @@ After any non-trivial change to the integration, run:
 1. **Unit + perf tests** — `swift build && swift test`. The integration's full suite lives across `AgentSessionRegistryTests`, `AgentHookListenerTests`, `ClaudeSettingsInstallerTests`, `OSCDedupIntegrationTests`, `GhosttyRuntimeActionBridgeTests`, `TranscriptReaderTests`, `AgentSessionRegistryBatchTests`, `ColdStartRecoveryTests`, `HeadlessClaudeStreamParserTests`, `HeadlessClaudeRunnerTests`, `WorkspaceServiceClaudeSetupTests`, `StatusLinePayloadTests`. Perf tests are gated behind `WORKSPACES_PERF_RUN=1`.
 2. **Build GhosttyKit** if framework is missing: `./scripts/build-ghosttykit.sh`.
 3. **Lint**: `swift-format lint --strict --recursive Sources/ Tests/`.
-4. **Dev launch**: `./scripts/launch-dev.sh --no-build --no-activate` for a shared-desktop-friendly smoke. The launcher should report the listener path it bound to.
-5. **Manual end-to-end with a real `claude` session** (the only path some of these can be smoke-tested):
+4. **Integration smoke harness**: `./scripts/claude-integration-smoke.sh --pr <N> --no-build` launches the debug app, discovers the pid-scoped hook socket from the launch log, verifies `/healthz`, prompts for the human-driven Claude steps, captures screenshots, uploads evidence when `EVIDENCE_UPLOAD_TOKEN` is available, and writes a PR-ready comment to `output/claude-integration-smoke/<timestamp>/pr-comment.md`.
+   - Use `mise run claude-integration-smoke -- --pr <N> --no-build` from mise.
+   - Use `--fixture-home` when you only need Settings merge-preview evidence without touching the real `~/.claude/settings.json`.
+   - Use `--non-interactive` for the automated preflight only: launch, socket discovery, health check, and one screenshot.
+5. **Manual end-to-end with a real `claude` session** (the harness prompts for these because they require a real terminal and credentials):
    - Open Settings → Agents, toggle on "Send Claude Code status to WorkSpaces", review the merge preview, accept.
    - Open a workspace, run `claude` in the embedded terminal.
    - Drive a tool call that triggers a permission prompt. Sidebar dot turns yellow; macOS notification fires.
-   - Capture screenshots and `./scripts/evidence.sh --pr <N> --name claude-integration-smoke` to upload to R2.
+   - Let `./scripts/claude-integration-smoke.sh --pr <N>` capture and upload each evidence step.
 6. **OSC fallback verification**: with the Settings toggle on, kill the dev binary's hook listener (find pid + `kill -USR1` if instrumented; otherwise full quit). Drive a notification from the embedded `claude` session. Confirm the sidebar dot transitions via the OSC path — the registry should log `origin: .osc` ingestion.
 7. **Transcript replay verification**: open the conversation-log surface for a session that's still receiving live events. Confirm rich rendering for canonical types and collapsed JSON for unknown types. Replay the same JSONL through cold-start path; verify `ingestBatch` fires `@Published` exactly once per batch flush.
 8. **Headless verification**: invoke the runner with `claude --bare -p "hello"` (real CLI required); confirm `system/init` arrives, text deltas stream, `result` event captures `session_id`. Resume with `--resume <session_id>`; confirm context carries.
