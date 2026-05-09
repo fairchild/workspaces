@@ -7,6 +7,7 @@
 //  cold start once the user has opted in. Defect 1 from the round-2 review.
 //
 
+import Combine
 import Foundation
 import Testing
 
@@ -83,5 +84,40 @@ struct ClaudeIntegrationLifecycleTests {
         let stub = await runStart(optedIn: false)
         let count = await stub.installCallCount
         #expect(count == 0)
+    }
+
+    @Test("settings installer publishes after startup for Settings scene injection")
+    func settingsInstallerPublishesAfterStartup() async {
+        let suiteName = "wm-lifecycle-test-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+
+        let stub = StubInstaller()
+        ClaudeIntegrationLifecycle.shared._configureForTesting(
+            defaults: defaults,
+            installerFactory: { _ in stub }
+        )
+
+        var didPublishInstaller = false
+        let cancellable = ClaudeIntegrationLifecycle.shared.$settingsInstaller
+            .sink { installer in
+                if installer != nil {
+                    didPublishInstaller = true
+                }
+            }
+
+        let registry = AgentSessionRegistry()
+        ClaudeIntegrationLifecycle.shared.start(registry: registry)
+
+        let deadline = Date().addingTimeInterval(2.0)
+        while Date() < deadline {
+            if didPublishInstaller { break }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+
+        await ClaudeIntegrationLifecycle.shared.stop()
+        UserDefaults().removePersistentDomain(forName: suiteName)
+        _ = cancellable
+
+        #expect(didPublishInstaller)
     }
 }
