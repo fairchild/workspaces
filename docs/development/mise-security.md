@@ -34,8 +34,9 @@ configs can affect every later command in a checkout.
 ## Verification
 
 ```bash
-uv run --script scripts/test_security_hardening.py
-MISE_TRUSTED_CONFIG_PATHS="$PWD" mise lock --dry-run --platform macos-arm64,linux-x64 zig
-MISE_IGNORED_CONFIG_PATHS="$HOME/.config/mise" MISE_TRUSTED_CONFIG_PATHS="$PWD" mise exec --locked zig@0.15.2 -- zig version
-curl -fsSL https://api.github.com/repos/jdx/mise/releases/latest | jq -r '.tag_name, "draft=\(.draft)", "prerelease=\(.prerelease)"'
+./scripts/verify-mise-security.sh
 ```
+
+The `Mise Security` workflow runs this verifier whenever mise configs,
+`mise.lock`, the setup/build scripts, the sandbox mise installer, or this doc
+change.

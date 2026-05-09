@@ -1,0 +1,57 @@
+name: Mise Security
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/mise-security.yml"
+      - ".mise.toml"
+      - "web/.mise.toml"
+      - "mise.lock"
+      - "scripts/setup"
+      - "scripts/build-ghosttykit.sh"
+      - "scripts/verify-mise-security.sh"
+      - "scripts/test_security_hardening.py"
+      - "docs/development/mise-security.md"
+      - "web/src/lib/agent-runtime/vercel-sandbox.ts"
+  pull_request:
+    paths:
+      - ".github/workflows/mise-security.yml"
+      - ".mise.toml"
+      - "web/.mise.toml"
+      - "mise.lock"
+      - "scripts/setup"
+      - "scripts/build-ghosttykit.sh"
+      - "scripts/verify-mise-security.sh"
+      - "scripts/test_security_hardening.py"
+      - "docs/development/mise-security.md"
+      - "web/src/lib/agent-runtime/vercel-sandbox.ts"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mise-security-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+
+      - name: Install pinned mise binary
+        run: |
+          set -euo pipefail
+          MISE_VERSION="$(awk -F= '/^MISE_EXPECTED_VERSION=/{ gsub(/"/, "", $2); print $2 }' scripts/verify-mise-security.sh)"
+          MISE_SHA256="$(awk -F= '/^MISE_EXPECTED_LINUX_X64_SHA256=/{ gsub(/"/, "", $2); print $2 }' scripts/verify-mise-security.sh)"
+          test -n "$MISE_VERSION"
+          test -n "$MISE_SHA256"
+          curl -fsSL "https://github.com/jdx/mise/releases/download/${MISE_VERSION}/mise-${MISE_VERSION}-linux-x64" -o /tmp/mise
+          echo "${MISE_SHA256}  /tmp/mise" | sha256sum -c -
+          sudo install -m 755 /tmp/mise /usr/local/bin/mise
+          mise --version
+
+      - name: Verify mise security controls
+        run: ./scripts/verify-mise-security.sh
