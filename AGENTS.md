@@ -14,6 +14,20 @@ When the user asks to implement a change, default to carrying it through to a PR
 
 Continuous improvement of `AGENTS.md` is important to the health and longevity of the codebase: it is how this repo teaches future agents to meet product, quality, evidence, and operational objectives. Improve it when the guidance becomes clearer, shorter, or more actionable.
 
+## Agent skills
+
+### Issue tracker
+
+Issues and PRDs live in GitHub Issues for `fairchild/workspaces`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Use the repo's agent lifecycle labels, with `agent:ready` for AFK-ready work and `needs-human` for human-owned work. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context repo; use root docs plus `docs/decisions/` for architectural decisions. See `docs/agents/domain.md`.
+
 ## Dev Verification Practice (required)
 
 When changing terminal/keyboard/sidebar behavior, use this loop so future sessions can self-verify reliably:
