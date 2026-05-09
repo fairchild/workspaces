@@ -80,6 +80,16 @@ struct WorkspaceManagerApp: App {
                 .disabled(!softwareUpdateController.canCheckForUpdates)
             }
 
+            CommandGroup(replacing: .appSettings) {
+                Button("Settings...") {
+                    SettingsWindowPresenter.open()
+                }
+                .keyboardShortcut(
+                    AppChromeShortcut.settings.keyEquivalent,
+                    modifiers: AppChromeShortcut.settings.eventModifiers
+                )
+            }
+
             CommandGroup(replacing: .newItem) {
                 Button("New Workspace...") {
                     appCommandState.performNewWorkspace()

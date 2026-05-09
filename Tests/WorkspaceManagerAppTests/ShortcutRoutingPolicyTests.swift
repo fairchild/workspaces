@@ -42,16 +42,10 @@ struct ShortcutRoutingPolicyTests {
     func appOwnedDefaultsRouteToAppChrome() {
         policy.clearOverrides()
 
-        #expect(policy.route(for: AppChromeShortcut.toggleSidebar.chord) == .appChrome)
-        #expect(policy.route(for: AppChromeShortcut.toggleInspector.chord) == .appChrome)
-        #expect(policy.route(for: AppChromeShortcut.toggleTerminalPanel.chord) == .appChrome)
-        #expect(policy.route(for: AppChromeShortcut.newWorkspace.chord) == .appChrome)
-        #expect(policy.route(for: AppChromeShortcut.newTerminalTab.chord) == .appChrome)
-        #expect(policy.route(for: AppChromeShortcut.closeTerminalTab.chord) == .appChrome)
-        #expect(policy.route(for: AppChromeShortcut.nextTerminalTab.chord) == .appChrome)
-        #expect(policy.route(for: AppChromeShortcut.previousTerminalTab.chord) == .appChrome)
-        #expect(policy.route(for: AppChromeShortcut.alternateNextTerminalTab.chord) == .appChrome)
-        #expect(policy.route(for: AppChromeShortcut.alternatePreviousTerminalTab.chord) == .appChrome)
+        for shortcut in AppChromeShortcutCatalog.appOwnedDefaults {
+            #expect(policy.route(for: shortcut.chord) == .appChrome)
+        }
+        #expect(AppChromeShortcutCatalog.appOwnedDefaults.contains(.settings))
     }
 
     @Test("Non-reserved shortcuts route to Ghostty by default")
@@ -61,6 +55,15 @@ struct ShortcutRoutingPolicyTests {
         let splitChord = chord("d", modifiers: [.command])
         #expect(policy.route(for: splitChord) == .ghostty)
         #expect(policy.route(for: AppChromeShortcut.openInEditor.chord) == .ghostty)
+    }
+
+    @Test("App-owned default catalog is derived from shortcut route policy")
+    func appOwnedDefaultCatalogMatchesShortcutRoutePolicy() {
+        let expectedDefaults = AppChromeShortcut.allCases.filter { $0.defaultRoute == .appChrome }
+
+        #expect(AppChromeShortcutCatalog.appOwnedDefaults == expectedDefaults)
+        #expect(!AppChromeShortcutCatalog.appOwnedDefaults.contains(.openInEditor))
+        #expect(AppChromeShortcut.openInEditor.defaultRoute == .ghostty)
     }
 
     @Test("Overrides are applied and removable")
@@ -99,6 +102,8 @@ struct ShortcutRoutingPolicyTests {
         let inspectorUp = keyEvent(type: .keyUp, key: "B", modifiers: [.command, .shift])
         let terminalDown = keyEvent(type: .keyDown, key: "j", modifiers: [.command])
         let terminalUp = keyEvent(type: .keyUp, key: "j", modifiers: [.command])
+        let settingsDown = keyEvent(type: .keyDown, key: ",", modifiers: [.command])
+        let settingsUp = keyEvent(type: .keyUp, key: ",", modifiers: [.command])
         let splitUp = keyEvent(type: .keyUp, key: "d", modifiers: [.command])
 
         #expect(policy.route(for: sidebarDown) == .appChrome)
@@ -107,6 +112,8 @@ struct ShortcutRoutingPolicyTests {
         #expect(policy.route(for: inspectorUp) == .appChrome)
         #expect(policy.route(for: terminalDown) == .appChrome)
         #expect(policy.route(for: terminalUp) == .appChrome)
+        #expect(policy.route(for: settingsDown) == .appChrome)
+        #expect(policy.route(for: settingsUp) == .appChrome)
         #expect(policy.route(for: splitUp) == .ghostty)
     }
 }

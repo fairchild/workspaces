@@ -8,6 +8,12 @@
 import AppKit
 import SwiftUI
 
+private struct AppChromeShortcutDefinition {
+    let keyString: String
+    let modifiers: NSEvent.ModifierFlags
+    let defaultRoute: ShortcutRouteTarget
+}
+
 enum AppChromeShortcut: CaseIterable {
     case toggleSidebar
     case toggleInspector
@@ -20,30 +26,38 @@ enum AppChromeShortcut: CaseIterable {
     case alternateNextTerminalTab
     case alternatePreviousTerminalTab
     case openInEditor
+    case settings
 
-    var keyString: String {
+    private var definition: AppChromeShortcutDefinition {
         switch self {
         case .toggleSidebar:
-            return "b"
+            return AppChromeShortcutDefinition(keyString: "b", modifiers: [.command], defaultRoute: .appChrome)
         case .toggleInspector:
-            return "b"
+            return AppChromeShortcutDefinition(keyString: "b", modifiers: [.command, .shift], defaultRoute: .appChrome)
         case .toggleTerminalPanel:
-            return "j"
+            return AppChromeShortcutDefinition(keyString: "j", modifiers: [.command], defaultRoute: .appChrome)
         case .newWorkspace:
-            return "n"
+            return AppChromeShortcutDefinition(keyString: "n", modifiers: [.command], defaultRoute: .appChrome)
         case .newTerminalTab:
-            return "t"
+            return AppChromeShortcutDefinition(keyString: "t", modifiers: [.command], defaultRoute: .appChrome)
         case .closeTerminalTab:
-            return "w"
+            return AppChromeShortcutDefinition(keyString: "w", modifiers: [.command], defaultRoute: .appChrome)
         case .nextTerminalTab, .previousTerminalTab:
-            return "\t"
+            let modifiers: NSEvent.ModifierFlags = self == .nextTerminalTab ? [.control] : [.control, .shift]
+            return AppChromeShortcutDefinition(keyString: "\t", modifiers: modifiers, defaultRoute: .appChrome)
         case .alternateNextTerminalTab:
-            return "]"
+            return AppChromeShortcutDefinition(keyString: "]", modifiers: [.command, .shift], defaultRoute: .appChrome)
         case .alternatePreviousTerminalTab:
-            return "["
+            return AppChromeShortcutDefinition(keyString: "[", modifiers: [.command, .shift], defaultRoute: .appChrome)
         case .openInEditor:
-            return "o"
+            return AppChromeShortcutDefinition(keyString: "o", modifiers: [.command, .shift], defaultRoute: .ghostty)
+        case .settings:
+            return AppChromeShortcutDefinition(keyString: ",", modifiers: [.command], defaultRoute: .appChrome)
         }
+    }
+
+    var keyString: String {
+        definition.keyString
     }
 
     var keyCharacter: Character {
@@ -51,53 +65,15 @@ enum AppChromeShortcut: CaseIterable {
     }
 
     var appKitModifiers: NSEvent.ModifierFlags {
-        switch self {
-        case .toggleSidebar:
-            return [.command]
-        case .toggleInspector:
-            return [.command, .shift]
-        case .toggleTerminalPanel:
-            return [.command]
-        case .newWorkspace:
-            return [.command]
-        case .newTerminalTab:
-            return [.command]
-        case .closeTerminalTab:
-            return [.command]
-        case .nextTerminalTab:
-            return [.control]
-        case .previousTerminalTab:
-            return [.control, .shift]
-        case .alternateNextTerminalTab, .alternatePreviousTerminalTab:
-            return [.command, .shift]
-        case .openInEditor:
-            return [.command, .shift]
-        }
+        definition.modifiers
+    }
+
+    var defaultRoute: ShortcutRouteTarget {
+        definition.defaultRoute
     }
 
     var eventModifiers: EventModifiers {
-        switch self {
-        case .toggleSidebar:
-            return [.command]
-        case .toggleInspector:
-            return [.command, .shift]
-        case .toggleTerminalPanel:
-            return [.command]
-        case .newWorkspace:
-            return [.command]
-        case .newTerminalTab:
-            return [.command]
-        case .closeTerminalTab:
-            return [.command]
-        case .nextTerminalTab:
-            return [.control]
-        case .previousTerminalTab:
-            return [.control, .shift]
-        case .alternateNextTerminalTab, .alternatePreviousTerminalTab:
-            return [.command, .shift]
-        case .openInEditor:
-            return [.command, .shift]
-        }
+        EventModifiers(appKitModifiers: appKitModifiers)
     }
 
     var keyEquivalent: KeyEquivalent {
@@ -113,20 +89,18 @@ enum AppChromeShortcut: CaseIterable {
 }
 
 enum AppChromeShortcutCatalog {
-    // Keep this list intentionally narrow; context-dependent shortcuts can be
-    // routed via ShortcutRoutingPolicy overrides.
-    static let appOwnedDefaults: [AppChromeShortcut] = [
-        .toggleSidebar,
-        .toggleInspector,
-        .toggleTerminalPanel,
-        .newWorkspace,
-        .newTerminalTab,
-        .closeTerminalTab,
-        .nextTerminalTab,
-        .previousTerminalTab,
-        .alternateNextTerminalTab,
-        .alternatePreviousTerminalTab,
-    ]
+    static let appOwnedDefaults: [AppChromeShortcut] =
+        AppChromeShortcut.allCases.filter { $0.defaultRoute == .appChrome }
 
     static let appOwnedDefaultChords: Set<ShortcutChord> = Set(appOwnedDefaults.map(\.chord))
+}
+
+extension EventModifiers {
+    fileprivate init(appKitModifiers: NSEvent.ModifierFlags) {
+        self = []
+        if appKitModifiers.contains(.command) { insert(.command) }
+        if appKitModifiers.contains(.control) { insert(.control) }
+        if appKitModifiers.contains(.option) { insert(.option) }
+        if appKitModifiers.contains(.shift) { insert(.shift) }
+    }
 }
