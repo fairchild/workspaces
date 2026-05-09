@@ -120,8 +120,34 @@ if [[ "$ENV_ONLY" == "1" ]]; then
 fi
 
 # Trust and install mise-managed tools. Codex worktrees run setup without an
-# interactive terminal, so trust every checked-in project config up front.
+# interactive terminal, but mise tasks can execute arbitrary shell. Keep the
+# trust surface small and fail closed if a new config appears.
+allowed_mise_config() {
+  case "$1" in
+    "$REPO_ROOT/.mise.toml"|"$REPO_ROOT/web/.mise.toml") return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+validate_mise_config() {
+  local mise_config="$1"
+  local relative="${mise_config#$REPO_ROOT/}"
+  local forbidden_regex='(^[[:space:]]*\[(env|hooks)\][[:space:]]*$|trusted_config_paths|^[[:space:]]*(yes|ci)[[:space:]]*=[[:space:]]*true([[:space:]]*(#.*)?)?$|_[.](source|file)[[:space:]]*=)'
+
+  if ! allowed_mise_config "$mise_config"; then
+    echo "error: unallowlisted mise config: $relative" >&2
+    echo "Add it to scripts/setup only after reviewing its trust boundary." >&2
+    exit 1
+  fi
+
+  if grep -En "$forbidden_regex" "$mise_config" >&2; then
+    echo "error: forbidden trust/env directive in $relative" >&2
+    exit 1
+  fi
+}
+
 while IFS= read -r mise_config; do
+  validate_mise_config "$mise_config"
   echo "=> Trusting mise config ${mise_config#$REPO_ROOT/}"
   mise trust "$mise_config"
 done < <(
@@ -130,7 +156,11 @@ done < <(
     -path "*/node_modules" -prune -o \
     -name ".mise.toml" -print | sort
 )
-[[ -f .mise.toml ]] && mise install
+if [[ -f .mise.toml ]]; then
+  MISE_IGNORED_CONFIG_PATHS="${HOME}/.config/mise${MISE_IGNORED_CONFIG_PATHS:+:$MISE_IGNORED_CONFIG_PATHS}" \
+    MISE_PARANOID=1 \
+    mise install --locked zig@0.15.2
+fi
 
 # Install dependencies per lockfile
 install_deps() {

@@ -116,6 +116,10 @@ mise run dev-lume-macos-smoke
 
 Run `mise tasks` for the full top-level catalog. Web dashboard tasks stay in `web/.mise.toml`; run them with `mise -C web run <task>`.
 
+The bootstrap path validates and trusts only the reviewed root/web mise configs,
+then installs locked tool versions. Keep secrets and broad trust settings out of
+mise config; see [mise security](./docs/development/mise-security.md).
+
 For contribution guidelines and project structure, see:
 
 - [CONTRIBUTING.md](./CONTRIBUTING.md)

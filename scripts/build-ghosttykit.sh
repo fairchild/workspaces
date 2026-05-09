@@ -69,13 +69,24 @@ resolve_zig_runner() {
     return
   fi
 
+  if command -v mise >/dev/null 2>&1; then
+    ZIG_RUNNER=(
+      env
+      "MISE_CONFIG_FILE=$PROJECT_DIR/.mise.toml"
+      "MISE_CONFIG_ROOT=$PROJECT_DIR"
+      "MISE_IGNORED_CONFIG_PATHS=$HOME/.config/mise${MISE_IGNORED_CONFIG_PATHS:+:$MISE_IGNORED_CONFIG_PATHS}"
+      MISE_PARANOID=1
+      mise exec --locked "zig@$ZIG_VERSION" -- zig
+    )
+    return
+  fi
+
   if [[ -x "$HOMEBREW_ZIG_BIN" ]]; then
     ZIG_RUNNER=("$HOMEBREW_ZIG_BIN")
     return
   fi
 
   require_cmd mise "https://mise.jdx.dev/"
-  ZIG_RUNNER=(mise exec "zig@$ZIG_VERSION" -- zig)
 }
 
 rewrite_modulemap() {
