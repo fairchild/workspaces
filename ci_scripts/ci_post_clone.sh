@@ -27,4 +27,20 @@ if ! command -v swift-format >/dev/null 2>&1; then
   brew install swift-format
 fi
 
+if ! command -v msgfmt >/dev/null 2>&1; then
+  brew install gettext
+fi
+
+gettext_prefix="$(brew --prefix gettext 2>/dev/null || true)"
+if [ -n "$gettext_prefix" ] && [ -x "$gettext_prefix/bin/msgfmt" ]; then
+  export PATH="$gettext_prefix/bin:$PATH"
+fi
+
+if ! command -v msgfmt >/dev/null 2>&1; then
+  echo "error: msgfmt is required to build Ghostty translations; install Homebrew gettext" >&2
+  exit 1
+fi
+
+msgfmt --version | head -n 1
+
 ./scripts/build-ghosttykit.sh

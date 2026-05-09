@@ -78,6 +78,23 @@ resolve_zig_runner() {
   ZIG_RUNNER=(mise exec "zig@$ZIG_VERSION" -- zig)
 }
 
+require_msgfmt() {
+  if command -v msgfmt >/dev/null 2>&1; then
+    return
+  fi
+
+  if command -v brew >/dev/null 2>&1; then
+    local gettext_prefix
+    gettext_prefix="$(brew --prefix gettext 2>/dev/null || true)"
+    if [[ -x "$gettext_prefix/bin/msgfmt" ]]; then
+      export PATH="$gettext_prefix/bin:$PATH"
+      return
+    fi
+  fi
+
+  die "msgfmt is required to build Ghostty translations (install Homebrew gettext; if it is keg-only, add \$(brew --prefix gettext)/bin to PATH)"
+}
+
 rewrite_modulemap() {
   local modulemap_path="$1"
 
@@ -248,6 +265,7 @@ install_xcframework() {
 main() {
   require_cmd git
   require_cmd xcrun
+  require_msgfmt
   resolve_zig_runner
 
   resolve_ghostty_dir
