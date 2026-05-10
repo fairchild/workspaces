@@ -3,102 +3,184 @@
 		{
 			"source": "README.md",
 			"dest": "README.md",
-			"title": "WorkSpaces README"
+			"title": "WorkSpaces README",
+			"group": "Start Here",
+			"topics": ["workspaces", "repository", "workspace", "terminal-session"],
+			"summary": "Repository-level orientation for the native WorkSpaces app."
 		},
 		{
 			"source": "CONTEXT.md",
 			"dest": "CONTEXT.md",
-			"title": "Vocabulary"
+			"title": "Vocabulary",
+			"group": "Start Here",
+			"topics": [
+				"workspaces",
+				"repository",
+				"workspace",
+				"terminal-session",
+				"surface",
+				"repo-overview",
+				"web-source",
+				"detail-pane"
+			],
+			"summary": "Canonical product language for docs, UI, and implementation work."
 		},
 		{
 			"source": "docs/README.md",
 			"dest": "docs-site.md",
-			"title": "Docs Site Runbook"
+			"title": "Docs Site Runbook",
+			"group": "Start Here",
+			"topics": ["workspaces", "docs-site"],
+			"summary": "How the static docs site is generated, served, and checked."
 		},
 		{
 			"source": "docs/product_overview.md",
 			"dest": "product_overview.md",
-			"title": "Product Overview"
+			"title": "Product Overview",
+			"group": "Product",
+			"topics": [
+				"workspaces",
+				"repository",
+				"workspace",
+				"terminal-session",
+				"surface",
+				"web-source"
+			],
+			"summary": "The product shape, principles, and non-goals of the native app."
 		},
 		{
 			"source": "docs/branding.md",
 			"dest": "branding.md",
-			"title": "Branding"
+			"title": "Branding",
+			"group": "Product",
+			"topics": ["workspaces", "repository", "branding"],
+			"summary": "Visual identity, icon metaphor, palette, and asset rules."
 		},
 		{
 			"source": "docs/user-stories.md",
 			"dest": "user-stories.md",
-			"title": "User Stories"
+			"title": "User Stories",
+			"group": "Product",
+			"topics": [
+				"repository",
+				"workspace",
+				"terminal-session",
+				"surface",
+				"web-source"
+			],
+			"summary": "User-facing workflows expressed through WorkSpaces domain language."
 		},
 		{
 			"source": "docs/vm-provider-architecture.md",
 			"dest": "vm-provider-architecture.md",
-			"title": "VM Provider Architecture"
+			"title": "VM Provider Architecture",
+			"group": "Architecture",
+			"topics": ["workspace", "provider", "lume"],
+			"summary": "Provider abstraction for isolated workspace execution."
 		},
 		{
 			"source": "docs/daytona-vm.md",
 			"dest": "daytona-vm.md",
-			"title": "Daytona VM"
+			"title": "Daytona VM",
+			"group": "Architecture",
+			"topics": ["workspace", "provider"],
+			"summary": "Daytona-backed workspace runtime notes."
 		},
 		{
 			"source": "docs/performance-testing.md",
 			"dest": "performance-testing.md",
-			"title": "Performance Testing"
+			"title": "Performance Testing",
+			"group": "Evidence",
+			"topics": ["performance", "evidence", "workspace"],
+			"summary": "Performance test expectations and local evidence workflow."
 		},
 		{
 			"source": "docs/development/mergeability-standard.md",
 			"dest": "development/mergeability-standard.md",
-			"title": "Mergeability Standard"
+			"title": "Mergeability Standard",
+			"group": "Development",
+			"topics": ["mergeability", "evidence", "workspaces"],
+			"summary": "Review, verification, and evidence expectations before landing changes."
 		},
 		{
 			"source": "docs/development/libghostty-integration.md",
 			"dest": "development/libghostty-integration.md",
-			"title": "Ghostty Integration"
+			"title": "Ghostty Integration",
+			"group": "Development",
+			"topics": ["terminal-session", "ghostty", "surface", "workspace"],
+			"summary": "Ghostty integration contract for terminal focus, shortcuts, tabs, and splits."
 		},
 		{
 			"source": "docs/development/lume-integration.md",
 			"dest": "development/lume-integration.md",
-			"title": "Lume Integration"
+			"title": "Lume Integration",
+			"group": "Development",
+			"topics": ["workspace", "lume", "provider"],
+			"summary": "Lume runtime setup, storage, daemon reliability, and app integration."
 		},
 		{
 			"source": "docs/development/lume-validation.md",
 			"dest": "development/lume-validation.md",
-			"title": "Lume Validation"
+			"title": "Lume Validation",
+			"group": "Development",
+			"topics": ["workspace", "lume", "evidence"],
+			"summary": "Validation contract for Lume-backed workspace behavior."
 		},
 		{
 			"source": "docs/development/lume-recreate-runbook.md",
 			"dest": "development/lume-recreate-runbook.md",
-			"title": "Lume Recreate Runbook"
+			"title": "Lume Recreate Runbook",
+			"group": "Operations",
+			"topics": ["workspace", "lume", "provider"],
+			"summary": "Operational recovery path for recreating Lume workspace bases."
 		},
 		{
 			"source": "docs/development/lume-runner-setup.md",
 			"dest": "development/lume-runner-setup.md",
-			"title": "Lume Runner Setup"
+			"title": "Lume Runner Setup",
+			"group": "Operations",
+			"topics": ["workspace", "lume", "evidence"],
+			"summary": "Self-hosted runner setup for Lume macOS validation."
 		},
 		{
 			"source": "docs/development/shortcut-routing.md",
 			"dest": "development/shortcut-routing.md",
-			"title": "Shortcut Routing"
+			"title": "Shortcut Routing",
+			"group": "Development",
+			"topics": ["terminal-session", "ghostty", "surface"],
+			"summary": "Shortcut ownership between WorkSpaces chrome and Ghostty terminals."
 		},
 		{
 			"source": "docs/development/solution-terminal-keyboard.md",
 			"dest": "development/solution-terminal-keyboard.md",
-			"title": "Terminal Keyboard"
+			"title": "Terminal Keyboard",
+			"group": "Development",
+			"topics": ["terminal-session", "ghostty", "surface"],
+			"summary": "Keyboard focus model for the native terminal surface."
 		},
 		{
 			"source": "docs/development/evidence.md",
 			"dest": "development/evidence.md",
-			"title": "Evidence"
+			"title": "Evidence",
+			"group": "Operations",
+			"topics": ["evidence", "mergeability", "workspaces"],
+			"summary": "How to capture and publish evidence for WorkSpaces changes."
 		},
 		{
 			"source": "docs/performance/dashboard.md",
 			"dest": "performance/dashboard.md",
-			"title": "Performance Dashboard"
+			"title": "Performance Dashboard",
+			"group": "Evidence",
+			"topics": ["performance", "evidence", "workspace"],
+			"summary": "Latest performance snapshot, investigated deltas, and metric trends."
 		},
 		{
 			"source": "docs/performance/metrics-reference.md",
 			"dest": "performance/metrics-reference.md",
-			"title": "Metrics Reference"
+			"title": "Metrics Reference",
+			"group": "Evidence",
+			"topics": ["performance", "evidence"],
+			"summary": "Definitions for WorkSpaces performance metrics."
 		}
 	],
 	"staticFiles": [

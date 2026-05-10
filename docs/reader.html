@@ -202,6 +202,37 @@
       color: var(--quiet);
     }
 
+    .doc-card details {
+      display: grid;
+      gap: 10px;
+    }
+
+    .doc-card summary {
+      color: var(--ink);
+      font-family: var(--sans);
+      font-size: 0.95rem;
+      cursor: pointer;
+      list-style-position: outside;
+    }
+
+    .doc-card dl {
+      display: grid;
+      gap: 12px;
+      margin: 12px 0 0;
+    }
+
+    .doc-card dt {
+      color: var(--ink);
+      font-family: var(--sans);
+      font-size: 0.92rem;
+      font-weight: 700;
+    }
+
+    .doc-card dd {
+      margin: 2px 0 0;
+      overflow-wrap: anywhere;
+    }
+
     .doc-card strong {
       display: block;
       color: var(--ink);
@@ -227,6 +258,18 @@
       background: rgba(166, 255, 223, 0.08);
       color: var(--ink);
       font-size: 0.82rem;
+    }
+
+    button.chip {
+      font: inherit;
+      cursor: pointer;
+    }
+
+    button.chip:hover,
+    button.chip[aria-expanded="true"] {
+      border-color: var(--mint);
+      background: rgba(166, 255, 223, 0.14);
+      text-decoration: none;
     }
 
     .chip.quiet {
@@ -473,20 +516,6 @@
       color: var(--muted);
     }
 
-    .visual-note {
-      display: grid;
-      grid-template-columns: 44px minmax(0, 1fr);
-      gap: 12px;
-      align-items: start;
-      color: var(--muted);
-      font-size: 0.92rem;
-    }
-
-    .visual-note svg {
-      width: 44px;
-      height: 44px;
-    }
-
     .doc-links {
       display: grid;
       gap: 8px;
@@ -507,6 +536,26 @@
       border-color: var(--mint);
       color: var(--ink);
       text-decoration: none;
+    }
+
+    .related-panel {
+      display: none;
+    }
+
+    .related-panel[data-visible="true"] {
+      display: block;
+    }
+
+    .related-heading {
+      margin: 0 0 8px;
+      color: var(--muted);
+      font-size: 0.86rem;
+    }
+
+    .related-empty {
+      color: var(--quiet);
+      font-size: 0.86rem;
+      margin: 0;
     }
 
     @media (max-width: 1040px) {
@@ -578,9 +627,15 @@
             <div class="concept-map" id="concept-map"></div>
           </div>
           <aside class="doc-card" aria-label="Document metadata">
-            <div><strong>Source</strong><span id="doc-path">-</span></div>
+            <div><strong>Updated</strong><span id="doc-updated">-</span></div>
             <div><strong>Sections</strong><span id="doc-section-count">-</span></div>
-            <div><strong>Mode</strong><span>Markdown source, rendered locally</span></div>
+            <details>
+              <summary>Document details</summary>
+              <dl>
+                <div><dt>Source</dt><dd id="doc-path">-</dd></div>
+                <div><dt>Group</dt><dd id="doc-group">-</dd></div>
+              </dl>
+            </details>
           </aside>
         </div>
       </section>
@@ -602,19 +657,10 @@
         <nav class="outline" id="outline" aria-label="Document outline"></nav>
       </section>
 
-      <section class="side-panel">
-        <h2>Visual Reading</h2>
-        <div class="visual-note">
-          <svg viewBox="0 0 48 48" aria-hidden="true">
-            <rect x="5" y="6" width="38" height="36" rx="8" fill="#1a1f28" stroke="#394044"></rect>
-            <rect x="13" y="14" width="9" height="9" rx="2" fill="#414957"></rect>
-            <rect x="26" y="14" width="9" height="9" rx="2" fill="#414957"></rect>
-            <rect x="13" y="27" width="9" height="9" rx="2" fill="#414957"></rect>
-            <rect x="26" y="27" width="9" height="9" rx="2" fill="#111821"></rect>
-            <path d="M29 30.5L32 33L29 35.5" fill="none" stroke="#a6ffdf" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
-          </svg>
-          <p style="margin:0">Concept chips show which WorkSpaces domain terms are active in this document. Headings become the navigation spine.</p>
-        </div>
+      <section class="side-panel related-panel" id="related-panel" data-visible="false">
+        <h2>Related Docs</h2>
+        <p class="related-heading" id="related-heading"></p>
+        <div class="doc-links" id="related-docs"></div>
       </section>
 
       <section class="side-panel">
@@ -631,14 +677,14 @@
 
   <script>
     const terms = [
-      { name: "WorkSpaces", aliases: ["WorkSpaces"] },
-      { name: "Repository", aliases: ["repository", "repositories", "repo", "repos"] },
-      { name: "Workspace", aliases: ["workspace", "workspaces"] },
-      { name: "Terminal Session", aliases: ["terminal session", "terminal sessions", "terminal"] },
-      { name: "Surface", aliases: ["surface", "surfaces", "last surface"] },
-      { name: "Repo Overview", aliases: ["repo overview", "repository overview"] },
-      { name: "Web Source", aliases: ["web source", "web sources", "web view", "web views"] },
-      { name: "Detail Pane", aliases: ["detail pane", "right pane", "file/changes pane"] }
+      { id: "workspaces", name: "WorkSpaces", aliases: ["WorkSpaces"] },
+      { id: "repository", name: "Repository", aliases: ["repository", "repositories", "repo", "repos"] },
+      { id: "workspace", name: "Workspace", aliases: ["workspace", "workspaces"] },
+      { id: "terminal-session", name: "Terminal Session", aliases: ["terminal session", "terminal sessions", "terminal"] },
+      { id: "surface", name: "Surface", aliases: ["surface", "surfaces", "last surface"] },
+      { id: "repo-overview", name: "Repo Overview", aliases: ["repo overview", "repository overview"] },
+      { id: "web-source", name: "Web Source", aliases: ["web source", "web sources", "web view", "web views"] },
+      { id: "detail-pane", name: "Detail Pane", aliases: ["detail pane", "right pane", "file/changes pane"] }
     ];
 
     const docsBase = "/docs/";
@@ -651,6 +697,8 @@
     const content = document.querySelector("#content");
     const outline = document.querySelector("#outline");
     const rawLink = document.querySelector("#raw-link");
+    let manifestEntries = [];
+    let activeTopic = null;
 
     function escapeHtml(value) {
       return value
@@ -716,15 +764,30 @@
 
     async function loadPublishedDocs() {
       if (publishedDocs) return publishedDocs;
-      try {
-        const response = await fetch(manifestUrl, { cache: "no-store" });
-        if (!response.ok) return null;
-        const manifest = await response.json();
-        publishedDocs = new Set((manifest.documents || []).filter(Boolean));
-        return publishedDocs;
-      } catch {
-        return null;
+      const manifests = [
+        manifestUrl,
+        "/web/scripts/docs-sync-manifest.json"
+      ];
+      for (const url of manifests) {
+        try {
+          const response = await fetch(url, { cache: "no-store" });
+          if (!response.ok) continue;
+          const manifest = await response.json();
+          manifestEntries = Array.isArray(manifest.entries)
+            ? manifest.entries
+            : Array.isArray(manifest.documents)
+              ? manifest.documents
+              : [];
+          const docs = Array.isArray(manifest.documents)
+            ? manifest.documents.map((entry) => typeof entry === "string" ? entry : entry.dest)
+            : manifestEntries.map((entry) => entry.dest);
+          publishedDocs = new Set(docs.filter(Boolean));
+          return publishedDocs;
+        } catch {
+          continue;
+        }
       }
+      return null;
     }
 
     function publicDocUrl(path) {
@@ -957,12 +1020,83 @@
       return terms.filter((term) => term.aliases.some((alias) => termAppears(markdown, alias)));
     }
 
+    function topicLabel(topic) {
+      return terms.find((term) => term.id === topic)?.name || topic.replace(/-/g, " ");
+    }
+
+    function docEntry(path) {
+      return manifestEntries.find((entry) => entry.dest === path) || null;
+    }
+
+    function relatedDocs(topic) {
+      return manifestEntries
+        .filter((entry) => entry.dest !== currentDocPath && Array.isArray(entry.topics) && entry.topics.includes(topic))
+        .slice(0, 5);
+    }
+
+    function renderRelatedDocs(topic) {
+      const panel = document.querySelector("#related-panel");
+      const heading = document.querySelector("#related-heading");
+      const target = document.querySelector("#related-docs");
+      if (!topic) {
+        panel.dataset.visible = "false";
+        heading.textContent = "";
+        target.innerHTML = "";
+        return;
+      }
+
+      const docs = relatedDocs(topic);
+      panel.dataset.visible = "true";
+      heading.textContent = topicLabel(topic);
+      target.innerHTML = docs.length
+        ? docs.map((entry) => `<a href="${renderedDocHref(entry.dest)}"><span>${escapeHtml(entry.title)}</span><span>${escapeHtml(entry.group || "")}</span></a>`).join("")
+        : '<p class="related-empty">No other published docs use this topic yet.</p>';
+    }
+
+    function selectTopic(topic) {
+      activeTopic = activeTopic === topic ? null : topic;
+      document.querySelectorAll("#concept-map button.chip").forEach((button) => {
+        button.setAttribute("aria-expanded", String(button.dataset.topic === activeTopic));
+      });
+      renderRelatedDocs(activeTopic);
+    }
+
     function renderTermChips(markdown) {
       const found = detectedTerms(markdown);
       const chipHtml = found.length
-        ? found.map((term) => `<span class="chip">${term.name}</span>`).join("")
+        ? found.map((term) => `<button class="chip" type="button" data-topic="${term.id}" aria-expanded="false" title="Show related docs for ${escapeHtml(term.name)}">${term.name}</button>`).join("")
         : '<span class="chip quiet">No WorkSpaces terms detected</span>';
-      document.querySelector("#concept-map").innerHTML = chipHtml;
+      const conceptMap = document.querySelector("#concept-map");
+      conceptMap.innerHTML = chipHtml;
+      conceptMap.querySelectorAll("button.chip").forEach((button) => {
+        button.addEventListener("click", () => selectTopic(button.dataset.topic));
+      });
+      activeTopic = null;
+      renderRelatedDocs(null);
+    }
+
+    function extractUpdatedAt(markdown) {
+      const match = /^Last updated:\s*`?([^`\n]+)`?/im.exec(markdown);
+      return match?.[1]?.trim() || null;
+    }
+
+    function markdownWithoutPageMetadata(markdown) {
+      return markdown.replace(/^Last updated:\s*`?[^`\n]+`?\s*\n{1,2}/im, "");
+    }
+
+    function formatUpdatedAt(value) {
+      if (!value) return "Not listed";
+      const normalized = value.replace(/([+-]\d{2})(\d{2})$/, "$1:$2");
+      const date = new Date(normalized);
+      if (Number.isNaN(date.getTime())) return value;
+      return new Intl.DateTimeFormat("en", {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+        timeZoneName: "short"
+      }).format(date);
     }
 
     function renderOutline(headings) {
@@ -984,8 +1118,11 @@
       document.querySelector("#doc-kind").textContent = "Curated docs only";
       document.querySelector("#doc-summary").textContent = "This public reader only renders the native WorkSpaces documentation selected for publishing.";
       document.querySelector("#doc-path").textContent = path || "unknown";
+      document.querySelector("#doc-updated").textContent = "Not listed";
+      document.querySelector("#doc-group").textContent = "Unpublished";
       document.querySelector("#toolbar-title").textContent = path || "unknown";
       document.querySelector("#concept-map").innerHTML = '<span class="chip quiet">Not in public manifest</span>';
+      renderRelatedDocs(null);
       renderOutline([]);
       rawLink.removeAttribute("href");
     }
@@ -1004,12 +1141,15 @@
       rawLink.href = manifest ? `${docsBase}${currentDocPath}` : `${docUrl.pathname}${docUrl.search}${docUrl.hash}`;
       document.querySelector("#doc-path").textContent = displayPath;
       document.querySelector("#toolbar-title").textContent = displayPath;
+      const entry = manifest ? docEntry(currentDocPath) : null;
+      document.querySelector("#doc-group").textContent = entry?.group || "Docs";
 
       try {
         const response = await fetch(fetchUrl);
         if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
         const markdown = await response.text();
-        const rendered = renderMarkdown(markdown);
+        const displayMarkdown = markdownWithoutPageMetadata(markdown);
+        const rendered = renderMarkdown(displayMarkdown);
         const title = rendered.headings[0]?.label || displayPath.split("/").pop() || "Documentation";
 
         document.title = `${title} - WorkSpaces Docs`;
@@ -1019,8 +1159,9 @@
           : displayPath.includes("performance/")
             ? "Evidence doc"
             : "Rendered Markdown";
-        document.querySelector("#doc-summary").textContent = summaryFrom(markdown, title);
-        renderTermChips(markdown);
+        document.querySelector("#doc-summary").textContent = entry?.summary || summaryFrom(displayMarkdown, title);
+        document.querySelector("#doc-updated").textContent = formatUpdatedAt(extractUpdatedAt(markdown));
+        renderTermChips(displayMarkdown);
         renderOutline(rendered.headings);
         content.innerHTML = rendered.html;
       } catch (error) {

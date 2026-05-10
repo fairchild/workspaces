@@ -25,11 +25,16 @@ const publicManifest = {
 	generatedBy: "web/scripts/docs-sync.mjs",
 	documents: manifest.documents.map((entry) => entry.dest),
 	renderedRoutes: manifest.documents.map((entry) => renderedRoute(entry.dest)),
-	entries: manifest.documents.map(({ source, dest, title }) => ({
-		source,
-		dest,
-		title,
-	})),
+	entries: manifest.documents.map(
+		({ source, dest, title, group, topics, summary }) => ({
+			source,
+			dest,
+			title,
+			group,
+			topics,
+			summary,
+		}),
+	),
 };
 
 function sourcePath(relativePath) {

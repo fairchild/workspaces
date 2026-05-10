@@ -26,6 +26,28 @@ test.describe("Public docs", () => {
 		await expect(page.getByText("Repository").first()).toBeVisible();
 	});
 
+	test("filters related docs from concept chips", async ({ page }) => {
+		await page.goto("/docs/product_overview");
+
+		await page.getByRole("button", { name: "Repository" }).click();
+
+		await expect(page.getByRole("heading", { name: "Related Docs" })).toBeVisible();
+		await expect(page.locator("#related-heading")).toHaveText("Repository");
+		await expect(
+			page.locator("#related-docs").getByRole("link", { name: /Vocabulary/ }),
+		).toBeVisible();
+	});
+
+	test("shows friendly page metadata before exact details", async ({ page }) => {
+		await page.goto("/docs/performance/dashboard");
+
+		await expect(page.locator("#doc-updated")).toContainText("Mar 22, 2026");
+		await expect(page.locator("#doc-updated")).not.toContainText(
+			"2026-03-22T10:29:08-0700",
+		);
+		await expect(page.locator("#content")).not.toContainText("Last updated:");
+	});
+
 	test("serves suffixed Markdown docs as raw Markdown", async ({ request }) => {
 		const response = await request.get("/docs/product_overview.md");
 

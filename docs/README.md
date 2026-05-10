@@ -24,6 +24,7 @@ The docs site is intentionally a static shell over canonical Markdown, not a sec
 
 - Root Markdown remains editable source content.
 - `web/scripts/docs-sync-manifest.json` defines the curated native WorkSpaces docs that are safe to publish.
+- Manifest entries carry each document's group, summary, and domain topics. The reader uses that metadata for calm related-doc navigation instead of scraping arbitrary Markdown.
 - `web/scripts/docs-sync.mjs` copies that curated set into `web/public/docs` for Next/Vercel.
 - URLs ending in `.md` serve raw Markdown for source-level references.
 - Extensionless URLs render curated Markdown with the richer human-readable UI.
@@ -111,6 +112,15 @@ Direct links to existing HTML pages are fine:
 ```
 
 Inside rendered Markdown, local `.md` links are automatically rewritten to extensionless rendered paths.
+
+## Reader Behavior
+
+Rendered pages should stay focused on understanding the product and codebase first. Exact source details remain available, but they are not the main reading path.
+
+- Concept chips are filters. Selecting a chip shows related published docs for that WorkSpaces domain topic.
+- The reader shows friendly document metadata by default.
+- Exact source path and document group live under **Document details**.
+- A standalone `Last updated:` source line is lifted into metadata instead of repeated in the rendered body.
 
 ## Vocabulary Contract
 
