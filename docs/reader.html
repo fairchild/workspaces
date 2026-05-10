@@ -679,6 +679,7 @@
     let manifestEntries = [];
     let activeTopic = null;
     let currentEntry = null;
+    let referenceDefinitions = new Map();
 
     function escapeHtml(value) {
       return value
@@ -810,8 +811,37 @@
       return pattern.test(markdown);
     }
 
+    function referenceKey(value) {
+      return value.trim().replace(/\s+/g, " ").toLowerCase();
+    }
+
+    function extractReferenceDefinitions(markdown) {
+      const references = new Map();
+      const lines = markdown.replace(/\r\n/g, "\n").split("\n");
+      const kept = [];
+      for (const line of lines) {
+        const match = /^\s*\[([^\]]+)\]:\s*(\S+)(?:\s+["'][^"']+["'])?\s*$/.exec(line);
+        if (match) {
+          references.set(referenceKey(match[1]), match[2]);
+        } else {
+          kept.push(line);
+        }
+      }
+      return { markdown: kept.join("\n"), references };
+    }
+
     function renderInline(markdown) {
       let text = escapeHtml(markdown);
+      text = text.replace(/!\[([^\]]*)\]\[([^\]]*)\]/g, (source, alt, id) => {
+        const href = referenceDefinitions.get(referenceKey(id || alt));
+        if (!href) return source;
+        return `<img alt="${escapeHtml(alt)}" src="${resolveAssetHref(href)}">`;
+      });
+      text = text.replace(/\[([^\]]+)\]\[([^\]]*)\]/g, (source, label, id) => {
+        const href = referenceDefinitions.get(referenceKey(id || label));
+        if (!href) return source;
+        return `<a href="${resolveDocHref(href)}">${label}</a>`;
+      });
       text = text.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_, alt, href) => {
         return `<img alt="${escapeHtml(alt)}" src="${resolveAssetHref(href.trim())}">`;
       });
@@ -1172,7 +1202,9 @@
         const response = await fetch(fetchUrl);
         if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
         const markdown = await response.text();
-        const displayMarkdown = markdownWithoutPageMetadata(markdown);
+        const extracted = extractReferenceDefinitions(markdownWithoutPageMetadata(markdown));
+        const displayMarkdown = extracted.markdown;
+        referenceDefinitions = extracted.references;
         const rendered = renderMarkdown(displayMarkdown);
         const title = rendered.headings[0]?.label || displayPath.split("/").pop() || "Documentation";
 

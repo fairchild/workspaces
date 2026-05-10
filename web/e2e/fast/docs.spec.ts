@@ -27,6 +27,18 @@ test.describe("Public docs", () => {
 		await expect(page.getByText("Repository").first()).toBeVisible();
 	});
 
+	test("renders README reference-style images", async ({ page }) => {
+		await page.goto("/docs/README");
+
+		const screenshot = page.getByRole("img", { name: "WorkSpaces main window" });
+		await expect(screenshot).toBeVisible();
+		await expect(screenshot).toHaveAttribute(
+			"src",
+			"/docs/assets/screenshot-main.jpg",
+		);
+		await expect(page.locator("#content")).not.toContainText("[screenshot-main]");
+	});
+
 	test("shows related docs inline from concept chips", async ({ page }) => {
 		await page.goto("/docs/product_overview");
 
@@ -47,6 +59,7 @@ test.describe("Public docs", () => {
 	test("only shows concept chips that link to related docs", async ({ page }) => {
 		await page.goto("/docs/product_overview");
 
+		await expect(page.locator("#concept-map button.chip").first()).toBeVisible();
 		const counts = await page
 			.locator("#concept-map button.chip")
 			.evaluateAll((buttons) =>
