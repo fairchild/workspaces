@@ -103,19 +103,37 @@ export function parsePrReviewTrigger(
 		if (action === "edited") {
 			if (isDraft) return null;
 			const changes = payload.changes as Record<string, unknown> | undefined;
-			if (!changes || changes.body === undefined) return null;
-			const bodyHash = createHash("sha256")
-				.update(reviewPayload.body)
-				.digest("hex")
-				.slice(0, 16);
-			return {
-				reviewPayload,
-				context: {
-					kind: "edited",
-					triggerSourceId: `body-${bodyHash}`,
-					reason: "PR description edited",
-				},
-			};
+			if (!changes) return null;
+			const baseChange = changes.base as Record<string, unknown> | undefined;
+			if (baseChange !== undefined) {
+				// Base-branch retarget materially changes the diff being reviewed,
+				// so a new review must be produced. Source ID combines new base ref
+				// and head SHA so a webhook retry is deduped but a real retarget
+				// still reruns.
+				return {
+					reviewPayload,
+					context: {
+						kind: "edited",
+						triggerSourceId: `base-${reviewPayload.baseRef}-${reviewPayload.headSha}`,
+						reason: `PR base branch changed to ${reviewPayload.baseRef}`,
+					},
+				};
+			}
+			if (changes.body !== undefined) {
+				const bodyHash = createHash("sha256")
+					.update(reviewPayload.body)
+					.digest("hex")
+					.slice(0, 16);
+				return {
+					reviewPayload,
+					context: {
+						kind: "edited",
+						triggerSourceId: `body-${bodyHash}`,
+						reason: "PR description edited",
+					},
+				};
+			}
+			return null;
 		}
 		return null;
 	}

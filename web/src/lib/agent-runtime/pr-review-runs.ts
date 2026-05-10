@@ -62,19 +62,35 @@ export function computeRunFingerprint(
 
 export interface RecordRunStartResult {
 	inserted: boolean;
+	priorStatus?: PrReviewRunStatus;
 }
 
+/** Treat a `started` row older than this as crashed and eligible for retry. */
+const STALE_STARTED_MS = 15 * 60 * 1000;
+
 /**
- * Insert a "started" run row keyed on fingerprint. Returns
- * { inserted: false } when a row with the same fingerprint already exists,
- * which the caller treats as an idempotent skip.
+ * Claim a run slot for the fingerprint. Returns `inserted: true` when the
+ * caller should proceed with the session; `inserted: false` when this run
+ * should be treated as an idempotent skip.
+ *
+ * The semantics are:
+ * - no row → insert and proceed.
+ * - row with `completed` → skip; the previous run already produced a review.
+ * - row with `failed` → reset to `started` and proceed; lets a later
+ *   redelivery (or a follow-on event with the same fingerprint) recover from
+ *   a transient session-create or events.send failure.
+ * - row with `started` and `updated_at` older than STALE_STARTED_MS → assume
+ *   the prior process crashed before it could record a result; reset and
+ *   proceed.
+ * - row with fresh `started` → in-flight, skip.
  */
 export async function recordRunStart(
 	input: PrReviewRunRecordInput,
 ): Promise<RecordRunStartResult> {
 	await ensureRunsTable();
 	const now = new Date().toISOString();
-	const result = await getDb()
+	const db = getDb();
+	const insert = await db
 		.insertInto("managed_pr_review_runs")
 		.values({
 			fingerprint: input.fingerprint,
@@ -92,8 +108,62 @@ export async function recordRunStart(
 		})
 		.onConflict((oc) => oc.column("fingerprint").doNothing())
 		.executeTakeFirst();
-	const inserted = Number(result?.numInsertedOrUpdatedRows ?? 0) > 0;
-	return { inserted };
+	if (Number(insert?.numInsertedOrUpdatedRows ?? 0) > 0) {
+		return { inserted: true };
+	}
+
+	const existing = await db
+		.selectFrom("managed_pr_review_runs")
+		.select(["status", "updated_at"])
+		.where("fingerprint", "=", input.fingerprint)
+		.executeTakeFirst();
+	if (!existing) {
+		// Race: row vanished between insert attempt and select. Try insert again
+		// without doNothing() to surface any real error to the caller.
+		await db
+			.insertInto("managed_pr_review_runs")
+			.values({
+				fingerprint: input.fingerprint,
+				repo_full_name: input.repoFullName,
+				pr_number: input.prNumber,
+				head_sha: input.headSha,
+				trigger_kind: input.triggerKind,
+				trigger_source_id: input.triggerSourceId,
+				reviewer_config_hash: input.reviewerConfigHash,
+				session_id: null,
+				status: "started",
+				created_at: now,
+				updated_at: now,
+				error: null,
+			})
+			.execute();
+		return { inserted: true };
+	}
+
+	const priorStatus = existing.status as PrReviewRunStatus;
+	if (priorStatus === "completed") {
+		return { inserted: false, priorStatus };
+	}
+	if (priorStatus === "started") {
+		const updatedMs = Date.parse(existing.updated_at);
+		const ageMs = Number.isFinite(updatedMs) ? Date.now() - updatedMs : 0;
+		if (ageMs < STALE_STARTED_MS) {
+			return { inserted: false, priorStatus };
+		}
+	}
+
+	// failed, or stale started — reset and proceed.
+	await db
+		.updateTable("managed_pr_review_runs")
+		.set({
+			status: "started",
+			session_id: null,
+			error: null,
+			updated_at: now,
+		})
+		.where("fingerprint", "=", input.fingerprint)
+		.execute();
+	return { inserted: true, priorStatus };
 }
 
 export interface RecordRunResultInput {

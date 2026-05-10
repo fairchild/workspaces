@@ -215,7 +215,7 @@ describe("/api/webhooks/github POST", () => {
 			});
 		});
 
-		it("does not trigger on PR edits without body changes", async () => {
+		it("does not trigger on PR edits without body or base changes", async () => {
 			const { POST } = await import("./route");
 			await POST(
 				makePullRequestRequest("edited", {
@@ -223,6 +223,27 @@ describe("/api/webhooks/github POST", () => {
 				}),
 			);
 			expect(mocks.triggerPrReview).not.toHaveBeenCalled();
+		});
+
+		it("triggers when the PR base branch is retargeted", async () => {
+			const { POST } = await import("./route");
+			await POST(
+				makePullRequestRequest("edited", {
+					pull_request: {
+						base: { ref: "release/2026-05" },
+						head: { ref: "feature/x", sha: "abc123def456" },
+					},
+					changes: { base: { ref: { from: "main" } } },
+				}),
+			);
+			expect(mocks.triggerPrReview).toHaveBeenCalledTimes(1);
+			const [payload, ctx] = mocks.triggerPrReview.mock.calls[0];
+			expect(payload.baseRef).toBe("release/2026-05");
+			expect(ctx).toMatchObject({
+				kind: "edited",
+				triggerSourceId: "base-release/2026-05-abc123def456",
+			});
+			expect(ctx.reason).toContain("base branch");
 		});
 
 		it("triggers on ready_for_review even though prior was draft", async () => {

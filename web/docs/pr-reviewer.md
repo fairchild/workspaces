@@ -180,7 +180,7 @@ stale `REQUEST_CHANGES` instead of repeating itself.
 | `pull_request` | `reopened` | Rerun (skip drafts) |
 | `pull_request` | `ready_for_review` | Rerun even when previous state was draft |
 | `pull_request` | `synchronize` | Rerun on new head SHA (skip drafts) |
-| `pull_request` | `edited` | Rerun only when `changes.body` is present (skip drafts) |
+| `pull_request` | `edited` | Rerun when `changes.body` or `changes.base` is present — base retargets materially change the diff (skip drafts) |
 | `issue_comment` | `created` | Rerun when the comment is on a PR thread, the sender is a non-bot, and the body matches an evidence signal: `evidence.cloudcompute.com`, `Evidence:`, `swift test`, `playwright`, `screenshot`, `recording`, `validation` |
 
 Loop guards skip events from any `*[bot]` sender (including the reviewer
@@ -190,8 +190,18 @@ itself) and from `Bot`-typed senders.
 
 Every dispatch computes a fingerprint over
 `(repo, pr, headSha, triggerKind, triggerSourceId, reviewerConfigHash)` and
-inserts a row into `managed_pr_review_runs` (created on first use). When the
-insert is a no-op (duplicate fingerprint), the run is skipped. Effects:
+inserts a row into `managed_pr_review_runs` (created on first use). The skip
+decision honors the prior run's status so failed/crashed dispatches stay
+retriable:
+
+- `completed` → skip; the previous run already produced a review.
+- `failed` → reset and proceed; lets a redelivery (or a follow-on event with
+  the same fingerprint) recover from a transient session-create failure.
+- fresh `started` → skip (in-flight).
+- stale `started` (older than 15 minutes) → reset and proceed; the prior
+  process likely crashed before recording a result.
+
+Effects:
 
 - Webhook redeliveries for the same trigger are no-ops.
 - A new commit changes `headSha` → new fingerprint → rerun.
