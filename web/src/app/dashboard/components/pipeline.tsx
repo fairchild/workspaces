@@ -3,7 +3,7 @@ import type {
 	PipelineIssue,
 	Pipeline as PipelineType,
 } from "@/lib/types";
-import { PIPELINE_LABELS } from "@/lib/types";
+import { AGENT_TASK_LABEL, PIPELINE_LABELS } from "@/lib/types";
 import styles from "./pipeline.module.css";
 
 interface PipelineProps {
@@ -25,8 +25,8 @@ const COLUMN_STYLE: Record<PipelineColumn, string> = {
 };
 
 function IssueCard({ issue }: { issue: PipelineIssue }) {
-	const hasTask = issue.labels.some((l) => l === "agent:task");
-	const hasDecision = issue.labels.some((l) => l === "agent:decision");
+	const hasTask = issue.labels.some((l) => l === AGENT_TASK_LABEL);
+	const hasDecision = issue.labels.some((l) => l === "decision");
 
 	return (
 		<a

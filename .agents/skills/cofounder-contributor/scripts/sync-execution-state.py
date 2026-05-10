@@ -91,13 +91,19 @@ CLOSING_REFERENCE_RE = re.compile(
     r"(?im)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(?P<number>\d+)\b"
 )
 
-AGENT_READY_LABEL = "agent:ready"
+AGENT_LANE_LABEL = "agent"
+AGENT_LANE_LABEL_COLOR = "5319e7"
+AGENT_LANE_LABEL_DESCRIPTION = "Work owned by the agent execution lane"
+AGENT_TASK_LABEL = "task"
+AGENT_TASK_LABEL_COLOR = "0E8A16"
+AGENT_TASK_LABEL_DESCRIPTION = "Planned work item"
+AGENT_READY_LABEL = "ready"
 AGENT_READY_LABEL_COLOR = "5319e7"
 AGENT_READY_LABEL_DESCRIPTION = "Execution-approved and ready for an automated contributor to claim"
-AGENT_CLAIM_LABEL = "agent:claimed"
+AGENT_CLAIM_LABEL = "claimed"
 AGENT_CLAIM_LABEL_COLOR = "1d76db"
 AGENT_CLAIM_LABEL_DESCRIPTION = "Currently being executed by an automated contributor"
-AGENT_REVIEW_LABEL = "agent:review"
+AGENT_REVIEW_LABEL = "review"
 AGENT_REVIEW_LABEL_COLOR = "fbca04"
 AGENT_REVIEW_LABEL_DESCRIPTION = "PR opened, awaiting review"
 TRUSTED_AUTHOR_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR"}
@@ -536,12 +542,13 @@ def unassign_issue(
 
 
 def fetch_agent_task_issues(env: dict[str, str]) -> list[dict[str, Any]]:
-    """Fetch all agent:task issues (open and closed) with their bodies."""
+    """Fetch all agent task issues (open and closed) with their bodies."""
     result = run_checked(
         [
             "gh", "issue", "list",
             "--state", "all",
-            "--label", "agent:task",
+            "--label", AGENT_LANE_LABEL,
+            "--label", AGENT_TASK_LABEL,
             "--limit", "200",
             "--json", "number,body,state",
         ],
@@ -562,6 +569,8 @@ def main() -> int:
     now = datetime.now(timezone.utc)
 
     existing_labels = fetch_existing_labels(env)
+    ensure_label(existing_labels, env, AGENT_LANE_LABEL, AGENT_LANE_LABEL_COLOR, AGENT_LANE_LABEL_DESCRIPTION)
+    ensure_label(existing_labels, env, AGENT_TASK_LABEL, AGENT_TASK_LABEL_COLOR, AGENT_TASK_LABEL_DESCRIPTION)
     ensure_label(existing_labels, env, AGENT_READY_LABEL, AGENT_READY_LABEL_COLOR, AGENT_READY_LABEL_DESCRIPTION)
     ensure_label(existing_labels, env, AGENT_CLAIM_LABEL, AGENT_CLAIM_LABEL_COLOR, AGENT_CLAIM_LABEL_DESCRIPTION)
     ensure_label(existing_labels, env, AGENT_REVIEW_LABEL, AGENT_REVIEW_LABEL_COLOR, AGENT_REVIEW_LABEL_DESCRIPTION)
@@ -581,7 +590,7 @@ def main() -> int:
     updated = 0
     for issue in work_state["issues"]:
         current_labels = issue_label_names(issue)
-        if "agent:task" not in current_labels:
+        if AGENT_LANE_LABEL not in current_labels or AGENT_TASK_LABEL not in current_labels:
             continue
         desired_labels, reason = desired_execution_labels(
             issue,
@@ -610,7 +619,7 @@ def main() -> int:
 
     # Auto-close discussions whose Peter-planned issues are all closed.
     # work_state["issues"] only contains OPEN issues, so we fetch all
-    # agent:task issues (open + closed) to build the complete child map.
+    # agent task issues (open + closed) to build the complete child map.
     all_agent_task_issues = fetch_agent_task_issues(env)
     discussion_child_issues: dict[int, list[int]] = {}
     for issue in all_agent_task_issues:

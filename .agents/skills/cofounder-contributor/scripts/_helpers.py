@@ -19,13 +19,19 @@ GITHUB_API_TIMEOUT = 30
 CLAUDE_TIMEOUT = 300
 VALIDATION_TIMEOUT = 30
 
-AGENT_READY_LABEL = "agent:ready"
+AGENT_LANE_LABEL = "agent"
+AGENT_LANE_LABEL_COLOR = "5319e7"
+AGENT_LANE_LABEL_DESCRIPTION = "Work owned by the agent execution lane"
+AGENT_TASK_LABEL = "task"
+AGENT_TASK_LABEL_COLOR = "0E8A16"
+AGENT_TASK_LABEL_DESCRIPTION = "Planned work item"
+AGENT_READY_LABEL = "ready"
 AGENT_READY_LABEL_COLOR = "5319e7"
 AGENT_READY_LABEL_DESCRIPTION = "Execution-approved and ready for an automated contributor to claim"
-AGENT_CLAIM_LABEL = "agent:claimed"
+AGENT_CLAIM_LABEL = "claimed"
 AGENT_CLAIM_LABEL_COLOR = "1d76db"
 AGENT_CLAIM_LABEL_DESCRIPTION = "Currently being executed by an automated contributor"
-AGENT_MERGEABLE_LABEL = "agent:mergeable"
+AGENT_MERGEABLE_LABEL = "mergeable"
 AGENT_MERGEABLE_LABEL_COLOR = "0e8a16"
 AGENT_MERGEABLE_LABEL_DESCRIPTION = "Agent-approved, ready for owner merge"
 

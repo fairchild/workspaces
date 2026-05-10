@@ -5,7 +5,7 @@
 # ///
 """Check agent lifecycle invariants against live GitHub state.
 
-Queries open agent:task issues and open PRs, then verifies label exclusivity,
+Queries open agent task issues and open PRs, then verifies label exclusivity,
 PR↔label consistency, assignment tracking, and stale-claim expiry.
 
 JSON report to stdout, human summary to stderr. Exit 0 if all pass, 1 otherwise.
@@ -26,7 +26,10 @@ REPO_ROOT = Path(__file__).resolve().parents[4]
 GITHUB_API_TIMEOUT = 30
 STALE_CLAIM_HOURS = 24
 
-PHASE_LABELS = {"agent:ready", "agent:claimed", "agent:review"}
+LANE_LABEL = "agent"
+TASK_LABEL = "task"
+PHASE_LABELS = {"ready", "claimed", "review"}
+MERGEABLE_LABEL = "mergeable"
 CLOSING_REFERENCE_RE = re.compile(
     r"(?im)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(?P<number>\d+)\b"
 )
@@ -149,13 +152,13 @@ def check_review_pr_consistency(issues: list[dict[str, Any]], prs_by_issue: dict
     for issue in issues:
         n = issue["number"]
         labels = label_names(issue)
-        has_review = "agent:review" in labels
+        has_review = "review" in labels
         has_pr = n in prs_by_issue
 
         if has_review and not has_pr:
-            problems.append({"number": n, "problem": "agent:review but no open PR references this issue"})
+            problems.append({"number": n, "problem": "review but no open PR references this issue"})
         if has_pr and not has_review:
-            problems.append({"number": n, "problem": f"open PR exists but agent:review missing (sync may not have run yet)", "severity": "warn"})
+            problems.append({"number": n, "problem": f"open PR exists but review missing (sync may not have run yet)", "severity": "warn"})
     return {"name": "review_pr_consistency", "pass": all(p.get("severity") == "warn" for p in problems) if problems else True, "issues": problems}
 
 
@@ -166,8 +169,8 @@ def check_claim_assignment_consistency(issues: list[dict[str, Any]]) -> dict[str
         labels = label_names(issue)
         bots = bot_assignees(issue)
 
-        if "agent:claimed" in labels and not bots:
-            problems.append({"number": n, "problem": "agent:claimed but no bot assignee"})
+        if "claimed" in labels and not bots:
+            problems.append({"number": n, "problem": "claimed but no bot assignee"})
     return {"name": "claim_assignment_consistency", "pass": len(problems) == 0, "issues": problems}
 
 
@@ -176,14 +179,14 @@ def check_mergeable_coherence(issues: list[dict[str, Any]], prs_by_issue: dict[i
     for issue in issues:
         n = issue["number"]
         labels = label_names(issue)
-        if "agent:mergeable" not in labels:
+        if MERGEABLE_LABEL not in labels:
             continue
-        if "agent:review" not in labels:
-            problems.append({"number": n, "problem": "agent:mergeable without agent:review"})
+        if "review" not in labels:
+            problems.append({"number": n, "problem": "mergeable without review"})
             continue
         prs = prs_by_issue.get(n, [])
         if prs and all(pr.get("reviews", {}).get("totalCount", 0) == 0 for pr in prs):
-            problems.append({"number": n, "problem": "agent:mergeable but linked PR has no approved reviews"})
+            problems.append({"number": n, "problem": "mergeable but linked PR has no approved reviews"})
     return {"name": "mergeable_coherence", "pass": len(problems) == 0, "issues": problems}
 
 
@@ -192,7 +195,7 @@ def check_stale_claims(issues: list[dict[str, Any]], prs_by_issue: dict[int, lis
     for issue in issues:
         n = issue["number"]
         labels = label_names(issue)
-        if "agent:claimed" not in labels:
+        if "claimed" not in labels:
             continue
         if n in prs_by_issue:
             continue
@@ -203,7 +206,7 @@ def check_stale_claims(issues: list[dict[str, Any]], prs_by_issue: dict[int, lis
         created = parse_dt(claim["createdAt"])
         if created and now - created >= timedelta(hours=STALE_CLAIM_HOURS):
             age_h = (now - created).total_seconds() / 3600
-            problems.append({"number": n, "problem": f"agent:claimed for {age_h:.0f}h with no PR (stale)"})
+            problems.append({"number": n, "problem": f"claimed for {age_h:.0f}h with no PR (stale)"})
     return {"name": "stale_claims", "pass": len(problems) == 0, "issues": problems}
 
 
@@ -213,7 +216,7 @@ def check_orphaned_assignments(issues: list[dict[str, Any]]) -> dict[str, Any]:
         n = issue["number"]
         labels = label_names(issue)
         bots = bot_assignees(issue)
-        if bots and "agent:claimed" not in labels and "agent:review" not in labels:
+        if bots and "claimed" not in labels and "review" not in labels:
             problems.append({"number": n, "problem": f"bot {bots[0]} assigned but no claimed/review label"})
     return {"name": "orphaned_assignments", "pass": len(problems) == 0, "issues": problems}
 
@@ -227,7 +230,10 @@ def main() -> int:
     data = run_query(env)
     now = datetime.now(timezone.utc)
 
-    task_issues = [i for i in data["issues"] if "agent:task" in label_names(i)]
+    task_issues = [
+        i for i in data["issues"]
+        if {LANE_LABEL, TASK_LABEL}.issubset(label_names(i))
+    ]
     prs_by_issue = pr_issue_map(data["pull_requests"])
 
     checks = [
@@ -252,7 +258,7 @@ def main() -> int:
 
     print(json.dumps(report, indent=2))
 
-    log(f"Checked {len(task_issues)} agent:task issue(s)")
+    log(f"Checked {len(task_issues)} agent task issue(s)")
     for check in checks:
         status = "PASS" if check["pass"] else "FAIL"
         log(f"  {status}  {check['name']}")

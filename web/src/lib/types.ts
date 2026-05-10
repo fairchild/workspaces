@@ -186,11 +186,14 @@ export type TimelineEntry =
 	| (ChatMessage & { kind: "chat" });
 
 export const PIPELINE_GITHUB_LABELS: Record<PipelineColumn, string> = {
-	ready: "agent:ready",
-	claimed: "agent:claimed",
-	review: "agent:review",
-	mergeable: "agent:mergeable",
+	ready: "ready",
+	claimed: "claimed",
+	review: "review",
+	mergeable: "mergeable",
 };
+
+export const AGENT_PIPELINE_LABEL = "agent";
+export const AGENT_TASK_LABEL = "task";
 
 export interface GitHubRepo {
 	full_name: string;

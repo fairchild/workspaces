@@ -9,7 +9,9 @@ from datetime import datetime, timedelta, timezone
 
 from _helpers import (
     AGENT_CLAIM_LABEL,
+    AGENT_LANE_LABEL,
     AGENT_READY_LABEL,
+    AGENT_TASK_LABEL,
     GITHUB_API_TIMEOUT,
     REPO_ROOT,
     _normalize_login,
@@ -336,7 +338,7 @@ def compute_wip_state(
     open_discussions = len(discussions)
     open_agent_issues = sum(
         1 for issue in issues
-        if "agent:task" in issue_label_names(issue)
+        if {AGENT_LANE_LABEL, AGENT_TASK_LABEL}.issubset(issue_label_names(issue))
     )
 
     stale: list[dict[str, object]] = []
@@ -376,7 +378,7 @@ def compute_wip_state(
 def format_wip_state(wip: dict[str, object]) -> str:
     lines = [
         f"WIP state: {wip['open_discussions']}/{wip['discussion_cap']} open discussions, "
-        f"{wip['open_agent_issues']}/{wip['issue_cap']} open agent:task issues"
+        f"{wip['open_agent_issues']}/{wip['issue_cap']} open agent task issues"
     ]
     if wip["discussions_at_cap"]:
         lines.append(
@@ -777,9 +779,13 @@ def classify_execution_work(
 
     for issue in issues:
         labels = issue_label_names(issue)
-        if AGENT_CLAIM_LABEL not in labels and AGENT_READY_LABEL not in labels and "agent:task" not in labels:
+        if (
+            AGENT_CLAIM_LABEL not in labels
+            and AGENT_READY_LABEL not in labels
+            and not {AGENT_LANE_LABEL, AGENT_TASK_LABEL}.issubset(labels)
+        ):
             continue
-        if "agent:task" not in labels:
+        if not {AGENT_LANE_LABEL, AGENT_TASK_LABEL}.issubset(labels):
             continue
 
         issue_number = int(issue["number"])

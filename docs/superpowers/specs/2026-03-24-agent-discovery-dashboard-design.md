@@ -16,7 +16,7 @@ Phase 1 delivers: repo selection, agent discovery via GitHub Contents API, and i
 | Data sources | Repos + .agents/ scan + Issues API | Pipeline kanban is the signature feature; Discussions deferred |
 | Repo population | User-selected from sorted list | `GET /user/repos?sort=pushed` — user picks which to monitor |
 | Onboarding | Full-screen repo selector | First visit shows selector; sidebar "+" button for later additions |
-| Pipeline columns | ready → claimed → review → mergeable | `agent:task` and `agent:decision` shown as badges on cards |
+| Pipeline columns | ready → claimed → review → mergeable | `task` and `decision` shown as badges on cards |
 | Design system | Existing tokens | Instrument Serif, JetBrains Mono, mint `#a6ffdf`, dark surfaces |
 | Caching | 5min repos, 15min agent scans, 5min issues | Avoids GitHub rate limits while keeping data fresh |
 
@@ -64,15 +64,15 @@ When a repo is selected in the sidebar, the center panel shows:
 
 **Stats row**: 4 cards — agent count, skill count, open PRs, ready issues. Open PRs fetched via `GET /repos/{owner}/{repo}/pulls?state=open` (cached 5min alongside issues).
 
-**Agent team grid**: Cards for each discovered agent. Phase 1 treats every `.agents/skills/*/` directory entry as an agent — the directory name is the agent name, role is parsed from SKILL.md frontmatter `description` field (or null), skills listed from subdirectory names. Status derived from `agent:*` labeled issues (active if any issue has `agent:claimed` or `agent:review` with matching assignee, idle otherwise).
+**Agent team grid**: Cards for each discovered agent. Phase 1 treats every `.agents/skills/*/` directory entry as an agent — the directory name is the agent name, role is parsed from SKILL.md frontmatter `description` field (or null), skills listed from subdirectory names. Status is derived from issues labeled `agent` plus `claimed` or `review` with matching assignee.
 
 **Issue pipeline kanban**: 4 columns matching these exact labels:
-- `agent:ready` → Ready
-- `agent:claimed` → Claimed
-- `agent:review` → Review
-- `agent:mergeable` → Mergeable
+- `agent` + `ready` → Ready
+- `agent` + `claimed` → Claimed
+- `agent` + `review` → Review
+- `agent` + `mergeable` → Mergeable
 
-Issues fetched via `GET /repos/{owner}/{repo}/issues?labels=agent:ready` (one call per column). Issues that also carry `agent:task` or `agent:decision` labels show those as colored secondary badges on the card.
+Issues are fetched with the `agent` lane label plus the column state label. Issues that also carry `task` or `decision` labels show those as colored secondary badges on the card.
 
 ### Activity Feed
 
@@ -199,7 +199,7 @@ CREATE TABLE IF NOT EXISTS user_repos (
 - [ ] Selecting a repo shows stats row (agents, skills, open PRs, ready issues)
 - [ ] Agent team grid shows discovered agents with status and skills
 - [ ] Pipeline kanban shows `agent:*` labeled issues in correct columns
-- [ ] `agent:task` and `agent:decision` appear as badges on pipeline cards
+- [ ] `task` and `decision` appear as badges on pipeline cards
 - [ ] Activity feed filters to selected repo
 - [ ] Repos without `.agents/` show "no agent setup" state
 - [ ] GitHub API responses cached (5min repos, 15min agent scans, 5min issues)

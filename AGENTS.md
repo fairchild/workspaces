@@ -22,7 +22,7 @@ Issues and PRDs live in GitHub Issues for `fairchild/workspaces`. See `docs/agen
 
 ### Triage labels
 
-Use the repo's agent lifecycle labels, with `agent:ready` for AFK-ready work and `needs-human` for human-owned work. See `docs/agents/triage-labels.md`.
+Use lane + state labels: `agent`/`human` for ownership, `ready`/`claimed`/`review`/`mergeable` for lifecycle, and `needs-human` only for human intervention blockers. See `docs/agents/triage-labels.md`.
 
 ### Domain docs
 

@@ -12,6 +12,9 @@ from _helpers import (
     AGENT_CLAIM_LABEL,
     AGENT_CLAIM_LABEL_COLOR,
     AGENT_CLAIM_LABEL_DESCRIPTION,
+    AGENT_LANE_LABEL,
+    AGENT_LANE_LABEL_COLOR,
+    AGENT_LANE_LABEL_DESCRIPTION,
     AGENT_MERGEABLE_LABEL,
     AGENT_MERGEABLE_LABEL_COLOR,
     AGENT_MERGEABLE_LABEL_DESCRIPTION,
@@ -124,6 +127,7 @@ def ensure_label_exists(env: dict[str, str], name: str, color: str, description:
 
 
 def ensure_claim_label(env: dict[str, str]) -> None:
+    ensure_label_exists(env, AGENT_LANE_LABEL, AGENT_LANE_LABEL_COLOR, AGENT_LANE_LABEL_DESCRIPTION)
     ensure_label_exists(env, AGENT_CLAIM_LABEL, AGENT_CLAIM_LABEL_COLOR, AGENT_CLAIM_LABEL_DESCRIPTION)
 
 
@@ -221,7 +225,16 @@ def ensure_issue_claimed(
     )
     if not already_claimed:
         ensure_claim_label(env)
-        cmd = ["gh", "issue", "edit", str(issue_number), "--add-label", AGENT_CLAIM_LABEL]
+        cmd = [
+            "gh",
+            "issue",
+            "edit",
+            str(issue_number),
+            "--add-label",
+            AGENT_LANE_LABEL,
+            "--add-label",
+            AGENT_CLAIM_LABEL,
+        ]
         if AGENT_READY_LABEL in current_labels:
             cmd.extend(["--remove-label", AGENT_READY_LABEL])
         run_checked(cmd, timeout=GITHUB_API_TIMEOUT, cwd=REPO_ROOT, env=env)

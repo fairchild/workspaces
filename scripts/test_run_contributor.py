@@ -84,7 +84,7 @@ class RunContributorEvidenceTests(unittest.TestCase):
                     run_contributor.enforce_agent_patch_policy(
                         artifact,
                         {},
-                        selection_item={"labels": ["agent:task"]},
+                        selection_item={"labels": ["agent", "task"]},
                         cli_override=False,
                     )
 

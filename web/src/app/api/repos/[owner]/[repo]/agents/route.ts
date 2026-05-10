@@ -11,7 +11,7 @@ import {
 } from "@/lib/github";
 import { isRepoOwnedByUser } from "@/lib/repos";
 import type { AgentDiscoveryResponse } from "@/lib/types";
-import { PIPELINE_GITHUB_LABELS } from "@/lib/types";
+import { AGENT_PIPELINE_LABEL, PIPELINE_GITHUB_LABELS } from "@/lib/types";
 
 export async function GET(
 	_request: Request,
@@ -68,16 +68,27 @@ export async function GET(
 		);
 
 		const [ready, claimed, review, mergeable, openPRs] = await Promise.all([
-			fetchIssuesByLabel(token, owner, repo, PIPELINE_GITHUB_LABELS.ready),
-			fetchIssuesByLabel(token, owner, repo, PIPELINE_GITHUB_LABELS.claimed),
-			fetchIssuesByLabel(token, owner, repo, PIPELINE_GITHUB_LABELS.review),
-			fetchIssuesByLabel(token, owner, repo, PIPELINE_GITHUB_LABELS.mergeable),
+			fetchIssuesByLabel(token, owner, repo, [
+				AGENT_PIPELINE_LABEL,
+				PIPELINE_GITHUB_LABELS.ready,
+			]),
+			fetchIssuesByLabel(token, owner, repo, [
+				AGENT_PIPELINE_LABEL,
+				PIPELINE_GITHUB_LABELS.claimed,
+			]),
+			fetchIssuesByLabel(token, owner, repo, [
+				AGENT_PIPELINE_LABEL,
+				PIPELINE_GITHUB_LABELS.review,
+			]),
+			fetchIssuesByLabel(token, owner, repo, [
+				AGENT_PIPELINE_LABEL,
+				PIPELINE_GITHUB_LABELS.mergeable,
+			]),
 			fetchOpenPRCount(token, owner, repo),
 		]);
 
-		// Any claimed/review issue with an agent-named label counts as that
-		// agent being active — the label is the only cross-reference from an
-		// issue back to the agent persona that claimed it.
+		// Any claimed/review issue with an agent-specific label counts as that
+		// agent being active — assignees are not reliable for all bot accounts.
 		if (claimed.length > 0 || review.length > 0) {
 			for (const agent of agents) {
 				const hasActivity = [...claimed, ...review].some((issue) =>

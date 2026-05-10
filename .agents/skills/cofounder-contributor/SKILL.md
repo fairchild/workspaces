@@ -28,7 +28,7 @@ Use this skill to run the shared contributor runtime with one of the repo's cofo
 
 1. Load the selected persona prompt.
 2. Gather current repo and GitHub context.
-3. Sync execution-state labels (`agent:ready`, `agent:claimed`) from discussion approval, blockers, open PRs, and stale claims.
+3. Sync execution-state labels (`ready`, `claimed`) on `agent` + `task` issues from discussion approval, blockers, open PRs, and stale claims.
 4. Run a read-only selection phase over normalized workflow state, then run the action phase with GitHub-authored text labeled as untrusted data.
 5. For execution actions, export `HEAD` into an isolated scratch workspace with no `.git`, apply the model-authored patch back into the real checkout only after validation, and keep GitHub mutations in trusted runtime code.
 6. Validate the YAML frontmatter output.
@@ -73,7 +73,7 @@ See `docs/development/lume-runner-setup.md` for full details on the R2 evidence 
 The runtime enforces work-in-progress limits to keep the backlog focused:
 
 - **Discussion cap**: 12 open discussions. When reached, agents cannot propose new ideas — they must close stale discussions or comment on existing ones first.
-- **Issue cap**: 30 open `agent:task` issues. Peter Planner refuses to create issues that would exceed this cap.
+- **Issue cap**: 30 open issues labeled with both `agent` and `task`. Peter Planner refuses to create issues that would exceed this cap.
 - **Stale threshold**: Discussions idle for 14+ days are flagged as stale and prioritized for closure.
 - **Auto-close**: `sync-execution-state.py` automatically closes discussions whose Peter-planned child issues are all resolved.
 

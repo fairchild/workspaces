@@ -61,6 +61,8 @@ ISSUE_MARKER_RE = re.compile(
 )
 MILESTONE_MARKER_RE = re.compile(r"<!-- peter-planner:discussion=(?P<number>\d+);milestone -->")
 AGENT_ISSUE_WIP_CAP = 30
+AGENT_LANE_LABEL = "agent"
+AGENT_TASK_LABEL = "task"
 LEGACY_ACK_SNIPPET = "*Peter Planner*\n\nWorking on it"
 LEGACY_RECONCILIATION_MILESTONES = {43: {2, 3}}
 ISSUE_TITLE_STOPWORDS = {
@@ -1327,15 +1329,15 @@ def main() -> int:
     open_agent_task_count = sum(
         1 for issue in existing_issues
         if issue.get("state", "").upper() == "OPEN"
-        and any(
-            (label.get("name") if isinstance(label, dict) else label) == "agent:task"
+        and {AGENT_LANE_LABEL, AGENT_TASK_LABEL}.issubset({
+            label.get("name") if isinstance(label, dict) else label
             for label in (issue.get("labels") or [])
-        )
+        })
     )
     new_issue_count = sum(1 for item in execution.issues if item.existing_issue is None)
     if open_agent_task_count + new_issue_count > AGENT_ISSUE_WIP_CAP:
         raise PlannerError(
-            f"WIP cap exceeded: {open_agent_task_count} open agent:task issues + "
+            f"WIP cap exceeded: {open_agent_task_count} open agent task issues + "
             f"{new_issue_count} new planned issues = {open_agent_task_count + new_issue_count}, "
             f"cap is {AGENT_ISSUE_WIP_CAP}. Close existing issues before planning new ones."
         )
