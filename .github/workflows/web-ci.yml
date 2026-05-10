@@ -4,10 +4,16 @@ on:
   push:
     branches: [main]
     paths:
+      - "CONTEXT.md"
+      - "README.md"
+      - "docs/**"
       - "web/**"
       - ".github/workflows/web-ci.yml"
   pull_request:
     paths:
+      - "CONTEXT.md"
+      - "README.md"
+      - "docs/**"
       - "web/**"
       - ".github/workflows/web-ci.yml"
 
@@ -36,6 +42,11 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Check docs sync
+        run: |
+          pnpm run docs:sync
+          pnpm run docs:check
 
       - name: Lint
         run: pnpm run lint

@@ -1,0 +1,121 @@
+{
+	"documents": [
+		{
+			"source": "README.md",
+			"dest": "README.md",
+			"title": "WorkSpaces README"
+		},
+		{
+			"source": "CONTEXT.md",
+			"dest": "CONTEXT.md",
+			"title": "Vocabulary"
+		},
+		{
+			"source": "docs/README.md",
+			"dest": "docs-site.md",
+			"title": "Docs Site Runbook"
+		},
+		{
+			"source": "docs/product_overview.md",
+			"dest": "product_overview.md",
+			"title": "Product Overview"
+		},
+		{
+			"source": "docs/branding.md",
+			"dest": "branding.md",
+			"title": "Branding"
+		},
+		{
+			"source": "docs/user-stories.md",
+			"dest": "user-stories.md",
+			"title": "User Stories"
+		},
+		{
+			"source": "docs/vm-provider-architecture.md",
+			"dest": "vm-provider-architecture.md",
+			"title": "VM Provider Architecture"
+		},
+		{
+			"source": "docs/daytona-vm.md",
+			"dest": "daytona-vm.md",
+			"title": "Daytona VM"
+		},
+		{
+			"source": "docs/performance-testing.md",
+			"dest": "performance-testing.md",
+			"title": "Performance Testing"
+		},
+		{
+			"source": "docs/development/mergeability-standard.md",
+			"dest": "development/mergeability-standard.md",
+			"title": "Mergeability Standard"
+		},
+		{
+			"source": "docs/development/libghostty-integration.md",
+			"dest": "development/libghostty-integration.md",
+			"title": "Ghostty Integration"
+		},
+		{
+			"source": "docs/development/lume-integration.md",
+			"dest": "development/lume-integration.md",
+			"title": "Lume Integration"
+		},
+		{
+			"source": "docs/development/lume-validation.md",
+			"dest": "development/lume-validation.md",
+			"title": "Lume Validation"
+		},
+		{
+			"source": "docs/development/lume-recreate-runbook.md",
+			"dest": "development/lume-recreate-runbook.md",
+			"title": "Lume Recreate Runbook"
+		},
+		{
+			"source": "docs/development/lume-runner-setup.md",
+			"dest": "development/lume-runner-setup.md",
+			"title": "Lume Runner Setup"
+		},
+		{
+			"source": "docs/development/shortcut-routing.md",
+			"dest": "development/shortcut-routing.md",
+			"title": "Shortcut Routing"
+		},
+		{
+			"source": "docs/development/solution-terminal-keyboard.md",
+			"dest": "development/solution-terminal-keyboard.md",
+			"title": "Terminal Keyboard"
+		},
+		{
+			"source": "docs/development/evidence.md",
+			"dest": "development/evidence.md",
+			"title": "Evidence"
+		},
+		{
+			"source": "docs/performance/dashboard.md",
+			"dest": "performance/dashboard.md",
+			"title": "Performance Dashboard"
+		},
+		{
+			"source": "docs/performance/metrics-reference.md",
+			"dest": "performance/metrics-reference.md",
+			"title": "Metrics Reference"
+		}
+	],
+	"staticFiles": [
+		{
+			"source": "docs/index.html",
+			"dest": "index.html"
+		}
+	],
+	"assetDirectories": [
+		{
+			"source": "docs/assets",
+			"dest": "assets"
+		},
+		{
+			"source": "Sources/WorkspaceManager/Resources/Assets.xcassets/AppIcon.appiconset",
+			"dest": "Sources/WorkspaceManager/Resources/Assets.xcassets/AppIcon.appiconset",
+			"include": [".png"]
+		}
+	]
+}

@@ -1,0 +1,1036 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WorkSpaces Docs Reader</title>
+  <meta name="description" content="Rendered WorkSpaces documentation with domain vocabulary, outline, and visual structure.">
+  <link rel="icon" href="/docs/assets/icon-concepts/favicon.ico">
+  <style>
+    :root {
+      color-scheme: dark;
+      --ink: #f3f0e7;
+      --muted: #a8afad;
+      --quiet: #737d7b;
+      --bg: #0d1012;
+      --bg-alt: #14181b;
+      --panel: #1c2224;
+      --panel-strong: #242b2d;
+      --line: #394044;
+      --line-soft: rgba(243, 240, 231, 0.12);
+      --mint: #a6ffdf;
+      --green: #5ed49d;
+      --amber: #e7b75f;
+      --blue: #8ab7ff;
+      --red: #f28b82;
+      --shadow: 0 22px 80px rgba(0, 0, 0, 0.32);
+      --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+      --sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        linear-gradient(90deg, rgba(255, 255, 255, 0.028) 1px, transparent 1px),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.022) 1px, transparent 1px),
+        radial-gradient(circle at 18% 5%, rgba(166, 255, 223, 0.08), transparent 22rem),
+        var(--bg);
+      background-size: 44px 44px, 44px 44px, auto, auto;
+      color: var(--ink);
+      font-family: var(--sans);
+      line-height: 1.6;
+    }
+
+    a {
+      color: var(--mint);
+      text-decoration: none;
+    }
+
+    a:hover {
+      text-decoration: underline;
+    }
+
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      border-bottom: 1px solid var(--line-soft);
+      background: rgba(13, 16, 18, 0.88);
+      backdrop-filter: blur(18px);
+    }
+
+    .topbar-inner {
+      width: min(1260px, calc(100% - 32px));
+      min-height: 62px;
+      margin: 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+    }
+
+    .brand-lockup {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      color: var(--ink);
+      font-weight: 720;
+      white-space: nowrap;
+    }
+
+    .app-mark {
+      width: 34px;
+      height: 34px;
+      border-radius: 9px;
+      background: #1a1f28;
+      box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+      padding: 6px;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      grid-template-rows: 1fr 1fr;
+      gap: 3px;
+    }
+
+    .app-mark span {
+      border-radius: 3px;
+      background: #414957;
+    }
+
+    .app-mark .active {
+      position: relative;
+      background: #111821;
+    }
+
+    .app-mark .active::after {
+      content: ">";
+      position: absolute;
+      left: 3px;
+      top: -3px;
+      color: var(--mint);
+      font-family: var(--mono);
+      font-size: 13px;
+      font-weight: 800;
+    }
+
+    .topnav {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 14px;
+      flex-wrap: wrap;
+      font-size: 0.88rem;
+    }
+
+    .topnav a {
+      color: var(--muted);
+    }
+
+    .topnav a:hover {
+      color: var(--ink);
+      text-decoration: none;
+    }
+
+    .layout {
+      width: min(1260px, calc(100% - 32px));
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 286px;
+      gap: 24px;
+      align-items: start;
+      padding: 36px 0 70px;
+    }
+
+    .hero {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: linear-gradient(135deg, rgba(166, 255, 223, 0.1), rgba(138, 183, 255, 0.06)), rgba(20, 24, 27, 0.86);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .hero-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 260px;
+      gap: 20px;
+      padding: 26px;
+      align-items: stretch;
+    }
+
+    .eyebrow {
+      margin: 0 0 14px;
+      color: var(--mint);
+      font-family: var(--mono);
+      font-size: 0.75rem;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 0 0 14px;
+      max-width: 850px;
+      font-size: clamp(2.45rem, 6vw, 5.7rem);
+      line-height: 0.94;
+      letter-spacing: 0;
+    }
+
+    .summary {
+      max-width: 760px;
+      margin: 0;
+      color: var(--muted);
+      font-size: 1.08rem;
+    }
+
+    .doc-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(13, 16, 18, 0.72);
+      padding: 16px;
+      display: grid;
+      gap: 13px;
+      align-content: start;
+      font-family: var(--mono);
+      font-size: 0.78rem;
+      color: var(--quiet);
+    }
+
+    .doc-card strong {
+      display: block;
+      color: var(--ink);
+      font-family: var(--sans);
+      font-size: 0.95rem;
+      margin-bottom: 3px;
+    }
+
+    .concept-map {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 22px;
+    }
+
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      min-height: 28px;
+      border: 1px solid rgba(166, 255, 223, 0.32);
+      border-radius: 999px;
+      padding: 0 10px;
+      background: rgba(166, 255, 223, 0.08);
+      color: var(--ink);
+      font-size: 0.82rem;
+    }
+
+    .chip.quiet {
+      border-color: var(--line);
+      background: rgba(255, 255, 255, 0.03);
+      color: var(--quiet);
+    }
+
+    .content-frame {
+      margin-top: 24px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(20, 24, 27, 0.82);
+      overflow: hidden;
+    }
+
+    .content-toolbar {
+      display: flex;
+      justify-content: space-between;
+      gap: 14px;
+      align-items: center;
+      min-height: 48px;
+      padding: 0 16px;
+      border-bottom: 1px solid var(--line-soft);
+      color: var(--quiet);
+      font-family: var(--mono);
+      font-size: 0.78rem;
+    }
+
+    .markdown-body {
+      max-width: 870px;
+      padding: 36px clamp(20px, 5vw, 58px) 52px;
+    }
+
+    .markdown-body > *:first-child {
+      margin-top: 0;
+    }
+
+    .markdown-body h1,
+    .markdown-body h2,
+    .markdown-body h3,
+    .markdown-body h4 {
+      position: relative;
+      margin: 2.1em 0 0.65em;
+      line-height: 1.12;
+      letter-spacing: 0;
+      color: var(--ink);
+    }
+
+    .markdown-body h1 {
+      display: none;
+    }
+
+    .markdown-body h2 {
+      padding-top: 0.2em;
+      font-size: clamp(1.65rem, 3.2vw, 2.7rem);
+    }
+
+    .markdown-body h2::before {
+      content: "";
+      position: absolute;
+      left: -24px;
+      top: 0.38em;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--mint);
+      box-shadow: 0 0 18px rgba(166, 255, 223, 0.6);
+    }
+
+    .markdown-body h3 {
+      font-size: 1.25rem;
+    }
+
+    .markdown-body p,
+    .markdown-body li {
+      color: #d6d9d3;
+    }
+
+    .markdown-body p {
+      margin: 0 0 1.05em;
+    }
+
+    .markdown-body ul,
+    .markdown-body ol {
+      margin: 1em 0 1.35em;
+      padding-left: 1.25em;
+    }
+
+    .markdown-body li {
+      margin: 0.42em 0;
+      padding-left: 0.18em;
+    }
+
+    .markdown-body strong {
+      color: var(--ink);
+    }
+
+    .markdown-body code {
+      border: 1px solid var(--line-soft);
+      border-radius: 5px;
+      padding: 0.12em 0.36em;
+      background: rgba(13, 16, 18, 0.78);
+      color: var(--mint);
+      font-family: var(--mono);
+      font-size: 0.92em;
+    }
+
+    .markdown-body pre {
+      margin: 1.45em 0;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #0a0d0f;
+      overflow: auto;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+    }
+
+    .markdown-body pre code {
+      display: block;
+      border: 0;
+      border-radius: 0;
+      padding: 16px;
+      background: transparent;
+      color: #dbe7e1;
+      font-size: 0.86rem;
+      line-height: 1.55;
+    }
+
+    .markdown-body blockquote {
+      margin: 1.4em 0;
+      border-left: 3px solid var(--mint);
+      border-radius: 0 8px 8px 0;
+      background: rgba(166, 255, 223, 0.08);
+      padding: 14px 16px;
+      color: var(--ink);
+    }
+
+    .markdown-body table {
+      width: 100%;
+      margin: 1.5em 0;
+      border-collapse: collapse;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      display: block;
+      max-width: 100%;
+      overflow-x: auto;
+      background: rgba(13, 16, 18, 0.45);
+    }
+
+    .markdown-body thead {
+      background: rgba(166, 255, 223, 0.1);
+    }
+
+    .markdown-body th,
+    .markdown-body td {
+      border-bottom: 1px solid var(--line-soft);
+      padding: 10px 12px;
+      vertical-align: top;
+      text-align: left;
+      min-width: 120px;
+    }
+
+    .markdown-body th {
+      color: var(--ink);
+      font-size: 0.84rem;
+    }
+
+    .markdown-body td {
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+
+    .markdown-body img {
+      max-width: 100%;
+      height: auto;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #0a0d0f;
+      box-shadow: var(--shadow);
+    }
+
+    .markdown-body hr {
+      height: 1px;
+      border: 0;
+      margin: 2.5em 0;
+      background: var(--line-soft);
+    }
+
+    .sidecar {
+      position: sticky;
+      top: 86px;
+      display: grid;
+      gap: 14px;
+    }
+
+    .side-panel {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(20, 24, 27, 0.86);
+      padding: 15px;
+    }
+
+    .side-panel h2 {
+      margin: 0 0 10px;
+      color: var(--quiet);
+      font-family: var(--mono);
+      font-size: 0.75rem;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+    }
+
+    .outline {
+      display: grid;
+      gap: 7px;
+    }
+
+    .outline a {
+      display: block;
+      border-radius: 6px;
+      padding: 6px 7px;
+      color: var(--muted);
+      font-size: 0.86rem;
+    }
+
+    .outline a:hover {
+      background: rgba(166, 255, 223, 0.08);
+      color: var(--ink);
+      text-decoration: none;
+    }
+
+    .outline a.depth-3 {
+      margin-left: 10px;
+      color: var(--quiet);
+      font-size: 0.8rem;
+    }
+
+    .empty,
+    .error {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 26px;
+      background: var(--panel);
+      color: var(--muted);
+    }
+
+    .visual-note {
+      display: grid;
+      grid-template-columns: 44px minmax(0, 1fr);
+      gap: 12px;
+      align-items: start;
+      color: var(--muted);
+      font-size: 0.92rem;
+    }
+
+    .visual-note svg {
+      width: 44px;
+      height: 44px;
+    }
+
+    .doc-links {
+      display: grid;
+      gap: 8px;
+    }
+
+    .doc-links a {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 9px 10px;
+      color: var(--muted);
+      font-size: 0.86rem;
+    }
+
+    .doc-links a:hover {
+      border-color: var(--mint);
+      color: var(--ink);
+      text-decoration: none;
+    }
+
+    @media (max-width: 1040px) {
+      .layout,
+      .hero-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .sidecar {
+        position: static;
+        order: -1;
+      }
+    }
+
+    @media (max-width: 680px) {
+      .topbar {
+        position: static;
+      }
+
+      .topbar-inner {
+        align-items: flex-start;
+        flex-direction: column;
+        padding: 14px 0;
+      }
+
+      .topnav {
+        justify-content: flex-start;
+      }
+
+      .layout {
+        padding-top: 18px;
+      }
+
+      .hero-grid,
+      .markdown-body {
+        padding: 20px;
+      }
+
+      .doc-card {
+        display: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand-lockup" href="/docs/" aria-label="Back to WorkSpaces docs home">
+        <span class="app-mark" aria-hidden="true"><span></span><span></span><span></span><span class="active"></span></span>
+        <span>WorkSpaces Docs</span>
+      </a>
+      <nav class="topnav" aria-label="Reader navigation">
+        <a href="/docs/">Landing</a>
+        <a href="/docs/CONTEXT">Vocabulary</a>
+        <a href="/docs/product_overview">Product</a>
+        <a href="https://github.com/fairchild/workspaces">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <div class="layout">
+    <main>
+      <section class="hero" aria-labelledby="doc-title">
+        <div class="hero-grid">
+          <div>
+            <p class="eyebrow" id="doc-kind">Rendered Markdown</p>
+            <h1 id="doc-title">Loading documentation...</h1>
+            <p class="summary" id="doc-summary">Fetching Markdown source and applying the WorkSpaces documentation view.</p>
+            <div class="concept-map" id="concept-map"></div>
+          </div>
+          <aside class="doc-card" aria-label="Document metadata">
+            <div><strong>Source</strong><span id="doc-path">-</span></div>
+            <div><strong>Sections</strong><span id="doc-section-count">-</span></div>
+            <div><strong>Mode</strong><span>Markdown source, rendered locally</span></div>
+          </aside>
+        </div>
+      </section>
+
+      <section class="content-frame">
+        <div class="content-toolbar">
+          <span id="toolbar-title">Markdown</span>
+          <a id="raw-link" href="#">Raw source</a>
+        </div>
+        <article id="content" class="markdown-body">
+          <div class="empty">Loading...</div>
+        </article>
+      </section>
+    </main>
+
+    <aside class="sidecar">
+      <section class="side-panel">
+        <h2>Document Outline</h2>
+        <nav class="outline" id="outline" aria-label="Document outline"></nav>
+      </section>
+
+      <section class="side-panel">
+        <h2>Visual Reading</h2>
+        <div class="visual-note">
+          <svg viewBox="0 0 48 48" aria-hidden="true">
+            <rect x="5" y="6" width="38" height="36" rx="8" fill="#1a1f28" stroke="#394044"></rect>
+            <rect x="13" y="14" width="9" height="9" rx="2" fill="#414957"></rect>
+            <rect x="26" y="14" width="9" height="9" rx="2" fill="#414957"></rect>
+            <rect x="13" y="27" width="9" height="9" rx="2" fill="#414957"></rect>
+            <rect x="26" y="27" width="9" height="9" rx="2" fill="#111821"></rect>
+            <path d="M29 30.5L32 33L29 35.5" fill="none" stroke="#a6ffdf" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
+          </svg>
+          <p style="margin:0">Concept chips show which WorkSpaces domain terms are active in this document. Headings become the navigation spine.</p>
+        </div>
+      </section>
+
+      <section class="side-panel">
+        <h2>Quick Docs</h2>
+        <div class="doc-links">
+          <a href="/docs/product_overview"><span>Product Overview</span><span>-></span></a>
+          <a href="/docs/branding"><span>Branding</span><span>-></span></a>
+          <a href="/docs/development/libghostty-integration"><span>Ghostty Integration</span><span>-></span></a>
+          <a href="/docs/development/lume-integration"><span>Lume Integration</span><span>-></span></a>
+        </div>
+      </section>
+    </aside>
+  </div>
+
+  <script>
+    const terms = [
+      { name: "WorkSpaces", aliases: ["WorkSpaces"] },
+      { name: "Repository", aliases: ["repository", "repositories", "repo", "repos"] },
+      { name: "Workspace", aliases: ["workspace", "workspaces"] },
+      { name: "Terminal Session", aliases: ["terminal session", "terminal sessions", "terminal"] },
+      { name: "Surface", aliases: ["surface", "surfaces", "last surface"] },
+      { name: "Repo Overview", aliases: ["repo overview", "repository overview"] },
+      { name: "Web Source", aliases: ["web source", "web sources", "web view", "web views"] },
+      { name: "Detail Pane", aliases: ["detail pane", "right pane", "file/changes pane"] }
+    ];
+
+    const docsBase = "/docs/";
+    const manifestUrl = `${docsBase}docs-manifest.json`;
+    const params = new URLSearchParams(location.search);
+    const docParam = initialDocParam();
+    const docUrl = publicDocUrl(normalizeInputDocPath(docParam) || "product_overview.md");
+    let publishedDocs = null;
+    let currentDocPath = null;
+    const content = document.querySelector("#content");
+    const outline = document.querySelector("#outline");
+    const rawLink = document.querySelector("#raw-link");
+
+    function escapeHtml(value) {
+      return value
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;");
+    }
+
+    function slugify(value) {
+      return value
+        .toLowerCase()
+        .replace(/<[^>]+>/g, "")
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "") || "section";
+    }
+
+    function safeDecode(value) {
+      try {
+        return decodeURIComponent(value);
+      } catch {
+        return value;
+      }
+    }
+
+    function normalizeInputDocPath(value) {
+      let path = safeDecode(value || "").replace(/\\/g, "/");
+      if (path.startsWith(docsBase)) {
+        path = path.slice(docsBase.length);
+      } else {
+        path = path.replace(/^\/+/, "");
+      }
+      path = path.replace(/\/+/g, "/");
+      if (!path || path.includes("..") || path.startsWith("/")) return null;
+      return path;
+    }
+
+    function inferDocPathFromLocation() {
+      let path = safeDecode(location.pathname).replace(/\\/g, "/");
+      if (!path.startsWith(docsBase)) return null;
+      path = path.slice(docsBase.length).replace(/\/+/g, "/");
+      path = path.replace(/\/index\.html$/, "").replace(/\/$/, "");
+      if (!path || path === "index.html" || path === "reader.html") return null;
+      return path.endsWith(".md") ? path : `${path}.md`;
+    }
+
+    function initialDocParam() {
+      if (window.WORKSPACES_DOC_PATH) return window.WORKSPACES_DOC_PATH;
+      return params.get("doc") || inferDocPathFromLocation() || "product_overview.md";
+    }
+
+    function normalizeDocPath(url) {
+      let path = safeDecode(url.pathname).replace(/\\/g, "/");
+      if (path.startsWith(docsBase)) {
+        path = path.slice(docsBase.length);
+      } else {
+        path = path.replace(/^\/+/, "");
+      }
+      path = path.replace(/\/+/g, "/");
+      if (!path || path.includes("..") || path.startsWith("/")) return null;
+      return path;
+    }
+
+    async function loadPublishedDocs() {
+      if (publishedDocs) return publishedDocs;
+      try {
+        const response = await fetch(manifestUrl, { cache: "no-store" });
+        if (!response.ok) return null;
+        const manifest = await response.json();
+        publishedDocs = new Set((manifest.documents || []).filter(Boolean));
+        return publishedDocs;
+      } catch {
+        return null;
+      }
+    }
+
+    function publicDocUrl(path) {
+      return new URL(`${docsBase}${path}`, location.origin);
+    }
+
+    function renderedDocHref(path, hash = "") {
+      return `${docsBase}${path.replace(/\.md$/, "")}${hash}`;
+    }
+
+    function resolveDocHref(href) {
+      if (/^(https?:|mailto:|#)/.test(href)) return href;
+      const baseUrl = publishedDocs && currentDocPath ? publicDocUrl(currentDocPath) : docUrl;
+      const resolved = new URL(href, baseUrl);
+      if (resolved.pathname.endsWith(".md")) {
+        const nextDocPath = normalizeDocPath(resolved);
+        return nextDocPath ? renderedDocHref(nextDocPath, resolved.hash) : href;
+      }
+      return `${resolved.pathname}${resolved.search}${resolved.hash}`;
+    }
+
+    function resolveAssetHref(href) {
+      if (/^(https?:|data:|#)/.test(href)) return href;
+      const baseUrl = publishedDocs && currentDocPath ? publicDocUrl(currentDocPath) : docUrl;
+      const resolved = new URL(href, baseUrl);
+      let pathname = resolved.pathname;
+      if (publishedDocs) {
+        if (pathname.startsWith("/docs/docs/assets/")) {
+          pathname = pathname.replace("/docs/docs/assets/", "/docs/assets/");
+        }
+        if (pathname.startsWith("/Sources/")) {
+          pathname = `/docs${pathname}`;
+        }
+      }
+      return `${pathname}${resolved.search}${resolved.hash}`;
+    }
+
+    function termAppears(markdown, alias) {
+      const pattern = new RegExp(`(^|[^a-z0-9])${alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^a-z0-9]|$)`, "i");
+      return pattern.test(markdown);
+    }
+
+    function renderInline(markdown) {
+      let text = escapeHtml(markdown);
+      text = text.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_, alt, href) => {
+        return `<img alt="${escapeHtml(alt)}" src="${resolveAssetHref(href.trim())}">`;
+      });
+      text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, href) => {
+        return `<a href="${resolveDocHref(href.trim())}">${label}</a>`;
+      });
+      text = text.replace(/`([^`]+)`/g, "<code>$1</code>");
+      text = text.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+      text = text.replace(/_([^_]+)_/g, "<em>$1</em>");
+      return text;
+    }
+
+    function isTableStart(lines, index) {
+      return lines[index]?.includes("|") && /^\s*\|?[\s:-]+\|[\s|:-]+\s*$/.test(lines[index + 1] || "");
+    }
+
+    function splitTableRow(line) {
+      return line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim());
+    }
+
+    function renderMarkdown(markdown) {
+      const lines = markdown.replace(/\r\n/g, "\n").split("\n");
+      const html = [];
+      const headings = [];
+      let listType = null;
+      let paragraph = [];
+      let inCode = false;
+      let codeLang = "";
+      let codeLines = [];
+      let blockquote = [];
+
+      function closeParagraph() {
+        if (!paragraph.length) return;
+        html.push(`<p>${renderInline(paragraph.join(" "))}</p>`);
+        paragraph = [];
+      }
+
+      function closeList() {
+        if (!listType) return;
+        html.push(`</${listType}>`);
+        listType = null;
+      }
+
+      function closeBlockquote() {
+        if (!blockquote.length) return;
+        html.push(`<blockquote>${blockquote.map((line) => `<p>${renderInline(line)}</p>`).join("")}</blockquote>`);
+        blockquote = [];
+      }
+
+      for (let index = 0; index < lines.length; index += 1) {
+        const line = lines[index];
+
+        if (inCode) {
+          if (line.startsWith("```")) {
+            html.push(`<pre><code class="language-${escapeHtml(codeLang)}">${escapeHtml(codeLines.join("\n"))}</code></pre>`);
+            inCode = false;
+            codeLang = "";
+            codeLines = [];
+          } else {
+            codeLines.push(line);
+          }
+          continue;
+        }
+
+        if (line.startsWith("```")) {
+          closeParagraph();
+          closeList();
+          closeBlockquote();
+          inCode = true;
+          codeLang = line.slice(3).trim();
+          continue;
+        }
+
+        if (!line.trim()) {
+          closeParagraph();
+          closeList();
+          closeBlockquote();
+          continue;
+        }
+
+        if (/^\s*---+\s*$/.test(line)) {
+          closeParagraph();
+          closeList();
+          closeBlockquote();
+          html.push("<hr>");
+          continue;
+        }
+
+        if (/^\s*<img\s/i.test(line)) {
+          closeParagraph();
+          closeList();
+          closeBlockquote();
+          const srcMatch = /src=["']([^"']+)["']/i.exec(line);
+          const altMatch = /alt=["']([^"']*)["']/i.exec(line);
+          const widthMatch = /width=["']?([0-9]+)["']?/i.exec(line);
+          const heightMatch = /height=["']?([0-9]+)["']?/i.exec(line);
+          if (srcMatch) {
+            const attrs = [
+              `src="${resolveAssetHref(srcMatch[1])}"`,
+              `alt="${escapeHtml(altMatch?.[1] || "")}"`,
+              widthMatch ? `width="${escapeHtml(widthMatch[1])}"` : "",
+              heightMatch ? `height="${escapeHtml(heightMatch[1])}"` : ""
+            ].filter(Boolean).join(" ");
+            html.push(`<p><img ${attrs}></p>`);
+            continue;
+          }
+        }
+
+        if (/^>\s?/.test(line)) {
+          closeParagraph();
+          closeList();
+          blockquote.push(line.replace(/^>\s?/, ""));
+          continue;
+        }
+
+        const heading = /^(#{1,4})\s+(.+)$/.exec(line);
+        if (heading) {
+          closeParagraph();
+          closeList();
+          closeBlockquote();
+          const depth = heading[1].length;
+          const label = renderInline(heading[2].trim());
+          const id = slugify(heading[2]);
+          headings.push({ depth, label: heading[2].trim(), id });
+          html.push(`<h${depth} id="${id}">${label}</h${depth}>`);
+          continue;
+        }
+
+        if (isTableStart(lines, index)) {
+          closeParagraph();
+          closeList();
+          closeBlockquote();
+          const headers = splitTableRow(lines[index]);
+          index += 2;
+          const rows = [];
+          while (index < lines.length && lines[index].includes("|") && lines[index].trim()) {
+            rows.push(splitTableRow(lines[index]));
+            index += 1;
+          }
+          index -= 1;
+          html.push("<table><thead><tr>");
+          headers.forEach((header) => html.push(`<th>${renderInline(header)}</th>`));
+          html.push("</tr></thead><tbody>");
+          rows.forEach((row) => {
+            html.push("<tr>");
+            row.forEach((cell) => html.push(`<td>${renderInline(cell)}</td>`));
+            html.push("</tr>");
+          });
+          html.push("</tbody></table>");
+          continue;
+        }
+
+        const unordered = /^\s*[-*]\s+(.+)$/.exec(line);
+        const ordered = /^\s*\d+[.)]\s+(.+)$/.exec(line);
+        if (unordered || ordered) {
+          closeParagraph();
+          closeBlockquote();
+          const nextType = unordered ? "ul" : "ol";
+          if (listType !== nextType) {
+            closeList();
+            listType = nextType;
+            html.push(`<${listType}>`);
+          }
+          html.push(`<li>${renderInline((unordered || ordered)[1])}</li>`);
+          continue;
+        }
+
+        paragraph.push(line.trim());
+      }
+
+      closeParagraph();
+      closeList();
+      closeBlockquote();
+      return { html: html.join("\n"), headings };
+    }
+
+    function summaryFrom(markdown, title) {
+      const lines = markdown.split(/\n+/)
+        .map((line) => line.trim())
+        .filter((line) => line && !line.startsWith("#") && !line.startsWith("```") && !line.startsWith("|"));
+      const first = lines.find((line) => !/^[-*\d.]+\s/.test(line)) || title;
+      return first.replace(/\*\*/g, "").replace(/`/g, "").slice(0, 220);
+    }
+
+    function detectedTerms(markdown) {
+      return terms.filter((term) => term.aliases.some((alias) => termAppears(markdown, alias)));
+    }
+
+    function renderTermChips(markdown) {
+      const found = detectedTerms(markdown);
+      const chipHtml = found.length
+        ? found.map((term) => `<span class="chip">${term.name}</span>`).join("")
+        : '<span class="chip quiet">No WorkSpaces terms detected</span>';
+      document.querySelector("#concept-map").innerHTML = chipHtml;
+    }
+
+    function renderOutline(headings) {
+      const visible = headings.filter((heading) => heading.depth >= 2 && heading.depth <= 3);
+      document.querySelector("#doc-section-count").textContent = String(visible.length);
+      if (!visible.length) {
+        outline.innerHTML = '<span class="chip quiet">No sections</span>';
+        return;
+      }
+      outline.innerHTML = visible
+        .map((heading) => `<a class="depth-${heading.depth}" href="#${heading.id}">${escapeHtml(heading.label)}</a>`)
+        .join("");
+    }
+
+    function showNotPublished(path) {
+      content.innerHTML = `<div class="error"><strong>Document not published.</strong><br>${escapeHtml(path || "The requested document")} is outside the curated native WorkSpaces docs set.</div>`;
+      document.title = "Document not published - WorkSpaces Docs";
+      document.querySelector("#doc-title").textContent = "Document not published";
+      document.querySelector("#doc-kind").textContent = "Curated docs only";
+      document.querySelector("#doc-summary").textContent = "This public reader only renders the native WorkSpaces documentation selected for publishing.";
+      document.querySelector("#doc-path").textContent = path || "unknown";
+      document.querySelector("#toolbar-title").textContent = path || "unknown";
+      document.querySelector("#concept-map").innerHTML = '<span class="chip quiet">Not in public manifest</span>';
+      renderOutline([]);
+      rawLink.removeAttribute("href");
+    }
+
+    async function loadDocument() {
+      const manifest = await loadPublishedDocs();
+      currentDocPath = manifest ? normalizeDocPath(docUrl) : null;
+
+      if (manifest && (!currentDocPath || !manifest.has(currentDocPath))) {
+        showNotPublished(currentDocPath || docParam);
+        return;
+      }
+
+      const fetchUrl = manifest ? publicDocUrl(currentDocPath) : docUrl;
+      const displayPath = manifest ? currentDocPath : docUrl.pathname;
+      rawLink.href = manifest ? `${docsBase}${currentDocPath}` : `${docUrl.pathname}${docUrl.search}${docUrl.hash}`;
+      document.querySelector("#doc-path").textContent = displayPath;
+      document.querySelector("#toolbar-title").textContent = displayPath;
+
+      try {
+        const response = await fetch(fetchUrl);
+        if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+        const markdown = await response.text();
+        const rendered = renderMarkdown(markdown);
+        const title = rendered.headings[0]?.label || displayPath.split("/").pop() || "Documentation";
+
+        document.title = `${title} - WorkSpaces Docs`;
+        document.querySelector("#doc-title").textContent = title;
+        document.querySelector("#doc-kind").textContent = displayPath.includes("development/")
+          ? "Development doc"
+          : displayPath.includes("performance/")
+            ? "Evidence doc"
+            : "Rendered Markdown";
+        document.querySelector("#doc-summary").textContent = summaryFrom(markdown, title);
+        renderTermChips(markdown);
+        renderOutline(rendered.headings);
+        content.innerHTML = rendered.html;
+      } catch (error) {
+        content.innerHTML = `<div class="error"><strong>Could not render this document.</strong><br>${escapeHtml(error.message)}</div>`;
+        document.querySelector("#doc-title").textContent = "Document unavailable";
+        document.querySelector("#doc-summary").textContent = "The Markdown source could not be fetched by the local docs reader.";
+      }
+    }
+
+    loadDocument();
+  </script>
+</body>
+</html>
