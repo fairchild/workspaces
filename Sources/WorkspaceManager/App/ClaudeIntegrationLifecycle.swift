@@ -8,6 +8,7 @@
 //
 
 import AppKit
+import Combine
 import Foundation
 import WorkspaceManagerCore
 
@@ -22,12 +23,12 @@ enum ClaudeIntegrationDefaults {
 }
 
 @MainActor
-final class ClaudeIntegrationLifecycle {
+final class ClaudeIntegrationLifecycle: ObservableObject {
     static let shared = ClaudeIntegrationLifecycle()
 
     private(set) var listener: AgentHookListener?
     private(set) var notificationPoster: AgentNotificationPoster?
-    private(set) var settingsInstaller: (any ClaudeSettingsInstalling)?
+    @Published private(set) var settingsInstaller: (any ClaudeSettingsInstalling)?
     private(set) var socketPath: String?
     private var teardownObserver: Any?
     private var didStart = false

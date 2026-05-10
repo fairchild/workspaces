@@ -255,6 +255,43 @@ public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
 
 // MARK: - PR #1 contribution: workspaces.hooks
 
+private func isClaudeHookHandler(_ entry: [String: Any]) -> Bool {
+    entry["type"] is String
+}
+
+private func claudeHookHandlers(in group: [String: Any]) -> [[String: Any]] {
+    if let nested = group["hooks"] as? [Any] {
+        return nested.compactMap { $0 as? [String: Any] }
+    }
+    if isClaudeHookHandler(group) {
+        return [group]
+    }
+    return []
+}
+
+private func normalizedClaudeHookGroups(from raw: Any?) -> [[String: Any]] {
+    guard let entries = raw as? [Any] else { return [] }
+    return entries.compactMap { item in
+        guard let dict = item as? [String: Any] else { return nil }
+        if dict["hooks"] != nil {
+            var group = dict
+            group["hooks"] = claudeHookHandlers(in: dict)
+            return group
+        }
+        if isClaudeHookHandler(dict) {
+            return ["hooks": [dict]]
+        }
+        return dict
+    }
+}
+
+private func claudeGroupContainsHandler(
+    _ group: [String: Any],
+    matching predicate: ([String: Any]) -> Bool
+) -> Bool {
+    claudeHookHandlers(in: group).contains(where: predicate)
+}
+
 /// Build the contribution that registers our HTTP hook routes in `~/.claude/settings.json`.
 /// `socketPath` is the Unix socket the running app is listening on. When
 /// `titleEmitScriptPath` is non-nil the contribution also registers a
@@ -300,37 +337,70 @@ public func workspacesHooksContribution(
         merge: { current in
             var dict = current
             // Settings layout:
-            //   { "hooks": { "<EventName>": [ { "type": "http", "url": "...", "async": true } ] } }
-            // We deep-merge: existing handlers stay; ours are appended only if not already there.
+            //   { "hooks": { "<EventName>": [ { "matcher": "...", "hooks": [ ...handlers... ] } ] } }
+            // We deep-merge matcher groups: existing groups stay; ours are added to a
+            // matcherless group, and older raw top-level handler entries are normalized
+            // into the current Claude Code shape on reinstall.
             var hooks: [String: Any] =
                 (current["hooks"]?.value as? [String: Any]) ?? [:]
             for name in eventNames {
-                var arr = (hooks[name] as? [[String: Any]]) ?? []
-                let alreadyPresent = arr.contains { entry in
-                    (entry["type"] as? String) == "http"
-                        && (entry["url"] as? String) == endpoint
+                var groups = normalizedClaudeHookGroups(from: hooks[name])
+                let httpPresent = groups.contains { group in
+                    claudeGroupContainsHandler(group) { handler in
+                        (handler["type"] as? String) == "http"
+                            && (handler["url"] as? String) == endpoint
+                    }
                 }
-                if !alreadyPresent {
-                    arr.append([
+
+                let commandPresent = groups.contains { group in
+                    guard let scriptPath = titleEmitScriptPath else { return false }
+                    return claudeGroupContainsHandler(group) { handler in
+                        (handler["type"] as? String) == "command"
+                            && (handler["command"] as? String) == scriptPath
+                    }
+                }
+
+                let integrationGroupIndex =
+                    groups.firstIndex { group in
+                        claudeGroupContainsHandler(group) { handler in
+                            (handler["type"] as? String) == "http"
+                                && (handler["url"] as? String) == endpoint
+                        }
+                            || claudeGroupContainsHandler(group) { handler in
+                                guard let scriptPath = titleEmitScriptPath else { return false }
+                                return (handler["type"] as? String) == "command"
+                                    && (handler["command"] as? String) == scriptPath
+                            }
+                    }
+                    ?? {
+                        groups.append(["hooks": [[String: Any]]()])
+                        return groups.index(before: groups.endIndex)
+                    }()
+
+                var integrationGroup = groups[integrationGroupIndex]
+                var integrationHandlers = claudeHookHandlers(in: integrationGroup)
+
+                if !httpPresent {
+                    integrationHandlers.append([
                         "type": "http",
                         "url": endpoint,
                         "async": true,
                     ])
                 }
-                if let scriptPath = titleEmitScriptPath, titleEmitEvents.contains(name) {
-                    let cmdAlreadyPresent = arr.contains { entry in
-                        (entry["type"] as? String) == "command"
-                            && (entry["command"] as? String) == scriptPath
-                    }
-                    if !cmdAlreadyPresent {
-                        arr.append([
-                            "type": "command",
-                            "command": scriptPath,
-                            "async": true,
-                        ])
-                    }
+                if let scriptPath = titleEmitScriptPath,
+                    titleEmitEvents.contains(name),
+                    !commandPresent
+                {
+                    integrationHandlers.append([
+                        "type": "command",
+                        "command": scriptPath,
+                        "async": true,
+                    ])
                 }
-                hooks[name] = arr
+
+                integrationGroup["hooks"] = integrationHandlers
+                groups[integrationGroupIndex] = integrationGroup
+                hooks[name] = groups
             }
             dict["hooks"] = AnyCodable(hooks)
             return dict
@@ -339,26 +409,44 @@ public func workspacesHooksContribution(
             let hooks = (current["hooks"]?.value as? [String: Any]) ?? [:]
             var addedHTTP: [String] = []
             var addedCommand: [String] = []
+            var normalizedShape: [String] = []
             for name in eventNames {
-                let entries = (hooks[name] as? [[String: Any]]) ?? []
-                let httpPresent = entries.contains { entry in
-                    (entry["type"] as? String) == "http"
-                        && (entry["url"] as? String) == endpoint
+                let rawEntries = (hooks[name] as? [Any]) ?? []
+                if rawEntries.contains(where: {
+                    guard let entry = $0 as? [String: Any] else { return false }
+                    return entry["hooks"] == nil && isClaudeHookHandler(entry)
+                }) {
+                    normalizedShape.append(name)
+                }
+
+                let groups = normalizedClaudeHookGroups(from: hooks[name])
+                let httpPresent = groups.contains { group in
+                    claudeGroupContainsHandler(group) { handler in
+                        (handler["type"] as? String) == "http"
+                            && (handler["url"] as? String) == endpoint
+                    }
                 }
                 if !httpPresent { addedHTTP.append(name) }
 
                 if let scriptPath = titleEmitScriptPath, titleEmitEvents.contains(name) {
-                    let cmdPresent = entries.contains { entry in
-                        (entry["type"] as? String) == "command"
-                            && (entry["command"] as? String) == scriptPath
+                    let cmdPresent = groups.contains { group in
+                        claudeGroupContainsHandler(group) { handler in
+                            (handler["type"] as? String) == "command"
+                                && (handler["command"] as? String) == scriptPath
+                        }
                     }
                     if !cmdPresent { addedCommand.append(name) }
                 }
             }
-            if addedHTTP.isEmpty && addedCommand.isEmpty {
+            if addedHTTP.isEmpty && addedCommand.isEmpty && normalizedShape.isEmpty {
                 return "no changes (already wired for \(eventNames.count) events → \(endpoint))"
             }
             var parts: [String] = []
+            if !normalizedShape.isEmpty {
+                parts.append(
+                    "normalize legacy hook group shape for \(normalizedShape.joined(separator: ", "))"
+                )
+            }
             if !addedHTTP.isEmpty {
                 parts.append(
                     "add \(addedHTTP.count) http hook(s) → \(endpoint): \(addedHTTP.joined(separator: ", "))"

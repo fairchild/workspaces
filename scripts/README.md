@@ -26,6 +26,7 @@ Use `./scripts/setup` for first-run bootstrap. After that, prefer the root `mise
 | `mise run dev-launch` | `./scripts/launch-dev.sh` | Launch the debug app with isolated data. |
 | `mise run dev-watch` | `./scripts/launch-dev.sh --watch` | Launch and keep logs attached. |
 | `mise run dev-smoke` | `./scripts/dev-smoke.sh` | Run the fast debug startup smoke. |
+| `mise run claude-integration-smoke -- --pr <N>` | `./scripts/claude-integration-smoke.sh` | Run the Claude Code integration smoke evidence harness. |
 | `mise run evidence -- --pr <N> --name <slug>` | `./scripts/evidence.sh` | Capture and upload PR evidence. |
 
 Lume entry points:
@@ -146,17 +147,25 @@ Use these scripts for day-to-day UI verification:
   - `./output/dev-smoke/dev-smoke-<timestamp>.png`
   - latest launch log under `./.dev-data/logs/`
 
-3. `./scripts/ui-smoke.sh`
+3. `./scripts/claude-integration-smoke.sh`
+- Interactive evidence harness for the full Claude Code integration.
+- Launches the debug app, discovers the live `hooks-<pid>.sock` from the launch log, verifies `/healthz`, prompts through Settings install / real Claude prompt / OSC fallback / conversation log / headless quick action evidence steps, and writes a PR-ready comment.
+- `--pr <N>` uploads each captured screenshot through `evidence.sh` when `EVIDENCE_UPLOAD_TOKEN` is available.
+- `--fixture-home` launches with an isolated `HOME` containing a fixture `~/.claude/settings.json` for merge-preview evidence without touching the user's real Claude config.
+- `--non-interactive` runs only the automated preflight and one launch screenshot.
+- Writes artifacts to `./output/claude-integration-smoke/<timestamp>/`.
+
+4. `./scripts/ui-smoke.sh`
 - Fast interaction smoke test.
 - Validates launch, focus, typing, and Enter behavior.
 - Writes artifacts to `/tmp/workspaces-ui-smoke-<timestamp>/`.
 
-4. `./scripts/ui-capture.sh`
+5. `./scripts/ui-capture.sh`
 - Screenshot-focused flow capture.
 - Same core interaction path plus screenshot artifacts.
 - Writes artifacts to `/tmp/workspaces-ui-capture-<timestamp>/`.
 
-5. `./scripts/sidebar-capture.sh`
+6. `./scripts/sidebar-capture.sh`
 - Fast deterministic sidebar-only capture loop for visual polish work.
 - Launches app in `WORKSPACES_UI_FIXTURE=1` mode (in-memory sample data).
 - Captures the WorkspaceManager window and writes:

@@ -18,6 +18,7 @@ struct WorkspaceManagerApp: App {
     @StateObject private var modelStoreStatusController: ModelStoreStatusController
     @StateObject private var softwareUpdateController: SoftwareUpdateController
     @StateObject private var agentSessionRegistry: AgentSessionRegistry
+    @StateObject private var claudeIntegrationLifecycle: ClaudeIntegrationLifecycle
     private let appRuntimeDependencies = AppRuntimeDependencies.resolved()
     let sharedModelContainer: ModelContainer
 
@@ -35,6 +36,7 @@ struct WorkspaceManagerApp: App {
         _appCommandState = StateObject(wrappedValue: AppCommandState())
         _modelStoreStatusController = StateObject(wrappedValue: .shared)
         _softwareUpdateController = StateObject(wrappedValue: SoftwareUpdateController())
+        _claudeIntegrationLifecycle = StateObject(wrappedValue: ClaudeIntegrationLifecycle.shared)
         let registry = AgentSessionRegistry()
         _agentSessionRegistry = StateObject(wrappedValue: registry)
         self.sharedModelContainer = bootstrap.container
@@ -225,7 +227,7 @@ struct WorkspaceManagerApp: App {
             SettingsView(softwareUpdateController: softwareUpdateController)
                 .environment(\.lumeRuntimeService, appRuntimeDependencies.lumeRuntimeService)
                 .environment(\.workspaceProviderRegistry, appRuntimeDependencies.workspaceProviderRegistry)
-                .environment(\.claudeSettingsInstaller, ClaudeIntegrationLifecycle.shared.settingsInstaller)
+                .environment(\.claudeSettingsInstaller, claudeIntegrationLifecycle.settingsInstaller)
                 .environmentObject(modelStoreStatusController)
                 .environmentObject(agentSessionRegistry)
                 .environment(\.agentSessionRegistry, agentSessionRegistry)

@@ -96,6 +96,15 @@ struct ClaudeSettingsInstallingProtocolTests {
         let afterInstall = await installer.isInstalled()
         #expect(afterInstall == true)
 
+        let installedData = try Data(contentsOf: home.appendingPathComponent(".claude/settings.json"))
+        let installedJSON = try JSONSerialization.jsonObject(with: installedData) as? [String: Any] ?? [:]
+        let hooks = installedJSON["hooks"] as? [String: Any] ?? [:]
+        let notification = hooks["Notification"] as? [[String: Any]] ?? []
+        #expect(notification.count == 1)
+        let notificationHandlers = notification.first?["hooks"] as? [[String: Any]] ?? []
+        #expect(notificationHandlers.count == 1)
+        #expect(notificationHandlers.first?["type"] as? String == "http")
+
         // No backup is recorded for a freshly created file (nothing to back up).
         // Pre-seed an existing settings file and re-install to exercise the backup path.
         let claudeDir = home.appendingPathComponent(".claude", isDirectory: true)
