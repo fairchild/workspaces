@@ -21,6 +21,18 @@ struct ClaudeSettingsInstallerTests {
         return url
     }
 
+    private func hookGroups(
+        named event: String,
+        in updated: [String: Any]
+    ) -> [[String: Any]] {
+        let hooks = updated["hooks"] as? [String: Any] ?? [:]
+        return hooks[event] as? [[String: Any]] ?? []
+    }
+
+    private func hookHandlers(in group: [String: Any]) -> [[String: Any]] {
+        (group["hooks"] as? [[String: Any]]) ?? []
+    }
+
     @Test("Non-destructive merge preserves unrelated existing keys")
     func nonDestructiveMerge() async throws {
         let home = makeTempHome()
@@ -50,16 +62,25 @@ struct ClaudeSettingsInstallerTests {
         #expect(updated["theme"] as? String == "dark")
         #expect(updated["model"] as? String == "claude-opus-4")
 
-        let hooks = updated["hooks"] as? [String: Any] ?? [:]
-        let preToolUse = hooks["PreToolUse"] as? [[String: Any]] ?? []
-        // Original command hook plus our http hook.
+        let preToolUse = hookGroups(named: "PreToolUse", in: updated)
+        // Original raw command hook is preserved and normalized into a matcher
+        // group; our http hook is added as a second matcherless group.
         #expect(preToolUse.count == 2)
-        #expect(preToolUse.contains { ($0["type"] as? String) == "command" })
-        #expect(preToolUse.contains { ($0["type"] as? String) == "http" })
+        #expect(
+            preToolUse.contains {
+                hookHandlers(in: $0).contains { ($0["type"] as? String) == "command" }
+            })
+        #expect(
+            preToolUse.contains {
+                hookHandlers(in: $0).contains { ($0["type"] as? String) == "http" }
+            })
 
         // Our endpoint should be wired for all spec-listed events.
-        let stop = hooks["Stop"] as? [[String: Any]] ?? []
-        #expect(stop.contains { ($0["type"] as? String) == "http" })
+        let stop = hookGroups(named: "Stop", in: updated)
+        #expect(
+            stop.contains {
+                hookHandlers(in: $0).contains { ($0["type"] as? String) == "http" }
+            })
     }
 
     @Test("Backup file is written before mutation")
@@ -102,10 +123,55 @@ struct ClaudeSettingsInstallerTests {
         let settingsURL = home.appendingPathComponent(".claude/settings.json")
         let data = try Data(contentsOf: settingsURL)
         let updated = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
-        let hooks = updated["hooks"] as? [String: Any] ?? [:]
-        let preToolUse = hooks["PreToolUse"] as? [[String: Any]] ?? []
-        let httpEntries = preToolUse.filter { ($0["type"] as? String) == "http" }
+        let preToolUse = hookGroups(named: "PreToolUse", in: updated)
+        let httpEntries = preToolUse.flatMap { group in
+            hookHandlers(in: group).filter { ($0["type"] as? String) == "http" }
+        }
         #expect(httpEntries.count == 1)
+    }
+
+    @Test("Re-install normalizes legacy raw handler entries into matcher groups")
+    func reinstallNormalizesLegacyRawHandlers() async throws {
+        let home = makeTempHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        let claudeDir = home.appendingPathComponent(".claude", isDirectory: true)
+        try FileManager.default.createDirectory(at: claudeDir, withIntermediateDirectories: true)
+        let settingsURL = claudeDir.appendingPathComponent("settings.json")
+
+        let existing: [String: Any] = [
+            "hooks": [
+                "Notification": [
+                    [
+                        "type": "http",
+                        "url": "http+unix://legacy/event",
+                        "async": true,
+                    ]
+                ]
+            ]
+        ]
+        let data = try JSONSerialization.data(withJSONObject: existing, options: [.prettyPrinted])
+        try data.write(to: settingsURL)
+
+        let installer = ClaudeSettingsInstaller(homeDirectory: home)
+        await installer.register(workspacesHooksContribution(socketPath: "/tmp/hooks.sock"))
+        try await installer.install()
+
+        let updatedData = try Data(contentsOf: settingsURL)
+        let updated = try JSONSerialization.jsonObject(with: updatedData) as? [String: Any] ?? [:]
+        let notification = hookGroups(named: "Notification", in: updated)
+        #expect(notification.count == 2)
+        #expect(notification.allSatisfy { $0["type"] == nil })
+        #expect(
+            notification.contains {
+                hookHandlers(in: $0).contains { ($0["url"] as? String) == "http+unix://legacy/event" }
+            })
+        #expect(
+            notification.contains {
+                hookHandlers(in: $0).contains {
+                    ($0["url"] as? String) == "http+unix://%2Ftmp%2Fhooks%2Esock/event"
+                }
+            })
     }
 
     @Test("renderPreview describes pending changes")
@@ -191,9 +257,11 @@ struct ClaudeSettingsInstallerTests {
         #expect(updated["theme"] as? String == "dark")
 
         // Hook routes wired up for all spec-listed events.
-        let hooks = updated["hooks"] as? [String: Any] ?? [:]
-        let stop = hooks["Stop"] as? [[String: Any]] ?? []
-        #expect(stop.contains { ($0["type"] as? String) == "http" })
+        let stop = hookGroups(named: "Stop", in: updated)
+        #expect(
+            stop.contains {
+                hookHandlers(in: $0).contains { ($0["type"] as? String) == "http" }
+            })
 
         // statusLine block points at our forwarder; original `padding` field is
         // preserved — the merge replaces our owned keys but never strips others.
