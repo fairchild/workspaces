@@ -1601,6 +1601,28 @@ class RunContributorTests(unittest.TestCase):
         self.assertEqual(labels, {sync_execution_state.AGENT_READY_LABEL})
         self.assertEqual(reason, "execution-approved and ready")
 
+    def test_sync_dry_run_does_not_create_missing_labels(self) -> None:
+        args = type("Args", (), {"dry_run": True})()
+        env = {"GH_TOKEN": "token", "GITHUB_REPOSITORY": "fairchild/workspaces"}
+
+        with (
+            mock.patch.dict(os.environ, env, clear=True),
+            mock.patch.object(sync_execution_state, "parse_args", return_value=args),
+            mock.patch.object(sync_execution_state, "repo_owner_name", return_value=("fairchild", "workspaces")),
+            mock.patch.object(
+                sync_execution_state,
+                "fetch_work_state",
+                return_value={"discussions": [], "issues": [], "pull_requests": []},
+            ),
+            mock.patch.object(sync_execution_state, "fetch_issue_state_map", return_value={}),
+            mock.patch.object(sync_execution_state, "fetch_existing_labels", return_value=set()),
+            mock.patch.object(sync_execution_state, "fetch_agent_task_issues", return_value=[]),
+            mock.patch.object(sync_execution_state, "ensure_label") as ensure_label,
+        ):
+            self.assertEqual(sync_execution_state.main(), 0)
+
+        ensure_label.assert_not_called()
+
     def test_extract_pr_issue_reference_reads_pr_marker(self) -> None:
         issue_number, agent = run_contributor.extract_pr_issue_reference(
             "Closes #116\n\n<!-- contributor:issue=116;agent=april-clearwater -->"

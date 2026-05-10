@@ -96,9 +96,10 @@ const templates: EventTemplate[] = [
 				labels: [
 					{
 						name: pick([
-							"agent:ready",
-							"agent:claimed",
-							"agent:review",
+							"agent",
+							"ready",
+							"claimed",
+							"review",
 							"enhancement",
 							"bug",
 						]),
