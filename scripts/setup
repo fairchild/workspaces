@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#MISE description="Trust mise config and install project dependencies"
+#MISE description="Trust mise config and optionally install project dependencies"
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -7,11 +7,13 @@ cd "$REPO_ROOT"
 
 usage() {
   cat <<'USAGE'
-Usage: ./scripts/setup [--hooks-only]
+Usage: ./scripts/setup [--fast|--full|--env-only|--hooks-only]
 
 Canonical first-run setup for this repository.
 
 Options:
+  --fast        Link env files and trust reviewed mise configs, then exit.
+  --full        Run the full bootstrap: trust, tools, hooks, and dependencies.
   --env-only    Link local env files from another worktree, then exit.
   --hooks-only  Install or refresh prek git hooks, then exit.
   -h, --help    Show this help.
@@ -19,9 +21,16 @@ USAGE
 }
 
 ENV_ONLY=0
+FAST=0
 HOOKS_ONLY=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --fast)
+      FAST=1
+      ;;
+    --full)
+      FAST=0
+      ;;
     --env-only)
       ENV_ONLY=1
       ;;
@@ -156,6 +165,11 @@ done < <(
     -path "*/node_modules" -prune -o \
     -name ".mise.toml" -print | sort
 )
+
+if [[ "$FAST" == "1" ]]; then
+  exit 0
+fi
+
 if [[ -f .mise.toml ]]; then
   MISE_IGNORED_CONFIG_PATHS="${HOME}/.config/mise${MISE_IGNORED_CONFIG_PATHS:+:$MISE_IGNORED_CONFIG_PATHS}" \
     MISE_PARANOID=1 \
@@ -170,6 +184,13 @@ install_deps() {
     (cd "$dir" && bun install)
   elif [[ -f "$dir/pnpm-lock.yaml" ]]; then
     echo "=> $dir: pnpm install"
+    if [[ -f "$dir/node_modules/.modules.yaml" \
+      && "$dir/node_modules/.modules.yaml" -nt "$dir/pnpm-lock.yaml" \
+      && (! -f "$dir/package.json" || "$dir/node_modules/.modules.yaml" -nt "$dir/package.json") \
+      && (! -f "$dir/.npmrc" || "$dir/node_modules/.modules.yaml" -nt "$dir/.npmrc") ]]; then
+      echo "=> $dir: pnpm dependencies already current"
+      return 0
+    fi
     # Codex and CI run setup without a TTY; CI=1 prevents pnpm from aborting
     # when it needs to recreate node_modules.
     (cd "$dir" && CI=1 pnpm install)
