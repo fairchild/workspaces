@@ -474,7 +474,7 @@ struct PerfChannel1Tests {
 
         let installer = ClaudeSettingsInstaller(homeDirectory: homeDir)
         await installer.register(
-            workspacesHooksContribution(socketPath: "/tmp/perf-backup.sock")
+            workspacesHooksContribution(eventForwarderScriptPath: "/tmp/event-forwarder.sh")
         )
 
         // Seed an existing settings.json so each install writes a backup.
@@ -547,7 +547,7 @@ struct PerfChannel1Tests {
             try Data(content.utf8).write(to: settingsPath)
             let installer = ClaudeSettingsInstaller(homeDirectory: homeDir)
             await installer.register(
-                workspacesHooksContribution(socketPath: "/tmp/m.sock")
+                workspacesHooksContribution(eventForwarderScriptPath: "/tmp/event-forwarder.sh")
             )
             var renderError: String? = nil
             var rendered: String? = nil

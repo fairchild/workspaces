@@ -104,6 +104,12 @@ public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
     /// Apply all registered contributions. Backs up each settings file once before
     /// writing, and writes pretty-printed JSON. Non-destructive: untouched keys
     /// survive byte-for-byte at the JSON-value level.
+    ///
+    /// Routine-launch protection: if the merged result is byte-identical to the
+    /// existing file, install() skips the write AND skips the backup. Without
+    /// this, every silent reinstall on every app launch would churn the backup
+    /// chain and rotate away the last meaningful pre-integration backup, even
+    /// though nothing actually changed.
     public func install() throws {
         for target in [ClaudeSettingsContribution.Target.userSettingsJSON, .userClaudeJSON] {
             let scopedContributions = contributions.filter { $0.target == target }
@@ -119,6 +125,18 @@ public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
                 current = c.merge(current)
             }
 
+            // Serialize once — same options as writeJSON — so we can compare
+            // the merged result against the file on disk without a second read.
+            let mergedData = try JSONSerialization.data(
+                withJSONObject: Self.lower(current),
+                options: [.prettyPrinted, .sortedKeys]
+            )
+
+            if let originalDataIfPresent, originalDataIfPresent == mergedData {
+                // Nothing to do; preserve the backup chain.
+                continue
+            }
+
             if let originalDataIfPresent {
                 let backupURL = url.appendingPathExtension(
                     "workspaces-backup-\(Self.iso8601Timestamp())"
@@ -130,7 +148,7 @@ public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
                 rotateBackups(forSettingsFile: url)
             }
 
-            try writeJSON(current, to: url)
+            try mergedData.write(to: url)
         }
     }
 
@@ -292,23 +310,23 @@ private func claudeGroupContainsHandler(
     claudeHookHandlers(in: group).contains(where: predicate)
 }
 
-/// Build the contribution that registers our HTTP hook routes in `~/.claude/settings.json`.
-/// `socketPath` is the Unix socket the running app is listening on. When
-/// `titleEmitScriptPath` is non-nil the contribution also registers a
+/// Build the contribution that registers our hook routes in `~/.claude/settings.json`.
+/// `eventForwarderScriptPath` is the absolute path to the bundled `event-forwarder.sh`
+/// shell. When `titleEmitScriptPath` is non-nil the contribution also registers a
 /// `UserPromptSubmit`/`Stop` command hook that emits OSC 2 — the Channel 3 path
 /// that updates the embedded terminal's tab title without app-side polling.
+///
+/// History: PR #443 wrote `type: "http"` handlers with `http+unix://<socket>/event`
+/// URLs. Real Claude Code does not speak the `http+unix://` URL scheme; every hook
+/// errored with `Unsupported protocol http+unix:`. This contribution replaces that
+/// path with `type: "command"` handlers running a tiny shell forwarder that pipes
+/// stdin through `curl --unix-socket`. Same pattern as `statusline.sh`. Legacy
+/// `http+unix://` handlers are scrubbed from the user's settings on every install
+/// so opted-in users self-heal.
 public func workspacesHooksContribution(
-    socketPath: String,
+    eventForwarderScriptPath: String,
     titleEmitScriptPath: String? = nil
 ) -> ClaudeSettingsContribution {
-    // Per spec § Channel 1, point each interesting event at our /event route.
-    // `http+unix://<encoded-socket>/event` is the de-facto convention used by Claude Code.
-    let encodedSocket =
-        socketPath.addingPercentEncoding(
-            withAllowedCharacters: .alphanumerics
-        ) ?? socketPath
-    let endpoint = "http+unix://\(encodedSocket)/event"
-
     let eventNames: [String] = [
         "SessionStart",
         "UserPromptSubmit",
@@ -331,6 +349,42 @@ public func workspacesHooksContribution(
     // agent's lifecycle (prompt submitted → "thinking", stop → "ready").
     let titleEmitEvents: Set<String> = ["UserPromptSubmit", "Stop"]
 
+    /// Drop legacy `type: "http"` handlers whose URL points at *our* old
+    /// pid-scoped socket path. PR #443's installer wrote these and they are
+    /// non-functional in real Claude Code (which does not speak `http+unix://`),
+    /// so we scrub them on every install. Crucially we do NOT scrub arbitrary
+    /// `http+unix://` URLs — a user with their own Unix-socket Claude hook must
+    /// keep it. The match is precise: percent-decoded URL must end in
+    /// `hooks-<digits>.sock/event` AND contain `/Application Support/` (our
+    /// install path under `~/Library/Application Support/<bundle-id>/`).
+    @Sendable
+    func looksLikeWorkspacesLegacyHookURL(_ raw: String?) -> Bool {
+        guard let raw, raw.hasPrefix("http+unix://") else { return false }
+        let payload = String(raw.dropFirst("http+unix://".count))
+        let decoded = payload.removingPercentEncoding ?? payload
+        guard decoded.range(of: #"/hooks-\d+\.sock/event$"#, options: .regularExpression) != nil
+        else {
+            return false
+        }
+        return decoded.contains("/Application Support/")
+    }
+
+    @Sendable
+    func scrubLegacyHTTPUnix(in groups: [[String: Any]]) -> [[String: Any]] {
+        groups.compactMap { group in
+            var g = group
+            let kept = claudeHookHandlers(in: g).filter { handler in
+                let isLegacy =
+                    (handler["type"] as? String) == "http"
+                    && looksLikeWorkspacesLegacyHookURL(handler["url"] as? String)
+                return !isLegacy
+            }
+            if kept.isEmpty { return nil }
+            g["hooks"] = kept
+            return g
+        }
+    }
+
     return ClaudeSettingsContribution(
         id: "workspaces.hooks",
         target: .userSettingsJSON,
@@ -345,14 +399,19 @@ public func workspacesHooksContribution(
                 (current["hooks"]?.value as? [String: Any]) ?? [:]
             for name in eventNames {
                 var groups = normalizedClaudeHookGroups(from: hooks[name])
-                let httpPresent = groups.contains { group in
+
+                // Self-heal: remove any non-functional `http+unix://` entries
+                // left behind by PR #443's installer.
+                groups = scrubLegacyHTTPUnix(in: groups)
+
+                let eventForwarderPresent = groups.contains { group in
                     claudeGroupContainsHandler(group) { handler in
-                        (handler["type"] as? String) == "http"
-                            && (handler["url"] as? String) == endpoint
+                        (handler["type"] as? String) == "command"
+                            && (handler["command"] as? String) == eventForwarderScriptPath
                     }
                 }
 
-                let commandPresent = groups.contains { group in
+                let titleEmitPresent = groups.contains { group in
                     guard let scriptPath = titleEmitScriptPath else { return false }
                     return claudeGroupContainsHandler(group) { handler in
                         (handler["type"] as? String) == "command"
@@ -363,14 +422,10 @@ public func workspacesHooksContribution(
                 let integrationGroupIndex =
                     groups.firstIndex { group in
                         claudeGroupContainsHandler(group) { handler in
-                            (handler["type"] as? String) == "http"
-                                && (handler["url"] as? String) == endpoint
+                            (handler["type"] as? String) == "command"
+                                && ((handler["command"] as? String) == eventForwarderScriptPath
+                                    || (handler["command"] as? String) == titleEmitScriptPath)
                         }
-                            || claudeGroupContainsHandler(group) { handler in
-                                guard let scriptPath = titleEmitScriptPath else { return false }
-                                return (handler["type"] as? String) == "command"
-                                    && (handler["command"] as? String) == scriptPath
-                            }
                     }
                     ?? {
                         groups.append(["hooks": [[String: Any]]()])
@@ -380,16 +435,16 @@ public func workspacesHooksContribution(
                 var integrationGroup = groups[integrationGroupIndex]
                 var integrationHandlers = claudeHookHandlers(in: integrationGroup)
 
-                if !httpPresent {
+                if !eventForwarderPresent {
                     integrationHandlers.append([
-                        "type": "http",
-                        "url": endpoint,
+                        "type": "command",
+                        "command": eventForwarderScriptPath,
                         "async": true,
                     ])
                 }
                 if let scriptPath = titleEmitScriptPath,
                     titleEmitEvents.contains(name),
-                    !commandPresent
+                    !titleEmitPresent
                 {
                     integrationHandlers.append([
                         "type": "command",
@@ -407,9 +462,10 @@ public func workspacesHooksContribution(
         },
         preview: { current in
             let hooks = (current["hooks"]?.value as? [String: Any]) ?? [:]
-            var addedHTTP: [String] = []
-            var addedCommand: [String] = []
+            var addedEventForwarder: [String] = []
+            var addedTitleEmit: [String] = []
             var normalizedShape: [String] = []
+            var legacyHTTPUnixToScrub: [String] = []
             for name in eventNames {
                 let rawEntries = (hooks[name] as? [Any]) ?? []
                 if rawEntries.contains(where: {
@@ -420,13 +476,22 @@ public func workspacesHooksContribution(
                 }
 
                 let groups = normalizedClaudeHookGroups(from: hooks[name])
-                let httpPresent = groups.contains { group in
+
+                let legacyPresent = groups.contains { group in
                     claudeGroupContainsHandler(group) { handler in
                         (handler["type"] as? String) == "http"
-                            && (handler["url"] as? String) == endpoint
+                            && looksLikeWorkspacesLegacyHookURL(handler["url"] as? String)
                     }
                 }
-                if !httpPresent { addedHTTP.append(name) }
+                if legacyPresent { legacyHTTPUnixToScrub.append(name) }
+
+                let eventForwarderPresent = groups.contains { group in
+                    claudeGroupContainsHandler(group) { handler in
+                        (handler["type"] as? String) == "command"
+                            && (handler["command"] as? String) == eventForwarderScriptPath
+                    }
+                }
+                if !eventForwarderPresent { addedEventForwarder.append(name) }
 
                 if let scriptPath = titleEmitScriptPath, titleEmitEvents.contains(name) {
                     let cmdPresent = groups.contains { group in
@@ -435,26 +500,34 @@ public func workspacesHooksContribution(
                                 && (handler["command"] as? String) == scriptPath
                         }
                     }
-                    if !cmdPresent { addedCommand.append(name) }
+                    if !cmdPresent { addedTitleEmit.append(name) }
                 }
             }
-            if addedHTTP.isEmpty && addedCommand.isEmpty && normalizedShape.isEmpty {
-                return "no changes (already wired for \(eventNames.count) events → \(endpoint))"
+            if addedEventForwarder.isEmpty && addedTitleEmit.isEmpty
+                && normalizedShape.isEmpty && legacyHTTPUnixToScrub.isEmpty
+            {
+                return
+                    "no changes (already wired for \(eventNames.count) events → \(eventForwarderScriptPath))"
             }
             var parts: [String] = []
+            if !legacyHTTPUnixToScrub.isEmpty {
+                parts.append(
+                    "scrub \(legacyHTTPUnixToScrub.count) legacy http+unix:// hook(s): \(legacyHTTPUnixToScrub.joined(separator: ", "))"
+                )
+            }
             if !normalizedShape.isEmpty {
                 parts.append(
                     "normalize legacy hook group shape for \(normalizedShape.joined(separator: ", "))"
                 )
             }
-            if !addedHTTP.isEmpty {
+            if !addedEventForwarder.isEmpty {
                 parts.append(
-                    "add \(addedHTTP.count) http hook(s) → \(endpoint): \(addedHTTP.joined(separator: ", "))"
+                    "add \(addedEventForwarder.count) command hook(s) → \(eventForwarderScriptPath): \(addedEventForwarder.joined(separator: ", "))"
                 )
             }
-            if !addedCommand.isEmpty, let scriptPath = titleEmitScriptPath {
+            if !addedTitleEmit.isEmpty, let scriptPath = titleEmitScriptPath {
                 parts.append(
-                    "add \(addedCommand.count) command hook(s) → \(scriptPath): \(addedCommand.joined(separator: ", "))"
+                    "add \(addedTitleEmit.count) title-emit command hook(s) → \(scriptPath): \(addedTitleEmit.joined(separator: ", "))"
                 )
             }
             return parts.joined(separator: "; ")

@@ -86,7 +86,7 @@ struct ClaudeSettingsInstallingProtocolTests {
         defer { try? FileManager.default.removeItem(at: home) }
 
         let installer = ClaudeSettingsInstaller(homeDirectory: home)
-        await installer.register(workspacesHooksContribution(socketPath: "/tmp/hooks.sock"))
+        await installer.register(workspacesHooksContribution(eventForwarderScriptPath: "/tmp/event-forwarder.sh"))
         let beforeInstall = await installer.isInstalled()
         #expect(beforeInstall == false)
         let backupBefore = await installer.mostRecentBackupPath()
@@ -103,7 +103,8 @@ struct ClaudeSettingsInstallingProtocolTests {
         #expect(notification.count == 1)
         let notificationHandlers = notification.first?["hooks"] as? [[String: Any]] ?? []
         #expect(notificationHandlers.count == 1)
-        #expect(notificationHandlers.first?["type"] as? String == "http")
+        #expect(notificationHandlers.first?["type"] as? String == "command")
+        #expect(notificationHandlers.first?["command"] as? String == "/tmp/event-forwarder.sh")
 
         // No backup is recorded for a freshly created file (nothing to back up).
         // Pre-seed an existing settings file and re-install to exercise the backup path.
@@ -112,7 +113,7 @@ struct ClaudeSettingsInstallingProtocolTests {
         try Data("{\"theme\":\"dark\"}".utf8).write(to: settingsURL)
 
         let installer2 = ClaudeSettingsInstaller(homeDirectory: home)
-        await installer2.register(workspacesHooksContribution(socketPath: "/tmp/hooks.sock"))
+        await installer2.register(workspacesHooksContribution(eventForwarderScriptPath: "/tmp/event-forwarder.sh"))
         try await installer2.install()
         let backupAfter = await installer2.mostRecentBackupPath()
         #expect(backupAfter?.contains("workspaces-backup-") == true)
