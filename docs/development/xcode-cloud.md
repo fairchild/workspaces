@@ -24,6 +24,17 @@ Do not rename the SwiftPM targets as part of Xcode Cloud setup. Do not use the r
   - `swift build -c release`
   - `swift test`
 
+## Tooling Dependencies
+
+`ci_post_clone.sh` installs the host tools that are not guaranteed by the Xcode
+Cloud image:
+- `mise` for the pinned Zig toolchain
+- `swift-format` for the SwiftPM validation gate
+- `gettext` for Ghostty's `msgfmt` translation compilation step
+
+Homebrew's `gettext` may be keg-only, so the script prepends
+`$(brew --prefix gettext)/bin` before building GhosttyKit.
+
 ## Manual Xcode Cloud Setup
 
 1. Open `WorkSpacesCloudCI.xcodeproj` in Xcode.
