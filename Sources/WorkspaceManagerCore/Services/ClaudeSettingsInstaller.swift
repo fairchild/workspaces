@@ -104,6 +104,12 @@ public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
     /// Apply all registered contributions. Backs up each settings file once before
     /// writing, and writes pretty-printed JSON. Non-destructive: untouched keys
     /// survive byte-for-byte at the JSON-value level.
+    ///
+    /// Routine-launch protection: if the merged result is byte-identical to the
+    /// existing file, install() skips the write AND skips the backup. Without
+    /// this, every silent reinstall on every app launch would churn the backup
+    /// chain and rotate away the last meaningful pre-integration backup, even
+    /// though nothing actually changed.
     public func install() throws {
         for target in [ClaudeSettingsContribution.Target.userSettingsJSON, .userClaudeJSON] {
             let scopedContributions = contributions.filter { $0.target == target }
@@ -119,6 +125,18 @@ public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
                 current = c.merge(current)
             }
 
+            // Serialize once — same options as writeJSON — so we can compare
+            // the merged result against the file on disk without a second read.
+            let mergedData = try JSONSerialization.data(
+                withJSONObject: Self.lower(current),
+                options: [.prettyPrinted, .sortedKeys]
+            )
+
+            if let originalDataIfPresent, originalDataIfPresent == mergedData {
+                // Nothing to do; preserve the backup chain.
+                continue
+            }
+
             if let originalDataIfPresent {
                 let backupURL = url.appendingPathExtension(
                     "workspaces-backup-\(Self.iso8601Timestamp())"
@@ -130,7 +148,7 @@ public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
                 rotateBackups(forSettingsFile: url)
             }
 
-            try writeJSON(current, to: url)
+            try mergedData.write(to: url)
         }
     }
 
@@ -331,10 +349,26 @@ public func workspacesHooksContribution(
     // agent's lifecycle (prompt submitted → "thinking", stop → "ready").
     let titleEmitEvents: Set<String> = ["UserPromptSubmit", "Stop"]
 
-    /// Drop legacy `type: "http"` handlers whose URL starts with `http+unix://`.
-    /// These were written by the PR #443 installer and are non-functional; we
-    /// scrub them whenever this contribution runs so opted-in users self-heal
-    /// on the next silent reinstall.
+    /// Drop legacy `type: "http"` handlers whose URL points at *our* old
+    /// pid-scoped socket path. PR #443's installer wrote these and they are
+    /// non-functional in real Claude Code (which does not speak `http+unix://`),
+    /// so we scrub them on every install. Crucially we do NOT scrub arbitrary
+    /// `http+unix://` URLs — a user with their own Unix-socket Claude hook must
+    /// keep it. The match is precise: percent-decoded URL must end in
+    /// `hooks-<digits>.sock/event` AND contain `/Application Support/` (our
+    /// install path under `~/Library/Application Support/<bundle-id>/`).
+    @Sendable
+    func looksLikeWorkspacesLegacyHookURL(_ raw: String?) -> Bool {
+        guard let raw, raw.hasPrefix("http+unix://") else { return false }
+        let payload = String(raw.dropFirst("http+unix://".count))
+        let decoded = payload.removingPercentEncoding ?? payload
+        guard decoded.range(of: #"/hooks-\d+\.sock/event$"#, options: .regularExpression) != nil
+        else {
+            return false
+        }
+        return decoded.contains("/Application Support/")
+    }
+
     @Sendable
     func scrubLegacyHTTPUnix(in groups: [[String: Any]]) -> [[String: Any]] {
         groups.compactMap { group in
@@ -342,7 +376,7 @@ public func workspacesHooksContribution(
             let kept = claudeHookHandlers(in: g).filter { handler in
                 let isLegacy =
                     (handler["type"] as? String) == "http"
-                    && ((handler["url"] as? String) ?? "").hasPrefix("http+unix://")
+                    && looksLikeWorkspacesLegacyHookURL(handler["url"] as? String)
                 return !isLegacy
             }
             if kept.isEmpty { return nil }
@@ -446,7 +480,7 @@ public func workspacesHooksContribution(
                 let legacyPresent = groups.contains { group in
                     claudeGroupContainsHandler(group) { handler in
                         (handler["type"] as? String) == "http"
-                            && ((handler["url"] as? String) ?? "").hasPrefix("http+unix://")
+                            && looksLikeWorkspacesLegacyHookURL(handler["url"] as? String)
                     }
                 }
                 if legacyPresent { legacyHTTPUnixToScrub.append(name) }

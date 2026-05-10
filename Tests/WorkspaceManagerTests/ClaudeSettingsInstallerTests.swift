@@ -151,12 +151,17 @@ struct ClaudeSettingsInstallerTests {
         #expect(eventForwarderEntries.count == 1)
     }
 
-    @Test("Re-install scrubs legacy http+unix:// hook entries from previous installer versions")
+    @Test("Re-install scrubs legacy WorkSpaces http+unix:// hook entries (precise match)")
     func reinstallScrubsLegacyHTTPUnixEntries() async throws {
         // Background: PR #443's installer wrote `type: "http"` handlers with
-        // `http+unix://...` URLs. Real Claude Code does not speak that URL scheme,
-        // so every hook errored with `Unsupported protocol http+unix:`. The
-        // current installer self-heals by removing those handlers on every run.
+        // `http+unix://<percent-encoded-Application Support socket>/event` URLs.
+        // Real Claude Code does not speak that URL scheme, so every hook errored
+        // with `Unsupported protocol http+unix:`. The current installer
+        // self-heals by removing OUR specific URLs on every run.
+        //
+        // The match is precise: percent-decoded URL must end in
+        // `hooks-<digits>.sock/event` AND contain `/Application Support/`. Other
+        // `http+unix://` URLs the user owns must survive (see the next test).
         let home = makeTempHome()
         defer { try? FileManager.default.removeItem(at: home) }
 
@@ -164,19 +169,19 @@ struct ClaudeSettingsInstallerTests {
         try FileManager.default.createDirectory(at: claudeDir, withIntermediateDirectories: true)
         let settingsURL = claudeDir.appendingPathComponent("settings.json")
 
+        // Two realistic legacy URLs as PR #443's installer would have written
+        // them: percent-encoded paths under "Application Support" with
+        // pid-scoped socket filenames.
+        let legacyURL1 =
+            "http+unix://%2FUsers%2Ftest%2FLibrary%2FApplication%20Support%2Fcom.cloudcompute.workspaces%2Fhooks-1234.sock/event"
+        let legacyURL2 =
+            "http+unix://%2FUsers%2Ftest%2FLibrary%2FApplication%20Support%2Fcom.cloudcompute.workspaces%2Fhooks-5678.sock/event"
+
         let existing: [String: Any] = [
             "hooks": [
                 "Notification": [
-                    [
-                        "type": "http",
-                        "url": "http+unix://legacy-pid-1234/event",
-                        "async": true,
-                    ],
-                    [
-                        "type": "http",
-                        "url": "http+unix://legacy-pid-5678/event",
-                        "async": true,
-                    ],
+                    ["type": "http", "url": legacyURL1, "async": true],
+                    ["type": "http", "url": legacyURL2, "async": true],
                 ]
             ]
         ]
@@ -192,11 +197,11 @@ struct ClaudeSettingsInstallerTests {
         let updated = try JSONSerialization.jsonObject(with: updatedData) as? [String: Any] ?? [:]
         let notification = hookGroups(named: "Notification", in: updated)
 
-        // Legacy http+unix:// entries are gone.
+        // Both legacy WorkSpaces URLs are gone.
         let anyLegacy = notification.contains { group in
             hookHandlers(in: group).contains {
-                ($0["type"] as? String) == "http"
-                    && ((($0["url"] as? String) ?? "").hasPrefix("http+unix://"))
+                let url = ($0["url"] as? String) ?? ""
+                return url == legacyURL1 || url == legacyURL2
             }
         }
         #expect(anyLegacy == false)
@@ -209,6 +214,91 @@ struct ClaudeSettingsInstallerTests {
             }
         }
         #expect(hasEventForwarder)
+    }
+
+    @Test("User-owned http+unix:// hooks survive the install (non-destructive contract)")
+    func reinstallPreservesUserOwnedHTTPUnixHooks() async throws {
+        // Regression guard for code review of PR #466: the legacy scrub must
+        // only remove URLs that look like ours (under /Application Support/
+        // with a `hooks-<pid>.sock` filename). A user with their own
+        // Unix-socket Claude hook — say one pointing at `/tmp/my-claude.sock`
+        // or `~/.local/run/agent.sock` — must keep it across reinstalls.
+        let home = makeTempHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        let claudeDir = home.appendingPathComponent(".claude", isDirectory: true)
+        try FileManager.default.createDirectory(at: claudeDir, withIntermediateDirectories: true)
+        let settingsURL = claudeDir.appendingPathComponent("settings.json")
+
+        // None of these match our pattern: no /Application Support/, or no
+        // hooks-<digits>.sock filename, or both.
+        let userHookURLs = [
+            "http+unix://%2Ftmp%2Fmy-claude.sock/event",
+            "http+unix://%2FUsers%2Ftest%2F.local%2Frun%2Fagent.sock/event",
+            "http+unix://legacy-pid-1234/event",
+        ]
+        let existing: [String: Any] = [
+            "hooks": [
+                "Notification": userHookURLs.map { url in
+                    ["type": "http", "url": url, "async": true] as [String: Any]
+                }
+            ]
+        ]
+        let data = try JSONSerialization.data(withJSONObject: existing, options: [.prettyPrinted])
+        try data.write(to: settingsURL)
+
+        let installer = ClaudeSettingsInstaller(homeDirectory: home)
+        await installer.register(
+            workspacesHooksContribution(eventForwarderScriptPath: "/tmp/event-forwarder.sh"))
+        try await installer.install()
+
+        let updatedData = try Data(contentsOf: settingsURL)
+        let updated = try JSONSerialization.jsonObject(with: updatedData) as? [String: Any] ?? [:]
+        let notification = hookGroups(named: "Notification", in: updated)
+        let allHandlers = notification.flatMap { hookHandlers(in: $0) }
+        for url in userHookURLs {
+            let preserved = allHandlers.contains {
+                ($0["type"] as? String) == "http" && ($0["url"] as? String) == url
+            }
+            #expect(preserved, "user-owned http+unix hook \(url) was unexpectedly scrubbed")
+        }
+    }
+
+    @Test("install() is a no-op when merged result equals the existing file (no backup churn)")
+    func installIsNoOpWhenNothingChanges() async throws {
+        // Regression guard for code review of PR #466: routine relaunches must
+        // not churn the backup chain. After an initial install, every
+        // subsequent install with the same contributions must skip the write
+        // (and the backup) so the user's last meaningful pre-integration backup
+        // stays at index 0 of the rotation.
+        let home = makeTempHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        let claudeDir = home.appendingPathComponent(".claude", isDirectory: true)
+        try FileManager.default.createDirectory(at: claudeDir, withIntermediateDirectories: true)
+        let settingsURL = claudeDir.appendingPathComponent("settings.json")
+        try Data("{\"theme\":\"dark\"}".utf8).write(to: settingsURL)
+
+        let installer = ClaudeSettingsInstaller(homeDirectory: home)
+        await installer.register(
+            workspacesHooksContribution(eventForwarderScriptPath: "/tmp/event-forwarder.sh"))
+
+        // First install creates exactly one backup.
+        try await installer.install()
+        let backupsAfterFirst = try FileManager.default.contentsOfDirectory(
+            at: claudeDir, includingPropertiesForKeys: nil
+        ).filter { $0.lastPathComponent.hasPrefix("settings.json.workspaces-backup-") }
+        #expect(backupsAfterFirst.count == 1)
+
+        // Subsequent installs are no-ops: no new backup, no churn.
+        try await installer.install()
+        try await installer.install()
+        try await installer.install()
+        let backupsAfterRepeats = try FileManager.default.contentsOfDirectory(
+            at: claudeDir, includingPropertiesForKeys: nil
+        ).filter { $0.lastPathComponent.hasPrefix("settings.json.workspaces-backup-") }
+        #expect(backupsAfterRepeats.count == 1)
+        #expect(backupsAfterRepeats.first?.lastPathComponent == backupsAfterFirst.first?.lastPathComponent)
     }
 
     @Test("renderPreview describes pending changes")

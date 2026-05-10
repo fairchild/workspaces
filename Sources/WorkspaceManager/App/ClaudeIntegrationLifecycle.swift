@@ -36,21 +36,29 @@ final class ClaudeIntegrationLifecycle: ObservableObject {
     private var installerFactory: @Sendable (String) async -> any ClaudeSettingsInstalling = {
         _ in
         let installer = ClaudeSettingsInstaller()
-        guard let eventForwarderPath = ClaudeIntegrationLifecycle.extractEventForwarderScript()
-        else {
+
+        // Channel 1: requires the bundled event-forwarder shell. If extraction
+        // fails (most tests, previews) we skip JUST this contribution so
+        // Channels 2 and 3 still register cleanly.
+        if let eventForwarderPath = ClaudeIntegrationLifecycle.extractEventForwarderScript() {
+            let titleEmitPath = ClaudeIntegrationLifecycle.extractTitleEmitScript()
+            await installer.register(
+                workspacesHooksContribution(
+                    eventForwarderScriptPath: eventForwarderPath,
+                    titleEmitScriptPath: titleEmitPath
+                )
+            )
+        } else {
             NSLog(
-                "[ClaudeIntegration] event-forwarder.sh extraction failed; channel 1 settings install will be skipped"
+                "[ClaudeIntegration] event-forwarder.sh extraction failed; Channel 1 will be skipped this session (Channels 2 and 3 unaffected)"
             )
-            return installer
         }
-        let titleEmitPath = ClaudeIntegrationLifecycle.extractTitleEmitScript()
-        await installer.register(
-            workspacesHooksContribution(
-                eventForwarderScriptPath: eventForwarderPath,
-                titleEmitScriptPath: titleEmitPath
-            )
-        )
+
+        // Channel 3 channel-selection: writes preferredNotifChannel into ~/.claude.json.
+        // Independent of Channel 1's script availability.
         await installer.register(workspacesNotifChannelContribution())
+
+        // Channel 2: status-line forwarder. Independent of Channel 1's script.
         if let forwarderPath = ClaudeIntegrationLifecycle.bundledStatusLineForwarderPath() {
             await installer.register(
                 workspacesStatusLineContribution(forwarderPath: forwarderPath)
