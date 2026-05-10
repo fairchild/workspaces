@@ -166,32 +166,60 @@ Edit `SYSTEM_PROMPT` in `web/src/lib/agent-runtime/pr-review.ts`. The hash-based
 
 Edit `TOOLS` or `MCP_SERVERS` arrays in `pr-review.ts`. Same cache behavior — config changes create a new agent.
 
-### Change the trigger
+### Triggers
 
-Currently fires on `pull_request.opened` only. To also fire on `reopened` or `synchronize` (new commits pushed), edit the condition in `web/src/app/api/webhooks/github/route.ts`:
+The reviewer is **continuous**: it reruns on meaningful PR updates and carries
+its own prior review state into each rerun so it can revise (or approve) a
+stale `REQUEST_CHANGES` instead of repeating itself.
 
-```ts
-// Current: only new PRs
-if (eventType === "pull_request" && action === "opened") {
+`parsePrReviewTrigger()` in `web/src/app/api/webhooks/github/route.ts` accepts:
 
-// Also re-review on new commits:
-if (eventType === "pull_request" && (action === "opened" || action === "synchronize")) {
-```
+| Event | Action | Behavior |
+|-------|--------|----------|
+| `pull_request` | `opened` | Initial review (skip drafts) |
+| `pull_request` | `reopened` | Rerun (skip drafts) |
+| `pull_request` | `ready_for_review` | Rerun even when previous state was draft |
+| `pull_request` | `synchronize` | Rerun on new head SHA (skip drafts) |
+| `pull_request` | `edited` | Rerun only when `changes.body` is present (skip drafts) |
+| `issue_comment` | `created` | Rerun when the comment is on a PR thread, the sender is a non-bot, and the body matches an evidence signal: `evidence.cloudcompute.com`, `Evidence:`, `swift test`, `playwright`, `screenshot`, `recording`, `validation` |
+
+Loop guards skip events from any `*[bot]` sender (including the reviewer
+itself) and from `Bot`-typed senders.
+
+### Idempotency
+
+Every dispatch computes a fingerprint over
+`(repo, pr, headSha, triggerKind, triggerSourceId, reviewerConfigHash)` and
+inserts a row into `managed_pr_review_runs` (created on first use). When the
+insert is a no-op (duplicate fingerprint), the run is skipped. Effects:
+
+- Webhook redeliveries for the same trigger are no-ops.
+- A new commit changes `headSha` → new fingerprint → rerun.
+- Distinct evidence comments on the same head produce distinct
+  `triggerSourceId` values → each runs once.
+- A reviewer prompt or model change rotates `reviewerConfigHash`, allowing a
+  re-evaluation of the same head without manual intervention.
+
+### Same-PR review history in the kickoff
+
+For any rerun (`kind !== "opened"`), the runtime fetches the bot's prior
+reviews on the current PR via `GET /repos/{owner}/{repo}/pulls/{pr}/reviews`,
+keeps the newest 3, and includes them as untrusted context inside a
+`<untrusted-content name="prior-managed-reviews">` block. A small trusted
+instruction tells the reviewer to approve when a prior `REQUEST_CHANGES`
+blocker is now resolved by the current body, comments, or commits.
 
 ### Filter by repo or label
 
-Add conditions before `triggerPrReview()` in the webhook route:
+Add conditions inside `parsePrReviewTrigger()` in the webhook route, e.g.:
 
 ```ts
 // Only review PRs in specific repos
-if (repoObj.full_name !== "fairchild/workspaces") return;
-
-// Skip draft PRs
-if (pr.draft) return;
+if (String(repoObj.full_name) !== "fairchild/workspaces") return null;
 
 // Only review PRs with a specific label
 const labels = pr.labels as Array<{name: string}> | undefined;
-if (!labels?.some(l => l.name === "review-wanted")) return;
+if (!labels?.some((l) => l.name === "review-wanted")) return null;
 ```
 
 ### Cost control

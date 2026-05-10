@@ -72,6 +72,21 @@ export interface ManagedAgentsCacheTable {
 	metadata: string | null;
 }
 
+export interface ManagedPrReviewRunsTable {
+	fingerprint: string;
+	repo_full_name: string;
+	pr_number: number;
+	head_sha: string;
+	trigger_kind: string;
+	trigger_source_id: string;
+	reviewer_config_hash: string;
+	session_id: string | null;
+	status: string;
+	created_at: string;
+	updated_at: string;
+	error: string | null;
+}
+
 interface Database {
 	webhook_events: EventsTable;
 	chat_messages: ChatMessagesTable;
@@ -79,6 +94,7 @@ interface Database {
 	agent_sessions: AgentSessionsTable;
 	base_snapshots: BaseSnapshotsTable;
 	managed_agents_cache: ManagedAgentsCacheTable;
+	managed_pr_review_runs: ManagedPrReviewRunsTable;
 }
 
 let _turso: Client | undefined;
