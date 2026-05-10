@@ -52,8 +52,33 @@ test.describe("Public docs", () => {
 		await expect(
 			page.locator("#topic-panel").getByRole("link", { name: /Vocabulary/ }),
 		).toBeVisible();
-		await expect(page.getByRole("heading", { name: "More in Product" })).toBeVisible();
+		await expect(page.getByRole("heading", { name: "In Product" })).toBeVisible();
 		await expect(page.getByRole("heading", { name: "Related to Repository" })).toHaveCount(1);
+	});
+
+	test("explains concepts in the chip panel", async ({ page }) => {
+		await page.goto("/docs/development/lume-integration");
+
+		await expect(page.getByRole("button", { name: "WorkSpaces" })).toHaveCount(0);
+		await page.getByRole("button", { name: "Workspace" }).click();
+
+		await expect(page.locator("#topic-panel")).toContainText(
+			"An isolated working copy or provider-backed environment",
+		);
+		await expect(page.locator("#topic-panel .topic-links a").first()).toBeVisible();
+	});
+
+	test("shows navigable breadcrumbs for document groups", async ({ page }) => {
+		await page.goto("/docs/daytona-vm");
+
+		await expect(page.getByLabel("Documentation breadcrumb")).toContainText(
+			"Architecture",
+		);
+		await expect(
+			page.getByLabel("Documentation breadcrumb").getByRole("link", {
+				name: "Architecture",
+			}),
+		).toHaveAttribute("href", /\/docs\/#group-architecture|\/docs\/developer-operator-index\.html\?group=Architecture/);
 	});
 
 	test("only shows concept chips that link to related docs", async ({ page }) => {
@@ -75,7 +100,7 @@ test.describe("Public docs", () => {
 	test("shows useful same-group docs by default", async ({ page }) => {
 		await page.goto("/docs/performance/dashboard");
 
-		await expect(page.getByRole("heading", { name: "More in Evidence" })).toBeVisible();
+		await expect(page.getByRole("heading", { name: "In Evidence" })).toBeVisible();
 		await expect(
 			page.locator("#related-docs").getByRole("link", { name: /Metrics Reference/ }),
 		).toBeVisible();
@@ -112,11 +137,39 @@ test.describe("Public docs", () => {
 	});
 
 	test("does not render Markdown outside the curated manifest", async ({ page }) => {
+		const localManifest = await page.request.get("/docs/local-docs-manifest.json");
+		test.skip(localManifest.ok(), "local docs mode intentionally renders all docs");
+
 		await page.goto("/docs/design/product_overview");
 
 		await expect(
 			page.getByRole("heading", { name: "Document not published" }),
 		).toBeVisible();
 		await expect(page.getByText("outside the curated native WorkSpaces docs set")).toBeVisible();
+	});
+
+	test("public docs do not expose the local operator index", async ({ request }) => {
+		const localManifest = await request.get("/docs/local-docs-manifest.json");
+		test.skip(localManifest.ok(), "local docs mode intentionally exposes the operator index");
+
+		const response = await request.get("/docs/developer-operator-index.html");
+		expect(response.status()).toBe(404);
+	});
+
+	test("local operator index exposes uncurated docs when local mode is active", async ({
+		page,
+	}) => {
+		const localManifest = await page.request.get("/docs/local-docs-manifest.json");
+		test.skip(!localManifest.ok(), "public docs mode intentionally excludes the local index");
+
+		await page.goto("/docs/developer-operator-index.html?group=Development");
+
+		await expect(
+			page.getByRole("heading", { name: "Operator Index" }),
+		).toBeVisible();
+		await expect(page.getByRole("link", { name: /Agent Team/ })).toBeVisible();
+		await page.getByRole("link", { name: /Agent Team/ }).click();
+		await expect(page).toHaveURL(/\/docs\/development\/agent-team$/);
+		await expect(page.getByRole("heading", { name: /Agent Team/ })).toBeVisible();
 	});
 });

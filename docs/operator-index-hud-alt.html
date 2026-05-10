@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Operator Index Mission Control - WorkSpaces Docs</title>
+  <meta name="robots" content="noindex">
+  <link rel="icon" href="/docs/assets/icon-concepts/favicon.ico">
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b0e10;
+      --ink: #f3f0e7;
+      --muted: #a8afad;
+      --quiet: #737d7b;
+      --panel: #14191c;
+      --panel-strong: #1e2528;
+      --line: #384246;
+      --soft-line: rgba(243, 240, 231, 0.13);
+      --mint: #a6ffdf;
+      --blue: #8ab7ff;
+      --amber: #e7b75f;
+      --green: #69d7a3;
+      --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+      --sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        linear-gradient(90deg, rgba(255, 255, 255, 0.028) 1px, transparent 1px),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.022) 1px, transparent 1px),
+        radial-gradient(circle at 50% 0%, rgba(166, 255, 223, 0.08), transparent 34rem),
+        var(--bg);
+      background-size: 44px 44px, 44px 44px, auto, auto;
+      color: var(--ink);
+      font-family: var(--sans);
+      line-height: 1.45;
+    }
+
+    a { color: inherit; text-decoration: none; }
+    a:hover { color: var(--mint); }
+
+    .shell {
+      width: min(1500px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 26px 0 70px;
+    }
+
+    .topline {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 18px;
+      color: var(--muted);
+      font-size: 0.88rem;
+    }
+
+    .topline strong { color: var(--ink); }
+    .topline nav { display: flex; gap: 14px; flex-wrap: wrap; }
+
+    .command-center {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 360px;
+      gap: 14px;
+      align-items: stretch;
+    }
+
+    .deck,
+    .answer-panel,
+    .matrix,
+    .lane,
+    .focus-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(20, 24, 27, 0.9);
+    }
+
+    .deck {
+      padding: 24px;
+      background:
+        linear-gradient(135deg, rgba(166, 255, 223, 0.08), rgba(138, 183, 255, 0.04)),
+        rgba(20, 24, 27, 0.9);
+    }
+
+    .eyebrow {
+      margin: 0 0 10px;
+      color: var(--mint);
+      font: 0.74rem var(--mono);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 0 0 18px;
+      max-width: 920px;
+      font-size: clamp(2.4rem, 5vw, 5.4rem);
+      line-height: 0.94;
+      letter-spacing: 0;
+    }
+
+    .query {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 8px;
+      background: #090c0e;
+    }
+
+    .query input {
+      min-width: 0;
+      min-height: 44px;
+      border: 0;
+      outline: 0;
+      background: transparent;
+      color: var(--ink);
+      font: 1rem var(--sans);
+    }
+
+    .query button,
+    .pill {
+      min-height: 42px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 0 12px;
+      background: var(--panel-strong);
+      color: var(--ink);
+      font: 0.9rem var(--sans);
+      cursor: pointer;
+    }
+
+    .answer-panel {
+      padding: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .answer-panel h2,
+    .section-title,
+    .lane h3,
+    .focus-card h3 {
+      margin: 0;
+      font-size: 1rem;
+    }
+
+    .answer-panel p,
+    .lane p,
+    .focus-card p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.88rem;
+    }
+
+    .answer-button {
+      display: grid;
+      gap: 3px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 10px;
+      background: #0f1315;
+    }
+
+    .answer-button span {
+      color: var(--muted);
+      font-size: 0.82rem;
+    }
+
+    .mission-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 0.74fr) minmax(0, 1fr);
+      gap: 14px;
+      margin-top: 14px;
+    }
+
+    .map {
+      min-height: 500px;
+      position: relative;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background:
+        linear-gradient(90deg, rgba(255, 255, 255, 0.026) 1px, transparent 1px),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.022) 1px, transparent 1px),
+        #0a0d0f;
+      background-size: 34px 34px;
+      overflow: hidden;
+    }
+
+    .map::before,
+    .map::after {
+      content: "";
+      position: absolute;
+      inset: 50% auto auto 50%;
+      width: 72%;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, rgba(166, 255, 223, 0.55), transparent);
+      transform: translate(-50%, -50%);
+    }
+
+    .map::after {
+      width: 1px;
+      height: 72%;
+      background: linear-gradient(180deg, transparent, rgba(138, 183, 255, 0.46), transparent);
+    }
+
+    .map-node {
+      position: absolute;
+      width: min(210px, 42%);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      background: rgba(20, 24, 27, 0.95);
+    }
+
+    .map-node strong {
+      display: block;
+      margin-bottom: 5px;
+      font-size: 0.92rem;
+    }
+
+    .map-node span {
+      color: var(--muted);
+      font-size: 0.78rem;
+    }
+
+    .map-node.center {
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      border-color: rgba(166, 255, 223, 0.6);
+      background: #17211f;
+    }
+
+    .map-node.product { left: 7%; top: 9%; }
+    .map-node.runtime { right: 7%; top: 9%; }
+    .map-node.providers { left: 7%; bottom: 9%; }
+    .map-node.evidence { right: 7%; bottom: 9%; }
+    .map-node.archive { left: 50%; bottom: 4%; transform: translateX(-50%); }
+
+    .matrix {
+      padding: 16px;
+    }
+
+    .matrix-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 14px;
+      align-items: baseline;
+      margin-bottom: 12px;
+    }
+
+    .matrix-head p {
+      margin: 5px 0 0;
+      color: var(--muted);
+    }
+
+    .lane-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .lane {
+      padding: 13px;
+      background: rgba(255, 255, 255, 0.025);
+    }
+
+    .link-list {
+      display: grid;
+      gap: 6px;
+      margin-top: 11px;
+    }
+
+    .link-list a {
+      display: flex;
+      justify-content: space-between;
+      min-height: 30px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 6px 8px;
+      color: var(--muted);
+      background: #0f1315;
+      font-size: 0.82rem;
+    }
+
+    .link-list a span:last-child {
+      color: var(--quiet);
+      font-family: var(--mono);
+    }
+
+    .focus-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 14px;
+    }
+
+    .focus-card {
+      padding: 13px;
+      background: rgba(255, 255, 255, 0.025);
+    }
+
+    .topic-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 10px;
+    }
+
+    .topic-chip {
+      min-height: 27px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 5px 8px;
+      color: var(--muted);
+      font-size: 0.78rem;
+    }
+
+    @media (max-width: 1160px) {
+      .command-center,
+      .mission-grid,
+      .focus-grid {
+        grid-template-columns: 1fr 1fr;
+      }
+    }
+
+    @media (max-width: 760px) {
+      .command-center,
+      .mission-grid,
+      .lane-grid,
+      .focus-grid,
+      .query {
+        grid-template-columns: 1fr;
+      }
+
+      .map { min-height: 680px; }
+      .map-node,
+      .map-node.product,
+      .map-node.runtime,
+      .map-node.providers,
+      .map-node.evidence,
+      .map-node.archive,
+      .map-node.center {
+        position: static;
+        width: auto;
+        transform: none;
+        margin: 10px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <div class="topline">
+      <a href="/docs/developer-operator-index.html"><strong>Operator Index</strong></a>
+      <nav aria-label="Prototype navigation">
+        <a href="/docs/operator-index-hud-next.html">Next HUD</a>
+        <a href="/docs/operator-index-hud-mocks.html">Synthesis HUD</a>
+        <a href="/docs/developer-operator-index.html">Current Index</a>
+        <a href="/docs/CONTEXT">Vocabulary</a>
+      </nav>
+    </div>
+
+    <section class="command-center">
+      <div class="deck">
+        <p class="eyebrow">Mission control alternate</p>
+        <h1>Navigate by question, concept, and system layer.</h1>
+        <form class="query" id="query-form">
+          <input id="query-input" placeholder="Type an operator question: why is Lume failing, where is shortcut routing, what proves this PR?">
+          <button type="submit">Route Me</button>
+        </form>
+      </div>
+      <aside class="answer-panel">
+        <h2>Answer This</h2>
+        <p>Fast entry points for the questions this local index should make easy.</p>
+        <div id="answer-buttons"></div>
+      </aside>
+    </section>
+
+    <section class="mission-grid">
+      <div class="map" aria-label="Documentation mission map">
+        <div class="map-node center"><strong>WorkSpaces Docs</strong><span>One local map over product, code, runtime, operations, and evidence.</span></div>
+        <a class="map-node product" href="/docs/developer-operator-index.html?group=Product"><strong>Product Model</strong><span>Repository, workspace, surface, session.</span></a>
+        <a class="map-node runtime" href="/docs/developer-operator-index.html?topic=terminal-session"><strong>Runtime</strong><span>Ghostty, focus, shortcuts, terminal behavior.</span></a>
+        <a class="map-node providers" href="/docs/developer-operator-index.html?topic=provider"><strong>Providers</strong><span>Lume, Daytona, local execution environments.</span></a>
+        <a class="map-node evidence" href="/docs/developer-operator-index.html?topic=evidence"><strong>Evidence</strong><span>Tests, screenshots, performance, mergeability.</span></a>
+        <a class="map-node archive" href="/docs/developer-operator-index.html?type=Design"><strong>Design Archive</strong><span>Specs, planning, history, and product rationale.</span></a>
+      </div>
+
+      <section class="matrix">
+        <div class="matrix-head">
+          <div>
+            <h2 class="section-title">Routing Matrix</h2>
+            <p>Use the lanes when search is too vague and the hierarchy is too broad.</p>
+          </div>
+          <a class="pill" href="/docs/developer-operator-index.html">Open All</a>
+        </div>
+        <div class="lane-grid" id="lane-grid"></div>
+      </section>
+    </section>
+
+    <section class="focus-grid" id="focus-grid" aria-label="Concept focus areas"></section>
+  </main>
+
+  <script>
+    const answerButtons = [
+      ["What is this product?", "product overview"],
+      ["How does terminal focus work?", "terminal focus"],
+      ["How do providers fit together?", "provider architecture"],
+      ["How do I prove a change?", "evidence mergeability"],
+      ["What should I read for Lume?", "lume validation"]
+    ];
+
+    const lanes = [
+      {
+        title: "Learn the nouns",
+        copy: "Start here when the codebase vocabulary is the blocker.",
+        links: [["Vocabulary", "q", "CONTEXT"], ["Product", "group", "Product"], ["Repository", "topic", "repository"]]
+      },
+      {
+        title: "Trace runtime behavior",
+        copy: "Use when the app behavior depends on terminal, focus, or shortcut contracts.",
+        links: [["Terminal Session", "topic", "terminal-session"], ["Ghostty", "topic", "ghostty"], ["Development", "group", "Development"]]
+      },
+      {
+        title: "Operate providers",
+        copy: "Use when workspaces are running somewhere and you need setup, recovery, or validation.",
+        links: [["Provider", "topic", "provider"], ["Lume", "topic", "lume"], ["Operations", "group", "Operations"]]
+      },
+      {
+        title: "Review and prove",
+        copy: "Use when you need to know what evidence is expected before a PR lands.",
+        links: [["Evidence", "topic", "evidence"], ["Performance", "topic", "performance"], ["Mergeability", "topic", "mergeability"]]
+      }
+    ];
+
+    const focusAreas = [
+      ["Product language", ["repository", "workspace", "terminal-session"]],
+      ["Runtime mechanics", ["terminal-session", "ghostty", "surface"]],
+      ["Provider operations", ["provider", "lume", "workspace"]],
+      ["Proof loop", ["evidence", "performance", "mergeability"]]
+    ];
+
+    let topics = [];
+
+    function escapeHtml(value) {
+      return String(value || "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;");
+    }
+
+    function href(kind, value) {
+      if (kind === "group") return `/docs/developer-operator-index.html?group=${encodeURIComponent(value)}`;
+      if (kind === "type") return `/docs/developer-operator-index.html?type=${encodeURIComponent(value)}`;
+      if (kind === "q") return `/docs/developer-operator-index.html?q=${encodeURIComponent(value)}`;
+      return `/docs/developer-operator-index.html?topic=${encodeURIComponent(value)}`;
+    }
+
+    function topicLabel(id) {
+      return topics.find((topic) => topic.id === id)?.label || id.replace(/-/g, " ");
+    }
+
+    function renderAnswers() {
+      document.querySelector("#answer-buttons").innerHTML = answerButtons.map(([label, query]) => `
+        <a class="answer-button" href="${href("q", query)}"><strong>${escapeHtml(label)}</strong><span>${escapeHtml(query)}</span></a>
+      `).join("");
+    }
+
+    function renderLanes() {
+      document.querySelector("#lane-grid").innerHTML = lanes.map((lane) => `
+        <article class="lane">
+          <h3>${escapeHtml(lane.title)}</h3>
+          <p>${escapeHtml(lane.copy)}</p>
+          <div class="link-list">
+            ${lane.links.map(([label, kind, value]) => `
+              <a href="${href(kind, value)}"><span>${escapeHtml(label)}</span><span>${escapeHtml(kind)}</span></a>
+            `).join("")}
+          </div>
+        </article>
+      `).join("");
+    }
+
+    function renderFocus() {
+      document.querySelector("#focus-grid").innerHTML = focusAreas.map(([title, ids]) => `
+        <article class="focus-card">
+          <h3>${escapeHtml(title)}</h3>
+          <p>${escapeHtml(ids.map(topicLabel).join(", "))}</p>
+          <div class="topic-chips">
+            ${ids.map((id) => `<a class="topic-chip" href="${href("topic", id)}">${escapeHtml(topicLabel(id))}</a>`).join("")}
+          </div>
+        </article>
+      `).join("");
+    }
+
+    function bindQuery() {
+      document.querySelector("#query-form").addEventListener("submit", (event) => {
+        event.preventDefault();
+        const query = document.querySelector("#query-input").value.trim() || "lume validation";
+        window.location.href = href("q", query);
+      });
+    }
+
+    async function load() {
+      bindQuery();
+      renderAnswers();
+      renderLanes();
+      const response = await fetch("/docs/local-docs-manifest.json", { cache: "no-store" });
+      const manifest = await response.json();
+      topics = manifest.topics || [];
+      renderFocus();
+    }
+
+    load();
+  </script>
+</body>
+</html>

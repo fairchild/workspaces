@@ -1,0 +1,1509 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Developer and Operator Index - WorkSpaces Docs</title>
+  <meta name="robots" content="noindex">
+  <link rel="icon" href="/docs/assets/icon-concepts/favicon.ico">
+  <style>
+    :root {
+      color-scheme: dark;
+      --ink: #f3f0e7;
+      --muted: #a8afad;
+      --quiet: #737d7b;
+      --bg: #0d1012;
+      --panel: #171c1f;
+      --panel-strong: #20272a;
+      --line: #394044;
+      --line-soft: rgba(243, 240, 231, 0.12);
+      --mint: #a6ffdf;
+      --blue: #8ab7ff;
+      --amber: #e7b75f;
+      --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+      --sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        linear-gradient(90deg, rgba(255, 255, 255, 0.026) 1px, transparent 1px),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.022) 1px, transparent 1px),
+        radial-gradient(circle at 18% 6%, rgba(166, 255, 223, 0.08), transparent 28rem),
+        var(--bg);
+      background-size: 44px 44px, 44px 44px, auto, auto;
+      color: var(--ink);
+      font-family: var(--sans);
+      line-height: 1.55;
+    }
+
+    a { color: var(--mint); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    .shell {
+      width: min(1500px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 24px 0 70px;
+    }
+
+    .topline {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 28px;
+      color: var(--muted);
+      font-size: 0.88rem;
+    }
+
+    .topline strong { color: var(--ink); }
+
+    .topline nav {
+      display: flex;
+      gap: 14px;
+      flex-wrap: wrap;
+    }
+
+    .topline a { color: inherit; }
+
+    .topline a:hover { color: var(--mint); text-decoration: none; }
+
+    .intro {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(320px, 0.44fr);
+      gap: 24px;
+      align-items: end;
+      margin-bottom: 12px;
+    }
+
+    .eyebrow {
+      margin: 0 0 10px;
+      color: var(--mint);
+      font-family: var(--mono);
+      font-size: 0.74rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      max-width: 940px;
+      margin: 0;
+      font-size: clamp(2.2rem, 4.2vw, 4.4rem);
+      line-height: 0.94;
+      letter-spacing: 0;
+    }
+
+    .intro-copy {
+      margin: 0 0 8px;
+      color: var(--muted);
+      font-size: 1rem;
+    }
+
+    .route-field {
+      margin-bottom: 16px;
+      border: 1px solid rgba(166, 255, 223, 0.32);
+      border-radius: 8px;
+      padding: 8px;
+      background: #090c0e;
+      box-shadow: 0 0 0 1px rgba(166, 255, 223, 0.04), 0 18px 60px rgba(0, 0, 0, 0.28);
+    }
+
+    .search-shell {
+      display: grid;
+      gap: 10px;
+    }
+
+    .route-form {
+      display: grid;
+      grid-template-columns: 1fr auto auto;
+      gap: 8px;
+    }
+
+    .route-form input {
+      min-width: 0;
+      min-height: 50px;
+      border: 0;
+      outline: 0;
+      background: transparent;
+      color: var(--ink);
+      font: 1.04rem var(--sans);
+    }
+
+    .search-hint {
+      margin: 0;
+      color: var(--quiet);
+      font-family: var(--mono);
+      font-size: 0.72rem;
+    }
+
+    .autocomplete {
+      display: none;
+      border-top: 1px solid var(--line-soft);
+      padding-top: 10px;
+    }
+
+    .autocomplete.active {
+      display: grid;
+      gap: 6px;
+    }
+
+    .autocomplete-row {
+      display: grid;
+      grid-template-columns: minmax(180px, 0.42fr) minmax(0, 1fr) auto;
+      gap: 12px;
+      align-items: baseline;
+      border: 1px solid var(--line-soft);
+      border-radius: 7px;
+      padding: 8px 10px;
+      background: rgba(255, 255, 255, 0.025);
+      color: var(--muted);
+    }
+
+    .autocomplete-row:hover {
+      border-color: rgba(166, 255, 223, 0.36);
+      text-decoration: none;
+    }
+
+    .autocomplete-row strong {
+      color: var(--ink);
+      font-size: 0.88rem;
+    }
+
+    .autocomplete-row span {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .autocomplete-row code {
+      color: var(--quiet);
+      font: 0.72rem var(--mono);
+    }
+
+    .route-form button,
+    .button-link {
+      min-height: 50px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 0 13px;
+      background: var(--panel-strong);
+      color: var(--ink);
+      font: 0.92rem var(--sans);
+      cursor: pointer;
+    }
+
+    .route-form button:disabled {
+      cursor: wait;
+      opacity: 0.72;
+    }
+
+    .ask-spinner,
+    .answer-spinner {
+      display: none;
+      width: 14px;
+      height: 14px;
+      border: 2px solid rgba(166, 255, 223, 0.25);
+      border-top-color: var(--mint);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    .route-form.asking .ask-spinner,
+    .answer-loading .answer-spinner {
+      display: inline-block;
+    }
+
+    #ask-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+
+    @keyframes spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+
+    .button-link {
+      display: inline-flex;
+      align-items: center;
+      min-height: 34px;
+      color: var(--muted);
+    }
+
+    .ai-answer {
+      display: none;
+      margin-bottom: 16px;
+      border: 1px solid rgba(138, 183, 255, 0.32);
+      border-radius: 8px;
+      padding: 14px;
+      background: rgba(13, 16, 18, 0.9);
+    }
+
+    .ai-answer.active {
+      display: grid;
+      gap: 12px;
+    }
+
+    .ai-answer-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: baseline;
+    }
+
+    .ai-answer h2 {
+      margin: 0;
+      font-size: 1rem;
+    }
+
+    .ai-answer-status {
+      color: var(--quiet);
+      font-family: var(--mono);
+      font-size: 0.72rem;
+    }
+
+    .ai-answer-body {
+      color: var(--muted);
+      font-size: 0.95rem;
+    }
+
+    .ai-answer-body p {
+      margin: 0 0 10px;
+    }
+
+    .ai-answer-body ul {
+      margin: 0 0 10px 18px;
+      padding: 0;
+    }
+
+    .answer-loading {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--muted);
+    }
+
+    .citation-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .citation-list a {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 3px 8px;
+      color: var(--muted);
+      font-size: 0.78rem;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(0, 0.95fr) minmax(380px, 0.68fr);
+      gap: 14px;
+      align-items: stretch;
+    }
+
+    .map,
+    .routing,
+    .concept-strip,
+    .reading-path {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(20, 24, 27, 0.9);
+    }
+
+    .map {
+      min-height: 360px;
+      padding: 18px;
+      background:
+        linear-gradient(90deg, rgba(255, 255, 255, 0.026) 1px, transparent 1px),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.022) 1px, transparent 1px),
+        #0a0d0f;
+      background-size: 34px 34px;
+    }
+
+    .map-title h2,
+    .routing h2,
+    .reading-path h2 {
+      margin: 0 0 5px;
+      font-size: 1rem;
+    }
+
+    .map-title p,
+    .routing p,
+    .reading-path p,
+    .concept-card p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.88rem;
+    }
+
+    .architecture-prompt {
+      display: grid;
+      gap: 12px;
+      margin-top: 18px;
+      max-width: 760px;
+      border: 1px solid rgba(166, 255, 223, 0.24);
+      border-radius: 8px;
+      padding: 18px;
+      background: rgba(13, 16, 18, 0.72);
+      color: var(--muted);
+    }
+
+    .architecture-prompt strong {
+      color: var(--ink);
+      font-size: 1rem;
+    }
+
+    .architecture-prompt code {
+      color: var(--mint);
+      font-family: var(--mono);
+      font-size: 0.86rem;
+      white-space: normal;
+    }
+
+    .right-stack {
+      display: grid;
+      gap: 14px;
+    }
+
+    .routing,
+    .concept-strip,
+    .reading-path {
+      padding: 16px;
+    }
+
+    .routing-head,
+    .path-head {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
+    .route-grid,
+    .concept-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 9px;
+    }
+
+    .route,
+    .concept-card,
+    .path-step {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 11px;
+      background: rgba(255, 255, 255, 0.025);
+    }
+
+    .route {
+      display: grid;
+      gap: 8px;
+    }
+
+    .route h3,
+    .concept-card h3,
+    .path-step h3 {
+      margin: 0 0 6px;
+      font-size: 0.94rem;
+    }
+
+    .route p {
+      min-height: 40px;
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.82rem;
+    }
+
+    .route-actions {
+      display: grid;
+      gap: 5px;
+    }
+
+    .route-actions button,
+    .topic-chip,
+    .path-step button {
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #0f1315;
+      color: var(--muted);
+      font: 0.8rem var(--sans);
+      cursor: pointer;
+    }
+
+    .route-actions button {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 29px;
+      padding: 6px 8px;
+      text-align: left;
+    }
+
+    .route-actions span:last-child {
+      color: var(--quiet);
+      font-family: var(--mono);
+      text-transform: uppercase;
+      font-size: 0.68rem;
+    }
+
+    .concept-strip h2 {
+      margin: 0 0 10px;
+      font-size: 0.96rem;
+    }
+
+    .topic-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+      margin-top: 8px;
+    }
+
+    .topic-chip {
+      min-height: 25px;
+      border-radius: 999px;
+      padding: 4px 7px;
+    }
+
+    .reading-path {
+      margin-top: 14px;
+    }
+
+    .path-rail {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .path-step::before {
+      content: attr(data-step);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 24px;
+      height: 24px;
+      margin-bottom: 10px;
+      border: 1px solid rgba(166, 255, 223, 0.42);
+      border-radius: 999px;
+      color: var(--mint);
+      font: 0.74rem var(--mono);
+    }
+
+    .path-step button {
+      display: block;
+      width: fit-content;
+      margin-top: 5px;
+      padding: 5px 7px;
+      text-align: left;
+    }
+
+    .control {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      min-height: 30px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 0 9px;
+      background: rgba(255, 255, 255, 0.03);
+      color: var(--muted);
+      font: 0.84rem var(--sans);
+      cursor: pointer;
+    }
+
+    .control:hover,
+    .control.active {
+      border-color: var(--mint);
+      color: var(--ink);
+      background: rgba(166, 255, 223, 0.08);
+    }
+
+    .control strong {
+      color: var(--ink);
+      font-weight: 720;
+    }
+
+    .filters,
+    .results {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(20, 24, 27, 0.86);
+    }
+
+    .tool {
+      display: grid;
+      gap: 16px;
+      margin-top: 22px;
+    }
+
+    .filters {
+      position: sticky;
+      top: 72px;
+      z-index: 5;
+      padding: 16px;
+      backdrop-filter: blur(16px);
+    }
+
+    .filter-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(150px, 0.7fr)) auto;
+      gap: 12px;
+      align-items: end;
+    }
+
+    label {
+      display: grid;
+      gap: 6px;
+      margin: 0;
+      color: var(--quiet);
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+
+    input,
+    select {
+      width: 100%;
+      min-height: 38px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 0 10px;
+      background: #0d1012;
+      color: var(--ink);
+      font: 0.92rem var(--sans);
+    }
+
+    .reset {
+      min-height: 38px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 0 12px;
+      background: var(--panel-strong);
+      color: var(--ink);
+      font: inherit;
+      cursor: pointer;
+    }
+
+    .stats {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 14px;
+    }
+
+    .index-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 12px;
+    }
+
+    .stat {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 4px 9px;
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 0.74rem;
+    }
+
+    .results {
+      min-height: 360px;
+      padding: 14px;
+    }
+
+    .result-grid {
+      display: grid;
+      gap: 12px;
+    }
+
+    .area {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.025);
+      overflow: hidden;
+    }
+
+    .area summary,
+    .section summary {
+      cursor: pointer;
+      list-style: none;
+    }
+
+    .area summary::-webkit-details-marker,
+    .section summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .area-head {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 18px;
+      min-height: 56px;
+      padding: 0 16px;
+      border-bottom: 1px solid var(--line-soft);
+    }
+
+    .area-head strong {
+      color: var(--ink);
+      font-size: 1.08rem;
+    }
+
+    .area-head span {
+      color: var(--quiet);
+      font-family: var(--mono);
+      font-size: 0.78rem;
+    }
+
+    .section {
+      margin: 10px;
+      border: 1px solid var(--line-soft);
+      border-radius: 7px;
+      background: rgba(13, 16, 18, 0.34);
+      overflow: hidden;
+    }
+
+    .section-head {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      min-height: 42px;
+      padding: 0 12px;
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 0.8rem;
+    }
+
+    .doc-list {
+      display: grid;
+      border-top: 1px solid var(--line-soft);
+    }
+
+    .doc-row {
+      display: grid;
+      grid-template-columns: minmax(180px, 0.78fr) minmax(0, 1.1fr) minmax(170px, 0.52fr);
+      gap: 14px;
+      padding: 12px;
+      border-bottom: 1px solid var(--line-soft);
+      color: var(--muted);
+    }
+
+    .doc-row:last-child {
+      border-bottom: 0;
+    }
+
+    .doc-row:hover {
+      background: rgba(166, 255, 223, 0.06);
+      text-decoration: none;
+    }
+
+    .doc-title {
+      color: var(--ink);
+      font-weight: 680;
+    }
+
+    .path {
+      color: var(--quiet);
+      font-family: var(--mono);
+      font-size: 0.74rem;
+    }
+
+    .tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      justify-content: flex-end;
+    }
+
+    .tag {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 2px 7px;
+      color: var(--muted);
+      font-size: 0.76rem;
+    }
+
+    .empty {
+      padding: 42px;
+      color: var(--muted);
+      text-align: center;
+    }
+
+    @media (max-width: 860px) {
+      .intro,
+      .layout,
+      .route-form,
+      .route-grid,
+      .concept-grid,
+      .path-rail,
+      .filter-grid,
+      .doc-row {
+        grid-template-columns: 1fr;
+      }
+
+      .filters { position: static; }
+
+      .tags {
+        justify-content: flex-start;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <div class="topline">
+      <a href="/docs/developer-operator-index.html"><strong>Developer and Operator Index</strong></a>
+      <nav aria-label="Index navigation">
+        <a href="/docs/">Published Docs</a>
+        <a href="/docs/CONTEXT">Vocabulary</a>
+        <a href="/docs/docs-site">Runbook</a>
+      </nav>
+    </div>
+
+    <section class="intro" aria-labelledby="page-title">
+      <div>
+        <p class="eyebrow">Local index</p>
+        <h1 id="page-title">Operator Index</h1>
+      </div>
+      <p class="intro-copy">Live filter on type. Press Enter to ask local Claude Code with citations.</p>
+    </section>
+
+    <section class="route-field" aria-label="Route a documentation question">
+      <div class="search-shell">
+        <form class="route-form" id="route-form">
+          <input id="route-input" autofocus autocomplete="off" placeholder="Filter docs or ask: why is Lume failing?">
+          <button type="submit" id="ask-button"><span class="ask-spinner" aria-hidden="true"></span><span>Ask</span></button>
+          <button type="button" id="route-show-all">All Docs</button>
+        </form>
+        <p class="search-hint" id="search-hint">Typing filters instantly. Enter asks local Claude Code using the visible matches.</p>
+        <div class="autocomplete" id="autocomplete" aria-label="Matching docs"></div>
+      </div>
+    </section>
+
+    <section class="ai-answer" id="ai-answer" aria-live="polite" aria-label="Local AI docs answer">
+      <div class="ai-answer-head">
+        <h2>Local Answer</h2>
+        <span class="ai-answer-status" id="ai-answer-status">Claude Code</span>
+      </div>
+      <div class="ai-answer-body" id="ai-answer-body"></div>
+      <div class="citation-list" id="citation-list"></div>
+      <div class="index-actions">
+        <button class="control" id="copy-answer" type="button">Copy answer</button>
+        <button class="control" id="dismiss-answer" type="button">Dismiss</button>
+      </div>
+    </section>
+
+    <section class="layout" aria-label="Documentation heads-up display">
+      <div class="map" aria-label="Deferred architecture map prompt">
+        <div class="map-title">
+          <h2>System Map</h2>
+          <p>Reserved for the technical architecture map.</p>
+        </div>
+        <div class="architecture-prompt">
+          <strong>Future architecture map prompt</strong>
+          <span>Build a technical context map for WorkSpaces documentation. It should show the real systems and code boundaries: the macOS SwiftUI/AppKit app, Ghostty/libghostty terminal runtime, workspace/provider layer, Lume macOS/Linux VM runtime, web Next.js/Vercel app, Cloudflare Workers and Durable Objects, GitHub webhook/PR/evidence flows, evidence storage, and local developer scripts. The map should make architectural relationships clear, not just document categories. It should help a new developer answer: what systems exist, where code lives, what talks to what, what runs locally vs remotely, and which docs explain each subsystem.</span>
+          <code>Deferred: architecture map implementation belongs in its own pass.</code>
+        </div>
+      </div>
+
+      <div class="right-stack">
+        <section class="routing" aria-labelledby="routing-title">
+          <div class="routing-head">
+            <div>
+              <h2 id="routing-title">Routing Matrix</h2>
+              <p>Choose the job you are doing now.</p>
+            </div>
+            <button class="button-link" id="open-all" type="button">Open All</button>
+          </div>
+          <div class="route-grid" id="route-grid"></div>
+        </section>
+
+        <section class="concept-strip" aria-labelledby="concept-title">
+          <h2 id="concept-title">Concept Clusters</h2>
+          <div class="concept-grid" id="concept-grid"></div>
+        </section>
+      </div>
+    </section>
+
+    <section class="reading-path" aria-labelledby="path-title">
+      <div class="path-head">
+        <div>
+          <h2 id="path-title">Reading Path</h2>
+          <p>Use this when you are onboarding or trying to rebuild the mental model from scratch.</p>
+        </div>
+        <button class="button-link" type="button" data-filter="q" data-value="CONTEXT">Start with vocabulary</button>
+      </div>
+      <div class="path-rail" id="path-rail"></div>
+    </section>
+
+    <section class="tool" aria-label="Developer and operator docs index">
+      <aside class="filters">
+        <div class="filter-grid">
+          <label>
+            Area
+            <select id="group"></select>
+          </label>
+          <label>
+            Topic
+            <select id="topic"></select>
+          </label>
+          <label>
+            Type
+            <select id="type"></select>
+          </label>
+          <button class="reset" id="reset" type="button">Reset</button>
+        </div>
+        <div class="stats" id="stats"></div>
+        <div class="index-actions" aria-label="Index actions">
+          <button class="control" id="show-all" type="button">Show all docs</button>
+          <button class="control" id="expand-all" type="button">Expand all sections</button>
+          <button class="control" id="collapse-all" type="button">Collapse all sections</button>
+        </div>
+      </aside>
+
+      <section class="results">
+        <div class="result-grid" id="results">
+          <div class="empty">Loading local docs index...</div>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <script>
+    const state = {
+      docs: [],
+      topics: [],
+      query: new URLSearchParams(location.search)
+    };
+
+    const routes = [
+      {
+        title: "Learn product language",
+        copy: "Vocabulary, product overview, surface model, and user-facing nouns.",
+        links: [["Vocabulary", "q", "CONTEXT"], ["Product", "group", "Product"], ["Repository", "topic", "repository"]]
+      },
+      {
+        title: "Debug runtime behavior",
+        copy: "Terminal focus, Ghostty integration, shortcut routing, and session behavior.",
+        links: [["Terminal", "topic", "terminal-session"], ["Ghostty", "topic", "ghostty"], ["Development", "group", "Development"]]
+      },
+      {
+        title: "Operate providers",
+        copy: "Lume, Daytona, validation, setup, recreate flows, and recovery.",
+        links: [["Provider", "topic", "provider"], ["Lume", "topic", "lume"], ["Operations", "group", "Operations"]]
+      },
+      {
+        title: "Prove the work",
+        copy: "Evidence, performance, mergeability, and review readiness.",
+        links: [["Evidence", "topic", "evidence"], ["Performance", "topic", "performance"], ["Mergeability", "topic", "mergeability"]]
+      }
+    ];
+
+    const conceptClusters = [
+      ["Product nouns", ["repository", "workspace", "terminal-session"]],
+      ["Runtime mechanics", ["terminal-session", "ghostty", "surface"]],
+      ["Provider operations", ["provider", "lume", "workspace"]],
+      ["Review proof", ["evidence", "performance", "mergeability"]]
+    ];
+
+    const readingPath = [
+      ["Learn", [["Vocabulary", "q", "CONTEXT"], ["Product overview", "q", "product overview"]]],
+      ["Orient", [["Architecture", "q", "architecture"], ["Provider model", "topic", "provider"]]],
+      ["Operate", [["Lume runbooks", "topic", "lume"], ["Troubleshooting", "q", "troubleshooting"]]],
+      ["Verify", [["Evidence", "topic", "evidence"], ["Mergeability", "topic", "mergeability"]]]
+    ];
+
+    const elements = {
+      routeForm: document.querySelector("#route-form"),
+      routeInput: document.querySelector("#route-input"),
+      askButton: document.querySelector("#ask-button"),
+      routeShowAll: document.querySelector("#route-show-all"),
+      searchHint: document.querySelector("#search-hint"),
+      autocomplete: document.querySelector("#autocomplete"),
+      aiAnswer: document.querySelector("#ai-answer"),
+      aiAnswerStatus: document.querySelector("#ai-answer-status"),
+      aiAnswerBody: document.querySelector("#ai-answer-body"),
+      citationList: document.querySelector("#citation-list"),
+      copyAnswer: document.querySelector("#copy-answer"),
+      dismissAnswer: document.querySelector("#dismiss-answer"),
+      openAll: document.querySelector("#open-all"),
+      routeGrid: document.querySelector("#route-grid"),
+      conceptGrid: document.querySelector("#concept-grid"),
+      pathRail: document.querySelector("#path-rail"),
+      group: document.querySelector("#group"),
+      topic: document.querySelector("#topic"),
+      type: document.querySelector("#type"),
+      reset: document.querySelector("#reset"),
+      stats: document.querySelector("#stats"),
+      results: document.querySelector("#results"),
+      showAll: document.querySelector("#show-all"),
+      expandAll: document.querySelector("#expand-all"),
+      collapseAll: document.querySelector("#collapse-all")
+    };
+
+    let currentDocs = [];
+    let currentAnswer = "";
+    let askController = null;
+
+    function escapeHtml(value) {
+      return String(value || "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;");
+    }
+
+    function maybeJson(value) {
+      if (typeof value !== "string") return value;
+      let text = value.trim();
+      if (text.startsWith("```json")) {
+        text = text.replace(/^```json\s*/, "").replace(/```$/, "").trim();
+      } else if (text.startsWith("```")) {
+        text = text.replace(/^```\s*/, "").replace(/```$/, "").trim();
+      }
+      if (!text || !/^[{[]/.test(text)) return value;
+      try {
+        return JSON.parse(text);
+      } catch {
+        return value;
+      }
+    }
+
+    function normalizeAnswerPayload(payload) {
+      const parsedAnswer = maybeJson(payload.answer || payload.copyText || "");
+      const structured = parsedAnswer && typeof parsedAnswer === "object" && !Array.isArray(parsedAnswer)
+        ? parsedAnswer
+        : {};
+      const answer = structured.answer_markdown || structured.answer || payload.answer || payload.copyText || "";
+      return {
+        ...payload,
+        answer,
+        copyText: structured.copy_text || payload.copyText || answer,
+        citations: Array.isArray(payload.citations) && payload.citations.length
+          ? payload.citations
+          : Array.isArray(structured.citations)
+            ? structured.citations
+            : []
+      };
+    }
+
+    async function readJsonResponse(response) {
+      const text = await response.text();
+      const parsed = maybeJson(text);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed;
+      }
+      return {
+        error: response.ok ? "Docs ask returned an unreadable response." : "Local AI docs ask is available only from docs/server.py."
+      };
+    }
+
+    function markdownToHtml(markdown) {
+      const lines = String(markdown || "").split("\n");
+      let html = "";
+      let inList = false;
+      for (const rawLine of lines) {
+        const line = rawLine.trim();
+        if (!line) {
+          if (inList) {
+            html += "</ul>";
+            inList = false;
+          }
+          continue;
+        }
+        const bullet = /^[-*]\s+(.+)$/.exec(line);
+        if (bullet) {
+          if (!inList) {
+            html += "<ul>";
+            inList = true;
+          }
+          html += `<li>${inlineMarkdown(bullet[1])}</li>`;
+          continue;
+        }
+        if (inList) {
+          html += "</ul>";
+          inList = false;
+        }
+        html += `<p>${inlineMarkdown(line)}</p>`;
+      }
+      if (inList) html += "</ul>";
+      return html || "<p>No answer returned.</p>";
+    }
+
+    function inlineMarkdown(value) {
+      return escapeHtml(value)
+        .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+        .replace(/`([^`]+)`/g, "<code>$1</code>")
+        .replace(/\[([^\]]+)]\((\/docs\/[^)]+)\)/g, '<a href="$2">$1</a>');
+    }
+
+    function renderedHref(dest) {
+      return `/docs/${dest.replace(/\.md$/, "")}`;
+    }
+
+    function optionList(values, label) {
+      return [`<option value="">All ${label}</option>`]
+        .concat(values.map((value) => `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`))
+        .join("");
+    }
+
+    function optionPairs(values, label) {
+      return [`<option value="">All ${label}</option>`]
+        .concat(values.map(({ value, text }) => `<option value="${escapeHtml(value)}">${escapeHtml(text)}</option>`))
+        .join("");
+    }
+
+    function topicLabel(topic) {
+      return state.topics.find((entry) => entry.id === topic)?.label || topic.replace(/-/g, " ");
+    }
+
+    function titleCase(value) {
+      return String(value || "")
+        .split(/[-_/]+/)
+        .filter(Boolean)
+        .map((part) => `${part[0]?.toUpperCase() || ""}${part.slice(1)}`)
+        .join(" ");
+    }
+
+    function sectionLabel(doc) {
+      if (doc.dest.includes("/")) {
+        return titleCase(doc.dest.split("/")[0]);
+      }
+      return "Root";
+    }
+
+    function groupBy(values, keyForValue) {
+      const groups = new Map();
+      for (const value of values) {
+        const key = keyForValue(value) || "Reference";
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(value);
+      }
+      return [...groups.entries()].sort(([a], [b]) => a.localeCompare(b));
+    }
+
+    function countBy(values, keyForValue) {
+      return groupBy(values, keyForValue)
+        .map(([key, entries]) => ({ key, count: entries.length }))
+        .sort((a, b) => b.count - a.count || a.key.localeCompare(b.key));
+    }
+
+    function setFilter(key, value) {
+      if (key === "q") {
+        elements.routeInput.value = value;
+      } else {
+        elements[key].value = value;
+      }
+      render();
+    }
+
+    function clearFilters() {
+      elements.routeInput.value = "";
+      elements.group.value = "";
+      elements.topic.value = "";
+      elements.type.value = "";
+      render();
+    }
+
+    function syncUrl() {
+      const params = new URLSearchParams();
+      for (const key of ["group", "topic", "type"]) {
+        if (elements[key].value) params.set(key, elements[key].value);
+      }
+      if (elements.routeInput.value.trim()) params.set("q", elements.routeInput.value.trim());
+      history.replaceState(null, "", `${location.pathname}${params.toString() ? `?${params}` : ""}`);
+    }
+
+    function filters() {
+      return {
+        q: elements.routeInput.value.trim(),
+        group: elements.group.value,
+        topic: elements.topic.value,
+        type: elements.type.value
+      };
+    }
+
+    function searchTokens(value) {
+      const stopwords = new Set([
+        "a",
+        "an",
+        "and",
+        "are",
+        "can",
+        "do",
+        "does",
+        "for",
+        "how",
+        "i",
+        "in",
+        "is",
+        "it",
+        "me",
+        "of",
+        "on",
+        "or",
+        "our",
+        "should",
+        "the",
+        "to",
+        "what",
+        "where",
+        "why",
+        "with"
+      ]);
+      return String(value || "")
+        .toLowerCase()
+        .match(/[a-z0-9][a-z0-9_-]*/g)
+        ?.filter((token) => token.length > 1 && !stopwords.has(token)) || [];
+    }
+
+    function searchText(doc) {
+      return [
+        doc.title,
+        doc.summary,
+        doc.dest,
+        doc.source,
+        doc.group,
+        doc.type,
+        ...(doc.topics || []),
+        ...(doc.topics || []).map(topicLabel)
+      ].join(" ").toLowerCase();
+    }
+
+    function isSubsequence(needle, haystack) {
+      let index = 0;
+      for (const character of haystack) {
+        if (index < needle.length && needle[index] === character) index += 1;
+      }
+      return index === needle.length;
+    }
+
+    function tokenMatchScore(token, words, haystack) {
+      if (haystack.includes(token)) return 12;
+      let best = 0;
+      for (const word of words) {
+        if (word.startsWith(token)) best = Math.max(best, 10);
+        else if (token.startsWith(word) && word.length >= 3) best = Math.max(best, 8);
+        else if (token.length >= 4 && isSubsequence(token, word)) best = Math.max(best, 5);
+      }
+      return best;
+    }
+
+    function searchScore(doc, query) {
+      const tokens = searchTokens(query);
+      if (!tokens.length) return 1;
+      const haystack = searchText(doc);
+      const words = searchTokens(haystack);
+      let score = 0;
+      let matched = 0;
+      for (const token of tokens) {
+        const tokenScore = tokenMatchScore(token, words, haystack);
+        if (tokenScore) {
+          matched += 1;
+          score += tokenScore;
+        }
+      }
+      if (matched < Math.max(1, Math.round(tokens.length * 0.34))) return 0;
+      const title = String(doc.title || "").toLowerCase();
+      const dest = String(doc.dest || "").toLowerCase();
+      if (tokens.some((token) => title.includes(token))) score += 8;
+      if (tokens.some((token) => dest.includes(token))) score += 4;
+      return score;
+    }
+
+    function docMatches(doc, active) {
+      return (!active.q || searchScore(doc, active.q) > 0)
+        && (!active.group || doc.group === active.group)
+        && (!active.topic || (doc.topics || []).includes(active.topic))
+        && (!active.type || doc.type === active.type);
+    }
+
+    function render() {
+      const active = filters();
+      const docs = state.docs
+        .filter((doc) => docMatches(doc, active))
+        .sort((a, b) => active.q ? searchScore(b, active.q) - searchScore(a, active.q) : 0);
+      currentDocs = docs;
+      elements.stats.innerHTML = [
+        `${docs.length} shown`,
+        `${state.docs.length} indexed`,
+        active.group || "all areas"
+      ].map((text) => `<span class="stat">${escapeHtml(text)}</span>`).join("");
+
+      elements.results.innerHTML = docs.length
+        ? groupBy(docs, (doc) => doc.group || "Reference").map(([area, areaDocs]) => `
+            <details class="area" open>
+              <summary class="area-head">
+                <strong>${escapeHtml(area)}</strong>
+                <span>${areaDocs.length} docs</span>
+              </summary>
+              ${groupBy(areaDocs, sectionLabel).map(([section, sectionDocs]) => `
+                <details class="section" open>
+                  <summary class="section-head">
+                    <strong>${escapeHtml(section)}</strong>
+                    <span>${sectionDocs.length}</span>
+                  </summary>
+                  <div class="doc-list">
+                    ${sectionDocs.map((doc) => `
+                      <a class="doc-row" href="${renderedHref(doc.dest)}">
+                        <span>
+                          <span class="doc-title">${escapeHtml(doc.title)}</span><br>
+                          <span class="path">${escapeHtml(doc.dest)}</span>
+                        </span>
+                        <span>${escapeHtml(doc.summary || "No summary yet.")}</span>
+                        <span class="tags">
+                          <span class="tag">${escapeHtml(doc.type || "Reference")}</span>
+                          ${(doc.topics || []).slice(0, 3).map((topic) => `<span class="tag">${escapeHtml(topicLabel(topic))}</span>`).join("")}
+                        </span>
+                      </a>
+                    `).join("")}
+                  </div>
+                </details>
+              `).join("")}
+            </details>
+          `).join("")
+        : '<div class="empty">No docs match these filters.</div>';
+      renderAutocomplete(docs, active);
+      syncUrl();
+    }
+
+    function renderAutocomplete(docs, active) {
+      const shouldShow = Boolean(active.q) && docs.length > 0;
+      elements.autocomplete.classList.toggle("active", shouldShow);
+      if (!shouldShow) {
+        elements.autocomplete.innerHTML = "";
+        elements.searchHint.textContent = "Typing filters instantly. Enter asks local Claude Code using the visible matches.";
+        return;
+      }
+      const topDocs = docs.slice(0, 6);
+      elements.searchHint.textContent = `${docs.length} matching docs. Press Enter to ask using these results.`;
+      elements.autocomplete.innerHTML = topDocs.map((doc) => `
+        <a class="autocomplete-row" href="${renderedHref(doc.dest)}">
+          <strong>${escapeHtml(doc.title)}</strong>
+          <span>${escapeHtml(doc.summary || "No summary yet.")}</span>
+          <code>${escapeHtml(doc.dest)}</code>
+        </a>
+      `).join("");
+    }
+
+    function docsForAsk() {
+      return currentDocs.slice(0, 12).map((doc) => ({
+        title: doc.title,
+        url: renderedHref(doc.dest),
+        source: doc.source,
+        dest: doc.dest,
+        snippet: doc.summary || "",
+        topics: doc.topics || []
+      }));
+    }
+
+    async function askDocs() {
+      const query = elements.routeInput.value.trim();
+      if (!query) {
+        elements.routeInput.focus();
+        return;
+      }
+      if (askController) askController.abort();
+      askController = new AbortController();
+      elements.aiAnswer.classList.add("active");
+      elements.aiAnswer.setAttribute("aria-busy", "true");
+      elements.routeForm.classList.add("asking");
+      elements.aiAnswerStatus.textContent = "Asking local Claude Code...";
+      elements.aiAnswerBody.innerHTML = '<div class="answer-loading"><span class="answer-spinner" aria-hidden="true"></span><span>Searching docs and preparing a cited answer.</span></div>';
+      elements.citationList.innerHTML = "";
+      elements.askButton.disabled = true;
+      try {
+        const response = await fetch("/docs/api/ask", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ query, filteredResults: docsForAsk() }),
+          signal: askController.signal
+        });
+        const payload = await readJsonResponse(response);
+        if (!response.ok) {
+          throw new Error(payload.detail || payload.error || "Docs ask failed.");
+        }
+        const answerPayload = normalizeAnswerPayload(payload);
+        currentAnswer = answerPayload.copyText || answerPayload.answer || "";
+        elements.aiAnswerStatus.textContent = answerPayload.totalCostUsd ? `Claude Code · $${Number(answerPayload.totalCostUsd).toFixed(4)}` : "Claude Code";
+        elements.aiAnswerBody.innerHTML = markdownToHtml(answerPayload.answer || answerPayload.copyText);
+        elements.citationList.innerHTML = (answerPayload.citations || []).map((citation) => `
+          <a href="${escapeHtml(citation.url || "#")}" title="${escapeHtml(citation.source || "")}">
+            ${escapeHtml(citation.title || citation.source || "Source")}
+          </a>
+        `).join("");
+      } catch (error) {
+        if (error.name === "AbortError") return;
+        currentAnswer = "";
+        elements.aiAnswerStatus.textContent = "Unavailable";
+        elements.aiAnswerBody.innerHTML = `<p>${escapeHtml(error.message || "Could not ask local Claude Code.")}</p>`;
+      } finally {
+        elements.askButton.disabled = false;
+        elements.routeForm.classList.remove("asking");
+        elements.aiAnswer.setAttribute("aria-busy", "false");
+        askController = null;
+      }
+    }
+
+    function renderRoutes() {
+      elements.routeGrid.innerHTML = routes.map((route) => `
+        <article class="route">
+          <div>
+            <h3>${escapeHtml(route.title)}</h3>
+            <p>${escapeHtml(route.copy)}</p>
+          </div>
+          <div class="route-actions">
+            ${route.links.map(([label, kind, value]) => `
+              <button type="button" data-filter="${escapeHtml(kind)}" data-value="${escapeHtml(value)}">
+                <span>${escapeHtml(label)}</span><span>${escapeHtml(kind)}</span>
+              </button>
+            `).join("")}
+          </div>
+        </article>
+      `).join("");
+    }
+
+    function renderConcepts() {
+      const indexedTopics = new Set(state.docs.flatMap((doc) => doc.topics || []));
+      elements.conceptGrid.innerHTML = conceptClusters.map(([title, ids]) => {
+        const visibleIds = ids.filter((id) => indexedTopics.has(id));
+        if (!visibleIds.length) return "";
+        return `
+          <article class="concept-card">
+            <h3>${escapeHtml(title)}</h3>
+            <p>${escapeHtml(visibleIds.map(topicLabel).join(", "))}</p>
+            <div class="topic-chips">
+              ${visibleIds.map((id) => `
+                <button class="topic-chip" type="button" data-filter="topic" data-value="${escapeHtml(id)}">
+                  ${escapeHtml(topicLabel(id))}
+                </button>
+              `).join("")}
+            </div>
+          </article>
+        `;
+      }).join("");
+    }
+
+    function renderReadingPath() {
+      elements.pathRail.innerHTML = readingPath.map(([title, links], index) => `
+        <article class="path-step" data-step="${index + 1}">
+          <h3>${escapeHtml(title)}</h3>
+          ${links.map(([label, kind, value]) => `
+            <button type="button" data-filter="${escapeHtml(kind)}" data-value="${escapeHtml(value)}">
+              ${escapeHtml(label)}
+            </button>
+          `).join("")}
+        </article>
+      `).join("");
+    }
+
+    function hydrateControls() {
+      const groups = [...new Set(state.docs.map((doc) => doc.group).filter(Boolean))].sort();
+      const topics = [...new Set(state.docs.flatMap((doc) => doc.topics || []))]
+        .sort((a, b) => topicLabel(a).localeCompare(topicLabel(b)));
+      const types = [...new Set(state.docs.map((doc) => doc.type).filter(Boolean))].sort();
+      elements.group.innerHTML = optionList(groups, "collections");
+      elements.topic.innerHTML = optionPairs(
+        topics.map((topic) => ({ value: topic, text: topicLabel(topic) })),
+        "topics"
+      );
+      elements.type.innerHTML = optionList(types, "types");
+
+      elements.routeInput.value = state.query.get("q") || "";
+      elements.group.value = state.query.get("group") || "";
+      elements.topic.value = state.query.get("topic") || "";
+      elements.type.value = state.query.get("type") || "";
+    }
+
+    async function loadIndex() {
+      const response = await fetch("/docs/local-docs-manifest.json", { cache: "no-store" });
+      if (!response.ok) throw new Error("Local docs manifest is unavailable.");
+      const manifest = await response.json();
+      if (!manifest.local) throw new Error("This index is only available in local docs mode.");
+      state.docs = manifest.entries || [];
+      state.topics = manifest.topics || [];
+      hydrateControls();
+      renderRoutes();
+      renderConcepts();
+      renderReadingPath();
+      render();
+      requestAnimationFrame(() => elements.routeInput.focus());
+    }
+
+    function handleFilterClick(event) {
+      const button = event.target.closest("[data-filter]");
+      if (!button) return;
+      setFilter(button.dataset.filter, button.dataset.value);
+    }
+
+    elements.routeForm.addEventListener("submit", (event) => {
+      event.preventDefault();
+      askDocs();
+    });
+    elements.routeInput.addEventListener("input", render);
+    elements.routeShowAll.addEventListener("click", clearFilters);
+    elements.openAll.addEventListener("click", clearFilters);
+    elements.routeGrid.addEventListener("click", handleFilterClick);
+    elements.conceptGrid.addEventListener("click", handleFilterClick);
+    elements.pathRail.addEventListener("click", handleFilterClick);
+    document.querySelector(".path-head").addEventListener("click", handleFilterClick);
+    for (const input of [elements.group, elements.topic, elements.type]) {
+      input.addEventListener("input", render);
+      input.addEventListener("change", render);
+    }
+    elements.copyAnswer.addEventListener("click", async () => {
+      if (!currentAnswer) return;
+      try {
+        await navigator.clipboard.writeText(currentAnswer);
+        elements.aiAnswerStatus.textContent = "Copied";
+      } catch {
+        const textArea = document.createElement("textarea");
+        textArea.value = currentAnswer;
+        textArea.setAttribute("readonly", "");
+        textArea.style.position = "fixed";
+        textArea.style.opacity = "0";
+        document.body.appendChild(textArea);
+        textArea.select();
+        document.execCommand("copy");
+        textArea.remove();
+        elements.aiAnswerStatus.textContent = "Copied";
+      }
+    });
+    elements.dismissAnswer.addEventListener("click", () => {
+      elements.aiAnswer.classList.remove("active");
+    });
+    elements.reset.addEventListener("click", () => {
+      clearFilters();
+    });
+    elements.showAll.addEventListener("click", clearFilters);
+    elements.expandAll.addEventListener("click", () => {
+      document.querySelectorAll("#results details").forEach((details) => {
+        details.open = true;
+      });
+    });
+    elements.collapseAll.addEventListener("click", () => {
+      document.querySelectorAll("#results details").forEach((details) => {
+        details.open = false;
+      });
+    });
+
+    loadIndex().catch((error) => {
+      elements.results.innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
+    });
+  </script>
+</body>
+</html>

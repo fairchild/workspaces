@@ -19,23 +19,12 @@ const publicDocsRoot = path.join(webRoot, "public", "docs");
 const manifestPath = path.join(scriptDir, "docs-sync-manifest.json");
 const readerTemplatePath = sourcePath("docs/reader.html");
 const checkMode = process.argv.includes("--check");
+const localMode = process.argv.includes("--local");
 
 const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
-const publicManifest = {
-	generatedBy: "web/scripts/docs-sync.mjs",
-	documents: manifest.documents.map((entry) => entry.dest),
-	renderedRoutes: manifest.documents.map((entry) => renderedRoute(entry.dest)),
-	entries: manifest.documents.map(
-		({ source, dest, title, group, topics, summary }) => ({
-			source,
-			dest,
-			title,
-			group,
-			topics,
-			summary,
-		}),
-	),
-};
+const topicCatalog = manifest.topics ?? [];
+const publicEntries = manifest.documents.map(normalizeManifestEntry);
+const publicManifest = docsManifest(publicEntries, { local: false });
 
 function sourcePath(relativePath) {
 	return path.join(repoRoot, relativePath);
@@ -61,6 +50,157 @@ function sha256(content) {
 	return createHash("sha256").update(content).digest("hex");
 }
 
+function normalizeManifestEntry({
+	source,
+	dest,
+	title,
+	group,
+	topics,
+	summary,
+	type,
+	published,
+}) {
+	return {
+		source,
+		dest,
+		title,
+		group,
+		topics: topics ?? [],
+		summary,
+		type: type ?? group ?? "Docs",
+		published: published ?? true,
+	};
+}
+
+function docsManifest(entries, { local }) {
+	return {
+		generatedBy: "web/scripts/docs-sync.mjs",
+		local,
+		documents: entries.map((entry) => entry.dest),
+		renderedRoutes: entries.map((entry) => renderedRoute(entry.dest)),
+		entries: entries.map(
+			({ source, dest, title, group, topics, summary, type, published }) => ({
+				source,
+				dest,
+				title,
+				group,
+				topics,
+				summary,
+				type,
+				published,
+			}),
+		),
+		topics: topicCatalog,
+	};
+}
+
+function titleFromMarkdown(content, fallback) {
+	const heading = /^#\s+(.+)$/m.exec(content);
+	return heading?.[1]?.replace(/`/g, "").trim() || fallback;
+}
+
+function summaryFromMarkdown(content) {
+	const lines = content
+		.replace(/^Last updated:\s*`?[^`\n]+`?\s*/im, "")
+		.split(/\n+/)
+		.map((line) => line.trim())
+		.filter(
+			(line) =>
+				line &&
+				!line.startsWith("#") &&
+				!line.startsWith("```") &&
+				!line.startsWith("|") &&
+				!line.startsWith("![") &&
+				!line.startsWith("["),
+		);
+	const first = lines.find((line) => !/^[-*\d.]+\s/.test(line)) || "";
+	return first.replace(/\*\*/g, "").replace(/`/g, "").slice(0, 180);
+}
+
+function titleCase(value) {
+	return value
+		.split(/[-_/]+/)
+		.filter(Boolean)
+		.map((part) => `${part[0]?.toUpperCase() || ""}${part.slice(1)}`)
+		.join(" ");
+}
+
+function localGroup(source) {
+	const parts = source.split("/");
+	if (parts[0] !== "docs" || parts.length < 3) return "Reference";
+	const group = parts[1];
+	if (group === "ops") return "Operations";
+	return titleCase(group);
+}
+
+function localType(source) {
+	if (source.includes("/performance/")) return "Evidence";
+	if (source.includes("/ops/")) return "Operations";
+	if (
+		source.includes("/design/") ||
+		source.includes("/specs/") ||
+		source.includes("/plans/")
+	)
+		return "Design";
+	if (source.includes("/development/") || source.includes("/agents/"))
+		return "Development";
+	if (source.includes("runbook") || source.includes("runner"))
+		return "Operations";
+	return "Reference";
+}
+
+function topicAppears(content, alias) {
+	const pattern = new RegExp(
+		`(^|[^a-z0-9])${alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^a-z0-9]|$)`,
+		"i",
+	);
+	return pattern.test(content);
+}
+
+function localTopics(content, source) {
+	const topics = topicCatalog
+		.filter((topic) =>
+			(topic.aliases ?? []).some((alias) => topicAppears(content, alias)),
+		)
+		.map((topic) => topic.id);
+	if (source.includes("lume") && !topics.includes("lume")) topics.push("lume");
+	if (source.includes("ghostty") && !topics.includes("ghostty"))
+		topics.push("ghostty");
+	if (source.includes("performance") && !topics.includes("performance"))
+		topics.push("performance");
+	if (source.includes("evidence") && !topics.includes("evidence"))
+		topics.push("evidence");
+	return [...new Set(topics)];
+}
+
+async function localDocsEntries() {
+	const bySource = new Set(publicEntries.map((entry) => entry.source));
+	const byDest = new Map(publicEntries.map((entry) => [entry.dest, entry]));
+	const docsFiles = (await collectFiles(sourcePath("docs")))
+		.filter((file) => path.extname(file) === ".md")
+		.map((file) => path.relative(repoRoot, file))
+		.sort();
+
+	for (const source of docsFiles) {
+		if (bySource.has(source)) continue;
+		const dest = path.relative(sourcePath("docs"), sourcePath(source));
+		if (byDest.has(dest)) continue;
+		const content = await readFile(sourcePath(source), "utf8");
+		byDest.set(dest, {
+			source,
+			dest,
+			title: titleFromMarkdown(content, titleCase(path.basename(dest, ".md"))),
+			group: localGroup(source),
+			topics: localTopics(content, source),
+			summary: summaryFromMarkdown(content),
+			type: localType(source),
+			published: false,
+		});
+	}
+
+	return [...byDest.values()].sort((a, b) => a.dest.localeCompare(b.dest));
+}
+
 async function readGeneratedFile(entry) {
 	return await readFile(sourcePath(entry.source), "utf8");
 }
@@ -69,8 +209,8 @@ async function readRenderedPage(markdownPath) {
 	const template = await readFile(readerTemplatePath, "utf8");
 	const config = `    window.WORKSPACES_DOC_PATH = ${JSON.stringify(markdownPath)};\n`;
 	return template.replace(
-		"    const terms = [",
-		`${config}    const terms = [`,
+		"    const fallbackTopicCatalog = [",
+		`${config}    const fallbackTopicCatalog = [`,
 	);
 }
 
@@ -104,7 +244,8 @@ async function copyDirectory(source, destination, includeExtensions) {
 	}
 }
 
-async function syncDocs() {
+async function syncDocs({ entries = publicEntries, local = false } = {}) {
+	const generatedManifest = docsManifest(entries, { local });
 	await rm(publicDocsRoot, { recursive: true, force: true });
 	await mkdir(publicDocsRoot, { recursive: true });
 
@@ -121,7 +262,17 @@ async function syncDocs() {
 		await writeFile(target, content);
 	}
 
-	for (const entry of manifest.documents) {
+	if (local) {
+		const indexSource = "docs/developer-operator-index.html";
+		const indexTarget = destPath("developer-operator-index.html");
+		await mkdir(path.dirname(indexTarget), { recursive: true });
+		await writeFile(
+			indexTarget,
+			await readGeneratedFile({ source: indexSource }),
+		);
+	}
+
+	for (const entry of entries) {
 		const content = await readGeneratedFile(entry);
 		const target = destPath(entry.dest);
 		await mkdir(path.dirname(target), { recursive: true });
@@ -133,6 +284,12 @@ async function syncDocs() {
 	}
 
 	await writeFile(destPath("docs-manifest.json"), sortJson(publicManifest));
+	if (local) {
+		await writeFile(
+			destPath("local-docs-manifest.json"),
+			sortJson(generatedManifest),
+		);
+	}
 
 	for (const entry of manifest.assetDirectories) {
 		await copyDirectory(
@@ -326,8 +483,9 @@ async function checkDocs() {
 if (checkMode) {
 	await checkDocs();
 } else {
-	await syncDocs();
+	const entries = localMode ? await localDocsEntries() : publicEntries;
+	await syncDocs({ entries, local: localMode });
 	console.log(
-		`Synced ${publicManifest.documents.length} docs to web/public/docs.`,
+		`Synced ${entries.length} docs to web/public/docs${localMode ? " (local mode)" : ""}.`,
 	);
 }

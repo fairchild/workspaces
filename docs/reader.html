@@ -157,6 +157,34 @@
       overflow: hidden;
     }
 
+    .breadcrumb {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 7px;
+      padding: 18px 26px 0;
+      color: var(--quiet);
+      font-family: var(--mono);
+      font-size: 0.76rem;
+    }
+
+    .breadcrumb[hidden] {
+      display: none;
+    }
+
+    .breadcrumb a {
+      color: var(--muted);
+    }
+
+    .breadcrumb a:hover {
+      color: var(--mint);
+      text-decoration: none;
+    }
+
+    .breadcrumb span {
+      color: var(--quiet);
+    }
+
     .hero-grid {
       display: grid;
       grid-template-columns: minmax(0, 1fr);
@@ -260,6 +288,10 @@
       margin: 0 0 12px;
       color: var(--muted);
       font-size: 0.88rem;
+    }
+
+    .topic-definition {
+      color: #d6d9d3;
     }
 
     .topic-links {
@@ -617,6 +649,7 @@
   <div class="layout">
     <main>
       <section class="hero" aria-labelledby="doc-title">
+        <nav class="breadcrumb" id="breadcrumb" aria-label="Documentation breadcrumb" hidden></nav>
         <div class="hero-grid">
           <div>
             <p class="eyebrow" id="doc-kind">Rendered Markdown</p>
@@ -655,15 +688,21 @@
   </div>
 
   <script>
-    const terms = [
-      { id: "workspaces", name: "WorkSpaces", aliases: ["WorkSpaces"] },
-      { id: "repository", name: "Repository", aliases: ["repository", "repositories", "repo", "repos"] },
-      { id: "workspace", name: "Workspace", aliases: ["workspace", "workspaces"] },
-      { id: "terminal-session", name: "Terminal Session", aliases: ["terminal session", "terminal sessions", "terminal"] },
-      { id: "surface", name: "Surface", aliases: ["surface", "surfaces", "last surface"] },
-      { id: "repo-overview", name: "Repo Overview", aliases: ["repo overview", "repository overview"] },
-      { id: "web-source", name: "Web Source", aliases: ["web source", "web sources", "web view", "web views"] },
-      { id: "detail-pane", name: "Detail Pane", aliases: ["detail pane", "right pane", "file/changes pane"] }
+    const fallbackTopicCatalog = [
+      { id: "workspaces", label: "WorkSpaces", definition: "The Mac-native app for terminal-first AI coding session management.", chip: false, priority: 0, aliases: ["WorkSpaces"] },
+      { id: "repository", label: "Repository", definition: "A tracked local codebase that anchors overviews, terminals, workspaces, and repo-owned web sources.", chip: true, priority: 20, aliases: ["repository", "repositories", "repo", "repos"] },
+      { id: "workspace", label: "Workspace", definition: "An isolated working copy or provider-backed environment created from a repository for a single work stream.", chip: true, priority: 10, aliases: ["workspace", "workspaces"] },
+      { id: "terminal-session", label: "Terminal Session", definition: "A resumable terminal context attached to a repository or workspace.", chip: true, priority: 30, aliases: ["terminal session", "terminal sessions", "terminal"] },
+      { id: "surface", label: "Surface", definition: "The currently selected main content target, such as a repo overview, terminal session, or web source.", chip: true, priority: 40, aliases: ["surface", "surfaces", "last surface"] },
+      { id: "provider", label: "Provider", definition: "A backing runtime that can create isolated workspace environments.", chip: true, priority: 50, aliases: ["provider", "providers", "runtime"] },
+      { id: "lume", label: "Lume", definition: "The local macOS VM provider used for WorkSpaces isolation and validation.", chip: true, priority: 60, aliases: ["lume"] },
+      { id: "ghostty", label: "Ghostty", definition: "The embedded terminal engine and integration boundary for terminal rendering, focus, and shortcuts.", chip: true, priority: 70, aliases: ["ghostty", "libghostty", "ghosttykit"] },
+      { id: "evidence", label: "Evidence", definition: "The captured proof used to verify behavior, review risk, and support merge readiness.", chip: true, priority: 80, aliases: ["evidence", "proof", "validation"] },
+      { id: "performance", label: "Performance", definition: "The measured startup, interaction, and runtime behavior that keeps WorkSpaces responsive.", chip: true, priority: 90, aliases: ["performance", "latency", "metrics"] },
+      { id: "mergeability", label: "Mergeability", definition: "The standard for changes that are coherent, verified, reviewable, and ready to land.", chip: true, priority: 100, aliases: ["mergeability", "mergeable", "merge gate"] },
+      { id: "repo-overview", label: "Repo Overview", definition: "The repository-level surface for navigation and launch actions before entering a terminal or web view.", chip: true, priority: 110, aliases: ["repo overview", "repository overview"] },
+      { id: "web-source", label: "Web Source", definition: "A saved web destination owned globally, by a repository, or by a workspace.", chip: true, priority: 120, aliases: ["web source", "web sources", "web view", "web views"] },
+      { id: "detail-pane", label: "Detail Pane", definition: "The collapsible right-side supporting pane for files, changes, and selected-context details.", chip: true, priority: 130, aliases: ["detail pane", "right pane", "file/changes pane"] }
     ];
 
     const docsBase = "/docs/";
@@ -680,6 +719,8 @@
     let activeTopic = null;
     let currentEntry = null;
     let referenceDefinitions = new Map();
+    let topicCatalog = fallbackTopicCatalog;
+    let activeManifestIsLocal = false;
 
     function escapeHtml(value) {
       return value
@@ -745,10 +786,10 @@
 
     async function loadPublishedDocs() {
       if (publishedDocs) return publishedDocs;
-      const manifests = [
-        manifestUrl,
-        "/web/scripts/docs-sync-manifest.json"
-      ];
+      const isLocalHost = ["localhost", "127.0.0.1", "::1"].includes(location.hostname);
+      const manifests = isLocalHost
+        ? ["/docs/local-docs-manifest.json", manifestUrl, "/web/scripts/docs-sync-manifest.json"]
+        : [manifestUrl];
       for (const url of manifests) {
         try {
           const response = await fetch(url, { cache: "no-store" });
@@ -763,6 +804,8 @@
             ? manifest.documents.map((entry) => typeof entry === "string" ? entry : entry.dest)
             : manifestEntries.map((entry) => entry.dest);
           publishedDocs = new Set(docs.filter(Boolean));
+          topicCatalog = Array.isArray(manifest.topics) && manifest.topics.length ? manifest.topics : fallbackTopicCatalog;
+          activeManifestIsLocal = Boolean(manifest.local);
           return publishedDocs;
         } catch {
           continue;
@@ -1026,12 +1069,16 @@
       return first.replace(/\*\*/g, "").replace(/`/g, "").slice(0, 220);
     }
 
-    function detectedTerms(markdown) {
-      return terms.filter((term) => term.aliases.some((alias) => termAppears(markdown, alias)));
+    function topicInfo(topic) {
+      return topicCatalog.find((term) => term.id === topic) || null;
     }
 
     function topicLabel(topic) {
-      return terms.find((term) => term.id === topic)?.name || topic.replace(/-/g, " ");
+      return topicInfo(topic)?.label || topic.replace(/-/g, " ");
+    }
+
+    function topicDefinition(topic) {
+      return topicInfo(topic)?.definition || "A WorkSpaces documentation concept used to connect related pages.";
     }
 
     function docEntry(path) {
@@ -1064,7 +1111,7 @@
         ? groupDocs(currentEntry.group)
         : fallbackDocs();
       title.textContent = currentEntry?.group
-        ? `More in ${currentEntry.group}`
+        ? `In ${currentEntry.group}`
         : "Published Docs";
       heading.textContent = currentEntry?.group
         ? "Same documentation group."
@@ -1091,6 +1138,7 @@
       panel.hidden = false;
       panel.innerHTML = `
         <h2>Related to ${escapeHtml(label)}</h2>
+        <p class="topic-definition">${escapeHtml(topicDefinition(topic))}</p>
         <p>Pages that share this WorkSpaces concept.</p>
         <div class="topic-links">
           ${docs.map((entry) => `<a href="${renderedDocHref(entry.dest)}">${escapeHtml(entry.title)}<span>${escapeHtml(entry.group || "Docs")}</span></a>`).join("")}
@@ -1106,12 +1154,14 @@
       renderTopicPanel(activeTopic);
     }
 
-    function renderTermChips(markdown) {
-      const found = detectedTerms(markdown)
+    function renderTermChips() {
+      const found = (currentEntry?.topics || [])
+        .map((topic) => topicInfo(topic))
+        .filter((term) => term && term.chip !== false)
         .map((term) => ({ ...term, relatedCount: relatedDocs(term.id).length }))
         .filter((term) => term.relatedCount > 0);
       const chipHtml = found.length
-        ? found.map((term) => `<button class="chip" type="button" data-topic="${term.id}" data-related-count="${term.relatedCount}" aria-expanded="false" aria-controls="topic-panel" title="Show related docs for ${escapeHtml(term.name)}">${term.name}</button>`).join("")
+        ? found.sort((a, b) => (a.priority || 999) - (b.priority || 999)).map((term) => `<button class="chip" type="button" data-topic="${term.id}" data-related-count="${term.relatedCount}" aria-expanded="false" aria-controls="topic-panel" title="${escapeHtml(term.definition || `Show related docs for ${term.label}`)}">${term.label}</button>`).join("")
         : "";
       const conceptMap = document.querySelector("#concept-map");
       conceptMap.innerHTML = chipHtml;
@@ -1121,6 +1171,35 @@
       activeTopic = null;
       renderTopicPanel(null);
       renderContextDocs();
+    }
+
+    function slugForGroup(value) {
+      return slugify(value || "docs");
+    }
+
+    function groupHref(group) {
+      if (!group) return "/docs/";
+      return activeManifestIsLocal
+        ? `/docs/developer-operator-index.html?group=${encodeURIComponent(group)}`
+        : `/docs/#group-${slugForGroup(group)}`;
+    }
+
+    function renderBreadcrumb(displayPath, title) {
+      const breadcrumb = document.querySelector("#breadcrumb");
+      if (!currentEntry) {
+        breadcrumb.hidden = true;
+        breadcrumb.innerHTML = "";
+        return;
+      }
+      const group = currentEntry.group || "Docs";
+      breadcrumb.hidden = false;
+      breadcrumb.innerHTML = `
+        <a href="/docs/">Docs</a>
+        <span>/</span>
+        <a href="${groupHref(group)}">${escapeHtml(group)}</a>
+        <span>/</span>
+        <span>${escapeHtml(currentEntry.title || title || displayPath)}</span>
+      `;
     }
 
     function extractUpdatedAt(markdown) {
@@ -1176,6 +1255,7 @@
       document.querySelector("#doc-updated-wrap").hidden = true;
       document.querySelector("#toolbar-title").textContent = path || "unknown";
       document.querySelector("#concept-map").innerHTML = '<span class="chip quiet">Not in public manifest</span>';
+      document.querySelector("#breadcrumb").hidden = true;
       currentEntry = null;
       renderContextDocs();
       renderOutline([]);
@@ -1217,7 +1297,8 @@
             : "Rendered Markdown";
         document.querySelector("#doc-summary").textContent = entry?.summary || summaryFrom(displayMarkdown, title);
         renderUpdatedAt(markdown);
-        renderTermChips(displayMarkdown);
+        renderBreadcrumb(displayPath, title);
+        renderTermChips();
         renderOutline(rendered.headings);
         content.innerHTML = rendered.html;
       } catch (error) {
