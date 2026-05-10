@@ -34,13 +34,20 @@ final class ClaudeIntegrationLifecycle: ObservableObject {
     private var didStart = false
     private var defaults: UserDefaults = .standard
     private var installerFactory: @Sendable (String) async -> any ClaudeSettingsInstalling = {
-        socketPath in
+        _ in
         let installer = ClaudeSettingsInstaller()
-        let scriptPath = ClaudeIntegrationLifecycle.extractTitleEmitScript()
+        guard let eventForwarderPath = ClaudeIntegrationLifecycle.extractEventForwarderScript()
+        else {
+            NSLog(
+                "[ClaudeIntegration] event-forwarder.sh extraction failed; channel 1 settings install will be skipped"
+            )
+            return installer
+        }
+        let titleEmitPath = ClaudeIntegrationLifecycle.extractTitleEmitScript()
         await installer.register(
             workspacesHooksContribution(
-                socketPath: socketPath,
-                titleEmitScriptPath: scriptPath
+                eventForwarderScriptPath: eventForwarderPath,
+                titleEmitScriptPath: titleEmitPath
             )
         )
         await installer.register(workspacesNotifChannelContribution())
@@ -149,11 +156,27 @@ final class ClaudeIntegrationLifecycle: ObservableObject {
         }
     }
 
+    /// Copy the bundled `event-forwarder.sh` (Channel 1 hook event forwarder) to a
+    /// stable location under Application Support and chmod it executable. Returns
+    /// the destination path, or nil if extraction failed — the contribution then
+    /// declines to register, and Channel 1 stays dormant for this session.
+    nonisolated static func extractEventForwarderScript() -> String? {
+        extractHookForwarderScript(named: "event-forwarder")
+    }
+
     /// Copy the bundled `title-emit.sh` (Channel 3 hook forwarder) to a stable
     /// location under Application Support and chmod it executable. Returns the
     /// destination path, or nil if extraction failed — the contribution then
-    /// degrades gracefully to HTTP-only hooks.
+    /// degrades gracefully to event-forwarder-only hooks.
     nonisolated static func extractTitleEmitScript() -> String? {
+        extractHookForwarderScript(named: "title-emit")
+    }
+
+    /// Generic helper used by both the event-forwarder and title-emit extractors:
+    /// copies `<name>.sh` from the bundle's `HookForwarders/` resource directory
+    /// to `~/Library/Application Support/<bundle-id>/HookForwarders/<name>.sh`,
+    /// chmods it 0o755, returns the destination path. Nil on any failure.
+    nonisolated private static func extractHookForwarderScript(named name: String) -> String? {
         let bundleID = Bundle.main.bundleIdentifier ?? "com.cloudcompute.workspaces"
         let appSupport = FileManager.default.urls(
             for: .applicationSupportDirectory,
@@ -167,13 +190,13 @@ final class ClaudeIntegrationLifecycle: ObservableObject {
         try? FileManager.default.createDirectory(
             at: dir, withIntermediateDirectories: true
         )
-        let dest = dir.appendingPathComponent("title-emit.sh")
+        let dest = dir.appendingPathComponent("\(name).sh")
 
         // Source: bundled .sh file. Falls back to nil silently — most tests
         // and previews don't run inside a real .app bundle.
         guard
             let bundleURL = Bundle.main.url(
-                forResource: "title-emit",
+                forResource: name,
                 withExtension: "sh",
                 subdirectory: "HookForwarders"
             )

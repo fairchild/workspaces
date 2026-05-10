@@ -53,7 +53,7 @@ struct ClaudeSettingsInstallerTests {
         try data.write(to: settingsURL)
 
         let installer = ClaudeSettingsInstaller(homeDirectory: home)
-        await installer.register(workspacesHooksContribution(socketPath: "/tmp/hooks.sock"))
+        await installer.register(workspacesHooksContribution(eventForwarderScriptPath: "/tmp/event-forwarder.sh"))
         try await installer.install()
 
         let updatedData = try Data(contentsOf: settingsURL)
@@ -63,24 +63,42 @@ struct ClaudeSettingsInstallerTests {
         #expect(updated["model"] as? String == "claude-opus-4")
 
         let preToolUse = hookGroups(named: "PreToolUse", in: updated)
-        // Original raw command hook is preserved and normalized into a matcher
-        // group; our http hook is added as a second matcherless group.
+        // Original user command hook is preserved and normalized; our event-forwarder
+        // command hook is added as a second matcherless group.
         #expect(preToolUse.count == 2)
         #expect(
             preToolUse.contains {
-                hookHandlers(in: $0).contains { ($0["type"] as? String) == "command" }
+                hookHandlers(in: $0).contains {
+                    ($0["type"] as? String) == "command"
+                        && ($0["command"] as? String) == "/usr/local/bin/myhook"
+                }
             })
         #expect(
             preToolUse.contains {
-                hookHandlers(in: $0).contains { ($0["type"] as? String) == "http" }
+                hookHandlers(in: $0).contains {
+                    ($0["type"] as? String) == "command"
+                        && ($0["command"] as? String) == "/tmp/event-forwarder.sh"
+                }
             })
 
-        // Our endpoint should be wired for all spec-listed events.
+        // Our event-forwarder should be wired for every spec-listed event.
         let stop = hookGroups(named: "Stop", in: updated)
         #expect(
             stop.contains {
-                hookHandlers(in: $0).contains { ($0["type"] as? String) == "http" }
+                hookHandlers(in: $0).contains {
+                    ($0["type"] as? String) == "command"
+                        && ($0["command"] as? String) == "/tmp/event-forwarder.sh"
+                }
             })
+
+        // No `type: "http"` handlers anywhere — the http+unix:// scheme is broken in
+        // real Claude and must never be written by this installer again.
+        let allHookGroups = (updated["hooks"] as? [String: Any] ?? [:])
+            .values.flatMap { $0 as? [[String: Any]] ?? [] }
+        let anyHTTP = allHookGroups.contains { group in
+            hookHandlers(in: group).contains { ($0["type"] as? String) == "http" }
+        }
+        #expect(anyHTTP == false)
     }
 
     @Test("Backup file is written before mutation")
@@ -97,7 +115,7 @@ struct ClaudeSettingsInstallerTests {
         try originalData.write(to: settingsURL)
 
         let installer = ClaudeSettingsInstaller(homeDirectory: home)
-        await installer.register(workspacesHooksContribution(socketPath: "/tmp/hooks.sock"))
+        await installer.register(workspacesHooksContribution(eventForwarderScriptPath: "/tmp/event-forwarder.sh"))
         try await installer.install()
 
         let entries = try FileManager.default.contentsOfDirectory(at: claudeDir, includingPropertiesForKeys: nil)
@@ -116,7 +134,7 @@ struct ClaudeSettingsInstallerTests {
         defer { try? FileManager.default.removeItem(at: home) }
 
         let installer = ClaudeSettingsInstaller(homeDirectory: home)
-        await installer.register(workspacesHooksContribution(socketPath: "/tmp/hooks.sock"))
+        await installer.register(workspacesHooksContribution(eventForwarderScriptPath: "/tmp/event-forwarder.sh"))
         try await installer.install()
         try await installer.install()
 
@@ -124,14 +142,21 @@ struct ClaudeSettingsInstallerTests {
         let data = try Data(contentsOf: settingsURL)
         let updated = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
         let preToolUse = hookGroups(named: "PreToolUse", in: updated)
-        let httpEntries = preToolUse.flatMap { group in
-            hookHandlers(in: group).filter { ($0["type"] as? String) == "http" }
+        let eventForwarderEntries = preToolUse.flatMap { group in
+            hookHandlers(in: group).filter {
+                ($0["type"] as? String) == "command"
+                    && ($0["command"] as? String) == "/tmp/event-forwarder.sh"
+            }
         }
-        #expect(httpEntries.count == 1)
+        #expect(eventForwarderEntries.count == 1)
     }
 
-    @Test("Re-install normalizes legacy raw handler entries into matcher groups")
-    func reinstallNormalizesLegacyRawHandlers() async throws {
+    @Test("Re-install scrubs legacy http+unix:// hook entries from previous installer versions")
+    func reinstallScrubsLegacyHTTPUnixEntries() async throws {
+        // Background: PR #443's installer wrote `type: "http"` handlers with
+        // `http+unix://...` URLs. Real Claude Code does not speak that URL scheme,
+        // so every hook errored with `Unsupported protocol http+unix:`. The
+        // current installer self-heals by removing those handlers on every run.
         let home = makeTempHome()
         defer { try? FileManager.default.removeItem(at: home) }
 
@@ -144,9 +169,14 @@ struct ClaudeSettingsInstallerTests {
                 "Notification": [
                     [
                         "type": "http",
-                        "url": "http+unix://legacy/event",
+                        "url": "http+unix://legacy-pid-1234/event",
                         "async": true,
-                    ]
+                    ],
+                    [
+                        "type": "http",
+                        "url": "http+unix://legacy-pid-5678/event",
+                        "async": true,
+                    ],
                 ]
             ]
         ]
@@ -154,24 +184,31 @@ struct ClaudeSettingsInstallerTests {
         try data.write(to: settingsURL)
 
         let installer = ClaudeSettingsInstaller(homeDirectory: home)
-        await installer.register(workspacesHooksContribution(socketPath: "/tmp/hooks.sock"))
+        await installer.register(
+            workspacesHooksContribution(eventForwarderScriptPath: "/tmp/event-forwarder.sh"))
         try await installer.install()
 
         let updatedData = try Data(contentsOf: settingsURL)
         let updated = try JSONSerialization.jsonObject(with: updatedData) as? [String: Any] ?? [:]
         let notification = hookGroups(named: "Notification", in: updated)
-        #expect(notification.count == 2)
-        #expect(notification.allSatisfy { $0["type"] == nil })
-        #expect(
-            notification.contains {
-                hookHandlers(in: $0).contains { ($0["url"] as? String) == "http+unix://legacy/event" }
-            })
-        #expect(
-            notification.contains {
-                hookHandlers(in: $0).contains {
-                    ($0["url"] as? String) == "http+unix://%2Ftmp%2Fhooks%2Esock/event"
-                }
-            })
+
+        // Legacy http+unix:// entries are gone.
+        let anyLegacy = notification.contains { group in
+            hookHandlers(in: group).contains {
+                ($0["type"] as? String) == "http"
+                    && ((($0["url"] as? String) ?? "").hasPrefix("http+unix://"))
+            }
+        }
+        #expect(anyLegacy == false)
+
+        // Our event-forwarder command hook is wired in.
+        let hasEventForwarder = notification.contains { group in
+            hookHandlers(in: group).contains {
+                ($0["type"] as? String) == "command"
+                    && ($0["command"] as? String) == "/tmp/event-forwarder.sh"
+            }
+        }
+        #expect(hasEventForwarder)
     }
 
     @Test("renderPreview describes pending changes")
@@ -180,7 +217,7 @@ struct ClaudeSettingsInstallerTests {
         defer { try? FileManager.default.removeItem(at: home) }
 
         let installer = ClaudeSettingsInstaller(homeDirectory: home)
-        await installer.register(workspacesHooksContribution(socketPath: "/tmp/hooks.sock"))
+        await installer.register(workspacesHooksContribution(eventForwarderScriptPath: "/tmp/event-forwarder.sh"))
         let preview = try await installer.renderPreview()
         #expect(preview.contains("workspaces.hooks"))
         #expect(preview.contains("Stop"))
@@ -192,7 +229,7 @@ struct ClaudeSettingsInstallerTests {
         defer { try? FileManager.default.removeItem(at: home) }
 
         let installer = ClaudeSettingsInstaller(homeDirectory: home)
-        await installer.register(workspacesHooksContribution(socketPath: "/tmp/hooks.sock"))
+        await installer.register(workspacesHooksContribution(eventForwarderScriptPath: "/tmp/event-forwarder.sh"))
         let beforeInstall = await installer.isInstalled()
         #expect(beforeInstall == false)
         try await installer.install()
@@ -244,7 +281,7 @@ struct ClaudeSettingsInstallerTests {
         try original.write(to: settingsURL)
 
         let installer = ClaudeSettingsInstaller(homeDirectory: home)
-        await installer.register(workspacesHooksContribution(socketPath: "/tmp/hooks.sock"))
+        await installer.register(workspacesHooksContribution(eventForwarderScriptPath: "/tmp/event-forwarder.sh"))
         await installer.register(
             workspacesStatusLineContribution(forwarderPath: "/tmp/statusline.sh")
         )
@@ -256,11 +293,14 @@ struct ClaudeSettingsInstallerTests {
         // Theme survives.
         #expect(updated["theme"] as? String == "dark")
 
-        // Hook routes wired up for all spec-listed events.
+        // Event-forwarder command hooks wired up for all spec-listed events.
         let stop = hookGroups(named: "Stop", in: updated)
         #expect(
             stop.contains {
-                hookHandlers(in: $0).contains { ($0["type"] as? String) == "http" }
+                hookHandlers(in: $0).contains {
+                    ($0["type"] as? String) == "command"
+                        && ($0["command"] as? String) == "/tmp/event-forwarder.sh"
+                }
             })
 
         // statusLine block points at our forwarder; original `padding` field is

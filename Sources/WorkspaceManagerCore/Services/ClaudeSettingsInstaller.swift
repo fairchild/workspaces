@@ -292,23 +292,23 @@ private func claudeGroupContainsHandler(
     claudeHookHandlers(in: group).contains(where: predicate)
 }
 
-/// Build the contribution that registers our HTTP hook routes in `~/.claude/settings.json`.
-/// `socketPath` is the Unix socket the running app is listening on. When
-/// `titleEmitScriptPath` is non-nil the contribution also registers a
+/// Build the contribution that registers our hook routes in `~/.claude/settings.json`.
+/// `eventForwarderScriptPath` is the absolute path to the bundled `event-forwarder.sh`
+/// shell. When `titleEmitScriptPath` is non-nil the contribution also registers a
 /// `UserPromptSubmit`/`Stop` command hook that emits OSC 2 — the Channel 3 path
 /// that updates the embedded terminal's tab title without app-side polling.
+///
+/// History: PR #443 wrote `type: "http"` handlers with `http+unix://<socket>/event`
+/// URLs. Real Claude Code does not speak the `http+unix://` URL scheme; every hook
+/// errored with `Unsupported protocol http+unix:`. This contribution replaces that
+/// path with `type: "command"` handlers running a tiny shell forwarder that pipes
+/// stdin through `curl --unix-socket`. Same pattern as `statusline.sh`. Legacy
+/// `http+unix://` handlers are scrubbed from the user's settings on every install
+/// so opted-in users self-heal.
 public func workspacesHooksContribution(
-    socketPath: String,
+    eventForwarderScriptPath: String,
     titleEmitScriptPath: String? = nil
 ) -> ClaudeSettingsContribution {
-    // Per spec § Channel 1, point each interesting event at our /event route.
-    // `http+unix://<encoded-socket>/event` is the de-facto convention used by Claude Code.
-    let encodedSocket =
-        socketPath.addingPercentEncoding(
-            withAllowedCharacters: .alphanumerics
-        ) ?? socketPath
-    let endpoint = "http+unix://\(encodedSocket)/event"
-
     let eventNames: [String] = [
         "SessionStart",
         "UserPromptSubmit",
@@ -331,6 +331,26 @@ public func workspacesHooksContribution(
     // agent's lifecycle (prompt submitted → "thinking", stop → "ready").
     let titleEmitEvents: Set<String> = ["UserPromptSubmit", "Stop"]
 
+    /// Drop legacy `type: "http"` handlers whose URL starts with `http+unix://`.
+    /// These were written by the PR #443 installer and are non-functional; we
+    /// scrub them whenever this contribution runs so opted-in users self-heal
+    /// on the next silent reinstall.
+    @Sendable
+    func scrubLegacyHTTPUnix(in groups: [[String: Any]]) -> [[String: Any]] {
+        groups.compactMap { group in
+            var g = group
+            let kept = claudeHookHandlers(in: g).filter { handler in
+                let isLegacy =
+                    (handler["type"] as? String) == "http"
+                    && ((handler["url"] as? String) ?? "").hasPrefix("http+unix://")
+                return !isLegacy
+            }
+            if kept.isEmpty { return nil }
+            g["hooks"] = kept
+            return g
+        }
+    }
+
     return ClaudeSettingsContribution(
         id: "workspaces.hooks",
         target: .userSettingsJSON,
@@ -345,14 +365,19 @@ public func workspacesHooksContribution(
                 (current["hooks"]?.value as? [String: Any]) ?? [:]
             for name in eventNames {
                 var groups = normalizedClaudeHookGroups(from: hooks[name])
-                let httpPresent = groups.contains { group in
+
+                // Self-heal: remove any non-functional `http+unix://` entries
+                // left behind by PR #443's installer.
+                groups = scrubLegacyHTTPUnix(in: groups)
+
+                let eventForwarderPresent = groups.contains { group in
                     claudeGroupContainsHandler(group) { handler in
-                        (handler["type"] as? String) == "http"
-                            && (handler["url"] as? String) == endpoint
+                        (handler["type"] as? String) == "command"
+                            && (handler["command"] as? String) == eventForwarderScriptPath
                     }
                 }
 
-                let commandPresent = groups.contains { group in
+                let titleEmitPresent = groups.contains { group in
                     guard let scriptPath = titleEmitScriptPath else { return false }
                     return claudeGroupContainsHandler(group) { handler in
                         (handler["type"] as? String) == "command"
@@ -363,14 +388,10 @@ public func workspacesHooksContribution(
                 let integrationGroupIndex =
                     groups.firstIndex { group in
                         claudeGroupContainsHandler(group) { handler in
-                            (handler["type"] as? String) == "http"
-                                && (handler["url"] as? String) == endpoint
+                            (handler["type"] as? String) == "command"
+                                && ((handler["command"] as? String) == eventForwarderScriptPath
+                                    || (handler["command"] as? String) == titleEmitScriptPath)
                         }
-                            || claudeGroupContainsHandler(group) { handler in
-                                guard let scriptPath = titleEmitScriptPath else { return false }
-                                return (handler["type"] as? String) == "command"
-                                    && (handler["command"] as? String) == scriptPath
-                            }
                     }
                     ?? {
                         groups.append(["hooks": [[String: Any]]()])
@@ -380,16 +401,16 @@ public func workspacesHooksContribution(
                 var integrationGroup = groups[integrationGroupIndex]
                 var integrationHandlers = claudeHookHandlers(in: integrationGroup)
 
-                if !httpPresent {
+                if !eventForwarderPresent {
                     integrationHandlers.append([
-                        "type": "http",
-                        "url": endpoint,
+                        "type": "command",
+                        "command": eventForwarderScriptPath,
                         "async": true,
                     ])
                 }
                 if let scriptPath = titleEmitScriptPath,
                     titleEmitEvents.contains(name),
-                    !commandPresent
+                    !titleEmitPresent
                 {
                     integrationHandlers.append([
                         "type": "command",
@@ -407,9 +428,10 @@ public func workspacesHooksContribution(
         },
         preview: { current in
             let hooks = (current["hooks"]?.value as? [String: Any]) ?? [:]
-            var addedHTTP: [String] = []
-            var addedCommand: [String] = []
+            var addedEventForwarder: [String] = []
+            var addedTitleEmit: [String] = []
             var normalizedShape: [String] = []
+            var legacyHTTPUnixToScrub: [String] = []
             for name in eventNames {
                 let rawEntries = (hooks[name] as? [Any]) ?? []
                 if rawEntries.contains(where: {
@@ -420,13 +442,22 @@ public func workspacesHooksContribution(
                 }
 
                 let groups = normalizedClaudeHookGroups(from: hooks[name])
-                let httpPresent = groups.contains { group in
+
+                let legacyPresent = groups.contains { group in
                     claudeGroupContainsHandler(group) { handler in
                         (handler["type"] as? String) == "http"
-                            && (handler["url"] as? String) == endpoint
+                            && ((handler["url"] as? String) ?? "").hasPrefix("http+unix://")
                     }
                 }
-                if !httpPresent { addedHTTP.append(name) }
+                if legacyPresent { legacyHTTPUnixToScrub.append(name) }
+
+                let eventForwarderPresent = groups.contains { group in
+                    claudeGroupContainsHandler(group) { handler in
+                        (handler["type"] as? String) == "command"
+                            && (handler["command"] as? String) == eventForwarderScriptPath
+                    }
+                }
+                if !eventForwarderPresent { addedEventForwarder.append(name) }
 
                 if let scriptPath = titleEmitScriptPath, titleEmitEvents.contains(name) {
                     let cmdPresent = groups.contains { group in
@@ -435,26 +466,34 @@ public func workspacesHooksContribution(
                                 && (handler["command"] as? String) == scriptPath
                         }
                     }
-                    if !cmdPresent { addedCommand.append(name) }
+                    if !cmdPresent { addedTitleEmit.append(name) }
                 }
             }
-            if addedHTTP.isEmpty && addedCommand.isEmpty && normalizedShape.isEmpty {
-                return "no changes (already wired for \(eventNames.count) events → \(endpoint))"
+            if addedEventForwarder.isEmpty && addedTitleEmit.isEmpty
+                && normalizedShape.isEmpty && legacyHTTPUnixToScrub.isEmpty
+            {
+                return
+                    "no changes (already wired for \(eventNames.count) events → \(eventForwarderScriptPath))"
             }
             var parts: [String] = []
+            if !legacyHTTPUnixToScrub.isEmpty {
+                parts.append(
+                    "scrub \(legacyHTTPUnixToScrub.count) legacy http+unix:// hook(s): \(legacyHTTPUnixToScrub.joined(separator: ", "))"
+                )
+            }
             if !normalizedShape.isEmpty {
                 parts.append(
                     "normalize legacy hook group shape for \(normalizedShape.joined(separator: ", "))"
                 )
             }
-            if !addedHTTP.isEmpty {
+            if !addedEventForwarder.isEmpty {
                 parts.append(
-                    "add \(addedHTTP.count) http hook(s) → \(endpoint): \(addedHTTP.joined(separator: ", "))"
+                    "add \(addedEventForwarder.count) command hook(s) → \(eventForwarderScriptPath): \(addedEventForwarder.joined(separator: ", "))"
                 )
             }
-            if !addedCommand.isEmpty, let scriptPath = titleEmitScriptPath {
+            if !addedTitleEmit.isEmpty, let scriptPath = titleEmitScriptPath {
                 parts.append(
-                    "add \(addedCommand.count) command hook(s) → \(scriptPath): \(addedCommand.joined(separator: ", "))"
+                    "add \(addedTitleEmit.count) title-emit command hook(s) → \(scriptPath): \(addedTitleEmit.joined(separator: ", "))"
                 )
             }
             return parts.joined(separator: "; ")

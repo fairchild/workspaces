@@ -32,7 +32,7 @@ struct ClaudeSettingsInstallerBackupRotationTests {
         let settingsURL = claudeDir.appendingPathComponent("settings.json")
 
         let installer = ClaudeSettingsInstaller(homeDirectory: home)
-        await installer.register(workspacesHooksContribution(socketPath: "/tmp/r.sock"))
+        await installer.register(workspacesHooksContribution(eventForwarderScriptPath: "/tmp/event-forwarder.sh"))
 
         // Seed and install 7 times. Mutate between installs so each install
         // sees a different on-disk file (otherwise the contribution is a no-op
@@ -92,7 +92,7 @@ struct ClaudeSettingsInstallerBackupRotationTests {
         let settingsURL = claudeDir.appendingPathComponent("settings.json")
 
         let installer = ClaudeSettingsInstaller(homeDirectory: home)
-        await installer.register(workspacesHooksContribution(socketPath: "/tmp/r2.sock"))
+        await installer.register(workspacesHooksContribution(eventForwarderScriptPath: "/tmp/event-forwarder.sh"))
 
         try Data("{}\n".utf8).write(to: settingsURL)
         var installCount = 0
