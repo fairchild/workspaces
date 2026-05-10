@@ -159,7 +159,7 @@
 
     .hero-grid {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) 260px;
+      grid-template-columns: minmax(0, 1fr);
       gap: 20px;
       padding: 26px;
       align-items: stretch;
@@ -189,56 +189,15 @@
       font-size: 1.08rem;
     }
 
-    .doc-card {
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      background: rgba(13, 16, 18, 0.72);
-      padding: 16px;
-      display: grid;
-      gap: 13px;
-      align-content: start;
+    .hero-meta {
+      margin: 14px 0 0;
       font-family: var(--mono);
       font-size: 0.78rem;
       color: var(--quiet);
     }
 
-    .doc-card details {
-      display: grid;
-      gap: 10px;
-    }
-
-    .doc-card summary {
-      color: var(--ink);
-      font-family: var(--sans);
-      font-size: 0.95rem;
-      cursor: pointer;
-      list-style-position: outside;
-    }
-
-    .doc-card dl {
-      display: grid;
-      gap: 12px;
-      margin: 12px 0 0;
-    }
-
-    .doc-card dt {
-      color: var(--ink);
-      font-family: var(--sans);
-      font-size: 0.92rem;
-      font-weight: 700;
-    }
-
-    .doc-card dd {
-      margin: 2px 0 0;
-      overflow-wrap: anywhere;
-    }
-
-    .doc-card strong {
-      display: block;
-      color: var(--ink);
-      font-family: var(--sans);
-      font-size: 0.95rem;
-      margin-bottom: 3px;
+    .hero-meta span {
+      color: var(--muted);
     }
 
     .concept-map {
@@ -538,14 +497,6 @@
       text-decoration: none;
     }
 
-    .related-panel {
-      display: none;
-    }
-
-    .related-panel[data-visible="true"] {
-      display: block;
-    }
-
     .related-heading {
       margin: 0 0 8px;
       color: var(--muted);
@@ -589,13 +540,8 @@
         padding-top: 18px;
       }
 
-      .hero-grid,
       .markdown-body {
         padding: 20px;
-      }
-
-      .doc-card {
-        display: none;
       }
     }
   </style>
@@ -624,19 +570,9 @@
             <p class="eyebrow" id="doc-kind">Rendered Markdown</p>
             <h1 id="doc-title">Loading documentation...</h1>
             <p class="summary" id="doc-summary">Fetching Markdown source and applying the WorkSpaces documentation view.</p>
+            <p class="hero-meta" id="doc-updated-wrap" hidden><span id="doc-updated"></span></p>
             <div class="concept-map" id="concept-map"></div>
           </div>
-          <aside class="doc-card" aria-label="Document metadata">
-            <div><strong>Updated</strong><span id="doc-updated">-</span></div>
-            <div><strong>Sections</strong><span id="doc-section-count">-</span></div>
-            <details>
-              <summary>Document details</summary>
-              <dl>
-                <div><dt>Source</dt><dd id="doc-path">-</dd></div>
-                <div><dt>Group</dt><dd id="doc-group">-</dd></div>
-              </dl>
-            </details>
-          </aside>
         </div>
       </section>
 
@@ -657,20 +593,10 @@
         <nav class="outline" id="outline" aria-label="Document outline"></nav>
       </section>
 
-      <section class="side-panel related-panel" id="related-panel" data-visible="false">
-        <h2>Related Docs</h2>
+      <section class="side-panel related-panel" id="related-panel">
+        <h2 id="related-title">More Docs</h2>
         <p class="related-heading" id="related-heading"></p>
         <div class="doc-links" id="related-docs"></div>
-      </section>
-
-      <section class="side-panel">
-        <h2>Quick Docs</h2>
-        <div class="doc-links">
-          <a href="/docs/product_overview"><span>Product Overview</span><span>-></span></a>
-          <a href="/docs/branding"><span>Branding</span><span>-></span></a>
-          <a href="/docs/development/libghostty-integration"><span>Ghostty Integration</span><span>-></span></a>
-          <a href="/docs/development/lume-integration"><span>Lume Integration</span><span>-></span></a>
-        </div>
       </section>
     </aside>
   </div>
@@ -699,6 +625,7 @@
     const rawLink = document.querySelector("#raw-link");
     let manifestEntries = [];
     let activeTopic = null;
+    let currentEntry = null;
 
     function escapeHtml(value) {
       return value
@@ -1034,23 +961,40 @@
         .slice(0, 5);
     }
 
-    function renderRelatedDocs(topic) {
-      const panel = document.querySelector("#related-panel");
+    function groupDocs(group) {
+      return manifestEntries
+        .filter((entry) => entry.dest !== currentDocPath && entry.group === group)
+        .slice(0, 5);
+    }
+
+    function fallbackDocs() {
+      return manifestEntries
+        .filter((entry) => entry.dest !== currentDocPath)
+        .slice(0, 5);
+    }
+
+    function renderContextDocs(topic = null) {
+      const title = document.querySelector("#related-title");
       const heading = document.querySelector("#related-heading");
       const target = document.querySelector("#related-docs");
-      if (!topic) {
-        panel.dataset.visible = "false";
-        heading.textContent = "";
-        target.innerHTML = "";
-        return;
-      }
-
-      const docs = relatedDocs(topic);
-      panel.dataset.visible = "true";
-      heading.textContent = topicLabel(topic);
+      const docs = topic
+        ? relatedDocs(topic)
+        : currentEntry?.group
+          ? groupDocs(currentEntry.group)
+          : fallbackDocs();
+      title.textContent = topic
+        ? `Related to ${topicLabel(topic)}`
+        : currentEntry?.group
+          ? `More in ${currentEntry.group}`
+          : "Published Docs";
+      heading.textContent = topic
+        ? "Docs that share this domain concept."
+        : currentEntry?.group
+          ? "Same documentation group."
+          : "Curated public docs.";
       target.innerHTML = docs.length
         ? docs.map((entry) => `<a href="${renderedDocHref(entry.dest)}"><span>${escapeHtml(entry.title)}</span><span>${escapeHtml(entry.group || "")}</span></a>`).join("")
-        : '<p class="related-empty">No other published docs use this topic yet.</p>';
+        : '<p class="related-empty">No other published docs match this context yet.</p>';
     }
 
     function selectTopic(topic) {
@@ -1058,7 +1002,7 @@
       document.querySelectorAll("#concept-map button.chip").forEach((button) => {
         button.setAttribute("aria-expanded", String(button.dataset.topic === activeTopic));
       });
-      renderRelatedDocs(activeTopic);
+      renderContextDocs(activeTopic);
     }
 
     function renderTermChips(markdown) {
@@ -1072,7 +1016,7 @@
         button.addEventListener("click", () => selectTopic(button.dataset.topic));
       });
       activeTopic = null;
-      renderRelatedDocs(null);
+      renderContextDocs();
     }
 
     function extractUpdatedAt(markdown) {
@@ -1085,23 +1029,31 @@
     }
 
     function formatUpdatedAt(value) {
-      if (!value) return "Not listed";
+      if (!value) return null;
       const normalized = value.replace(/([+-]\d{2})(\d{2})$/, "$1:$2");
       const date = new Date(normalized);
       if (Number.isNaN(date.getTime())) return value;
       return new Intl.DateTimeFormat("en", {
         month: "short",
         day: "numeric",
-        year: "numeric",
-        hour: "numeric",
-        minute: "2-digit",
-        timeZoneName: "short"
+        year: "numeric"
       }).format(date);
+    }
+
+    function renderUpdatedAt(markdown) {
+      const updated = formatUpdatedAt(extractUpdatedAt(markdown));
+      const wrapper = document.querySelector("#doc-updated-wrap");
+      if (!updated) {
+        wrapper.hidden = true;
+        document.querySelector("#doc-updated").textContent = "";
+        return;
+      }
+      wrapper.hidden = false;
+      document.querySelector("#doc-updated").textContent = `Updated ${updated}`;
     }
 
     function renderOutline(headings) {
       const visible = headings.filter((heading) => heading.depth >= 2 && heading.depth <= 3);
-      document.querySelector("#doc-section-count").textContent = String(visible.length);
       if (!visible.length) {
         outline.innerHTML = '<span class="chip quiet">No sections</span>';
         return;
@@ -1117,12 +1069,11 @@
       document.querySelector("#doc-title").textContent = "Document not published";
       document.querySelector("#doc-kind").textContent = "Curated docs only";
       document.querySelector("#doc-summary").textContent = "This public reader only renders the native WorkSpaces documentation selected for publishing.";
-      document.querySelector("#doc-path").textContent = path || "unknown";
-      document.querySelector("#doc-updated").textContent = "Not listed";
-      document.querySelector("#doc-group").textContent = "Unpublished";
+      document.querySelector("#doc-updated-wrap").hidden = true;
       document.querySelector("#toolbar-title").textContent = path || "unknown";
       document.querySelector("#concept-map").innerHTML = '<span class="chip quiet">Not in public manifest</span>';
-      renderRelatedDocs(null);
+      currentEntry = null;
+      renderContextDocs();
       renderOutline([]);
       rawLink.removeAttribute("href");
     }
@@ -1139,10 +1090,9 @@
       const fetchUrl = manifest ? publicDocUrl(currentDocPath) : docUrl;
       const displayPath = manifest ? currentDocPath : docUrl.pathname;
       rawLink.href = manifest ? `${docsBase}${currentDocPath}` : `${docUrl.pathname}${docUrl.search}${docUrl.hash}`;
-      document.querySelector("#doc-path").textContent = displayPath;
       document.querySelector("#toolbar-title").textContent = displayPath;
       const entry = manifest ? docEntry(currentDocPath) : null;
-      document.querySelector("#doc-group").textContent = entry?.group || "Docs";
+      currentEntry = entry;
 
       try {
         const response = await fetch(fetchUrl);
@@ -1160,7 +1110,7 @@
             ? "Evidence doc"
             : "Rendered Markdown";
         document.querySelector("#doc-summary").textContent = entry?.summary || summaryFrom(displayMarkdown, title);
-        document.querySelector("#doc-updated").textContent = formatUpdatedAt(extractUpdatedAt(markdown));
+        renderUpdatedAt(markdown);
         renderTermChips(displayMarkdown);
         renderOutline(rendered.headings);
         content.innerHTML = rendered.html;

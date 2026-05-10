@@ -1,19 +1,20 @@
 import { expect, test } from "@playwright/test";
 
 test.describe("Public docs", () => {
-	test("serves /docs without authentication", async ({ page }) => {
-		await page.goto("/docs");
+	test("serves /docs without authentication", async ({ request }) => {
+		const response = await request.get("/docs", { maxRedirects: 0 });
+		expect(response.status()).toBe(307);
+		expect(response.headers().location).toBe("/docs/index.html");
 
-		await expect(page).toHaveURL(/\/docs\/index\.html$/);
-		await expect(
-			page.getByRole("heading", {
-				name: "Terminal-first control for your code portfolio.",
-			}),
-		).toBeVisible();
+		const landing = await request.get("/docs/index.html");
+		expect(landing.ok()).toBe(true);
+		await expect(landing.text()).resolves.toContain(
+			"Terminal-first control for your code portfolio.",
+		);
 	});
 
 	test("renders a Markdown document from the landing page", async ({ page }) => {
-		await page.goto("/docs");
+		await page.goto("/docs/index.html");
 		await page
 			.getByRole("link", { name: /Product Overview/ })
 			.first()
@@ -31,20 +32,30 @@ test.describe("Public docs", () => {
 
 		await page.getByRole("button", { name: "Repository" }).click();
 
-		await expect(page.getByRole("heading", { name: "Related Docs" })).toBeVisible();
-		await expect(page.locator("#related-heading")).toHaveText("Repository");
+		await expect(page.getByRole("heading", { name: "Related to Repository" })).toBeVisible();
 		await expect(
 			page.locator("#related-docs").getByRole("link", { name: /Vocabulary/ }),
 		).toBeVisible();
 	});
 
+	test("shows useful same-group docs by default", async ({ page }) => {
+		await page.goto("/docs/performance/dashboard");
+
+		await expect(page.getByRole("heading", { name: "More in Evidence" })).toBeVisible();
+		await expect(
+			page.locator("#related-docs").getByRole("link", { name: /Metrics Reference/ }),
+		).toBeVisible();
+		await expect(page.getByRole("heading", { name: "Quick Docs" })).toHaveCount(0);
+	});
+
 	test("shows friendly page metadata before exact details", async ({ page }) => {
 		await page.goto("/docs/performance/dashboard");
 
-		await expect(page.locator("#doc-updated")).toContainText("Mar 22, 2026");
+		await expect(page.locator("#doc-updated")).toHaveText("Updated Mar 22, 2026");
 		await expect(page.locator("#doc-updated")).not.toContainText(
 			"2026-03-22T10:29:08-0700",
 		);
+		await expect(page.getByText("Document details")).toHaveCount(0);
 		await expect(page.locator("#content")).not.toContainText("Last updated:");
 	});
 

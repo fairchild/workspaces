@@ -118,8 +118,9 @@ Inside rendered Markdown, local `.md` links are automatically rewritten to exten
 Rendered pages should stay focused on understanding the product and codebase first. Exact source details remain available, but they are not the main reading path.
 
 - Concept chips are filters. Selecting a chip shows related published docs for that WorkSpaces domain topic.
-- The reader shows friendly document metadata by default.
-- Exact source path and document group live under **Document details**.
+- The reader shows only compact, friendly page-level metadata by default.
+- The sidebar shows same-group docs first, then switches to concept-related docs when a chip is selected.
+- Exact source remains available through the raw Markdown link instead of occupying the hero.
 - A standalone `Last updated:` source line is lifted into metadata instead of repeated in the rendered body.
 
 ## Vocabulary Contract
