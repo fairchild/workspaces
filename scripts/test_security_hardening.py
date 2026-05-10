@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import plistlib
 import re
@@ -271,9 +272,16 @@ class SecurityHardeningTests(unittest.TestCase):
 
         setup = (REPO_ROOT / "scripts/setup").read_text()
         self.assertIn('"$REPO_ROOT/.mise.toml"|"$REPO_ROOT/web/.mise.toml"', setup)
+        self.assertIn('if [[ "$FAST" == "1" ]]', setup)
         self.assertIn("mise install --locked zig@0.15.2", setup)
         self.assertIn("MISE_IGNORED_CONFIG_PATHS=", setup)
         self.assertNotIn("trust every checked-in project config", setup)
+
+        conductor = json.loads((REPO_ROOT / "conductor.json").read_text())
+        self.assertIn("./scripts/setup --fast", conductor["scripts"]["setup"])
+
+        web_npmrc = (REPO_ROOT / "web/.npmrc").read_text()
+        self.assertIn("enable-global-virtual-store=true", web_npmrc)
 
         sandbox = (REPO_ROOT / "web/src/lib/agent-runtime/vercel-sandbox.ts").read_text()
         self.assertIn("MISE_VERSION='v2026.5.3'", sandbox)

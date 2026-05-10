@@ -4,11 +4,13 @@ This directory contains build/release helpers plus UI test utilities.
 
 ## First-Run Setup
 
-- `./scripts/setup` is the canonical first-run path. It links local env files from a sibling worktree when needed, validates and trusts only the reviewed root/web mise configs, installs mise-managed tools from `mise.lock`, unsets legacy `core.hooksPath`, and runs `prek install`.
+- `./scripts/setup --fast` is the Conductor workspace-creation path. It links local env files from a sibling worktree when needed, then validates and trusts only the reviewed root/web mise configs.
+- `./scripts/setup` or `./scripts/setup --full` is the full bootstrap path. It runs fast setup, installs mise-managed tools from `mise.lock`, refreshes prek hooks, and installs dependencies when needed.
 - `./scripts/setup --env-only` refreshes local env-file links without running dependency setup.
 - `./scripts/setup --hooks-only` installs or refreshes the prek git hooks without running dependency setup.
 - `./scripts/install-git-hooks.sh` remains only as a compatibility wrapper around `./scripts/setup --hooks-only`; prefer `./scripts/setup` in new docs and task definitions.
 - mise security rules live in [docs/development/mise-security.md](../docs/development/mise-security.md). Keep secrets and global trust bypasses out of mise config.
+- `web/.npmrc` enables pnpm's experimental global virtual store so repeated warm installs across Conductor workspaces reuse a shared virtual store.
 
 ## Root Mise Task Catalog
 
@@ -16,7 +18,7 @@ Use `./scripts/setup` for first-run bootstrap. After that, prefer the root `mise
 
 | Task | Backend | Purpose |
 |------|---------|---------|
-| `mise run setup` | `./scripts/setup` | Re-run bootstrap setup after the checkout is trusted. |
+| `mise run setup` | `./scripts/setup` | Re-run full bootstrap setup after the checkout is trusted. |
 | `mise run hooks-install` | `./scripts/setup --hooks-only` | Refresh prek hooks only. |
 | `mise run build-ghosttykit` | `./scripts/build-ghosttykit.sh` | Build the pinned GhosttyKit framework. |
 | `mise run lint` | `swift-format lint --strict --recursive Sources/ Tests/` | Check Swift formatting. |
