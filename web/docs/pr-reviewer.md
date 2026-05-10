@@ -219,6 +219,43 @@ keeps the newest 3, and includes them as untrusted context inside a
 instruction tells the reviewer to approve when a prior `REQUEST_CHANGES`
 blocker is now resolved by the current body, comments, or commits.
 
+### Follow-up kickoff shape
+
+On reruns the kickoff is shaped so the agent behaves like a human reviewer
+returning to a PR they've already touched, not like a fresh reviewer:
+
+- **Stance** — opens with "You reviewed this PR before. New activity has
+  landed since your last review. Your job is to check whether the author
+  addressed your prior blockers and to surface anything new the new activity
+  introduces."
+- **Anchor commit** — when the most recent prior review's `commit_id` differs
+  from the current head, the kickoff names it as the anchor and gives
+  concrete commands: `git fetch origin <anchor>`, `git log --oneline
+  <anchor>..HEAD`, `git diff <anchor>..HEAD`. The agent runs these itself —
+  no diff blob is shipped in the prompt.
+- **Output format** — a `## Follow-up review format` trailer overrides the
+  base format on these points:
+  - Decision banner uses follow-up phrasing (e.g. `✅ **Approve** — Prior
+    blockers addressed; nothing new of concern.`,
+    `🛑 **Request changes** — Prior blocker on file:line still
+    unaddressed.`).
+  - Add a `## Changes Since Last Review` section under `## Summary` with
+    `**Resolved:**` and `**New:**` sub-bullets.
+  - `## Project Thread` is optional on reruns — the thread is already
+    established.
+  - If the prior review's only blocker was missing evidence and the new
+    activity supplies it, approve and credit the evidence URL.
+- **Session naming** — `sessions.create` uses a `Re-review PR #N: <title>`
+  title and stamps `metadata.run_kind = "follow-up"` so operator tooling can
+  distinguish initial from follow-up sessions at a glance.
+
+When `kind !== "opened"` but the prior-review fetch returns no managed
+reviews (e.g. GitHub API failure, or the bot crashed before posting),
+the kickoff still applies the follow-up output trailer but skips the
+anchor block — the run identifies itself as "a rerun without a recoverable
+prior review on this PR" so the agent reviews defensively rather than
+inventing a fake anchor.
+
 ### Filter by repo or label
 
 Add conditions inside `parsePrReviewTrigger()` in the webhook route, e.g.:
