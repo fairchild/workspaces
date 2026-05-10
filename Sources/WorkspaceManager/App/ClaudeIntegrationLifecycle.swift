@@ -200,17 +200,19 @@ final class ClaudeIntegrationLifecycle: ObservableObject {
         )
         let dest = dir.appendingPathComponent("\(name).sh")
 
-        // Source: bundled .sh file. Falls back to nil silently — most tests
-        // and previews don't run inside a real .app bundle.
-        guard
-            let bundleURL = Bundle.main.url(
+        // Source: bundled .sh file. Resources live in the SPM target bundle
+        // (`Bundle.module`) for both `swift build` and packaged `.app` builds,
+        // so we look there — `Bundle.main` finds nothing under a debug binary
+        // because SPM puts target resources in a sibling `_<Module>.bundle`.
+        // Mirrors the lookup at `bundledStatusLineForwarderPath()` above.
+        let bundleURL =
+            Bundle.module.url(
                 forResource: name,
                 withExtension: "sh",
                 subdirectory: "HookForwarders"
             )
-        else {
-            return nil
-        }
+            ?? Bundle.module.url(forResource: name, withExtension: "sh")
+        guard let bundleURL else { return nil }
         do {
             let contents = try Data(contentsOf: bundleURL)
             try contents.write(to: dest, options: .atomic)
