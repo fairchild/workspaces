@@ -264,6 +264,12 @@ class SecurityHardeningTests(unittest.TestCase):
             self.assertTrue(entry["url"].startswith("https://"))
 
     def test_mise_invocations_are_locked_and_pinned(self) -> None:
+        verify_mise = (REPO_ROOT / "scripts/verify-mise-security.sh").read_text()
+        self.assertIn("MISE_EXPECTED_VERSION=\"v2026.5.5\"", verify_mise)
+        self.assertIn("verify_locked_zig_exec", verify_mise)
+        self.assertIn("github.com/repos/jdx/mise/releases/latest", verify_mise)
+        self.assertIn("SHASUMS256.txt", verify_mise)
+
         build_ghosttykit = (REPO_ROOT / "scripts/build-ghosttykit.sh").read_text()
         self.assertIn('mise exec --locked "zig@$ZIG_VERSION" -- zig', build_ghosttykit)
         self.assertIn("MISE_CONFIG_FILE=$PROJECT_DIR/.mise.toml", build_ghosttykit)
@@ -275,6 +281,7 @@ class SecurityHardeningTests(unittest.TestCase):
         self.assertIn('if [[ "$FAST" == "1" ]]', setup)
         self.assertIn("mise install --locked zig@0.15.2", setup)
         self.assertIn("MISE_IGNORED_CONFIG_PATHS=", setup)
+        self.assertIn('-path "*/.pnpm-store" -prune', setup)
         self.assertNotIn("trust every checked-in project config", setup)
 
         conductor = json.loads((REPO_ROOT / "conductor.json").read_text())
@@ -284,10 +291,25 @@ class SecurityHardeningTests(unittest.TestCase):
         self.assertIn("enable-global-virtual-store=true", web_npmrc)
 
         sandbox = (REPO_ROOT / "web/src/lib/agent-runtime/vercel-sandbox.ts").read_text()
-        self.assertIn("MISE_VERSION='v2026.5.3'", sandbox)
-        self.assertIn("MISE_SHA256='9a4f228158a316b236653ff615e9955f50c56c6a3ef719135d327c7fc632b89b'", sandbox)
+        self.assertIn("MISE_VERSION='v2026.5.5'", sandbox)
+        self.assertIn("MISE_SHA256='3aaab5c05a8a94a93b42b4f581779bbd5c44ddb251e7f3639fc671ec5c6aab8a'", sandbox)
         self.assertIn("sha256sum -c -", sandbox)
         self.assertNotIn("mise-latest-linux-x64", sandbox)
+
+    def test_mise_security_workflow_runs_for_mise_changes(self) -> None:
+        workflow = (REPO_ROOT / ".github/workflows/mise-security.yml").read_text()
+        self.assertIn("name: Mise Security", workflow)
+        self.assertIn("scripts/verify-mise-security.sh", workflow)
+        for expected_path in (
+            ".mise.toml",
+            "web/.mise.toml",
+            "mise.lock",
+            "scripts/setup",
+            "scripts/build-ghosttykit.sh",
+            "scripts/verify-mise-security.sh",
+            "web/src/lib/agent-runtime/vercel-sandbox.ts",
+        ):
+            self.assertIn(expected_path, workflow)
 
     def test_release_workflow_publishes_and_validates_manifest_and_appcast_signature(self) -> None:
         workflow = (REPO_ROOT / ".github/workflows/release.yml").read_text()
