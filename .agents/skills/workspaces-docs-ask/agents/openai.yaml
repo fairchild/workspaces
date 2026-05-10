@@ -1,0 +1,4 @@
+interface:
+  display_name: "WorkSpaces Docs Ask"
+  short_description: "Query the local WorkSpaces docs server with cited answers."
+  default_prompt: "Ask the local WorkSpaces docs server a focused question and return the cited answer."

@@ -204,6 +204,24 @@ This intentionally fails when Claude Code is not logged in, when the local
 Claude CLI cannot use non-interactive mode, or when the docs answer exceeds the
 local timeout/budget.
 
+For answer-quality regression checks, run the focused eval harness:
+
+```bash
+uv run --script scripts/docs-ask-eval.py
+uv run --script scripts/docs-ask-eval.py --real-claude
+uv run --script scripts/docs-ask-eval.py --base-url http://127.0.0.1:8098
+```
+
+The default eval starts an isolated server with a fake Claude Code binary and
+checks the endpoint contract. `--real-claude` or `--base-url` exercises the real
+local ask path and reports citation, terminology, and source-coverage failures.
+
+Agents can query the local docs server through the repo-local skill:
+
+```bash
+uv run --script .agents/skills/workspaces-docs-ask/scripts/query-docs.py "Where is the Lume daemon reliability runbook?"
+```
+
 The Playwright docs checks are split by hosting mode:
 
 - `test:e2e:docs-local` starts `docs/server.py` directly and exercises the local-only operator index, autocomplete, AI answer box, citations, and copy flow with a fake Claude Code binary.
