@@ -237,6 +237,58 @@
       color: var(--quiet);
     }
 
+    .topic-panel {
+      margin-top: 14px;
+      border: 1px solid rgba(166, 255, 223, 0.22);
+      border-radius: 8px;
+      background: rgba(13, 16, 18, 0.58);
+      padding: 14px;
+    }
+
+    .topic-panel[hidden] {
+      display: none;
+    }
+
+    .topic-panel h2 {
+      margin: 0 0 8px;
+      color: var(--ink);
+      font-size: 0.95rem;
+      letter-spacing: 0;
+    }
+
+    .topic-panel p {
+      margin: 0 0 12px;
+      color: var(--muted);
+      font-size: 0.88rem;
+    }
+
+    .topic-links {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+      gap: 8px;
+    }
+
+    .topic-links a {
+      display: grid;
+      gap: 3px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 10px;
+      color: var(--ink);
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    .topic-links a:hover {
+      border-color: var(--mint);
+      text-decoration: none;
+    }
+
+    .topic-links span {
+      color: var(--quiet);
+      font-family: var(--mono);
+      font-size: 0.72rem;
+    }
+
     .content-frame {
       margin-top: 24px;
       border: 1px solid var(--line);
@@ -572,6 +624,7 @@
             <p class="summary" id="doc-summary">Fetching Markdown source and applying the WorkSpaces documentation view.</p>
             <p class="hero-meta" id="doc-updated-wrap" hidden><span id="doc-updated"></span></p>
             <div class="concept-map" id="concept-map"></div>
+            <div class="topic-panel" id="topic-panel" role="region" aria-live="polite" hidden></div>
           </div>
         </div>
       </section>
@@ -973,28 +1026,46 @@
         .slice(0, 5);
     }
 
-    function renderContextDocs(topic = null) {
+    function renderContextDocs() {
       const title = document.querySelector("#related-title");
       const heading = document.querySelector("#related-heading");
       const target = document.querySelector("#related-docs");
-      const docs = topic
-        ? relatedDocs(topic)
-        : currentEntry?.group
-          ? groupDocs(currentEntry.group)
-          : fallbackDocs();
-      title.textContent = topic
-        ? `Related to ${topicLabel(topic)}`
-        : currentEntry?.group
-          ? `More in ${currentEntry.group}`
-          : "Published Docs";
-      heading.textContent = topic
-        ? "Docs that share this domain concept."
-        : currentEntry?.group
-          ? "Same documentation group."
-          : "Curated public docs.";
+      const docs = currentEntry?.group
+        ? groupDocs(currentEntry.group)
+        : fallbackDocs();
+      title.textContent = currentEntry?.group
+        ? `More in ${currentEntry.group}`
+        : "Published Docs";
+      heading.textContent = currentEntry?.group
+        ? "Same documentation group."
+        : "Curated public docs.";
       target.innerHTML = docs.length
         ? docs.map((entry) => `<a href="${renderedDocHref(entry.dest)}"><span>${escapeHtml(entry.title)}</span><span>${escapeHtml(entry.group || "")}</span></a>`).join("")
         : '<p class="related-empty">No other published docs match this context yet.</p>';
+    }
+
+    function renderTopicPanel(topic) {
+      const panel = document.querySelector("#topic-panel");
+      if (!topic) {
+        panel.hidden = true;
+        panel.innerHTML = "";
+        return;
+      }
+      const docs = relatedDocs(topic);
+      if (!docs.length) {
+        panel.hidden = true;
+        panel.innerHTML = "";
+        return;
+      }
+      const label = topicLabel(topic);
+      panel.hidden = false;
+      panel.innerHTML = `
+        <h2>Related to ${escapeHtml(label)}</h2>
+        <p>Pages that share this WorkSpaces concept.</p>
+        <div class="topic-links">
+          ${docs.map((entry) => `<a href="${renderedDocHref(entry.dest)}">${escapeHtml(entry.title)}<span>${escapeHtml(entry.group || "Docs")}</span></a>`).join("")}
+        </div>
+      `;
     }
 
     function selectTopic(topic) {
@@ -1002,20 +1073,23 @@
       document.querySelectorAll("#concept-map button.chip").forEach((button) => {
         button.setAttribute("aria-expanded", String(button.dataset.topic === activeTopic));
       });
-      renderContextDocs(activeTopic);
+      renderTopicPanel(activeTopic);
     }
 
     function renderTermChips(markdown) {
-      const found = detectedTerms(markdown);
+      const found = detectedTerms(markdown)
+        .map((term) => ({ ...term, relatedCount: relatedDocs(term.id).length }))
+        .filter((term) => term.relatedCount > 0);
       const chipHtml = found.length
-        ? found.map((term) => `<button class="chip" type="button" data-topic="${term.id}" aria-expanded="false" title="Show related docs for ${escapeHtml(term.name)}">${term.name}</button>`).join("")
-        : '<span class="chip quiet">No WorkSpaces terms detected</span>';
+        ? found.map((term) => `<button class="chip" type="button" data-topic="${term.id}" data-related-count="${term.relatedCount}" aria-expanded="false" aria-controls="topic-panel" title="Show related docs for ${escapeHtml(term.name)}">${term.name}</button>`).join("")
+        : "";
       const conceptMap = document.querySelector("#concept-map");
       conceptMap.innerHTML = chipHtml;
       conceptMap.querySelectorAll("button.chip").forEach((button) => {
         button.addEventListener("click", () => selectTopic(button.dataset.topic));
       });
       activeTopic = null;
+      renderTopicPanel(null);
       renderContextDocs();
     }
 

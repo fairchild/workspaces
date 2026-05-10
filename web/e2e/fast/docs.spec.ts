@@ -27,15 +27,36 @@ test.describe("Public docs", () => {
 		await expect(page.getByText("Repository").first()).toBeVisible();
 	});
 
-	test("filters related docs from concept chips", async ({ page }) => {
+	test("shows related docs inline from concept chips", async ({ page }) => {
 		await page.goto("/docs/product_overview");
 
 		await page.getByRole("button", { name: "Repository" }).click();
 
-		await expect(page.getByRole("heading", { name: "Related to Repository" })).toBeVisible();
 		await expect(
-			page.locator("#related-docs").getByRole("link", { name: /Vocabulary/ }),
+			page.locator("#topic-panel").getByRole("heading", {
+				name: "Related to Repository",
+			}),
 		).toBeVisible();
+		await expect(
+			page.locator("#topic-panel").getByRole("link", { name: /Vocabulary/ }),
+		).toBeVisible();
+		await expect(page.getByRole("heading", { name: "More in Product" })).toBeVisible();
+		await expect(page.getByRole("heading", { name: "Related to Repository" })).toHaveCount(1);
+	});
+
+	test("only shows concept chips that link to related docs", async ({ page }) => {
+		await page.goto("/docs/product_overview");
+
+		const counts = await page
+			.locator("#concept-map button.chip")
+			.evaluateAll((buttons) =>
+				buttons.map((button) =>
+					Number(button.getAttribute("data-related-count") || "0"),
+				),
+			);
+
+		expect(counts.length).toBeGreaterThan(0);
+		expect(counts.every((count) => count > 0)).toBe(true);
 	});
 
 	test("shows useful same-group docs by default", async ({ page }) => {
