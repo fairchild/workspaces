@@ -95,11 +95,14 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def ensure_labels(*, apply: bool) -> None:
-    existing = {
+def fetch_labels() -> dict[str, dict[str, object]]:
+    return {
         item["name"]: item
         for item in run_json(["gh", "label", "list", "--limit", "300", "--json", "name,color,description"])
     }
+
+
+def ensure_labels(existing: dict[str, dict[str, object]], *, apply: bool) -> None:
     for spec in LABELS:
         current = existing.get(spec.name)
         if current is None:
@@ -137,9 +140,11 @@ def ensure_labels(*, apply: bool) -> None:
             ])
 
 
-def migrate_issues(*, apply: bool) -> set[str]:
+def migrate_issues(existing_labels: set[str], *, apply: bool) -> set[str]:
     legacy_seen: set[str] = set()
     for old_label, new_labels in LEGACY_LABELS.items():
+        if old_label not in existing_labels:
+            continue
         issues = run_json([
             "gh",
             "issue",
@@ -183,8 +188,9 @@ def main() -> int:
     args = parse_args()
     if not args.apply:
         print("dry run: pass --apply to update GitHub")
-    ensure_labels(apply=args.apply)
-    legacy_seen = migrate_issues(apply=args.apply)
+    existing = fetch_labels()
+    ensure_labels(existing, apply=args.apply)
+    legacy_seen = migrate_issues(set(existing), apply=args.apply)
     if args.delete_legacy:
         delete_legacy_labels(legacy_seen, apply=args.apply)
     elif legacy_seen:
