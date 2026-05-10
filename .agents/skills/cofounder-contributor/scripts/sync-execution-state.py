@@ -569,11 +569,42 @@ def main() -> int:
     now = datetime.now(timezone.utc)
 
     existing_labels = fetch_existing_labels(env)
-    ensure_label(existing_labels, env, AGENT_LANE_LABEL, AGENT_LANE_LABEL_COLOR, AGENT_LANE_LABEL_DESCRIPTION)
-    ensure_label(existing_labels, env, AGENT_TASK_LABEL, AGENT_TASK_LABEL_COLOR, AGENT_TASK_LABEL_DESCRIPTION)
-    ensure_label(existing_labels, env, AGENT_READY_LABEL, AGENT_READY_LABEL_COLOR, AGENT_READY_LABEL_DESCRIPTION)
-    ensure_label(existing_labels, env, AGENT_CLAIM_LABEL, AGENT_CLAIM_LABEL_COLOR, AGENT_CLAIM_LABEL_DESCRIPTION)
-    ensure_label(existing_labels, env, AGENT_REVIEW_LABEL, AGENT_REVIEW_LABEL_COLOR, AGENT_REVIEW_LABEL_DESCRIPTION)
+    if not args.dry_run:
+        ensure_label(
+            existing_labels,
+            env,
+            AGENT_LANE_LABEL,
+            AGENT_LANE_LABEL_COLOR,
+            AGENT_LANE_LABEL_DESCRIPTION,
+        )
+        ensure_label(
+            existing_labels,
+            env,
+            AGENT_TASK_LABEL,
+            AGENT_TASK_LABEL_COLOR,
+            AGENT_TASK_LABEL_DESCRIPTION,
+        )
+        ensure_label(
+            existing_labels,
+            env,
+            AGENT_READY_LABEL,
+            AGENT_READY_LABEL_COLOR,
+            AGENT_READY_LABEL_DESCRIPTION,
+        )
+        ensure_label(
+            existing_labels,
+            env,
+            AGENT_CLAIM_LABEL,
+            AGENT_CLAIM_LABEL_COLOR,
+            AGENT_CLAIM_LABEL_DESCRIPTION,
+        )
+        ensure_label(
+            existing_labels,
+            env,
+            AGENT_REVIEW_LABEL,
+            AGENT_REVIEW_LABEL_COLOR,
+            AGENT_REVIEW_LABEL_DESCRIPTION,
+        )
 
     discussions = {
         int(discussion["number"]): discussion

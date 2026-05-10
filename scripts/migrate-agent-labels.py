@@ -101,15 +101,34 @@ def ensure_labels(*, apply: bool) -> None:
         for item in run_json(["gh", "label", "list", "--limit", "300", "--json", "name,color,description"])
     }
     for spec in LABELS:
-        if spec.name in existing:
+        current = existing.get(spec.name)
+        if current is None:
+            print(f"create label: {spec.name}")
+            if apply:
+                run_checked([
+                    "gh",
+                    "label",
+                    "create",
+                    spec.name,
+                    "--color",
+                    spec.color,
+                    "--description",
+                    spec.description,
+                ])
+            continue
+
+        current_color = str(current.get("color", ""))
+        current_description = str(current.get("description", ""))
+        if current_color.lower() == spec.color.lower() and current_description == spec.description:
             print(f"label exists: {spec.name}")
             continue
-        print(f"create label: {spec.name}")
+
+        print(f"update label: {spec.name}")
         if apply:
             run_checked([
                 "gh",
                 "label",
-                "create",
+                "edit",
                 spec.name,
                 "--color",
                 spec.color,
