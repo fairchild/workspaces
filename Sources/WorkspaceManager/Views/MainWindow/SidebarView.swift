@@ -643,12 +643,7 @@ struct SidebarView: View {
     }
 
     private func openSettingsWindow() {
-        let selector = Selector(("showSettingsWindow:"))
-        if NSApp.sendAction(selector, to: nil, from: nil) {
-            return
-        }
-
-        _ = NSApp.sendAction(Selector(("showPreferencesWindow:")), to: nil, from: nil)
+        SettingsWindowPresenter.open()
     }
 
     private func openLumeLog() {
