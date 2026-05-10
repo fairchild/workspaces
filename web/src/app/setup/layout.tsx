@@ -1,6 +1,8 @@
 import { getSession } from "@/lib/auth-server";
 import { PostHogUserIdentify } from "../dashboard/components/posthog-user-identify";
 
+export const dynamic = "force-dynamic";
+
 export default async function SetupLayout({
 	children,
 }: {
