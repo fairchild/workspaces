@@ -44,7 +44,10 @@ class MigrateAgentLabelsTests(unittest.TestCase):
         ):
             output = io.StringIO()
             with contextlib.redirect_stdout(output):
-                migrate_agent_labels.ensure_labels(apply=False)
+                migrate_agent_labels.ensure_labels(
+                    {item["name"]: item for item in existing},
+                    apply=False,
+                )
 
         self.assertIn("update label: claimed", output.getvalue())
         run_checked.assert_not_called()
@@ -65,7 +68,10 @@ class MigrateAgentLabelsTests(unittest.TestCase):
             mock.patch.object(migrate_agent_labels, "run_json", return_value=existing),
             mock.patch.object(migrate_agent_labels, "run_checked") as run_checked,
         ):
-            migrate_agent_labels.ensure_labels(apply=True)
+            migrate_agent_labels.ensure_labels(
+                {item["name"]: item for item in existing},
+                apply=True,
+            )
 
         commands = [call.args[0] for call in run_checked.call_args_list]
         self.assertIn(
@@ -103,6 +109,13 @@ class MigrateAgentLabelsTests(unittest.TestCase):
         self.assertNotIn("agent:review", content)
         self.assertIn('"agent"', content)
         self.assertIn('"ready"', content)
+
+    def test_migration_skips_deleted_legacy_labels(self) -> None:
+        with mock.patch.object(migrate_agent_labels, "run_json") as run_json:
+            seen = migrate_agent_labels.migrate_issues(set(), apply=False)
+
+        self.assertEqual(seen, set())
+        run_json.assert_not_called()
 
 
 if __name__ == "__main__":
