@@ -1,8 +1,6 @@
 import crypto from "node:crypto";
-import {
-	type PrReviewPayload,
-	triggerPrReview,
-} from "@/lib/agent-runtime/pr-review";
+import { triggerPrReview } from "@/lib/agent-runtime/pr-review";
+import { parsePrReviewTrigger } from "@/lib/agent-runtime/pr-review-trigger";
 import {
 	getChatMessageByDiscussionId,
 	pushChatMessage,
@@ -146,28 +144,12 @@ export async function POST(request: Request): Promise<Response> {
 
 	// Trigger automated PR review via Managed Agents before returning so
 	// serverless teardown cannot drop the session kickoff event.
-	if (eventType === "pull_request" && action === "opened") {
-		const pr = payload.pull_request as Record<string, unknown> | undefined;
-		const repoObj = payload.repository as Record<string, unknown> | undefined;
-		if (pr && repoObj) {
-			const head = pr.head as Record<string, unknown> | undefined;
-			const base = pr.base as Record<string, unknown> | undefined;
-			const reviewPayload: PrReviewPayload = {
-				number: Number(pr.number ?? 0),
-				title: String(pr.title ?? ""),
-				htmlUrl: String(pr.html_url ?? ""),
-				body: String(pr.body ?? ""),
-				headRef: String(head?.ref ?? ""),
-				baseRef: String(base?.ref ?? ""),
-				repoUrl: String(repoObj.html_url ?? ""),
-				repoFullName: String(repoObj.full_name ?? ""),
-				repoName: String(repoObj.name ?? ""),
-			};
-			try {
-				await triggerPrReview(reviewPayload);
-			} catch (err) {
-				console.error("[pr-review] failed:", err);
-			}
+	const trigger = parsePrReviewTrigger(eventType, action, payload);
+	if (trigger) {
+		try {
+			await triggerPrReview(trigger.reviewPayload, trigger.context);
+		} catch (err) {
+			console.error("[pr-review] failed:", err);
 		}
 	}
 

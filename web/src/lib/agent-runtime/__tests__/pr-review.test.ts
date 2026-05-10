@@ -8,6 +8,9 @@ const mocks = vi.hoisted(() => ({
 	getOrCreateEnvironment: vi.fn(),
 	getInstallationToken: vi.fn(),
 	fetch: vi.fn(),
+	recordRunStart: vi.fn(),
+	recordRunResult: vi.fn(),
+	computeRunFingerprint: vi.fn(),
 }));
 
 vi.mock("@anthropic-ai/sdk", () => {
@@ -36,6 +39,12 @@ vi.mock("../../github-app-auth", () => ({
 	getInstallationToken: mocks.getInstallationToken,
 }));
 
+vi.mock("../pr-review-runs", () => ({
+	computeRunFingerprint: mocks.computeRunFingerprint,
+	recordRunStart: mocks.recordRunStart,
+	recordRunResult: mocks.recordRunResult,
+}));
+
 vi.stubGlobal("fetch", mocks.fetch);
 
 import {
@@ -59,6 +68,7 @@ Adds narrative review context.
 - [x] Test evidence attached (Playwright report, test output, or equivalent)
 - https://evidence.cloudcompute.com/pr-9.png`,
 		headRef: "feature/pr-narrative",
+		headSha: "deadbeefcafebabe1234567890abcdef12345678",
 		baseRef: "main",
 		repoUrl: "https://github.com/fairchild/workspaces",
 		repoFullName: "fairchild/workspaces",
@@ -189,6 +199,9 @@ beforeEach(() => {
 	mocks.getOrCreateEnvironment.mockReset();
 	mocks.getInstallationToken.mockReset();
 	mocks.fetch.mockReset();
+	mocks.recordRunStart.mockReset();
+	mocks.recordRunResult.mockReset();
+	mocks.computeRunFingerprint.mockReset();
 
 	mocks.getOrCreateAgent.mockResolvedValue("agent_01");
 	mocks.getOrCreateEnvironment.mockResolvedValue("env_01");
@@ -196,6 +209,9 @@ beforeEach(() => {
 	mocks.uploadFile.mockResolvedValue({ id: "file_01" });
 	mocks.createSession.mockResolvedValue({ id: "sesn_01" });
 	mocks.sendEvent.mockResolvedValue({});
+	mocks.computeRunFingerprint.mockReturnValue("fp_test");
+	mocks.recordRunStart.mockResolvedValue({ inserted: true });
+	mocks.recordRunResult.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -645,6 +661,85 @@ describe("triggerPrReview", () => {
 		);
 		expect(message).toContain(
 			"If no previous PR exists or the previous PR context is unavailable",
+		);
+	});
+});
+
+describe("triggerPrReview rerun behavior", () => {
+	it("skips when recordRunStart reports a duplicate fingerprint", async () => {
+		mockPrList([githubPr(9), githubPr(8)]);
+		mocks.recordRunStart.mockResolvedValueOnce({ inserted: false });
+
+		await expect(triggerPrReview(payload())).resolves.toBeNull();
+
+		expect(mocks.createSession).not.toHaveBeenCalled();
+		expect(mocks.sendEvent).not.toHaveBeenCalled();
+	});
+
+	it("includes prior managed reviews in the kickoff for reruns", async () => {
+		mocks.fetch.mockImplementation(async (url: string) => {
+			if (url.includes("/pulls?")) {
+				return { ok: true, json: async () => [githubPr(8)] };
+			}
+			if (url.includes("/labels?")) {
+				return { ok: true, json: async () => [] };
+			}
+			if (url.includes("/issues/9/comments?")) {
+				return { ok: true, json: async () => [] };
+			}
+			if (/\/pulls\/9\/reviews\?/.test(url)) {
+				return {
+					ok: true,
+					json: async () => [
+						{
+							id: 1,
+							state: "CHANGES_REQUESTED",
+							body: "Need evidence",
+							submitted_at: "2026-05-08T10:00:00Z",
+							commit_id: "oldsha000000000000",
+							user: { login: "workspaces-claude-pr-reviewer[bot]" },
+						},
+					],
+				};
+			}
+			if (/\/pulls\/8\/reviews\?/.test(url)) {
+				return { ok: true, json: async () => [] };
+			}
+			throw new Error(`Unexpected fetch URL: ${url}`);
+		});
+
+		await expect(
+			triggerPrReview(payload(), {
+				kind: "synchronize",
+				triggerSourceId: "deadbeefcafebabe1234567890abcdef12345678",
+				reason: "New commit pushed (head deadbeef)",
+			}),
+		).resolves.toBe("sesn_01");
+
+		const [, params] = mocks.sendEvent.mock.calls[0];
+		const message = params.events[0].content[0].text;
+		expect(message).toContain("Rerun context (trusted)");
+		expect(message).toContain("This rerun fired because: New commit pushed");
+		expect(message).toContain(
+			'<untrusted-content name="prior-managed-reviews">',
+		);
+		expect(message).toContain("Need evidence");
+		expect(message).toContain("older head");
+	});
+
+	it("records run failure when session creation throws", async () => {
+		mockPrList([githubPr(9)]);
+		mocks.createSession.mockRejectedValueOnce(new Error("session denied"));
+
+		await expect(triggerPrReview(payload())).rejects.toThrow("session denied");
+
+		expect(mocks.recordRunResult).toHaveBeenCalledWith(
+			"fp_test",
+			expect.objectContaining({
+				status: "failed",
+				sessionId: null,
+				error: "session denied",
+			}),
 		);
 	});
 });
