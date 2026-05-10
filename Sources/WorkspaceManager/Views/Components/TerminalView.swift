@@ -25,6 +25,7 @@ enum TerminalPaneChromePolicy: Equatable, Sendable {
 final class HostTerminalSurfaceStore {
     private var surfaces: [UUID: GhosttySurfaceView] = [:]
     private var sessionIDsBySurfaceIdentity: [ObjectIdentifier: UUID] = [:]
+    var hooksSocketPath: String?
     var onSurfaceCreated: (@MainActor (UUID) -> Void)?
     var onSurfaceInvalidated: (@MainActor (UUID) -> Void)?
 
@@ -64,6 +65,8 @@ final class HostTerminalSurfaceStore {
         } else {
             created = GhosttySurfaceView(
                 workingDirectory: session.directoryURL,
+                hostSessionID: session.id,
+                hooksSocketPath: hooksSocketPath,
                 onProcessExit: wrappedOnProcessExit,
                 onCloseConfirmationRequired: onCloseConfirmationRequired
             )

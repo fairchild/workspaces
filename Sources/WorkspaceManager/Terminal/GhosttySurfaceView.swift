@@ -34,13 +34,19 @@ final class GhosttySurfaceView: NSView {
 
     init(
         workingDirectory: URL,
+        hostSessionID: UUID? = nil,
+        hooksSocketPath: String? = nil,
         onProcessExit: (() -> Void)? = nil,
         onCloseConfirmationRequired: (() -> Void)? = nil
     ) {
         self.workingDirectory = workingDirectory
         self.onProcessExit = onProcessExit
         self.onCloseConfirmationRequired = onCloseConfirmationRequired
-        self.terminalConfig = GhosttyTerminalConfig(workingDirectory: workingDirectory)
+        self.terminalConfig = GhosttyTerminalConfig(
+            workingDirectory: workingDirectory,
+            hostSessionID: hostSessionID,
+            hooksSocketPath: hooksSocketPath
+        )
         self.readinessDiagnostics = TerminalReadinessDiagnostics(
             workingDirectoryName: workingDirectory.lastPathComponent,
             shellProfileMode: terminalConfig.shellProfileModeLabel

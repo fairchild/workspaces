@@ -78,8 +78,8 @@ let package = Package(
                 // App icons and assets
                 .process("Resources/Assets.xcassets"),
 
-                // Claude Code hook forwarders — bundled .sh files for both
-                // Channel 2 (statusline.sh) and Channel 3 (title-emit.sh).
+                // Claude Code hook forwarders — bundled .sh files for hook
+                // events and status-line forwarding.
                 // The installer wires them into ~/.claude/settings.json by
                 // absolute path, extracting them to a writable path on opt-in
                 // install when needed.

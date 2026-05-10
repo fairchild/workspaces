@@ -3,10 +3,10 @@
 # claude-integration-smoke.sh - Interactive evidence harness for Claude Code
 # ==========================================================================
 #
-# This harness automates the repeatable parts of the five-channel integration
+# This harness automates the repeatable parts of the Claude Code integration
 # smoke and prompts for the parts that must be human-driven in a real terminal:
 # accepting the Settings merge, driving a real Claude permission prompt, and
-# opening the conversation log / headless quick action surfaces.
+# opening the conversation log surface.
 #
 # Usage:
 #   ./scripts/claude-integration-smoke.sh --pr 455 --no-build
@@ -228,7 +228,7 @@ discover_socket() {
 
     while (( SECONDS < deadline )); do
         socket="$(
-            sed -nE 's/.*listener started at (.*hooks-[0-9]+\.sock).*/\1/p' "$APP_LOG" | tail -n 1
+            sed -nE 's/.*listener started at (.*hooks\.sock).*/\1/p' "$APP_LOG" | tail -n 1
         )"
         if [[ -n "$socket" && -S "$socket" ]]; then
             SOCKET_PATH="$socket"
@@ -238,7 +238,7 @@ discover_socket() {
         sleep 1
     done
 
-    fail "Could not find live hooks-<pid>.sock in $APP_LOG"
+    fail "Could not find live hooks.sock in $APP_LOG"
 }
 
 probe_healthz() {
@@ -323,27 +323,35 @@ run_interactive_steps() {
         capture_step "08-conversation-log" "Conversation log renders the live transcript surface."
     fi
 
-    if wait_for_user "Optional: invoke a Claude headless quick action or run the headless service flow and capture its progress."; then
-        capture_step "09-headless-quick-action" "Headless Claude run reports separately from the interactive terminal session."
-    fi
 }
 
 write_comment_file() {
     local date_string
     date_string="$(date '+%Y-%m-%d')"
+
+    local behaviors
+    if [[ "$NON_INTERACTIVE" == true ]]; then
+        behaviors="- Debug app launches.
+- The stable hook listener socket is discovered from launch logs.
+- The hook listener answers \`/healthz\`.
+- A screenshot of the launched debug app was captured."
+    else
+        behaviors="- Debug app launches and the stable hook listener answers \`/healthz\`.
+- Settings -> Agents renders the merge preview and installs with backup visibility.
+- A real Claude terminal session can drive awaiting-input and completion UI states.
+- OSC fallback can update host state when no matching hook event arrives.
+- Conversation log renders transcript data when captured above."
+    fi
+
     cat >"$COMMENT_FILE" <<EOF
 ## Manual Claude integration smoke evidence
 
-Captured against the integrated five-channel Claude Code architecture on ${date_string}.
+Captured against the interactive Claude Code integration on ${date_string}.
 
 $(cat "$URL_FILE")
 
 Behaviors covered:
-- Debug app launches and the pid-scoped hook listener answers \`/healthz\`.
-- Settings -> Agents renders the merge preview and installs with backup visibility.
-- A real Claude terminal session can drive awaiting-input and completion UI states.
-- OSC fallback can update host state when no matching hook event arrives.
-- Conversation log and headless run surfaces are exercised when captured above.
+${behaviors}
 
 Local artifact bundle: \`${RUN_DIR}\`
 EOF

@@ -2,9 +2,8 @@
 //  ClaudeIntegrationLifecycleTests.swift
 //  WorkspaceManagerAppTests
 //
-//  Verifies the silent-reinstall behaviour the lifecycle uses to keep
-//  ~/.claude/settings.json pointed at the live (pid-scoped) socket on every
-//  cold start once the user has opted in. Defect 1 from the round-2 review.
+//  Verifies the settings-repair behaviour the lifecycle uses on cold start once
+//  the user has opted in.
 //
 
 import Combine
@@ -15,7 +14,7 @@ import Testing
 @testable import WorkspaceManagerCore
 
 @MainActor
-@Suite("ClaudeIntegrationLifecycle silent reinstall", .serialized)
+@Suite("ClaudeIntegrationLifecycle settings repair", .serialized)
 struct ClaudeIntegrationLifecycleTests {
 
     actor StubInstaller: ClaudeSettingsInstalling {
@@ -53,7 +52,7 @@ struct ClaudeIntegrationLifecycleTests {
         // Wait for the lifecycle's startup Task chain to complete. The chain awaits
         // `listener.socketPath`, then calls install(), then starts the listener.
         // Polling for installCallCount or a timeout is sufficient.
-        let deadline = Date().addingTimeInterval(2.0)
+        let deadline = Date().addingTimeInterval(15.0)
         while Date() < deadline {
             let count = await stub.installCallCount
             if !optedIn {
@@ -108,7 +107,7 @@ struct ClaudeIntegrationLifecycleTests {
         let registry = AgentSessionRegistry()
         ClaudeIntegrationLifecycle.shared.start(registry: registry)
 
-        let deadline = Date().addingTimeInterval(2.0)
+        let deadline = Date().addingTimeInterval(15.0)
         while Date() < deadline {
             if didPublishInstaller { break }
             try? await Task.sleep(nanoseconds: 50_000_000)

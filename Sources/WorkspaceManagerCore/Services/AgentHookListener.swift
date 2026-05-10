@@ -6,9 +6,9 @@
 //  Spec: pasted_text_2026-05-03_22-18-10.txt § Channel 1 ("Listener", "Async by default").
 //
 //  Routes:
-//    POST /event       — hook event, decoded via the registered ClaudeCode adapter
+//    POST /event       — hook event, decoded via ClaudeHookTranslator
 //    POST /statusline  — Channel 2 status-line forwarder; decodes StatusLinePayload
-//                        and updates the registry's status fields for the matching session
+//                        and applies status fields for the header-routed session
 //    GET  /healthz     — 200 OK "OK"
 //
 //  Framing: minimal HTTP/1.1 — request line, headers, body. We respond 200 OK
@@ -16,6 +16,7 @@
 //  fast (<10ms) per the spec.
 //
 
+import Darwin
 import Foundation
 import Network
 
@@ -35,47 +36,54 @@ public actor AgentHookListener {
     }
 
     private let socketURL: URL
+    private let lockURL: URL
     private let registry: any AgentSessionRegistryProtocol
-    private let adapterRegistry: AgentAdapterRegistry
     private let logger: @Sendable (String) -> Void
     private var listener: NWListener?
+    private var lockFileDescriptor: Int32?
     private var statistics = Statistics()
 
     public init(
         bundleIdentifier: String,
         registry: any AgentSessionRegistryProtocol,
-        adapterRegistry: AgentAdapterRegistry = AgentAdapterRegistry(),
         socketURLOverride: URL? = nil,
         logger: @escaping @Sendable (String) -> Void = { NSLog("[AgentHookListener] %@", $0) }
     ) {
         self.registry = registry
-        self.adapterRegistry = adapterRegistry
         self.logger = logger
         if let override = socketURLOverride {
             self.socketURL = override
         } else {
-            let appSupport =
-                FileManager.default.urls(
-                    for: .applicationSupportDirectory,
-                    in: .userDomainMask
-                ).first ?? FileManager.default.temporaryDirectory
-            let dir = appSupport.appendingPathComponent(bundleIdentifier, isDirectory: true)
-            self.socketURL = dir.appendingPathComponent("hooks-\(getpid()).sock", isDirectory: false)
+            self.socketURL = Self.defaultSocketURL(bundleIdentifier: bundleIdentifier)
         }
+        self.lockURL = socketURL.deletingPathExtension().appendingPathExtension("lock")
     }
 
-    public var socketPath: String { socketURL.path }
+    public nonisolated var socketPath: String { socketURL.path }
+
+    public nonisolated static func defaultSocketURL(bundleIdentifier: String) -> URL {
+        let appSupport =
+            FileManager.default.urls(
+                for: .applicationSupportDirectory,
+                in: .userDomainMask
+            ).first ?? FileManager.default.temporaryDirectory
+        let dir = appSupport.appendingPathComponent(bundleIdentifier, isDirectory: true)
+        return dir.appendingPathComponent("hooks.sock", isDirectory: false)
+    }
 
     public func currentStatistics() -> Statistics { statistics }
 
-    /// Start the listener. Sweeps stale sibling sockets owned by dead pids,
-    /// removes any leftover file at our path, then binds.
+    /// Start the listener. A stable socket path is guarded by a sibling lock
+    /// file so concurrent app instances do not race each other.
     public func start() async throws {
         guard listener == nil else { throw ListenerError.alreadyStarted }
 
         try ensureParentDirectoryExists()
+        guard try acquireSocketLock() else {
+            logger("listener dormant; another process owns \(socketURL.path)")
+            return
+        }
         try? FileManager.default.removeItem(at: socketURL)
-        sweepStaleSiblingSockets()
 
         let endpoint = NWEndpoint.unix(path: socketURL.path)
         let parameters = NWParameters.tcp
@@ -86,6 +94,7 @@ public actor AgentHookListener {
         do {
             listener = try NWListener(using: parameters)
         } catch {
+            releaseSocketLock()
             throw ListenerError.socketBindFailed("\(error)")
         }
 
@@ -105,10 +114,16 @@ public actor AgentHookListener {
     }
 
     public func stop() async {
+        let hadListener = listener != nil
         listener?.cancel()
         listener = nil
-        try? FileManager.default.removeItem(at: socketURL)
-        logger("listener stopped; socket file removed at \(socketURL.path)")
+        if hadListener {
+            try? FileManager.default.removeItem(at: socketURL)
+            logger("listener stopped; socket file removed at \(socketURL.path)")
+        } else {
+            logger("listener stopped")
+        }
+        releaseSocketLock()
     }
 
     // MARK: - Connection handling
@@ -197,19 +212,27 @@ public actor AgentHookListener {
     private func process(request: HTTPRequest) async {
         switch (request.method.uppercased(), request.path) {
         case ("POST", "/event"):
-            await processEvent(body: request.body)
+            await processEvent(request: request)
         case ("POST", "/statusline"):
-            await processStatusLine(body: request.body)
+            await processStatusLine(request: request)
         default:
             break
         }
     }
 
-    private func processEvent(body: Data) async {
-        let adapter = adapterRegistry.adapter(for: .claudeCode)
+    private func processEvent(request: HTTPRequest) async {
+        guard let hostSessionID = Self.hostSessionID(from: request.headers) else {
+            logger("dropping hook event without valid host session header")
+            return
+        }
+        guard await isRegisteredHostSession(hostSessionID) else {
+            logger("dropping hook event for unregistered host session \(hostSessionID.uuidString)")
+            return
+        }
+
         let event: AgentEvent?
         do {
-            event = try adapter.decodeHookEvent(body)
+            event = try ClaudeHookTranslator.decodeAgentEvent(from: request.body)
         } catch {
             statistics.decodeFailures += 1
             logger("decode error: \(error)")
@@ -217,76 +240,42 @@ public actor AgentHookListener {
         }
         guard let event else { return }
 
-        // Resolve the host session via the locked contract.
-        let cwd: String
-        let agentSessionID: String?
-        switch event {
-        case .sessionStart(let id, let path, _):
-            cwd = path
-            agentSessionID = id
-        case .workingDirectory(let path):
-            cwd = path
-            agentSessionID = nil
-        default:
-            // Pull the cwd back out of the raw payload via the decoder common fields.
-            // The adapter already consumed the JSON, so re-read for routing only.
-            (cwd, agentSessionID) = Self.extractCommon(body: body)
-        }
-
-        let hostSessionID = await MainActor.run { [registry] in
-            registry.resolveHostSession(cwd: cwd, agentSessionID: agentSessionID)
-        }
-
-        guard let hostSessionID else {
-            logger("no host session for cwd=\(cwd) agentSession=\(agentSessionID ?? "nil")")
-            return
-        }
-
         await MainActor.run { [registry, event] in
-            registry.ingest(event, for: hostSessionID, origin: .hook)
+            registry.apply(events: [event], for: hostSessionID, origin: .hook)
         }
         statistics.ingestedEvents += 1
     }
 
-    private func processStatusLine(body: Data) async {
-        guard let payload = StatusLinePayload.decode(from: body) else {
+    private func processStatusLine(request: HTTPRequest) async {
+        guard let hostSessionID = Self.hostSessionID(from: request.headers) else {
+            return
+        }
+        guard await isRegisteredHostSession(hostSessionID) else {
+            return
+        }
+
+        guard let payload = StatusLinePayload.decode(from: request.body) else {
             statistics.decodeFailures += 1
             logger("statusline decode failed")
             return
         }
 
-        let cwd = payload.resolvedCwd() ?? ""
-        let hostSessionID = await MainActor.run { [registry] in
-            registry.resolveHostSession(cwd: cwd, agentSessionID: payload.agentSessionID)
-        }
-
-        guard let hostSessionID else {
-            // Status-line ticks before SessionStart are common and not worth a
-            // decode-failure log entry.
-            return
-        }
-
         let fields = payload.toStatusFields()
         await MainActor.run { [registry] in
-            registry.updateStatusFields(fields, for: hostSessionID)
+            registry.apply(events: [.statusFields(fields)], for: hostSessionID, origin: .statusLine)
         }
         statistics.statusLineUpdates += 1
     }
 
-    private static func extractCommon(body: Data) -> (cwd: String, agentSessionID: String?) {
-        guard let raw = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else {
-            return ("", nil)
+    private func isRegisteredHostSession(_ hostSessionID: UUID) async -> Bool {
+        await MainActor.run { [registry] in
+            registry.statuses[hostSessionID] != nil
         }
-        let cwd =
-            (raw["cwd"] as? String)
-            ?? (raw["working_directory"] as? String)
-            ?? (raw["workingDirectory"] as? String)
-            ?? ""
-        let sessionID =
-            (raw["session_id"] as? String)
-            ?? (raw["sessionId"] as? String)
-            ?? (raw["sessionID"] as? String)
-        return (cwd, sessionID)
+    }
+
+    private static func hostSessionID(from headers: [String: String]) -> UUID? {
+        guard let raw = headers["x-workspaces-host-session-id"] else { return nil }
+        return UUID(uuidString: raw)
     }
 
     // MARK: - Filesystem hygiene
@@ -298,27 +287,26 @@ public actor AgentHookListener {
         )
     }
 
-    private func sweepStaleSiblingSockets() {
-        let dir = socketURL.deletingLastPathComponent()
-        guard
-            let entries = try? FileManager.default.contentsOfDirectory(
-                at: dir, includingPropertiesForKeys: nil
-            )
-        else { return }
-        for entry in entries {
-            let name = entry.lastPathComponent
-            guard name.hasPrefix("hooks-"), name.hasSuffix(".sock") else { continue }
-            let pidString = name.dropFirst("hooks-".count).dropLast(".sock".count)
-            guard let pid = pid_t(pidString) else {
-                try? FileManager.default.removeItem(at: entry)
-                continue
-            }
-            // kill(pid, 0) returns 0 if alive, -1 with errno=ESRCH if dead.
-            if kill(pid, 0) == -1 && errno == ESRCH {
-                try? FileManager.default.removeItem(at: entry)
-                logger("swept stale sibling socket pid=\(pid)")
-            }
+    private func acquireSocketLock() throws -> Bool {
+        let fd = open(lockURL.path, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR)
+        guard fd >= 0 else {
+            throw ListenerError.socketBindFailed("could not open lock \(lockURL.path): errno=\(errno)")
         }
+
+        if flock(fd, LOCK_EX | LOCK_NB) != 0 {
+            close(fd)
+            return false
+        }
+
+        lockFileDescriptor = fd
+        return true
+    }
+
+    private func releaseSocketLock() {
+        guard let fd = lockFileDescriptor else { return }
+        flock(fd, LOCK_UN)
+        close(fd)
+        lockFileDescriptor = nil
     }
 
     // MARK: - HTTP framing

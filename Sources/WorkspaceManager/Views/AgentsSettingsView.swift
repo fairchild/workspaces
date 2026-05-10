@@ -281,8 +281,7 @@ struct AgentsSettingsView: View {
             try await installer.install()
             await refresh()
             await MainActor.run {
-                // Persist the opt-in so silent reinstall on next launch re-runs
-                // install() against the new (pid-scoped) socket path.
+                // Persist the opt-in so launch-time settings repair stays active.
                 self.hooksEnabled = true
                 self.showPreviewSheet = false
                 self.transientFeedback =

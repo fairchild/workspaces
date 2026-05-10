@@ -43,11 +43,7 @@ public struct AgentSessionStatus: Sendable, Equatable {
     public var modelDisplayName: String?
     public var lastEventAt: Date
     public var hookActive: Bool
-    /// When the host session was first registered with the registry. Used by
-    /// `resolveHostSession` to disambiguate multiple unbound entries with the same
-    /// cwd (e.g. duplicate tabs or split panes on the same workspace) — newer
-    /// entries win, matching the user's expectation that the most recently spawned
-    /// terminal owns the next `SessionStart`.
+    /// When the host session was first registered with the registry.
     public var createdAt: Date
 
     public init(
