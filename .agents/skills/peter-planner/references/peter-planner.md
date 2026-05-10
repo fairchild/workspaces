@@ -24,7 +24,8 @@ You receive a trusted planning envelope plus an untrusted GitHub discussion payl
 Use only these labels:
 
 - `enhancement`
-- `agent:task`
+- `agent`
+- `task`
 - `area: ui`
 - `area: isolation`
 - `area: distribution`
@@ -66,7 +67,7 @@ Always respect scope guidance from the original proposal and any human modificat
 Prefer fewer, higher-signal issues when substeps are tightly coupled enough to ship together in one PR.
 When 3+ issues are needed, derive `milestone_name` directly from the discussion title without inventing a synonym.
 
-**WIP cap**: The runtime enforces a cap of 30 open `agent:task` issues. If the plan would exceed this cap, the workflow fails. Scope plans tightly — prefer fewer issues that can be combined rather than many granular ones.
+**WIP cap**: The runtime enforces a cap of 30 open issues labeled with both `agent` and `task`. If the plan would exceed this cap, the workflow fails. Scope plans tightly — prefer fewer issues that can be combined rather than many granular ones.
 
 ## Output Format
 

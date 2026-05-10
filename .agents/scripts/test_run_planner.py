@@ -252,7 +252,7 @@ class RunPlannerTests(unittest.TestCase):
         labels = run_planner.normalize_labels(["ci", "ui"], CATALOG)
         self.assertEqual(
             labels,
-            ["enhancement", "agent:task", "area: platform", "area: ui"],
+            ["enhancement", "agent", "task", "area: platform", "area: ui"],
         )
 
     def test_normalize_plan_derives_milestone_from_discussion_title(self) -> None:
@@ -1401,7 +1401,7 @@ class RunContributorTests(unittest.TestCase):
                 "title": "Fix environment status color semantics in NewWorkspaceSheet",
                 "url": "https://github.com/fairchild/workspaces/issues/116",
                 "body": issue_body,
-                "labels": {"nodes": [{"name": "agent:task"}, {"name": "agent:ready"}]},
+                "labels": {"nodes": [{"name": "agent"}, {"name": "task"}, {"name": "ready"}]},
                 "comments": {"nodes": []},
             }
         ]
@@ -1418,7 +1418,7 @@ class RunContributorTests(unittest.TestCase):
         )
         self.assertEqual(len(classified["ready_issues"]), 1)
         self.assertEqual(classified["ready_issues"][0]["issue_number"], 116)
-        self.assertEqual(classified["ready_issues"][0]["approval_reason"], "agent:ready label present")
+        self.assertEqual(classified["ready_issues"][0]["approval_reason"], "ready label present")
 
     def test_claim_is_stale_after_24_hours_without_pr(self) -> None:
         claim = {
@@ -2412,7 +2412,7 @@ class RunContributorTests(unittest.TestCase):
                 "title": "Fix status color",
                 "url": "https://github.com/fairchild/workspaces/issues/116",
                 "body": issue_body,
-                "labels": {"nodes": [{"name": "agent:task"}, {"name": "agent:ready"}]},
+                "labels": {"nodes": [{"name": "agent"}, {"name": "task"}, {"name": "ready"}]},
                 "comments": {"nodes": []},
             }
         ]
@@ -2463,7 +2463,7 @@ class RunContributorTests(unittest.TestCase):
                 "title": "Fix status color",
                 "url": "https://github.com/fairchild/workspaces/issues/116",
                 "body": issue_body,
-                "labels": {"nodes": [{"name": "agent:task"}, {"name": "agent:ready"}]},
+                "labels": {"nodes": [{"name": "agent"}, {"name": "task"}, {"name": "ready"}]},
                 "comments": {"nodes": []},
             }
         ]
@@ -2514,7 +2514,7 @@ class RunContributorTests(unittest.TestCase):
                 "title": "Fix status color",
                 "url": "https://github.com/fairchild/workspaces/issues/116",
                 "body": issue_body,
-                "labels": {"nodes": [{"name": "agent:task"}, {"name": "agent:ready"}]},
+                "labels": {"nodes": [{"name": "agent"}, {"name": "task"}, {"name": "ready"}]},
                 "comments": {"nodes": []},
             }
         ]
@@ -2566,7 +2566,7 @@ class RunContributorTests(unittest.TestCase):
                 "title": "Fix status color",
                 "url": "https://github.com/fairchild/workspaces/issues/116",
                 "body": issue_body,
-                "labels": {"nodes": [{"name": "agent:task"}, {"name": "agent:ready"}, {"name": "agent:claimed"}]},
+                "labels": {"nodes": [{"name": "agent"}, {"name": "task"}, {"name": "ready"}, {"name": "claimed"}]},
                 "comments": {
                     "nodes": [
                         {

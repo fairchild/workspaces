@@ -1,12 +1,16 @@
-default_labels = ["enhancement", "agent:task"]
+default_labels = ["enhancement", "agent", "task"]
 
 [labels.enhancement]
 color = "a2eeef"
 description = "New feature or request"
 
-[labels."agent:task"]
+[labels.agent]
+color = "5319e7"
+description = "Work owned by the agent execution lane"
+
+[labels.task]
 color = "0E8A16"
-description = "Planned by the agent team"
+description = "Planned work item"
 
 [labels."area: ui"]
 color = "c5def5"

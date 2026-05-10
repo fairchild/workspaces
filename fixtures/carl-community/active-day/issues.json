@@ -6,7 +6,7 @@
     "createdAt": "2026-03-19T10:00:00Z",
     "updatedAt": "2026-03-21T07:00:00Z",
     "closedAt": "2026-03-21T07:00:00Z",
-    "labels": [{"name": "agent:ready"}],
+    "labels": [{"name": "agent"}, {"name": "ready"}],
     "milestone": {"title": "M5: Agent Coordination"},
     "assignees": [{"login": "plat-ironwood[bot]"}]
   },

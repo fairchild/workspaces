@@ -236,11 +236,13 @@ export function fetchIssuesByLabel(
 	token: string,
 	owner: string,
 	repo: string,
-	label: string,
+	label: string | string[],
 ): Promise<PipelineIssue[]> {
-	return cached(`issues:${owner}/${repo}:${label}`, FIVE_MIN, async () => {
+	const labels = Array.isArray(label) ? label : [label];
+	const labelKey = labels.join(",");
+	return cached(`issues:${owner}/${repo}:${labelKey}`, FIVE_MIN, async () => {
 		const issues = await ghFetch<GHIssue[]>(
-			`/repos/${owner}/${repo}/issues?labels=${encodeURIComponent(label)}&state=open&per_page=100`,
+			`/repos/${owner}/${repo}/issues?labels=${encodeURIComponent(labelKey)}&state=open&per_page=100`,
 			token,
 		);
 		return issues.map((i) => ({

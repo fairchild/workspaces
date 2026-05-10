@@ -14,7 +14,10 @@
     },
     "labels": [
       {
-        "name": "agent:task"
+        "name": "agent"
+      },
+      {
+        "name": "task"
       }
     ],
     "closedByPullRequestsReferences": []
@@ -34,7 +37,10 @@
     },
     "labels": [
       {
-        "name": "agent:task"
+        "name": "agent"
+      },
+      {
+        "name": "task"
       }
     ],
     "closedByPullRequestsReferences": []
@@ -54,7 +60,10 @@
     },
     "labels": [
       {
-        "name": "agent:task"
+        "name": "agent"
+      },
+      {
+        "name": "task"
       }
     ],
     "closedByPullRequestsReferences": []
@@ -74,7 +83,10 @@
     },
     "labels": [
       {
-        "name": "agent:task"
+        "name": "agent"
+      },
+      {
+        "name": "task"
       }
     ],
     "closedByPullRequestsReferences": []

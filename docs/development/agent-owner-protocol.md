@@ -30,12 +30,12 @@ The current control points are:
 |------|-------------|--------------|
 | Let agents ideate | Do nothing | April and Plat review PRs, deepen discussions, or propose a new `[idea]` discussion on schedule |
 | Turn an idea into a plan | Reply on the discussion with `plan it` | Peter creates issue(s) and, if needed, a milestone |
-| Start coding | React with 👍 on Peter's summary comment | The next contributor wake-up syncs the mission into `agent:ready` issue state, then April and Plat may claim ready issues and open PRs |
+| Start coding | React with 👍 on Peter's summary comment | The next contributor wake-up syncs the mission into `agent` + `ready` issue state, then April and Plat may claim ready issues and open PRs |
 | Keep agents focused on PRs | Leave approved work in place | Contributors prioritize re-reviews, open PRs, then ready issues before new ideation |
 | Stop new execution from starting | Remove the 👍 from Peter's summary comment | Unclaimed issues in that discussion stop being execution-approved |
 | Redirect work | Comment on the discussion, issue, or PR with explicit instructions | Peter uses discussion guidance for planning; April and Plat use PR review and issue/PR context during execution |
 | Stop a bad PR from landing | Request changes or leave review comments | Agents should work the PR to closure, but they do not merge |
-| See what's ready to merge | Filter issues by `agent:mergeable` | An agent approved the PR; review and merge at your discretion |
+| See what's ready to merge | Filter issues by `agent` + `mergeable` | An agent approved the PR; review and merge at your discretion |
 | Ship the change | Merge the PR yourself | `main` only moves when you do it |
 
 ## Exact Signals
@@ -66,10 +66,10 @@ Why: that reaction is the execution gate April and Plat check before claiming wo
 
 Internally, the next contributor wake-up converts that discussion approval into explicit issue state:
 
-- `agent:ready` means the issue is execution-approved, unblocked, and available to claim
-- `agent:claimed` means an agent claimed it and is assigned to work it toward a PR
-- `agent:review` means the issue has an open PR awaiting review
-- `agent:mergeable` means an agent reviewed and approved the PR — ready for your merge
+- `agent` + `ready` means the issue is execution-approved, unblocked, and available to claim
+- `agent` + `claimed` means an agent claimed it and is assigned to work it toward a PR
+- `agent` + `review` means the issue has an open PR awaiting review
+- `agent` + `mergeable` means an agent reviewed and approved the PR — ready for your merge
 
 ### 3. Merge Signal
 
