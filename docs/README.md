@@ -79,7 +79,7 @@ Use the extensionless path when the page should render Markdown with the visual 
 From the repository root:
 
 ```bash
-uv run --script docs/server.py
+mise run docs:serve
 ```
 
 Then open:
@@ -91,7 +91,7 @@ http://127.0.0.1:8088/docs/
 You can choose a different port when needed:
 
 ```bash
-uv run --script docs/server.py --port 8090
+mise run docs:serve -- --port 8090
 ```
 
 The server intentionally serves the repository root, not just `docs/`, so rendered pages can fetch root-level Markdown such as `README.md` and `CONTEXT.md`.
