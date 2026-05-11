@@ -22,18 +22,31 @@ struct AgentHookListenerTests {
         return dir.appendingPathComponent(name)
     }
 
-    private static func curlPost(socket: URL, path: String, body: Data) async -> Int32 {
+    private static func curlPost(
+        socket: URL,
+        path: String,
+        body: Data,
+        hostSessionID: UUID? = nil
+    ) async -> Int32 {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/curl")
-        process.arguments = [
+        var arguments = [
             "--silent",
             "--show-error",
             "--unix-socket", socket.path,
             "-X", "POST",
             "-H", "Content-Type: application/json",
+        ]
+        if let hostSessionID {
+            arguments.append(contentsOf: [
+                "-H", "X-WorkSpaces-Host-Session-ID: \(hostSessionID.uuidString)",
+            ])
+        }
+        arguments.append(contentsOf: [
             "--data-binary", "@-",
             "http://localhost\(path)",
-        ]
+        ])
+        process.arguments = arguments
         let stdin = Pipe()
         let stdout = Pipe()
         let stderr = Pipe()
@@ -70,27 +83,9 @@ struct AgentHookListenerTests {
             statuses = underlying.statuses
         }
 
-        func ingest(_ event: AgentEvent, for hostSessionID: UUID, origin: AgentEventOrigin) {
-            underlying.ingest(event, for: hostSessionID, origin: origin)
+        func apply(events: [AgentEvent], for hostSessionID: UUID, origin: AgentEventOrigin) {
+            underlying.apply(events: events, for: hostSessionID, origin: origin)
             statuses = underlying.statuses
-        }
-
-        func ingestBatch(
-            events: [AgentEvent],
-            for hostSessionID: UUID,
-            origin: AgentEventOrigin
-        ) {
-            underlying.ingestBatch(events: events, for: hostSessionID, origin: origin)
-            statuses = underlying.statuses
-        }
-
-        func updateStatusFields(_ fields: AgentEvent.StatusFields, for hostSessionID: UUID) {
-            underlying.updateStatusFields(fields, for: hostSessionID)
-            statuses = underlying.statuses
-        }
-
-        func resolveHostSession(cwd: String, agentSessionID: String?) -> UUID? {
-            underlying.resolveHostSession(cwd: cwd, agentSessionID: agentSessionID)
         }
 
         func deregister(hostSessionID: UUID) {
@@ -138,7 +133,7 @@ struct AgentHookListenerTests {
 
         let socket = Self.makeTempSocketURL()
         let registry = await TestRegistry(cwd: cwd)
-        let registeredID = await registry.registeredID
+        let registeredID = registry.registeredID
         let listener = AgentHookListener(
             bundleIdentifier: "com.test.workspaces",
             registry: registry,
@@ -154,7 +149,8 @@ struct AgentHookListenerTests {
             "cwd": cwd,
         ]
         let data = try JSONSerialization.data(withJSONObject: body)
-        let status = await Self.curlPost(socket: socket, path: "/event", body: data)
+        let status = await Self.curlPost(
+            socket: socket, path: "/event", body: data, hostSessionID: registeredID)
         #expect(status == 0)
 
         let bound = await waitUntil {
@@ -177,7 +173,7 @@ struct AgentHookListenerTests {
 
         let socket = Self.makeTempSocketURL()
         let registry = await TestRegistry(cwd: cwd)
-        let registeredID = await registry.registeredID
+        let registeredID = registry.registeredID
         let listener = AgentHookListener(
             bundleIdentifier: "com.test.workspaces",
             registry: registry,
@@ -194,7 +190,8 @@ struct AgentHookListenerTests {
         preBody["tool_name"] = "Read"
         preBody["tool_input"] = ["file_path": "/tmp/x.swift"]
         let preData = try JSONSerialization.data(withJSONObject: preBody)
-        _ = await Self.curlPost(socket: socket, path: "/event", body: preData)
+        _ = await Self.curlPost(
+            socket: socket, path: "/event", body: preData, hostSessionID: registeredID)
         let preReached = await waitUntil {
             await MainActor.run {
                 if case .runningTool = registry.statuses[registeredID]?.run { return true }
@@ -214,7 +211,8 @@ struct AgentHookListenerTests {
         postBody["tool_name"] = "Read"
         postBody["duration_ms"] = 5
         let postData = try JSONSerialization.data(withJSONObject: postBody)
-        _ = await Self.curlPost(socket: socket, path: "/event", body: postData)
+        _ = await Self.curlPost(
+            socket: socket, path: "/event", body: postData, hostSessionID: registeredID)
         let postReached = await waitUntil {
             await MainActor.run { registry.statuses[registeredID]?.run == .thinking }
         }
@@ -223,7 +221,8 @@ struct AgentHookListenerTests {
         var stopBody = common
         stopBody["hook_event_name"] = "Stop"
         let stopData = try JSONSerialization.data(withJSONObject: stopBody)
-        _ = await Self.curlPost(socket: socket, path: "/event", body: stopData)
+        _ = await Self.curlPost(
+            socket: socket, path: "/event", body: stopData, hostSessionID: registeredID)
         let stopReached = await waitUntil {
             await MainActor.run { registry.statuses[registeredID]?.run == .complete }
         }
@@ -240,7 +239,7 @@ struct AgentHookListenerTests {
 
         let socket = Self.makeTempSocketURL()
         let registry = await TestRegistry(cwd: cwd)
-        let registeredID = await registry.registeredID
+        let registeredID = registry.registeredID
         let listener = AgentHookListener(
             bundleIdentifier: "com.test.workspaces",
             registry: registry,
@@ -257,7 +256,8 @@ struct AgentHookListenerTests {
             "tool_name": "Bash",
         ]
         let data = try JSONSerialization.data(withJSONObject: body)
-        _ = await Self.curlPost(socket: socket, path: "/event", body: data)
+        _ = await Self.curlPost(
+            socket: socket, path: "/event", body: data, hostSessionID: registeredID)
         let reached = await waitUntil {
             await MainActor.run {
                 if case .awaitingInput(.permissionPrompt) = registry.statuses[registeredID]?.run {
@@ -279,7 +279,7 @@ struct AgentHookListenerTests {
 
         let socket = Self.makeTempSocketURL()
         let registry = await TestRegistry(cwd: cwd)
-        let registeredID = await registry.registeredID
+        let registeredID = registry.registeredID
         let listener = AgentHookListener(
             bundleIdentifier: "com.test.workspaces",
             registry: registry,
@@ -296,7 +296,8 @@ struct AgentHookListenerTests {
             "error": "rate limit hit",
         ]
         let data = try JSONSerialization.data(withJSONObject: body)
-        _ = await Self.curlPost(socket: socket, path: "/event", body: data)
+        _ = await Self.curlPost(
+            socket: socket, path: "/event", body: data, hostSessionID: registeredID)
         let reached = await waitUntil {
             await MainActor.run {
                 if case .errored = registry.statuses[registeredID]?.run { return true }
@@ -321,7 +322,7 @@ struct AgentHookListenerTests {
 
         let socket = Self.makeTempSocketURL()
         let registry = await TestRegistry(cwd: cwd)
-        let registeredID = await registry.registeredID
+        let registeredID = registry.registeredID
         let listener = AgentHookListener(
             bundleIdentifier: "com.test.workspaces",
             registry: registry,
@@ -339,7 +340,8 @@ struct AgentHookListenerTests {
             "error": "exit 1",
         ]
         let data = try JSONSerialization.data(withJSONObject: body)
-        _ = await Self.curlPost(socket: socket, path: "/event", body: data)
+        _ = await Self.curlPost(
+            socket: socket, path: "/event", body: data, hostSessionID: registeredID)
         let reached = await waitUntil {
             await MainActor.run {
                 if case .errored = registry.statuses[registeredID]?.run { return true }
@@ -364,7 +366,7 @@ struct AgentHookListenerTests {
 
         let socket = Self.makeTempSocketURL()
         let registry = await TestRegistry(cwd: cwd)
-        let registeredID = await registry.registeredID
+        let registeredID = registry.registeredID
         let listener = AgentHookListener(
             bundleIdentifier: "com.test.workspaces",
             registry: registry,
@@ -381,7 +383,8 @@ struct AgentHookListenerTests {
             "prompt": "hello",
         ]
         let data = try JSONSerialization.data(withJSONObject: body)
-        _ = await Self.curlPost(socket: socket, path: "/event", body: data)
+        _ = await Self.curlPost(
+            socket: socket, path: "/event", body: data, hostSessionID: registeredID)
         let reached = await waitUntil {
             await MainActor.run { registry.statuses[registeredID]?.run == .thinking }
         }
@@ -390,7 +393,7 @@ struct AgentHookListenerTests {
         await listener.stop()
     }
 
-    @Test("statusline POST updates registry status fields by cwd")
+    @Test("statusline POST updates registry status fields by host session header")
     func statusLineUpdatesByCwd() async throws {
         let cwd = "/tmp/hook-test-\(UUID().uuidString.prefix(6))"
         try? FileManager.default.createDirectory(atPath: cwd, withIntermediateDirectories: true)
@@ -398,7 +401,7 @@ struct AgentHookListenerTests {
 
         let socket = Self.makeTempSocketURL()
         let registry = await TestRegistry(cwd: cwd)
-        let registeredID = await registry.registeredID
+        let registeredID = registry.registeredID
         let listener = AgentHookListener(
             bundleIdentifier: "com.test.workspaces",
             registry: registry,
@@ -421,7 +424,8 @@ struct AgentHookListenerTests {
             ],
         ]
         let data = try JSONSerialization.data(withJSONObject: body)
-        let status = await Self.curlPost(socket: socket, path: "/statusline", body: data)
+        let status = await Self.curlPost(
+            socket: socket, path: "/statusline", body: data, hostSessionID: registeredID)
         #expect(status == 0)
 
         let reached = await waitUntil {
@@ -441,7 +445,7 @@ struct AgentHookListenerTests {
         await listener.stop()
     }
 
-    @Test("statusline POST resolves by agent_session_id once SessionStart bound")
+    @Test("statusline POST uses host session header even when cwd and agent id drift")
     func statusLineResolvesByAgentSessionID() async throws {
         let cwd = "/tmp/hook-test-\(UUID().uuidString.prefix(6))"
         try? FileManager.default.createDirectory(atPath: cwd, withIntermediateDirectories: true)
@@ -449,7 +453,7 @@ struct AgentHookListenerTests {
 
         let socket = Self.makeTempSocketURL()
         let registry = await TestRegistry(cwd: cwd)
-        let registeredID = await registry.registeredID
+        let registeredID = registry.registeredID
         let listener = AgentHookListener(
             bundleIdentifier: "com.test.workspaces",
             registry: registry,
@@ -466,7 +470,8 @@ struct AgentHookListenerTests {
         ]
         _ = await Self.curlPost(
             socket: socket, path: "/event",
-            body: try JSONSerialization.data(withJSONObject: bind)
+            body: try JSONSerialization.data(withJSONObject: bind),
+            hostSessionID: registeredID
         )
         let bound = await waitUntil {
             await MainActor.run {
@@ -483,7 +488,8 @@ struct AgentHookListenerTests {
         ]
         _ = await Self.curlPost(
             socket: socket, path: "/statusline",
-            body: try JSONSerialization.data(withJSONObject: body)
+            body: try JSONSerialization.data(withJSONObject: body),
+            hostSessionID: registeredID
         )
 
         let reached = await waitUntil {
@@ -504,7 +510,7 @@ struct AgentHookListenerTests {
 
         let socket = Self.makeTempSocketURL()
         let registry = await TestRegistry(cwd: cwd)
-        let registeredID = await registry.registeredID
+        let registeredID = registry.registeredID
         let listener = AgentHookListener(
             bundleIdentifier: "com.test.workspaces",
             registry: registry,
@@ -523,7 +529,8 @@ struct AgentHookListenerTests {
         ]
         let posted = await Self.curlPost(
             socket: socket, path: "/statusline",
-            body: try JSONSerialization.data(withJSONObject: body)
+            body: try JSONSerialization.data(withJSONObject: body),
+            hostSessionID: UUID()
         )
         #expect(posted == 0)
 
@@ -542,7 +549,7 @@ struct AgentHookListenerTests {
 
         let socket = Self.makeTempSocketURL()
         let registry = await TestRegistry(cwd: cwd)
-        let registeredID = await registry.registeredID
+        let registeredID = registry.registeredID
         let listener = AgentHookListener(
             bundleIdentifier: "com.test.workspaces",
             registry: registry,
@@ -560,7 +567,8 @@ struct AgentHookListenerTests {
             "cwd": cwd,
         ]
         let data = try JSONSerialization.data(withJSONObject: body)
-        let status = await Self.curlPost(socket: socket, path: "/event", body: data)
+        let status = await Self.curlPost(
+            socket: socket, path: "/event", body: data, hostSessionID: registeredID)
         #expect(status == 0)
 
         // Absence-of-mutation check — give the listener mailbox room to drain

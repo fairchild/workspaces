@@ -15,14 +15,13 @@ import Foundation
 import WorkspaceManagerCore
 
 /// Singleton glue between the libghostty action callback and the registry. The
-/// app wires it up at startup with a registry, an adapter registry, and a
-/// resolver from `GhosttySurfaceView` to the host session id.
+/// app wires it up at startup with a registry and a resolver from
+/// `GhosttySurfaceView` to the host session id.
 @MainActor
 final class AgentOSCRouter {
     static let shared = AgentOSCRouter()
 
     private weak var registry: AgentSessionRegistry?
-    private var adapters: AgentAdapterRegistry = AgentAdapterRegistry()
     private var resolveHostSession: (@MainActor (GhosttySurfaceView) -> UUID?)?
 
     private init() {}
@@ -31,11 +30,9 @@ final class AgentOSCRouter {
     /// Safe to call repeatedly; each call replaces the prior wiring.
     func attach(
         registry: AgentSessionRegistry,
-        adapters: AgentAdapterRegistry = AgentAdapterRegistry(),
         resolveHostSession: @escaping @MainActor (GhosttySurfaceView) -> UUID?
     ) {
         self.registry = registry
-        self.adapters = adapters
         self.resolveHostSession = resolveHostSession
     }
 
@@ -56,10 +53,9 @@ final class AgentOSCRouter {
         guard let hostID = resolveHostSession?(surfaceView) else { return }
         guard let registry else { return }
         let kind = registry.statuses[hostID]?.kind ?? .unknown
-        let adapter = adapters.adapter(for: kind)
-        let event = adapter.mapOSCNotification(title: title, body: body)
-        registry.ingest(
-            event,
+        let event = AgentOSCEventMapper.mapNotification(kind: kind, title: title, body: body)
+        registry.apply(
+            events: [event],
             for: hostID,
             origin: .osc(surfaceID: UInt64(surfaceAddress))
         )
@@ -75,10 +71,9 @@ final class AgentOSCRouter {
         guard let hostID = resolveHostSession?(surfaceView) else { return }
         guard let registry else { return }
         let kind = registry.statuses[hostID]?.kind ?? .unknown
-        let adapter = adapters.adapter(for: kind)
-        let event = adapter.mapBell()
-        registry.ingest(
-            event,
+        let event = AgentOSCEventMapper.mapBell(kind: kind)
+        registry.apply(
+            events: [event],
             for: hostID,
             origin: .bell
         )

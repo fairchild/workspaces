@@ -83,7 +83,10 @@ struct PerfChannel1Tests {
     /// don't pay `Process.run()` startup cost for each request.
     @discardableResult
     private static func rawPost(
-        socket: String, path: String, body: Data
+        socket: String,
+        path: String,
+        body: Data,
+        hostSessionID: UUID? = nil
     ) -> (
         sent: Date, ack: Date
     ) {
@@ -111,6 +114,9 @@ struct PerfChannel1Tests {
         var head = "POST \(path) HTTP/1.1\r\n"
         head += "Host: localhost\r\n"
         head += "Content-Type: application/json\r\n"
+        if let hostSessionID {
+            head += "X-WorkSpaces-Host-Session-ID: \(hostSessionID.uuidString)\r\n"
+        }
         head += "Content-Length: \(body.count)\r\n"
         head += "Connection: close\r\n\r\n"
         var out = Data(head.utf8)
@@ -205,7 +211,7 @@ struct PerfChannel1Tests {
             "cwd": cwd,
         ]
         let bindData = try JSONSerialization.data(withJSONObject: bindBody)
-        _ = Self.rawPost(socket: socketPath, path: "/event", body: bindData)
+        _ = Self.rawPost(socket: socketPath, path: "/event", body: bindData, hostSessionID: hostID)
         try await Task.sleep(nanoseconds: 100_000_000)
         // Reset update timestamps after bind.
         updateTimestamps.reset()
@@ -219,7 +225,7 @@ struct PerfChannel1Tests {
                 group.addTask {
                     for i in lo..<hi {
                         let (sent, ack) = Self.rawPost(
-                            socket: socketPath, path: "/event", body: bodies[i]
+                            socket: socketPath, path: "/event", body: bodies[i], hostSessionID: hostID
                         )
                         sendTimestamps.append(sent)
                         httpLatencies.append(ack.timeIntervalSince(sent) * 1000)
@@ -310,7 +316,8 @@ struct PerfChannel1Tests {
                 ]
                 _ = Self.rawPost(
                     socket: socket.path, path: "/event",
-                    body: try JSONSerialization.data(withJSONObject: body))
+                    body: try JSONSerialization.data(withJSONObject: body),
+                    hostSessionID: hostID)
             }
             try await Task.sleep(nanoseconds: 50_000_000)
             await MainActor.run { registry.deregister(hostSessionID: hostID) }
@@ -426,7 +433,7 @@ struct PerfChannel1Tests {
                 "tool_input": ["file_path": "/tmp/x.swift"],
             ]
             let data = try JSONSerialization.data(withJSONObject: body)
-            _ = Self.rawPost(socket: socket.path, path: "/event", body: data)
+            _ = Self.rawPost(socket: socket.path, path: "/event", body: data, hostSessionID: hostIDs[s])
             event += 1
             try await Task.sleep(nanoseconds: intervalNS)
         }
@@ -472,9 +479,9 @@ struct PerfChannel1Tests {
         try FileManager.default.createDirectory(at: homeDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: homeDir) }
 
-        let installer = ClaudeSettingsInstaller(homeDirectory: homeDir)
-        await installer.register(
-            workspacesHooksContribution(eventForwarderScriptPath: "/tmp/event-forwarder.sh")
+        let installer = ClaudeSettingsInstaller(
+            homeDirectory: homeDir,
+            eventForwarderScriptPath: "/tmp/event-forwarder.sh"
         )
 
         // Seed an existing settings.json so each install writes a backup.
@@ -545,9 +552,9 @@ struct PerfChannel1Tests {
         var outcomes: [[String: Any]] = []
         for (label, content) in cases {
             try Data(content.utf8).write(to: settingsPath)
-            let installer = ClaudeSettingsInstaller(homeDirectory: homeDir)
-            await installer.register(
-                workspacesHooksContribution(eventForwarderScriptPath: "/tmp/event-forwarder.sh")
+            let installer = ClaudeSettingsInstaller(
+                homeDirectory: homeDir,
+                eventForwarderScriptPath: "/tmp/event-forwarder.sh"
             )
             var renderError: String? = nil
             var rendered: String? = nil
@@ -578,56 +585,49 @@ struct PerfChannel1Tests {
             payload, to: Self.resultPath(scenario: "channel1_risk_malformed_settings"))
     }
 
-    // MARK: - Risk: stale socket sweep
+    // MARK: - Risk: stable socket ownership
 
-    @Test("risk_stale_socket_sweep: orphan socket from a dead pid is removed on next start")
-    func staleSocketSweep() async throws {
+    @Test("risk_stable_socket_lock: second listener starts dormant without removing owner socket")
+    func stableSocketLock() async throws {
         let dir = URL(fileURLWithPath: "/tmp")
-            .appendingPathComponent("perf-sweep-\(UUID().uuidString.prefix(6))")
+            .appendingPathComponent("perf-lock-\(UUID().uuidString.prefix(6))")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
 
-        // Plant a socket file owned by a definitely-dead pid.
-        let deadPid = 999_998
-        let stale = dir.appendingPathComponent("hooks-\(deadPid).sock")
-        try Data().write(to: stale)
-        // Plant another with our pid (alive) — must NOT be swept.
-        let alivePid = getpid()
-        let alive = dir.appendingPathComponent("hooks-\(alivePid).sock")
-        try Data().write(to: alive)
-        // Plant a non-numeric name — should be swept.
-        let bogus = dir.appendingPathComponent("hooks-bogus.sock")
-        try Data().write(to: bogus)
-
         let registry = await AgentSessionRegistry()
-        // Use a different socket path inside `dir` so the listener triggers the
-        // sweep on parent dir.
-        let listenerSocket = dir.appendingPathComponent("hooks-\(alivePid)-test.sock")
-        let listener = AgentHookListener(
+        let listenerSocket = dir.appendingPathComponent("hooks.sock")
+        let first = AgentHookListener(
             bundleIdentifier: "com.test.perf",
             registry: registry,
             socketURLOverride: listenerSocket,
             logger: { _ in }
         )
-        try await listener.start()
-        defer { Task { await listener.stop() } }
+        try await first.start()
+        defer { Task { await first.stop() } }
 
-        let staleStillExists = FileManager.default.fileExists(atPath: stale.path)
-        let aliveStillExists = FileManager.default.fileExists(atPath: alive.path)
-        let bogusStillExists = FileManager.default.fileExists(atPath: bogus.path)
+        let logs = LockedArray<String>()
+        let second = AgentHookListener(
+            bundleIdentifier: "com.test.perf",
+            registry: registry,
+            socketURLOverride: listenerSocket,
+            logger: { logs.append($0) }
+        )
+        try await second.start()
+        await second.stop()
+
+        let ownerSocketStillExists = FileManager.default.fileExists(atPath: listenerSocket.path)
+        let dormantLogged = logs.snapshot().contains { $0.contains("dormant") }
 
         let payload: [String: Any] = [
-            "scenario": "channel1_risk_stale_socket_sweep",
-            "stale_pid_socket_present": staleStillExists,
-            "alive_pid_socket_present": aliveStillExists,
-            "bogus_named_socket_present": bogusStillExists,
+            "scenario": "channel1_risk_stable_socket_lock",
+            "owner_socket_present_after_second_stop": ownerSocketStillExists,
+            "second_listener_dormant": dormantLogged,
         ]
         try Self.writeResult(
-            payload, to: Self.resultPath(scenario: "channel1_risk_stale_socket_sweep"))
+            payload, to: Self.resultPath(scenario: "channel1_risk_stable_socket_lock"))
 
-        #expect(!staleStillExists, "stale socket from dead pid should have been swept")
-        #expect(aliveStillExists, "live pid's socket must NOT be swept")
-        #expect(!bogusStillExists, "non-numeric pid socket should have been swept")
+        #expect(dormantLogged)
+        #expect(ownerSocketStillExists)
     }
 
     // MARK: - Risk: race — events queued after deregister
@@ -663,7 +663,8 @@ struct PerfChannel1Tests {
         ]
         _ = Self.rawPost(
             socket: socket.path, path: "/event",
-            body: try JSONSerialization.data(withJSONObject: bind))
+            body: try JSONSerialization.data(withJSONObject: bind),
+            hostSessionID: hostID)
         try await Task.sleep(nanoseconds: 100_000_000)
 
         // Fire 200 events then deregister mid-flight.
@@ -682,7 +683,8 @@ struct PerfChannel1Tests {
                 ]
                 _ = Self.rawPost(
                     socket: socket.path, path: "/event",
-                    body: try! JSONSerialization.data(withJSONObject: body))
+                    body: try! JSONSerialization.data(withJSONObject: body),
+                    hostSessionID: hostID)
                 group.leave()
             }
             if i == 50 {

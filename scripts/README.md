@@ -161,10 +161,11 @@ Use these scripts for day-to-day UI verification:
 
 4. `./scripts/claude-integration-smoke.sh`
 - Interactive evidence harness for the full Claude Code integration.
-- Launches the debug app, discovers the live `hooks-<pid>.sock` from the launch log, verifies `/healthz`, prompts through Settings install / real Claude prompt / OSC fallback / conversation log / headless quick action evidence steps, and writes a PR-ready comment.
+- Launches the debug app, discovers the live `hooks.sock` from the launch log, verifies `/healthz`, prompts through Settings install / real Claude prompt / OSC fallback / conversation log evidence steps, and writes a PR-ready comment.
 - `--pr <N>` uploads each captured screenshot through `evidence.sh` when `EVIDENCE_UPLOAD_TOKEN` is available.
 - `--fixture-home` launches with an isolated `HOME` containing a fixture `~/.claude/settings.json` for merge-preview evidence without touching the user's real Claude config.
 - `--non-interactive` runs only the automated preflight and one launch screenshot.
+- `--use-existing --deterministic-signal --host-session-id <uuid>` sends a deterministic Claude `SessionStart` and `Notification(permission_prompt)` through the installed `event-forwarder.sh`, then captures the native awaiting-input UI. Run it from an embedded terminal to use the exported `WORKSPACES_HOST_SESSION_ID`, or pass the UUID explicitly.
 - Writes artifacts to `./output/claude-integration-smoke/<timestamp>/`.
 
 5. `./scripts/ui-smoke.sh`

@@ -17,8 +17,7 @@ import WorkspaceManagerCore
 /// sync across launches.
 enum ClaudeIntegrationDefaults {
     /// `true` once the user has accepted the merge preview at least once. Drives the
-    /// silent reinstall on subsequent launches so the hook routes always reflect the
-    /// live (pid-scoped) socket path.
+    /// silent settings repair on subsequent launches.
     static let optedInKey = "workspaces.claudeIntegration.optedIn"
 }
 
@@ -35,40 +34,24 @@ final class ClaudeIntegrationLifecycle: ObservableObject {
     private var defaults: UserDefaults = .standard
     private var installerFactory: @Sendable (String) async -> any ClaudeSettingsInstalling = {
         _ in
-        let installer = ClaudeSettingsInstaller()
-
-        // Channel 1: requires the bundled event-forwarder shell. If extraction
-        // fails (most tests, previews) we skip JUST this contribution so
-        // Channels 2 and 3 still register cleanly.
-        if let eventForwarderPath = ClaudeIntegrationLifecycle.extractEventForwarderScript() {
-            let titleEmitPath = ClaudeIntegrationLifecycle.extractTitleEmitScript()
-            await installer.register(
-                workspacesHooksContribution(
-                    eventForwarderScriptPath: eventForwarderPath,
-                    titleEmitScriptPath: titleEmitPath
-                )
-            )
-        } else {
+        let eventForwarderPath = ClaudeIntegrationLifecycle.extractEventForwarderScript()
+        if eventForwarderPath == nil {
             NSLog(
-                "[ClaudeIntegration] event-forwarder.sh extraction failed; Channel 1 will be skipped this session (Channels 2 and 3 unaffected)"
+                "[ClaudeIntegration] event-forwarder.sh extraction failed; Channel 1 will be skipped this session"
             )
         }
 
-        // Channel 3 channel-selection: writes preferredNotifChannel into ~/.claude.json.
-        // Independent of Channel 1's script availability.
-        await installer.register(workspacesNotifChannelContribution())
-
-        // Channel 2: status-line forwarder. Independent of Channel 1's script.
-        if let forwarderPath = ClaudeIntegrationLifecycle.bundledStatusLineForwarderPath() {
-            await installer.register(
-                workspacesStatusLineContribution(forwarderPath: forwarderPath)
-            )
-        } else {
+        let statusLinePath = ClaudeIntegrationLifecycle.bundledStatusLineForwarderPath()
+        if statusLinePath == nil {
             NSLog(
                 "[ClaudeIntegration] statusline.sh not found in bundle; skipping Channel 2 contribution"
             )
         }
-        return installer
+
+        return ClaudeSettingsInstaller(
+            eventForwarderScriptPath: eventForwarderPath,
+            statusLineForwarderPath: statusLinePath
+        )
     }
 
     /// Locate the Channel 2 status-line forwarder shell shipped alongside the app.
@@ -114,44 +97,43 @@ final class ClaudeIntegrationLifecycle: ObservableObject {
         let bundleID = Bundle.main.bundleIdentifier ?? "com.cloudcompute.workspaces"
         let listener = AgentHookListener(bundleIdentifier: bundleID, registry: registry)
         self.listener = listener
+        self.socketPath = listener.socketPath
         self.notificationPoster = AgentNotificationPoster(registry: registry)
 
         let optedIn = defaults.bool(forKey: ClaudeIntegrationDefaults.optedInKey)
         let installerFactory = self.installerFactory
 
         Task { @MainActor in
-            let resolvedSocketPath = await listener.socketPath
+            let resolvedSocketPath = listener.socketPath
             self.socketPath = resolvedSocketPath
             let installer = await installerFactory(resolvedSocketPath)
             self.settingsInstaller = installer
-
-            // Defect 1: the pid-scoped socket path means a previously installed
-            // settings.json points at a dead socket after every relaunch. When the
-            // user has opted in, silently re-run install() so the routes always
-            // reflect the live socket. install() is idempotent and backs up before
-            // writing, so this is safe to run unconditionally on opted-in cold
-            // starts.
-            if optedIn {
-                do {
-                    try await installer.install()
-                    let backup = await installer.mostRecentBackupPath() ?? "(no prior file)"
-                    NSLog(
-                        "[ClaudeIntegration] silent reinstall succeeded; backup=%@",
-                        backup
-                    )
-                } catch {
-                    NSLog(
-                        "[ClaudeIntegration] silent reinstall failed: %@; channel 1 dormant for this session",
-                        "\(error)"
-                    )
-                }
-            }
 
             do {
                 try await listener.start()
                 NSLog("[ClaudeIntegration] hook listener started at %@", resolvedSocketPath)
             } catch {
                 NSLog("[ClaudeIntegration] hook listener failed to start: %@", "\(error)")
+            }
+
+            if optedIn {
+                do {
+                    if await installer.isInstalled() {
+                        NSLog("[ClaudeIntegration] settings already installed; no write needed")
+                    } else {
+                        try await installer.install()
+                        let backup = await installer.mostRecentBackupPath() ?? "(no prior file)"
+                        NSLog(
+                            "[ClaudeIntegration] settings repair succeeded; backup=%@",
+                            backup
+                        )
+                    }
+                } catch {
+                    NSLog(
+                        "[ClaudeIntegration] settings repair failed: %@; integration settings may be stale",
+                        "\(error)"
+                    )
+                }
             }
         }
 
@@ -172,15 +154,7 @@ final class ClaudeIntegrationLifecycle: ObservableObject {
         extractHookForwarderScript(named: "event-forwarder")
     }
 
-    /// Copy the bundled `title-emit.sh` (Channel 3 hook forwarder) to a stable
-    /// location under Application Support and chmod it executable. Returns the
-    /// destination path, or nil if extraction failed — the contribution then
-    /// degrades gracefully to event-forwarder-only hooks.
-    nonisolated static func extractTitleEmitScript() -> String? {
-        extractHookForwarderScript(named: "title-emit")
-    }
-
-    /// Generic helper used by both the event-forwarder and title-emit extractors:
+    /// Generic helper used by the event-forwarder extractor:
     /// copies `<name>.sh` from the bundle's `HookForwarders/` resource directory
     /// to `~/Library/Application Support/<bundle-id>/HookForwarders/<name>.sh`,
     /// chmods it 0o755, returns the destination path. Nil on any failure.
@@ -200,15 +174,11 @@ final class ClaudeIntegrationLifecycle: ObservableObject {
         )
         let dest = dir.appendingPathComponent("\(name).sh")
 
-        // Source: bundled .sh file. Falls back to nil silently — most tests
-        // and previews don't run inside a real .app bundle.
-        guard
-            let bundleURL = Bundle.main.url(
-                forResource: name,
-                withExtension: "sh",
-                subdirectory: "HookForwarders"
-            )
-        else {
+        // Source: bundled .sh file. SwiftPM debug builds expose copied
+        // resources through Bundle.module; packaged app launches may expose
+        // them through Bundle.main.
+        let bundleURL = bundledHookForwarderURL(named: name)
+        guard let bundleURL else {
             return nil
         }
         do {
@@ -222,6 +192,20 @@ final class ClaudeIntegrationLifecycle: ObservableObject {
         } catch {
             return nil
         }
+    }
+
+    nonisolated static func bundledHookForwarderURL(named name: String) -> URL? {
+        Bundle.module.url(
+            forResource: name,
+            withExtension: "sh",
+            subdirectory: "HookForwarders"
+        )
+            ?? Bundle.module.url(forResource: name, withExtension: "sh")
+            ?? Bundle.main.url(
+                forResource: name,
+                withExtension: "sh",
+                subdirectory: "HookForwarders"
+            )
     }
 
     func stop() async {

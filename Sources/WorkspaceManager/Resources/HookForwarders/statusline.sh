@@ -18,15 +18,21 @@
 set -u
 
 socket="${WORKSPACES_HOOKS_SOCKET:-}"
+host_session_id="${WORKSPACES_HOST_SESSION_ID:-}"
 
 if [[ -n "$socket" && -S "$socket" ]]; then
+    headers=(-H 'Content-Type: application/json')
+    if [[ -n "$host_session_id" ]]; then
+        headers+=(-H "X-WorkSpaces-Host-Session-ID: $host_session_id")
+    fi
+
     /usr/bin/curl \
         --silent \
         --show-error \
         --max-time 1 \
         --unix-socket "$socket" \
         -X POST \
-        -H 'Content-Type: application/json' \
+        "${headers[@]}" \
         --data-binary @- \
         'http://localhost/statusline' \
         >/dev/null 2>&1 || true

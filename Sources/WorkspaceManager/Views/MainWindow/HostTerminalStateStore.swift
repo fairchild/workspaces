@@ -45,10 +45,24 @@ final class HostTerminalStateStore: ObservableObject {
     private var registeredAgentSessionIDs: Set<UUID> = []
 
     func attach(agentSessionRegistry: AgentSessionRegistry) {
-        guard self.agentSessionRegistry !== agentSessionRegistry else { return }
+        attach(
+            agentSessionRegistry: agentSessionRegistry,
+            hooksSocketPath: ClaudeIntegrationLifecycle.shared.socketPath
+        )
+    }
+
+    func attach(
+        agentSessionRegistry: AgentSessionRegistry,
+        hooksSocketPath: String?
+    ) {
+        self.surfaceStore.hooksSocketPath = hooksSocketPath
+        guard self.agentSessionRegistry !== agentSessionRegistry else {
+            syncRegistry()
+            return
+        }
         self.agentSessionRegistry = agentSessionRegistry
         // Backfill: any sessions already in the coordinator should be registered.
-        syncRegistry(forSessions: coordinator.sessions)
+        syncRegistry()
 
         // Channel 3: hook the surface→host-session resolver into the OSC router so
         // libghostty desktop notifications and BEL events can find their session.
@@ -304,6 +318,7 @@ final class HostTerminalStateStore: ObservableObject {
         splitSessionsByPrimaryID[primarySessionID] = splitSession
         splitLayoutsByPrimaryID[primarySessionID] = preferredLayout
         splitFractionsByPrimaryID[primarySessionID] = Self.defaultSplitFraction
+        syncRegistry()
         objectWillChange.send()
         return splitSession
     }
@@ -421,18 +436,19 @@ final class HostTerminalStateStore: ObservableObject {
             removeSplitState(forPrimarySessionID: primaryID)
         }
 
-        syncRegistry(forSessions: coordinator.sessions)
+        syncRegistry()
     }
 
     /// Mirror the coordinator's session list into the agent session registry so the
     /// hook listener has somewhere to land payloads. Idempotent — `register` and
     /// `deregister` are no-ops on already-registered / already-removed ids.
-    private func syncRegistry(forSessions sessions: [HostTerminalSession]) {
+    private func syncRegistry() {
         guard let registry = agentSessionRegistry else { return }
-        let liveIDs = Set(sessions.map(\.id))
+        let allSessions = coordinator.sessions + Array(splitSessionsByPrimaryID.values)
+        let liveIDs = Set(allSessions.map(\.id))
 
         // Register newly-seen sessions.
-        for session in sessions where !registeredAgentSessionIDs.contains(session.id) {
+        for session in allSessions where !registeredAgentSessionIDs.contains(session.id) {
             // PR #1: probe is a stub returning `.claudeCode` for every surface.
             // Replace surfaceID with a real value when the Channel 3 probe lands.
             let kind = foregroundProbe.detect(surfaceID: 0)
@@ -455,6 +471,10 @@ final class HostTerminalStateStore: ObservableObject {
     private func removeSplitState(forPrimarySessionID primarySessionID: UUID) {
         if let splitSession = splitSessionsByPrimaryID.removeValue(forKey: primarySessionID) {
             surfaceStore.invalidate(sessionID: splitSession.id)
+            if registeredAgentSessionIDs.contains(splitSession.id) {
+                agentSessionRegistry?.deregister(hostSessionID: splitSession.id)
+                registeredAgentSessionIDs.remove(splitSession.id)
+            }
         }
         splitLayoutsByPrimaryID.removeValue(forKey: primarySessionID)
         splitFractionsByPrimaryID.removeValue(forKey: primarySessionID)
