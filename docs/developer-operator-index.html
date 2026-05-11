@@ -789,21 +789,20 @@
           <button type="submit" id="ask-button"><span class="ask-spinner" aria-hidden="true"></span><span>Ask</span></button>
           <button type="button" id="route-show-all">All Docs</button>
         </form>
+        <section class="ai-answer" id="ai-answer" aria-live="polite" aria-label="Local AI docs answer">
+          <div class="ai-answer-head">
+            <h2>Local Answer</h2>
+            <span class="ai-answer-status" id="ai-answer-status">Claude Code</span>
+          </div>
+          <div class="ai-answer-body" id="ai-answer-body"></div>
+          <div class="citation-list" id="citation-list"></div>
+          <div class="index-actions">
+            <button class="control" id="copy-answer" type="button">Copy answer</button>
+            <button class="control" id="dismiss-answer" type="button">Dismiss</button>
+          </div>
+        </section>
         <p class="search-hint" id="search-hint">Typing filters instantly. Enter asks local Claude Code using the visible matches.</p>
         <div class="autocomplete" id="autocomplete" aria-label="Matching docs"></div>
-      </div>
-    </section>
-
-    <section class="ai-answer" id="ai-answer" aria-live="polite" aria-label="Local AI docs answer">
-      <div class="ai-answer-head">
-        <h2>Local Answer</h2>
-        <span class="ai-answer-status" id="ai-answer-status">Claude Code</span>
-      </div>
-      <div class="ai-answer-body" id="ai-answer-body"></div>
-      <div class="citation-list" id="citation-list"></div>
-      <div class="index-actions">
-        <button class="control" id="copy-answer" type="button">Copy answer</button>
-        <button class="control" id="dismiss-answer" type="button">Dismiss</button>
       </div>
     </section>
 

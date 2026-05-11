@@ -160,6 +160,9 @@ test.describe("Local docs server", () => {
 
 		await page.locator("#ask-button").click();
 		await expect(page.locator("#ai-answer")).toHaveClass(/active/);
+		await expect(
+			page.locator("#route-form + #ai-answer + #search-hint + #autocomplete"),
+		).toHaveCount(1);
 		await expect(page.locator("#ask-button")).toBeDisabled();
 		await expect(page.locator(".answer-loading")).toBeVisible();
 		await expect(page.locator("#ai-answer-body")).toContainText(
