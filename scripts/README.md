@@ -165,6 +165,7 @@ Use these scripts for day-to-day UI verification:
 - `--pr <N>` uploads each captured screenshot through `evidence.sh` when `EVIDENCE_UPLOAD_TOKEN` is available.
 - `--fixture-home` launches with an isolated `HOME` containing a fixture `~/.claude/settings.json` for merge-preview evidence without touching the user's real Claude config.
 - `--non-interactive` runs only the automated preflight and one launch screenshot.
+- `--use-existing --deterministic-signal --host-session-id <uuid>` sends a deterministic Claude `SessionStart` and `Notification(permission_prompt)` through the installed `event-forwarder.sh`, then captures the native awaiting-input UI. Run it from an embedded terminal to use the exported `WORKSPACES_HOST_SESSION_ID`, or pass the UUID explicitly.
 - Writes artifacts to `./output/claude-integration-smoke/<timestamp>/`.
 
 5. `./scripts/ui-smoke.sh`

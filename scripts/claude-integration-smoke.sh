@@ -12,6 +12,7 @@
 #   ./scripts/claude-integration-smoke.sh --pr 455 --no-build
 #   ./scripts/claude-integration-smoke.sh --pr 455 --no-build --fixture-home
 #   ./scripts/claude-integration-smoke.sh --non-interactive --no-build
+#   ./scripts/claude-integration-smoke.sh --use-existing --deterministic-signal --host-session-id <uuid> --pr 473
 #
 # ==========================================================================
 
@@ -30,12 +31,16 @@ CLEAN_DATA=false
 TRUST_MISE=false
 FIXTURE_HOME=false
 NON_INTERACTIVE=false
+DETERMINISTIC_SIGNAL=false
+USE_EXISTING=false
 POST_COMMENT=false
 WINDOW_TIMEOUT_SECONDS=15
 ENV_FILE=""
 APP_LOG=""
 APP_PID=""
 SOCKET_PATH=""
+HOST_SESSION_ID="${WORKSPACES_HOST_SESSION_ID:-}"
+SIGNAL_CWD="$PWD"
 COMMENT_FILE=""
 URL_FILE=""
 
@@ -62,6 +67,17 @@ Options:
   --fixture-home         Launch with an isolated HOME containing a fixture ~/.claude/settings.json.
                          Useful for merge-preview evidence without touching the real Claude config.
   --non-interactive      Run only automated preflight: launch, socket discovery, /healthz, screenshot.
+  --deterministic-signal Send a deterministic Claude Notification hook through the installed
+                         event-forwarder.sh and capture the resulting native awaiting-input state.
+                         Requires a registered host session via --host-session-id or
+                         WORKSPACES_HOST_SESSION_ID.
+  --host-session-id <id> Host terminal session UUID to route the deterministic signal to.
+                         Embedded WorkSpaces terminals export WORKSPACES_HOST_SESSION_ID.
+  --signal-cwd <path>    cwd to include in deterministic hook payloads (default: current directory).
+  --use-existing         Reuse a running debug app instead of launching a new one.
+  --app-pid <pid>        PID to use for exact-window capture when --use-existing is set.
+  --socket-path <path>   Hook listener socket path when --use-existing is set.
+                         Defaults to WORKSPACES_HOOKS_SOCKET, then the stable dev socket path.
   --post-comment         Post the generated smoke evidence comment to the PR. Requires --pr.
   --env-file <path>      Source evidence token from a specific env file.
                          Defaults to ~/code/workspaces/.env when present, then repo .env.
@@ -106,6 +122,34 @@ parse_args() {
                 NON_INTERACTIVE=true
                 shift
                 ;;
+            --deterministic-signal)
+                DETERMINISTIC_SIGNAL=true
+                shift
+                ;;
+            --host-session-id)
+                [[ $# -ge 2 ]] || fail "--host-session-id requires a value"
+                HOST_SESSION_ID="$2"
+                shift 2
+                ;;
+            --signal-cwd)
+                [[ $# -ge 2 ]] || fail "--signal-cwd requires a value"
+                SIGNAL_CWD="$2"
+                shift 2
+                ;;
+            --use-existing)
+                USE_EXISTING=true
+                shift
+                ;;
+            --app-pid)
+                [[ $# -ge 2 ]] || fail "--app-pid requires a value"
+                APP_PID="$2"
+                shift 2
+                ;;
+            --socket-path)
+                [[ $# -ge 2 ]] || fail "--socket-path requires a value"
+                SOCKET_PATH="$2"
+                shift 2
+                ;;
             --post-comment)
                 POST_COMMENT=true
                 shift
@@ -136,6 +180,14 @@ parse_args() {
 
     if [[ "$POST_COMMENT" == true && -z "$PR_NUMBER" ]]; then
         fail "--post-comment requires --pr"
+    fi
+
+    if [[ "$USE_EXISTING" == true && "$FIXTURE_HOME" == true ]]; then
+        fail "--use-existing cannot be combined with --fixture-home"
+    fi
+
+    if [[ "$DETERMINISTIC_SIGNAL" == true && "$USE_EXISTING" != true ]]; then
+        fail "--deterministic-signal targets an already-registered terminal; pass --use-existing with --host-session-id"
     fi
 }
 
@@ -222,6 +274,27 @@ launch_app() {
     fi
 }
 
+adopt_existing_app() {
+    if [[ -z "$SOCKET_PATH" ]]; then
+        SOCKET_PATH="${WORKSPACES_HOOKS_SOCKET:-}"
+    fi
+    if [[ -z "$SOCKET_PATH" ]]; then
+        SOCKET_PATH="$HOME/Library/Application Support/com.cloudcompute.workspaces/hooks.sock"
+    fi
+
+    [[ -S "$SOCKET_PATH" ]] || fail "Hook socket is not live: $SOCKET_PATH"
+
+    if [[ -n "$APP_PID" ]]; then
+        if ! ps -p "$APP_PID" >/dev/null 2>&1; then
+            fail "No running process for --app-pid $APP_PID"
+        fi
+        log "Using existing app pid: $APP_PID"
+    else
+        log "Using existing app without pid-filtered capture."
+    fi
+    log "Hook socket: $SOCKET_PATH"
+}
+
 discover_socket() {
     local deadline=$((SECONDS + 10))
     local socket=""
@@ -256,9 +329,14 @@ capture_step() {
     local url=""
 
     log "Capture: $slug - $description"
+    local -a capture_args=("--output" "$screenshot")
+    if [[ -n "$APP_PID" ]]; then
+        capture_args+=("--pid" "$APP_PID")
+    fi
+
     if ! (
         cd "$REPO_ROOT"
-        ./scripts/capture-window.sh --output "$screenshot"
+        ./scripts/capture-window.sh "${capture_args[@]}"
     ) >"$RUN_DIR/${slug}.capture.log" 2>&1; then
         if [[ "$NO_ACTIVATE" == true ]]; then
             fail "Window capture failed for $slug. Keep the debug app visible, or rerun with --activate. See $RUN_DIR/${slug}.capture.log"
@@ -283,6 +361,82 @@ capture_step() {
     else
         printf -- "- %s - %s (%s)\n" "$slug" "$description" "$screenshot" >>"$URL_FILE"
     fi
+}
+
+json_escape() {
+    local value="$1"
+    value="${value//\\/\\\\}"
+    value="${value//\"/\\\"}"
+    value="${value//$'\n'/\\n}"
+    value="${value//$'\r'/\\r}"
+    value="${value//$'\t'/\\t}"
+    printf "%s" "$value"
+}
+
+validate_host_session_id() {
+    local uuid_re='^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$'
+    if [[ -z "$HOST_SESSION_ID" ]]; then
+        fail "--deterministic-signal requires --host-session-id or WORKSPACES_HOST_SESSION_ID from an embedded WorkSpaces terminal"
+    fi
+    if [[ ! "$HOST_SESSION_ID" =~ $uuid_re ]]; then
+        fail "Invalid host session UUID: $HOST_SESSION_ID"
+    fi
+}
+
+event_forwarder_path() {
+    local socket_dir
+    socket_dir="$(dirname "$SOCKET_PATH")"
+    printf "%s/HookForwarders/event-forwarder.sh" "$socket_dir"
+}
+
+send_forwarder_payload() {
+    local payload_file="$1"
+    local forwarder
+    forwarder="$(event_forwarder_path)"
+    [[ -x "$forwarder" ]] || fail "Installed event forwarder is not executable: $forwarder"
+
+    WORKSPACES_HOOKS_SOCKET="$SOCKET_PATH" \
+        WORKSPACES_HOST_SESSION_ID="$HOST_SESSION_ID" \
+        "$forwarder" <"$payload_file" >"$RUN_DIR/$(basename "$payload_file" .json).forwarder.log" 2>&1
+}
+
+run_deterministic_signal() {
+    validate_host_session_id
+
+    local agent_session_id="deterministic-signal-$RUN_ID"
+    local escaped_session_id
+    local escaped_cwd
+    escaped_session_id="$(json_escape "$agent_session_id")"
+    escaped_cwd="$(json_escape "$SIGNAL_CWD")"
+
+    local session_start="$RUN_DIR/deterministic-session-start.json"
+    local notification="$RUN_DIR/deterministic-notification.json"
+
+    printf '{"hook_event_name":"SessionStart","session_id":"%s","cwd":"%s"}\n' \
+        "$escaped_session_id" \
+        "$escaped_cwd" \
+        >"$session_start"
+
+    printf '{"hook_event_name":"Notification","session_id":"%s","cwd":"%s","notification_type":"permission_prompt","title":"WorkSpaces deterministic signal","message":"event-forwarder.sh reached the native app"}\n' \
+        "$escaped_session_id" \
+        "$escaped_cwd" \
+        >"$notification"
+
+    {
+        printf "socket=%s\n" "$SOCKET_PATH"
+        printf "host_session_id=%s\n" "$HOST_SESSION_ID"
+        printf "signal_cwd=%s\n" "$SIGNAL_CWD"
+        printf "forwarder=%s\n" "$(event_forwarder_path)"
+        printf "agent_session_id=%s\n" "$agent_session_id"
+    } >"$RUN_DIR/deterministic-signal.env"
+
+    log "Sending deterministic SessionStart through event-forwarder.sh"
+    send_forwarder_payload "$session_start"
+    log "Sending deterministic permission_prompt Notification through event-forwarder.sh"
+    send_forwarder_payload "$notification"
+
+    sleep 1
+    capture_step "02-deterministic-signal" "Installed event-forwarder.sh delivered a Claude permission_prompt hook to the native app."
 }
 
 wait_for_user() {
@@ -330,7 +484,12 @@ write_comment_file() {
     date_string="$(date '+%Y-%m-%d')"
 
     local behaviors
-    if [[ "$NON_INTERACTIVE" == true ]]; then
+    if [[ "$DETERMINISTIC_SIGNAL" == true ]]; then
+        behaviors="- The stable hook listener socket answers \`/healthz\`.
+- The installed \`event-forwarder.sh\` posted a deterministic Claude \`SessionStart\`.
+- The installed \`event-forwarder.sh\` posted a deterministic Claude \`Notification(permission_prompt)\`.
+- The native app rendered the routed host session in awaiting-input state."
+    elif [[ "$NON_INTERACTIVE" == true ]]; then
         behaviors="- Debug app launches.
 - The stable hook listener socket is discovered from launch logs.
 - The hook listener answers \`/healthz\`.
@@ -372,11 +531,18 @@ main() {
     parse_args "$@"
     prepare_run_dir
     source_env_if_available
-    launch_app
-    discover_socket
+    if [[ "$USE_EXISTING" == true ]]; then
+        adopt_existing_app
+    else
+        launch_app
+        discover_socket
+    fi
     probe_healthz
 
-    if [[ "$NON_INTERACTIVE" == true ]]; then
+    if [[ "$DETERMINISTIC_SIGNAL" == true ]]; then
+        capture_step "01-app-launched" "Debug app is visible; hook listener health check passed."
+        run_deterministic_signal
+    elif [[ "$NON_INTERACTIVE" == true ]]; then
         capture_step "01-app-launched" "Debug app launched; hook listener health check passed."
     else
         run_interactive_steps

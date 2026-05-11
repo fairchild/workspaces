@@ -228,6 +228,8 @@ After non-trivial changes:
 3. `swift test`
 4. `swift-format lint --strict --recursive Sources/ Tests/`
 5. `./scripts/claude-integration-smoke.sh --non-interactive --no-build --trust-mise --output-dir output/claude-integration-smoke/<timestamp>`
+6. For a real routed signal against a visible embedded terminal:
+   `./scripts/claude-integration-smoke.sh --use-existing --deterministic-signal --host-session-id <uuid> --pr <number>`
 
 Targeted integration suites:
 
