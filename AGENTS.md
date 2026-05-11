@@ -258,6 +258,7 @@ mise run web:deps:remove -- <pkg>           # pnpm remove + auto-fix formatting
 | libghostty internals | docs/development/libghostty-integration.md | - |
 | Notifications / webhooks | docs/development/notifications.md | - |
 | Debug an issue | docs/development/troubleshooting.md | - |
+| Add Settings-gated experimental UI | docs/development/experimental-features.md | - |
 | Terminal keyboard focus | docs/development/solution-terminal-keyboard.md | - |
 | Evidence guide | docs/development/evidence.md | - |
 | UI fixture mode + release screenshots | docs/development/ui-fixture-mode.md | - |
