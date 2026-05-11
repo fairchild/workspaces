@@ -41,19 +41,11 @@ Payload:
 
 ```json
 {
-  "query": "question text",
-  "filteredResults": [
-    {
-      "title": "Doc title",
-      "url": "/docs/rendered-path",
-      "source": "docs/source.md",
-      "dest": "rendered-path.md",
-      "snippet": "Relevant text",
-      "topics": ["topic"]
-    }
-  ]
+  "query": "question text"
 }
 ```
+
+The server chooses canonical context through `GET /docs/api/search?q=&group=&topic=&type=&limit=` before calling Claude Code.
 
 Response:
 
@@ -83,4 +75,3 @@ Response:
 ## Resources
 
 - `scripts/query-docs.py`: probe/start-friendly CLI wrapper around the local ask endpoint.
-

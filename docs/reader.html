@@ -688,23 +688,6 @@
   </div>
 
   <script>
-    const fallbackTopicCatalog = [
-      { id: "workspaces", label: "WorkSpaces", definition: "The Mac-native app for terminal-first AI coding session management.", chip: false, priority: 0, aliases: ["WorkSpaces"] },
-      { id: "repository", label: "Repository", definition: "A tracked local codebase that anchors overviews, terminals, workspaces, and repo-owned web sources.", chip: true, priority: 20, aliases: ["repository", "repositories", "repo", "repos"] },
-      { id: "workspace", label: "Workspace", definition: "An isolated working copy or provider-backed environment created from a repository for a single work stream.", chip: true, priority: 10, aliases: ["workspace", "workspaces"] },
-      { id: "terminal-session", label: "Terminal Session", definition: "A resumable terminal context attached to a repository or workspace.", chip: true, priority: 30, aliases: ["terminal session", "terminal sessions", "terminal"] },
-      { id: "surface", label: "Surface", definition: "The currently selected main content target, such as a repo overview, terminal session, or web source.", chip: true, priority: 40, aliases: ["surface", "surfaces", "last surface"] },
-      { id: "provider", label: "Provider", definition: "A backing runtime that can create isolated workspace environments.", chip: true, priority: 50, aliases: ["provider", "providers", "runtime"] },
-      { id: "lume", label: "Lume", definition: "The local macOS VM provider used for WorkSpaces isolation and validation.", chip: true, priority: 60, aliases: ["lume"] },
-      { id: "ghostty", label: "Ghostty", definition: "The embedded terminal engine and integration boundary for terminal rendering, focus, and shortcuts.", chip: true, priority: 70, aliases: ["ghostty", "libghostty", "ghosttykit"] },
-      { id: "evidence", label: "Evidence", definition: "The captured proof used to verify behavior, review risk, and support merge readiness.", chip: true, priority: 80, aliases: ["evidence", "proof", "validation"] },
-      { id: "performance", label: "Performance", definition: "The measured startup, interaction, and runtime behavior that keeps WorkSpaces responsive.", chip: true, priority: 90, aliases: ["performance", "latency", "metrics"] },
-      { id: "mergeability", label: "Mergeability", definition: "The standard for changes that are coherent, verified, reviewable, and ready to land.", chip: true, priority: 100, aliases: ["mergeability", "mergeable", "merge gate"] },
-      { id: "repo-overview", label: "Repo Overview", definition: "The repository-level surface for navigation and launch actions before entering a terminal or web view.", chip: true, priority: 110, aliases: ["repo overview", "repository overview"] },
-      { id: "web-source", label: "Web Source", definition: "A saved web destination owned globally, by a repository, or by a workspace.", chip: true, priority: 120, aliases: ["web source", "web sources", "web view", "web views"] },
-      { id: "detail-pane", label: "Detail Pane", definition: "The collapsible right-side supporting pane for files, changes, and selected-context details.", chip: true, priority: 130, aliases: ["detail pane", "right pane", "file/changes pane"] }
-    ];
-
     const docsBase = "/docs/";
     const manifestUrl = `${docsBase}docs-manifest.json`;
     const params = new URLSearchParams(location.search);
@@ -719,7 +702,7 @@
     let activeTopic = null;
     let currentEntry = null;
     let referenceDefinitions = new Map();
-    let topicCatalog = fallbackTopicCatalog;
+    let topicCatalog = [];
     let activeManifestIsLocal = false;
 
     function escapeHtml(value) {
@@ -804,7 +787,7 @@
             ? manifest.documents.map((entry) => typeof entry === "string" ? entry : entry.dest)
             : manifestEntries.map((entry) => entry.dest);
           publishedDocs = new Set(docs.filter(Boolean));
-          topicCatalog = Array.isArray(manifest.topics) && manifest.topics.length ? manifest.topics : fallbackTopicCatalog;
+          topicCatalog = Array.isArray(manifest.topics) ? manifest.topics : [];
           activeManifestIsLocal = Boolean(manifest.local);
           return publishedDocs;
         } catch {

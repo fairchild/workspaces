@@ -101,7 +101,8 @@ The server intentionally serves the repository root, not just `docs/`, so render
 The Developer and Operator Index has a local-only ask path. It is available only when the docs are served over HTTP from `docs/server.py`; it cannot work from `file://` URLs.
 
 - Typing in the top input live-filters the local docs index.
-- Pressing Enter sends the query and the current visible matches to `POST /docs/api/ask`.
+- Live filtering uses `GET /docs/api/search?q=&group=&topic=&type=&limit=`, which returns the canonical local ranked result set.
+- Pressing Enter sends only the query to `POST /docs/api/ask`; the server chooses the same canonical search context before calling Claude Code.
 - The server shells out to Claude Code in non-interactive mode with read/search-only tools.
 - The response is rendered above the results with citations and a copy button.
 
@@ -128,6 +129,7 @@ WORKSPACES_DOCS_ASK_TIMEOUT_SECONDS=120
 ```
 
 This endpoint is intentionally not part of the public/Vercel docs contract.
+The operator index shell lives in `docs/developer-operator-index.html`; its page-specific behavior and styling live in `docs/assets/operator-index.js` and `docs/assets/operator-index.css`.
 
 ## Link Conventions
 
@@ -177,11 +179,13 @@ Before considering docs-site changes ready, run:
 
 ```bash
 uv run --script scripts/docs-server-smoke.py
+uv run --script scripts/docs-ask-eval.py
 pnpm --dir web docs:sync
 pnpm --dir web docs:check
 pnpm --dir web test:e2e:docs-local
 pnpm --dir web test:e2e:docs
-node -e "for (const file of ['docs/index.html','docs/reader.html','docs/developer-operator-index.html']) { const fs=require('fs'); const html=fs.readFileSync(file,'utf8'); const scripts=[...html.matchAll(/<script>([\\s\\S]*?)<\\/script>/g)]; for (const script of scripts) new Function(script[1]); console.log(file, 'script ok'); }"
+python3 -m py_compile docs/server.py scripts/docs_catalog.py scripts/docs-fake-claude.py scripts/docs-server-smoke.py scripts/docs-ask-eval.py .agents/skills/workspaces-docs-ask/scripts/query-docs.py
+node --check docs/assets/operator-index.js
 git -c core.whitespace=blank-at-eol,blank-at-eof,space-before-tab diff --check
 ```
 
@@ -189,7 +193,8 @@ Web CI also runs `docs:sync` and `docs:check` before lint, typecheck, tests, and
 
 The fast smoke script starts an isolated local docs server, injects a fake Claude
 Code binary, then verifies the operator index, local manifest, raw Markdown
-paths, extensionless rendered paths, and `/docs/api/ask` response shape. Use
+paths, extensionless rendered paths, `/docs/api/search`, and `/docs/api/ask`
+response shape. The shared fake binary is `scripts/docs-fake-claude.py`. Use
 `--base-url http://127.0.0.1:<port>` to check an already-running server; add
 `--ask` only when you intentionally want to exercise the real configured Claude
 Code binary.

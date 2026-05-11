@@ -1,6 +1,6 @@
 import { expect, request, test } from "@playwright/test";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import net from "node:net";
@@ -30,34 +30,6 @@ async function freePort(): Promise<number> {
 	});
 }
 
-function writeFakeClaude(dir: string): string {
-	const fakeClaude = path.join(dir, "claude");
-	writeFileSync(
-		fakeClaude,
-		`#!/usr/bin/env node
-setTimeout(() => {
-console.log(JSON.stringify({
-	type: "result",
-	session_id: "playwright-docs-fake-claude",
-	total_cost_usd: 0,
-	result: JSON.stringify({
-		answer_markdown: "The docs server renders extensionless paths and keeps raw Markdown at .md URLs.",
-		copy_text: "The docs server renders extensionless paths and keeps raw Markdown at .md URLs.",
-		citations: [{
-			title: "WorkSpaces Docs Site",
-			url: "/docs/docs-site",
-			source: "docs/README.md",
-			snippet: "Rendered and raw Markdown URL contracts."
-		}]
-	})
-}));
-}, 250);
-`,
-		{ mode: 0o755 },
-	);
-	return fakeClaude;
-}
-
 async function waitForServer(url: string): Promise<void> {
 	const context = await request.newContext({ baseURL: url });
 	const deadline = Date.now() + 10_000;
@@ -82,17 +54,19 @@ async function waitForServer(url: string): Promise<void> {
 
 test.beforeAll(async () => {
 	tempDir = mkdtempSync(path.join(tmpdir(), "workspaces-docs-playwright-"));
-	const fakeClaude = writeFakeClaude(tempDir);
 	const port = await freePort();
 	baseURL = `http://127.0.0.1:${port}`;
 	server = spawn("python3", ["docs/server.py", "--port", String(port)], {
 		cwd: repoRoot,
 		env: {
-			...process.env,
-			PYTHONPYCACHEPREFIX: path.join(tempDir, "pycache"),
-			WORKSPACES_DOCS_ASK_CLAUDE_BIN: fakeClaude,
-			WORKSPACES_DOCS_ASK_TIMEOUT_SECONDS: "10",
-		},
+				...process.env,
+				PYTHONPYCACHEPREFIX: path.join(tempDir, "pycache"),
+				WORKSPACES_DOCS_ASK_CLAUDE_BIN: path.join(
+					repoRoot,
+					"scripts/docs-fake-claude.py",
+				),
+				WORKSPACES_DOCS_ASK_TIMEOUT_SECONDS: "10",
+			},
 	});
 	await waitForServer(baseURL);
 });
@@ -152,28 +126,35 @@ test.describe("Local docs server", () => {
 		const routeInput = page.locator("#route-input");
 		await expect(routeInput).toBeFocused();
 		await expect(page.locator("#stats")).toContainText(/\d+ indexed/);
-		await routeInput.pressSequentially("lum failng");
+			await routeInput.pressSequentially("lum failng");
 
-		await expect(page.locator("#autocomplete")).toBeVisible();
-		await expect(page.locator("#autocomplete .autocomplete-row").first()).toBeVisible();
-		await expect(page.locator("#stats")).toContainText(/\d+ shown/);
+			await expect(page.locator("#autocomplete")).toBeVisible();
+			await expect(page.locator("#autocomplete .autocomplete-row").first()).toBeVisible();
+			await expect(page.locator("#stats")).toContainText(/\d+ shown/);
 
-		await page.locator("#ask-button").click();
+			const search = await context.request.get(
+				`${baseURL}/docs/api/search?q=lum%20failng&limit=5`,
+			);
+			expect(search.ok()).toBe(true);
+			const searchPayload = await search.json();
+			expect(searchPayload.results.length).toBeGreaterThan(0);
+
+			await page.locator("#ask-button").click();
 		await expect(page.locator("#ai-answer")).toHaveClass(/active/);
 		await expect(
 			page.locator("#route-form + #ai-answer + #search-hint + #autocomplete"),
 		).toHaveCount(1);
 		await expect(page.locator("#ask-button")).toBeDisabled();
 		await expect(page.locator(".answer-loading")).toBeVisible();
-		await expect(page.locator("#ai-answer-body")).toContainText(
-			"extensionless paths",
-		);
+			await expect(page.locator("#ai-answer-body")).toContainText(
+				"Lume daemon reliability",
+			);
 		await expect(page.locator("#ai-answer-body")).not.toContainText(
 			"answer_markdown",
 		);
 		await expect(page.locator("#citation-list a")).toHaveAttribute(
 			"href",
-			"/docs/docs-site",
+			"/docs/development/lume-integration",
 		);
 
 		await page.locator("#copy-answer").click();

@@ -12,6 +12,7 @@ import json
 import os
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 
 
@@ -74,37 +75,6 @@ def probe_base_url(explicit: str | None) -> str:
     )
 
 
-def filtered_results(base_url: str, query: str, limit: int) -> list[dict]:
-    manifest = request_json(base_url, "/docs/local-docs-manifest.json")
-    tokens = [
-        token
-        for token in query.lower().replace("/", " ").replace("-", " ").split()
-        if len(token) > 2
-    ]
-    scored = []
-    for index, entry in enumerate(manifest.get("entries", [])):
-        text = " ".join(
-            str(entry.get(key, ""))
-            for key in ["title", "summary", "dest", "source", "group", "type"]
-        ).lower()
-        text = f"{text} {' '.join(entry.get('topics', []))}"
-        score = sum(1 for token in tokens if token in text)
-        if score:
-            scored.append((score, index, entry))
-    scored.sort(key=lambda item: (-item[0], item[1]))
-    return [
-        {
-            "title": entry.get("title"),
-            "url": f"/docs/{entry.get('dest', '').removesuffix('.md')}",
-            "source": entry.get("source"),
-            "dest": entry.get("dest"),
-            "snippet": entry.get("summary", ""),
-            "topics": entry.get("topics", []),
-        }
-        for _, _, entry in scored[:limit]
-    ]
-
-
 def print_markdown(payload: dict) -> None:
     answer = payload.get("copyText") or payload.get("answer") or ""
     print(answer.strip() or "No answer returned.")
@@ -127,11 +97,12 @@ def main() -> None:
     args = parser.parse_args()
 
     base_url = probe_base_url(args.base_url)
-    results = filtered_results(base_url, args.query, args.limit)
+    search_path = f"/docs/api/search?{urllib.parse.urlencode({'q': args.query, 'limit': args.limit})}"
+    request_json(base_url, search_path)
     payload = request_json(
         base_url,
         "/docs/api/ask",
-        {"query": args.query, "filteredResults": results},
+        {"query": args.query},
     )
     if args.json:
         print(json.dumps(payload, indent=2))
@@ -145,4 +116,3 @@ if __name__ == "__main__":
     except QueryFailure as error:
         print(f"workspaces-docs-ask failed: {error}", file=sys.stderr)
         raise SystemExit(1)
-

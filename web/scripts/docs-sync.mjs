@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import {
@@ -94,111 +95,19 @@ function docsManifest(entries, { local }) {
 	};
 }
 
-function titleFromMarkdown(content, fallback) {
-	const heading = /^#\s+(.+)$/m.exec(content);
-	return heading?.[1]?.replace(/`/g, "").trim() || fallback;
-}
-
-function summaryFromMarkdown(content) {
-	const lines = content
-		.replace(/^Last updated:\s*`?[^`\n]+`?\s*/im, "")
-		.split(/\n+/)
-		.map((line) => line.trim())
-		.filter(
-			(line) =>
-				line &&
-				!line.startsWith("#") &&
-				!line.startsWith("```") &&
-				!line.startsWith("|") &&
-				!line.startsWith("![") &&
-				!line.startsWith("["),
-		);
-	const first = lines.find((line) => !/^[-*\d.]+\s/.test(line)) || "";
-	return first.replace(/\*\*/g, "").replace(/`/g, "").slice(0, 180);
-}
-
-function titleCase(value) {
-	return value
-		.split(/[-_/]+/)
-		.filter(Boolean)
-		.map((part) => `${part[0]?.toUpperCase() || ""}${part.slice(1)}`)
-		.join(" ");
-}
-
-function localGroup(source) {
-	const parts = source.split("/");
-	if (parts[0] !== "docs" || parts.length < 3) return "Reference";
-	const group = parts[1];
-	if (group === "ops") return "Operations";
-	return titleCase(group);
-}
-
-function localType(source) {
-	if (source.includes("/performance/")) return "Evidence";
-	if (source.includes("/ops/")) return "Operations";
-	if (
-		source.includes("/design/") ||
-		source.includes("/specs/") ||
-		source.includes("/plans/")
-	)
-		return "Design";
-	if (source.includes("/development/") || source.includes("/agents/"))
-		return "Development";
-	if (source.includes("runbook") || source.includes("runner"))
-		return "Operations";
-	return "Reference";
-}
-
-function topicAppears(content, alias) {
-	const pattern = new RegExp(
-		`(^|[^a-z0-9])${alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^a-z0-9]|$)`,
-		"i",
-	);
-	return pattern.test(content);
-}
-
-function localTopics(content, source) {
-	const topics = topicCatalog
-		.filter((topic) =>
-			(topic.aliases ?? []).some((alias) => topicAppears(content, alias)),
-		)
-		.map((topic) => topic.id);
-	if (source.includes("lume") && !topics.includes("lume")) topics.push("lume");
-	if (source.includes("ghostty") && !topics.includes("ghostty"))
-		topics.push("ghostty");
-	if (source.includes("performance") && !topics.includes("performance"))
-		topics.push("performance");
-	if (source.includes("evidence") && !topics.includes("evidence"))
-		topics.push("evidence");
-	return [...new Set(topics)];
-}
-
 async function localDocsEntries() {
-	const bySource = new Set(publicEntries.map((entry) => entry.source));
-	const byDest = new Map(publicEntries.map((entry) => [entry.dest, entry]));
-	const docsFiles = (await collectFiles(sourcePath("docs")))
-		.filter((file) => path.extname(file) === ".md")
-		.map((file) => path.relative(repoRoot, file))
-		.sort();
-
-	for (const source of docsFiles) {
-		if (bySource.has(source)) continue;
-		const dest = path.relative(sourcePath("docs"), sourcePath(source));
-		if (byDest.has(dest)) continue;
-		const content = await readFile(sourcePath(source), "utf8");
-		byDest.set(dest, {
-			source,
-			dest,
-			title: titleFromMarkdown(content, titleCase(path.basename(dest, ".md"))),
-			group: localGroup(source),
-			topics: localTopics(content, source),
-			summary: summaryFromMarkdown(content),
-			type: localType(source),
-			published: false,
-		});
+	const result = spawnSync(
+		"python3",
+		["scripts/docs_catalog.py", "local-manifest", "--repo-root", repoRoot],
+		{ cwd: repoRoot, encoding: "utf8" },
+	);
+	if (result.error) throw result.error;
+	if (result.status !== 0) {
+		throw new Error(
+			`local docs catalog failed:\n${result.stderr || result.stdout}`,
+		);
 	}
-
-	return [...byDest.values()].sort((a, b) => a.dest.localeCompare(b.dest));
+	return JSON.parse(result.stdout).entries;
 }
 
 async function readGeneratedFile(entry) {
@@ -209,8 +118,8 @@ async function readRenderedPage(markdownPath) {
 	const template = await readFile(readerTemplatePath, "utf8");
 	const config = `    window.WORKSPACES_DOC_PATH = ${JSON.stringify(markdownPath)};\n`;
 	return template.replace(
-		"    const fallbackTopicCatalog = [",
-		`${config}    const fallbackTopicCatalog = [`,
+		"    const docsBase =",
+		`${config}    const docsBase =`,
 	);
 }
 
@@ -220,7 +129,12 @@ async function assertSourceExists(relativePath) {
 	}
 }
 
-async function copyDirectory(source, destination, includeExtensions) {
+async function copyDirectory(
+	source,
+	destination,
+	includeExtensions,
+	excludeNames = [],
+) {
 	const sourceStats = await stat(source);
 	if (!sourceStats.isDirectory()) {
 		throw new Error(`Expected directory: ${path.relative(repoRoot, source)}`);
@@ -238,6 +152,9 @@ async function copyDirectory(source, destination, includeExtensions) {
 			includeExtensions &&
 			!includeExtensions.includes(path.extname(entry.name))
 		) {
+			continue;
+		}
+		if (excludeNames.includes(entry.name)) {
 			continue;
 		}
 		await cp(from, to);
@@ -296,6 +213,7 @@ async function syncDocs({ entries = publicEntries, local = false } = {}) {
 			sourcePath(entry.source),
 			destPath(entry.dest),
 			entry.include,
+			local ? [] : ["operator-index.css", "operator-index.js"],
 		);
 	}
 }
@@ -328,7 +246,12 @@ async function collectFiles(directory) {
 	return files;
 }
 
-async function checkDirectory(source, destination, includeExtensions) {
+async function checkDirectory(
+	source,
+	destination,
+	includeExtensions,
+	excludeNames = [],
+) {
 	const errors = [];
 	if (!existsSync(destination)) {
 		return [`${path.relative(publicDocsRoot, destination)} is missing`];
@@ -336,6 +259,9 @@ async function checkDirectory(source, destination, includeExtensions) {
 	const sourceFiles = await collectFiles(source);
 	for (const file of sourceFiles) {
 		if (includeExtensions && !includeExtensions.includes(path.extname(file))) {
+			continue;
+		}
+		if (excludeNames.includes(path.basename(file))) {
 			continue;
 		}
 		const relative = path.relative(source, file);
@@ -463,7 +389,12 @@ async function checkDocs() {
 			errors.push(`${entry.source} is missing`);
 			continue;
 		}
-		errors.push(...(await checkDirectory(source, destination, entry.include)));
+		errors.push(
+			...(await checkDirectory(source, destination, entry.include, [
+				"operator-index.css",
+				"operator-index.js",
+			])),
+		);
 	}
 
 	errors.push(...(await validateLinks()));

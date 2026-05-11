@@ -16,7 +16,6 @@ import argparse
 import json
 import os
 import socket
-import stat
 import subprocess
 import sys
 import tempfile
@@ -93,33 +92,6 @@ def wait_for_server(base_url: str, process: subprocess.Popen[str]) -> None:
     raise SmokeFailure(f"timed out waiting for {base_url}")
 
 
-def write_fake_claude(directory: Path) -> Path:
-    fake_claude = directory / "claude"
-    fake_claude.write_text(
-        """#!/usr/bin/env python3
-import json
-print(json.dumps({
-  "type": "result",
-  "session_id": "docs-smoke-fake-claude",
-  "total_cost_usd": 0,
-  "result": json.dumps({
-    "answer_markdown": "Use the local docs server for rendered pages and raw `.md` paths for source Markdown.",
-    "copy_text": "Use the local docs server for rendered pages and raw `.md` paths for source Markdown.",
-    "citations": [{
-      "title": "WorkSpaces Docs Site",
-      "url": "/docs/docs-site",
-      "source": "docs/README.md",
-      "snippet": "Local docs server and raw Markdown contract."
-    }]
-  })
-}))
-""",
-        encoding="utf-8",
-    )
-    fake_claude.chmod(fake_claude.stat().st_mode | stat.S_IXUSR)
-    return fake_claude
-
-
 def run_checks(base_url: str, *, check_ask: bool) -> None:
     status, headers, body = request(base_url, "/docs/")
     expect(status == 200, f"/docs/ returned {status}")
@@ -127,7 +99,14 @@ def run_checks(base_url: str, *, check_ask: bool) -> None:
 
     status, headers, body = request(base_url, "/docs/developer-operator-index.html")
     expect(status == 200, f"operator index returned {status}")
-    expect(b"/docs/api/ask" in body, "operator index is missing docs ask wiring")
+    expect(
+        b"/docs/assets/operator-index.js" in body,
+        "operator index is missing its JS asset",
+    )
+
+    status, _, body = request(base_url, "/docs/assets/operator-index.js")
+    expect(status == 200, f"operator index JS returned {status}")
+    expect(b"/docs/api/ask" in body, "operator index JS is missing docs ask wiring")
 
     status, _, body = request(base_url, "/docs/local-docs-manifest.json")
     expect(status == 200, f"local docs manifest returned {status}")
@@ -164,19 +143,17 @@ def run_checks(base_url: str, *, check_ask: bool) -> None:
     if check_ask:
         status, _, body = request(
             base_url,
+            "/docs/api/search?q=lum%20failng&limit=5",
+        )
+        expect(status == 200, f"docs search returned {status}: {body.decode()[:300]}")
+        search = json.loads(body)
+        expect(search.get("results"), "docs search did not include results")
+
+        status, _, body = request(
+            base_url,
             "/docs/api/ask",
             method="POST",
-            body={
-                "query": "How do I use rendered docs and raw markdown?",
-                "filteredResults": [
-                    {
-                        "title": "WorkSpaces Docs Site",
-                        "dest": "docs-site.md",
-                        "source": "docs/README.md",
-                        "snippet": "Local docs server and raw Markdown contract.",
-                    }
-                ],
-            },
+            body={"query": "How do I use rendered docs and raw markdown?"},
         )
         expect(status == 200, f"docs ask returned {status}: {body.decode()[:300]}")
         answer = json.loads(body)
@@ -220,8 +197,9 @@ def main() -> None:
                 "WORKSPACES_DOCS_ASK_TIMEOUT_SECONDS": "10",
             }
             if not args.real_claude:
-                fake_claude = write_fake_claude(Path(temp_dir.name))
-                env["WORKSPACES_DOCS_ASK_CLAUDE_BIN"] = str(fake_claude)
+                env["WORKSPACES_DOCS_ASK_CLAUDE_BIN"] = str(
+                    REPO_ROOT / "scripts/docs-fake-claude.py"
+                )
             process = subprocess.Popen(
                 [
                     sys.executable,

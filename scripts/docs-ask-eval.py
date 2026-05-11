@@ -11,12 +11,12 @@ import argparse
 import json
 import os
 import socket
-import stat
 import subprocess
 import sys
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -113,95 +113,6 @@ def wait_for_server(base_url: str, process: subprocess.Popen[str]) -> None:
     raise EvalFailure(f"timed out waiting for {base_url}")
 
 
-def write_fake_claude(directory: Path) -> Path:
-    fake_claude = directory / "claude"
-    fake_claude.write_text(
-        """#!/usr/bin/env python3
-import json
-import sys
-
-try:
-    prompt = sys.argv[sys.argv.index("-p") + 1]
-except (ValueError, IndexError):
-    prompt = " ".join(sys.argv)
-
-try:
-    query = json.loads(prompt).get("query", prompt)
-except json.JSONDecodeError:
-    query = prompt
-
-if "Lume" in query or "lume" in query:
-    answer = "Lume daemon reliability lives in the Lume integration and validation docs. Use the local rendered docs first, then raw `.md` paths when source text is needed."
-    source = "docs/development/lume-integration.md"
-    title = "Lume Integration"
-    url = "/docs/development/lume-integration"
-elif "Ghostty" in query or "shortcut" in query:
-    answer = "Ghostty shortcut and split behavior is documented around libghostty integration, shortcut routing, and terminal session behavior."
-    source = "docs/development/libghostty-integration.md"
-    title = "libghostty Integration"
-    url = "/docs/development/libghostty-integration"
-elif "merge" in query or "evidence" in query:
-    answer = "A mergeable PR needs evidence, reviewable validation, and links that prove the behavior changed safely."
-    source = "docs/development/mergeability-standard.md"
-    title = "Mergeability Standard"
-    url = "/docs/development/mergeability-standard"
-else:
-    answer = "The docs site uses extensionless rendered URLs for reading and `.md` URLs for raw Markdown source. Public docs are curated; the local operator index is exhaustive."
-    source = "docs/README.md"
-    title = "WorkSpaces Docs Site"
-    url = "/docs/docs-site"
-
-print(json.dumps({
-  "type": "result",
-  "session_id": "docs-ask-eval-fake",
-  "total_cost_usd": 0,
-  "result": json.dumps({
-    "answer_markdown": answer,
-    "copy_text": answer,
-    "citations": [{"title": title, "url": url, "source": source, "snippet": answer}]
-  })
-}))
-""",
-        encoding="utf-8",
-    )
-    fake_claude.chmod(fake_claude.stat().st_mode | stat.S_IXUSR)
-    return fake_claude
-
-
-def search_terms(value: str) -> list[str]:
-    return [
-        token
-        for token in value.lower().replace("/", " ").replace("-", " ").split()
-        if len(token) > 2
-    ]
-
-
-def filtered_results(manifest: dict, query: str, limit: int) -> list[dict]:
-    tokens = search_terms(query)
-    scored = []
-    for index, entry in enumerate(manifest.get("entries", [])):
-        text = " ".join(
-            str(entry.get(key, ""))
-            for key in ["title", "summary", "dest", "source", "group", "type"]
-        ).lower()
-        text = f"{text} {' '.join(entry.get('topics', []))}"
-        score = sum(1 for token in tokens if token in text)
-        if score:
-            scored.append((score, index, entry))
-    scored.sort(key=lambda item: (-item[0], item[1]))
-    return [
-        {
-            "title": entry.get("title"),
-            "url": f"/docs/{entry.get('dest', '').removesuffix('.md')}",
-            "source": entry.get("source"),
-            "dest": entry.get("dest"),
-            "snippet": entry.get("summary", ""),
-            "topics": entry.get("topics", []),
-        }
-        for _, _, entry in scored[:limit]
-    ]
-
-
 def evaluate_answer(case: dict, status: int, payload: dict) -> dict:
     answer = str(payload.get("answer") or payload.get("copyText") or "")
     citations = payload.get("citations") if isinstance(payload.get("citations"), list) else []
@@ -255,14 +166,28 @@ def run_eval(base_url: str, cases: list[dict], limit: int) -> list[dict]:
 
     results = []
     for case in cases:
+        search_status, search_payload = request(
+            base_url,
+            f"/docs/api/search?q={urllib.parse.quote(case['query'])}&limit={limit}",
+        )
+        if search_status != 200 or not search_payload.get("results"):
+            results.append(
+                {
+                    "id": case["id"],
+                    "query": case["query"],
+                    "status": search_status,
+                    "ok": False,
+                    "failures": ["canonical search returned no results"],
+                    "answer": "",
+                    "citations": [],
+                }
+            )
+            continue
         status, payload = request(
             base_url,
             "/docs/api/ask",
             method="POST",
-            body={
-                "query": case["query"],
-                "filteredResults": filtered_results(manifest, case["query"], limit),
-            },
+            body={"query": case["query"]},
         )
         results.append(evaluate_answer(case, status, payload))
     return results
@@ -322,7 +247,7 @@ def main() -> None:
             }
             if not args.real_claude:
                 env["WORKSPACES_DOCS_ASK_CLAUDE_BIN"] = str(
-                    write_fake_claude(Path(temp_dir.name))
+                    REPO_ROOT / "scripts/docs-fake-claude.py"
                 )
             process = subprocess.Popen(
                 [sys.executable, str(REPO_ROOT / "docs/server.py"), "--port", str(port)],

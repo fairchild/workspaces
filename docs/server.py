@@ -19,11 +19,23 @@ import functools
 import http.server
 import json
 import os
-import re
 import socketserver
 import subprocess
+import sys
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
+
+
+REPO_ROOT_FOR_IMPORT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT_FOR_IMPORT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT_FOR_IMPORT))
+
+from scripts.docs_catalog import (  # noqa: E402
+    local_docs_manifest as build_local_docs_manifest,
+    rendered_href,
+    search_docs,
+    source_for_entry,
+)
 
 
 SOURCE_OVERRIDES = {
@@ -79,254 +91,6 @@ DOCS_ASK_SCHEMA = {
 DOCS_ASK_MAX_BODY_BYTES = 128_000
 DOCS_ASK_MAX_RESULTS = 12
 DOCS_ASK_TIMEOUT_SECONDS = 120
-SEARCH_STOPWORDS = {
-    "a",
-    "an",
-    "and",
-    "are",
-    "can",
-    "do",
-    "does",
-    "for",
-    "how",
-    "i",
-    "in",
-    "is",
-    "it",
-    "me",
-    "of",
-    "on",
-    "or",
-    "our",
-    "should",
-    "the",
-    "to",
-    "what",
-    "where",
-    "why",
-    "with",
-}
-
-
-def title_case(value: str) -> str:
-    return " ".join(part.capitalize() for part in re.split(r"[-_/]+", value) if part)
-
-
-def title_from_markdown(content: str, fallback: str) -> str:
-    match = re.search(r"^#\s+(.+)$", content, re.MULTILINE)
-    return match.group(1).replace("`", "").strip() if match else fallback
-
-
-def summary_from_markdown(content: str) -> str:
-    content = re.sub(r"^Last updated:\s*`?[^`\n]+`?\s*", "", content, flags=re.I | re.M)
-    for raw_line in re.split(r"\n+", content):
-        line = raw_line.strip()
-        if not line or line.startswith(("#", "```", "|", "![", "[")):
-            continue
-        if re.match(r"^[-*\d.]+\s", line):
-            continue
-        return line.replace("**", "").replace("`", "")[:180]
-    return ""
-
-
-def local_group(source: str) -> str:
-    parts = source.split("/")
-    if len(parts) < 3:
-        return "Reference"
-    if parts[1] == "ops":
-        return "Operations"
-    return title_case(parts[1])
-
-
-def local_type(source: str) -> str:
-    if "/performance/" in source:
-        return "Evidence"
-    if "/ops/" in source or "runbook" in source or "runner" in source:
-        return "Operations"
-    if "/design/" in source or "/specs/" in source or "/plans/" in source:
-        return "Design"
-    if "/development/" in source or "/agents/" in source:
-        return "Development"
-    return "Reference"
-
-
-def topic_appears(content: str, alias: str) -> bool:
-    pattern = rf"(^|[^a-z0-9]){re.escape(alias)}([^a-z0-9]|$)"
-    return re.search(pattern, content, re.I) is not None
-
-
-def local_topics(content: str, source: str, catalog: list[dict]) -> list[str]:
-    topics = [
-        topic["id"]
-        for topic in catalog
-        if any(topic_appears(content, alias) for alias in topic.get("aliases", []))
-    ]
-    for topic in ["lume", "ghostty", "performance", "evidence"]:
-        if topic in source and topic not in topics:
-            topics.append(topic)
-    return list(dict.fromkeys(topics))
-
-
-def rendered_route(markdown_path: str) -> str:
-    return markdown_path.removesuffix(".md")
-
-
-def rendered_href(markdown_path: str) -> str:
-    return f"/docs/{rendered_route(markdown_path)}"
-
-
-def source_for_entry(entry: dict) -> str:
-    source = str(entry.get("source", ""))
-    if source == "/README.md":
-        return "README.md"
-    if source == "/CONTEXT.md":
-        return "CONTEXT.md"
-    return source.lstrip("/")
-
-
-def search_tokens(value: str) -> list[str]:
-    return [
-        token
-        for token in re.findall(r"[a-z0-9][a-z0-9_-]*", value.lower())
-        if len(token) > 1 and token not in SEARCH_STOPWORDS
-    ]
-
-
-def search_text_for_entry(entry: dict) -> str:
-    return " ".join(
-        [
-            str(entry.get("title", "")),
-            str(entry.get("summary", "")),
-            str(entry.get("dest", "")),
-            str(entry.get("source", "")),
-            str(entry.get("group", "")),
-            str(entry.get("type", "")),
-            " ".join(entry.get("topics", [])),
-        ]
-    ).lower()
-
-
-def is_subsequence(needle: str, haystack: str) -> bool:
-    index = 0
-    for char in haystack:
-        if index < len(needle) and needle[index] == char:
-            index += 1
-    return index == len(needle)
-
-
-def token_match_score(token: str, words: list[str], haystack: str) -> int:
-    if token in haystack:
-        return 12
-    best = 0
-    for word in words:
-        if word.startswith(token):
-            best = max(best, 10)
-        elif token.startswith(word) and len(word) >= 3:
-            best = max(best, 8)
-        elif len(token) >= 4 and is_subsequence(token, word):
-            best = max(best, 5)
-    return best
-
-
-def fuzzy_doc_score(query: str, entry: dict) -> int:
-    tokens = search_tokens(query)
-    if not tokens:
-        return 0
-    haystack = search_text_for_entry(entry)
-    words = search_tokens(haystack)
-    score = 0
-    matched = 0
-    for token in tokens:
-        match_score = token_match_score(token, words, haystack)
-        if match_score:
-            matched += 1
-            score += match_score
-    required_matches = max(1, round(len(tokens) * 0.34))
-    if matched < required_matches:
-        return 0
-    title = str(entry.get("title", "")).lower()
-    dest = str(entry.get("dest", "")).lower()
-    if any(token in title for token in tokens):
-        score += 8
-    if any(token in dest for token in tokens):
-        score += 4
-    return score
-
-
-def fuzzy_docs(query: str, entries: list[dict], limit: int) -> list[dict]:
-    scored = [
-        (fuzzy_doc_score(query, entry), index, entry)
-        for index, entry in enumerate(entries)
-    ]
-    return [
-        entry
-        for score, _, entry in sorted(
-            (item for item in scored if item[0] > 0),
-            key=lambda item: (-item[0], item[1]),
-        )[:limit]
-    ]
-
-
-def safe_doc_excerpt(repo_root: Path, source: str, query: str) -> str:
-    source_path = repo_root / source
-    try:
-        resolved = source_path.resolve()
-    except OSError:
-        return ""
-    try:
-        resolved.relative_to(repo_root.resolve())
-    except ValueError:
-        return ""
-    if not resolved.is_file():
-        return ""
-
-    try:
-        content = resolved.read_text(encoding="utf-8")
-    except UnicodeDecodeError:
-        return ""
-
-    query_terms = [term.lower() for term in re.findall(r"[a-z0-9][a-z0-9_-]+", query)]
-    blocks = [block.strip() for block in re.split(r"\n\s*\n", content) if block.strip()]
-    if query_terms:
-        for block in blocks:
-            lower = block.lower()
-            if any(term in lower for term in query_terms):
-                return re.sub(r"\s+", " ", block)[:700]
-    return summary_from_markdown(content) or re.sub(r"\s+", " ", content.strip())[:700]
-
-
-def compact_result(entry: dict, repo_root: Path, query: str) -> dict:
-    dest = str(entry.get("dest", ""))
-    source = source_for_entry(entry)
-    return {
-        "title": str(entry.get("title") or dest),
-        "url": str(entry.get("url") or rendered_href(dest)),
-        "source": source,
-        "summary": str(entry.get("summary") or ""),
-        "topics": entry.get("topics") or [],
-        "snippet": str(entry.get("snippet") or "")
-        or safe_doc_excerpt(repo_root, source, query),
-    }
-
-
-def normalize_client_result(result: dict, manifest_entries: dict[str, dict]) -> dict | None:
-    dest = str(result.get("dest") or "").removeprefix("/docs/")
-    if dest and not dest.endswith(".md"):
-        dest = f"{dest}.md"
-    source = str(result.get("source") or "").lstrip("/")
-    entry = manifest_entries.get(dest)
-    if not entry and source:
-        entry = next(
-            (
-                candidate
-                for candidate in manifest_entries.values()
-                if source_for_entry(candidate) == source
-            ),
-            None,
-        )
-    if not entry:
-        return None
-    return {**entry, **{key: value for key, value in result.items() if value}}
 
 
 def build_docs_ask_prompt(
@@ -344,10 +108,7 @@ def build_docs_ask_prompt(
         }
         for entry in entries[:120]
     ]
-    initial_context = [
-        compact_result(result, repo_root, query)
-        for result in results[:DOCS_ASK_MAX_RESULTS]
-    ]
+    initial_context = results[:DOCS_ASK_MAX_RESULTS]
     return json.dumps(
         {
             "task": "Answer the operator's WorkSpaces documentation question.",
@@ -505,56 +266,7 @@ class QuietHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
         return False
 
     def local_docs_manifest(self) -> dict:
-        repo_root = Path(self.directory)
-        manifest = json.loads(
-            (repo_root / "web/scripts/docs-sync-manifest.json").read_text()
-        )
-        topic_catalog = manifest.get("topics", [])
-        entries_by_dest = {
-            entry["dest"]: {
-                "source": entry["source"],
-                "dest": entry["dest"],
-                "title": entry["title"],
-                "group": entry["group"],
-                "topics": entry.get("topics", []),
-                "summary": entry.get("summary", ""),
-                "type": entry.get("type", entry["group"]),
-                "published": True,
-            }
-            for entry in manifest["documents"]
-        }
-        public_sources = {entry["source"] for entry in manifest["documents"]}
-
-        for source_path in sorted((repo_root / "docs").rglob("*.md")):
-            source = source_path.relative_to(repo_root).as_posix()
-            if source in public_sources:
-                continue
-            dest = source_path.relative_to(repo_root / "docs").as_posix()
-            if dest in entries_by_dest:
-                continue
-            content = source_path.read_text()
-            entries_by_dest[dest] = {
-                "source": source,
-                "dest": dest,
-                "title": title_from_markdown(
-                    content, title_case(Path(dest).stem)
-                ),
-                "group": local_group(source),
-                "topics": local_topics(content, source, topic_catalog),
-                "summary": summary_from_markdown(content),
-                "type": local_type(source),
-                "published": False,
-            }
-
-        entries = sorted(entries_by_dest.values(), key=lambda entry: entry["dest"])
-        return {
-            "generatedBy": "docs/server.py",
-            "local": True,
-            "documents": [entry["dest"] for entry in entries],
-            "renderedRoutes": [rendered_route(entry["dest"]) for entry in entries],
-            "entries": entries,
-            "topics": topic_catalog,
-        }
+        return build_local_docs_manifest(Path(self.directory))
 
     def serve_local_docs_manifest(self, head_only: bool = False) -> bool:
         if urlsplit(self.path).path != "/docs/local-docs-manifest.json":
@@ -566,6 +278,28 @@ class QuietHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
         if not head_only:
             self.wfile.write(body)
+        return True
+
+    def serve_docs_search(self, head_only: bool = False) -> bool:
+        parsed = urlsplit(self.path)
+        if parsed.path != "/docs/api/search":
+            return False
+        query = parse_qs(parsed.query)
+        limit = 12
+        try:
+            limit = int(query.get("limit", ["12"])[0])
+        except ValueError:
+            limit = 12
+        payload = search_docs(
+            self.local_docs_manifest(),
+            Path(self.directory),
+            query=query.get("q", [""])[0].strip(),
+            group=query.get("group", [""])[0],
+            topic=query.get("topic", [""])[0],
+            doc_type=query.get("type", [""])[0],
+            limit=max(1, min(limit, 250)),
+        )
+        self.send_json(payload, head_only=head_only)
         return True
 
     def send_json(
@@ -608,27 +342,12 @@ class QuietHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
 
             repo_root = Path(self.directory)
             manifest = self.local_docs_manifest()
-            manifest_entries = {
-                str(entry.get("dest", "")): entry for entry in manifest.get("entries", [])
-            }
-            client_results = payload.get("filteredResults") or []
-            if not isinstance(client_results, list):
-                raise ValueError("filteredResults must be an array.")
-            results = [
-                result
-                for result in (
-                    normalize_client_result(result, manifest_entries)
-                    for result in client_results[:DOCS_ASK_MAX_RESULTS]
-                    if isinstance(result, dict)
-                )
-                if result
-            ]
-            if not results:
-                results = fuzzy_docs(
-                    query,
-                    manifest.get("entries", []),
-                    DOCS_ASK_MAX_RESULTS,
-                )
+            results = search_docs(
+                manifest,
+                repo_root,
+                query=query,
+                limit=DOCS_ASK_MAX_RESULTS,
+            )["results"]
 
             prompt = build_docs_ask_prompt(query, results, manifest, repo_root)
             timeout = int(
@@ -720,6 +439,8 @@ class QuietHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
             return
         if self.serve_local_docs_manifest():
             return
+        if self.serve_docs_search():
+            return
         self.render_extensionless_doc()
         super().do_GET()
 
@@ -727,6 +448,8 @@ class QuietHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
         if self.redirect_docs_root():
             return
         if self.serve_local_docs_manifest(head_only=True):
+            return
+        if self.serve_docs_search(head_only=True):
             return
         self.render_extensionless_doc()
         super().do_HEAD()
