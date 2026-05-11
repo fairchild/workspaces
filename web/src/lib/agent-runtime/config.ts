@@ -26,6 +26,20 @@ function hasVercelCredentials(env: Env): boolean {
 	);
 }
 
+function hasAnyPrReviewerCredential(env: Env): boolean {
+	return Boolean(
+		env.PR_REVIEWER_APP_ID ||
+			env.PR_REVIEWER_PRIVATE_KEY ||
+			env.PR_REVIEWER_INSTALLATION_ID,
+	);
+}
+
+function isPrReviewerConfigured(env: Env): boolean {
+	if (env.PR_REVIEWER_ENABLED === "0") return false;
+	if (env.PR_REVIEWER_ENABLED === "1") return true;
+	return hasAnyPrReviewerCredential(env);
+}
+
 function requireEnv(
 	env: Env,
 	name: string,
@@ -113,26 +127,31 @@ export function validateProductionAgentRuntimeConfig(
 		);
 	}
 
-	if (env.PR_REVIEWER_ENABLED === "1") {
+	if (isPrReviewerConfigured(env)) {
 		requireEnv(
 			env,
 			"PR_REVIEWER_APP_ID",
-			"when PR reviewer is enabled",
+			"when PR reviewer is configured",
 			errors,
 		);
 		requireEnv(
 			env,
 			"PR_REVIEWER_PRIVATE_KEY",
-			"when PR reviewer is enabled",
+			"when PR reviewer is configured",
 			errors,
 		);
 		requireEnv(
 			env,
 			"PR_REVIEWER_INSTALLATION_ID",
-			"when PR reviewer is enabled",
+			"when PR reviewer is configured",
 			errors,
 		);
-		requireEnv(env, "ANTHROPIC_API_KEY", "when PR reviewer is enabled", errors);
+		requireEnv(
+			env,
+			"ANTHROPIC_API_KEY",
+			"when PR reviewer is configured",
+			errors,
+		);
 	}
 
 	if (errors.length > 0) {

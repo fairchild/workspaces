@@ -13,8 +13,10 @@ import type {
 	WebhookEvent,
 	WebhookEventType,
 } from "@/lib/types";
+import { after } from "next/server";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 300;
 
 const SUPPORTED_EVENTS = new Set<string>([
 	"pull_request",
@@ -147,7 +149,17 @@ export async function POST(request: Request): Promise<Response> {
 	const trigger = parsePrReviewTrigger(eventType, action, payload);
 	if (trigger) {
 		try {
-			await triggerPrReview(trigger.reviewPayload, trigger.context);
+			await triggerPrReview(trigger.reviewPayload, trigger.context, {
+				onReviewStarted: (completeReview) => {
+					after(async () => {
+						try {
+							await completeReview();
+						} catch (err) {
+							console.error("[pr-review] broker failed:", err);
+						}
+					});
+				},
+			});
 		} catch (err) {
 			console.error("[pr-review] failed:", err);
 		}
