@@ -174,15 +174,11 @@ final class ClaudeIntegrationLifecycle: ObservableObject {
         )
         let dest = dir.appendingPathComponent("\(name).sh")
 
-        // Source: bundled .sh file. Falls back to nil silently — most tests
-        // and previews don't run inside a real .app bundle.
-        guard
-            let bundleURL = Bundle.main.url(
-                forResource: name,
-                withExtension: "sh",
-                subdirectory: "HookForwarders"
-            )
-        else {
+        // Source: bundled .sh file. SwiftPM debug builds expose copied
+        // resources through Bundle.module; packaged app launches may expose
+        // them through Bundle.main.
+        let bundleURL = bundledHookForwarderURL(named: name)
+        guard let bundleURL else {
             return nil
         }
         do {
@@ -196,6 +192,20 @@ final class ClaudeIntegrationLifecycle: ObservableObject {
         } catch {
             return nil
         }
+    }
+
+    nonisolated static func bundledHookForwarderURL(named name: String) -> URL? {
+        Bundle.module.url(
+            forResource: name,
+            withExtension: "sh",
+            subdirectory: "HookForwarders"
+        )
+            ?? Bundle.module.url(forResource: name, withExtension: "sh")
+            ?? Bundle.main.url(
+                forResource: name,
+                withExtension: "sh",
+                subdirectory: "HookForwarders"
+            )
     }
 
     func stop() async {

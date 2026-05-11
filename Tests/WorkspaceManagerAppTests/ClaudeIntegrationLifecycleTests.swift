@@ -119,4 +119,15 @@ struct ClaudeIntegrationLifecycleTests {
 
         #expect(didPublishInstaller)
     }
+
+    @Test("bundled hook forwarder resources resolve in SwiftPM debug builds")
+    func bundledHookForwarderResourcesResolve() throws {
+        let eventForwarder = try #require(
+            ClaudeIntegrationLifecycle.bundledHookForwarderURL(named: "event-forwarder"))
+        let statusLine = try #require(
+            ClaudeIntegrationLifecycle.bundledHookForwarderURL(named: "statusline"))
+
+        #expect(FileManager.default.fileExists(atPath: eventForwarder.path))
+        #expect(FileManager.default.fileExists(atPath: statusLine.path))
+    }
 }
