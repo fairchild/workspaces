@@ -149,7 +149,17 @@ Use these scripts for day-to-day UI verification:
   - `./output/dev-smoke/dev-smoke-<timestamp>.png`
   - latest launch log under `./.dev-data/logs/`
 
-3. `./scripts/claude-integration-smoke.sh`
+3. `./scripts/settings-window-smoke.sh`
+- Activation-driving regression smoke for the app Settings entry points.
+- Launches the debug app, triggers Settings via `Cmd+,` and the WorkSpaces app menu, then waits for the Settings scene accessibility identifier (`settings.root`).
+- Screenshots are supporting evidence only; pass/fail comes from Accessibility finding the Settings scene.
+- Requires Accessibility, Automation, and Screen Recording permissions for full evidence capture.
+- Writes artifacts to:
+  - `./output/settings-window-smoke/<timestamp>/`
+- Run via mise:
+  - `mise run dev-settings-smoke`
+
+4. `./scripts/claude-integration-smoke.sh`
 - Interactive evidence harness for the full Claude Code integration.
 - Launches the debug app, discovers the live `hooks-<pid>.sock` from the launch log, verifies `/healthz`, prompts through Settings install / real Claude prompt / OSC fallback / conversation log / headless quick action evidence steps, and writes a PR-ready comment.
 - `--pr <N>` uploads each captured screenshot through `evidence.sh` when `EVIDENCE_UPLOAD_TOKEN` is available.
@@ -157,17 +167,17 @@ Use these scripts for day-to-day UI verification:
 - `--non-interactive` runs only the automated preflight and one launch screenshot.
 - Writes artifacts to `./output/claude-integration-smoke/<timestamp>/`.
 
-4. `./scripts/ui-smoke.sh`
+5. `./scripts/ui-smoke.sh`
 - Fast interaction smoke test.
 - Validates launch, focus, typing, and Enter behavior.
 - Writes artifacts to `/tmp/workspaces-ui-smoke-<timestamp>/`.
 
-5. `./scripts/ui-capture.sh`
+6. `./scripts/ui-capture.sh`
 - Screenshot-focused flow capture.
 - Same core interaction path plus screenshot artifacts.
 - Writes artifacts to `/tmp/workspaces-ui-capture-<timestamp>/`.
 
-6. `./scripts/sidebar-capture.sh`
+7. `./scripts/sidebar-capture.sh`
 - Fast deterministic sidebar-only capture loop for visual polish work.
 - Launches app in `WORKSPACES_UI_FIXTURE=1` mode (in-memory sample data).
 - Captures the WorkspaceManager window and writes:
@@ -175,7 +185,7 @@ Use these scripts for day-to-day UI verification:
   - timestamped snapshots: `./output/sidebar/sidebar-<timestamp>.png`
 - Also preserves raw run artifacts under `/tmp/workspaces-sidebar-capture-<timestamp>/`.
 
-6. `./scripts/preview-open-capture.sh`
+8. `./scripts/preview-open-capture.sh`
 - Deterministic preview-open capture for `Open` header polish.
 - Launches with fixture bootstrap variables so a repo and target file open automatically:
   - `WORKSPACES_UI_FIXTURE_OPEN_PREVIEW=1`
@@ -187,7 +197,7 @@ Use these scripts for day-to-day UI verification:
   - latest: `./output/preview-open/latest.png`
   - timestamped snapshots: `./output/preview-open/preview-open-<timestamp>.png`
 
-7. `./scripts/capture-window.sh`
+9. `./scripts/capture-window.sh`
 - One-shot window-only capture for shared-desktop workflows.
 - Captures by window id (`screencapture -l`) and **does not activate the app by default**.
 - Use `--pid <pid>` when multiple WorkSpaces/WorkspaceManager debug windows are visible.
@@ -196,14 +206,14 @@ Use these scripts for day-to-day UI verification:
   - timestamped: `./output/window/window-<timestamp>.png`
   - latest copy: `./output/window/latest.png`
 
-8. `./scripts/continuity-evidence.sh`
+10. `./scripts/continuity-evidence.sh`
 - App terminate/relaunch evidence for local repo/workspace terminal continuity.
 - Launches the debug app with isolated data, forces `tmux_per_session` through a dev-only environment override, captures before/closed/after proof, and writes artifacts under:
   - `./output/continuity-evidence/<timestamp>/`
 - Use for PRs that touch terminal continuity restore behavior:
   - `./scripts/continuity-evidence.sh --target "$HOME/code/workspaces" --no-build --trust-mise`
 
-9. `./scripts/open-in-editor-shortcut-smoke.sh`
+11. `./scripts/open-in-editor-shortcut-smoke.sh`
 - End-to-end regression smoke for `Cmd+Shift+O` editor launch.
 - Covers both target paths:
   - repo selected, no file preview -> open project root only
@@ -211,7 +221,7 @@ Use these scripts for day-to-day UI verification:
 - Uses fixture mode and a fake Zed CLI shim to verify launched arguments.
 - Verifies `[Perf] metric=open_in_editor_launch ... outcome=success` log evidence.
 
-10. `./scripts/tart-webview-demo.sh`
+12. `./scripts/tart-webview-demo.sh`
 - Runs the repo/webview transition flow inside an isolated Tart VM.
 - Clones a prepared base VM, boots it with this repo mounted, drives the guest
   UI over SSH + VNC, and outputs capture artifacts under:

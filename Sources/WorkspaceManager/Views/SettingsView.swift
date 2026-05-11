@@ -468,6 +468,7 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .frame(width: 560, height: 700)
+        .accessibilityIdentifier("settings.root")
         .onAppear {
             refreshCommandLineToolStatus()
             notificationCoordinator.loadStoredAuth()
