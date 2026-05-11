@@ -83,8 +83,8 @@ struct WorkspaceManagerApp: App {
             }
 
             CommandGroup(replacing: .appSettings) {
-                Button("Settings...") {
-                    SettingsWindowPresenter.open()
+                SettingsLink {
+                    Text("Settings...")
                 }
                 .keyboardShortcut(
                     AppChromeShortcut.settings.keyEquivalent,

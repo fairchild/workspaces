@@ -36,6 +36,7 @@ struct SidebarView: View {
     @Environment(\.lumeRuntimeService) private var lumeRuntimeService
     @Environment(\.workspaceService) private var workspaceService
     @Environment(\.workspaceProviderRegistry) private var workspaceProviderRegistry
+    @Environment(\.openSettings) private var openSettings
     @ObservedObject var appCommandState: AppCommandState
     let repos: [Repo]
     let webSources: [WebSource]
@@ -643,7 +644,7 @@ struct SidebarView: View {
     }
 
     private func openSettingsWindow() {
-        SettingsWindowPresenter.open()
+        openSettings()
     }
 
     private func openLumeLog() {
