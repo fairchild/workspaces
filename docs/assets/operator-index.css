@@ -299,7 +299,7 @@
       display: grid;
       grid-template-columns: minmax(0, 0.95fr) minmax(380px, 0.68fr);
       gap: 14px;
-      align-items: stretch;
+      align-items: start;
     }
 
     .map,
@@ -311,9 +311,72 @@
       background: rgba(20, 24, 27, 0.9);
     }
 
+    .dive {
+      padding: 16px;
+      overflow: hidden;
+    }
+
+    .dive summary {
+      cursor: pointer;
+      list-style: none;
+    }
+
+    .dive summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .dive-head {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 14px;
+    }
+
+    .dive-head h2 {
+      margin: 0 0 5px;
+    }
+
+    .dive-toggle {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex: 0 0 auto;
+      width: 28px;
+      height: 28px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.03);
+      color: var(--muted);
+      font: 1rem var(--mono);
+    }
+
+    .dive-toggle::before {
+      content: "+";
+      line-height: 1;
+    }
+
+    .dive[open] .dive-toggle::before {
+      content: "-";
+    }
+
+    .dive-head:hover .dive-toggle,
+    .dive-head:focus-visible .dive-toggle {
+      border-color: var(--mint);
+      color: var(--mint);
+      background: rgba(166, 255, 223, 0.08);
+    }
+
+    .dive-body {
+      display: grid;
+      gap: 12px;
+      margin-top: 14px;
+    }
+
+    .dive-body > .button-link {
+      justify-self: end;
+    }
+
     .map {
-      min-height: 360px;
-      padding: 18px;
       background:
         linear-gradient(90deg, rgba(255, 255, 255, 0.026) 1px, transparent 1px),
         linear-gradient(180deg, rgba(255, 255, 255, 0.022) 1px, transparent 1px),
@@ -321,15 +384,20 @@
       background-size: 34px 34px;
     }
 
+    .map[open] {
+      min-height: 360px;
+    }
+
     .map-title h2,
     .routing h2,
+    .concept-strip h2,
     .reading-path h2 {
-      margin: 0 0 5px;
       font-size: 1rem;
     }
 
     .map-title p,
     .routing p,
+    .concept-strip p,
     .reading-path p,
     .concept-card p {
       margin: 0;
@@ -340,7 +408,6 @@
     .architecture-prompt {
       display: grid;
       gap: 12px;
-      margin-top: 18px;
       max-width: 760px;
       border: 1px solid rgba(166, 255, 223, 0.24);
       border-radius: 8px;
@@ -374,11 +441,7 @@
 
     .routing-head,
     .path-head {
-      display: flex;
-      align-items: baseline;
-      justify-content: space-between;
-      gap: 12px;
-      margin-bottom: 12px;
+      margin: 0;
     }
 
     .route-grid,
@@ -446,11 +509,6 @@
       font-family: var(--mono);
       text-transform: uppercase;
       font-size: 0.68rem;
-    }
-
-    .concept-strip h2 {
-      margin: 0 0 10px;
-      font-size: 0.96rem;
     }
 
     .topic-chips {

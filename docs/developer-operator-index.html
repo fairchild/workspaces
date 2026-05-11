@@ -52,47 +52,66 @@
     </section>
 
     <section class="layout" aria-label="Documentation heads-up display">
-      <div class="map" aria-label="Deferred architecture map prompt">
-        <div class="map-title">
-          <h2>System Map</h2>
-          <p>Reserved for the technical architecture map.</p>
+      <details class="map dive" aria-label="Deferred architecture map prompt" open>
+        <summary class="map-title dive-head">
+          <span>
+            <h2>System Map</h2>
+            <p>Reserved for the technical architecture map.</p>
+          </span>
+          <span class="dive-toggle" aria-hidden="true"></span>
+        </summary>
+        <div class="dive-body">
+          <div class="architecture-prompt">
+            <strong>Future architecture map prompt</strong>
+            <span>Build a technical context map for WorkSpaces documentation. It should show the real systems and code boundaries: the macOS SwiftUI/AppKit app, Ghostty/libghostty terminal runtime, workspace/provider layer, Lume macOS/Linux VM runtime, web Next.js/Vercel app, Cloudflare Workers and Durable Objects, GitHub webhook/PR/evidence flows, evidence storage, and local developer scripts. The map should make architectural relationships clear, not just document categories. It should help a new developer answer: what systems exist, where code lives, what talks to what, what runs locally vs remotely, and which docs explain each subsystem.</span>
+            <code>Deferred: architecture map implementation belongs in its own pass.</code>
+          </div>
         </div>
-        <div class="architecture-prompt">
-          <strong>Future architecture map prompt</strong>
-          <span>Build a technical context map for WorkSpaces documentation. It should show the real systems and code boundaries: the macOS SwiftUI/AppKit app, Ghostty/libghostty terminal runtime, workspace/provider layer, Lume macOS/Linux VM runtime, web Next.js/Vercel app, Cloudflare Workers and Durable Objects, GitHub webhook/PR/evidence flows, evidence storage, and local developer scripts. The map should make architectural relationships clear, not just document categories. It should help a new developer answer: what systems exist, where code lives, what talks to what, what runs locally vs remotely, and which docs explain each subsystem.</span>
-          <code>Deferred: architecture map implementation belongs in its own pass.</code>
-        </div>
-      </div>
+      </details>
 
       <div class="right-stack">
-        <section class="routing" aria-labelledby="routing-title">
-          <div class="routing-head">
-            <div>
+        <details class="routing dive" aria-labelledby="routing-title" open>
+          <summary class="routing-head dive-head">
+            <span>
               <h2 id="routing-title">Routing Matrix</h2>
               <p>Choose the job you are doing now.</p>
-            </div>
+            </span>
+            <span class="dive-toggle" aria-hidden="true"></span>
+          </summary>
+          <div class="dive-body">
             <button class="button-link" id="open-all" type="button">Open All</button>
+            <div class="route-grid" id="route-grid"></div>
           </div>
-          <div class="route-grid" id="route-grid"></div>
-        </section>
+        </details>
 
-        <section class="concept-strip" aria-labelledby="concept-title">
-          <h2 id="concept-title">Concept Clusters</h2>
-          <div class="concept-grid" id="concept-grid"></div>
-        </section>
+        <details class="concept-strip dive" aria-labelledby="concept-title" open>
+          <summary class="dive-head">
+            <span>
+              <h2 id="concept-title">Concept Clusters</h2>
+              <p>Follow related terms across the documentation set.</p>
+            </span>
+            <span class="dive-toggle" aria-hidden="true"></span>
+          </summary>
+          <div class="dive-body">
+            <div class="concept-grid" id="concept-grid"></div>
+          </div>
+        </details>
       </div>
     </section>
 
-    <section class="reading-path" aria-labelledby="path-title">
-      <div class="path-head">
-        <div>
+    <details class="reading-path dive" aria-labelledby="path-title" open>
+      <summary class="path-head dive-head">
+        <span>
           <h2 id="path-title">Reading Path</h2>
           <p>Use this when you are onboarding or trying to rebuild the mental model from scratch.</p>
-        </div>
+        </span>
+        <span class="dive-toggle" aria-hidden="true"></span>
+      </summary>
+      <div class="dive-body">
         <button class="button-link" type="button" data-filter="q" data-value="CONTEXT">Start with vocabulary</button>
+        <div class="path-rail" id="path-rail"></div>
       </div>
-      <div class="path-rail" id="path-rail"></div>
-    </section>
+    </details>
 
     <section class="tool" aria-label="Developer and operator docs index">
       <aside class="filters">

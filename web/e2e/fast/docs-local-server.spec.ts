@@ -160,4 +160,44 @@ test.describe("Local docs server", () => {
 		await page.locator("#copy-answer").click();
 		await expect(page.locator("#ai-answer-status")).toHaveText("Copied");
 	});
+
+	test("operator index dives collapse to header and tagline", async ({ page }) => {
+		await page.goto(`${baseURL}/docs/developer-operator-index.html`);
+
+		for (const dive of [
+			{
+				selector: "details.map",
+				heading: "System Map",
+				tagline: "Reserved for the technical architecture map.",
+				inner: ".architecture-prompt",
+			},
+			{
+				selector: "details.routing",
+				heading: "Routing Matrix",
+				tagline: "Choose the job you are doing now.",
+				inner: "#route-grid",
+			},
+			{
+				selector: "details.concept-strip",
+				heading: "Concept Clusters",
+				tagline: "Follow related terms across the documentation set.",
+				inner: "#concept-grid",
+			},
+			{
+				selector: "details.reading-path",
+				heading: "Reading Path",
+				tagline:
+					"Use this when you are onboarding or trying to rebuild the mental model from scratch.",
+				inner: "#path-rail",
+			},
+		]) {
+			const section = page.locator(dive.selector);
+			await expect(section).toHaveJSProperty("open", true);
+			await section.locator("summary").click();
+			await expect(section).toHaveJSProperty("open", false);
+			await expect(section.getByRole("heading", { name: dive.heading })).toBeVisible();
+			await expect(section.getByText(dive.tagline)).toBeVisible();
+			await expect(page.locator(dive.inner)).toBeHidden();
+		}
+	});
 });

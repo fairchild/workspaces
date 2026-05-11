@@ -503,7 +503,7 @@
     elements.routeGrid.addEventListener("click", handleFilterClick);
     elements.conceptGrid.addEventListener("click", handleFilterClick);
     elements.pathRail.addEventListener("click", handleFilterClick);
-    document.querySelector(".path-head").addEventListener("click", handleFilterClick);
+    document.querySelector(".reading-path").addEventListener("click", handleFilterClick);
     for (const input of [elements.group, elements.topic, elements.type]) {
       input.addEventListener("input", render);
       input.addEventListener("change", render);
