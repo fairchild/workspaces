@@ -742,4 +742,128 @@ describe("triggerPrReview rerun behavior", () => {
 			}),
 		);
 	});
+
+	it("shapes the kickoff as a follow-up when a prior managed review exists", async () => {
+		mocks.fetch.mockImplementation(async (url: string) => {
+			if (url.includes("/pulls?")) {
+				return { ok: true, json: async () => [githubPr(8)] };
+			}
+			if (url.includes("/labels?")) {
+				return { ok: true, json: async () => [] };
+			}
+			if (url.includes("/issues/9/comments?")) {
+				return { ok: true, json: async () => [] };
+			}
+			if (/\/pulls\/9\/reviews\?/.test(url)) {
+				return {
+					ok: true,
+					json: async () => [
+						{
+							id: 9011,
+							state: "CHANGES_REQUESTED",
+							body: "Need evidence for the Settings injection bug.",
+							submitted_at: "2026-05-07T14:51:31Z",
+							commit_id: "149919136973eeb166d827278c636e3fc45b21bb",
+							user: { login: "workspaces-claude-pr-reviewer[bot]" },
+						},
+					],
+				};
+			}
+			if (/\/pulls\/8\/reviews\?/.test(url)) {
+				return { ok: true, json: async () => [] };
+			}
+			throw new Error(`Unexpected fetch URL: ${url}`);
+		});
+
+		await expect(
+			triggerPrReview(
+				payload({ headSha: "4c38cbdf3ffe88502c66ee7c74776e6c27d3312d" }),
+				{
+					kind: "synchronize",
+					triggerSourceId: "4c38cbdf3ffe88502c66ee7c74776e6c27d3312d",
+					reason: "New commit pushed",
+				},
+			),
+		).resolves.toBe("sesn_01");
+
+		const sessionRequest = mocks.createSession.mock.calls[0][0];
+		expect(sessionRequest.title).toMatch(/^Re-review PR #9:/);
+		expect(sessionRequest.metadata).toMatchObject({
+			run_kind: "follow-up",
+			trigger_kind: "synchronize",
+		});
+
+		const [, params] = mocks.sendEvent.mock.calls[0];
+		const message = params.events[0].content[0].text;
+		expect(message).toContain("You reviewed this PR before");
+		expect(message).toContain(
+			"Anchor commit (your last review): 149919136973eeb166d827278c636e3fc45b21bb",
+		);
+		expect(message).toContain(
+			"git diff 149919136973eeb166d827278c636e3fc45b21bb..HEAD",
+		);
+		expect(message).toContain("Anchor on what changed since your last review");
+		expect(message).toContain("## Follow-up review format");
+		expect(message).toContain("## Changes Since Last Review");
+		expect(message).toContain("**Resolved:**");
+		expect(message).toContain("**New:**");
+		expect(message).toContain(
+			"Prior blockers addressed; nothing new of concern",
+		);
+		expect(message).toContain(
+			"`## Project Thread` section is optional on reruns",
+		);
+	});
+
+	it("uses the initial kickoff when a rerun has no recoverable prior review", async () => {
+		mocks.fetch.mockImplementation(async (url: string) => {
+			if (url.includes("/pulls?")) {
+				return { ok: true, json: async () => [githubPr(8)] };
+			}
+			if (url.includes("/labels?")) {
+				return { ok: true, json: async () => [] };
+			}
+			if (url.includes("/issues/9/comments?")) {
+				return { ok: true, json: async () => [] };
+			}
+			if (/\/pulls\/\d+\/reviews\?/.test(url)) {
+				return { ok: true, json: async () => [] };
+			}
+			throw new Error(`Unexpected fetch URL: ${url}`);
+		});
+
+		await expect(
+			triggerPrReview(payload(), {
+				kind: "synchronize",
+				triggerSourceId: "newsha",
+				reason: "New commit pushed",
+			}),
+		).resolves.toBe("sesn_01");
+
+		const [, params] = mocks.sendEvent.mock.calls[0];
+		const message = params.events[0].content[0].text;
+		// Still includes follow-up output-format trailer (this is a rerun)
+		expect(message).toContain("## Follow-up review format");
+		// But without a recoverable prior review, no anchor commit / git diff line
+		expect(message).not.toContain("Anchor commit (your last review):");
+		expect(message).toContain(
+			"rerun without a recoverable prior review on this PR",
+		);
+	});
+
+	it("omits the follow-up trailer entirely on the initial run", async () => {
+		mockPrList([githubPr(9), githubPr(8)]);
+
+		await expect(triggerPrReview(payload())).resolves.toBe("sesn_01");
+
+		const sessionRequest = mocks.createSession.mock.calls[0][0];
+		expect(sessionRequest.title).toMatch(/^Review PR #9:/);
+		expect(sessionRequest.metadata).toMatchObject({ run_kind: "initial" });
+
+		const [, params] = mocks.sendEvent.mock.calls[0];
+		const message = params.events[0].content[0].text;
+		expect(message).not.toContain("## Follow-up review format");
+		expect(message).not.toContain("## Changes Since Last Review");
+		expect(message).not.toContain("Rerun context (trusted)");
+	});
 });
