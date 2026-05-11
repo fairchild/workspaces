@@ -109,7 +109,7 @@
 
     .route-form {
       display: grid;
-      grid-template-columns: 1fr auto auto;
+      grid-template-columns: 1fr auto;
       gap: 8px;
     }
 
@@ -187,112 +187,11 @@
       cursor: pointer;
     }
 
-    .route-form button:disabled {
-      cursor: wait;
-      opacity: 0.72;
-    }
-
-    .ask-spinner,
-    .answer-spinner {
-      display: none;
-      width: 14px;
-      height: 14px;
-      border: 2px solid rgba(166, 255, 223, 0.25);
-      border-top-color: var(--mint);
-      border-radius: 50%;
-      animation: spin 0.8s linear infinite;
-    }
-
-    .route-form.asking .ask-spinner,
-    .answer-loading .answer-spinner {
-      display: inline-block;
-    }
-
-    #ask-button {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      gap: 8px;
-    }
-
-    @keyframes spin {
-      to {
-        transform: rotate(360deg);
-      }
-    }
-
     .button-link {
       display: inline-flex;
       align-items: center;
       min-height: 34px;
       color: var(--muted);
-    }
-
-    .ai-answer {
-      display: none;
-      margin-bottom: 16px;
-      border: 1px solid rgba(138, 183, 255, 0.32);
-      border-radius: 8px;
-      padding: 14px;
-      background: rgba(13, 16, 18, 0.9);
-    }
-
-    .ai-answer.active {
-      display: grid;
-      gap: 12px;
-    }
-
-    .ai-answer-head {
-      display: flex;
-      justify-content: space-between;
-      gap: 12px;
-      align-items: baseline;
-    }
-
-    .ai-answer h2 {
-      margin: 0;
-      font-size: 1rem;
-    }
-
-    .ai-answer-status {
-      color: var(--quiet);
-      font-family: var(--mono);
-      font-size: 0.72rem;
-    }
-
-    .ai-answer-body {
-      color: var(--muted);
-      font-size: 0.95rem;
-    }
-
-    .ai-answer-body p {
-      margin: 0 0 10px;
-    }
-
-    .ai-answer-body ul {
-      margin: 0 0 10px 18px;
-      padding: 0;
-    }
-
-    .answer-loading {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      color: var(--muted);
-    }
-
-    .citation-list {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 6px;
-    }
-
-    .citation-list a {
-      border: 1px solid var(--line);
-      border-radius: 999px;
-      padding: 3px 8px;
-      color: var(--muted);
-      font-size: 0.78rem;
     }
 
     .layout {

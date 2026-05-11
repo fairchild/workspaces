@@ -24,29 +24,16 @@
         <p class="eyebrow">Local index</p>
         <h1 id="page-title">Operator Index</h1>
       </div>
-      <p class="intro-copy">Live filter on type. Press Enter to ask local Claude Code with citations.</p>
+      <p class="intro-copy">Fast local search across the complete documentation set.</p>
     </section>
 
     <section class="route-field" aria-label="Route a documentation question">
       <div class="search-shell">
         <form class="route-form" id="route-form">
-          <input id="route-input" autofocus autocomplete="off" placeholder="Filter docs or ask: why is Lume failing?">
-          <button type="submit" id="ask-button"><span class="ask-spinner" aria-hidden="true"></span><span>Ask</span></button>
+          <input id="route-input" autofocus autocomplete="off" placeholder="Filter docs: Lume, shortcut routing, evidence">
           <button type="button" id="route-show-all">All Docs</button>
         </form>
-        <section class="ai-answer" id="ai-answer" aria-live="polite" aria-label="Local AI docs answer">
-          <div class="ai-answer-head">
-            <h2>Local Answer</h2>
-            <span class="ai-answer-status" id="ai-answer-status">Claude Code</span>
-          </div>
-          <div class="ai-answer-body" id="ai-answer-body"></div>
-          <div class="citation-list" id="citation-list"></div>
-          <div class="index-actions">
-            <button class="control" id="copy-answer" type="button">Copy answer</button>
-            <button class="control" id="dismiss-answer" type="button">Dismiss</button>
-          </div>
-        </section>
-        <p class="search-hint" id="search-hint">Typing filters instantly. Enter asks local Claude Code using the same search.</p>
+        <p class="search-hint" id="search-hint">Typing filters instantly. Use results below for the full index.</p>
         <div class="autocomplete" id="autocomplete" aria-label="Matching docs"></div>
       </div>
     </section>

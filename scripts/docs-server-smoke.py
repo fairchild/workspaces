@@ -38,21 +38,8 @@ def free_port() -> int:
         return int(sock.getsockname()[1])
 
 
-def request(
-    base_url: str,
-    path: str,
-    *,
-    method: str = "GET",
-    body: dict | None = None,
-) -> tuple[int, dict[str, str], bytes]:
-    data = None
-    headers = {}
-    if body is not None:
-        data = json.dumps(body).encode()
-        headers["Content-Type"] = "application/json"
-    req = urllib.request.Request(
-        f"{base_url}{path}", data=data, headers=headers, method=method
-    )
+def request(base_url: str, path: str) -> tuple[int, dict[str, str], bytes]:
+    req = urllib.request.Request(f"{base_url}{path}")
     try:
         with urllib.request.urlopen(req, timeout=10) as response:
             return (
@@ -92,7 +79,7 @@ def wait_for_server(base_url: str, process: subprocess.Popen[str]) -> None:
     raise SmokeFailure(f"timed out waiting for {base_url}")
 
 
-def run_checks(base_url: str, *, check_ask: bool) -> None:
+def run_checks(base_url: str) -> None:
     status, headers, body = request(base_url, "/docs/")
     expect(status == 200, f"/docs/ returned {status}")
     expect(b"WorkSpaces" in body, "/docs/ did not include the landing page")
@@ -106,7 +93,7 @@ def run_checks(base_url: str, *, check_ask: bool) -> None:
 
     status, _, body = request(base_url, "/docs/assets/operator-index.js")
     expect(status == 200, f"operator index JS returned {status}")
-    expect(b"/docs/api/ask" in body, "operator index JS is missing docs ask wiring")
+    expect(b"/docs/api/search" in body, "operator index JS is missing docs search wiring")
 
     status, _, body = request(base_url, "/docs/local-docs-manifest.json")
     expect(status == 200, f"local docs manifest returned {status}")
@@ -140,26 +127,13 @@ def run_checks(base_url: str, *, check_ask: bool) -> None:
     expect(b"WorkSpaces Docs Reader" in body, "rendered doc omitted reader shell")
     expect(b"/docs/local-docs-manifest.json" in body, "reader shell cannot load manifest")
 
-    if check_ask:
-        status, _, body = request(
-            base_url,
-            "/docs/api/search?q=lum%20failng&limit=5",
-        )
-        expect(status == 200, f"docs search returned {status}: {body.decode()[:300]}")
-        search = json.loads(body)
-        expect(search.get("results"), "docs search did not include results")
-
-        status, _, body = request(
-            base_url,
-            "/docs/api/ask",
-            method="POST",
-            body={"query": "How do I use rendered docs and raw markdown?"},
-        )
-        expect(status == 200, f"docs ask returned {status}: {body.decode()[:300]}")
-        answer = json.loads(body)
-        expect(answer.get("answer"), "docs ask response did not include answer")
-        expect(answer.get("copyText"), "docs ask response did not include copyText")
-        expect(answer.get("citations"), "docs ask response did not include citations")
+    status, _, body = request(
+        base_url,
+        "/docs/api/search?q=lum%20failng&limit=5",
+    )
+    expect(status == 200, f"docs search returned {status}: {body.decode()[:300]}")
+    search = json.loads(body)
+    expect(search.get("results"), "docs search did not include results")
 
 
 def main() -> None:
@@ -169,16 +143,6 @@ def main() -> None:
         help="Validate an already-running docs server instead of starting one.",
     )
     parser.add_argument("--port", type=int, help="Port to use when starting a server.")
-    parser.add_argument(
-        "--ask",
-        action="store_true",
-        help="Also call /docs/api/ask when validating an existing server.",
-    )
-    parser.add_argument(
-        "--real-claude",
-        action="store_true",
-        help="When starting a server, use the real claude binary instead of a fake one.",
-    )
     args = parser.parse_args()
 
     process: subprocess.Popen[str] | None = None
@@ -186,20 +150,10 @@ def main() -> None:
     try:
         if args.base_url:
             base_url = args.base_url.rstrip("/")
-            check_ask = args.ask
         else:
             temp_dir = tempfile.TemporaryDirectory(prefix="workspaces-docs-smoke-")
             port = args.port or free_port()
             base_url = f"http://127.0.0.1:{port}"
-            env = {
-                **os.environ,
-                "PYTHONPYCACHEPREFIX": str(Path(temp_dir.name) / "pycache"),
-                "WORKSPACES_DOCS_ASK_TIMEOUT_SECONDS": "10",
-            }
-            if not args.real_claude:
-                env["WORKSPACES_DOCS_ASK_CLAUDE_BIN"] = str(
-                    REPO_ROOT / "scripts/docs-fake-claude.py"
-                )
             process = subprocess.Popen(
                 [
                     sys.executable,
@@ -208,15 +162,17 @@ def main() -> None:
                     str(port),
                 ],
                 cwd=REPO_ROOT,
-                env=env,
+                env={
+                    **os.environ,
+                    "PYTHONPYCACHEPREFIX": str(Path(temp_dir.name) / "pycache"),
+                },
                 text=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
             )
             wait_for_server(base_url, process)
-            check_ask = True
 
-        run_checks(base_url, check_ask=check_ask)
+        run_checks(base_url)
         print(f"docs server smoke passed: {base_url}")
     finally:
         if process is not None:

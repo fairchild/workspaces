@@ -44,16 +44,9 @@
     const elements = {
       routeForm: document.querySelector("#route-form"),
       routeInput: document.querySelector("#route-input"),
-      askButton: document.querySelector("#ask-button"),
       routeShowAll: document.querySelector("#route-show-all"),
       searchHint: document.querySelector("#search-hint"),
       autocomplete: document.querySelector("#autocomplete"),
-      aiAnswer: document.querySelector("#ai-answer"),
-      aiAnswerStatus: document.querySelector("#ai-answer-status"),
-      aiAnswerBody: document.querySelector("#ai-answer-body"),
-      citationList: document.querySelector("#citation-list"),
-      copyAnswer: document.querySelector("#copy-answer"),
-      dismissAnswer: document.querySelector("#dismiss-answer"),
       openAll: document.querySelector("#open-all"),
       routeGrid: document.querySelector("#route-grid"),
       conceptGrid: document.querySelector("#concept-grid"),
@@ -70,8 +63,6 @@
     };
 
     let currentDocs = [];
-    let currentAnswer = "";
-    let askController = null;
     let renderRequestId = 0;
 
     function escapeHtml(value) {
@@ -80,90 +71,6 @@
         .replaceAll("<", "&lt;")
         .replaceAll(">", "&gt;")
         .replaceAll('"', "&quot;");
-    }
-
-    function maybeJson(value) {
-      if (typeof value !== "string") return value;
-      let text = value.trim();
-      if (text.startsWith("```json")) {
-        text = text.replace(/^```json\s*/, "").replace(/```$/, "").trim();
-      } else if (text.startsWith("```")) {
-        text = text.replace(/^```\s*/, "").replace(/```$/, "").trim();
-      }
-      if (!text || !/^[{[]/.test(text)) return value;
-      try {
-        return JSON.parse(text);
-      } catch {
-        return value;
-      }
-    }
-
-    function normalizeAnswerPayload(payload) {
-      const parsedAnswer = maybeJson(payload.answer || payload.copyText || "");
-      const structured = parsedAnswer && typeof parsedAnswer === "object" && !Array.isArray(parsedAnswer)
-        ? parsedAnswer
-        : {};
-      const answer = structured.answer_markdown || structured.answer || payload.answer || payload.copyText || "";
-      return {
-        ...payload,
-        answer,
-        copyText: structured.copy_text || payload.copyText || answer,
-        citations: Array.isArray(payload.citations) && payload.citations.length
-          ? payload.citations
-          : Array.isArray(structured.citations)
-            ? structured.citations
-            : []
-      };
-    }
-
-    async function readJsonResponse(response) {
-      const text = await response.text();
-      const parsed = maybeJson(text);
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        return parsed;
-      }
-      return {
-        error: response.ok ? "Docs ask returned an unreadable response." : "Local AI docs ask is available only from docs/server.py."
-      };
-    }
-
-    function markdownToHtml(markdown) {
-      const lines = String(markdown || "").split("\n");
-      let html = "";
-      let inList = false;
-      for (const rawLine of lines) {
-        const line = rawLine.trim();
-        if (!line) {
-          if (inList) {
-            html += "</ul>";
-            inList = false;
-          }
-          continue;
-        }
-        const bullet = /^[-*]\s+(.+)$/.exec(line);
-        if (bullet) {
-          if (!inList) {
-            html += "<ul>";
-            inList = true;
-          }
-          html += `<li>${inlineMarkdown(bullet[1])}</li>`;
-          continue;
-        }
-        if (inList) {
-          html += "</ul>";
-          inList = false;
-        }
-        html += `<p>${inlineMarkdown(line)}</p>`;
-      }
-      if (inList) html += "</ul>";
-      return html || "<p>No answer returned.</p>";
-    }
-
-    function inlineMarkdown(value) {
-      return escapeHtml(value)
-        .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
-        .replace(/`([^`]+)`/g, "<code>$1</code>")
-        .replace(/\[([^\]]+)]\((\/docs\/[^)]+)\)/g, '<a href="$2">$1</a>');
     }
 
     function renderedHref(dest) {
@@ -340,11 +247,11 @@
       elements.autocomplete.classList.toggle("active", shouldShow);
       if (!shouldShow) {
         elements.autocomplete.innerHTML = "";
-        elements.searchHint.textContent = "Typing filters instantly. Enter asks local Claude Code using the same search.";
+        elements.searchHint.textContent = "Typing filters instantly. Use results below for the full index.";
         return;
       }
       const topDocs = docs.slice(0, 6);
-      elements.searchHint.textContent = `${docs.length} matching docs. Press Enter to ask with canonical docs search.`;
+      elements.searchHint.textContent = `${docs.length} matching docs. Pick a result or keep narrowing.`;
       elements.autocomplete.innerHTML = topDocs.map((doc) => `
         <a class="autocomplete-row" href="${renderedHref(doc.dest)}">
           <strong>${escapeHtml(doc.title)}</strong>
@@ -352,54 +259,6 @@
           <code>${escapeHtml(doc.dest)}</code>
         </a>
       `).join("");
-    }
-
-    async function askDocs() {
-      const query = elements.routeInput.value.trim();
-      if (!query) {
-        elements.routeInput.focus();
-        return;
-      }
-      if (askController) askController.abort();
-      askController = new AbortController();
-      elements.aiAnswer.classList.add("active");
-      elements.aiAnswer.setAttribute("aria-busy", "true");
-      elements.routeForm.classList.add("asking");
-      elements.aiAnswerStatus.textContent = "Asking local Claude Code...";
-      elements.aiAnswerBody.innerHTML = '<div class="answer-loading"><span class="answer-spinner" aria-hidden="true"></span><span>Searching docs and preparing a cited answer.</span></div>';
-      elements.citationList.innerHTML = "";
-      elements.askButton.disabled = true;
-      try {
-        const response = await fetch("/docs/api/ask", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ query }),
-          signal: askController.signal
-        });
-        const payload = await readJsonResponse(response);
-        if (!response.ok) {
-          throw new Error(payload.detail || payload.error || "Docs ask failed.");
-        }
-        const answerPayload = normalizeAnswerPayload(payload);
-        currentAnswer = answerPayload.copyText || answerPayload.answer || "";
-        elements.aiAnswerStatus.textContent = answerPayload.totalCostUsd ? `Claude Code · $${Number(answerPayload.totalCostUsd).toFixed(4)}` : "Claude Code";
-        elements.aiAnswerBody.innerHTML = markdownToHtml(answerPayload.answer || answerPayload.copyText);
-        elements.citationList.innerHTML = (answerPayload.citations || []).map((citation) => `
-          <a href="${escapeHtml(citation.url || "#")}" title="${escapeHtml(citation.source || "")}">
-            ${escapeHtml(citation.title || citation.source || "Source")}
-          </a>
-        `).join("");
-      } catch (error) {
-        if (error.name === "AbortError") return;
-        currentAnswer = "";
-        elements.aiAnswerStatus.textContent = "Unavailable";
-        elements.aiAnswerBody.innerHTML = `<p>${escapeHtml(error.message || "Could not ask local Claude Code.")}</p>`;
-      } finally {
-        elements.askButton.disabled = false;
-        elements.routeForm.classList.remove("asking");
-        elements.aiAnswer.setAttribute("aria-busy", "false");
-        askController = null;
-      }
     }
 
     function renderRoutes() {
@@ -495,7 +354,7 @@
 
     elements.routeForm.addEventListener("submit", (event) => {
       event.preventDefault();
-      askDocs();
+      render();
     });
     elements.routeInput.addEventListener("input", render);
     elements.routeShowAll.addEventListener("click", clearFilters);
@@ -508,27 +367,6 @@
       input.addEventListener("input", render);
       input.addEventListener("change", render);
     }
-    elements.copyAnswer.addEventListener("click", async () => {
-      if (!currentAnswer) return;
-      try {
-        await navigator.clipboard.writeText(currentAnswer);
-        elements.aiAnswerStatus.textContent = "Copied";
-      } catch {
-        const textArea = document.createElement("textarea");
-        textArea.value = currentAnswer;
-        textArea.setAttribute("readonly", "");
-        textArea.style.position = "fixed";
-        textArea.style.opacity = "0";
-        document.body.appendChild(textArea);
-        textArea.select();
-        document.execCommand("copy");
-        textArea.remove();
-        elements.aiAnswerStatus.textContent = "Copied";
-      }
-    });
-    elements.dismissAnswer.addEventListener("click", () => {
-      elements.aiAnswer.classList.remove("active");
-    });
     elements.reset.addEventListener("click", () => {
       clearFilters();
     });

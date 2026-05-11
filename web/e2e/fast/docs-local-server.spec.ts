@@ -59,14 +59,9 @@ test.beforeAll(async () => {
 	server = spawn("python3", ["docs/server.py", "--port", String(port)], {
 		cwd: repoRoot,
 		env: {
-				...process.env,
-				PYTHONPYCACHEPREFIX: path.join(tempDir, "pycache"),
-				WORKSPACES_DOCS_ASK_CLAUDE_BIN: path.join(
-					repoRoot,
-					"scripts/docs-fake-claude.py",
-				),
-				WORKSPACES_DOCS_ASK_TIMEOUT_SECONDS: "10",
-			},
+			...process.env,
+			PYTHONPYCACHEPREFIX: path.join(tempDir, "pycache"),
+		},
 	});
 	await waitForServer(baseURL);
 });
@@ -114,51 +109,30 @@ test.describe("Local docs server", () => {
 		}
 	});
 
-	test("filters locally and asks Claude Code from the operator index", async ({
-		page,
-		context,
-	}) => {
-		await context.grantPermissions(["clipboard-read", "clipboard-write"], {
-			origin: baseURL,
-		});
+	test("filters locally from the operator index", async ({ page, context }) => {
 		await page.goto(`${baseURL}/docs/developer-operator-index.html`);
 
 		const routeInput = page.locator("#route-input");
 		await expect(routeInput).toBeFocused();
 		await expect(page.locator("#stats")).toContainText(/\d+ indexed/);
-			await routeInput.pressSequentially("lum failng");
+		await routeInput.pressSequentially("lum failng");
 
-			await expect(page.locator("#autocomplete")).toBeVisible();
-			await expect(page.locator("#autocomplete .autocomplete-row").first()).toBeVisible();
-			await expect(page.locator("#stats")).toContainText(/\d+ shown/);
+		await expect(page.locator("#autocomplete")).toBeVisible();
+		await expect(page.locator("#autocomplete .autocomplete-row").first()).toBeVisible();
+		await expect(page.locator("#stats")).toContainText(/\d+ shown/);
 
-			const search = await context.request.get(
-				`${baseURL}/docs/api/search?q=lum%20failng&limit=5`,
-			);
-			expect(search.ok()).toBe(true);
-			const searchPayload = await search.json();
-			expect(searchPayload.results.length).toBeGreaterThan(0);
-
-			await page.locator("#ask-button").click();
-		await expect(page.locator("#ai-answer")).toHaveClass(/active/);
-		await expect(
-			page.locator("#route-form + #ai-answer + #search-hint + #autocomplete"),
-		).toHaveCount(1);
-		await expect(page.locator("#ask-button")).toBeDisabled();
-		await expect(page.locator(".answer-loading")).toBeVisible();
-			await expect(page.locator("#ai-answer-body")).toContainText(
-				"Lume daemon reliability",
-			);
-		await expect(page.locator("#ai-answer-body")).not.toContainText(
-			"answer_markdown",
+		const search = await context.request.get(
+			`${baseURL}/docs/api/search?q=lum%20failng&limit=5`,
 		);
-		await expect(page.locator("#citation-list a")).toHaveAttribute(
-			"href",
-			"/docs/development/lume-integration",
-		);
+		expect(search.ok()).toBe(true);
+		const searchPayload = await search.json();
+		expect(searchPayload.results.length).toBeGreaterThan(0);
 
-		await page.locator("#copy-answer").click();
-		await expect(page.locator("#ai-answer-status")).toHaveText("Copied");
+		await routeInput.press("Enter");
+		await expect(page.locator("#autocomplete")).toBeVisible();
+		await expect(page.locator("#route-form + #search-hint + #autocomplete")).toHaveCount(
+			1,
+		);
 	});
 
 	test("operator index dives collapse to header and tagline", async ({ page }) => {
