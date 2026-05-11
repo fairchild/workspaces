@@ -93,6 +93,55 @@ struct GhosttyTerminalConfigTests {
         #expect(config.shellProfileModeLabel == "clean")
     }
 
+    @Test("host session hook context is exported when both values are available")
+    func exportsHostSessionHookContext() {
+        let hostSessionID = UUID(uuidString: "2D4D6044-1E11-49C9-9CB0-A1D7B9F44E31")!
+        let config = GhosttyTerminalConfig(
+            workingDirectory: URL(fileURLWithPath: "/tmp/repo-a"),
+            environment: [
+                "SHELL": "/bin/zsh",
+                "PATH": "/usr/bin:/bin",
+            ],
+            terminalMultiplexingMode: .ghosttyManagedSplits,
+            isTmuxAvailableOverride: true,
+            hostSessionID: hostSessionID,
+            hooksSocketPath: "/tmp/workspaces-hooks.sock"
+        )
+
+        #expect(config.environmentVariables["WORKSPACES_HOST_SESSION_ID"] == hostSessionID.uuidString)
+        #expect(config.environmentVariables["WORKSPACES_HOOKS_SOCKET"] == "/tmp/workspaces-hooks.sock")
+    }
+
+    @Test("host session hook context is omitted unless complete")
+    func omitsIncompleteHostSessionHookContext() {
+        let hostSessionID = UUID(uuidString: "2D4D6044-1E11-49C9-9CB0-A1D7B9F44E31")!
+        let missingSocket = GhosttyTerminalConfig(
+            workingDirectory: URL(fileURLWithPath: "/tmp/repo-a"),
+            environment: [
+                "SHELL": "/bin/zsh",
+                "PATH": "/usr/bin:/bin",
+            ],
+            terminalMultiplexingMode: .ghosttyManagedSplits,
+            isTmuxAvailableOverride: true,
+            hostSessionID: hostSessionID
+        )
+        let missingHostID = GhosttyTerminalConfig(
+            workingDirectory: URL(fileURLWithPath: "/tmp/repo-a"),
+            environment: [
+                "SHELL": "/bin/zsh",
+                "PATH": "/usr/bin:/bin",
+            ],
+            terminalMultiplexingMode: .ghosttyManagedSplits,
+            isTmuxAvailableOverride: true,
+            hooksSocketPath: "/tmp/workspaces-hooks.sock"
+        )
+
+        #expect(missingSocket.environmentVariables["WORKSPACES_HOST_SESSION_ID"] == nil)
+        #expect(missingSocket.environmentVariables["WORKSPACES_HOOKS_SOCKET"] == nil)
+        #expect(missingHostID.environmentVariables["WORKSPACES_HOST_SESSION_ID"] == nil)
+        #expect(missingHostID.environmentVariables["WORKSPACES_HOOKS_SOCKET"] == nil)
+    }
+
     @Test("tmux mode respects clean shell override")
     func tmuxModeRespectsCleanShellOverride() throws {
         let config = GhosttyTerminalConfig(
