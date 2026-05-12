@@ -55,21 +55,10 @@ final class ClaudeIntegrationLifecycle: ObservableObject {
     }
 
     /// Locate the Channel 2 status-line forwarder shell shipped alongside the app.
-    /// The script is added to the SPM bundle via `Resources/HookForwarders` (see
-    /// Package.swift). Returns nil if the bundle was assembled without it — caller
-    /// logs and proceeds without registering Channel 2.
+    /// Returns nil if the bundle was assembled without it — caller logs and
+    /// proceeds without registering Channel 2.
     nonisolated static func bundledStatusLineForwarderPath() -> String? {
-        if let url = Bundle.module.url(
-            forResource: "statusline",
-            withExtension: "sh",
-            subdirectory: "HookForwarders"
-        ) {
-            return url.path
-        }
-        if let url = Bundle.module.url(forResource: "statusline", withExtension: "sh") {
-            return url.path
-        }
-        return nil
+        bundledHookForwarderURL(named: "statusline")?.path
     }
 
     private init() {}
@@ -174,9 +163,9 @@ final class ClaudeIntegrationLifecycle: ObservableObject {
         )
         let dest = dir.appendingPathComponent("\(name).sh")
 
-        // Source: bundled .sh file. SwiftPM debug builds expose copied
-        // resources through Bundle.module; packaged app launches may expose
-        // them through Bundle.main.
+        // Source: bundled .sh file. Packaged apps expose flattened resources
+        // through Bundle.main; SwiftPM builds expose them through a sibling
+        // WorkspaceManager_WorkspaceManager.bundle.
         let bundleURL = bundledHookForwarderURL(named: name)
         guard let bundleURL else {
             return nil
@@ -195,17 +184,87 @@ final class ClaudeIntegrationLifecycle: ObservableObject {
     }
 
     nonisolated static func bundledHookForwarderURL(named name: String) -> URL? {
-        Bundle.module.url(
-            forResource: name,
-            withExtension: "sh",
-            subdirectory: "HookForwarders"
+        bundledHookForwarderURL(
+            named: name,
+            mainBundle: .main,
+            swiftPMResourceBundle: { Bundle.module }
         )
-            ?? Bundle.module.url(forResource: name, withExtension: "sh")
-            ?? Bundle.main.url(
+    }
+
+    nonisolated static func bundledHookForwarderURL(
+        named name: String,
+        mainBundle: Bundle,
+        swiftPMResourceBundle: () -> Bundle?
+    ) -> URL? {
+        let appResourceBundles = hookForwarderResourceBundles(mainBundle: mainBundle)
+        if let url = hookForwarderURL(named: name, resourceBundles: appResourceBundles) {
+            return url
+        }
+
+        guard !isApplicationBundle(mainBundle), let swiftPMBundle = swiftPMResourceBundle() else {
+            return nil
+        }
+
+        return hookForwarderURL(
+            named: name,
+            resourceBundles: [swiftPMBundle]
+        )
+    }
+
+    nonisolated static func hookForwarderURL(named name: String, resourceBundles: [Bundle]) -> URL? {
+        for bundle in resourceBundles {
+            if let url = bundle.url(
                 forResource: name,
                 withExtension: "sh",
                 subdirectory: "HookForwarders"
-            )
+            ) {
+                return url
+            }
+            if let url = bundle.url(forResource: name, withExtension: "sh") {
+                return url
+            }
+        }
+        return nil
+    }
+
+    private nonisolated static func hookForwarderResourceBundles(mainBundle: Bundle) -> [Bundle] {
+        let swiftPMResourceBundleName = "WorkspaceManager_WorkspaceManager.bundle"
+        let fileManager = FileManager.default
+        var bundles: [Bundle] = []
+        var seenPaths = Set<String>()
+
+        func appendBundle(_ bundle: Bundle) {
+            let path = bundle.bundleURL.standardizedFileURL.path
+            guard seenPaths.insert(path).inserted else { return }
+            bundles.append(bundle)
+        }
+
+        func appendBundle(at url: URL) {
+            let path = url.standardizedFileURL.path
+            guard seenPaths.insert(path).inserted else { return }
+            guard fileManager.fileExists(atPath: path), let bundle = Bundle(url: url) else { return }
+            bundles.append(bundle)
+        }
+
+        appendBundle(mainBundle)
+
+        let nestedResourceBundleURLs = [
+            mainBundle.resourceURL?
+                .appendingPathComponent(swiftPMResourceBundleName, isDirectory: true),
+            mainBundle.bundleURL
+                .appendingPathComponent(swiftPMResourceBundleName, isDirectory: true),
+        ]
+
+        for url in nestedResourceBundleURLs {
+            guard let url else { continue }
+            appendBundle(at: url)
+        }
+
+        return bundles
+    }
+
+    private nonisolated static func isApplicationBundle(_ bundle: Bundle) -> Bool {
+        bundle.bundleURL.standardizedFileURL.pathExtension == "app"
     }
 
     func stop() async {
