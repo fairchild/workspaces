@@ -29,7 +29,8 @@ not a broad public security stance.
   `codespaces-claude-break-glass` environment and defaults to `main` or
   owner-repository branches.
 - The managed PR reviewer no longer mounts a GitHub write token into the agent
-  workspace. It produces a structured review intent for a server-side broker.
+  workspace. It produces a structured review intent, and the server-side broker
+  validates and posts the GitHub review with the App token.
 
 ## Release And Update Chain
 
@@ -66,8 +67,8 @@ uv run --script scripts/audit-security-posture.py --repo fairchild/workspaces --
 
 ## Explicit Follow-Ups
 
-- Build the server-side PR-review broker that validates review intents and posts
-  reviews/labels with a GitHub App token.
+- Move PR-review broker execution to a durable queue if Vercel post-response
+  execution proves too short for unusually long managed-agent reviews.
 - Consider a true WebSocket proxy for terminal access so the browser never sees
   the final ttyd URL after ticket redemption.
 - Keep dependency overrides current and remove them when upstream patched

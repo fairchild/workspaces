@@ -53,6 +53,7 @@ import {
 	fetchPrNarrativeContext,
 	formatPrEvidenceContext,
 	formatPrNarrativeContext,
+	parseReviewIntentFromText,
 	triggerPrReview,
 } from "../pr-review";
 
@@ -442,15 +443,60 @@ describe("fetchPrNarrativeContext", () => {
 	});
 });
 
+describe("parseReviewIntentFromText", () => {
+	it("extracts and validates the final fenced JSON review intent", () => {
+		const intent = parseReviewIntentFromText(
+			`Finished.
+
+\`\`\`json
+{
+  "event": "REQUEST_CHANGES",
+  "body": "🛑 **Request changes** — Evidence is missing.\\n\\n## Summary\\nNeeds evidence.",
+  "labels": ["security", "missing-label", "security"]
+}
+\`\`\``,
+			["security"],
+		);
+
+		expect(intent).toEqual({
+			event: "REQUEST_CHANGES",
+			body: "🛑 **Request changes** — Evidence is missing.\n\n## Summary\nNeeds evidence.",
+			labels: ["security"],
+		});
+	});
+
+	it("rejects unsupported review events", () => {
+		expect(() =>
+			parseReviewIntentFromText(
+				'```json\n{"event":"MERGE","body":"ship it","labels":[]}\n```',
+			),
+		).toThrow(/unsupported review event/);
+	});
+});
+
 describe("triggerPrReview", () => {
-	it("does not fall back to GITHUB_TOKEN when the reviewer is not explicitly enabled", async () => {
-		vi.stubEnv("PR_REVIEWER_ENABLED", "");
+	it("does not fall back to GITHUB_TOKEN when the reviewer is explicitly disabled", async () => {
+		vi.stubEnv("PR_REVIEWER_ENABLED", "0");
 		mockPrList([githubPr(9), githubPr(8)]);
 
 		await expect(triggerPrReview(payload())).resolves.toBeNull();
 
 		expect(mocks.getInstallationToken).not.toHaveBeenCalled();
 		expect(mocks.createSession).not.toHaveBeenCalled();
+	});
+
+	it("starts when GitHub App credentials are configured without a separate enable flag", async () => {
+		vi.stubEnv("PR_REVIEWER_ENABLED", "");
+		mockPrList([githubPr(9), githubPr(8)]);
+
+		await expect(triggerPrReview(payload())).resolves.toBe("sesn_01");
+
+		expect(mocks.getInstallationToken).toHaveBeenCalledWith(
+			"123",
+			"private-key",
+			"456",
+		);
+		expect(mocks.createSession).toHaveBeenCalledTimes(1);
 	});
 
 	it("does not fall back to GITHUB_TOKEN when GitHub App token exchange fails", async () => {

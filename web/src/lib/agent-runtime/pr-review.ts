@@ -6,6 +6,7 @@ import {
 	getOrCreateAgent,
 	getOrCreateEnvironment,
 } from "./managed-agents-cache";
+import { streamWithReconnect } from "./managed-agents-events";
 import {
 	computeRunFingerprint,
 	recordRunResult,
@@ -84,6 +85,7 @@ const RELATIONSHIP_CANDIDATE_COUNT = 5;
 const EVIDENCE_COMMENT_COUNT = 20;
 const BODY_TRUNCATE_LENGTH = 1200;
 const CURRENT_PR_BODY_TRUNCATE_LENGTH = 6000;
+const VALID_REVIEW_EVENTS = new Set(["APPROVE", "REQUEST_CHANGES", "COMMENT"]);
 
 export interface PrReviewPayload {
 	number: number;
@@ -201,8 +203,22 @@ interface GitHubIssueComment {
 	user?: { login?: string | null } | null;
 }
 
+function hasReviewerAppCredentials(env: NodeJS.ProcessEnv): boolean {
+	return Boolean(
+		env.PR_REVIEWER_APP_ID &&
+			env.PR_REVIEWER_PRIVATE_KEY &&
+			env.PR_REVIEWER_INSTALLATION_ID,
+	);
+}
+
+function isPrReviewerEnabled(env: NodeJS.ProcessEnv): boolean {
+	if (env.PR_REVIEWER_ENABLED === "0") return false;
+	if (env.PR_REVIEWER_ENABLED === "1") return true;
+	return hasReviewerAppCredentials(env);
+}
+
 async function resolveGitHubToken(): Promise<string | null> {
-	if (process.env.PR_REVIEWER_ENABLED !== "1") {
+	if (!isPrReviewerEnabled(process.env)) {
 		return null;
 	}
 
@@ -228,6 +244,14 @@ async function resolveGitHubToken(): Promise<string | null> {
 		}
 	}
 	return null;
+}
+
+export type PrReviewIntentEvent = "APPROVE" | "REQUEST_CHANGES" | "COMMENT";
+
+export interface PrReviewIntent {
+	event: PrReviewIntentEvent;
+	body: string;
+	labels: string[];
 }
 
 function truncateBody(body: string, maxLength = BODY_TRUNCATE_LENGTH): string {
@@ -626,6 +650,137 @@ function computeReviewerConfigHash(model: string): string {
 		.slice(0, 16);
 }
 
+function extractJsonCandidates(text: string): string[] {
+	const candidates: string[] = [];
+	const fenced = /```json\s*([\s\S]*?)```/gi;
+	for (const match of text.matchAll(fenced)) {
+		const body = match[1]?.trim();
+		if (body) candidates.push(body);
+	}
+	if (candidates.length > 0) return candidates;
+
+	const firstBrace = text.indexOf("{");
+	const lastBrace = text.lastIndexOf("}");
+	if (firstBrace >= 0 && lastBrace > firstBrace) {
+		candidates.push(text.slice(firstBrace, lastBrace + 1));
+	}
+	return candidates;
+}
+
+export function parseReviewIntentFromText(
+	text: string,
+	availableLabels: string[] = [],
+): PrReviewIntent {
+	const labelInventory = new Set(
+		availableLabels.map((label) => label.trim()).filter(Boolean),
+	);
+	const candidates = extractJsonCandidates(text);
+	let lastError: unknown = null;
+
+	for (const candidate of candidates) {
+		try {
+			const parsed = JSON.parse(candidate) as Record<string, unknown>;
+			const event = String(parsed.event ?? "").trim();
+			const body = String(parsed.body ?? "").trim();
+			if (!VALID_REVIEW_EVENTS.has(event)) {
+				throw new Error(`unsupported review event: ${event || "(empty)"}`);
+			}
+			if (!body) {
+				throw new Error("review body is empty");
+			}
+
+			const labels = Array.isArray(parsed.labels)
+				? parsed.labels
+						.map((label) => String(label).trim())
+						.filter((label) => label.length > 0)
+				: [];
+			const uniqueLabels = [...new Set(labels)].filter((label) =>
+				labelInventory.has(label),
+			);
+
+			return {
+				event: event as PrReviewIntentEvent,
+				body,
+				labels: uniqueLabels,
+			};
+		} catch (err) {
+			lastError = err;
+		}
+	}
+
+	const reason = lastError instanceof Error ? lastError.message : "not found";
+	throw new Error(`No valid PR review intent JSON found: ${reason}`);
+}
+
+async function postGitHubReviewIntent(
+	githubToken: string,
+	payload: PrReviewPayload,
+	intent: PrReviewIntent,
+): Promise<void> {
+	const [owner, repo] = payload.repoFullName.split("/");
+	if (!owner || !repo) {
+		throw new Error("Repository owner/name was unavailable.");
+	}
+
+	const headers = {
+		Authorization: `Bearer ${githubToken}`,
+		Accept: "application/vnd.github+json",
+		"X-GitHub-Api-Version": "2022-11-28",
+		"Content-Type": "application/json",
+	};
+	const reviewRes = await fetch(
+		`${GITHUB_API}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls/${payload.number}/reviews`,
+		{
+			method: "POST",
+			headers,
+			body: JSON.stringify({ event: intent.event, body: intent.body }),
+		},
+	);
+	if (!reviewRes.ok) {
+		throw new Error(
+			`GitHub review post failed ${reviewRes.status}: ${await reviewRes.text()}`,
+		);
+	}
+
+	if (intent.labels.length === 0) return;
+
+	const labelRes = await fetch(
+		`${GITHUB_API}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/${payload.number}/labels`,
+		{
+			method: "POST",
+			headers,
+			body: JSON.stringify({ labels: intent.labels }),
+		},
+	);
+	if (!labelRes.ok) {
+		console.warn(
+			`[pr-review] label post skipped/failed ${labelRes.status}: ${await labelRes.text()}`,
+		);
+	}
+}
+
+async function collectReviewIntentText(
+	client: Anthropic,
+	sessionId: string,
+): Promise<string> {
+	let output = "";
+	for await (const chunk of streamWithReconnect(client, sessionId, {
+		maxReconnects: 6,
+	})) {
+		if (chunk.type === "text") {
+			output += chunk.content;
+		}
+		if (chunk.type === "error") {
+			throw new Error(chunk.content);
+		}
+	}
+	return output;
+}
+
+export interface TriggerPrReviewOptions {
+	onReviewStarted?: (completeReview: () => Promise<void>) => void;
+}
+
 /**
  * Fire-and-forget: creates a Managed Agents session that reviews the PR
  * and produces a structured review intent. The agent never receives GitHub
@@ -640,6 +795,7 @@ export async function triggerPrReview(
 		triggerSourceId: payload.headSha || payload.headRef,
 		reason: "PR opened",
 	},
+	options: TriggerPrReviewOptions = {},
 ): Promise<string | null> {
 	const apiKey = process.env.ANTHROPIC_API_KEY;
 	const githubToken = await resolveGitHubToken();
@@ -647,7 +803,7 @@ export async function triggerPrReview(
 
 	if (!apiKey || !githubToken) {
 		console.log(
-			"[pr-review] skipping — missing ANTHROPIC_API_KEY, PR_REVIEWER_ENABLED=1, or GitHub App credentials",
+			"[pr-review] skipping — missing ANTHROPIC_API_KEY, GitHub App credentials, or reviewer is disabled",
 		);
 		return null;
 	}
@@ -765,6 +921,11 @@ export async function triggerPrReview(
 			},
 		});
 
+		await recordRunResult(fingerprint, {
+			sessionId: session.id,
+			status: "started",
+		});
+
 		const anchorReview = priorReviewContext.reviews[0];
 		const anchorCommit = anchorReview?.commitSha?.trim() ?? "";
 		const currentHead = resolvedPayload.headSha?.trim() || "HEAD";
@@ -862,10 +1023,33 @@ In "## Project Thread", include a short label rationale using the first applicab
 			],
 		});
 
-		await recordRunResult(fingerprint, {
-			sessionId: session.id,
-			status: "completed",
-		});
+		const completeReview = async () => {
+			try {
+				const output = await collectReviewIntentText(client, session.id);
+				const intent = parseReviewIntentFromText(
+					output,
+					narrativeContext.availableLabels.map((label) => label.name),
+				);
+				await postGitHubReviewIntent(githubToken, resolvedPayload, intent);
+				await recordRunResult(fingerprint, {
+					sessionId: session.id,
+					status: "completed",
+				});
+				console.log(
+					`[pr-review] Posted review for PR #${resolvedPayload.number} (${trigger.kind}): ${session.id}`,
+				);
+			} catch (err) {
+				const reason = err instanceof Error ? err.message : String(err);
+				await recordRunResult(fingerprint, {
+					sessionId: session.id,
+					status: "failed",
+					error: reason,
+				});
+				throw err;
+			}
+		};
+		options.onReviewStarted?.(completeReview);
+
 		console.log(
 			`[pr-review] Session created for PR #${resolvedPayload.number} (${trigger.kind}): ${session.id}`,
 		);
