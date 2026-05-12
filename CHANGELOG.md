@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.13.1] - 2026-05-12
+
+### Fixed
+- post managed PR review intents (#476)
+- avoid packaged Claude hook resource crash (#477)
+
 ## [0.13.0] - 2026-05-10
 
 ### Added
