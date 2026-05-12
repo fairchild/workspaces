@@ -10,7 +10,7 @@ intent and posts the GitHub review with the PR reviewer GitHub App token.
 ```
 GitHub PR opened
 → Cloudflare webhook relay
-→ web/api/webhooks/github (webhook route)
+→ signed forward to web/api/webhooks/github (webhook route)
 → triggerPrReview() (fire-and-forget)
 → getOrCreateAgent/Environment (idempotent, DB-cached)
 → sessions.create (mounts repo at PR branch)
@@ -39,6 +39,8 @@ GitHub PR opened
 | `PR_REVIEWER_ENABLED` | Vercel (optional) | `0` disables the reviewer; `1` enables it explicitly. If omitted, complete App credentials enable it. |
 | `PR_REVIEWER_VAULT_ID` | Vercel (optional) | Vault for MCP credentials (not currently used) |
 | `PR_REVIEWER_MODEL` | Vercel (optional) | Override model (default: `claude-opus-4-6`) |
+| `GITHUB_WEB_WORKSPACES_WEBHOOK_SECRET` | Vercel | Same GitHub webhook secret used by the Cloudflare relay; verifies the forwarded raw payload |
+| `WEBHOOK_FORWARD_URL` | Cloudflare Worker | HTTPS web app webhook endpoint, currently `https://spaces.cloudcompute.com/api/webhooks/github` |
 
 ### GitHub App setup
 
@@ -49,6 +51,9 @@ Reviews are posted by the `workspaces-pr-reviewer` GitHub App, which gives them 
    broker to apply validated label suggestions
 2. Install the app on `fairchild/workspaces` and note the installation ID
 3. Set `PR_REVIEWER_APP_ID`, `PR_REVIEWER_PRIVATE_KEY`, and `PR_REVIEWER_INSTALLATION_ID` in Vercel
+4. Confirm the Cloudflare relay has `WEBHOOK_FORWARD_URL` configured and that
+   `GITHUB_WEBHOOK_SECRET` in Cloudflare matches
+   `GITHUB_WEB_WORKSPACES_WEBHOOK_SECRET` in Vercel
 
 The app generates short-lived installation tokens (1-hour TTL) on demand. If
 the App credentials are missing or token exchange fails, `triggerPrReview()`
@@ -62,6 +67,12 @@ agent workspace and does not appear in the prompt or message stream.
 **Security:** Never print App private keys or installation tokens to logs. Use
 files or secret-manager flows, never standalone `echo`/`print` of credential
 values.
+
+The Cloudflare relay forwards only managed-review trigger candidates:
+`pull_request.opened`, `reopened`, `ready_for_review`, `synchronize`, eligible
+`edited` events, and evidence-bearing PR comments. It preserves the original
+GitHub HMAC signature and raw body; the Vercel route independently verifies the
+signature before creating any managed-agent session.
 
 ## Observing Sessions
 

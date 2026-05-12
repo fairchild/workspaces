@@ -14,6 +14,9 @@ new_sqlite_classes = ["WebhookRelay"]
 pattern = "webhooks.cloudcompute.com"
 custom_domain = true
 
+[vars]
+WEBHOOK_FORWARD_URL = "https://spaces.cloudcompute.com/api/webhooks/github"
+
 # --- Preview environment ---
 [env.preview]
 name = "webhook-relay-preview"
