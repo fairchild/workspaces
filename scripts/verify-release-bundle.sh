@@ -147,6 +147,8 @@ APP_BUNDLE="${APP_BUNDLE/#\~/$HOME}"
 verify_bundle_identity "$APP_BUNDLE"
 [[ -d "$APP_BUNDLE/Contents/Resources/ghostty" ]] || fail "Missing Ghostty resources directory"
 [[ -d "$APP_BUNDLE/Contents/Resources/terminfo" ]] || fail "Missing bundled terminfo directory"
+[[ -f "$APP_BUNDLE/Contents/Resources/HookForwarders/event-forwarder.sh" ]] || fail "Missing Claude hook event forwarder"
+[[ -f "$APP_BUNDLE/Contents/Resources/HookForwarders/statusline.sh" ]] || fail "Missing Claude status-line forwarder"
 
 CODE_OBJECTS_FILE="$TMP_DIR/code-objects.txt"
 : >"$CODE_OBJECTS_FILE"

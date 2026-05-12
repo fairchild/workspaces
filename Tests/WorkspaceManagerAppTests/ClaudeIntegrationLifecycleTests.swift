@@ -130,4 +130,81 @@ struct ClaudeIntegrationLifecycleTests {
         #expect(FileManager.default.fileExists(atPath: eventForwarder.path))
         #expect(FileManager.default.fileExists(atPath: statusLine.path))
     }
+
+    @Test("packaged app hook forwarder resources resolve from flattened app resources")
+    func packagedAppHookForwarderResourcesResolveFromMainBundle() throws {
+        let fixture = try makePackagedAppFixture(includeEventForwarder: true)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+
+        var didAskForSwiftPMBundle = false
+        let resolvedURL = try #require(
+            ClaudeIntegrationLifecycle.bundledHookForwarderURL(
+                named: "event-forwarder",
+                mainBundle: fixture.appBundle,
+                swiftPMResourceBundle: {
+                    didAskForSwiftPMBundle = true
+                    return nil
+                }
+            ))
+
+        #expect(resolvedURL.standardizedFileURL == fixture.eventForwarderURL?.standardizedFileURL)
+        #expect(!didAskForSwiftPMBundle)
+    }
+
+    @Test("packaged app missing hook forwarder resources does not touch SwiftPM bundle")
+    func packagedAppMissingHookForwarderResourcesDoNotTouchSwiftPMBundle() throws {
+        let fixture = try makePackagedAppFixture(includeEventForwarder: false)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+
+        var didAskForSwiftPMBundle = false
+        let resolvedURL = ClaudeIntegrationLifecycle.bundledHookForwarderURL(
+            named: "event-forwarder",
+            mainBundle: fixture.appBundle,
+            swiftPMResourceBundle: {
+                didAskForSwiftPMBundle = true
+                return nil
+            }
+        )
+
+        #expect(resolvedURL == nil)
+        #expect(!didAskForSwiftPMBundle)
+    }
+
+    private func makePackagedAppFixture(includeEventForwarder: Bool) throws -> PackagedAppFixture {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeIntegrationLifecycleTests-\(UUID().uuidString)", isDirectory: true)
+        let appBundleURL = root.appendingPathComponent("WorkSpaces.app", isDirectory: true)
+        let contentsURL = appBundleURL.appendingPathComponent("Contents", isDirectory: true)
+        let hookForwardersURL =
+            contentsURL
+            .appendingPathComponent("Resources", isDirectory: true)
+            .appendingPathComponent("HookForwarders", isDirectory: true)
+        try FileManager.default.createDirectory(at: hookForwardersURL, withIntermediateDirectories: true)
+
+        let plist: [String: Any] = [
+            "CFBundleExecutable": "WorkspaceManager",
+            "CFBundleIdentifier": "com.cloudcompute.workspaces",
+            "CFBundleName": "WorkSpaces",
+        ]
+        let plistData = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+        try plistData.write(to: contentsURL.appendingPathComponent("Info.plist"))
+
+        let eventForwarderURL = hookForwardersURL.appendingPathComponent("event-forwarder.sh")
+        if includeEventForwarder {
+            try "#!/bin/sh\n".write(to: eventForwarderURL, atomically: true, encoding: .utf8)
+        }
+
+        let appBundle = try #require(Bundle(url: appBundleURL))
+        return PackagedAppFixture(
+            root: root,
+            appBundle: appBundle,
+            eventForwarderURL: includeEventForwarder ? eventForwarderURL : nil
+        )
+    }
+
+    private struct PackagedAppFixture {
+        let root: URL
+        let appBundle: Bundle
+        let eventForwarderURL: URL?
+    }
 }
