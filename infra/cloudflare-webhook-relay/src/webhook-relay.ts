@@ -6,6 +6,7 @@ export interface Env {
   GITHUB_WEBHOOK_SECRET: string;
   JWT_SIGNING_SECRET: string;
   GITHUB_API_BASE?: string;
+  WEBHOOK_FORWARD_URL?: string;
 }
 
 interface StoredEvent {

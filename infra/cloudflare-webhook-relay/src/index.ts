@@ -14,7 +14,11 @@ function githubAPI(env: Env, path: string): string {
 }
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(
+    request: Request,
+    env: Env,
+    ctx: ExecutionContext
+  ): Promise<Response> {
     const url = new URL(request.url);
     const path = url.pathname;
 
@@ -27,7 +31,7 @@ export default {
     }
 
     if (path === "/webhook" && request.method === "POST") {
-      return handleWebhook(request, env);
+      return handleWebhook(request, env, ctx);
     }
 
     const wsMatch = path.match(/^\/ws\/([^/]+)$/);
@@ -118,7 +122,145 @@ async function handleAuthSession(request: Request, env: Env): Promise<Response> 
 // Webhook ingress — forward to org-level DO
 // ---------------------------------------------------------------------------
 
-async function handleWebhook(request: Request, env: Env): Promise<Response> {
+const EVIDENCE_SIGNAL =
+  /(evidence\.cloudcompute\.com|^Evidence:|swift test|playwright|screenshot|recording|validation)/im;
+
+function isBotSender(payload: Record<string, unknown>): boolean {
+  const sender = payload.sender as Record<string, unknown> | undefined;
+  const login = String(sender?.login ?? "");
+  if (login.endsWith("[bot]")) return true;
+  return String(sender?.type ?? "").toLowerCase() === "bot";
+}
+
+function shouldForwardToWebApp(
+  eventType: string,
+  payload: Record<string, unknown>
+): boolean {
+  if (isBotSender(payload)) return false;
+
+  const action = String(payload.action ?? "");
+  if (eventType === "pull_request") {
+    const pr = payload.pull_request as Record<string, unknown> | undefined;
+    if (!pr) return false;
+    const isDraft = Boolean(pr.draft);
+
+    if (["opened", "reopened", "synchronize", "edited"].includes(action)) {
+      if (isDraft) return false;
+      if (action !== "edited") return true;
+      const changes = payload.changes as Record<string, unknown> | undefined;
+      return Boolean(changes?.body !== undefined || changes?.base !== undefined);
+    }
+
+    return action === "ready_for_review";
+  }
+
+  if (eventType === "issue_comment" && action === "created") {
+    const issue = payload.issue as Record<string, unknown> | undefined;
+    const comment = payload.comment as Record<string, unknown> | undefined;
+    if (!issue?.pull_request) return false;
+    const body = String(comment?.body ?? "");
+    return EVIDENCE_SIGNAL.test(body);
+  }
+
+  return false;
+}
+
+async function forwardWebhookToWebApp(
+  env: Env,
+  body: string,
+  headers: Headers,
+  eventType: string,
+  deliveryId: string | undefined,
+  repo: string
+): Promise<void> {
+  const forwardUrl = env.WEBHOOK_FORWARD_URL?.trim();
+  if (!forwardUrl) {
+    log.warn("webhook_forward_not_configured", {
+      delivery_id: deliveryId,
+      event_type: eventType,
+      repo,
+    });
+    return;
+  }
+
+  let parsedForwardUrl: URL;
+  try {
+    parsedForwardUrl = new URL(forwardUrl);
+  } catch {
+    log.error("webhook_forward_invalid_url", {
+      delivery_id: deliveryId,
+      event_type: eventType,
+      repo,
+    });
+    return;
+  }
+  const localDevForward =
+    parsedForwardUrl.protocol === "http:" &&
+    ["127.0.0.1", "localhost"].includes(parsedForwardUrl.hostname);
+  if (parsedForwardUrl.protocol !== "https:" && !localDevForward) {
+    log.error("webhook_forward_insecure_url", {
+      delivery_id: deliveryId,
+      event_type: eventType,
+      repo,
+      protocol: parsedForwardUrl.protocol,
+    });
+    return;
+  }
+
+  const signature = headers.get("X-Hub-Signature-256");
+  if (!signature) {
+    log.warn("webhook_forward_missing_signature", {
+      delivery_id: deliveryId,
+      event_type: eventType,
+      repo,
+    });
+    return;
+  }
+
+  try {
+    const forwardHeaders = new Headers({
+      "Content-Type": headers.get("Content-Type") ?? "application/json",
+      "X-GitHub-Event": eventType,
+      "X-Hub-Signature-256": signature,
+      "User-Agent": "WorkspaceManager-WebhookRelay",
+      "X-Workspace-Webhook-Relay": "cloudflare",
+    });
+    if (deliveryId) {
+      forwardHeaders.set("X-GitHub-Delivery", deliveryId);
+    }
+
+    const response = await fetch(forwardUrl, {
+      method: "POST",
+      headers: forwardHeaders,
+      body,
+    });
+
+    if (!response.ok) {
+      log.error("webhook_forward_failed", { delivery_id: deliveryId, event_type: eventType, repo, status: response.status });
+      return;
+    }
+
+    log.info("webhook_forwarded", {
+      delivery_id: deliveryId,
+      event_type: eventType,
+      repo,
+      status: response.status,
+    });
+  } catch (err) {
+    log.error("webhook_forward_error", {
+      delivery_id: deliveryId,
+      event_type: eventType,
+      repo,
+      detail: String(err),
+    });
+  }
+}
+
+async function handleWebhook(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext
+): Promise<Response> {
   const signature = request.headers.get("X-Hub-Signature-256");
   if (!signature) {
     log.warn("webhook_missing_signature");
@@ -148,6 +290,10 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
 
   const doId = env.WEBHOOK_RELAY.idFromName(owner);
   const stub = env.WEBHOOK_RELAY.get(doId);
+
+  if (shouldForwardToWebApp(eventType, payload)) {
+    ctx.waitUntil(forwardWebhookToWebApp(env, body, request.headers, eventType, deliveryId, fullName));
+  }
 
   return stub.fetch(
     new Request(request.url, { method: "POST", headers: request.headers, body })
