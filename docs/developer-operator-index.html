@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Developer and Operator Index - WorkSpaces Docs</title>
+  <meta name="robots" content="noindex">
+  <link rel="icon" href="/docs/assets/icon-concepts/favicon.ico">
+  <link rel="stylesheet" href="/docs/assets/operator-index.css">
+</head>
+<body>
+  <main class="shell">
+    <div class="topline">
+      <a href="/docs/developer-operator-index.html"><strong>Developer and Operator Index</strong></a>
+      <nav aria-label="Index navigation">
+        <a href="/docs/">Published Docs</a>
+        <a href="/docs/CONTEXT">Vocabulary</a>
+        <a href="/docs/docs-site">Runbook</a>
+      </nav>
+    </div>
+
+    <section class="intro" aria-labelledby="page-title">
+      <div>
+        <p class="eyebrow">Local index</p>
+        <h1 id="page-title">Operator Index</h1>
+      </div>
+      <p class="intro-copy">Fast local search across the complete documentation set.</p>
+    </section>
+
+    <section class="route-field" aria-label="Route a documentation question">
+      <div class="search-shell">
+        <form class="route-form" id="route-form">
+          <input id="route-input" autofocus autocomplete="off" placeholder="Filter docs: Lume, shortcut routing, evidence">
+          <button type="button" id="route-show-all">All Docs</button>
+        </form>
+        <p class="search-hint" id="search-hint">Typing filters instantly. Use results below for the full index.</p>
+        <div class="autocomplete" id="autocomplete" aria-label="Matching docs"></div>
+      </div>
+    </section>
+
+    <section class="layout" aria-label="Documentation heads-up display">
+      <details class="map dive" aria-label="Deferred architecture map prompt" open>
+        <summary class="map-title dive-head">
+          <span>
+            <h2>System Map</h2>
+            <p>Reserved for the technical architecture map.</p>
+          </span>
+          <span class="dive-toggle" aria-hidden="true"></span>
+        </summary>
+        <div class="dive-body">
+          <div class="architecture-prompt">
+            <strong>Future architecture map prompt</strong>
+            <span>Build a technical context map for WorkSpaces documentation. It should show the real systems and code boundaries: the macOS SwiftUI/AppKit app, Ghostty/libghostty terminal runtime, workspace/provider layer, Lume macOS/Linux VM runtime, web Next.js/Vercel app, Cloudflare Workers and Durable Objects, GitHub webhook/PR/evidence flows, evidence storage, and local developer scripts. The map should make architectural relationships clear, not just document categories. It should help a new developer answer: what systems exist, where code lives, what talks to what, what runs locally vs remotely, and which docs explain each subsystem.</span>
+            <code>Deferred: architecture map implementation belongs in its own pass.</code>
+          </div>
+        </div>
+      </details>
+
+      <div class="right-stack">
+        <details class="routing dive" aria-labelledby="routing-title" open>
+          <summary class="routing-head dive-head">
+            <span>
+              <h2 id="routing-title">Routing Matrix</h2>
+              <p>Choose the job you are doing now.</p>
+            </span>
+            <span class="dive-toggle" aria-hidden="true"></span>
+          </summary>
+          <div class="dive-body">
+            <button class="button-link" id="open-all" type="button">Open All</button>
+            <div class="route-grid" id="route-grid"></div>
+          </div>
+        </details>
+
+        <details class="concept-strip dive" aria-labelledby="concept-title" open>
+          <summary class="dive-head">
+            <span>
+              <h2 id="concept-title">Concept Clusters</h2>
+              <p>Follow related terms across the documentation set.</p>
+            </span>
+            <span class="dive-toggle" aria-hidden="true"></span>
+          </summary>
+          <div class="dive-body">
+            <div class="concept-grid" id="concept-grid"></div>
+          </div>
+        </details>
+      </div>
+    </section>
+
+    <details class="reading-path dive" aria-labelledby="path-title" open>
+      <summary class="path-head dive-head">
+        <span>
+          <h2 id="path-title">Reading Path</h2>
+          <p>Use this when you are onboarding or trying to rebuild the mental model from scratch.</p>
+        </span>
+        <span class="dive-toggle" aria-hidden="true"></span>
+      </summary>
+      <div class="dive-body">
+        <button class="button-link" type="button" data-filter="q" data-value="CONTEXT">Start with vocabulary</button>
+        <div class="path-rail" id="path-rail"></div>
+      </div>
+    </details>
+
+    <section class="tool" aria-label="Developer and operator docs index">
+      <aside class="filters">
+        <div class="filter-grid">
+          <label>
+            Area
+            <select id="group"></select>
+          </label>
+          <label>
+            Topic
+            <select id="topic"></select>
+          </label>
+          <label>
+            Type
+            <select id="type"></select>
+          </label>
+          <button class="reset" id="reset" type="button">Reset</button>
+        </div>
+        <div class="stats" id="stats"></div>
+        <div class="index-actions" aria-label="Index actions">
+          <button class="control" id="show-all" type="button">Show all docs</button>
+          <button class="control" id="expand-all" type="button">Expand all sections</button>
+          <button class="control" id="collapse-all" type="button">Collapse all sections</button>
+        </div>
+      </aside>
+
+      <section class="results">
+        <div class="result-grid" id="results">
+          <div class="empty">Loading local docs index...</div>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <script src="/docs/assets/operator-index.js"></script>
+</body>
+</html>

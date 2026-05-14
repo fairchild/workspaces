@@ -1,6 +1,7 @@
 .vercel
 node_modules/
 .next/
+public/docs/
 .env*.local
 tsconfig.tsbuildinfo
 data/

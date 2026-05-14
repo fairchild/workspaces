@@ -1,391 +1,1178 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WorkSpaces - AI Coding Session Manager for macOS</title>
-    <meta name="description" content="A native macOS app for managing AI coding session workspaces with integrated terminal.">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WorkSpaces Docs - Native Terminal Session Manager</title>
+  <meta name="description" content="WorkSpaces is a native macOS app for terminal-first AI coding sessions, repository navigation, and isolated workspaces.">
+  <link rel="icon" href="/docs/assets/icon-concepts/favicon.ico">
+  <style>
+    :root {
+      color-scheme: dark;
+      --ink: #f3f0e7;
+      --muted: #a8afad;
+      --quiet: #737d7b;
+      --bg: #0d1012;
+      --bg-alt: #14181b;
+      --panel: #1c2224;
+      --panel-strong: #242b2d;
+      --line: #394044;
+      --line-soft: rgba(243, 240, 231, 0.12);
+      --mint: #a6ffdf;
+      --green: #5ed49d;
+      --amber: #e7b75f;
+      --blue: #8ab7ff;
+      --red: #f28b82;
+      --plum: #d7a9ff;
+      --shadow: 0 22px 80px rgba(0, 0, 0, 0.34);
+      --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+      --sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    }
 
-    <style>
-        /* ============================================================
-           Base Styles
-           ============================================================ */
+    * {
+      box-sizing: border-box;
+    }
 
-        :root {
-            --color-bg: #0d1117;
-            --color-surface: #161b22;
-            --color-border: #30363d;
-            --color-text: #c9d1d9;
-            --color-text-muted: #8b949e;
-            --color-accent: #58a6ff;
-            --color-accent-hover: #79b8ff;
-            --color-success: #3fb950;
-            --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
-            --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-        }
+    html {
+      scroll-behavior: smooth;
+    }
 
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-        }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+        radial-gradient(circle at 70% 12%, rgba(166, 255, 223, 0.09), transparent 26rem),
+        var(--bg);
+      background-size: 44px 44px, 44px 44px, auto, auto;
+      color: var(--ink);
+      font-family: var(--sans);
+      line-height: 1.55;
+    }
 
-        body {
-            font-family: var(--font-sans);
-            background: var(--color-bg);
-            color: var(--color-text);
-            line-height: 1.6;
-            min-height: 100vh;
-        }
+    a {
+      color: var(--mint);
+      text-decoration: none;
+    }
 
-        a {
-            color: var(--color-accent);
-            text-decoration: none;
-        }
+    a:hover {
+      text-decoration: underline;
+    }
 
-        a:hover {
-            color: var(--color-accent-hover);
-            text-decoration: underline;
-        }
+    button {
+      font: inherit;
+    }
 
-        /* ============================================================
-           Layout
-           ============================================================ */
+    .page-shell {
+      width: min(1180px, calc(100% - 32px));
+      margin: 0 auto;
+    }
 
-        .container {
-            max-width: 800px;
-            margin: 0 auto;
-            padding: 2rem 1.5rem;
-        }
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      border-bottom: 1px solid var(--line-soft);
+      background: rgba(13, 16, 18, 0.86);
+      backdrop-filter: blur(18px);
+    }
 
-        header {
-            text-align: center;
-            padding: 4rem 0 3rem;
-            border-bottom: 1px solid var(--color-border);
-        }
+    .topbar .page-shell {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      min-height: 64px;
+    }
 
-        main {
-            padding: 3rem 0;
-        }
+    .brand-lockup {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      color: var(--ink);
+      font-weight: 680;
+      letter-spacing: 0;
+      white-space: nowrap;
+    }
 
-        footer {
-            text-align: center;
-            padding: 2rem 0;
-            border-top: 1px solid var(--color-border);
-            color: var(--color-text-muted);
-            font-size: 0.875rem;
-        }
+    .app-mark {
+      width: 34px;
+      height: 34px;
+      border-radius: 9px;
+      background: #1a1f28;
+      box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+      padding: 6px;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      grid-template-rows: 1fr 1fr;
+      gap: 3px;
+    }
 
-        /* ============================================================
-           Typography
-           ============================================================ */
+    .app-mark span {
+      border-radius: 3px;
+      background: #414957;
+    }
 
-        h1 {
-            font-size: 2.5rem;
-            font-weight: 600;
-            margin-bottom: 0.5rem;
-            letter-spacing: -0.02em;
-        }
+    .app-mark .active {
+      position: relative;
+      background: #111821;
+    }
 
-        .tagline {
-            font-size: 1.25rem;
-            color: var(--color-text-muted);
-            margin-bottom: 2rem;
-        }
+    .app-mark .active::after {
+      content: ">";
+      position: absolute;
+      left: 3px;
+      top: -3px;
+      color: var(--mint);
+      font-family: var(--mono);
+      font-weight: 800;
+      font-size: 13px;
+    }
 
-        h2 {
-            font-size: 1.5rem;
-            font-weight: 600;
-            margin: 2rem 0 1rem;
-            padding-bottom: 0.5rem;
-            border-bottom: 1px solid var(--color-border);
-        }
+    .topnav {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      font-size: 0.88rem;
+    }
 
-        h3 {
-            font-size: 1rem;
-            font-weight: 600;
-            margin: 1.5rem 0 0.5rem;
-        }
+    .topnav a {
+      color: var(--muted);
+    }
 
-        p {
-            margin-bottom: 1rem;
-        }
+    .topnav a:hover {
+      color: var(--ink);
+      text-decoration: none;
+    }
 
-        ul {
-            margin: 1rem 0;
-            padding-left: 1.5rem;
-        }
+    .hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1.02fr) minmax(360px, 0.98fr);
+      gap: 36px;
+      align-items: center;
+      padding: 70px 0 42px;
+      min-height: calc(100vh - 64px);
+    }
 
-        li {
-            margin-bottom: 0.5rem;
-        }
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      margin: 0 0 18px;
+      color: var(--mint);
+      font-family: var(--mono);
+      font-size: 0.78rem;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
 
-        code {
-            font-family: var(--font-mono);
-            background: var(--color-surface);
-            padding: 0.2em 0.4em;
-            border-radius: 4px;
-            font-size: 0.9em;
-        }
+    .eyebrow::before {
+      content: "";
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: var(--mint);
+      box-shadow: 0 0 20px rgba(166, 255, 223, 0.8);
+    }
 
-        /* ============================================================
-           Components
-           ============================================================ */
+    h1,
+    h2,
+    h3,
+    p {
+      margin-top: 0;
+    }
 
-        .badge {
-            display: inline-block;
-            background: var(--color-surface);
-            border: 1px solid var(--color-border);
-            padding: 0.25rem 0.75rem;
-            border-radius: 2rem;
-            font-size: 0.875rem;
-            color: var(--color-text-muted);
-            margin-bottom: 1rem;
-        }
+    h1 {
+      max-width: 870px;
+      margin-bottom: 20px;
+      font-size: clamp(3rem, 7vw, 6.9rem);
+      line-height: 0.91;
+      letter-spacing: 0;
+      font-weight: 780;
+    }
 
-        .badge--beta {
-            background: rgba(88, 166, 255, 0.1);
-            border-color: var(--color-accent);
-            color: var(--color-accent);
-        }
+    .hero-copy {
+      max-width: 660px;
+      margin-bottom: 28px;
+      color: var(--muted);
+      font-size: clamp(1.05rem, 2vw, 1.32rem);
+    }
 
-        .download-btn {
-            display: inline-flex;
-            align-items: center;
-            gap: 0.5rem;
-            background: var(--color-accent);
-            color: var(--color-bg);
-            padding: 0.875rem 1.5rem;
-            border-radius: 8px;
-            font-weight: 600;
-            font-size: 1rem;
-            transition: background-color 0.2s;
-        }
+    .actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin: 30px 0;
+    }
 
-        .download-btn:hover {
-            background: var(--color-accent-hover);
-            color: var(--color-bg);
-            text-decoration: none;
-        }
+    .button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 42px;
+      gap: 8px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 0 15px;
+      background: var(--panel);
+      color: var(--ink);
+      font-weight: 650;
+      text-decoration: none;
+    }
 
-        .download-btn svg {
-            width: 20px;
-            height: 20px;
-        }
+    .button.primary {
+      border-color: rgba(166, 255, 223, 0.8);
+      background: var(--mint);
+      color: #0b1110;
+    }
 
-        .requirements {
-            display: flex;
-            justify-content: center;
-            gap: 2rem;
-            margin-top: 1.5rem;
-            flex-wrap: wrap;
-        }
+    .button:hover {
+      border-color: var(--mint);
+      text-decoration: none;
+    }
 
-        .requirement {
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-            color: var(--color-text-muted);
-            font-size: 0.875rem;
-        }
+    .terminal-window {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+      background: #0a0c0e;
+      box-shadow: var(--shadow);
+    }
 
-        .requirement svg {
-            width: 16px;
-            height: 16px;
-            color: var(--color-success);
-        }
+    .terminal-titlebar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 39px;
+      padding: 0 12px;
+      border-bottom: 1px solid var(--line-soft);
+      background: #171c1f;
+      color: var(--quiet);
+      font-family: var(--mono);
+      font-size: 0.78rem;
+    }
 
-        .features {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-            gap: 1.5rem;
-            margin: 1.5rem 0;
-        }
+    .dots {
+      display: flex;
+      gap: 7px;
+    }
 
-        .feature {
-            background: var(--color-surface);
-            border: 1px solid var(--color-border);
-            border-radius: 8px;
-            padding: 1.5rem;
-        }
+    .dots span {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--line);
+    }
 
-        .feature h3 {
-            margin-top: 0;
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-        }
+    .dots span:nth-child(1) {
+      background: #ff6b5f;
+    }
 
-        .feature p {
-            margin: 0;
-            color: var(--color-text-muted);
-            font-size: 0.9375rem;
-        }
+    .dots span:nth-child(2) {
+      background: #e9c46a;
+    }
 
-        .steps {
-            counter-reset: step;
-        }
+    .dots span:nth-child(3) {
+      background: var(--green);
+    }
 
-        .steps li {
-            counter-increment: step;
-            position: relative;
-            padding-left: 2.5rem;
-            margin-bottom: 1rem;
-        }
+    .terminal-grid {
+      display: grid;
+      grid-template-columns: 210px minmax(0, 1fr) 168px;
+      min-height: 444px;
+    }
 
-        .steps li::before {
-            content: counter(step);
-            position: absolute;
-            left: 0;
-            width: 1.75rem;
-            height: 1.75rem;
-            background: var(--color-surface);
-            border: 1px solid var(--color-border);
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 0.875rem;
-            font-weight: 600;
-        }
+    .sidebar,
+    .detail {
+      background: #151a1d;
+      border-right: 1px solid var(--line-soft);
+      padding: 14px;
+      min-width: 0;
+    }
 
-        .callout {
-            background: var(--color-surface);
-            border: 1px solid var(--color-border);
-            border-left: 3px solid var(--color-accent);
-            padding: 1rem 1.25rem;
-            border-radius: 0 8px 8px 0;
-            margin: 1.5rem 0;
-        }
+    .detail {
+      border-right: 0;
+      border-left: 1px solid var(--line-soft);
+    }
 
-        .callout p {
-            margin: 0;
-        }
+    .label {
+      color: var(--quiet);
+      font-family: var(--mono);
+      font-size: 0.68rem;
+      letter-spacing: 0.08em;
+      margin-bottom: 10px;
+      text-transform: uppercase;
+    }
 
-        .links {
-            display: flex;
-            justify-content: center;
-            gap: 2rem;
-            margin-top: 1rem;
-        }
+    .tree {
+      display: grid;
+      gap: 6px;
+      font-family: var(--mono);
+      font-size: 0.79rem;
+    }
 
-        /* ============================================================
-           Responsive
-           ============================================================ */
+    .tree-row,
+    .file-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 29px;
+      border-radius: 6px;
+      padding: 0 8px;
+      color: var(--muted);
+      white-space: nowrap;
+    }
 
-        @media (max-width: 600px) {
-            h1 {
-                font-size: 2rem;
-            }
+    .tree-row.active,
+    .file-row.active {
+      background: rgba(166, 255, 223, 0.12);
+      color: var(--ink);
+    }
 
-            .tagline {
-                font-size: 1.125rem;
-            }
+    .tree-row.child {
+      margin-left: 14px;
+    }
 
-            .requirements {
-                flex-direction: column;
-                gap: 0.75rem;
-                align-items: center;
-            }
-        }
-    </style>
+    .glyph {
+      color: var(--mint);
+    }
+
+    .terminal-pane {
+      padding: 18px;
+      font-family: var(--mono);
+      font-size: clamp(0.78rem, 1.3vw, 0.92rem);
+      color: #dbe7e1;
+      min-width: 0;
+    }
+
+    .prompt-line {
+      margin: 0 0 10px;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .prompt {
+      color: var(--mint);
+    }
+
+    .dim {
+      color: var(--quiet);
+    }
+
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 0 9px;
+      color: var(--muted);
+      font-size: 0.73rem;
+    }
+
+    .doc-strip {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 28px;
+    }
+
+    .doc-link {
+      min-height: 96px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+      background: rgba(28, 34, 36, 0.68);
+      color: var(--muted);
+    }
+
+    .doc-link strong {
+      display: block;
+      color: var(--ink);
+      margin-bottom: 5px;
+    }
+
+    section {
+      padding: 74px 0;
+      border-top: 1px solid var(--line-soft);
+    }
+
+    .section-head {
+      display: grid;
+      grid-template-columns: minmax(0, 0.78fr) minmax(300px, 0.72fr);
+      gap: 34px;
+      align-items: end;
+      margin-bottom: 28px;
+    }
+
+    h2 {
+      margin-bottom: 0;
+      font-size: clamp(2rem, 4.4vw, 4.4rem);
+      line-height: 0.98;
+      letter-spacing: 0;
+      font-weight: 760;
+    }
+
+    .section-head p,
+    .section-copy {
+      color: var(--muted);
+      font-size: 1rem;
+    }
+
+    .concept-layout {
+      display: grid;
+      grid-template-columns: minmax(280px, 0.78fr) minmax(0, 1.22fr);
+      gap: 22px;
+      align-items: stretch;
+    }
+
+    .concept-list {
+      display: grid;
+      gap: 9px;
+    }
+
+    .concept-button {
+      width: 100%;
+      min-height: 58px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px 12px;
+      background: var(--panel);
+      color: var(--muted);
+      cursor: pointer;
+      text-align: left;
+    }
+
+    .concept-button strong {
+      display: block;
+      color: var(--ink);
+      font-size: 0.98rem;
+      margin-bottom: 2px;
+    }
+
+    .concept-button[aria-selected="true"] {
+      border-color: var(--mint);
+      background: rgba(166, 255, 223, 0.1);
+      color: var(--ink);
+    }
+
+    .diagram-panel,
+    .flow-panel,
+    .glossary-panel {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(20, 24, 27, 0.78);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .diagram-panel {
+      min-height: 520px;
+      padding: 20px;
+    }
+
+    .diagram-panel svg {
+      width: 100%;
+      height: auto;
+      display: block;
+    }
+
+    .node rect,
+    .node path,
+    .node circle {
+      transition: stroke 0.18s, fill 0.18s, opacity 0.18s;
+    }
+
+    .node text {
+      font-family: var(--mono);
+      font-size: 14px;
+      fill: var(--ink);
+      pointer-events: none;
+    }
+
+    .node[data-active="true"] rect,
+    .node[data-active="true"] path {
+      stroke: var(--mint);
+      fill: rgba(166, 255, 223, 0.12);
+    }
+
+    .node[data-active="false"] {
+      opacity: 0.64;
+    }
+
+    .edge {
+      stroke: rgba(243, 240, 231, 0.36);
+      stroke-width: 2;
+      fill: none;
+    }
+
+    .edge.active {
+      stroke: var(--mint);
+      stroke-width: 3;
+    }
+
+    .explain-box {
+      border-top: 1px solid var(--line-soft);
+      margin-top: 16px;
+      padding-top: 16px;
+      color: var(--muted);
+    }
+
+    .explain-box strong {
+      display: block;
+      color: var(--ink);
+      margin-bottom: 5px;
+      font-size: 1.1rem;
+    }
+
+    .flow-panel {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(280px, 0.82fr);
+      min-height: 414px;
+    }
+
+    .flow-steps {
+      display: grid;
+      padding: 18px;
+      gap: 10px;
+      border-right: 1px solid var(--line-soft);
+    }
+
+    .flow-step {
+      display: grid;
+      grid-template-columns: 34px minmax(0, 1fr);
+      gap: 12px;
+      align-items: start;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      background: var(--panel);
+      cursor: pointer;
+      color: var(--muted);
+      text-align: left;
+    }
+
+    .flow-step[aria-selected="true"] {
+      border-color: var(--amber);
+      background: rgba(231, 183, 95, 0.11);
+      color: var(--ink);
+    }
+
+    .step-number {
+      display: grid;
+      place-items: center;
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
+      background: #0f1315;
+      color: var(--amber);
+      font-family: var(--mono);
+      font-weight: 750;
+    }
+
+    .flow-step strong {
+      display: block;
+      color: var(--ink);
+      margin-bottom: 3px;
+    }
+
+    .flow-detail {
+      padding: 22px;
+      color: var(--muted);
+    }
+
+    .flow-detail h3 {
+      color: var(--ink);
+      font-size: 1.45rem;
+      margin-bottom: 12px;
+    }
+
+    .mini-window {
+      margin-top: 22px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+      background: #0e1113;
+      font-family: var(--mono);
+      font-size: 0.78rem;
+    }
+
+    .mini-window header {
+      min-height: 32px;
+      display: flex;
+      align-items: center;
+      padding: 0 10px;
+      border-bottom: 1px solid var(--line-soft);
+      color: var(--quiet);
+      background: #171c1f;
+    }
+
+    .mini-body {
+      padding: 13px;
+      display: grid;
+      gap: 8px;
+    }
+
+    .mini-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      color: var(--muted);
+    }
+
+    .mini-row strong {
+      color: var(--mint);
+    }
+
+    .glossary-panel {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 1px;
+      background: var(--line-soft);
+    }
+
+    .term {
+      min-height: 158px;
+      background: var(--bg-alt);
+      padding: 18px;
+    }
+
+    .term h3 {
+      margin-bottom: 8px;
+      color: var(--ink);
+      font-size: 1.1rem;
+    }
+
+    .term p {
+      color: var(--muted);
+      margin-bottom: 12px;
+    }
+
+    .avoid {
+      color: var(--quiet);
+      font-family: var(--mono);
+      font-size: 0.76rem;
+    }
+
+    .artifact-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .artifact {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px;
+      background: var(--panel);
+      min-height: 144px;
+    }
+
+    .artifact .type {
+      display: inline-block;
+      margin-bottom: 18px;
+      color: var(--quiet);
+      font-family: var(--mono);
+      font-size: 0.7rem;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    .artifact strong {
+      display: block;
+      margin-bottom: 8px;
+      color: var(--ink);
+      font-size: 1.05rem;
+    }
+
+    .artifact p {
+      color: var(--muted);
+      margin-bottom: 0;
+    }
+
+    .download-band {
+      display: grid;
+      grid-template-columns: minmax(0, 0.9fr) minmax(280px, 0.55fr);
+      gap: 22px;
+      align-items: center;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 22px;
+      background: linear-gradient(135deg, rgba(166, 255, 223, 0.12), rgba(138, 183, 255, 0.08)), var(--panel);
+    }
+
+    .download-band h2 {
+      font-size: clamp(1.6rem, 3vw, 2.6rem);
+      margin-bottom: 10px;
+    }
+
+    .download-band p {
+      color: var(--muted);
+      margin-bottom: 0;
+    }
+
+    .run-command {
+      display: inline-flex;
+      margin-top: 14px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 9px 11px;
+      background: rgba(13, 16, 18, 0.72);
+      color: var(--mint);
+      font-family: var(--mono);
+      font-size: 0.86rem;
+      white-space: nowrap;
+      max-width: 100%;
+      overflow-x: auto;
+    }
+
+    footer {
+      padding: 42px 0 54px;
+      color: var(--quiet);
+      border-top: 1px solid var(--line-soft);
+      font-size: 0.9rem;
+    }
+
+    footer .page-shell {
+      display: flex;
+      justify-content: space-between;
+      gap: 18px;
+      flex-wrap: wrap;
+    }
+
+    @media (max-width: 980px) {
+      .hero,
+      .section-head,
+      .concept-layout,
+      .flow-panel,
+      .download-band {
+        grid-template-columns: 1fr;
+      }
+
+      .hero {
+        min-height: 0;
+      }
+
+      .terminal-grid {
+        grid-template-columns: 160px minmax(0, 1fr);
+      }
+
+      .detail {
+        display: none;
+      }
+
+      .doc-strip,
+      .artifact-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .flow-steps {
+        border-right: 0;
+        border-bottom: 1px solid var(--line-soft);
+      }
+    }
+
+    @media (max-width: 680px) {
+      .topbar {
+        position: static;
+      }
+
+      .topbar .page-shell {
+        align-items: flex-start;
+        flex-direction: column;
+        padding: 14px 0;
+      }
+
+      .topnav {
+        justify-content: flex-start;
+      }
+
+      .hero {
+        padding-top: 42px;
+      }
+
+      .terminal-grid,
+      .doc-strip,
+      .artifact-grid,
+      .glossary-panel {
+        grid-template-columns: 1fr;
+      }
+
+      .sidebar {
+        display: none;
+      }
+    }
+  </style>
 </head>
 <body>
-    <div class="container">
-        <header>
-            <span class="badge badge--beta">Beta</span>
-            <h1>WorkSpaces</h1>
-            <p class="tagline">AI Coding Session Manager for macOS</p>
-
-            <a href="https://github.com/fairchild/workspaces/releases/latest/download/WorkSpaces-latest.dmg"
-               class="download-btn">
-                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                </svg>
-                Download for macOS
-            </a>
-
-            <div class="requirements">
-                <div class="requirement">
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
-                    </svg>
-                    macOS 14+ (Sonoma)
-                </div>
-                <div class="requirement">
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
-                    </svg>
-                    Apple Silicon & Intel
-                </div>
-                <div class="requirement">
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
-                    </svg>
-                    Notarized by Apple
-                </div>
-            </div>
-        </header>
-
-        <main>
-            <h2>Features</h2>
-            <div class="features">
-                <div class="feature">
-                    <h3>Workspace Management</h3>
-                    <p>Create isolated git worktrees for each AI coding session. Keep your main branch clean while experimenting.</p>
-                </div>
-                <div class="feature">
-                    <h3>Integrated Terminal</h3>
-                    <p>Full-featured terminal emulator built-in. Run commands, view output, and manage your session in one window.</p>
-                </div>
-                <div class="feature">
-                    <h3>Repository Browser</h3>
-                    <p>Browse files and view git status at a glance. See what changed in your workspace without switching apps.</p>
-                </div>
-                <div class="feature">
-                    <h3>Lifecycle Hooks</h3>
-                    <p>Custom <code>setup.sh</code> and <code>archive.sh</code> scripts run automatically when workspaces are created or deleted.</p>
-                </div>
-            </div>
-
-            <h2>Installation</h2>
-            <ol class="steps">
-                <li>Download the DMG file using the button above</li>
-                <li>Open the DMG and drag <strong>WorkSpaces</strong> to your Applications folder</li>
-                <li>On first launch, right-click the app and select <strong>Open</strong> to bypass Gatekeeper</li>
-                <li>Configure your workspace root directory in Settings</li>
-            </ol>
-
-            <div class="callout">
-                <p><strong>Note:</strong> This app requires access to your filesystem and terminal for workspace management. It's distributed outside the App Store because it needs capabilities that sandboxed apps cannot provide.</p>
-            </div>
-
-            <h2>Feedback & Support</h2>
-            <p>This is a beta release. Your feedback helps improve the app!</p>
-            <ul>
-                <li><strong>Bug reports:</strong> <a href="https://github.com/fairchild/workspaces/issues">Open an issue on GitHub</a></li>
-                <li><strong>Feature requests:</strong> <a href="https://github.com/fairchild/workspaces/discussions">Start a discussion</a></li>
-                <li><strong>Source code:</strong> <a href="https://github.com/fairchild/workspaces">View on GitHub</a></li>
-            </ul>
-
-            <h2>Developer Docs</h2>
-            <ul>
-                <li><a href="./performance-testing.md">Performance Testing and Benchmarking</a></li>
-                <li><a href="./performance/dashboard.md">Performance Dashboard</a></li>
-                <li><a href="./ops/dashboard.md">Ops Dashboard</a></li>
-                <li><a href="./performance/metrics-reference.md">Performance Metrics Reference</a></li>
-            </ul>
-        </main>
-
-        <footer>
-            <p>Built with SwiftUI for macOS</p>
-            <div class="links">
-                <a href="https://github.com/fairchild/workspaces">GitHub</a>
-                <a href="https://github.com/fairchild/workspaces/releases">Releases</a>
-                <a href="./performance-testing.md">Performance Docs</a>
-                <a href="https://github.com/fairchild/workspaces/blob/main/LICENSE">License</a>
-            </div>
-        </footer>
+  <header class="topbar">
+    <div class="page-shell">
+      <a class="brand-lockup" href="#top" aria-label="WorkSpaces documentation home">
+        <span class="app-mark" aria-hidden="true"><span></span><span></span><span></span><span class="active"></span></span>
+        <span>WorkSpaces Docs</span>
+      </a>
+      <nav class="topnav" aria-label="Primary">
+        <a href="#model">Domain Model</a>
+        <a href="#lifecycle">Lifecycle</a>
+        <a href="#language">Language</a>
+        <a href="#docs">Docs</a>
+        <a href="https://github.com/fairchild/workspaces">GitHub</a>
+      </nav>
     </div>
+  </header>
+
+  <main id="top">
+    <div class="page-shell">
+      <section class="hero" aria-labelledby="hero-title">
+        <div>
+          <p class="eyebrow">Native macOS context</p>
+          <h1 id="hero-title">Terminal-first control for your code portfolio.</h1>
+          <p class="hero-copy">WorkSpaces is a Mac-native app for moving between repositories, isolated workspaces, terminal sessions, and scoped web sources without turning the product into an IDE.</p>
+          <div class="actions">
+            <a class="button primary" href="https://github.com/fairchild/workspaces/releases/latest/download/WorkSpaces-latest.dmg">Download DMG</a>
+            <a class="button" href="/docs/README">Read README</a>
+            <a class="button" href="/docs/CONTEXT">Open Vocabulary</a>
+          </div>
+          <div class="doc-strip" aria-label="High-level documentation entry points">
+            <a class="doc-link" href="/docs/product_overview"><strong>Product Overview</strong>High-level purpose, principles, and non-goals.</a>
+            <a class="doc-link" href="user-guide/"><strong>User Guide</strong>Day-to-day workflows and shortcuts.</a>
+            <a class="doc-link" href="/docs/branding"><strong>Branding</strong>Icon metaphor, palette, and asset rules.</a>
+            <a class="doc-link" href="/docs/development/mergeability-standard"><strong>Mergeability</strong>Review and evidence expectations.</a>
+          </div>
+        </div>
+
+        <div class="terminal-window" aria-label="WorkSpaces three-column native app diagram">
+          <div class="terminal-titlebar">
+            <div class="dots" aria-hidden="true"><span></span><span></span><span></span></div>
+            <span>Development Build - repo overview / workspace terminal / web source</span>
+          </div>
+          <div class="terminal-grid">
+            <aside class="sidebar">
+              <div class="label">Repositories</div>
+              <div class="tree">
+                <div class="tree-row active"><span class="glyph">#</span> workspaces</div>
+                <div class="tree-row child"><span class="glyph">~</span> docs</div>
+                <div class="tree-row child active"><span class="glyph">&gt;</span> feature-site</div>
+                <div class="tree-row"><span class="glyph">#</span> services</div>
+                <div class="tree-row"><span class="glyph">#</span> dotclaude</div>
+              </div>
+            </aside>
+            <section class="terminal-pane" aria-label="Terminal session preview">
+              <p class="prompt-line"><span class="prompt">workspaces feature-site</span> <span class="dim">$</span> codex</p>
+              <p class="prompt-line">Reading <span class="dim">CONTEXT.md</span> for canonical language...</p>
+              <p class="prompt-line">Selected surface: <span class="prompt">Workspace Terminal</span></p>
+              <p class="prompt-line">Detail pane target: <span class="prompt">workspaces / feature-site</span></p>
+              <p class="prompt-line dim">Cmd+B toggles the sidebar. Cmd+D creates a Ghostty split.</p>
+              <p class="prompt-line"><span class="prompt">workspaces feature-site</span> <span class="dim">$</span> _</p>
+            </section>
+            <aside class="detail">
+              <div class="label">Detail Pane</div>
+              <div class="tree">
+                <div class="file-row active">CONTEXT.md</div>
+                <div class="file-row">docs/index.html</div>
+                <div class="file-row">docs/server.py</div>
+                <div class="file-row">Sources/...</div>
+              </div>
+              <p style="margin-top:18px"><span class="status-pill">git changes visible here</span></p>
+            </aside>
+          </div>
+        </div>
+      </section>
+
+      <section id="model" aria-labelledby="model-title">
+        <div class="section-head">
+          <h2 id="model-title">From high level to native objects.</h2>
+          <p>The site uses the same domain terms as the app. Select a concept to see where it sits in the WorkSpaces model.</p>
+        </div>
+
+        <div class="concept-layout">
+          <div class="concept-list" role="tablist" aria-label="Domain concepts">
+            <button class="concept-button" role="tab" aria-selected="true" data-concept="repository"><strong>Repository</strong>Tracked local codebase.</button>
+            <button class="concept-button" role="tab" aria-selected="false" data-concept="workspace"><strong>Workspace</strong>Isolated work stream.</button>
+            <button class="concept-button" role="tab" aria-selected="false" data-concept="terminal"><strong>Terminal Session</strong>Resumable command context.</button>
+            <button class="concept-button" role="tab" aria-selected="false" data-concept="surface"><strong>Surface</strong>Main selected content target.</button>
+            <button class="concept-button" role="tab" aria-selected="false" data-concept="websource"><strong>Web Source</strong>Saved scoped web destination.</button>
+          </div>
+
+          <div class="diagram-panel">
+            <svg viewBox="0 0 760 430" role="img" aria-labelledby="diagram-title diagram-desc">
+              <title id="diagram-title">WorkSpaces domain relationship diagram</title>
+              <desc id="diagram-desc">A repository owns workspaces and web sources. A surface selects a repo overview, terminal session, workspace terminal, or web view.</desc>
+              <defs>
+                <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                  <path d="M 0 0 L 10 5 L 0 10 z" fill="rgba(243,240,231,0.45)"></path>
+                </marker>
+              </defs>
+              <path class="edge edge-repository edge-workspace" d="M230 126 C310 126 323 118 393 118" marker-end="url(#arrow)"></path>
+              <path class="edge edge-repository edge-websource" d="M230 150 C318 174 324 224 397 241" marker-end="url(#arrow)"></path>
+              <path class="edge edge-workspace edge-terminal" d="M550 136 C592 152 615 188 625 230" marker-end="url(#arrow)"></path>
+              <path class="edge edge-repository edge-terminal" d="M156 176 C232 326 460 344 602 278" marker-end="url(#arrow)"></path>
+              <path class="edge edge-surface edge-terminal" d="M236 315 C332 315 454 298 603 268" marker-end="url(#arrow)"></path>
+              <path class="edge edge-surface edge-websource" d="M226 294 C282 258 332 246 397 246" marker-end="url(#arrow)"></path>
+
+              <g class="node node-repository" data-node="repository" data-active="true" transform="translate(48 82)">
+                <rect width="184" height="104" rx="8" fill="#1c2224" stroke="#394044" stroke-width="2"></rect>
+                <text x="18" y="32">Repository</text>
+                <text x="18" y="62" fill="#a8afad">local codebase</text>
+                <text x="18" y="84" fill="#a8afad">portfolio anchor</text>
+              </g>
+
+              <g class="node node-workspace" data-node="workspace" data-active="false" transform="translate(397 78)">
+                <rect width="178" height="94" rx="8" fill="#1c2224" stroke="#394044" stroke-width="2"></rect>
+                <text x="18" y="32">Workspace</text>
+                <text x="18" y="62" fill="#a8afad">isolated work</text>
+              </g>
+
+              <g class="node node-websource" data-node="websource" data-active="false" transform="translate(397 210)">
+                <rect width="178" height="94" rx="8" fill="#1c2224" stroke="#394044" stroke-width="2"></rect>
+                <text x="18" y="32">Web Source</text>
+                <text x="18" y="62" fill="#a8afad">global / repo / workspace</text>
+              </g>
+
+              <g class="node node-terminal" data-node="terminal" data-active="false" transform="translate(596 229)">
+                <path d="M0 0 H124 Q132 0 132 8 V94 Q132 102 124 102 H0 Q-8 102 -8 94 V8 Q-8 0 0 0 Z" fill="#1c2224" stroke="#394044" stroke-width="2"></path>
+                <text x="12" y="32">Terminal</text>
+                <text x="12" y="58">Session</text>
+                <text x="12" y="82" fill="#a8afad">resumable</text>
+              </g>
+
+              <g class="node node-surface" data-node="surface" data-active="false" transform="translate(48 266)">
+                <rect width="188" height="98" rx="8" fill="#1c2224" stroke="#394044" stroke-width="2"></rect>
+                <text x="18" y="32">Surface</text>
+                <text x="18" y="62" fill="#a8afad">selected main target</text>
+              </g>
+            </svg>
+            <div class="explain-box" id="concept-explanation" aria-live="polite">
+              <strong>Repository</strong>
+              A tracked local codebase that anchors overviews, terminals, workspaces, and repo-owned web sources.
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="lifecycle" aria-labelledby="lifecycle-title">
+        <div class="section-head">
+          <h2 id="lifecycle-title">A normal path through the app.</h2>
+          <p>WorkSpaces should read from top to bottom: choose a repository, open the right surface, create isolation when needed, and keep the terminal in control.</p>
+        </div>
+
+        <div class="flow-panel">
+          <div class="flow-steps" role="tablist" aria-label="Workflow steps">
+            <button class="flow-step" role="tab" aria-selected="true" data-step="0"><span class="step-number">1</span><span><strong>Select a Repository</strong>Start from the portfolio, not a blank terminal.</span></button>
+            <button class="flow-step" role="tab" aria-selected="false" data-step="1"><span class="step-number">2</span><span><strong>Open a Surface</strong>Choose overview, terminal, workspace, or web view.</span></button>
+            <button class="flow-step" role="tab" aria-selected="false" data-step="2"><span class="step-number">3</span><span><strong>Create a Workspace</strong>Isolate a feature, experiment, or agent run.</span></button>
+            <button class="flow-step" role="tab" aria-selected="false" data-step="3"><span class="step-number">4</span><span><strong>Stay Terminal-First</strong>Let Ghostty own terminal behavior and shortcuts.</span></button>
+          </div>
+          <div class="flow-detail">
+            <h3 id="flow-title">Select a Repository</h3>
+            <p id="flow-copy">The sidebar is a repository portfolio. A repository click opens the Repo Overview so the user can choose the next action deliberately.</p>
+            <div class="mini-window" aria-hidden="true">
+              <header>state</header>
+              <div class="mini-body" id="flow-state">
+                <div class="mini-row"><span>Surface</span><strong>Repo Overview</strong></div>
+                <div class="mini-row"><span>Terminal Session</span><strong>not yet entered</strong></div>
+                <div class="mini-row"><span>Detail Pane</span><strong>repository context</strong></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="language" aria-labelledby="language-title">
+        <div class="section-head">
+          <h2 id="language-title">Canonical language for docs and UI.</h2>
+          <p>This is the first pass from <a href="/docs/CONTEXT">CONTEXT.md</a>. Product docs should prefer these terms and avoid overloaded alternatives.</p>
+        </div>
+
+        <div class="glossary-panel">
+          <article class="term">
+            <h3>Repository</h3>
+            <p>A tracked local codebase that anchors overviews, terminals, workspaces, and repo-owned web sources.</p>
+            <div class="avoid">Avoid: Project, folder, account</div>
+          </article>
+          <article class="term">
+            <h3>Workspace</h3>
+            <p>An isolated working copy or provider-backed environment created from a repository for a single work stream.</p>
+            <div class="avoid">Avoid: Session, tab, branch</div>
+          </article>
+          <article class="term">
+            <h3>Terminal Session</h3>
+            <p>A resumable terminal context attached to a repository or workspace.</p>
+            <div class="avoid">Avoid: Shell, pane, console</div>
+          </article>
+          <article class="term">
+            <h3>Surface</h3>
+            <p>The currently selected main content target, such as a repo overview, terminal, or web view.</p>
+            <div class="avoid">Avoid: Page, screen, route</div>
+          </article>
+          <article class="term">
+            <h3>Repo Overview</h3>
+            <p>The repository-level surface for navigation and launch actions before entering a terminal or web view.</p>
+            <div class="avoid">Avoid: Dashboard, home page</div>
+          </article>
+          <article class="term">
+            <h3>Web Source</h3>
+            <p>A saved web destination owned globally, by a repository, or by a workspace.</p>
+            <div class="avoid">Avoid: Bookmark, browser tab, website</div>
+          </article>
+        </div>
+      </section>
+
+      <section id="docs" aria-labelledby="docs-title">
+        <div class="section-head">
+          <h2 id="docs-title">Where to go next.</h2>
+          <p>The docs are organized from user-level product meaning down to development and verification detail.</p>
+        </div>
+
+        <div class="artifact-grid">
+          <a class="artifact" href="/docs/product_overview"><span class="type">Product</span><strong>Product Overview</strong><p>Problem, solution, native app principles, and non-goals.</p></a>
+          <a class="artifact" href="user-guide/"><span class="type">User</span><strong>User Guide</strong><p>Repository, workspace, terminal, and shortcut workflows.</p></a>
+          <a class="artifact" href="/docs/branding"><span class="type">Brand</span><strong>Branding</strong><p>Icon metaphor and visual rules grounded in the repository portfolio model.</p></a>
+          <a class="artifact" href="/docs/development/libghostty-integration"><span class="type">Terminal</span><strong>Ghostty Integration</strong><p>Shortcut, split, and terminal surface contract.</p></a>
+          <a class="artifact" href="/docs/development/lume-integration"><span class="type">Runtime</span><strong>Lume Integration</strong><p>VM-backed workspace runtime setup and storage contracts.</p></a>
+          <a class="artifact" href="/docs/performance/dashboard"><span class="type">Evidence</span><strong>Performance Dashboard</strong><p>Operational and performance evidence for the native app.</p></a>
+        </div>
+      </section>
+
+      <section aria-labelledby="download-title">
+        <div class="download-band">
+          <div>
+            <h2 id="download-title">Use the app, then return to the model.</h2>
+            <p>The docs site is intentionally static and source-backed. Serve it over HTTP so the reader can fetch Markdown files, build outlines, and keep local links in the rendered documentation frame.</p>
+            <code class="run-command">mise run docs:serve</code>
+          </div>
+          <div class="actions" style="margin:0">
+            <a class="button primary" href="https://github.com/fairchild/workspaces/releases/latest/download/WorkSpaces-latest.dmg">Download Latest</a>
+            <a class="button" href="/docs/docs-site">Runbook</a>
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <footer>
+    <div class="page-shell">
+      <span>WorkSpaces is a native macOS app for terminal-first AI coding sessions.</span>
+      <span><a href="/docs/CONTEXT">Vocabulary</a> / <a href="/docs/docs-site">Runbook</a> / <a href="https://github.com/fairchild/workspaces/blob/main/LICENSE">License</a></span>
+    </div>
+  </footer>
+
+  <script>
+    const conceptCopy = {
+      repository: {
+        title: "Repository",
+        body: "A tracked local codebase that anchors overviews, terminals, workspaces, and repo-owned web sources.",
+        edges: ["repository", "workspace", "terminal", "websource"]
+      },
+      workspace: {
+        title: "Workspace",
+        body: "An isolated working copy or provider-backed environment created from a repository for a single work stream.",
+        edges: ["repository", "workspace", "terminal", "websource"]
+      },
+      terminal: {
+        title: "Terminal Session",
+        body: "A resumable terminal context attached to a repository or workspace. Terminal behavior should remain Ghostty-first.",
+        edges: ["terminal", "workspace", "repository", "surface"]
+      },
+      surface: {
+        title: "Surface",
+        body: "The selected main content target: repo overview, repository terminal, workspace terminal, or web view.",
+        edges: ["surface", "terminal", "websource"]
+      },
+      websource: {
+        title: "Web Source",
+        body: "A saved web destination owned globally, by a repository, or by a workspace.",
+        edges: ["websource", "repository", "workspace", "surface"]
+      }
+    };
+
+    const explanation = document.querySelector("#concept-explanation");
+    const conceptButtons = Array.from(document.querySelectorAll(".concept-button"));
+    const nodes = Array.from(document.querySelectorAll(".node"));
+    const edges = Array.from(document.querySelectorAll(".edge"));
+
+    function selectConcept(key) {
+      const concept = conceptCopy[key];
+      conceptButtons.forEach((button) => {
+        button.setAttribute("aria-selected", String(button.dataset.concept === key));
+      });
+      nodes.forEach((node) => {
+        node.dataset.active = String(node.dataset.node === key);
+      });
+      edges.forEach((edge) => {
+        const active = concept.edges.some((edgeKey) => edge.classList.contains(`edge-${edgeKey}`));
+        edge.classList.toggle("active", active);
+      });
+      explanation.innerHTML = `<strong>${concept.title}</strong>${concept.body}`;
+    }
+
+    conceptButtons.forEach((button) => {
+      button.addEventListener("click", () => selectConcept(button.dataset.concept));
+    });
+
+    const flowContent = [
+      {
+        title: "Select a Repository",
+        copy: "The sidebar is a repository portfolio. A repository click opens the Repo Overview so the user can choose the next action deliberately.",
+        state: [
+          ["Surface", "Repo Overview"],
+          ["Terminal Session", "not yet entered"],
+          ["Detail Pane", "repository context"]
+        ]
+      },
+      {
+        title: "Open a Surface",
+        copy: "A surface is the main selected target. It can be a repo overview, repository terminal, workspace terminal, or web view.",
+        state: [
+          ["Surface", "selected target"],
+          ["Last Surface", "restored on launch"],
+          ["Sidebar", "selection source"]
+        ]
+      },
+      {
+        title: "Create a Workspace",
+        copy: "A workspace gives one work stream its own isolated environment while keeping the source repository clean.",
+        state: [
+          ["Workspace", "provisioning"],
+          ["Repository", "source owner"],
+          ["Lifecycle", "setup hook"]
+        ]
+      },
+      {
+        title: "Stay Terminal-First",
+        copy: "The terminal is the primary experience. App chrome supports navigation and context, while Ghostty owns terminal semantics.",
+        state: [
+          ["Shortcut Route", "Ghostty-first"],
+          ["Split", "Cmd+D"],
+          ["Chrome", "minimal"]
+        ]
+      }
+    ];
+
+    const flowButtons = Array.from(document.querySelectorAll(".flow-step"));
+    const flowTitle = document.querySelector("#flow-title");
+    const flowCopy = document.querySelector("#flow-copy");
+    const flowState = document.querySelector("#flow-state");
+
+    function selectFlowStep(index) {
+      const content = flowContent[index];
+      flowButtons.forEach((button) => {
+        button.setAttribute("aria-selected", String(Number(button.dataset.step) === index));
+      });
+      flowTitle.textContent = content.title;
+      flowCopy.textContent = content.copy;
+      flowState.innerHTML = content.state
+        .map(([label, value]) => `<div class="mini-row"><span>${label}</span><strong>${value}</strong></div>`)
+        .join("");
+    }
+
+    flowButtons.forEach((button) => {
+      button.addEventListener("click", () => selectFlowStep(Number(button.dataset.step)));
+    });
+  </script>
 </body>
 </html>

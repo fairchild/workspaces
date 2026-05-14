@@ -18,6 +18,7 @@
 			".claude/",
 			".vercel/",
 			"node_modules/",
+			"public/docs/",
 			"e2e/",
 			"playwright-report/",
 			"test-results/"

@@ -58,6 +58,10 @@ description = "Run the interactive Claude Code integration smoke and evidence ca
 run = "./scripts/claude-integration-smoke.sh"
 usage = "--pr <number> [--no-build] [--fixture-home] [--post-comment]"
 
+[tasks."docs:serve"]
+description = "Serve the local WorkSpaces docs site."
+run = "uv run --script docs/server.py"
+
 [tasks."lume-status"]
 description = "Compact VM status (use --stale to find cleanup candidates)."
 run = "uv run --script ./scripts/lume-status.py"

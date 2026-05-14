@@ -171,7 +171,7 @@ The base becomes reusable only after the standalone Lume validator proves:
 - `lume ssh` succeeds
 - a disposable clone also boots and reaches SSH
 
-For the detailed contract and storage layout, see [development/lume-integration.md](/Users/fairchild/.codex/worktrees/55bd/workspaces/docs/development/lume-integration.md).
+For the detailed contract and storage layout, see [development/lume-integration.md](development/lume-integration.md).
 
 ```mermaid
 sequenceDiagram
