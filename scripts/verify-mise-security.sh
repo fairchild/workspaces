@@ -5,8 +5,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 cd "$REPO_ROOT"
 
-MISE_EXPECTED_VERSION="v2026.5.5"
-MISE_EXPECTED_LINUX_X64_SHA256="3aaab5c05a8a94a93b42b4f581779bbd5c44ddb251e7f3639fc671ec5c6aab8a"
+MISE_EXPECTED_VERSION="v2026.5.7"
+MISE_EXPECTED_LINUX_X64_SHA256="f70272c144e6a3da52cea68d544bb43ef5410905efe6f3bfc2c9d448949e1ce5"
 ZIG_VERSION="0.15.2"
 
 fail() {
@@ -139,7 +139,7 @@ verify_latest_mise_pin() {
 
   if command -v mise >/dev/null 2>&1; then
     local installed_version
-    installed_version="$(mise --version | awk '{print $1}')"
+    installed_version="$(mise -q version | awk '{print $1}')"
     [[ "$installed_version" == "${MISE_EXPECTED_VERSION#v}" ]] \
       || fail "installed mise $installed_version does not match $MISE_EXPECTED_VERSION"
   fi

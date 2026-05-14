@@ -40,3 +40,18 @@ configs can affect every later command in a checkout.
 The `Mise Security` workflow runs this verifier whenever mise configs,
 `mise.lock`, the setup/build scripts, the sandbox mise installer, or this doc
 change.
+
+## Sandboxed Agent Runs
+
+When Codex or another sandbox blocks writes to user-level mise state or cache
+directories, run mise through:
+
+```bash
+./scripts/mise-sandbox -C web run web:check
+```
+
+The wrapper redirects only `XDG_STATE_HOME` and `MISE_CACHE_DIR` to temp
+directories, ignores user-level mise config, preserves explicit trust for the
+reviewed root and web mise configs, enables paranoid mode, and then execs `mise`
+normally. It does not redirect `MISE_DATA_DIR`, suppress stderr, or weaken task
+failure behavior.

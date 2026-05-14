@@ -10,6 +10,7 @@ This directory contains build/release helpers plus UI test utilities.
 - `./scripts/setup --hooks-only` installs or refreshes the prek git hooks without running dependency setup.
 - `./scripts/install-git-hooks.sh` remains only as a compatibility wrapper around `./scripts/setup --hooks-only`; prefer `./scripts/setup` in new docs and task definitions.
 - mise security rules live in [docs/development/mise-security.md](../docs/development/mise-security.md). Run `./scripts/verify-mise-security.sh` after touching mise config, lockfiles, setup/build scripts, or the sandbox mise installer. Keep secrets and global trust bypasses out of mise config.
+- In sandboxed agent sessions where mise cannot write user state/cache metadata, use `./scripts/mise-sandbox <mise args>` instead of suppressing warnings.
 - `web/.npmrc` enables pnpm's experimental global virtual store so repeated warm installs across Conductor workspaces reuse a shared virtual store.
 
 ## Root Mise Task Catalog

@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(dirname "$SCRIPT_DIR")"
+
+STATE_HOME="${WORKSPACES_MISE_STATE_HOME:-${TMPDIR:-/tmp}/workspaces-mise-state}"
+CACHE_DIR="${WORKSPACES_MISE_CACHE_DIR:-${TMPDIR:-/tmp}/workspaces-mise-cache}"
+TRUSTED_PATHS="$REPO_ROOT:$REPO_ROOT/web"
+IGNORED_CONFIG_PATHS="$HOME/.config/mise"
+
+mkdir -p "$STATE_HOME" "$CACHE_DIR"
+
+if [[ -n "${MISE_TRUSTED_CONFIG_PATHS:-}" ]]; then
+  TRUSTED_PATHS="$TRUSTED_PATHS:$MISE_TRUSTED_CONFIG_PATHS"
+fi
+
+if [[ -n "${MISE_IGNORED_CONFIG_PATHS:-}" ]]; then
+  IGNORED_CONFIG_PATHS="$IGNORED_CONFIG_PATHS:$MISE_IGNORED_CONFIG_PATHS"
+fi
+
+export XDG_STATE_HOME="$STATE_HOME"
+export MISE_CACHE_DIR="$CACHE_DIR"
+export MISE_TRUSTED_CONFIG_PATHS="$TRUSTED_PATHS"
+export MISE_IGNORED_CONFIG_PATHS="$IGNORED_CONFIG_PATHS"
+export MISE_PARANOID="${MISE_PARANOID:-1}"
+
+exec mise "$@"
