@@ -1,3 +1,7 @@
+# Managed reviewer ingress is the contract gate between GitHub webhook delivery,
+# the Cloudflare relay, and the Vercel route that decides whether to start a
+# managed PR review. Keep this workflow narrow and required for changes that can
+# break either side of that cross-service handoff.
 name: Managed Reviewer Ingress
 
 on:
@@ -8,6 +12,7 @@ on:
       - "web/src/app/api/webhooks/github/**"
       - "web/src/lib/agent-runtime/pr-review*.ts"
       - "web/src/lib/agent-runtime/__tests__/pr-review*.ts"
+      - "scripts/managed-reviewer-ingress-canary.py"
       - ".github/workflows/managed-reviewer-ingress.yml"
   pull_request:
     paths:
@@ -15,6 +20,7 @@ on:
       - "web/src/app/api/webhooks/github/**"
       - "web/src/lib/agent-runtime/pr-review*.ts"
       - "web/src/lib/agent-runtime/__tests__/pr-review*.ts"
+      - "scripts/managed-reviewer-ingress-canary.py"
       - ".github/workflows/managed-reviewer-ingress.yml"
   workflow_dispatch:
   schedule:
@@ -81,54 +87,9 @@ jobs:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+
       - name: Run managed reviewer ingress canary
         env:
           WORKSPACES_WEBHOOK_CANARY_SECRET: ${{ secrets.WORKSPACES_WEBHOOK_CANARY_SECRET }}
-        run: |
-          if [ -z "$WORKSPACES_WEBHOOK_CANARY_SECRET" ]; then
-            echo "::error::WORKSPACES_WEBHOOK_CANARY_SECRET is required for the production canary"
-            exit 1
-          fi
-
-          response="$(
-            curl --fail-with-body -sS -X POST \
-              "https://webhooks.cloudcompute.com/canary/pr-review-ingress" \
-              -H "X-Workspace-Webhook-Canary: ${WORKSPACES_WEBHOOK_CANARY_SECRET}"
-          )"
-          printf '%s\n' "$response"
-          RESPONSE="$response" python3 - <<'PY'
-          import json
-          import os
-          import sys
-
-          payload = json.loads(os.environ["RESPONSE"])
-          if (
-              payload.get("ok") is not True
-              or payload.get("canary") is not True
-              or payload.get("wouldTrigger") is not True
-              or payload.get("triggerKind") != "opened"
-          ):
-              print(f"Unexpected canary response: {payload}", file=sys.stderr)
-              sys.exit(1)
-          PY
-
-      - name: Check recent reviewer run records
-        env:
-          WORKSPACES_WEBHOOK_CANARY_SECRET: ${{ secrets.WORKSPACES_WEBHOOK_CANARY_SECRET }}
-        run: |
-          monitor_response="$(
-            curl --fail-with-body -sS \
-              "https://spaces.cloudcompute.com/api/webhooks/github/pr-reviewer-monitor?windowMinutes=90" \
-              -H "X-Workspace-Webhook-Canary: ${WORKSPACES_WEBHOOK_CANARY_SECRET}"
-          )"
-          printf '%s\n' "$monitor_response"
-          RESPONSE="$monitor_response" python3 - <<'PY'
-          import json
-          import os
-          import sys
-
-          payload = json.loads(os.environ["RESPONSE"])
-          if payload.get("ok") is not True:
-              print(f"Reviewer run monitor failed: {payload}", file=sys.stderr)
-              sys.exit(1)
-          PY
+        run: python3 scripts/managed-reviewer-ingress-canary.py

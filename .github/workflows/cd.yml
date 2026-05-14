@@ -290,50 +290,7 @@ jobs:
       - name: Managed reviewer ingress canary
         env:
           WORKSPACES_WEBHOOK_CANARY_SECRET: ${{ secrets.WORKSPACES_WEBHOOK_CANARY_SECRET }}
-        run: |
-          if [ -z "$WORKSPACES_WEBHOOK_CANARY_SECRET" ]; then
-            echo "::error::WORKSPACES_WEBHOOK_CANARY_SECRET is required for the managed reviewer ingress canary"
-            exit 1
-          fi
-
-          response="$(
-            curl --fail-with-body -sS -X POST \
-              "https://webhooks.cloudcompute.com/canary/pr-review-ingress" \
-              -H "X-Workspace-Webhook-Canary: ${WORKSPACES_WEBHOOK_CANARY_SECRET}"
-          )"
-          printf '%s\n' "$response"
-          RESPONSE="$response" python3 - <<'PY'
-          import json
-          import os
-          import sys
-
-          payload = json.loads(os.environ["RESPONSE"])
-          if (
-              payload.get("ok") is not True
-              or payload.get("canary") is not True
-              or payload.get("wouldTrigger") is not True
-              or payload.get("triggerKind") != "opened"
-          ):
-              print(f"Unexpected canary response: {payload}", file=sys.stderr)
-              sys.exit(1)
-          PY
-
-          monitor_response="$(
-            curl --fail-with-body -sS \
-              "https://spaces.cloudcompute.com/api/webhooks/github/pr-reviewer-monitor?windowMinutes=90" \
-              -H "X-Workspace-Webhook-Canary: ${WORKSPACES_WEBHOOK_CANARY_SECRET}"
-          )"
-          printf '%s\n' "$monitor_response"
-          RESPONSE="$monitor_response" python3 - <<'PY'
-          import json
-          import os
-          import sys
-
-          payload = json.loads(os.environ["RESPONSE"])
-          if payload.get("ok") is not True:
-              print(f"Reviewer run monitor failed: {payload}", file=sys.stderr)
-              sys.exit(1)
-          PY
+        run: python3 ../scripts/managed-reviewer-ingress-canary.py
       - name: Playwright fast against prod
         env:
           PLAYWRIGHT_BASE_URL: https://spaces.cloudcompute.com
