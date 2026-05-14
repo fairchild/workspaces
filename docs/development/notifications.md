@@ -125,6 +125,9 @@ bun run --bun wrangler deploy --env preview # preview
 **Secrets** (set via `wrangler secret put`):
 - `GITHUB_WEBHOOK_SECRET` — shared secret for GitHub webhook signature verification
 - `JWT_SIGNING_SECRET` — HMAC-SHA256 key for JWT signing/verification
+- `WORKSPACES_WEBHOOK_CANARY_SECRET` — canary-only shared secret used to prove
+  the signed Cloudflare-to-Vercel reviewer ingress path without starting an
+  agent
 
 **Vars** (set in `wrangler.toml` or via Cloudflare):
 - `WEBHOOK_FORWARD_URL` — optional web app webhook endpoint. Production uses
@@ -134,6 +137,7 @@ bun run --bun wrangler deploy --env preview # preview
 
 **Routes:**
 - `POST /webhook` — receives GitHub webhooks, verifies signature, forwards to org DO, and forwards managed-review trigger candidates to the web app
+- `POST /canary/pr-review-ingress` — requires `WORKSPACES_WEBHOOK_CANARY_SECRET`, sends a signed dry-run PR-review webhook to the web app, and returns whether the web route would trigger the reviewer
 - `POST /auth/session` — exchanges GitHub token for JWT
 - `GET /ws/{owner}` — WebSocket upgrade with per-client repo filtering (requires JWT + GitHub token)
 - `GET /health` — health check

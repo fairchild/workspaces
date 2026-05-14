@@ -8,6 +8,7 @@
 import { signJWT } from "../src/github-verify";
 import { writeFileSync, readFileSync, existsSync, rmSync } from "fs";
 import { resolve } from "path";
+import { PR_REVIEW_WEBHOOK_CONTRACT_CASES } from "../../../web/src/lib/agent-runtime/__tests__/pr-review-trigger-fixtures";
 
 const WORKER_PORT = 8787;
 const MOCK_PORT = 8788;
@@ -15,6 +16,7 @@ const FORWARD_PORT = 8789;
 const WORKER_URL = `http://localhost:${WORKER_PORT}`;
 const FORWARD_URL = `http://127.0.0.1:${FORWARD_PORT}/api/webhooks/github`;
 const WEBHOOK_SECRET = "test-webhook-secret-e2e";
+const WEBHOOK_CANARY_SECRET = "test-webhook-canary-secret-e2e";
 const JWT_SECRET = "test-jwt-secret-e2e";
 
 const projectDir = resolve(import.meta.dir, "..");
@@ -154,6 +156,10 @@ function payloadForPR(
   });
 }
 
+function contractPayload(testCase: (typeof PR_REVIEW_WEBHOOK_CONTRACT_CASES)[number]): string {
+  return JSON.stringify(testCase.payload);
+}
+
 async function expectNoExtraWebSocketMessage(
   bws: BufferedWS,
   timeoutMs = 750
@@ -201,13 +207,31 @@ async function readCatchupEvents(
   }
 }
 
-async function durableObjectSQLitePath(): Promise<string> {
+async function durableObjectSQLitePath(eventSummary?: string): Promise<string> {
   const proc = Bun.spawn(
     ["find", resolve(stateDir, "v3/do"), "-name", "*.sqlite"],
     { stdout: "pipe", stderr: "ignore" }
   );
   const output = (await new Response(proc.stdout).text()).trim();
   const paths = output.split("\n").filter(Boolean);
+  if (eventSummary) {
+    const matches: string[] = [];
+    const escaped = eventSummary.replace(/'/g, "''");
+    for (const path of paths) {
+      const count = await runSQLite(
+        path,
+        `SELECT COUNT(*) FROM events WHERE summary LIKE '%${escaped}%';`
+      );
+      if (Number(count.trim()) > 0) {
+        matches.push(path);
+      }
+    }
+    assert(
+      matches.length === 1,
+      `Expected 1 Durable Object sqlite file containing ${eventSummary}, found ${matches.length}`
+    );
+    return matches[0];
+  }
   assert(paths.length === 1, `Expected 1 Durable Object sqlite file, found ${paths.length}`);
   return paths[0];
 }
@@ -239,6 +263,7 @@ writeFileSync(
     `JWT_SIGNING_SECRET=${JWT_SECRET}`,
     `GITHUB_API_BASE=http://127.0.0.1:${MOCK_PORT}`,
     `WEBHOOK_FORWARD_URL=${FORWARD_URL}`,
+    `WORKSPACES_WEBHOOK_CANARY_SECRET=${WEBHOOK_CANARY_SECRET}`,
     "",
   ].join("\n")
 );
@@ -305,7 +330,31 @@ async function startForwardMock(): Promise<void> {
     port: FORWARD_PORT,
     async fetch(request) {
       const headers = Object.fromEntries(request.headers.entries()) as Record<string, string>;
-      forwardedRequests.push({ body: await request.text(), headers });
+      const body = await request.text();
+      forwardedRequests.push({ body, headers });
+      if (headers["x-workspace-webhook-canary"]) {
+        const expectedSignature = await hmacSign(WEBHOOK_SECRET, body);
+        if (headers["x-workspace-webhook-canary"] !== WEBHOOK_CANARY_SECRET) {
+          return Response.json(
+            { ok: false, canary: true, error: "invalid_canary_secret" },
+            { status: 401 }
+          );
+        }
+        if (headers["x-hub-signature-256"] !== expectedSignature) {
+          return Response.json(
+            { ok: false, canary: true, error: "invalid_signature" },
+            { status: 401 }
+          );
+        }
+        return Response.json({
+          ok: true,
+          canary: true,
+          wouldTrigger: true,
+          triggerKind: "opened",
+          eventType: headers["x-github-event"],
+          action: "opened",
+        });
+      }
       return new Response("OK", { status: 200 });
     },
   });
@@ -458,7 +507,7 @@ try {
   // Test 6: PR-review trigger events are forwarded to the web app route
   await test("PR-review trigger webhooks are forwarded with the original signature", async () => {
     forwardedRequests.length = 0;
-    const payload = payloadForPR(9090, "Forwarded Review PR", "opened");
+    const payload = contractPayload(PR_REVIEW_WEBHOOK_CONTRACT_CASES[0]);
     const expectedSignature = await hmacSign(WEBHOOK_SECRET, payload);
 
     const resp = await postWebhook(payload, "forward-review-delivery-1");
@@ -481,7 +530,103 @@ try {
     );
   });
 
-  // Test 7: Non-review lifecycle events stay relay-local
+  // Test 7: Cloudflare and Vercel reviewer ingress share the same trigger contract
+  await test("PR-review forwarding follows the shared trigger contract matrix", async () => {
+    forwardedRequests.length = 0;
+    let expectedForwards = 0;
+
+    for (const testCase of PR_REVIEW_WEBHOOK_CONTRACT_CASES) {
+      const payload = contractPayload(testCase);
+      const resp = await postWebhook(
+        payload,
+        testCase.deliveryId,
+        testCase.eventType
+      );
+      assert(resp.status === 200, `${testCase.name}: webhook POST returned ${resp.status}`);
+
+      if (testCase.expectedForwarded) {
+        expectedForwards += 1;
+        await waitForForwardedRequestCount(expectedForwards);
+        const forwarded = forwardedRequests[expectedForwards - 1];
+        const expectedSignature = await hmacSign(WEBHOOK_SECRET, payload);
+        assert(
+          forwarded.body === payload,
+          `${testCase.name}: expected forwarded body to preserve the raw GitHub payload`
+        );
+        assert(
+          forwarded.headers["x-hub-signature-256"] === expectedSignature,
+          `${testCase.name}: expected forwarded signature to match original HMAC`
+        );
+        assert(
+          forwarded.headers["x-github-event"] === testCase.eventType,
+          `${testCase.name}: expected ${testCase.eventType} event header`
+        );
+      } else {
+        await Bun.sleep(250);
+        assert(
+          forwardedRequests.length === expectedForwards,
+          `${testCase.name}: expected no forwarded request`
+        );
+      }
+    }
+  });
+
+  // Test 8: Canary requires its separate secret and stays relay-local when unauthorized
+  await test("PR-review canary rejects missing or invalid canary secrets", async () => {
+    forwardedRequests.length = 0;
+    const missing = await fetch(`${WORKER_URL}/canary/pr-review-ingress`, {
+      method: "POST",
+    });
+    assert(missing.status === 401, `Expected 401 for missing canary secret, got ${missing.status}`);
+
+    const invalid = await fetch(`${WORKER_URL}/canary/pr-review-ingress`, {
+      method: "POST",
+      headers: { "X-Workspace-Webhook-Canary": "wrong-secret" },
+    });
+    assert(invalid.status === 401, `Expected 401 for invalid canary secret, got ${invalid.status}`);
+    assert(forwardedRequests.length === 0, "Unauthorized canary requests must not be forwarded");
+  });
+
+  // Test 9: Canary proves the signed Cloudflare -> Vercel dry-run path
+  await test("PR-review canary forwards a signed dry-run webhook to the web app", async () => {
+    forwardedRequests.length = 0;
+    const resp = await fetch(`${WORKER_URL}/canary/pr-review-ingress`, {
+      method: "POST",
+      headers: { "X-Workspace-Webhook-Canary": WEBHOOK_CANARY_SECRET },
+    });
+    const body = await resp.json() as {
+      ok: boolean;
+      canary: boolean;
+      upstreamStatus: number;
+      wouldTrigger: boolean;
+      triggerKind: string;
+    };
+
+    assert(resp.status === 200, `Expected 200, got ${resp.status}`);
+    assert(body.ok === true, "Expected canary response ok=true");
+    assert(body.canary === true, "Expected canary response marker");
+    assert(body.upstreamStatus === 200, `Expected upstream 200, got ${body.upstreamStatus}`);
+    assert(body.wouldTrigger === true, "Expected Vercel dry-run to report wouldTrigger=true");
+    assert(body.triggerKind === "opened", `Expected opened trigger, got ${body.triggerKind}`);
+
+    await waitForForwardedRequestCount(1);
+    const forwarded = forwardedRequests[0];
+    const expectedSignature = await hmacSign(WEBHOOK_SECRET, forwarded.body);
+    assert(
+      forwarded.headers["x-workspace-webhook-canary"] === WEBHOOK_CANARY_SECRET,
+      "Expected forwarded canary secret header"
+    );
+    assert(
+      forwarded.headers["x-hub-signature-256"] === expectedSignature,
+      "Expected forwarded canary request to be signed with the GitHub webhook HMAC"
+    );
+    assert(
+      forwarded.headers["x-github-event"] === "pull_request",
+      `Expected pull_request event header, got ${forwarded.headers["x-github-event"]}`
+    );
+  });
+
+  // Test 10: Non-review lifecycle events stay relay-local
   await test("Non-review PR lifecycle events are not forwarded", async () => {
     forwardedRequests.length = 0;
     const payload = payloadForPR(9091, "Closed PR", "closed");
@@ -493,7 +638,7 @@ try {
     assert(forwardedRequests.length === 0, `Expected no forwarded requests, got ${forwardedRequests.length}`);
   });
 
-  // Test 8: Duplicate webhook delivery is ignored
+  // Test 11: Duplicate webhook delivery is ignored
   await test("Duplicate webhook payload only appears once", async () => {
     const jwt = await makeJWT();
     const payload = payloadForPR(4242, "Duplicate PR", "opened");
@@ -520,7 +665,7 @@ try {
     assert(duplicateEntries.length === 1, `Expected 1 duplicate-test event in catchup, got ${duplicateEntries.length}`);
   });
 
-  // Test 9: Equivalent payloads with different key order are deduped
+  // Test 12: Equivalent payloads with different key order are deduped
   await test("Semantically equivalent payloads only appear once", async () => {
     const jwt = await makeJWT();
     const payloadA = payloadForPR(4343, "Key Order PR", "opened");
@@ -553,7 +698,7 @@ try {
     assert(matching.length === 1, `Expected 1 key-order event in catchup, got ${matching.length}`);
   });
 
-  // Test 10: Distinct lifecycle events for the same PR are preserved
+  // Test 13: Distinct lifecycle events for the same PR are preserved
   await test("Distinct events for the same PR are not over-deduped", async () => {
     const jwt = await makeJWT();
     const openedPayload = payloadForPR(5151, "Lifecycle PR", "opened");
@@ -584,7 +729,7 @@ try {
     assert(matching.length === 2, `Expected 2 lifecycle events in catchup, got ${matching.length}`);
   });
 
-  // Test 11: Duplicate suppression survives worker restart
+  // Test 14: Duplicate suppression survives worker restart
   await test("Duplicate suppression survives worker restart", async () => {
     const jwt = await makeJWT();
     const payload = payloadForPR(6262, "Restart Stable PR", "opened");
@@ -614,7 +759,7 @@ try {
     assert(finalMatches.length === 1, `Expected 1 restarted event after duplicate resend, got ${finalMatches.length}`);
   });
 
-  // Test 12: Startup cleanup prunes legacy duplicate rows
+  // Test 15: Startup cleanup prunes legacy duplicate rows
   await test("Startup cleanup collapses legacy duplicate rows before catchup", async () => {
     const jwt = await makeJWT();
     const payload = payloadForPR(7373, "Legacy Cleanup PR", "opened");
@@ -623,7 +768,7 @@ try {
 
     await stopWorker();
 
-    const sqlitePath = await durableObjectSQLitePath();
+    const sqlitePath = await durableObjectSQLitePath("Legacy Cleanup PR");
     await runSQLite(
       sqlitePath,
       `
@@ -659,7 +804,7 @@ try {
     assert(matching.length === 1, `Expected 1 legacy-cleanup event in catchup, got ${matching.length}`);
   });
 
-  // Test 13: Per-client repo filtering
+  // Test 16: Per-client repo filtering
   await test("Repo filtering: ghp_repo_b_only only receives repo-b events", async () => {
     const jwt = await makeJWT();
     const bws = await connectWebSocket("test-org", jwt, "ghp_repo_b_only");

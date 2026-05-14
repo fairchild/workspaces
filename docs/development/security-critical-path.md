@@ -31,6 +31,9 @@ not a broad public security stance.
 - The managed PR reviewer no longer mounts a GitHub write token into the agent
   workspace. It produces a structured review intent, and the server-side broker
   validates and posts the GitHub review with the App token.
+- Managed reviewer ingress canaries are HMAC verified and gated by
+  `WORKSPACES_WEBHOOK_CANARY_SECRET`; the dry-run response returns before DB
+  writes or managed-agent session creation.
 
 ## Release And Update Chain
 

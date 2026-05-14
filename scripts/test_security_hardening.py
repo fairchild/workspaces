@@ -265,7 +265,7 @@ class SecurityHardeningTests(unittest.TestCase):
 
     def test_mise_invocations_are_locked_and_pinned(self) -> None:
         verify_mise = (REPO_ROOT / "scripts/verify-mise-security.sh").read_text()
-        self.assertIn("MISE_EXPECTED_VERSION=\"v2026.5.5\"", verify_mise)
+        self.assertIn("MISE_EXPECTED_VERSION=\"v2026.5.7\"", verify_mise)
         self.assertIn("verify_locked_zig_exec", verify_mise)
         self.assertIn("github.com/repos/jdx/mise/releases/latest", verify_mise)
         self.assertIn("SHASUMS256.txt", verify_mise)
@@ -291,8 +291,8 @@ class SecurityHardeningTests(unittest.TestCase):
         self.assertIn("enable-global-virtual-store=true", web_npmrc)
 
         sandbox = (REPO_ROOT / "web/src/lib/agent-runtime/vercel-sandbox.ts").read_text()
-        self.assertIn("MISE_VERSION='v2026.5.5'", sandbox)
-        self.assertIn("MISE_SHA256='3aaab5c05a8a94a93b42b4f581779bbd5c44ddb251e7f3639fc671ec5c6aab8a'", sandbox)
+        self.assertIn("MISE_VERSION='v2026.5.7'", sandbox)
+        self.assertIn("MISE_SHA256='f70272c144e6a3da52cea68d544bb43ef5410905efe6f3bfc2c9d448949e1ce5'", sandbox)
         self.assertIn("sha256sum -c -", sandbox)
         self.assertNotIn("mise-latest-linux-x64", sandbox)
 
@@ -347,6 +347,39 @@ class SecurityHardeningTests(unittest.TestCase):
         self.assertNotIn("authorization_token: githubToken", reviewer)
         self.assertNotIn('networking: { type: "unrestricted" }', reviewer)
         self.assertIn("The managed-agent workspace is intentionally tokenless", reviewer)
+
+    def test_pr_reviewer_ingress_canary_is_hmac_and_secret_gated(self) -> None:
+        route = (REPO_ROOT / "web/src/app/api/webhooks/github/route.ts").read_text()
+        monitor = (
+            REPO_ROOT / "web/src/app/api/webhooks/github/pr-reviewer-monitor/route.ts"
+        ).read_text()
+        runs = (REPO_ROOT / "web/src/lib/agent-runtime/pr-review-runs.ts").read_text()
+        route_test = (REPO_ROOT / "web/src/app/api/webhooks/github/route.test.ts").read_text()
+        worker = (REPO_ROOT / "infra/cloudflare-webhook-relay/src/index.ts").read_text()
+        workflow = (REPO_ROOT / ".github/workflows/managed-reviewer-ingress.yml").read_text()
+        cd_workflow = (REPO_ROOT / ".github/workflows/cd.yml").read_text()
+
+        for source in (route, monitor, worker, workflow, cd_workflow):
+            self.assertIn("WORKSPACES_WEBHOOK_CANARY_SECRET", source)
+
+        self.assertIn("validateCanaryRequest", route)
+        self.assertIn("verifySignature(body, signature)", route)
+        self.assertLess(
+            route.index("verifySignature(body, signature)"),
+            route.index("validateCanaryRequest(request.headers)"),
+        )
+        self.assertIn("pushEvent).not.toHaveBeenCalled", route_test)
+        self.assertIn("triggerPrReview).not.toHaveBeenCalled", route_test)
+
+        self.assertIn("/canary/pr-review-ingress", worker)
+        self.assertIn("signGitHubSignature", worker)
+        self.assertIn("allowedForwardUrl", worker)
+        self.assertIn("managed_pr_review_runs", runs)
+        self.assertIn("listRecentPrReviewRuns", monitor)
+        self.assertIn("pr-reviewer-monitor", workflow)
+        self.assertIn("Managed reviewer ingress canary", cd_workflow)
+        self.assertIn("bun run test:e2e", workflow)
+        self.assertIn("wrangler deploy --dry-run", workflow)
 
     def test_sparkle_appcast_verifier_accepts_valid_ed25519_signature(self) -> None:
         if shutil.which("swift") is None:

@@ -41,6 +41,7 @@ GitHub PR opened
 | `PR_REVIEWER_MODEL` | Vercel (optional) | Override model (default: `claude-opus-4-6`) |
 | `GITHUB_WEB_WORKSPACES_WEBHOOK_SECRET` | Vercel | Same GitHub webhook secret used by the Cloudflare relay; verifies the forwarded raw payload |
 | `WEBHOOK_FORWARD_URL` | Cloudflare Worker | HTTPS web app webhook endpoint, currently `https://spaces.cloudcompute.com/api/webhooks/github` |
+| `WORKSPACES_WEBHOOK_CANARY_SECRET` | Cloudflare Worker, Vercel, GitHub Actions | Shared canary-only secret for the dry-run ingress probe. It is separate from the GitHub webhook HMAC secret. |
 
 ### GitHub App setup
 
@@ -73,6 +74,54 @@ The Cloudflare relay forwards only managed-review trigger candidates:
 `edited` events, and evidence-bearing PR comments. It preserves the original
 GitHub HMAC signature and raw body; the Vercel route independently verifies the
 signature before creating any managed-agent session.
+
+## Ingress Contract And Canary
+
+Reviewer ingress is covered by `.github/workflows/managed-reviewer-ingress.yml`.
+The workflow runs when either side of the Cloudflare-to-Vercel contract changes:
+the Worker relay, the web webhook route, the reviewer trigger/runtime files, or
+the shared trigger fixtures. It runs:
+
+- `pnpm exec vitest run src/app/api/webhooks/github/route.test.ts`
+- `cd infra/cloudflare-webhook-relay && bun run test:e2e`
+- `cd infra/cloudflare-webhook-relay && bun run --bun wrangler deploy --dry-run`
+
+The shared trigger fixture matrix lives in
+`web/src/lib/agent-runtime/__tests__/pr-review-trigger-fixtures.ts` and is
+imported by both the Vercel route tests and the Cloudflare relay e2e harness.
+This is the regression guard for drift between "forward this webhook" and
+"start the reviewer".
+
+The production CD `validate-prod` job runs the same canary and monitor after
+promotion, before the production Playwright smoke.
+
+Production canary:
+
+```bash
+curl --fail-with-body -sS -X POST \
+  https://webhooks.cloudcompute.com/canary/pr-review-ingress \
+  -H "X-Workspace-Webhook-Canary: $WORKSPACES_WEBHOOK_CANARY_SECRET"
+```
+
+The Worker requires `WORKSPACES_WEBHOOK_CANARY_SECRET`, signs a canonical
+reviewer-eligible PR payload with `GITHUB_WEBHOOK_SECRET`, forwards it to the
+Vercel webhook route with the canary header, and expects Vercel to return
+`{ "canary": true, "wouldTrigger": true, "triggerKind": "opened" }`. The Vercel
+route verifies the GitHub-style HMAC and the canary secret before returning the
+dry-run result, and returns before `pushEvent()` or `triggerPrReview()` so no
+managed-agent session or GitHub review is created.
+
+The same workflow also calls:
+
+```bash
+curl --fail-with-body -sS \
+  "https://spaces.cloudcompute.com/api/webhooks/github/pr-reviewer-monitor?windowMinutes=90" \
+  -H "X-Workspace-Webhook-Canary: $WORKSPACES_WEBHOOK_CANARY_SECRET"
+```
+
+That monitor compares recent reviewer-eligible rows in `webhook_events` with
+`managed_pr_review_runs` records. It returns only run metadata and missing
+event identifiers, not raw payloads or secrets.
 
 ## Observing Sessions
 
