@@ -15,13 +15,18 @@ struct RightPaneTabPolicy {
     let notificationsEnabled: Bool
 
     var visibleTabs: [RightPaneView.Tab] {
-        let canShowActivity = showActivity && notificationsEnabled
+        var tabs: [RightPaneView.Tab] = [.files]
         if supportsFilesystemInspection {
-            return canShowActivity
-                ? RightPaneView.Tab.allCases
-                : RightPaneView.Tab.allCases.filter { $0 != .activity }
+            tabs.append(.changes)
         }
-        return canShowActivity ? [.activity] : [.files]
+
+        let canShowActivity = showActivity && notificationsEnabled
+        if canShowActivity {
+            tabs.append(.activity)
+        }
+
+        tabs.append(.diagnostics)
+        return tabs
     }
 
     func normalizedSelection(for selectedTab: RightPaneView.Tab) -> RightPaneView.Tab {
@@ -29,6 +34,40 @@ struct RightPaneTabPolicy {
             return selectedTab
         }
         return visibleTabs[0]
+    }
+}
+
+struct RightPaneWidth: Equatable {
+    let minimum: CGFloat
+    let ideal: CGFloat
+    let maximum: CGFloat
+}
+
+struct RightPaneWidthPolicy {
+    func width(for selectedTab: RightPaneView.Tab) -> RightPaneWidth {
+        selectedTab == .diagnostics
+            ? RightPaneWidth(minimum: 360, ideal: 640, maximum: 760)
+            : RightPaneWidth(minimum: 220, ideal: 280, maximum: 400)
+    }
+}
+
+private struct RightPaneWidthModifier: ViewModifier {
+    @ObservedObject var state: RightPaneSessionState
+    private let policy = RightPaneWidthPolicy()
+
+    func body(content: Content) -> some View {
+        let width = policy.width(for: state.selectedTab)
+        content.frame(
+            minWidth: width.minimum,
+            idealWidth: width.ideal,
+            maxWidth: width.maximum
+        )
+    }
+}
+
+extension View {
+    func rightPaneWidth(for state: RightPaneSessionState) -> some View {
+        modifier(RightPaneWidthModifier(state: state))
     }
 }
 
@@ -74,6 +113,8 @@ struct RightPaneView: View {
     let targetID: String
     let directoryURL: URL?
     let onFileSelected: (CodePreviewSelection) -> Void
+    let diagnosticWorkspaceDirectories: [URL]
+    let agentStatuses: [AgentSessionStatus]
     private let showActivity: Bool
     private let supportsFilesystemInspection: Bool
 
@@ -87,12 +128,14 @@ struct RightPaneView: View {
         case files = "Files"
         case changes = "Changes"
         case activity = "Activity"
+        case diagnostics = "Diagnostics"
 
         var icon: String {
             switch self {
             case .files: return "folder"
             case .changes: return "arrow.triangle.2.circlepath"
             case .activity: return "bell"
+            case .diagnostics: return "waveform.path.ecg"
             }
         }
     }
@@ -100,12 +143,16 @@ struct RightPaneView: View {
     init(
         workspace: Workspace,
         state: RightPaneSessionState,
+        diagnosticWorkspaceDirectories: [URL] = [],
+        agentStatuses: [AgentSessionStatus] = [],
         onFileSelected: @escaping (CodePreviewSelection) -> Void = { _ in }
     ) {
         self.targetID = "workspace-\(workspace.id.uuidString)"
         self.directoryURL = workspace.localDirectoryURL
         self.state = state
         self.onFileSelected = onFileSelected
+        self.diagnosticWorkspaceDirectories = diagnosticWorkspaceDirectories
+        self.agentStatuses = agentStatuses
         self.showActivity = true
         self.supportsFilesystemInspection = workspace.localDirectoryURL != nil
     }
@@ -113,12 +160,16 @@ struct RightPaneView: View {
     init(
         repo: Repo,
         state: RightPaneSessionState,
+        diagnosticWorkspaceDirectories: [URL] = [],
+        agentStatuses: [AgentSessionStatus] = [],
         onFileSelected: @escaping (CodePreviewSelection) -> Void = { _ in }
     ) {
         self.targetID = "repo-\(repo.id.uuidString)"
         self.directoryURL = repo.localURL
         self.state = state
         self.onFileSelected = onFileSelected
+        self.diagnosticWorkspaceDirectories = diagnosticWorkspaceDirectories
+        self.agentStatuses = agentStatuses
         self.showActivity = false
         self.supportsFilesystemInspection = true
     }
@@ -183,6 +234,11 @@ struct RightPaneView: View {
                         isConnected: notificationCoordinator.isStreamConnected,
                         authState: notificationCoordinator.authState
                     )
+                case .diagnostics:
+                    DiagnosticsTabView(
+                        workspaceDirectories: diagnosticWorkspaceDirectories,
+                        agentStatuses: agentStatuses
+                    )
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -195,6 +251,13 @@ struct RightPaneView: View {
                         .fill(notificationCoordinator.isStreamConnected ? Color.mint : Color.secondary)
                         .frame(width: 6, height: 6)
                     Text(notificationCoordinator.isStreamConnected ? "Connected" : "Disconnected")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else if displayedTab == .diagnostics {
+                    Circle()
+                        .fill(Color.mint)
+                        .frame(width: 6, height: 6)
+                    Text("Live runtime diagnostics")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 } else if state.isLoading {
@@ -211,7 +274,7 @@ struct RightPaneView: View {
 
                 Spacer()
 
-                if supportsFilesystemInspection, displayedTab != .activity {
+                if supportsFilesystemInspection, displayedTab == .files || displayedTab == .changes {
                     Button {
                         Task { await refresh() }
                     } label: {
@@ -273,6 +336,8 @@ struct RightPaneView: View {
         case .activity:
             let count = notificationCoordinator.unseenEventCount
             return count > 0 ? count : nil
+        case .diagnostics:
+            return nil
         }
     }
 
@@ -373,6 +438,8 @@ struct RightPaneView: View {
             return notificationCoordinator.isStreamConnected
                 ? "Live workspace activity"
                 : "Activity stream disconnected"
+        case .diagnostics:
+            return "Runtime health and process history"
         }
     }
 }
