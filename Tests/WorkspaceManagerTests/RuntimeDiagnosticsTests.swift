@@ -77,6 +77,42 @@ struct RuntimeDiagnosticsTests {
         #expect(workspaceProcesses.map(\.pid) == [12, 11])
     }
 
+    @Test("snapshot workspace scope can update without a new process sample")
+    func snapshotWorkspaceScopeCanUpdateWithoutNewProcessSample() {
+        let firstWorkspace = URL(fileURLWithPath: "/Users/fairchild/code/project")
+        let secondWorkspace = URL(fileURLWithPath: "/Users/fairchild/code/other")
+        let snapshot = RuntimeDiagnosticsSnapshot(
+            sampledAt: Date(timeIntervalSinceReferenceDate: 10),
+            appPID: 10,
+            allProcesses: [
+                sample(pid: 10, parentPID: 1, name: "WorkspaceManager", cwd: "/Applications"),
+                sample(pid: 11, parentPID: 10, name: "claude", cpu: 25, cwd: "/Users/fairchild/code/project"),
+                sample(pid: 12, parentPID: 10, name: "node", cpu: 50, cwd: "/Users/fairchild/code/other"),
+            ],
+            appTreeProcesses: [],
+            appTreeTotals: .empty,
+            workspaceProcesses: [
+                sample(pid: 11, parentPID: 10, name: "claude", cpu: 25, cwd: "/Users/fairchild/code/project")
+            ],
+            workspaceTotals: RuntimeDiagnosticsSampler.totals(for: [
+                sample(pid: 11, parentPID: 10, name: "claude", cpu: 25, cwd: "/Users/fairchild/code/project")
+            ])
+        )
+
+        let rescoped = RuntimeDiagnosticsSampler.rescopeWorkspaceProcesses(
+            in: snapshot,
+            workspaceDirectories: [secondWorkspace]
+        )
+
+        #expect(
+            RuntimeDiagnosticsSampler.rescopeWorkspaceProcesses(
+                in: snapshot,
+                workspaceDirectories: [firstWorkspace]
+            ).workspaceProcesses.map(\.pid) == [11])
+        #expect(rescoped.workspaceProcesses.map(\.pid) == [12])
+        #expect(rescoped.workspaceTotals.cpuPercent == 50)
+    }
+
     @Test("sampler trims history to configured duration")
     func samplerTrimsHistoryToConfiguredDuration() async {
         let clock = MutableClock(Date(timeIntervalSinceReferenceDate: 0))

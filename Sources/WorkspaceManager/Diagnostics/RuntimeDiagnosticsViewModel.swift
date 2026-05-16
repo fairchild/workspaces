@@ -97,7 +97,10 @@ final class RuntimeDiagnosticsViewModel: ObservableObject {
         }
 
         if let nextSnapshot {
-            snapshot = nextSnapshot
+            snapshot = RuntimeDiagnosticsSampler.rescopeWorkspaceProcesses(
+                in: nextSnapshot,
+                workspaceDirectories: workspaceDirectories
+            )
         }
         lastCheckedAt = Date()
         await refreshSummaryAndHistory()
@@ -105,8 +108,11 @@ final class RuntimeDiagnosticsViewModel: ObservableObject {
 
     private func refreshSummaryAndHistory() async {
         history = await sampler.history(duration: selectedRange.duration)
-        if snapshot == nil {
-            snapshot = await sampler.latestSnapshot()
+        if let latestSnapshot = await sampler.latestSnapshot() {
+            snapshot = RuntimeDiagnosticsSampler.rescopeWorkspaceProcesses(
+                in: latestSnapshot,
+                workspaceDirectories: workspaceDirectories
+            )
         }
 
         let events = await StartupDiagnosticsStore.shared.allEvents()

@@ -499,6 +499,27 @@ public actor RuntimeDiagnosticsSampler {
         lastErrorMessage = nil
     }
 
+    public static func rescopeWorkspaceProcesses(
+        in snapshot: RuntimeDiagnosticsSnapshot,
+        workspaceDirectories: [URL]
+    ) -> RuntimeDiagnosticsSnapshot {
+        let workspaceProcesses = workspaceProcesses(
+            from: snapshot.allProcesses,
+            workspaceDirectories: workspaceDirectories
+        )
+
+        return RuntimeDiagnosticsSnapshot(
+            sampledAt: snapshot.sampledAt,
+            appPID: snapshot.appPID,
+            allProcesses: snapshot.allProcesses,
+            appTreeProcesses: snapshot.appTreeProcesses,
+            appTreeTotals: snapshot.appTreeTotals,
+            workspaceProcesses: workspaceProcesses,
+            workspaceTotals: totals(for: workspaceProcesses),
+            errorMessage: snapshot.errorMessage
+        )
+    }
+
     public static func totals(for processes: [RuntimeProcessSample]) -> RuntimeResourceTotals {
         RuntimeResourceTotals(
             processCount: processes.count,
