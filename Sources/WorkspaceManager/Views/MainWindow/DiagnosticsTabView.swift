@@ -149,7 +149,7 @@ struct DiagnosticsTabView: View {
     private var resourceHistorySection: some View {
         DiagnosticsPanel(title: "Resource History", accessibilityID: "inspector.diagnostics.resource-history") {
             HStack(alignment: .firstTextBaseline) {
-                Text("App tree CPU over time")
+                Text("App tree resources over time")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
 
@@ -193,7 +193,7 @@ struct DiagnosticsTabView: View {
             RuntimeResourceChart(history: viewModel.history)
                 .frame(height: 170)
                 .help(
-                    "Charts WorkSpaces app tree CPU percentage over the selected range. Hover for sample time, CPU, memory, and process count."
+                    "Charts WorkSpaces app tree CPU or memory over the selected range. Hover for sample time, CPU, memory, and process count."
                 )
                 .accessibilityIdentifier("inspector.diagnostics.resource-chart")
         }
@@ -720,10 +720,88 @@ private struct RuntimeProcessTable: View {
     }
 }
 
+private enum RuntimeResourceChartMetric: String, CaseIterable, Identifiable {
+    case cpu
+    case memory
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .cpu: "WorkSpaces app tree CPU"
+        case .memory: "WorkSpaces app tree Memory"
+        }
+    }
+
+    var optionTitle: String {
+        switch self {
+        case .cpu: "CPU"
+        case .memory: "Memory"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .cpu: "waveform.path.ecg"
+        case .memory: "memorychip"
+        }
+    }
+
+    var next: RuntimeResourceChartMetric {
+        switch self {
+        case .cpu: .memory
+        case .memory: .cpu
+        }
+    }
+
+    func value(in snapshot: RuntimeDiagnosticsSnapshot) -> Double {
+        switch self {
+        case .cpu:
+            snapshot.appTreeTotals.cpuPercent
+        case .memory:
+            Double(snapshot.appTreeTotals.residentMemoryBytes)
+        }
+    }
+
+    func peak(in history: RuntimeProcessHistory) -> Double {
+        switch self {
+        case .cpu:
+            max(history.appCPUPeak, 1)
+        case .memory:
+            max(Double(history.appMemoryPeakBytes), 1)
+        }
+    }
+
+    func formattedValue(in snapshot: RuntimeDiagnosticsSnapshot) -> String {
+        switch self {
+        case .cpu:
+            percentString(snapshot.appTreeTotals.cpuPercent)
+        case .memory:
+            byteString(snapshot.appTreeTotals.residentMemoryBytes)
+        }
+    }
+
+    func chartColor(for value: Double, isHovered: Bool) -> Color {
+        let opacity = isHovered ? 1.0 : 0.78
+        switch self {
+        case .cpu:
+            if value >= 80 { return .red.opacity(opacity) }
+            if value >= 40 { return .yellow.opacity(opacity) }
+            return .secondary.opacity(opacity)
+        case .memory:
+            return .teal.opacity(opacity)
+        }
+    }
+}
+
 private struct RuntimeResourceChart: View {
     let history: RuntimeProcessHistory
 
     @State private var hoveredIndex: Int?
+    @State private var selectedMetric: RuntimeResourceChartMetric = .cpu
+    @State private var isMetricSelectorHovered = false
+    @State private var isMetricDropdownVisible = false
+    @State private var metricHoverGeneration = 0
 
     private var hoveredSnapshot: RuntimeDiagnosticsSnapshot? {
         guard let hoveredIndex, history.snapshots.indices.contains(hoveredIndex) else {
@@ -735,9 +813,7 @@ private struct RuntimeResourceChart: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline) {
-                Label("WorkSpaces app tree CPU", systemImage: "waveform.path.ecg")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                chartMetricSelector
 
                 Spacer()
 
@@ -749,7 +825,7 @@ private struct RuntimeResourceChart: View {
 
             GeometryReader { proxy in
                 let snapshots = history.snapshots
-                let maxCPU = max(history.appCPUPeak, 1)
+                let peakValue = selectedMetric.peak(in: history)
                 ZStack(alignment: .topTrailing) {
                     HStack(alignment: .bottom, spacing: 3) {
                         if snapshots.isEmpty {
@@ -758,11 +834,14 @@ private struct RuntimeResourceChart: View {
                                 .frame(height: 2)
                         } else {
                             ForEach(Array(snapshots.enumerated()), id: \.element.sampledAt) { index, snapshot in
-                                let heightRatio = min(max(snapshot.appTreeTotals.cpuPercent / maxCPU, 0), 1)
+                                let value = selectedMetric.value(in: snapshot)
+                                let heightRatio = min(max(value / peakValue, 0), 1)
                                 RoundedRectangle(cornerRadius: 3, style: .continuous)
                                     .fill(
-                                        chartColor(
-                                            for: snapshot.appTreeTotals.cpuPercent, isHovered: index == hoveredIndex)
+                                        selectedMetric.chartColor(
+                                            for: value,
+                                            isHovered: index == hoveredIndex
+                                        )
                                     )
                                     .frame(
                                         width: barWidth(totalWidth: proxy.size.width, count: snapshots.count),
@@ -799,12 +878,97 @@ private struct RuntimeResourceChart: View {
         }
     }
 
+    private var chartMetricSelector: some View {
+        Button {
+            selectedMetric = selectedMetric.next
+            showMetricDropdown()
+        } label: {
+            Label(selectedMetric.title, systemImage: selectedMetric.systemImage)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .onContinuousHover { phase in
+            switch phase {
+            case .active:
+                updateMetricSelectorHover(true)
+            case .ended:
+                updateMetricSelectorHover(false)
+            }
+        }
+        .help("Click to switch between CPU and memory. Hover to choose a metric.")
+        .accessibilityIdentifier("inspector.diagnostics.resource-chart.metric-selector")
+        .overlay(alignment: .topLeading) {
+            if isMetricDropdownVisible {
+                metricDropdown
+                    .offset(y: 20)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+                    .zIndex(1)
+            }
+        }
+        .animation(.snappy(duration: 0.14), value: isMetricDropdownVisible)
+        .animation(.snappy(duration: 0.14), value: selectedMetric)
+    }
+
+    private var metricDropdown: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(RuntimeResourceChartMetric.allCases) { metric in
+                Button {
+                    selectedMetric = metric
+                    showMetricDropdown()
+                } label: {
+                    HStack(spacing: 7) {
+                        Image(systemName: metric.systemImage)
+                            .font(.caption2)
+                            .frame(width: 12)
+                        Text(metric.optionTitle)
+                            .font(.caption.weight(.medium))
+                        if metric == selectedMetric {
+                            Image(systemName: "checkmark")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .foregroundStyle(metric == selectedMetric ? .primary : .secondary)
+                    .frame(minWidth: 92, alignment: .leading)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(4)
+        .background(Color(nsColor: .windowBackgroundColor).opacity(0.97), in: .rect(cornerRadius: 7))
+        .overlay {
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .stroke(Color.secondary.opacity(0.18), lineWidth: 1)
+        }
+        .shadow(color: .black.opacity(0.12), radius: 10, x: 0, y: 4)
+        .onContinuousHover { phase in
+            switch phase {
+            case .active:
+                updateMetricSelectorHover(true)
+            case .ended:
+                updateMetricSelectorHover(false)
+            }
+        }
+        .accessibilityIdentifier("inspector.diagnostics.resource-chart.metric-menu")
+    }
+
     private func chartCallout(_ snapshot: RuntimeDiagnosticsSnapshot) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(snapshot.sampledAt.formatted(date: .omitted, time: .standard))
                 .font(.caption.weight(.semibold))
-            Text("CPU \(percentString(snapshot.appTreeTotals.cpuPercent))")
-            Text("Memory \(byteString(snapshot.appTreeTotals.residentMemoryBytes))")
+            Text("\(selectedMetric.optionTitle) \(selectedMetric.formattedValue(in: snapshot))")
+                .font(.caption2.weight(.semibold).monospacedDigit())
+            if selectedMetric != .cpu {
+                Text("CPU \(percentString(snapshot.appTreeTotals.cpuPercent))")
+            }
+            if selectedMetric != .memory {
+                Text("Memory \(byteString(snapshot.appTreeTotals.residentMemoryBytes))")
+            }
             Text("\(snapshot.appTreeTotals.processCount) processes")
         }
         .font(.caption2.monospacedDigit())
@@ -821,13 +985,6 @@ private struct RuntimeResourceChart: View {
         return max(3, min(18, (totalWidth / CGFloat(count)) - 3))
     }
 
-    private func chartColor(for cpu: Double, isHovered: Bool) -> Color {
-        let opacity = isHovered ? 1.0 : 0.78
-        if cpu >= 80 { return .red.opacity(opacity) }
-        if cpu >= 40 { return .yellow.opacity(opacity) }
-        return .secondary.opacity(opacity)
-    }
-
     private func hoveredIndex(for x: CGFloat, width: CGFloat, count: Int) -> Int? {
         guard count > 0, width > 0 else { return nil }
         let clampedX = min(max(x, 0), width)
@@ -836,7 +993,28 @@ private struct RuntimeResourceChart: View {
     }
 
     private func sampleDescription(_ snapshot: RuntimeDiagnosticsSnapshot) -> String {
-        "\(snapshot.sampledAt.formatted(date: .omitted, time: .shortened))  CPU \(percentString(snapshot.appTreeTotals.cpuPercent))  Mem \(byteString(snapshot.appTreeTotals.residentMemoryBytes))"
+        "\(snapshot.sampledAt.formatted(date: .omitted, time: .shortened))  \(selectedMetric.optionTitle) \(selectedMetric.formattedValue(in: snapshot))"
+    }
+
+    private func showMetricDropdown() {
+        metricHoverGeneration += 1
+        isMetricDropdownVisible = true
+    }
+
+    private func updateMetricSelectorHover(_ isHovered: Bool) {
+        metricHoverGeneration += 1
+        let generation = metricHoverGeneration
+        isMetricSelectorHovered = isHovered
+
+        if isHovered {
+            isMetricDropdownVisible = true
+        } else {
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(240))
+                guard generation == metricHoverGeneration, !isMetricSelectorHovered else { return }
+                isMetricDropdownVisible = false
+            }
+        }
     }
 }
 
