@@ -15,11 +15,13 @@ struct DiagnosticsTabView: View {
 
     @StateObject private var viewModel = RuntimeDiagnosticsViewModel()
     @State private var selectedRange: RuntimeDiagnosticsRange = .fifteenMinutes
+    @State private var isAboutExpanded = false
 
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 18) {
                 diagnosticsHeader
+                DiagnosticsAboutDisclosure(isExpanded: $isAboutExpanded)
 
                 if let errorMessage = viewModel.snapshot?.errorMessage {
                     DiagnosticsInlineError(message: errorMessage)
@@ -85,10 +87,13 @@ struct DiagnosticsTabView: View {
                     await DiagnosticReportExporter.exportWithSavePanel()
                 }
             } label: {
-                Image(systemName: "folder")
+                Image(systemName: "square.and.arrow.up")
             }
             .buttonStyle(.borderless)
-            .help("Export Diagnostic Report")
+            .help(
+                "Export Diagnostic Report: save a zip with app diagnostics, system profile, recent logs, and startup telemetry."
+            )
+            .accessibilityLabel("Export Diagnostic Report")
             .accessibilityIdentifier("inspector.diagnostics.export")
 
             Button {
@@ -104,22 +109,31 @@ struct DiagnosticsTabView: View {
     }
 
     private var liveProcessesSection: some View {
-        DiagnosticsPanel(title: "Live Processes", accessibilityID: "inspector.diagnostics.app-processes") {
+        DiagnosticsPanel(title: "WorkSpaces App Tree", accessibilityID: "inspector.diagnostics.app-processes") {
+            DiagnosticsConceptNote(
+                icon: "scope",
+                tint: .orange,
+                title: "Headline process",
+                text: "The root is this running WorkSpaces app; child rows are processes it launched.",
+                helpText:
+                    "This separates WorkSpaces runtime overhead from commands that happen inside workspace directories."
+            )
+
             MetricsGrid {
                 DiagnosticsMetricCard(
-                    label: "Child Processes",
+                    label: "Descendants",
                     value: "\(max((viewModel.snapshot?.appTreeTotals.processCount ?? 0) - 1, 0))"
                 )
                 DiagnosticsMetricCard(
-                    label: "CPU",
+                    label: "App Tree CPU",
                     value: percentString(viewModel.snapshot?.appTreeTotals.cpuPercent ?? 0)
                 )
                 DiagnosticsMetricCard(
-                    label: "Memory",
+                    label: "App Tree Memory",
                     value: byteString(viewModel.snapshot?.appTreeTotals.residentMemoryBytes ?? 0)
                 )
                 DiagnosticsMetricCard(
-                    label: "App PID",
+                    label: "WorkSpaces PID",
                     value: "\(viewModel.snapshot?.appPID ?? 0)"
                 )
             }
@@ -135,6 +149,12 @@ struct DiagnosticsTabView: View {
     private var resourceHistorySection: some View {
         DiagnosticsPanel(title: "Resource History", accessibilityID: "inspector.diagnostics.resource-history") {
             HStack(alignment: .firstTextBaseline) {
+                Text("App tree CPU over time")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+
+                Spacer()
+
                 Picker("History Range", selection: $selectedRange) {
                     ForEach(RuntimeDiagnosticsRange.allCases) { range in
                         Text(range.rawValue)
@@ -144,8 +164,6 @@ struct DiagnosticsTabView: View {
                 .pickerStyle(.segmented)
                 .labelsHidden()
                 .frame(width: 250)
-
-                Spacer()
 
                 Text(sampleText)
                     .font(.caption)
@@ -159,28 +177,40 @@ struct DiagnosticsTabView: View {
                     value: "\(viewModel.history.sampleCount)"
                 )
                 DiagnosticsMetricCard(
-                    label: "Avg CPU",
+                    label: "App Avg CPU",
                     value: percentString(viewModel.history.appCPUAverage)
                 )
                 DiagnosticsMetricCard(
-                    label: "Peak CPU",
+                    label: "App Peak CPU",
                     value: percentString(viewModel.history.appCPUPeak)
                 )
                 DiagnosticsMetricCard(
-                    label: "Max Memory",
+                    label: "App Max Memory",
                     value: byteString(viewModel.history.appMemoryPeakBytes)
                 )
             }
 
             RuntimeResourceChart(history: viewModel.history)
-                .frame(height: 130)
+                .frame(height: 170)
+                .help(
+                    "Charts WorkSpaces app tree CPU percentage over the selected range. Hover for sample time, CPU, memory, and process count."
+                )
                 .accessibilityIdentifier("inspector.diagnostics.resource-chart")
         }
     }
 
     private var agentProcessesSection: some View {
-        DiagnosticsPanel(title: "Agent / Workspace Processes", accessibilityID: "inspector.diagnostics.agent-processes")
+        DiagnosticsPanel(title: "Workspace / Agent Processes", accessibilityID: "inspector.diagnostics.agent-processes")
         {
+            DiagnosticsConceptNote(
+                icon: "terminal",
+                tint: .mint,
+                title: "Workspace scope",
+                text: "Rows here are host processes whose current directory is inside the selected workspace or repo.",
+                helpText:
+                    "This is intentionally different from the app tree: it finds commands by workspace directory, including agent tools and terminals that WorkSpaces did not directly launch."
+            )
+
             MetricsGrid {
                 DiagnosticsMetricCard(
                     label: "Workspace Processes",
@@ -279,6 +309,35 @@ struct DiagnosticsTabView: View {
     }
 }
 
+private struct DiagnosticsAboutDisclosure: View {
+    @Binding var isExpanded: Bool
+
+    var body: some View {
+        DisclosureGroup(isExpanded: $isExpanded) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(
+                    "Sampling starts when this tab appears, runs every five seconds, and keeps a one-hour in-memory history."
+                )
+                Text("Process samples are not persisted; export uses the existing diagnostic report bundle.")
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .padding(.top, 4)
+        } label: {
+            Label("Samples local process and trace telemetry while this tab is open.", systemImage: "info.circle")
+                .font(.callout.weight(.medium))
+        }
+        .padding(10)
+        .background(Color(nsColor: .controlBackgroundColor).opacity(0.55), in: .rect(cornerRadius: 8))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color.secondary.opacity(0.14), lineWidth: 1)
+        }
+        .help("Open for details about what Diagnostics samples and whether the tab adds runtime overhead.")
+        .accessibilityIdentifier("inspector.diagnostics.about")
+    }
+}
+
 private struct DiagnosticsPanel<Content: View>: View {
     let title: String
     let accessibilityID: String
@@ -307,6 +366,36 @@ private struct DiagnosticsPanel<Content: View>: View {
             .clipShape(.rect(cornerRadius: 8))
         }
         .accessibilityIdentifier(accessibilityID)
+    }
+}
+
+private struct DiagnosticsConceptNote: View {
+    let icon: String
+    let tint: Color
+    let title: String
+    let text: String
+    let helpText: String
+
+    var body: some View {
+        Label {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.primary)
+                Text(text)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        } icon: {
+            Image(systemName: icon)
+                .font(.callout)
+                .foregroundStyle(tint)
+        }
+        .padding(9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(tint.opacity(0.08), in: .rect(cornerRadius: 7))
+        .help(helpText)
     }
 }
 
@@ -375,10 +464,106 @@ private struct DiagnosticsMetricCard: View {
     }
 }
 
+enum RuntimeProcessTableColumn: CaseIterable {
+    case name
+    case cpu
+    case memory
+    case pid
+    case command
+
+    var title: String {
+        switch self {
+        case .name: return "Name"
+        case .cpu: return "CPU"
+        case .memory: return "Memory"
+        case .pid: return "PID"
+        case .command: return "Command"
+        }
+    }
+}
+
+enum RuntimeProcessSortDirection {
+    case ascending
+    case descending
+}
+
+struct RuntimeProcessTableSortState: Equatable {
+    var column: RuntimeProcessTableColumn?
+    var direction: RuntimeProcessSortDirection?
+
+    mutating func cycle(column nextColumn: RuntimeProcessTableColumn) {
+        if column != nextColumn {
+            column = nextColumn
+            direction = .ascending
+            return
+        }
+
+        switch direction {
+        case .ascending:
+            direction = .descending
+        case .descending:
+            column = nil
+            direction = nil
+        case nil:
+            direction = .ascending
+        }
+    }
+
+    func sorted(_ rows: [RuntimeProcessSample]) -> [RuntimeProcessSample] {
+        guard let column, let direction else { return rows }
+
+        return rows.enumerated().sorted { lhs, rhs in
+            let comparison = compare(lhs.element, rhs.element, by: column)
+            guard comparison != .orderedSame else {
+                return lhs.offset < rhs.offset
+            }
+
+            switch direction {
+            case .ascending:
+                return comparison == .orderedAscending
+            case .descending:
+                return comparison == .orderedDescending
+            }
+        }
+        .map(\.element)
+    }
+
+    private func compare(
+        _ lhs: RuntimeProcessSample,
+        _ rhs: RuntimeProcessSample,
+        by column: RuntimeProcessTableColumn
+    ) -> ComparisonResult {
+        switch column {
+        case .name:
+            return lhs.name.localizedStandardCompare(rhs.name)
+        case .cpu:
+            return compare(lhs.cpuPercent, rhs.cpuPercent)
+        case .memory:
+            return compare(lhs.residentMemoryBytes, rhs.residentMemoryBytes)
+        case .pid:
+            return compare(lhs.pid, rhs.pid)
+        case .command:
+            return lhs.command.localizedStandardCompare(rhs.command)
+        }
+    }
+
+    private func compare<T: Comparable>(_ lhs: T, _ rhs: T) -> ComparisonResult {
+        if lhs < rhs { return .orderedAscending }
+        if lhs > rhs { return .orderedDescending }
+        return .orderedSame
+    }
+}
+
 private struct RuntimeProcessTable: View {
     let rows: [RuntimeProcessSample]
     let emptyText: String
     let accessibilityID: String
+
+    @State private var sortState = RuntimeProcessTableSortState()
+
+    private var displayedRows: [RuntimeProcessSample] {
+        sortState.sorted(rows)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -391,9 +576,9 @@ private struct RuntimeProcessTable: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.vertical, 14)
             } else {
-                ForEach(rows.prefix(10)) { row in
+                ForEach(displayedRows.prefix(10)) { row in
                     processRow(row)
-                    if row.pid != rows.prefix(10).last?.pid {
+                    if row.pid != displayedRows.prefix(10).last?.pid {
                         Divider()
                     }
                 }
@@ -404,20 +589,54 @@ private struct RuntimeProcessTable: View {
 
     private var tableHeader: some View {
         HStack(spacing: 12) {
-            Text("Name")
-                .frame(minWidth: 110, alignment: .leading)
-            Text("CPU")
-                .frame(width: 58, alignment: .trailing)
-            Text("Memory")
-                .frame(width: 82, alignment: .trailing)
-            Text("PID")
-                .frame(width: 54, alignment: .trailing)
-            Text("Command")
-                .frame(minWidth: 160, alignment: .leading)
+            sortableHeader(.name, minWidth: 110, alignment: .leading)
+            sortableHeader(.cpu, width: 58, alignment: .trailing)
+            sortableHeader(.memory, width: 82, alignment: .trailing)
+            sortableHeader(.pid, width: 54, alignment: .trailing)
+            sortableHeader(.command, minWidth: 160, alignment: .leading)
         }
         .font(.caption.weight(.semibold))
         .foregroundStyle(.secondary)
         .padding(.bottom, 8)
+    }
+
+    @ViewBuilder
+    private func sortableHeader(
+        _ column: RuntimeProcessTableColumn,
+        minWidth: CGFloat? = nil,
+        width: CGFloat? = nil,
+        alignment: Alignment
+    ) -> some View {
+        let header = Button {
+            sortState.cycle(column: column)
+        } label: {
+            HStack(spacing: 3) {
+                Text(column.title)
+                    .lineLimit(1)
+                sortIndicator(for: column)
+            }
+            .frame(maxWidth: .infinity, alignment: alignment)
+        }
+        .buttonStyle(.plain)
+        .help("Sort by \(column.title). Click again to reverse; click a third time to restore the default order.")
+
+        if let width {
+            header.frame(width: width, alignment: alignment)
+        } else {
+            header.frame(minWidth: minWidth ?? 0, alignment: alignment)
+        }
+    }
+
+    @ViewBuilder
+    private func sortIndicator(for column: RuntimeProcessTableColumn) -> some View {
+        if sortState.column == column {
+            Image(systemName: sortState.direction == .ascending ? "chevron.up" : "chevron.down")
+                .font(.caption2.weight(.bold))
+        } else {
+            Image(systemName: "arrow.up.arrow.down")
+                .font(.caption2)
+                .opacity(0.22)
+        }
     }
 
     private func processRow(_ row: RuntimeProcessSample) -> some View {
@@ -471,33 +690,96 @@ private struct RuntimeProcessTable: View {
 private struct RuntimeResourceChart: View {
     let history: RuntimeProcessHistory
 
+    @State private var hoveredIndex: Int?
+
+    private var hoveredSnapshot: RuntimeDiagnosticsSnapshot? {
+        guard let hoveredIndex, history.snapshots.indices.contains(hoveredIndex) else {
+            return nil
+        }
+        return history.snapshots[hoveredIndex]
+    }
+
     var body: some View {
-        GeometryReader { proxy in
-            let snapshots = history.snapshots
-            let maxCPU = max(history.appCPUPeak, 1)
-            HStack(alignment: .bottom, spacing: 3) {
-                if snapshots.isEmpty {
-                    Rectangle()
-                        .fill(Color.secondary.opacity(0.15))
-                        .frame(height: 2)
-                } else {
-                    ForEach(Array(snapshots.enumerated()), id: \.element.sampledAt) { _, snapshot in
-                        let heightRatio = min(max(snapshot.appTreeTotals.cpuPercent / maxCPU, 0), 1)
-                        RoundedRectangle(cornerRadius: 3, style: .continuous)
-                            .fill(chartColor(for: snapshot.appTreeTotals.cpuPercent))
-                            .frame(
-                                width: barWidth(totalWidth: proxy.size.width, count: snapshots.count),
-                                height: max(2, proxy.size.height * heightRatio)
-                            )
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline) {
+                Label("WorkSpaces app tree CPU", systemImage: "waveform.path.ecg")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+
+                Spacer()
+
+                Text(hoveredSnapshot.map(sampleDescription) ?? "Hover for sample details")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            GeometryReader { proxy in
+                let snapshots = history.snapshots
+                let maxCPU = max(history.appCPUPeak, 1)
+                ZStack(alignment: .topTrailing) {
+                    HStack(alignment: .bottom, spacing: 3) {
+                        if snapshots.isEmpty {
+                            Rectangle()
+                                .fill(Color.secondary.opacity(0.15))
+                                .frame(height: 2)
+                        } else {
+                            ForEach(Array(snapshots.enumerated()), id: \.element.sampledAt) { index, snapshot in
+                                let heightRatio = min(max(snapshot.appTreeTotals.cpuPercent / maxCPU, 0), 1)
+                                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                                    .fill(
+                                        chartColor(
+                                            for: snapshot.appTreeTotals.cpuPercent, isHovered: index == hoveredIndex)
+                                    )
+                                    .frame(
+                                        width: barWidth(totalWidth: proxy.size.width, count: snapshots.count),
+                                        height: max(2, proxy.size.height * heightRatio)
+                                    )
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+                    .overlay(alignment: .bottom) {
+                        Rectangle()
+                            .fill(Color.secondary.opacity(0.30))
+                            .frame(height: 1)
+                    }
+
+                    if let hoveredSnapshot {
+                        chartCallout(hoveredSnapshot)
+                    }
+                }
+                .contentShape(Rectangle())
+                .onContinuousHover(coordinateSpace: .local) { phase in
+                    switch phase {
+                    case .active(let location):
+                        hoveredIndex = hoveredIndex(
+                            for: location.x,
+                            width: proxy.size.width,
+                            count: snapshots.count
+                        )
+                    case .ended:
+                        hoveredIndex = nil
                     }
                 }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
-            .overlay(alignment: .bottom) {
-                Rectangle()
-                    .fill(Color.secondary.opacity(0.30))
-                    .frame(height: 1)
-            }
+        }
+    }
+
+    private func chartCallout(_ snapshot: RuntimeDiagnosticsSnapshot) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(snapshot.sampledAt.formatted(date: .omitted, time: .standard))
+                .font(.caption.weight(.semibold))
+            Text("CPU \(percentString(snapshot.appTreeTotals.cpuPercent))")
+            Text("Memory \(byteString(snapshot.appTreeTotals.residentMemoryBytes))")
+            Text("\(snapshot.appTreeTotals.processCount) processes")
+        }
+        .font(.caption2.monospacedDigit())
+        .padding(8)
+        .background(Color(nsColor: .windowBackgroundColor).opacity(0.92), in: .rect(cornerRadius: 7))
+        .overlay {
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .stroke(Color.secondary.opacity(0.22), lineWidth: 1)
         }
     }
 
@@ -506,10 +788,22 @@ private struct RuntimeResourceChart: View {
         return max(3, min(18, (totalWidth / CGFloat(count)) - 3))
     }
 
-    private func chartColor(for cpu: Double) -> Color {
-        if cpu >= 80 { return .red.opacity(0.85) }
-        if cpu >= 40 { return .yellow.opacity(0.85) }
-        return .secondary.opacity(0.75)
+    private func chartColor(for cpu: Double, isHovered: Bool) -> Color {
+        let opacity = isHovered ? 1.0 : 0.78
+        if cpu >= 80 { return .red.opacity(opacity) }
+        if cpu >= 40 { return .yellow.opacity(opacity) }
+        return .secondary.opacity(opacity)
+    }
+
+    private func hoveredIndex(for x: CGFloat, width: CGFloat, count: Int) -> Int? {
+        guard count > 0, width > 0 else { return nil }
+        let clampedX = min(max(x, 0), width)
+        let rawIndex = Int((clampedX / width) * CGFloat(count))
+        return min(max(rawIndex, 0), count - 1)
+    }
+
+    private func sampleDescription(_ snapshot: RuntimeDiagnosticsSnapshot) -> String {
+        "\(snapshot.sampledAt.formatted(date: .omitted, time: .shortened))  CPU \(percentString(snapshot.appTreeTotals.cpuPercent))  Mem \(byteString(snapshot.appTreeTotals.residentMemoryBytes))"
     }
 }
 

@@ -257,9 +257,15 @@ struct RightPaneView: View {
                     Circle()
                         .fill(Color.mint)
                         .frame(width: 6, height: 6)
-                    Text("Live runtime diagnostics")
+                    Text("Sampling while open")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    Image(systemName: "info.circle")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .help(
+                            "Diagnostics starts a 5-second in-memory process sampler only while this tab is visible. Samples are not persisted."
+                        )
                 } else if state.isLoading {
                     ProgressView()
                         .controlSize(.small)
