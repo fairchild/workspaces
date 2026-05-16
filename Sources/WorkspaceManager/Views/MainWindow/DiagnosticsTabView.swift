@@ -313,25 +313,58 @@ private struct DiagnosticsAboutDisclosure: View {
     @Binding var isExpanded: Bool
 
     var body: some View {
-        DisclosureGroup(isExpanded: $isExpanded) {
-            VStack(alignment: .leading, spacing: 8) {
-                Text(
-                    "Sampling starts when this tab appears, runs every five seconds, and keeps a one-hour in-memory history."
-                )
-                Text("Process samples are not persisted; export uses the existing diagnostic report bundle.")
+        VStack(alignment: .leading, spacing: 8) {
+            Button {
+                withAnimation(.snappy(duration: 0.16)) {
+                    isExpanded.toggle()
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                        .frame(width: 10)
+
+                    Image(systemName: "info.circle")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    Text("About Diagnostics")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+
+                    Text("Samples local process and trace telemetry while this tab is open.")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+
+                    Spacer(minLength: 0)
+                }
+                .contentShape(.rect)
             }
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .padding(.top, 4)
-        } label: {
-            Label("Samples local process and trace telemetry while this tab is open.", systemImage: "info.circle")
-                .font(.callout.weight(.medium))
-        }
-        .padding(10)
-        .background(Color(nsColor: .controlBackgroundColor).opacity(0.55), in: .rect(cornerRadius: 8))
-        .overlay {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(Color.secondary.opacity(0.14), lineWidth: 1)
+            .buttonStyle(.plain)
+
+            if isExpanded {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(
+                        "Diagnostics shows the running WorkSpaces app process tree alongside workspace and agent processes for the selected item."
+                    )
+                    Text(
+                        "Sampling starts when this tab appears, runs every five seconds, and keeps a one-hour in-memory history."
+                    )
+                    Text("Process samples are not persisted; export uses the existing diagnostic report bundle.")
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(12)
+                .background(Color(nsColor: .controlBackgroundColor).opacity(0.48), in: .rect(cornerRadius: 8))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(Color.secondary.opacity(0.12), lineWidth: 1)
+                }
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
         }
         .help("Open for details about what Diagnostics samples and whether the tab adds runtime overhead.")
         .accessibilityIdentifier("inspector.diagnostics.about")
