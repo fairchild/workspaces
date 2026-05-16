@@ -287,6 +287,10 @@ jobs:
           done
           echo "::error::Prod unreachable after 5 attempts"
           exit 1
+      - name: Managed reviewer ingress canary
+        env:
+          WORKSPACES_WEBHOOK_CANARY_SECRET: ${{ secrets.WORKSPACES_WEBHOOK_CANARY_SECRET }}
+        run: python3 ../scripts/managed-reviewer-ingress-canary.py
       - name: Playwright fast against prod
         env:
           PLAYWRIGHT_BASE_URL: https://spaces.cloudcompute.com

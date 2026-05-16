@@ -348,6 +348,57 @@ class SecurityHardeningTests(unittest.TestCase):
         self.assertNotIn('networking: { type: "unrestricted" }', reviewer)
         self.assertIn("The managed-agent workspace is intentionally tokenless", reviewer)
 
+    def test_pr_reviewer_ingress_canary_is_hmac_and_secret_gated(self) -> None:
+        route = (REPO_ROOT / "web/src/app/api/webhooks/github/route.ts").read_text()
+        monitor = (
+            REPO_ROOT / "web/src/app/api/webhooks/github/pr-reviewer-monitor/route.ts"
+        ).read_text()
+        runs = (REPO_ROOT / "web/src/lib/agent-runtime/pr-review-runs.ts").read_text()
+        route_test = (REPO_ROOT / "web/src/app/api/webhooks/github/route.test.ts").read_text()
+        worker = (REPO_ROOT / "infra/cloudflare-webhook-relay/src/index.ts").read_text()
+        workflow = (REPO_ROOT / ".github/workflows/managed-reviewer-ingress.yml").read_text()
+        cd_workflow = (REPO_ROOT / ".github/workflows/cd.yml").read_text()
+        canary_script = (REPO_ROOT / "scripts/managed-reviewer-ingress-canary.py").read_text()
+
+        for source in (route, monitor, worker, workflow, cd_workflow, canary_script):
+            self.assertIn("WORKSPACES_WEBHOOK_CANARY_SECRET", source)
+
+        self.assertIn("validateCanaryRequest", route)
+        self.assertIn("verifySignature(body, signature)", route)
+        self.assertLess(
+            route.index("verifySignature(body, signature)"),
+            route.index("validateCanaryRequest(request.headers)"),
+        )
+        self.assertIn("pushEvent).not.toHaveBeenCalled", route_test)
+        self.assertIn("triggerPrReview).not.toHaveBeenCalled", route_test)
+
+        self.assertIn("/canary/pr-review-ingress", worker)
+        self.assertIn("signGitHubSignature", worker)
+        self.assertIn("allowedForwardUrl", worker)
+        self.assertIn("managed_pr_review_runs", runs)
+        self.assertIn("listRecentPrReviewRuns", monitor)
+        self.assertIn("pr-reviewer-monitor", canary_script)
+        self.assertIn("scripts/managed-reviewer-ingress-canary.py", workflow)
+        self.assertIn("scripts/managed-reviewer-ingress-canary.py", cd_workflow)
+        self.assertNotIn("python3 - <<", workflow)
+        self.assertNotIn("python3 - <<", cd_workflow)
+        self.assertIn("Managed reviewer ingress canary", cd_workflow)
+        self.assertIn("bun run test:e2e", workflow)
+        self.assertIn("wrangler deploy --dry-run", workflow)
+        self.assertIn("urllib.request", canary_script)
+        self.assertIn("SAFE_RESPONSE_KEYS", canary_script)
+
+        result = subprocess.run(
+            ["python3", "scripts/managed-reviewer-ingress-canary.py", "--skip-monitor"],
+            cwd=REPO_ROOT,
+            env={key: value for key, value in os.environ.items() if key != "WORKSPACES_WEBHOOK_CANARY_SECRET"},
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("WORKSPACES_WEBHOOK_CANARY_SECRET is required", result.stderr)
+
     def test_sparkle_appcast_verifier_accepts_valid_ed25519_signature(self) -> None:
         if shutil.which("swift") is None:
             self.skipTest("swift is required for Sparkle appcast verifier")

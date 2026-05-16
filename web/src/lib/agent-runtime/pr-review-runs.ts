@@ -189,6 +189,53 @@ export async function recordRunResult(
 		.execute();
 }
 
+export interface PrReviewRunSummary {
+	repoFullName: string;
+	prNumber: number;
+	headSha: string;
+	triggerKind: string;
+	triggerSourceId: string;
+	status: PrReviewRunStatus;
+	sessionId: string | null;
+	createdAt: string;
+	updatedAt: string;
+}
+
+export async function listRecentPrReviewRuns(input: {
+	sinceIso: string;
+	repoFullName: string;
+}): Promise<PrReviewRunSummary[]> {
+	await ensureRunsTable();
+	const rows = await getDb()
+		.selectFrom("managed_pr_review_runs")
+		.select([
+			"repo_full_name",
+			"pr_number",
+			"head_sha",
+			"trigger_kind",
+			"trigger_source_id",
+			"status",
+			"session_id",
+			"created_at",
+			"updated_at",
+		])
+		.where("created_at", ">=", input.sinceIso)
+		.where("repo_full_name", "=", input.repoFullName)
+		.execute();
+
+	return rows.map((row) => ({
+		repoFullName: row.repo_full_name,
+		prNumber: row.pr_number,
+		headSha: row.head_sha,
+		triggerKind: row.trigger_kind,
+		triggerSourceId: row.trigger_source_id,
+		status: row.status as PrReviewRunStatus,
+		sessionId: row.session_id,
+		createdAt: row.created_at,
+		updatedAt: row.updated_at,
+	}));
+}
+
 /** Test-only hook so per-test in-memory DBs re-run table creation. */
 export function __resetPrReviewRunsForTests(): void {
 	migrated = false;
