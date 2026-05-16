@@ -2,7 +2,7 @@
 //  RuntimeDiagnostics.swift
 //  WorkspaceManagerCore
 //
-//  Lightweight process and trace diagnostics for the WorkSpaces inspector.
+//  Lightweight process and trace diagnostics for the WorkSpaces Detail Pane.
 //
 
 import Foundation

@@ -2,7 +2,7 @@
 //  RuntimeDiagnosticsViewModel.swift
 //  WorkspaceManager
 //
-//  Main-actor bridge between the inspector UI and core runtime diagnostics sampler.
+//  Main-actor bridge between the Detail Pane UI and core runtime diagnostics sampler.
 //
 
 import Foundation

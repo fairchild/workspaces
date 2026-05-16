@@ -97,8 +97,8 @@ struct RightPaneTabPolicyTests {
         #expect(policy.normalizedSelection(for: .diagnostics) == .diagnostics)
     }
 
-    @Test("Diagnostics tab uses widened inspector dimensions")
-    func diagnosticsTabUsesWidenedInspectorDimensions() {
+    @Test("Diagnostics tab uses widened Detail Pane dimensions")
+    func diagnosticsTabUsesWidenedDetailPaneDimensions() {
         let policy = RightPaneWidthPolicy()
 
         #expect(policy.width(for: .files) == RightPaneWidth(minimum: 220, ideal: 280, maximum: 400))

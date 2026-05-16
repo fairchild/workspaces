@@ -2,7 +2,7 @@
 //  DiagnosticsTabView.swift
 //  WorkspaceManager
 //
-//  Live runtime diagnostics for the right inspector.
+//  Live runtime diagnostics for the Detail Pane.
 //
 
 import Foundation
@@ -126,11 +126,11 @@ struct DiagnosticsTabView: View {
                 )
                 DiagnosticsMetricCard(
                     label: "App Tree CPU",
-                    value: percentString(viewModel.snapshot?.appTreeTotals.cpuPercent ?? 0)
+                    value: DiagnosticsValueFormatting.percent(viewModel.snapshot?.appTreeTotals.cpuPercent ?? 0)
                 )
                 DiagnosticsMetricCard(
                     label: "App Tree Memory",
-                    value: byteString(viewModel.snapshot?.appTreeTotals.residentMemoryBytes ?? 0)
+                    value: DiagnosticsValueFormatting.bytes(viewModel.snapshot?.appTreeTotals.residentMemoryBytes ?? 0)
                 )
                 DiagnosticsMetricCard(
                     label: "WorkSpaces PID",
@@ -178,15 +178,15 @@ struct DiagnosticsTabView: View {
                 )
                 DiagnosticsMetricCard(
                     label: "App Avg CPU",
-                    value: percentString(viewModel.history.appCPUAverage)
+                    value: DiagnosticsValueFormatting.percent(viewModel.history.appCPUAverage)
                 )
                 DiagnosticsMetricCard(
                     label: "App Peak CPU",
-                    value: percentString(viewModel.history.appCPUPeak)
+                    value: DiagnosticsValueFormatting.percent(viewModel.history.appCPUPeak)
                 )
                 DiagnosticsMetricCard(
                     label: "App Max Memory",
-                    value: byteString(viewModel.history.appMemoryPeakBytes)
+                    value: DiagnosticsValueFormatting.bytes(viewModel.history.appMemoryPeakBytes)
                 )
             }
 
@@ -200,39 +200,41 @@ struct DiagnosticsTabView: View {
     }
 
     private var agentProcessesSection: some View {
-        DiagnosticsPanel(title: "Workspace / Agent Processes", accessibilityID: "inspector.diagnostics.agent-processes")
+        DiagnosticsPanel(title: "Workspace & Agent Processes", accessibilityID: "inspector.diagnostics.agent-processes")
         {
             DiagnosticsConceptNote(
                 icon: "terminal",
                 tint: .mint,
                 title: "Workspace scope",
-                text: "Rows here are host processes whose current directory is inside the selected workspace or repo.",
+                text:
+                    "Rows here are host processes whose current directory is inside the selected Workspace or Repository.",
                 helpText:
-                    "This is intentionally different from the app tree: it finds commands by workspace directory, including agent tools and terminals that WorkSpaces did not directly launch."
+                    "This is intentionally different from the app tree: it finds commands by Repository or Workspace directory, including agent tools and Terminal Sessions that WorkSpaces did not directly launch."
             )
 
             MetricsGrid {
                 DiagnosticsMetricCard(
-                    label: "Workspace Processes",
+                    label: "Scoped Processes",
                     value: "\(viewModel.snapshot?.workspaceTotals.processCount ?? 0)"
                 )
                 DiagnosticsMetricCard(
-                    label: "Workspace CPU",
-                    value: percentString(viewModel.snapshot?.workspaceTotals.cpuPercent ?? 0)
+                    label: "Scoped CPU",
+                    value: DiagnosticsValueFormatting.percent(viewModel.snapshot?.workspaceTotals.cpuPercent ?? 0)
                 )
                 DiagnosticsMetricCard(
-                    label: "Workspace Memory",
-                    value: byteString(viewModel.snapshot?.workspaceTotals.residentMemoryBytes ?? 0)
+                    label: "Scoped Memory",
+                    value: DiagnosticsValueFormatting.bytes(
+                        viewModel.snapshot?.workspaceTotals.residentMemoryBytes ?? 0)
                 )
                 DiagnosticsMetricCard(
-                    label: "Agent Sessions",
+                    label: "Agent Runs",
                     value: "\(viewModel.summary.activeAgentSessionCount)"
                 )
             }
 
             RuntimeProcessTable(
                 rows: viewModel.snapshot?.workspaceProcesses ?? [],
-                emptyText: "No active workspace processes found.",
+                emptyText: "No active Repository or Workspace processes found.",
                 accessibilityID: "inspector.diagnostics.agent-process-table"
             )
 
@@ -333,7 +335,7 @@ private struct DiagnosticsAboutDisclosure: View {
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
 
-                    Text("Samples local process and trace telemetry while this tab is open.")
+                    Text("Samples local processes while open; trace counts use existing telemetry.")
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                         .lineLimit(1)
@@ -347,7 +349,7 @@ private struct DiagnosticsAboutDisclosure: View {
             if isExpanded {
                 VStack(alignment: .leading, spacing: 8) {
                     Text(
-                        "Diagnostics shows the running WorkSpaces app process tree alongside workspace and agent processes for the selected item."
+                        "Diagnostics samples the local process list while this tab is open and shows it beside existing trace telemetry for the selected Repository or Workspace."
                     )
                     Text(
                         "Sampling starts when this tab appears, runs every five seconds, and keeps a one-hour in-memory history."
@@ -366,7 +368,7 @@ private struct DiagnosticsAboutDisclosure: View {
                 .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
-        .help("Open for details about what Diagnostics samples and whether the tab adds runtime overhead.")
+        .help("Open for details about process sampling, existing trace telemetry, and runtime overhead.")
         .accessibilityIdentifier("inspector.diagnostics.about")
     }
 }
@@ -497,539 +499,18 @@ private struct DiagnosticsMetricCard: View {
     }
 }
 
-enum RuntimeProcessTableColumn: CaseIterable {
-    case name
-    case cpu
-    case memory
-    case pid
-    case command
-
-    var title: String {
-        switch self {
-        case .name: return "Name"
-        case .cpu: return "CPU"
-        case .memory: return "Memory"
-        case .pid: return "PID"
-        case .command: return "Command"
-        }
-    }
-}
-
-enum RuntimeProcessSortDirection {
-    case ascending
-    case descending
-}
-
-struct RuntimeProcessTableSortState: Equatable {
-    var column: RuntimeProcessTableColumn?
-    var direction: RuntimeProcessSortDirection?
-
-    mutating func cycle(column nextColumn: RuntimeProcessTableColumn) {
-        if column != nextColumn {
-            column = nextColumn
-            direction = .ascending
-            return
-        }
-
-        switch direction {
-        case .ascending:
-            direction = .descending
-        case .descending:
-            column = nil
-            direction = nil
-        case nil:
-            direction = .ascending
-        }
-    }
-
-    func sorted(_ rows: [RuntimeProcessSample]) -> [RuntimeProcessSample] {
-        guard let column, let direction else { return rows }
-
-        return rows.enumerated().sorted { lhs, rhs in
-            let comparison = compare(lhs.element, rhs.element, by: column)
-            guard comparison != .orderedSame else {
-                return lhs.offset < rhs.offset
-            }
-
-            switch direction {
-            case .ascending:
-                return comparison == .orderedAscending
-            case .descending:
-                return comparison == .orderedDescending
-            }
-        }
-        .map(\.element)
-    }
-
-    private func compare(
-        _ lhs: RuntimeProcessSample,
-        _ rhs: RuntimeProcessSample,
-        by column: RuntimeProcessTableColumn
-    ) -> ComparisonResult {
-        switch column {
-        case .name:
-            return lhs.name.localizedStandardCompare(rhs.name)
-        case .cpu:
-            return compare(lhs.cpuPercent, rhs.cpuPercent)
-        case .memory:
-            return compare(lhs.residentMemoryBytes, rhs.residentMemoryBytes)
-        case .pid:
-            return compare(lhs.pid, rhs.pid)
-        case .command:
-            return lhs.command.localizedStandardCompare(rhs.command)
-        }
-    }
-
-    private func compare<T: Comparable>(_ lhs: T, _ rhs: T) -> ComparisonResult {
-        if lhs < rhs { return .orderedAscending }
-        if lhs > rhs { return .orderedDescending }
-        return .orderedSame
-    }
-}
-
-private struct RuntimeProcessTable: View {
-    let rows: [RuntimeProcessSample]
-    let emptyText: String
-    let accessibilityID: String
-
-    @State private var sortState = RuntimeProcessTableSortState()
-
-    private var displayedRows: [RuntimeProcessSample] {
-        sortState.sorted(rows)
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            tableHeader
-
-            if rows.isEmpty {
-                Text(emptyText)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.vertical, 14)
-            } else {
-                ForEach(displayedRows.prefix(10)) { row in
-                    processRow(row)
-                    if row.pid != displayedRows.prefix(10).last?.pid {
-                        Divider()
-                    }
-                }
-            }
-        }
-        .accessibilityIdentifier(accessibilityID)
-    }
-
-    private var tableHeader: some View {
-        HStack(spacing: 12) {
-            sortableHeader(.name, minWidth: 110, alignment: .leading)
-            sortableHeader(.cpu, width: 58, alignment: .trailing)
-            sortableHeader(.memory, width: 82, alignment: .trailing)
-            sortableHeader(.pid, width: 54, alignment: .trailing)
-            sortableHeader(.command, minWidth: 160, alignment: .leading)
-        }
-        .font(.caption.weight(.semibold))
-        .foregroundStyle(.secondary)
-        .padding(.bottom, 8)
-    }
-
-    @ViewBuilder
-    private func sortableHeader(
-        _ column: RuntimeProcessTableColumn,
-        minWidth: CGFloat? = nil,
-        width: CGFloat? = nil,
-        alignment: Alignment
-    ) -> some View {
-        let header = Button {
-            sortState.cycle(column: column)
-        } label: {
-            HStack(spacing: 3) {
-                Text(column.title)
-                    .lineLimit(1)
-                sortIndicator(for: column)
-            }
-            .frame(maxWidth: .infinity, alignment: alignment)
-        }
-        .buttonStyle(.plain)
-        .help("Sort by \(column.title). Click again to reverse; click a third time to restore the default order.")
-
-        if let width {
-            header.frame(width: width, alignment: alignment)
-        } else {
-            header.frame(minWidth: minWidth ?? 0, alignment: alignment)
-        }
-    }
-
-    @ViewBuilder
-    private func sortIndicator(for column: RuntimeProcessTableColumn) -> some View {
-        if sortState.column == column {
-            Image(systemName: sortState.direction == .ascending ? "chevron.up" : "chevron.down")
-                .font(.caption2.weight(.bold))
-        } else {
-            Image(systemName: "arrow.up.arrow.down")
-                .font(.caption2)
-                .opacity(0.22)
-        }
-    }
-
-    private func processRow(_ row: RuntimeProcessSample) -> some View {
-        HStack(spacing: 12) {
-            HStack(spacing: 6) {
-                Circle()
-                    .fill(processColor(row))
-                    .frame(width: 7, height: 7)
-                Text(row.name)
-                    .font(.callout.weight(.medium))
-                    .lineLimit(1)
-            }
-            .frame(minWidth: 110, alignment: .leading)
-
-            Text(percentString(row.cpuPercent))
-                .font(.system(.callout, design: .monospaced))
-                .frame(width: 58, alignment: .trailing)
-
-            Text(byteString(row.residentMemoryBytes))
-                .font(.system(.callout, design: .monospaced))
-                .frame(width: 82, alignment: .trailing)
-
-            Text("\(row.pid)")
-                .font(.system(.callout, design: .monospaced))
-                .foregroundStyle(.secondary)
-                .frame(width: 54, alignment: .trailing)
-
-            Text(row.command)
-                .font(.system(.caption, design: .monospaced))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .textSelection(.enabled)
-                .frame(minWidth: 160, alignment: .leading)
-        }
-        .padding(.vertical, 8)
-    }
-
-    private func processColor(_ row: RuntimeProcessSample) -> Color {
-        if isKnownAgent(row) { return .mint }
-        if row.parentPID == 1 { return .secondary }
-        return .orange
-    }
-
-    private func isKnownAgent(_ row: RuntimeProcessSample) -> Bool {
-        let haystack = "\(row.name) \(row.command)".lowercased()
-        return ["claude", "codex", "aider", "cursor", "opencode", "pi"].contains { haystack.contains($0) }
-    }
-}
-
-private enum RuntimeResourceChartMetric: String, CaseIterable, Identifiable {
-    case cpu
-    case memory
-
-    var id: Self { self }
-
-    var title: String {
-        switch self {
-        case .cpu: "WorkSpaces app tree CPU"
-        case .memory: "WorkSpaces app tree Memory"
-        }
-    }
-
-    var optionTitle: String {
-        switch self {
-        case .cpu: "CPU"
-        case .memory: "Memory"
-        }
-    }
-
-    var systemImage: String {
-        switch self {
-        case .cpu: "waveform.path.ecg"
-        case .memory: "memorychip"
-        }
-    }
-
-    var next: RuntimeResourceChartMetric {
-        switch self {
-        case .cpu: .memory
-        case .memory: .cpu
-        }
-    }
-
-    func value(in snapshot: RuntimeDiagnosticsSnapshot) -> Double {
-        switch self {
-        case .cpu:
-            snapshot.appTreeTotals.cpuPercent
-        case .memory:
-            Double(snapshot.appTreeTotals.residentMemoryBytes)
-        }
-    }
-
-    func peak(in history: RuntimeProcessHistory) -> Double {
-        switch self {
-        case .cpu:
-            max(history.appCPUPeak, 1)
-        case .memory:
-            max(Double(history.appMemoryPeakBytes), 1)
-        }
-    }
-
-    func formattedValue(in snapshot: RuntimeDiagnosticsSnapshot) -> String {
-        switch self {
-        case .cpu:
-            percentString(snapshot.appTreeTotals.cpuPercent)
-        case .memory:
-            byteString(snapshot.appTreeTotals.residentMemoryBytes)
-        }
-    }
-
-    func chartColor(for value: Double, isHovered: Bool) -> Color {
-        let opacity = isHovered ? 1.0 : 0.78
-        switch self {
-        case .cpu:
-            if value >= 80 { return .red.opacity(opacity) }
-            if value >= 40 { return .yellow.opacity(opacity) }
-            return .secondary.opacity(opacity)
-        case .memory:
-            return .teal.opacity(opacity)
-        }
-    }
-}
-
-private struct RuntimeResourceChart: View {
-    let history: RuntimeProcessHistory
-
-    @State private var hoveredIndex: Int?
-    @State private var selectedMetric: RuntimeResourceChartMetric = .cpu
-    @State private var isMetricSelectorHovered = false
-    @State private var isMetricDropdownVisible = false
-    @State private var metricHoverGeneration = 0
-
-    private var hoveredSnapshot: RuntimeDiagnosticsSnapshot? {
-        guard let hoveredIndex, history.snapshots.indices.contains(hoveredIndex) else {
-            return nil
-        }
-        return history.snapshots[hoveredIndex]
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .firstTextBaseline) {
-                chartMetricSelector
-
-                Spacer()
-
-                Text(hoveredSnapshot.map(sampleDescription) ?? "Hover for sample details")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-
-            GeometryReader { proxy in
-                let snapshots = history.snapshots
-                let peakValue = selectedMetric.peak(in: history)
-                ZStack(alignment: .topTrailing) {
-                    HStack(alignment: .bottom, spacing: 3) {
-                        if snapshots.isEmpty {
-                            Rectangle()
-                                .fill(Color.secondary.opacity(0.15))
-                                .frame(height: 2)
-                        } else {
-                            ForEach(Array(snapshots.enumerated()), id: \.element.sampledAt) { index, snapshot in
-                                let value = selectedMetric.value(in: snapshot)
-                                let heightRatio = min(max(value / peakValue, 0), 1)
-                                RoundedRectangle(cornerRadius: 3, style: .continuous)
-                                    .fill(
-                                        selectedMetric.chartColor(
-                                            for: value,
-                                            isHovered: index == hoveredIndex
-                                        )
-                                    )
-                                    .frame(
-                                        width: barWidth(totalWidth: proxy.size.width, count: snapshots.count),
-                                        height: max(2, proxy.size.height * heightRatio)
-                                    )
-                            }
-                        }
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
-                    .overlay(alignment: .bottom) {
-                        Rectangle()
-                            .fill(Color.secondary.opacity(0.30))
-                            .frame(height: 1)
-                    }
-
-                    if let hoveredSnapshot {
-                        chartCallout(hoveredSnapshot)
-                    }
-                }
-                .contentShape(Rectangle())
-                .onContinuousHover(coordinateSpace: .local) { phase in
-                    switch phase {
-                    case .active(let location):
-                        hoveredIndex = hoveredIndex(
-                            for: location.x,
-                            width: proxy.size.width,
-                            count: snapshots.count
-                        )
-                    case .ended:
-                        hoveredIndex = nil
-                    }
-                }
-            }
-        }
-    }
-
-    private var chartMetricSelector: some View {
-        Button {
-            selectedMetric = selectedMetric.next
-            showMetricDropdown()
-        } label: {
-            Label(selectedMetric.title, systemImage: selectedMetric.systemImage)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .contentShape(.rect)
-        }
-        .buttonStyle(.plain)
-        .onContinuousHover { phase in
-            switch phase {
-            case .active:
-                updateMetricSelectorHover(true)
-            case .ended:
-                updateMetricSelectorHover(false)
-            }
-        }
-        .help("Click to switch between CPU and memory. Hover to choose a metric.")
-        .accessibilityIdentifier("inspector.diagnostics.resource-chart.metric-selector")
-        .overlay(alignment: .topLeading) {
-            if isMetricDropdownVisible {
-                metricDropdown
-                    .offset(y: 20)
-                    .transition(.opacity.combined(with: .move(edge: .top)))
-                    .zIndex(1)
-            }
-        }
-        .animation(.snappy(duration: 0.14), value: isMetricDropdownVisible)
-        .animation(.snappy(duration: 0.14), value: selectedMetric)
-    }
-
-    private var metricDropdown: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            ForEach(RuntimeResourceChartMetric.allCases) { metric in
-                Button {
-                    selectedMetric = metric
-                    showMetricDropdown()
-                } label: {
-                    HStack(spacing: 7) {
-                        Image(systemName: metric.systemImage)
-                            .font(.caption2)
-                            .frame(width: 12)
-                        Text(metric.optionTitle)
-                            .font(.caption.weight(.medium))
-                        if metric == selectedMetric {
-                            Image(systemName: "checkmark")
-                                .font(.caption2.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .foregroundStyle(metric == selectedMetric ? .primary : .secondary)
-                    .frame(minWidth: 92, alignment: .leading)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 5)
-                    .contentShape(.rect)
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .padding(4)
-        .background(Color(nsColor: .windowBackgroundColor).opacity(0.97), in: .rect(cornerRadius: 7))
-        .overlay {
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .stroke(Color.secondary.opacity(0.18), lineWidth: 1)
-        }
-        .shadow(color: .black.opacity(0.12), radius: 10, x: 0, y: 4)
-        .onContinuousHover { phase in
-            switch phase {
-            case .active:
-                updateMetricSelectorHover(true)
-            case .ended:
-                updateMetricSelectorHover(false)
-            }
-        }
-        .accessibilityIdentifier("inspector.diagnostics.resource-chart.metric-menu")
-    }
-
-    private func chartCallout(_ snapshot: RuntimeDiagnosticsSnapshot) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(snapshot.sampledAt.formatted(date: .omitted, time: .standard))
-                .font(.caption.weight(.semibold))
-            Text("\(selectedMetric.optionTitle) \(selectedMetric.formattedValue(in: snapshot))")
-                .font(.caption2.weight(.semibold).monospacedDigit())
-            if selectedMetric != .cpu {
-                Text("CPU \(percentString(snapshot.appTreeTotals.cpuPercent))")
-            }
-            if selectedMetric != .memory {
-                Text("Memory \(byteString(snapshot.appTreeTotals.residentMemoryBytes))")
-            }
-            Text("\(snapshot.appTreeTotals.processCount) processes")
-        }
-        .font(.caption2.monospacedDigit())
-        .padding(8)
-        .background(Color(nsColor: .windowBackgroundColor).opacity(0.92), in: .rect(cornerRadius: 7))
-        .overlay {
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .stroke(Color.secondary.opacity(0.22), lineWidth: 1)
-        }
-    }
-
-    private func barWidth(totalWidth: CGFloat, count: Int) -> CGFloat {
-        guard count > 0 else { return totalWidth }
-        return max(3, min(18, (totalWidth / CGFloat(count)) - 3))
-    }
-
-    private func hoveredIndex(for x: CGFloat, width: CGFloat, count: Int) -> Int? {
-        guard count > 0, width > 0 else { return nil }
-        let clampedX = min(max(x, 0), width)
-        let rawIndex = Int((clampedX / width) * CGFloat(count))
-        return min(max(rawIndex, 0), count - 1)
-    }
-
-    private func sampleDescription(_ snapshot: RuntimeDiagnosticsSnapshot) -> String {
-        "\(snapshot.sampledAt.formatted(date: .omitted, time: .shortened))  \(selectedMetric.optionTitle) \(selectedMetric.formattedValue(in: snapshot))"
-    }
-
-    private func showMetricDropdown() {
-        metricHoverGeneration += 1
-        isMetricDropdownVisible = true
-    }
-
-    private func updateMetricSelectorHover(_ isHovered: Bool) {
-        metricHoverGeneration += 1
-        let generation = metricHoverGeneration
-        isMetricSelectorHovered = isHovered
-
-        if isHovered {
-            isMetricDropdownVisible = true
-        } else {
-            Task { @MainActor in
-                try? await Task.sleep(for: .milliseconds(240))
-                guard generation == metricHoverGeneration, !isMetricSelectorHovered else { return }
-                isMetricDropdownVisible = false
-            }
-        }
-    }
-}
-
 private struct AgentSessionStatusList: View {
     let statuses: [AgentSessionStatus]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("ACTIVE AGENT SESSIONS")
+            Text("ACTIVE AGENT RUNS")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
                 .padding(.bottom, 6)
 
             if sortedStatuses.isEmpty {
-                Text("No active agent sessions registered.")
+                Text("No active agent runs registered.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -1111,12 +592,4 @@ private struct DiagnosticsInlineError: View {
         .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
         .accessibilityIdentifier("inspector.diagnostics.error")
     }
-}
-
-private func percentString(_ value: Double) -> String {
-    String(format: "%.1f%%", value)
-}
-
-private func byteString(_ bytes: Int64) -> String {
-    ByteCountFormatter.string(fromByteCount: bytes, countStyle: .memory)
 }

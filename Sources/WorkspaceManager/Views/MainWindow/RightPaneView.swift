@@ -2,7 +2,7 @@
 //  RightPaneView.swift
 //  WorkspaceManager
 //
-//  Collapsible right pane with Files and Changes tabs
+//  Collapsible Detail Pane with Files, Changes, Activity, and Diagnostics tabs.
 //
 
 import AppKit
@@ -179,7 +179,7 @@ struct RightPaneView: View {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Inspector")
+                        Text("Detail Pane")
                             .font(.headline)
 
                         Text(summaryText)
@@ -198,7 +198,7 @@ struct RightPaneView: View {
                     }
                 }
 
-                Picker("Inspector Tab", selection: selectedTabBinding) {
+                Picker("Detail Pane Tab", selection: selectedTabBinding) {
                     ForEach(visibleTabs, id: \.self) { tab in
                         Text(tab.rawValue)
                             .tag(tab)
@@ -264,7 +264,7 @@ struct RightPaneView: View {
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .help(
-                            "Diagnostics starts a 5-second in-memory process sampler only while this tab is visible. Samples are not persisted."
+                            "Diagnostics starts a 5-second in-memory process sampler only while this tab is visible. Trace counts come from existing telemetry; process samples are not persisted."
                         )
                 } else if state.isLoading {
                     ProgressView()
