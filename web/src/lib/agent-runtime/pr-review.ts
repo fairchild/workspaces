@@ -41,7 +41,7 @@ Your final response must contain a single fenced \`json\` block with this shape:
 }
 \`\`\`
 
-Use \`APPROVE\` for clean PRs, \`REQUEST_CHANGES\` for issues, \`COMMENT\` for informational reviews. Leave \`labels\` empty unless you are highly confident an existing repository label applies. The server-side review broker validates this intent before any GitHub write; you do not have write credentials.
+Use \`APPROVE\` for clean PRs, \`REQUEST_CHANGES\` for issues, \`COMMENT\` for informational reviews. Leave \`labels\` empty unless you are highly confident an existing repository label applies. The server-side review broker validates this intent before any GitHub write; do not use GitHub write APIs yourself.
 
 ## Review format
 
@@ -898,6 +898,10 @@ export async function triggerPrReview(
 			type: "github_repository" as const,
 			url: resolvedPayload.repoUrl,
 			mount_path: mountPath,
+			// Required by Managed Agents for the repository clone. The token is a
+			// short-lived GitHub App installation token and is not printed in the
+			// prompt or stored as a filesystem token for the agent to discover.
+			authorization_token: githubToken,
 			checkout: { type: "branch" as const, name: resolvedPayload.headRef },
 		} as unknown as BetaManagedAgentsGitHubRepositoryResourceParams;
 
@@ -1005,7 +1009,7 @@ Recent PR comments for evidence context:
 ${untrustedBlock("recent-pr-comments", formatPrEvidenceContext(evidenceContext))}
 ${rerunBlock}</trusted-envelope>
 
-Read the diff against ${resolvedPayload.baseRef}, explore the surrounding code, run swift build and swift test if the project supports them, then return one structured review intent. Do not call GitHub write APIs, do not use \`gh api\`, and do not look for a mounted GitHub token. The managed-agent workspace is intentionally tokenless.
+Read the diff against ${resolvedPayload.baseRef}, explore the surrounding code, run swift build and swift test if the project supports them, then return one structured review intent. Do not call GitHub write APIs, do not use \`gh api\`, and do not look for environment variables or files containing GitHub credentials. The repository resource uses a short-lived GitHub App installation token only for repository access; the server-side broker is the only component that may post the review or labels.
 
 Your review must include a short "## Evidence" section. Judge whether the PR has enough evidence for the actual risk and surface area of the diff. Use the PR description, evidence links, checklist state, and PR comments as evidence inputs; treat bot reminders as prompts to inspect evidence, not as proof. Confirm sufficient provided evidence when it is adequate. If no evidence is provided, say whether that is acceptable and why; this should only be acceptable for docs-only, config-only, or genuinely non-testable changes. If evidence is missing or insufficient for a code, UI, behavioral, or risky change, set the review intent event to REQUEST_CHANGES and give a concrete example of acceptable evidence, such as an uploaded test-output artifact, an exact-commit screenshot or recording, or a checked "Not a testable change" rationale for docs-only/config-only work.
 

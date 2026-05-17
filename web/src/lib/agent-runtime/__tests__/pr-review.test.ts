@@ -530,7 +530,7 @@ describe("triggerPrReview", () => {
 		const [, config] = mocks.getOrCreateAgent.mock.calls[0];
 		const prompt = config.systemPrompt;
 		expect(prompt).toContain("Produce one structured review intent");
-		expect(prompt).toContain("you do not have write credentials");
+		expect(prompt).toContain("do not use GitHub write APIs yourself");
 		expect(prompt).toContain(
 			"<details><summary>Details</summary> ... </details>",
 		);
@@ -656,7 +656,9 @@ describe("triggerPrReview", () => {
 		const message = params.events[0].content[0].text;
 		expect(message).toContain("Labels: security");
 		expect(message).toContain("include it in the `labels` array");
-		expect(message).toContain("do not look for a mounted GitHub token");
+		expect(message).toContain(
+			"do not look for environment variables or files containing GitHub credentials",
+		);
 		expect(message).not.toContain("POST https://api.github.com");
 		expect(message).not.toContain("/workspace/.github-token");
 		expect(message).toContain(
@@ -671,7 +673,7 @@ describe("triggerPrReview", () => {
 		expect(message).toContain("Do not create labels");
 	});
 
-	it("does not mount GitHub write credentials into the managed-agent session", async () => {
+	it("uses only the repository resource token for managed-agent GitHub access", async () => {
 		mockPrList([githubPr(9), githubPr(8)]);
 
 		await expect(triggerPrReview(payload())).resolves.toBe("sesn_01");
@@ -681,8 +683,16 @@ describe("triggerPrReview", () => {
 		expect(JSON.stringify(sessionRequest.resources)).not.toContain(
 			"github-token",
 		);
-		expect(JSON.stringify(sessionRequest.resources)).not.toContain(
-			"authorization_token",
+		expect(sessionRequest.resources[0]).toMatchObject({
+			type: "github_repository",
+			authorization_token: "ghs_app_token",
+			checkout: { type: "branch", name: "feature/pr-narrative" },
+		});
+		const [, params] = mocks.sendEvent.mock.calls[0];
+		const message = params.events[0].content[0].text;
+		expect(message).not.toContain("ghs_app_token");
+		expect(message).toContain(
+			"server-side broker is the only component that may post the review or labels",
 		);
 		const [, envConfig] = mocks.getOrCreateEnvironment.mock.calls[0];
 		expect(envConfig.config.networking.type).toBe("limited");

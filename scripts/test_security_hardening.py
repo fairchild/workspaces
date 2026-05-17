@@ -265,7 +265,7 @@ class SecurityHardeningTests(unittest.TestCase):
 
     def test_mise_invocations_are_locked_and_pinned(self) -> None:
         verify_mise = (REPO_ROOT / "scripts/verify-mise-security.sh").read_text()
-        self.assertIn("MISE_EXPECTED_VERSION=\"v2026.5.7\"", verify_mise)
+        self.assertIn("MISE_EXPECTED_VERSION=\"v2026.5.10\"", verify_mise)
         self.assertIn("verify_locked_zig_exec", verify_mise)
         self.assertIn("github.com/repos/jdx/mise/releases/latest", verify_mise)
         self.assertIn("SHASUMS256.txt", verify_mise)
@@ -291,8 +291,8 @@ class SecurityHardeningTests(unittest.TestCase):
         self.assertIn("enable-global-virtual-store=true", web_npmrc)
 
         sandbox = (REPO_ROOT / "web/src/lib/agent-runtime/vercel-sandbox.ts").read_text()
-        self.assertIn("MISE_VERSION='v2026.5.7'", sandbox)
-        self.assertIn("MISE_SHA256='f70272c144e6a3da52cea68d544bb43ef5410905efe6f3bfc2c9d448949e1ce5'", sandbox)
+        self.assertIn("MISE_VERSION='v2026.5.10'", sandbox)
+        self.assertIn("MISE_SHA256='568e6074262804788f138fb8749865738e47dff739ebaa0d428134c45957b569'", sandbox)
         self.assertIn("sha256sum -c -", sandbox)
         self.assertNotIn("mise-latest-linux-x64", sandbox)
 
@@ -341,12 +341,20 @@ class SecurityHardeningTests(unittest.TestCase):
         self.assertIn("consumeTerminalTicket", ticket_route)
         self.assertIn('fetch("/api/terminal/ticket"', terminal_canvas)
 
-    def test_pr_reviewer_does_not_mount_github_write_tokens(self) -> None:
+    def test_pr_reviewer_limits_github_credentials_to_repository_resource(self) -> None:
         reviewer = (REPO_ROOT / "web/src/lib/agent-runtime/pr-review.ts").read_text()
         self.assertNotIn(".github-token", reviewer)
-        self.assertNotIn("authorization_token: githubToken", reviewer)
         self.assertNotIn('networking: { type: "unrestricted" }', reviewer)
-        self.assertIn("The managed-agent workspace is intentionally tokenless", reviewer)
+        self.assertIn("authorization_token: githubToken", reviewer)
+        self.assertIn("short-lived GitHub App installation token", reviewer)
+        self.assertIn(
+            "do not look for environment variables or files containing GitHub credentials",
+            reviewer,
+        )
+        self.assertIn(
+            "server-side broker is the only component that may post the review or labels",
+            reviewer,
+        )
 
     def test_pr_reviewer_ingress_canary_is_hmac_and_secret_gated(self) -> None:
         route = (REPO_ROOT / "web/src/app/api/webhooks/github/route.ts").read_text()
