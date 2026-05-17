@@ -2,7 +2,7 @@
 name: workspaces-optimization
 description: >
   Debug and improve WorkspaceManager performance on development hosts,
-  CI or Tart lanes, and target machines.
+  CI, Lume macOS lanes, and target machines.
   Use when investigating slow launch, slow typing in the Ghostty terminal,
   terminal focus lag, repo or workspace switching latency, or when collecting
   before and after evidence for a performance fix. Prefer this skill for

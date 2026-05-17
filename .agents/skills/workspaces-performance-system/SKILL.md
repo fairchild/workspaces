@@ -131,7 +131,7 @@ Rules:
 
 - `runner-lane-health` answers whether the lane is available.
 - `perf-validation` answers whether the product met the scenario.
-- Do not report `tart-ui` offline or runner disconnects as app regressions.
+- Do not report `lume-macos` offline or runner disconnects as app regressions.
 - On PRs, local evidence plus build/test is merge-critical; self-hosted perf stays advisory until lane stability is proven.
 
 ## Outputs To Produce

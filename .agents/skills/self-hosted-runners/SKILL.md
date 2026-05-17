@@ -2,7 +2,7 @@
 name: self-hosted-runners
 description: >
   Inspect, recover, and operate this repo's self-hosted GitHub Actions
-  runners across the signing-host, lume-macos, and tart-ui lanes.
+  runners across the signing-host and lume-macos lanes.
   Use when jobs are queued, runners show offline or busy unexpectedly,
   release jobs do not start, a Lume runner VM needs recovery, or when
   you need a host fallback runner on the current machine.
@@ -12,11 +12,10 @@ description: >
 
 Use this skill when the problem is runner health, scheduling, or lane ownership rather than repo code.
 
-This repo has three important self-hosted lanes:
+This repo has two important self-hosted lanes:
 
 - `signing-host` for release signing and notarization
-- `lume-macos` for macOS CI and agent execution
-- `tart-ui` for UI and perf automation
+- `lume-macos` for maintained macOS automation and agent execution
 
 ## Quick Start
 
@@ -53,7 +52,7 @@ If you already know the lane is `lume-macos`, use the Lume guest probe before gu
 ### 1. Inspect the current lane state
 
 - Run `summarize_runner_state.py` first.
-- Identify which lane is actually blocked: `signing-host`, `lume-macos`, or `tart-ui`.
+- Identify which lane is actually blocked: `signing-host` or `lume-macos`.
 - If a specific run is queued or failed, pass `--run-id`.
 - Read [references/recovery-order.md](references/recovery-order.md) for the standard recovery order.
 
@@ -73,18 +72,12 @@ For `signing-host`:
 2. Start the configured runner on the intended machine.
 3. Verify the release run lands on that lane before debugging signing details.
 
-For `tart-ui`:
-
-1. Confirm the runner inventory shows an online `tart-ui` host.
-2. Only debug Tart workflow behavior after the runner itself is proven healthy.
-
 ### 3. Use the lane-specific repo runbooks
 
 Primary docs:
 
 - `docs/development/lume-runner-setup.md`
 - `docs/development/signing-runner-setup.md`
-- `docs/development/tart-runner-setup.md`
 
 Use the skill scripts to narrow the failure mode first, then jump into the lane-specific doc section you need.
 

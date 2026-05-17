@@ -588,6 +588,16 @@ class SecurityHardeningTests(unittest.TestCase):
         self.assertEqual(check.status, "pass", check.detail)
         self.assertIn("no jobs inherit", check.detail)
 
+    def test_no_workflow_uses_retired_tart_ui_runner_lane(self) -> None:
+        """The repo no longer has a tart-ui runner lane; workflows must not target it."""
+        workflows_dir = REPO_ROOT / ".github/workflows"
+        offenders = [
+            path.name
+            for path in sorted(workflows_dir.glob("*.yml"))
+            if "tart-ui" in path.read_text()
+        ]
+        self.assertEqual(offenders, [])
+
     def test_remote_audit_requires_read_only_default_token_permissions(self) -> None:
         with mock.patch.object(
             audit_security_posture,

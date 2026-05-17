@@ -154,7 +154,7 @@ cmd_setup() {
 
     if [[ "${RUNNER_LABELS}" == "self-hosted-macos,macos,$(uname -m)" ]]; then
         log_warn "RUNNER_LABELS is using the generic default (${RUNNER_LABELS})."
-        log_warn "Repo workflows target explicit lanes such as 'tart-ui' and 'signing-host'; set RUNNER_LABELS accordingly before setup."
+        log_warn "Repo workflows target explicit lanes such as 'lume-macos' and 'signing-host'; set RUNNER_LABELS accordingly before setup."
     fi
 
     if [ ! -f "${RUNNER_DIR}/config.sh" ]; then
@@ -317,7 +317,7 @@ Examples:
 
 Notes:
   The default RUNNER_LABELS (${RUNNER_LABELS}) is a generic label set. Repo
-  workflows only target explicit lanes such as tart-ui and signing-host, so
+  workflows only target explicit lanes such as lume-macos and signing-host, so
   export RUNNER_LABELS before setup when provisioning a workflow runner.
 EOF
 }

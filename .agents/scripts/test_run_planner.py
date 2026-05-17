@@ -414,13 +414,13 @@ class RunPlannerTests(unittest.TestCase):
         plan = self.make_plan(
             [
                 "Replace bare self-hosted runner label",
-                "Stand up tart-ui runner",
-                "Move `perf-validation` job to `tart-ui` runner and make it manual/scheduled",
+                "Stand up lume-macos runner",
+                "Move `perf-validation` job to `lume-macos` runner and make it manual/scheduled",
             ],
             discussion=discussion,
         )
         prior_title = (
-            "Move `perf-validation` job to `tart-ui` runner and make it "
+            "Move `perf-validation` job to `lume-macos` runner and make it "
             "manual/scheduled instead of push-triggered"
         )
         existing_issues = [
@@ -509,7 +509,7 @@ class RunPlannerTests(unittest.TestCase):
                         run_planner.comment_marker(43, "planned"),
                         "",
                         "- #61 — Audit runners",
-                        "- #62 — Provision tart-ui runner",
+                        "- #62 — Provision lume-macos runner",
                         "- #63 — Move perf-validation workflow",
                     ]
                 ),
@@ -517,7 +517,7 @@ class RunPlannerTests(unittest.TestCase):
         ]
         issues = [
             {"number": 61, "body": run_planner.issue_marker(43, "audit-runners")},
-            {"number": 62, "body": run_planner.issue_marker(43, "provision-tart-ui-runner")},
+            {"number": 62, "body": run_planner.issue_marker(43, "provision-lume-macos-runner")},
             {"number": 63, "body": run_planner.issue_marker(43, "move-perf-validation")},
         ]
         self.assertTrue(run_planner.has_summary_issue_set(43, comments, issues))
@@ -525,9 +525,9 @@ class RunPlannerTests(unittest.TestCase):
     def test_titles_loosely_match_minor_suffix_change(self) -> None:
         self.assertTrue(
             run_planner.titles_loosely_match(
-                "Move `perf-validation` job to `tart-ui` runner and make it manual/scheduled",
+                "Move `perf-validation` job to `lume-macos` runner and make it manual/scheduled",
                 (
-                    "Move `perf-validation` job to `tart-ui` runner and make it "
+                    "Move `perf-validation` job to `lume-macos` runner and make it "
                     "manual/scheduled instead of push-triggered"
                 ),
             )

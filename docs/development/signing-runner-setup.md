@@ -4,7 +4,7 @@ Use this runbook to provision or relabel the dedicated `[self-hosted, signing-ho
 
 ## Why this exists
 
-The release workflow intentionally does not run on a generic self-hosted runner. It targets `[self-hosted, signing-host]` so signing and notarization stay isolated from routine desktop CI and Tart UI automation.
+The release workflow intentionally does not run on a generic self-hosted runner. It targets `[self-hosted, signing-host]` so signing and notarization stay isolated from routine desktop CI and macOS automation.
 
 `signing-host` is a mutable GitHub runner label, not repo state. If no online runner advertises it, `Release` jobs will remain queued even when self-hosted runners are otherwise healthy.
 
@@ -91,4 +91,3 @@ Then add `signing-host` to the new designated runner and re-run the verification
 
 - [RELEASING.md](../../RELEASING.md)
 - [.github/workflows/release.yml](../../.github/workflows/release.yml)
-- [docs/development/tart-runner-setup.md](./tart-runner-setup.md)

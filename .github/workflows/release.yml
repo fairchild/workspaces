@@ -17,7 +17,7 @@ permissions:
 jobs:
   build-sign-notarize-release:
     # Release signing/notarization stays on the dedicated signing lane so it
-    # never contends with generic CI or Tart UI automation.
+    # never contends with generic CI or routine macOS automation.
     runs-on: [self-hosted, signing-host]
     environment: release
     timeout-minutes: 120

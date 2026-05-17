@@ -22,7 +22,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 REQUIRED_RUNNER_LABELS = {"signing-host", "lume-macos"}
-ADVISORY_RUNNER_LABELS = {"tart-ui"}
+ADVISORY_RUNNER_LABELS: set[str] = set()
 EXPECTED_ENVIRONMENTS = {"release", "codespaces-claude-break-glass"}
 EXPECTED_REQUIRED_STATUS_CHECKS = {"readiness", "release-change-validation"}
 EXPECTED_REPO_SECRETS = {
@@ -214,8 +214,7 @@ def remote_runner_checks(repo: str) -> list[Check]:
         if isinstance(label, dict) and label.get("name")
     }
     missing_required = sorted(REQUIRED_RUNNER_LABELS - labels)
-    missing_advisory = sorted(ADVISORY_RUNNER_LABELS - labels)
-    return [
+    checks = [
         Check(
             "fail" if missing_required else "pass",
             "release/agent runner labels",
@@ -223,14 +222,19 @@ def remote_runner_checks(repo: str) -> list[Check]:
             if missing_required
             else "required labels present",
         ),
-        Check(
-            "warn" if missing_advisory else "pass",
-            "advisory runner labels",
-            f"missing: {', '.join(missing_advisory)}"
-            if missing_advisory
-            else "advisory labels present",
-        ),
     ]
+    if ADVISORY_RUNNER_LABELS:
+        missing_advisory = sorted(ADVISORY_RUNNER_LABELS - labels)
+        checks.append(
+            Check(
+                "warn" if missing_advisory else "pass",
+                "advisory runner labels",
+                f"missing: {', '.join(missing_advisory)}"
+                if missing_advisory
+                else "advisory labels present",
+            )
+        )
+    return checks
 
 
 def remote_secret_checks(repo: str) -> list[Check]:

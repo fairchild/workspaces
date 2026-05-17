@@ -40,7 +40,7 @@ jobs:
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
 
-      - name: Inspect tart-ui runner lane
+      - name: Inspect lume-macos runner lane
         id: inspect
         env:
           GH_TOKEN: ${{ github.token }}
@@ -68,7 +68,7 @@ jobs:
                   payload = json.loads(response.read().decode("utf-8"))
           except urllib.error.HTTPError as error:
               state = {
-                  "lane": "tart-ui",
+                  "lane": "lume-macos",
                   "available": None,
                   "status": "inspection_blocked",
                   "summary": (
@@ -85,7 +85,7 @@ jobs:
               lane_status = "inspection_blocked"
           except Exception as error:  # pragma: no cover - defensive workflow guard
               state = {
-                  "lane": "tart-ui",
+                  "lane": "lume-macos",
                   "available": None,
                   "status": "inspection_error",
                   "summary": (
@@ -103,7 +103,7 @@ jobs:
               lane_runners = []
               for runner in payload.get("runners", []):
                   labels = {label.get("name") for label in runner.get("labels", [])}
-                  if "tart-ui" not in labels:
+                  if "lume-macos" not in labels:
                       continue
                   lane_runners.append(
                       {
@@ -119,14 +119,14 @@ jobs:
                   for runner in lane_runners
               )
               state = {
-                  "lane": "tart-ui",
+                  "lane": "lume-macos",
                   "available": available,
                   "status": "available" if available else "unavailable",
                   "runners": lane_runners,
                   "summary": (
-                      "At least one tart-ui runner is online and idle."
+                      "At least one lume-macos runner is online and idle."
                       if available
-                      else "No tart-ui runner is currently online and idle."
+                      else "No lume-macos runner is currently online and idle."
                   ),
               }
               lane_available = "true" if available else "false"
@@ -148,9 +148,8 @@ jobs:
   perf-validation:
     needs: runner-lane-health
     if: needs.runner-lane-health.outputs.lane_available == 'true'
-    # Run perf validation on the dedicated Tart UI lane so app-launching checks
-    # never contend with generic CI or the interactive desktop runner.
-    runs-on: [self-hosted, tart-ui]
+    # Run perf validation on the maintained Lume macOS lane.
+    runs-on: [self-hosted, lume-macos]
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
@@ -206,7 +205,7 @@ jobs:
           LANE_STATUS: ${{ needs.runner-lane-health.outputs.lane_status }}
         run: |
           cat <<EOF > perf-validation-skipped.md
-          Perf validation did not run because the dedicated tart-ui lane was not available or could not be inspected.
+          Perf validation did not run because the lume-macos lane was not available or could not be inspected.
           lane_available: ${LANE_AVAILABLE}
           lane_status: ${LANE_STATUS}
           If lane_status is inspection_blocked, the workflow token could not query the runner inventory.
