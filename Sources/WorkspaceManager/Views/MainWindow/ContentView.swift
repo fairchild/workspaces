@@ -1443,13 +1443,15 @@ struct ContentView: View {
     }
 
     private func handleTerminalProcessExit(sessionID: UUID) {
-        guard let result = terminalSessionController.handleProcessExit(
-            sessionID: sessionID,
-            hostTerminalState: hostTerminalState,
-            defaultHomeDirectory: resolvedDefaultHostDirectory,
-            repos: repos,
-            normalizePath: normalizePath
-        ) else { return }
+        guard
+            let result = terminalSessionController.handleProcessExit(
+                sessionID: sessionID,
+                hostTerminalState: hostTerminalState,
+                defaultHomeDirectory: resolvedDefaultHostDirectory,
+                repos: repos,
+                normalizePath: normalizePath
+            )
+        else { return }
         applyTerminalSessionResult(result)
     }
 
@@ -1473,49 +1475,57 @@ struct ContentView: View {
 
     @MainActor
     private func createTerminalTabFromCurrentContext() {
-        guard let result = terminalSessionController.createTabFromCurrentContext(
-            hostTerminalState: hostTerminalState,
-            defaultHomeDirectory: resolvedDefaultHostDirectory,
-            repos: repos,
-            normalizePath: normalizePath,
-            activateHostSession: { key, directory, customCommand in
-                activateHostSession(key: key, directory: directory, customCommand: customCommand)
-            }
-        ) else { return }
+        guard
+            let result = terminalSessionController.createTabFromCurrentContext(
+                hostTerminalState: hostTerminalState,
+                defaultHomeDirectory: resolvedDefaultHostDirectory,
+                repos: repos,
+                normalizePath: normalizePath,
+                activateHostSession: { key, directory, customCommand in
+                    activateHostSession(key: key, directory: directory, customCommand: customCommand)
+                }
+            )
+        else { return }
         applyTerminalSessionResult(result)
     }
 
     @MainActor
     private func selectTerminalTab(sessionID: UUID) {
-        guard let result = terminalSessionController.selectTab(
-            sessionID: sessionID,
-            hostTerminalState: hostTerminalState,
-            repos: repos,
-            normalizePath: normalizePath
-        ) else { return }
+        guard
+            let result = terminalSessionController.selectTab(
+                sessionID: sessionID,
+                hostTerminalState: hostTerminalState,
+                repos: repos,
+                normalizePath: normalizePath
+            )
+        else { return }
         applyTerminalSessionResult(result)
     }
 
     @MainActor
     private func selectAdjacentTerminalTab(offset: Int) {
-        guard let result = terminalSessionController.selectAdjacentTab(
-            offset: offset,
-            hostTerminalState: hostTerminalState,
-            repos: repos,
-            normalizePath: normalizePath
-        ) else { return }
+        guard
+            let result = terminalSessionController.selectAdjacentTab(
+                offset: offset,
+                hostTerminalState: hostTerminalState,
+                repos: repos,
+                normalizePath: normalizePath
+            )
+        else { return }
         applyTerminalSessionResult(result)
     }
 
     @MainActor
     private func closeActiveTerminalTab() {
-        guard let result = terminalSessionController.closeActiveTab(
-            hostTerminalState: hostTerminalState,
-            defaultHomeDirectory: resolvedDefaultHostDirectory,
-            repos: repos,
-            normalizePath: normalizePath,
-            requestClose: requestTerminalClose(sessionID:)
-        ) else { return }
+        guard
+            let result = terminalSessionController.closeActiveTab(
+                hostTerminalState: hostTerminalState,
+                defaultHomeDirectory: resolvedDefaultHostDirectory,
+                repos: repos,
+                normalizePath: normalizePath,
+                requestClose: requestTerminalClose(sessionID:)
+            )
+        else { return }
         applyTerminalSessionResult(result)
     }
 
@@ -1549,13 +1559,15 @@ struct ContentView: View {
 
     @MainActor
     private func forceCloseTerminalTab(sessionID: UUID) {
-        guard let result = terminalSessionController.forceCloseTab(
-            sessionID: sessionID,
-            hostTerminalState: hostTerminalState,
-            defaultHomeDirectory: resolvedDefaultHostDirectory,
-            repos: repos,
-            normalizePath: normalizePath
-        ) else { return }
+        guard
+            let result = terminalSessionController.forceCloseTab(
+                sessionID: sessionID,
+                hostTerminalState: hostTerminalState,
+                defaultHomeDirectory: resolvedDefaultHostDirectory,
+                repos: repos,
+                normalizePath: normalizePath
+            )
+        else { return }
         applyTerminalSessionResult(result)
     }
 
