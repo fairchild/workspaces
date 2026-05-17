@@ -62,8 +62,12 @@ skips the run and records/logs the failure instead of falling back to a PAT.
 
 **How the token is used:** `triggerPrReview()` calls `resolveGitHubToken()`
 which generates a short-lived installation token from the GitHub App
-credentials. The token is kept server-side. It is not mounted into the managed
-agent workspace and does not appear in the prompt or message stream.
+credentials. The token is passed to the Managed Agents `github_repository`
+resource as `authorization_token` so Anthropic can clone the repository. It is
+not written into the prompt or a filesystem token path for the agent to
+discover. The token must be least-privilege and repo-scoped; the reviewer prompt
+still forbids GitHub write APIs, and the server-side broker remains the only
+component that posts reviews or labels.
 
 **Security:** Never print App private keys or installation tokens to logs. Use
 files or secret-manager flows, never standalone `echo`/`print` of credential
@@ -212,6 +216,9 @@ Check Vercel error logs. Common causes:
 - GitHub App credentials are missing or partial (`PR_REVIEWER_APP_ID`, `PR_REVIEWER_PRIVATE_KEY`, `PR_REVIEWER_INSTALLATION_ID`)
 - Env var has a trailing newline (use `printf` not `echo` when setting)
 - Webhook secret mismatch between GitHub and `GITHUB_WEB_WORKSPACES_WEBHOOK_SECRET`
+- Anthropic returns `resources.0.authorization_token: Field required` — the
+  `github_repository` session resource is missing the short-lived App
+  installation token required for repository cloning
 
 ### Agent can't find the diff
 

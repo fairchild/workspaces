@@ -28,9 +28,12 @@ not a broad public security stance.
 - The Codespaces Claude worker is protected by the
   `codespaces-claude-break-glass` environment and defaults to `main` or
   owner-repository branches.
-- The managed PR reviewer no longer mounts a GitHub write token into the agent
-  workspace. It produces a structured review intent, and the server-side broker
-  validates and posts the GitHub review with the App token.
+- The managed PR reviewer passes a short-lived GitHub App installation token
+  only as the Managed Agents `github_repository.authorization_token` needed for
+  repository cloning. It does not write a token into the prompt or filesystem
+  for the agent to discover. The agent produces a structured review intent, and
+  the server-side broker validates and posts the GitHub review with the App
+  token.
 - Managed reviewer ingress canaries are HMAC verified and gated by
   `WORKSPACES_WEBHOOK_CANARY_SECRET`; the dry-run response returns before DB
   writes or managed-agent session creation.

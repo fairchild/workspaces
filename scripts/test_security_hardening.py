@@ -341,12 +341,20 @@ class SecurityHardeningTests(unittest.TestCase):
         self.assertIn("consumeTerminalTicket", ticket_route)
         self.assertIn('fetch("/api/terminal/ticket"', terminal_canvas)
 
-    def test_pr_reviewer_does_not_mount_github_write_tokens(self) -> None:
+    def test_pr_reviewer_limits_github_credentials_to_repository_resource(self) -> None:
         reviewer = (REPO_ROOT / "web/src/lib/agent-runtime/pr-review.ts").read_text()
         self.assertNotIn(".github-token", reviewer)
-        self.assertNotIn("authorization_token: githubToken", reviewer)
         self.assertNotIn('networking: { type: "unrestricted" }', reviewer)
-        self.assertIn("The managed-agent workspace is intentionally tokenless", reviewer)
+        self.assertIn("authorization_token: githubToken", reviewer)
+        self.assertIn("short-lived GitHub App installation token", reviewer)
+        self.assertIn(
+            "do not look for environment variables or files containing GitHub credentials",
+            reviewer,
+        )
+        self.assertIn(
+            "server-side broker is the only component that may post the review or labels",
+            reviewer,
+        )
 
     def test_pr_reviewer_ingress_canary_is_hmac_and_secret_gated(self) -> None:
         route = (REPO_ROOT / "web/src/app/api/webhooks/github/route.ts").read_text()
