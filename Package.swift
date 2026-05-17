@@ -35,6 +35,7 @@ let package = Package(
         .executable(name: "WorkspaceManagerCLI", targets: ["WorkspaceManagerCLI"]),
     ],
     dependencies: [
+        .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.10.0"),
         .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.9.1")
     ],
     targets: [
@@ -45,6 +46,9 @@ let package = Package(
         // or potentially shared with a CLI tool in the future.
         .target(
             name: "WorkspaceManagerCore",
+            dependencies: [
+                .product(name: "GRDB", package: "GRDB.swift")
+            ],
             swiftSettings: [.enableUpcomingFeature("BareSlashRegexLiterals")]
         ),
 
@@ -119,7 +123,10 @@ let package = Package(
         // ====================================================================
         .testTarget(
             name: "WorkspaceManagerTests",
-            dependencies: ["WorkspaceManagerCore"]
+            dependencies: [
+                "WorkspaceManagerCore",
+                .product(name: "GRDB", package: "GRDB.swift")
+            ]
         ),
         .testTarget(
             name: "WorkspaceManagerAppTests",

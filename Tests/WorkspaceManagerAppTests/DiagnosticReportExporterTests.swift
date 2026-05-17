@@ -36,14 +36,28 @@ struct DiagnosticReportExporterTests {
             mode: .inMemoryDegraded,
             bootstrapErrors: ["primary failed", "fallback failed"]
         )
+        let localStateSnapshot = LocalStateStoreStatusSnapshot(
+            mode: .persistent(path: "/tmp/local-state.sqlite"),
+            bootstrapErrors: []
+        )
+        let localStateSummary = LocalStateStoreSummary(
+            schemaVersion: 1,
+            databasePath: "/tmp/local-state.sqlite",
+            generatedAt: Date(),
+            tableCounts: ["terminal_sessions": 1]
+        )
 
         let report = DiagnosticReportExporter.makeReport(
             diagnosticsBundle: diagnostics,
             systemInfo: systemInfo,
-            modelStoreSnapshot: snapshot
+            modelStoreSnapshot: snapshot,
+            localStateSnapshot: localStateSnapshot,
+            localStateSummary: localStateSummary
         )
 
         #expect(report.modelStore == snapshot)
-        #expect(report.schemaVersion == 2)
+        #expect(report.localStateStore == localStateSnapshot)
+        #expect(report.localStateSummary == localStateSummary)
+        #expect(report.schemaVersion == 3)
     }
 }

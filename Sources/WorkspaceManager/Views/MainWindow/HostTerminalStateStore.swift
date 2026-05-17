@@ -37,6 +37,7 @@ final class HostTerminalStateStore: ObservableObject {
     /// Agent session registry attached at scene mount. Optional because previews and
     /// fixtures construct stores without an app-scoped registry.
     private weak var agentSessionRegistry: AgentSessionRegistry?
+    private var localStateStore: LocalStateStore?
     /// Stub probe used to seed `kind` on register; PR #1 ships a fail-safe
     /// `.claudeCode` default. Replace with the real probe in a Channel 3 follow-up.
     private let foregroundProbe = PTYForegroundProbe()
@@ -47,14 +48,17 @@ final class HostTerminalStateStore: ObservableObject {
     func attach(agentSessionRegistry: AgentSessionRegistry) {
         attach(
             agentSessionRegistry: agentSessionRegistry,
+            localStateStore: nil,
             hooksSocketPath: ClaudeIntegrationLifecycle.shared.socketPath
         )
     }
 
     func attach(
         agentSessionRegistry: AgentSessionRegistry,
+        localStateStore: LocalStateStore?,
         hooksSocketPath: String?
     ) {
+        self.localStateStore = localStateStore
         self.surfaceStore.hooksSocketPath = hooksSocketPath
         guard self.agentSessionRegistry !== agentSessionRegistry else {
             syncRegistry()
@@ -437,6 +441,13 @@ final class HostTerminalStateStore: ObservableObject {
         }
 
         syncRegistry()
+
+        for session in sessions {
+            recordTerminalSession(session, isActive: session.id == activeSessionID)
+        }
+        for splitSession in splitSessionsByPrimaryID.values {
+            recordTerminalSession(splitSession, isActive: false)
+        }
     }
 
     /// Mirror the coordinator's session list into the agent session registry so the
@@ -458,12 +469,14 @@ final class HostTerminalStateStore: ObservableObject {
                 kind: kind
             )
             registeredAgentSessionIDs.insert(session.id)
+            recordTerminalSession(session, isActive: session.id == activeSessionID)
         }
 
         // Deregister sessions that have left the coordinator.
         let removed = registeredAgentSessionIDs.subtracting(liveIDs)
         for sessionID in removed {
             registry.deregister(hostSessionID: sessionID)
+            recordTerminalSessionEnded(sessionID)
         }
         registeredAgentSessionIDs.subtract(removed)
     }
@@ -473,11 +486,33 @@ final class HostTerminalStateStore: ObservableObject {
             surfaceStore.invalidate(sessionID: splitSession.id)
             if registeredAgentSessionIDs.contains(splitSession.id) {
                 agentSessionRegistry?.deregister(hostSessionID: splitSession.id)
+                recordTerminalSessionEnded(splitSession.id)
                 registeredAgentSessionIDs.remove(splitSession.id)
             }
         }
         splitLayoutsByPrimaryID.removeValue(forKey: primarySessionID)
         splitFractionsByPrimaryID.removeValue(forKey: primarySessionID)
+    }
+
+    private func recordTerminalSession(_ session: HostTerminalSession, isActive: Bool) {
+        guard let localStateStore else { return }
+        let terminalMode = TerminalMultiplexingMode.resolve().rawValue
+        let hooksSocketPath = surfaceStore.hooksSocketPath
+        Task {
+            try? await localStateStore.recordTerminalSession(
+                session,
+                terminalMode: terminalMode,
+                isActive: isActive,
+                hooksSocketPath: hooksSocketPath
+            )
+        }
+    }
+
+    private func recordTerminalSessionEnded(_ sessionID: UUID) {
+        guard let localStateStore else { return }
+        Task {
+            try? await localStateStore.markTerminalSessionEnded(hostSessionID: sessionID)
+        }
     }
 
     private func resolvedPrimarySessionID(_ sourceSessionID: UUID?) -> UUID? {
