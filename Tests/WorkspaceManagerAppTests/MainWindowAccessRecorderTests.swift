@@ -67,6 +67,28 @@ struct MainWindowAccessRecorderTests {
         #expect(fetchedRepos.first?.lastAccessedAt ?? .distantPast > Date(timeIntervalSince1970: 10))
     }
 
+    @Test("Flushing pending save persists access without waiting for debounce")
+    func flushingPendingSavePersistsRecordedAccess() throws {
+        let fixture = try makeModelContext()
+        let repo = Repo(
+            name: "alpha",
+            localPath: URL(fileURLWithPath: "/tmp/alpha"),
+            lastAccessedAt: Date(timeIntervalSince1970: 10)
+        )
+        fixture.context.insert(repo)
+        try fixture.context.save()
+
+        var recorder = MainWindowAccessRecorder(saveDelay: .seconds(60))
+        recorder.record(repo: repo, modelContext: fixture.context)
+        let result = recorder.flushPendingSave(modelContext: fixture.context)
+
+        let freshContext = ModelContext(fixture.container)
+        let fetchedRepos = try freshContext.fetch(FetchDescriptor<Repo>())
+        #expect(result == nil)
+        #expect(fetchedRepos.count == 1)
+        #expect(fetchedRepos.first?.lastAccessedAt ?? .distantPast > Date(timeIntervalSince1970: 10))
+    }
+
     @Test("Save failure rollback is skipped when inserts are pending")
     func saveFailureRollbackSkipsPendingInserts() throws {
         let fixture = try makeModelContext()

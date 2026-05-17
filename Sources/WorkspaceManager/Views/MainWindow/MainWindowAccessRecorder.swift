@@ -47,6 +47,13 @@ struct MainWindowAccessRecorder {
     }
 
     @discardableResult
+    mutating func flushPendingSave(modelContext: ModelContext) -> SaveFailureResolution? {
+        guard saveTask != nil else { return nil }
+        cancelPendingSave()
+        return Self.savePendingChanges(modelContext: modelContext)
+    }
+
+    @discardableResult
     static func savePendingChanges(modelContext: ModelContext) -> SaveFailureResolution? {
         do {
             try modelContext.save()

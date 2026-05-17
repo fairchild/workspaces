@@ -714,7 +714,7 @@ struct ContentView: View {
             }
             .onDisappear {
                 clearAppCommands()
-                accessRecorder.cancelPendingSave()
+                accessRecorder.flushPendingSave(modelContext: modelContext)
             }
             .sheet(item: $repoForNewWorkspaceFromLanding) { repo in
                 NewWorkspaceSheet(
