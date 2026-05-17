@@ -190,6 +190,7 @@ export async function recordRunResult(
 }
 
 export interface PrReviewRunSummary {
+	fingerprint: string;
 	repoFullName: string;
 	prNumber: number;
 	headSha: string;
@@ -197,6 +198,18 @@ export interface PrReviewRunSummary {
 	triggerSourceId: string;
 	status: PrReviewRunStatus;
 	sessionId: string | null;
+	createdAt: string;
+	updatedAt: string;
+}
+
+export interface StartedPrReviewRun {
+	fingerprint: string;
+	repoFullName: string;
+	prNumber: number;
+	headSha: string;
+	triggerKind: string;
+	triggerSourceId: string;
+	sessionId: string;
 	createdAt: string;
 	updatedAt: string;
 }
@@ -209,6 +222,7 @@ export async function listRecentPrReviewRuns(input: {
 	const rows = await getDb()
 		.selectFrom("managed_pr_review_runs")
 		.select([
+			"fingerprint",
 			"repo_full_name",
 			"pr_number",
 			"head_sha",
@@ -224,6 +238,7 @@ export async function listRecentPrReviewRuns(input: {
 		.execute();
 
 	return rows.map((row) => ({
+		fingerprint: row.fingerprint,
 		repoFullName: row.repo_full_name,
 		prNumber: row.pr_number,
 		headSha: row.head_sha,
@@ -234,6 +249,50 @@ export async function listRecentPrReviewRuns(input: {
 		createdAt: row.created_at,
 		updatedAt: row.updated_at,
 	}));
+}
+
+export async function listStartedPrReviewRuns(
+	input: {
+		limit?: number;
+		repoFullName?: string;
+	} = {},
+): Promise<StartedPrReviewRun[]> {
+	await ensureRunsTable();
+	let query = getDb()
+		.selectFrom("managed_pr_review_runs")
+		.select([
+			"fingerprint",
+			"repo_full_name",
+			"pr_number",
+			"head_sha",
+			"trigger_kind",
+			"trigger_source_id",
+			"session_id",
+			"created_at",
+			"updated_at",
+		])
+		.where("status", "=", "started")
+		.where("session_id", "is not", null)
+		.orderBy("updated_at", "asc")
+		.limit(input.limit ?? 10);
+	if (input.repoFullName) {
+		query = query.where("repo_full_name", "=", input.repoFullName);
+	}
+	const rows = await query.execute();
+
+	return rows
+		.filter((row) => row.session_id)
+		.map((row) => ({
+			fingerprint: row.fingerprint,
+			repoFullName: row.repo_full_name,
+			prNumber: row.pr_number,
+			headSha: row.head_sha,
+			triggerKind: row.trigger_kind,
+			triggerSourceId: row.trigger_source_id,
+			sessionId: row.session_id as string,
+			createdAt: row.created_at,
+			updatedAt: row.updated_at,
+		}));
 }
 
 /** Test-only hook so per-test in-memory DBs re-run table creation. */

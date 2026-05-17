@@ -13,7 +13,6 @@ import type {
 	WebhookEvent,
 	WebhookEventType,
 } from "@/lib/types";
-import { after } from "next/server";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -205,17 +204,7 @@ export async function POST(request: Request): Promise<Response> {
 	// serverless teardown cannot drop the session kickoff event.
 	if (trigger) {
 		try {
-			await triggerPrReview(trigger.reviewPayload, trigger.context, {
-				onReviewStarted: (completeReview) => {
-					after(async () => {
-						try {
-							await completeReview();
-						} catch (err) {
-							console.error("[pr-review] broker failed:", err);
-						}
-					});
-				},
-			});
+			await triggerPrReview(trigger.reviewPayload, trigger.context);
 		} catch (err) {
 			console.error("[pr-review] failed:", err);
 		}

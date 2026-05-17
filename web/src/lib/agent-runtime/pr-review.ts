@@ -6,9 +6,10 @@ import {
 	getOrCreateAgent,
 	getOrCreateEnvironment,
 } from "./managed-agents-cache";
-import { streamWithReconnect } from "./managed-agents-events";
 import {
+	type StartedPrReviewRun,
 	computeRunFingerprint,
+	listStartedPrReviewRuns,
 	recordRunResult,
 	recordRunStart,
 } from "./pr-review-runs";
@@ -759,26 +760,178 @@ async function postGitHubReviewIntent(
 	}
 }
 
-async function collectReviewIntentText(
+async function collectCompletedReviewIntentText(
 	client: Anthropic,
 	sessionId: string,
-): Promise<string> {
+): Promise<{ done: boolean; output: string; stopReason?: string }> {
 	let output = "";
-	for await (const chunk of streamWithReconnect(client, sessionId, {
-		maxReconnects: 6,
+	let done = false;
+	let stopReason: string | undefined;
+
+	for await (const event of client.beta.sessions.events.list(sessionId, {
+		order: "asc",
 	})) {
-		if (chunk.type === "text") {
-			output += chunk.content;
+		if (event.type === "agent.message") {
+			for (const block of event.content ?? []) {
+				if (block?.type === "text" && typeof block.text === "string") {
+					output += block.text;
+				}
+			}
 		}
-		if (chunk.type === "error") {
-			throw new Error(chunk.content);
+		if (event.type === "session.error") {
+			const err = event.error as
+				| { message?: string; type?: string }
+				| undefined;
+			throw new Error(err?.message ?? err?.type ?? "session.error");
+		}
+		if (event.type === "session.status_idle") {
+			const reason = event.stop_reason?.type;
+			if (reason === "end_turn" || reason === "retries_exhausted") {
+				done = true;
+				stopReason = reason;
+			}
 		}
 	}
-	return output;
+
+	return { done, output, stopReason };
 }
 
-export interface TriggerPrReviewOptions {
-	onReviewStarted?: (completeReview: () => Promise<void>) => void;
+async function payloadFromStartedRun(
+	githubToken: string,
+	run: StartedPrReviewRun,
+): Promise<PrReviewPayload | null> {
+	const [owner, repo] = run.repoFullName.split("/");
+	if (!owner || !repo) return null;
+	const fetched = await fetchPrHeadMetadata(
+		githubToken,
+		run.repoFullName,
+		run.prNumber,
+	);
+	if (!fetched) return null;
+	return {
+		number: run.prNumber,
+		title: fetched.title,
+		htmlUrl: fetched.htmlUrl,
+		body: fetched.body,
+		headRef: fetched.headRef,
+		headSha: run.headSha || fetched.headSha,
+		baseRef: fetched.baseRef,
+		repoUrl: `https://github.com/${run.repoFullName}`,
+		repoFullName: run.repoFullName,
+		repoName: repo,
+	};
+}
+
+export interface PrReviewBrokerRunResult {
+	fingerprint: string;
+	sessionId: string;
+	prNumber: number;
+	status: "completed" | "failed" | "skipped_running";
+	error?: string;
+}
+
+export interface PrReviewBrokerResult {
+	checked: number;
+	completed: number;
+	failed: number;
+	skippedRunning: number;
+	runs: PrReviewBrokerRunResult[];
+}
+
+export async function processPendingPrReviewRuns(
+	input: {
+		limit?: number;
+		repoFullName?: string;
+	} = {},
+): Promise<PrReviewBrokerResult> {
+	const apiKey = process.env.ANTHROPIC_API_KEY;
+	const githubToken = await resolveGitHubToken();
+	if (!apiKey || !githubToken) {
+		throw new Error(
+			"missing ANTHROPIC_API_KEY, GitHub App credentials, or reviewer is disabled",
+		);
+	}
+
+	const client = new Anthropic({ apiKey });
+	const pendingRuns = await listStartedPrReviewRuns({
+		limit: input.limit ?? 5,
+		repoFullName: input.repoFullName,
+	});
+	const result: PrReviewBrokerResult = {
+		checked: pendingRuns.length,
+		completed: 0,
+		failed: 0,
+		skippedRunning: 0,
+		runs: [],
+	};
+
+	for (const run of pendingRuns) {
+		try {
+			const collected = await collectCompletedReviewIntentText(
+				client,
+				run.sessionId,
+			);
+			if (!collected.done) {
+				result.skippedRunning += 1;
+				result.runs.push({
+					fingerprint: run.fingerprint,
+					sessionId: run.sessionId,
+					prNumber: run.prNumber,
+					status: "skipped_running",
+				});
+				continue;
+			}
+
+			const payload = await payloadFromStartedRun(githubToken, run);
+			if (!payload) {
+				throw new Error(
+					`could not resolve PR metadata for ${run.repoFullName}#${run.prNumber}`,
+				);
+			}
+
+			const narrativeContext = await fetchPrNarrativeContext(
+				githubToken,
+				payload,
+			);
+			const intent = parseReviewIntentFromText(
+				collected.output,
+				narrativeContext.availableLabels.map((label) => label.name),
+			);
+			await postGitHubReviewIntent(githubToken, payload, intent);
+			await recordRunResult(run.fingerprint, {
+				sessionId: run.sessionId,
+				status: "completed",
+			});
+			result.completed += 1;
+			result.runs.push({
+				fingerprint: run.fingerprint,
+				sessionId: run.sessionId,
+				prNumber: run.prNumber,
+				status: "completed",
+			});
+			console.log(
+				`[pr-review] Broker posted review for PR #${run.prNumber} (${run.triggerKind}): ${run.sessionId}`,
+			);
+		} catch (err) {
+			const reason = err instanceof Error ? err.message : String(err);
+			await recordRunResult(run.fingerprint, {
+				sessionId: run.sessionId,
+				status: "failed",
+				error: reason,
+			});
+			result.failed += 1;
+			result.runs.push({
+				fingerprint: run.fingerprint,
+				sessionId: run.sessionId,
+				prNumber: run.prNumber,
+				status: "failed",
+				error: reason,
+			});
+			console.error("[pr-review] broker failed:", err);
+		}
+	}
+
+	return result;
 }
 
 /**
@@ -795,7 +948,6 @@ export async function triggerPrReview(
 		triggerSourceId: payload.headSha || payload.headRef,
 		reason: "PR opened",
 	},
-	options: TriggerPrReviewOptions = {},
 ): Promise<string | null> {
 	const apiKey = process.env.ANTHROPIC_API_KEY;
 	const githubToken = await resolveGitHubToken();
@@ -1026,33 +1178,6 @@ In "## Project Thread", include a short label rationale using the first applicab
 				},
 			],
 		});
-
-		const completeReview = async () => {
-			try {
-				const output = await collectReviewIntentText(client, session.id);
-				const intent = parseReviewIntentFromText(
-					output,
-					narrativeContext.availableLabels.map((label) => label.name),
-				);
-				await postGitHubReviewIntent(githubToken, resolvedPayload, intent);
-				await recordRunResult(fingerprint, {
-					sessionId: session.id,
-					status: "completed",
-				});
-				console.log(
-					`[pr-review] Posted review for PR #${resolvedPayload.number} (${trigger.kind}): ${session.id}`,
-				);
-			} catch (err) {
-				const reason = err instanceof Error ? err.message : String(err);
-				await recordRunResult(fingerprint, {
-					sessionId: session.id,
-					status: "failed",
-					error: reason,
-				});
-				throw err;
-			}
-		};
-		options.onReviewStarted?.(completeReview);
 
 		console.log(
 			`[pr-review] Session created for PR #${resolvedPayload.number} (${trigger.kind}): ${session.id}`,

@@ -73,8 +73,8 @@ uv run --script scripts/audit-security-posture.py --repo fairchild/workspaces --
 
 ## Explicit Follow-Ups
 
-- Move PR-review broker execution to a durable queue if Vercel post-response
-  execution proves too short for unusually long managed-agent reviews.
+- Keep PR-review broker execution outside the webhook request path; the
+  scheduled/protected broker route should own completed-session posting.
 - Consider a true WebSocket proxy for terminal access so the browser never sees
   the final ttyd URL after ticket redemption.
 - Keep dependency overrides current and remove them when upstream patched

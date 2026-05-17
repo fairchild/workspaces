@@ -3,12 +3,13 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""Run the production managed-reviewer ingress canary and run-row monitor.
+"""Run the production managed-reviewer ingress canary, broker, and monitor.
 
 The canary proves the deployed Cloudflare relay can forward a signed,
-reviewer-eligible webhook to the Vercel route in dry-run mode. The monitor then
-checks that recent eligible production webhook activity has matching
-managed_pr_review_runs rows.
+reviewer-eligible webhook to the Vercel route in dry-run mode. The broker then
+posts any completed managed-agent review intents, and the monitor checks that
+recent eligible production webhook activity has matching managed_pr_review_runs
+rows.
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ from typing import Any
 CANARY_HEADER = "X-Workspace-Webhook-Canary"
 DEFAULT_CANARY_URL = "https://webhooks.cloudcompute.com/canary/pr-review-ingress"
 DEFAULT_MONITOR_URL = "https://spaces.cloudcompute.com/api/webhooks/github/pr-reviewer-monitor"
+DEFAULT_BROKER_URL = "https://spaces.cloudcompute.com/api/webhooks/github/pr-reviewer-broker"
 SAFE_RESPONSE_KEYS = (
     "ok",
     "canary",
@@ -37,6 +39,10 @@ SAFE_RESPONSE_KEYS = (
     "windowMinutes",
     "eligibleEvents",
     "missingRuns",
+    "checked",
+    "completed",
+    "failed",
+    "skippedRunning",
     "error",
 )
 
@@ -49,9 +55,11 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--canary-url", default=DEFAULT_CANARY_URL)
     parser.add_argument("--monitor-url", default=DEFAULT_MONITOR_URL)
+    parser.add_argument("--broker-url", default=DEFAULT_BROKER_URL)
     parser.add_argument("--window-minutes", type=int, default=90)
     parser.add_argument("--timeout", type=float, default=20)
     parser.add_argument("--skip-canary", action="store_true")
+    parser.add_argument("--skip-broker", action="store_true")
     parser.add_argument("--skip-monitor", action="store_true")
     return parser.parse_args()
 
@@ -133,7 +141,7 @@ def validate_monitor(payload: dict[str, Any]) -> None:
 def main() -> int:
     args = parse_args()
 
-    if args.skip_canary and args.skip_monitor:
+    if args.skip_canary and args.skip_broker and args.skip_monitor:
         print("No managed reviewer ingress checks requested.")
         return 0
 
@@ -144,6 +152,12 @@ def main() -> int:
             payload = request_json("managed reviewer ingress canary", "POST", args.canary_url, secret, args.timeout)
             validate_canary(payload)
             print(f"managed reviewer ingress canary ok: {json.dumps(safe_payload(payload), sort_keys=True)}")
+
+        if not args.skip_broker:
+            payload = request_json("managed reviewer broker", "POST", args.broker_url, secret, args.timeout)
+            if payload.get("ok") is not True:
+                raise CanaryError(f"managed reviewer broker failed: {json.dumps(safe_payload(payload), sort_keys=True)}")
+            print(f"managed reviewer broker ok: {json.dumps(safe_payload(payload), sort_keys=True)}")
 
         if not args.skip_monitor:
             payload = request_json(
