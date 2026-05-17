@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.15.0] - 2026-05-16
+
+### Added
+- add local SQLite state store foundation
+
 ## [0.14.0] - 2026-05-16
 
 ### Added
