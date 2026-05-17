@@ -8,19 +8,37 @@
 from __future__ import annotations
 
 import json
+import importlib.util
 import os
 import plistlib
 import re
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import tomllib
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def load_module(name: str, path: Path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+audit_security_posture = load_module(
+    "audit_security_posture",
+    REPO_ROOT / "scripts/audit-security-posture.py",
+)
 
 
 class SecurityHardeningTests(unittest.TestCase):
@@ -559,6 +577,71 @@ class SecurityHardeningTests(unittest.TestCase):
                 workflow,
                 f"{name} must declare explicit top-level permissions",
             )
+
+    def test_no_workflow_inherits_repository_default_token_permissions(self) -> None:
+        """Read-only repository defaults are safe only when write jobs opt in explicitly."""
+        checks = {
+            check.name: check
+            for check in audit_security_posture.local_workflow_checks()
+        }
+        check = checks["workflow token permissions are explicit"]
+        self.assertEqual(check.status, "pass", check.detail)
+        self.assertIn("no jobs inherit", check.detail)
+
+    def test_remote_audit_requires_read_only_default_token_permissions(self) -> None:
+        with mock.patch.object(
+            audit_security_posture,
+            "gh_json",
+            return_value={
+                "default_workflow_permissions": "read",
+                "can_approve_pull_request_reviews": False,
+            },
+        ):
+            checks = audit_security_posture.remote_actions_permission_checks("fairchild/workspaces")
+        self.assertTrue(all(check.status == "pass" for check in checks), checks)
+
+        with mock.patch.object(
+            audit_security_posture,
+            "gh_json",
+            return_value={
+                "default_workflow_permissions": "write",
+                "can_approve_pull_request_reviews": False,
+            },
+        ):
+            checks = audit_security_posture.remote_actions_permission_checks("fairchild/workspaces")
+        self.assertEqual(checks[0].name, "default GITHUB_TOKEN permissions")
+        self.assertEqual(checks[0].status, "fail")
+
+    def test_remote_audit_requires_main_branch_protection(self) -> None:
+        protected_main = {
+            "required_status_checks": {
+                "strict": True,
+                "contexts": ["readiness", "release-change-validation"],
+            },
+            "required_pull_request_reviews": {
+                "required_approving_review_count": 0,
+            },
+            "enforce_admins": {"enabled": True},
+            "allow_force_pushes": {"enabled": False},
+            "allow_deletions": {"enabled": False},
+            "required_conversation_resolution": {"enabled": True},
+        }
+        with mock.patch.object(audit_security_posture, "gh_json", return_value=protected_main):
+            checks = audit_security_posture.remote_branch_protection_checks("fairchild/workspaces")
+
+        self.assertTrue(all(check.status == "pass" for check in checks), checks)
+
+    def test_remote_audit_reports_agent_automation_kill_switch(self) -> None:
+        with mock.patch.object(
+            audit_security_posture,
+            "gh_json",
+            return_value=[
+                {"name": "AGENT_AUTOMATIONS_ENABLED", "value": "false"},
+            ],
+        ):
+            checks = audit_security_posture.remote_variable_checks("fairchild/workspaces")
+        self.assertEqual(checks[0].status, "pass")
+        self.assertIn("AGENT_AUTOMATIONS_ENABLED='false'", checks[0].detail)
 
     def test_no_pull_request_target_trigger(self) -> None:
         """No workflow should use pull_request_target, which runs with write access on untrusted PRs."""

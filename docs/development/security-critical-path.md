@@ -22,9 +22,14 @@ not a broad public security stance.
 - Public mention triage workflows do not receive privileged model, GitHub App,
   evidence, or release secrets.
 - Agent executor jobs remain maintainer-label gated with `safe-to-run-agent`.
+- Repository `GITHUB_TOKEN` defaults to read-only. Workflows that need writes
+  opt in with explicit workflow/job `permissions:` blocks, and local audit
+  fails if any job inherits the repository default.
 - Agent-generated patches touching repo-control, release/signing, auth/token,
   sandbox, or infra secret paths require `privileged-agent-patch` or an explicit
   break-glass workflow input.
+- `main` is branch-protected with required status checks, conversation
+  resolution, admin enforcement, and force-push/deletion blocks.
 - The Codespaces Claude worker is protected by the
   `codespaces-claude-break-glass` environment and defaults to `main` or
   owner-repository branches.
@@ -62,7 +67,8 @@ uv run --script scripts/test_security_hardening.py
 uv run --script scripts/audit-security-posture.py --local-only --strict
 ```
 
-When `gh` is authenticated, run the remote posture audit before releases:
+When `gh` is authenticated, run the remote posture audit before releases or
+before re-enabling scheduled/background agent automation:
 
 ```bash
 uv run --script scripts/audit-security-posture.py --repo fairchild/workspaces --strict

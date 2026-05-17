@@ -24,7 +24,10 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 REQUIRED_RUNNER_LABELS = {"signing-host", "lume-macos"}
 ADVISORY_RUNNER_LABELS = {"tart-ui"}
 EXPECTED_ENVIRONMENTS = {"release", "codespaces-claude-break-glass"}
+EXPECTED_REQUIRED_STATUS_CHECKS = {"readiness", "release-change-validation"}
 EXPECTED_REPO_SECRETS = {
+    "APRIL_APP_ID",
+    "APRIL_PRIVATE_KEY",
     "APPLE_API_ISSUER_ID",
     "APPLE_API_KEY_BASE64",
     "APPLE_API_KEY_ID",
@@ -39,6 +42,8 @@ EXPECTED_REPO_SECRETS = {
     "VERCEL_ORG_ID",
     "VERCEL_PROJECT_ID",
     "VERCEL_TOKEN",
+    "WORKSPACE_AGENTS_APP_ID",
+    "WORKSPACE_AGENTS_PRIVATE_KEY",
 }
 LEGACY_REPO_SECRETS = {"APPLE_APP_PASSWORD"}
 
@@ -67,6 +72,48 @@ def gh_json(args: list[str]) -> object:
     return json.loads(result.stdout)
 
 
+def bool_enabled(value: object) -> bool:
+    return isinstance(value, dict) and value.get("enabled") is True
+
+
+def workflow_has_top_level_permissions(lines: list[str]) -> bool:
+    for line in lines:
+        if line.startswith("jobs:"):
+            return False
+        if line.startswith("permissions:"):
+            return True
+    return False
+
+
+def jobs_without_explicit_permissions(lines: list[str]) -> list[str]:
+    top_level_permissions = workflow_has_top_level_permissions(lines)
+    if top_level_permissions:
+        return []
+
+    jobs_index = next((index for index, line in enumerate(lines) if line.startswith("jobs:")), None)
+    if jobs_index is None:
+        return []
+
+    missing: list[str] = []
+    current_job: str | None = None
+    current_has_permissions = False
+    for line in lines[jobs_index + 1:]:
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        if line.startswith("  ") and not line.startswith("    ") and line.rstrip().endswith(":"):
+            if current_job is not None and not current_has_permissions:
+                missing.append(current_job)
+            current_job = line.strip()[:-1]
+            current_has_permissions = False
+            continue
+        if current_job is not None and line.startswith("    permissions:"):
+            current_has_permissions = True
+
+    if current_job is not None and not current_has_permissions:
+        missing.append(current_job)
+    return missing
+
+
 def local_workflow_checks() -> list[Check]:
     checks: list[Check] = []
     workflow_dir = REPO_ROOT / ".github/workflows"
@@ -79,6 +126,21 @@ def local_workflow_checks() -> list[Check]:
             "fail" if pull_request_target else "pass",
             "no pull_request_target workflows",
             ", ".join(pull_request_target) if pull_request_target else "none found",
+        )
+    )
+
+    inherited_permissions = [
+        f"{path.name}:{job}"
+        for path in workflows
+        for job in jobs_without_explicit_permissions(path.read_text(encoding="utf-8").splitlines())
+    ]
+    checks.append(
+        Check(
+            "fail" if inherited_permissions else "pass",
+            "workflow token permissions are explicit",
+            ", ".join(inherited_permissions)
+            if inherited_permissions
+            else "no jobs inherit repository default token permissions",
         )
     )
 
@@ -194,14 +256,116 @@ def remote_secret_checks(repo: str) -> list[Check]:
     ]
 
 
+def remote_actions_permission_checks(repo: str) -> list[Check]:
+    data = gh_json(["api", f"repos/{repo}/actions/permissions/workflow"])
+    workflow_permissions = data if isinstance(data, dict) else {}
+    default_permissions = workflow_permissions.get("default_workflow_permissions")
+    can_approve_pr_reviews = workflow_permissions.get("can_approve_pull_request_reviews")
+    return [
+        Check(
+            "pass" if default_permissions == "read" else "fail",
+            "default GITHUB_TOKEN permissions",
+            f"default_workflow_permissions={default_permissions!r}",
+        ),
+        Check(
+            "pass" if can_approve_pr_reviews is False else "fail",
+            "GITHUB_TOKEN PR review approval disabled",
+            f"can_approve_pull_request_reviews={can_approve_pr_reviews!r}",
+        ),
+    ]
+
+
+def remote_branch_protection_checks(repo: str) -> list[Check]:
+    try:
+        data = gh_json(["api", f"repos/{repo}/branches/main/protection"])
+    except RuntimeError as error:
+        return [Check("fail", "main branch protection", str(error))]
+
+    protection = data if isinstance(data, dict) else {}
+    status_checks = protection.get("required_status_checks")
+    if isinstance(status_checks, dict):
+        contexts = {
+            str(item)
+            for item in status_checks.get("contexts", [])
+            if item is not None
+        }
+        strict = status_checks.get("strict") is True
+    else:
+        contexts = set()
+        strict = False
+    missing_contexts = sorted(EXPECTED_REQUIRED_STATUS_CHECKS - contexts)
+
+    pull_request_reviews = protection.get("required_pull_request_reviews")
+    return [
+        Check("pass", "main branch protection", "enabled"),
+        Check(
+            "pass" if isinstance(pull_request_reviews, dict) else "fail",
+            "main requires pull request gate",
+            "required_pull_request_reviews configured"
+            if isinstance(pull_request_reviews, dict)
+            else "missing required_pull_request_reviews",
+        ),
+        Check(
+            "pass" if strict and not missing_contexts else "fail",
+            "main required status checks",
+            "strict checks present: " + ", ".join(sorted(EXPECTED_REQUIRED_STATUS_CHECKS))
+            if strict and not missing_contexts
+            else f"strict={strict}, missing={', '.join(missing_contexts) or 'none'}",
+        ),
+        Check(
+            "pass" if bool_enabled(protection.get("enforce_admins")) else "fail",
+            "main protection enforces admins",
+            "enabled" if bool_enabled(protection.get("enforce_admins")) else "disabled",
+        ),
+        Check(
+            "pass"
+            if not bool_enabled(protection.get("allow_force_pushes"))
+            and not bool_enabled(protection.get("allow_deletions"))
+            else "fail",
+            "main blocks force pushes and deletions",
+            (
+                f"allow_force_pushes={bool_enabled(protection.get('allow_force_pushes'))}, "
+                f"allow_deletions={bool_enabled(protection.get('allow_deletions'))}"
+            ),
+        ),
+        Check(
+            "pass" if bool_enabled(protection.get("required_conversation_resolution")) else "fail",
+            "main requires conversation resolution",
+            "enabled"
+            if bool_enabled(protection.get("required_conversation_resolution"))
+            else "disabled",
+        ),
+    ]
+
+
+def remote_variable_checks(repo: str) -> list[Check]:
+    data = gh_json(["variable", "list", "--repo", repo, "--json", "name,value"])
+    variables = {
+        str(item.get("name")): str(item.get("value"))
+        for item in data
+        if isinstance(item, dict) and item.get("name")
+    } if isinstance(data, list) else {}
+    value = variables.get("AGENT_AUTOMATIONS_ENABLED")
+    return [
+        Check(
+            "pass" if value in {"true", "false"} else "fail",
+            "agent automation kill switch",
+            f"AGENT_AUTOMATIONS_ENABLED={value!r}",
+        )
+    ]
+
+
 def remote_checks(repo: str) -> list[Check]:
     if not shutil.which("gh"):
         return [Check("warn", "GitHub remote audit", "gh CLI is not installed")]
     checks: list[Check] = []
     for collect in (
+        remote_actions_permission_checks,
+        remote_branch_protection_checks,
         remote_environment_checks,
         remote_runner_checks,
         remote_secret_checks,
+        remote_variable_checks,
     ):
         try:
             checks.extend(collect(repo))
