@@ -75,6 +75,31 @@ struct StartupDiagnosticsStoreTests {
         #expect(await store.allEvents().isEmpty)
     }
 
+    @Test("Attached local state store receives existing and future events")
+    func attachedLocalStateStorePersistsDiagnostics() async throws {
+        let fixture = try StartupDiagnosticsTemporaryDirectory()
+        defer { fixture.cleanup() }
+        let localStateStore = try LocalStateStore(
+            databaseURL: fixture.url.appendingPathComponent("state.sqlite", isDirectory: false)
+        )
+        let store = StartupDiagnosticsStore()
+
+        await store.record(
+            metric: "before_attach",
+            durationMs: 1,
+            labels: ["phase": "bootstrap"]
+        )
+        await store.attach(localStateStore: localStateStore)
+        try await waitForDiagnosticEventCount(1, in: localStateStore)
+
+        await store.record(
+            metric: "after_attach",
+            durationMs: 2,
+            labels: ["phase": "runtime"]
+        )
+        try await waitForDiagnosticEventCount(2, in: localStateStore)
+    }
+
     @Test("Export produces a valid bundle with metadata")
     func exportProducesValidBundle() async {
         let store = StartupDiagnosticsStore()
@@ -171,5 +196,39 @@ struct StartupDiagnosticsStoreTests {
 
         #expect(decoded.events.isEmpty)
         #expect(decoded.appVersion == "1.0.0")
+    }
+
+    private func waitForDiagnosticEventCount(
+        _ expectedCount: Int,
+        in localStateStore: LocalStateStore
+    ) async throws {
+        var latestCount = 0
+        for _ in 0..<20 {
+            let summary = try await localStateStore.summary()
+            latestCount = summary.tableCounts["diagnostic_events"] ?? 0
+            if latestCount == expectedCount {
+                return
+            }
+            try await Task.sleep(nanoseconds: 25_000_000)
+        }
+
+        #expect(latestCount == expectedCount)
+    }
+}
+
+private struct StartupDiagnosticsTemporaryDirectory {
+    let url: URL
+
+    init() throws {
+        url = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "StartupDiagnosticsStoreTests-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+    }
+
+    func cleanup() {
+        try? FileManager.default.removeItem(at: url)
     }
 }

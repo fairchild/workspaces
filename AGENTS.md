@@ -30,7 +30,7 @@ Single-context repo; use root docs plus `docs/decisions/` for architectural deci
 
 ### Local state schema
 
-The native app's local SQLite sidecar schema lives in `docs/schema.sql`. Use it when working on continuity, diagnostics, exports, or local state history. Keep it manually in sync with `LocalStateStore` migrations whenever tables, indexes, or persisted meanings change.
+The native app's local SQLite sidecar schema lives in `docs/schema.sql`, with the implementation plan in `docs/development/local-state-store-plan.md`. Use them when working on continuity, diagnostics, exports, or local state history. Keep the schema doc manually in sync with `LocalStateStore` migrations whenever tables, indexes, or persisted meanings change.
 
 ## Dev Verification Practice (required)
 
@@ -261,6 +261,7 @@ mise run web:deps:remove -- <pkg>           # pnpm remove + auto-fix formatting
 | Terminal keyboard focus | docs/development/solution-terminal-keyboard.md | - |
 | Evidence guide | docs/development/evidence.md | - |
 | Local SQLite state schema | docs/schema.sql | - |
+| Local state store plan | docs/development/local-state-store-plan.md | - |
 | Lume runner setup | docs/development/lume-runner-setup.md | - |
 | Lume daemon reliability | docs/development/lume-integration.md § "Daemon Reliability" | - |
 | Web architecture | web/docs/architecture.md | - |

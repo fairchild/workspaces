@@ -37,6 +37,9 @@ struct WorkspaceManagerApp: App {
             launchEnvironment: ProcessInfo.processInfo.environment
         )
         LocalStateStoreController.shared.apply(localStateBootstrap)
+        Task {
+            await StartupDiagnosticsStore.shared.attach(localStateStore: localStateBootstrap.store)
+        }
 
         ModelStoreStatusController.shared.apply(bootstrap)
         _appCommandState = StateObject(wrappedValue: AppCommandState())
