@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.14.0] - 2026-05-16
+
+### Added
+- add runtime diagnostics detail pane
+
+### Fixed
+- forward PR review webhooks to web app (#478)
+- unblock docs deployment validation (#481)
+
+### Other
+- [codex] Publish WorkSpaces docs site (#463)
+- Harden managed reviewer ingress tests (#480)
+
 ## [0.13.1] - 2026-05-12
 
 ### Fixed
