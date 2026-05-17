@@ -11,6 +11,8 @@ enum DiagnosticReportExporter {
         let generatedAt: Date
         let system: SystemInfo
         let modelStore: ModelStoreStatusSnapshot
+        let localStateStore: LocalStateStoreStatusSnapshot
+        let localStateSummary: LocalStateStoreSummary?
         let startupDiagnostics: StartupDiagnosticsStore.DiagnosticsBundle
     }
 
@@ -58,15 +60,35 @@ enum DiagnosticReportExporter {
         let modelStoreSnapshot = await MainActor.run {
             ModelStoreStatusController.shared.snapshot
         }
+        let (localStateSnapshot, localStateStore) = await MainActor.run {
+            (
+                LocalStateStoreController.shared.snapshot,
+                LocalStateStoreController.shared.store
+            )
+        }
+        let localStateSummary = try? await localStateStore?.summary()
         let report = makeReport(
             diagnosticsBundle: diagnosticsBundle,
             systemInfo: systemInfo,
-            modelStoreSnapshot: modelStoreSnapshot
+            modelStoreSnapshot: modelStoreSnapshot,
+            localStateSnapshot: localStateSnapshot,
+            localStateSummary: localStateSummary
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
         try encoder.encode(report).write(to: tempDir.appendingPathComponent("report.json"))
+        if let localStateSummary {
+            try encoder.encode(localStateSummary).write(to: tempDir.appendingPathComponent("local-state-summary.json"))
+            try? await localStateStore?.recordDiagnosticExport(
+                appVersion: appVersion,
+                buildNumber: buildNumber,
+                filename: zipURL.lastPathComponent,
+                redactionLevel: "summary",
+                status: "created",
+                rowCounts: localStateSummary.tableCounts
+            )
+        }
 
         // system-profile.txt
         let profile = gatherSystemProfile(systemInfo)
@@ -87,13 +109,17 @@ enum DiagnosticReportExporter {
     static func makeReport(
         diagnosticsBundle: StartupDiagnosticsStore.DiagnosticsBundle,
         systemInfo: SystemInfo,
-        modelStoreSnapshot: ModelStoreStatusSnapshot
+        modelStoreSnapshot: ModelStoreStatusSnapshot,
+        localStateSnapshot: LocalStateStoreStatusSnapshot,
+        localStateSummary: LocalStateStoreSummary?
     ) -> Report {
         Report(
-            schemaVersion: 2,
+            schemaVersion: 3,
             generatedAt: Date(),
             system: systemInfo,
             modelStore: modelStoreSnapshot,
+            localStateStore: localStateSnapshot,
+            localStateSummary: localStateSummary,
             startupDiagnostics: diagnosticsBundle
         )
     }
@@ -148,6 +174,21 @@ enum DiagnosticReportExporter {
         } else {
             lines.append("  Bootstrap Errors:")
             for error in modelStore.bootstrapErrors {
+                lines.append("    - \(error)")
+            }
+        }
+        lines.append("")
+        lines.append("Local State Store:")
+        let localStateStore = MainActor.assumeIsolated {
+            LocalStateStoreController.shared.snapshot
+        }
+        lines.append("  Mode: \(localStateStore.mode.label)")
+        lines.append("  Path: \(localStateStore.mode.path ?? "none")")
+        if localStateStore.bootstrapErrors.isEmpty {
+            lines.append("  Bootstrap Errors: none")
+        } else {
+            lines.append("  Bootstrap Errors:")
+            for error in localStateStore.bootstrapErrors {
                 lines.append("    - \(error)")
             }
         }

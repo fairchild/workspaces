@@ -34,9 +34,14 @@ public final class AgentSessionRegistry: ObservableObject, AgentSessionRegistryP
 
     private var bookkeeping: [UUID: Bookkeeping] = [:]
     private let clock: @Sendable () -> Date
+    private let localStateStore: LocalStateStore?
 
-    public init(clock: @escaping @Sendable () -> Date = { Date() }) {
+    public init(
+        clock: @escaping @Sendable () -> Date = { Date() },
+        localStateStore: LocalStateStore? = nil
+    ) {
         self.clock = clock
+        self.localStateStore = localStateStore
     }
 
     // MARK: - Public surface
@@ -144,6 +149,20 @@ public final class AgentSessionRegistry: ObservableObject, AgentSessionRegistryP
         }
         statuses[hostSessionID] = status
         bookkeeping[hostSessionID] = book
+
+        if let localStateStore {
+            let persistedEvents = events
+            let persistedStatus = status
+            Task {
+                try? await localStateStore.recordAgentEvents(
+                    persistedEvents,
+                    hostSessionID: hostSessionID,
+                    origin: origin,
+                    status: persistedStatus,
+                    occurredAt: now
+                )
+            }
+        }
     }
 
     // MARK: - Internal

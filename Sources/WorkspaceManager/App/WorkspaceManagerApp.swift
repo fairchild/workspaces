@@ -20,6 +20,7 @@ struct WorkspaceManagerApp: App {
     @StateObject private var agentSessionRegistry: AgentSessionRegistry
     @StateObject private var claudeIntegrationLifecycle: ClaudeIntegrationLifecycle
     private let appRuntimeDependencies = AppRuntimeDependencies.resolved()
+    private let localStateStore: LocalStateStore?
     let sharedModelContainer: ModelContainer
 
     init() {
@@ -32,14 +33,20 @@ struct WorkspaceManagerApp: App {
             seedUIFixtureDataIfNeeded(in: bootstrap.container.mainContext)
         }
 
+        let localStateBootstrap = LocalStateStoreBootstrapper.bootstrap(
+            launchEnvironment: ProcessInfo.processInfo.environment
+        )
+        LocalStateStoreController.shared.apply(localStateBootstrap)
+
         ModelStoreStatusController.shared.apply(bootstrap)
         _appCommandState = StateObject(wrappedValue: AppCommandState())
         _modelStoreStatusController = StateObject(wrappedValue: .shared)
         _softwareUpdateController = StateObject(wrappedValue: SoftwareUpdateController())
         _claudeIntegrationLifecycle = StateObject(wrappedValue: ClaudeIntegrationLifecycle.shared)
-        let registry = AgentSessionRegistry()
+        let registry = AgentSessionRegistry(localStateStore: localStateBootstrap.store)
         _agentSessionRegistry = StateObject(wrappedValue: registry)
         self.sharedModelContainer = bootstrap.container
+        self.localStateStore = localStateBootstrap.store
 
         // Stand up the hook listener and notification poster on the same registry instance.
         // The listener binds to a Unix socket under Application Support keyed by pid.
@@ -63,6 +70,7 @@ struct WorkspaceManagerApp: App {
             .environmentObject(modelStoreStatusController)
             .environmentObject(agentSessionRegistry)
             .environment(\.agentSessionRegistry, agentSessionRegistry)
+            .environment(\.localStateStore, localStateStore)
             .frame(minWidth: 1000, minHeight: 700)
             .onAppear {
                 softwareUpdateController.installCheckForUpdatesMenuItem()
@@ -333,11 +341,16 @@ private struct MainWindowRootView: View {
 /// where production POSTs to `/event` had nowhere to land.
 private struct AgentSessionRegistryAttacher: ViewModifier {
     @EnvironmentObject private var registry: AgentSessionRegistry
+    @Environment(\.localStateStore) private var localStateStore
     let hostTerminalState: HostTerminalStateStore
 
     func body(content: Content) -> some View {
         content.onAppear {
-            hostTerminalState.attach(agentSessionRegistry: registry)
+            hostTerminalState.attach(
+                agentSessionRegistry: registry,
+                localStateStore: localStateStore,
+                hooksSocketPath: ClaudeIntegrationLifecycle.shared.socketPath
+            )
         }
     }
 }
@@ -533,6 +546,10 @@ private struct AgentSessionRegistryKey: EnvironmentKey {
     static let defaultValue: AgentSessionRegistry? = nil
 }
 
+private struct LocalStateStoreKey: EnvironmentKey {
+    static let defaultValue: LocalStateStore? = nil
+}
+
 private struct ClaudeSettingsInstallerKey: EnvironmentKey {
     static let defaultValue: (any ClaudeSettingsInstalling)? = nil
 }
@@ -571,6 +588,11 @@ extension EnvironmentValues {
     var agentSessionRegistry: AgentSessionRegistry? {
         get { self[AgentSessionRegistryKey.self] }
         set { self[AgentSessionRegistryKey.self] = newValue }
+    }
+
+    var localStateStore: LocalStateStore? {
+        get { self[LocalStateStoreKey.self] }
+        set { self[LocalStateStoreKey.self] = newValue }
     }
 
     var claudeSettingsInstaller: (any ClaudeSettingsInstalling)? {
