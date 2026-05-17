@@ -361,6 +361,9 @@ class SecurityHardeningTests(unittest.TestCase):
         monitor = (
             REPO_ROOT / "web/src/app/api/webhooks/github/pr-reviewer-monitor/route.ts"
         ).read_text()
+        broker = (
+            REPO_ROOT / "web/src/app/api/webhooks/github/pr-reviewer-broker/route.ts"
+        ).read_text()
         runs = (REPO_ROOT / "web/src/lib/agent-runtime/pr-review-runs.ts").read_text()
         route_test = (REPO_ROOT / "web/src/app/api/webhooks/github/route.test.ts").read_text()
         worker = (REPO_ROOT / "infra/cloudflare-webhook-relay/src/index.ts").read_text()
@@ -368,7 +371,7 @@ class SecurityHardeningTests(unittest.TestCase):
         cd_workflow = (REPO_ROOT / ".github/workflows/cd.yml").read_text()
         canary_script = (REPO_ROOT / "scripts/managed-reviewer-ingress-canary.py").read_text()
 
-        for source in (route, monitor, worker, workflow, cd_workflow, canary_script):
+        for source in (route, monitor, broker, worker, workflow, cd_workflow, canary_script):
             self.assertIn("WORKSPACES_WEBHOOK_CANARY_SECRET", source)
 
         self.assertIn("validateCanaryRequest", route)
@@ -385,6 +388,8 @@ class SecurityHardeningTests(unittest.TestCase):
         self.assertIn("allowedForwardUrl", worker)
         self.assertIn("managed_pr_review_runs", runs)
         self.assertIn("listRecentPrReviewRuns", monitor)
+        self.assertIn("processPendingPrReviewRuns", broker)
+        self.assertIn("pr-reviewer-broker", canary_script)
         self.assertIn("pr-reviewer-monitor", canary_script)
         self.assertIn("scripts/managed-reviewer-ingress-canary.py", workflow)
         self.assertIn("scripts/managed-reviewer-ingress-canary.py", cd_workflow)

@@ -104,3 +104,46 @@ describe("recordRunStart", () => {
 		expect(retry.priorStatus).toBe("started");
 	});
 });
+
+describe("listStartedPrReviewRuns", () => {
+	it("returns only started rows with a session id in oldest-first order", async () => {
+		const { listStartedPrReviewRuns, recordRunStart, recordRunResult } =
+			await loadModule();
+		const started = makeInput({
+			fingerprint: "fp_started",
+			prNumber: 1,
+			headSha: "started-sha",
+		});
+		const completed = makeInput({
+			fingerprint: "fp_completed",
+			prNumber: 2,
+			headSha: "completed-sha",
+		});
+		const noSession = makeInput({
+			fingerprint: "fp_no_session",
+			prNumber: 3,
+			headSha: "no-session-sha",
+		});
+
+		await recordRunStart(started);
+		await recordRunResult(started.fingerprint, {
+			sessionId: "sesn_started",
+			status: "started",
+		});
+		await recordRunStart(completed);
+		await recordRunResult(completed.fingerprint, {
+			sessionId: "sesn_completed",
+			status: "completed",
+		});
+		await recordRunStart(noSession);
+
+		const rows = await listStartedPrReviewRuns();
+
+		expect(rows).toHaveLength(1);
+		expect(rows[0]).toMatchObject({
+			fingerprint: "fp_started",
+			prNumber: 1,
+			sessionId: "sesn_started",
+		});
+	});
+});

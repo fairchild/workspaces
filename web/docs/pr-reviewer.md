@@ -16,7 +16,7 @@ GitHub PR opened
 → sessions.create (mounts repo at PR branch)
 → events.send (kickoff message)
 → Agent runs autonomously on Anthropic → returns review-intent JSON
-→ server-side broker validates intent → posts GitHub review
+→ scheduled/protected broker route validates intent → posts GitHub review
 ```
 
 ## Key Files
@@ -25,7 +25,8 @@ GitHub PR opened
 |------|---------|
 | `web/src/lib/agent-runtime/pr-review.ts` | Agent config, session creation, kickoff |
 | `web/src/lib/agent-runtime/managed-agents-cache.ts` | Idempotent agent/environment creation with DB cache |
-| `web/src/app/api/webhooks/github/route.ts` | Webhook handler — triggers on `pull_request.opened` |
+| `web/src/app/api/webhooks/github/route.ts` | Webhook handler — starts reviewer sessions and returns after kickoff |
+| `web/src/app/api/webhooks/github/pr-reviewer-broker/route.ts` | Protected broker route — processes completed sessions from `managed_pr_review_runs` and posts reviews |
 | `web/src/app/api/managed-agents/transcript/route.ts` | SSE endpoint for streaming session events to the UI |
 
 ## Environment Variables
@@ -96,8 +97,8 @@ imported by both the Vercel route tests and the Cloudflare relay e2e harness.
 This is the regression guard for drift between "forward this webhook" and
 "start the reviewer".
 
-The production CD `validate-prod` job runs the same canary and monitor after
-promotion, before the production Playwright smoke.
+The production CD `validate-prod` job runs the same canary, broker, and monitor
+after promotion, before the production Playwright smoke.
 
 Production canary:
 
@@ -118,14 +119,21 @@ managed-agent session or GitHub review is created.
 The same workflow also calls:
 
 ```bash
+curl --fail-with-body -sS -X POST \
+  "https://spaces.cloudcompute.com/api/webhooks/github/pr-reviewer-broker?limit=5" \
+  -H "X-Workspace-Webhook-Canary: $WORKSPACES_WEBHOOK_CANARY_SECRET"
+
 curl --fail-with-body -sS \
   "https://spaces.cloudcompute.com/api/webhooks/github/pr-reviewer-monitor?windowMinutes=90" \
   -H "X-Workspace-Webhook-Canary: $WORKSPACES_WEBHOOK_CANARY_SECRET"
 ```
 
-That monitor compares recent reviewer-eligible rows in `webhook_events` with
-`managed_pr_review_runs` records. It returns only run metadata and missing
-event identifiers, not raw payloads or secrets.
+The broker inspects `started` rows in `managed_pr_review_runs`, skips sessions
+that are still running, validates completed review-intent JSON, and posts the
+review with the GitHub App token. The monitor then compares recent
+reviewer-eligible rows in `webhook_events` with `managed_pr_review_runs`
+records. These routes return only run metadata and missing event identifiers,
+not raw payloads or secrets.
 
 ## Observing Sessions
 
@@ -201,6 +209,7 @@ If using the GitHub App: check that `PR_REVIEWER_APP_ID`, `PR_REVIEWER_PRIVATE_K
 
 Check the session events for the final fenced `json` review intent, then check
 Vercel logs for `[pr-review] broker failed`. Common causes:
+- `WORKSPACES_WEBHOOK_CANARY_SECRET` is missing, so scheduled broker calls are not authenticated
 - GitHub App token exchange failed — check Vercel logs for `[pr-review] GitHub App token failed`
 - `PR_REVIEWER_ENABLED=0` is set
 - the managed agent did not return valid fenced JSON with `event`, `body`, and `labels`

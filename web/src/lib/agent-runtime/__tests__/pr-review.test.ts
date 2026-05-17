@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
 	createSession: vi.fn(),
+	listEvents: vi.fn(),
 	sendEvent: vi.fn(),
 	uploadFile: vi.fn(),
 	getOrCreateAgent: vi.fn(),
@@ -10,6 +11,7 @@ const mocks = vi.hoisted(() => ({
 	fetch: vi.fn(),
 	recordRunStart: vi.fn(),
 	recordRunResult: vi.fn(),
+	listStartedPrReviewRuns: vi.fn(),
 	computeRunFingerprint: vi.fn(),
 }));
 
@@ -22,6 +24,7 @@ vi.mock("@anthropic-ai/sdk", () => {
 			sessions: {
 				create: mocks.createSession,
 				events: {
+					list: mocks.listEvents,
 					send: mocks.sendEvent,
 				},
 			},
@@ -41,6 +44,7 @@ vi.mock("../../github-app-auth", () => ({
 
 vi.mock("../pr-review-runs", () => ({
 	computeRunFingerprint: mocks.computeRunFingerprint,
+	listStartedPrReviewRuns: mocks.listStartedPrReviewRuns,
 	recordRunStart: mocks.recordRunStart,
 	recordRunResult: mocks.recordRunResult,
 }));
@@ -54,6 +58,7 @@ import {
 	formatPrEvidenceContext,
 	formatPrNarrativeContext,
 	parseReviewIntentFromText,
+	processPendingPrReviewRuns,
 	triggerPrReview,
 } from "../pr-review";
 
@@ -112,6 +117,12 @@ function githubIssueComment(
 		user: { login: "fairchild" },
 		...overrides,
 	};
+}
+
+async function* asyncEvents(events: unknown[]) {
+	for (const event of events) {
+		yield event;
+	}
 }
 
 function mockPrList(prs: unknown[]) {
@@ -194,6 +205,7 @@ beforeEach(() => {
 	vi.stubEnv("PR_REVIEWER_PRIVATE_KEY", "private-key");
 	vi.stubEnv("PR_REVIEWER_INSTALLATION_ID", "456");
 	mocks.createSession.mockReset();
+	mocks.listEvents.mockReset();
 	mocks.sendEvent.mockReset();
 	mocks.uploadFile.mockReset();
 	mocks.getOrCreateAgent.mockReset();
@@ -202,6 +214,7 @@ beforeEach(() => {
 	mocks.fetch.mockReset();
 	mocks.recordRunStart.mockReset();
 	mocks.recordRunResult.mockReset();
+	mocks.listStartedPrReviewRuns.mockReset();
 	mocks.computeRunFingerprint.mockReset();
 
 	mocks.getOrCreateAgent.mockResolvedValue("agent_01");
@@ -213,6 +226,7 @@ beforeEach(() => {
 	mocks.computeRunFingerprint.mockReturnValue("fp_test");
 	mocks.recordRunStart.mockResolvedValue({ inserted: true });
 	mocks.recordRunResult.mockResolvedValue(undefined);
+	mocks.listStartedPrReviewRuns.mockResolvedValue([]);
 });
 
 afterEach(() => {
@@ -471,6 +485,138 @@ describe("parseReviewIntentFromText", () => {
 				'```json\n{"event":"MERGE","body":"ship it","labels":[]}\n```',
 			),
 		).toThrow(/unsupported review event/);
+	});
+});
+
+describe("processPendingPrReviewRuns", () => {
+	it("posts completed review intents from started managed-agent sessions", async () => {
+		mocks.listStartedPrReviewRuns.mockResolvedValue([
+			{
+				fingerprint: "fp_486",
+				repoFullName: "fairchild/workspaces",
+				prNumber: 486,
+				headSha: "head-sha",
+				triggerKind: "opened",
+				triggerSourceId: "head-sha",
+				sessionId: "sesn_486",
+				createdAt: "2026-05-17T06:24:27Z",
+				updatedAt: "2026-05-17T06:24:27Z",
+			},
+		]);
+		mocks.listEvents.mockReturnValue(
+			asyncEvents([
+				{
+					type: "agent.message",
+					content: [
+						{
+							type: "text",
+							text: `Review complete.
+
+\`\`\`json
+{
+  "event": "COMMENT",
+  "body": "💬 **Comment** — No blocking issues found.\\n\\n## Evidence\\nSwift unavailable in managed environment.",
+  "labels": ["refactor"]
+}
+\`\`\``,
+						},
+					],
+				},
+				{
+					type: "session.status_idle",
+					stop_reason: { type: "end_turn" },
+				},
+			]),
+		);
+		mocks.fetch.mockImplementation(
+			async (url: string, options?: RequestInit) => {
+				if (url.endsWith("/pulls/486")) {
+					return {
+						ok: true,
+						json: async () =>
+							githubPr(486, {
+								title: "Refactor main window orchestration",
+								html_url: "https://github.com/fairchild/workspaces/pull/486",
+								body: "PR body",
+								head: { ref: "codex/main-window", sha: "head-sha" },
+								base: { ref: "main" },
+							}),
+					};
+				}
+				if (url.includes("/pulls?")) {
+					return { ok: true, json: async () => [] };
+				}
+				if (url.includes("/labels?")) {
+					return { ok: true, json: async () => [githubLabel("refactor")] };
+				}
+				if (url.includes("/pulls/") && url.includes("/reviews?")) {
+					return { ok: true, json: async () => [] };
+				}
+				if (url.endsWith("/pulls/486/reviews")) {
+					expect(options?.method).toBe("POST");
+					expect(JSON.parse(String(options?.body))).toMatchObject({
+						event: "COMMENT",
+						body: expect.stringContaining("No blocking issues found"),
+					});
+					return { ok: true, text: async () => "", json: async () => ({}) };
+				}
+				if (url.endsWith("/issues/486/labels")) {
+					expect(options?.method).toBe("POST");
+					expect(JSON.parse(String(options?.body))).toEqual({
+						labels: ["refactor"],
+					});
+					return { ok: true, text: async () => "", json: async () => ({}) };
+				}
+				throw new Error(`Unexpected fetch URL: ${url}`);
+			},
+		);
+
+		const result = await processPendingPrReviewRuns({ limit: 1 });
+
+		expect(result).toMatchObject({
+			checked: 1,
+			completed: 1,
+			failed: 0,
+			skippedRunning: 0,
+		});
+		expect(mocks.recordRunResult).toHaveBeenCalledWith("fp_486", {
+			sessionId: "sesn_486",
+			status: "completed",
+		});
+	});
+
+	it("leaves still-running sessions in started state", async () => {
+		mocks.listStartedPrReviewRuns.mockResolvedValue([
+			{
+				fingerprint: "fp_running",
+				repoFullName: "fairchild/workspaces",
+				prNumber: 486,
+				headSha: "head-sha",
+				triggerKind: "opened",
+				triggerSourceId: "head-sha",
+				sessionId: "sesn_running",
+				createdAt: "2026-05-17T06:24:27Z",
+				updatedAt: "2026-05-17T06:24:27Z",
+			},
+		]);
+		mocks.listEvents.mockReturnValue(
+			asyncEvents([
+				{
+					type: "agent.message",
+					content: [{ type: "text", text: "still working" }],
+				},
+			]),
+		);
+
+		const result = await processPendingPrReviewRuns({ limit: 1 });
+
+		expect(result).toMatchObject({
+			checked: 1,
+			completed: 0,
+			failed: 0,
+			skippedRunning: 1,
+		});
+		expect(mocks.recordRunResult).not.toHaveBeenCalled();
 	});
 });
 

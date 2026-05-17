@@ -3,7 +3,6 @@ import { PR_REVIEW_WEBHOOK_CONTRACT_CASES } from "@/lib/agent-runtime/__tests__/
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-	after: vi.fn(),
 	getChatMessageByDiscussionId: vi.fn(),
 	pushChatMessage: vi.fn(),
 	pushEvent: vi.fn(),
@@ -13,10 +12,6 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@/lib/agent-runtime/pr-review", () => ({
 	triggerPrReview: mocks.triggerPrReview,
-}));
-
-vi.mock("next/server", () => ({
-	after: mocks.after,
 }));
 
 vi.mock("@/lib/chat", () => ({
@@ -144,7 +139,6 @@ describe("/api/webhooks/github POST", () => {
 	beforeEach(() => {
 		vi.stubEnv("GITHUB_WEB_WORKSPACES_WEBHOOK_SECRET", "");
 		mocks.getChatMessageByDiscussionId.mockReset();
-		mocks.after.mockReset();
 		mocks.pushChatMessage.mockReset();
 		mocks.pushEvent.mockReset();
 		mocks.pushEvent.mockResolvedValue(undefined);
@@ -189,9 +183,6 @@ describe("/api/webhooks/github POST", () => {
 				repoName: "workspaces",
 			},
 			expect.objectContaining({ kind: "opened" }),
-			expect.objectContaining({
-				onReviewStarted: expect.any(Function),
-			}),
 		);
 		expect(resolved).toBe(false);
 
@@ -216,30 +207,17 @@ describe("/api/webhooks/github POST", () => {
 		expect(consoleError).toHaveBeenCalledWith("[pr-review] failed:", error);
 	});
 
-	it("schedules server-side review publishing after managed-agent kickoff", async () => {
-		const completeReview = vi.fn().mockResolvedValue(undefined);
-		mocks.triggerPrReview.mockImplementation(
-			async (
-				_payload: unknown,
-				_ctx: unknown,
-				options: {
-					onReviewStarted: (completeReview: () => Promise<void>) => void;
-				},
-			) => {
-				options.onReviewStarted(completeReview);
-				return "sesn_123";
-			},
-		);
+	it("leaves review publishing to the broker after kickoff", async () => {
+		mocks.triggerPrReview.mockResolvedValue("sesn_123");
 
 		const { POST } = await import("./route");
 		const response = await POST(pullRequestOpenedRequest());
 
 		expect(response.status).toBe(200);
-		expect(mocks.after).toHaveBeenCalledTimes(1);
-
-		const scheduled = mocks.after.mock.calls[0][0] as () => Promise<void>;
-		await scheduled();
-		expect(completeReview).toHaveBeenCalledTimes(1);
+		expect(mocks.triggerPrReview).toHaveBeenCalledWith(
+			expect.any(Object),
+			expect.objectContaining({ kind: "opened" }),
+		);
 	});
 
 	describe("trigger matrix", () => {
@@ -450,7 +428,6 @@ describe("/api/webhooks/github POST", () => {
 			});
 			expect(mocks.pushEvent).not.toHaveBeenCalled();
 			expect(mocks.triggerPrReview).not.toHaveBeenCalled();
-			expect(mocks.after).not.toHaveBeenCalled();
 		});
 
 		it("rejects canary requests with a valid HMAC but the wrong canary secret", async () => {
