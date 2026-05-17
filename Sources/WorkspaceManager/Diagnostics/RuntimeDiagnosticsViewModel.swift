@@ -32,6 +32,12 @@ final class RuntimeDiagnosticsViewModel: ObservableObject {
     @Published private(set) var snapshot: RuntimeDiagnosticsSnapshot?
     @Published private(set) var history = RuntimeProcessHistory(snapshots: [])
     @Published private(set) var summary = RuntimeDiagnosticsSummary.make(events: [], agentStatuses: [])
+    @Published private(set) var localStateSnapshot = LocalStateStoreStatusSnapshot(
+        mode: .unavailable,
+        bootstrapErrors: []
+    )
+    @Published private(set) var localStateSummary: LocalStateStoreSummary?
+    @Published private(set) var localStateSummaryError: String?
     @Published private(set) var isRefreshing = false
     @Published private(set) var lastCheckedAt: Date?
 
@@ -117,5 +123,23 @@ final class RuntimeDiagnosticsViewModel: ObservableObject {
 
         let events = await StartupDiagnosticsStore.shared.allEvents()
         summary = RuntimeDiagnosticsSummary.make(events: events, agentStatuses: agentStatuses)
+        await refreshLocalStateSummary()
+    }
+
+    private func refreshLocalStateSummary() async {
+        localStateSnapshot = LocalStateStoreController.shared.snapshot
+        guard let localStateStore = LocalStateStoreController.shared.store else {
+            localStateSummary = nil
+            localStateSummaryError = nil
+            return
+        }
+
+        do {
+            localStateSummary = try await localStateStore.summary()
+            localStateSummaryError = nil
+        } catch {
+            localStateSummary = nil
+            localStateSummaryError = String(describing: error)
+        }
     }
 }

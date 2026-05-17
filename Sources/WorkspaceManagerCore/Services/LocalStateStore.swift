@@ -151,17 +151,20 @@ public struct LocalStateStoreSummary: Codable, Equatable, Sendable {
     public let databasePath: String
     public let generatedAt: Date
     public let tableCounts: [String: Int]
+    public let latestEventTimes: [String: Date]
 
     public init(
         schemaVersion: Int,
         databasePath: String,
         generatedAt: Date,
-        tableCounts: [String: Int]
+        tableCounts: [String: Int],
+        latestEventTimes: [String: Date] = [:]
     ) {
         self.schemaVersion = schemaVersion
         self.databasePath = databasePath
         self.generatedAt = generatedAt
         self.tableCounts = tableCounts
+        self.latestEventTimes = latestEventTimes
     }
 }
 
@@ -333,6 +336,13 @@ public actor LocalStateStore {
         let runState = Self.runStateName(status.run)
 
         try await dbPool.write { db in
+            try Self.ensureTerminalSessionRow(
+                db,
+                hostSessionID: hostSessionID,
+                cwd: status.cwd,
+                now: now
+            )
+
             for event in events {
                 let eventFields = Self.eventFields(event)
                 try db.execute(
@@ -387,6 +397,45 @@ public actor LocalStateStore {
                     ])
             }
         }
+    }
+
+    private static func ensureTerminalSessionRow(
+        _ db: Database,
+        hostSessionID: UUID,
+        cwd: String,
+        now: String
+    ) throws {
+        try db.execute(
+            sql: """
+                INSERT INTO terminal_sessions (
+                    host_session_id,
+                    session_key,
+                    target_kind,
+                    target_id,
+                    target_path,
+                    backend_identifier,
+                    backend_instance_id,
+                    directory_path,
+                    terminal_mode,
+                    tmux_session_name,
+                    custom_command_present,
+                    hooks_socket_path,
+                    is_active,
+                    created_at,
+                    last_seen_at,
+                    ended_at
+                )
+                VALUES (?, ?, 'host_path', NULL, ?, NULL, NULL, ?, 'unknown', NULL, 0, NULL, 0, ?, ?, NULL)
+                ON CONFLICT(host_session_id) DO NOTHING
+                """,
+            arguments: [
+                hostSessionID.uuidString,
+                "host_session_id:\(hostSessionID.uuidString)",
+                cwd,
+                cwd,
+                now,
+                now,
+            ])
     }
 
     public func recordDiagnosticEvent(
@@ -462,12 +511,31 @@ public actor LocalStateStore {
             }
             return result
         }
+        let latestEventTimes = try await dbPool.read { db -> [String: Date] in
+            let queries = [
+                "terminal_sessions": "SELECT max(last_seen_at) FROM terminal_sessions",
+                "terminal_layout_snapshots": "SELECT max(captured_at) FROM terminal_layout_snapshots",
+                "agent_status_events": "SELECT max(event_at) FROM agent_status_events",
+                "diagnostic_events": "SELECT max(event_at) FROM diagnostic_events",
+                "diagnostic_exports": "SELECT max(created_at) FROM diagnostic_exports",
+            ]
+            var result: [String: Date] = [:]
+            for (table, sql) in queries {
+                if let rawValue = try String.fetchOne(db, sql: sql),
+                    let date = Self.date(fromISOString: rawValue)
+                {
+                    result[table] = date
+                }
+            }
+            return result
+        }
 
         return LocalStateStoreSummary(
             schemaVersion: Self.schemaVersion,
             databasePath: databaseURL.path,
             generatedAt: Date(),
-            tableCounts: counts
+            tableCounts: counts,
+            latestEventTimes: latestEventTimes
         )
     }
 
@@ -658,7 +726,7 @@ public actor LocalStateStore {
         case .userPrompt(let prompt):
             return ("user_prompt", nil, nil, nil, nil, nil, prompt == nil ? 0 : 1)
         case .toolStart(let name, let detail):
-            return ("tool_start", name, detail, nil, nil, nil, 0)
+            return ("tool_start", name, safeToolDetail(for: name, rawDetail: detail), nil, nil, nil, 0)
         case .toolEnd(let name, _):
             return ("tool_end", name, nil, nil, nil, nil, 0)
         case .toolBatchEnd:
@@ -677,6 +745,29 @@ public actor LocalStateStore {
             return ("working_directory", nil, nil, nil, nil, nil, 0)
         case .bell:
             return ("bell", nil, nil, nil, nil, nil, 0)
+        }
+    }
+
+    private static func safeToolDetail(for toolName: String, rawDetail: String?) -> String? {
+        guard let rawDetail = rawDetail?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !rawDetail.isEmpty
+        else {
+            return nil
+        }
+
+        switch toolName.lowercased() {
+        case "bash":
+            return "command_present"
+        case "read", "edit", "multiedit", "write", "notebookread", "notebookedit":
+            return "file_path_present"
+        case "glob", "grep", "ls":
+            return "path_or_pattern_present"
+        case "webfetch":
+            return "url_present"
+        case "websearch":
+            return "query_present"
+        default:
+            return "detail_present"
         }
     }
 
@@ -757,6 +848,12 @@ public actor LocalStateStore {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter.string(from: date)
+    }
+
+    private static func date(fromISOString value: String) -> Date? {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.date(from: value)
     }
 
     private static func jsonString<T: Encodable>(_ value: T) throws -> String {

@@ -118,6 +118,9 @@ CREATE TABLE IF NOT EXISTS terminal_split_snapshots (
 -- Normalized agent state events from hooks, OSC, status line, transcript, and
 -- bell inputs. Raw prompts and raw tool inputs are not persisted by default.
 -- prompt_present records that a user prompt existed without storing the prompt.
+-- tool_detail stores only a coarse safe marker such as command_present or
+-- file_path_present; it must not contain raw commands, URLs, prompts, paths, or
+-- tool payloads.
 CREATE TABLE IF NOT EXISTS agent_status_events (
     id TEXT PRIMARY KEY NOT NULL,
     host_session_id TEXT NOT NULL,

@@ -80,14 +80,6 @@ enum DiagnosticReportExporter {
         try encoder.encode(report).write(to: tempDir.appendingPathComponent("report.json"))
         if let localStateSummary {
             try encoder.encode(localStateSummary).write(to: tempDir.appendingPathComponent("local-state-summary.json"))
-            try? await localStateStore?.recordDiagnosticExport(
-                appVersion: appVersion,
-                buildNumber: buildNumber,
-                filename: zipURL.lastPathComponent,
-                redactionLevel: "summary",
-                status: "created",
-                rowCounts: localStateSummary.tableCounts
-            )
         }
 
         // system-profile.txt
@@ -104,6 +96,16 @@ enum DiagnosticReportExporter {
 
         // zip
         try createZip(from: tempDir, to: zipURL)
+        if let localStateSummary {
+            try? await localStateStore?.recordDiagnosticExport(
+                appVersion: appVersion,
+                buildNumber: buildNumber,
+                filename: zipURL.lastPathComponent,
+                redactionLevel: "summary",
+                status: "created",
+                rowCounts: localStateSummary.tableCounts
+            )
+        }
     }
 
     static func makeReport(

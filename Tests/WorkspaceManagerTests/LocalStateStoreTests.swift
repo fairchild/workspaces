@@ -38,7 +38,7 @@ struct LocalStateStoreTests {
             createdAt: Date(timeIntervalSince1970: 1_700_000_000)
         )
         try await store.recordAgentEvents(
-            [.toolStart(name: "Read", detail: "README.md")],
+            [.toolStart(name: "Bash", detail: "echo super-secret-token")],
             hostSessionID: sessionID,
             origin: .hook,
             status: status,
@@ -56,6 +56,8 @@ struct LocalStateStoreTests {
         #expect(summary.tableCounts["terminal_sessions"] == 1)
         #expect(summary.tableCounts["agent_status_events"] == 1)
         #expect(summary.tableCounts["diagnostic_events"] == 1)
+        #expect(summary.latestEventTimes["agent_status_events"] == Date(timeIntervalSince1970: 1_700_000_001))
+        #expect(summary.latestEventTimes["diagnostic_events"] == Date(timeIntervalSince1970: 1_700_000_002))
 
         let dbQueue = try DatabaseQueue(path: databaseURL.path)
         let targetKind = try await dbQueue.read {
@@ -66,6 +68,102 @@ struct LocalStateStoreTests {
             )
         }
         #expect(targetKind == "repo")
+
+        let toolDetail = try await dbQueue.read {
+            try String.fetchOne(
+                $0,
+                sql: "SELECT tool_detail FROM agent_status_events WHERE host_session_id = ?",
+                arguments: [sessionID.uuidString]
+            )
+        }
+        #expect(toolDetail == "command_present")
+
+        let eventCwd = try await dbQueue.read {
+            try String.fetchOne(
+                $0,
+                sql: "SELECT cwd FROM agent_status_events WHERE host_session_id = ?",
+                arguments: [sessionID.uuidString]
+            )
+        }
+        #expect(eventCwd == "/tmp/workspaces/repo")
+
+        let rawDetailCount = try await dbQueue.read {
+            try Int.fetchOne(
+                $0,
+                sql: "SELECT COUNT(*) FROM agent_status_events WHERE tool_detail = ?",
+                arguments: ["echo super-secret-token"]
+            )
+        }
+        #expect(rawDetailCount == 0)
+    }
+
+    @Test("Agent events create a placeholder terminal session when needed")
+    func agentEventsCreatePlaceholderTerminalSession() async throws {
+        let fixture = try TemporaryDirectory()
+        defer { fixture.cleanup() }
+        let databaseURL = fixture.url.appendingPathComponent("state.sqlite")
+        let store = try LocalStateStore(databaseURL: databaseURL)
+        let sessionID = UUID(uuidString: "5D4AC4D8-967E-4C71-A37E-EBEB21082415")!
+        let status = AgentSessionStatus(
+            hostSessionID: sessionID,
+            agentSessionID: "claude-session-2",
+            kind: .claudeCode,
+            cwd: "/tmp/workspaces/repo",
+            run: .runningTool(name: "Read", detail: "/tmp/workspaces/repo/secret.txt"),
+            modelDisplayName: "Claude",
+            lastEventAt: Date(timeIntervalSince1970: 1_700_000_010),
+            hookActive: true,
+            createdAt: Date(timeIntervalSince1970: 1_700_000_010)
+        )
+
+        try await store.recordAgentEvents(
+            [.toolStart(name: "Read", detail: "/tmp/workspaces/repo/secret.txt")],
+            hostSessionID: sessionID,
+            origin: .hook,
+            status: status,
+            occurredAt: Date(timeIntervalSince1970: 1_700_000_011)
+        )
+
+        let summary = try await store.summary()
+        #expect(summary.tableCounts["terminal_sessions"] == 1)
+        #expect(summary.tableCounts["agent_status_events"] == 1)
+
+        let dbQueue = try DatabaseQueue(path: databaseURL.path)
+        let placeholderTargetKind = try await dbQueue.read {
+            try String.fetchOne(
+                $0,
+                sql: "SELECT target_kind FROM terminal_sessions WHERE host_session_id = ?",
+                arguments: [sessionID.uuidString]
+            )
+        }
+        #expect(placeholderTargetKind == "host_path")
+
+        let placeholderTargetPath = try await dbQueue.read {
+            try String.fetchOne(
+                $0,
+                sql: "SELECT target_path FROM terminal_sessions WHERE host_session_id = ?",
+                arguments: [sessionID.uuidString]
+            )
+        }
+        #expect(placeholderTargetPath == "/tmp/workspaces/repo")
+
+        let placeholderTerminalMode = try await dbQueue.read {
+            try String.fetchOne(
+                $0,
+                sql: "SELECT terminal_mode FROM terminal_sessions WHERE host_session_id = ?",
+                arguments: [sessionID.uuidString]
+            )
+        }
+        #expect(placeholderTerminalMode == "unknown")
+
+        let toolDetail = try await dbQueue.read {
+            try String.fetchOne(
+                $0,
+                sql: "SELECT tool_detail FROM agent_status_events WHERE host_session_id = ?",
+                arguments: [sessionID.uuidString]
+            )
+        }
+        #expect(toolDetail == "file_path_present")
     }
 
     @Test("docs/schema.sql loads as runnable SQLite")

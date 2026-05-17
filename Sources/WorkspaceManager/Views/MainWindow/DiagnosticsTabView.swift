@@ -27,6 +27,7 @@ struct DiagnosticsTabView: View {
                     DiagnosticsInlineError(message: errorMessage)
                 }
 
+                localStateSection
                 liveProcessesSection
                 resourceHistorySection
                 agentProcessesSection
@@ -91,7 +92,7 @@ struct DiagnosticsTabView: View {
             }
             .buttonStyle(.borderless)
             .help(
-                "Export Diagnostic Report: save a zip with app diagnostics, system profile, recent logs, and startup telemetry."
+                "Export Diagnostic Report: save a zip with app diagnostics, system profile, recent logs, startup telemetry, and local state summary."
             )
             .accessibilityLabel("Export Diagnostic Report")
             .accessibilityIdentifier("inspector.diagnostics.export")
@@ -105,6 +106,46 @@ struct DiagnosticsTabView: View {
             .disabled(viewModel.isRefreshing)
             .help("Refresh Diagnostics")
             .accessibilityIdentifier("inspector.diagnostics.refresh")
+        }
+    }
+
+    private var localStateSection: some View {
+        DiagnosticsPanel(title: "Local State Store", accessibilityID: "inspector.diagnostics.local-state") {
+            DiagnosticsConceptNote(
+                icon: "internaldrive",
+                tint: .blue,
+                title: "Local SQLite sidecar",
+                text: "Continuity rows and export metadata recorded on this Mac.",
+                helpText:
+                    "Shows the local SQLite sidecar status and compact table totals. Raw prompts, transcripts, commands, and tool payloads are not stored here."
+            )
+
+            MetricsGrid {
+                DiagnosticsMetricCard(label: "Mode", value: viewModel.localStateSnapshot.mode.label)
+                DiagnosticsMetricCard(label: "Schema", value: localStateSchemaText)
+                DiagnosticsMetricCard(label: "Rows", value: "\(localStateRowCount)")
+                DiagnosticsMetricCard(label: "Latest", value: localStateLatestText)
+            }
+
+            DiagnosticsKeyValueRow(
+                label: "Database",
+                value: viewModel.localStateSnapshot.mode.path ?? "none",
+                monospaced: true
+            )
+
+            if let error = viewModel.localStateSummaryError {
+                DiagnosticsInlineError(message: "Local state summary failed: \(error)")
+            }
+
+            if !viewModel.localStateSnapshot.bootstrapErrors.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(viewModel.localStateSnapshot.bootstrapErrors, id: \.self) { error in
+                        DiagnosticsKeyValueRow(label: "Bootstrap Error", value: error)
+                    }
+                }
+            }
+
+            LocalStateSummaryList(summary: viewModel.localStateSummary)
         }
     }
 
@@ -309,6 +350,22 @@ struct DiagnosticsTabView: View {
         let count = viewModel.history.sampleCount
         return count == 1 ? "1 sample" : "\(count) samples"
     }
+
+    private var localStateSchemaText: String {
+        guard let schemaVersion = viewModel.localStateSummary?.schemaVersion else { return "n/a" }
+        return "v\(schemaVersion)"
+    }
+
+    private var localStateRowCount: Int {
+        viewModel.localStateSummary?.tableCounts.values.reduce(0, +) ?? 0
+    }
+
+    private var localStateLatestText: String {
+        guard let latest = viewModel.localStateSummary?.latestEventTimes.values.max() else {
+            return "None"
+        }
+        return latest.formatted(.relative(presentation: .named))
+    }
 }
 
 private struct DiagnosticsAboutDisclosure: View {
@@ -431,6 +488,90 @@ private struct DiagnosticsConceptNote: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(tint.opacity(0.08), in: .rect(cornerRadius: 7))
         .help(helpText)
+    }
+}
+
+private struct DiagnosticsKeyValueRow: View {
+    let label: String
+    let value: String
+    var monospaced = false
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Text(label.uppercased())
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 116, alignment: .leading)
+            Text(value)
+                .font(monospaced ? .system(.caption, design: .monospaced) : .caption)
+                .foregroundStyle(.primary)
+                .lineLimit(2)
+                .truncationMode(.middle)
+                .textSelection(.enabled)
+            Spacer(minLength: 0)
+        }
+    }
+}
+
+private struct LocalStateSummaryList: View {
+    let summary: LocalStateStoreSummary?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("TABLES")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.bottom, 6)
+
+            if let summary {
+                let rows = tableRows(summary)
+                ForEach(rows, id: \.name) { row in
+                    HStack(alignment: .firstTextBaseline, spacing: 10) {
+                        Text(row.name)
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Spacer()
+                        Text("\(row.count)")
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                        Text(row.latest)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .frame(width: 88, alignment: .trailing)
+                    }
+                    .padding(.vertical, 5)
+
+                    if row.name != rows.last?.name {
+                        Divider()
+                    }
+                }
+            } else {
+                Text("No local state summary available.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 8)
+            }
+        }
+    }
+
+    private func tableRows(_ summary: LocalStateStoreSummary) -> [TableRow] {
+        summary.tableCounts.keys.sorted().map { tableName in
+            let latest = summary.latestEventTimes[tableName]
+            return TableRow(
+                name: tableName,
+                count: summary.tableCounts[tableName] ?? 0,
+                latest: latest?.formatted(.relative(presentation: .named)) ?? "-"
+            )
+        }
+    }
+
+    private struct TableRow {
+        let name: String
+        let count: Int
+        let latest: String
     }
 }
 

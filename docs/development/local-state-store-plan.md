@@ -2,12 +2,13 @@
 
 This plan tracks the local SQLite sidecar that records WorkSpaces state history for continuity, diagnostics, and export. SwiftData remains the canonical store for Repository, Workspace, and Web Source rows. The SQLite store records append-friendly, queryable history around Terminal Sessions, Surfaces, agent state, and diagnostic events.
 
-The foundation landed in commit `759ebd3c`:
+The foundation landed in PR #483 and shipped in WorkSpaces v0.15.0:
 
 - GRDB-backed `LocalStateStore` with WAL mode, foreign keys, migrations, and summary reporting.
 - Runtime tables for terminal sessions, terminal layout snapshots, split snapshots, agent status events, diagnostic events, and diagnostic export ledger rows.
 - `docs/schema.sql` as the readable and runnable schema document. Keep it manually in sync with `LocalStateStore` migrations.
-- App bootstrap, agent status event persistence, terminal session persistence, and diagnostic report summary export.
+- App bootstrap, agent status event persistence, terminal session persistence, Diagnostics tab summary, and diagnostic report summary export.
+- Agent event persistence writes only coarse tool-detail markers, never raw tool payloads.
 
 ## Goals
 
@@ -42,7 +43,8 @@ The foundation landed in commit `759ebd3c`:
    - Tests: deleted or stale targets do not restore invalid Surfaces.
 
 4. Expose local state in diagnostics.
-   - Add a diagnostics panel or section that shows store mode, database path, schema version, table counts, latest event times, and last write failure if any.
+   - Initial Diagnostics tab section shows store mode, database path, schema version, table counts, and latest event times.
+   - Follow-up: track and render last write failure if any.
    - Keep direct database actions explicit and local-only.
    - Tests: view model renders degraded/unavailable/persistent states.
 
