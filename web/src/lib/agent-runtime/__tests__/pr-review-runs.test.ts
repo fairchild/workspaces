@@ -68,6 +68,22 @@ describe("recordRunStart", () => {
 		expect(retry.priorStatus).toBe("completed");
 	});
 
+	it("treats a superseded prior run as a permanent skip", async () => {
+		const { recordRunStart, recordRunResult } = await loadModule();
+		const input = makeInput();
+
+		await recordRunStart(input);
+		await recordRunResult(input.fingerprint, {
+			sessionId: "sesn_old",
+			status: "superseded",
+			error: "newer review already posted",
+		});
+
+		const retry = await recordRunStart(input);
+		expect(retry.inserted).toBe(false);
+		expect(retry.priorStatus).toBe("superseded");
+	});
+
 	it("retries when the prior run failed", async () => {
 		const { recordRunStart, recordRunResult } = await loadModule();
 		const input = makeInput();

@@ -33,7 +33,9 @@ not a broad public security stance.
   repository cloning. It does not write a token into the prompt or filesystem
   for the agent to discover. The agent produces a structured review intent, and
   the server-side broker validates and posts the GitHub review with the App
-  token.
+  token. The broker re-checks current managed reviews before posting and
+  supersedes stale session output that did not account for a review posted while
+  the session was running.
 - Managed reviewer ingress canaries are HMAC verified and gated by
   `WORKSPACES_WEBHOOK_CANARY_SECRET`; the dry-run response returns before DB
   writes or managed-agent session creation.

@@ -43,6 +43,8 @@ SAFE_RESPONSE_KEYS = (
     "completed",
     "failed",
     "skippedRunning",
+    "superseded",
+    "requeued",
     "error",
 )
 

@@ -130,7 +130,11 @@ curl --fail-with-body -sS \
 
 The broker inspects `started` rows in `managed_pr_review_runs`, skips sessions
 that are still running, validates completed review-intent JSON, and posts the
-review with the GitHub App token. The monitor then compares recent
+review with the GitHub App token. Before posting, it re-checks current managed
+reviews on the PR; if another managed review was submitted after the session
+started, the stale session is marked `superseded`. If the superseding review is
+for an older head, the broker starts a fresh follow-up session so the newer-head
+review includes the prior review context. The monitor then compares recent
 reviewer-eligible rows in `webhook_events` with `managed_pr_review_runs`
 records. These routes return only run metadata and missing event identifiers,
 not raw payloads or secrets.

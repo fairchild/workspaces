@@ -28,6 +28,8 @@ describe("/api/webhooks/github/pr-reviewer-broker POST", () => {
 			completed: 1,
 			failed: 0,
 			skippedRunning: 0,
+			superseded: 0,
+			requeued: 0,
 			runs: [
 				{
 					fingerprint: "fp",
@@ -81,6 +83,8 @@ describe("/api/webhooks/github/pr-reviewer-broker POST", () => {
 			completed: 0,
 			failed: 1,
 			skippedRunning: 0,
+			superseded: 0,
+			requeued: 0,
 			runs: [
 				{
 					fingerprint: "fp",

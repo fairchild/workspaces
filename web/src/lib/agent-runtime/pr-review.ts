@@ -107,7 +107,8 @@ export type PrReviewTriggerKind =
 	| "ready_for_review"
 	| "synchronize"
 	| "edited"
-	| "evidence_comment";
+	| "evidence_comment"
+	| "superseded_retry";
 
 export interface PrReviewTrigger {
 	kind: PrReviewTriggerKind;
@@ -822,12 +823,46 @@ async function payloadFromStartedRun(
 	};
 }
 
+function reviewSubmittedAfter(
+	review: PrPriorReviewItem,
+	thresholdIso: string,
+): boolean {
+	const submittedMs = Date.parse(review.submittedAt);
+	const thresholdMs = Date.parse(thresholdIso);
+	if (!Number.isFinite(submittedMs) || !Number.isFinite(thresholdMs)) {
+		return false;
+	}
+	return submittedMs > thresholdMs;
+}
+
+function reviewsAfterRunStarted(
+	history: PrPriorReviewContext,
+	run: StartedPrReviewRun,
+): PrPriorReviewItem[] {
+	if (history.unavailableReason) return [];
+	return history.reviews.filter((review) =>
+		reviewSubmittedAfter(review, run.createdAt),
+	);
+}
+
+function currentHeadAlreadyReviewed(
+	review: PrPriorReviewItem,
+	run: StartedPrReviewRun,
+	payload: PrReviewPayload,
+): boolean {
+	const reviewedSha = review.commitSha.trim();
+	const runSha = (run.headSha || payload.headSha).trim();
+	return Boolean(reviewedSha && runSha && reviewedSha === runSha);
+}
+
 export interface PrReviewBrokerRunResult {
 	fingerprint: string;
 	sessionId: string;
 	prNumber: number;
-	status: "completed" | "failed" | "skipped_running";
+	status: "completed" | "failed" | "skipped_running" | "superseded";
 	error?: string;
+	supersededByReviewId?: number;
+	retrySessionId?: string | null;
 }
 
 export interface PrReviewBrokerResult {
@@ -835,6 +870,8 @@ export interface PrReviewBrokerResult {
 	completed: number;
 	failed: number;
 	skippedRunning: number;
+	superseded: number;
+	requeued: number;
 	runs: PrReviewBrokerRunResult[];
 }
 
@@ -862,6 +899,8 @@ export async function processPendingPrReviewRuns(
 		completed: 0,
 		failed: 0,
 		skippedRunning: 0,
+		superseded: 0,
+		requeued: 0,
 		runs: [],
 	};
 
@@ -887,6 +926,59 @@ export async function processPendingPrReviewRuns(
 				throw new Error(
 					`could not resolve PR metadata for ${run.repoFullName}#${run.prNumber}`,
 				);
+			}
+
+			const currentReviewHistory = await fetchCurrentPrReviewHistory(
+				githubToken,
+				payload,
+			);
+			const supersedingReviews = reviewsAfterRunStarted(
+				currentReviewHistory,
+				run,
+			);
+			const supersedingReview = supersedingReviews[0] ?? null;
+			if (supersedingReview) {
+				let retrySessionId: string | null = null;
+				const reviewedCurrentHead = supersedingReviews.some((review) =>
+					currentHeadAlreadyReviewed(review, run, payload),
+				);
+				if (!reviewedCurrentHead) {
+					try {
+						retrySessionId = await triggerPrReview(payload, {
+							kind: "superseded_retry",
+							triggerSourceId: `review-${supersedingReview.id}-head-${run.headSha || payload.headSha}`,
+							reason: `Managed review ${supersedingReview.id} posted after session ${run.sessionId} started; re-running with prior review context.`,
+						});
+					} catch (err) {
+						console.error("[pr-review] superseded retry failed:", err);
+					}
+				}
+
+				const error = reviewedCurrentHead
+					? `Superseded by managed review ${supersedingReview.id} on the same head.`
+					: retrySessionId
+						? `Superseded by managed review ${supersedingReview.id}; retry session ${retrySessionId} started.`
+						: `Superseded by managed review ${supersedingReview.id}; retry session was not started.`;
+				await recordRunResult(run.fingerprint, {
+					sessionId: run.sessionId,
+					status: "superseded",
+					error,
+				});
+				result.superseded += 1;
+				if (retrySessionId) result.requeued += 1;
+				result.runs.push({
+					fingerprint: run.fingerprint,
+					sessionId: run.sessionId,
+					prNumber: run.prNumber,
+					status: "superseded",
+					error,
+					supersededByReviewId: supersedingReview.id,
+					retrySessionId,
+				});
+				console.log(
+					`[pr-review] Broker superseded stale review for PR #${run.prNumber}: ${run.sessionId}`,
+				);
+				continue;
 			}
 
 			const narrativeContext = await fetchPrNarrativeContext(
