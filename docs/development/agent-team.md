@@ -96,9 +96,19 @@ Public mention requests now run in two phases:
 1. `agent-mention.yml` runs on GitHub-hosted Ubuntu, records a structured triage request, and posts a summary comment with the hidden machine-readable payload.
 2. A maintainer applies the `safe-to-run-agent` label to approve execution. `agent-executor.yml` claims the latest pending request for that thread, clears the label, and dispatches the selected agent with only the structured payload.
 
-Public requests must mention exactly one agent. If multiple agents are mentioned, triage rejects the request and asks for a single-agent retry.
+Public requests must mention exactly one agent. If multiple agents are mentioned,
+triage rejects the request and asks for a single-agent retry.
 
-Directed contributor runs still use the same contributor runtime with a directed message (`--message`), which overrides the normal priority order. Mention-triggered executor runs use separate concurrency groups (`agent-approved-april-*`, etc.) so they do not interfere with scheduled cron runs.
+Every approved mention executor must leave a visible response on the target issue
+or PR. For `@claude`, a successful workflow run with no PR review, issue comment,
+or PR comment is a workflow bug, not a completed review; Claude should post a
+brief affirmative/no-findings note when there is nothing else to report.
+
+Directed contributor runs still use the same contributor runtime with a directed
+message (`--message`), which overrides the normal priority order.
+Mention-triggered executor runs use separate concurrency groups
+(`agent-approved-april-*`, etc.) so they do not interfere with scheduled cron
+runs.
 
 ### Local Persona Mode
 

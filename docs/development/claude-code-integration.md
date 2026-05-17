@@ -218,6 +218,10 @@ directory-backed persistent Ghostty surface it creates.
 - Concurrent dev and installed apps can still compete for the `workspaces://`
   URL handler. The hook socket no longer has that ambiguity because it is
   lock-owned.
+- The GitHub Actions `@claude` mention executor is outside this Mac-app
+  integration. Its contract lives in `docs/development/agent-team.md` and
+  `.github/workflows/agent-executor.yml`: a green approved-mention run must
+  leave a visible issue or PR response, even if only a brief no-findings note.
 
 ## Verification Runbook
 

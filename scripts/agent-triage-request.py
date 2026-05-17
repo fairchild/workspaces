@@ -258,7 +258,10 @@ def render_contributor_prompt(payload: dict[str, Any]) -> str:
 
 
 def render_claude_prompt(payload: dict[str, Any]) -> str:
-    target_label = "PR" if payload["target_type"] == "pull_request" else "issue"
+    target_type = payload["target_type"]
+    target_number = payload["target_number"]
+    reply_command = "gh pr comment" if target_type == "pull_request" else "gh issue comment"
+    target_label = "PR" if target_type == "pull_request" else "issue"
     return "\n".join(
         [
             "A maintainer approved a public request for Claude.",
@@ -275,6 +278,9 @@ def render_claude_prompt(payload: dict[str, Any]) -> str:
             f"- Approval label: {APPROVAL_LABEL}",
             "",
             "Work only on the approved request. If the summary is insufficient, ask clarifying questions on the target thread instead of inferring hidden intent from public text.",
+            "Before finishing, always post one visible response on the target thread, even if only a brief affirmative or no-findings note.",
+            f"Use `{reply_command} {target_number} --body-file /tmp/reply.md` for that final response.",
+            "Do not finish silently. If you cannot complete the requested work, post a concise blocker comment instead.",
         ]
     )
 

@@ -133,6 +133,7 @@ class SecurityHardeningTests(unittest.TestCase):
         self.assertIn("safe-to-run-agent", workflow)
         self.assertIn("privileged_patch_approved:", workflow)
         self.assertIn("--allow-privileged-patches", workflow)
+        self.assertIn("GH_TOKEN: ${{ github.token }}", workflow)
 
     def test_codespaces_claude_worker_is_break_glass_ref_gated(self) -> None:
         workflow = (REPO_ROOT / ".github/workflows/codespaces-claude-worker.yml").read_text()
