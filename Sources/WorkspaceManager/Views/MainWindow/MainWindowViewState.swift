@@ -55,6 +55,7 @@ struct MainWindowViewState {
     var didRunPerfAutoOpenNewWorkspace = false
     var didApplyFixturePreviewBootstrap = false
     var didApplyFixtureWebBootstrap = false
+    var didApplyFixtureDiagnosticsBootstrap = false
     var didResolveInitialSurface = false
     var openInEditorErrorMessage: String?
     var workspaceOperationErrorMessage: String?

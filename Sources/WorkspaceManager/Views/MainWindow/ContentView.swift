@@ -211,6 +211,10 @@ struct ContentView: View {
         UIFixtureWebBootstrapConfiguration.from(environment: ProcessInfo.processInfo.environment)
     }
 
+    private var fixtureDiagnosticsBootstrapConfiguration: UIFixtureDiagnosticsBootstrapConfiguration? {
+        UIFixtureDiagnosticsBootstrapConfiguration.from(environment: ProcessInfo.processInfo.environment)
+    }
+
     private var openInEditorTarget: OpenInEditorTarget? {
         presentationController.openInEditorTarget(
             selectedCodePreview: viewState.selectedCodePreview,
@@ -333,6 +337,7 @@ struct ContentView: View {
             activeSplitFraction: hostTerminalState.splitFraction(for: hostTerminalState.activeSessionID),
             hostSurfaceStore: hostTerminalState.surfaceStore,
             tabTitleOverrides: hostTerminalState.tabTitleOverridesBySessionID,
+            agentStatuses: Array(agentSessionRegistry.statuses.values),
             terminalContextMenuProvider: terminalContextMenu(for:),
             onSplitFractionChanged: { nextFraction in
                 guard let activeSessionID = hostTerminalState.activeSessionID else { return }
@@ -479,6 +484,7 @@ struct ContentView: View {
                 )
                 ensureInitialHostSession()
                 resolveSurfaceLifecycle()
+                applyDiagnosticsFixtureIfNeeded()
                 pruneRightPaneState()
                 syncOpenInEditorShortcutRouting()
                 Task { @MainActor in
@@ -505,6 +511,7 @@ struct ContentView: View {
                 )
                 reconcileSelectionAfterModelChange()
                 resolveSurfaceLifecycle()
+                applyDiagnosticsFixtureIfNeeded()
                 hostTerminalState.pruneRepoSessions(validRepoPaths: normalizedRepoPathSnapshot)
             }
             .onChange(of: inspectorTargetIDSet) { _, _ in
@@ -868,6 +875,35 @@ struct ContentView: View {
             )
 
             guard applySurfaceResolutionAction(action) else { break }
+        }
+    }
+
+    @MainActor
+    private func applyDiagnosticsFixtureIfNeeded() {
+        guard fixtureDiagnosticsBootstrapConfiguration != nil else { return }
+        guard !viewState.didApplyFixtureDiagnosticsBootstrap else { return }
+        guard deepLinkState.pendingRequest == nil else { return }
+
+        if let workspace =
+            repos
+            .flatMap(\.workspaces)
+            .sorted(by: { $0.lastAccessedAt > $1.lastAccessedAt })
+            .first
+        {
+            handleWorkspaceSelection(workspace)
+            rightPaneStateStore.state(for: workspace).selectedTab = .diagnostics
+            viewState.isRightPaneVisible = true
+            viewState.didApplyFixtureDiagnosticsBootstrap = true
+            NSLog("[UIFixture] Diagnostics bootstrap applied (workspace=%@)", workspace.name)
+            return
+        }
+
+        if let repo = repos.first {
+            handleRepoTerminalSelection(repo)
+            rightPaneStateStore.state(for: repo).selectedTab = .diagnostics
+            viewState.isRightPaneVisible = true
+            viewState.didApplyFixtureDiagnosticsBootstrap = true
+            NSLog("[UIFixture] Diagnostics bootstrap applied (repo=%@)", repo.name)
         }
     }
 
@@ -2225,6 +2261,7 @@ struct MainTerminalDetailView: View {
     let activeSplitFraction: CGFloat?
     let hostSurfaceStore: HostTerminalSurfaceStore
     let tabTitleOverrides: [UUID: String]
+    let agentStatuses: [AgentSessionStatus]
     let terminalContextMenuProvider: (HostTerminalSession) -> NSMenu?
     let onSplitFractionChanged: (CGFloat) -> Void
     var onSelectTerminalTab: ((UUID) -> Void)?
@@ -2249,23 +2286,54 @@ struct MainTerminalDetailView: View {
             // Collapsible right pane
             if isRightPaneVisible {
                 if let selectedWorkspace {
+                    let state = rightPaneStateStore.state(for: selectedWorkspace)
                     RightPaneView(
                         workspace: selectedWorkspace,
-                        state: rightPaneStateStore.state(for: selectedWorkspace),
+                        state: state,
+                        diagnosticWorkspaceDirectories: diagnosticWorkspaceDirectories,
+                        agentStatuses: agentStatuses,
                         onFileSelected: onFileSelected
                     )
-                    .frame(minWidth: 220, idealWidth: 280, maxWidth: 400)
+                    .rightPaneWidth(for: state)
                 } else if let selectedRepo {
+                    let state = rightPaneStateStore.state(for: selectedRepo)
                     RightPaneView(
                         repo: selectedRepo,
-                        state: rightPaneStateStore.state(for: selectedRepo),
+                        state: state,
+                        diagnosticWorkspaceDirectories: diagnosticWorkspaceDirectories,
+                        agentStatuses: agentStatuses,
                         onFileSelected: onFileSelected
                     )
-                    .frame(minWidth: 220, idealWidth: 280, maxWidth: 400)
+                    .rightPaneWidth(for: state)
                 }
             }
         }
         .navigationTitle(navigationTitle)
+    }
+
+    private var diagnosticWorkspaceDirectories: [URL] {
+        var seen = Set<String>()
+        var directories: [URL] = []
+
+        var candidateDirectories = hostTerminalSessions.map(\.directoryURL)
+        if let activeSplitHostSession {
+            candidateDirectories.append(activeSplitHostSession.directoryURL)
+        }
+        if let selectedWorkspaceDirectory = selectedWorkspace?.localDirectoryURL {
+            candidateDirectories.append(selectedWorkspaceDirectory)
+        }
+        if let selectedRepo {
+            candidateDirectories.append(selectedRepo.localURL)
+        }
+
+        for directory in candidateDirectories {
+            let path = directory.standardizedFileURL.resolvingSymlinksInPath().path
+            if seen.insert(path).inserted {
+                directories.append(URL(fileURLWithPath: path, isDirectory: true))
+            }
+        }
+
+        return directories
     }
 
     @ViewBuilder
