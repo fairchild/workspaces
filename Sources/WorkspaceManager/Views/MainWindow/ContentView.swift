@@ -1591,11 +1591,6 @@ struct ContentView: View {
     }
 
     @MainActor
-    private func syncSidebarSelectionToActiveSession() {
-        syncSidebarSelectionToActiveSessionFromActiveHostSession()
-    }
-
-    @MainActor
     private func performDeferredStartupWorkspaceStatusSync() async {
         guard !didScheduleInitialWorkspaceStatusSync else { return }
         didScheduleInitialWorkspaceStatusSync = true
