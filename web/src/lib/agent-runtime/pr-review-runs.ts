@@ -1,7 +1,11 @@
 import { createHash } from "node:crypto";
 import { getDb } from "../db";
 
-export type PrReviewRunStatus = "started" | "completed" | "failed";
+export type PrReviewRunStatus =
+	| "started"
+	| "completed"
+	| "failed"
+	| "superseded";
 
 export interface PrReviewRunFingerprintInput {
 	repoFullName: string;
@@ -76,6 +80,8 @@ const STALE_STARTED_MS = 15 * 60 * 1000;
  * The semantics are:
  * - no row → insert and proceed.
  * - row with `completed` → skip; the previous run already produced a review.
+ * - row with `superseded` → skip; a later broker pass intentionally retired
+ *   that run because a newer managed review was already visible.
  * - row with `failed` → reset to `started` and proceed; lets a later
  *   redelivery (or a follow-on event with the same fingerprint) recover from
  *   a transient session-create or events.send failure.
@@ -141,7 +147,7 @@ export async function recordRunStart(
 	}
 
 	const priorStatus = existing.status as PrReviewRunStatus;
-	if (priorStatus === "completed") {
+	if (priorStatus === "completed" || priorStatus === "superseded") {
 		return { inserted: false, priorStatus };
 	}
 	if (priorStatus === "started") {

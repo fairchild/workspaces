@@ -618,6 +618,197 @@ describe("processPendingPrReviewRuns", () => {
 		});
 		expect(mocks.recordRunResult).not.toHaveBeenCalled();
 	});
+
+	it("supersedes a completed session when a newer managed review already covers the same head", async () => {
+		mocks.listStartedPrReviewRuns.mockResolvedValue([
+			{
+				fingerprint: "fp_stale",
+				repoFullName: "fairchild/workspaces",
+				prNumber: 489,
+				headSha: "same-head",
+				triggerKind: "edited",
+				triggerSourceId: "body-123",
+				sessionId: "sesn_stale",
+				createdAt: "2026-05-17T06:39:00Z",
+				updatedAt: "2026-05-17T06:39:10Z",
+			},
+		]);
+		mocks.listEvents.mockReturnValue(
+			asyncEvents([
+				{
+					type: "agent.message",
+					content: [{ type: "text", text: "stale review intent" }],
+				},
+				{
+					type: "session.status_idle",
+					stop_reason: { type: "end_turn" },
+				},
+			]),
+		);
+		mocks.fetch.mockImplementation(async (url: string) => {
+			if (url.endsWith("/pulls/489")) {
+				return {
+					ok: true,
+					json: async () =>
+						githubPr(489, {
+							title: "Broker managed reviewer completions",
+							html_url: "https://github.com/fairchild/workspaces/pull/489",
+							body: "PR body",
+							head: { ref: "codex/reviewer", sha: "same-head" },
+							base: { ref: "main" },
+						}),
+				};
+			}
+			if (url.includes("/pulls/489/reviews?")) {
+				return {
+					ok: true,
+					json: async () => [
+						{
+							id: 4304929065,
+							state: "APPROVED",
+							body: "First managed review.",
+							submitted_at: "2026-05-17T06:42:30Z",
+							commit_id: "same-head",
+							user: { login: "workspaces-claude-pr-reviewer[bot]" },
+						},
+					],
+				};
+			}
+			throw new Error(`Unexpected fetch URL: ${url}`);
+		});
+
+		const result = await processPendingPrReviewRuns({ limit: 1 });
+
+		expect(result).toMatchObject({
+			checked: 1,
+			completed: 0,
+			failed: 0,
+			skippedRunning: 0,
+			superseded: 1,
+			requeued: 0,
+			runs: [
+				{
+					fingerprint: "fp_stale",
+					status: "superseded",
+					supersededByReviewId: 4304929065,
+					retrySessionId: null,
+				},
+			],
+		});
+		expect(mocks.createSession).not.toHaveBeenCalled();
+		expect(mocks.recordRunResult).toHaveBeenCalledWith("fp_stale", {
+			sessionId: "sesn_stale",
+			status: "superseded",
+			error: expect.stringContaining("same head"),
+		});
+	});
+
+	it("requeues a stale completed session when the newer managed review is for an older head", async () => {
+		mocks.listStartedPrReviewRuns.mockResolvedValue([
+			{
+				fingerprint: "fp_new_head_stale",
+				repoFullName: "fairchild/workspaces",
+				prNumber: 489,
+				headSha: "new-head",
+				triggerKind: "synchronize",
+				triggerSourceId: "new-head",
+				sessionId: "sesn_new_head_stale",
+				createdAt: "2026-05-17T06:39:00Z",
+				updatedAt: "2026-05-17T06:39:10Z",
+			},
+		]);
+		mocks.listEvents.mockReturnValue(
+			asyncEvents([
+				{
+					type: "agent.message",
+					content: [{ type: "text", text: "stale review intent" }],
+				},
+				{
+					type: "session.status_idle",
+					stop_reason: { type: "end_turn" },
+				},
+			]),
+		);
+		mocks.fetch.mockImplementation(async (url: string) => {
+			if (url.endsWith("/pulls/489")) {
+				return {
+					ok: true,
+					json: async () =>
+						githubPr(489, {
+							title: "Broker managed reviewer completions",
+							html_url: "https://github.com/fairchild/workspaces/pull/489",
+							body: "PR body",
+							head: { ref: "codex/reviewer", sha: "new-head" },
+							base: { ref: "main" },
+						}),
+				};
+			}
+			if (url.includes("/pulls/489/reviews?")) {
+				return {
+					ok: true,
+					json: async () => [
+						{
+							id: 4304929065,
+							state: "APPROVED",
+							body: "First managed review on old head.",
+							submitted_at: "2026-05-17T06:42:30Z",
+							commit_id: "old-head",
+							user: { login: "workspaces-claude-pr-reviewer[bot]" },
+						},
+					],
+				};
+			}
+			if (url.includes("/pulls?")) {
+				return { ok: true, json: async () => [] };
+			}
+			if (url.includes("/labels?")) {
+				return { ok: true, json: async () => [] };
+			}
+			if (url.includes("/issues/489/comments?")) {
+				return { ok: true, json: async () => [] };
+			}
+			throw new Error(`Unexpected fetch URL: ${url}`);
+		});
+
+		const result = await processPendingPrReviewRuns({ limit: 1 });
+
+		expect(result).toMatchObject({
+			checked: 1,
+			completed: 0,
+			failed: 0,
+			superseded: 1,
+			requeued: 1,
+			runs: [
+				{
+					fingerprint: "fp_new_head_stale",
+					status: "superseded",
+					supersededByReviewId: 4304929065,
+					retrySessionId: "sesn_01",
+				},
+			],
+		});
+		expect(mocks.recordRunStart).toHaveBeenCalledWith(
+			expect.objectContaining({
+				prNumber: 489,
+				headSha: "new-head",
+				triggerKind: "superseded_retry",
+				triggerSourceId: "review-4304929065-head-new-head",
+			}),
+		);
+		expect(mocks.recordRunResult).toHaveBeenCalledWith("fp_test", {
+			sessionId: "sesn_01",
+			status: "started",
+		});
+		expect(mocks.recordRunResult).toHaveBeenCalledWith("fp_new_head_stale", {
+			sessionId: "sesn_new_head_stale",
+			status: "superseded",
+			error: expect.stringContaining("retry session sesn_01 started"),
+		});
+		const [, params] = mocks.sendEvent.mock.calls[0];
+		const message = params.events[0].content[0].text;
+		expect(message).toContain("You reviewed this PR before");
+		expect(message).toContain("First managed review on old head.");
+	});
 });
 
 describe("triggerPrReview", () => {
