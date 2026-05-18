@@ -53,7 +53,7 @@ struct ContentView: View {
     @State private var landingErrorMessage: String?
     @State private var workspaceEnvironmentSheetState = WorkspaceEnvironmentSheetState.empty
     @State private var didScheduleInitialWorkspaceStatusSync = false
-    @State private var accessTimestampSaveTask: Task<Void, Never>?
+    @State private var accessRecorder = MainWindowAccessRecorder()
     @StateObject private var rightPaneStateStore = RightPaneStateStore()
     @StateObject private var webSurfaceStore = WebSurfaceStore()
     @StateObject private var terminalFocusCoordinator = TerminalFocusCoordinator()
@@ -66,7 +66,9 @@ struct ContentView: View {
     @State private var mainSelectionCoordinator = MainSelectionCoordinator()
     private let navigationStateController = MainWindowNavigationStateController()
     private let surfaceResolutionController = MainWindowSurfaceResolutionController()
+    private let launchActionHandler = MainWindowLaunchActionHandler()
     private let presentationController = MainWindowPresentationController()
+    private let terminalSessionController = MainWindowTerminalSessionController()
     private let splitRoutingController = SplitRoutingController()
     private let tabRoutingController = TabRoutingController()
     private let workspaceEnvironmentOptionsController = WorkspaceEnvironmentOptionsController()
@@ -561,7 +563,7 @@ struct ContentView: View {
                             requestCloseTerminalTabs(sessionIDs)
                         }
                     )
-                    syncSidebarSelectionToActiveSession()
+                    syncSidebarSelectionToActiveSessionFromActiveHostSession()
                 }
             }
     }
@@ -712,6 +714,7 @@ struct ContentView: View {
             }
             .onDisappear {
                 clearAppCommands()
+                accessRecorder.flushPendingSave(modelContext: modelContext)
             }
             .sheet(item: $repoForNewWorkspaceFromLanding) { repo in
                 NewWorkspaceSheet(
@@ -910,155 +913,61 @@ struct ContentView: View {
     @MainActor
     @discardableResult
     private func applySurfaceResolutionAction(_ action: MainWindowSurfaceResolutionAction) -> Bool {
-        switch action {
-        case .none, .waitForRepos:
-            return false
-
-        case .clearDeepLinkNoMatch(let request):
-            NSLog("[DeepLink] No workspace match for cwd: %@", request.cwd)
-            deepLinkState.clearPendingRequest()
-            return true
-
-        case .selectDeepLinkedWorkspace(let request, let workspace):
-            NSLog(
-                "[DeepLink] Matched workspace '%@' for cwd '%@' (session_id=%@ source=%@)",
-                workspace.name,
-                request.cwd,
-                request.sessionID ?? "",
-                request.source ?? ""
+        launchActionHandler.apply(
+            action,
+            state: &viewState,
+            environment: ProcessInfo.processInfo.environment,
+            pendingRequest: deepLinkState.pendingRequest,
+            bootstrapController: bootstrapController,
+            actions: MainWindowLaunchActionHandler.Actions(
+                clearDeepLink: {
+                    deepLinkState.clearPendingRequest()
+                },
+                clearLastSurface: {
+                    lastSurfaceRawValue = ""
+                },
+                discardPendingRemoteConnection: { reason in
+                    abandonPendingRemoteConnection(reason: reason)
+                },
+                importRepo: { repoRoot in
+                    launchRepositoryService.existingOrImportedRepo(at: repoRoot)
+                },
+                selectWorkspace: { workspace, preferredDirectory in
+                    handleWorkspaceSelection(workspace, preferredDirectory: preferredDirectory)
+                },
+                selectRepoTerminal: { repo, preferredDirectory in
+                    handleRepoTerminalSelection(repo, preferredDirectory: preferredDirectory)
+                },
+                selectWebSource: { source in
+                    handleWebSourceSelection(source)
+                },
+                applyLaunchSurface: { surface in
+                    applyLaunchSurface(surface)
+                },
+                schedulePerfAutoSelect: { repo, shouldAutoOpenNewWorkspace in
+                    schedulePerfAutoSelection(repo, shouldAutoOpenNewWorkspace: shouldAutoOpenNewWorkspace)
+                },
+                focusWorkspaceWindow: {
+                    focusWorkspaceWindow()
+                }
             )
+        )
+    }
 
-            abandonPendingRemoteConnection(reason: "deep_link_selected")
-            handleWorkspaceSelection(
-                workspace,
-                preferredDirectory: URL(fileURLWithPath: request.cwd, isDirectory: true)
-            )
-            deepLinkState.clearPendingRequest()
-            viewState.didResolveInitialSurface = true
-            focusWorkspaceWindow()
-            return false
+    @MainActor
+    private func schedulePerfAutoSelection(_ repo: Repo, shouldAutoOpenNewWorkspace: Bool) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            Task { @MainActor in
+                viewState.didResolveInitialSurface = true
+                handleRepoTerminalSelection(repo)
+                guard shouldAutoOpenNewWorkspace else { return }
 
-        case .selectDeepLinkedRepo(let request, let repo):
-            NSLog(
-                "[DeepLink] Matched repo '%@' for cwd '%@' (session_id=%@ source=%@)",
-                repo.name,
-                request.cwd,
-                request.sessionID ?? "",
-                request.source ?? ""
-            )
-
-            abandonPendingRemoteConnection(reason: "deep_link_selected")
-            handleRepoTerminalSelection(
-                repo,
-                preferredDirectory: URL(fileURLWithPath: request.cwd, isDirectory: true)
-            )
-            deepLinkState.clearPendingRequest()
-            viewState.didResolveInitialSurface = true
-            focusWorkspaceWindow()
-            return false
-
-        case .importDeepLinkedRepo(let request, let repoRoot):
-            guard let repo = launchRepositoryService.existingOrImportedRepo(at: repoRoot) else {
-                NSLog("[DeepLink] Failed to import repo for cwd '%@' repo_root='%@'", request.cwd, repoRoot)
-                deepLinkState.clearPendingRequest()
-                return true
-            }
-
-            NSLog(
-                "[DeepLink] Imported repo '%@' for cwd '%@' (repo_root=%@)",
-                repo.name,
-                request.cwd,
-                repoRoot
-            )
-
-            abandonPendingRemoteConnection(reason: "deep_link_repo_imported")
-            handleRepoTerminalSelection(
-                repo,
-                preferredDirectory: URL(fileURLWithPath: request.cwd, isDirectory: true)
-            )
-            deepLinkState.clearPendingRequest()
-            viewState.didResolveInitialSurface = true
-            focusWorkspaceWindow()
-            return false
-
-        case .perfAutoSelect(let repo):
-            let shouldAutoOpenNewWorkspace = bootstrapController.shouldPerfAutoOpenNewWorkspace(
-                environment: ProcessInfo.processInfo.environment,
-                didRun: viewState.didRunPerfAutoOpenNewWorkspace,
-                pendingRequest: deepLinkState.pendingRequest
-            )
-            viewState.didRunPerfAutoSelection = true
-            if shouldAutoOpenNewWorkspace {
-                viewState.didRunPerfAutoOpenNewWorkspace = true
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                Task { @MainActor in
-                    viewState.didResolveInitialSurface = true
-                    handleRepoTerminalSelection(repo)
-                    guard shouldAutoOpenNewWorkspace else { return }
-
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                        Task { @MainActor in
-                            await presentNewWorkspaceFromLanding(repo)
-                        }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                    Task { @MainActor in
+                        await presentNewWorkspaceFromLanding(repo)
                     }
                 }
             }
-            return false
-
-        case .recordMissingPreviewBootstrap(let configuration):
-            viewState.didApplyFixturePreviewBootstrap = true
-            NSLog(
-                "[UIFixture] Preview bootstrap skipped (repo=%@ path=%@)",
-                configuration.repoName,
-                configuration.relativePath
-            )
-            return true
-
-        case .applyPreviewBootstrap(_, let repo, let selection):
-            viewState.didApplyFixturePreviewBootstrap = true
-            viewState.didResolveInitialSurface = true
-            handleRepoTerminalSelection(repo)
-            viewState.selectedCodePreview = selection
-            viewState.isTerminalPanelVisible = true
-            viewState.isRightPaneVisible = true
-
-            NSLog(
-                "[UIFixture] Preview bootstrap applied (repo=%@ file=%@)",
-                repo.name,
-                selection.relativePath
-            )
-            return false
-
-        case .recordMissingWebBootstrap(let targetName):
-            viewState.didApplyFixtureWebBootstrap = true
-            NSLog("[UIFixture] Web bootstrap skipped (target=%@)", targetName)
-            return true
-
-        case .applyWebBootstrap(let targetName, let selectedSource):
-            viewState.didApplyFixtureWebBootstrap = true
-            viewState.didResolveInitialSurface = true
-            handleWebSourceSelection(selectedSource)
-            NSLog(
-                "[UIFixture] Web bootstrap applied (target=%@ selected=%@)",
-                targetName,
-                selectedSource.name
-            )
-            return false
-
-        case .clearInvalidLastSurface:
-            lastSurfaceRawValue = ""
-            return true
-
-        case .restore(let surface):
-            viewState.didResolveInitialSurface = true
-            applyLaunchSurface(surface)
-            return false
-
-        case .fallback(let surface):
-            viewState.didResolveInitialSurface = true
-            applyLaunchSurface(surface)
-            return false
         }
     }
 
@@ -1520,99 +1429,104 @@ struct ContentView: View {
 
     @MainActor
     private func markAccessed(repo: Repo) {
-        repo.lastAccessedAt = Date()
-        saveAccessTimestampChanges()
+        accessRecorder.record(repo: repo, modelContext: modelContext)
     }
 
     @MainActor
     private func markAccessed(workspace: Workspace) {
-        let accessDate = Date()
-        workspace.lastAccessedAt = accessDate
-        workspace.sourceRepo?.lastAccessedAt = accessDate
-        saveAccessTimestampChanges()
+        accessRecorder.record(workspace: workspace, modelContext: modelContext)
     }
 
     @MainActor
     private func markAccessed(webSource: WebSource) {
-        let accessDate = Date()
-        webSource.lastAccessedAt = accessDate
-        webSource.ownerRepo?.lastAccessedAt = accessDate
-        saveAccessTimestampChanges()
+        accessRecorder.record(webSource: webSource, modelContext: modelContext)
+    }
+
+    private func handleTerminalProcessExit(sessionID: UUID) {
+        guard
+            let result = terminalSessionController.handleProcessExit(
+                sessionID: sessionID,
+                hostTerminalState: hostTerminalState,
+                defaultHomeDirectory: resolvedDefaultHostDirectory,
+                repos: repos,
+                normalizePath: normalizePath
+            )
+        else { return }
+        applyTerminalSessionResult(result)
     }
 
     @MainActor
-    private func saveAccessTimestampChanges() {
-        accessTimestampSaveTask?.cancel()
-        accessTimestampSaveTask = Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(500))
-            guard !Task.isCancelled else { return }
-            do {
-                try modelContext.save()
-            } catch {
-                if modelContext.insertedModelsArray.isEmpty {
-                    creationLog.warning(
-                        "saveAccessTimestampChanges: save failed, rolling back (no pending inserts)"
-                    )
-                    modelContext.rollback()
-                } else {
-                    creationLog.error(
-                        "saveAccessTimestampChanges: save failed with \(modelContext.insertedModelsArray.count) pending inserts — skipping rollback to preserve workspace creation"
-                    )
-                }
-            }
-        }
+    private func applyTerminalSessionResult(
+        _ result: MainWindowTerminalSessionController.SessionFocusResult
+    ) {
+        setSelectedWorkspace(result.syncedWorkspace)
+        focusTerminalTab(result.focusSessionID)
     }
-    private func handleTerminalProcessExit(sessionID: UUID) {
-        NSLog("[HostSession] Process exit detected for session %@", sessionID.uuidString)
-        guard
-            let focusSessionID = hostTerminalState.handleProcessExitAndResolveFocusTarget(
-                for: sessionID,
-                defaultHomeDirectory: resolvedDefaultHostDirectory
-            )
-        else {
-            return
-        }
 
-        // Sync sidebar selection to match the new active session.
-        syncSidebarSelectionToActiveSession()
-
-        terminalFocusCoordinator.requestMainTerminalFocus(
-            targetSessionID: focusSessionID,
-            activateApp: false,
-            surfaceStore: hostTerminalState.surfaceStore,
-            activeSessionID: hostTerminalState.activeSessionID
+    @MainActor
+    private func syncSidebarSelectionToActiveSessionFromActiveHostSession() {
+        let syncedWorkspace = terminalSessionController.syncedWorkspaceSelection(
+            activeHostSession: activeHostSession,
+            repos: repos,
+            normalizePath: normalizePath
         )
+        setSelectedWorkspace(syncedWorkspace)
     }
 
     @MainActor
     private func createTerminalTabFromCurrentContext() {
-        if !hostTerminalState.hasSessions {
-            ensureInitialHostSession()
-        }
-
-        guard let session = hostTerminalState.createTab() else { return }
-        syncSidebarSelectionToActiveSession()
-        focusTerminalTab(session.id)
+        guard
+            let result = terminalSessionController.createTabFromCurrentContext(
+                hostTerminalState: hostTerminalState,
+                defaultHomeDirectory: resolvedDefaultHostDirectory,
+                repos: repos,
+                normalizePath: normalizePath,
+                activateHostSession: { key, directory, customCommand in
+                    activateHostSession(key: key, directory: directory, customCommand: customCommand)
+                }
+            )
+        else { return }
+        applyTerminalSessionResult(result)
     }
 
     @MainActor
     private func selectTerminalTab(sessionID: UUID) {
-        guard hostTerminalState.activateExistingSession(sessionID: sessionID) else { return }
-        syncSidebarSelectionToActiveSession()
-        focusTerminalTab(sessionID)
+        guard
+            let result = terminalSessionController.selectTab(
+                sessionID: sessionID,
+                hostTerminalState: hostTerminalState,
+                repos: repos,
+                normalizePath: normalizePath
+            )
+        else { return }
+        applyTerminalSessionResult(result)
     }
 
     @MainActor
     private func selectAdjacentTerminalTab(offset: Int) {
-        guard let session = hostTerminalState.activateAdjacentTab(offset: offset) else { return }
-        syncSidebarSelectionToActiveSession()
-        focusTerminalTab(session.id)
+        guard
+            let result = terminalSessionController.selectAdjacentTab(
+                offset: offset,
+                hostTerminalState: hostTerminalState,
+                repos: repos,
+                normalizePath: normalizePath
+            )
+        else { return }
+        applyTerminalSessionResult(result)
     }
 
     @MainActor
     private func closeActiveTerminalTab() {
-        guard let activeSessionID = hostTerminalState.activeSessionID else { return }
-        closeTerminalTab(sessionID: activeSessionID)
+        guard
+            let result = terminalSessionController.closeActiveTab(
+                hostTerminalState: hostTerminalState,
+                defaultHomeDirectory: resolvedDefaultHostDirectory,
+                repos: repos,
+                normalizePath: normalizePath,
+                requestClose: requestTerminalClose(sessionID:)
+            )
+        else { return }
+        applyTerminalSessionResult(result)
     }
 
     @MainActor
@@ -1622,43 +1536,48 @@ struct ContentView: View {
 
     @MainActor
     private func requestCloseTerminalTabs(_ sessionIDs: [UUID]) {
-        for sessionID in sessionIDs {
-            if let terminal = hostTerminalState.surfaceStore.terminal(for: sessionID) {
-                terminal.requestClose()
-            } else {
-                forceCloseTerminalTab(sessionID: sessionID)
-            }
+        let results = terminalSessionController.closeTabs(
+            sessionIDs,
+            hostTerminalState: hostTerminalState,
+            defaultHomeDirectory: resolvedDefaultHostDirectory,
+            repos: repos,
+            normalizePath: normalizePath,
+            requestClose: requestTerminalClose(sessionID:)
+        )
+        for result in results {
+            applyTerminalSessionResult(result)
         }
     }
 
     @MainActor
     private func requestCloseConfirmationForTerminalTab(sessionID: UUID) {
-        let title =
-            hostTerminalState.sessions.first(where: { $0.id == sessionID })
-            .map {
-                hostTerminalState.tabTitleOverride(for: $0.id)
-                    ?? hostTerminalState.surfaceStore.displayTitle(for: $0)
-            }
-            ?? "Terminal"
-        viewState.terminalCloseConfirmation = TerminalCloseConfirmation(
+        viewState.terminalCloseConfirmation = terminalSessionController.closeConfirmation(
             sessionID: sessionID,
-            title: title
+            hostTerminalState: hostTerminalState
         )
     }
 
     @MainActor
     private func forceCloseTerminalTab(sessionID: UUID) {
         guard
-            let focusSessionID = hostTerminalState.handleProcessExitAndResolveFocusTarget(
-                for: sessionID,
-                defaultHomeDirectory: resolvedDefaultHostDirectory
+            let result = terminalSessionController.forceCloseTab(
+                sessionID: sessionID,
+                hostTerminalState: hostTerminalState,
+                defaultHomeDirectory: resolvedDefaultHostDirectory,
+                repos: repos,
+                normalizePath: normalizePath
             )
-        else {
-            return
-        }
+        else { return }
+        applyTerminalSessionResult(result)
+    }
 
-        syncSidebarSelectionToActiveSession()
-        focusTerminalTab(focusSessionID)
+    @MainActor
+    private func requestTerminalClose(sessionID: UUID) -> Bool {
+        guard let terminal = hostTerminalState.surfaceStore.terminal(for: sessionID) else {
+            return false
+        }
+        terminal.requestClose()
+        return true
     }
 
     @MainActor
@@ -1669,16 +1588,6 @@ struct ContentView: View {
             surfaceStore: hostTerminalState.surfaceStore,
             activeSessionID: hostTerminalState.activeSessionID
         )
-    }
-
-    @MainActor
-    private func syncSidebarSelectionToActiveSession() {
-        let syncedWorkspace = mainSelectionCoordinator.syncedWorkspaceSelection(
-            for: activeHostSession,
-            repos: repos,
-            normalizePath: normalizePath
-        )
-        setSelectedWorkspace(syncedWorkspace)
     }
 
     @MainActor
@@ -1831,10 +1740,12 @@ struct ContentView: View {
 
     @MainActor
     private func ensureInitialHostSession() {
-        guard !hostTerminalState.hasSessions else { return }
-        _ = activateHostSession(
-            key: .defaultHome,
-            directory: resolvedDefaultHostDirectory
+        terminalSessionController.ensureInitialHostSession(
+            hostTerminalState: hostTerminalState,
+            defaultHomeDirectory: resolvedDefaultHostDirectory,
+            activateHostSession: { key, directory, customCommand in
+                activateHostSession(key: key, directory: directory, customCommand: customCommand)
+            }
         )
     }
 
