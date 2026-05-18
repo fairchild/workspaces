@@ -265,7 +265,7 @@ class SecurityHardeningTests(unittest.TestCase):
 
     def test_mise_invocations_are_locked_and_pinned(self) -> None:
         verify_mise = (REPO_ROOT / "scripts/verify-mise-security.sh").read_text()
-        self.assertIn("MISE_EXPECTED_VERSION=\"v2026.5.10\"", verify_mise)
+        self.assertIn("MISE_EXPECTED_VERSION=\"v2026.5.11\"", verify_mise)
         self.assertIn("verify_locked_zig_exec", verify_mise)
         self.assertIn("github.com/repos/jdx/mise/releases/latest", verify_mise)
         self.assertIn("SHASUMS256.txt", verify_mise)
@@ -291,8 +291,8 @@ class SecurityHardeningTests(unittest.TestCase):
         self.assertIn("enable-global-virtual-store=true", web_npmrc)
 
         sandbox = (REPO_ROOT / "web/src/lib/agent-runtime/vercel-sandbox.ts").read_text()
-        self.assertIn("MISE_VERSION='v2026.5.10'", sandbox)
-        self.assertIn("MISE_SHA256='568e6074262804788f138fb8749865738e47dff739ebaa0d428134c45957b569'", sandbox)
+        self.assertIn("MISE_VERSION='v2026.5.11'", sandbox)
+        self.assertIn("MISE_SHA256='9bb41ae4dbe2bcdfdbe36cf3c737a8bdb72035c03af3b7218a70780988f62b9b'", sandbox)
         self.assertIn("sha256sum -c -", sandbox)
         self.assertNotIn("mise-latest-linux-x64", sandbox)
 
@@ -396,6 +396,15 @@ class SecurityHardeningTests(unittest.TestCase):
         self.assertNotIn("python3 - <<", workflow)
         self.assertNotIn("python3 - <<", cd_workflow)
         self.assertIn("Managed reviewer ingress canary", cd_workflow)
+        self.assertIn("canary-secret-preflight", cd_workflow)
+        self.assertIn("managed-reviewer-canary-preflight", cd_workflow)
+        self.assertIn("Managed reviewer ingress canary before promotion", cd_workflow)
+        self.assertIn("pre-prod-managed-reviewer-ingress-findings", cd_workflow)
+        self.assertIn(
+            "WORKSPACES_WEBHOOK_CANARY_SECRET is required before production promotion",
+            cd_workflow,
+        )
+        self.assertIn("managed-reviewer-ingress-canary.log", cd_workflow)
         self.assertIn("bun run test:e2e", workflow)
         self.assertIn("wrangler deploy --dry-run", workflow)
         self.assertIn("urllib.request", canary_script)

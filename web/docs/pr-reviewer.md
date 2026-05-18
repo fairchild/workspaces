@@ -97,8 +97,9 @@ imported by both the Vercel route tests and the Cloudflare relay e2e harness.
 This is the regression guard for drift between "forward this webhook" and
 "start the reviewer".
 
-The production CD `validate-prod` job runs the same canary, broker, and monitor
-after promotion, before the production Playwright smoke.
+Production CD requires `WORKSPACES_WEBHOOK_CANARY_SECRET`, runs the same canary,
+broker, and monitor before promotion, then repeats them in `validate-prod` after
+promotion before the production Playwright smoke.
 
 Production canary:
 
