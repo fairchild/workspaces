@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.15.1] - 2026-05-19
+
+### Fixed
+- broker managed reviewer completions out of band (#489)
+- supersede stale managed reviews (#490)
+- harden local state persistence and diagnostics (#488)
+- show managed reviewer pickup status (#494)
+- harden perf readiness diagnostics
+
+### Other
+- Restore managed reviewer repository auth (#487)
+- Refactor main window orchestration into focused controllers (#486)
+
 ## [0.15.0] - 2026-05-16
 
 ### Added
