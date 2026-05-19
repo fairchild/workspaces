@@ -761,6 +761,63 @@ async function postGitHubReviewIntent(
 	}
 }
 
+type ManagedReviewStatusState = "pending" | "success" | "failure" | "error";
+
+const MANAGED_REVIEW_STATUS_CONTEXT = "WorkSpaces Managed Review";
+
+interface ManagedReviewStatusPayload {
+	repoFullName: string;
+	number: number;
+	headSha: string;
+	htmlUrl: string;
+}
+
+async function postManagedReviewStatus(
+	githubToken: string,
+	payload: ManagedReviewStatusPayload,
+	state: ManagedReviewStatusState,
+	description: string,
+): Promise<void> {
+	const [owner, repo] = payload.repoFullName.split("/");
+	if (!owner || !repo || !payload.headSha) {
+		console.warn(
+			`[pr-review] managed review status skipped for PR #${payload.number}: missing repo or head SHA`,
+		);
+		return;
+	}
+
+	try {
+		const res = await fetch(
+			`${GITHUB_API}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/statuses/${encodeURIComponent(payload.headSha)}`,
+			{
+				method: "POST",
+				headers: {
+					Authorization: `Bearer ${githubToken}`,
+					Accept: "application/vnd.github+json",
+					"X-GitHub-Api-Version": "2022-11-28",
+					"Content-Type": "application/json",
+				},
+				body: JSON.stringify({
+					state,
+					context: MANAGED_REVIEW_STATUS_CONTEXT,
+					description,
+					target_url: payload.htmlUrl,
+				}),
+			},
+		);
+		if (!res.ok) {
+			console.warn(
+				`[pr-review] managed review status update failed ${res.status}: ${await res.text()}`,
+			);
+		}
+	} catch (err) {
+		console.warn(
+			"[pr-review] managed review status update failed:",
+			err instanceof Error ? err.message : err,
+		);
+	}
+}
+
 async function collectCompletedReviewIntentText(
 	client: Anthropic,
 	sessionId: string,
@@ -905,6 +962,12 @@ export async function processPendingPrReviewRuns(
 	};
 
 	for (const run of pendingRuns) {
+		let statusPayload: ManagedReviewStatusPayload = {
+			repoFullName: run.repoFullName,
+			number: run.prNumber,
+			headSha: run.headSha,
+			htmlUrl: `https://github.com/${run.repoFullName}/pull/${run.prNumber}`,
+		};
 		try {
 			const collected = await collectCompletedReviewIntentText(
 				client,
@@ -927,6 +990,12 @@ export async function processPendingPrReviewRuns(
 					`could not resolve PR metadata for ${run.repoFullName}#${run.prNumber}`,
 				);
 			}
+			statusPayload = {
+				repoFullName: payload.repoFullName,
+				number: payload.number,
+				headSha: payload.headSha,
+				htmlUrl: payload.htmlUrl,
+			};
 
 			const currentReviewHistory = await fetchCurrentPrReviewHistory(
 				githubToken,
@@ -990,6 +1059,12 @@ export async function processPendingPrReviewRuns(
 				narrativeContext.availableLabels.map((label) => label.name),
 			);
 			await postGitHubReviewIntent(githubToken, payload, intent);
+			await postManagedReviewStatus(
+				githubToken,
+				statusPayload,
+				"success",
+				"Managed review posted.",
+			);
 			await recordRunResult(run.fingerprint, {
 				sessionId: run.sessionId,
 				status: "completed",
@@ -1006,6 +1081,12 @@ export async function processPendingPrReviewRuns(
 			);
 		} catch (err) {
 			const reason = err instanceof Error ? err.message : String(err);
+			await postManagedReviewStatus(
+				githubToken,
+				statusPayload,
+				"failure",
+				"Managed review failed before posting.",
+			);
 			await recordRunResult(run.fingerprint, {
 				sessionId: run.sessionId,
 				status: "failed",
@@ -1105,6 +1186,18 @@ export async function triggerPrReview(
 		);
 		return null;
 	}
+
+	await postManagedReviewStatus(
+		githubToken,
+		{
+			repoFullName: resolvedPayload.repoFullName,
+			number: resolvedPayload.number,
+			headSha: resolvedPayload.headSha,
+			htmlUrl: resolvedPayload.htmlUrl,
+		},
+		"pending",
+		"Managed reviewer picked up this PR.",
+	);
 
 	try {
 		const isRerun = trigger.kind !== "opened";
@@ -1277,6 +1370,17 @@ In "## Project Thread", include a short label rationale using the first applicab
 		return session.id;
 	} catch (err) {
 		const reason = err instanceof Error ? err.message : String(err);
+		await postManagedReviewStatus(
+			githubToken,
+			{
+				repoFullName: resolvedPayload.repoFullName,
+				number: resolvedPayload.number,
+				headSha: resolvedPayload.headSha,
+				htmlUrl: resolvedPayload.htmlUrl,
+			},
+			"failure",
+			"Managed reviewer failed to start.",
+		);
 		await recordRunResult(fingerprint, {
 			sessionId: null,
 			status: "failed",

@@ -12,11 +12,13 @@ GitHub PR opened
 → Cloudflare webhook relay
 → signed forward to web/api/webhooks/github (webhook route)
 → triggerPrReview() (fire-and-forget)
+→ record new run and post pending `WorkSpaces Managed Review` commit status
 → getOrCreateAgent/Environment (idempotent, DB-cached)
 → sessions.create (mounts repo at PR branch)
 → events.send (kickoff message)
 → Agent runs autonomously on Anthropic → returns review-intent JSON
 → scheduled/protected broker route validates intent → posts GitHub review
+→ commit status flips to success or failure
 ```
 
 ## Key Files
@@ -49,8 +51,8 @@ GitHub PR opened
 Reviews are posted by the `workspaces-pr-reviewer` GitHub App, which gives them a dedicated bot identity instead of being attributed to a personal account. To set up:
 
 1. Create a GitHub App at https://github.com/settings/apps with permissions:
-   `contents:read`, `pull_requests:write`; add `issues:write` if you want the
-   broker to apply validated label suggestions
+   `contents:read`, `pull_requests:write`, `statuses:write`; add
+   `issues:write` if you want the broker to apply validated label suggestions
 2. Install the app on `fairchild/workspaces` and note the installation ID
 3. Set `PR_REVIEWER_APP_ID`, `PR_REVIEWER_PRIVATE_KEY`, and `PR_REVIEWER_INSTALLATION_ID` in Vercel
 4. Confirm the Cloudflare relay has `WEBHOOK_FORWARD_URL` configured and that
@@ -73,6 +75,19 @@ component that posts reviews or labels.
 **Security:** Never print App private keys or installation tokens to logs. Use
 files or secret-manager flows, never standalone `echo`/`print` of credential
 values.
+
+### PR progress status
+
+After the webhook route records a new reviewer run, it posts a pending commit
+status named `WorkSpaces Managed Review` to the PR head SHA. This is the first
+visible PR signal that the managed reviewer picked up the run. When the broker
+posts the final GitHub review, it updates the same status context to `success`;
+if broker processing fails before a review is posted, it updates the context to
+`failure`.
+
+The status is best-effort: a status API failure is logged but does not block the
+review session or broker. A `403` on this request means the GitHub App is missing
+the `statuses:write` permission.
 
 The Cloudflare relay forwards only managed-review trigger candidates:
 `pull_request.opened`, `reopened`, `ready_for_review`, `synchronize`, eligible
