@@ -365,6 +365,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var windowObserver: Any?
     private static let appVariantEnvKey = "WORKSPACES_APP_VARIANT"
+    private nonisolated static let disableStateRestorationEnvKey = "WORKSPACES_DISABLE_STATE_RESTORATION"
 
     private enum AppVariant {
         case standard
@@ -391,6 +392,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var isCI: Bool {
         ProcessInfo.processInfo.environment["CI"] != nil
+    }
+
+    private var disablesStateRestoration: Bool {
+        !Self.shouldPreserveState(launchEnvironment: ProcessInfo.processInfo.environment)
+    }
+
+    nonisolated static func shouldPreserveState(launchEnvironment: [String: String]) -> Bool {
+        launchEnvironment[disableStateRestorationEnvKey] != "1"
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -504,6 +513,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Keep the app alive after the last window closes. This avoids
         // unexpected app termination when a user closes a terminal/window.
         return false
+    }
+
+    func application(_ application: NSApplication, shouldSaveSecureApplicationState coder: NSCoder) -> Bool {
+        !disablesStateRestoration
+    }
+
+    func application(_ application: NSApplication, shouldRestoreSecureApplicationState coder: NSCoder) -> Bool {
+        !disablesStateRestoration
+    }
+
+    func application(_ application: NSApplication, shouldSaveApplicationState coder: NSCoder) -> Bool {
+        !disablesStateRestoration
+    }
+
+    func application(_ application: NSApplication, shouldRestoreApplicationState coder: NSCoder) -> Bool {
+        !disablesStateRestoration
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {

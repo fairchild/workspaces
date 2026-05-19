@@ -91,6 +91,11 @@ fi
 ENV_VARS=(
     "WORKSPACES_FOCUS_DIAGNOSTICS=1"
     "WORKSPACES_TERMINAL_DIAGNOSTICS=1"
+    "WORKSPACES_DISABLE_STATE_RESTORATION=1"
+)
+APP_ARGS=(
+    "-ApplePersistenceIgnoreState"
+    "YES"
 )
 
 if [[ "$WITH_INPUT_DIAGNOSTICS" -eq 1 ]]; then
@@ -118,13 +123,17 @@ for entry in "${ENV_VARS[@]}"; do
 done
 echo "  summarize:"
 echo "    ./.agents/skills/workspaces-optimization/scripts/summarize_perf_log.py $LOG_FILE"
+echo "  app_args:"
+for entry in "${APP_ARGS[@]}"; do
+    echo "    $entry"
+done
 if [[ "$CAPTURE_SECONDS" -gt 0 ]]; then
     echo "  capture_seconds: $CAPTURE_SECONDS"
-    env "${ENV_VARS[@]}" "$APP_PATH" > >(tee "$LOG_FILE") 2>&1 &
+    env "${ENV_VARS[@]}" "$APP_PATH" "${APP_ARGS[@]}" > >(tee "$LOG_FILE") 2>&1 &
     APP_PID=$!
     sleep "$CAPTURE_SECONDS"
     kill "$APP_PID" 2>/dev/null || true
     wait "$APP_PID" 2>/dev/null || true
 else
-    env "${ENV_VARS[@]}" "$APP_PATH" 2>&1 | tee "$LOG_FILE"
+    env "${ENV_VARS[@]}" "$APP_PATH" "${APP_ARGS[@]}" 2>&1 | tee "$LOG_FILE"
 fi

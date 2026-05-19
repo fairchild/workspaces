@@ -76,6 +76,26 @@ struct GhosttyTerminalConfigTests {
         #expect(config.shellProfileModeLabel == "clean")
     }
 
+    @Test("clean zsh diagnostics install prompt readiness marker")
+    func cleanZshDiagnosticsInstallPromptReadinessMarker() throws {
+        let config = GhosttyTerminalConfig(
+            workingDirectory: URL(fileURLWithPath: "/tmp/repo-a"),
+            environment: [
+                "SHELL": "/bin/zsh",
+                "PATH": "/usr/bin:/bin",
+                "WORKSPACES_SHELL_PROFILE_MODE": "clean",
+                "WORKSPACES_TERMINAL_DIAGNOSTICS": "1",
+            ],
+            terminalMultiplexingMode: .ghosttyManagedSplits,
+            isTmuxAvailableOverride: true
+        )
+
+        let prompt = try #require(config.environmentVariables["PROMPT"])
+        #expect(config.command == "/bin/zsh -f")
+        #expect(prompt.contains("\u{1B}]0;WorkSpaces Ready\u{7}"))
+        #expect(prompt.hasPrefix("%{"))
+    }
+
     @Test("clean shell mode uses bash without profile loading")
     func cleanShellModeUsesBareBash() {
         let config = GhosttyTerminalConfig(
@@ -91,6 +111,26 @@ struct GhosttyTerminalConfigTests {
 
         #expect(config.command == "/bin/bash --noprofile --norc")
         #expect(config.shellProfileModeLabel == "clean")
+    }
+
+    @Test("clean bash diagnostics install prompt readiness marker")
+    func cleanBashDiagnosticsInstallPromptReadinessMarker() throws {
+        let config = GhosttyTerminalConfig(
+            workingDirectory: URL(fileURLWithPath: "/tmp/repo-a"),
+            environment: [
+                "SHELL": "/bin/bash",
+                "PATH": "/usr/bin:/bin",
+                "WORKSPACES_SHELL_PROFILE_MODE": "clean",
+                "WORKSPACES_TERMINAL_DIAGNOSTICS": "1",
+            ],
+            terminalMultiplexingMode: .ghosttyManagedSplits,
+            isTmuxAvailableOverride: true
+        )
+
+        let prompt = try #require(config.environmentVariables["PS1"])
+        #expect(config.command == "/bin/bash --noprofile --norc")
+        #expect(prompt.contains("\u{1B}]0;WorkSpaces Ready\u{7}"))
+        #expect(prompt.hasPrefix("\\["))
     }
 
     @Test("host session hook context is exported when both values are available")
