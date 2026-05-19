@@ -125,6 +125,14 @@ async function* asyncEvents(events: unknown[]) {
 	}
 }
 
+function isManagedReviewStatusUrl(url: string): boolean {
+	return url.includes("/statuses/");
+}
+
+function okResponse() {
+	return { ok: true, text: async () => "", json: async () => ({}) };
+}
+
 function mockPrList(prs: unknown[]) {
 	mockNarrativeFetch({ prs });
 }
@@ -190,6 +198,10 @@ function mockNarrativeFetch({
 						? [{ user: { login: "workspaces-claude-pr-reviewer[bot]" } }]
 						: [{ user: { login: "fairchild" } }],
 			};
+		}
+
+		if (isManagedReviewStatusUrl(url)) {
+			return okResponse();
 		}
 
 		throw new Error(`Unexpected fetch URL: ${url}`);
@@ -567,6 +579,9 @@ describe("processPendingPrReviewRuns", () => {
 					});
 					return { ok: true, text: async () => "", json: async () => ({}) };
 				}
+				if (isManagedReviewStatusUrl(url)) {
+					return okResponse();
+				}
 				throw new Error(`Unexpected fetch URL: ${url}`);
 			},
 		);
@@ -582,6 +597,16 @@ describe("processPendingPrReviewRuns", () => {
 		expect(mocks.recordRunResult).toHaveBeenCalledWith("fp_486", {
 			sessionId: "sesn_486",
 			status: "completed",
+		});
+		const statusPost = mocks.fetch.mock.calls.find(([url]) =>
+			String(url).includes("/statuses/head-sha"),
+		);
+		expect(statusPost?.[1]).toMatchObject({ method: "POST" });
+		expect(JSON.parse(String(statusPost?.[1]?.body))).toMatchObject({
+			state: "success",
+			context: "WorkSpaces Managed Review",
+			description: "Managed review posted.",
+			target_url: "https://github.com/fairchild/workspaces/pull/486",
 		});
 	});
 
@@ -673,6 +698,9 @@ describe("processPendingPrReviewRuns", () => {
 						},
 					],
 				};
+			}
+			if (isManagedReviewStatusUrl(url)) {
+				return okResponse();
 			}
 			throw new Error(`Unexpected fetch URL: ${url}`);
 		});
@@ -767,6 +795,9 @@ describe("processPendingPrReviewRuns", () => {
 			if (url.includes("/issues/489/comments?")) {
 				return { ok: true, json: async () => [] };
 			}
+			if (isManagedReviewStatusUrl(url)) {
+				return okResponse();
+			}
 			throw new Error(`Unexpected fetch URL: ${url}`);
 		});
 
@@ -834,6 +865,34 @@ describe("triggerPrReview", () => {
 			"456",
 		);
 		expect(mocks.createSession).toHaveBeenCalledTimes(1);
+	});
+
+	it("posts a pending PR status after the managed reviewer is kicked off", async () => {
+		mockPrList([githubPr(9), githubPr(8)]);
+
+		await expect(triggerPrReview(payload())).resolves.toBe("sesn_01");
+
+		const statusCallIndex = mocks.fetch.mock.calls.findIndex(([url]) =>
+			String(url).includes(
+				"/statuses/deadbeefcafebabe1234567890abcdef12345678",
+			),
+		);
+		expect(statusCallIndex).toBeGreaterThanOrEqual(0);
+		const [, statusOptions] = mocks.fetch.mock.calls[statusCallIndex];
+		expect(statusOptions).toMatchObject({ method: "POST" });
+		expect(JSON.parse(String(statusOptions?.body))).toMatchObject({
+			state: "pending",
+			context: "WorkSpaces Managed Review",
+			description: "Managed reviewer picked up this PR.",
+			target_url: "https://github.com/fairchild/workspaces/pull/9",
+		});
+		const statusOrder = mocks.fetch.mock.invocationCallOrder[statusCallIndex];
+		expect(statusOrder).toBeGreaterThan(
+			mocks.recordRunStart.mock.invocationCallOrder[0],
+		);
+		expect(statusOrder).toBeLessThan(
+			mocks.createSession.mock.invocationCallOrder[0],
+		);
 	});
 
 	it("does not fall back to GITHUB_TOKEN when GitHub App token exchange fails", async () => {
@@ -1098,6 +1157,9 @@ describe("triggerPrReview rerun behavior", () => {
 			if (/\/pulls\/8\/reviews\?/.test(url)) {
 				return { ok: true, json: async () => [] };
 			}
+			if (isManagedReviewStatusUrl(url)) {
+				return okResponse();
+			}
 			throw new Error(`Unexpected fetch URL: ${url}`);
 		});
 
@@ -1165,6 +1227,9 @@ describe("triggerPrReview rerun behavior", () => {
 			if (/\/pulls\/8\/reviews\?/.test(url)) {
 				return { ok: true, json: async () => [] };
 			}
+			if (isManagedReviewStatusUrl(url)) {
+				return okResponse();
+			}
 			throw new Error(`Unexpected fetch URL: ${url}`);
 		});
 
@@ -1221,6 +1286,9 @@ describe("triggerPrReview rerun behavior", () => {
 			}
 			if (/\/pulls\/\d+\/reviews\?/.test(url)) {
 				return { ok: true, json: async () => [] };
+			}
+			if (isManagedReviewStatusUrl(url)) {
+				return okResponse();
 			}
 			throw new Error(`Unexpected fetch URL: ${url}`);
 		});
