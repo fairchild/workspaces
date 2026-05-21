@@ -74,4 +74,12 @@ final class MockGitService: GitServiceProtocol, @unchecked Sendable {
     func discard(file: String, at path: URL) async throws {
         discardCalls.append((file: file, path: path))
     }
+
+    // MARK: - Branches (M8 prep)
+
+    var branchesResult: [BranchName] = []
+
+    func branches(at path: URL) async throws -> [BranchName] {
+        branchesResult
+    }
 }

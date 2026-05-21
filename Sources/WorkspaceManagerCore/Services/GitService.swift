@@ -76,6 +76,42 @@ public actor GitService: GitServiceProtocol {
         _ = try await runGit(["checkout", name], at: path)
     }
 
+    /// List local and `origin/*` remote branches. Sorted locals-first, current at top.
+    public func branches(at path: URL) async throws -> [BranchName] {
+        let current = try await getCurrentBranch(at: path) ?? ""
+
+        let output = try await runGit(
+            [
+                "for-each-ref",
+                "--format=%(refname)",
+                "refs/heads",
+                "refs/remotes/origin",
+            ],
+            at: path
+        )
+
+        var locals: [BranchName] = []
+        var remotes: [BranchName] = []
+
+        for raw in output.split(separator: "\n", omittingEmptySubsequences: true) {
+            let ref = String(raw)
+            if let name = ref.dropPrefix("refs/heads/") {
+                locals.append(BranchName(name: name, isCurrent: name == current, isRemote: false))
+            } else if let name = ref.dropPrefix("refs/remotes/origin/") {
+                if name == "HEAD" { continue }
+                remotes.append(BranchName(name: name, isCurrent: false, isRemote: true))
+            }
+        }
+
+        locals.sort { lhs, rhs in
+            if lhs.isCurrent != rhs.isCurrent { return lhs.isCurrent }
+            return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+        }
+        remotes.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+
+        return locals + remotes
+    }
+
     // MARK: - Diff / Stage / Unstage / Discard
 
     /// Structured working-tree-vs-index diff for a single file.
@@ -224,6 +260,27 @@ public actor GitService: GitServiceProtocol {
             return .modified
         }
         return .modified
+    }
+}
+
+// MARK: - Value Types
+
+public struct BranchName: Hashable, Sendable {
+    public let name: String
+    public let isCurrent: Bool
+    public let isRemote: Bool
+
+    public init(name: String, isCurrent: Bool, isRemote: Bool) {
+        self.name = name
+        self.isCurrent = isCurrent
+        self.isRemote = isRemote
+    }
+}
+
+extension String {
+    fileprivate func dropPrefix(_ prefix: String) -> String? {
+        guard hasPrefix(prefix) else { return nil }
+        return String(dropFirst(prefix.count))
     }
 }
 
