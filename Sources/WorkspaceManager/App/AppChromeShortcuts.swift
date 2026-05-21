@@ -27,6 +27,7 @@ enum AppChromeShortcut: CaseIterable {
     case alternatePreviousTerminalTab
     case openInEditor
     case settings
+    case workspaceSwitcher
 
     private var definition: AppChromeShortcutDefinition {
         switch self {
@@ -53,6 +54,8 @@ enum AppChromeShortcut: CaseIterable {
             return AppChromeShortcutDefinition(keyString: "o", modifiers: [.command, .shift], defaultRoute: .ghostty)
         case .settings:
             return AppChromeShortcutDefinition(keyString: ",", modifiers: [.command], defaultRoute: .appChrome)
+        case .workspaceSwitcher:
+            return AppChromeShortcutDefinition(keyString: "p", modifiers: [.command], defaultRoute: .appChrome)
         }
     }
 

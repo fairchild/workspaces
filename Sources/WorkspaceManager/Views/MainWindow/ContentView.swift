@@ -281,7 +281,8 @@ struct ContentView: View {
             reloadWebSource: reloadWebSourceFocusedAction,
             openDesktop: openDesktopFocusedAction,
             revealInFinder: revealInFinderFocusedAction,
-            copyPath: copyPathFocusedAction
+            copyPath: copyPathFocusedAction,
+            openCommandPalette: { viewState.isShowingCommandPalette = true }
         )
     }
 
@@ -299,7 +300,8 @@ struct ContentView: View {
             canReloadWebSource: reloadWebSourceFocusedAction != nil,
             canOpenDesktop: openDesktopFocusedAction != nil,
             canRevealInFinder: revealInFinderFocusedAction != nil,
-            canCopyPath: copyPathFocusedAction != nil
+            canCopyPath: copyPathFocusedAction != nil,
+            canOpenCommandPalette: true
         )
     }
 
@@ -759,6 +761,27 @@ struct ContentView: View {
                         )
                     }
                 }
+            }
+            .sheet(isPresented: $viewState.isShowingCommandPalette) {
+                CommandPaletteView(
+                    repos: repos,
+                    webSources: webSources,
+                    onSelectWorkspace: { workspace in
+                        viewState.isShowingCommandPalette = false
+                        handleWorkspaceSelection(workspace)
+                    },
+                    onSelectRepo: { repo in
+                        viewState.isShowingCommandPalette = false
+                        handleRepoSelection(repo)
+                    },
+                    onSelectWebSource: { source in
+                        viewState.isShowingCommandPalette = false
+                        handleWebSourceSelection(source)
+                    },
+                    onDismiss: {
+                        viewState.isShowingCommandPalette = false
+                    }
+                )
             }
             .alert(
                 "Error",
