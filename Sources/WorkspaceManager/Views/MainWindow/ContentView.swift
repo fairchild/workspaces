@@ -449,6 +449,11 @@ struct ContentView: View {
                         }
 
                         ToolbarItemGroup(placement: .primaryAction) {
+                            NeedsYouToolbarPill(
+                                repos: repos,
+                                onActivate: handleWorkspaceSelection
+                            )
+
                             Button {
                                 withAnimation(.easeInOut(duration: 0.2)) {
                                     viewState.isRightPaneVisible.toggle()
