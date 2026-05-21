@@ -26,6 +26,21 @@ struct SidebarWorkspacePresentationController {
         return .hostPath(normalizePath(workspace.workspaceURL))
     }
 
+    /// Pick the freshest registered `AgentSessionStatus` whose host session shares `key`.
+    /// Returns `nil` when no session for that key has a registered status.
+    func freshestAgentStatus(
+        for key: HostTerminalSessionKey,
+        sessions: [HostTerminalSession],
+        agentStatusBySessionID: [UUID: AgentSessionStatus]
+    ) -> AgentSessionStatus? {
+        guard !agentStatusBySessionID.isEmpty, !sessions.isEmpty else { return nil }
+        let normalizedKey = key.normalized()
+        return sessions
+            .filter { $0.key == normalizedKey }
+            .compactMap { agentStatusBySessionID[$0.id] }
+            .max { $0.lastEventAt < $1.lastEventAt }
+    }
+
     func sessionActivity(
         for key: HostTerminalSessionKey,
         paneCountBySessionKey: [HostTerminalSessionKey: Int],
@@ -42,21 +57,11 @@ struct SidebarWorkspacePresentationController {
             isActiveSession: activeSessionKey == key
         )
 
-        guard !agentStatusBySessionID.isEmpty, !sessions.isEmpty else { return baseline }
-
-        let normalizedKey = key.normalized()
-        let matchingSessionIDs =
-            sessions
-            .filter { $0.key == normalizedKey }
-            .map(\.id)
-
-        // Pick the freshest status for this key — agents progress through states fast
-        // and the most recent event wins.
-        let candidate =
-            matchingSessionIDs
-            .compactMap { agentStatusBySessionID[$0] }
-            .sorted { $0.lastEventAt > $1.lastEventAt }
-            .first
+        let candidate = freshestAgentStatus(
+            for: key,
+            sessions: sessions,
+            agentStatusBySessionID: agentStatusBySessionID
+        )
 
         guard let candidate else { return baseline }
 
