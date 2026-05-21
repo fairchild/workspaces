@@ -50,7 +50,8 @@ struct AppCommandStateTests {
             canReloadWebSource: false,
             canOpenDesktop: false,
             canRevealInFinder: false,
-            canCopyPath: false
+            canCopyPath: false,
+            canOpenCommandPalette: true
         )
 
         state.setMainWindowActions(

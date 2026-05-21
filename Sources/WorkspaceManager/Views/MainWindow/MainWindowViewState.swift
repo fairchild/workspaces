@@ -61,6 +61,7 @@ struct MainWindowViewState {
     var workspaceOperationErrorMessage: String?
     var connectingWorkspaceID: UUID?
     var terminalCloseConfirmation: TerminalCloseConfirmation?
+    var isShowingCommandPalette = false
 }
 
 enum MainWindowOpenInEditorContextKey: Equatable {

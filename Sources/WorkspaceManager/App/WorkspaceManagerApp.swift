@@ -194,6 +194,15 @@ struct WorkspaceManagerApp: App {
                     modifiers: AppChromeShortcut.toggleTerminalPanel.eventModifiers
                 )
                 .disabled(!appCommandState.mainWindowAvailability.canToggleTerminalPanel)
+
+                Button("Switch Workspace...") {
+                    appCommandState.perform(.openCommandPalette)
+                }
+                .keyboardShortcut(
+                    AppChromeShortcut.workspaceSwitcher.keyEquivalent,
+                    modifiers: AppChromeShortcut.workspaceSwitcher.eventModifiers
+                )
+                .disabled(!appCommandState.mainWindowAvailability.canOpenCommandPalette)
             }
 
             SidebarCommands()
@@ -647,6 +656,7 @@ struct MainWindowFocusedActions {
     var openDesktop: Action? = nil
     var revealInFinder: Action? = nil
     var copyPath: Action? = nil
+    var openCommandPalette: Action? = nil
 
     @MainActor static let empty = MainWindowFocusedActions()
 }
@@ -665,6 +675,7 @@ struct MainWindowCommandAvailability: Equatable {
     let canOpenDesktop: Bool
     let canRevealInFinder: Bool
     let canCopyPath: Bool
+    let canOpenCommandPalette: Bool
 
     static let empty = MainWindowCommandAvailability(
         canToggleSidebar: false,
@@ -679,7 +690,8 @@ struct MainWindowCommandAvailability: Equatable {
         canReloadWebSource: false,
         canOpenDesktop: false,
         canRevealInFinder: false,
-        canCopyPath: false
+        canCopyPath: false,
+        canOpenCommandPalette: false
     )
 }
 
@@ -697,6 +709,7 @@ enum MainWindowCommand {
     case openDesktop
     case revealInFinder
     case copyPath
+    case openCommandPalette
 }
 
 @MainActor
@@ -759,6 +772,8 @@ final class AppCommandState: ObservableObject {
             mainWindowActions.revealInFinder?()
         case .copyPath:
             mainWindowActions.copyPath?()
+        case .openCommandPalette:
+            mainWindowActions.openCommandPalette?()
         }
     }
 }
