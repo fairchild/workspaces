@@ -33,21 +33,64 @@ public final class WorkspaceStatusAggregator: ObservableObject {
 
     public struct RepoInput: Equatable, Sendable {
         public let repoID: UUID
+        public let lastAccessedAt: Date
         public let status: AgentSessionStatus?
 
-        public init(repoID: UUID, status: AgentSessionStatus?) {
+        public init(
+            repoID: UUID,
+            lastAccessedAt: Date = .distantPast,
+            status: AgentSessionStatus?
+        ) {
             self.repoID = repoID
+            self.lastAccessedAt = lastAccessedAt
             self.status = status
         }
     }
 
+    public enum AttentionTarget: Equatable, Sendable {
+        case workspace(UUID)
+        case repo(UUID)
+
+        public var workspaceID: UUID? {
+            switch self {
+            case .workspace(let id): return id
+            case .repo: return nil
+            }
+        }
+
+        public var repoID: UUID? {
+            switch self {
+            case .workspace: return nil
+            case .repo(let id): return id
+            }
+        }
+
+        fileprivate var stableSortKey: String {
+            switch self {
+            case .workspace(let id): return "workspace-\(id.uuidString)"
+            case .repo(let id): return "repo-\(id.uuidString)"
+            }
+        }
+    }
+
+    private struct AttentionEntry: Equatable {
+        let target: AttentionTarget
+        let lastAccessedAt: Date
+    }
+
     @Published public private(set) var workspaceStatuses: [UUID: AgentSessionStatus] = [:]
     @Published public private(set) var repoStatuses: [UUID: AgentSessionStatus] = [:]
-    /// Workspace IDs that currently demand the user's attention (awaiting input or
-    /// errored), ordered by `lastAccessedAt` descending.
+    /// Repo or workspace targets currently demanding attention, ordered by
+    /// `lastAccessedAt` descending.
+    @Published public private(set) var attentionTargets: [AttentionTarget] = []
+    /// Workspace IDs that currently demand the user's attention, ordered by
+    /// `lastAccessedAt` descending.
     @Published public private(set) var attentionWorkspaces: [UUID] = []
+    /// Repo-root terminal IDs that currently demand the user's attention, ordered by
+    /// `lastAccessedAt` descending.
+    @Published public private(set) var attentionRepos: [UUID] = []
 
-    public var attentionCount: Int { attentionWorkspaces.count }
+    public var attentionCount: Int { attentionTargets.count }
 
     public init() {}
 
@@ -73,14 +116,31 @@ public final class WorkspaceStatusAggregator: ObservableObject {
             }
         }
 
-        let attention =
-            workspaces
-            .filter { input in
-                guard let status = input.status else { return false }
-                return Self.demandsAttention(status.run)
+        let workspaceAttention = workspaces.compactMap { input -> AttentionEntry? in
+            guard let status = input.status, Self.demandsAttention(status.run) else { return nil }
+            return AttentionEntry(
+                target: .workspace(input.workspaceID),
+                lastAccessedAt: input.lastAccessedAt
+            )
+        }
+        let repoAttention = repos.compactMap { input -> AttentionEntry? in
+            guard let status = input.status, Self.demandsAttention(status.run) else { return nil }
+            return AttentionEntry(
+                target: .repo(input.repoID),
+                lastAccessedAt: input.lastAccessedAt
+            )
+        }
+        let attentionTargets =
+            (workspaceAttention + repoAttention)
+            .sorted { lhs, rhs in
+                if lhs.lastAccessedAt != rhs.lastAccessedAt {
+                    return lhs.lastAccessedAt > rhs.lastAccessedAt
+                }
+                return lhs.target.stableSortKey < rhs.target.stableSortKey
             }
-            .sorted { $0.lastAccessedAt > $1.lastAccessedAt }
-            .map(\.workspaceID)
+            .map(\.target)
+        let attentionWorkspaces = attentionTargets.compactMap(\.workspaceID)
+        let attentionRepos = attentionTargets.compactMap(\.repoID)
 
         if self.workspaceStatuses != workspaceStatuses {
             self.workspaceStatuses = workspaceStatuses
@@ -88,8 +148,14 @@ public final class WorkspaceStatusAggregator: ObservableObject {
         if self.repoStatuses != repoStatuses {
             self.repoStatuses = repoStatuses
         }
-        if self.attentionWorkspaces != attention {
-            self.attentionWorkspaces = attention
+        if self.attentionTargets != attentionTargets {
+            self.attentionTargets = attentionTargets
+        }
+        if self.attentionWorkspaces != attentionWorkspaces {
+            self.attentionWorkspaces = attentionWorkspaces
+        }
+        if self.attentionRepos != attentionRepos {
+            self.attentionRepos = attentionRepos
         }
     }
 
