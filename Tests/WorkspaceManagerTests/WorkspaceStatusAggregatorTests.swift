@@ -74,6 +74,38 @@ struct WorkspaceStatusAggregatorTests {
         #expect(aggregator.attentionWorkspaces == [recentAwaiting, olderErrored])
     }
 
+    @Test("Repo-root attention contributes to the global attention list")
+    func repoRootAttention() {
+        let aggregator = WorkspaceStatusAggregator()
+        let now = Date()
+        let older = now.addingTimeInterval(-60)
+        let repoID = UUID()
+        let wsID = UUID()
+
+        aggregator.update(
+            workspaces: [
+                .init(
+                    workspaceID: wsID,
+                    repoID: repoID,
+                    lastAccessedAt: older,
+                    status: status(run: .errored(category: .toolFailure, message: nil))
+                )
+            ],
+            repos: [
+                .init(
+                    repoID: repoID,
+                    lastAccessedAt: now,
+                    status: status(run: .awaitingInput(reason: .permissionPrompt))
+                )
+            ]
+        )
+
+        #expect(aggregator.attentionCount == 2)
+        #expect(aggregator.attentionTargets == [.repo(repoID), .workspace(wsID)])
+        #expect(aggregator.attentionRepos == [repoID])
+        #expect(aggregator.attentionWorkspaces == [wsID])
+    }
+
     @Test("demandsAttention only fires for awaiting/errored")
     func demandsAttentionMatrix() {
         #expect(WorkspaceStatusAggregator.demandsAttention(.awaitingInput(reason: .permissionPrompt)))

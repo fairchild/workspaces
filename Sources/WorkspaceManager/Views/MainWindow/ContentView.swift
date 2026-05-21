@@ -173,6 +173,48 @@ struct ContentView: View {
         )
     }
 
+    private var commandPaletteWorkspaceActivities: [UUID: SidebarSessionActivity] {
+        let presentation = SidebarWorkspacePresentationController()
+        let normalize: (URL) -> String = { url in normalizePath(url.path) }
+        return Dictionary(
+            uniqueKeysWithValues: repos.flatMap(\.workspaces).map { workspace in
+                let key = presentation.sessionKey(
+                    for: workspace,
+                    registry: workspaceProviderRegistry,
+                    normalizePath: normalize
+                )
+                let activity = presentation.sessionActivity(
+                    for: key,
+                    paneCountBySessionKey: paneCountBySessionKeyForSidebar,
+                    activeSessionKey: activeSessionKeyForSidebar,
+                    sessions: hostTerminalState.sessions,
+                    agentStatusBySessionID: agentSessionRegistry.statuses
+                )
+                return (workspace.id, activity)
+            }
+        )
+    }
+
+    private var commandPaletteRepoActivities: [UUID: SidebarSessionActivity] {
+        let presentation = SidebarWorkspacePresentationController()
+        return Dictionary(
+            uniqueKeysWithValues: repos.map { repo in
+                let key = HostTerminalSessionKey.repoPath(normalizePath(repo.localURL.path))
+                let baseline = presentation.sessionActivity(
+                    for: key,
+                    paneCountBySessionKey: paneCountBySessionKeyForSidebar,
+                    activeSessionKey: activeSessionKeyForSidebar,
+                    sessions: hostTerminalState.sessions,
+                    agentStatusBySessionID: agentSessionRegistry.statuses
+                )
+                let bubbled =
+                    workspaceStatusAggregator.repoStatuses[repo.id]
+                    .map { SidebarSessionActivity.from($0) } ?? .inactive
+                return (repo.id, baseline.mergedWithBubbled(bubbled))
+            }
+        )
+    }
+
     static func sidebarActiveSessionKey(
         selectedWebSourceID: UUID?,
         activeSessionID: UUID?,
@@ -453,7 +495,8 @@ struct ContentView: View {
                         ToolbarItemGroup(placement: .primaryAction) {
                             NeedsYouToolbarPill(
                                 repos: repos,
-                                onActivate: handleWorkspaceSelection
+                                onActivateWorkspace: handleWorkspaceSelection,
+                                onActivateRepo: handleRepoTerminalSelection
                             )
 
                             Button {
@@ -766,6 +809,8 @@ struct ContentView: View {
                 CommandPaletteView(
                     repos: repos,
                     webSources: webSources,
+                    workspaceActivities: commandPaletteWorkspaceActivities,
+                    repoActivities: commandPaletteRepoActivities,
                     onSelectWorkspace: { workspace in
                         viewState.isShowingCommandPalette = false
                         handleWorkspaceSelection(workspace)
@@ -2160,7 +2205,11 @@ struct ContentView: View {
                 sessions: sessions,
                 agentStatusBySessionID: statuses
             )
-            return WorkspaceStatusAggregator.RepoInput(repoID: repo.id, status: status)
+            return WorkspaceStatusAggregator.RepoInput(
+                repoID: repo.id,
+                lastAccessedAt: repo.lastAccessedAt,
+                status: status
+            )
         }
 
         workspaceStatusAggregator.update(workspaces: workspaceInputs, repos: repoInputs)

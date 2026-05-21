@@ -75,6 +75,8 @@ struct CommandPaletteView: View {
     @EnvironmentObject private var aggregator: WorkspaceStatusAggregator
     let repos: [Repo]
     let webSources: [WebSource]
+    let workspaceActivities: [UUID: SidebarSessionActivity]
+    let repoActivities: [UUID: SidebarSessionActivity]
     let onSelectWorkspace: (Workspace) -> Void
     let onSelectRepo: (Repo) -> Void
     let onSelectWebSource: (WebSource) -> Void
@@ -225,7 +227,7 @@ struct CommandPaletteView: View {
             return PaletteRow.workspace(
                 WorkspaceSwitchableItem(
                     workspace: workspace,
-                    indicator: SidebarSessionActivity.from(status),
+                    indicator: workspaceActivities[workspace.id] ?? SidebarSessionActivity.from(status),
                     waitingDescriptor: waitingDescriptor(for: status?.run)
                 )
             )
@@ -235,7 +237,7 @@ struct CommandPaletteView: View {
             return PaletteRow.repo(
                 RepoSwitchableItem(
                     repo: repo,
-                    indicator: SidebarSessionActivity.from(status)
+                    indicator: repoActivities[repo.id] ?? SidebarSessionActivity.from(status)
                 )
             )
         }

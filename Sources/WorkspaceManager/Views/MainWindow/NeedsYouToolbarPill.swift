@@ -2,7 +2,7 @@
 //  NeedsYouToolbarPill.swift
 //  WorkspaceManager
 //
-//  Project-wide toolbar indicator that surfaces workspaces currently awaiting
+//  Project-wide toolbar indicator that surfaces terminals currently awaiting
 //  input or errored. Reads from WorkspaceStatusAggregator so its count never
 //  diverges from the bubbled dots in the sidebar.
 //
@@ -13,12 +13,13 @@ import WorkspaceManagerCore
 struct NeedsYouToolbarPill: View {
     @EnvironmentObject private var aggregator: WorkspaceStatusAggregator
     let repos: [Repo]
-    let onActivate: (Workspace) -> Void
+    let onActivateWorkspace: (Workspace) -> Void
+    let onActivateRepo: (Repo) -> Void
 
     var body: some View {
-        if aggregator.attentionCount > 0, let firstAttentionWorkspace {
+        if aggregator.attentionCount > 0, let firstAttentionTarget {
             Button {
-                onActivate(firstAttentionWorkspace)
+                activate(firstAttentionTarget)
             } label: {
                 HStack(spacing: 6) {
                     Circle()
@@ -41,29 +42,47 @@ struct NeedsYouToolbarPill: View {
             }
             .buttonStyle(.plain)
             .help(tooltipText)
-            .accessibilityLabel("\(aggregator.attentionCount) workspaces need attention")
+            .accessibilityLabel("\(aggregator.attentionCount) sessions need attention")
         }
+    }
+
+    private var reposByID: [UUID: Repo] {
+        Dictionary(uniqueKeysWithValues: repos.map { ($0.id, $0) })
     }
 
     private var workspacesByID: [UUID: Workspace] {
         Dictionary(uniqueKeysWithValues: repos.flatMap(\.workspaces).map { ($0.id, $0) })
     }
 
-    private var firstAttentionWorkspace: Workspace? {
-        for id in aggregator.attentionWorkspaces {
-            if let workspace = workspacesByID[id] {
-                return workspace
+    private var firstAttentionTarget: WorkspaceStatusAggregator.AttentionTarget? {
+        for target in aggregator.attentionTargets {
+            switch target {
+            case .workspace(let id):
+                if workspacesByID[id] != nil { return target }
+            case .repo(let id):
+                if reposByID[id] != nil { return target }
             }
         }
         return nil
     }
 
+    private func activate(_ target: WorkspaceStatusAggregator.AttentionTarget) {
+        switch target {
+        case .workspace(let id):
+            guard let workspace = workspacesByID[id] else { return }
+            onActivateWorkspace(workspace)
+        case .repo(let id):
+            guard let repo = reposByID[id] else { return }
+            onActivateRepo(repo)
+        }
+    }
+
     private var tooltipText: String {
-        let names = aggregator.attentionWorkspaces
-            .compactMap { workspacesByID[$0]?.name }
+        let names = aggregator.attentionTargets
+            .compactMap(displayName(for:))
             .prefix(5)
         if names.isEmpty {
-            return "\(aggregator.attentionCount) workspaces awaiting input or errored"
+            return "\(aggregator.attentionCount) sessions awaiting input or errored"
         }
         let remaining = aggregator.attentionCount - names.count
         let listed = names.joined(separator: ", ")
@@ -71,5 +90,15 @@ struct NeedsYouToolbarPill: View {
             return "\(listed), and \(remaining) more"
         }
         return listed
+    }
+
+    private func displayName(for target: WorkspaceStatusAggregator.AttentionTarget) -> String? {
+        switch target {
+        case .workspace(let id):
+            return workspacesByID[id]?.name
+        case .repo(let id):
+            guard let repo = reposByID[id] else { return nil }
+            return "\(repo.name) repo"
+        }
     }
 }
