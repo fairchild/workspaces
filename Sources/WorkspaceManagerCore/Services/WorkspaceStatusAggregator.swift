@@ -43,6 +43,11 @@ public final class WorkspaceStatusAggregator: ObservableObject {
 
     @Published public private(set) var workspaceStatuses: [UUID: AgentSessionStatus] = [:]
     @Published public private(set) var repoStatuses: [UUID: AgentSessionStatus] = [:]
+    /// Workspace IDs that currently demand the user's attention (awaiting input or
+    /// errored), ordered by `lastAccessedAt` descending.
+    @Published public private(set) var attentionWorkspaces: [UUID] = []
+
+    public var attentionCount: Int { attentionWorkspaces.count }
 
     public init() {}
 
@@ -68,11 +73,23 @@ public final class WorkspaceStatusAggregator: ObservableObject {
             }
         }
 
+        let attention =
+            workspaces
+            .filter { input in
+                guard let status = input.status else { return false }
+                return Self.demandsAttention(status.run)
+            }
+            .sorted { $0.lastAccessedAt > $1.lastAccessedAt }
+            .map(\.workspaceID)
+
         if self.workspaceStatuses != workspaceStatuses {
             self.workspaceStatuses = workspaceStatuses
         }
         if self.repoStatuses != repoStatuses {
             self.repoStatuses = repoStatuses
+        }
+        if self.attentionWorkspaces != attention {
+            self.attentionWorkspaces = attention
         }
     }
 
@@ -86,6 +103,13 @@ public final class WorkspaceStatusAggregator: ObservableObject {
         case .runningTool: return 3
         case .thinking: return 2
         case .idle, .complete: return 1
+        }
+    }
+
+    public static func demandsAttention(_ state: AgentRunState) -> Bool {
+        switch state {
+        case .awaitingInput, .errored: return true
+        case .idle, .thinking, .runningTool, .complete: return false
         }
     }
 
