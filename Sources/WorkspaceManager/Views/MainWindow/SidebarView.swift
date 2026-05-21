@@ -37,6 +37,7 @@ struct SidebarView: View {
     @Environment(\.workspaceService) private var workspaceService
     @Environment(\.workspaceProviderRegistry) private var workspaceProviderRegistry
     @Environment(\.openSettings) private var openSettings
+    @EnvironmentObject private var workspaceStatusAggregator: WorkspaceStatusAggregator
     @ObservedObject var appCommandState: AppCommandState
     let repos: [Repo]
     let webSources: [WebSource]
@@ -383,13 +384,16 @@ struct SidebarView: View {
     private func repoListRow(_ repo: Repo) -> some View {
         let normalizedRepoPath = normalizePath(repo.localURL)
         let repoSessionKey = HostTerminalSessionKey.repoPath(normalizedRepoPath)
+        let baselineActivity = sessionActivity(for: repoSessionKey)
+        let bubbledActivity = bubbledRepoActivity(for: repo, baseline: baselineActivity)
 
         RepoRow(
             repo: repo,
-            sessionActivity: sessionActivity(for: repoSessionKey),
+            sessionActivity: bubbledActivity,
             paneCount: paneCount(for: repoSessionKey),
             isSelected: selectedRepo?.id == repo.id,
             isExpanded: isRepoExpanded(repo),
+            sessionActivityTooltip: bubbleTooltip(for: repo, bubbled: bubbledActivity, baseline: baselineActivity),
             onToggleExpansion: {
                 toggleRepoExpansion(repo)
             },
@@ -1219,6 +1223,47 @@ struct SidebarView: View {
             sessions: hostSessions,
             agentStatusBySessionID: agentStatusBySessionID
         )
+    }
+
+    /// Merge the repo's own-session baseline with the aggregator-bubbled state derived
+    /// from its child workspaces. Most-severe wins, so a yellow `awaitingInput` child
+    /// shows on a collapsed repo row even when the repo's own terminal is idle.
+    private func bubbledRepoActivity(
+        for repo: Repo,
+        baseline: SidebarSessionActivity
+    ) -> SidebarSessionActivity {
+        guard let bubbledStatus = workspaceStatusAggregator.repoStatuses[repo.id] else {
+            return baseline
+        }
+        return baseline.mergedWithBubbled(SidebarSessionActivity.from(bubbledStatus))
+    }
+
+    /// Tooltip that explains the bubbled state when it differs from the baseline,
+    /// e.g., "2 workspaces awaiting input".
+    private func bubbleTooltip(
+        for repo: Repo,
+        bubbled: SidebarSessionActivity,
+        baseline: SidebarSessionActivity
+    ) -> String? {
+        guard bubbled != baseline else { return nil }
+        let attentionCount = repo.workspaces.reduce(into: 0) { count, workspace in
+            guard let status = workspaceStatusAggregator.workspaceStatuses[workspace.id] else { return }
+            switch status.run {
+            case .awaitingInput, .errored: count += 1
+            default: break
+            }
+        }
+        guard attentionCount > 0 else { return nil }
+        switch bubbled {
+        case .errored:
+            return "\(attentionCount) workspace\(attentionCount == 1 ? "" : "s") need attention"
+        case .awaitingInput:
+            return "\(attentionCount) workspace\(attentionCount == 1 ? "" : "s") awaiting input"
+        case .thinking, .runningTool:
+            return "Agent active in \(attentionCount) workspace\(attentionCount == 1 ? "" : "s")"
+        default:
+            return nil
+        }
     }
 
     private func workspaceStatusMessage(_ workspace: Workspace) -> String? {

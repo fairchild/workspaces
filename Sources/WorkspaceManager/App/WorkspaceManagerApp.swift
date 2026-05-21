@@ -18,6 +18,7 @@ struct WorkspaceManagerApp: App {
     @StateObject private var modelStoreStatusController: ModelStoreStatusController
     @StateObject private var softwareUpdateController: SoftwareUpdateController
     @StateObject private var agentSessionRegistry: AgentSessionRegistry
+    @StateObject private var workspaceStatusAggregator = WorkspaceStatusAggregator()
     @StateObject private var claudeIntegrationLifecycle: ClaudeIntegrationLifecycle
     private let appRuntimeDependencies = AppRuntimeDependencies.resolved()
     private let localStateStore: LocalStateStore?
@@ -72,6 +73,7 @@ struct WorkspaceManagerApp: App {
             )
             .environmentObject(modelStoreStatusController)
             .environmentObject(agentSessionRegistry)
+            .environmentObject(workspaceStatusAggregator)
             .environment(\.agentSessionRegistry, agentSessionRegistry)
             .environment(\.localStateStore, localStateStore)
             .frame(minWidth: 1000, minHeight: 700)

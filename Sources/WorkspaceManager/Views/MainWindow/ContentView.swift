@@ -44,6 +44,7 @@ struct ContentView: View {
     @Environment(\.workspaceService) private var workspaceService
     @Environment(\.workspaceProviderRegistry) private var workspaceProviderRegistry
     @EnvironmentObject private var agentSessionRegistry: AgentSessionRegistry
+    @EnvironmentObject private var workspaceStatusAggregator: WorkspaceStatusAggregator
     @ObservedObject private var notificationCoordinator = NotificationCoordinator.shared
 
     @State private var viewState = MainWindowViewState()
@@ -489,6 +490,7 @@ struct ContentView: View {
                 applyDiagnosticsFixtureIfNeeded()
                 pruneRightPaneState()
                 syncOpenInEditorShortcutRouting()
+                refreshWorkspaceStatusAggregator()
                 Task { @MainActor in
                     await hostLumeSmokeAutomation.noteLaunchReady()
                 }
@@ -497,6 +499,12 @@ struct ContentView: View {
                     terminalFocusCoordinator.attach(surfaceStore: hostTerminalState.surfaceStore)
                     _ = await seedLandingWorkspaceEnvironmentStateIfNeeded()
                 }
+            }
+            .onChange(of: agentSessionRegistry.statuses) { _, _ in
+                refreshWorkspaceStatusAggregator()
+            }
+            .onChange(of: hostTerminalState.sessions) { _, _ in
+                refreshWorkspaceStatusAggregator()
             }
             .task {
                 await performDeferredStartupWorkspaceStatusSync()
@@ -515,6 +523,7 @@ struct ContentView: View {
                 resolveSurfaceLifecycle()
                 applyDiagnosticsFixtureIfNeeded()
                 hostTerminalState.pruneRepoSessions(validRepoPaths: normalizedRepoPathSnapshot)
+                refreshWorkspaceStatusAggregator()
             }
             .onChange(of: inspectorTargetIDSet) { _, _ in
                 pruneRightPaneState()
@@ -2087,6 +2096,46 @@ struct ContentView: View {
     private func normalizePath(_ rawPath: String) -> String {
         let expanded = NSString(string: rawPath).expandingTildeInPath
         return URL(fileURLWithPath: expanded).standardizedFileURL.resolvingSymlinksInPath().path
+    }
+
+    private func refreshWorkspaceStatusAggregator() {
+        let presentation = SidebarWorkspacePresentationController()
+        let statuses = agentSessionRegistry.statuses
+        let sessions = hostTerminalState.sessions
+        let normalize: (URL) -> String = { url in normalizePath(url.path) }
+
+        let workspaceInputs: [WorkspaceStatusAggregator.WorkspaceInput] = repos
+            .flatMap(\.workspaces)
+            .map { workspace in
+                let key = presentation.sessionKey(
+                    for: workspace,
+                    registry: workspaceProviderRegistry,
+                    normalizePath: normalize
+                )
+                let status = presentation.freshestAgentStatus(
+                    for: key,
+                    sessions: sessions,
+                    agentStatusBySessionID: statuses
+                )
+                return WorkspaceStatusAggregator.WorkspaceInput(
+                    workspaceID: workspace.id,
+                    repoID: workspace.sourceRepo?.id,
+                    lastAccessedAt: workspace.lastAccessedAt,
+                    status: status
+                )
+            }
+
+        let repoInputs: [WorkspaceStatusAggregator.RepoInput] = repos.map { repo in
+            let key = HostTerminalSessionKey.repoPath(normalize(repo.localURL))
+            let status = presentation.freshestAgentStatus(
+                for: key,
+                sessions: sessions,
+                agentStatusBySessionID: statuses
+            )
+            return WorkspaceStatusAggregator.RepoInput(repoID: repo.id, status: status)
+        }
+
+        workspaceStatusAggregator.update(workspaces: workspaceInputs, repos: repoInputs)
     }
 
     @MainActor
