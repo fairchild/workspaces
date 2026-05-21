@@ -31,6 +31,57 @@ struct WorkspaceStatusAggregatorTests {
         aggregator.update(workspaces: [], repos: [])
         #expect(aggregator.workspaceStatuses.isEmpty)
         #expect(aggregator.repoStatuses.isEmpty)
+        #expect(aggregator.attentionWorkspaces.isEmpty)
+        #expect(aggregator.attentionCount == 0)
+    }
+
+    @Test("Attention list collects awaiting + errored, ordered by recency")
+    func attentionList() {
+        let aggregator = WorkspaceStatusAggregator()
+        let now = Date()
+        let older = now.addingTimeInterval(-60)
+        let oldest = now.addingTimeInterval(-120)
+        let repoID = UUID()
+        let recentAwaiting = UUID()
+        let olderErrored = UUID()
+        let oldestThinking = UUID()
+
+        aggregator.update(
+            workspaces: [
+                .init(
+                    workspaceID: oldestThinking,
+                    repoID: repoID,
+                    lastAccessedAt: oldest,
+                    status: status(run: .thinking)
+                ),
+                .init(
+                    workspaceID: olderErrored,
+                    repoID: repoID,
+                    lastAccessedAt: older,
+                    status: status(run: .errored(category: .toolFailure, message: nil))
+                ),
+                .init(
+                    workspaceID: recentAwaiting,
+                    repoID: repoID,
+                    lastAccessedAt: now,
+                    status: status(run: .awaitingInput(reason: .permissionPrompt))
+                ),
+            ],
+            repos: [.init(repoID: repoID, status: nil)]
+        )
+
+        #expect(aggregator.attentionCount == 2)
+        #expect(aggregator.attentionWorkspaces == [recentAwaiting, olderErrored])
+    }
+
+    @Test("demandsAttention only fires for awaiting/errored")
+    func demandsAttentionMatrix() {
+        #expect(WorkspaceStatusAggregator.demandsAttention(.awaitingInput(reason: .permissionPrompt)))
+        #expect(WorkspaceStatusAggregator.demandsAttention(.errored(category: .server, message: nil)))
+        #expect(!WorkspaceStatusAggregator.demandsAttention(.thinking))
+        #expect(!WorkspaceStatusAggregator.demandsAttention(.runningTool(name: "x", detail: nil)))
+        #expect(!WorkspaceStatusAggregator.demandsAttention(.idle))
+        #expect(!WorkspaceStatusAggregator.demandsAttention(.complete))
     }
 
     @Test("Awaiting-input workspace bubbles to its repo")
