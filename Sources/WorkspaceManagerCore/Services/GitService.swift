@@ -76,6 +76,28 @@ public actor GitService: GitServiceProtocol {
         _ = try await runGit(["checkout", name], at: path)
     }
 
+    // MARK: - Diff / Stage / Unstage / Discard
+
+    /// Structured working-tree-vs-index diff for a single file.
+    public func diff(file: String, at path: URL) async throws -> UnifiedDiff {
+        let output = try await runGit(["diff", "--no-color", "--", file], at: path)
+        return try UnifiedDiff.parse(output, path: file)
+    }
+
+    public func stage(file: String, at path: URL) async throws {
+        _ = try await runGit(["add", "--", file], at: path)
+    }
+
+    public func unstage(file: String, at path: URL) async throws {
+        _ = try await runGit(["reset", "HEAD", "--", file], at: path)
+    }
+
+    /// Discard working-tree changes for `file`, restoring HEAD contents.
+    /// Destructive: unstaged edits are lost without recovery.
+    public func discard(file: String, at path: URL) async throws {
+        _ = try await runGit(["checkout", "--", file], at: path)
+    }
+
     // MARK: - File Tree
 
     public func getFileTree(at path: URL, maxDepth: Int = 4) async throws -> FileNode {
