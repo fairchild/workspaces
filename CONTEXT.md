@@ -36,6 +36,34 @@ _Avoid_: Bookmark, browser tab, website
 The collapsible right-side supporting pane for files, changes, and selected-context details.
 _Avoid_: Inspector, sidebar, editor
 
+**Agent**:
+An AI coding assistant the developer drives from inside a **Terminal Session** — Claude Code, Codex, Aider, or similar. Agents have observable **Run State** (idle, thinking, running tool, awaiting input, errored, complete).
+_Avoid_: Bot, assistant, copilot
+
+**Workspace Event**:
+A single observable change in an **Agent**'s **Run State** within a **Workspace** — started, transitioned, ran a tool, errored, completed. Persisted to local state so the Timeline narrates the past, not just the present.
+_Avoid_: Log line, message, activity item
+
+**Workspace Journal**:
+The per-**Workspace** read API over **Workspace Events**, ordered newest first. The Timeline tab of the **Detail Pane** consumes it.
+_Avoid_: Log, history, activity feed, audit trail
+
+**Terminal Command Status**:
+The last shell command observed in a **Terminal Session** — its exit code, duration, and whether it is still running. Sourced from OSC 133 prompt marks or an equivalent shell hook.
+_Avoid_: Exit status, shell result, return code
+
+**Diff**:
+A unified `git diff` for a single file in a **Workspace**, structured as hunks of context / added / removed lines. The Changes tab of the **Detail Pane** renders it inline.
+_Avoid_: Patch, changeset, edit
+
+**Branch**:
+A git branch in a **Repository** or **Workspace**. The **Workspace** creation flow can target an existing branch; the Detail Pane surfaces the current one.
+_Avoid_: Ref, head, version
+
+**Attention**:
+The project-wide rollup of **Workspaces** or **Repositories** that currently demand the user — agents that are awaiting input or have errored. Drives the "N need you" toolbar indicator.
+_Avoid_: Notifications, alerts, warnings, tasks
+
 ## Relationships
 
 - A **Repository** owns zero or more **Workspaces**.
@@ -45,6 +73,9 @@ _Avoid_: Inspector, sidebar, editor
 - A **Terminal Session** attaches to either a **Repository** or a **Workspace**.
 - A **Surface** is one selected **Repo Overview**, repository **Terminal Session**, workspace **Terminal Session**, or **Web Source**.
 - The **Detail Pane** follows the selected **Surface** when that surface has repository or workspace context.
+- An **Agent** runs inside a **Terminal Session** and emits **Workspace Events** that the **Workspace Journal** persists.
+- A **Terminal Session** observes its own **Terminal Command Status** independently of any **Agent** running inside it.
+- **Attention** rolls up across all **Workspaces** and **Repositories**; the rollup at any moment determines the toolbar indicator.
 
 ## Example Dialogue
 
@@ -54,4 +85,7 @@ _Avoid_: Inspector, sidebar, editor
 ## Flagged Ambiguities
 
 - "Spaces" was used for the web chat/dashboard docs, while "WorkSpaces" names the native macOS app. Resolved: this context uses **WorkSpaces** for the native app; **Spaces** belongs to a separate web/chat context.
-- "Session" can mean a terminal process, an agent conversation, or a work stream. Resolved: use **Terminal Session** for the native terminal context and **Workspace** for the isolated work stream.
+- "Session" can mean a terminal process, an agent conversation, or a work stream. Resolved: use **Terminal Session** for the native terminal context and **Workspace** for the isolated work stream. Never use bare "Session" in domain types or API surfaces.
+- "Event" without a scope was ambiguous between **Workspace Events** (agent state changes inside a workspace) and webhook events from external systems. Resolved: use **Workspace Event** for the in-app domain type; reserve "webhook event" (lowercased, qualified) for the external GitHub stream.
+- "Journal" vs "log" vs "history" — domain reads use **Workspace Journal**; "log" stays a runtime/diagnostic term; "history" is informal narration and shouldn't appear in types.
+- "Status" is overloaded — there is workspace **Agent** status, **Terminal Command Status**, and git status (file changes). Resolved: qualify every use; never ship a public `status:` property without a scope-revealing prefix.
