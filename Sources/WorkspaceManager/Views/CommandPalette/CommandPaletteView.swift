@@ -9,7 +9,7 @@
 import SwiftUI
 import WorkspaceManagerCore
 
-private enum PaletteRow: Identifiable {
+private enum PaletteRow: SwitchableItem {
     case workspace(WorkspaceSwitchableItem)
     case repo(RepoSwitchableItem)
     case web(WebSourceSwitchableItem)
@@ -244,31 +244,7 @@ struct CommandPaletteView: View {
         let webRows: [PaletteRow] = webSources.map { source in
             .web(WebSourceSwitchableItem(source: source))
         }
-        return rank(workspaceRows + repoRows + webRows)
-    }
-
-    private func rank(_ rows: [PaletteRow]) -> [PaletteRow] {
-        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            return Array(rows.sorted { $0.sortKey > $1.sortKey }.prefix(50))
-        }
-        let scored: [(row: PaletteRow, tier: Int)] = rows.compactMap { row in
-            guard row.matches(trimmed) else { return nil }
-            let title = row.title.lowercased()
-            let q = trimmed.lowercased()
-            if title.hasPrefix(q) { return (row, 0) }
-            if title.contains(q) { return (row, 1) }
-            return (row, 2)
-        }
-        return Array(
-            scored
-                .sorted { lhs, rhs in
-                    if lhs.tier != rhs.tier { return lhs.tier < rhs.tier }
-                    return lhs.row.sortKey > rhs.row.sortKey
-                }
-                .map(\.row)
-                .prefix(50)
-        )
+        return SwitchableIndex.rank(workspaceRows + repoRows + webRows, query: query)
     }
 
     private func waitingDescriptor(for state: AgentRunState?) -> String? {
