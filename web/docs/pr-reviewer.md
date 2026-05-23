@@ -89,6 +89,16 @@ The status is best-effort: a status API failure is logged but does not block the
 review session or broker. A `403` on this request means the GitHub App is missing
 the `statuses:write` permission.
 
+### Health monitoring
+
+Managed-reviewer coverage is summarized by
+`scripts/pr-review-health.py` and `.github/workflows/managed-reviewer-health.yml`.
+The workflow runs on a schedule and can be dispatched manually. It checks recent
+open PRs for the `WorkSpaces Managed Review` status, stale pending pickup,
+failure statuses, and success statuses that do not have a current-head managed
+review. Older or draft PRs are reported but skipped by default so pre-indicator
+branches do not keep the health job red forever.
+
 The Cloudflare relay forwards only managed-review trigger candidates:
 `pull_request.opened`, `reopened`, `ready_for_review`, `synchronize`, eligible
 `edited` events, and evidence-bearing PR comments. It preserves the original
