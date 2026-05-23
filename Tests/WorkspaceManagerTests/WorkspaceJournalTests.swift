@@ -64,11 +64,12 @@ struct WorkspaceJournalTests {
 
         let events = journal.events(for: workspaceID)
         #expect(events.count == 3)
-        #expect(events.map(\.kind) == [
-            .completed,
-            .toolRun(name: "Bash"),
-            .started,
-        ])
+        #expect(
+            events.map(\.kind) == [
+                .completed,
+                .toolRun(name: "Bash"),
+                .started,
+            ])
         #expect(events.allSatisfy { $0.workspaceID == workspaceID })
         #expect(events.allSatisfy { $0.hostSessionID == hostSessionID })
     }
