@@ -160,8 +160,8 @@ public final class WorkspaceStatusAggregator: ObservableObject {
     }
 
     /// Severity ordering — higher number wins when choosing the bubbled state.
-    /// Mirrors the visual hierarchy encoded in `SidebarSessionActivity.indicatorColor`
-    /// (red > yellow > blue > accent).
+    /// Both active agent states render blue in the sidebar, but a running tool
+    /// outranks a merely thinking agent when choosing one bubbled status.
     public static func severity(of state: AgentRunState) -> Int {
         switch state {
         case .errored: return 5

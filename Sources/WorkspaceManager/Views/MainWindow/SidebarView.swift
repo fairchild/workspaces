@@ -1297,8 +1297,6 @@ struct SidebarView: View {
             return "\(attentionCount) workspace\(attentionCount == 1 ? "" : "s") need attention"
         case .awaitingInput:
             return "\(attentionCount) workspace\(attentionCount == 1 ? "" : "s") awaiting input"
-        case .thinking, .runningTool:
-            return "Agent active in \(attentionCount) workspace\(attentionCount == 1 ? "" : "s")"
         default:
             return nil
         }
