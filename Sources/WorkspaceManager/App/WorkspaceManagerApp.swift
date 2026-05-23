@@ -31,7 +31,7 @@ struct WorkspaceManagerApp: App {
             launchEnvironment: ProcessInfo.processInfo.environment
         )
         if ProcessInfo.processInfo.environment["WORKSPACES_UI_FIXTURE"] == "1" {
-            seedUIFixtureDataIfNeeded(in: bootstrap.container.mainContext)
+            UIFixtureSeeder.seedDataIfNeeded(in: bootstrap.container.mainContext)
         }
 
         let localStateBootstrap = LocalStateStoreBootstrapper.bootstrap(
@@ -257,59 +257,6 @@ struct WorkspaceManagerApp: App {
     }
 }
 
-private func seedUIFixtureDataIfNeeded(in context: ModelContext) {
-    do {
-        let repoCount = try context.fetchCount(FetchDescriptor<Repo>())
-        guard repoCount == 0 else { return }
-    } catch {
-        // If readback fails, continue and try to seed once.
-    }
-
-    let codeRoot = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("code", isDirectory: true)
-
-    let skillsRepo = Repo(
-        name: "skills",
-        localPath: codeRoot.appendingPathComponent("skills", isDirectory: true)
-    )
-    let servicesRepo = Repo(
-        name: "services",
-        localPath: codeRoot.appendingPathComponent("services", isDirectory: true)
-    )
-    let superpowersRepo = Repo(
-        name: "superpowers",
-        localPath: codeRoot.appendingPathComponent("superpowers", isDirectory: true)
-    )
-    let workspacesRepo = Repo(
-        name: "workspaces",
-        localPath: codeRoot.appendingPathComponent("workspaces", isDirectory: true)
-    )
-    let swiftDocs = WebSource(
-        name: "Swift Docs",
-        baseURLString: "https://docs.swift.org/",
-        allowedHost: "docs.swift.org"
-    )
-
-    context.insert(skillsRepo)
-    context.insert(servicesRepo)
-    context.insert(superpowersRepo)
-    context.insert(workspacesRepo)
-    context.insert(swiftDocs)
-
-    let skillsWorkspace = Workspace(
-        name: "skills-v13",
-        path: codeRoot.appendingPathComponent("workspaces/skills/skills-v13", isDirectory: true),
-        sourceRepo: skillsRepo,
-        gitBranch: "workspace/skills-v13"
-    )
-    context.insert(skillsWorkspace)
-
-    do {
-        try context.save()
-    } catch {
-        NSLog("[UIFixture] Failed to seed fixture data: %@", String(describing: error))
-    }
-}
-
 private struct MainWindowRootView: View {
     private let appRuntimeDependencies: AppRuntimeDependencies
     @ObservedObject private var appCommandState: AppCommandState
@@ -352,10 +299,12 @@ private struct MainWindowRootView: View {
 
 /// Attaches the app-scoped `AgentSessionRegistry` to the host terminal store so the
 /// store can register/deregister host sessions with the registry — closes the gap
-/// where production POSTs to `/event` had nowhere to land.
+/// where production POSTs to `/event` had nowhere to land. Also runs the fixture
+/// agent-state seeder so deterministic screenshots can land at specific run states.
 private struct AgentSessionRegistryAttacher: ViewModifier {
     @EnvironmentObject private var registry: AgentSessionRegistry
     @Environment(\.localStateStore) private var localStateStore
+    @Environment(\.modelContext) private var modelContext
     let hostTerminalState: HostTerminalStateStore
 
     func body(content: Content) -> some View {
@@ -365,6 +314,14 @@ private struct AgentSessionRegistryAttacher: ViewModifier {
                 localStateStore: localStateStore,
                 hooksSocketPath: ClaudeIntegrationLifecycle.shared.socketPath
             )
+            if ProcessInfo.processInfo.environment["WORKSPACES_UI_FIXTURE"] == "1" {
+                UIFixtureSeeder.seedAgentStatesIfNeeded(
+                    from: ProcessInfo.processInfo.environment,
+                    in: modelContext,
+                    registry: registry,
+                    hostTerminalState: hostTerminalState
+                )
+            }
         }
     }
 }
