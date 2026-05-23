@@ -168,7 +168,9 @@ struct LastCommandStatusRegistryTests {
         init(_ start: Date) { self.now = start }
     }
 
-    private func makeRegistry(start: Date = Date(timeIntervalSince1970: 1_000))
+    private func makeRegistry(
+        start: Date = Date(timeIntervalSince1970: 1_000)
+    )
         -> (LastCommandStatusRegistry, FakeClock)
     {
         let clock = FakeClock(start)

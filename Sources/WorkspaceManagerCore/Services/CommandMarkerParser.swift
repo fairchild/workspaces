@@ -55,7 +55,8 @@ public struct CommandMarkerParser: Sendable {
                 // buffer looks like a partial introducer (ESC, ESC ], …) so we
                 // hold those bytes for the next chunk; drop everything before
                 // the partial prefix.
-                let tailStart = Self.partialIntroducerStart(in: buffer, from: index)
+                let tailStart =
+                    Self.partialIntroducerStart(in: buffer, from: index)
                     ?? buffer.endIndex
                 consumedThrough = tailStart
                 break
@@ -163,12 +164,12 @@ public struct CommandMarkerParser: Sendable {
         var i = start
         while i < data.endIndex {
             let byte = data[i]
-            if byte == 0x07 { // BEL
+            if byte == 0x07 {  // BEL
                 return i..<data.index(after: i)
             }
             if byte == 0x1B {
                 let next = data.index(after: i)
-                if next < data.endIndex, data[next] == 0x5C { // ESC \
+                if next < data.endIndex, data[next] == 0x5C {  // ESC \
                     return i..<data.index(after: next)
                 }
                 // A lone ESC inside an OSC payload is ambiguous; treat as
