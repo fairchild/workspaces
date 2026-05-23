@@ -2177,7 +2177,8 @@ struct ContentView: View {
         let sessions = hostTerminalState.sessions
         let normalize: (URL) -> String = { url in normalizePath(url.path) }
 
-        let workspaceInputs: [WorkspaceStatusAggregator.WorkspaceInput] = repos
+        let workspaceInputs: [WorkspaceStatusAggregator.WorkspaceInput] =
+            repos
             .flatMap(\.workspaces)
             .map { workspace in
                 let key = presentation.sessionKey(

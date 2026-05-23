@@ -35,7 +35,8 @@ struct SidebarWorkspacePresentationController {
     ) -> AgentSessionStatus? {
         guard !agentStatusBySessionID.isEmpty, !sessions.isEmpty else { return nil }
         let normalizedKey = key.normalized()
-        return sessions
+        return
+            sessions
             .filter { $0.key == normalizedKey }
             .compactMap { agentStatusBySessionID[$0.id] }
             .max { $0.lastEventAt < $1.lastEventAt }
