@@ -74,6 +74,7 @@ struct SidebarView: View {
 
     @State private var didAttemptDefaultRepoImport = false
     @State private var expansionController = SidebarExpansionStateController()
+    @FocusState private var sidebarHasKeyFocus: Bool
     @State private var workspaceAction: WorkspaceActionState?
     @State private var workspaceCreationStatusByRepoID: [UUID: WorkspaceCreationStatus] = [:]
     @State private var repoLastAccessedSnapshotByID: [UUID: Date] = [:]
@@ -271,6 +272,41 @@ struct SidebarView: View {
                 webSection
             }
         }
+        .focusable()
+        .focused($sidebarHasKeyFocus)
+        .onKeyPress(.leftArrow) { handleSidebarLeftArrow() }
+        .onKeyPress(.rightArrow) { handleSidebarRightArrow() }
+    }
+
+    /// Tree-style ← behavior. When a workspace is selected, collapse its
+    /// parent repo and lift selection to that parent. When a repo is selected
+    /// and expanded, collapse it. Otherwise pass through.
+    private func handleSidebarLeftArrow() -> KeyPress.Result {
+        if let workspace = selectedWorkspace, let parent = workspace.sourceRepo {
+            selectedWorkspace = nil
+            onRepoSelected(parent)
+            if isRepoExpanded(parent) {
+                toggleRepoExpansion(parent)
+            }
+            return .handled
+        }
+        if let repo = selectedRepo, isRepoExpanded(repo) {
+            toggleRepoExpansion(repo)
+            return .handled
+        }
+        return .ignored
+    }
+
+    /// Tree-style → behavior. When a repo is selected and collapsed, expand
+    /// it. (Moving selection into the first child is intentionally not
+    /// implemented yet — Finder/Xcode both treat → as expand-then-enter, but
+    /// the second step is fiddly and not yet warranted.)
+    private func handleSidebarRightArrow() -> KeyPress.Result {
+        if let repo = selectedRepo, !isRepoExpanded(repo) {
+            toggleRepoExpansion(repo)
+            return .handled
+        }
+        return .ignored
     }
 
     private var repositoriesSection: some View {
@@ -398,6 +434,7 @@ struct SidebarView: View {
                 toggleRepoExpansion(repo)
             },
             onSelectRepo: {
+                sidebarHasKeyFocus = true
                 if !isRepoExpanded(repo) {
                     expansionController.expandRepo(repo.id)
                 }
@@ -1122,6 +1159,7 @@ struct SidebarView: View {
 
     @MainActor
     private func selectWorkspace(_ workspace: Workspace) {
+        sidebarHasKeyFocus = true
         // Force a value transition when re-selecting the same workspace so the
         // host session activation path in ContentView runs again.
         if selectedWorkspace?.id == workspace.id {
