@@ -654,9 +654,14 @@ function computeReviewerConfigHash(model: string): string {
 
 function extractJsonCandidates(text: string): string[] {
 	const candidates: string[] = [];
-	const fenced = /```json\s*([\s\S]*?)```/gi;
+	const fenced = /(?:^|\r?\n)[ \t]*```json[ \t]*\r?\n/gi;
 	for (const match of text.matchAll(fenced)) {
-		const body = match[1]?.trim();
+		const bodyStart = (match.index ?? 0) + match[0].length;
+		const closingFence = /(?:^|\r?\n)[ \t]*```[ \t]*(?=\r?\n|$)/g;
+		closingFence.lastIndex = bodyStart;
+		const close = closingFence.exec(text);
+		if (!close) continue;
+		const body = text.slice(bodyStart, close.index).trim();
 		if (body) candidates.push(body);
 	}
 	if (candidates.length > 0) return candidates;
@@ -757,6 +762,76 @@ async function postGitHubReviewIntent(
 	if (!labelRes.ok) {
 		console.warn(
 			`[pr-review] label post skipped/failed ${labelRes.status}: ${await labelRes.text()}`,
+		);
+	}
+}
+
+const FAILED_REVIEW_OUTPUT_LIMIT = 8000;
+const FAILED_REVIEW_REASON_LIMIT = 1000;
+
+function truncateForFailureComment(value: string, limit: number): string {
+	if (value.length <= limit) return value;
+	return `${value.slice(0, limit)}\n\n...[truncated ${value.length - limit} characters]`;
+}
+
+function escapeHtml(value: string): string {
+	return value
+		.replaceAll("&", "&amp;")
+		.replaceAll("<", "&lt;")
+		.replaceAll(">", "&gt;")
+		.replaceAll('"', "&quot;")
+		.replaceAll("'", "&#39;");
+}
+
+async function postManagedReviewFailureComment(
+	githubToken: string,
+	payload: ManagedReviewStatusPayload,
+	reason: string,
+	output: string,
+): Promise<void> {
+	const trimmedOutput = output.trim();
+	if (!trimmedOutput) return;
+
+	const [owner, repo] = payload.repoFullName.split("/");
+	if (!owner || !repo) return;
+
+	const safeReason = escapeHtml(
+		truncateForFailureComment(reason.trim(), FAILED_REVIEW_REASON_LIMIT),
+	);
+	const safeOutput = escapeHtml(
+		truncateForFailureComment(trimmedOutput, FAILED_REVIEW_OUTPUT_LIMIT),
+	);
+	const body = [
+		"⚠️ **Managed review publication failed**",
+		"",
+		"The managed reviewer session reached a final response, but the broker could not publish it as a GitHub review.",
+		"",
+		"Reason:",
+		`<pre><code>${safeReason}</code></pre>`,
+		"",
+		"<details><summary>Unpublished managed reviewer output</summary>",
+		"",
+		`<pre><code>${safeOutput}</code></pre>`,
+		"",
+		"</details>",
+	].join("\n");
+
+	const res = await fetch(
+		`${GITHUB_API}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/${payload.number}/comments`,
+		{
+			method: "POST",
+			headers: {
+				Authorization: `Bearer ${githubToken}`,
+				Accept: "application/vnd.github+json",
+				"X-GitHub-Api-Version": "2022-11-28",
+				"Content-Type": "application/json",
+			},
+			body: JSON.stringify({ body }),
+		},
+	);
+	if (!res.ok) {
+		console.warn(
+			`[pr-review] failure comment skipped/failed ${res.status}: ${await res.text()}`,
 		);
 	}
 }
@@ -978,6 +1053,7 @@ export async function processPendingPrReviewRuns(
 	};
 
 	for (const run of pendingRuns) {
+		let completedOutput = "";
 		let statusPayload: ManagedReviewStatusPayload = {
 			repoFullName: run.repoFullName,
 			number: run.prNumber,
@@ -1000,6 +1076,7 @@ export async function processPendingPrReviewRuns(
 				});
 				continue;
 			}
+			completedOutput = collected.output;
 
 			const payload = await payloadFromStartedRun(githubToken, run);
 			if (!payload) {
@@ -1102,6 +1179,17 @@ export async function processPendingPrReviewRuns(
 			);
 		} catch (err) {
 			const reason = err instanceof Error ? err.message : String(err);
+			await postManagedReviewFailureComment(
+				githubToken,
+				statusPayload,
+				reason,
+				completedOutput,
+			).catch((commentErr) => {
+				console.warn(
+					"[pr-review] failure comment skipped/failed:",
+					commentErr instanceof Error ? commentErr.message : commentErr,
+				);
+			});
 			await postManagedReviewStatus(
 				githubToken,
 				statusPayload,
