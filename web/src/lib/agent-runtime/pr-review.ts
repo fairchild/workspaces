@@ -1008,9 +1008,12 @@ export async function processPendingPrReviewRuns(
 			const supersedingReview = supersedingReviews[0] ?? null;
 			if (supersedingReview) {
 				let retrySessionId: string | null = null;
-				const reviewedCurrentHead = supersedingReviews.some((review) =>
-					currentHeadAlreadyReviewed(review, run, payload),
-				);
+				const currentHeadReview =
+					supersedingReviews.find((review) =>
+						currentHeadAlreadyReviewed(review, run, payload),
+					) ?? null;
+				const reviewedCurrentHead = currentHeadReview !== null;
+				const referenceReview = currentHeadReview ?? supersedingReview;
 				if (!reviewedCurrentHead) {
 					try {
 						retrySessionId = await triggerPrReview(payload, {
@@ -1024,10 +1027,10 @@ export async function processPendingPrReviewRuns(
 				}
 
 				const error = reviewedCurrentHead
-					? `Superseded by managed review ${supersedingReview.id} on the same head.`
+					? `Superseded by managed review ${referenceReview.id} on the same head.`
 					: retrySessionId
-						? `Superseded by managed review ${supersedingReview.id}; retry session ${retrySessionId} started.`
-						: `Superseded by managed review ${supersedingReview.id}; retry session was not started.`;
+						? `Superseded by managed review ${referenceReview.id}; retry session ${retrySessionId} started.`
+						: `Superseded by managed review ${referenceReview.id}; retry session was not started.`;
 				await recordRunResult(run.fingerprint, {
 					sessionId: run.sessionId,
 					status: "superseded",
@@ -1041,7 +1044,7 @@ export async function processPendingPrReviewRuns(
 					prNumber: run.prNumber,
 					status: "superseded",
 					error,
-					supersededByReviewId: supersedingReview.id,
+					supersededByReviewId: referenceReview.id,
 					retrySessionId,
 				});
 				console.log(
