@@ -1,6 +1,6 @@
 # UI Fixture Mode
 
-In-memory SwiftData seeding plus deterministic agent-status seeding so the app can launch into a known visual state for screenshots, design review, and visual regression. No filesystem, no real agents, no network.
+In-memory SwiftData seeding plus deterministic agent-status seeding so the app can launch into a known visual state for screenshots, design review, and visual regression. Scope: the seeded model state is in-memory and no real agents drive the sessions. The rest of the app still does its normal launch IO — outside `CI=1`, `ClaudeIntegrationLifecycle` binds a Unix socket under Application Support keyed by pid (`Sources/WorkspaceManager/App/WorkspaceManagerApp.swift:55-60`), `LocalStateStore` writes SQLite under the dev-data dir, and the synthetic `HostTerminalSession`s spawn real PTYs (which fall back to `$HOME` when the seeded path doesn't exist — see "Known limits"). For a truly hermetic capture environment, set `CI=1` and a dedicated `WORKSPACES_DATA_DIR`.
 
 ## Quick start
 
@@ -115,7 +115,7 @@ If you want the new workspace to be the default selection on launch, bump its `l
 
 ### A new agent run-state token
 
-The env var's `<state>` tokens map to `AgentRunState` values inside `UIFixtureSeeder.runState(for:)`. To add a variant — e.g. `awaitingIdle` for `.awaitingInput(reason: .idlePrompt)` — add a `case` arm there and a row in `references/scenarios.md` under "Supported states." The events list in `events(for:)` may also need a new arm if the state requires a different synthetic event shape.
+The env var's `<state>` tokens map to `AgentRunState` values inside `UIFixtureSeeder.runState(for:)`. To add a variant — e.g. `awaitingIdle` for `.awaitingInput(reason: .idlePrompt)` — add a `case` arm there and a row in `.claude/skills/release-screenshot/references/scenarios.md` under "Supported states." The events list in `events(for:)` may also need a new arm if the state requires a different synthetic event shape.
 
 ### A new named release-screenshot scenario
 
