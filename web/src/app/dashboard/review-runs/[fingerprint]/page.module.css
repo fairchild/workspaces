@@ -1,0 +1,176 @@
+.page {
+	display: flex;
+	flex-direction: column;
+	gap: 18px;
+	min-height: calc(100vh - 56px);
+	padding: 24px;
+	background: #f7f7f5;
+	color: #171717;
+}
+
+.header {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 16px;
+}
+
+.eyebrow {
+	margin: 0 0 4px;
+	color: #6b7280;
+	font-size: 12px;
+	font-weight: 700;
+	text-transform: uppercase;
+}
+
+.header h1 {
+	margin: 0;
+	font-size: 24px;
+	line-height: 1.2;
+}
+
+.status {
+	border: 1px solid #d1d5db;
+	border-radius: 999px;
+	padding: 4px 10px;
+	background: #ffffff;
+	color: #374151;
+	font-size: 12px;
+	font-weight: 700;
+	text-transform: uppercase;
+}
+
+.status-started {
+	border-color: #93c5fd;
+	background: #eff6ff;
+	color: #1d4ed8;
+}
+
+.status-completed {
+	border-color: #86efac;
+	background: #f0fdf4;
+	color: #15803d;
+}
+
+.status-failed {
+	border-color: #fca5a5;
+	background: #fef2f2;
+	color: #b91c1c;
+}
+
+.status-superseded {
+	border-color: #facc15;
+	background: #fefce8;
+	color: #854d0e;
+}
+
+.summary {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+	gap: 1px;
+	overflow: hidden;
+	border: 1px solid #e5e7eb;
+	border-radius: 8px;
+	background: #e5e7eb;
+}
+
+.summary div {
+	min-width: 0;
+	padding: 12px;
+	background: #ffffff;
+}
+
+.summary span {
+	display: block;
+	margin-bottom: 4px;
+	color: #6b7280;
+	font-size: 12px;
+}
+
+.summary strong {
+	display: block;
+	overflow-wrap: anywhere;
+	font-size: 13px;
+}
+
+.links {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 10px;
+}
+
+.links a {
+	border: 1px solid #d1d5db;
+	border-radius: 6px;
+	padding: 7px 10px;
+	background: #ffffff;
+	color: #111827;
+	font-size: 13px;
+	font-weight: 600;
+	text-decoration: none;
+}
+
+.links a:hover {
+	border-color: #9ca3af;
+	background: #f9fafb;
+}
+
+.transcriptCard {
+	display: flex;
+	flex: 1;
+	flex-direction: column;
+	min-height: 360px;
+	overflow: hidden;
+	border: 1px solid #d1d5db;
+	border-radius: 8px;
+	background: #ffffff;
+}
+
+.transcriptCard h2 {
+	margin: 0;
+	padding: 12px 14px;
+	border-bottom: 1px solid #e5e7eb;
+	font-size: 15px;
+}
+
+.transcriptHeader {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	border-bottom: 1px solid #e5e7eb;
+}
+
+.transcriptHeader h2 {
+	border-bottom: 0;
+}
+
+.sessionId {
+	margin-right: 14px;
+	color: #6b7280;
+	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+	font-size: 12px;
+}
+
+.transcriptFrame {
+	display: flex;
+	flex: 1;
+	min-height: 0;
+}
+
+.muted {
+	margin: 12px 14px;
+	color: #6b7280;
+	font-size: 13px;
+}
+
+.errorBlock {
+	margin: 0;
+	overflow: auto;
+	border: 1px solid #fecaca;
+	border-radius: 8px;
+	padding: 12px;
+	background: #fef2f2;
+	color: #991b1b;
+	white-space: pre-wrap;
+}

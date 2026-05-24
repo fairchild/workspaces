@@ -770,6 +770,22 @@ interface ManagedReviewStatusPayload {
 	number: number;
 	headSha: string;
 	htmlUrl: string;
+	fingerprint?: string;
+}
+
+function getManagedReviewStatusBaseUrl(): string {
+	const explicit =
+		process.env.WORKSPACES_WEB_BASE_URL ?? process.env.BETTER_AUTH_URL;
+	if (explicit) return explicit.replace(/\/+$/, "");
+	if (process.env.NODE_ENV === "development") return "http://localhost:3000";
+	return "https://spaces.cloudcompute.com";
+}
+
+function buildManagedReviewStatusTargetUrl(
+	payload: ManagedReviewStatusPayload,
+): string {
+	if (!payload.fingerprint) return payload.htmlUrl;
+	return `${getManagedReviewStatusBaseUrl()}/dashboard/review-runs/${encodeURIComponent(payload.fingerprint)}`;
 }
 
 async function postManagedReviewStatus(
@@ -801,7 +817,7 @@ async function postManagedReviewStatus(
 					state,
 					context: MANAGED_REVIEW_STATUS_CONTEXT,
 					description,
-					target_url: payload.htmlUrl,
+					target_url: buildManagedReviewStatusTargetUrl(payload),
 				}),
 			},
 		);
@@ -967,6 +983,7 @@ export async function processPendingPrReviewRuns(
 			number: run.prNumber,
 			headSha: run.headSha,
 			htmlUrl: `https://github.com/${run.repoFullName}/pull/${run.prNumber}`,
+			fingerprint: run.fingerprint,
 		};
 		try {
 			const collected = await collectCompletedReviewIntentText(
@@ -995,6 +1012,7 @@ export async function processPendingPrReviewRuns(
 				number: payload.number,
 				headSha: payload.headSha,
 				htmlUrl: payload.htmlUrl,
+				fingerprint: run.fingerprint,
 			};
 
 			const currentReviewHistory = await fetchCurrentPrReviewHistory(
@@ -1197,6 +1215,7 @@ export async function triggerPrReview(
 			number: resolvedPayload.number,
 			headSha: resolvedPayload.headSha,
 			htmlUrl: resolvedPayload.htmlUrl,
+			fingerprint,
 		},
 		"pending",
 		"Managed reviewer picked up this PR.",
@@ -1380,6 +1399,7 @@ In "## Project Thread", include a short label rationale using the first applicab
 				number: resolvedPayload.number,
 				headSha: resolvedPayload.headSha,
 				htmlUrl: resolvedPayload.htmlUrl,
+				fingerprint,
 			},
 			"failure",
 			"Managed reviewer failed to start.",

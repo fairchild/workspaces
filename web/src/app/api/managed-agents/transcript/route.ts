@@ -1,3 +1,4 @@
+import { getPrReviewRunBySessionId } from "@/lib/agent-runtime/pr-review-runs";
 import { getSessionByInstanceId } from "@/lib/agent-sessions";
 import { authorizeRepoAccess } from "@/lib/api-auth";
 import { getSession } from "@/lib/auth-server";
@@ -23,13 +24,14 @@ export async function GET(request: Request): Promise<Response> {
 	}
 
 	const agentSession = await getSessionByInstanceId(authed.user.id, sessionId);
-	if (!agentSession) {
+	const reviewRun = agentSession
+		? null
+		: await getPrReviewRunBySessionId(sessionId);
+	const repo = agentSession?.repo ?? reviewRun?.repoFullName ?? null;
+	if (!repo) {
 		return new Response("session not found", { status: 404 });
 	}
-	const unauthorized = await authorizeRepoAccess(
-		authed.user.id,
-		agentSession.repo,
-	);
+	const unauthorized = await authorizeRepoAccess(authed.user.id, repo);
 	if (unauthorized) return unauthorized;
 
 	if (!process.env.ANTHROPIC_API_KEY) {

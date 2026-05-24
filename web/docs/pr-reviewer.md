@@ -85,6 +85,10 @@ posts the final GitHub review, it updates the same status context to `success`;
 if broker processing fails before a review is posted, it updates the context to
 `failure`.
 
+The status details URL points to `/dashboard/review-runs/<fingerprint>`. That
+authenticated page authorizes access to the stored repo, shows run metadata, and
+streams the managed-agent transcript once the run records a session id.
+
 The status is best-effort: a status API failure is logged but does not block the
 review session or broker. A `403` on this request means the GitHub App is missing
 the `statuses:write` permission.
