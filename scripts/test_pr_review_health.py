@@ -151,6 +151,15 @@ class PRReviewHealthTests(unittest.TestCase):
         )
         self.assertEqual(report.failures, [])
 
+    def test_workspace_agents_login_counts_as_managed_review(self) -> None:
+        report = evaluate(
+            pr(
+                statuses=[status("SUCCESS")],
+                reviews=[review("APPROVED", login="workspace-agents")],
+            )
+        )
+        self.assertEqual(report.failures, [])
+
     def test_render_markdown_does_not_treat_skipped_prs_as_global_health(self) -> None:
         report = pr_review_health.evaluate(
             [

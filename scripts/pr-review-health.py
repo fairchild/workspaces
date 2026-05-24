@@ -56,6 +56,8 @@ from typing import Any
 
 GITHUB_GRAPHQL_URL = "https://api.github.com/graphql"
 MANAGED_REVIEWER_LOGINS = {
+    "workspace-agents",
+    "workspace-agents[bot]",
     "workspaces-claude-pr-reviewer",
     "workspaces-claude-pr-reviewer[bot]",
 }
