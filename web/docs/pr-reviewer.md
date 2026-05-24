@@ -21,6 +21,11 @@ GitHub PR opened
 → commit status flips to success or failure
 ```
 
+The target simplified model is documented as a Postgres design sketch in
+[`web/docs/pr-reviewer-review-run-schema.sql`](pr-reviewer-review-run-schema.sql).
+That schema treats `ReviewRun` as the source of truth and stores GitHub status,
+review, label, and diagnostic-comment writes as repairable projections.
+
 ## Key Files
 
 | File | Purpose |
