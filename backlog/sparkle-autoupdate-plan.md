@@ -51,11 +51,15 @@ Info.plist defaults:
 
 Release builds bundle `Sparkle.framework` into `Contents/Frameworks` and sign it with the rest of the app bundle. The release workflow requires `SPARKLE_PRIVATE_KEY`, generates `build/appcast.xml` after the DMG is created, and uploads the appcast beside the DMG assets.
 
+Before appcast generation, `CHANGELOG.md` must contain a version-matched `## [<CFBundleShortVersionString>] - <date>` section. The appcast generator embeds that section in the item `<description>` and fails if the section is missing or empty, so release notes are part of the signed release artifact contract.
+
 The generated appcast uses:
 
 - `CFBundleVersion` for `sparkle:version`
 - `CFBundleShortVersionString` for `sparkle:shortVersionString`
 - `LSMinimumSystemVersion` for `sparkle:minimumSystemVersion`
+- the matching `CHANGELOG.md` section for the item `<description>`
+- the tagged `CHANGELOG.md` URL for `sparkle:fullReleaseNotesLink`
 - Sparkle `sign_update` output for `sparkle:edSignature` and `length`
 - the tagged GitHub Release DMG URL as the enclosure URL
 

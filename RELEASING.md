@@ -253,6 +253,7 @@ The recommended method for production releases.
    - fetches `origin/main` and fast-forwards local `main` before mutating
    - updates `Info.plist` version/build metadata
    - prepends a changelog entry from commits since the latest `v*` tag
+   - ensures `CHANGELOG.md` contains `## [<CFBundleShortVersionString>] - <date>` for the release version before `scripts/generate-sparkle-appcast.sh` runs
    - creates commit `release: v0.3.1`
    - creates lightweight tag `v0.3.1`
    - pushes `main` first, then pushes the tag
@@ -294,6 +295,10 @@ The recommended method for production releases.
      - Publish or refresh a GitHub release with artifacts via `gh`
      - Download the published assets on hosted macOS and re-check appcast XML,
        DMG identity, stapling, and Gatekeeper assessment
+   - Appcast release notes:
+     - `scripts/generate-sparkle-appcast.sh` embeds the matching
+       `CHANGELOG.md` section in the item `<description>`
+     - appcast generation fails if the matching section is missing or empty
 
 4. **Release Tag and Assets**
 

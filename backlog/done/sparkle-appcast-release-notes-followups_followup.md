@@ -3,9 +3,19 @@ topic: sparkle-appcast-release-notes
 relates_to: after:sparkle-autoupdate-plan
 priority: 2
 description: Capture release runbook and appcast script hardening follow-ups from PR #497 review.
+completed: 2026-05-24
 ---
 
 # Sparkle Appcast Release Notes Follow-ups
+
+## Outcome
+
+Implemented the release-note precondition in `RELEASING.md`, kept the Sparkle autoupdate plan aligned, and documented the trusted release-workflow boundary around appcast URL interpolation in `scripts/generate-sparkle-appcast.sh`.
+
+Verification:
+- `bash -n scripts/generate-sparkle-appcast.sh`
+- `swift test --filter SparkleAppcastScript`
+- `rg -n "CHANGELOG.md|generate-sparkle-appcast|fullReleaseNotesLink" RELEASING.md backlog/sparkle-autoupdate-plan.md scripts/generate-sparkle-appcast.sh`
 
 ## Problem Statement
 
@@ -29,8 +39,8 @@ The PR review also called out a safe-but-implicit script assumption: `scripts/ge
 - `backlog/sparkle-autoupdate-plan.md` - add the same note under Release Integration so the Sparkle update plan stays current.
 
 **Acceptance criteria:**
-- [ ] Release docs state that `CHANGELOG.md` must contain `## [CFBundleShortVersionString] - <date>` before `scripts/generate-sparkle-appcast.sh` runs.
-- [ ] Docs mention that the generated appcast embeds that section in `<description>` and fails if it is missing or empty.
+- [x] Release docs state that `CHANGELOG.md` must contain `## [CFBundleShortVersionString] - <date>` before `scripts/generate-sparkle-appcast.sh` runs.
+- [x] Docs mention that the generated appcast embeds that section in `<description>` and fails if it is missing or empty.
 
 ### Phase 2: Appcast Script Assumption Comment
 
@@ -38,8 +48,8 @@ The PR review also called out a safe-but-implicit script assumption: `scripts/ge
 - `scripts/generate-sparkle-appcast.sh` - add a short comment near `DOWNLOAD_URL`, `RELEASE_URL`, and `CHANGELOG_URL` explaining that `$REPO` comes from `GITHUB_REPOSITORY` and `$TAG` is validated by release preparation before the release workflow runs.
 
 **Acceptance criteria:**
-- [ ] The comment makes the trust boundary explicit without adding noisy escaping code for the current release-only use case.
-- [ ] If future work allows arbitrary `--repo` or `--tag` values from untrusted callers, the follow-up either constrains those values or escapes them before XML interpolation.
+- [x] The comment makes the trust boundary explicit without adding noisy escaping code for the current release-only use case.
+- [x] If future work allows arbitrary `--repo` or `--tag` values from untrusted callers, the follow-up either constrains those values or escapes them before XML interpolation.
 
 ## Verification Commands
 
