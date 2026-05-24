@@ -327,10 +327,12 @@ def result_summary(result: PullRequestResult) -> str:
         return f"unassessed: {result.skipped_reason}"
     if result.problems:
         return "; ".join(result.problems)
+    if result.status_state == "PENDING":
+        parts = ["pending within timeout"]
+        parts.extend(result.notices)
+        return "; ".join(parts)
     if result.notices:
         return "; ".join(result.notices)
-    if result.status_state == "PENDING":
-        return "pending within timeout"
     return "healthy"
 
 

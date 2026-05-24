@@ -160,6 +160,26 @@ class PRReviewHealthTests(unittest.TestCase):
         )
         self.assertEqual(report.failures, [])
 
+    def test_render_markdown_preserves_pending_status_with_notices(self) -> None:
+        report = pr_review_health.evaluate(
+            [
+                pr(
+                    statuses=[status("PENDING", started_at=NOW - timedelta(minutes=1))],
+                    merge_state="BLOCKED",
+                ),
+            ],
+            now=NOW,
+            updated_within=timedelta(hours=72),
+            pending_timeout=timedelta(minutes=30),
+        )
+        rendered = pr_review_health.render_markdown(
+            report,
+            updated_within=timedelta(hours=72),
+            pending_timeout=timedelta(minutes=30),
+        )
+
+        self.assertIn("pending within timeout; PR merge state is blocked", rendered)
+
     def test_render_markdown_does_not_treat_skipped_prs_as_global_health(self) -> None:
         report = pr_review_health.evaluate(
             [
