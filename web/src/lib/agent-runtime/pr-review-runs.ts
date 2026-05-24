@@ -206,11 +206,11 @@ export interface PrReviewRunSummary {
 	sessionId: string | null;
 	createdAt: string;
 	updatedAt: string;
+	error: string | null;
 }
 
 export interface PrReviewRunDetails extends PrReviewRunSummary {
 	reviewerConfigHash: string;
-	error: string | null;
 }
 
 export interface StartedPrReviewRun {
@@ -299,6 +299,7 @@ export async function listRecentPrReviewRuns(input: {
 			"session_id",
 			"created_at",
 			"updated_at",
+			"error",
 		])
 		.where("created_at", ">=", input.sinceIso)
 		.where("repo_full_name", "=", input.repoFullName)
@@ -315,7 +316,115 @@ export async function listRecentPrReviewRuns(input: {
 		sessionId: row.session_id,
 		createdAt: row.created_at,
 		updatedAt: row.updated_at,
+		error: row.error,
 	}));
+}
+
+export type PrReviewRunOperatorState =
+	| "starting"
+	| "stuck_starting"
+	| "executing"
+	| "needs_projection"
+	| "failed"
+	| "terminal";
+
+export interface PrReviewRunStateThresholds {
+	startingTimeoutMinutes: number;
+	projectionTimeoutMinutes: number;
+}
+
+export interface ClassifiedPrReviewRun extends PrReviewRunSummary {
+	state: PrReviewRunOperatorState;
+	ageMinutes: number;
+}
+
+export interface PrReviewRunStateBuckets {
+	starting: ClassifiedPrReviewRun[];
+	stuckStarting: ClassifiedPrReviewRun[];
+	executing: ClassifiedPrReviewRun[];
+	needsProjection: ClassifiedPrReviewRun[];
+	failed: ClassifiedPrReviewRun[];
+	terminal: ClassifiedPrReviewRun[];
+}
+
+function elapsedMinutes(sinceIso: string, now: Date): number {
+	const sinceMs = Date.parse(sinceIso);
+	const nowMs = now.getTime();
+	if (!Number.isFinite(sinceMs) || !Number.isFinite(nowMs)) return 0;
+	return Math.max(0, Math.floor((nowMs - sinceMs) / (60 * 1000)));
+}
+
+export function classifyPrReviewRun(
+	run: PrReviewRunSummary,
+	options: {
+		now?: Date;
+		thresholds: PrReviewRunStateThresholds;
+	},
+): ClassifiedPrReviewRun {
+	const now = options.now ?? new Date();
+	const ageMinutes = elapsedMinutes(run.updatedAt, now);
+	let state: PrReviewRunOperatorState;
+
+	if (run.status === "failed") {
+		state = "failed";
+	} else if (run.status === "completed" || run.status === "superseded") {
+		state = "terminal";
+	} else if (!run.sessionId) {
+		state =
+			ageMinutes >= options.thresholds.startingTimeoutMinutes
+				? "stuck_starting"
+				: "starting";
+	} else {
+		state =
+			ageMinutes >= options.thresholds.projectionTimeoutMinutes
+				? "needs_projection"
+				: "executing";
+	}
+
+	return { ...run, state, ageMinutes };
+}
+
+export function bucketPrReviewRuns(
+	runs: PrReviewRunSummary[],
+	options: {
+		now?: Date;
+		thresholds: PrReviewRunStateThresholds;
+	},
+): PrReviewRunStateBuckets {
+	const buckets: PrReviewRunStateBuckets = {
+		starting: [],
+		stuckStarting: [],
+		executing: [],
+		needsProjection: [],
+		failed: [],
+		terminal: [],
+	};
+
+	for (const run of runs) {
+		const classified = classifyPrReviewRun(run, options);
+		switch (classified.state) {
+			case "starting":
+				buckets.starting.push(classified);
+				break;
+			case "stuck_starting":
+				buckets.stuckStarting.push(classified);
+				break;
+			case "executing":
+				buckets.executing.push(classified);
+				break;
+			case "needs_projection":
+				buckets.needsProjection.push(classified);
+				break;
+			case "failed":
+				buckets.failed.push(classified);
+				break;
+			case "terminal":
+				buckets.terminal.push(classified);
+				break;
+		}
+	}
+
+	return buckets;
 }
 
 export async function listStartedPrReviewRuns(

@@ -138,6 +138,19 @@ curl --fail-with-body -sS -X POST \
   -H "X-Workspace-Webhook-Canary: $WORKSPACES_WEBHOOK_CANARY_SECRET"
 ```
 
+Operator run report:
+
+```bash
+uv run --script scripts/pr-reviewer-runs.py
+```
+
+Use the report as the first read of production health. `missingRuns` means a
+reviewer-eligible webhook did not create a `managed_pr_review_runs` row.
+`executing` means the managed-agent session has been created and is still inside
+the normal projection window. `needsProjection` means the row is old enough that
+the broker should have posted the GitHub review or failure status. `failed`
+shows terminal run failures with the stored reason and a details URL.
+
 The Worker requires `WORKSPACES_WEBHOOK_CANARY_SECRET`, signs a canonical
 reviewer-eligible PR payload with `GITHUB_WEBHOOK_SECRET`, forwards it to the
 Vercel webhook route with the canary header, and expects Vercel to return
@@ -166,7 +179,9 @@ started, the stale session is marked `superseded`. If the superseding review is
 for an older head, the broker starts a fresh follow-up session so the newer-head
 review includes the prior review context. The monitor then compares recent
 reviewer-eligible rows in `webhook_events` with `managed_pr_review_runs`
-records. These routes return only run metadata and missing event identifiers,
+records and classifies the current ReviewRun rows into starting, executing,
+needs-projection, failed, and terminal buckets. These routes return only run
+metadata, details URLs, stored failure reasons, and missing event identifiers,
 not raw payloads or secrets.
 
 ## Observing Sessions
