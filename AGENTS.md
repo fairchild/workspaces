@@ -260,6 +260,7 @@ mise run web:deps:remove -- <pkg>           # pnpm remove + auto-fix formatting
 | Debug an issue | docs/development/troubleshooting.md | - |
 | Terminal keyboard focus | docs/development/solution-terminal-keyboard.md | - |
 | Evidence guide | docs/development/evidence.md | - |
+| UI fixture mode + release screenshots | docs/development/ui-fixture-mode.md | - |
 | Local SQLite state schema | docs/schema.sql | - |
 | Local state store plan | docs/development/local-state-store-plan.md | - |
 | Lume runner setup | docs/development/lume-runner-setup.md | - |
