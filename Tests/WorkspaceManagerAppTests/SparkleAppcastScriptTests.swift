@@ -13,6 +13,7 @@ struct SparkleAppcastScriptTests {
                 "--dmg", fixture.dmg.path,
                 "--app", fixture.app.path,
                 "--tag", "v9.9.9",
+                "--changelog", fixture.changelog.path,
                 "--output", fixture.output.path,
             ],
             environment: [:]
@@ -31,6 +32,7 @@ struct SparkleAppcastScriptTests {
                 "--app", fixture.app.path,
                 "--tag", "v9.9.9",
                 "--repo", "fairchild/workspaces",
+                "--changelog", fixture.changelog.path,
                 "--output", fixture.output.path,
             ],
             environment: ["SPARKLE_PRIVATE_KEY": testPrivateKey]
@@ -47,15 +49,52 @@ struct SparkleAppcastScriptTests {
         #expect(xml.contains(dmgURL))
         #expect(xml.contains("sparkle:edSignature="))
         #expect(xml.contains("length=\"4\""))
+        let fullReleaseNotesLink =
+            "<sparkle:fullReleaseNotesLink>"
+            + "https://github.com/fairchild/workspaces/blob/v9.9.9/CHANGELOG.md"
+            + "</sparkle:fullReleaseNotesLink>"
+        #expect(xml.contains(fullReleaseNotesLink))
+        #expect(xml.contains("<h2>WorkSpaces 9.9.9</h2>"))
+        #expect(xml.contains("<h3>Added</h3>"))
+        #expect(xml.contains("<li>show changelog notes in Sparkle update checks</li>"))
+        #expect(xml.contains("<h3>Fixed</h3>"))
+        #expect(xml.contains("<li>escape &lt;markup&gt; &amp; quotes &quot;safely&quot;</li>"))
+        #expect(!xml.contains("See the GitHub release notes"))
     }
 
-    private func makeFixture() throws -> (app: URL, dmg: URL, output: URL) {
+    @Test("Missing changelog entry fails clearly")
+    func missingChangelogEntryFailsClearly() throws {
+        let fixture = try makeFixture(includeChangelogEntry: false)
+        let result = runAppcastScript(
+            arguments: [
+                "--dmg", fixture.dmg.path,
+                "--app", fixture.app.path,
+                "--tag", "v9.9.9",
+                "--changelog", fixture.changelog.path,
+                "--output", fixture.output.path,
+            ],
+            environment: ["SPARKLE_PRIVATE_KEY": testPrivateKey]
+        )
+
+        #expect(result.exitCode == 1)
+        #expect(result.stderr.contains("CHANGELOG.md does not contain release notes for WorkSpaces 9.9.9"))
+    }
+
+    private func makeFixture(
+        includeChangelogEntry: Bool = true
+    ) throws -> (
+        app: URL,
+        dmg: URL,
+        output: URL,
+        changelog: URL
+    ) {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("SparkleAppcastScriptTests-\(UUID().uuidString)", isDirectory: true)
         let app = root.appendingPathComponent("WorkSpaces.app", isDirectory: true)
         let contents = app.appendingPathComponent("Contents", isDirectory: true)
         let dmg = root.appendingPathComponent("WorkSpaces-9.9.9.dmg")
         let output = root.appendingPathComponent("appcast.xml")
+        let changelog = root.appendingPathComponent("CHANGELOG.md")
 
         try FileManager.default.createDirectory(at: contents, withIntermediateDirectories: true)
         let plist: [String: Any] = [
@@ -67,7 +106,32 @@ struct SparkleAppcastScriptTests {
         try data.write(to: contents.appendingPathComponent("Info.plist"))
         try Data("test".utf8).write(to: dmg)
 
-        return (app, dmg, output)
+        let changelogEntry: String
+        if includeChangelogEntry {
+            changelogEntry = """
+                ## [9.9.9] - 2099-09-09
+
+                ### Added
+                - show changelog notes in Sparkle update checks
+
+                ### Fixed
+                - escape <markup> & quotes "safely"
+
+                """
+        } else {
+            changelogEntry = ""
+        }
+        let changelogContent = """
+            # Changelog
+
+            \(changelogEntry)## [9.9.8] - 2099-09-08
+
+            ### Fixed
+            - older release notes should not be embedded
+            """
+        try changelogContent.write(to: changelog, atomically: true, encoding: .utf8)
+
+        return (app, dmg, output, changelog)
     }
 
     private func runAppcastScript(
