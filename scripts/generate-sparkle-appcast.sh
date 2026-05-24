@@ -176,6 +176,9 @@ VERSION="$("$PLIST_BUDDY" -c "Print :CFBundleVersion" "$INFO_PLIST")"
 SHORT_VERSION="$("$PLIST_BUDDY" -c "Print :CFBundleShortVersionString" "$INFO_PLIST")"
 MIN_SYSTEM_VERSION="$("$PLIST_BUDDY" -c "Print :LSMinimumSystemVersion" "$INFO_PLIST")"
 DMG_BASENAME="$(basename "$DMG_PATH")"
+# In the release workflow, REPO comes from GITHUB_REPOSITORY and TAG has passed
+# release-version validation. Constrain or XML-escape arbitrary --repo/--tag
+# inputs before broadening this script beyond trusted release automation.
 DOWNLOAD_URL="https://github.com/$REPO/releases/download/$TAG/$DMG_BASENAME"
 RELEASE_URL="https://github.com/$REPO/releases/tag/$TAG"
 CHANGELOG_URL="https://github.com/$REPO/blob/$TAG/CHANGELOG.md"
