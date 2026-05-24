@@ -31,8 +31,10 @@ struct ClaudeSettingsInstallerBackupRotationTests {
         try FileManager.default.createDirectory(at: claudeDir, withIntermediateDirectories: true)
         let settingsURL = claudeDir.appendingPathComponent("settings.json")
 
-        let installer = ClaudeSettingsInstaller(homeDirectory: home)
-        await installer.register(workspacesHooksContribution(eventForwarderScriptPath: "/tmp/event-forwarder.sh"))
+        let installer = ClaudeSettingsInstaller(
+            homeDirectory: home,
+            eventForwarderScriptPath: "/tmp/event-forwarder.sh"
+        )
 
         // Seed and install 7 times. Mutate between installs so each install
         // sees a different on-disk file (otherwise the contribution is a no-op
@@ -65,7 +67,6 @@ struct ClaudeSettingsInstallerBackupRotationTests {
         try Data("{\"preferredNotifChannel\": \"terminal\"}\n".utf8).write(to: claudeJSON)
 
         let installer = ClaudeSettingsInstaller(homeDirectory: home)
-        await installer.register(workspacesNotifChannelContribution())
 
         for i in 0..<7 {
             try await installer.install()
@@ -91,8 +92,10 @@ struct ClaudeSettingsInstallerBackupRotationTests {
         try FileManager.default.createDirectory(at: claudeDir, withIntermediateDirectories: true)
         let settingsURL = claudeDir.appendingPathComponent("settings.json")
 
-        let installer = ClaudeSettingsInstaller(homeDirectory: home)
-        await installer.register(workspacesHooksContribution(eventForwarderScriptPath: "/tmp/event-forwarder.sh"))
+        let installer = ClaudeSettingsInstaller(
+            homeDirectory: home,
+            eventForwarderScriptPath: "/tmp/event-forwarder.sh"
+        )
 
         try Data("{}\n".utf8).write(to: settingsURL)
         var installCount = 0

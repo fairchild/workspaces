@@ -36,6 +36,8 @@ struct SidebarView: View {
     @Environment(\.lumeRuntimeService) private var lumeRuntimeService
     @Environment(\.workspaceService) private var workspaceService
     @Environment(\.workspaceProviderRegistry) private var workspaceProviderRegistry
+    @Environment(\.openSettings) private var openSettings
+    @EnvironmentObject private var workspaceStatusAggregator: WorkspaceStatusAggregator
     @ObservedObject var appCommandState: AppCommandState
     let repos: [Repo]
     let webSources: [WebSource]
@@ -72,6 +74,7 @@ struct SidebarView: View {
 
     @State private var didAttemptDefaultRepoImport = false
     @State private var expansionController = SidebarExpansionStateController()
+    @FocusState private var sidebarHasKeyFocus: Bool
     @State private var workspaceAction: WorkspaceActionState?
     @State private var workspaceCreationStatusByRepoID: [UUID: WorkspaceCreationStatus] = [:]
     @State private var repoLastAccessedSnapshotByID: [UUID: Date] = [:]
@@ -269,6 +272,41 @@ struct SidebarView: View {
                 webSection
             }
         }
+        .focusable()
+        .focused($sidebarHasKeyFocus)
+        .onKeyPress(.leftArrow) { handleSidebarLeftArrow() }
+        .onKeyPress(.rightArrow) { handleSidebarRightArrow() }
+    }
+
+    /// Tree-style ← behavior. When a workspace is selected, collapse its
+    /// parent repo and lift selection to that parent. When a repo is selected
+    /// and expanded, collapse it. Otherwise pass through.
+    private func handleSidebarLeftArrow() -> KeyPress.Result {
+        if let workspace = selectedWorkspace, let parent = workspace.sourceRepo {
+            selectedWorkspace = nil
+            onRepoSelected(parent)
+            if isRepoExpanded(parent) {
+                toggleRepoExpansion(parent)
+            }
+            return .handled
+        }
+        if let repo = selectedRepo, isRepoExpanded(repo) {
+            toggleRepoExpansion(repo)
+            return .handled
+        }
+        return .ignored
+    }
+
+    /// Tree-style → behavior. When a repo is selected and collapsed, expand
+    /// it. (Moving selection into the first child is intentionally not
+    /// implemented yet — Finder/Xcode both treat → as expand-then-enter, but
+    /// the second step is fiddly and not yet warranted.)
+    private func handleSidebarRightArrow() -> KeyPress.Result {
+        if let repo = selectedRepo, !isRepoExpanded(repo) {
+            toggleRepoExpansion(repo)
+            return .handled
+        }
+        return .ignored
     }
 
     private var repositoriesSection: some View {
@@ -382,17 +420,21 @@ struct SidebarView: View {
     private func repoListRow(_ repo: Repo) -> some View {
         let normalizedRepoPath = normalizePath(repo.localURL)
         let repoSessionKey = HostTerminalSessionKey.repoPath(normalizedRepoPath)
+        let baselineActivity = sessionActivity(for: repoSessionKey)
+        let bubbledActivity = bubbledRepoActivity(for: repo, baseline: baselineActivity)
 
         RepoRow(
             repo: repo,
-            sessionActivity: sessionActivity(for: repoSessionKey),
+            sessionActivity: bubbledActivity,
             paneCount: paneCount(for: repoSessionKey),
             isSelected: selectedRepo?.id == repo.id,
             isExpanded: isRepoExpanded(repo),
+            sessionActivityTooltip: bubbleTooltip(for: repo, bubbled: bubbledActivity, baseline: baselineActivity),
             onToggleExpansion: {
                 toggleRepoExpansion(repo)
             },
             onSelectRepo: {
+                sidebarHasKeyFocus = true
                 if !isRepoExpanded(repo) {
                     expansionController.expandRepo(repo.id)
                 }
@@ -643,7 +685,7 @@ struct SidebarView: View {
     }
 
     private func openSettingsWindow() {
-        SettingsWindowPresenter.open()
+        openSettings()
     }
 
     private func openLumeLog() {
@@ -1117,6 +1159,7 @@ struct SidebarView: View {
 
     @MainActor
     private func selectWorkspace(_ workspace: Workspace) {
+        sidebarHasKeyFocus = true
         // Force a value transition when re-selecting the same workspace so the
         // host session activation path in ContentView runs again.
         if selectedWorkspace?.id == workspace.id {
@@ -1218,6 +1261,45 @@ struct SidebarView: View {
             sessions: hostSessions,
             agentStatusBySessionID: agentStatusBySessionID
         )
+    }
+
+    /// Merge the repo's own-session baseline with the aggregator-bubbled state derived
+    /// from its child workspaces. Most-severe wins, so a yellow `awaitingInput` child
+    /// shows on a collapsed repo row even when the repo's own terminal is idle.
+    private func bubbledRepoActivity(
+        for repo: Repo,
+        baseline: SidebarSessionActivity
+    ) -> SidebarSessionActivity {
+        guard let bubbledStatus = workspaceStatusAggregator.repoStatuses[repo.id] else {
+            return baseline
+        }
+        return baseline.mergedWithBubbled(SidebarSessionActivity.from(bubbledStatus))
+    }
+
+    /// Tooltip that explains the bubbled state when it differs from the baseline,
+    /// e.g., "2 workspaces awaiting input".
+    private func bubbleTooltip(
+        for repo: Repo,
+        bubbled: SidebarSessionActivity,
+        baseline: SidebarSessionActivity
+    ) -> String? {
+        guard bubbled != baseline else { return nil }
+        let attentionCount = repo.workspaces.reduce(into: 0) { count, workspace in
+            guard let status = workspaceStatusAggregator.workspaceStatuses[workspace.id] else { return }
+            switch status.run {
+            case .awaitingInput, .errored: count += 1
+            default: break
+            }
+        }
+        guard attentionCount > 0 else { return nil }
+        switch bubbled {
+        case .errored:
+            return "\(attentionCount) workspace\(attentionCount == 1 ? "" : "s") need attention"
+        case .awaitingInput:
+            return "\(attentionCount) workspace\(attentionCount == 1 ? "" : "s") awaiting input"
+        default:
+            return nil
+        }
     }
 
     private func workspaceStatusMessage(_ workspace: Workspace) -> String? {

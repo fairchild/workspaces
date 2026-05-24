@@ -3,8 +3,8 @@
 //  WorkspaceManagerCore
 //
 //  Live registry of agent session statuses keyed by host session ID. Consumes
-//  AgentEvent values from any input channel (HTTP hooks, OSC fallback, transcript
-//  replay, headless stream) and produces a normalized AgentRunState for the UI.
+//  AgentEvent values from hook, status-line, and OSC inputs, then produces a
+//  normalized AgentRunState for the UI.
 //
 //  Spec: pasted_text_2026-05-03_22-18-10.txt § Channel 1, Channel 3 ("Dedup with hooks").
 //
@@ -34,9 +34,14 @@ public final class AgentSessionRegistry: ObservableObject, AgentSessionRegistryP
 
     private var bookkeeping: [UUID: Bookkeeping] = [:]
     private let clock: @Sendable () -> Date
+    private let localStateStore: LocalStateStore?
 
-    public init(clock: @escaping @Sendable () -> Date = { Date() }) {
+    public init(
+        clock: @escaping @Sendable () -> Date = { Date() },
+        localStateStore: LocalStateStore? = nil
+    ) {
         self.clock = clock
+        self.localStateStore = localStateStore
     }
 
     // MARK: - Public surface
@@ -62,129 +67,18 @@ public final class AgentSessionRegistry: ObservableObject, AgentSessionRegistryP
         statuses.removeValue(forKey: hostSessionID)
     }
 
-    public func ingest(_ event: AgentEvent, for hostSessionID: UUID, origin: AgentEventOrigin) {
-        guard var status = statuses[hostSessionID] else { return }
-        var book = bookkeeping[hostSessionID] ?? Bookkeeping()
-
-        let now = clock()
-        let mappedRun = Self.runState(for: event)
-
-        // OSC dedup: if a hook recently produced the same effective run state for this session,
-        // suppress this OSC event.
-        if case .osc = origin, status.hookActive {
-            if let lastRun = book.lastHookRunStateApplied,
-                let lastAt = book.lastHookEventAt,
-                lastRun == mappedRun,
-                now.timeIntervalSince(lastAt) < Self.oscDedupWindow
-            {
-                return
-            }
-        }
-
-        status.lastEventAt = now
-
-        switch event {
-        case .sessionStart(let agentSessionID, let cwd, let kind):
-            status.agentSessionID = agentSessionID
-            status.kind = kind
-            status.cwd = Self.normalizePath(cwd)
-            status.run = .idle
-            if case .hook = origin {
-                status.hookActive = true
-                book.hookExpirationTask?.cancel()
-                book.hookExpirationTask = scheduleHookExpiration(
-                    for: hostSessionID,
-                    timeout: Self.hookActivityTimeout
-                )
-            }
-
-        case .userPrompt:
-            status.run = .thinking
-
-        case .toolStart(let name, let detail):
-            status.run = .runningTool(name: name, detail: detail)
-
-        case .toolEnd, .toolBatchEnd:
-            // Assume more tools are likely; settle on `.thinking` until a Stop arrives.
-            status.run = .thinking
-
-        case .toolFailed(let name, let error):
-            status.run = .errored(category: .toolFailure, message: error ?? "tool '\(name)' failed")
-
-        case .awaitingInput(let reason, _, _):
-            status.run = .awaitingInput(reason: reason)
-
-        case .stopped(let error):
-            status.run = error == nil ? .complete : .errored(category: .unknown, message: error)
-
-        case .errored(let category, let message):
-            status.run = .errored(category: category, message: message)
-
-        case .statusFields(let fields):
-            mergeStatusFields(fields, into: &status)
-            // intentionally do not touch status.run
-            statuses[hostSessionID] = status
-            bookkeeping[hostSessionID] = book
-            return
-
-        case .workingDirectory(let path):
-            status.cwd = Self.normalizePath(path)
-            statuses[hostSessionID] = status
-            bookkeeping[hostSessionID] = book
-            return
-
-        case .bell:
-            // PR #1: bell is a no-op for v1 — notifications come from awaitingInput.
-            statuses[hostSessionID] = status
-            bookkeeping[hostSessionID] = book
-            return
-        }
-
-        if case .hook = origin {
-            book.lastHookRunStateApplied = status.run
-            book.lastHookEventAt = now
-            status.hookActive = true
-            book.hookExpirationTask?.cancel()
-            book.hookExpirationTask = scheduleHookExpiration(
-                for: hostSessionID,
-                timeout: Self.hookActivityTimeout
-            )
-        }
-
-        statuses[hostSessionID] = status
-        bookkeeping[hostSessionID] = book
-    }
-
-    /// Apply a batch of events to a single host session in one published mutation.
-    ///
-    /// Channel 4 transcript replay can deliver hundreds-to-thousands of events for
-    /// a single cold-started session. The naive shape — calling `ingest(_:for:origin:)`
-    /// in a loop — fires `@Published` once per event and reproduces the allocator-
-    /// pressure pattern observed in the 10-minute long-session perf run
-    /// (~43 bytes/event sustained at high throughput; see
-    /// `.context/claude-integration/perf-audit-pr443-final.md`).
-    ///
-    /// `ingestBatch` builds the new `AgentSessionStatus` by replaying every event
-    /// in order, then writes `statuses[hostSessionID] = newStatus` exactly once.
-    /// SwiftUI sees a single rebind regardless of batch size.
-    ///
-    /// Bookkeeping (`hookActive`, dedup state, hook-expiration task) is preserved —
-    /// transcript-origin batches do not flip `hookActive`.
-    public func ingestBatch(
-        events: [AgentEvent],
-        for hostSessionID: UUID,
-        origin: AgentEventOrigin
-    ) {
+    public func apply(events: [AgentEvent], for hostSessionID: UUID, origin: AgentEventOrigin) {
         guard !events.isEmpty else { return }
         guard var status = statuses[hostSessionID] else { return }
         var book = bookkeeping[hostSessionID] ?? Bookkeeping()
         let now = clock()
 
         for event in events {
-            // OSC dedup applies per-event even in batch form, but for the cold-start
-            // transcript path origin is `.transcript` and the dedup branch is skipped.
+            let mappedRun = Self.runState(for: event)
+
+            // OSC dedup: if a hook recently produced the same effective run state
+            // for this session, suppress this OSC event.
             if case .osc = origin, status.hookActive {
-                let mappedRun = Self.runState(for: event)
                 if let lastRun = book.lastHookRunStateApplied,
                     let lastAt = book.lastHookEventAt,
                     lastRun == mappedRun,
@@ -208,6 +102,7 @@ public final class AgentSessionRegistry: ObservableObject, AgentSessionRegistryP
                 status.run = .runningTool(name: name, detail: detail)
 
             case .toolEnd, .toolBatchEnd:
+                // Assume more tools are likely; settle on `.thinking` until a Stop arrives.
                 status.run = .thinking
 
             case .toolFailed(let name, let error):
@@ -220,19 +115,20 @@ public final class AgentSessionRegistry: ObservableObject, AgentSessionRegistryP
                 status.run = .awaitingInput(reason: reason)
 
             case .stopped(let error):
-                status.run =
-                    error == nil ? .complete : .errored(category: .unknown, message: error)
+                status.run = error == nil ? .complete : .errored(category: .unknown, message: error)
 
             case .errored(let category, let message):
                 status.run = .errored(category: category, message: message)
 
             case .statusFields(let fields):
+                // Intentionally do not touch status.run.
                 mergeStatusFields(fields, into: &status)
 
             case .workingDirectory(let path):
                 status.cwd = Self.normalizePath(path)
 
             case .bell:
+                // Bell is a no-op for v1; notifications come from awaitingInput.
                 continue
             }
 
@@ -251,52 +147,22 @@ public final class AgentSessionRegistry: ObservableObject, AgentSessionRegistryP
                 timeout: Self.hookActivityTimeout
             )
         }
-
         statuses[hostSessionID] = status
         bookkeeping[hostSessionID] = book
-    }
 
-    public func updateStatusFields(_ fields: AgentEvent.StatusFields, for hostSessionID: UUID) {
-        guard var status = statuses[hostSessionID] else { return }
-        mergeStatusFields(fields, into: &status)
-        status.lastEventAt = clock()
-        statuses[hostSessionID] = status
-    }
-
-    /// Resolve a host session for a hook payload. The rule is `agentSessionID`-first
-    /// — once a host session has been bound to a Claude session id, that binding is
-    /// canonical for the rest of the session. Cwd is only consulted as a *fallback*
-    /// for the very first event in a session (which is always a `SessionStart` and
-    /// therefore arrives before any binding exists).
-    ///
-    /// Behaviour:
-    ///   1. If `agentSessionID` is non-nil and matches a bound entry → return it.
-    ///   2. Otherwise, collect host sessions whose cwd matches AND that have no
-    ///      agentSessionID bound yet. Pick the most recently-registered one.
-    ///   3. If no candidate, return nil; the listener will drop the event.
-    ///
-    /// This is what makes the registry safe for duplicate tabs and split panes on
-    /// the same workspace — two `HostTerminalSession`s with the same cwd no longer
-    /// collapse onto a single entry. See defect 2 from the round-2 review.
-    public func resolveHostSession(cwd: String, agentSessionID: String?) -> UUID? {
-        if let agentSessionID {
-            for (hostID, status) in statuses where status.agentSessionID == agentSessionID {
-                return hostID
+        if let localStateStore {
+            let persistedEvents = events
+            let persistedStatus = status
+            Task {
+                try? await localStateStore.recordAgentEvents(
+                    persistedEvents,
+                    hostSessionID: hostSessionID,
+                    origin: origin,
+                    status: persistedStatus,
+                    occurredAt: now
+                )
             }
         }
-
-        let normalized = Self.normalizePath(cwd)
-        let unboundCandidates = statuses.values.filter {
-            $0.cwd == normalized && $0.agentSessionID == nil
-        }
-        guard !unboundCandidates.isEmpty else { return nil }
-        // Most recently registered wins — matches the user's expectation that the
-        // newest terminal owns the next SessionStart.
-        return
-            unboundCandidates
-            .sorted { $0.createdAt > $1.createdAt }
-            .first?
-            .hostSessionID
     }
 
     // MARK: - Internal

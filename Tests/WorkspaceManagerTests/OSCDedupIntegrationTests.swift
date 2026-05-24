@@ -15,6 +15,14 @@ import Testing
 @MainActor
 @Suite("Channel 3 OSC dedup integration")
 struct OSCDedupIntegrationTests {
+    private func apply(
+        _ event: AgentEvent,
+        to registry: AgentSessionRegistry,
+        hostSessionID: UUID,
+        origin: AgentEventOrigin
+    ) {
+        registry.apply(events: [event], for: hostSessionID, origin: origin)
+    }
 
     @Test("Hook then OSC within 750ms: OSC suppressed")
     func hookThenOscWithinWindow() async {
@@ -23,53 +31,52 @@ struct OSCDedupIntegrationTests {
         let id = UUID()
         registry.register(hostSessionID: id, cwd: "/tmp/dedup-int", kind: .claudeCode)
 
-        // Hook: SessionStart binds the agent id and sets hookActive=true.
-        registry.ingest(
+        apply(
             .sessionStart(agentSessionID: "session-A", cwd: "/tmp/dedup-int", kind: .claudeCode),
-            for: id,
+            to: registry,
+            hostSessionID: id,
             origin: .hook
         )
-        // Hook fires permission prompt. Registry caches lastHookRunStateApplied.
-        registry.ingest(
+        apply(
             .awaitingInput(reason: .permissionPrompt, title: "perm", message: "msg"),
-            for: id,
+            to: registry,
+            hostSessionID: id,
             origin: .hook
         )
         let runAfterHook = registry.statuses[id]?.run
 
-        // Adapter maps the OSC payload identically.
-        let adapter = AgentAdapterRegistry().adapter(for: .claudeCode)
-        let oscEvent = adapter.mapOSCNotification(title: "perm", body: "permission requested")
+        let oscEvent = AgentOSCEventMapper.mapNotification(
+            kind: .claudeCode,
+            title: "perm",
+            body: "permission requested"
+        )
 
-        // Within 750ms: OSC suppressed, run state unchanged.
         clock.advance(by: 0.300)
-        registry.ingest(oscEvent, for: id, origin: .osc(surfaceID: 0xDEAD_BEEF))
+        apply(oscEvent, to: registry, hostSessionID: id, origin: .osc(surfaceID: 0xDEAD_BEEF))
         #expect(registry.statuses[id]?.run == runAfterHook)
     }
 
-    @Test("Hook then OSC after 1s: OSC applies (window elapsed)")
+    @Test("Hook then OSC after 1s: OSC applies")
     func hookThenOscAfterWindow() async {
         let clock = TestClock(start: Date(timeIntervalSince1970: 1_700_000_000))
         let registry = AgentSessionRegistry(clock: clock.now)
         let id = UUID()
         registry.register(hostSessionID: id, cwd: "/tmp/dedup-after", kind: .claudeCode)
-        registry.ingest(
+        apply(
             .sessionStart(agentSessionID: "session-B", cwd: "/tmp/dedup-after", kind: .claudeCode),
-            for: id,
+            to: registry,
+            hostSessionID: id,
             origin: .hook
         )
-        // Hook drives a tool — registry remembers lastHookRunStateApplied=runningTool.
-        registry.ingest(.toolStart(name: "Read", detail: nil), for: id, origin: .hook)
+        apply(.toolStart(name: "Read", detail: nil), to: registry, hostSessionID: id, origin: .hook)
 
-        // Wait past the window. OSC `awaitingInput` differs from runningTool, but
-        // even if it didn't, the timestamp branch should let it through.
         clock.advance(by: 1.0)
-        let adapter = AgentAdapterRegistry().adapter(for: .claudeCode)
-        let oscEvent = adapter.mapOSCNotification(
+        let oscEvent = AgentOSCEventMapper.mapNotification(
+            kind: .claudeCode,
             title: "permission",
             body: "Tool needs permission"
         )
-        registry.ingest(oscEvent, for: id, origin: .osc(surfaceID: 0xCAFE))
+        apply(oscEvent, to: registry, hostSessionID: id, origin: .osc(surfaceID: 0xCAFE))
 
         if case .awaitingInput(.permissionPrompt) = registry.statuses[id]?.run {
             // ok
@@ -80,48 +87,53 @@ struct OSCDedupIntegrationTests {
         }
     }
 
-    @Test("Generic adapter OSC also routes via the registry")
-    func genericAdapterOSCApplies() async {
+    @Test("Generic OSC mapping routes via the registry")
+    func genericOSCApplies() async {
         let registry = AgentSessionRegistry()
         let id = UUID()
         registry.register(hostSessionID: id, cwd: "/tmp/opencode", kind: .opencode)
-        let adapter = AgentAdapterRegistry().adapter(for: .opencode)
-        let event = adapter.mapOSCNotification(title: "ready", body: "agent finished")
-        registry.ingest(event, for: id, origin: .osc(surfaceID: nil))
+        let event = AgentOSCEventMapper.mapNotification(
+            kind: .opencode,
+            title: "ready",
+            body: "agent finished"
+        )
+        apply(event, to: registry, hostSessionID: id, origin: .osc(surfaceID: nil))
 
         if case .awaitingInput(.custom) = registry.statuses[id]?.run {
-            // ok — generic adapter maps everything to custom awaiting input
+            // ok
         } else {
-            Issue.record("expected generic adapter to map OSC to custom awaitingInput")
+            Issue.record("expected generic OSC to map to custom awaitingInput")
         }
     }
 
-    @Test("OSC dedup uses .osc origin (hook origin still applies even within window)")
+    @Test("OSC dedup uses .osc origin")
     func dedupSpecificToOSCOrigin() async {
         let clock = TestClock(start: Date(timeIntervalSince1970: 1_700_000_000))
         let registry = AgentSessionRegistry(clock: clock.now)
         let id = UUID()
         registry.register(hostSessionID: id, cwd: "/tmp/origin", kind: .claudeCode)
-        registry.ingest(
+        apply(
             .sessionStart(agentSessionID: "s", cwd: "/tmp/origin", kind: .claudeCode),
-            for: id,
+            to: registry,
+            hostSessionID: id,
             origin: .hook
         )
-        registry.ingest(
+        apply(
             .awaitingInput(reason: .permissionPrompt, title: nil, message: nil),
-            for: id,
+            to: registry,
+            hostSessionID: id,
             origin: .hook
         )
-        clock.advance(by: 0.100)
-        // A second *hook* event with identical state still applies (timestamp updates).
+
+        clock.advance(by: 0.150)
         let lastEventBefore = registry.statuses[id]?.lastEventAt
-        clock.advance(by: 0.050)
-        registry.ingest(
+        apply(
             .awaitingInput(reason: .permissionPrompt, title: nil, message: nil),
-            for: id,
+            to: registry,
+            hostSessionID: id,
             origin: .hook
         )
-        // The hook-vs-hook path is not deduped — it just refreshes lastEventAt.
+
         #expect(registry.statuses[id]?.lastEventAt != lastEventBefore)
     }
 }

@@ -28,6 +28,10 @@ Use lane + state labels: `agent`/`human` for ownership, `ready`/`claimed`/`revie
 
 Single-context repo; use root docs plus `docs/decisions/` for architectural decisions. See `docs/agents/domain.md`.
 
+### Local state schema
+
+The native app's local SQLite sidecar schema lives in `docs/schema.sql`, with the implementation plan in `docs/development/local-state-store-plan.md`. Use them when working on continuity, diagnostics, exports, or local state history. Keep the schema doc manually in sync with `LocalStateStore` migrations whenever tables, indexes, or persisted meanings change.
+
 ## Dev Verification Practice (required)
 
 When changing terminal/keyboard/sidebar behavior, use this loop so future sessions can self-verify reliably:
@@ -256,6 +260,9 @@ mise run web:deps:remove -- <pkg>           # pnpm remove + auto-fix formatting
 | Debug an issue | docs/development/troubleshooting.md | - |
 | Terminal keyboard focus | docs/development/solution-terminal-keyboard.md | - |
 | Evidence guide | docs/development/evidence.md | - |
+| UI fixture mode + release screenshots | docs/development/ui-fixture-mode.md | - |
+| Local SQLite state schema | docs/schema.sql | - |
+| Local state store plan | docs/development/local-state-store-plan.md | - |
 | Lume runner setup | docs/development/lume-runner-setup.md | - |
 | Lume daemon reliability | docs/development/lume-integration.md § "Daemon Reliability" | - |
 | Web architecture | web/docs/architecture.md | - |
@@ -271,6 +278,7 @@ mise run web:deps:remove -- <pkg>           # pnpm remove + auto-fix formatting
 | Data models | Sources/WorkspaceManagerCore/Models/Models.swift |
 | Git operations | Sources/WorkspaceManagerCore/Services/GitService.swift |
 | Workspace lifecycle | Sources/WorkspaceManagerCore/Services/WorkspaceService.swift |
+| Local state history | Sources/WorkspaceManagerCore/Services/LocalStateStore.swift |
 | Service protocols | Sources/WorkspaceManagerCore/Services/Protocols.swift |
 | Backend abstraction | Sources/WorkspaceManagerCore/Services/LocalBackend.swift |
 | Lume runtime setup | Sources/WorkspaceManagerCore/Services/LumeRuntimeService.swift |

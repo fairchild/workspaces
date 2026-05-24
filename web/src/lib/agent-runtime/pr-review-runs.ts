@@ -1,7 +1,11 @@
 import { createHash } from "node:crypto";
 import { getDb } from "../db";
 
-export type PrReviewRunStatus = "started" | "completed" | "failed";
+export type PrReviewRunStatus =
+	| "started"
+	| "completed"
+	| "failed"
+	| "superseded";
 
 export interface PrReviewRunFingerprintInput {
 	repoFullName: string;
@@ -76,6 +80,8 @@ const STALE_STARTED_MS = 15 * 60 * 1000;
  * The semantics are:
  * - no row → insert and proceed.
  * - row with `completed` → skip; the previous run already produced a review.
+ * - row with `superseded` → skip; a later broker pass intentionally retired
+ *   that run because a newer managed review was already visible.
  * - row with `failed` → reset to `started` and proceed; lets a later
  *   redelivery (or a follow-on event with the same fingerprint) recover from
  *   a transient session-create or events.send failure.
@@ -141,7 +147,7 @@ export async function recordRunStart(
 	}
 
 	const priorStatus = existing.status as PrReviewRunStatus;
-	if (priorStatus === "completed") {
+	if (priorStatus === "completed" || priorStatus === "superseded") {
 		return { inserted: false, priorStatus };
 	}
 	if (priorStatus === "started") {
@@ -187,6 +193,112 @@ export async function recordRunResult(
 		})
 		.where("fingerprint", "=", fingerprint)
 		.execute();
+}
+
+export interface PrReviewRunSummary {
+	fingerprint: string;
+	repoFullName: string;
+	prNumber: number;
+	headSha: string;
+	triggerKind: string;
+	triggerSourceId: string;
+	status: PrReviewRunStatus;
+	sessionId: string | null;
+	createdAt: string;
+	updatedAt: string;
+}
+
+export interface StartedPrReviewRun {
+	fingerprint: string;
+	repoFullName: string;
+	prNumber: number;
+	headSha: string;
+	triggerKind: string;
+	triggerSourceId: string;
+	sessionId: string;
+	createdAt: string;
+	updatedAt: string;
+}
+
+export async function listRecentPrReviewRuns(input: {
+	sinceIso: string;
+	repoFullName: string;
+}): Promise<PrReviewRunSummary[]> {
+	await ensureRunsTable();
+	const rows = await getDb()
+		.selectFrom("managed_pr_review_runs")
+		.select([
+			"fingerprint",
+			"repo_full_name",
+			"pr_number",
+			"head_sha",
+			"trigger_kind",
+			"trigger_source_id",
+			"status",
+			"session_id",
+			"created_at",
+			"updated_at",
+		])
+		.where("created_at", ">=", input.sinceIso)
+		.where("repo_full_name", "=", input.repoFullName)
+		.execute();
+
+	return rows.map((row) => ({
+		fingerprint: row.fingerprint,
+		repoFullName: row.repo_full_name,
+		prNumber: row.pr_number,
+		headSha: row.head_sha,
+		triggerKind: row.trigger_kind,
+		triggerSourceId: row.trigger_source_id,
+		status: row.status as PrReviewRunStatus,
+		sessionId: row.session_id,
+		createdAt: row.created_at,
+		updatedAt: row.updated_at,
+	}));
+}
+
+export async function listStartedPrReviewRuns(
+	input: {
+		limit?: number;
+		repoFullName?: string;
+	} = {},
+): Promise<StartedPrReviewRun[]> {
+	await ensureRunsTable();
+	let query = getDb()
+		.selectFrom("managed_pr_review_runs")
+		.select([
+			"fingerprint",
+			"repo_full_name",
+			"pr_number",
+			"head_sha",
+			"trigger_kind",
+			"trigger_source_id",
+			"session_id",
+			"created_at",
+			"updated_at",
+		])
+		.where("status", "=", "started")
+		.where("session_id", "is not", null)
+		.orderBy("updated_at", "asc")
+		.limit(input.limit ?? 10);
+	if (input.repoFullName) {
+		query = query.where("repo_full_name", "=", input.repoFullName);
+	}
+	const rows = await query.execute();
+
+	return rows
+		.filter((row) => row.session_id)
+		.map((row) => ({
+			fingerprint: row.fingerprint,
+			repoFullName: row.repo_full_name,
+			prNumber: row.pr_number,
+			headSha: row.head_sha,
+			triggerKind: row.trigger_kind,
+			triggerSourceId: row.trigger_source_id,
+			sessionId: row.session_id as string,
+			createdAt: row.created_at,
+			updatedAt: row.updated_at,
+		}));
 }
 
 /** Test-only hook so per-test in-memory DBs re-run table creation. */

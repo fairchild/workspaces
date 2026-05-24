@@ -264,6 +264,12 @@ class SecurityHardeningTests(unittest.TestCase):
             self.assertTrue(entry["url"].startswith("https://"))
 
     def test_mise_invocations_are_locked_and_pinned(self) -> None:
+        verify_mise = (REPO_ROOT / "scripts/verify-mise-security.sh").read_text()
+        self.assertIn("MISE_EXPECTED_VERSION=\"v2026.5.11\"", verify_mise)
+        self.assertIn("verify_locked_zig_exec", verify_mise)
+        self.assertIn("github.com/repos/jdx/mise/releases/latest", verify_mise)
+        self.assertIn("SHASUMS256.txt", verify_mise)
+
         build_ghosttykit = (REPO_ROOT / "scripts/build-ghosttykit.sh").read_text()
         self.assertIn('mise exec --locked "zig@$ZIG_VERSION" -- zig', build_ghosttykit)
         self.assertIn("MISE_CONFIG_FILE=$PROJECT_DIR/.mise.toml", build_ghosttykit)
@@ -275,6 +281,7 @@ class SecurityHardeningTests(unittest.TestCase):
         self.assertIn('if [[ "$FAST" == "1" ]]', setup)
         self.assertIn("mise install --locked zig@0.15.2", setup)
         self.assertIn("MISE_IGNORED_CONFIG_PATHS=", setup)
+        self.assertIn('-path "*/.pnpm-store" -prune', setup)
         self.assertNotIn("trust every checked-in project config", setup)
 
         conductor = json.loads((REPO_ROOT / "conductor.json").read_text())
@@ -284,10 +291,25 @@ class SecurityHardeningTests(unittest.TestCase):
         self.assertIn("enable-global-virtual-store=true", web_npmrc)
 
         sandbox = (REPO_ROOT / "web/src/lib/agent-runtime/vercel-sandbox.ts").read_text()
-        self.assertIn("MISE_VERSION='v2026.5.3'", sandbox)
-        self.assertIn("MISE_SHA256='9a4f228158a316b236653ff615e9955f50c56c6a3ef719135d327c7fc632b89b'", sandbox)
+        self.assertIn("MISE_VERSION='v2026.5.11'", sandbox)
+        self.assertIn("MISE_SHA256='9bb41ae4dbe2bcdfdbe36cf3c737a8bdb72035c03af3b7218a70780988f62b9b'", sandbox)
         self.assertIn("sha256sum -c -", sandbox)
         self.assertNotIn("mise-latest-linux-x64", sandbox)
+
+    def test_mise_security_workflow_runs_for_mise_changes(self) -> None:
+        workflow = (REPO_ROOT / ".github/workflows/mise-security.yml").read_text()
+        self.assertIn("name: Mise Security", workflow)
+        self.assertIn("scripts/verify-mise-security.sh", workflow)
+        for expected_path in (
+            ".mise.toml",
+            "web/.mise.toml",
+            "mise.lock",
+            "scripts/setup",
+            "scripts/build-ghosttykit.sh",
+            "scripts/verify-mise-security.sh",
+            "web/src/lib/agent-runtime/vercel-sandbox.ts",
+        ):
+            self.assertIn(expected_path, workflow)
 
     def test_release_workflow_publishes_and_validates_manifest_and_appcast_signature(self) -> None:
         workflow = (REPO_ROOT / ".github/workflows/release.yml").read_text()
@@ -319,12 +341,85 @@ class SecurityHardeningTests(unittest.TestCase):
         self.assertIn("consumeTerminalTicket", ticket_route)
         self.assertIn('fetch("/api/terminal/ticket"', terminal_canvas)
 
-    def test_pr_reviewer_does_not_mount_github_write_tokens(self) -> None:
+    def test_pr_reviewer_limits_github_credentials_to_repository_resource(self) -> None:
         reviewer = (REPO_ROOT / "web/src/lib/agent-runtime/pr-review.ts").read_text()
         self.assertNotIn(".github-token", reviewer)
-        self.assertNotIn("authorization_token: githubToken", reviewer)
         self.assertNotIn('networking: { type: "unrestricted" }', reviewer)
-        self.assertIn("The managed-agent workspace is intentionally tokenless", reviewer)
+        self.assertIn("authorization_token: githubToken", reviewer)
+        self.assertIn("short-lived GitHub App installation token", reviewer)
+        self.assertIn(
+            "do not look for environment variables or files containing GitHub credentials",
+            reviewer,
+        )
+        self.assertIn(
+            "server-side broker is the only component that may post the review or labels",
+            reviewer,
+        )
+
+    def test_pr_reviewer_ingress_canary_is_hmac_and_secret_gated(self) -> None:
+        route = (REPO_ROOT / "web/src/app/api/webhooks/github/route.ts").read_text()
+        monitor = (
+            REPO_ROOT / "web/src/app/api/webhooks/github/pr-reviewer-monitor/route.ts"
+        ).read_text()
+        broker = (
+            REPO_ROOT / "web/src/app/api/webhooks/github/pr-reviewer-broker/route.ts"
+        ).read_text()
+        runs = (REPO_ROOT / "web/src/lib/agent-runtime/pr-review-runs.ts").read_text()
+        route_test = (REPO_ROOT / "web/src/app/api/webhooks/github/route.test.ts").read_text()
+        worker = (REPO_ROOT / "infra/cloudflare-webhook-relay/src/index.ts").read_text()
+        workflow = (REPO_ROOT / ".github/workflows/managed-reviewer-ingress.yml").read_text()
+        cd_workflow = (REPO_ROOT / ".github/workflows/cd.yml").read_text()
+        canary_script = (REPO_ROOT / "scripts/managed-reviewer-ingress-canary.py").read_text()
+
+        for source in (route, monitor, broker, worker, workflow, cd_workflow, canary_script):
+            self.assertIn("WORKSPACES_WEBHOOK_CANARY_SECRET", source)
+
+        self.assertIn("validateCanaryRequest", route)
+        self.assertIn("verifySignature(body, signature)", route)
+        self.assertLess(
+            route.index("verifySignature(body, signature)"),
+            route.index("validateCanaryRequest(request.headers)"),
+        )
+        self.assertIn("pushEvent).not.toHaveBeenCalled", route_test)
+        self.assertIn("triggerPrReview).not.toHaveBeenCalled", route_test)
+
+        self.assertIn("/canary/pr-review-ingress", worker)
+        self.assertIn("signGitHubSignature", worker)
+        self.assertIn("allowedForwardUrl", worker)
+        self.assertIn("managed_pr_review_runs", runs)
+        self.assertIn("listRecentPrReviewRuns", monitor)
+        self.assertIn("processPendingPrReviewRuns", broker)
+        self.assertIn("pr-reviewer-broker", canary_script)
+        self.assertIn("pr-reviewer-monitor", canary_script)
+        self.assertIn("scripts/managed-reviewer-ingress-canary.py", workflow)
+        self.assertIn("scripts/managed-reviewer-ingress-canary.py", cd_workflow)
+        self.assertNotIn("python3 - <<", workflow)
+        self.assertNotIn("python3 - <<", cd_workflow)
+        self.assertIn("Managed reviewer ingress canary", cd_workflow)
+        self.assertIn("canary-secret-preflight", cd_workflow)
+        self.assertIn("managed-reviewer-canary-preflight", cd_workflow)
+        self.assertIn("Managed reviewer ingress canary before promotion", cd_workflow)
+        self.assertIn("pre-prod-managed-reviewer-ingress-findings", cd_workflow)
+        self.assertIn(
+            "WORKSPACES_WEBHOOK_CANARY_SECRET is required before production promotion",
+            cd_workflow,
+        )
+        self.assertIn("managed-reviewer-ingress-canary.log", cd_workflow)
+        self.assertIn("bun run test:e2e", workflow)
+        self.assertIn("wrangler deploy --dry-run", workflow)
+        self.assertIn("urllib.request", canary_script)
+        self.assertIn("SAFE_RESPONSE_KEYS", canary_script)
+
+        result = subprocess.run(
+            ["python3", "scripts/managed-reviewer-ingress-canary.py", "--skip-monitor"],
+            cwd=REPO_ROOT,
+            env={key: value for key, value in os.environ.items() if key != "WORKSPACES_WEBHOOK_CANARY_SECRET"},
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("WORKSPACES_WEBHOOK_CANARY_SECRET is required", result.stderr)
 
     def test_sparkle_appcast_verifier_accepts_valid_ed25519_signature(self) -> None:
         if shutil.which("swift") is None:

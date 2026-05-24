@@ -348,8 +348,8 @@ async function resolveBaseSnapshot(): Promise<string> {
 			"-c",
 			[
 				"set -euo pipefail",
-				"MISE_VERSION='v2026.5.3'",
-				"MISE_SHA256='9a4f228158a316b236653ff615e9955f50c56c6a3ef719135d327c7fc632b89b'",
+				"MISE_VERSION='v2026.5.11'",
+				"MISE_SHA256='9bb41ae4dbe2bcdfdbe36cf3c737a8bdb72035c03af3b7218a70780988f62b9b'",
 				'MISE_URL="https://github.com/jdx/mise/releases/download/${MISE_VERSION}/mise-${MISE_VERSION}-linux-x64"',
 				"echo '--- downloading mise ---'",
 				'curl -fsSL "$MISE_URL" -o /tmp/mise',

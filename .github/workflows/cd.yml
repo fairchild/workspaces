@@ -20,6 +20,47 @@ permissions:
   actions: write
 
 jobs:
+  canary-secret-preflight:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require managed reviewer canary secret
+        env:
+          WORKSPACES_WEBHOOK_CANARY_SECRET: ${{ secrets.WORKSPACES_WEBHOOK_CANARY_SECRET }}
+        run: |
+          if [ -z "$WORKSPACES_WEBHOOK_CANARY_SECRET" ]; then
+            echo "::error::WORKSPACES_WEBHOOK_CANARY_SECRET is required before production promotion"
+            exit 1
+          fi
+
+  managed-reviewer-canary-preflight:
+    needs: canary-secret-preflight
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Managed reviewer ingress canary before promotion
+        env:
+          WORKSPACES_WEBHOOK_CANARY_SECRET: ${{ secrets.WORKSPACES_WEBHOOK_CANARY_SECRET }}
+        run: |
+          set +e
+          python3 scripts/managed-reviewer-ingress-canary.py > managed-reviewer-ingress-canary.log 2>&1
+          CANARY_EXIT=$?
+          cat managed-reviewer-ingress-canary.log
+          if [ "$CANARY_EXIT" -ne 0 ]; then
+            {
+              echo "# Managed reviewer ingress preflight failed"
+              echo
+              echo '```text'
+              cat managed-reviewer-ingress-canary.log
+              echo '```'
+            } > findings.md
+          fi
+          exit "$CANARY_EXIT"
+      - if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: pre-prod-managed-reviewer-ingress-findings
+          path: findings.md
+
   preview-web:
     runs-on: ubuntu-latest
     outputs:
@@ -177,7 +218,13 @@ jobs:
           path: web/findings.md
 
   promote:
-    needs: [preview-web, preview-workers, playwright-validate, lighthouse]
+    needs:
+      - preview-web
+      - preview-workers
+      - playwright-validate
+      - lighthouse
+      - canary-secret-preflight
+      - managed-reviewer-canary-preflight
     if: success()
     runs-on: ubuntu-latest
     steps:
@@ -287,6 +334,24 @@ jobs:
           done
           echo "::error::Prod unreachable after 5 attempts"
           exit 1
+      - name: Managed reviewer ingress canary
+        env:
+          WORKSPACES_WEBHOOK_CANARY_SECRET: ${{ secrets.WORKSPACES_WEBHOOK_CANARY_SECRET }}
+        run: |
+          set +e
+          python3 ../scripts/managed-reviewer-ingress-canary.py > managed-reviewer-ingress-canary.log 2>&1
+          CANARY_EXIT=$?
+          cat managed-reviewer-ingress-canary.log
+          if [ "$CANARY_EXIT" -ne 0 ]; then
+            {
+              echo "# Managed reviewer ingress canary failed"
+              echo
+              echo '```text'
+              cat managed-reviewer-ingress-canary.log
+              echo '```'
+            } > findings.md
+          fi
+          exit "$CANARY_EXIT"
       - name: Playwright fast against prod
         env:
           PLAYWRIGHT_BASE_URL: https://spaces.cloudcompute.com

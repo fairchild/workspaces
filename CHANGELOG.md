@@ -1,5 +1,85 @@
 # Changelog
 
+## [0.15.1] - 2026-05-19
+
+### Fixed
+- broker managed reviewer completions out of band (#489)
+- supersede stale managed reviews (#490)
+- harden local state persistence and diagnostics (#488)
+- show managed reviewer pickup status (#494)
+- harden perf readiness diagnostics
+
+### Other
+- Restore managed reviewer repository auth (#487)
+- Refactor main window orchestration into focused controllers (#486)
+
+## [0.15.0] - 2026-05-16
+
+### Added
+- add local SQLite state store foundation
+
+## [0.14.0] - 2026-05-16
+
+### Added
+- add runtime diagnostics detail pane
+
+### Fixed
+- forward PR review webhooks to web app (#478)
+- unblock docs deployment validation (#481)
+
+### Other
+- [codex] Publish WorkSpaces docs site (#463)
+- Harden managed reviewer ingress tests (#480)
+
+## [0.13.1] - 2026-05-12
+
+### Fixed
+- post managed PR review intents (#476)
+- avoid packaged Claude hook resource crash (#477)
+
+## [0.13.0] - 2026-05-10
+
+### Added
+- claude code hook integration (PR #1, contract layer + Channel 1)
+- settings → agents pane for claude hook installer
+- claude code OSC fallback channel + backup rotation (PR #3)
+- claude code headless runner channel (PR #5)
+- Channel 4 transcript replay + cold-start state recovery (PR #4)
+- claude code statusline channel (PR #2)
+- rerun on meaningful PR updates (#464)
+- shape the kickoff as a follow-up on reruns (#468)
+
+### Fixed
+- wire AgentSessionRegistry to host sessions and the sidebar
+- silently reinstall Claude hooks on launch when opted in
+- resolveHostSession routes by agentSessionID first, cwd is SessionStart fallback
+- inject agentSessionRegistry into Settings scene via keyed environment
+- publish claude settings installer to settings scene
+- write claude hooks using matcher groups
+- prevent setup prerender auth secret failure (#462)
+- command-hook forwarder for /event (Unsupported protocol http+unix:) (#466)
+- make agent label migration idempotent (#470)
+
+### Other
+- swift-format pass on claude integration sources
+- add TestClock and waitUntil helpers; fix CI race + sendable warning
+- multi-session resolveHostSession scenarios for duplicate tabs
+- make release asset validation reliable
+- channel1 perf + risk tests, drivers, contract entries
+- claude code integration reference
+- add claude integration smoke harness
+- harden mise setup
+- configure Matt Pocock skills
+- Refine Ghostty terminal action routing (#461)
+- Enable Command+, and align shortcut catalog (#460)
+- fix xcode cloud ghostty gettext setup (#459)
+- speed up conductor workspace setup (#465)
+- simplify agent lifecycle labels (#467)
+- harden agent label migration (#469)
+- verify mise security changes (#458)
+- Fix Settings menu opening (#474)
+- Simplify Claude integration architecture (#473)
+
 ## [0.12.0] - 2026-05-06
 
 ### Added

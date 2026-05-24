@@ -15,6 +15,7 @@ import type {
 } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 300;
 
 const SUPPORTED_EVENTS = new Set<string>([
 	"pull_request",
@@ -27,6 +28,8 @@ const SUPPORTED_EVENTS = new Set<string>([
 	"issue_comment",
 	"workflow_run",
 ]);
+
+const WEBHOOK_CANARY_HEADER = "x-workspace-webhook-canary";
 
 async function verifySignature(
 	body: string,
@@ -57,6 +60,44 @@ async function verifySignature(
 	const sigBuf = Buffer.from(signature);
 	const expectedBuf = Buffer.from(expected);
 	return crypto.timingSafeEqual(sigBuf, expectedBuf);
+}
+
+function timingSafeStringEqual(actual: string, expected: string): boolean {
+	if (actual.length !== expected.length) return false;
+	return crypto.timingSafeEqual(Buffer.from(actual), Buffer.from(expected));
+}
+
+function validateCanaryRequest(headers: Headers): {
+	active: boolean;
+	response?: Response;
+} {
+	const provided = headers.get(WEBHOOK_CANARY_HEADER);
+	if (!provided) return { active: false };
+
+	const expected = process.env.WORKSPACES_WEBHOOK_CANARY_SECRET;
+	if (!expected) {
+		console.warn("[webhooks] canary requested but secret is not configured");
+		return {
+			active: false,
+			response: Response.json(
+				{ ok: false, canary: true, error: "canary_not_configured" },
+				{ status: 404 },
+			),
+		};
+	}
+
+	if (!timingSafeStringEqual(provided, expected)) {
+		console.warn("[webhooks] invalid canary secret");
+		return {
+			active: false,
+			response: Response.json(
+				{ ok: false, canary: true, error: "invalid_canary_secret" },
+				{ status: 401 },
+			),
+		};
+	}
+
+	return { active: true };
 }
 
 function summarize(
@@ -99,6 +140,9 @@ export async function POST(request: Request): Promise<Response> {
 		return new Response("invalid signature", { status: 401 });
 	}
 
+	const canary = validateCanaryRequest(request.headers);
+	if (canary.response) return canary.response;
+
 	const eventType = request.headers.get("x-github-event");
 	if (!eventType || !SUPPORTED_EVENTS.has(eventType)) {
 		return new Response("ignored", { status: 200 });
@@ -108,6 +152,20 @@ export async function POST(request: Request): Promise<Response> {
 	const action = String(payload.action ?? "");
 	const repo = (payload.repository as Record<string, unknown> | undefined)
 		?.full_name as string | undefined;
+	const trigger = parsePrReviewTrigger(eventType, action, payload);
+
+	if (canary.active) {
+		const wouldTrigger = Boolean(trigger);
+		return Response.json({
+			ok: wouldTrigger,
+			canary: true,
+			wouldTrigger,
+			triggerKind: trigger?.context.kind ?? null,
+			eventType,
+			action,
+			repo: repo ?? "unknown",
+		});
+	}
 
 	const event: WebhookEvent = {
 		id: request.headers.get("x-github-delivery") ?? crypto.randomUUID(),
@@ -144,7 +202,6 @@ export async function POST(request: Request): Promise<Response> {
 
 	// Trigger automated PR review via Managed Agents before returning so
 	// serverless teardown cannot drop the session kickoff event.
-	const trigger = parsePrReviewTrigger(eventType, action, payload);
 	if (trigger) {
 		try {
 			await triggerPrReview(trigger.reviewPayload, trigger.context);

@@ -7,9 +7,8 @@
 //  Spec: pasted_text_2026-05-03_22-18-10.txt § Channel 4. Two consumption shapes:
 //
 //    - `tail()`: opens the file, yields every record from the start, then ends.
-//      Cold-start state recovery uses this. The throttle (≤500 ev/s) is applied
-//      at the *consumer* (cold-start replay coordinator), not in the reader —
-//      keeping the reader pure and reusable.
+//      Conversation replay uses this. The reader deliberately does not rebuild
+//      AgentSessionRegistry state.
 //
 //    - `live()`: opens the file, yields existing records, then keeps the file
 //      open for `tail -f`–style append polling. Real Claude does not push

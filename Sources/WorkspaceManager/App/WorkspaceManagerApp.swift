@@ -18,8 +18,10 @@ struct WorkspaceManagerApp: App {
     @StateObject private var modelStoreStatusController: ModelStoreStatusController
     @StateObject private var softwareUpdateController: SoftwareUpdateController
     @StateObject private var agentSessionRegistry: AgentSessionRegistry
+    @StateObject private var workspaceStatusAggregator = WorkspaceStatusAggregator()
     @StateObject private var claudeIntegrationLifecycle: ClaudeIntegrationLifecycle
     private let appRuntimeDependencies = AppRuntimeDependencies.resolved()
+    private let localStateStore: LocalStateStore?
     let sharedModelContainer: ModelContainer
 
     init() {
@@ -29,7 +31,15 @@ struct WorkspaceManagerApp: App {
             launchEnvironment: ProcessInfo.processInfo.environment
         )
         if ProcessInfo.processInfo.environment["WORKSPACES_UI_FIXTURE"] == "1" {
-            seedUIFixtureDataIfNeeded(in: bootstrap.container.mainContext)
+            UIFixtureSeeder.seedDataIfNeeded(in: bootstrap.container.mainContext)
+        }
+
+        let localStateBootstrap = LocalStateStoreBootstrapper.bootstrap(
+            launchEnvironment: ProcessInfo.processInfo.environment
+        )
+        LocalStateStoreController.shared.apply(localStateBootstrap)
+        Task {
+            await StartupDiagnosticsStore.shared.attach(localStateStore: localStateBootstrap.store)
         }
 
         ModelStoreStatusController.shared.apply(bootstrap)
@@ -37,9 +47,10 @@ struct WorkspaceManagerApp: App {
         _modelStoreStatusController = StateObject(wrappedValue: .shared)
         _softwareUpdateController = StateObject(wrappedValue: SoftwareUpdateController())
         _claudeIntegrationLifecycle = StateObject(wrappedValue: ClaudeIntegrationLifecycle.shared)
-        let registry = AgentSessionRegistry()
+        let registry = AgentSessionRegistry(localStateStore: localStateBootstrap.store)
         _agentSessionRegistry = StateObject(wrappedValue: registry)
         self.sharedModelContainer = bootstrap.container
+        self.localStateStore = localStateBootstrap.store
 
         // Stand up the hook listener and notification poster on the same registry instance.
         // The listener binds to a Unix socket under Application Support keyed by pid.
@@ -62,7 +73,9 @@ struct WorkspaceManagerApp: App {
             )
             .environmentObject(modelStoreStatusController)
             .environmentObject(agentSessionRegistry)
+            .environmentObject(workspaceStatusAggregator)
             .environment(\.agentSessionRegistry, agentSessionRegistry)
+            .environment(\.localStateStore, localStateStore)
             .frame(minWidth: 1000, minHeight: 700)
             .onAppear {
                 softwareUpdateController.installCheckForUpdatesMenuItem()
@@ -80,16 +93,6 @@ struct WorkspaceManagerApp: App {
                     softwareUpdateController.checkForUpdatesWithDisclosure()
                 }
                 .disabled(!softwareUpdateController.canCheckForUpdates)
-            }
-
-            CommandGroup(replacing: .appSettings) {
-                Button("Settings...") {
-                    SettingsWindowPresenter.open()
-                }
-                .keyboardShortcut(
-                    AppChromeShortcut.settings.keyEquivalent,
-                    modifiers: AppChromeShortcut.settings.eventModifiers
-                )
             }
 
             CommandGroup(replacing: .newItem) {
@@ -191,6 +194,15 @@ struct WorkspaceManagerApp: App {
                     modifiers: AppChromeShortcut.toggleTerminalPanel.eventModifiers
                 )
                 .disabled(!appCommandState.mainWindowAvailability.canToggleTerminalPanel)
+
+                Button("Switch Workspace...") {
+                    appCommandState.perform(.openCommandPalette)
+                }
+                .keyboardShortcut(
+                    AppChromeShortcut.workspaceSwitcher.keyEquivalent,
+                    modifiers: AppChromeShortcut.workspaceSwitcher.eventModifiers
+                )
+                .disabled(!appCommandState.mainWindowAvailability.canOpenCommandPalette)
             }
 
             SidebarCommands()
@@ -245,59 +257,6 @@ struct WorkspaceManagerApp: App {
     }
 }
 
-private func seedUIFixtureDataIfNeeded(in context: ModelContext) {
-    do {
-        let repoCount = try context.fetchCount(FetchDescriptor<Repo>())
-        guard repoCount == 0 else { return }
-    } catch {
-        // If readback fails, continue and try to seed once.
-    }
-
-    let codeRoot = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("code", isDirectory: true)
-
-    let skillsRepo = Repo(
-        name: "skills",
-        localPath: codeRoot.appendingPathComponent("skills", isDirectory: true)
-    )
-    let servicesRepo = Repo(
-        name: "services",
-        localPath: codeRoot.appendingPathComponent("services", isDirectory: true)
-    )
-    let superpowersRepo = Repo(
-        name: "superpowers",
-        localPath: codeRoot.appendingPathComponent("superpowers", isDirectory: true)
-    )
-    let workspacesRepo = Repo(
-        name: "workspaces",
-        localPath: codeRoot.appendingPathComponent("workspaces", isDirectory: true)
-    )
-    let swiftDocs = WebSource(
-        name: "Swift Docs",
-        baseURLString: "https://docs.swift.org/",
-        allowedHost: "docs.swift.org"
-    )
-
-    context.insert(skillsRepo)
-    context.insert(servicesRepo)
-    context.insert(superpowersRepo)
-    context.insert(workspacesRepo)
-    context.insert(swiftDocs)
-
-    let skillsWorkspace = Workspace(
-        name: "skills-v13",
-        path: codeRoot.appendingPathComponent("workspaces/skills/skills-v13", isDirectory: true),
-        sourceRepo: skillsRepo,
-        gitBranch: "workspace/skills-v13"
-    )
-    context.insert(skillsWorkspace)
-
-    do {
-        try context.save()
-    } catch {
-        NSLog("[UIFixture] Failed to seed fixture data: %@", String(describing: error))
-    }
-}
-
 private struct MainWindowRootView: View {
     private let appRuntimeDependencies: AppRuntimeDependencies
     @ObservedObject private var appCommandState: AppCommandState
@@ -340,14 +299,29 @@ private struct MainWindowRootView: View {
 
 /// Attaches the app-scoped `AgentSessionRegistry` to the host terminal store so the
 /// store can register/deregister host sessions with the registry — closes the gap
-/// where production POSTs to `/event` had nowhere to land.
+/// where production POSTs to `/event` had nowhere to land. Also runs the fixture
+/// agent-state seeder so deterministic screenshots can land at specific run states.
 private struct AgentSessionRegistryAttacher: ViewModifier {
     @EnvironmentObject private var registry: AgentSessionRegistry
+    @Environment(\.localStateStore) private var localStateStore
+    @Environment(\.modelContext) private var modelContext
     let hostTerminalState: HostTerminalStateStore
 
     func body(content: Content) -> some View {
         content.onAppear {
-            hostTerminalState.attach(agentSessionRegistry: registry)
+            hostTerminalState.attach(
+                agentSessionRegistry: registry,
+                localStateStore: localStateStore,
+                hooksSocketPath: ClaudeIntegrationLifecycle.shared.socketPath
+            )
+            if ProcessInfo.processInfo.environment["WORKSPACES_UI_FIXTURE"] == "1" {
+                UIFixtureSeeder.seedAgentStatesIfNeeded(
+                    from: ProcessInfo.processInfo.environment,
+                    in: modelContext,
+                    registry: registry,
+                    hostTerminalState: hostTerminalState
+                )
+            }
         }
     }
 }
@@ -359,6 +333,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var windowObserver: Any?
     private static let appVariantEnvKey = "WORKSPACES_APP_VARIANT"
+    private nonisolated static let disableStateRestorationEnvKey = "WORKSPACES_DISABLE_STATE_RESTORATION"
 
     private enum AppVariant {
         case standard
@@ -385,6 +360,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var isCI: Bool {
         ProcessInfo.processInfo.environment["CI"] != nil
+    }
+
+    private var disablesStateRestoration: Bool {
+        !Self.shouldPreserveState(launchEnvironment: ProcessInfo.processInfo.environment)
+    }
+
+    nonisolated static func shouldPreserveState(launchEnvironment: [String: String]) -> Bool {
+        launchEnvironment[disableStateRestorationEnvKey] != "1"
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -500,6 +483,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return false
     }
 
+    func application(_ application: NSApplication, shouldSaveSecureApplicationState coder: NSCoder) -> Bool {
+        !disablesStateRestoration
+    }
+
+    func application(_ application: NSApplication, shouldRestoreSecureApplicationState coder: NSCoder) -> Bool {
+        !disablesStateRestoration
+    }
+
+    func application(_ application: NSApplication, shouldSaveApplicationState coder: NSCoder) -> Bool {
+        !disablesStateRestoration
+    }
+
+    func application(_ application: NSApplication, shouldRestoreApplicationState coder: NSCoder) -> Bool {
+        !disablesStateRestoration
+    }
+
     func applicationDidBecomeActive(_ notification: Notification) {
         NSLog("[AppDelegate] applicationDidBecomeActive")
         applyApplicationIconIfAvailable()
@@ -543,6 +542,10 @@ private struct AgentSessionRegistryKey: EnvironmentKey {
     static let defaultValue: AgentSessionRegistry? = nil
 }
 
+private struct LocalStateStoreKey: EnvironmentKey {
+    static let defaultValue: LocalStateStore? = nil
+}
+
 private struct ClaudeSettingsInstallerKey: EnvironmentKey {
     static let defaultValue: (any ClaudeSettingsInstalling)? = nil
 }
@@ -583,6 +586,11 @@ extension EnvironmentValues {
         set { self[AgentSessionRegistryKey.self] = newValue }
     }
 
+    var localStateStore: LocalStateStore? {
+        get { self[LocalStateStoreKey.self] }
+        set { self[LocalStateStoreKey.self] = newValue }
+    }
+
     var claudeSettingsInstaller: (any ClaudeSettingsInstalling)? {
         get { self[ClaudeSettingsInstallerKey.self] }
         set { self[ClaudeSettingsInstallerKey.self] = newValue }
@@ -605,6 +613,7 @@ struct MainWindowFocusedActions {
     var openDesktop: Action? = nil
     var revealInFinder: Action? = nil
     var copyPath: Action? = nil
+    var openCommandPalette: Action? = nil
 
     @MainActor static let empty = MainWindowFocusedActions()
 }
@@ -623,6 +632,7 @@ struct MainWindowCommandAvailability: Equatable {
     let canOpenDesktop: Bool
     let canRevealInFinder: Bool
     let canCopyPath: Bool
+    let canOpenCommandPalette: Bool
 
     static let empty = MainWindowCommandAvailability(
         canToggleSidebar: false,
@@ -637,7 +647,8 @@ struct MainWindowCommandAvailability: Equatable {
         canReloadWebSource: false,
         canOpenDesktop: false,
         canRevealInFinder: false,
-        canCopyPath: false
+        canCopyPath: false,
+        canOpenCommandPalette: false
     )
 }
 
@@ -655,6 +666,7 @@ enum MainWindowCommand {
     case openDesktop
     case revealInFinder
     case copyPath
+    case openCommandPalette
 }
 
 @MainActor
@@ -717,6 +729,8 @@ final class AppCommandState: ObservableObject {
             mainWindowActions.revealInFinder?()
         case .copyPath:
             mainWindowActions.copyPath?()
+        case .openCommandPalette:
+            mainWindowActions.openCommandPalette?()
         }
     }
 }

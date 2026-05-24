@@ -1,3 +1,5 @@
+import crypto from "node:crypto";
+import { PR_REVIEW_WEBHOOK_CONTRACT_CASES } from "@/lib/agent-runtime/__tests__/pr-review-trigger-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -107,6 +109,32 @@ function pullRequestOpenedRequest(): Request {
 	return makePullRequestRequest("opened");
 }
 
+const CONTRACT_WEBHOOK_SECRET = "route-contract-webhook-secret";
+
+function signedWebhookRequest(
+	eventType: string,
+	deliveryId: string,
+	payload: Record<string, unknown>,
+	extraHeaders: Record<string, string> = {},
+): Request {
+	const body = JSON.stringify(payload);
+	const signature = `sha256=${crypto
+		.createHmac("sha256", CONTRACT_WEBHOOK_SECRET)
+		.update(body)
+		.digest("hex")}`;
+	return new Request("http://localhost/api/webhooks/github", {
+		method: "POST",
+		headers: {
+			"content-type": "application/json",
+			"x-github-delivery": deliveryId,
+			"x-github-event": eventType,
+			"x-hub-signature-256": signature,
+			...extraHeaders,
+		},
+		body,
+	});
+}
+
 describe("/api/webhooks/github POST", () => {
 	beforeEach(() => {
 		vi.stubEnv("GITHUB_WEB_WORKSPACES_WEBHOOK_SECRET", "");
@@ -177,6 +205,19 @@ describe("/api/webhooks/github POST", () => {
 
 		expect(response.status).toBe(200);
 		expect(consoleError).toHaveBeenCalledWith("[pr-review] failed:", error);
+	});
+
+	it("leaves review publishing to the broker after kickoff", async () => {
+		mocks.triggerPrReview.mockResolvedValue("sesn_123");
+
+		const { POST } = await import("./route");
+		const response = await POST(pullRequestOpenedRequest());
+
+		expect(response.status).toBe(200);
+		expect(mocks.triggerPrReview).toHaveBeenCalledWith(
+			expect.any(Object),
+			expect.objectContaining({ kind: "opened" }),
+		);
 	});
 
 	describe("trigger matrix", () => {
@@ -318,6 +359,124 @@ describe("/api/webhooks/github POST", () => {
 				}),
 			);
 			expect(mocks.triggerPrReview).not.toHaveBeenCalled();
+		});
+	});
+
+	describe("shared reviewer ingress contract", () => {
+		beforeEach(() => {
+			vi.stubEnv(
+				"GITHUB_WEB_WORKSPACES_WEBHOOK_SECRET",
+				CONTRACT_WEBHOOK_SECRET,
+			);
+			mocks.triggerPrReview.mockResolvedValue("sesn_contract");
+		});
+
+		for (const testCase of PR_REVIEW_WEBHOOK_CONTRACT_CASES) {
+			it(`${testCase.expectedTriggerKind ? "triggers" : "skips"} ${testCase.name}`, async () => {
+				const { POST } = await import("./route");
+				const response = await POST(
+					signedWebhookRequest(
+						testCase.eventType,
+						testCase.deliveryId,
+						testCase.payload,
+					),
+				);
+
+				expect(response.status).toBe(200);
+				if (testCase.expectedTriggerKind) {
+					expect(mocks.triggerPrReview).toHaveBeenCalledTimes(1);
+					expect(mocks.triggerPrReview.mock.calls[0][1]).toMatchObject({
+						kind: testCase.expectedTriggerKind,
+					});
+				} else {
+					expect(mocks.triggerPrReview).not.toHaveBeenCalled();
+				}
+			});
+		}
+	});
+
+	describe("reviewer ingress canary", () => {
+		beforeEach(() => {
+			vi.stubEnv(
+				"GITHUB_WEB_WORKSPACES_WEBHOOK_SECRET",
+				CONTRACT_WEBHOOK_SECRET,
+			);
+			vi.stubEnv("WORKSPACES_WEBHOOK_CANARY_SECRET", "canary-secret");
+			mocks.triggerPrReview.mockResolvedValue("sesn_should_not_start");
+		});
+
+		it("returns a dry-run trigger result without writing events or starting an agent", async () => {
+			const { POST } = await import("./route");
+			const response = await POST(
+				signedWebhookRequest(
+					"pull_request",
+					"canary-delivery",
+					PR_REVIEW_WEBHOOK_CONTRACT_CASES[0].payload,
+					{ "x-workspace-webhook-canary": "canary-secret" },
+				),
+			);
+
+			expect(response.status).toBe(200);
+			await expect(response.json()).resolves.toMatchObject({
+				ok: true,
+				canary: true,
+				wouldTrigger: true,
+				triggerKind: "opened",
+				eventType: "pull_request",
+				action: "opened",
+				repo: "fairchild/workspaces",
+			});
+			expect(mocks.pushEvent).not.toHaveBeenCalled();
+			expect(mocks.triggerPrReview).not.toHaveBeenCalled();
+		});
+
+		it("rejects canary requests with a valid HMAC but the wrong canary secret", async () => {
+			const consoleWarn = vi
+				.spyOn(console, "warn")
+				.mockImplementation(() => {});
+			const { POST } = await import("./route");
+			const response = await POST(
+				signedWebhookRequest(
+					"pull_request",
+					"canary-bad-secret",
+					PR_REVIEW_WEBHOOK_CONTRACT_CASES[0].payload,
+					{ "x-workspace-webhook-canary": "wrong-secret" },
+				),
+			);
+
+			expect(response.status).toBe(401);
+			await expect(response.json()).resolves.toMatchObject({
+				ok: false,
+				canary: true,
+				error: "invalid_canary_secret",
+			});
+			expect(mocks.pushEvent).not.toHaveBeenCalled();
+			expect(mocks.triggerPrReview).not.toHaveBeenCalled();
+			consoleWarn.mockRestore();
+		});
+
+		it("requires a valid GitHub HMAC before honoring the canary secret", async () => {
+			const consoleWarn = vi
+				.spyOn(console, "warn")
+				.mockImplementation(() => {});
+			const { POST } = await import("./route");
+			const response = await POST(
+				signedWebhookRequest(
+					"pull_request",
+					"canary-bad-hmac",
+					PR_REVIEW_WEBHOOK_CONTRACT_CASES[0].payload,
+					{
+						"x-hub-signature-256": "sha256=bad",
+						"x-workspace-webhook-canary": "canary-secret",
+					},
+				),
+			);
+
+			expect(response.status).toBe(401);
+			expect(await response.text()).toBe("invalid signature");
+			expect(mocks.pushEvent).not.toHaveBeenCalled();
+			expect(mocks.triggerPrReview).not.toHaveBeenCalled();
+			consoleWarn.mockRestore();
 		});
 	});
 });

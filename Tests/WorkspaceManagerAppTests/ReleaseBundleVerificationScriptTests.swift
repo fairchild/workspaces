@@ -56,16 +56,29 @@ struct ReleaseBundleVerificationScriptTests {
         #expect(result.stderr.contains("CFBundleExecutable must be WorkspaceManager"))
     }
 
+    @Test("Missing hook forwarder resources fail release verification")
+    func missingHookForwarderResourcesFailReleaseVerification() throws {
+        let fixture = try makeFixture(bundleName: "WorkSpaces.app", includeRuntimeResources: true)
+        defer { fixture.cleanup() }
+
+        let result = runVerifier(appBundle: fixture.appBundle)
+
+        #expect(result.exitCode == 1)
+        #expect(result.stderr.contains("Missing Claude hook event forwarder"))
+    }
+
     private func makeFixture(
         bundleName: String,
         displayName: String = "WorkSpaces",
         bundleDisplayName: String = "WorkSpaces",
-        executableName: String = "WorkspaceManager"
+        executableName: String = "WorkspaceManager",
+        includeRuntimeResources: Bool = false
     ) throws -> Fixture {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("ReleaseBundleVerificationScriptTests-\(UUID().uuidString)", isDirectory: true)
         let appBundle = root.appendingPathComponent(bundleName, isDirectory: true)
         let contents = appBundle.appendingPathComponent("Contents", isDirectory: true)
+        let resources = contents.appendingPathComponent("Resources", isDirectory: true)
 
         try FileManager.default.createDirectory(at: contents, withIntermediateDirectories: true)
 
@@ -76,6 +89,23 @@ struct ReleaseBundleVerificationScriptTests {
         ]
         let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
         try data.write(to: contents.appendingPathComponent("Info.plist"))
+
+        if includeRuntimeResources {
+            let macOS = contents.appendingPathComponent("MacOS", isDirectory: true)
+            try FileManager.default.createDirectory(at: macOS, withIntermediateDirectories: true)
+            let executable = macOS.appendingPathComponent("WorkspaceManager")
+            try Data().write(to: executable)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+
+            try FileManager.default.createDirectory(
+                at: resources.appendingPathComponent("ghostty", isDirectory: true),
+                withIntermediateDirectories: true
+            )
+            try FileManager.default.createDirectory(
+                at: resources.appendingPathComponent("terminfo", isDirectory: true),
+                withIntermediateDirectories: true
+            )
+        }
 
         return Fixture(root: root, appBundle: appBundle)
     }

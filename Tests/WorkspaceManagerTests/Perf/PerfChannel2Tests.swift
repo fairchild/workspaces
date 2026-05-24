@@ -65,7 +65,12 @@ struct PerfChannel2Tests {
     }
 
     @discardableResult
-    private static func rawPost(socket: String, path: String, body: Data) -> (Date, Date) {
+    private static func rawPost(
+        socket: String,
+        path: String,
+        body: Data,
+        hostSessionID: UUID? = nil
+    ) -> (Date, Date) {
         let fd = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
         precondition(fd >= 0, "socket() failed")
         defer { Darwin.close(fd) }
@@ -90,6 +95,9 @@ struct PerfChannel2Tests {
         var head = "POST \(path) HTTP/1.1\r\n"
         head += "Host: localhost\r\n"
         head += "Content-Type: application/json\r\n"
+        if let hostSessionID {
+            head += "X-WorkSpaces-Host-Session-ID: \(hostSessionID.uuidString)\r\n"
+        }
         head += "Content-Length: \(body.count)\r\n"
         head += "Connection: close\r\n\r\n"
         var out = Data(head.utf8)
@@ -159,7 +167,8 @@ struct PerfChannel2Tests {
         ]
         _ = Self.rawPost(
             socket: socketPath, path: "/event",
-            body: try JSONSerialization.data(withJSONObject: bind)
+            body: try JSONSerialization.data(withJSONObject: bind),
+            hostSessionID: hostID
         )
         try await Task.sleep(nanoseconds: 100_000_000)
         updateTimestamps.reset()
@@ -191,7 +200,10 @@ struct PerfChannel2Tests {
                 group.addTask {
                     for i in lo..<hi {
                         let (sent, ack) = Self.rawPost(
-                            socket: socketPath, path: "/statusline", body: bodies[i]
+                            socket: socketPath,
+                            path: "/statusline",
+                            body: bodies[i],
+                            hostSessionID: hostID
                         )
                         sendTimestamps.append(sent)
                         httpLatencies.append(ack.timeIntervalSince(sent) * 1000)

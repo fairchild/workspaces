@@ -1,11 +1,9 @@
 import Foundation
 
-/// Adapter-agnostic event normalized from any input channel (HTTP hook, OSC notification,
-/// transcript replay, or headless stream). The registry consumes only this type.
+/// Agent event normalized from an input channel (HTTP hook, status line, OSC notification,
+/// or transcript reader). The registry consumes only this type.
 ///
-/// New cases must be additive — never rename or repurpose. Channels #2–#5 may add fields
-/// to existing cases through associated values that default to `nil`, but coordinator
-/// approval is required for any change.
+/// New cases must be additive — never rename or repurpose without a migration.
 public enum AgentEvent: Sendable {
     case sessionStart(agentSessionID: String, cwd: String, kind: AgentKind)
     case userPrompt(prompt: String?)
@@ -49,6 +47,5 @@ public enum AgentEventOrigin: Sendable, Equatable {
     case osc(surfaceID: UInt64?)
     case statusLine
     case transcript
-    case headless
     case bell
 }

@@ -4,7 +4,8 @@
 //
 //  In-memory accumulator for startup diagnostic events. Events are recorded
 //  during launch and provider-availability checks, then exported on demand
-//  as a self-contained JSON bundle. No disk I/O happens on the hot path.
+//  as a self-contained JSON bundle. Optional local-state persistence is
+//  fire-and-forget so no disk I/O happens on the hot path.
 //
 
 import Foundation
@@ -56,15 +57,37 @@ public actor StartupDiagnosticsStore {
 
     private var events: [DiagnosticEvent] = []
     private let maxEvents: Int
+    private var localStateStore: LocalStateStore?
+    private var persistedEventCount = 0
 
     public init(maxEvents: Int = 200) {
         self.maxEvents = maxEvents
     }
 
+    public func attach(localStateStore: LocalStateStore?) {
+        self.localStateStore = localStateStore
+        guard let localStateStore else {
+            persistedEventCount = 0
+            return
+        }
+
+        let firstUnpersistedIndex = min(persistedEventCount, events.count)
+        let pendingEvents = Array(events.dropFirst(firstUnpersistedIndex))
+        persistedEventCount = events.count
+        Self.enqueuePersistence(of: pendingEvents, to: localStateStore)
+    }
+
     public func record(_ event: DiagnosticEvent) {
         events.append(event)
         if events.count > maxEvents {
-            events.removeFirst()
+            let overflow = events.count - maxEvents
+            events.removeFirst(overflow)
+            persistedEventCount = max(0, persistedEventCount - overflow)
+        }
+
+        if let localStateStore {
+            persistedEventCount = events.count
+            Self.enqueuePersistence(of: [event], to: localStateStore)
         }
     }
 
@@ -116,6 +139,7 @@ public actor StartupDiagnosticsStore {
 
     public func clear() {
         events.removeAll()
+        persistedEventCount = 0
     }
 
     private func currentArchitecture() -> String {
@@ -126,5 +150,22 @@ public actor StartupDiagnosticsStore {
         #else
             return "unknown"
         #endif
+    }
+
+    private static func enqueuePersistence(
+        of events: [DiagnosticEvent],
+        to localStateStore: LocalStateStore
+    ) {
+        guard !events.isEmpty else { return }
+        Task {
+            for event in events {
+                try? await localStateStore.recordDiagnosticEvent(
+                    metric: event.metric,
+                    durationMs: event.durationMs,
+                    labels: event.labels,
+                    occurredAt: event.timestamp
+                )
+            }
+        }
     }
 }

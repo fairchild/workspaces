@@ -55,11 +55,13 @@ struct MainWindowViewState {
     var didRunPerfAutoOpenNewWorkspace = false
     var didApplyFixturePreviewBootstrap = false
     var didApplyFixtureWebBootstrap = false
+    var didApplyFixtureDiagnosticsBootstrap = false
     var didResolveInitialSurface = false
     var openInEditorErrorMessage: String?
     var workspaceOperationErrorMessage: String?
     var connectingWorkspaceID: UUID?
     var terminalCloseConfirmation: TerminalCloseConfirmation?
+    var isShowingCommandPalette = false
 }
 
 enum MainWindowOpenInEditorContextKey: Equatable {

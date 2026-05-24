@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
 	createSession: vi.fn(),
+	listEvents: vi.fn(),
 	sendEvent: vi.fn(),
 	uploadFile: vi.fn(),
 	getOrCreateAgent: vi.fn(),
@@ -10,6 +11,7 @@ const mocks = vi.hoisted(() => ({
 	fetch: vi.fn(),
 	recordRunStart: vi.fn(),
 	recordRunResult: vi.fn(),
+	listStartedPrReviewRuns: vi.fn(),
 	computeRunFingerprint: vi.fn(),
 }));
 
@@ -22,6 +24,7 @@ vi.mock("@anthropic-ai/sdk", () => {
 			sessions: {
 				create: mocks.createSession,
 				events: {
+					list: mocks.listEvents,
 					send: mocks.sendEvent,
 				},
 			},
@@ -41,6 +44,7 @@ vi.mock("../../github-app-auth", () => ({
 
 vi.mock("../pr-review-runs", () => ({
 	computeRunFingerprint: mocks.computeRunFingerprint,
+	listStartedPrReviewRuns: mocks.listStartedPrReviewRuns,
 	recordRunStart: mocks.recordRunStart,
 	recordRunResult: mocks.recordRunResult,
 }));
@@ -53,6 +57,8 @@ import {
 	fetchPrNarrativeContext,
 	formatPrEvidenceContext,
 	formatPrNarrativeContext,
+	parseReviewIntentFromText,
+	processPendingPrReviewRuns,
 	triggerPrReview,
 } from "../pr-review";
 
@@ -111,6 +117,20 @@ function githubIssueComment(
 		user: { login: "fairchild" },
 		...overrides,
 	};
+}
+
+async function* asyncEvents(events: unknown[]) {
+	for (const event of events) {
+		yield event;
+	}
+}
+
+function isManagedReviewStatusUrl(url: string): boolean {
+	return url.includes("/statuses/");
+}
+
+function okResponse() {
+	return { ok: true, text: async () => "", json: async () => ({}) };
 }
 
 function mockPrList(prs: unknown[]) {
@@ -180,6 +200,10 @@ function mockNarrativeFetch({
 			};
 		}
 
+		if (isManagedReviewStatusUrl(url)) {
+			return okResponse();
+		}
+
 		throw new Error(`Unexpected fetch URL: ${url}`);
 	});
 }
@@ -193,6 +217,7 @@ beforeEach(() => {
 	vi.stubEnv("PR_REVIEWER_PRIVATE_KEY", "private-key");
 	vi.stubEnv("PR_REVIEWER_INSTALLATION_ID", "456");
 	mocks.createSession.mockReset();
+	mocks.listEvents.mockReset();
 	mocks.sendEvent.mockReset();
 	mocks.uploadFile.mockReset();
 	mocks.getOrCreateAgent.mockReset();
@@ -201,6 +226,7 @@ beforeEach(() => {
 	mocks.fetch.mockReset();
 	mocks.recordRunStart.mockReset();
 	mocks.recordRunResult.mockReset();
+	mocks.listStartedPrReviewRuns.mockReset();
 	mocks.computeRunFingerprint.mockReset();
 
 	mocks.getOrCreateAgent.mockResolvedValue("agent_01");
@@ -212,6 +238,7 @@ beforeEach(() => {
 	mocks.computeRunFingerprint.mockReturnValue("fp_test");
 	mocks.recordRunStart.mockResolvedValue({ inserted: true });
 	mocks.recordRunResult.mockResolvedValue(undefined);
+	mocks.listStartedPrReviewRuns.mockResolvedValue([]);
 });
 
 afterEach(() => {
@@ -442,15 +469,521 @@ describe("fetchPrNarrativeContext", () => {
 	});
 });
 
+describe("parseReviewIntentFromText", () => {
+	it("extracts and validates the final fenced JSON review intent", () => {
+		const intent = parseReviewIntentFromText(
+			`Finished.
+
+\`\`\`json
+{
+  "event": "REQUEST_CHANGES",
+  "body": "🛑 **Request changes** — Evidence is missing.\\n\\n## Summary\\nNeeds evidence.",
+  "labels": ["security", "missing-label", "security"]
+}
+\`\`\``,
+			["security"],
+		);
+
+		expect(intent).toEqual({
+			event: "REQUEST_CHANGES",
+			body: "🛑 **Request changes** — Evidence is missing.\n\n## Summary\nNeeds evidence.",
+			labels: ["security"],
+		});
+	});
+
+	it("rejects unsupported review events", () => {
+		expect(() =>
+			parseReviewIntentFromText(
+				'```json\n{"event":"MERGE","body":"ship it","labels":[]}\n```',
+			),
+		).toThrow(/unsupported review event/);
+	});
+});
+
+describe("processPendingPrReviewRuns", () => {
+	it("posts completed review intents from started managed-agent sessions", async () => {
+		mocks.listStartedPrReviewRuns.mockResolvedValue([
+			{
+				fingerprint: "fp_486",
+				repoFullName: "fairchild/workspaces",
+				prNumber: 486,
+				headSha: "head-sha",
+				triggerKind: "opened",
+				triggerSourceId: "head-sha",
+				sessionId: "sesn_486",
+				createdAt: "2026-05-17T06:24:27Z",
+				updatedAt: "2026-05-17T06:24:27Z",
+			},
+		]);
+		mocks.listEvents.mockReturnValue(
+			asyncEvents([
+				{
+					type: "agent.message",
+					content: [
+						{
+							type: "text",
+							text: `Review complete.
+
+\`\`\`json
+{
+  "event": "COMMENT",
+  "body": "💬 **Comment** — No blocking issues found.\\n\\n## Evidence\\nSwift unavailable in managed environment.",
+  "labels": ["refactor"]
+}
+\`\`\``,
+						},
+					],
+				},
+				{
+					type: "session.status_idle",
+					stop_reason: { type: "end_turn" },
+				},
+			]),
+		);
+		mocks.fetch.mockImplementation(
+			async (url: string, options?: RequestInit) => {
+				if (url.endsWith("/pulls/486")) {
+					return {
+						ok: true,
+						json: async () =>
+							githubPr(486, {
+								title: "Refactor main window orchestration",
+								html_url: "https://github.com/fairchild/workspaces/pull/486",
+								body: "PR body",
+								head: { ref: "codex/main-window", sha: "head-sha" },
+								base: { ref: "main" },
+							}),
+					};
+				}
+				if (url.includes("/pulls?")) {
+					return { ok: true, json: async () => [] };
+				}
+				if (url.includes("/labels?")) {
+					return { ok: true, json: async () => [githubLabel("refactor")] };
+				}
+				if (url.includes("/pulls/") && url.includes("/reviews?")) {
+					return { ok: true, json: async () => [] };
+				}
+				if (url.endsWith("/pulls/486/reviews")) {
+					expect(options?.method).toBe("POST");
+					expect(JSON.parse(String(options?.body))).toMatchObject({
+						event: "COMMENT",
+						body: expect.stringContaining("No blocking issues found"),
+					});
+					return { ok: true, text: async () => "", json: async () => ({}) };
+				}
+				if (url.endsWith("/issues/486/labels")) {
+					expect(options?.method).toBe("POST");
+					expect(JSON.parse(String(options?.body))).toEqual({
+						labels: ["refactor"],
+					});
+					return { ok: true, text: async () => "", json: async () => ({}) };
+				}
+				if (isManagedReviewStatusUrl(url)) {
+					return okResponse();
+				}
+				throw new Error(`Unexpected fetch URL: ${url}`);
+			},
+		);
+
+		const result = await processPendingPrReviewRuns({ limit: 1 });
+
+		expect(result).toMatchObject({
+			checked: 1,
+			completed: 1,
+			failed: 0,
+			skippedRunning: 0,
+		});
+		expect(mocks.recordRunResult).toHaveBeenCalledWith("fp_486", {
+			sessionId: "sesn_486",
+			status: "completed",
+		});
+		const statusPost = mocks.fetch.mock.calls.find(([url]) =>
+			String(url).includes("/statuses/head-sha"),
+		);
+		expect(statusPost?.[1]).toMatchObject({ method: "POST" });
+		expect(JSON.parse(String(statusPost?.[1]?.body))).toMatchObject({
+			state: "success",
+			context: "WorkSpaces Managed Review",
+			description: "Managed review posted.",
+			target_url: "https://github.com/fairchild/workspaces/pull/486",
+		});
+	});
+
+	it("leaves still-running sessions in started state", async () => {
+		mocks.listStartedPrReviewRuns.mockResolvedValue([
+			{
+				fingerprint: "fp_running",
+				repoFullName: "fairchild/workspaces",
+				prNumber: 486,
+				headSha: "head-sha",
+				triggerKind: "opened",
+				triggerSourceId: "head-sha",
+				sessionId: "sesn_running",
+				createdAt: "2026-05-17T06:24:27Z",
+				updatedAt: "2026-05-17T06:24:27Z",
+			},
+		]);
+		mocks.listEvents.mockReturnValue(
+			asyncEvents([
+				{
+					type: "agent.message",
+					content: [{ type: "text", text: "still working" }],
+				},
+			]),
+		);
+
+		const result = await processPendingPrReviewRuns({ limit: 1 });
+
+		expect(result).toMatchObject({
+			checked: 1,
+			completed: 0,
+			failed: 0,
+			skippedRunning: 1,
+		});
+		expect(mocks.recordRunResult).not.toHaveBeenCalled();
+	});
+
+	it("supersedes a completed session when a newer managed review already covers the same head", async () => {
+		mocks.listStartedPrReviewRuns.mockResolvedValue([
+			{
+				fingerprint: "fp_stale",
+				repoFullName: "fairchild/workspaces",
+				prNumber: 489,
+				headSha: "same-head",
+				triggerKind: "edited",
+				triggerSourceId: "body-123",
+				sessionId: "sesn_stale",
+				createdAt: "2026-05-17T06:39:00Z",
+				updatedAt: "2026-05-17T06:39:10Z",
+			},
+		]);
+		mocks.listEvents.mockReturnValue(
+			asyncEvents([
+				{
+					type: "agent.message",
+					content: [{ type: "text", text: "stale review intent" }],
+				},
+				{
+					type: "session.status_idle",
+					stop_reason: { type: "end_turn" },
+				},
+			]),
+		);
+		mocks.fetch.mockImplementation(async (url: string) => {
+			if (url.endsWith("/pulls/489")) {
+				return {
+					ok: true,
+					json: async () =>
+						githubPr(489, {
+							title: "Broker managed reviewer completions",
+							html_url: "https://github.com/fairchild/workspaces/pull/489",
+							body: "PR body",
+							head: { ref: "codex/reviewer", sha: "same-head" },
+							base: { ref: "main" },
+						}),
+				};
+			}
+			if (url.includes("/pulls/489/reviews?")) {
+				return {
+					ok: true,
+					json: async () => [
+						{
+							id: 4304929065,
+							state: "APPROVED",
+							body: "First managed review.",
+							submitted_at: "2026-05-17T06:42:30Z",
+							commit_id: "same-head",
+							user: { login: "workspaces-claude-pr-reviewer[bot]" },
+						},
+					],
+				};
+			}
+			if (isManagedReviewStatusUrl(url)) {
+				return okResponse();
+			}
+			throw new Error(`Unexpected fetch URL: ${url}`);
+		});
+
+		const result = await processPendingPrReviewRuns({ limit: 1 });
+
+		expect(result).toMatchObject({
+			checked: 1,
+			completed: 0,
+			failed: 0,
+			skippedRunning: 0,
+			superseded: 1,
+			requeued: 0,
+			runs: [
+				{
+					fingerprint: "fp_stale",
+					status: "superseded",
+					supersededByReviewId: 4304929065,
+					retrySessionId: null,
+				},
+			],
+		});
+		expect(mocks.createSession).not.toHaveBeenCalled();
+		expect(mocks.recordRunResult).toHaveBeenCalledWith("fp_stale", {
+			sessionId: "sesn_stale",
+			status: "superseded",
+			error: expect.stringContaining("same head"),
+		});
+	});
+
+	it("does not requeue when any newer managed review covers the current head", async () => {
+		mocks.listStartedPrReviewRuns.mockResolvedValue([
+			{
+				fingerprint: "fp_mixed_reviews",
+				repoFullName: "fairchild/workspaces",
+				prNumber: 489,
+				headSha: "current-head",
+				triggerKind: "synchronize",
+				triggerSourceId: "current-head",
+				sessionId: "sesn_mixed_reviews",
+				createdAt: "2026-05-17T06:39:00Z",
+				updatedAt: "2026-05-17T06:39:10Z",
+			},
+		]);
+		mocks.listEvents.mockReturnValue(
+			asyncEvents([
+				{
+					type: "agent.message",
+					content: [{ type: "text", text: "stale review intent" }],
+				},
+				{
+					type: "session.status_idle",
+					stop_reason: { type: "end_turn" },
+				},
+			]),
+		);
+		mocks.fetch.mockImplementation(async (url: string) => {
+			if (url.endsWith("/pulls/489")) {
+				return {
+					ok: true,
+					json: async () =>
+						githubPr(489, {
+							title: "Broker managed reviewer completions",
+							html_url: "https://github.com/fairchild/workspaces/pull/489",
+							body: "PR body",
+							head: { ref: "codex/reviewer", sha: "current-head" },
+							base: { ref: "main" },
+						}),
+				};
+			}
+			if (url.includes("/pulls/489/reviews?")) {
+				return {
+					ok: true,
+					json: async () => [
+						{
+							id: 4304929509,
+							state: "APPROVED",
+							body: "Later review on an older head.",
+							submitted_at: "2026-05-17T06:43:04Z",
+							commit_id: "old-head",
+							user: { login: "workspaces-claude-pr-reviewer[bot]" },
+						},
+						{
+							id: 4304929065,
+							state: "APPROVED",
+							body: "Earlier review on the current head.",
+							submitted_at: "2026-05-17T06:42:30Z",
+							commit_id: "current-head",
+							user: { login: "workspaces-claude-pr-reviewer[bot]" },
+						},
+					],
+				};
+			}
+			throw new Error(`Unexpected fetch URL: ${url}`);
+		});
+
+		const result = await processPendingPrReviewRuns({ limit: 1 });
+
+		expect(result).toMatchObject({
+			checked: 1,
+			completed: 0,
+			failed: 0,
+			superseded: 1,
+			requeued: 0,
+			runs: [
+				{
+					fingerprint: "fp_mixed_reviews",
+					status: "superseded",
+					supersededByReviewId: 4304929065,
+					retrySessionId: null,
+				},
+			],
+		});
+		expect(mocks.createSession).not.toHaveBeenCalled();
+		expect(mocks.recordRunResult).toHaveBeenCalledWith("fp_mixed_reviews", {
+			sessionId: "sesn_mixed_reviews",
+			status: "superseded",
+			error: expect.stringContaining("4304929065"),
+		});
+	});
+
+	it("requeues a stale completed session when the newer managed review is for an older head", async () => {
+		mocks.listStartedPrReviewRuns.mockResolvedValue([
+			{
+				fingerprint: "fp_new_head_stale",
+				repoFullName: "fairchild/workspaces",
+				prNumber: 489,
+				headSha: "new-head",
+				triggerKind: "synchronize",
+				triggerSourceId: "new-head",
+				sessionId: "sesn_new_head_stale",
+				createdAt: "2026-05-17T06:39:00Z",
+				updatedAt: "2026-05-17T06:39:10Z",
+			},
+		]);
+		mocks.listEvents.mockReturnValue(
+			asyncEvents([
+				{
+					type: "agent.message",
+					content: [{ type: "text", text: "stale review intent" }],
+				},
+				{
+					type: "session.status_idle",
+					stop_reason: { type: "end_turn" },
+				},
+			]),
+		);
+		mocks.fetch.mockImplementation(async (url: string) => {
+			if (url.endsWith("/pulls/489")) {
+				return {
+					ok: true,
+					json: async () =>
+						githubPr(489, {
+							title: "Broker managed reviewer completions",
+							html_url: "https://github.com/fairchild/workspaces/pull/489",
+							body: "PR body",
+							head: { ref: "codex/reviewer", sha: "new-head" },
+							base: { ref: "main" },
+						}),
+				};
+			}
+			if (url.includes("/pulls/489/reviews?")) {
+				return {
+					ok: true,
+					json: async () => [
+						{
+							id: 4304929065,
+							state: "APPROVED",
+							body: "First managed review on old head.",
+							submitted_at: "2026-05-17T06:42:30Z",
+							commit_id: "old-head",
+							user: { login: "workspaces-claude-pr-reviewer[bot]" },
+						},
+					],
+				};
+			}
+			if (url.includes("/pulls?")) {
+				return { ok: true, json: async () => [] };
+			}
+			if (url.includes("/labels?")) {
+				return { ok: true, json: async () => [] };
+			}
+			if (url.includes("/issues/489/comments?")) {
+				return { ok: true, json: async () => [] };
+			}
+			if (isManagedReviewStatusUrl(url)) {
+				return okResponse();
+			}
+			throw new Error(`Unexpected fetch URL: ${url}`);
+		});
+
+		const result = await processPendingPrReviewRuns({ limit: 1 });
+
+		expect(result).toMatchObject({
+			checked: 1,
+			completed: 0,
+			failed: 0,
+			superseded: 1,
+			requeued: 1,
+			runs: [
+				{
+					fingerprint: "fp_new_head_stale",
+					status: "superseded",
+					supersededByReviewId: 4304929065,
+					retrySessionId: "sesn_01",
+				},
+			],
+		});
+		expect(mocks.recordRunStart).toHaveBeenCalledWith(
+			expect.objectContaining({
+				prNumber: 489,
+				headSha: "new-head",
+				triggerKind: "superseded_retry",
+				triggerSourceId: "review-4304929065-head-new-head",
+			}),
+		);
+		expect(mocks.recordRunResult).toHaveBeenCalledWith("fp_test", {
+			sessionId: "sesn_01",
+			status: "started",
+		});
+		expect(mocks.recordRunResult).toHaveBeenCalledWith("fp_new_head_stale", {
+			sessionId: "sesn_new_head_stale",
+			status: "superseded",
+			error: expect.stringContaining("retry session sesn_01 started"),
+		});
+		const [, params] = mocks.sendEvent.mock.calls[0];
+		const message = params.events[0].content[0].text;
+		expect(message).toContain("You reviewed this PR before");
+		expect(message).toContain("First managed review on old head.");
+	});
+});
+
 describe("triggerPrReview", () => {
-	it("does not fall back to GITHUB_TOKEN when the reviewer is not explicitly enabled", async () => {
-		vi.stubEnv("PR_REVIEWER_ENABLED", "");
+	it("does not fall back to GITHUB_TOKEN when the reviewer is explicitly disabled", async () => {
+		vi.stubEnv("PR_REVIEWER_ENABLED", "0");
 		mockPrList([githubPr(9), githubPr(8)]);
 
 		await expect(triggerPrReview(payload())).resolves.toBeNull();
 
 		expect(mocks.getInstallationToken).not.toHaveBeenCalled();
 		expect(mocks.createSession).not.toHaveBeenCalled();
+	});
+
+	it("starts when GitHub App credentials are configured without a separate enable flag", async () => {
+		vi.stubEnv("PR_REVIEWER_ENABLED", "");
+		mockPrList([githubPr(9), githubPr(8)]);
+
+		await expect(triggerPrReview(payload())).resolves.toBe("sesn_01");
+
+		expect(mocks.getInstallationToken).toHaveBeenCalledWith(
+			"123",
+			"private-key",
+			"456",
+		);
+		expect(mocks.createSession).toHaveBeenCalledTimes(1);
+	});
+
+	it("posts a pending PR status after the managed reviewer is kicked off", async () => {
+		mockPrList([githubPr(9), githubPr(8)]);
+
+		await expect(triggerPrReview(payload())).resolves.toBe("sesn_01");
+
+		const statusCallIndex = mocks.fetch.mock.calls.findIndex(([url]) =>
+			String(url).includes(
+				"/statuses/deadbeefcafebabe1234567890abcdef12345678",
+			),
+		);
+		expect(statusCallIndex).toBeGreaterThanOrEqual(0);
+		const [, statusOptions] = mocks.fetch.mock.calls[statusCallIndex];
+		expect(statusOptions).toMatchObject({ method: "POST" });
+		expect(JSON.parse(String(statusOptions?.body))).toMatchObject({
+			state: "pending",
+			context: "WorkSpaces Managed Review",
+			description: "Managed reviewer picked up this PR.",
+			target_url: "https://github.com/fairchild/workspaces/pull/9",
+		});
+		const statusOrder = mocks.fetch.mock.invocationCallOrder[statusCallIndex];
+		expect(statusOrder).toBeGreaterThan(
+			mocks.recordRunStart.mock.invocationCallOrder[0],
+		);
+		expect(statusOrder).toBeLessThan(
+			mocks.createSession.mock.invocationCallOrder[0],
+		);
 	});
 
 	it("does not fall back to GITHUB_TOKEN when GitHub App token exchange fails", async () => {
@@ -484,7 +1017,7 @@ describe("triggerPrReview", () => {
 		const [, config] = mocks.getOrCreateAgent.mock.calls[0];
 		const prompt = config.systemPrompt;
 		expect(prompt).toContain("Produce one structured review intent");
-		expect(prompt).toContain("you do not have write credentials");
+		expect(prompt).toContain("do not use GitHub write APIs yourself");
 		expect(prompt).toContain(
 			"<details><summary>Details</summary> ... </details>",
 		);
@@ -610,7 +1143,9 @@ describe("triggerPrReview", () => {
 		const message = params.events[0].content[0].text;
 		expect(message).toContain("Labels: security");
 		expect(message).toContain("include it in the `labels` array");
-		expect(message).toContain("do not look for a mounted GitHub token");
+		expect(message).toContain(
+			"do not look for environment variables or files containing GitHub credentials",
+		);
 		expect(message).not.toContain("POST https://api.github.com");
 		expect(message).not.toContain("/workspace/.github-token");
 		expect(message).toContain(
@@ -625,7 +1160,7 @@ describe("triggerPrReview", () => {
 		expect(message).toContain("Do not create labels");
 	});
 
-	it("does not mount GitHub write credentials into the managed-agent session", async () => {
+	it("uses only the repository resource token for managed-agent GitHub access", async () => {
 		mockPrList([githubPr(9), githubPr(8)]);
 
 		await expect(triggerPrReview(payload())).resolves.toBe("sesn_01");
@@ -635,8 +1170,16 @@ describe("triggerPrReview", () => {
 		expect(JSON.stringify(sessionRequest.resources)).not.toContain(
 			"github-token",
 		);
-		expect(JSON.stringify(sessionRequest.resources)).not.toContain(
-			"authorization_token",
+		expect(sessionRequest.resources[0]).toMatchObject({
+			type: "github_repository",
+			authorization_token: "ghs_app_token",
+			checkout: { type: "branch", name: "feature/pr-narrative" },
+		});
+		const [, params] = mocks.sendEvent.mock.calls[0];
+		const message = params.events[0].content[0].text;
+		expect(message).not.toContain("ghs_app_token");
+		expect(message).toContain(
+			"server-side broker is the only component that may post the review or labels",
 		);
 		const [, envConfig] = mocks.getOrCreateEnvironment.mock.calls[0];
 		expect(envConfig.config.networking.type).toBe("limited");
@@ -705,6 +1248,9 @@ describe("triggerPrReview rerun behavior", () => {
 			if (/\/pulls\/8\/reviews\?/.test(url)) {
 				return { ok: true, json: async () => [] };
 			}
+			if (isManagedReviewStatusUrl(url)) {
+				return okResponse();
+			}
 			throw new Error(`Unexpected fetch URL: ${url}`);
 		});
 
@@ -741,5 +1287,135 @@ describe("triggerPrReview rerun behavior", () => {
 				error: "session denied",
 			}),
 		);
+	});
+
+	it("shapes the kickoff as a follow-up when a prior managed review exists", async () => {
+		mocks.fetch.mockImplementation(async (url: string) => {
+			if (url.includes("/pulls?")) {
+				return { ok: true, json: async () => [githubPr(8)] };
+			}
+			if (url.includes("/labels?")) {
+				return { ok: true, json: async () => [] };
+			}
+			if (url.includes("/issues/9/comments?")) {
+				return { ok: true, json: async () => [] };
+			}
+			if (/\/pulls\/9\/reviews\?/.test(url)) {
+				return {
+					ok: true,
+					json: async () => [
+						{
+							id: 9011,
+							state: "CHANGES_REQUESTED",
+							body: "Need evidence for the Settings injection bug.",
+							submitted_at: "2026-05-07T14:51:31Z",
+							commit_id: "149919136973eeb166d827278c636e3fc45b21bb",
+							user: { login: "workspaces-claude-pr-reviewer[bot]" },
+						},
+					],
+				};
+			}
+			if (/\/pulls\/8\/reviews\?/.test(url)) {
+				return { ok: true, json: async () => [] };
+			}
+			if (isManagedReviewStatusUrl(url)) {
+				return okResponse();
+			}
+			throw new Error(`Unexpected fetch URL: ${url}`);
+		});
+
+		await expect(
+			triggerPrReview(
+				payload({ headSha: "4c38cbdf3ffe88502c66ee7c74776e6c27d3312d" }),
+				{
+					kind: "synchronize",
+					triggerSourceId: "4c38cbdf3ffe88502c66ee7c74776e6c27d3312d",
+					reason: "New commit pushed",
+				},
+			),
+		).resolves.toBe("sesn_01");
+
+		const sessionRequest = mocks.createSession.mock.calls[0][0];
+		expect(sessionRequest.title).toMatch(/^Re-review PR #9:/);
+		expect(sessionRequest.metadata).toMatchObject({
+			run_kind: "follow-up",
+			trigger_kind: "synchronize",
+		});
+
+		const [, params] = mocks.sendEvent.mock.calls[0];
+		const message = params.events[0].content[0].text;
+		expect(message).toContain("You reviewed this PR before");
+		expect(message).toContain(
+			"Anchor commit (your last review): 149919136973eeb166d827278c636e3fc45b21bb",
+		);
+		expect(message).toContain(
+			"git diff 149919136973eeb166d827278c636e3fc45b21bb..HEAD",
+		);
+		expect(message).toContain("Anchor on what changed since your last review");
+		expect(message).toContain("## Follow-up review format");
+		expect(message).toContain("## Changes Since Last Review");
+		expect(message).toContain("**Resolved:**");
+		expect(message).toContain("**New:**");
+		expect(message).toContain(
+			"Prior blockers addressed; nothing new of concern",
+		);
+		expect(message).toContain(
+			"`## Project Thread` section is optional on reruns",
+		);
+	});
+
+	it("uses the initial kickoff when a rerun has no recoverable prior review", async () => {
+		mocks.fetch.mockImplementation(async (url: string) => {
+			if (url.includes("/pulls?")) {
+				return { ok: true, json: async () => [githubPr(8)] };
+			}
+			if (url.includes("/labels?")) {
+				return { ok: true, json: async () => [] };
+			}
+			if (url.includes("/issues/9/comments?")) {
+				return { ok: true, json: async () => [] };
+			}
+			if (/\/pulls\/\d+\/reviews\?/.test(url)) {
+				return { ok: true, json: async () => [] };
+			}
+			if (isManagedReviewStatusUrl(url)) {
+				return okResponse();
+			}
+			throw new Error(`Unexpected fetch URL: ${url}`);
+		});
+
+		await expect(
+			triggerPrReview(payload(), {
+				kind: "synchronize",
+				triggerSourceId: "newsha",
+				reason: "New commit pushed",
+			}),
+		).resolves.toBe("sesn_01");
+
+		const [, params] = mocks.sendEvent.mock.calls[0];
+		const message = params.events[0].content[0].text;
+		// Still includes follow-up output-format trailer (this is a rerun)
+		expect(message).toContain("## Follow-up review format");
+		// But without a recoverable prior review, no anchor commit / git diff line
+		expect(message).not.toContain("Anchor commit (your last review):");
+		expect(message).toContain(
+			"rerun without a recoverable prior review on this PR",
+		);
+	});
+
+	it("omits the follow-up trailer entirely on the initial run", async () => {
+		mockPrList([githubPr(9), githubPr(8)]);
+
+		await expect(triggerPrReview(payload())).resolves.toBe("sesn_01");
+
+		const sessionRequest = mocks.createSession.mock.calls[0][0];
+		expect(sessionRequest.title).toMatch(/^Review PR #9:/);
+		expect(sessionRequest.metadata).toMatchObject({ run_kind: "initial" });
+
+		const [, params] = mocks.sendEvent.mock.calls[0];
+		const message = params.events[0].content[0].text;
+		expect(message).not.toContain("## Follow-up review format");
+		expect(message).not.toContain("## Changes Since Last Review");
+		expect(message).not.toContain("Rerun context (trusted)");
 	});
 });

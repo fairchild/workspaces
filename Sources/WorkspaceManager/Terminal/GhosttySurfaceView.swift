@@ -27,6 +27,7 @@ final class GhosttySurfaceView: NSView {
     private(set) var terminalTitle: String = ""
     private(set) var currentWorkingDirectory: String?
     private var didProcessExit = false
+    private var promptReadinessSignposts: TerminalPromptReadinessSignpostController
     private var lastScaleAndSize: GhosttySurfaceScaleCalculator.ScaleAndSize?
     private var trackingAreaInstalled = false
     var workingDirectoryPath: String { workingDirectory.path }
@@ -34,13 +35,20 @@ final class GhosttySurfaceView: NSView {
 
     init(
         workingDirectory: URL,
+        hostSessionID: UUID? = nil,
+        hooksSocketPath: String? = nil,
         onProcessExit: (() -> Void)? = nil,
         onCloseConfirmationRequired: (() -> Void)? = nil
     ) {
         self.workingDirectory = workingDirectory
+        self.promptReadinessSignposts = TerminalPromptReadinessSignpostController(hostSessionID: hostSessionID)
         self.onProcessExit = onProcessExit
         self.onCloseConfirmationRequired = onCloseConfirmationRequired
-        self.terminalConfig = GhosttyTerminalConfig(workingDirectory: workingDirectory)
+        self.terminalConfig = GhosttyTerminalConfig(
+            workingDirectory: workingDirectory,
+            hostSessionID: hostSessionID,
+            hooksSocketPath: hooksSocketPath
+        )
         self.readinessDiagnostics = TerminalReadinessDiagnostics(
             workingDirectoryName: workingDirectory.lastPathComponent,
             shellProfileMode: terminalConfig.shellProfileModeLabel
@@ -57,6 +65,7 @@ final class GhosttySurfaceView: NSView {
         onCloseConfirmationRequired: (() -> Void)? = nil
     ) {
         self.workingDirectory = FileManager.default.temporaryDirectory
+        self.promptReadinessSignposts = TerminalPromptReadinessSignpostController(hostSessionID: nil)
         self.onProcessExit = onProcessExit
         self.onCloseConfirmationRequired = onCloseConfirmationRequired
         self.terminalConfig = GhosttyTerminalConfig(customCommand: customCommand)
@@ -168,13 +177,22 @@ final class GhosttySurfaceView: NSView {
     func updateTerminalTitle(_ title: String) {
         terminalTitle = title
         guard !title.isEmpty else { return }
-        readinessDiagnostics.observeShellSignal(.setTitle)
+        observePromptReadinessSignal(.setTitle)
     }
 
     func updateWorkingDirectory(_ path: String?) {
         currentWorkingDirectory = path
         guard let path, !path.isEmpty else { return }
-        readinessDiagnostics.observeShellSignal(.pwd)
+        observePromptReadinessSignal(.pwd)
+    }
+
+    private func observePromptReadinessSignal(_ signal: TerminalReadinessDiagnostics.Signal) {
+        readinessDiagnostics.observeShellSignal(signal)
+        completePromptReadinessSignpostsIfNeeded(signal: signal)
+    }
+
+    private func completePromptReadinessSignpostsIfNeeded(signal: TerminalReadinessDiagnostics.Signal) {
+        promptReadinessSignposts.completeIfNeeded(signal: signal)
     }
 
     /// Channel 3: an OSC 9 / OSC 777 notification from the agent. Forward to the

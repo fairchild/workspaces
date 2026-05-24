@@ -85,8 +85,10 @@ struct ClaudeSettingsInstallingProtocolTests {
         try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: home) }
 
-        let installer = ClaudeSettingsInstaller(homeDirectory: home)
-        await installer.register(workspacesHooksContribution(eventForwarderScriptPath: "/tmp/event-forwarder.sh"))
+        let installer = ClaudeSettingsInstaller(
+            homeDirectory: home,
+            eventForwarderScriptPath: "/tmp/event-forwarder.sh"
+        )
         let beforeInstall = await installer.isInstalled()
         #expect(beforeInstall == false)
         let backupBefore = await installer.mostRecentBackupPath()
@@ -112,8 +114,10 @@ struct ClaudeSettingsInstallingProtocolTests {
         let settingsURL = claudeDir.appendingPathComponent("settings.json")
         try Data("{\"theme\":\"dark\"}".utf8).write(to: settingsURL)
 
-        let installer2 = ClaudeSettingsInstaller(homeDirectory: home)
-        await installer2.register(workspacesHooksContribution(eventForwarderScriptPath: "/tmp/event-forwarder.sh"))
+        let installer2 = ClaudeSettingsInstaller(
+            homeDirectory: home,
+            eventForwarderScriptPath: "/tmp/event-forwarder.sh"
+        )
         try await installer2.install()
         let backupAfter = await installer2.mostRecentBackupPath()
         #expect(backupAfter?.contains("workspaces-backup-") == true)

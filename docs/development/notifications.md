@@ -125,9 +125,19 @@ bun run --bun wrangler deploy --env preview # preview
 **Secrets** (set via `wrangler secret put`):
 - `GITHUB_WEBHOOK_SECRET` — shared secret for GitHub webhook signature verification
 - `JWT_SIGNING_SECRET` — HMAC-SHA256 key for JWT signing/verification
+- `WORKSPACES_WEBHOOK_CANARY_SECRET` — canary-only shared secret used to prove
+  the signed Cloudflare-to-Vercel reviewer ingress path without starting an
+  agent
+
+**Vars** (set in `wrangler.toml` or via Cloudflare):
+- `WEBHOOK_FORWARD_URL` — optional web app webhook endpoint. Production uses
+  `https://spaces.cloudcompute.com/api/webhooks/github` so managed PR review
+  triggers reach the Next.js route after the relay verifies GitHub's signature.
+  The relay accepts HTTPS URLs in production and local HTTP URLs only for tests.
 
 **Routes:**
-- `POST /webhook` — receives GitHub webhooks, verifies signature, forwards to org DO
+- `POST /webhook` — receives GitHub webhooks, verifies signature, forwards to org DO, and forwards managed-review trigger candidates to the web app
+- `POST /canary/pr-review-ingress` — requires `WORKSPACES_WEBHOOK_CANARY_SECRET`, sends a signed dry-run PR-review webhook to the web app, and returns whether the web route would trigger the reviewer
 - `POST /auth/session` — exchanges GitHub token for JWT
 - `GET /ws/{owner}` — WebSocket upgrade with per-client repo filtering (requires JWT + GitHub token)
 - `GET /health` — health check
@@ -140,7 +150,7 @@ bun run --bun wrangler deploy --env preview # preview
 | `src/webhook-relay.ts` | `WebhookRelay` Durable Object — SQLite event storage, WebSocket lifecycle, broadcast |
 | `src/github-verify.ts` | Crypto — HMAC-SHA256 signature verification, JWT sign/verify, timing-safe compare |
 | `src/log.ts` | Structured JSON logging helper (`{ level, msg, ts, ...context }`) |
-| `test/e2e.ts` | E2E test harness — orchestrates mock + wrangler dev + 11 behavior-level scenarios |
+| `test/e2e.ts` | E2E test harness — orchestrates mock + wrangler dev + behavior-level scenarios |
 | `test/mock-github.ts` | Mock GitHub API server with token-dependent behavior |
 
 ### Durable Object Lifecycle

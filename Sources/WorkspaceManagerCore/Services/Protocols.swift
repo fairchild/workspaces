@@ -90,6 +90,11 @@ public protocol GitServiceProtocol: Sendable {
     func createBranch(_ name: String, at path: URL) async throws
     func checkoutBranch(_ name: String, at path: URL) async throws
     func getFileTree(at path: URL, maxDepth: Int) async throws -> FileNode
+    func diff(file: String, at path: URL) async throws -> UnifiedDiff
+    func stage(file: String, at path: URL) async throws
+    func unstage(file: String, at path: URL) async throws
+    func discard(file: String, at path: URL) async throws
+    func branches(at path: URL) async throws -> [BranchName]
 }
 
 extension GitServiceProtocol {
@@ -267,13 +272,6 @@ public protocol RemoteBackendRegistryProtocol: Sendable {
 public protocol AgentSessionRegistryProtocol: AnyObject {
     var statuses: [UUID: AgentSessionStatus] { get }
     func register(hostSessionID: UUID, cwd: String, kind: AgentKind)
-    func ingest(_ event: AgentEvent, for hostSessionID: UUID, origin: AgentEventOrigin)
-    func ingestBatch(
-        events: [AgentEvent],
-        for hostSessionID: UUID,
-        origin: AgentEventOrigin
-    )
-    func updateStatusFields(_ fields: AgentEvent.StatusFields, for hostSessionID: UUID)
-    func resolveHostSession(cwd: String, agentSessionID: String?) -> UUID?
+    func apply(events: [AgentEvent], for hostSessionID: UUID, origin: AgentEventOrigin)
     func deregister(hostSessionID: UUID)
 }

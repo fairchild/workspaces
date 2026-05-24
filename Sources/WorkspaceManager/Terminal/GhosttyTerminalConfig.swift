@@ -67,7 +67,11 @@ struct GhosttyTerminalConfig {
         }
 
         let shell = environment["SHELL"] ?? "/bin/zsh"
+        let shellName = URL(fileURLWithPath: shell).lastPathComponent.lowercased()
         let shellProfileMode = ShellProfileMode.resolve(from: environment)
+        if shellProfileMode == .clean, environment["WORKSPACES_TERMINAL_DIAGNOSTICS"] == "1" {
+            Self.installDiagnosticPromptMarker(for: shellName, environment: &environment)
+        }
         let mode = terminalMultiplexingMode ?? TerminalMultiplexingMode.resolve()
         let tmuxAvailable =
             isTmuxAvailableOverride
@@ -132,6 +136,21 @@ struct GhosttyTerminalConfig {
             components.append(Self.singleQuoted(command))
         }
         return components.joined(separator: " ")
+    }
+
+    private static func installDiagnosticPromptMarker(
+        for shellName: String,
+        environment: inout [String: String]
+    ) {
+        let titleMarker = "\u{1B}]0;WorkSpaces Ready\u{7}"
+        switch shellName {
+        case "zsh":
+            environment["PROMPT"] = "%{\(titleMarker)%}%# "
+        case "bash":
+            environment["PS1"] = "\\[\(titleMarker)\\]\\$ "
+        default:
+            break
+        }
     }
 
     private static func isExecutableAvailable(_ executable: String, inPath path: String?) -> Bool {

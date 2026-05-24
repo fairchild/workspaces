@@ -118,6 +118,25 @@ enum SidebarSessionActivity: Equatable {
     static func showsPaneCountBadge(for paneCount: Int) -> Bool {
         paneCount > 1
     }
+
+    /// Severity ranking used to merge a baseline (own-session) activity with a
+    /// bubbled activity derived from child workspaces. Higher wins.
+    var severity: Int {
+        switch self {
+        case .errored: return 5
+        case .awaitingInput: return 4
+        case .runningTool, .thinking: return 3
+        case .active: return 2
+        case .live: return 1
+        case .inactive: return 0
+        }
+    }
+
+    /// Combine this activity with another, returning the more severe one. Ties
+    /// prefer `self` so callers can pass the baseline first.
+    func mergedWithBubbled(_ other: SidebarSessionActivity) -> SidebarSessionActivity {
+        other.severity > self.severity ? other : self
+    }
 }
 
 private struct WorkspaceCountBadge: View {
@@ -160,13 +179,24 @@ private struct PaneCountBadge: View {
 
 private struct SessionActivityIndicator: View {
     let sessionActivity: SidebarSessionActivity
+    var tooltip: String? = nil
 
     var body: some View {
         if sessionActivity.hasLiveSession {
-            Circle()
-                .fill(sessionActivity.indicatorColor)
-                .frame(width: 7, height: 7)
-                .accessibilityHidden(true)
+            indicator
+        }
+    }
+
+    @ViewBuilder
+    private var indicator: some View {
+        let circle = Circle()
+            .fill(sessionActivity.indicatorColor)
+            .frame(width: 7, height: 7)
+            .accessibilityHidden(true)
+        if let tooltip, !tooltip.isEmpty {
+            circle.help(tooltip)
+        } else {
+            circle
         }
     }
 }
@@ -177,6 +207,7 @@ struct RepoRow: View {
     let paneCount: Int
     let isSelected: Bool
     let isExpanded: Bool
+    var sessionActivityTooltip: String? = nil
     let onToggleExpansion: () -> Void
     let onSelectRepo: () -> Void
     let onNewWorkspace: (() -> Void)?
@@ -249,7 +280,10 @@ struct RepoRow: View {
 
             Spacer(minLength: 8)
 
-            SessionActivityIndicator(sessionActivity: sessionActivity)
+            SessionActivityIndicator(
+                sessionActivity: sessionActivity,
+                tooltip: sessionActivityTooltip
+            )
 
             if workspaceCount > 1, !isExpanded {
                 WorkspaceCountBadge(

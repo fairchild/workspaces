@@ -1,19 +1,24 @@
 # PR Reviewer — Managed Agent
 
-Automated code review triggered by GitHub `pull_request.opened` webhooks. The agent runs on Anthropic's infrastructure, reads the diff, explores surrounding code, runs tests, and posts a review via the GitHub API.
+Automated code review triggered by GitHub PR webhooks. The managed agent runs
+on Anthropic's infrastructure, reads the diff, explores surrounding code, runs
+tests, and returns a structured review intent. The web server validates that
+intent and posts the GitHub review with the PR reviewer GitHub App token.
 
 ## Architecture
 
 ```
 GitHub PR opened
-  → Cloudflare webhook relay
-    → web/api/webhooks/github (webhook route)
-      → triggerPrReview() (fire-and-forget)
-        → getOrCreateAgent/Environment (idempotent, DB-cached)
-        → sessions.create (mounts repo at PR branch)
-        → events.send (kickoff message)
-        → Files API uploads GitHub token as mounted file
-        → Agent runs autonomously on Anthropic → posts review via GitHub API (curl)
+→ Cloudflare webhook relay
+→ signed forward to web/api/webhooks/github (webhook route)
+→ triggerPrReview() (fire-and-forget)
+→ record new run and post pending `WorkSpaces Managed Review` commit status
+→ getOrCreateAgent/Environment (idempotent, DB-cached)
+→ sessions.create (mounts repo at PR branch)
+→ events.send (kickoff message)
+→ Agent runs autonomously on Anthropic → returns review-intent JSON
+→ scheduled/protected broker route validates intent → posts GitHub review
+→ commit status flips to success or failure
 ```
 
 ## Key Files
@@ -22,7 +27,8 @@ GitHub PR opened
 |------|---------|
 | `web/src/lib/agent-runtime/pr-review.ts` | Agent config, session creation, kickoff |
 | `web/src/lib/agent-runtime/managed-agents-cache.ts` | Idempotent agent/environment creation with DB cache |
-| `web/src/app/api/webhooks/github/route.ts` | Webhook handler — triggers on `pull_request.opened` |
+| `web/src/app/api/webhooks/github/route.ts` | Webhook handler — starts reviewer sessions and returns after kickoff |
+| `web/src/app/api/webhooks/github/pr-reviewer-broker/route.ts` | Protected broker route — processes completed sessions from `managed_pr_review_runs` and posts reviews |
 | `web/src/app/api/managed-agents/transcript/route.ts` | SSE endpoint for streaming session events to the UI |
 
 ## Environment Variables
@@ -33,23 +39,131 @@ GitHub PR opened
 | `PR_REVIEWER_APP_ID` | Vercel | GitHub App ID for bot identity |
 | `PR_REVIEWER_PRIVATE_KEY` | Vercel | GitHub App private key (PEM) |
 | `PR_REVIEWER_INSTALLATION_ID` | Vercel | GitHub App installation ID for this repo |
-| `GITHUB_TOKEN` | Vercel (fallback) | PAT fallback — used only if App credentials are missing |
+| `PR_REVIEWER_ENABLED` | Vercel (optional) | `0` disables the reviewer; `1` enables it explicitly. If omitted, complete App credentials enable it. |
 | `PR_REVIEWER_VAULT_ID` | Vercel (optional) | Vault for MCP credentials (not currently used) |
 | `PR_REVIEWER_MODEL` | Vercel (optional) | Override model (default: `claude-opus-4-6`) |
+| `GITHUB_WEB_WORKSPACES_WEBHOOK_SECRET` | Vercel | Same GitHub webhook secret used by the Cloudflare relay; verifies the forwarded raw payload |
+| `WEBHOOK_FORWARD_URL` | Cloudflare Worker | HTTPS web app webhook endpoint, currently `https://spaces.cloudcompute.com/api/webhooks/github` |
+| `WORKSPACES_WEBHOOK_CANARY_SECRET` | Cloudflare Worker, Vercel, GitHub Actions | Shared canary-only secret for the dry-run ingress probe. It is separate from the GitHub webhook HMAC secret. |
 
 ### GitHub App setup
 
 Reviews are posted by the `workspaces-pr-reviewer` GitHub App, which gives them a dedicated bot identity instead of being attributed to a personal account. To set up:
 
-1. Create a GitHub App at https://github.com/settings/apps with permissions: `contents:read`, `pull_requests:write`
+1. Create a GitHub App at https://github.com/settings/apps with permissions:
+   `contents:read`, `pull_requests:write`, `statuses:write`; add
+   `issues:write` if you want the broker to apply validated label suggestions
 2. Install the app on `fairchild/workspaces` and note the installation ID
 3. Set `PR_REVIEWER_APP_ID`, `PR_REVIEWER_PRIVATE_KEY`, and `PR_REVIEWER_INSTALLATION_ID` in Vercel
+4. Confirm the Cloudflare relay has `WEBHOOK_FORWARD_URL` configured and that
+   `GITHUB_WEBHOOK_SECRET` in Cloudflare matches
+   `GITHUB_WEB_WORKSPACES_WEBHOOK_SECRET` in Vercel
 
-The app generates short-lived installation tokens (1-hour TTL) on demand — no manual token rotation needed. If the App credentials are missing or token exchange fails, `triggerPrReview()` falls back to `GITHUB_TOKEN`.
+The app generates short-lived installation tokens (1-hour TTL) on demand. If
+the App credentials are missing or token exchange fails, `triggerPrReview()`
+skips the run and records/logs the failure instead of falling back to a PAT.
 
-**How the token reaches the agent:** `triggerPrReview()` calls `resolveGitHubToken()` which generates a short-lived installation token from the GitHub App credentials (or falls back to `GITHUB_TOKEN`). The token is uploaded as a file via the Files API and mounted at `/workspace/.github-token`. The agent reads it with `cat` and uses `curl` to post the review. The token never appears in the prompt or message stream.
+**How the token is used:** `triggerPrReview()` calls `resolveGitHubToken()`
+which generates a short-lived installation token from the GitHub App
+credentials. The token is passed to the Managed Agents `github_repository`
+resource as `authorization_token` so Anthropic can clone the repository. It is
+not written into the prompt or a filesystem token path for the agent to
+discover. The token must be least-privilege and repo-scoped; the reviewer prompt
+still forbids GitHub write APIs, and the server-side broker remains the only
+component that posts reviews or labels.
 
-**Security:** Never print tokens to logs. Use pipes (`gh auth token | vercel env add ...`) or files, never standalone `echo`/`print` of credential values.
+**Security:** Never print App private keys or installation tokens to logs. Use
+files or secret-manager flows, never standalone `echo`/`print` of credential
+values.
+
+### PR progress status
+
+After the webhook route records a new reviewer run, it posts a pending commit
+status named `WorkSpaces Managed Review` to the PR head SHA. This is the first
+visible PR signal that the managed reviewer picked up the run. When the broker
+posts the final GitHub review, it updates the same status context to `success`;
+if broker processing fails before a review is posted, it updates the context to
+`failure`.
+
+The status is best-effort: a status API failure is logged but does not block the
+review session or broker. A `403` on this request means the GitHub App is missing
+the `statuses:write` permission.
+
+### Health monitoring
+
+Managed-reviewer coverage is summarized by
+`scripts/pr-review-health.py` and `.github/workflows/managed-reviewer-health.yml`.
+The workflow runs on a schedule and can be dispatched manually. It checks recent
+open PRs for the `WorkSpaces Managed Review` status, stale pending pickup,
+failure statuses, and success statuses that do not have a current-head managed
+review. Older or draft PRs are reported but skipped by default so pre-indicator
+branches do not keep the health job red forever.
+
+The Cloudflare relay forwards only managed-review trigger candidates:
+`pull_request.opened`, `reopened`, `ready_for_review`, `synchronize`, eligible
+`edited` events, and evidence-bearing PR comments. It preserves the original
+GitHub HMAC signature and raw body; the Vercel route independently verifies the
+signature before creating any managed-agent session.
+
+## Ingress Contract And Canary
+
+Reviewer ingress is covered by `.github/workflows/managed-reviewer-ingress.yml`.
+The workflow runs when either side of the Cloudflare-to-Vercel contract changes:
+the Worker relay, the web webhook route, the reviewer trigger/runtime files, or
+the shared trigger fixtures. It runs:
+
+- `pnpm exec vitest run src/app/api/webhooks/github/route.test.ts`
+- `cd infra/cloudflare-webhook-relay && bun run test:e2e`
+- `cd infra/cloudflare-webhook-relay && bun run --bun wrangler deploy --dry-run`
+
+The shared trigger fixture matrix lives in
+`web/src/lib/agent-runtime/__tests__/pr-review-trigger-fixtures.ts` and is
+imported by both the Vercel route tests and the Cloudflare relay e2e harness.
+This is the regression guard for drift between "forward this webhook" and
+"start the reviewer".
+
+Production CD requires `WORKSPACES_WEBHOOK_CANARY_SECRET`, runs the same canary,
+broker, and monitor before promotion, then repeats them in `validate-prod` after
+promotion before the production Playwright smoke.
+
+Production canary:
+
+```bash
+curl --fail-with-body -sS -X POST \
+  https://webhooks.cloudcompute.com/canary/pr-review-ingress \
+  -H "X-Workspace-Webhook-Canary: $WORKSPACES_WEBHOOK_CANARY_SECRET"
+```
+
+The Worker requires `WORKSPACES_WEBHOOK_CANARY_SECRET`, signs a canonical
+reviewer-eligible PR payload with `GITHUB_WEBHOOK_SECRET`, forwards it to the
+Vercel webhook route with the canary header, and expects Vercel to return
+`{ "canary": true, "wouldTrigger": true, "triggerKind": "opened" }`. The Vercel
+route verifies the GitHub-style HMAC and the canary secret before returning the
+dry-run result, and returns before `pushEvent()` or `triggerPrReview()` so no
+managed-agent session or GitHub review is created.
+
+The same workflow also calls:
+
+```bash
+curl --fail-with-body -sS -X POST \
+  "https://spaces.cloudcompute.com/api/webhooks/github/pr-reviewer-broker?limit=5" \
+  -H "X-Workspace-Webhook-Canary: $WORKSPACES_WEBHOOK_CANARY_SECRET"
+
+curl --fail-with-body -sS \
+  "https://spaces.cloudcompute.com/api/webhooks/github/pr-reviewer-monitor?windowMinutes=90" \
+  -H "X-Workspace-Webhook-Canary: $WORKSPACES_WEBHOOK_CANARY_SECRET"
+```
+
+The broker inspects `started` rows in `managed_pr_review_runs`, skips sessions
+that are still running, validates completed review-intent JSON, and posts the
+review with the GitHub App token. Before posting, it re-checks current managed
+reviews on the PR; if another managed review was submitted after the session
+started, the stale session is marked `superseded`. If the superseding review is
+for an older head, the broker starts a fresh follow-up session so the newer-head
+review includes the prior review context. The monitor then compares recent
+reviewer-eligible rows in `webhook_events` with `managed_pr_review_runs`
+records. These routes return only run metadata and missing event identifiers,
+not raw payloads or secrets.
 
 ## Observing Sessions
 
@@ -121,32 +235,29 @@ for line in sys.stdin:
 
 If using the GitHub App: check that `PR_REVIEWER_APP_ID`, `PR_REVIEWER_PRIVATE_KEY`, and `PR_REVIEWER_INSTALLATION_ID` are set correctly. The private key PEM must have real newlines (Vercel handles this, but verify with `vercel env pull`).
 
-If using the PAT fallback: the `GITHUB_TOKEN` likely expired. OAuth tokens (`gho_`) are short-lived. Fix:
-
-```bash
-# Rotate and set without printing the token value
-gh auth refresh --hostname github.com
-gh auth token | vercel env rm GITHUB_TOKEN production --yes 2>/dev/null
-gh auth token | vercel env add GITHUB_TOKEN production
-vercel deploy --prod
-```
-
 ### Review not posted to GitHub
 
-Check the session events for the `curl` call. Common causes:
+Check the session events for the final fenced `json` review intent, then check
+Vercel logs for `[pr-review] broker failed`. Common causes:
+- `WORKSPACES_WEBHOOK_CANARY_SECRET` is missing, so scheduled broker calls are not authenticated
 - GitHub App token exchange failed — check Vercel logs for `[pr-review] GitHub App token failed`
-- `GITHUB_TOKEN` expired (PAT fallback) — rotate with `gh auth refresh` then update Vercel
-- Token file not mounted — check session resources for `/workspace/.github-token`
-- API response `401` — App not installed on the repo, or PAT lacks `repo` scope
+- `PR_REVIEWER_ENABLED=0` is set
+- the managed agent did not return valid fenced JSON with `event`, `body`, and `labels`
+- API response `401` — App not installed on the repo, or installation token invalid
 - API response `403` — App missing `pull_requests:write` permission
-- API response `422` — review body has unescaped JSON characters
+- API response `422` — review event/body was rejected by GitHub
+- label application failures are logged as warnings and do not block posting the review
 
 ### Webhook fires but no session created
 
 Check Vercel error logs. Common causes:
 - `ANTHROPIC_API_KEY` not set (only in production, not preview)
+- GitHub App credentials are missing or partial (`PR_REVIEWER_APP_ID`, `PR_REVIEWER_PRIVATE_KEY`, `PR_REVIEWER_INSTALLATION_ID`)
 - Env var has a trailing newline (use `printf` not `echo` when setting)
 - Webhook secret mismatch between GitHub and `GITHUB_WEB_WORKSPACES_WEBHOOK_SECRET`
+- Anthropic returns `resources.0.authorization_token: Field required` — the
+  `github_repository` session resource is missing the short-lived App
+  installation token required for repository cloning
 
 ### Agent can't find the diff
 
@@ -218,6 +329,43 @@ keeps the newest 3, and includes them as untrusted context inside a
 `<untrusted-content name="prior-managed-reviews">` block. A small trusted
 instruction tells the reviewer to approve when a prior `REQUEST_CHANGES`
 blocker is now resolved by the current body, comments, or commits.
+
+### Follow-up kickoff shape
+
+On reruns the kickoff is shaped so the agent behaves like a human reviewer
+returning to a PR they've already touched, not like a fresh reviewer:
+
+- **Stance** — opens with "You reviewed this PR before. New activity has
+  landed since your last review. Your job is to check whether the author
+  addressed your prior blockers and to surface anything new the new activity
+  introduces."
+- **Anchor commit** — when the most recent prior review's `commit_id` differs
+  from the current head, the kickoff names it as the anchor and gives
+  concrete commands: `git fetch origin <anchor>`, `git log --oneline
+  <anchor>..HEAD`, `git diff <anchor>..HEAD`. The agent runs these itself —
+  no diff blob is shipped in the prompt.
+- **Output format** — a `## Follow-up review format` trailer overrides the
+  base format on these points:
+  - Decision banner uses follow-up phrasing (e.g. `✅ **Approve** — Prior
+    blockers addressed; nothing new of concern.`,
+    `🛑 **Request changes** — Prior blocker on file:line still
+    unaddressed.`).
+  - Add a `## Changes Since Last Review` section under `## Summary` with
+    `**Resolved:**` and `**New:**` sub-bullets.
+  - `## Project Thread` is optional on reruns — the thread is already
+    established.
+  - If the prior review's only blocker was missing evidence and the new
+    activity supplies it, approve and credit the evidence URL.
+- **Session naming** — `sessions.create` uses a `Re-review PR #N: <title>`
+  title and stamps `metadata.run_kind = "follow-up"` so operator tooling can
+  distinguish initial from follow-up sessions at a glance.
+
+When `kind !== "opened"` but the prior-review fetch returns no managed
+reviews (e.g. GitHub API failure, or the bot crashed before posting),
+the kickoff still applies the follow-up output trailer but skips the
+anchor block — the run identifies itself as "a rerun without a recoverable
+prior review on this PR" so the agent reviews defensively rather than
+inventing a fake anchor.
 
 ### Filter by repo or label
 

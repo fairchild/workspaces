@@ -1,0 +1,640 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Operator Index HUD Next - WorkSpaces Docs</title>
+  <meta name="robots" content="noindex">
+  <link rel="icon" href="/docs/assets/icon-concepts/favicon.ico">
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b0e10;
+      --ink: #f3f0e7;
+      --muted: #a8afad;
+      --quiet: #737d7b;
+      --panel: #14191c;
+      --panel-strong: #1e2528;
+      --line: #384246;
+      --soft-line: rgba(243, 240, 231, 0.13);
+      --mint: #a6ffdf;
+      --blue: #8ab7ff;
+      --amber: #e7b75f;
+      --green: #69d7a3;
+      --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+      --sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        linear-gradient(90deg, rgba(255, 255, 255, 0.028) 1px, transparent 1px),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.022) 1px, transparent 1px),
+        radial-gradient(circle at 50% -10%, rgba(166, 255, 223, 0.09), transparent 35rem),
+        var(--bg);
+      background-size: 44px 44px, 44px 44px, auto, auto;
+      color: var(--ink);
+      font-family: var(--sans);
+      line-height: 1.45;
+    }
+
+    a { color: inherit; text-decoration: none; }
+    a:hover { color: var(--mint); }
+
+    .shell {
+      width: min(1500px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 24px 0 72px;
+    }
+
+    .topline {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 28px;
+      color: var(--muted);
+      font-size: 0.88rem;
+    }
+
+    .topline strong { color: var(--ink); }
+    .topline nav { display: flex; gap: 14px; flex-wrap: wrap; }
+
+    .intro {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(360px, 0.48fr);
+      gap: 24px;
+      align-items: end;
+      margin-bottom: 18px;
+    }
+
+    .eyebrow {
+      margin: 0 0 10px;
+      color: var(--mint);
+      font: 0.74rem var(--mono);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 0;
+      max-width: 940px;
+      font-size: clamp(2.7rem, 5.8vw, 6.6rem);
+      line-height: 0.9;
+      letter-spacing: 0;
+    }
+
+    .intro-copy {
+      margin: 0 0 8px;
+      color: var(--muted);
+      font-size: 1rem;
+    }
+
+    .route-field {
+      margin-bottom: 16px;
+      border: 1px solid rgba(166, 255, 223, 0.32);
+      border-radius: 8px;
+      padding: 8px;
+      background: #090c0e;
+      box-shadow: 0 0 0 1px rgba(166, 255, 223, 0.04), 0 18px 60px rgba(0, 0, 0, 0.28);
+    }
+
+    .route-form {
+      display: grid;
+      grid-template-columns: 1fr auto auto;
+      gap: 8px;
+    }
+
+    .route-form input {
+      min-width: 0;
+      min-height: 50px;
+      border: 0;
+      outline: 0;
+      background: transparent;
+      color: var(--ink);
+      font: 1.04rem var(--sans);
+    }
+
+    .route-form button,
+    .button-link {
+      min-height: 50px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 0 13px;
+      background: var(--panel-strong);
+      color: var(--ink);
+      font: 0.92rem var(--sans);
+      cursor: pointer;
+    }
+
+    .button-link {
+      display: inline-flex;
+      align-items: center;
+      min-height: 34px;
+      color: var(--muted);
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(0, 0.95fr) minmax(380px, 0.68fr);
+      gap: 14px;
+      align-items: stretch;
+    }
+
+    .map,
+    .routing,
+    .concept-strip,
+    .reading-path {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(20, 24, 27, 0.9);
+    }
+
+    .map {
+      min-height: 560px;
+      position: relative;
+      overflow: hidden;
+      background:
+        linear-gradient(90deg, rgba(255, 255, 255, 0.026) 1px, transparent 1px),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.022) 1px, transparent 1px),
+        #0a0d0f;
+      background-size: 34px 34px;
+    }
+
+    .map::before {
+      content: "";
+      position: absolute;
+      inset: 78px 12% auto;
+      height: calc(100% - 156px);
+      border: 1px solid rgba(166, 255, 223, 0.22);
+      border-radius: 999px;
+      pointer-events: none;
+    }
+
+    .map::after {
+      content: "";
+      position: absolute;
+      left: 50%;
+      top: 14%;
+      width: 1px;
+      height: 72%;
+      background: linear-gradient(180deg, transparent, rgba(138, 183, 255, 0.45), transparent);
+      pointer-events: none;
+    }
+
+    .map-title {
+      position: absolute;
+      left: 18px;
+      top: 16px;
+      z-index: 2;
+    }
+
+    .map-title h2,
+    .routing h2,
+    .reading-path h2 {
+      margin: 0 0 5px;
+      font-size: 1rem;
+    }
+
+    .map-title p,
+    .routing p,
+    .reading-path p,
+    .concept-card p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.88rem;
+    }
+
+    .node {
+      position: absolute;
+      z-index: 1;
+      width: min(220px, 42%);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      background: rgba(20, 24, 27, 0.96);
+    }
+
+    .node strong {
+      display: block;
+      margin-bottom: 5px;
+      font-size: 0.92rem;
+    }
+
+    .node span {
+      color: var(--muted);
+      font-size: 0.79rem;
+    }
+
+    .node.center {
+      left: 50%;
+      top: 47%;
+      transform: translate(-50%, -50%);
+      border-color: rgba(166, 255, 223, 0.62);
+      background: #17211f;
+    }
+
+    .node.product { left: 8%; top: 22%; }
+    .node.runtime { right: 8%; top: 22%; }
+    .node.providers { left: 8%; bottom: 16%; }
+    .node.evidence { right: 8%; bottom: 16%; }
+    .node.archive { left: 50%; bottom: 6%; transform: translateX(-50%); }
+
+    .right-stack {
+      display: grid;
+      gap: 14px;
+    }
+
+    .routing {
+      padding: 16px;
+    }
+
+    .routing-head {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
+    .route-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 9px;
+    }
+
+    .route {
+      display: grid;
+      gap: 8px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 11px;
+      background: rgba(255, 255, 255, 0.025);
+    }
+
+    .route h3 {
+      margin: 0;
+      font-size: 0.95rem;
+    }
+
+    .route p {
+      min-height: 40px;
+      font-size: 0.82rem;
+    }
+
+    .route-actions {
+      display: grid;
+      gap: 5px;
+    }
+
+    .route-actions a {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      min-height: 29px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 6px 8px;
+      color: var(--muted);
+      background: #0f1315;
+      font-size: 0.8rem;
+    }
+
+    .route-actions span:last-child {
+      color: var(--quiet);
+      font-family: var(--mono);
+      text-transform: uppercase;
+      font-size: 0.68rem;
+    }
+
+    .concept-strip {
+      padding: 13px;
+    }
+
+    .concept-strip h2 {
+      margin: 0 0 10px;
+      font-size: 0.96rem;
+    }
+
+    .concept-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .concept-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px;
+      background: rgba(255, 255, 255, 0.022);
+    }
+
+    .concept-card h3 {
+      margin: 0 0 5px;
+      font-size: 0.88rem;
+    }
+
+    .topic-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+      margin-top: 8px;
+    }
+
+    .topic-chip {
+      min-height: 25px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 4px 7px;
+      color: var(--muted);
+      font-size: 0.75rem;
+    }
+
+    .reading-path {
+      margin-top: 14px;
+      padding: 16px;
+    }
+
+    .path-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: baseline;
+      margin-bottom: 12px;
+    }
+
+    .path-rail {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .path-step {
+      position: relative;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      background: #0f1315;
+    }
+
+    .path-step::before {
+      content: attr(data-step);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 24px;
+      height: 24px;
+      margin-bottom: 10px;
+      border: 1px solid rgba(166, 255, 223, 0.42);
+      border-radius: 999px;
+      color: var(--mint);
+      font: 0.74rem var(--mono);
+    }
+
+    .path-step h3 {
+      margin: 0 0 7px;
+      font-size: 0.94rem;
+    }
+
+    .path-step a {
+      display: block;
+      margin-top: 5px;
+      color: var(--muted);
+      font-size: 0.82rem;
+    }
+
+    @media (max-width: 1180px) {
+      .intro,
+      .layout,
+      .path-rail {
+        grid-template-columns: 1fr 1fr;
+      }
+    }
+
+    @media (max-width: 780px) {
+      .intro,
+      .layout,
+      .route-form,
+      .route-grid,
+      .concept-grid,
+      .path-rail {
+        grid-template-columns: 1fr;
+      }
+
+      .map { min-height: 720px; }
+
+      .node,
+      .node.product,
+      .node.runtime,
+      .node.providers,
+      .node.evidence,
+      .node.archive,
+      .node.center {
+        position: static;
+        width: auto;
+        transform: none;
+        margin: 10px;
+      }
+
+      .map-title { position: static; padding: 14px 14px 4px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <div class="topline">
+      <a href="/docs/developer-operator-index.html"><strong>Operator Index</strong></a>
+      <nav aria-label="Prototype navigation">
+        <a href="/docs/operator-index-hud-alt.html">Alt</a>
+        <a href="/docs/operator-index-hud-mocks.html">Synthesis</a>
+        <a href="/docs/developer-operator-index.html">Current Index</a>
+      </nav>
+    </div>
+
+    <section class="intro" aria-labelledby="page-title">
+      <div>
+        <p class="eyebrow">Mission control iteration</p>
+        <h1 id="page-title">Route from question to system shape.</h1>
+      </div>
+      <p class="intro-copy">This version treats the page less like a document and more like a navigation instrument: type first, then use the map, lanes, and reading path when the question needs structure.</p>
+    </section>
+
+    <section class="route-field" aria-label="Route a documentation question">
+      <form class="route-form" id="route-form">
+        <input id="route-input" autofocus autocomplete="off" placeholder="Ask: why is Lume failing, where is shortcut routing, what proves this PR?">
+        <button type="submit">Route Me</button>
+        <button type="button" id="show-all">All Docs</button>
+      </form>
+    </section>
+
+    <section class="layout">
+      <div class="map" aria-label="Documentation relationship map">
+        <div class="map-title">
+          <h2>System Map</h2>
+          <p>Use when you need relationships before details.</p>
+        </div>
+        <div class="node center"><strong>WorkSpaces Docs</strong><span>Local map over product, code, runtime, operations, evidence, and decisions.</span></div>
+        <a class="node product" href="/docs/developer-operator-index.html?group=Product"><strong>Product Model</strong><span>Repository, workspace, surface, terminal session.</span></a>
+        <a class="node runtime" href="/docs/developer-operator-index.html?topic=terminal-session"><strong>Runtime</strong><span>Ghostty, focus, shortcuts, keyboard behavior.</span></a>
+        <a class="node providers" href="/docs/developer-operator-index.html?topic=provider"><strong>Providers</strong><span>Lume, Daytona, local execution, VM validation.</span></a>
+        <a class="node evidence" href="/docs/developer-operator-index.html?topic=evidence"><strong>Evidence</strong><span>Tests, screenshots, performance, mergeability.</span></a>
+        <a class="node archive" href="/docs/developer-operator-index.html?type=Design"><strong>Design Archive</strong><span>Specs, planning, branding, rationale.</span></a>
+      </div>
+
+      <div class="right-stack">
+        <section class="routing" aria-labelledby="routing-title">
+          <div class="routing-head">
+            <div>
+              <h2 id="routing-title">Routing Matrix</h2>
+              <p>Choose the job you are doing now.</p>
+            </div>
+            <a class="button-link" href="/docs/developer-operator-index.html">Open All</a>
+          </div>
+          <div class="route-grid" id="route-grid"></div>
+        </section>
+
+        <section class="concept-strip" aria-labelledby="concept-title">
+          <h2 id="concept-title">Concept Clusters</h2>
+          <div class="concept-grid" id="concept-grid"></div>
+        </section>
+      </div>
+    </section>
+
+    <section class="reading-path" aria-labelledby="path-title">
+      <div class="path-head">
+        <div>
+          <h2 id="path-title">Reading Path</h2>
+          <p>Use this when you are onboarding or trying to rebuild the mental model from scratch.</p>
+        </div>
+        <a class="button-link" href="/docs/CONTEXT">Start with vocabulary</a>
+      </div>
+      <div class="path-rail" id="path-rail"></div>
+    </section>
+  </main>
+
+  <script>
+    const routes = [
+      {
+        title: "Learn product language",
+        copy: "Vocabulary, product overview, surface model, and user-facing nouns.",
+        links: [["Vocabulary", "q", "CONTEXT"], ["Product", "group", "Product"], ["Repository", "topic", "repository"]]
+      },
+      {
+        title: "Debug runtime behavior",
+        copy: "Terminal focus, Ghostty integration, shortcut routing, and session behavior.",
+        links: [["Terminal", "topic", "terminal-session"], ["Ghostty", "topic", "ghostty"], ["Development", "group", "Development"]]
+      },
+      {
+        title: "Operate providers",
+        copy: "Lume, Daytona, validation, setup, recreate flows, and recovery.",
+        links: [["Provider", "topic", "provider"], ["Lume", "topic", "lume"], ["Operations", "group", "Operations"]]
+      },
+      {
+        title: "Prove the work",
+        copy: "Evidence, performance, mergeability, and review readiness.",
+        links: [["Evidence", "topic", "evidence"], ["Performance", "topic", "performance"], ["Mergeability", "topic", "mergeability"]]
+      }
+    ];
+
+    const conceptClusters = [
+      ["Product nouns", ["repository", "workspace", "terminal-session"]],
+      ["Runtime mechanics", ["terminal-session", "ghostty", "surface"]],
+      ["Provider operations", ["provider", "lume", "workspace"]],
+      ["Review proof", ["evidence", "performance", "mergeability"]]
+    ];
+
+    const readingPath = [
+      ["Learn", [["Vocabulary", "q", "CONTEXT"], ["Product overview", "q", "product overview"]]],
+      ["Orient", [["Architecture", "q", "architecture"], ["Provider model", "topic", "provider"]]],
+      ["Operate", [["Lume runbooks", "topic", "lume"], ["Troubleshooting", "q", "troubleshooting"]]],
+      ["Verify", [["Evidence", "topic", "evidence"], ["Mergeability", "topic", "mergeability"]]]
+    ];
+
+    let topics = [];
+
+    function escapeHtml(value) {
+      return String(value || "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;");
+    }
+
+    function href(kind, value) {
+      if (kind === "group") return `/docs/developer-operator-index.html?group=${encodeURIComponent(value)}`;
+      if (kind === "type") return `/docs/developer-operator-index.html?type=${encodeURIComponent(value)}`;
+      if (kind === "q") return `/docs/developer-operator-index.html?q=${encodeURIComponent(value)}`;
+      return `/docs/developer-operator-index.html?topic=${encodeURIComponent(value)}`;
+    }
+
+    function topicLabel(id) {
+      return topics.find((topic) => topic.id === id)?.label || id.replace(/-/g, " ");
+    }
+
+    function bindRouteForm() {
+      const input = document.querySelector("#route-input");
+      document.querySelector("#route-form").addEventListener("submit", (event) => {
+        event.preventDefault();
+        const query = input.value.trim() || "lume validation";
+        window.location.href = href("q", query);
+      });
+      document.querySelector("#show-all").addEventListener("click", () => {
+        window.location.href = "/docs/developer-operator-index.html";
+      });
+      requestAnimationFrame(() => input.focus());
+    }
+
+    function renderRoutes() {
+      document.querySelector("#route-grid").innerHTML = routes.map((route) => `
+        <article class="route">
+          <div>
+            <h3>${escapeHtml(route.title)}</h3>
+            <p>${escapeHtml(route.copy)}</p>
+          </div>
+          <div class="route-actions">
+            ${route.links.map(([label, kind, value]) => `
+              <a href="${href(kind, value)}"><span>${escapeHtml(label)}</span><span>${escapeHtml(kind)}</span></a>
+            `).join("")}
+          </div>
+        </article>
+      `).join("");
+    }
+
+    function renderConcepts() {
+      document.querySelector("#concept-grid").innerHTML = conceptClusters.map(([title, ids]) => `
+        <article class="concept-card">
+          <h3>${escapeHtml(title)}</h3>
+          <p>${escapeHtml(ids.map(topicLabel).join(", "))}</p>
+          <div class="topic-chips">
+            ${ids.map((id) => `<a class="topic-chip" href="${href("topic", id)}">${escapeHtml(topicLabel(id))}</a>`).join("")}
+          </div>
+        </article>
+      `).join("");
+    }
+
+    function renderReadingPath() {
+      document.querySelector("#path-rail").innerHTML = readingPath.map(([title, links], index) => `
+        <article class="path-step" data-step="${index + 1}">
+          <h3>${escapeHtml(title)}</h3>
+          ${links.map(([label, kind, value]) => `<a href="${href(kind, value)}">${escapeHtml(label)}</a>`).join("")}
+        </article>
+      `).join("");
+    }
+
+    async function load() {
+      bindRouteForm();
+      renderRoutes();
+      renderReadingPath();
+      const response = await fetch("/docs/local-docs-manifest.json", { cache: "no-store" });
+      const manifest = await response.json();
+      topics = manifest.topics || [];
+      renderConcepts();
+    }
+
+    load();
+  </script>
+</body>
+</html>

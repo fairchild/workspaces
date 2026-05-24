@@ -163,6 +163,7 @@ done < <(
   find "$REPO_ROOT" \
     -path "*/.git" -prune -o \
     -path "*/node_modules" -prune -o \
+    -path "*/.pnpm-store" -prune -o \
     -name ".mise.toml" -print | sort
 )
 

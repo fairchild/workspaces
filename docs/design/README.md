@@ -1,6 +1,8 @@
 # Design Documents
 
-Design explorations and wireframes for Spaces features.
+Design explorations and wireframes for **Spaces** web/chat features.
+
+These documents are a separate web-dashboard context from the native **WorkSpaces** app documented by the main docs site and `CONTEXT.md`.
 
 | Document | What |
 |----------|------|

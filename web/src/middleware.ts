@@ -3,6 +3,7 @@ import type { NextRequest } from "next/server";
 
 const PUBLIC_PATHS = new Set([
 	"/",
+	"/docs",
 	"/sign-in",
 	"/api/auth",
 	"/api/webhooks",
@@ -19,6 +20,12 @@ function isPublic(pathname: string): boolean {
 
 export function middleware(request: NextRequest) {
 	const { pathname } = request.nextUrl;
+
+	if (pathname.startsWith("/docs/") && !pathname.includes(".")) {
+		return NextResponse.rewrite(
+			new URL("/docs/_renderer/index.html", request.url),
+		);
+	}
 
 	if (isPublic(pathname)) return NextResponse.next();
 

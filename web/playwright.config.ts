@@ -7,13 +7,13 @@ const E2E_DATABASE_URL =
 	(process.env.CI ? "file:data/e2e-auth.db" : process.env.TURSO_DATABASE_URL);
 
 // Vercel Deployment Protection: preview URLs redirect to vercel.com/login
-// unless callers supply the Protection Bypass for Automation secret. When
-// present, send it on every request so validators see the real app.
+// unless callers supply the Protection Bypass for Automation secret. Keep this
+// as a direct request header; asking Vercel to set a bypass cookie introduces
+// an extra redirect before the app sees /docs, which breaks redirect assertions.
 const BYPASS_SECRET = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
 const extraHTTPHeaders = BYPASS_SECRET
 	? {
 			"x-vercel-protection-bypass": BYPASS_SECRET,
-			"x-vercel-set-bypass-cookie": "true",
 		}
 	: undefined;
 

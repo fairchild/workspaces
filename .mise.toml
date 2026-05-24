@@ -49,10 +49,18 @@ run = "./scripts/launch-dev.sh --watch"
 description = "Launch the debug app, verify a visible window, and capture a screenshot."
 run = "./scripts/dev-smoke.sh"
 
+[tasks."dev-settings-smoke"]
+description = "Verify Settings opens from Cmd+, and the app menu using Accessibility."
+run = "./scripts/settings-window-smoke.sh"
+
 [tasks."claude-integration-smoke"]
 description = "Run the interactive Claude Code integration smoke and evidence capture harness."
 run = "./scripts/claude-integration-smoke.sh"
 usage = "--pr <number> [--no-build] [--fixture-home] [--post-comment]"
+
+[tasks."docs:serve"]
+description = "Serve the local WorkSpaces docs site."
+run = "uv run --script docs/server.py"
 
 [tasks."lume-status"]
 description = "Compact VM status (use --stale to find cleanup candidates)."

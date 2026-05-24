@@ -99,3 +99,7 @@ That runbook covers:
 - artifact and log locations
 - the exact clean-slate recreation path
 - the known-good bridged-network workaround
+
+## UI Fixture Mode
+
+For deterministic app screenshots without real agents or git state — release notes, design review, PR evidence — see `docs/development/ui-fixture-mode.md`. Covers `WORKSPACES_UI_FIXTURE`, `WORKSPACES_UI_FIXTURE_AGENT_STATES`, the `UIFixtureSeeder` API, and the `release-screenshot` skill that wraps the capture flow.
