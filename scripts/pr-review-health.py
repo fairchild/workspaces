@@ -3,7 +3,41 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""Summarize managed PR reviewer health across recent open pull requests."""
+"""Summarize managed PR reviewer health across recent open pull requests.
+
+This is an operational monitor for the WorkSpaces managed PR reviewer, not a
+general "all open PRs are mergeable" gate.
+
+The script intentionally separates the queue into two buckets:
+
+- Active scope: non-draft open PRs updated within ``--updated-within-hours``.
+  These PRs are evaluated strictly for managed-reviewer coverage.
+- Skipped / unassessed: draft PRs and older open PRs. These are listed so they
+  are visible, but they do not fail the scheduled health job by default. This
+  keeps old pre-indicator branches from permanently pinning the monitor red.
+
+Interpretation:
+
+- "Active failures: 0" only means no active-scope PR is missing a required
+  managed-reviewer signal.
+- Any skipped PRs mean queue coverage is incomplete. They may be fine, stale, or
+  intentionally parked, but this script did not assess them as healthy.
+- A pending ``WorkSpaces Managed Review`` status is acceptable only until
+  ``--pending-timeout-min`` expires. After that it is a failed pickup/completion
+  signal.
+
+Operator response:
+
+- Active failures are the immediate break/fix queue.
+- Skipped / unassessed PRs are the coverage queue. Investigate them by widening
+  ``--updated-within-hours`` or triaging the listed PRs, but do not read them as
+  healthy just because the active gate is green.
+- A fully healthy reviewer queue has both ``Active failures: 0`` and
+  ``Queue coverage: complete``.
+
+Use a narrower ``--updated-within-hours`` for a quiet scheduled monitor and a
+larger value when deliberately auditing the whole open PR backlog.
+"""
 
 from __future__ import annotations
 
@@ -115,6 +149,14 @@ class HealthReport:
     @property
     def skipped_results(self) -> list[PullRequestResult]:
         return [result for result in self.results if result.skipped]
+
+    @property
+    def queue_coverage(self) -> str:
+        if self.skipped_results:
+            count = len(self.skipped_results)
+            plural = "PRs" if count != 1 else "PR"
+            return f"incomplete ({count} skipped/unassessed {plural})"
+        return "complete"
 
 
 def parse_timestamp(value: str | None) -> datetime | None:
@@ -280,11 +322,13 @@ def markdown_escape(value: str) -> str:
 
 def result_summary(result: PullRequestResult) -> str:
     if result.skipped_reason:
-        return f"skipped: {result.skipped_reason}"
+        return f"unassessed: {result.skipped_reason}"
     if result.problems:
         return "; ".join(result.problems)
     if result.notices:
         return "; ".join(result.notices)
+    if result.status_state == "PENDING":
+        return "pending within timeout"
     return "healthy"
 
 
@@ -295,8 +339,9 @@ def render_markdown(report: HealthReport, *, updated_within: timedelta, pending_
         f"- Scope: open PRs updated within {format_timedelta(updated_within)}",
         f"- Pending timeout: {format_timedelta(pending_timeout)}",
         f"- Active PRs checked: {len(report.active_results)}",
-        f"- Skipped PRs: {len(report.skipped_results)}",
-        f"- Failures: {len(report.failures)}",
+        f"- Active failures: {len(report.failures)}",
+        f"- Skipped/unassessed PRs: {len(report.skipped_results)}",
+        f"- Queue coverage: {report.queue_coverage}",
         "",
         "| PR | Head | Status | Review | Result |",
         "| --- | --- | --- | --- | --- |",

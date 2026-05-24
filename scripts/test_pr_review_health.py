@@ -151,6 +151,28 @@ class PRReviewHealthTests(unittest.TestCase):
         )
         self.assertEqual(report.failures, [])
 
+    def test_render_markdown_does_not_treat_skipped_prs_as_global_health(self) -> None:
+        report = pr_review_health.evaluate(
+            [
+                pr(statuses=[status("SUCCESS")], reviews=[review("APPROVED")]),
+                pr(updated_at=NOW - timedelta(days=10)),
+            ],
+            now=NOW,
+            updated_within=timedelta(hours=72),
+            pending_timeout=timedelta(minutes=30),
+        )
+        rendered = pr_review_health.render_markdown(
+            report,
+            updated_within=timedelta(hours=72),
+            pending_timeout=timedelta(minutes=30),
+        )
+
+        self.assertIn("- Active failures: 0", rendered)
+        self.assertIn("- Skipped/unassessed PRs: 1", rendered)
+        self.assertIn("- Queue coverage: incomplete (1 skipped/unassessed PR)", rendered)
+        self.assertIn("unassessed: not updated within 3d", rendered)
+        self.assertNotIn("- Failures: 0", rendered)
+
 
 if __name__ == "__main__":
     unittest.main()
