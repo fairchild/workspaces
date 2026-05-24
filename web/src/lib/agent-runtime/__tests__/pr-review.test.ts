@@ -492,6 +492,34 @@ describe("parseReviewIntentFromText", () => {
 		});
 	});
 
+	it("extracts fenced JSON when the review body contains markdown code fences", () => {
+		const reviewIntent = {
+			event: "REQUEST_CHANGES",
+			body: [
+				"🛑 **Request changes** — Branch is superseded.",
+				"",
+				"## Summary",
+				"The current branch is dirty against main.",
+				"",
+				"```swift",
+				"let path = try #require(ClaudeIntegrationLifecycle.extractTitleEmitScript())",
+				"```",
+			].join("\n"),
+			labels: ["bug"],
+		};
+
+		const intent = parseReviewIntentFromText(
+			`I now have a complete picture.
+
+\`\`\`json
+${JSON.stringify(reviewIntent, null, 2)}
+\`\`\``,
+			["bug"],
+		);
+
+		expect(intent).toEqual(reviewIntent);
+	});
+
 	it("rejects unsupported review events", () => {
 		expect(() =>
 			parseReviewIntentFromText(
@@ -609,6 +637,100 @@ describe("processPendingPrReviewRuns", () => {
 			description: "Managed review posted.",
 			target_url:
 				"https://spaces.cloudcompute.com/dashboard/review-runs/fp_486",
+		});
+	});
+
+	it("posts an operator-visible failure comment when a completed intent cannot be published", async () => {
+		mocks.listStartedPrReviewRuns.mockResolvedValue([
+			{
+				fingerprint: "fp_bad_intent",
+				repoFullName: "fairchild/workspaces",
+				prNumber: 486,
+				headSha: "head-sha",
+				triggerKind: "opened",
+				triggerSourceId: "head-sha",
+				sessionId: "sesn_bad_intent",
+				createdAt: "2026-05-17T06:24:27Z",
+				updatedAt: "2026-05-17T06:24:27Z",
+			},
+		]);
+		mocks.listEvents.mockReturnValue(
+			asyncEvents([
+				{
+					type: "agent.message",
+					content: [
+						{
+							type: "text",
+							text: `Review complete.
+
+\`\`\`json
+{"event":"MERGE","body":"ship it","labels":[]}
+\`\`\``,
+						},
+					],
+				},
+				{
+					type: "session.status_idle",
+					stop_reason: { type: "end_turn" },
+				},
+			]),
+		);
+		mocks.fetch.mockImplementation(
+			async (url: string, options?: RequestInit) => {
+				if (url.endsWith("/pulls/486")) {
+					return {
+						ok: true,
+						json: async () =>
+							githubPr(486, {
+								title: "Refactor main window orchestration",
+								html_url: "https://github.com/fairchild/workspaces/pull/486",
+								body: "PR body",
+								head: { ref: "codex/main-window", sha: "head-sha" },
+								base: { ref: "main" },
+							}),
+					};
+				}
+				if (url.includes("/pulls/486/reviews?")) {
+					return { ok: true, json: async () => [] };
+				}
+				if (url.includes("/pulls?")) {
+					return { ok: true, json: async () => [] };
+				}
+				if (url.includes("/labels?")) {
+					return { ok: true, json: async () => [] };
+				}
+				if (url.endsWith("/issues/486/comments")) {
+					expect(options?.method).toBe("POST");
+					const body = JSON.parse(String(options?.body)).body;
+					expect(body).toContain("Managed review publication failed");
+					expect(body).toContain("unsupported review event");
+					expect(body).toContain("MERGE");
+					return okResponse();
+				}
+				if (isManagedReviewStatusUrl(url)) {
+					expect(JSON.parse(String(options?.body))).toMatchObject({
+						state: "failure",
+						context: "WorkSpaces Managed Review",
+						description: "Managed review failed before posting.",
+					});
+					return okResponse();
+				}
+				throw new Error(`Unexpected fetch URL: ${url}`);
+			},
+		);
+
+		const result = await processPendingPrReviewRuns({ limit: 1 });
+
+		expect(result).toMatchObject({
+			checked: 1,
+			completed: 0,
+			failed: 1,
+			skippedRunning: 0,
+		});
+		expect(mocks.recordRunResult).toHaveBeenCalledWith("fp_bad_intent", {
+			sessionId: "sesn_bad_intent",
+			status: "failed",
+			error: expect.stringContaining("unsupported review event"),
 		});
 	});
 
