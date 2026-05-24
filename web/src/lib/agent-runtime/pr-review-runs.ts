@@ -208,6 +208,11 @@ export interface PrReviewRunSummary {
 	updatedAt: string;
 }
 
+export interface PrReviewRunDetails extends PrReviewRunSummary {
+	reviewerConfigHash: string;
+	error: string | null;
+}
+
 export interface StartedPrReviewRun {
 	fingerprint: string;
 	repoFullName: string;
@@ -218,6 +223,62 @@ export interface StartedPrReviewRun {
 	sessionId: string;
 	createdAt: string;
 	updatedAt: string;
+}
+
+function mapRunDetails(row: {
+	fingerprint: string;
+	repo_full_name: string;
+	pr_number: number;
+	head_sha: string;
+	trigger_kind: string;
+	trigger_source_id: string;
+	reviewer_config_hash: string;
+	status: string;
+	session_id: string | null;
+	created_at: string;
+	updated_at: string;
+	error: string | null;
+}): PrReviewRunDetails {
+	return {
+		fingerprint: row.fingerprint,
+		repoFullName: row.repo_full_name,
+		prNumber: row.pr_number,
+		headSha: row.head_sha,
+		triggerKind: row.trigger_kind,
+		triggerSourceId: row.trigger_source_id,
+		reviewerConfigHash: row.reviewer_config_hash,
+		status: row.status as PrReviewRunStatus,
+		sessionId: row.session_id,
+		createdAt: row.created_at,
+		updatedAt: row.updated_at,
+		error: row.error,
+	};
+}
+
+export async function getPrReviewRunByFingerprint(
+	fingerprint: string,
+): Promise<PrReviewRunDetails | null> {
+	await ensureRunsTable();
+	const row = await getDb()
+		.selectFrom("managed_pr_review_runs")
+		.selectAll()
+		.where("fingerprint", "=", fingerprint)
+		.executeTakeFirst();
+
+	return row ? mapRunDetails(row) : null;
+}
+
+export async function getPrReviewRunBySessionId(
+	sessionId: string,
+): Promise<PrReviewRunDetails | null> {
+	await ensureRunsTable();
+	const row = await getDb()
+		.selectFrom("managed_pr_review_runs")
+		.selectAll()
+		.where("session_id", "=", sessionId)
+		.executeTakeFirst();
+
+	return row ? mapRunDetails(row) : null;
 }
 
 export async function listRecentPrReviewRuns(input: {

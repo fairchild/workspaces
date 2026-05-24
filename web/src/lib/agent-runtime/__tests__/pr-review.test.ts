@@ -216,6 +216,7 @@ beforeEach(() => {
 	vi.stubEnv("PR_REVIEWER_APP_ID", "123");
 	vi.stubEnv("PR_REVIEWER_PRIVATE_KEY", "private-key");
 	vi.stubEnv("PR_REVIEWER_INSTALLATION_ID", "456");
+	vi.stubEnv("WORKSPACES_WEB_BASE_URL", "https://spaces.cloudcompute.com");
 	mocks.createSession.mockReset();
 	mocks.listEvents.mockReset();
 	mocks.sendEvent.mockReset();
@@ -606,7 +607,8 @@ describe("processPendingPrReviewRuns", () => {
 			state: "success",
 			context: "WorkSpaces Managed Review",
 			description: "Managed review posted.",
-			target_url: "https://github.com/fairchild/workspaces/pull/486",
+			target_url:
+				"https://spaces.cloudcompute.com/dashboard/review-runs/fp_486",
 		});
 	});
 
@@ -975,7 +977,8 @@ describe("triggerPrReview", () => {
 			state: "pending",
 			context: "WorkSpaces Managed Review",
 			description: "Managed reviewer picked up this PR.",
-			target_url: "https://github.com/fairchild/workspaces/pull/9",
+			target_url:
+				"https://spaces.cloudcompute.com/dashboard/review-runs/fp_test",
 		});
 		const statusOrder = mocks.fetch.mock.invocationCallOrder[statusCallIndex];
 		expect(statusOrder).toBeGreaterThan(

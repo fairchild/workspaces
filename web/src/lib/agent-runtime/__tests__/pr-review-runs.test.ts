@@ -163,3 +163,36 @@ describe("listStartedPrReviewRuns", () => {
 		});
 	});
 });
+
+describe("run detail lookups", () => {
+	it("returns run details by fingerprint and session id", async () => {
+		const {
+			getPrReviewRunByFingerprint,
+			getPrReviewRunBySessionId,
+			recordRunStart,
+			recordRunResult,
+		} = await loadModule();
+		const input = makeInput({ fingerprint: "fp_details", prNumber: 42 });
+
+		await recordRunStart(input);
+		await recordRunResult(input.fingerprint, {
+			sessionId: "sesn_details",
+			status: "failed",
+			error: "review intent parse failed",
+		});
+
+		await expect(getPrReviewRunByFingerprint("missing")).resolves.toBeNull();
+		const byFingerprint = await getPrReviewRunByFingerprint(input.fingerprint);
+		const bySession = await getPrReviewRunBySessionId("sesn_details");
+
+		expect(byFingerprint).toMatchObject({
+			fingerprint: "fp_details",
+			repoFullName: "fairchild/workspaces",
+			prNumber: 42,
+			sessionId: "sesn_details",
+			status: "failed",
+			error: "review intent parse failed",
+		});
+		expect(bySession).toEqual(byFingerprint);
+	});
+});
