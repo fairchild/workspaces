@@ -134,7 +134,7 @@ Priority is driven by three filters, in this order:
 
 #### 1. Workspace creation hang root cause
 
-`backlog/workspace-creation-hang-root-cause_followup.md`
+GitHub: [#554](https://github.com/fairchild/workspaces/issues/554) · `arc:core-reliability`
 
 Diagnostics shipped in PR #190 (`os.Logger` signposts + a 30-second watchdog). Regression net for the PR #190 guard added in PR #372. Root cause still uncertain. Reliability blocker — hangs in the creation path erode core-loop trust the fastest.
 
@@ -144,35 +144,33 @@ Diagnostics shipped in PR #190 (`os.Logger` signposts + a 30-second watchdog). R
 
 The remaining active P0 work is the structural maintainability lane. The narrow Ghostty appearance hardening lane has shipped, and the first Ghostty boundary seams have landed.
 
-- **2a. Main-window + sidebar maintainability** (structural). `backlog/main-window-sidebar-maintainability_followup.md`. Sidebar Phase 1 landed (PR #36), and later controller seams moved more selection, bootstrap, surface-resolution, remote-workspace, and sorting behavior out of the root view. Remaining scope is still actionable but should stay incremental: shrink `ContentView.swift` / `SidebarView.swift` integration hotspots without changing navigation, workspace creation, split handling, or inspector behavior.
-- **2b. Ghostty boundary cleanup** (structural). `backlog/main-window-sidebar-maintainability_followup.md`. PR #387 extracted runtime callback config wiring into `GhosttyRuntimeConfigFactory`; PR #394 centralized callback userdata and main-thread bridging. Remaining Ghostty work should now focus on the still-dense `GhosttySurfaceView` / AppKit lifecycle boundary, not on the completed callback userdata/config seams.
-- **2c. Ghostty appearance hardening** (completed). `backlog/ghostty-appearance-hardening_followup.md`. Split-routing controller coverage shipped in PR #379. Appearance dedupe coverage and docs parity shipped in PR #383, and current smoke docs/scripts already state the Ghostty-splits/tmux preconditions.
+- **2a. Main-window + sidebar maintainability** (structural). Sidebar Phase 1 landed (PR #36), and later controller seams moved more selection, bootstrap, surface-resolution, remote-workspace, and sorting behavior out of the root view. Remaining scope is still actionable but should stay incremental: shrink `ContentView.swift` / `SidebarView.swift` integration hotspots without changing navigation, workspace creation, split handling, or inspector behavior. Sidebar Phase 1 source plan: `backlog/done/main-window-sidebar-maintainability_followup.md` (closed #81 + residual notes).
+- **2b. Ghostty boundary cleanup** (structural). PR #387 extracted runtime callback config wiring into `GhosttyRuntimeConfigFactory`; PR #394 centralized callback userdata and main-thread bridging. Remaining Ghostty work should now focus on the still-dense `GhosttySurfaceView` / AppKit lifecycle boundary, not on the completed callback userdata/config seams.
+- **2c. Ghostty appearance hardening** (completed). Split-routing controller coverage shipped in PR #379. Appearance dedupe coverage and docs parity shipped in PR #383, and current smoke docs/scripts already state the Ghostty-splits/tmux preconditions. Closed under #84.
 
 P0 because these integration files still carry the highest regression risk when terminal, workspace, and activity behavior changes land. Treat this as a sequence of small behavior-preserving refactors with focused tests, not a broad rewrite.
 
 #### 3. Shared-desktop + evidence-loop reliability — Phase 1 done; Phase 2 deferred to P2
 
-`backlog/shared-desktop-focus-contention-followup.md`
-
-Phase 1 complete: `AppActivationPolicy` (PR #374) gates all `NSApp.activate` calls — launch *and* runtime — behind `WORKSPACES_NO_ACTIVATE_ON_LAUNCH=1` / `CI`. `scripts/capture-window.sh` provides window-id capture without activation. Remaining items (capture handshake, separate-user execution lane, VM-backed CI lane) drop to P2 — promote back when a concrete daily-driver scenario forces the issue.
+Phase 1 complete: `AppActivationPolicy` (PR #374) gates all `NSApp.activate` calls — launch *and* runtime — behind `WORKSPACES_NO_ACTIVATE_ON_LAUNCH=1` / `CI`. `scripts/capture-window.sh` provides window-id capture without activation. Remaining items (capture handshake, separate-user execution lane, VM-backed CI lane) drop to P2 — promote back when a concrete daily-driver scenario forces the issue. Phase 1 source: `backlog/done/shared-desktop-focus-contention-followup.md` (closed #82 + residual notes).
 
 ### Next (P1)
 
 #### 4. Terminal continuity — tmux + cross-session
 
-`backlog/tmux-support_plan.md` (multiplexing implementation), `backlog/desktop-continuity_plan.md` (across-session restore)
+GitHub: [#549](https://github.com/fairchild/workspaces/issues/549) (tmux implementation) + [#548](https://github.com/fairchild/workspaces/issues/548) (across-session restore) · `arc:terminal-continuity`
 
-Decided 2026-04-23 (`docs/decisions/terminal-multiplexing.md`): tmux primary; pane-tree deferred indefinitely. Two paired plans now sit under one theme. Tmux delivers reattach within a session. The continuity plan addresses the gap tmux does not close (close laptop, reopen, pick up where you left off). First continuity slice is active on `codex-continuity-dimension`: tmux preserves live process state when the server survives, and a terminal continuity manifest records the target plus launch directory for the honest fallback when it does not.
+Decided 2026-04-23 (`docs/decisions/terminal-multiplexing.md`): tmux primary; pane-tree deferred indefinitely. Two paired issues now sit under one theme. Tmux delivers reattach within a session. The continuity issue addresses the gap tmux does not close (close laptop, reopen, pick up where you left off). First continuity slice is active on `codex-continuity-dimension`: tmux preserves live process state when the server survives, and a terminal continuity manifest records the target plus launch directory for the honest fallback when it does not.
 
 #### 5. Lume runtime architecture cleanup
 
-`backlog/lume-runtime-architecture-followups_followup.md`
+Closed: #87, #88, #89 · `arc:lume-runtime`
 
-Contract proven (PR #54). Reduce reviewer friction and maintenance cost.
+Contract proven (PR #54). The three decomposition follow-ups (shared HTTP transport, native detachment + VM typing, doc refresh) all closed; reviewer-friction work is complete. Source plan archived to `backlog/done/lume-runtime-architecture-followups_followup.md`.
 
 #### 6. Notification client catch-up + reconnect correctness
 
-`backlog/notification-client-catchup-plan.md`
+GitHub: [#547](https://github.com/fairchild/workspaces/issues/547) · `arc:notification-catchup`
 
 Stable client identity, ACK cadence, duplicate/replay behavior. Reliability step before richer activity UX.
 
@@ -180,15 +178,15 @@ Stable client identity, ACK cadence, duplicate/replay behavior. Reliability step
 
 #### 7. Strategic isolation backend direction
 
-`backlog/vz-tahoe-execution-brief-plan.md`
+GitHub: [#533](https://github.com/fairchild/workspaces/issues/533) (VZ Tahoe tracking) + [#555](https://github.com/fairchild/workspaces/issues/555) (remote runtime expansion tracking) + [#532](https://github.com/fairchild/workspaces/issues/532) (Daytona native Swift) · `arc:isolation-backend`
 
 Current native-backend direction. Lume and Daytona already ship; VZ/Tahoe stays P2 until earlier quality debt is materially lower. `backlog/done/isolation-strategies.md` holds the long-form option tradeoff history.
 
 ### Icebox (P3)
 
-- Sparkle auto-update: `backlog/sparkle-autoupdate-plan.md`
-- Swift dev skills task list: `backlog/swift-dev-skills-task-list.md`
-- Dev-build warning cleanup + mise task migration: `backlog/dev-build-warning-cleanup-and-mise-tasks_plan.md`
+- Sparkle auto-update: already shipped under closed umbrella #2; source archived at `backlog/done/sparkle-autoupdate-plan.md`
+- Swift dev skills task list: [#552](https://github.com/fairchild/workspaces/issues/552)
+- Dev-build warning cleanup + mise task migration: [#551](https://github.com/fairchild/workspaces/issues/551)
 
 ---
 
@@ -208,13 +206,13 @@ Default execution policy:
 
 Theme-to-milestone map:
 
-| Roadmap theme | Milestone posture |
-|------|----------|
-| Core reliability and maintainability | Active P0 theme |
-| Lume runtime hardening | Queued after the current P0 theme clears |
-| Notification catch-up and reconnect correctness | Standalone after Lume unless activity work becomes urgent |
-| Terminal continuity (tmux + cross-session) | Decided 2026-04-23 (tmux primary). Implementation milestone after Lume runtime hardening unless continuity gap forces it sooner. |
-| Strategic isolation backend direction | Backlog/research until promoted by a fresh approved discussion |
+| Roadmap theme | Arc label | Milestone posture |
+|---|---|---|
+| Core reliability and maintainability | `arc:core-reliability` | Active P0 theme |
+| Lume runtime hardening | `arc:lume-runtime` | Closed (#87/#88/#89). Label retained for future Lume work. |
+| Notification catch-up and reconnect correctness | `arc:notification-catchup` | Next standalone after core-reliability theme clears |
+| Terminal continuity (tmux + cross-session) | `arc:terminal-continuity` | Decided 2026-04-23 (tmux primary). Implementation milestone after notification-catchup unless continuity gap forces it sooner. |
+| Strategic isolation backend direction | `arc:isolation-backend` | Backlog/research until promoted by a fresh approved discussion |
 
 ---
 
@@ -229,30 +227,37 @@ Scope tags:
 - `ops` — infrastructure, runners, release plumbing
 - `tooling` — dev productivity, build/CI, internal skills
 
-| Item | Scope | Priority | Pointer |
-|------|-------|----------|---------|
-| Workspace creation hang root cause | product | P0 | `backlog/workspace-creation-hang-root-cause_followup.md` |
-| Main-window + sidebar maintainability | product | P0 | `backlog/main-window-sidebar-maintainability_followup.md` |
-| Ghostty appearance hardening | product | Done | `backlog/ghostty-appearance-hardening_followup.md` |
-| Tmux per-worktree implementation | product | P1 | `backlog/tmux-support_plan.md` (chosen 2026-04-23 — `docs/decisions/terminal-multiplexing.md`) |
-| Desktop continuity (across-session restore) | product | P1 | `backlog/desktop-continuity_plan.md` (paired with tmux implementation) |
-| Lume runtime architecture follow-ups | product | P1 | `backlog/lume-runtime-architecture-followups_followup.md` |
-| Notification client catch-up | product | P1 | `backlog/notification-client-catchup-plan.md` |
-| Daytona native Swift API | product | — | `backlog/daytona-native-swift-api-plan.md` |
-| Remote runtime expansion plan | product | — | `backlog/remote-runtime-expansion-plan.md` |
-| Terminal PTY relay (sandbox) | product | — | `backlog/terminal-pty-relay-plan.md` |
-| Terminal architecture follow-ups | product | — | `backlog/terminal-architecture-followups.md` |
-| Terminal polish follow-ups | product | — | `backlog/terminal-polish-followup.md` |
-| Web API authorization hardening (tests) | quality | — | `backlog/web-api-authorization-hardening-followup.md` |
-| Web dashboard component regression tests | quality | — | `backlog/web-dashboard-component-regression-tests_followup.md` |
-| Shared-desktop focus contention Phase 2 | quality | P2 | `backlog/shared-desktop-focus-contention-followup.md` |
-| Tahoe VZ backend execution brief | product | P2 | `backlog/vz-tahoe-execution-brief-plan.md` |
-| Web dashboard Phase 3 follow-ups | product | P2 | `backlog/web-dashboard-phase3-followups.md` |
-| Spaces agent discovery dashboard | product | P2 | `backlog/spaces-agent-discovery-dashboard-plan.md` |
-| Sparkle auto-update | product | P3 | `backlog/sparkle-autoupdate-plan.md` |
-| Dev-build warning cleanup + mise tasks | tooling | P3 | `backlog/dev-build-warning-cleanup-and-mise-tasks_plan.md` |
-| Swift dev skills task list | tooling | P3 | `backlog/swift-dev-skills-task-list.md` |
-| Signing-host runner provisioning | ops | — | `backlog/signing-host-runner_followup.md` |
+Live source of truth is GitHub Issues on `fairchild/workspaces`. This table mirrors the strategic posture for items that have been promoted to issues; for the full operational queue use `gh issue list` (or the `backlog` skill).
+
+| Item | Scope | Priority | Issue |
+|------|-------|----------|-------|
+| Workspace creation hang root cause | product | P0 | [#554](https://github.com/fairchild/workspaces/issues/554) |
+| Main-window + sidebar maintainability | product | P0 | covered by closed #81 + residual notes in `backlog/done/main-window-sidebar-maintainability_followup.md` |
+| Ghostty appearance hardening | product | Done | closed #84 |
+| Tmux per-worktree implementation | product | P1 | [#549](https://github.com/fairchild/workspaces/issues/549) (chosen 2026-04-23 — `docs/decisions/terminal-multiplexing.md`) |
+| Desktop continuity (across-session restore) | product | P1 | [#548](https://github.com/fairchild/workspaces/issues/548) (paired with #549) |
+| Lume runtime architecture follow-ups | product | Done | closed #87, #88, #89 |
+| Notification client catch-up | product | P1 | [#547](https://github.com/fairchild/workspaces/issues/547) |
+| Managed PR reviewer continuous reruns | product | P1 | [#545](https://github.com/fairchild/workspaces/issues/545) |
+| PR reviewer narration eval skill | product | — | [#546](https://github.com/fairchild/workspaces/issues/546) |
+| Daytona native Swift API | product | — | [#532](https://github.com/fairchild/workspaces/issues/532) |
+| Remote runtime expansion (tracking) | product | — | [#555](https://github.com/fairchild/workspaces/issues/555) |
+| Terminal PTY relay (sandbox) | product | — | [#529](https://github.com/fairchild/workspaces/issues/529) |
+| Terminal architecture (tracking) | product | — | [#520](https://github.com/fairchild/workspaces/issues/520) (children #521–#527) |
+| Terminal polish | product | — | [#528](https://github.com/fairchild/workspaces/issues/528) |
+| Detail Pane sticky width | product | — | [#530](https://github.com/fairchild/workspaces/issues/530) |
+| Web API authorization hardening (tests) | quality | — | [#535](https://github.com/fairchild/workspaces/issues/535) |
+| Web dashboard component regression tests | quality | — | [#536](https://github.com/fairchild/workspaces/issues/536) |
+| Web dashboard CD deployment-smoke | quality | — | [#543](https://github.com/fairchild/workspaces/issues/543) |
+| CD auto-opener stale-close / dedup policy | quality | — | [#557](https://github.com/fairchild/workspaces/issues/557) |
+| Shared-desktop focus contention Phase 2 | quality | P2 | residual notes in `backlog/done/shared-desktop-focus-contention-followup.md` (Phase 1 closed under #82) |
+| Tahoe VZ backend execution brief (tracking) | product | P2 | [#533](https://github.com/fairchild/workspaces/issues/533) |
+| Web dashboard Phase 3 (tracking) | product | P2 | [#537](https://github.com/fairchild/workspaces/issues/537) + children #538–#541 |
+| Spaces agent discovery dashboard | product | P2 | [#542](https://github.com/fairchild/workspaces/issues/542) |
+| Sparkle auto-update | product | Done | covered by closed #2 (verified shipped) |
+| Dev-build warning cleanup + mise tasks | tooling | P3 | [#551](https://github.com/fairchild/workspaces/issues/551) |
+| Swift dev skills task list | tooling | P3 | [#552](https://github.com/fairchild/workspaces/issues/552) |
+| Signing-host runner provisioning | ops | — | [#553](https://github.com/fairchild/workspaces/issues/553) (human lane) |
 
 Archived (in `backlog/done/`):
 
