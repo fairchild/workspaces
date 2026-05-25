@@ -176,53 +176,66 @@ describe("bucketPrReviewRuns", () => {
 			triggerSourceId: "abc123",
 			createdAt: "2026-05-24T11:00:00.000Z",
 			error: null,
+			projectionError: null,
+			githubReviewId: null,
 		};
+		const pendingRun = (overrides: {
+			fingerprint: string;
+			status: "started" | "completed" | "failed";
+			sessionId: string | null;
+			updatedAt: string;
+			error?: string | null;
+			projectionStatus?: "pending" | "projected" | "failed";
+			projectionError?: string | null;
+		}) => ({
+			...base,
+			projectionStatus: overrides.projectionStatus ?? ("pending" as const),
+			projectionUpdatedAt: overrides.updatedAt,
+			...overrides,
+		});
 
 		const buckets = bucketPrReviewRuns(
 			[
-				{
-					...base,
+				pendingRun({
 					fingerprint: "fp_starting",
 					status: "started" as const,
 					sessionId: null,
 					updatedAt: "2026-05-24T11:59:00.000Z",
-				},
-				{
-					...base,
+				}),
+				pendingRun({
 					fingerprint: "fp_stuck_starting",
 					status: "started" as const,
 					sessionId: null,
 					updatedAt: "2026-05-24T11:50:00.000Z",
-				},
-				{
-					...base,
+				}),
+				pendingRun({
 					fingerprint: "fp_executing",
 					status: "started" as const,
 					sessionId: "sesn_executing",
 					updatedAt: "2026-05-24T11:40:00.000Z",
-				},
-				{
-					...base,
+				}),
+				pendingRun({
 					fingerprint: "fp_needs_projection",
 					status: "started" as const,
 					sessionId: "sesn_projection",
 					updatedAt: "2026-05-24T11:20:00.000Z",
-				},
-				{
-					...base,
+				}),
+				pendingRun({
 					fingerprint: "fp_failed",
 					status: "failed" as const,
 					sessionId: "sesn_failed",
 					updatedAt: "2026-05-24T11:58:00.000Z",
 					error: "review intent parse failed",
-				},
-				{
-					...base,
+					projectionStatus: "failed",
+					projectionError: "review intent parse failed",
+				}),
+				pendingRun({
 					fingerprint: "fp_completed",
 					status: "completed" as const,
 					sessionId: "sesn_completed",
 					updatedAt: "2026-05-24T11:58:00.000Z",
-				},
+					projectionStatus: "projected",
+				}),
 			],
 			{
 				now,
@@ -281,6 +294,8 @@ describe("run detail lookups", () => {
 			sessionId: "sesn_details",
 			status: "failed",
 			error: "review intent parse failed",
+			projectionStatus: "failed",
+			projectionError: "review intent parse failed",
 		});
 		expect(bySession).toEqual(byFingerprint);
 	});

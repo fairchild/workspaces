@@ -85,6 +85,10 @@ export interface ManagedPrReviewRunsTable {
 	created_at: string;
 	updated_at: string;
 	error: string | null;
+	projection_status: string | null;
+	projection_updated_at: string | null;
+	projection_error: string | null;
+	github_review_id: string | null;
 }
 
 interface Database {

@@ -35,6 +35,11 @@ interface OperatorRunItem {
 	triggerKind: string;
 	triggerSourceId: string;
 	status: string;
+	agentStatus: string;
+	projectionStatus: string;
+	projectionUpdatedAt: string;
+	projectionError?: string;
+	githubReviewId?: string;
 	state: string;
 	sessionId: string | null;
 	ageMinutes: number;
@@ -107,6 +112,9 @@ function operatorRunItem(
 		triggerKind: run.triggerKind,
 		triggerSourceId: run.triggerSourceId,
 		status: run.status,
+		agentStatus: run.status,
+		projectionStatus: run.projectionStatus,
+		projectionUpdatedAt: run.projectionUpdatedAt,
 		state: run.state,
 		sessionId: run.sessionId,
 		ageMinutes: run.ageMinutes,
@@ -114,6 +122,8 @@ function operatorRunItem(
 		updatedAt: run.updatedAt,
 		detailsUrl: reviewRunDetailsUrl(requestUrl, run.fingerprint),
 		...(run.error ? { error: run.error } : {}),
+		...(run.projectionError ? { projectionError: run.projectionError } : {}),
+		...(run.githubReviewId ? { githubReviewId: run.githubReviewId } : {}),
 	};
 }
 
