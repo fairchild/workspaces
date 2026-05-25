@@ -492,6 +492,8 @@ export function classifyPrReviewRun(
 				? "stuck_starting"
 				: "starting";
 	} else {
+		// Once a session exists, age reports projection staleness rather than
+		// wall-clock run age so operators can see when the broker is overdue.
 		ageSource = run.projectionUpdatedAt;
 		const ageMinutes = elapsedMinutes(ageSource, now);
 		state =

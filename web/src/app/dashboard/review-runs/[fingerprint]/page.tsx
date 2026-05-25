@@ -33,7 +33,9 @@ export default async function ReviewRunPage({
 		owner && repo
 			? `/dashboard/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}?tab=terminal&agent=pr-reviewer`
 			: "/dashboard";
-	const statusClass = styles[`status-${run.status}`] ?? "";
+	const effectiveStatus =
+		run.projectionStatus === "failed" ? "failed" : run.status;
+	const statusClass = styles[`status-${effectiveStatus}`] ?? "";
 	const projectionError =
 		run.projectionError && run.projectionError !== run.error
 			? run.projectionError

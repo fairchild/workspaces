@@ -1185,18 +1185,11 @@ export async function processPendingPrReviewRuns(
 				"success",
 				"Managed review posted.",
 			);
-			if (postedReview.reviewId) {
-				await recordRunResult(run.fingerprint, {
-					sessionId: run.sessionId,
-					status: "completed",
-					githubReviewId: postedReview.reviewId,
-				});
-			} else {
-				await recordRunResult(run.fingerprint, {
-					sessionId: run.sessionId,
-					status: "completed",
-				});
-			}
+			await recordRunResult(run.fingerprint, {
+				sessionId: run.sessionId,
+				status: "completed",
+				githubReviewId: postedReview.reviewId,
+			});
 			result.completed += 1;
 			result.runs.push({
 				fingerprint: run.fingerprint,
