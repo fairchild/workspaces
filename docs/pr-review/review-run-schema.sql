@@ -146,6 +146,8 @@ CREATE TABLE IF NOT EXISTS managed_review.review_runs (
   github_review_id text,
   github_review_url text,
 
+  -- Lifecycle timestamps answer "where did this run stop?" without requiring
+  -- operators to reconstruct timing from GitHub status or agent logs.
   queued_at timestamptz NOT NULL DEFAULT now(),
   started_at timestamptz,
   completed_at timestamptz,
@@ -153,10 +155,14 @@ CREATE TABLE IF NOT EXISTS managed_review.review_runs (
   failed_at timestamptz,
   superseded_at timestamptz,
 
+  -- Reconcile fields are scheduler inputs. The broker advances runs and updates
+  -- projections, then sets the next due time for retry or health reporting.
   next_reconcile_at timestamptz NOT NULL DEFAULT now(),
   last_reconcile_at timestamptz,
   reconcile_attempts integer NOT NULL DEFAULT 0 CHECK (reconcile_attempts >= 0),
 
+  -- Error fields carry the operator-facing reason a run failed or needs manual
+  -- attention; projection-specific failures live in review_run_projections.
   error_code text,
   error_message text,
   error_detail jsonb NOT NULL DEFAULT '{}'::jsonb,
