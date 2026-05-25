@@ -14,9 +14,14 @@ vi.mock("@/lib/db", () => ({
 	getDb: mocks.getDb,
 }));
 
-vi.mock("@/lib/agent-runtime/pr-review-runs", () => ({
-	listRecentPrReviewRuns: mocks.listRecentPrReviewRuns,
-}));
+vi.mock("@/lib/agent-runtime/pr-review-runs", async (importOriginal) => {
+	const actual =
+		await importOriginal<typeof import("@/lib/agent-runtime/pr-review-runs")>();
+	return {
+		...actual,
+		listRecentPrReviewRuns: mocks.listRecentPrReviewRuns,
+	};
+});
 
 const MONITOR_SECRET = "monitor-secret";
 
@@ -38,6 +43,38 @@ function monitorRequest(headers: Record<string, string> = {}): Request {
 		"http://localhost/api/webhooks/github/pr-reviewer-monitor?windowMinutes=90",
 		{ headers },
 	);
+}
+
+function runRow(
+	overrides: Partial<{
+		fingerprint: string;
+		repoFullName: string;
+		prNumber: number;
+		headSha: string;
+		triggerKind: string;
+		triggerSourceId: string;
+		status: "started" | "completed" | "failed" | "superseded";
+		sessionId: string | null;
+		createdAt: string;
+		updatedAt: string;
+		error: string | null;
+	}> = {},
+) {
+	const now = new Date().toISOString();
+	return {
+		fingerprint: "fp_monitor_test",
+		repoFullName: "fairchild/workspaces",
+		prNumber: 8101,
+		headSha: "abc8101def456",
+		triggerKind: "opened",
+		triggerSourceId: "abc8101def456",
+		status: "started" as const,
+		sessionId: "sesn_123",
+		createdAt: now,
+		updatedAt: now,
+		error: null,
+		...overrides,
+	};
 }
 
 describe("/api/webhooks/github/pr-reviewer-monitor GET", () => {
@@ -85,19 +122,7 @@ describe("/api/webhooks/github/pr-reviewer-monitor GET", () => {
 		mocks.executeWebhookQuery.mockResolvedValue([
 			webhookRowFromContractCase(opened),
 		]);
-		mocks.listRecentPrReviewRuns.mockResolvedValue([
-			{
-				repoFullName: "fairchild/workspaces",
-				prNumber: 8101,
-				headSha: "abc8101def456",
-				triggerKind: "opened",
-				triggerSourceId: "abc8101def456",
-				status: "started",
-				sessionId: "sesn_123",
-				createdAt: new Date().toISOString(),
-				updatedAt: new Date().toISOString(),
-			},
-		]);
+		mocks.listRecentPrReviewRuns.mockResolvedValue([runRow()]);
 
 		const { GET } = await import("./route");
 		const response = await GET(
@@ -108,6 +133,9 @@ describe("/api/webhooks/github/pr-reviewer-monitor GET", () => {
 		await expect(response.json()).resolves.toMatchObject({
 			ok: true,
 			checked: 1,
+			eligibleEvents: 1,
+			missingRuns: 0,
+			executing: 1,
 			missing: [],
 		});
 	});
@@ -121,17 +149,15 @@ describe("/api/webhooks/github/pr-reviewer-monitor GET", () => {
 			webhookRowFromContractCase(evidenceComment),
 		]);
 		mocks.listRecentPrReviewRuns.mockResolvedValue([
-			{
-				repoFullName: "fairchild/workspaces",
+			runRow({
+				fingerprint: "fp_evidence_comment",
 				prNumber: 8111,
 				headSha: "resolved-head-sha",
 				triggerKind: "evidence_comment",
 				triggerSourceId: "comment-908111",
 				status: "completed",
 				sessionId: "sesn_456",
-				createdAt: new Date().toISOString(),
-				updatedAt: new Date().toISOString(),
-			},
+			}),
 		]);
 
 		const { GET } = await import("./route");
@@ -163,6 +189,7 @@ describe("/api/webhooks/github/pr-reviewer-monitor GET", () => {
 		await expect(response.json()).resolves.toMatchObject({
 			ok: false,
 			checked: 1,
+			missingRuns: 1,
 			missing: [
 				{
 					eventId: "contract-pr-opened",
@@ -172,6 +199,57 @@ describe("/api/webhooks/github/pr-reviewer-monitor GET", () => {
 					triggerSourceId: "abc8101def456",
 				},
 			],
+		});
+	});
+
+	it("fails the operator report when existing runs need attention", async () => {
+		mocks.executeWebhookQuery.mockResolvedValue([]);
+		const oldStamp = new Date(Date.now() - 45 * 60 * 1000).toISOString();
+		mocks.listRecentPrReviewRuns.mockResolvedValue([
+			runRow({
+				fingerprint: "fp_needs_projection",
+				prNumber: 9001,
+				sessionId: "sesn_projection",
+				updatedAt: oldStamp,
+			}),
+			runRow({
+				fingerprint: "fp_failed",
+				prNumber: 9002,
+				status: "failed",
+				sessionId: "sesn_failed",
+				error: "review intent parse failed",
+				updatedAt: oldStamp,
+			}),
+		]);
+
+		const { GET } = await import("./route");
+		const response = await GET(
+			monitorRequest({ authorization: `Bearer ${MONITOR_SECRET}` }),
+		);
+
+		expect(response.status).toBe(503);
+		await expect(response.json()).resolves.toMatchObject({
+			ok: false,
+			attentionRequired: 2,
+			needsProjection: 1,
+			failed: 1,
+			runs: {
+				needsProjection: [
+					{
+						fingerprint: "fp_needs_projection",
+						state: "needs_projection",
+						detailsUrl:
+							"http://localhost/dashboard/review-runs/fp_needs_projection",
+					},
+				],
+				failed: [
+					{
+						fingerprint: "fp_failed",
+						state: "failed",
+						error: "review intent parse failed",
+					},
+				],
+			},
 		});
 	});
 });

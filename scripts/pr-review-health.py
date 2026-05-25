@@ -8,6 +8,10 @@
 This is an operational monitor for the WorkSpaces managed PR reviewer, not a
 general "all open PRs are mergeable" gate.
 
+Use ``scripts/pr-reviewer-runs.py`` when you need the ReviewRun database view:
+trigger rows, executing sessions, projection-due rows, and stored failures. This
+script checks the GitHub-facing projection on open PRs.
+
 The script intentionally separates the queue into two buckets:
 
 - Active scope: non-draft open PRs updated within ``--updated-within-hours``.

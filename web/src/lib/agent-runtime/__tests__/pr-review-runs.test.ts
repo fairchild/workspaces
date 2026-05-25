@@ -164,6 +164,95 @@ describe("listStartedPrReviewRuns", () => {
 	});
 });
 
+describe("bucketPrReviewRuns", () => {
+	it("separates runs that are starting, executing, due for projection, failed, and terminal", async () => {
+		const { bucketPrReviewRuns } = await loadModule();
+		const now = new Date("2026-05-24T12:00:00.000Z");
+		const base = {
+			repoFullName: "fairchild/workspaces",
+			prNumber: 1,
+			headSha: "abc123",
+			triggerKind: "opened",
+			triggerSourceId: "abc123",
+			createdAt: "2026-05-24T11:00:00.000Z",
+			error: null,
+		};
+
+		const buckets = bucketPrReviewRuns(
+			[
+				{
+					...base,
+					fingerprint: "fp_starting",
+					status: "started" as const,
+					sessionId: null,
+					updatedAt: "2026-05-24T11:59:00.000Z",
+				},
+				{
+					...base,
+					fingerprint: "fp_stuck_starting",
+					status: "started" as const,
+					sessionId: null,
+					updatedAt: "2026-05-24T11:50:00.000Z",
+				},
+				{
+					...base,
+					fingerprint: "fp_executing",
+					status: "started" as const,
+					sessionId: "sesn_executing",
+					updatedAt: "2026-05-24T11:40:00.000Z",
+				},
+				{
+					...base,
+					fingerprint: "fp_needs_projection",
+					status: "started" as const,
+					sessionId: "sesn_projection",
+					updatedAt: "2026-05-24T11:20:00.000Z",
+				},
+				{
+					...base,
+					fingerprint: "fp_failed",
+					status: "failed" as const,
+					sessionId: "sesn_failed",
+					updatedAt: "2026-05-24T11:58:00.000Z",
+					error: "review intent parse failed",
+				},
+				{
+					...base,
+					fingerprint: "fp_completed",
+					status: "completed" as const,
+					sessionId: "sesn_completed",
+					updatedAt: "2026-05-24T11:58:00.000Z",
+				},
+			],
+			{
+				now,
+				thresholds: {
+					startingTimeoutMinutes: 5,
+					projectionTimeoutMinutes: 30,
+				},
+			},
+		);
+
+		expect(buckets.starting.map((run) => run.fingerprint)).toEqual([
+			"fp_starting",
+		]);
+		expect(buckets.stuckStarting.map((run) => run.fingerprint)).toEqual([
+			"fp_stuck_starting",
+		]);
+		expect(buckets.executing.map((run) => run.fingerprint)).toEqual([
+			"fp_executing",
+		]);
+		expect(buckets.needsProjection.map((run) => run.fingerprint)).toEqual([
+			"fp_needs_projection",
+		]);
+		expect(buckets.failed.map((run) => run.fingerprint)).toEqual(["fp_failed"]);
+		expect(buckets.terminal.map((run) => run.fingerprint)).toEqual([
+			"fp_completed",
+		]);
+		expect(buckets.needsProjection[0].ageMinutes).toBe(40);
+	});
+});
+
 describe("run detail lookups", () => {
 	it("returns run details by fingerprint and session id", async () => {
 		const {
