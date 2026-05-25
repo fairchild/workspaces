@@ -1134,10 +1134,19 @@ export async function processPendingPrReviewRuns(
 					: retrySessionId
 						? `Superseded by managed review ${referenceReview.id}; retry session ${retrySessionId} started.`
 						: `Superseded by managed review ${referenceReview.id}; retry session was not started.`;
+				if (reviewedCurrentHead) {
+					await postManagedReviewStatus(
+						githubToken,
+						statusPayload,
+						"success",
+						"Managed review posted.",
+					);
+				}
 				await recordRunResult(run.fingerprint, {
 					sessionId: run.sessionId,
 					status: "superseded",
 					error,
+					projectionStatus: reviewedCurrentHead ? "projected" : "superseded",
 					githubReviewId: String(referenceReview.id),
 				});
 				result.superseded += 1;

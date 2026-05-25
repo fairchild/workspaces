@@ -857,7 +857,15 @@ describe("processPendingPrReviewRuns", () => {
 			sessionId: "sesn_stale",
 			status: "superseded",
 			error: expect.stringContaining("same head"),
+			projectionStatus: "projected",
 			githubReviewId: "4304929065",
+		});
+		const statusPost = mocks.fetch.mock.calls.find(([url]) =>
+			String(url).includes("/statuses/same-head"),
+		);
+		expect(JSON.parse(String(statusPost?.[1]?.body))).toMatchObject({
+			state: "success",
+			description: "Managed review posted.",
 		});
 	});
 
@@ -924,6 +932,9 @@ describe("processPendingPrReviewRuns", () => {
 					],
 				};
 			}
+			if (isManagedReviewStatusUrl(url)) {
+				return okResponse();
+			}
 			throw new Error(`Unexpected fetch URL: ${url}`);
 		});
 
@@ -949,6 +960,7 @@ describe("processPendingPrReviewRuns", () => {
 			sessionId: "sesn_mixed_reviews",
 			status: "superseded",
 			error: expect.stringContaining("4304929065"),
+			projectionStatus: "projected",
 			githubReviewId: "4304929065",
 		});
 	});
@@ -1056,6 +1068,7 @@ describe("processPendingPrReviewRuns", () => {
 			sessionId: "sesn_new_head_stale",
 			status: "superseded",
 			error: expect.stringContaining("retry session sesn_01 started"),
+			projectionStatus: "superseded",
 			githubReviewId: "4304929065",
 		});
 		const [, params] = mocks.sendEvent.mock.calls[0];
