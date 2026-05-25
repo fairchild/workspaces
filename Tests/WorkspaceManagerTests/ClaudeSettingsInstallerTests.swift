@@ -250,8 +250,8 @@ struct ClaudeSettingsInstallerTests {
         let spacedEventForwarder =
             "/Users/test/Library/Application Support/com.cloudcompute.workspaces/HookForwarders/event-forwarder.sh"
         let escapedEventForwarder = "'\(spacedEventForwarder)'"
-        let spacedStatusline = "/tmp/Status Line/statusline.sh"
-        let escapedStatusline = "'\(spacedStatusline)'"
+        let spacedStatusline = "/tmp/Status Line/O'Brien/statusline.sh"
+        let escapedStatusline = "'/tmp/Status Line/O'\\''Brien/statusline.sh'"
         let userHook = "/Users/test/Library/Application Support/user-hook.sh"
         let existing: [String: Any] = [
             "hooks": [
