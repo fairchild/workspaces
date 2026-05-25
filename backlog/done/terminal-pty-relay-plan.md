@@ -1,4 +1,8 @@
 ---
+status: done
+issue: 529
+completed: 2026-05-25
+resolution: promoted-to-github-issue
 priority: 2
 description: Upgrade terminal tab from command-per-line SSE to Sandcastle-style PTY relay with persistent sessions and WebSocket reconnection
 ---

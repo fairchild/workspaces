@@ -1,4 +1,9 @@
 ---
+status: done
+issue: 520
+children: [521, 522, 523, 524, 525, 526, 527]
+completed: 2026-05-25
+resolution: promoted-to-github-issues
 priority: 2
 description: Larger terminal architecture items that need design discussion before implementation. Small polish items live in terminal-polish-followup.md.
 ---
