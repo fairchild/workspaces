@@ -599,7 +599,11 @@ describe("processPendingPrReviewRuns", () => {
 						event: "COMMENT",
 						body: expect.stringContaining("No blocking issues found"),
 					});
-					return { ok: true, text: async () => "", json: async () => ({}) };
+					return {
+						ok: true,
+						text: async () => "",
+						json: async () => ({ id: 4304929701 }),
+					};
 				}
 				if (url.endsWith("/issues/486/labels")) {
 					expect(options?.method).toBe("POST");
@@ -626,6 +630,7 @@ describe("processPendingPrReviewRuns", () => {
 		expect(mocks.recordRunResult).toHaveBeenCalledWith("fp_486", {
 			sessionId: "sesn_486",
 			status: "completed",
+			githubReviewId: "4304929701",
 		});
 		const statusPost = mocks.fetch.mock.calls.find(([url]) =>
 			String(url).includes("/statuses/head-sha"),
@@ -852,6 +857,7 @@ describe("processPendingPrReviewRuns", () => {
 			sessionId: "sesn_stale",
 			status: "superseded",
 			error: expect.stringContaining("same head"),
+			githubReviewId: "4304929065",
 		});
 	});
 
@@ -943,6 +949,7 @@ describe("processPendingPrReviewRuns", () => {
 			sessionId: "sesn_mixed_reviews",
 			status: "superseded",
 			error: expect.stringContaining("4304929065"),
+			githubReviewId: "4304929065",
 		});
 	});
 
@@ -1049,6 +1056,7 @@ describe("processPendingPrReviewRuns", () => {
 			sessionId: "sesn_new_head_stale",
 			status: "superseded",
 			error: expect.stringContaining("retry session sesn_01 started"),
+			githubReviewId: "4304929065",
 		});
 		const [, params] = mocks.sendEvent.mock.calls[0];
 		const message = params.events[0].content[0].text;

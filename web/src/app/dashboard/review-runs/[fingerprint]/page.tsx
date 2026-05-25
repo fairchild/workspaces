@@ -34,6 +34,10 @@ export default async function ReviewRunPage({
 			? `/dashboard/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}?tab=terminal&agent=pr-reviewer`
 			: "/dashboard";
 	const statusClass = styles[`status-${run.status}`] ?? "";
+	const projectionError =
+		run.projectionError && run.projectionError !== run.error
+			? run.projectionError
+			: null;
 
 	return (
 		<main className={styles.page}>
@@ -44,7 +48,9 @@ export default async function ReviewRunPage({
 						{run.repoFullName}#{run.prNumber}
 					</h1>
 				</div>
-				<span className={`${styles.status} ${statusClass}`}>{run.status}</span>
+				<span className={`${styles.status} ${statusClass}`}>
+					{run.status} / {run.projectionStatus}
+				</span>
 			</div>
 
 			<section className={styles.summary}>
@@ -66,6 +72,19 @@ export default async function ReviewRunPage({
 					<span>Updated</span>
 					<strong>{new Date(run.updatedAt).toLocaleString()}</strong>
 				</div>
+				<div>
+					<span>Projection</span>
+					<strong>
+						{run.projectionStatus} /{" "}
+						{new Date(run.projectionUpdatedAt).toLocaleString()}
+					</strong>
+				</div>
+				{run.githubReviewId && (
+					<div>
+						<span>GitHub review</span>
+						<strong>{run.githubReviewId}</strong>
+					</div>
+				)}
 			</section>
 
 			<nav className={styles.links} aria-label="Run links">
@@ -75,6 +94,9 @@ export default async function ReviewRunPage({
 			</nav>
 
 			{run.error && <pre className={styles.errorBlock}>{run.error}</pre>}
+			{projectionError && (
+				<pre className={styles.errorBlock}>{projectionError}</pre>
+			)}
 
 			<ReviewRunTranscript
 				fingerprint={run.fingerprint}

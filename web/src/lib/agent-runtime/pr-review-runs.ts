@@ -7,6 +7,12 @@ export type PrReviewRunStatus =
 	| "failed"
 	| "superseded";
 
+export type PrReviewProjectionStatus =
+	| "pending"
+	| "projected"
+	| "failed"
+	| "superseded";
+
 export interface PrReviewRunFingerprintInput {
 	repoFullName: string;
 	prNumber: number;
@@ -40,7 +46,26 @@ async function ensureRunsTable(): Promise<void> {
 		.addColumn("created_at", "text", (c) => c.notNull())
 		.addColumn("updated_at", "text", (c) => c.notNull())
 		.addColumn("error", "text")
+		.addColumn("projection_status", "text")
+		.addColumn("projection_updated_at", "text")
+		.addColumn("projection_error", "text")
+		.addColumn("github_review_id", "text")
 		.execute();
+	for (const [column, type] of [
+		["projection_status", "text"],
+		["projection_updated_at", "text"],
+		["projection_error", "text"],
+		["github_review_id", "text"],
+	] as const) {
+		try {
+			await db.schema
+				.alterTable("managed_pr_review_runs")
+				.addColumn(column, type)
+				.execute();
+		} catch {
+			// Column already exists.
+		}
+	}
 	await db.schema
 		.createIndex("idx_managed_pr_review_runs_pr")
 		.ifNotExists()
@@ -71,6 +96,36 @@ export interface RecordRunStartResult {
 
 /** Treat a `started` row older than this as crashed and eligible for retry. */
 const STALE_STARTED_MS = 15 * 60 * 1000;
+
+function projectionStatusForRunStatus(
+	status: PrReviewRunStatus,
+): PrReviewProjectionStatus {
+	switch (status) {
+		case "completed":
+			return "projected";
+		case "failed":
+			return "failed";
+		case "superseded":
+			return "superseded";
+		case "started":
+			return "pending";
+	}
+}
+
+function normalizeProjectionStatus(
+	projectionStatus: string | null,
+	runStatus: PrReviewRunStatus,
+): PrReviewProjectionStatus {
+	if (
+		projectionStatus === "pending" ||
+		projectionStatus === "projected" ||
+		projectionStatus === "failed" ||
+		projectionStatus === "superseded"
+	) {
+		return projectionStatus;
+	}
+	return projectionStatusForRunStatus(runStatus);
+}
 
 /**
  * Claim a run slot for the fingerprint. Returns `inserted: true` when the
@@ -111,6 +166,10 @@ export async function recordRunStart(
 			created_at: now,
 			updated_at: now,
 			error: null,
+			projection_status: "pending",
+			projection_updated_at: now,
+			projection_error: null,
+			github_review_id: null,
 		})
 		.onConflict((oc) => oc.column("fingerprint").doNothing())
 		.executeTakeFirst();
@@ -141,6 +200,10 @@ export async function recordRunStart(
 				created_at: now,
 				updated_at: now,
 				error: null,
+				projection_status: "pending",
+				projection_updated_at: now,
+				projection_error: null,
+				github_review_id: null,
 			})
 			.execute();
 		return { inserted: true };
@@ -166,6 +229,10 @@ export async function recordRunStart(
 			session_id: null,
 			error: null,
 			updated_at: now,
+			projection_status: "pending",
+			projection_updated_at: now,
+			projection_error: null,
+			github_review_id: null,
 		})
 		.where("fingerprint", "=", input.fingerprint)
 		.execute();
@@ -176,6 +243,9 @@ export interface RecordRunResultInput {
 	sessionId: string | null;
 	status: PrReviewRunStatus;
 	error?: string | null;
+	projectionStatus?: PrReviewProjectionStatus;
+	projectionError?: string | null;
+	githubReviewId?: string | null;
 }
 
 export async function recordRunResult(
@@ -183,13 +253,25 @@ export async function recordRunResult(
 	input: RecordRunResultInput,
 ): Promise<void> {
 	await ensureRunsTable();
+	const now = new Date().toISOString();
+	const projectionStatus =
+		input.projectionStatus ?? projectionStatusForRunStatus(input.status);
 	await getDb()
 		.updateTable("managed_pr_review_runs")
 		.set({
 			session_id: input.sessionId,
 			status: input.status,
 			error: input.error ?? null,
-			updated_at: new Date().toISOString(),
+			updated_at: now,
+			projection_status: projectionStatus,
+			projection_updated_at: now,
+			projection_error:
+				input.projectionError !== undefined
+					? input.projectionError
+					: projectionStatus === "failed"
+						? (input.error ?? null)
+						: null,
+			github_review_id: input.githubReviewId ?? null,
 		})
 		.where("fingerprint", "=", fingerprint)
 		.execute();
@@ -207,6 +289,10 @@ export interface PrReviewRunSummary {
 	createdAt: string;
 	updatedAt: string;
 	error: string | null;
+	projectionStatus: PrReviewProjectionStatus;
+	projectionUpdatedAt: string;
+	projectionError: string | null;
+	githubReviewId: string | null;
 }
 
 export interface PrReviewRunDetails extends PrReviewRunSummary {
@@ -238,7 +324,12 @@ function mapRunDetails(row: {
 	created_at: string;
 	updated_at: string;
 	error: string | null;
+	projection_status: string | null;
+	projection_updated_at: string | null;
+	projection_error: string | null;
+	github_review_id: string | null;
 }): PrReviewRunDetails {
+	const status = row.status as PrReviewRunStatus;
 	return {
 		fingerprint: row.fingerprint,
 		repoFullName: row.repo_full_name,
@@ -247,11 +338,16 @@ function mapRunDetails(row: {
 		triggerKind: row.trigger_kind,
 		triggerSourceId: row.trigger_source_id,
 		reviewerConfigHash: row.reviewer_config_hash,
-		status: row.status as PrReviewRunStatus,
+		status,
 		sessionId: row.session_id,
 		createdAt: row.created_at,
 		updatedAt: row.updated_at,
 		error: row.error,
+		projectionStatus: normalizeProjectionStatus(row.projection_status, status),
+		projectionUpdatedAt: row.projection_updated_at ?? row.updated_at,
+		projectionError:
+			row.projection_error ?? (status === "failed" ? row.error : null),
+		githubReviewId: row.github_review_id,
 	};
 }
 
@@ -300,24 +396,39 @@ export async function listRecentPrReviewRuns(input: {
 			"created_at",
 			"updated_at",
 			"error",
+			"projection_status",
+			"projection_updated_at",
+			"projection_error",
+			"github_review_id",
 		])
 		.where("created_at", ">=", input.sinceIso)
 		.where("repo_full_name", "=", input.repoFullName)
 		.execute();
 
-	return rows.map((row) => ({
-		fingerprint: row.fingerprint,
-		repoFullName: row.repo_full_name,
-		prNumber: row.pr_number,
-		headSha: row.head_sha,
-		triggerKind: row.trigger_kind,
-		triggerSourceId: row.trigger_source_id,
-		status: row.status as PrReviewRunStatus,
-		sessionId: row.session_id,
-		createdAt: row.created_at,
-		updatedAt: row.updated_at,
-		error: row.error,
-	}));
+	return rows.map((row) => {
+		const status = row.status as PrReviewRunStatus;
+		return {
+			fingerprint: row.fingerprint,
+			repoFullName: row.repo_full_name,
+			prNumber: row.pr_number,
+			headSha: row.head_sha,
+			triggerKind: row.trigger_kind,
+			triggerSourceId: row.trigger_source_id,
+			status,
+			sessionId: row.session_id,
+			createdAt: row.created_at,
+			updatedAt: row.updated_at,
+			error: row.error,
+			projectionStatus: normalizeProjectionStatus(
+				row.projection_status,
+				status,
+			),
+			projectionUpdatedAt: row.projection_updated_at ?? row.updated_at,
+			projectionError:
+				row.projection_error ?? (status === "failed" ? row.error : null),
+			githubReviewId: row.github_review_id,
+		};
+	});
 }
 
 export type PrReviewRunOperatorState =
@@ -362,26 +473,34 @@ export function classifyPrReviewRun(
 	},
 ): ClassifiedPrReviewRun {
 	const now = options.now ?? new Date();
-	const ageMinutes = elapsedMinutes(run.updatedAt, now);
+	let ageSource = run.updatedAt;
 	let state: PrReviewRunOperatorState;
 
-	if (run.status === "failed") {
+	if (run.status === "failed" || run.projectionStatus === "failed") {
 		state = "failed";
-	} else if (run.status === "completed" || run.status === "superseded") {
+	} else if (
+		run.status === "completed" ||
+		run.status === "superseded" ||
+		run.projectionStatus === "projected" ||
+		run.projectionStatus === "superseded"
+	) {
 		state = "terminal";
 	} else if (!run.sessionId) {
+		const ageMinutes = elapsedMinutes(ageSource, now);
 		state =
 			ageMinutes >= options.thresholds.startingTimeoutMinutes
 				? "stuck_starting"
 				: "starting";
 	} else {
+		ageSource = run.projectionUpdatedAt;
+		const ageMinutes = elapsedMinutes(ageSource, now);
 		state =
 			ageMinutes >= options.thresholds.projectionTimeoutMinutes
 				? "needs_projection"
 				: "executing";
 	}
 
-	return { ...run, state, ageMinutes };
+	return { ...run, state, ageMinutes: elapsedMinutes(ageSource, now) };
 }
 
 export function bucketPrReviewRuns(

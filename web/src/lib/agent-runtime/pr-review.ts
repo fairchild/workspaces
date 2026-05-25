@@ -723,7 +723,7 @@ async function postGitHubReviewIntent(
 	githubToken: string,
 	payload: PrReviewPayload,
 	intent: PrReviewIntent,
-): Promise<void> {
+): Promise<{ reviewId: string | null }> {
 	const [owner, repo] = payload.repoFullName.split("/");
 	if (!owner || !repo) {
 		throw new Error("Repository owner/name was unavailable.");
@@ -748,8 +748,15 @@ async function postGitHubReviewIntent(
 			`GitHub review post failed ${reviewRes.status}: ${await reviewRes.text()}`,
 		);
 	}
+	const reviewJson = (await reviewRes.json().catch(() => null)) as {
+		id?: unknown;
+	} | null;
+	const reviewId =
+		reviewJson?.id !== undefined && reviewJson.id !== null
+			? String(reviewJson.id)
+			: null;
 
-	if (intent.labels.length === 0) return;
+	if (intent.labels.length === 0) return { reviewId };
 
 	const labelRes = await fetch(
 		`${GITHUB_API}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/${payload.number}/labels`,
@@ -764,6 +771,7 @@ async function postGitHubReviewIntent(
 			`[pr-review] label post skipped/failed ${labelRes.status}: ${await labelRes.text()}`,
 		);
 	}
+	return { reviewId };
 }
 
 const FAILED_REVIEW_OUTPUT_LIMIT = 8000;
@@ -1130,6 +1138,7 @@ export async function processPendingPrReviewRuns(
 					sessionId: run.sessionId,
 					status: "superseded",
 					error,
+					githubReviewId: String(referenceReview.id),
 				});
 				result.superseded += 1;
 				if (retrySessionId) result.requeued += 1;
@@ -1156,17 +1165,29 @@ export async function processPendingPrReviewRuns(
 				collected.output,
 				narrativeContext.availableLabels.map((label) => label.name),
 			);
-			await postGitHubReviewIntent(githubToken, payload, intent);
+			const postedReview = await postGitHubReviewIntent(
+				githubToken,
+				payload,
+				intent,
+			);
 			await postManagedReviewStatus(
 				githubToken,
 				statusPayload,
 				"success",
 				"Managed review posted.",
 			);
-			await recordRunResult(run.fingerprint, {
-				sessionId: run.sessionId,
-				status: "completed",
-			});
+			if (postedReview.reviewId) {
+				await recordRunResult(run.fingerprint, {
+					sessionId: run.sessionId,
+					status: "completed",
+					githubReviewId: postedReview.reviewId,
+				});
+			} else {
+				await recordRunResult(run.fingerprint, {
+					sessionId: run.sessionId,
+					status: "completed",
+				});
+			}
 			result.completed += 1;
 			result.runs.push({
 				fingerprint: run.fingerprint,

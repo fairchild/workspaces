@@ -146,10 +146,11 @@ uv run --script scripts/pr-reviewer-runs.py
 
 Use the report as the first read of production health. `missingRuns` means a
 reviewer-eligible webhook did not create a `managed_pr_review_runs` row.
-`executing` means the managed-agent session has been created and is still inside
-the normal projection window. `needsProjection` means the row is old enough that
-the broker should have posted the GitHub review or failure status. `failed`
-shows terminal run failures with the stored reason and a details URL.
+`executing` means the managed-agent session has been created and the GitHub
+projection is still inside the normal window. `needsProjection` means the row is
+old enough that the broker should have posted the GitHub review or failure
+status. `failed` shows agent or projection failures with the stored reason and a
+details URL.
 
 The Worker requires `WORKSPACES_WEBHOOK_CANARY_SECRET`, signs a canonical
 reviewer-eligible PR payload with `GITHUB_WEBHOOK_SECRET`, forwards it to the
@@ -173,7 +174,9 @@ curl --fail-with-body -sS \
 
 The broker inspects `started` rows in `managed_pr_review_runs`, skips sessions
 that are still running, validates completed review-intent JSON, and posts the
-review with the GitHub App token. Before posting, it re-checks current managed
+review with the GitHub App token. The row keeps two lifecycle fields: `status`
+for the managed-agent run and `projection_status` for the GitHub-facing review
+or failure projection. Before posting, the broker re-checks current managed
 reviews on the PR; if another managed review was submitted after the session
 started, the stale session is marked `superseded`. If the superseding review is
 for an older head, the broker starts a fresh follow-up session so the newer-head
@@ -320,11 +323,14 @@ itself) and from `Bot`-typed senders.
 
 Every dispatch computes a fingerprint over
 `(repo, pr, headSha, triggerKind, triggerSourceId, reviewerConfigHash)` and
-inserts a row into `managed_pr_review_runs` (created on first use). The skip
-decision honors the prior run's status so failed/crashed dispatches stay
-retriable:
+inserts a row into `managed_pr_review_runs` (created on first use). The row is
+the source of truth for both lifecycles: `status` tracks the managed agent, while
+`projection_status` tracks whether the broker has projected the result back to
+GitHub. The skip decision honors the prior run's agent status so failed/crashed
+dispatches stay retriable:
 
 - `completed` → skip; the previous run already produced a review.
+- `superseded` → skip; a later managed review intentionally covered this run.
 - `failed` → reset and proceed; lets a redelivery (or a follow-on event with
   the same fingerprint) recover from a transient session-create failure.
 - fresh `started` → skip (in-flight).

@@ -14,11 +14,12 @@ prints the current queue in operator terms:
 - ``starting``: a ReviewRun row exists, but the managed-agent session id has not
   been recorded yet. Briefly normal immediately after pickup.
 - ``stuckStarting``: a starting row is old enough to need attention.
-- ``executing``: a managed-agent session exists and is still inside the normal
-  projection window.
-- ``needsProjection``: a session exists, but the row is old enough that the
-  broker should have posted the GitHub review or failure status.
-- ``failed``: the ReviewRun reached a terminal failure and stored a reason.
+- ``executing``: a managed-agent session exists and its GitHub projection is
+  still inside the normal window.
+- ``needsProjection``: the agent run is old enough that the broker should have
+  posted a GitHub review or failure status by now.
+- ``failed``: either the agent lifecycle or GitHub projection failed and stored
+  a reason.
 - ``terminal``: completed or superseded rows. These are counted, but omitted
   from the terse text output unless ``--json`` is used.
 
@@ -141,15 +142,23 @@ def print_run_bucket(label: str, runs: list[dict[str, Any]]) -> None:
         pr_number = run.get("prNumber", "?")
         short_sha = run.get("shortHeadSha", "-")
         age = run.get("ageMinutes", "?")
-        status = run.get("status", "-")
+        agent_status = run.get("agentStatus", run.get("status", "-"))
+        projection_status = run.get("projectionStatus", "-")
         state = run.get("state", "-")
         session_id = run.get("sessionId")
         details_url = run.get("detailsUrl")
-        print(f"  - PR #{pr_number} {short_sha} {state} ({status}), age {age}m")
+        print(
+            f"  - PR #{pr_number} {short_sha} {state} "
+            f"(agent={agent_status}, projection={projection_status}), age {age}m"
+        )
         if session_id:
             print(f"    session: {session_id}")
+        if run.get("githubReviewId"):
+            print(f"    github review: {run['githubReviewId']}")
         if details_url:
             print(f"    details: {details_url}")
+        if run.get("projectionError") and run.get("projectionError") != run.get("error"):
+            print(f"    projection error: {run['projectionError']}")
         if run.get("error"):
             print(f"    error: {run['error']}")
 
