@@ -53,21 +53,20 @@ The label vocabulary above (`claimed` / `review` / `mergeable`) is shared with `
 
 ## Co-existence with other automation
 
-The skill is not the sole writer of these labels. Two existing systems also drive transitions on `agent` + `task` issues:
+Two existing systems write the `claimed` / `review` / `mergeable` labels:
 
-- **`.agents/skills/cofounder-contributor/scripts/sync-execution-state.py`** — owns `agent` + `task` lifecycle. Promotes approved, unblocked issues to `ready`, then to `claimed` on contributor claim, then to `review` when a PR opens. Expires stale claims after 24h.
+- **`.agents/skills/cofounder-contributor/scripts/sync-execution-state.py`** — owns the `agent` + `task` lifecycle. Promotes approved, unblocked issues to `ready`, to `claimed` on contributor claim, to `review` when a PR opens. Expires stale claims after 24h.
 - **Managed PR reviewer** (`web/src/lib/agent-runtime/pr-review.ts`) — adds `mergeable` when an agent approves the linked PR; removes it on changes-requested.
 
-Where the skill participates:
+These two systems and the `backlog` skill use **different claim comment formats**. Sync reads an HTML-comment marker embedded in the contributor's comment (`<!-- contributor:issue=N;status=...;agent=...;branch=... -->`); the skill posts a worklog line (`- <ts> advanced to=claimed claimer=... branch=...`). Sync ignores comments without its marker and treats the issue as unclaimed, so a skill-written `claimed` label on a sync-managed issue gets reverted to `ready` on the next sync pass.
 
-- **At claim (`take` / `advance` to `claimed`)** — skill writes the `claimed` label and posts the worklog comment with `branch=` for race resolution. Safe on `agent` + `task` issues because `sync-execution-state.py` does the same thing; the worklog comment is the source of truth either way.
-- **Mid-pipeline (`claimed → review → mergeable`)** — let the external automation drive these transitions. The skill *can* `advance` here, but doing so on `agent` + `task` issues races with sync. For non-`agent`+`task` issues (personal work, scratch threads, things outside the pipeline) the skill drives the whole sequence itself.
-- **At completion (`advance` from `mergeable` → `done`)** — skill closes the issue once merge has landed. Safe regardless of who set `mergeable`.
-- **`cancel` / `fail` / `rescue` / `retry`** — terminal verbs; safe at any point.
+This carves a clean operational split:
 
-This works because `current_claim` (skill internal) resolves ownership by walking branch-tagged worklog comments, not by reading the current label. External writers moving the label forward don't break the skill's view of who claimed the issue.
+- **`agent` + `task` issues — do not use the skill.** Peter Planner creates them, owner approval routes through `sync-execution-state.py`, April/Plat claim via the contributor runtime which writes sync's marker. `backlog take`/`advance`/`rescue` on these issues fights sync and loses. Operate them through the agent automation paths.
+- **All other issues — the skill is the only driver.** Sync gates on `AGENT_LANE_LABEL in current_labels and AGENT_TASK_LABEL in current_labels`, so issues missing either label are untouched. Use `backlog` freely for one-offs, scratch work, manual follow-ups, anything outside the auto-managed lane.
+- **`cancel` / `fail` are safe everywhere.** Closing an issue is permanent; sync only ever adds labels to open issues, never reopens.
 
-If you're claiming an `agent` + `task` issue and want to avoid double-writes, prefer the existing automation paths (Peter's planning → owner approval → `sync-execution-state.py`). Reach for `backlog take` on issues outside that pipeline, or when you want race-safe claim semantics for a manual pickup.
+The protocol-first framing earlier in this doc is what makes the agent automation work without the skill: a Matt Pocock agent or a human operating `gh issue` directly can participate in the `agent` + `task` lane using the same labels and comment conventions sync already understands.
 
 ## Backend
 
