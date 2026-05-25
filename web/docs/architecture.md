@@ -3,18 +3,18 @@
 ## System Overview
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│  Browser                                                            │
-│                                                                     │
-│  ┌──────────────┐  ┌──────────────┐  ┌────────────────────────────┐ │
+┌──────────────────────────────────────────────────────────────────────┐
+│  Browser                                                             │
+│                                                                      │
+│  ┌───────────────┐  ┌──────────────┐  ┌────────────────────────────┐ │
 │  │  Dashboard    │  │  Chat Panel  │  │  Terminal Panel            │ │
-│  │  (MainPanel)  │  │  (SSE stream │  │  (ghostty-web WASM)       │ │
-│  │              │  │   to agents)  │  │                            │ │
-│  │  Stats,      │  │              │  │  WSS → ttyd on sandbox     │ │
-│  │  agents,     │  │  Compose bar │  │   (path is HMAC token,     │ │
-│  │  pipeline    │  │  + @mentions  │  │    derived from sandboxId)│ │
-│  └──────────────┘  └──────────────┘  └────────────────────────────┘ │
-└──────────┬──────────────────┬──────────────────┬────────────────────┘
+│  │  (MainPanel)  │  │  (SSE stream │  │  (ghostty-web WASM)        │ │
+│  │               │  │   to agents) │  │                            │ │
+│  │  Stats,       │  │              │  │  WSS → ttyd on sandbox     │ │
+│  │  agents,      │  │  Compose bar │  │   (path is HMAC token,     │ │
+│  │  pipeline     │  │  + @mentions │  │    derived from sandboxId) │ │
+│  └───────────────┘  └──────────────┘  └────────────────────────────┘ │
+└──────────┬──────────────────┬──────────────────┬─────────────────────┘
            │                  │                  │
            ▼                  ▼                  ▼
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -34,18 +34,18 @@
 ┌──────────────────┐ ┌───────────────┐ ┌─────────────────────────────┐
 │  LibSQL / Kysely │ │  GitHub API   │ │  Compute Provider Registry  │
 │                  │ │               │ │                             │
-│  - chat_messages │ │  - Agent      │ │  ┌─────────────────────┐   │
-│  - agent_sessions│ │    discovery  │ │  │ Vercel Sandbox      │   │
+│  - chat_messages │ │  - Agent      │ │  ┌─────────────────────┐    │
+│  - agent_sessions│ │    discovery  │ │  │ Vercel Sandbox      │    │
 │  - user_repos    │ │  - Discussions│ │  │ (Firecracker microVM)│   │
-│  - webhook_events│ │  - Webhooks   │ │  └─────────────────────┘   │
-│                  │ │               │ │  ┌─────────────────────┐   │
-│                  │ │               │ │  │ Anthropic Managed   │   │
-│                  │ │               │ │  │ Agents              │   │
-│                  │ │               │ │  └─────────────────────┘   │
-│                  │ │               │ │  ┌─────────────────────┐   │
-│                  │ │               │ │  │ Daytona / GitHub    │   │
-│                  │ │               │ │  │ Actions stubs / Mock│   │
-│                  │ │               │ │  └─────────────────────┘   │
+│  - webhook_events│ │  - Webhooks   │ │  └─────────────────────┘    │
+│                  │ │               │ │  ┌─────────────────────┐    │
+│                  │ │               │ │  │ Anthropic Managed   │    │
+│                  │ │               │ │  │ Agents              │    │
+│                  │ │               │ │  └─────────────────────┘    │
+│                  │ │               │ │  ┌─────────────────────┐    │
+│                  │ │               │ │  │ Daytona / GitHub    │    │
+│                  │ │               │ │  │ Actions stubs / Mock│    │
+│                  │ │               │ │  └─────────────────────┘    │
 └──────────────────┘ └───────────────┘ └─────────────────────────────┘
 ```
 
