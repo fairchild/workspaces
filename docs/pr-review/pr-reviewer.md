@@ -21,6 +21,9 @@ GitHub PR opened
 → commit status flips to success or failure
 ```
 
+For the target source-of-truth model and schema sketch, see
+[`README.md`](README.md) and [`review-run-schema.sql`](review-run-schema.sql).
+
 ## Key Files
 
 | File | Purpose |
