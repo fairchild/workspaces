@@ -1,3 +1,12 @@
+---
+status: done
+category: plan
+resolution: deferred-design
+topic: agent-runtime
+priority: 3
+description: Design notes for a host-owned AgentEvent log used for cold-start state recovery. Deferred — the architecture intentionally keeps transcripts as transcript data only. Revisit if cold-start recovery becomes necessary.
+---
+
 # Agent Event Log Recovery
 
 Status: Deferred

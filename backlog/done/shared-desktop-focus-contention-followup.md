@@ -1,8 +1,12 @@
 ---
-status: phase-1-complete
+status: done
 category: followup
 issue: 82
+issue_closed: 2026-03-13
 milestone: 1
+completed_prs: [374]
+retro_summary: Phase 1 shipped — `AppActivationPolicy` (PR #374) and `scripts/capture-window.sh` give the agent-driven launch/capture loop a no-foreground-activation path on shared desktops.
+residual: Phase 2 items (capture handshake protocol, separate macOS user account, VM-backed CI execution lane) remain deferred at P2 per the file body. Promote when a concrete daily-driver scenario forces the issue.
 ---
 
 # Shared Desktop Focus Contention Hardening

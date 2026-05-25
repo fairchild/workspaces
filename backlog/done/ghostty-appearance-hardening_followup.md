@@ -1,7 +1,8 @@
 ---
-status: completed
+status: done
 category: followup
 issue: 84
+issue_closed: 2026-03-13
 milestone: 1
 completed_prs: [379, 383]
 ---

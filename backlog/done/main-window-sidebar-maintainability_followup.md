@@ -1,11 +1,13 @@
 ---
-status: in-progress
+status: done
 category: followup
 issue: 81
+issue_closed: 2026-03-13
 milestone: 1
 completed_prs: [36, 387, 394]
 branch: codex/apple-native-main-window-redesign-backlog
 retro_summary: Main-window state, navigation transitions, launch-surface resolution, and remote-workspace selection now have dedicated controller seams; sidebar sorting also moved into a small pure controller. Ghostty runtime callback config and callback userdata/main-thread bridging now have focused seams. Remaining work is incremental integration-file shrinkage, especially ContentView/SidebarView hotspots and the GhosttySurfaceView AppKit lifecycle boundary.
+residual: ContentView/SidebarView orchestration extraction and GhosttySurfaceView AppKit lifecycle boundary remain available as incremental quality work. No deadline; promote to a fresh issue if a concrete regression or refactor lands that benefits from it.
 ---
 
 # Main Window + Sidebar Maintainability Pass
