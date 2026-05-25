@@ -1,4 +1,8 @@
 ---
+status: done
+issue: 545
+completed: 2026-05-25
+resolution: promoted-to-github-issue
 topic: pr-reviewer
 priority: 1
 description: Make the managed PR reviewer run again on meaningful PR updates while carrying forward prior review context and avoiding review loops.
