@@ -1,4 +1,8 @@
 ---
+status: done
+issue: 536
+completed: 2026-05-25
+resolution: promoted-to-github-issue
 topic: web-dashboard-testing
 priority: 2
 description: Add a lightweight component-test harness for dashboard regressions like hook-order violations and stale repo-switch fetches.

@@ -1,4 +1,8 @@
 ---
+status: done
+issue: 543
+completed: 2026-05-25
+resolution: promoted-to-github-issue
 topic: web-cd
 priority: 2
 description: Add a remote-safe, skippable Playwright smoke lane for CD preview and prod validation.
