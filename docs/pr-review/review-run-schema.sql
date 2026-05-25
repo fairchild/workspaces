@@ -5,6 +5,8 @@
 -- shape below is the target model: ReviewRun is the source of truth, while
 -- GitHub statuses, GitHub reviews, labels, and diagnostic comments are
 -- projections that can be repaired from ReviewRun state.
+--
+-- Start with docs/pr-review/README.md for the operational model and diagrams.
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
