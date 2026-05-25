@@ -288,6 +288,23 @@ struct ClaudeSettingsInstallerTests {
         #expect(await installer.isInstalled())
     }
 
+    @Test("Install does not register event-forwarder on WorktreeCreate or WorktreeRemove")
+    func doesNotRegisterOnActiveHookEvents() async throws {
+        let home = makeTempHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        let installer = installer(home: home)
+        try await installer.install()
+
+        let settingsURL = home.appendingPathComponent(".claude", isDirectory: true)
+            .appendingPathComponent("settings.json")
+        let updated = try readJSON(settingsURL)
+        let hooks = updated["hooks"] as? [String: Any] ?? [:]
+
+        #expect(hooks["WorktreeCreate"] == nil)
+        #expect(hooks["WorktreeRemove"] == nil)
+    }
+
     @Test("renderPreview describes pending concrete changes")
     func renderPreviewDescribesChanges() async throws {
         let home = makeTempHome()
