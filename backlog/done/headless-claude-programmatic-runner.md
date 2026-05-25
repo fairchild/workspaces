@@ -1,3 +1,12 @@
+---
+status: done
+category: plan
+resolution: deferred-design
+topic: agent-runtime
+priority: 3
+description: Design notes for a host-owned `claude -p` runner (workspace warm-up, scheduled tasks, sidebar quick actions). Removed from the shipped integration; preserved here as a design doc. Revisit when there's a concrete UI/automation surface, a clear permission model, and a product decision on headless-vs-interactive history.
+---
+
 # Headless Claude Programmatic Runner
 
 Status: Deferred
