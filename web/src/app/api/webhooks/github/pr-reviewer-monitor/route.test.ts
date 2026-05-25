@@ -58,9 +58,14 @@ function runRow(
 		createdAt: string;
 		updatedAt: string;
 		error: string | null;
+		projectionStatus: "pending" | "projected" | "failed" | "superseded";
+		projectionUpdatedAt: string;
+		projectionError: string | null;
+		githubReviewId: string | null;
 	}> = {},
 ) {
 	const now = new Date().toISOString();
+	const status = overrides.status ?? "started";
 	return {
 		fingerprint: "fp_monitor_test",
 		repoFullName: "fairchild/workspaces",
@@ -68,11 +73,26 @@ function runRow(
 		headSha: "abc8101def456",
 		triggerKind: "opened",
 		triggerSourceId: "abc8101def456",
-		status: "started" as const,
+		status,
 		sessionId: "sesn_123",
 		createdAt: now,
 		updatedAt: now,
 		error: null,
+		projectionStatus:
+			overrides.projectionStatus ??
+			(status === "completed"
+				? "projected"
+				: status === "failed"
+					? "failed"
+					: status === "superseded"
+						? "superseded"
+						: "pending"),
+		projectionUpdatedAt:
+			overrides.projectionUpdatedAt ?? overrides.updatedAt ?? now,
+		projectionError:
+			overrides.projectionError ??
+			(status === "failed" ? (overrides.error ?? null) : null),
+		githubReviewId: null,
 		...overrides,
 	};
 }
@@ -238,6 +258,8 @@ describe("/api/webhooks/github/pr-reviewer-monitor GET", () => {
 					{
 						fingerprint: "fp_needs_projection",
 						state: "needs_projection",
+						agentStatus: "started",
+						projectionStatus: "pending",
 						detailsUrl:
 							"http://localhost/dashboard/review-runs/fp_needs_projection",
 					},
@@ -246,6 +268,7 @@ describe("/api/webhooks/github/pr-reviewer-monitor GET", () => {
 					{
 						fingerprint: "fp_failed",
 						state: "failed",
+						projectionStatus: "failed",
 						error: "review intent parse failed",
 					},
 				],
