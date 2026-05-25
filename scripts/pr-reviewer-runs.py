@@ -3,7 +3,30 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""Show the ReviewRun-centered managed PR reviewer operator report."""
+"""Show the ReviewRun-centered managed PR reviewer operator report.
+
+This is the first command to run when the managed PR reviewer looks stuck. It
+asks the protected production monitor route for the ReviewRun database view and
+prints the current queue in operator terms:
+
+- ``missingRuns``: a reviewer-eligible webhook exists, but no ReviewRun row was
+  created. Investigate trigger/ingress.
+- ``starting``: a ReviewRun row exists, but the managed-agent session id has not
+  been recorded yet. Briefly normal immediately after pickup.
+- ``stuckStarting``: a starting row is old enough to need attention.
+- ``executing``: a managed-agent session exists and is still inside the normal
+  projection window.
+- ``needsProjection``: a session exists, but the row is old enough that the
+  broker should have posted the GitHub review or failure status.
+- ``failed``: the ReviewRun reached a terminal failure and stored a reason.
+- ``terminal``: completed or superseded rows. These are counted, but omitted
+  from the terse text output unless ``--json`` is used.
+
+The script is read-only. It does not run the broker, create sessions, or post
+GitHub statuses. Exit code 0 means the monitor reported healthy, 1 means the
+monitor returned attention-needed state, and 2 means the report could not be
+fetched or parsed.
+"""
 
 from __future__ import annotations
 
@@ -26,7 +49,7 @@ class ReportError(RuntimeError):
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--url", default=DEFAULT_MONITOR_URL)
     parser.add_argument("--repo", default="fairchild/workspaces")
     parser.add_argument("--window-minutes", type=int, default=90)
@@ -54,6 +77,8 @@ def report_url(args: argparse.Namespace) -> str:
         "startingTimeoutMinutes": str(args.starting_timeout_minutes),
         "projectionTimeoutMinutes": str(args.projection_timeout_minutes),
     }
+    # Preserve explicit query parameters in --url so operators can paste a
+    # precise monitor URL and still use CLI defaults for anything omitted.
     query.extend((key, value) for key, value in params.items() if key not in existing)
     return urllib.parse.urlunparse(parsed._replace(query=urllib.parse.urlencode(query)))
 
@@ -79,6 +104,8 @@ def fetch_report(url: str, secret: str, timeout: float) -> tuple[int, dict[str, 
         },
     )
 
+    # The monitor intentionally returns 503 with useful JSON when a queue needs
+    # attention. Treat that as report data, not a transport failure.
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             return response.status, decode_json_response(response.read(256 * 1024))
@@ -98,6 +125,8 @@ def run_buckets(payload: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
     if not isinstance(runs, dict):
         return {}
     buckets: dict[str, list[dict[str, Any]]] = {}
+    # This payload crosses a deployed API boundary, so keep the renderer
+    # defensive even though the server type is stricter.
     for key, value in runs.items():
         if isinstance(key, str) and isinstance(value, list):
             buckets[key] = [item for item in value if isinstance(item, dict)]
@@ -161,6 +190,8 @@ def print_report(status: int, payload: dict[str, Any]) -> None:
             )
 
     buckets = run_buckets(payload)
+    # Print attention buckets before normal progress buckets; terminal rows stay
+    # available in --json without making the default report noisy.
     print_run_bucket("Stuck starting", buckets.get("stuckStarting", []))
     print_run_bucket("Needs projection", buckets.get("needsProjection", []))
     print_run_bucket("Failed", buckets.get("failed", []))
