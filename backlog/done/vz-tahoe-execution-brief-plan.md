@@ -1,11 +1,13 @@
 ---
-status: pending
+status: done
+issue: 533
+completed: 2026-05-25
+resolution: promoted-to-github-issue
 category: plan
 pr: null
 branch: null
 score: null
 retro_summary: null
-completed: null
 ---
 
 # Tahoe VZ Backend Execution Brief (Terminal-First Defaults)

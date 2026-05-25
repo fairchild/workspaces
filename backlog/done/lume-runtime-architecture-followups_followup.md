@@ -1,5 +1,8 @@
 ---
-status: pending
+status: done
+issues: [87, 88, 89]
+completed: 2026-05-25
+resolution: covered-by-prior-issues
 category: followup
 topic: lume-runtime
 priority: 2
