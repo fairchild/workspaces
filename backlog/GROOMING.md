@@ -1,6 +1,14 @@
 # Backlog Grooming — 2026-05-24
 
-Reconciliation pass before we adopt GitHub Issues as the canonical backlog backend. The `backlog` skill ships only `maildir-git` and `maildir-shared` today; a `github-issues` backend is in flight. This doc lines up local `backlog/*.md` against `fairchild/workspaces` Issues so the cutover lands clean: no duplicates, no drift, no orphans.
+Reconciliation pass before we adopt GitHub Issues as the canonical backlog backend. The `backlog` skill's `github-issues` backend shipped in skill PR #178 (`~/.claude/skills/backlog/` HEAD `e5e632a`). This doc lines up local `backlog/*.md` against `fairchild/workspaces` Issues so the cutover lands clean: no duplicates, no drift, no orphans.
+
+## Progress
+
+- **Phase 1 — state drift** ✅ done in [PR #512](https://github.com/fairchild/workspaces/pull/512) (2026-05-25). Five files archived to `backlog/done/`; queue went from 25 → 20 active.
+- **Phase 2 — GH-side noise** ✅ done 2026-05-25 (actions logged in [Outcomes](#outcomes) below). Three issues closed (#357, #356, #184), `needs-human` added to live one (#509), two stale labels removed (#226 `mergeable`, #107 `claimed`).
+- **Phase 3 — promote local files to issues** pending.
+- **Phase 4 — ROADMAP refresh** pending.
+- **Phase 5 — cutover to `github-issues` backend** pending (now possible — backend shipped).
 
 ## Frame
 
@@ -157,7 +165,42 @@ Sized for one grooming session per phase. Each phase ends in a commit.
 3. Keep `backlog/ROADMAP.md` and any surviving planning docs.
 4. Single commit: `chore(backlog): migrate to github-issues backend`.
 
+## Outcomes
+
+### Phase 1 — 2026-05-25 ([PR #512](https://github.com/fairchild/workspaces/pull/512))
+
+Five files moved to `backlog/done/` with frontmatter updates:
+
+| File | Issue | Resolution |
+|---|---|---|
+| `ghostty-appearance-hardening_followup.md` | #84 | Closed 2026-03-13; frontmatter normalized |
+| `main-window-sidebar-maintainability_followup.md` | #81 | Closed 2026-03-13; `residual:` note for incremental ContentView/SidebarView/GhosttySurfaceView work |
+| `shared-desktop-focus-contention-followup.md` | #82 | Closed 2026-03-13; `residual:` note for self-deferred Phase 2 (capture handshake, separate user, VM-backed lane) |
+| `agent-event-log-recovery.md` | — | `resolution: deferred-design`; design notes preserved |
+| `headless-claude-programmatic-runner.md` | — | `resolution: deferred-design`; design notes preserved |
+
+### Phase 2 — 2026-05-25
+
+GitHub-side cleanup. Six issues actioned:
+
+| Issue | Action | Reason |
+|---|---|---|
+| [#357](https://github.com/fairchild/workspaces/issues/357) | Closed (`not planned`) | Stale lighthouse failure; SHA `04f5fc82` 5+ weeks superseded |
+| [#356](https://github.com/fairchild/workspaces/issues/356) | Closed (`not planned`) with cluster summary | Aggregated 3 distinct Playwright failure clusters (landing, api-authorization, docs); summary captured in close comment for future reference |
+| [#509](https://github.com/fairchild/workspaces/issues/509) | Added `needs-human` label | Live prod regression on `69e1e79` (current main); managed reviewer ingress canary HTTP 503; likely related to recent PRs #504/#506/#508. Owner decision: rollback vs roll forward |
+| [#184](https://github.com/fairchild/workspaces/issues/184) | Closed (`completed`) | Tracking issue for Phase 2 Web Dashboard; all linked deps #167–#178 closed |
+| [#226](https://github.com/fairchild/workspaces/issues/226) | Removed `mergeable` label, commented | PR #232 "Closes #226" was closed-not-merged on 2026-05-10. Issue left open for re-triage on whether GitHub Discussion bridge is still wanted |
+| [#107](https://github.com/fairchild/workspaces/issues/107) | Removed `claimed` label, commented | April's claim branch `codex/april-clearwater-issue-107-...` deleted on remote, no PR materialized — orphaned claim. Issue left open as `agent`+`enhancement` for fresh claim |
+
+Net effect on the open-issue queue: ~28 → ~25 open issues; the two truly live items (#509 prod, #107 fresh claim) are now properly tagged; the recurring noise generators (#356, #357) are gone.
+
+### Remaining
+
+- **Phase 3** — promote ~20 remaining local files to issues per the reconciliation table above. Two-triage-first files (`agent-event-log-recovery.md`, `headless-claude-programmatic-runner.md`) already resolved in Phase 1.
+- **Phase 4** — ROADMAP refresh against the post-grooming queue.
+- **Phase 5** — cutover to `github-issues` backend (now actually possible; backend doc: `~/.claude/skills/backlog/references/backends/github-issues.md`).
+
 ## Notes
 
 - This doc is itself a working artifact, not a permanent fixture. Once Phases 1–4 are done it can move to `backlog/done/GROOMING-2026-05-24.md` or just be deleted. Once Phase 5 is done it's definitely deleted.
-- Nothing in this doc has been *executed* yet — it's the plan, not the change. Each phase wants explicit confirmation before running.
+- The `github-issues` backend is simpler than originally speculated in this doc's earlier draft: only two labels (`doing`, `failed`), no `slug:`/`category:`/`arc:` labels, claim discrimination via branch+comment ordering. Every open GH issue is a backlog candidate — no marker label gating membership. Worth re-reading `github-issues.md` before Phase 5.
