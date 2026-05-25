@@ -1,0 +1,163 @@
+# Backlog Grooming — 2026-05-24
+
+Reconciliation pass before we adopt GitHub Issues as the canonical backlog backend. The `backlog` skill ships only `maildir-git` and `maildir-shared` today; a `github-issues` backend is in flight. This doc lines up local `backlog/*.md` against `fairchild/workspaces` Issues so the cutover lands clean: no duplicates, no drift, no orphans.
+
+## Frame
+
+- **Source of truth, today** — split: strategic plans live in `backlog/*.md`, execution tickets live in GH Issues. Most local files predate the lane-label workflow (`agent`/`human`, `ready`/`claimed`/`review`/`mergeable`) and don't reference an issue at all.
+- **Source of truth, after migration** — GH Issues for every actionable item. Local `backlog/*.md` shrinks to ROADMAP-adjacent planning docs (multi-issue plans, design briefs) or disappears entirely.
+- **Goal of this grooming** — for every local file, decide: *open issue / link issue / archive to done / keep as repo doc*. For every open issue, decide: *keep / close / re-triage*. Output is a reconciled state we can then either freeze (single backend = maildir) or migrate (single backend = GH Issues).
+
+## Inventory
+
+### Local backlog
+
+| Bucket | Count | Notes |
+|---|---|---|
+| `backlog/*.md` (top-level "pending") | 25 | Mixed schema — some have `status:`/`category:`, some only `topic:`/`priority:`/`description:`, two have no frontmatter at all |
+| `backlog/done/` | 16 | Settled work; mostly has `pr:` / `completed:` |
+| `backlog/AGENTS.md` | 1 | Old schema documentation (status/category/issue/pr) — predates the maildir model and the lane-label scheme |
+| `backlog/ROADMAP.md` | 1 | 31KB, in active use; left untouched by this pass |
+
+### GitHub Issues (fairchild/workspaces)
+
+| Bucket | Count | Notes |
+|---|---|---|
+| Open, milestone #7 (Web Dashboard) | 12 | Phase 2/3/4/5 features; one has `mergeable` label (#226) |
+| Open, no milestone | ~13 | Includes 3 auto-opened CD-failure issues, several future-labeled MVP-deferred items, and a handful of agent-platform tasks |
+| Closed since 2026-03-01 | 40+ | Includes issues #81/82/83/84 (referenced by local files — see drift below) |
+
+### Label taxonomy in use
+
+Lanes: `agent`, `human`. Lifecycle: `ready` → `claimed` → `review` → `mergeable`. Blockers: `blocked`, `needs-human`, `needs-info`, `needs-triage`, `decision`. Approvals: `safe-to-run-agent`, `privileged-agent-patch`. Areas: `area: ui`, `area: isolation`, `area: distribution`, `area: platform`, `web`. Priorities: `priority:p0`/`p1`/`p2`. Quality: `bug`, `enhancement`, `documentation`, `quality`, `security`, `devEx`, `future`. Operational: `cd-failure`, `cd-failure:playwright`, `cd-failure:lighthouse`, `cd-failure:prod`, `auto-opened`, `urgent`.
+
+This is the schema the GH-issues backend will inherit — significantly richer than the maildir frontmatter, and already in use across the agent automation. No reason to invent a parallel taxonomy.
+
+## State drift — fix immediately
+
+Three local files claim "pending" but reference issues GitHub already closed in March:
+
+| File | Issue | GH status | Correction |
+|---|---|---|---|
+| `backlog/ghostty-appearance-hardening_followup.md` | [#84](https://github.com/fairchild/workspaces/issues/84) | Closed 2026-03-13 | File frontmatter already says `status: completed` — just `git mv` to `backlog/done/` |
+| `backlog/main-window-sidebar-maintainability_followup.md` | [#81](https://github.com/fairchild/workspaces/issues/81) | Closed 2026-03-13 | File says `status: in-progress` with a `retro_summary` and "Remaining work is incremental…" — split: archive the closed scope, open a fresh issue for the residual ContentView/SidebarView/GhosttySurfaceView shrinkage, or move to `done/` if the residual is now covered elsewhere |
+| `backlog/shared-desktop-focus-contention-followup.md` | [#82](https://github.com/fairchild/workspaces/issues/82) | Closed 2026-03-13 | File says `status: phase-1-complete` — same call: phase-2 either becomes a new issue or moves to `done/` with a resolution note |
+
+These three are mechanical fixes; no decisions needed beyond "is the residual scope still real?"
+
+## Reconciliation table — local files
+
+For each file in `backlog/*.md`, the proposal. **Action** column is the recommended next move; **rationale** explains the call.
+
+### Strategic plans worth promoting to GH Issues (or a tracking issue)
+
+| File | Action | Rationale |
+|---|---|---|
+| `daytona-native-swift-api-plan.md` | Open issue, label `enhancement`+`area: isolation`+`task` | Replaces Python CLI bridge; needs scheduling + claim semantics |
+| `desktop-continuity_plan.md` | Open issue, label `enhancement`+`area: ui`+`priority:p1` | Marked active, P1, has a branch — should be visible in Issues |
+| `dev-build-warning-cleanup-and-mise-tasks_plan.md` | Open issue, label `devEx`+`area: platform` | Discrete cleanup, good agent task |
+| `lume-runtime-architecture-followups_followup.md` | Open tracking issue + per-item child issues | Multiple distinct items; one tracking issue links the rest |
+| `managed-pr-reviewer-continuous-reruns_plan.md` | Open issue, label `agent`+`enhancement`+`priority:p1` | Already tagged P1; concrete |
+| `notification-client-catchup-plan.md` | Open issue, label `area: ui` | Plan exists; needs to enter the queue |
+| `pr-reviewer-narration-eval-skill_plan.md` | Open issue, label `agent`+`enhancement` | Discrete skill work |
+| `pre-release-deployment-smoke_plan.md` | Open issue, label `area: platform`+`web` | Smoke lane; one PR |
+| `remote-runtime-expansion-plan.md` | Open tracking issue | Plan spans multiple runtimes; tracking issue + per-runtime children |
+| `signing-host-runner_followup.md` | Open issue, label `area: distribution`+`area: platform` | Operational; runner provisioning |
+| `spaces-agent-discovery-dashboard-plan.md` | **Link to existing #174** (`feat(web): wire GitHub adapter in Chat SDK bot`) and/or open milestone-7 child issues | Likely overlaps with the Web Dashboard milestone work |
+| `terminal-architecture-followups.md` | Open tracking issue, label `area: ui`+`enhancement` | Multi-item; each line becomes a child |
+| `terminal-polish-followup.md` | Open issue, label `area: ui`+`enhancement` | Discrete polish items, each one PR |
+| `terminal-pty-relay-plan.md` | Open issue, label `area: ui`+`area: platform`+`enhancement` | Sandcastle PTY relay — concrete enough to track |
+| `tmux-support_plan.md` | Open issue, label `area: ui`+`priority:p1` | Active, P1, tied to a decision doc |
+| `vz-tahoe-execution-brief-plan.md` | Open tracking issue | Large execution brief; split into phased issues |
+| `web-api-authorization-hardening-followup.md` | Open issue, label `web`+`security` | Already references PR #342; trivial to issue-ify |
+| `web-dashboard-component-regression-tests_followup.md` | Open issue, label `web`+`quality` | Testing harness; one PR |
+| `web-dashboard-phase3-followups.md` | Open child issues under milestone #7 Phase 3 | Multiple items in one file → split |
+| `workspace-creation-hang-root-cause_followup.md` | Open issue, label `bug`+`area: ui`+`priority:p1` | Hang/root-cause work; needs visibility |
+
+### Discrete, smaller items
+
+| File | Action | Rationale |
+|---|---|---|
+| `detail-pane-sticky-width-followup.md` | Open issue, label `area: ui`+`enhancement` | One-PR polish |
+| `headless-claude-programmatic-runner.md` | **Triage first** — no frontmatter, no description visible; read body before deciding | May be a sketch rather than a plan |
+| `agent-event-log-recovery.md` | **Triage first** — no frontmatter; read body | Same |
+| `swift-dev-skills-task-list.md` | Open tracking issue, label `devEx` | Task list → tracking issue + children |
+
+### Active/in-flight (do not duplicate)
+
+| File | Action | Rationale |
+|---|---|---|
+| `sparkle-autoupdate-plan.md` | Confirm not already covered by closed #2 (`Add Sparkle auto-update`, closed 2026-05-09); if residual work remains, open follow-up issue; else move to `done/` | The umbrella issue closed two weeks ago; this file may now be archival |
+
+## Reconciliation table — open GH issues
+
+| Issue | Title | Action | Rationale |
+|---|---|---|---|
+| [#509](https://github.com/fairchild/workspaces/issues/509) | Prod regression on 69e1e79 | Triage now (urgent, just opened today) | Live CD-failure |
+| [#357](https://github.com/fairchild/workspaces/issues/357) | CD: lighthouse failures on main | Close as stale (auto-opened 2026-04-19, no movement) or reopen against current SHA | Auto-opened issues against a long-stale SHA usually want closing + re-running |
+| [#356](https://github.com/fairchild/workspaces/issues/356) | CD: playwright failures on main | Same — close-as-stale or rerun against current main | Has `needs-human` label, last touched 2026-05-14 |
+| [#472](https://github.com/fairchild/workspaces/issues/472) | Check agent label migration after scheduled agent runs | Verify against current label state; close if migration completed | `blocked` label suggests a dep that may have shipped |
+| [#231](https://github.com/fairchild/workspaces/issues/231) | chore(web): deploy chat and agent dispatch to production | Verify deployed; close if shipped | Milestone #7 |
+| [#230, #229, #228](https://github.com/fairchild/workspaces/issues/230) | qa(web): verify * | Run the verification or pull into the QA loop | These are claim-ready agent tasks |
+| [#227, #225, #224](https://github.com/fairchild/workspaces/issues/227) | feat(web): chat UI / dispatch / tab nav | Cross-check against `web/src/app/dashboard/`; close any already shipped | Several pre-March milestone-7 items may be stale |
+| [#226](https://github.com/fairchild/workspaces/issues/226) | feat(web): chat API route | `mergeable` label set — confirm a PR exists and merge | Already past `claimed`/`review` |
+| [#219](https://github.com/fairchild/workspaces/issues/219) | verify webhooks to spaces | Run verification or close | No labels, no milestone — needs triage |
+| [#196](https://github.com/fairchild/workspaces/issues/196) | PR review workshop preset | Decide: keep as enhancement or close | Older enhancement, no recent movement |
+| [#184](https://github.com/fairchild/workspaces/issues/184) | tracking: Web Dashboard Phase 2 dependency graph | Close (Phase 2 complete per `backlog/done/landing-page.md`) | Tracking issue for completed phase |
+| [#182, #181, #179, #174](https://github.com/fairchild/workspaces/issues/174) | Phase 4/5 web features | Keep in milestone #7; re-prioritize against current focus | Future-phase work |
+| [#159](https://github.com/fairchild/workspaces/issues/159) | Contributor runtime typed boundaries follow-up | Keep — clean enhancement, agent-claimable | `agent`+`task`+`enhancement`+`area: platform` |
+| [#107](https://github.com/fairchild/workspaces/issues/107) | Per-step snapshot timeout | Keep — `claimed` (active) | In flight |
+| [#7, #6, #5, #4, #3, #1](https://github.com/fairchild/workspaces/issues/1) | `future`-labeled MVP-deferred items | Leave as backlog floor; revisit at next milestone-set | These are the long-tail wishlist |
+
+## GitHub-backend migration plan
+
+When the `backlog` skill ships its `github-issues` backend, the cutover wants to look like this:
+
+1. **Don't double-write.** As soon as the backend exists in the skill, stop adding new `backlog/*.md` files for trackable work. New tracking goes straight to `gh issue create` with the lane + state labels.
+2. **Preserve plans, not tickets.** Keep `backlog/ROADMAP.md` (strategy) and large multi-issue planning docs (e.g. `vz-tahoe-execution-brief-plan.md`) as repo documents — they're the thing GH Issues *can't* hold well. Each plan links to its issues; each issue links back to the plan.
+3. **Migrate done/.** Once the reconciliation in this doc is complete, `backlog/done/` becomes archival. New `done` state lives in GH Issues (closed + the lifecycle labels).
+4. **Replace `backlog/AGENTS.md`.** When the new backend lands, AGENTS.md gets rewritten to point at `gh issue list --label …` recipes instead of the local-file schema. This is also the moment to drop `category:`/`status:` from any remaining frontmatter.
+5. **The `arc:` linkage from ROADMAP still works.** Both backends honor `arc: <name>` for grouping; in GH Issues it becomes a label (`arc:<name>`) or a milestone, depending on what the skill chooses.
+
+**Open questions before cutover** (don't need answers now; flag them for the skill author):
+
+- Does the GH backend treat **milestones** as arcs, or as a separate concept? Either is fine; consistency matters.
+- Does **claim** map to assigning the issue + setting the `claimed` label, or to one of those alone? The local agent automation already uses the label, so label-based claim is the lower-friction choice.
+- **Cross-worktree race avoidance** — the whole reason `maildir-shared` exists — comes free with GH Issues (server-side atomic). Worth confirming the backend uses HTTP PATCH-with-precondition rather than read-modify-write.
+- **Offline behavior** — what happens when an agent is air-gapped or rate-limited? Maildir doesn't have this problem.
+
+## Action sequence
+
+Sized for one grooming session per phase. Each phase ends in a commit.
+
+### Phase 1 — fix state drift (15 min)
+1. For #81, #82, #84 closed-issue files: decide residual scope, either `git mv` to `done/` or open a fresh issue capturing what's left.
+2. Read the two no-frontmatter files (`agent-event-log-recovery.md`, `headless-claude-programmatic-runner.md`) and either delete (if obsolete) or move into the open-an-issue queue.
+3. Commit: `chore(backlog): correct state drift against closed issues`.
+
+### Phase 2 — close GH-side noise (15 min)
+1. Triage the three auto-opened CD-failure issues (#357, #356, #509). Close the stale, leave the live, label `needs-human` if blocked.
+2. Close #184 (tracking issue for completed Phase 2).
+3. Verify #226 (`mergeable`) and #107 (`claimed`) are still actively owned; un-label or merge as appropriate.
+
+### Phase 3 — open issues for promotable local files (30–60 min)
+1. Walk the "promote to issue" rows of the reconciliation table top-to-bottom.
+2. For each: `gh issue create` with the proposed labels + a body that quotes the local file's frontmatter + description (or just links to the file at the SHA), then `git mv backlog/<file> backlog/done/` with a `linked_issue:` line in frontmatter.
+3. For multi-item files (`web-dashboard-phase3-followups.md`, `lume-runtime-architecture-followups_followup.md`, `terminal-architecture-followups.md`): open one tracking issue + child issues, link with `Tracked in #N` / `Part of #N`.
+4. Commit each chunk separately so the history shows the reconciliation as a series of small moves, not one massive sweep.
+
+### Phase 4 — ROADMAP refresh (30 min)
+1. Re-read `backlog/ROADMAP.md` against the now-true GH Issues queue.
+2. Update Current Focus to match the actively-claimed items.
+3. Add `arc:` labels in GH for each named arc in ROADMAP so the linkage works after cutover.
+
+### Phase 5 — cutover (when the GH backend ships)
+1. Replace `backlog/AGENTS.md` with the github-issues version (per skill docs).
+2. Delete or freeze `backlog/{todo,doing,done}/` (don't yet exist as such; effectively means delete `backlog/done/`).
+3. Keep `backlog/ROADMAP.md` and any surviving planning docs.
+4. Single commit: `chore(backlog): migrate to github-issues backend`.
+
+## Notes
+
+- This doc is itself a working artifact, not a permanent fixture. Once Phases 1–4 are done it can move to `backlog/done/GROOMING-2026-05-24.md` or just be deleted. Once Phase 5 is done it's definitely deleted.
+- Nothing in this doc has been *executed* yet — it's the plan, not the change. Each phase wants explicit confirmation before running.
