@@ -1,4 +1,8 @@
 ---
+status: done
+issue: 528
+completed: 2026-05-25
+resolution: promoted-to-github-issue
 priority: 2
 description: Small terminal polish items — each fits in one PR and needs no architectural decision. Larger items live in terminal-architecture-followups.md.
 ---
