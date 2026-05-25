@@ -49,6 +49,26 @@ These conventions are operable directly via `gh issue` — open an issue, add th
 
 Tasks are referenced by issue number — `take 42` or `take #42`. Titles are free text.
 
+The label vocabulary above (`claimed` / `review` / `mergeable`) is shared with `docs/agents/triage-labels.md`; this file is the protocol-level view, that file is the canonical reference for what each label means in this repo.
+
+## Co-existence with other automation
+
+The skill is not the sole writer of these labels. Two existing systems also drive transitions on `agent` + `task` issues:
+
+- **`.agents/skills/cofounder-contributor/scripts/sync-execution-state.py`** — owns `agent` + `task` lifecycle. Promotes approved, unblocked issues to `ready`, then to `claimed` on contributor claim, then to `review` when a PR opens. Expires stale claims after 24h.
+- **Managed PR reviewer** (`web/src/lib/agent-runtime/pr-review.ts`) — adds `mergeable` when an agent approves the linked PR; removes it on changes-requested.
+
+Where the skill participates:
+
+- **At claim (`take` / `advance` to `claimed`)** — skill writes the `claimed` label and posts the worklog comment with `branch=` for race resolution. Safe on `agent` + `task` issues because `sync-execution-state.py` does the same thing; the worklog comment is the source of truth either way.
+- **Mid-pipeline (`claimed → review → mergeable`)** — let the external automation drive these transitions. The skill *can* `advance` here, but doing so on `agent` + `task` issues races with sync. For non-`agent`+`task` issues (personal work, scratch threads, things outside the pipeline) the skill drives the whole sequence itself.
+- **At completion (`advance` from `mergeable` → `done`)** — skill closes the issue once merge has landed. Safe regardless of who set `mergeable`.
+- **`cancel` / `fail` / `rescue` / `retry`** — terminal verbs; safe at any point.
+
+This works because `current_claim` (skill internal) resolves ownership by walking branch-tagged worklog comments, not by reading the current label. External writers moving the label forward don't break the skill's view of who claimed the issue.
+
+If you're claiming an `agent` + `task` issue and want to avoid double-writes, prefer the existing automation paths (Peter's planning → owner approval → `sync-execution-state.py`). Reach for `backlog take` on issues outside that pipeline, or when you want race-safe claim semantics for a manual pickup.
+
 ## Backend
 
 `github-issues` — see the `backlog` skill's `references/backends/github-issues.md` for the script's behavior.
