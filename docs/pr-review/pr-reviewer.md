@@ -112,6 +112,15 @@ The Cloudflare relay forwards only managed-review trigger candidates:
 GitHub HMAC signature and raw body; the Vercel route independently verifies the
 signature before creating any managed-agent session.
 
+### Broker reconciliation
+
+Completed managed-agent sessions are projected to GitHub by
+`.github/workflows/managed-reviewer-broker.yml`, which runs
+`scripts/pr-reviewer-broker.py` every five minutes. This workflow calls only the
+protected broker route; it does not run the ingress canary or fail because the
+monitor has unrelated historical attention items. A broker failure means a
+completed ReviewRun could not be published or marked superseded.
+
 ## Ingress Contract And Canary
 
 Reviewer ingress is covered by `.github/workflows/managed-reviewer-ingress.yml`.
@@ -132,6 +141,9 @@ This is the regression guard for drift between "forward this webhook" and
 Production CD requires `WORKSPACES_WEBHOOK_CANARY_SECRET`, runs the same canary,
 broker, and monitor before promotion, then repeats them in `validate-prod` after
 promotion before the production Playwright smoke.
+
+The scheduled ingress workflow is a contract probe, not the normal broker
+driver. Use `Managed Reviewer Broker` to reconcile completed runs on demand.
 
 Production canary:
 
