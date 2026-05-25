@@ -1,9 +1,15 @@
-# Managed PR Review Model
+# Managed PR Review
 
-This directory documents the simpler target model for the managed PR reviewer.
-The key idea is that a `ReviewRun` row is the durable source of truth. GitHub
-statuses, GitHub reviews, labels, comments, health checks, and dashboard pages
-are projections that can be recreated or repaired from that row.
+This directory is the home for managed PR reviewer design and operations docs.
+
+- [`pr-reviewer.md`](pr-reviewer.md): deployed runtime, webhook ingress,
+  broker, health checks, and debugging.
+- [`review-run-schema.sql`](review-run-schema.sql): commented Postgres DDL
+  sketch for the target `ReviewRun` source-of-truth model, with example rows.
+
+The model should stay simple: a `ReviewRun` row is the durable source of truth.
+GitHub statuses, reviews, labels, diagnostic comments, health checks, and
+dashboard pages are projections that can be recreated or repaired from that row.
 
 ## Source Of Truth
 
@@ -50,21 +56,21 @@ then ask whether GitHub matches it.
 ## State Machine
 
 ```
-+--------+       session starts       +---------+      +------------+
-| queued | -------------------------> | running | ---> | superseded |
-+---+----+                            +----+----+      +------------+
-|                                      |
-| setup or trigger failure             | valid review intent
-v                                      v
-+---+----+                          +------+------+
-| failed | <------------------------| completed   |
-+---+----+    parse/apply failure   +------+------+
-^                                      |
-| projection drift after publish       | all projections applied
-|                                      v
-|                                +-----+-----+
-+--------------------------------| published |
-+-----------+
++--------+    session starts    +---------+
+| queued | -------------------> | running |
++---+----+                      +----+----+
+|                                |
+| setup failure                  | valid review intent
+v                                v
++--------+   parse/apply    +-----------+   projections   +-----------+
+| failed | <--------------- | completed | --------------> | published |
++--------+     failure      +-----+-----+     applied     +-----------+
+^                                |
+| projection drift               | newer head/config
+|                                v
+|                          +------------+
++--------------------------| superseded |
++------------+
 ```
 
 The state field should stay small. Retry counters, reconcile timestamps, and
@@ -104,10 +110,3 @@ event_name, actor, reason
 
 The transition table is an audit log. The projection table is a repair ledger.
 Neither should replace the current state on `review_runs`.
-
-## Files
-
-- [`review-run-schema.sql`](review-run-schema.sql): commented Postgres DDL
-  sketch with executable example rows.
-- [`../../web/docs/pr-reviewer.md`](../../web/docs/pr-reviewer.md): current
-  runtime documentation for the deployed managed reviewer.

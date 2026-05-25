@@ -21,10 +21,8 @@ GitHub PR opened
 → commit status flips to success or failure
 ```
 
-The target simplified model is documented in
-[`docs/pr-review/`](../../docs/pr-review/). That model treats `ReviewRun` as
-the source of truth and stores GitHub status, review, label, and
-diagnostic-comment writes as repairable projections.
+For the target source-of-truth model and schema sketch, see
+[`README.md`](README.md) and [`review-run-schema.sql`](review-run-schema.sql).
 
 ## Key Files
 

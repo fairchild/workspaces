@@ -266,7 +266,7 @@ mise run web:deps:remove -- <pkg>           # pnpm remove + auto-fix formatting
 | Lume runner setup | docs/development/lume-runner-setup.md | - |
 | Lume daemon reliability | docs/development/lume-integration.md § "Daemon Reliability" | - |
 | Web architecture | web/docs/architecture.md | - |
-| PR reviewer agent | web/docs/pr-reviewer.md | - |
+| PR reviewer agent | docs/pr-review/pr-reviewer.md | - |
 | Roadmap/planning | backlog/ROADMAP.md | - |
 | Deferred work items | backlog/*.md | - |
 | Prototypes | prototypes/README.md | - |
