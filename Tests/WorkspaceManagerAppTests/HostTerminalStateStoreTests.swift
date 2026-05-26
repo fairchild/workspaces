@@ -351,7 +351,13 @@ struct HostTerminalStateStoreTests {
         let pre = store.activateSession(key: .repoPath(repoURL.path), directory: repoURL).session
 
         let registry = AgentSessionRegistry()
-        store.attach(agentSessionRegistry: registry)
+        let commandStatusRegistry = LastCommandStatusRegistry()
+        store.attach(
+            agentSessionRegistry: registry,
+            localStateStore: nil,
+            hooksSocketPath: nil,
+            lastCommandStatusRegistry: commandStatusRegistry
+        )
 
         // Backfill: pre-existing session is registered on attach.
         #expect(registry.statuses[pre.id] != nil)
@@ -366,10 +372,14 @@ struct HostTerminalStateStoreTests {
         #expect(registry.statuses[next.id] != nil)
         #expect(registry.statuses[pre.id] != nil)
 
+        commandStatusRegistry.ingest(markers: [.commandStart], for: pre.id, commandLine: "make")
+        #expect(commandStatusRegistry.statusByTerminalSession[pre.id] != nil)
+
         // Process exit deregisters.
         _ = store.handleProcessExit(for: pre.id)
         #expect(registry.statuses[pre.id] == nil)
         #expect(registry.statuses[next.id] != nil)
+        #expect(commandStatusRegistry.statusByTerminalSession[pre.id] == nil)
     }
 
     @Test("Process exit helper returns active fallback session when others remain")

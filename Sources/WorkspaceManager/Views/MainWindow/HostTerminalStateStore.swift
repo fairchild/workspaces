@@ -37,6 +37,7 @@ final class HostTerminalStateStore: ObservableObject {
     /// Agent session registry attached at scene mount. Optional because previews and
     /// fixtures construct stores without an app-scoped registry.
     private weak var agentSessionRegistry: AgentSessionRegistry?
+    private weak var lastCommandStatusRegistry: LastCommandStatusRegistry?
     private var localStateStore: LocalStateStore?
     /// Stub probe used to seed `kind` on register; PR #1 ships a fail-safe
     /// `.claudeCode` default. Replace with the real probe in a Channel 3 follow-up.
@@ -56,9 +57,11 @@ final class HostTerminalStateStore: ObservableObject {
     func attach(
         agentSessionRegistry: AgentSessionRegistry,
         localStateStore: LocalStateStore?,
-        hooksSocketPath: String?
+        hooksSocketPath: String?,
+        lastCommandStatusRegistry: LastCommandStatusRegistry? = nil
     ) {
         self.localStateStore = localStateStore
+        self.lastCommandStatusRegistry = lastCommandStatusRegistry
         self.surfaceStore.hooksSocketPath = hooksSocketPath
         guard self.agentSessionRegistry !== agentSessionRegistry else {
             syncRegistry()
@@ -476,6 +479,7 @@ final class HostTerminalStateStore: ObservableObject {
         let removed = registeredAgentSessionIDs.subtracting(liveIDs)
         for sessionID in removed {
             registry.deregister(hostSessionID: sessionID)
+            lastCommandStatusRegistry?.clear(terminalSessionID: sessionID)
             recordTerminalSessionEnded(sessionID)
         }
         registeredAgentSessionIDs.subtract(removed)
@@ -486,6 +490,7 @@ final class HostTerminalStateStore: ObservableObject {
             surfaceStore.invalidate(sessionID: splitSession.id)
             if registeredAgentSessionIDs.contains(splitSession.id) {
                 agentSessionRegistry?.deregister(hostSessionID: splitSession.id)
+                lastCommandStatusRegistry?.clear(terminalSessionID: splitSession.id)
                 recordTerminalSessionEnded(splitSession.id)
                 registeredAgentSessionIDs.remove(splitSession.id)
             }

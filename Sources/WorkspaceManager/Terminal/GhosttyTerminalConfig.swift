@@ -54,6 +54,9 @@ struct GhosttyTerminalConfig {
         if let hooksSocketPath, let hostSessionID {
             environment["WORKSPACES_HOOKS_SOCKET"] = hooksSocketPath
             environment["WORKSPACES_HOST_SESSION_ID"] = hostSessionID.uuidString
+            if let commandStatusHookPath = ClaudeIntegrationLifecycle.bundledCommandStatusHookPath() {
+                environment["WORKSPACES_COMMAND_STATUS_ZSH"] = commandStatusHookPath
+            }
         }
 
         if let path = environment["PATH"] {

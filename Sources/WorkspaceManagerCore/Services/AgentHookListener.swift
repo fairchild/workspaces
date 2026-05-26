@@ -9,6 +9,8 @@
 //    POST /event       — hook event, decoded via ClaudeHookTranslator
 //    POST /statusline  — Channel 2 status-line forwarder; decodes StatusLinePayload
 //                        and applies status fields for the header-routed session
+//    POST /command-markers
+//                      — raw OSC 133 command markers for LastCommandStatusRegistry
 //    GET  /healthz     — 200 OK "OK"
 //
 //  Framing: minimal HTTP/1.1 — request line, headers, body. We respond 200 OK
@@ -33,11 +35,13 @@ public actor AgentHookListener {
         public var unsupportedRoutes: Int = 0
         public var ingestedEvents: Int = 0
         public var statusLineUpdates: Int = 0
+        public var commandMarkerUpdates: Int = 0
     }
 
     private let socketURL: URL
     private let lockURL: URL
     private let registry: any AgentSessionRegistryProtocol
+    private let commandStatusRegistry: LastCommandStatusRegistry?
     private let logger: @Sendable (String) -> Void
     private var listener: NWListener?
     private var lockFileDescriptor: Int32?
@@ -46,10 +50,12 @@ public actor AgentHookListener {
     public init(
         bundleIdentifier: String,
         registry: any AgentSessionRegistryProtocol,
+        commandStatusRegistry: LastCommandStatusRegistry? = nil,
         socketURLOverride: URL? = nil,
         logger: @escaping @Sendable (String) -> Void = { NSLog("[AgentHookListener] %@", $0) }
     ) {
         self.registry = registry
+        self.commandStatusRegistry = commandStatusRegistry
         self.logger = logger
         if let override = socketURLOverride {
             self.socketURL = override
@@ -204,6 +210,8 @@ public actor AgentHookListener {
             return (200, Data())
         case ("POST", "/statusline"):
             return (200, Data())
+        case ("POST", "/command-markers"):
+            return (200, Data())
         default:
             return (200, Data())
         }
@@ -215,6 +223,8 @@ public actor AgentHookListener {
             await processEvent(request: request)
         case ("POST", "/statusline"):
             await processStatusLine(request: request)
+        case ("POST", "/command-markers"):
+            await processCommandMarkers(request: request)
         default:
             break
         }
@@ -265,6 +275,39 @@ public actor AgentHookListener {
             registry.apply(events: [.statusFields(fields)], for: hostSessionID, origin: .statusLine)
         }
         statistics.statusLineUpdates += 1
+    }
+
+    private func processCommandMarkers(request: HTTPRequest) async {
+        guard let hostSessionID = Self.hostSessionID(from: request.headers) else {
+            logger("dropping command markers without valid host session header")
+            return
+        }
+        guard await isRegisteredHostSession(hostSessionID) else {
+            logger("dropping command markers for unregistered host session \(hostSessionID.uuidString)")
+            return
+        }
+        guard !request.body.isEmpty else {
+            statistics.decodeFailures += 1
+            logger("command marker decode failed: empty body")
+            return
+        }
+
+        let markers = CommandMarkerParser.parse(request.body)
+        guard !markers.isEmpty else {
+            statistics.decodeFailures += 1
+            logger("command marker decode failed: no OSC 133 markers")
+            return
+        }
+
+        guard let commandStatusRegistry else {
+            logger("dropping command markers; command status registry unavailable")
+            return
+        }
+
+        await MainActor.run { [commandStatusRegistry, markers] in
+            commandStatusRegistry.ingest(markers: markers, for: hostSessionID)
+        }
+        statistics.commandMarkerUpdates += 1
     }
 
     private func isRegisteredHostSession(_ hostSessionID: UUID) async -> Bool {

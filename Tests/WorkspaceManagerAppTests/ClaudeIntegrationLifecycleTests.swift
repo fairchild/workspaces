@@ -126,9 +126,16 @@ struct ClaudeIntegrationLifecycleTests {
             ClaudeIntegrationLifecycle.bundledHookForwarderURL(named: "event-forwarder"))
         let statusLine = try #require(
             ClaudeIntegrationLifecycle.bundledHookForwarderURL(named: "statusline"))
+        let commandStatus = try #require(
+            ClaudeIntegrationLifecycle.bundledHookForwarderURL(
+                named: "command-status",
+                fileExtension: "zsh"
+            ))
 
         #expect(FileManager.default.fileExists(atPath: eventForwarder.path))
         #expect(FileManager.default.fileExists(atPath: statusLine.path))
+        #expect(FileManager.default.fileExists(atPath: commandStatus.path))
+        #expect(ClaudeIntegrationLifecycle.bundledCommandStatusHookPath() == commandStatus.path)
     }
 
     @Test("packaged app hook forwarder resources resolve from flattened app resources")

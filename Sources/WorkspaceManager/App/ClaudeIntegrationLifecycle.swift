@@ -61,6 +61,12 @@ final class ClaudeIntegrationLifecycle: ObservableObject {
         bundledHookForwarderURL(named: "statusline")?.path
     }
 
+    /// Locate the sourceable zsh command-status producer shipped alongside the app.
+    /// Returns nil when the bundle was assembled without the producer resource.
+    nonisolated static func bundledCommandStatusHookPath() -> String? {
+        bundledHookForwarderURL(named: "command-status", fileExtension: "zsh")?.path
+    }
+
     private init() {}
 
     /// Test seam: swap the UserDefaults instance and the installer construction so
@@ -79,12 +85,16 @@ final class ClaudeIntegrationLifecycle: ObservableObject {
         self.socketPath = nil
     }
 
-    func start(registry: AgentSessionRegistry) {
+    func start(registry: AgentSessionRegistry, commandStatusRegistry: LastCommandStatusRegistry? = nil) {
         guard !didStart else { return }
         didStart = true
 
         let bundleID = Bundle.main.bundleIdentifier ?? "com.cloudcompute.workspaces"
-        let listener = AgentHookListener(bundleIdentifier: bundleID, registry: registry)
+        let listener = AgentHookListener(
+            bundleIdentifier: bundleID,
+            registry: registry,
+            commandStatusRegistry: commandStatusRegistry
+        )
         self.listener = listener
         self.socketPath = listener.socketPath
         self.notificationPoster = AgentNotificationPoster(registry: registry)
@@ -183,9 +193,10 @@ final class ClaudeIntegrationLifecycle: ObservableObject {
         }
     }
 
-    nonisolated static func bundledHookForwarderURL(named name: String) -> URL? {
+    nonisolated static func bundledHookForwarderURL(named name: String, fileExtension: String = "sh") -> URL? {
         bundledHookForwarderURL(
             named: name,
+            fileExtension: fileExtension,
             mainBundle: .main,
             swiftPMResourceBundle: { Bundle.module }
         )
@@ -193,11 +204,16 @@ final class ClaudeIntegrationLifecycle: ObservableObject {
 
     nonisolated static func bundledHookForwarderURL(
         named name: String,
+        fileExtension: String = "sh",
         mainBundle: Bundle,
         swiftPMResourceBundle: () -> Bundle?
     ) -> URL? {
         let appResourceBundles = hookForwarderResourceBundles(mainBundle: mainBundle)
-        if let url = hookForwarderURL(named: name, resourceBundles: appResourceBundles) {
+        if let url = hookForwarderURL(
+            named: name,
+            fileExtension: fileExtension,
+            resourceBundles: appResourceBundles
+        ) {
             return url
         }
 
@@ -207,20 +223,25 @@ final class ClaudeIntegrationLifecycle: ObservableObject {
 
         return hookForwarderURL(
             named: name,
+            fileExtension: fileExtension,
             resourceBundles: [swiftPMBundle]
         )
     }
 
-    nonisolated static func hookForwarderURL(named name: String, resourceBundles: [Bundle]) -> URL? {
+    nonisolated static func hookForwarderURL(
+        named name: String,
+        fileExtension: String = "sh",
+        resourceBundles: [Bundle]
+    ) -> URL? {
         for bundle in resourceBundles {
             if let url = bundle.url(
                 forResource: name,
-                withExtension: "sh",
+                withExtension: fileExtension,
                 subdirectory: "HookForwarders"
             ) {
                 return url
             }
-            if let url = bundle.url(forResource: name, withExtension: "sh") {
+            if let url = bundle.url(forResource: name, withExtension: fileExtension) {
                 return url
             }
         }

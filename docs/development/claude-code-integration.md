@@ -10,15 +10,17 @@ Claude work is tracked separately in `backlog/headless-claude-programmatic-runne
 
 ## Shipped Channels
 
-Only the first three channels feed `AgentSessionRegistry`. Channel 4 is a
-transcript reader for the conversation log UI; it is not a state recovery path.
+The first, second, and fourth channels feed `AgentSessionRegistry`. Channel 3
+feeds `LastCommandStatusRegistry`. Channel 5 is a transcript reader for the
+conversation log UI; it is not a state recovery path.
 
 | Channel | Role | Registry input |
 |---|---|---|
 | 1. Command hook forwarder | Primary event stream: tool start/end, awaiting input, complete, errored | Yes |
 | 2. Status-line forwarder | Model, cost, context fill, rate-limit headroom | Yes |
-| 3. libghostty OSC/BEL | Fallback attention signal for unhooked or degraded sessions | Yes |
-| 4. Transcript JSONL | Conversation replay/audit view | No |
+| 3. Command-status producer | Last shell command start/end and exit status | LastCommandStatusRegistry |
+| 4. libghostty OSC/BEL | Fallback attention signal for unhooked or degraded sessions | Yes |
+| 5. Transcript JSONL | Conversation replay/audit view | No |
 
 ```text
                  +------------------------------------+
@@ -32,7 +34,8 @@ transcript reader for the conversation log UI; it is not a state recovery path.
            |                                               |
            v                                               v
     Hook/status listener                              OSC router
-    /event, /statusline                               libghostty actions
+    /event, /statusline,                              libghostty actions
+    /command-markers
            |
            v
     SwiftUI observers
@@ -53,7 +56,8 @@ transcript reader for the conversation log UI; it is not a state recovery path.
 - `Sources/WorkspaceManagerCore/Services/AgentEventTranslators.swift` contains
   the concrete Claude hook translator and OSC mapper. There is no adapter
   protocol until a second rich hook-speaking agent exists.
-- `AgentHookListener` exposes `/event`, `/statusline`, and `/healthz`.
+- `AgentHookListener` exposes `/event`, `/statusline`, `/command-markers`,
+  and `/healthz`.
 
 The registry write surface is deliberately small:
 
@@ -71,6 +75,7 @@ Routing is explicit. Every persistent host terminal created from a
 
 - `WORKSPACES_HOOKS_SOCKET`
 - `WORKSPACES_HOST_SESSION_ID`
+- `WORKSPACES_COMMAND_STATUS_ZSH` when the bundled zsh producer is available
 
 The bundled shell forwarders include
 `X-WorkSpaces-Host-Session-ID: <uuid>` on every POST. The listener accepts the
@@ -116,7 +121,29 @@ it through the same registry write surface.
 Status-line ticks never change `AgentRunState`; they only update display fields
 such as model, cost, context used, and five-hour limit state.
 
-## Channel 3: libghostty OSC/BEL
+## Channel 3: Command-Status Producer
+
+Script: `Sources/WorkspaceManager/Resources/HookForwarders/command-status.zsh`.
+
+Local zsh sessions can opt in by sourcing the bundled path exported in the
+terminal environment:
+
+```zsh
+source "$WORKSPACES_COMMAND_STATUS_ZSH"
+```
+
+The sourceable hook uses `preexec` to POST `OSC 133 ; B` to
+`/command-markers`, then uses `precmd` to POST `OSC 133 ; D ; <exit>` after the
+command returns. Payloads are raw OSC bytes with
+`X-WorkSpaces-Host-Session-ID: <uuid>`, so the listener can parse them with
+`CommandMarkerParser` and update `LastCommandStatusRegistry` for the matching
+host terminal only.
+
+The app does not mutate shell profiles automatically. Missing socket/session
+environment, missing `curl`, stopped host listeners, and malformed payloads
+drop quietly with diagnostics.
+
+## Channel 4: libghostty OSC/BEL
 
 `GhosttyRuntimeActionBridge` recognizes:
 
@@ -136,7 +163,7 @@ Notification channel selection is concrete installer behavior: `~/.claude.json`
 is patched to `preferredNotifChannel: "iterm2"` because OSC 9 is the reliable
 path libghostty surfaces today.
 
-## Channel 4: Transcript JSONL
+## Channel 5: Transcript JSONL
 
 `Sources/WorkspaceManagerCore/Services/TranscriptReader.swift` reads Claude Code
 transcripts for `ConversationLogView`.
