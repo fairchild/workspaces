@@ -31,7 +31,7 @@ on:
         type: boolean
         default: false
       probe_branch:
-        description: "Optional branch name for the content-write probe"
+        description: "Optional codex-prefixed branch name for the content-write probe"
         type: string
         default: ""
 
@@ -132,6 +132,18 @@ jobs:
           if [ -z "$PROBE_BRANCH" ]; then
             PROBE_BRANCH="codex/${APP_SLUG}-content-write-smoke-${GITHUB_RUN_ID}"
           fi
+          if ! git check-ref-format --branch "$PROBE_BRANCH" >/dev/null; then
+            echo "Invalid probe branch name: $PROBE_BRANCH" >&2
+            exit 1
+          fi
+          case "$PROBE_BRANCH" in
+            codex/*|codex-*)
+              ;;
+            *)
+              echo "Content-write probe branches must start with codex/ or codex-." >&2
+              exit 1
+              ;;
+          esac
 
           git config user.name "$EXPECTED_LOGIN"
           git config user.email "$expected_email"

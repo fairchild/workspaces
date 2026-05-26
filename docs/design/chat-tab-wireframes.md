@@ -9,12 +9,13 @@ Selected layout: **Chat as tab in main panel** alongside Overview and Agents tab
 ```
 ┌──────────┬──────────────────────────────────┬───────────────┐
 │ Repos    │                                  │ All Activity  │
-│          │  Select a repo to start chatting  │               │
+│          │  Select a repo to start chatting │               │
 │   works… │                                  │ [CI] 3 commits│
 │   beads  │  or type a message to dispatch   │ [PR] #243     │
 │   bread  │  an agent across any repo:       │ [PUSH] beads  │
 │   jrnl…  │                                  │               │
-│          │  @april-clearwater repo:workspaces fix #234  │               │
+│          │  @april-clearwater               │               │
+│          │  repo:workspaces fix #234        │               │
 │          │                                  │               │
 │          │                                  │               │
 │          │                                  │               │
@@ -67,10 +68,11 @@ System events are compact; human/agent messages get full treatment.
 │   beads  │ ── Today ──────────────────────  │ [PR] #243     │
 │          │                                  │               │
 │          │  10:12  PUSH  3 commits to main  │               │
-│          │  10:14  CI    ✗ tests failed      │               │
+│          │  10:14  CI    ✗ tests failed     │               │
 │          │                                  │               │
 │          │  10:16  you                      │               │
-│          │  @april-clearwater the test_workspace_crud  │               │
+│          │  @april-clearwater               │               │
+│          │  the test_workspace_crud         │               │
 │          │  test is flaky again. Fix it     │               │
 │          │  and make sure CI is green.      │               │
 │          │                                  │               │
@@ -86,10 +88,10 @@ System events are compact; human/agent messages get full treatment.
 │          │  setup. Opened PR #245.          │               │
 │          │                                  │               │
 │          │  10:23  PR  opened #245          │               │
-│          │  10:24  CI  ✓ all checks passed   │               │
+│          │  10:24  CI  ✓ all checks passed  │               │
 │          │                                  │               │
 │          ├──────────────────────────────────┤               │
-│          │ [@april-clearwater] ...              [Send] │               │
+│          │ [@april-clearwater] ... [Send]   │               │
 └──────────┴──────────────────────────────────┴───────────────┘
 ```
 
@@ -139,7 +141,7 @@ After submitting a message with an @mention:
 
 ```
 │          │                                  │
-│          │  @april-clearwater fix the flaky test #234  │
+│          │  @april-clearwater fix #234      │
 │          │                                  │
 │          │ ┌─ Confirm dispatch ───────────┐ │
 │          │ │                              │ │
@@ -155,7 +157,7 @@ After submitting a message with an @mention:
 │          │ └──────────────────────────────┘ │
 │          │                                  │
 │          ├──────────────────────────────────┤
-│          │ [@april-clearwater] ...              [Send] │
+│          │ [@april-clearwater] ... [Send]   │
 └──────────┴──────────────────────────────────┘
 ```
 
@@ -230,12 +232,12 @@ Asking `@spaces` or `@status` returns info without dispatching:
 ## Compose Bar Details
 
 ```
-┌─────────────────────────────────────────────────────┐
-│ [@april-clearwater ▼]  Type a message...               [Send]  │
+┌──────────────────────────────────────────────────────┐
+│ [@april-clearwater ▼] Message...       [Send]        │
 │              ↑                                ↑      │
-│         agent picker               Enter or click   │
+│         agent picker               Enter or click    │
 │         (click to change)          Cmd+Enter = send  │
-└─────────────────────────────────────────────────────┘
+└──────────────────────────────────────────────────────┘
 ```
 
 - **Agent picker** (left): shows currently targeted agent, click to change or clear
@@ -263,12 +265,13 @@ Clicking an event in the right-side activity feed can jump to Chat tab:
 
 ```
 Activity panel:                    Main panel switches to Chat:
-┌───────────────┐                 ┌──────────────────────────┐
-│ [CI] ✗ failed │ ← click →      │ [Overview] [Agents] [Chat]
-│               │                 │                          │
-│               │                 │ Re: CI failure on main   │
-│               │                 │ [@april-clearwater] ...      [Send] │
-└───────────────┘                 └──────────────────────────┘
+┌───────────────┐                 ┌───────────────────────────┐
+│ [CI] ✗ failed │ ← click →      │ [Overview] [Agents] [Chat] │
+│               │                 │                           │
+│               │                 │ Re: CI failure on main    │
+│               │                 │ [@april-clearwater]       │
+│               │                 │ ... [Send]                │
+└───────────────┘                 └───────────────────────────┘
 ```
 
 This bridges the read-only activity feed with the interactive chat.

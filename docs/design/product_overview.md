@@ -25,7 +25,7 @@ The Chat SDK (`@chat-adapter/github`) handles the GitHub side (mentions in Discu
 ## Core Capabilities
 
 - **Web chat panel** — persistent chat UI in the dashboard, scoped per-repo or global
-- **@mention dispatch** — type `@april-clearwater`, `@peter-planner`, or any agent name to route a message
+- **@mention dispatch** — type `@april-clearwater`, `@peter-planner`, or another discovered agent name to route a message
 - **GitHub Discussion bridge** — messages posted in the web chat can create/reply to GitHub Discussions, and vice versa
 - **Agent status in chat** — when an agent is dispatched, its progress appears as chat messages (task created, PR opened, review ready)
 - **Webhook events as chat context** — CI failures, PR merges, and other events appear inline so you can react to them conversationally

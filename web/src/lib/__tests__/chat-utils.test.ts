@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+	findForbiddenPublicAgentMention,
 	formatDispatchBody,
 	handleBotCommand,
 	parseAgentMention,
 	parseIssueRef,
 	stripMention,
+	validatePublicAgentTarget,
 } from "../chat-utils";
 import type { EventStats } from "../events";
 
@@ -31,6 +33,50 @@ describe("parseAgentMention", () => {
 
 	it("returns null for text without mention", () => {
 		expect(parseAgentMention("no mention here")).toBeNull();
+	});
+});
+
+describe("validatePublicAgentTarget", () => {
+	it("allows canonical April Clearwater public target", () => {
+		expect(validatePublicAgentTarget("april-clearwater")).toBeNull();
+	});
+
+	it("rejects the short April alias because it is a real GitHub user", () => {
+		expect(validatePublicAgentTarget("april")).toContain(
+			"Use @april-clearwater instead of @april",
+		);
+	});
+
+	it("rejects malformed target names before they become GitHub mentions", () => {
+		expect(validatePublicAgentTarget("octo/agent")).toContain(
+			"Agent names may contain only",
+		);
+	});
+
+	it("can reject spaces where an agent target is required", () => {
+		expect(validatePublicAgentTarget("spaces")).toBeNull();
+		expect(
+			validatePublicAgentTarget("spaces", { allowSpaces: false }),
+		).toContain("not a dispatchable agent");
+	});
+});
+
+describe("findForbiddenPublicAgentMention", () => {
+	it("finds @april in GitHub-bound text", () => {
+		expect(findForbiddenPublicAgentMention("@april please handle this")).toBe(
+			"@april",
+		);
+		expect(findForbiddenPublicAgentMention("please ask @april")).toBe("@april");
+	});
+
+	it("does not flag canonical April Clearwater or longer names", () => {
+		expect(
+			findForbiddenPublicAgentMention("@april-clearwater status"),
+		).toBeNull();
+		expect(findForbiddenPublicAgentMention("@april_extra status")).toBeNull();
+		expect(
+			findForbiddenPublicAgentMention("@april-clearwater-extra"),
+		).toBeNull();
 	});
 });
 

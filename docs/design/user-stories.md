@@ -51,8 +51,8 @@ sequenceDiagram
 │          │ │ 10:32 CI failed on main     │  │               │
 │          │ │                             │  │               │
 │          │ │ 10:34 you                   │  │               │
-│          │ │ @april-clearwater fix the flaky test   │  │               │
-│          │ │ in #234                     │  │               │
+│          │ │ @april-clearwater           │  │               │
+│          │ │ fix flaky test in #234      │  │               │
 │          │ │                             │  │               │
 │          │ │ 10:34 april                 │  │               │
 │          │ │ On it. Investigating...     │  │               │
@@ -61,7 +61,7 @@ sequenceDiagram
 │          │ │ PR #245 ready for review    │  │               │
 │          │ │                             │  │               │
 │          │ └─────────────────────────────┘  │               │
-│          │ [@april-clearwater] fix the flaky test...   │               │
+│          │ [@april-clearwater] fix flaky... │               │
 │          │ [Send]                           │               │
 └──────────┴──────────────────────────────────┴───────────────┘
 ```
@@ -117,7 +117,8 @@ sequenceDiagram
 │ Activity                                              │
 │                                                       │
 │ [CI] ✗ Tests failed on main           2m ago          │
-│       └─ [Reply: @april-clearwater fix this] [Retry]             │
+│       └─ [Reply: @april-clearwater]                   │
+│          fix this                         [Retry]     │
 │                                                       │
 │ [PR] opened #243: feat(web)...        5m ago          │
 │ [PUSH] 3 commits to main             12m ago          │
@@ -162,7 +163,8 @@ sequenceDiagram
 ┌─────────────────────────────────────────┐
 │ Chat — fairchild/workspaces             │
 │                                         │
-│ [you] @april-clearwater status                     │
+│ [you] @april-clearwater                 │
+│       status                             │
 │                                         │
 │ [spaces] april — Active                 │
 │ ┌─────────────────────────────────────┐ │
@@ -172,7 +174,7 @@ sequenceDiagram
 │ │ Last activity: 3m ago               │ │
 │ └─────────────────────────────────────┘ │
 │                                         │
-│ [@april-clearwater] ...                    [Send]  │
+│ [@april-clearwater] ...      [Send]     │
 └─────────────────────────────────────────┘
 ```
 
@@ -199,7 +201,8 @@ sequenceDiagram
 │          │                                  │               │
 │   works… │ Recent conversations:            │ [PR] #243     │
 │   beads  │                                  │ [CI] ✗ main   │
-│   bread  │ workspaces — @april-clearwater fixing #234  │ [PUSH] beads  │
+│   bread  │ workspaces — @april-clearwater   │ [PUSH] beads  │
+│          │ fixing #234                      │               │
 │   jrnl…  │ beads — @peter planning sprint   │               │
 │          │                                  │               │
 │          │ Quick dispatch:                  │               │
@@ -237,7 +240,7 @@ sequenceDiagram
 │                                         │
 │ After selecting april:                  │
 │                                         │
-│ [@april-clearwater] fix the flaky test in #234     │
+│ [@april-clearwater] fix flaky #234      │
 │                                         │
 │ ┌─ Dispatch confirmation ────────────┐  │
 │ │ Agent: april (● active)            │  │

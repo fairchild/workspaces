@@ -1,8 +1,14 @@
 import crypto from "node:crypto";
+import { resolvePersona } from "@/lib/agent-runtime/persona-loader";
 import { authorizeRepoAccess, unauthorizedResponse } from "@/lib/api-auth";
 import { getDevBypassToken, getSession } from "@/lib/auth-server";
 import { pushChatMessage } from "@/lib/chat";
-import { formatDispatchBody, parseIssueRef } from "@/lib/chat-utils";
+import {
+	findForbiddenPublicAgentMention,
+	formatDispatchBody,
+	parseIssueRef,
+	validatePublicAgentTarget,
+} from "@/lib/chat-utils";
 import { createDiscussion, getGitHubToken } from "@/lib/github";
 import type { ChatMessage, DispatchMetadata } from "@/lib/types";
 
@@ -56,6 +62,33 @@ export async function POST(request: Request): Promise<Response> {
 	const taskId = crypto.randomUUID().slice(0, 8);
 	const timestamp = new Date().toISOString();
 	const issueRef = body.issueRef ?? parseIssueRef(body.task);
+	// Dispatch targets become GitHub @mentions; validate server-side so direct
+	// API calls cannot notify unrelated real users such as @april.
+	const targetError = validatePublicAgentTarget(body.agentName, {
+		allowSpaces: false,
+	});
+	if (targetError) {
+		return Response.json({ error: targetError }, { status: 400 });
+	}
+	const forbiddenMention = findForbiddenPublicAgentMention(body.task);
+	if (forbiddenMention) {
+		return Response.json(
+			{
+				error: `Use @april-clearwater instead of ${forbiddenMention}; @april is a different GitHub user.`,
+			},
+			{ status: 400 },
+		);
+	}
+	const persona = await resolvePersona(token, owner, repo, body.agentName);
+	if (!persona) {
+		return Response.json(
+			{
+				error:
+					"Unknown agent target. Use a discovered repo persona such as @april-clearwater.",
+			},
+			{ status: 400 },
+		);
+	}
 
 	const title = `@${body.agentName}: ${body.task.slice(0, 100)}`;
 	const discussionBody = formatDispatchBody(

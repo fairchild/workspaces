@@ -16,7 +16,7 @@ GitHub shows three related but distinct identities:
 2. Commit author: the local git `user.name` and `user.email` used before `git commit`.
 3. Review author association: GitHub's relationship between the reviewer and this repository.
 
-`contents:write` only lets an app push branches and commits. It does not by itself make the bot a contributor. A bot becomes `CONTRIBUTOR` after GitHub sees an attributed commit from that bot in the repository history.
+`contents:write` only lets an app push branches and commits. It does not by itself make the bot a contributor. Treat `CONTRIBUTOR` status as proven only after a live review reports that association; a linked bot-authored commit on an unmerged PR branch is not enough evidence.
 
 Contributor runs set `GH_APP_SLUG` and use the approved identity table in `.agents/skills/cofounder-contributor/scripts/execution.py`. The table maps app slugs to canonical bot noreply addresses:
 
@@ -56,7 +56,7 @@ To make another app a contributing bot:
 3. Look up the bot account ID with `gh api users/<bot-login>%5Bbot%5D --jq '{login,id}'`.
 4. Add the app slug, bot login, and canonical noreply email to the approved identity table.
 5. Run a disposable PR with that app token and verify the PR author and commit attribution resolve to the bot.
-6. Verify a later review from that bot reports `authorAssociation: CONTRIBUTOR`.
+6. After a bot-authored commit lands in the default branch history, verify a later review from that bot reports `authorAssociation: CONTRIBUTOR`.
 
 Do not repeat this process for `workspaces-claude-pr-reviewer`. That app is intentionally review-only.
 
