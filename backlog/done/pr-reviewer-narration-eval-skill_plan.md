@@ -1,4 +1,8 @@
 ---
+status: done
+issue: 546
+completed: 2026-05-25
+resolution: promoted-to-github-issue
 topic: pr-reviewer
 priority: 2
 description: Convert the recent PR reviewer narration analysis into a small skill-backed preference eval harness for fine-tuning narrative, evidence, and label behavior.

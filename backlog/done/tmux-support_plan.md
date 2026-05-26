@@ -1,5 +1,8 @@
 ---
-status: active
+status: done
+issue: 549
+completed: 2026-05-25
+resolution: promoted-to-github-issue
 category: plan
 priority: P1
 chosen_by: docs/decisions/terminal-multiplexing.md
@@ -8,7 +11,6 @@ pr: null
 branch: null
 score: null
 retro_summary: null
-completed: null
 ---
 
 > **Promoted 2026-04-23.** Chosen as the desktop multiplexing model in `docs/decisions/terminal-multiplexing.md`. Implementation runs against this plan. Continuity work is paired but tracked separately in `backlog/desktop-continuity_plan.md`.

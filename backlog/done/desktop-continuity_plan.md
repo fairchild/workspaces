@@ -1,5 +1,8 @@
 ---
-status: active
+status: done
+issue: 548
+completed: 2026-05-25
+resolution: promoted-to-github-issue
 category: plan
 priority: P1
 created: 2026-04-23
