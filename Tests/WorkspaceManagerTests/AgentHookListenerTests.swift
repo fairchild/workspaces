@@ -64,6 +64,13 @@ struct AgentHookListenerTests {
         return process.terminationStatus
     }
 
+    private static func osc133(_ payload: String) -> Data {
+        var data = Data([0x1B, 0x5D, 0x31, 0x33, 0x33, 0x3B])
+        data.append(payload.data(using: .utf8)!)
+        data.append(0x07)
+        return data
+    }
+
     @MainActor
     private final class TestRegistry: AgentSessionRegistryProtocol {
         var statuses: [UUID: AgentSessionStatus] = [:]
@@ -537,6 +544,131 @@ struct AgentHookListenerTests {
         try await Task.sleep(nanoseconds: 300_000_000)
         let runAfter = await registry.statuses[registeredID]?.modelDisplayName
         #expect(runAfter == runBefore)
+
+        await listener.stop()
+    }
+
+    @Test("command-markers POST updates last command status by host session header")
+    func commandMarkersUpdateLastCommandStatusByHostSessionHeader() async throws {
+        let cwd = "/tmp/hook-test-\(UUID().uuidString.prefix(6))"
+        try? FileManager.default.createDirectory(atPath: cwd, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: cwd) }
+
+        let socket = Self.makeTempSocketURL()
+        let registry = await TestRegistry(cwd: cwd)
+        let registeredID = registry.registeredID
+        await MainActor.run {
+            registry.register(hostSessionID: UUID(), cwd: "/tmp/other", kind: .claudeCode)
+        }
+        let commandStatusRegistry = await MainActor.run { LastCommandStatusRegistry() }
+        let listener = AgentHookListener(
+            bundleIdentifier: "com.test.workspaces",
+            registry: registry,
+            commandStatusRegistry: commandStatusRegistry,
+            socketURLOverride: socket
+        )
+        try await listener.start()
+        defer { Task { await listener.stop() } }
+        try await Task.sleep(nanoseconds: 250_000_000)
+
+        var body = Data()
+        body.append(Self.osc133("B"))
+        body.append(Self.osc133("D;7"))
+        let status = await Self.curlPost(
+            socket: socket,
+            path: "/command-markers",
+            body: body,
+            hostSessionID: registeredID
+        )
+        #expect(status == 0)
+
+        let reached = await waitUntil {
+            await MainActor.run {
+                commandStatusRegistry.statusByTerminalSession[registeredID]?.exitCode == 7
+            }
+        }
+        #expect(reached)
+        let live = await MainActor.run {
+            commandStatusRegistry.statusByTerminalSession[registeredID]
+        }
+        #expect(live?.isRunning == false)
+        #expect(live?.isSuccess == false)
+
+        let stats = await listener.currentStatistics()
+        #expect(stats.commandMarkerUpdates == 1)
+
+        await listener.stop()
+    }
+
+    @Test("command-markers POST drops missing and unregistered sessions")
+    func commandMarkersDropMissingAndUnregisteredSessions() async throws {
+        let socket = Self.makeTempSocketURL()
+        let registry = await TestRegistry(cwd: "/tmp")
+        let registeredID = registry.registeredID
+        let commandStatusRegistry = await MainActor.run { LastCommandStatusRegistry() }
+        let listener = AgentHookListener(
+            bundleIdentifier: "com.test.workspaces",
+            registry: registry,
+            commandStatusRegistry: commandStatusRegistry,
+            socketURLOverride: socket
+        )
+        try await listener.start()
+        defer { Task { await listener.stop() } }
+        try await Task.sleep(nanoseconds: 250_000_000)
+
+        _ = await Self.curlPost(
+            socket: socket,
+            path: "/command-markers",
+            body: Self.osc133("B")
+        )
+        _ = await Self.curlPost(
+            socket: socket,
+            path: "/command-markers",
+            body: Self.osc133("D;0"),
+            hostSessionID: UUID()
+        )
+
+        try await Task.sleep(nanoseconds: 400_000_000)
+        let status = await MainActor.run {
+            commandStatusRegistry.statusByTerminalSession[registeredID]
+        }
+        #expect(status == nil)
+
+        await listener.stop()
+    }
+
+    @Test("command-markers POST with malformed body records decode failure")
+    func commandMarkersMalformedBodyRecordsDecodeFailure() async throws {
+        let socket = Self.makeTempSocketURL()
+        let registry = await TestRegistry(cwd: "/tmp")
+        let registeredID = registry.registeredID
+        let commandStatusRegistry = await MainActor.run { LastCommandStatusRegistry() }
+        let listener = AgentHookListener(
+            bundleIdentifier: "com.test.workspaces",
+            registry: registry,
+            commandStatusRegistry: commandStatusRegistry,
+            socketURLOverride: socket
+        )
+        try await listener.start()
+        defer { Task { await listener.stop() } }
+        try await Task.sleep(nanoseconds: 250_000_000)
+
+        let status = await Self.curlPost(
+            socket: socket,
+            path: "/command-markers",
+            body: Data("not an osc marker".utf8),
+            hostSessionID: registeredID
+        )
+        #expect(status == 0)
+
+        let reached = await waitUntil {
+            await listener.currentStatistics().decodeFailures == 1
+        }
+        #expect(reached)
+        let commandStatus = await MainActor.run {
+            commandStatusRegistry.statusByTerminalSession[registeredID]
+        }
+        #expect(commandStatus == nil)
 
         await listener.stop()
     }

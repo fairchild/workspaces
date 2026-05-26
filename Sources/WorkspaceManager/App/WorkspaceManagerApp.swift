@@ -18,6 +18,7 @@ struct WorkspaceManagerApp: App {
     @StateObject private var modelStoreStatusController: ModelStoreStatusController
     @StateObject private var softwareUpdateController: SoftwareUpdateController
     @StateObject private var agentSessionRegistry: AgentSessionRegistry
+    @StateObject private var lastCommandStatusRegistry: LastCommandStatusRegistry
     @StateObject private var workspaceStatusAggregator = WorkspaceStatusAggregator()
     @StateObject private var claudeIntegrationLifecycle: ClaudeIntegrationLifecycle
     private let appRuntimeDependencies = AppRuntimeDependencies.resolved()
@@ -48,7 +49,9 @@ struct WorkspaceManagerApp: App {
         _softwareUpdateController = StateObject(wrappedValue: SoftwareUpdateController())
         _claudeIntegrationLifecycle = StateObject(wrappedValue: ClaudeIntegrationLifecycle.shared)
         let registry = AgentSessionRegistry(localStateStore: localStateBootstrap.store)
+        let commandStatusRegistry = LastCommandStatusRegistry()
         _agentSessionRegistry = StateObject(wrappedValue: registry)
+        _lastCommandStatusRegistry = StateObject(wrappedValue: commandStatusRegistry)
         self.sharedModelContainer = bootstrap.container
         self.localStateStore = localStateBootstrap.store
 
@@ -56,7 +59,10 @@ struct WorkspaceManagerApp: App {
         // The listener binds to a Unix socket under Application Support keyed by pid.
         // Disabled in CI to avoid cluttering the runner's filesystem.
         if ProcessInfo.processInfo.environment["CI"] == nil {
-            ClaudeIntegrationLifecycle.shared.start(registry: registry)
+            ClaudeIntegrationLifecycle.shared.start(
+                registry: registry,
+                commandStatusRegistry: commandStatusRegistry
+            )
         }
     }
 
@@ -73,8 +79,10 @@ struct WorkspaceManagerApp: App {
             )
             .environmentObject(modelStoreStatusController)
             .environmentObject(agentSessionRegistry)
+            .environmentObject(lastCommandStatusRegistry)
             .environmentObject(workspaceStatusAggregator)
             .environment(\.agentSessionRegistry, agentSessionRegistry)
+            .environment(\.lastCommandStatusRegistry, lastCommandStatusRegistry)
             .environment(\.localStateStore, localStateStore)
             .frame(minWidth: 1000, minHeight: 700)
             .onAppear {
@@ -252,7 +260,9 @@ struct WorkspaceManagerApp: App {
                 .environment(\.claudeSettingsInstaller, claudeIntegrationLifecycle.settingsInstaller)
                 .environmentObject(modelStoreStatusController)
                 .environmentObject(agentSessionRegistry)
+                .environmentObject(lastCommandStatusRegistry)
                 .environment(\.agentSessionRegistry, agentSessionRegistry)
+                .environment(\.lastCommandStatusRegistry, lastCommandStatusRegistry)
         }
     }
 }
@@ -303,6 +313,7 @@ private struct MainWindowRootView: View {
 /// agent-state seeder so deterministic screenshots can land at specific run states.
 private struct AgentSessionRegistryAttacher: ViewModifier {
     @EnvironmentObject private var registry: AgentSessionRegistry
+    @EnvironmentObject private var commandStatusRegistry: LastCommandStatusRegistry
     @Environment(\.localStateStore) private var localStateStore
     @Environment(\.modelContext) private var modelContext
     let hostTerminalState: HostTerminalStateStore
@@ -312,7 +323,8 @@ private struct AgentSessionRegistryAttacher: ViewModifier {
             hostTerminalState.attach(
                 agentSessionRegistry: registry,
                 localStateStore: localStateStore,
-                hooksSocketPath: ClaudeIntegrationLifecycle.shared.socketPath
+                hooksSocketPath: ClaudeIntegrationLifecycle.shared.socketPath,
+                lastCommandStatusRegistry: commandStatusRegistry
             )
             if ProcessInfo.processInfo.environment["WORKSPACES_UI_FIXTURE"] == "1" {
                 UIFixtureSeeder.seedAgentStatesIfNeeded(
@@ -542,6 +554,10 @@ private struct AgentSessionRegistryKey: EnvironmentKey {
     static let defaultValue: AgentSessionRegistry? = nil
 }
 
+private struct LastCommandStatusRegistryKey: EnvironmentKey {
+    static let defaultValue: LastCommandStatusRegistry? = nil
+}
+
 private struct LocalStateStoreKey: EnvironmentKey {
     static let defaultValue: LocalStateStore? = nil
 }
@@ -584,6 +600,11 @@ extension EnvironmentValues {
     var agentSessionRegistry: AgentSessionRegistry? {
         get { self[AgentSessionRegistryKey.self] }
         set { self[AgentSessionRegistryKey.self] = newValue }
+    }
+
+    var lastCommandStatusRegistry: LastCommandStatusRegistry? {
+        get { self[LastCommandStatusRegistryKey.self] }
+        set { self[LastCommandStatusRegistryKey.self] = newValue }
     }
 
     var localStateStore: LocalStateStore? {

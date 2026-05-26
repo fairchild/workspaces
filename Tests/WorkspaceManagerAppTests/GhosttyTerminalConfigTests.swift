@@ -150,6 +150,11 @@ struct GhosttyTerminalConfigTests {
 
         #expect(config.environmentVariables["WORKSPACES_HOST_SESSION_ID"] == hostSessionID.uuidString)
         #expect(config.environmentVariables["WORKSPACES_HOOKS_SOCKET"] == "/tmp/workspaces-hooks.sock")
+        let commandStatusHook = config.environmentVariables["WORKSPACES_COMMAND_STATUS_ZSH"]
+        #expect(commandStatusHook?.hasSuffix("command-status.zsh") == true)
+        if let commandStatusHook {
+            #expect(FileManager.default.fileExists(atPath: commandStatusHook))
+        }
     }
 
     @Test("host session hook context is omitted unless complete")
@@ -178,8 +183,10 @@ struct GhosttyTerminalConfigTests {
 
         #expect(missingSocket.environmentVariables["WORKSPACES_HOST_SESSION_ID"] == nil)
         #expect(missingSocket.environmentVariables["WORKSPACES_HOOKS_SOCKET"] == nil)
+        #expect(missingSocket.environmentVariables["WORKSPACES_COMMAND_STATUS_ZSH"] == nil)
         #expect(missingHostID.environmentVariables["WORKSPACES_HOST_SESSION_ID"] == nil)
         #expect(missingHostID.environmentVariables["WORKSPACES_HOOKS_SOCKET"] == nil)
+        #expect(missingHostID.environmentVariables["WORKSPACES_COMMAND_STATUS_ZSH"] == nil)
     }
 
     @Test("tmux mode respects clean shell override")
