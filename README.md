@@ -133,6 +133,10 @@ For performance testing and benchmarking workflows, see:
 - [docs/performance-testing.md](./docs/performance-testing.md)
 - [docs/performance/dashboard.md](./docs/performance/dashboard.md)
 
+For introducing Settings-gated UI experiments, see:
+
+- [docs/development/experimental-features.md](./docs/development/experimental-features.md)
+
 For VM and provider-backed workspace architecture, see:
 
 - [docs/vm-provider-architecture.md](./docs/vm-provider-architecture.md)

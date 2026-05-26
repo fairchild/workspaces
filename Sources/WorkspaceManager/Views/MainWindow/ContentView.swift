@@ -38,6 +38,8 @@ struct ContentView: View {
     private var terminalContinuityManifestRawValue = ""
     @AppStorage(NotificationConstants.enabledKey)
     private var notificationsEnabled = NotificationConstants.defaultEnabled
+    @ExperimentalFeatureFlag(.minimalToolbar)
+    private var minimalToolbarEnabled: Bool
     @Environment(\.externalEditorService) private var externalEditorService
     @Environment(\.lumeRuntimeService) private var lumeRuntimeService
     @EnvironmentObject private var modelStoreStatusController: ModelStoreStatusController
@@ -483,7 +485,7 @@ struct ContentView: View {
 
     private var splitViewWithToolbar: some View {
         Group {
-            if PerformanceExperimentFlags.minimalToolbar {
+            if minimalToolbarEnabled {
                 splitViewBody
             } else {
                 splitViewBody

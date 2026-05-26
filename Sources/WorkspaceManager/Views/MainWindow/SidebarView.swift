@@ -59,6 +59,8 @@ struct SidebarView: View {
 
     @AppStorage(SidebarRepoSortMode.storageKey)
     private var repoSortModeRawValue: String = SidebarRepoSortMode.alphabetical.rawValue
+    @ExperimentalFeatureFlag(.minimalToolbar)
+    private var minimalToolbarEnabled: Bool
 
     @State private var isAddingRepo = false
     @State private var newWorkspaceSheetContext: NewWorkspaceSheetContext?
@@ -130,7 +132,7 @@ struct SidebarView: View {
 
     var body: some View {
         Group {
-            if PerformanceExperimentFlags.minimalToolbar {
+            if minimalToolbarEnabled {
                 sidebarList
                     .listStyle(.sidebar)
                     .environment(\.defaultMinListRowHeight, 34)
