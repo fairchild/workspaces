@@ -22,13 +22,19 @@
     "main_scheduled": {
       "self_hosted_perf_required": true,
       "self_hosted_perf_condition": "after_7_day_lane_stability"
+    },
+    "release": {
+      "installed_build_verification_required": true,
+      "release_signoff_scenario": "installed_clean_shell",
+      "debug_scenarios_block_release": false,
+      "debug_scenarios_use": "branch_delta_and_trend"
     }
   },
   "scenarios": [
     {
       "id": "debug_no_activate",
       "build_kind": "debug",
-      "description": "Debug binary launched without activation for reproducible local startup and switch timing."
+      "description": "Raw SwiftPM debug binary launched without activation for reproducible local branch-delta and trend timing; not the release signoff scenario."
     },
     {
       "id": "debug_activate",
@@ -38,7 +44,7 @@
     {
       "id": "installed_clean_shell",
       "build_kind": "installed",
-      "description": "Installed app launched with clean shell profiles to isolate app and terminal surface cost."
+      "description": "Packaged app launched with clean shell profiles to isolate app and terminal surface cost; primary release performance signoff scenario."
     },
     {
       "id": "installed_login_shell",

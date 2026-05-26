@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 import tempfile
 import unittest
 import zipfile
@@ -58,9 +59,26 @@ class PerfContractTests(unittest.TestCase):
         self.assertEqual(result["launch_to_first_prompt"]["diagnostic_threshold_ms"], 390)
         self.assertEqual(result["launch_to_first_prompt"]["status"], "pass")
 
+    def test_release_policy_uses_installed_signoff(self) -> None:
+        contract = load_contract()
+        release_policy = contract["gate_policy"]["release"]
+        self.assertTrue(release_policy["installed_build_verification_required"])
+        self.assertEqual(release_policy["release_signoff_scenario"], "installed_clean_shell")
+        self.assertFalse(release_policy["debug_scenarios_block_release"])
+
+
+class PerfRunnerScriptTests(unittest.TestCase):
+    def test_installed_scenario_normalizes_app_bundle_path(self) -> None:
+        script = (REPO_ROOT / "scripts" / "perf-runner.sh").read_text(encoding="utf-8")
+        self.assertIn("normalize_installed_app_path", script)
+        self.assertIn("Contents/MacOS/WorkspaceManager", script)
+        self.assertIn('--app "$resolved_app_path"', script)
+
 
 class PerfSummarizerTests(unittest.TestCase):
     def run_json(self, command: list[str]) -> dict:
+        if command and Path(command[0]).suffix == ".py":
+            command = [sys.executable, *command]
         result = subprocess.run(
             command,
             cwd=REPO_ROOT,
