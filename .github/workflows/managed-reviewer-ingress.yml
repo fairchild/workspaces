@@ -1,7 +1,7 @@
 # Managed reviewer ingress is the contract gate between GitHub webhook delivery,
 # the Cloudflare relay, and the Vercel route that decides whether to start a
-# managed PR review. Keep this workflow narrow and required for changes that can
-# break either side of that cross-service handoff.
+# managed PR review. It should not broker completed reviews or report run
+# health; those are separate managed-reviewer surfaces.
 name: Managed Reviewer Ingress
 
 on:
@@ -9,17 +9,19 @@ on:
     branches: [main]
     paths:
       - "infra/cloudflare-webhook-relay/**"
-      - "web/src/app/api/webhooks/github/**"
-      - "web/src/lib/agent-runtime/pr-review*.ts"
-      - "web/src/lib/agent-runtime/__tests__/pr-review*.ts"
+      - "web/src/app/api/webhooks/github/route.ts"
+      - "web/src/app/api/webhooks/github/route.test.ts"
+      - "web/src/lib/agent-runtime/pr-review-trigger.ts"
+      - "web/src/lib/agent-runtime/__tests__/pr-review-trigger-fixtures.ts"
       - "scripts/managed-reviewer-ingress-canary.py"
       - ".github/workflows/managed-reviewer-ingress.yml"
   pull_request:
     paths:
       - "infra/cloudflare-webhook-relay/**"
-      - "web/src/app/api/webhooks/github/**"
-      - "web/src/lib/agent-runtime/pr-review*.ts"
-      - "web/src/lib/agent-runtime/__tests__/pr-review*.ts"
+      - "web/src/app/api/webhooks/github/route.ts"
+      - "web/src/app/api/webhooks/github/route.test.ts"
+      - "web/src/lib/agent-runtime/pr-review-trigger.ts"
+      - "web/src/lib/agent-runtime/__tests__/pr-review-trigger-fixtures.ts"
       - "scripts/managed-reviewer-ingress-canary.py"
       - ".github/workflows/managed-reviewer-ingress.yml"
   workflow_dispatch:
@@ -81,6 +83,24 @@ jobs:
 
       - name: Validate Worker bundle
         run: bun run --bun wrangler deploy --dry-run
+
+  canary-script-smoke:
+    name: Ingress canary script smoke
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+
+      - name: Check ingress canary script help
+        run: python3 scripts/managed-reviewer-ingress-canary.py --help
+
+      - name: Check ingress canary script secret gate
+        run: |
+          if python3 scripts/managed-reviewer-ingress-canary.py --timeout 0.1 2>canary.err; then
+            echo "::error::canary script succeeded without WORKSPACES_WEBHOOK_CANARY_SECRET"
+            exit 1
+          fi
+          grep -q "WORKSPACES_WEBHOOK_CANARY_SECRET is required" canary.err
 
   production-canary:
     name: Production ingress canary
