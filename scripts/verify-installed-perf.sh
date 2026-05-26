@@ -1,5 +1,5 @@
 #!/bin/bash
-# Verify installed-build performance parity and resource packaging for a packaged app.
+# Verify packaged-app performance and resource packaging for release signoff.
 
 set -euo pipefail
 

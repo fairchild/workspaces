@@ -18,7 +18,7 @@ Use `workspaces-optimization` instead when the task is root-cause investigation 
 
 ## Quick Start
 
-Run one canonical scenario and assert budgets:
+Run one canonical debug scenario and assert budgets:
 
 ```bash
 ./scripts/perf-runner.sh --scenario debug_no_activate --assert-budget
@@ -30,10 +30,10 @@ Compare before and after summaries:
 ./scripts/perf-compare.py before-summary.json after-summary.json
 ```
 
-Verify release-bundle installed-build parity:
+Verify release-bundle performance signoff on the packaged app:
 
 ```bash
-./scripts/verify-installed-perf.sh build/WorkspaceManager.app
+./scripts/verify-installed-perf.sh build/WorkSpaces.app
 ```
 
 ## Core Workflow
@@ -67,9 +67,9 @@ Use these scenario ids exactly:
 
 Guidance:
 
-- Use `debug_no_activate` for low-variance local branch comparisons.
+- Use `debug_no_activate` for low-variance local branch comparisons and trend history, not release signoff.
 - Use `debug_activate` for interactive local validation.
-- Use `installed_clean_shell` to isolate app and terminal surface cost.
+- Use `installed_clean_shell` to isolate app and terminal surface cost; this is the packaged-app release signoff scenario.
 - Use `installed_login_shell` to include shell-init overhead.
 - Use `installed_input_short_capture` only for short interactive focused typing captures.
 
@@ -119,6 +119,10 @@ Installed validation must confirm:
 - logs do not contain missing-resource warnings
 
 If the verifier fails because the machine is headless or lacks a real display session, classify that as an environment limitation, not a product perf result. Release automation may use `./scripts/verify-installed-perf.sh --allow-skip-noninteractive` for that one case only.
+
+Debug scenario failures are useful branch-trend evidence. They do not block a
+release by themselves when the packaged app verifier passes and the debug
+environment difference is explicitly classified.
 
 ### 6. Separate infra failures from perf regressions
 

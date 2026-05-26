@@ -240,7 +240,7 @@ jobs:
       - name: Verify signed app bundle
         run: ./scripts/verify-release-bundle.sh build/WorkSpaces.app
 
-      - name: Verify installed-build perf parity
+      - name: Verify installed-build release performance
         run: ./scripts/verify-installed-perf.sh --allow-skip-noninteractive build/WorkSpaces.app build/release-installed-perf
 
       - name: Upload installed-build perf verification artifact

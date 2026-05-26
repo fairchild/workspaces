@@ -10,9 +10,9 @@ Canonical scenarios:
 
 | Scenario | Build Kind | Purpose |
 |---|---|---|
-| `debug_no_activate` | `debug` | Low-variance local startup and switch timing without app activation |
+| `debug_no_activate` | `debug` | Raw SwiftPM debug startup and switch timing without app activation; use for branch deltas and trend history, not release signoff |
 | `debug_activate` | `debug` | Interactive debug startup timing with normal activation |
-| `installed_clean_shell` | `installed` | Installed-app startup with shell init bypassed |
+| `installed_clean_shell` | `installed` | Packaged-app release signoff with shell init bypassed and bundled Ghostty resources verified |
 | `installed_login_shell` | `installed` | Installed-app startup with normal login shell cost included |
 | `installed_input_short_capture` | `installed` | Short focused typing capture for input event age and handler timing |
 
@@ -28,6 +28,8 @@ Start event:
 
 End event:
 - `PerformanceSignposts.endLaunchToFirstPromptIfNeeded(trigger: "terminal_focus")` when focus manager successfully sets terminal first responder.
+- Installed no-activation captures may also end when terminal prompt readiness is
+  observed through the terminal title path before foreground focus is possible.
 
 Why it matters:
 - This is the “is the app immediately usable?” number.
@@ -262,6 +264,9 @@ Rules:
 - median is the gating statistic
 - p95 is diagnostic and should trigger investigation even when median still passes
 - existing `[Perf]` metric names remain the raw telemetry source; contract logic sits above them
+- debug scenario budgets are release-advisory only; a debug failure does not
+  block a release when installed-build verification passes and the difference is
+  classified in the release notes or PR context
 
 Enforcement points:
 
@@ -269,10 +274,14 @@ Enforcement points:
 - `./scripts/perf-runner.sh --scenario <id> --assert-budget`
 - `.github/workflows/perf-validation.yml`
 
-Installed-build parity is verified separately in the release path:
+Release signoff uses installed-build verification:
 
 - `./scripts/verify-release-bundle.sh`
 - `./scripts/verify-installed-perf.sh`
+
+`verify-installed-perf.sh` must confirm bundled Ghostty resources, bundled
+terminfo, `terminal_first_output`, and `first_prompt_ready`. These installed
+metrics are the release-relevant signal for packaged app startup.
 
 ## Interpreting Dashboard Changes
 
