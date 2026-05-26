@@ -3,7 +3,12 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""Stdlib tests for the Codespaces Claude launcher."""
+"""Launcher tests for the Codespaces Claude worker.
+
+Intent: protect the runner-side script that provisions a Codespace and starts
+the in-Codespace Claude worker. These are stdlib-only unit tests so GitHub
+workflow jobs can run them without installing the full app dependency stack.
+"""
 
 from __future__ import annotations
 
@@ -14,7 +19,7 @@ import unittest
 from pathlib import Path
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "codespaces-claude-launch.py"
 
 

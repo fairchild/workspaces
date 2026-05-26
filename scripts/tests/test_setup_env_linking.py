@@ -3,7 +3,12 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""Tests for scripts/setup env-file linking behavior."""
+"""Setup tests for local environment-file linking.
+
+Intent: protect the bootstrap path that links private local env files between
+worktrees without copying secrets into the repository or overwriting deliberate
+checkout-local configuration.
+"""
 
 from __future__ import annotations
 
@@ -15,7 +20,7 @@ import unittest
 from pathlib import Path
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 SETUP_SCRIPT = REPO_ROOT / "scripts" / "setup"
 
 

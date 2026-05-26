@@ -3,7 +3,11 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""Stdlib tests for agent label migration helpers."""
+"""Migration tests for GitHub agent label cleanup.
+
+Intent: keep one-off label migration helpers deterministic and reviewable.
+These tests exercise API payload handling without calling the live GitHub API.
+"""
 
 from __future__ import annotations
 
@@ -16,7 +20,7 @@ from pathlib import Path
 from unittest import mock
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def load_module(name: str, path: Path):

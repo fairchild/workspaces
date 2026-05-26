@@ -3,7 +3,12 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""Unit tests for structured agent triage and approval helpers."""
+"""Policy tests for public agent mention triage.
+
+Intent: keep the GitHub comment/review triage path safe for an open-source
+repo by proving public mentions are sanitized, approval labels gate execution,
+and April automation only responds to the public `@april-clearwater` app slug.
+"""
 
 from __future__ import annotations
 
@@ -16,7 +21,7 @@ import unittest
 from pathlib import Path
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 FIXTURES_DIR = REPO_ROOT / ".agents" / "scripts" / "fixtures"
 
 

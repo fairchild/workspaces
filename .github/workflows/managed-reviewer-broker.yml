@@ -9,12 +9,12 @@ on:
     paths:
       - ".github/workflows/managed-reviewer-broker.yml"
       - "scripts/pr-reviewer-broker.py"
-      - "scripts/test_security_hardening.py"
+      - "scripts/tests/test_security_hardening.py"
   pull_request:
     paths:
       - ".github/workflows/managed-reviewer-broker.yml"
       - "scripts/pr-reviewer-broker.py"
-      - "scripts/test_security_hardening.py"
+      - "scripts/tests/test_security_hardening.py"
   workflow_dispatch:
     inputs:
       limit:

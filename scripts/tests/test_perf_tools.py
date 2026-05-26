@@ -3,7 +3,12 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""Fixture tests for the Workspaces performance contract and summary tooling."""
+"""Fixture tests for the Workspaces performance contract.
+
+Intent: keep perf summary parsing, budget evaluation, and diagnostic report
+helpers aligned with `config/performance/contract.json` using small local
+fixtures instead of launching the app or requiring a performance runner.
+"""
 
 from __future__ import annotations
 
@@ -15,10 +20,12 @@ import unittest
 import zipfile
 from pathlib import Path
 
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT / "scripts"))
+
 from perf_schema import evaluate_budgets, load_contract
 
-
-REPO_ROOT = Path(__file__).resolve().parents[1]
 SUMMARIZE_PERF_LOG = (
     REPO_ROOT
     / ".agents"

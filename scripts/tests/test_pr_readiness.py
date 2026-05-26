@@ -3,7 +3,12 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""Tests for scripts/pr-readiness.py."""
+"""Policy tests for the PR readiness workflow helper.
+
+Intent: make the mergeability gate predictable by proving the script accepts
+the PR body sections this repo requires and reports missing evidence or policy
+sections in a form GitHub Actions can surface cleanly.
+"""
 
 from __future__ import annotations
 
@@ -13,7 +18,7 @@ import unittest
 from pathlib import Path
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "pr-readiness.py"
 
 spec = importlib.util.spec_from_file_location("pr_readiness", SCRIPT_PATH)

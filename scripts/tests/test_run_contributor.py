@@ -3,7 +3,12 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""Stdlib tests for run-contributor evidence reconciliation."""
+"""Policy tests for the cofounder contributor runner.
+
+Intent: protect the automation that lets trusted GitHub Apps commit and open
+PRs. These tests cover app-bot git identity selection, sensitive path gates,
+and PR evidence reconciliation without running an actual agent.
+"""
 
 from __future__ import annotations
 
@@ -18,7 +23,7 @@ from pathlib import Path
 from unittest import mock
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = REPO_ROOT / ".agents" / "skills" / "cofounder-contributor" / "scripts" / "run-contributor.py"
 
 
