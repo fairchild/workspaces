@@ -456,6 +456,12 @@ struct SettingsView: View {
             }
 
             Section {
+                ExperimentalFeaturesSettingsView()
+            } header: {
+                Text("Experimental Features")
+            }
+
+            Section {
                 HStack {
                     Text("Version")
                     Spacer()
