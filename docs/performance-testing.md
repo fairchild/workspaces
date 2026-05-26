@@ -25,9 +25,41 @@ swift build
 
 This ensures perf changes are not hiding functional regressions.
 
+## Release performance signoff
+
+Release performance is validated against the packaged app, not the raw SwiftPM
+debug binary. The installed verifier is the release gate because it confirms the
+bundle contains the Ghostty runtime resources and emits the installed-only
+terminal readiness metrics.
+
+Local prerelease check:
+
+```bash
+./scripts/build-release.sh --no-sign
+./scripts/verify-installed-perf.sh build/WorkSpaces.app /tmp/workspaces-installed-perf-verify-<date>
+```
+
+Signed release automation runs the same gate after `./scripts/verify-release-bundle.sh`:
+
+```bash
+./scripts/verify-installed-perf.sh --allow-skip-noninteractive build/WorkSpaces.app build/release-installed-perf
+```
+
+Use `--allow-skip-noninteractive` only on release runners that may lack an
+interactive Aqua session. On a developer Mac with a real display session, a
+missing installed perf result is a validation failure to diagnose before
+signoff.
+
 ## PR evidence contract
 
-Performance-sensitive PRs must carry canonical before/after evidence in the PR body. The expected workflow is:
+Performance-sensitive PRs must carry canonical before/after evidence in the PR
+body. Pick the scenario that matches the surface under review:
+
+- Use `debug_no_activate` for debug-build UI/runtime branch deltas.
+- Use `installed_clean_shell` or `installed_login_shell` for package, release,
+  shell, Ghostty resource, or installed-app startup changes.
+
+The expected debug-build workflow is:
 
 ```bash
 ./scripts/pr-evidence.sh --pr <N> --profile performance --scenario debug_no_activate
@@ -47,6 +79,15 @@ The lower-level helper remains available when you only need local Markdown field
 ./scripts/prepare-perf-evidence.sh --scenario debug_no_activate
 ```
 
+For release or packaging-sensitive PRs, include the installed verifier output
+and the exact packaged-app scenario used:
+
+```bash
+./scripts/build-release.sh --no-sign
+./scripts/verify-installed-perf.sh build/WorkSpaces.app /tmp/workspaces-installed-perf-verify-<slug>
+./scripts/perf-runner.sh --scenario installed_login_shell --app build/WorkSpaces.app
+```
+
 The PR evidence wrapper runs the canonical scenario, captures `before` and `after` summaries, compares them with `./scripts/perf-compare.py`, writes local PR-ready Markdown, and uploads an SVG delta summary through `./scripts/evidence.sh`.
 
 Required PR fields for `performance-sensitive` work:
@@ -58,15 +99,21 @@ Required PR fields for `performance-sensitive` work:
 
 When the PR has the `performance-sensitive` label, `.github/workflows/pr-perf-evidence.yml` fails if those fields are missing. Use scenarios from `config/performance/contract.json` and keep the machine, launch mode, and workload comparable across captures.
 
-## Standard benchmark workflow (recommended)
+## Debug benchmark workflow
 
-Use the scripted baseline runner:
+Use the scripted baseline runner for branch-to-branch debug comparisons and
+dashboard trend updates:
 
 ```bash
 ./scripts/perf-baseline.sh 5 8
 ./scripts/perf-baseline.sh 5 8 --launch-mode activate
 ./scripts/perf-runner.sh --scenario debug_no_activate --assert-budget
 ```
+
+This is not the release signoff path. The raw debug binary may carry debug-build
+overhead or miss packaged Ghostty resources that the release app bundles
+correctly. Compare debug captures only against debug captures from the same
+machine, launch mode, and workload shape.
 
 To persist results and generate a visual trend dashboard:
 
@@ -119,8 +166,8 @@ The dedicated GitHub Actions workflow is `.github/workflows/perf-validation.yml`
 Use the canonical installed-build wrapper when validating packaged or installed apps:
 
 ```bash
-./scripts/perf-runner.sh --scenario installed_clean_shell --app /Applications/WorkSpaces.app/Contents/MacOS/WorkspaceManager
-./scripts/perf-runner.sh --scenario installed_login_shell --app /Applications/WorkSpaces.app/Contents/MacOS/WorkspaceManager
+./scripts/perf-runner.sh --scenario installed_clean_shell --app build/WorkSpaces.app
+./scripts/perf-runner.sh --scenario installed_login_shell --app build/WorkSpaces.app
 ./scripts/perf-runner.sh --scenario installed_input_short_capture --capture-seconds 15
 ./scripts/verify-installed-perf.sh build/WorkSpaces.app
 ```
@@ -129,6 +176,8 @@ These runs use the same summary schema as the debug baseline, so before/after co
 
 Notes:
 
+- `perf-runner.sh --app` accepts either a `.app` bundle or the
+  `Contents/MacOS/WorkspaceManager` executable for installed scenarios.
 - `installed_input_short_capture` is intentionally interactive. The app activates and you must type in the focused terminal during the capture window.
 - `verify-installed-perf.sh --allow-skip-noninteractive` is reserved for release automation on runners that may lack an interactive Aqua session.
 
@@ -192,24 +241,40 @@ Recommended evidence loop for this startup-probing work:
 
 For PR submission, prefer `./scripts/prepare-perf-evidence.sh` over ad hoc notes so the evidence format stays consistent with the repo gate.
 
-## Installed-build validation workflow
+## Installed-build release validation workflow
 
-Use an installed app pass as validation evidence after the local repeated runs:
+Use the installed verifier as the primary quantitative source of truth for
+release readiness:
 
 ```bash
-./scripts/install-local.sh --no-open
+./scripts/build-release.sh --no-sign
+./scripts/verify-installed-perf.sh build/WorkSpaces.app /tmp/workspaces-installed-perf-verify-<date>
 ```
 
-Then launch the installed app and capture local logs:
+For a signed release artifact, the full release sequence is:
 
 ```bash
-log stream --style compact --predicate 'eventMessage CONTAINS "[Perf]"'
+./scripts/build-release.sh
+./scripts/verify-release-bundle.sh build/WorkSpaces.app
+./scripts/verify-installed-perf.sh build/WorkSpaces.app build/release-installed-perf
+```
+
+When you need the login-shell view of the same packaged app, run:
+
+```bash
+./scripts/perf-runner.sh --scenario installed_login_shell --app build/WorkSpaces.app
 ```
 
 Notes:
 
-- Treat the installed run as a spot check, not the main statistical baseline.
-- If local unsigned installs do not expose the expected `[Perf]` lines through unified logging, record that limitation explicitly in the report instead of fabricating timing data. The repeated local debug-run benchmarks remain the primary quantitative source of truth.
+- `verify-installed-perf.sh` must produce `terminal_first_output` and
+  `first_prompt_ready` in addition to `launch_to_first_prompt`.
+- Release signoff uses the installed scenario budgets in
+  `config/performance/contract.json`; do not apply debug `250ms` expectations to
+  the packaged release app.
+- If a debug run fails but the installed verifier passes, classify the debug
+  result as branch-trend evidence or a debug-environment issue, not a release
+  blocker.
 
 ## Manual benchmark workflow (optional)
 

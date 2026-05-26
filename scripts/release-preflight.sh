@@ -8,7 +8,8 @@
 #
 # Checks:
 #   - build-and-test (CI) must have passed on <sha>       → hard gate
-#   - perf-validation passing is advisory                 → warning only
+#   - scheduled debug perf-validation is advisory          → warning only
+#   - packaged-app perf signoff runs later in release.yml  → hard gate
 #
 # Exit codes:
 #   0  all required checks passed

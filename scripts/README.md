@@ -84,6 +84,7 @@ Run `mise tasks` from the repo root for the current catalog. Web dashboard tasks
 
 - `./scripts/perf-runner.sh --scenario <id>`
   - Runs one canonical scenario and writes a canonical summary artifact.
+  - Installed scenarios accept either a `.app` bundle path or the bundled executable path.
 - `./scripts/perf-compare.py before.json after.json`
   - Compares two canonical summaries and prints metric deltas plus gate status.
 - `./scripts/pr-evidence.sh --pr <N> --profile performance`
