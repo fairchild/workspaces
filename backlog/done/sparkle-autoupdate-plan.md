@@ -1,11 +1,19 @@
 ---
-status: in_progress
+status: done
+issue: 2
+completed: 2026-05-09
+resolution: covered-by-prior-issue
 category: plan
 pr: null
 branch: codex/privacy-first-sparkle-updates
 score: null
 retro_summary: null
-completed: null
+notes: |
+  Verified 2026-05-25: implementation already shipped under closed
+  umbrella issue #2 ("Add Sparkle auto-update"). Sources/WorkspaceManager/
+  App/SoftwareUpdateController.swift exists, Info.plist has SUFeedURL,
+  scripts/build-release.sh + scripts/generate-sparkle-appcast.sh ship
+  the appcast. No residual issue needed.
 ---
 
 > **GitHub Issue**: https://github.com/fairchild/workspaces/issues/2
