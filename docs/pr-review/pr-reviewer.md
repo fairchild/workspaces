@@ -138,9 +138,13 @@ imported by both the Vercel route tests and the Cloudflare relay e2e harness.
 This is the regression guard for drift between "forward this webhook" and
 "start the reviewer".
 
-Production CD requires `WORKSPACES_WEBHOOK_CANARY_SECRET`, runs the same canary,
-broker, and monitor before promotion, then repeats them in `validate-prod` after
-promotion before the production Playwright smoke.
+Production CD requires `WORKSPACES_WEBHOOK_CANARY_SECRET`. Before promotion it
+runs the ingress canary, broker, and monitor as a strict gate so a known-broken
+reviewer does not get papered over by a deploy. After promotion, `validate-prod`
+checks the ingress canary again before the production Playwright smoke, skips
+the mutating broker, and reports monitor attention as advisory queue health. The
+scheduled broker and health workflows remain the source of truth for live
+reviewer reconciliation failures.
 
 The scheduled ingress workflow is a contract probe, not the normal broker
 driver. Use `Managed Reviewer Broker` to reconcile completed runs on demand.
