@@ -14,7 +14,7 @@ Selected layout: **Chat as tab in main panel** alongside Overview and Agents tab
 │   beads  │  or type a message to dispatch   │ [PR] #243     │
 │   bread  │  an agent across any repo:       │ [PUSH] beads  │
 │   jrnl…  │                                  │               │
-│          │  @april repo:workspaces fix #234  │               │
+│          │  @april-clearwater repo:workspaces fix #234  │               │
 │          │                                  │               │
 │          │                                  │               │
 │          │                                  │               │
@@ -70,7 +70,7 @@ System events are compact; human/agent messages get full treatment.
 │          │  10:14  CI    ✗ tests failed      │               │
 │          │                                  │               │
 │          │  10:16  you                      │               │
-│          │  @april the test_workspace_crud  │               │
+│          │  @april-clearwater the test_workspace_crud  │               │
 │          │  test is flaky again. Fix it     │               │
 │          │  and make sure CI is green.      │               │
 │          │                                  │               │
@@ -89,7 +89,7 @@ System events are compact; human/agent messages get full treatment.
 │          │  10:24  CI  ✓ all checks passed   │               │
 │          │                                  │               │
 │          ├──────────────────────────────────┤               │
-│          │ [@april] ...              [Send] │               │
+│          │ [@april-clearwater] ...              [Send] │               │
 └──────────┴──────────────────────────────────┴───────────────┘
 ```
 
@@ -139,7 +139,7 @@ After submitting a message with an @mention:
 
 ```
 │          │                                  │
-│          │  @april fix the flaky test #234  │
+│          │  @april-clearwater fix the flaky test #234  │
 │          │                                  │
 │          │ ┌─ Confirm dispatch ───────────┐ │
 │          │ │                              │ │
@@ -155,7 +155,7 @@ After submitting a message with an @mention:
 │          │ └──────────────────────────────┘ │
 │          │                                  │
 │          ├──────────────────────────────────┤
-│          │ [@april] ...              [Send] │
+│          │ [@april-clearwater] ...              [Send] │
 └──────────┴──────────────────────────────────┘
 ```
 
@@ -231,7 +231,7 @@ Asking `@spaces` or `@status` returns info without dispatching:
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│ [@april ▼]  Type a message...               [Send]  │
+│ [@april-clearwater ▼]  Type a message...               [Send]  │
 │              ↑                                ↑      │
 │         agent picker               Enter or click   │
 │         (click to change)          Cmd+Enter = send  │
@@ -267,7 +267,7 @@ Activity panel:                    Main panel switches to Chat:
 │ [CI] ✗ failed │ ← click →      │ [Overview] [Agents] [Chat]
 │               │                 │                          │
 │               │                 │ Re: CI failure on main   │
-│               │                 │ [@april] ...      [Send] │
+│               │                 │ [@april-clearwater] ...      [Send] │
 └───────────────┘                 └──────────────────────────┘
 ```
 

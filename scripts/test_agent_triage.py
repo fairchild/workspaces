@@ -42,7 +42,7 @@ class AgentTriageTests(unittest.TestCase):
             "version": 1,
             "status": status,
             "request_id": request_id,
-            "requested_agent": "april",
+            "requested_agent": "april-clearwater",
             "target_type": "pull_request",
             "target_number": 212,
             "source_type": "issue_comment",
@@ -173,6 +173,48 @@ class AgentTriageTests(unittest.TestCase):
         )
 
         self.assertIn(triage.PRIVILEGED_PATCH_LABEL, names)
+
+    def test_public_april_mention_uses_full_app_slug_only(self) -> None:
+        context = triage.EventContext(
+            event_name="issue_comment",
+            action="created",
+            target_type="pull_request",
+            target_number=212,
+            source_type="issue_comment",
+            source_id="issue_comment:1",
+            source_url="https://github.com/fairchild/workspaces/pull/212#issuecomment-1",
+            author_login="fairchild",
+            author_association="OWNER",
+            source_text="@april-clearwater please review the status colors",
+            requested_at="2026-03-24T16:00:00Z",
+        )
+
+        self.assertEqual(triage.find_requested_agents(context), ["april-clearwater"])
+
+        short_context = triage.EventContext(
+            **{
+                **context.__dict__,
+                "source_text": "@april please review the status colors",
+            }
+        )
+        self.assertEqual(triage.find_requested_agents(short_context), [])
+
+    def test_april_clearwater_mention_requires_exact_slug_boundary(self) -> None:
+        context = triage.EventContext(
+            event_name="issue_comment",
+            action="created",
+            target_type="pull_request",
+            target_number=212,
+            source_type="issue_comment",
+            source_id="issue_comment:1",
+            source_url="https://github.com/fairchild/workspaces/pull/212#issuecomment-1",
+            author_login="fairchild",
+            author_association="OWNER",
+            source_text="@april-clearwater-extra is a different mention",
+            requested_at="2026-03-24T16:00:00Z",
+        )
+
+        self.assertEqual(triage.find_requested_agents(context), [])
 
 
 if __name__ == "__main__":

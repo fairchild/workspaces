@@ -2,7 +2,7 @@
 
 Workspaces has a founding team of AI agents that propose improvements, review each other's work, plan approved ideas into actionable issues, and now pick up explicitly approved issues into PRs. The goal is autonomous development with human approval gating — the repo advances itself, guided by the owner.
 
-If you need the operator-facing runbook for how to interact with and manage the agents, start with [agent-owner-protocol.md](/Users/fairchild/.codex/worktrees/7a0f/workspaces/docs/development/agent-owner-protocol.md).
+If you need the operator-facing runbook for how to interact with and manage the agents, start with [agent-owner-protocol.md](agent-owner-protocol.md). For GitHub App identity, commit attribution, and code-owner approval policy, see [github-app-identities.md](github-app-identities.md).
 
 ## Team
 
@@ -86,10 +86,12 @@ Oliver Obever runs separately once a week on Monday at 13:30 UTC to evaluate loo
 
 Mention an agent by name in any issue or PR comment to queue a maintainer-approved request:
 
-- `@april` — April Clearwater responds with her Application/UI perspective
+- `@april-clearwater` — April Clearwater responds with her Application/UI perspective
 - `@plat` — Plat Ironwood responds with his Platform/CI perspective
 - `@peter` — Peter Planner redirects to Discussions (his planning workflow operates there)
 - `@claude` — Claude Code handles one-off repo tasks after maintainer approval
+
+Do not use `@april` for Workspaces automation. That is a different real GitHub user. Public GitHub-triggered April runs use only `@april-clearwater`.
 
 Public mention requests now run in two phases:
 
@@ -157,6 +159,7 @@ Prompt, runtime, and compatibility responsibilities now split cleanly:
 | `.agents/scripts/validate-agent-output.py` | Compatibility shim for shared validation |
 | `.agents/skills/drive/SKILL.md` | Manual milestone execution workflow after planning |
 | `docs/development/agent-owner-protocol.md` | Owner-facing protocol for approving, steering, and merging agent work |
+| `docs/development/github-app-identities.md` | GitHub App identity, commit attribution, reviewer isolation, and code-owner approval runbook |
 | `scripts/ops-report.py` | Deterministic GitHub + perf reporting for the ops loop |
 | `fixtures/ops-report/` | Checked-in replay packs for Oliver Obever dry runs and tests |
 | `docs/ops/` | Checked-in ops timeline, snapshot JSON, and dashboard |

@@ -85,6 +85,9 @@ class SecurityHardeningTests(unittest.TestCase):
         for trigger in ("issue_comment:", "pull_request_review_comment:", "pull_request_review:", "issues:"):
             self.assertIn(trigger, on_block)
         self.assertIn("runs-on: ubuntu-latest", workflow)
+        self.assertIn("@april-clearwater", workflow)
+        self.assertNotIn("@april')", workflow)
+        self.assertNotIn("@april' )", workflow)
         for secret_name in (
             "CLAUDE_CODE_OAUTH_TOKEN",
             "APRIL_PRIVATE_KEY",
@@ -92,6 +95,11 @@ class SecurityHardeningTests(unittest.TestCase):
             "EVIDENCE_UPLOAD_TOKEN",
         ):
             self.assertNotIn(secret_name, workflow)
+
+    def test_codeowners_requires_fairchild_for_repo_and_control_paths(self) -> None:
+        codeowners = (REPO_ROOT / ".github/CODEOWNERS").read_text()
+        self.assertRegex(codeowners, r"(?m)^\*\s+@fairchild$")
+        self.assertRegex(codeowners, r"(?m)^/\.github/\s+@fairchild$")
 
     def test_claude_workflow_is_manual_dispatch_only(self) -> None:
         workflow = (REPO_ROOT / ".github/workflows/claude.yml").read_text()
@@ -115,6 +123,8 @@ class SecurityHardeningTests(unittest.TestCase):
         self.assertIn("safe-to-run-agent", workflow)
         self.assertIn("privileged_patch_approved:", workflow)
         self.assertIn("--allow-privileged-patches", workflow)
+        self.assertIn("requested_agent == 'april-clearwater'", workflow)
+        self.assertNotIn("requested_agent == 'april'", workflow)
 
     def test_codespaces_claude_worker_is_break_glass_ref_gated(self) -> None:
         workflow = (REPO_ROOT / ".github/workflows/codespaces-claude-worker.yml").read_text()

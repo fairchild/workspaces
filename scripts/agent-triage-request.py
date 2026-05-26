@@ -32,10 +32,10 @@ APPROVAL_LABEL = "safe-to-run-agent"
 PRIVILEGED_PATCH_LABEL = "privileged-agent-patch"
 TRIAGE_COMMENT_AUTHOR = "github-actions[bot]"
 TRIAGE_MARKER_RE = re.compile(r"<!-- agent-triage-request:v1:([A-Za-z0-9_\-=]+) -->")
-SUPPORTED_AGENTS = ("april", "plat", "peter", "claude")
+SUPPORTED_AGENTS = ("april-clearwater", "plat", "peter", "claude")
 ISSUE_BODY_AGENTS = ("claude",)
 MENTION_PATTERNS = {
-    agent: re.compile(rf"(^|\s|[^a-z0-9])@{agent}(\s|[^a-z0-9]|$)", re.IGNORECASE)
+    agent: re.compile(rf"(?<![A-Za-z0-9_-])@{re.escape(agent)}(?![A-Za-z0-9_-])", re.IGNORECASE)
     for agent in SUPPORTED_AGENTS
 }
 UNSAFE_SUMMARY_PATTERNS = (
@@ -225,7 +225,7 @@ def render_conflict_comment(context: EventContext, agents: list[str]) -> str:
             "Agent request not queued.",
             "",
             f"- Reason: public requests must mention exactly one agent, but this request mentioned {mentions}.",
-            f"- Fix: edit or repost the request with exactly one of `@april`, `@plat`, `@peter`, or `@claude`, then apply `{APPROVAL_LABEL}` after triage posts the request summary.",
+            f"- Fix: edit or repost the request with exactly one of `@april-clearwater`, `@plat`, `@peter`, or `@claude`, then apply `{APPROVAL_LABEL}` after triage posts the request summary.",
             f"- Source URL: {context.source_url}",
         ]
     )

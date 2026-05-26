@@ -68,6 +68,44 @@ class RunContributorEvidenceTests(unittest.TestCase):
             ],
         )
 
+    def test_app_bot_git_identity_uses_canonical_bot_noreply_addresses(self) -> None:
+        self.assertEqual(
+            run_contributor.app_bot_git_identity(
+                {"GH_APP_SLUG": "april-clearwater"},
+                "April Clearwater",
+                "april-clearwater[bot]",
+            ),
+            (
+                "april-clearwater[bot]",
+                "268297116+april-clearwater[bot]@users.noreply.github.com",
+            ),
+        )
+        self.assertEqual(
+            run_contributor.app_bot_git_identity(
+                {"GH_APP_SLUG": "workspace-agents"},
+                "Plat Ironwood",
+                "workspace-agents[bot]",
+            ),
+            (
+                "workspace-agents[bot]",
+                "266434718+workspace-agents[bot]@users.noreply.github.com",
+            ),
+        )
+
+    def test_app_bot_git_identity_rejects_unknown_app_slug(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "does not have an approved commit identity"):
+            run_contributor.app_bot_git_identity(
+                {"GH_APP_SLUG": "workspaces-claude-pr-reviewer"},
+                "Claude Reviewer",
+                "workspaces-claude-pr-reviewer[bot]",
+            )
+
+    def test_non_app_git_identity_keeps_persona_fallback(self) -> None:
+        self.assertEqual(
+            run_contributor.app_bot_git_identity({}, "April Clearwater", ""),
+            ("April Clearwater", "april-clearwater@users.noreply.github.com"),
+        )
+
     def test_agent_patch_policy_requires_privileged_label_or_override(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

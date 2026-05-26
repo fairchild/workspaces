@@ -1,0 +1,7 @@
+# fairchild is the global code owner so branch protection can require the
+# owner's approval separately from an app/bot approval.
+* @fairchild
+
+# Keep repository-control policy owned by fairchild even if future ownership
+# exceptions are added below.
+/.github/ @fairchild

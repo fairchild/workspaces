@@ -22,7 +22,7 @@ sequenceDiagram
     participant GH as GitHub Discussions
     participant Agent as Agent (Claude Code)
 
-    User->>Dashboard: Types "@april fix the flaky test in #234"
+    User->>Dashboard: Types "@april-clearwater fix the flaky test in #234"
     Dashboard->>API: POST message
     API->>GH: Create/reply to Discussion
     GH-->>API: Webhook: discussion_comment
@@ -51,7 +51,7 @@ sequenceDiagram
 │          │ │ 10:32 CI failed on main     │  │               │
 │          │ │                             │  │               │
 │          │ │ 10:34 you                   │  │               │
-│          │ │ @april fix the flaky test   │  │               │
+│          │ │ @april-clearwater fix the flaky test   │  │               │
 │          │ │ in #234                     │  │               │
 │          │ │                             │  │               │
 │          │ │ 10:34 april                 │  │               │
@@ -61,7 +61,7 @@ sequenceDiagram
 │          │ │ PR #245 ready for review    │  │               │
 │          │ │                             │  │               │
 │          │ └─────────────────────────────┘  │               │
-│          │ [@april] fix the flaky test...   │               │
+│          │ [@april-clearwater] fix the flaky test...   │               │
 │          │ [Send]                           │               │
 └──────────┴──────────────────────────────────┴───────────────┘
 ```
@@ -104,7 +104,7 @@ sequenceDiagram
     Note over Feed: CI failure event appears
     User->>Feed: Clicks CI failure event
     Feed->>Chat: Pre-fills context: "Re: CI failure on main"
-    User->>Chat: Types "@april fix this"
+    User->>Chat: Types "@april-clearwater fix this"
     Chat->>API: POST with event context
     API->>GH: Creates Discussion referencing the failure
     API-->>Chat: "Dispatching april with CI context..."
@@ -117,7 +117,7 @@ sequenceDiagram
 │ Activity                                              │
 │                                                       │
 │ [CI] ✗ Tests failed on main           2m ago          │
-│       └─ [Reply: @april fix this] [Retry]             │
+│       └─ [Reply: @april-clearwater fix this] [Retry]             │
 │                                                       │
 │ [PR] opened #243: feat(web)...        5m ago          │
 │ [PUSH] 3 commits to main             12m ago          │
@@ -149,7 +149,7 @@ sequenceDiagram
     participant Bot as Spaces Bot
     participant GH as GitHub API
 
-    User->>Chat: "@april status"
+    User->>Chat: "@april-clearwater status"
     Chat->>Bot: Route to status handler
     Bot->>GH: Check agent's recent activity
     GH-->>Bot: Open PRs, recent commits, Discussion replies
@@ -162,7 +162,7 @@ sequenceDiagram
 ┌─────────────────────────────────────────┐
 │ Chat — fairchild/workspaces             │
 │                                         │
-│ [you] @april status                     │
+│ [you] @april-clearwater status                     │
 │                                         │
 │ [spaces] april — Active                 │
 │ ┌─────────────────────────────────────┐ │
@@ -172,13 +172,13 @@ sequenceDiagram
 │ │ Last activity: 3m ago               │ │
 │ └─────────────────────────────────────┘ │
 │                                         │
-│ [@april] ...                    [Send]  │
+│ [@april-clearwater] ...                    [Send]  │
 └─────────────────────────────────────────┘
 ```
 
 ### Steps
 
-1. **User types** `@april status` or `@status` for all agents
+1. **User types** `@april-clearwater status` or `@status` for all agents
 2. **Bot queries** GitHub API for agent's recent activity
 3. **Bot responds** with structured status card inline in chat
 4. **No agent dispatched** — this is a bot query, not a task
@@ -199,7 +199,7 @@ sequenceDiagram
 │          │                                  │               │
 │   works… │ Recent conversations:            │ [PR] #243     │
 │   beads  │                                  │ [CI] ✗ main   │
-│   bread  │ workspaces — @april fixing #234  │ [PUSH] beads  │
+│   bread  │ workspaces — @april-clearwater fixing #234  │ [PUSH] beads  │
 │   jrnl…  │ beads — @peter planning sprint   │               │
 │          │                                  │               │
 │          │ Quick dispatch:                  │               │
@@ -237,7 +237,7 @@ sequenceDiagram
 │                                         │
 │ After selecting april:                  │
 │                                         │
-│ [@april] fix the flaky test in #234     │
+│ [@april-clearwater] fix the flaky test in #234     │
 │                                         │
 │ ┌─ Dispatch confirmation ────────────┐  │
 │ │ Agent: april (● active)            │  │

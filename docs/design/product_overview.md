@@ -5,7 +5,7 @@
 You have a fleet of AI coding agents defined in `.agents/` directories across your repos. Today, dispatching them requires terminal access — SSH into a machine, run `kanban task start`, or trigger a GitHub workflow manually. There's no way to:
 
 - **Talk to agents** from a browser — ask for status, request work, review output
-- **Dispatch agents by name** — `@april go fix the flaky test in #234`
+- **Dispatch agents by name** — `@april-clearwater go fix the flaky test in #234`
 - **See the conversation** — what did the agent do, what did it produce, what's it working on now
 - **React to repo events conversationally** — a PR fails CI, you want to say "retry" or "fix it"
 
@@ -25,7 +25,7 @@ The Chat SDK (`@chat-adapter/github`) handles the GitHub side (mentions in Discu
 ## Core Capabilities
 
 - **Web chat panel** — persistent chat UI in the dashboard, scoped per-repo or global
-- **@mention dispatch** — type `@april`, `@peter-planner`, or any agent name to route a message
+- **@mention dispatch** — type `@april-clearwater`, `@peter-planner`, or any agent name to route a message
 - **GitHub Discussion bridge** — messages posted in the web chat can create/reply to GitHub Discussions, and vice versa
 - **Agent status in chat** — when an agent is dispatched, its progress appears as chat messages (task created, PR opened, review ready)
 - **Webhook events as chat context** — CI failures, PR merges, and other events appear inline so you can react to them conversationally
