@@ -1,5 +1,9 @@
 ---
-status: pending
+status: done
+issue: 537
+children: [538, 539, 540, 541]
+completed: 2026-05-25
+resolution: promoted-to-github-issues
 category: followup
 pr: null
 branch: null

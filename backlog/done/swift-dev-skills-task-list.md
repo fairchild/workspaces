@@ -1,11 +1,13 @@
 ---
-status: pending
+status: done
+issue: 552
+completed: 2026-05-25
+resolution: promoted-to-github-issue
 category: task-list
 pr: null
 branch: null
 score: null
 retro_summary: null
-completed: null
 ---
 
 # Swift Development Skills: Install and Create

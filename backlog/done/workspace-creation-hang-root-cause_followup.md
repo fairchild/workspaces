@@ -1,5 +1,8 @@
 ---
-status: pending
+status: done
+issue: 554
+completed: 2026-05-25
+resolution: promoted-to-github-issue
 category: followup
 pr: null
 branch: null

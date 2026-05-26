@@ -1,5 +1,8 @@
 ---
-status: pending
+status: done
+issue: 532
+completed: 2026-05-25
+resolution: promoted-to-github-issue
 category: plan
 topic: daytona
 relates_to: after:vz-tahoe-execution-brief-plan
