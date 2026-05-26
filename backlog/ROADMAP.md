@@ -28,7 +28,7 @@ Workspaces now spans three surfaces — a Mac-native app, a web dashboard, and a
 
 **Agent automation.** The `.agents/skills/` library (`workspaces-performance-system`, `workspaces-optimization`, `drive`, `peter-planner`, `gh-discuss`, and others). April agent workflow runs on a Lume self-hosted runner. Most autonomous automations are currently gated off behind `AGENT_AUTOMATIONS_ENABLED`, pending runner policy and prompt-injection defense hardening.
 
-**Shipping cadence.** Weekly-ish releases. Latest release `v0.11.1`.
+**Shipping cadence.** Weekly-ish releases. Latest release `v0.15.1`.
 
 What this means for planning.
 
@@ -125,6 +125,7 @@ Priority is driven by three filters, in this order:
 - Protect the core promise first — select context, get a dependable terminal, keep working.
 - Fix dependency debt before adding breadth — work that reduces regression risk outranks adjacent feature growth.
 - Expand side systems only after they are trustworthy enough not to drag on the core.
+- Treat a red release/deploy gate as a temporary interrupt above the product bands until it is either fixed, rolled back, or explicitly accepted as non-blocking.
 
 ---
 
@@ -158,9 +159,11 @@ Phase 1 complete: `AppActivationPolicy` (PR #374) gates all `NSApp.activate` cal
 
 #### 4. Terminal continuity — tmux + cross-session
 
-GitHub: [#549](https://github.com/fairchild/workspaces/issues/549) (tmux implementation) + [#548](https://github.com/fairchild/workspaces/issues/548) (across-session restore) · `arc:terminal-continuity`
+GitHub: [#549](https://github.com/fairchild/workspaces/issues/549) (tmux implementation) + [#548](https://github.com/fairchild/workspaces/issues/548) (across-session restore) + [#564](https://github.com/fairchild/workspaces/issues/564) (terminal status producer) · `arc:terminal-continuity`
 
 Decided 2026-04-23 (`docs/decisions/terminal-multiplexing.md`): tmux primary; pane-tree deferred indefinitely. Two paired issues now sit under one theme. Tmux delivers reattach within a session. The continuity issue addresses the gap tmux does not close (close laptop, reopen, pick up where you left off). First continuity slice is active on `codex-continuity-dimension`: tmux preserves live process state when the server survives, and a terminal continuity manifest records the target plus launch directory for the honest fallback when it does not.
+
+The newest dependency is the terminal status producer (#564): the parser/registry prep exists, but the registry needs a real prompt-marker producer before any status-sliver UI ships. Keep #564 in this arc as a pre-UI infrastructure slice, not a separate visual feature.
 
 #### 5. Lume runtime architecture cleanup
 
@@ -232,10 +235,12 @@ Live source of truth is GitHub Issues on `fairchild/workspaces`. This table mirr
 | Item | Scope | Priority | Issue |
 |------|-------|----------|-------|
 | Workspace creation hang root cause | product | P0 | [#554](https://github.com/fairchild/workspaces/issues/554) |
+| CD managed-reviewer canary incident | ops | Done | [#509](https://github.com/fairchild/workspaces/issues/509), [#569](https://github.com/fairchild/workspaces/issues/569), [#570](https://github.com/fairchild/workspaces/issues/570); resolved by [#575](https://github.com/fairchild/workspaces/pull/575) |
 | Main-window + sidebar maintainability | product | P0 | covered by closed #81 + residual notes in `backlog/done/main-window-sidebar-maintainability_followup.md` |
 | Ghostty appearance hardening | product | Done | closed #84 |
 | Tmux per-worktree implementation | product | P1 | [#549](https://github.com/fairchild/workspaces/issues/549) (chosen 2026-04-23 — `docs/decisions/terminal-multiplexing.md`) |
 | Desktop continuity (across-session restore) | product | P1 | [#548](https://github.com/fairchild/workspaces/issues/548) (paired with #549) |
+| Terminal status producer | product | P1 | [#564](https://github.com/fairchild/workspaces/issues/564) (producer before status UI) |
 | Lume runtime architecture follow-ups | product | Done | closed #87, #88, #89 |
 | Notification client catch-up | product | P1 | [#547](https://github.com/fairchild/workspaces/issues/547) |
 | Managed PR reviewer continuous reruns | product | P1 | [#545](https://github.com/fairchild/workspaces/issues/545) |
@@ -249,11 +254,12 @@ Live source of truth is GitHub Issues on `fairchild/workspaces`. This table mirr
 | Web API authorization hardening (tests) | quality | — | [#535](https://github.com/fairchild/workspaces/issues/535) |
 | Web dashboard component regression tests | quality | — | [#536](https://github.com/fairchild/workspaces/issues/536) |
 | Web dashboard CD deployment-smoke | quality | — | [#543](https://github.com/fairchild/workspaces/issues/543) |
-| CD auto-opener stale-close / dedup policy | quality | — | [#557](https://github.com/fairchild/workspaces/issues/557) |
+| CD auto-opener stale-close / dedup policy | quality | P1 | [#557](https://github.com/fairchild/workspaces/issues/557) |
 | Shared-desktop focus contention Phase 2 | quality | P2 | residual notes in `backlog/done/shared-desktop-focus-contention-followup.md` (Phase 1 closed under #82) |
 | Tahoe VZ backend execution brief (tracking) | product | P2 | [#533](https://github.com/fairchild/workspaces/issues/533) |
 | Web dashboard Phase 3 (tracking) | product | P2 | [#537](https://github.com/fairchild/workspaces/issues/537) + children #538–#541 |
 | Spaces agent discovery dashboard | product | P2 | [#542](https://github.com/fairchild/workspaces/issues/542) |
+| Claude Code integration follow-ups | product | — | [#517](https://github.com/fairchild/workspaces/issues/517), [#518](https://github.com/fairchild/workspaces/issues/518), [#519](https://github.com/fairchild/workspaces/issues/519) |
 | Sparkle auto-update | product | Done | covered by closed #2 (verified shipped) |
 | Dev-build warning cleanup + mise tasks | tooling | P3 | [#551](https://github.com/fairchild/workspaces/issues/551) |
 | Swift dev skills task list | tooling | P3 | [#552](https://github.com/fairchild/workspaces/issues/552) |
@@ -280,6 +286,12 @@ Archived (in `backlog/done/`):
 ---
 
 ## Learnings
+
+### 2026-05-26 — GitHub Issues cutover + CD gate reflection
+
+- **The live queue is now GitHub Issues; the roadmap is the strategic mirror.** The local backlog has cut over: top-level `backlog/` is now `AGENTS.md`, `CLAUDE.md`, and `ROADMAP.md`, while archived source plans live in `backlog/done/`. Reflection should compare `ROADMAP.md` against `gh issue list`, not against local `todo/` files.
+- **Auto-opened prod failures need dedup as much as diagnosis.** #569 and #570 were both opened for the same commit/run (`6bb620b`, run `26434101070`) with slightly different managed-reviewer failure surfaces. #570 closed as a duplicate of #569; #509 and #569 closed after #575 restored the current `main` CD gate to green. Ship #557 so the backlog does not become a pile of duplicate commit-pinned runbooks.
+- **Do not ship terminal status UI on an empty registry.** #564 is the right dependency shape: establish the prompt-marker producer and session routing first, then build visual affordances on top of the registry once it has live data.
 
 ### 2026-04-27 — Split-routing tests + stale backlog reconciliation
 
