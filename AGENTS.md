@@ -149,7 +149,7 @@ Evidence is a merge gate. Do not create a PR without it. Follow these steps in o
 mise run evidence -- --pr <number> --name <slug>
 ```
 
-The script auto-sources `.env` for `EVIDENCE_UPLOAD_TOKEN`. Uploads go to `https://evidence.cloudcompute.com/`. See `docs/development/evidence.md` for the full guide.
+The script auto-sources `.env` for `EVIDENCE_UPLOAD_TOKEN` and falls back to shared worktree env files. If a worktree is missing `.env`, run `./scripts/setup --env-only` before claiming evidence is blocked. Uploads go to `https://evidence.cloudcompute.com/`. See `docs/development/evidence.md` for the full guide.
 
 ### Evidence rules
 

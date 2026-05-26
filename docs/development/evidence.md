@@ -25,6 +25,14 @@ Add `EVIDENCE_UPLOAD_TOKEN` to your `.env` (gitignored):
 EVIDENCE_UPLOAD_TOKEN=<value>
 ```
 
+Fresh linked worktrees can symlink the checked-out secret file with:
+
+```bash
+./scripts/setup --env-only
+```
+
+`scripts/evidence.sh` also searches the canonical checkout and sibling worktrees for `.env` or `.env.local` before failing, so evidence upload should not be marked blocked just because the current worktree is missing its symlink.
+
 The token value is stored in [GitHub repo secrets](https://github.com/fairchild/workspaces/settings/secrets/actions). To rotate it across all three locations:
 
 ```bash
@@ -83,7 +91,7 @@ Three layers, from gentlest to strongest:
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| `EVIDENCE_UPLOAD_TOKEN not set` | Token missing from `.env` | Add it — see [Setup](#setup) |
+| `EVIDENCE_UPLOAD_TOKEN not set` | Token missing from this checkout and no sibling checkout has it | Run `./scripts/setup --env-only`, or add it — see [Setup](#setup) |
 | `401 unauthorized` on upload | Token mismatch | Rotate token across Worker + GitHub + `.env` |
 | Auth redirect on localhost | Web middleware requires session | Use `DEV_BYPASS_AUTH=1 pnpm dev` |
 | `screencapture` fails | No display (headless/SSH) | Use `--file` with an existing screenshot |

@@ -118,6 +118,60 @@ class SetupEnvLinkingTests(unittest.TestCase):
             self.assertEqual(linked_env.resolve(), source_env.resolve())
             self.assertIn("Symlinking .env", result.stdout)
 
+    def test_env_only_prefers_conductor_root_path_env_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            main = tmp_path / "repo"
+            target = tmp_path / "target-worktree"
+            conductor_root = tmp_path / "conductor-root"
+
+            self.create_repo_with_setup_script(main)
+            self.add_worktree(main, "env-target", target)
+            conductor_root.mkdir()
+            conductor_env = conductor_root / ".env"
+            conductor_env.write_text("EVIDENCE_UPLOAD_TOKEN=test-token\n", encoding="utf-8")
+
+            isolated_home = tmp_path / "home"
+            result = self.run_command(
+                ["./scripts/setup", "--env-only"],
+                cwd=target,
+                env={"HOME": str(isolated_home), "CONDUCTOR_ROOT_PATH": str(conductor_root)},
+            )
+
+            self.assert_success(result)
+            linked_env = target / ".env"
+            self.assertTrue(linked_env.is_symlink())
+            self.assertEqual(linked_env.resolve(), conductor_env.resolve())
+            self.assertIn("Symlinking .env", result.stdout)
+
+    def test_env_only_replaces_broken_env_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            main = tmp_path / "repo"
+            source = tmp_path / "source-worktree"
+            target = tmp_path / "target-worktree"
+
+            self.create_repo_with_setup_script(main)
+            self.add_worktree(main, "env-source", source)
+            source_env = source / ".env"
+            source_env.write_text("EVIDENCE_UPLOAD_TOKEN=test-token\n", encoding="utf-8")
+            self.add_worktree(main, "env-target", target)
+            (target / ".env").symlink_to(tmp_path / "missing-env")
+
+            isolated_home = tmp_path / "home"
+            result = self.run_command(
+                ["./scripts/setup", "--env-only"],
+                cwd=target,
+                env={"HOME": str(isolated_home)},
+            )
+
+            self.assert_success(result)
+            linked_env = target / ".env"
+            self.assertTrue(linked_env.is_symlink())
+            self.assertEqual(linked_env.resolve(), source_env.resolve())
+            self.assertIn("Replacing broken .env symlink", result.stdout)
+            self.assertIn("Symlinking .env", result.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

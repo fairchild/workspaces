@@ -16,13 +16,77 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-# Source .env for EVIDENCE_UPLOAD_TOKEN if not already set
-if [[ -z "${EVIDENCE_UPLOAD_TOKEN:-}" ]] && [[ -f "$REPO_ROOT/.env" ]]; then
+source_env_file() {
+  local env_path="$1"
+  [[ -f "$env_path" ]] || return 1
+
   set -a
   # shellcheck disable=SC1091
-  source "$REPO_ROOT/.env"
+  source "$env_path"
   set +a
-fi
+}
+
+env_source_for() {
+  local envfile="$1"
+  local candidate=""
+  local git_common=""
+  local worktree_path=""
+
+  if [[ -n "${CONDUCTOR_ROOT_PATH:-}" ]]; then
+    candidate="$CONDUCTOR_ROOT_PATH/$envfile"
+    [[ "$candidate" != "$REPO_ROOT/$envfile" && -f "$candidate" ]] && { printf '%s\n' "$candidate"; return 0; }
+  fi
+
+  candidate="$HOME/code/$(basename "$REPO_ROOT")/$envfile"
+  if [[ "$candidate" != "$REPO_ROOT/$envfile" && -f "$candidate" ]]; then
+    printf '%s\n' "$candidate"
+    return 0
+  fi
+
+  git_common="$(git rev-parse --git-common-dir 2>/dev/null || true)"
+  if [[ -n "$git_common" ]]; then
+    [[ "$git_common" == /* ]] || git_common="$REPO_ROOT/$git_common"
+    if [[ "$git_common" == */.git ]]; then
+      candidate="${git_common%/.git}/$envfile"
+      [[ "$candidate" != "$REPO_ROOT/$envfile" && -f "$candidate" ]] && { printf '%s\n' "$candidate"; return 0; }
+    fi
+  fi
+
+  while IFS= read -r line; do
+    [[ "$line" == worktree\ * ]] || continue
+    worktree_path="${line#worktree }"
+    if [[ "$worktree_path" != "$REPO_ROOT" && -f "$worktree_path/$envfile" ]]; then
+      printf '%s\n' "$worktree_path/$envfile"
+      return 0
+    fi
+  done < <(git worktree list --porcelain 2>/dev/null)
+
+  return 1
+}
+
+load_evidence_env() {
+  local envfile=""
+  local env_source=""
+
+  [[ -n "${EVIDENCE_UPLOAD_TOKEN:-}" ]] && return 0
+
+  for envfile in .env .env.local; do
+    if [[ -f "$REPO_ROOT/$envfile" ]]; then
+      source_env_file "$REPO_ROOT/$envfile"
+      [[ -n "${EVIDENCE_UPLOAD_TOKEN:-}" ]] && return 0
+    fi
+  done
+
+  for envfile in .env .env.local; do
+    env_source="$(env_source_for "$envfile" || true)"
+    if [[ -n "$env_source" ]]; then
+      source_env_file "$env_source"
+      [[ -n "${EVIDENCE_UPLOAD_TOKEN:-}" ]] && return 0
+    fi
+  done
+}
+
+load_evidence_env
 
 PR=""
 NAME=""
@@ -64,7 +128,7 @@ fi
 
 if [[ -z "${EVIDENCE_UPLOAD_TOKEN:-}" ]]; then
   echo "error: EVIDENCE_UPLOAD_TOKEN not set." >&2
-  echo "  Add it to $REPO_ROOT/.env or export it directly." >&2
+  echo "  Add it to $REPO_ROOT/.env, run ./scripts/setup --env-only to symlink it from an existing checkout, or export it directly." >&2
   echo "  The token value is stored in GitHub repo secrets." >&2
   exit 1
 fi
