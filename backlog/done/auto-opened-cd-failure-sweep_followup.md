@@ -1,5 +1,8 @@
 ---
-status: pending
+status: done
+issue: 557
+completed: 2026-05-25
+resolution: promoted-to-github-issue
 category: followup
 topic: cd-automation
 priority: 2

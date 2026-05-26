@@ -1,4 +1,8 @@
 ---
+status: done
+issue: 542
+completed: 2026-05-25
+resolution: promoted-to-github-issue
 topic: spaces-web
 priority: 2
 description: Build the agent discovery dashboard into the Next.js app at spaces.cloudcompute.com

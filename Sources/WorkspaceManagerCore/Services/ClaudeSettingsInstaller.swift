@@ -42,8 +42,6 @@ public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
         "Notification",
         "Stop",
         "StopFailure",
-        "WorktreeCreate",
-        "WorktreeRemove",
         "TaskCreated",
         "TaskCompleted",
     ]
@@ -266,6 +264,7 @@ public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
                     "add command hook for \(addedEvents.count) events using \(eventForwarder.command)"
                 )
             }
+
         }
 
         if let statusLineForwarderPath {

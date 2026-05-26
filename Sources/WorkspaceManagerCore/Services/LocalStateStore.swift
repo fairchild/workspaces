@@ -438,6 +438,33 @@ public actor LocalStateStore {
             ])
     }
 
+    /// Fetch the most recent `agent_status_events` rows for one host session,
+    /// returned newest first. Returns `[]` for unknown sessions.
+    public func fetchAgentStatusEvents(
+        hostSessionID: UUID,
+        limit: Int = 200
+    ) async throws -> [AgentStatusEventRow] {
+        let sessionIDString = hostSessionID.uuidString
+        let cappedLimit = max(0, limit)
+        return try await dbPool.read { db -> [AgentStatusEventRow] in
+            let rows = try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT id, host_session_id, agent_session_id, agent_kind, origin,
+                           origin_detail, event_name, run_state, cwd, tool_name,
+                           tool_detail, awaiting_reason, error_category, error_message,
+                           model_display_name, event_at
+                    FROM agent_status_events
+                    WHERE host_session_id = ?
+                    ORDER BY event_at DESC, id DESC
+                    LIMIT ?
+                    """,
+                arguments: [sessionIDString, cappedLimit]
+            )
+            return rows.compactMap(AgentStatusEventRow.init(row:))
+        }
+    }
+
     public func recordDiagnosticEvent(
         metric: String,
         durationMs: Double,
@@ -861,6 +888,108 @@ public actor LocalStateStore {
         encoder.outputFormatting = [.sortedKeys]
         let data = try encoder.encode(value)
         return String(decoding: data, as: UTF8.self)
+    }
+}
+
+/// Read-side projection of one `agent_status_events` row. Strings are kept
+/// verbatim from the table — mapping to a richer domain type (e.g.
+/// `WorkspaceEvent`) is a caller concern, so the store stays the single owner
+/// of the SQL contract.
+public struct AgentStatusEventRow: Sendable, Equatable, Identifiable {
+    public let id: String
+    public let hostSessionID: UUID
+    public let agentSessionID: String?
+    public let agentKind: String
+    public let origin: String
+    public let originDetail: String?
+    public let eventName: String
+    public let runState: String
+    public let cwd: String
+    public let toolName: String?
+    public let toolDetail: String?
+    public let awaitingReason: String?
+    public let errorCategory: String?
+    public let errorMessage: String?
+    public let modelDisplayName: String?
+    public let eventAt: Date
+
+    public init(
+        id: String,
+        hostSessionID: UUID,
+        agentSessionID: String?,
+        agentKind: String,
+        origin: String,
+        originDetail: String?,
+        eventName: String,
+        runState: String,
+        cwd: String,
+        toolName: String?,
+        toolDetail: String?,
+        awaitingReason: String?,
+        errorCategory: String?,
+        errorMessage: String?,
+        modelDisplayName: String?,
+        eventAt: Date
+    ) {
+        self.id = id
+        self.hostSessionID = hostSessionID
+        self.agentSessionID = agentSessionID
+        self.agentKind = agentKind
+        self.origin = origin
+        self.originDetail = originDetail
+        self.eventName = eventName
+        self.runState = runState
+        self.cwd = cwd
+        self.toolName = toolName
+        self.toolDetail = toolDetail
+        self.awaitingReason = awaitingReason
+        self.errorCategory = errorCategory
+        self.errorMessage = errorMessage
+        self.modelDisplayName = modelDisplayName
+        self.eventAt = eventAt
+    }
+
+    init?(row: Row) {
+        guard let id = row["id"] as String?,
+            let hostSessionIDString = row["host_session_id"] as String?,
+            let hostSessionID = UUID(uuidString: hostSessionIDString),
+            let agentKind = row["agent_kind"] as String?,
+            let origin = row["origin"] as String?,
+            let eventName = row["event_name"] as String?,
+            let runState = row["run_state"] as String?,
+            let cwd = row["cwd"] as String?,
+            let eventAtRaw = row["event_at"] as String?,
+            let eventAt = AgentStatusEventRow.parseISODate(eventAtRaw)
+        else {
+            return nil
+        }
+
+        self.init(
+            id: id,
+            hostSessionID: hostSessionID,
+            agentSessionID: row["agent_session_id"] as String?,
+            agentKind: agentKind,
+            origin: origin,
+            originDetail: row["origin_detail"] as String?,
+            eventName: eventName,
+            runState: runState,
+            cwd: cwd,
+            toolName: row["tool_name"] as String?,
+            toolDetail: row["tool_detail"] as String?,
+            awaitingReason: row["awaiting_reason"] as String?,
+            errorCategory: row["error_category"] as String?,
+            errorMessage: row["error_message"] as String?,
+            modelDisplayName: row["model_display_name"] as String?,
+            eventAt: eventAt
+        )
+    }
+
+    private static func parseISODate(_ value: String) -> Date? {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = formatter.date(from: value) { return date }
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.date(from: value)
     }
 }
 

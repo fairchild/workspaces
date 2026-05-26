@@ -18,6 +18,10 @@ public final class Repo {
     public var addedAt: Date
     public var lastAccessedAt: Date = Date()
 
+    /// Repo-level default agent command (e.g. `claude --resume`). Overrides the
+    /// global default; overridden by a workspace's own `defaultAgentCommand`.
+    public var defaultAgentCommand: String?
+
     @Relationship(deleteRule: .cascade, inverse: \Workspace.sourceRepo)
     public var workspaces: [Workspace] = []
 
@@ -34,7 +38,8 @@ public final class Repo {
         localPath: URL,
         remoteURL: String? = nil,
         addedAt: Date = Date(),
-        lastAccessedAt: Date = Date()
+        lastAccessedAt: Date = Date(),
+        defaultAgentCommand: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -42,6 +47,7 @@ public final class Repo {
         self.remoteURL = remoteURL
         self.addedAt = addedAt
         self.lastAccessedAt = lastAccessedAt
+        self.defaultAgentCommand = defaultAgentCommand
     }
 }
 
@@ -283,6 +289,10 @@ public final class Workspace {
     public var statusRaw: String
     public var gitBranch: String?
 
+    /// Workspace-level default agent command (e.g. `claude --resume`). Most
+    /// specific tier — overrides both the repo and global defaults.
+    public var defaultAgentCommand: String?
+
     /// Isolation backend identifier ("local", "daytona", etc.)
     public var backendIdentifier: String = "local"
 
@@ -410,6 +420,7 @@ public final class Workspace {
         lastAccessedAt: Date = Date(),
         status: WorkspaceStatus = .active,
         gitBranch: String? = nil,
+        defaultAgentCommand: String? = nil,
         backendIdentifier: String = "local",
         remoteId: String? = nil,
         sessionRoutingID: String? = nil,
@@ -424,6 +435,7 @@ public final class Workspace {
         self.lastAccessedAt = lastAccessedAt
         self.statusRaw = status.rawValue
         self.gitBranch = gitBranch
+        self.defaultAgentCommand = defaultAgentCommand
         self.backendIdentifier = backendIdentifier
         self.remoteId = remoteId
         self.sessionRoutingID = sessionRoutingID

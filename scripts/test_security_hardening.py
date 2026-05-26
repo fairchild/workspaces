@@ -265,7 +265,7 @@ class SecurityHardeningTests(unittest.TestCase):
 
     def test_mise_invocations_are_locked_and_pinned(self) -> None:
         verify_mise = (REPO_ROOT / "scripts/verify-mise-security.sh").read_text()
-        self.assertIn("MISE_EXPECTED_VERSION=\"v2026.5.11\"", verify_mise)
+        self.assertIn("MISE_EXPECTED_VERSION=\"v2026.5.15\"", verify_mise)
         self.assertIn("verify_locked_zig_exec", verify_mise)
         self.assertIn("github.com/repos/jdx/mise/releases/latest", verify_mise)
         self.assertIn("SHASUMS256.txt", verify_mise)
@@ -291,8 +291,11 @@ class SecurityHardeningTests(unittest.TestCase):
         self.assertIn("enable-global-virtual-store=true", web_npmrc)
 
         sandbox = (REPO_ROOT / "web/src/lib/agent-runtime/vercel-sandbox.ts").read_text()
-        self.assertIn("MISE_VERSION='v2026.5.11'", sandbox)
-        self.assertIn("MISE_SHA256='9bb41ae4dbe2bcdfdbe36cf3c737a8bdb72035c03af3b7218a70780988f62b9b'", sandbox)
+        self.assertIn("MISE_VERSION='v2026.5.15'", sandbox)
+        self.assertIn(
+            "MISE_SHA256='a86aa65c8ca48a548c3f9904853489383bb8cdebfd8f2cf8ddd18b675e03bbf4'",
+            sandbox,
+        )
         self.assertIn("sha256sum -c -", sandbox)
         self.assertNotIn("mise-latest-linux-x64", sandbox)
 
@@ -368,10 +371,24 @@ class SecurityHardeningTests(unittest.TestCase):
         route_test = (REPO_ROOT / "web/src/app/api/webhooks/github/route.test.ts").read_text()
         worker = (REPO_ROOT / "infra/cloudflare-webhook-relay/src/index.ts").read_text()
         workflow = (REPO_ROOT / ".github/workflows/managed-reviewer-ingress.yml").read_text()
+        broker_workflow = (
+            REPO_ROOT / ".github/workflows/managed-reviewer-broker.yml"
+        ).read_text()
         cd_workflow = (REPO_ROOT / ".github/workflows/cd.yml").read_text()
         canary_script = (REPO_ROOT / "scripts/managed-reviewer-ingress-canary.py").read_text()
+        broker_script = (REPO_ROOT / "scripts/pr-reviewer-broker.py").read_text()
 
-        for source in (route, monitor, broker, worker, workflow, cd_workflow, canary_script):
+        for source in (
+            route,
+            monitor,
+            broker,
+            worker,
+            workflow,
+            broker_workflow,
+            cd_workflow,
+            canary_script,
+            broker_script,
+        ):
             self.assertIn("WORKSPACES_WEBHOOK_CANARY_SECRET", source)
 
         self.assertIn("validateCanaryRequest", route)
@@ -409,6 +426,14 @@ class SecurityHardeningTests(unittest.TestCase):
         self.assertIn("wrangler deploy --dry-run", workflow)
         self.assertIn("urllib.request", canary_script)
         self.assertIn("SAFE_RESPONSE_KEYS", canary_script)
+        self.assertIn("scripts/pr-reviewer-broker.py", broker_workflow)
+        self.assertIn("schedule:", broker_workflow)
+        self.assertNotIn("scripts/managed-reviewer-ingress-canary.py", broker_workflow)
+        self.assertNotIn("pr-reviewer-monitor", broker_workflow)
+        self.assertIn("pr-reviewer-broker", broker_script)
+        self.assertIn("Authorization", broker_script)
+        self.assertNotIn("pr-reviewer-monitor", broker_script)
+        self.assertNotIn("canary/pr-review-ingress", broker_script)
 
         result = subprocess.run(
             ["python3", "scripts/managed-reviewer-ingress-canary.py", "--skip-monitor"],

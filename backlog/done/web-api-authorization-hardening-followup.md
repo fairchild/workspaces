@@ -1,4 +1,8 @@
 ---
+status: done
+issue: 535
+completed: 2026-05-25
+resolution: promoted-to-github-issue
 topic: web
 priority: 2
 description: Add cross-tenant Playwright coverage for the read-API authorization checks landed in PR #342.

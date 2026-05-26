@@ -1,4 +1,8 @@
 ---
+status: done
+issue: 530
+completed: 2026-05-25
+resolution: promoted-to-github-issue
 topic: runtime-diagnostics
 priority: 2
 description: Preserve the user's preferred Detail Pane width across tab changes, including the wider Diagnostics tab.

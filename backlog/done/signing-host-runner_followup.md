@@ -1,5 +1,8 @@
 ---
-status: pending
+status: done
+issue: 553
+completed: 2026-05-25
+resolution: promoted-to-github-issue
 category: followup
 topic: release-runner-provisioning
 priority: 2
