@@ -26,6 +26,14 @@ on:
         description: "Review body text"
         type: string
         required: true
+      content_write_probe:
+        description: "Before reviewing, push an empty probe commit to a disposable branch with the selected app token"
+        type: boolean
+        default: false
+      probe_branch:
+        description: "Optional branch name for the content-write probe"
+        type: string
+        default: ""
 
 permissions:
   # This workflow validates GitHub App review capability. These permissions only
@@ -89,6 +97,83 @@ jobs:
           echo "::add-mask::$token"
           echo "token=$token" >> "$GITHUB_OUTPUT"
           echo "expected_login=$expected_login" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout for content-write probe
+        if: inputs.content_write_probe
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          fetch-depth: 1
+          token: ${{ steps.resolve.outputs.token }}
+
+      - name: Push app-authored content-write probe commit
+        if: inputs.content_write_probe
+        env:
+          GH_TOKEN: ${{ steps.resolve.outputs.token }}
+          APP_SLUG: ${{ inputs.app_slug }}
+          EXPECTED_LOGIN: ${{ steps.resolve.outputs.expected_login }}
+          PROBE_BRANCH: ${{ inputs.probe_branch }}
+        run: |
+          set -euo pipefail
+          unset GITHUB_TOKEN || true
+
+          case "$APP_SLUG" in
+            april-clearwater)
+              expected_email="268297116+april-clearwater[bot]@users.noreply.github.com"
+              ;;
+            workspace-agents)
+              expected_email="266434718+workspace-agents[bot]@users.noreply.github.com"
+              ;;
+            *)
+              echo "Unsupported app slug for content-write probe: $APP_SLUG" >&2
+              exit 1
+              ;;
+          esac
+
+          if [ -z "$PROBE_BRANCH" ]; then
+            PROBE_BRANCH="codex/${APP_SLUG}-content-write-smoke-${GITHUB_RUN_ID}"
+          fi
+
+          git config user.name "$EXPECTED_LOGIN"
+          git config user.email "$expected_email"
+          git checkout -B "$PROBE_BRANCH"
+          git commit --allow-empty -m "chore: ${APP_SLUG} content-write smoke ${GITHUB_RUN_ID}"
+          commit_sha=$(git rev-parse HEAD)
+          git push origin "HEAD:refs/heads/$PROBE_BRANCH"
+
+          commit_author_name=$(gh api "repos/$GITHUB_REPOSITORY/commits/$commit_sha" --jq '.commit.author.name')
+          commit_author_email=$(gh api "repos/$GITHUB_REPOSITORY/commits/$commit_sha" --jq '.commit.author.email')
+          linked_author_login=$(gh api "repos/$GITHUB_REPOSITORY/commits/$commit_sha" --jq '.author.login // ""')
+
+          echo "probe_branch=$PROBE_BRANCH"
+          echo "commit_sha=$commit_sha"
+          echo "commit_author_name=$commit_author_name"
+          echo "commit_author_email=$commit_author_email"
+          echo "linked_author_login=$linked_author_login"
+
+          if [ "$commit_author_name" != "$EXPECTED_LOGIN" ]; then
+            echo "Unexpected commit author name: expected $EXPECTED_LOGIN, got $commit_author_name" >&2
+            exit 1
+          fi
+
+          if [ "$commit_author_email" != "$expected_email" ]; then
+            echo "Unexpected commit author email: expected $expected_email, got $commit_author_email" >&2
+            exit 1
+          fi
+
+          if [ "$linked_author_login" != "$EXPECTED_LOGIN" ]; then
+            echo "Unexpected linked GitHub author: expected $EXPECTED_LOGIN, got $linked_author_login" >&2
+            exit 1
+          fi
+
+          {
+            echo "### GitHub App Content-Write Smoke"
+            echo ""
+            echo "- app: \`$APP_SLUG\`"
+            echo "- pushed branch: \`$PROBE_BRANCH\`"
+            echo "- commit: \`$commit_sha\`"
+            echo "- commit author: \`$commit_author_name <$commit_author_email>\`"
+            echo "- linked GitHub author: \`$linked_author_login\`"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Submit app-native review
         env:
@@ -179,6 +264,8 @@ jobs:
 
           echo "review_author=$review_author"
           echo "review_state=$review_state"
+          review_author_association=$(printf '%s' "$reviews_json" | jq -r --arg marker "$marker" 'map(select((.body // "") | contains($marker))) | last | .author_association // empty')
+          echo "review_author_association=$review_author_association"
 
           if [ "$review_author" != "$EXPECTED_LOGIN" ]; then
             echo "Unexpected review author: expected $EXPECTED_LOGIN, got $review_author" >&2
@@ -202,6 +289,7 @@ jobs:
             echo "- viewer: \`$viewer\`"
             echo "- review author: \`$review_author\`"
             echo "- review state: \`$review_state\`"
+            echo "- review author association: \`$review_author_association\`"
             echo "- pull request: \`#$PR_NUMBER\`"
             echo "- marker: \`$marker\`"
           } >> "$GITHUB_STEP_SUMMARY"
