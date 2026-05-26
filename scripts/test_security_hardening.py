@@ -104,8 +104,8 @@ class SecurityHardeningTests(unittest.TestCase):
     def test_app_review_smoke_limits_content_write_probe_branches(self) -> None:
         workflow = (REPO_ROOT / ".github/workflows/app-review-smoke.yml").read_text()
         self.assertIn("git check-ref-format --branch", workflow)
-        self.assertIn("codex/*|codex-*)", workflow)
-        self.assertIn("Content-write probe branches must start with codex/ or codex-.", workflow)
+        self.assertIn("main|release/*|releases/*", workflow)
+        self.assertIn("Content-write probes must not target main or release branches.", workflow)
 
     def test_claude_workflow_is_manual_dispatch_only(self) -> None:
         workflow = (REPO_ROOT / ".github/workflows/claude.yml").read_text()
