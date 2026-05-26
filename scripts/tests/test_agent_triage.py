@@ -109,6 +109,8 @@ class AgentTriageTests(unittest.TestCase):
         payload = self.make_payload(request_id="april-pull_request-212-prompt", requested_at="2026-03-24T16:10:00Z")
         contributor_prompt = triage.render_contributor_prompt(payload)
         claude_prompt = triage.render_claude_prompt(payload)
+        self.assertTrue(contributor_prompt.startswith("@mallory mentioned you in PR #212"))
+        self.assertIn("Request ID: april-pull_request-212-prompt", contributor_prompt)
         self.assertIn(payload["sanitized_summary"], contributor_prompt)
         self.assertIn(payload["sanitized_summary"], claude_prompt)
         self.assertIn(payload["source_url"], contributor_prompt)
