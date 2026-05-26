@@ -63,7 +63,7 @@ not a broad public security stance.
 Run these before merging security/release changes:
 
 ```bash
-uv run --script scripts/test_security_hardening.py
+uv run --script scripts/tests/test_security_hardening.py
 uv run --script scripts/audit-security-posture.py --local-only --strict
 ```
 

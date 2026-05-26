@@ -7,7 +7,12 @@ import { resolvePersona } from "@/lib/agent-runtime/persona-loader";
 import { authorizeRepoAccess, unauthorizedResponse } from "@/lib/api-auth";
 import { getDevBypassToken, getSession } from "@/lib/auth-server";
 import { getMixedTimeline, pushChatMessage } from "@/lib/chat";
-import { handleBotCommand, parseAgentMention } from "@/lib/chat-utils";
+import {
+	findForbiddenPublicAgentMention,
+	handleBotCommand,
+	parseAgentMention,
+	validatePublicAgentTarget,
+} from "@/lib/chat-utils";
 import { getEventStats } from "@/lib/events";
 import {
 	addDiscussionComment,
@@ -69,7 +74,25 @@ export async function POST(request: Request): Promise<Response> {
 	let discussionUrl: string | null = null;
 
 	const explicitTarget = body.agentName ?? parseAgentMention(body.message);
+	// Explicit targets become GitHub @mentions in Discussion titles, so reject
+	// unsafe aliases before publishing user text to a public repo.
+	const targetError = validatePublicAgentTarget(explicitTarget, {
+		allowSpaces: true,
+	});
+	if (targetError) {
+		return Response.json({ error: targetError }, { status: 400 });
+	}
+	const forbiddenMention = findForbiddenPublicAgentMention(body.message);
+	if (forbiddenMention) {
+		return Response.json(
+			{
+				error: `Use @april-clearwater instead of ${forbiddenMention}; @april is a different GitHub user.`,
+			},
+			{ status: 400 },
+		);
+	}
 	const agentTarget = explicitTarget ?? DEFAULT_AGENT;
+	let resolvedExplicitPersona = false;
 
 	// Bot commands only for explicit @mentions (not default agent fallback)
 	const botResponse = await handleBotCommand({
@@ -86,40 +109,57 @@ export async function POST(request: Request): Promise<Response> {
 
 	// Check if the mention targets a known agent persona (restricted to allowed users).
 	if (agentTarget && agentTarget !== "spaces") {
+		const persona = await resolvePersona(token, owner, repo, agentTarget);
+		resolvedExplicitPersona = explicitTarget !== null && persona !== null;
 		const login = getDevBypassToken()
 			? "fairchild"
 			: await fetchGitHubLogin(token);
-		if (ALLOWED_AGENT_LOGINS.has(login)) {
-			const persona = await resolvePersona(token, owner, repo, agentTarget);
-			if (persona) {
-				const chatMessage: ChatMessage = {
-					id: messageId,
-					repo: body.repo,
-					author: session.user.name ?? session.user.email ?? "you",
-					authorType: "user",
-					content: body.message,
-					agentTarget,
-					discussionId: null,
-					discussionUrl: null,
-					timestamp,
-				};
-				await pushChatMessage(chatMessage);
+		if (persona && ALLOWED_AGENT_LOGINS.has(login)) {
+			const chatMessage: ChatMessage = {
+				id: messageId,
+				repo: body.repo,
+				author: session.user.name ?? session.user.email ?? "you",
+				authorType: "user",
+				content: body.message,
+				agentTarget,
+				discussionId: null,
+				discussionUrl: null,
+				timestamp,
+			};
+			await pushChatMessage(chatMessage);
 
-				return Response.json({
-					messageId,
-					agentSession: {
-						agentName: agentTarget,
-						streamUrl: "/api/chat/agent-stream",
-						threadId: body.parentDiscussionId ?? messageId,
-					},
-				});
-			}
-			// Persona not found — fall through to Discussion creation
+			return Response.json({
+				messageId,
+				agentSession: {
+					agentName: agentTarget,
+					streamUrl: "/api/chat/agent-stream",
+					threadId: body.parentDiscussionId ?? messageId,
+				},
+			});
 		}
 	}
 
 	// Use explicit target (not default fallback) for Discussion titles
 	const effectiveTarget = explicitTarget;
+	if (
+		effectiveTarget &&
+		effectiveTarget !== "spaces" &&
+		!resolvedExplicitPersona
+	) {
+		return Response.json(
+			{
+				error:
+					"Unknown agent target. Use a discovered repo persona such as @april-clearwater.",
+			},
+			{ status: 400 },
+		);
+	}
+	if (effectiveTarget === "spaces") {
+		return Response.json(
+			{ error: "Unknown @spaces command." },
+			{ status: 400 },
+		);
+	}
 	const title = effectiveTarget
 		? `@${effectiveTarget}: ${body.message.slice(0, 100)}`
 		: body.message.slice(0, 100);

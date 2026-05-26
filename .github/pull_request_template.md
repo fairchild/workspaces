@@ -23,10 +23,17 @@
 - [ ] Before and after evidence came from a like-for-like workload and environment
 - [ ] Any meaningful delta, missing metric, target crossing, or non-comparable context is called out below
 
-For performance-sensitive work, capture canonical evidence with:
+For performance-sensitive work, capture canonical evidence with the scenario
+that matches the changed surface:
 
 ```bash
+# Debug-build UI/runtime branch deltas:
 ./scripts/prepare-perf-evidence.sh --scenario debug_no_activate
+
+# Release, packaging, shell, or bundled Ghostty resource changes:
+./scripts/build-release.sh --no-sign
+./scripts/verify-installed-perf.sh build/WorkSpaces.app /tmp/workspaces-installed-perf-verify-<slug>
+./scripts/perf-runner.sh --scenario installed_login_shell --app build/WorkSpaces.app
 ```
 
 If this PR has the `performance-sensitive` label, fill all fields below. The `PR Perf Evidence` workflow enforces them.

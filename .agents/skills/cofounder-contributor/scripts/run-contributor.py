@@ -194,8 +194,10 @@ from triage import (  # noqa: E402, F401
 )
 
 from execution import (  # noqa: E402, F401
+    APP_BOT_GIT_IDENTITIES,
     _update_mergeable_label,
     _write_github_outputs,
+    app_bot_git_identity,
     build_body,
     build_execution_summary_body,
     claim_marker,

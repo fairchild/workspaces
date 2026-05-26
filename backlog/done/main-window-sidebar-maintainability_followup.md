@@ -1,0 +1,92 @@
+---
+status: done
+category: followup
+issue: 81
+issue_closed: 2026-03-13
+milestone: 1
+completed_prs: [36, 387, 394]
+branch: codex/apple-native-main-window-redesign-backlog
+retro_summary: Main-window state, navigation transitions, launch-surface resolution, and remote-workspace selection now have dedicated controller seams; sidebar sorting also moved into a small pure controller. Ghostty runtime callback config and callback userdata/main-thread bridging now have focused seams. Remaining work is incremental integration-file shrinkage, especially ContentView/SidebarView hotspots and the GhosttySurfaceView AppKit lifecycle boundary.
+residual: ContentView/SidebarView orchestration extraction and GhosttySurfaceView AppKit lifecycle boundary remain available as incremental quality work. No deadline; promote to a fresh issue if a concrete regression or refactor lands that benefits from it.
+---
+
+# Main Window + Sidebar Maintainability Pass
+
+## Problem
+
+The recent refinement work made behavior materially safer, but a few integration files are still too large and mixed-purpose for comfortable iteration:
+
+- `Sources/WorkspaceManager/Views/MainWindow/ContentView.swift` remains the main app-level orchestration surface.
+- `Sources/WorkspaceManager/Views/MainWindow/SidebarView.swift` still mixes view composition with repo/workspace/web-source lifecycle actions.
+- `Sources/WorkspaceManager/Terminal/GhosttySurfaceView.swift` remains the densest AppKit/C-interop surface; `GhosttyAppManager.swift` is smaller after the callback-config and userdata extractions, but still sits on a sensitive runtime boundary.
+
+The codebase is stable (`swift test` and `swift build -Xswiftc -warn-concurrency` are green), so the highest-value next quality move is maintainability rather than more feature breadth.
+
+## Goal
+
+Reduce coupling and file-level complexity without changing user-visible behavior.
+
+## Scope
+
+- Prioritize extraction of action/orchestration logic out of oversized SwiftUI integration files.
+- Prefer new test seams and behavior-preserving refactors over new product surface.
+- Keep the current shortcut, split, workspace-creation, and inspector behavior unchanged.
+
+## Implementation Phases
+
+### Phase 1: Sidebar action extraction
+
+- Move repo/workspace/web-source lifecycle helpers out of `SidebarView.swift` into focused support types or extensions.
+- Separate workspace creation/deletion/remote-sandbox lifecycle logic from row rendering and list composition.
+- Keep existing behavior-level tests green and add tests for any newly extracted pure helpers.
+
+Status:
+- Completed on `codex/maintainability-quality-pass` via `SidebarWorkspaceController`, with the workspace lifecycle/persistence path extracted out of `SidebarView.swift`.
+
+### Phase 2: Main-window orchestration cleanup
+
+- Continue shrinking `ContentView.swift` by extracting lifecycle and selection orchestration that is still mixed into the root view.
+- Prefer coordinator/controller seams that can be tested without driving the full view tree.
+- Keep the root file primarily declarative: queries, bindings, layout, and high-level wiring.
+
+Status:
+- In progress on `codex/sidebar-content-maintainability`.
+- `MainWindowViewState`, `MainWindowPresentationController`, and `MainWindowBootstrapController` now hold root-view state, inspector/sidebar derivation, and deep-link/fixture bootstrap decisions.
+- Added focused tests for the new controller seams to keep the refactor behavior-preserving.
+- `MainWindowNavigationStateController`, `MainWindowSurfaceResolutionController`, and `MainWindowRemoteWorkspaceStateController` now centralize previously ad hoc selection and lifecycle behavior.
+- Selection state now stores stable IDs/lightweight structs instead of live SwiftData objects to avoid stale-object hazards after deletion or async completion.
+- `SidebarRepoSortController` now holds stable repository sorting rules instead of burying sort policy in `SidebarView`.
+- `SidebarExpansionStateController` now holds repo/workspace expansion state, selected-container expansion, and stale-ID pruning rules instead of keeping those transitions inline in `SidebarView`.
+- `SidebarWorkspacePresentationController` now holds workspace row presentation rules for session activity, pane counts, provider display names, host-file availability, and transient status messages.
+
+### Phase 3: Ghostty boundary cleanup
+
+- Isolate callback bridging, lifecycle helpers, and AppKit interop hotspots in the Ghostty layer.
+- Preserve the current `@MainActor`/strict-concurrency guarantees while improving readability and testability.
+- Add tests only where the new seam is deterministic and does not require fragile UI automation.
+
+Status:
+- PR #387 added a dedicated `GhosttyRuntimeConfigFactory` seam so raw `ghostty_runtime_config_s` callback wiring no longer lives inline in `GhosttyAppManager.initializeIfNeeded()`.
+- PR #394 added `GhosttyCallbackUserdata` and `GhosttyThreadingBridge`, centralizing unsafe pointer/address resolution and main-thread callback hopping for runtime, action, close-surface, and clipboard paths.
+- Remaining work should avoid revisiting those completed seams unless a concrete regression appears. Prefer the next narrow slice in `GhosttySurfaceView` lifecycle/input boundaries or a small `ContentView`/`SidebarView` orchestration extraction.
+
+## Acceptance Criteria
+
+- `ContentView.swift` and `SidebarView.swift` are materially smaller or more clearly partitioned by concern.
+- Completed Ghostty callback seams stay covered by focused tests instead of relying on runtime smoke alone.
+- No behavior regressions in session routing, inspector state, workspace creation, or split handling.
+- `swift build -Xswiftc -warn-concurrency` stays clean.
+- `swift test` remains green.
+
+## Verification
+
+```bash
+swift build -Xswiftc -warn-concurrency
+swift test
+```
+
+## Notes
+
+- Refinement-gate closure work is already on `main`; this follow-up is about quality of the implementation, not missing shipped behavior.
+- Shared-desktop verification determinism remains a related but separate track in `backlog/shared-desktop-focus-contention-followup.md`.
+- Current local validation after the additional extraction pass is green at 270 tests across 45 suites.

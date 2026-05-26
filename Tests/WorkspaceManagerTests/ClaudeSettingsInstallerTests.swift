@@ -239,6 +239,72 @@ struct ClaudeSettingsInstallerTests {
         #expect(handlers.contains { ($0["command"] as? String) == eventForwarder })
     }
 
+    @Test("Install shell-escapes WorkSpaces commands with spaces")
+    func shellEscapesCommandsWithSpaces() async throws {
+        let home = makeTempHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        let claudeDir = home.appendingPathComponent(".claude", isDirectory: true)
+        try FileManager.default.createDirectory(at: claudeDir, withIntermediateDirectories: true)
+        let settingsURL = claudeDir.appendingPathComponent("settings.json")
+        let spacedEventForwarder =
+            "/Users/test/Library/Application Support/com.cloudcompute.workspaces/HookForwarders/event-forwarder.sh"
+        let escapedEventForwarder = "'\(spacedEventForwarder)'"
+        let spacedStatusline = "/tmp/Status Line/O'Brien/statusline.sh"
+        let escapedStatusline = "'/tmp/Status Line/O'\\''Brien/statusline.sh'"
+        let userHook = "/Users/test/Library/Application Support/user-hook.sh"
+        let existing: [String: Any] = [
+            "hooks": [
+                "Notification": [
+                    [
+                        "hooks": [
+                            ["type": "command", "command": spacedEventForwarder, "async": true],
+                            ["type": "command", "command": userHook, "async": true],
+                        ]
+                    ]
+                ]
+            ],
+            "statusLine": ["type": "command", "command": spacedStatusline],
+        ]
+        try JSONSerialization.data(withJSONObject: existing, options: [.prettyPrinted])
+            .write(to: settingsURL)
+
+        let installer = ClaudeSettingsInstaller(
+            homeDirectory: home,
+            eventForwarderScriptPath: spacedEventForwarder,
+            statusLineForwarderPath: spacedStatusline
+        )
+        try await installer.install()
+
+        let updated = try readJSON(settingsURL)
+        let handlers = hookGroups(named: "Notification", in: updated)
+            .flatMap { hookHandlers(in: $0) }
+        #expect(handlers.contains { ($0["command"] as? String) == spacedEventForwarder } == false)
+        #expect(handlers.contains { ($0["command"] as? String) == escapedEventForwarder })
+        #expect(handlers.contains { ($0["command"] as? String) == userHook })
+
+        let block = updated["statusLine"] as? [String: Any] ?? [:]
+        #expect(block["command"] as? String == escapedStatusline)
+        #expect(await installer.isInstalled())
+    }
+
+    @Test("Install does not register event-forwarder on WorktreeCreate or WorktreeRemove")
+    func doesNotRegisterOnActiveHookEvents() async throws {
+        let home = makeTempHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        let installer = installer(home: home)
+        try await installer.install()
+
+        let settingsURL = home.appendingPathComponent(".claude", isDirectory: true)
+            .appendingPathComponent("settings.json")
+        let updated = try readJSON(settingsURL)
+        let hooks = updated["hooks"] as? [String: Any] ?? [:]
+
+        #expect(hooks["WorktreeCreate"] == nil)
+        #expect(hooks["WorktreeRemove"] == nil)
+    }
+
     @Test("renderPreview describes pending concrete changes")
     func renderPreviewDescribesChanges() async throws {
         let home = makeTempHome()

@@ -1,6 +1,6 @@
 {
   "scripts": {
-    "setup": "ln -sf \"$CONDUCTOR_ROOT_PATH/.env\" .env 2>/dev/null || true; bash ./scripts/setup --fast",
+    "setup": "bash ./scripts/setup --fast",
     "archive": "cd \"$CONDUCTOR_ROOT_PATH\" && git fetch origin"
   }
 }

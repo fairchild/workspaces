@@ -42,8 +42,6 @@ public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
         "Notification",
         "Stop",
         "StopFailure",
-        "WorktreeCreate",
-        "WorktreeRemove",
         "TaskCreated",
         "TaskCompleted",
     ]
@@ -184,10 +182,12 @@ public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
         var hooks = (current["hooks"]?.value as? [String: Any]) ?? [:]
 
         if let eventForwarderScriptPath {
+            let eventForwarder = CommandContribution(rawPath: eventForwarderScriptPath)
             var addedEvents: [String] = []
             var normalizedEvents: [String] = []
             var scrubbedLegacyEvents: [String] = []
             var scrubbedTitleEvents: [String] = []
+            var scrubbedUnescapedForwarderEvents: [String] = []
 
             for name in Self.hookEventNames {
                 let rawEntries = (hooks[name] as? [Any]) ?? []
@@ -199,43 +199,36 @@ public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
                 }
 
                 var groups = normalizedClaudeHookGroups(from: hooks[name])
-                let beforeLegacyCount = countHandlers(in: groups, where: isWorkspacesLegacyHTTPUnixHook)
-                let beforeTitleCount = countHandlers(in: groups, where: isWorkspacesTitleEmitHook)
-                groups = scrubHandlers(in: groups) { handler in
-                    isWorkspacesLegacyHTTPUnixHook(handler) || isWorkspacesTitleEmitHook(handler)
+                let legacyHTTPResult = scrubHandlers(in: groups, where: isWorkspacesLegacyHTTPUnixHook)
+                groups = legacyHTTPResult.groups
+                if legacyHTTPResult.removedCount > 0 { scrubbedLegacyEvents.append(name) }
+
+                let titleEmitResult = scrubHandlers(in: groups, where: isWorkspacesTitleEmitHook)
+                groups = titleEmitResult.groups
+                if titleEmitResult.removedCount > 0 { scrubbedTitleEvents.append(name) }
+
+                let unescapedForwarderResult = scrubHandlers(in: groups) { handler in
+                    isUnescapedWorkspacesCommandHook(handler, contribution: eventForwarder)
                 }
-                if countHandlers(in: groups, where: isWorkspacesLegacyHTTPUnixHook) < beforeLegacyCount {
-                    scrubbedLegacyEvents.append(name)
-                }
-                if countHandlers(in: groups, where: isWorkspacesTitleEmitHook) < beforeTitleCount {
-                    scrubbedTitleEvents.append(name)
+                groups = unescapedForwarderResult.groups
+                if unescapedForwarderResult.removedCount > 0 {
+                    scrubbedUnescapedForwarderEvents.append(name)
                 }
 
                 let eventForwarderPresent = groups.contains { group in
                     claudeGroupContainsHandler(group) { handler in
-                        (handler["type"] as? String) == "command"
-                            && (handler["command"] as? String) == eventForwarderScriptPath
+                        isCanonicalWorkspacesCommandHook(handler, contribution: eventForwarder)
                     }
                 }
 
                 if !eventForwarderPresent {
-                    let integrationGroupIndex =
-                        groups.firstIndex { group in
-                            claudeGroupContainsHandler(group) { handler in
-                                (handler["type"] as? String) == "command"
-                                    && (handler["command"] as? String) == eventForwarderScriptPath
-                            }
-                        }
-                        ?? {
-                            groups.append(["hooks": [[String: Any]]()])
-                            return groups.index(before: groups.endIndex)
-                        }()
-
+                    groups.append(["hooks": [[String: Any]]()])
+                    let integrationGroupIndex = groups.index(before: groups.endIndex)
                     var integrationGroup = groups[integrationGroupIndex]
                     var integrationHandlers = claudeHookHandlers(in: integrationGroup)
                     integrationHandlers.append([
                         "type": "command",
-                        "command": eventForwarderScriptPath,
+                        "command": eventForwarder.command,
                         "async": true,
                     ])
                     integrationGroup["hooks"] = integrationHandlers
@@ -256,6 +249,11 @@ public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
                     "remove deprecated title-emit hooks from \(scrubbedTitleEvents.count) events"
                 )
             }
+            if !scrubbedUnescapedForwarderEvents.isEmpty {
+                lines.append(
+                    "replace unescaped WorkSpaces event-forwarder command in \(scrubbedUnescapedForwarderEvents.count) events"
+                )
+            }
             if !normalizedEvents.isEmpty {
                 lines.append(
                     "normalize legacy hook group shape for \(normalizedEvents.joined(separator: ", "))"
@@ -263,22 +261,24 @@ public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
             }
             if !addedEvents.isEmpty {
                 lines.append(
-                    "add command hook for \(addedEvents.count) events using \(eventForwarderScriptPath)"
+                    "add command hook for \(addedEvents.count) events using \(eventForwarder.command)"
                 )
             }
+
         }
 
         if let statusLineForwarderPath {
+            let statusLineCommand = CommandContribution(rawPath: statusLineForwarderPath).command
             var block = (current["statusLine"]?.value as? [String: Any]) ?? [:]
             let oldCommand = block["command"] as? String
             let oldInterval = block["refreshInterval"] as? Int
             block["type"] = "command"
-            block["command"] = statusLineForwarderPath
+            block["command"] = statusLineCommand
             block["refreshInterval"] = statusLineRefreshInterval
             dict["statusLine"] = AnyCodable(block)
-            if oldCommand != statusLineForwarderPath || oldInterval != statusLineRefreshInterval {
+            if oldCommand != statusLineCommand || oldInterval != statusLineRefreshInterval {
                 lines.append(
-                    "set statusLine command to \(statusLineForwarderPath) every \(statusLineRefreshInterval)ms"
+                    "set statusLine command to \(statusLineCommand) every \(statusLineRefreshInterval)ms"
                 )
             }
         }
@@ -360,14 +360,18 @@ public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
     private func scrubHandlers(
         in groups: [[String: Any]],
         where shouldRemove: ([String: Any]) -> Bool
-    ) -> [[String: Any]] {
-        groups.compactMap { group in
+    ) -> (groups: [[String: Any]], removedCount: Int) {
+        var removedCount = 0
+        let scrubbedGroups = groups.compactMap { group -> [String: Any]? in
             var next = group
-            let kept = claudeHookHandlers(in: next).filter { !shouldRemove($0) }
+            let handlers = claudeHookHandlers(in: next)
+            let kept = handlers.filter { !shouldRemove($0) }
+            removedCount += handlers.count - kept.count
             if kept.isEmpty { return nil }
             next["hooks"] = kept
             return next
         }
+        return (scrubbedGroups, removedCount)
     }
 
     private func isWorkspacesLegacyHTTPUnixHook(_ handler: [String: Any]) -> Bool {
@@ -387,6 +391,45 @@ public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
         guard let command = handler["command"] as? String else { return false }
         return command.hasSuffix("/HookForwarders/title-emit.sh")
             && command.contains("/Application Support/")
+    }
+
+    private func isCanonicalWorkspacesCommandHook(
+        _ handler: [String: Any],
+        contribution: CommandContribution
+    ) -> Bool {
+        guard (handler["type"] as? String) == "command" else { return false }
+        guard let command = handler["command"] as? String else { return false }
+        return command == contribution.command
+    }
+
+    private func isUnescapedWorkspacesCommandHook(
+        _ handler: [String: Any],
+        contribution: CommandContribution
+    ) -> Bool {
+        guard contribution.command != contribution.rawPath else { return false }
+        guard (handler["type"] as? String) == "command" else { return false }
+        guard let command = handler["command"] as? String else { return false }
+        return command == contribution.rawPath
+    }
+
+    private struct CommandContribution {
+        let rawPath: String
+        let command: String
+
+        init(rawPath: String) {
+            self.rawPath = rawPath
+            command = ClaudeSettingsInstaller.shellEscapedCommand(rawPath)
+        }
+    }
+
+    private static func shellEscapedCommand(_ raw: String) -> String {
+        let safeScalars = CharacterSet(
+            charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_@%+=:,./-"
+        )
+        if raw.unicodeScalars.allSatisfy({ safeScalars.contains($0) }) {
+            return raw
+        }
+        return "'" + raw.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
     // MARK: - Filesystem helpers

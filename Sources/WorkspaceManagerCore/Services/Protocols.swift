@@ -90,6 +90,11 @@ public protocol GitServiceProtocol: Sendable {
     func createBranch(_ name: String, at path: URL) async throws
     func checkoutBranch(_ name: String, at path: URL) async throws
     func getFileTree(at path: URL, maxDepth: Int) async throws -> FileNode
+    func diff(file: String, at path: URL) async throws -> UnifiedDiff
+    func stage(file: String, at path: URL) async throws
+    func unstage(file: String, at path: URL) async throws
+    func discard(file: String, at path: URL) async throws
+    func branches(at path: URL) async throws -> [BranchName]
 }
 
 extension GitServiceProtocol {

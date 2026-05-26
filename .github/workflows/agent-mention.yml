@@ -21,19 +21,19 @@ jobs:
       vars.AGENT_AUTOMATIONS_ENABLED == 'true' &&
       !endsWith(github.event.sender.login, '[bot]') && (
         ((github.event_name == 'issue_comment') && (
-          contains(github.event.comment.body || '', '@april') ||
+          contains(github.event.comment.body || '', '@april-clearwater') ||
           contains(github.event.comment.body || '', '@plat') ||
           contains(github.event.comment.body || '', '@peter') ||
           contains(github.event.comment.body || '', '@claude')
         )) ||
         ((github.event_name == 'pull_request_review_comment') && (
-          contains(github.event.comment.body || '', '@april') ||
+          contains(github.event.comment.body || '', '@april-clearwater') ||
           contains(github.event.comment.body || '', '@plat') ||
           contains(github.event.comment.body || '', '@peter') ||
           contains(github.event.comment.body || '', '@claude')
         )) ||
         ((github.event_name == 'pull_request_review') && (
-          contains(github.event.review.body || '', '@april') ||
+          contains(github.event.review.body || '', '@april-clearwater') ||
           contains(github.event.review.body || '', '@plat') ||
           contains(github.event.review.body || '', '@peter') ||
           contains(github.event.review.body || '', '@claude')

@@ -654,9 +654,14 @@ function computeReviewerConfigHash(model: string): string {
 
 function extractJsonCandidates(text: string): string[] {
 	const candidates: string[] = [];
-	const fenced = /```json\s*([\s\S]*?)```/gi;
+	const fenced = /(?:^|\r?\n)[ \t]*```json[ \t]*\r?\n/gi;
 	for (const match of text.matchAll(fenced)) {
-		const body = match[1]?.trim();
+		const bodyStart = (match.index ?? 0) + match[0].length;
+		const closingFence = /(?:^|\r?\n)[ \t]*```[ \t]*(?=\r?\n|$)/g;
+		closingFence.lastIndex = bodyStart;
+		const close = closingFence.exec(text);
+		if (!close) continue;
+		const body = text.slice(bodyStart, close.index).trim();
 		if (body) candidates.push(body);
 	}
 	if (candidates.length > 0) return candidates;
@@ -718,7 +723,7 @@ async function postGitHubReviewIntent(
 	githubToken: string,
 	payload: PrReviewPayload,
 	intent: PrReviewIntent,
-): Promise<void> {
+): Promise<{ reviewId: string | null }> {
 	const [owner, repo] = payload.repoFullName.split("/");
 	if (!owner || !repo) {
 		throw new Error("Repository owner/name was unavailable.");
@@ -743,8 +748,15 @@ async function postGitHubReviewIntent(
 			`GitHub review post failed ${reviewRes.status}: ${await reviewRes.text()}`,
 		);
 	}
+	const reviewJson = (await reviewRes.json().catch(() => null)) as {
+		id?: unknown;
+	} | null;
+	const reviewId =
+		reviewJson?.id !== undefined && reviewJson.id !== null
+			? String(reviewJson.id)
+			: null;
 
-	if (intent.labels.length === 0) return;
+	if (intent.labels.length === 0) return { reviewId };
 
 	const labelRes = await fetch(
 		`${GITHUB_API}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/${payload.number}/labels`,
@@ -759,6 +771,77 @@ async function postGitHubReviewIntent(
 			`[pr-review] label post skipped/failed ${labelRes.status}: ${await labelRes.text()}`,
 		);
 	}
+	return { reviewId };
+}
+
+const FAILED_REVIEW_OUTPUT_LIMIT = 8000;
+const FAILED_REVIEW_REASON_LIMIT = 1000;
+
+function truncateForFailureComment(value: string, limit: number): string {
+	if (value.length <= limit) return value;
+	return `${value.slice(0, limit)}\n\n...[truncated ${value.length - limit} characters]`;
+}
+
+function escapeHtml(value: string): string {
+	return value
+		.replaceAll("&", "&amp;")
+		.replaceAll("<", "&lt;")
+		.replaceAll(">", "&gt;")
+		.replaceAll('"', "&quot;")
+		.replaceAll("'", "&#39;");
+}
+
+async function postManagedReviewFailureComment(
+	githubToken: string,
+	payload: ManagedReviewStatusPayload,
+	reason: string,
+	output: string,
+): Promise<void> {
+	const trimmedOutput = output.trim();
+	if (!trimmedOutput) return;
+
+	const [owner, repo] = payload.repoFullName.split("/");
+	if (!owner || !repo) return;
+
+	const safeReason = escapeHtml(
+		truncateForFailureComment(reason.trim(), FAILED_REVIEW_REASON_LIMIT),
+	);
+	const safeOutput = escapeHtml(
+		truncateForFailureComment(trimmedOutput, FAILED_REVIEW_OUTPUT_LIMIT),
+	);
+	const body = [
+		"⚠️ **Managed review publication failed**",
+		"",
+		"The managed reviewer session reached a final response, but the broker could not publish it as a GitHub review.",
+		"",
+		"Reason:",
+		`<pre><code>${safeReason}</code></pre>`,
+		"",
+		"<details><summary>Unpublished managed reviewer output</summary>",
+		"",
+		`<pre><code>${safeOutput}</code></pre>`,
+		"",
+		"</details>",
+	].join("\n");
+
+	const res = await fetch(
+		`${GITHUB_API}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/${payload.number}/comments`,
+		{
+			method: "POST",
+			headers: {
+				Authorization: `Bearer ${githubToken}`,
+				Accept: "application/vnd.github+json",
+				"X-GitHub-Api-Version": "2022-11-28",
+				"Content-Type": "application/json",
+			},
+			body: JSON.stringify({ body }),
+		},
+	);
+	if (!res.ok) {
+		console.warn(
+			`[pr-review] failure comment skipped/failed ${res.status}: ${await res.text()}`,
+		);
+	}
 }
 
 type ManagedReviewStatusState = "pending" | "success" | "failure" | "error";
@@ -770,6 +853,22 @@ interface ManagedReviewStatusPayload {
 	number: number;
 	headSha: string;
 	htmlUrl: string;
+	fingerprint?: string;
+}
+
+function getManagedReviewStatusBaseUrl(): string {
+	const explicit =
+		process.env.WORKSPACES_WEB_BASE_URL ?? process.env.BETTER_AUTH_URL;
+	if (explicit) return explicit.replace(/\/+$/, "");
+	if (process.env.NODE_ENV === "development") return "http://localhost:3000";
+	return "https://spaces.cloudcompute.com";
+}
+
+function buildManagedReviewStatusTargetUrl(
+	payload: ManagedReviewStatusPayload,
+): string {
+	if (!payload.fingerprint) return payload.htmlUrl;
+	return `${getManagedReviewStatusBaseUrl()}/dashboard/review-runs/${encodeURIComponent(payload.fingerprint)}`;
 }
 
 async function postManagedReviewStatus(
@@ -801,7 +900,7 @@ async function postManagedReviewStatus(
 					state,
 					context: MANAGED_REVIEW_STATUS_CONTEXT,
 					description,
-					target_url: payload.htmlUrl,
+					target_url: buildManagedReviewStatusTargetUrl(payload),
 				}),
 			},
 		);
@@ -962,11 +1061,13 @@ export async function processPendingPrReviewRuns(
 	};
 
 	for (const run of pendingRuns) {
+		let completedOutput = "";
 		let statusPayload: ManagedReviewStatusPayload = {
 			repoFullName: run.repoFullName,
 			number: run.prNumber,
 			headSha: run.headSha,
 			htmlUrl: `https://github.com/${run.repoFullName}/pull/${run.prNumber}`,
+			fingerprint: run.fingerprint,
 		};
 		try {
 			const collected = await collectCompletedReviewIntentText(
@@ -983,6 +1084,7 @@ export async function processPendingPrReviewRuns(
 				});
 				continue;
 			}
+			completedOutput = collected.output;
 
 			const payload = await payloadFromStartedRun(githubToken, run);
 			if (!payload) {
@@ -995,6 +1097,7 @@ export async function processPendingPrReviewRuns(
 				number: payload.number,
 				headSha: payload.headSha,
 				htmlUrl: payload.htmlUrl,
+				fingerprint: run.fingerprint,
 			};
 
 			const currentReviewHistory = await fetchCurrentPrReviewHistory(
@@ -1008,9 +1111,12 @@ export async function processPendingPrReviewRuns(
 			const supersedingReview = supersedingReviews[0] ?? null;
 			if (supersedingReview) {
 				let retrySessionId: string | null = null;
-				const reviewedCurrentHead = supersedingReviews.some((review) =>
-					currentHeadAlreadyReviewed(review, run, payload),
-				);
+				const currentHeadReview =
+					supersedingReviews.find((review) =>
+						currentHeadAlreadyReviewed(review, run, payload),
+					) ?? null;
+				const reviewedCurrentHead = currentHeadReview !== null;
+				const referenceReview = currentHeadReview ?? supersedingReview;
 				if (!reviewedCurrentHead) {
 					try {
 						retrySessionId = await triggerPrReview(payload, {
@@ -1024,14 +1130,24 @@ export async function processPendingPrReviewRuns(
 				}
 
 				const error = reviewedCurrentHead
-					? `Superseded by managed review ${supersedingReview.id} on the same head.`
+					? `Superseded by managed review ${referenceReview.id} on the same head.`
 					: retrySessionId
-						? `Superseded by managed review ${supersedingReview.id}; retry session ${retrySessionId} started.`
-						: `Superseded by managed review ${supersedingReview.id}; retry session was not started.`;
+						? `Superseded by managed review ${referenceReview.id}; retry session ${retrySessionId} started.`
+						: `Superseded by managed review ${referenceReview.id}; retry session was not started.`;
+				if (reviewedCurrentHead) {
+					await postManagedReviewStatus(
+						githubToken,
+						statusPayload,
+						"success",
+						"Managed review posted.",
+					);
+				}
 				await recordRunResult(run.fingerprint, {
 					sessionId: run.sessionId,
 					status: "superseded",
 					error,
+					projectionStatus: reviewedCurrentHead ? "projected" : "superseded",
+					githubReviewId: String(referenceReview.id),
 				});
 				result.superseded += 1;
 				if (retrySessionId) result.requeued += 1;
@@ -1041,7 +1157,7 @@ export async function processPendingPrReviewRuns(
 					prNumber: run.prNumber,
 					status: "superseded",
 					error,
-					supersededByReviewId: supersedingReview.id,
+					supersededByReviewId: referenceReview.id,
 					retrySessionId,
 				});
 				console.log(
@@ -1058,7 +1174,11 @@ export async function processPendingPrReviewRuns(
 				collected.output,
 				narrativeContext.availableLabels.map((label) => label.name),
 			);
-			await postGitHubReviewIntent(githubToken, payload, intent);
+			const postedReview = await postGitHubReviewIntent(
+				githubToken,
+				payload,
+				intent,
+			);
 			await postManagedReviewStatus(
 				githubToken,
 				statusPayload,
@@ -1068,6 +1188,7 @@ export async function processPendingPrReviewRuns(
 			await recordRunResult(run.fingerprint, {
 				sessionId: run.sessionId,
 				status: "completed",
+				githubReviewId: postedReview.reviewId,
 			});
 			result.completed += 1;
 			result.runs.push({
@@ -1081,6 +1202,17 @@ export async function processPendingPrReviewRuns(
 			);
 		} catch (err) {
 			const reason = err instanceof Error ? err.message : String(err);
+			await postManagedReviewFailureComment(
+				githubToken,
+				statusPayload,
+				reason,
+				completedOutput,
+			).catch((commentErr) => {
+				console.warn(
+					"[pr-review] failure comment skipped/failed:",
+					commentErr instanceof Error ? commentErr.message : commentErr,
+				);
+			});
 			await postManagedReviewStatus(
 				githubToken,
 				statusPayload,
@@ -1194,6 +1326,7 @@ export async function triggerPrReview(
 			number: resolvedPayload.number,
 			headSha: resolvedPayload.headSha,
 			htmlUrl: resolvedPayload.htmlUrl,
+			fingerprint,
 		},
 		"pending",
 		"Managed reviewer picked up this PR.",
@@ -1377,6 +1510,7 @@ In "## Project Thread", include a short label rationale using the first applicab
 				number: resolvedPayload.number,
 				headSha: resolvedPayload.headSha,
 				htmlUrl: resolvedPayload.htmlUrl,
+				fingerprint,
 			},
 			"failure",
 			"Managed reviewer failed to start.",

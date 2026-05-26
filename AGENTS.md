@@ -149,7 +149,7 @@ Evidence is a merge gate. Do not create a PR without it. Follow these steps in o
 mise run evidence -- --pr <number> --name <slug>
 ```
 
-The script auto-sources `.env` for `EVIDENCE_UPLOAD_TOKEN`. Uploads go to `https://evidence.cloudcompute.com/`. See `docs/development/evidence.md` for the full guide.
+The script auto-sources `.env` for `EVIDENCE_UPLOAD_TOKEN` and falls back to shared worktree env files. If a worktree is missing `.env`, run `./scripts/setup --env-only` before claiming evidence is blocked. Uploads go to `https://evidence.cloudcompute.com/`. See `docs/development/evidence.md` for the full guide.
 
 ### Evidence rules
 
@@ -258,14 +258,16 @@ mise run web:deps:remove -- <pkg>           # pnpm remove + auto-fix formatting
 | libghostty internals | docs/development/libghostty-integration.md | - |
 | Notifications / webhooks | docs/development/notifications.md | - |
 | Debug an issue | docs/development/troubleshooting.md | - |
+| Add Settings-gated experimental UI | docs/development/experimental-features.md | - |
 | Terminal keyboard focus | docs/development/solution-terminal-keyboard.md | - |
 | Evidence guide | docs/development/evidence.md | - |
+| UI fixture mode + release screenshots | docs/development/ui-fixture-mode.md | - |
 | Local SQLite state schema | docs/schema.sql | - |
 | Local state store plan | docs/development/local-state-store-plan.md | - |
 | Lume runner setup | docs/development/lume-runner-setup.md | - |
 | Lume daemon reliability | docs/development/lume-integration.md § "Daemon Reliability" | - |
 | Web architecture | web/docs/architecture.md | - |
-| PR reviewer agent | web/docs/pr-reviewer.md | - |
+| PR reviewer agent | docs/pr-review/pr-reviewer.md | - |
 | Roadmap/planning | backlog/ROADMAP.md | - |
 | Deferred work items | backlog/*.md | - |
 | Prototypes | prototypes/README.md | - |

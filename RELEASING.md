@@ -132,7 +132,7 @@ Run a local unsigned build first to confirm the toolchain works:
 
 ```bash
 ./scripts/build-release.sh --no-sign
-open build/WorkSpaces.app
+./scripts/verify-installed-perf.sh build/WorkSpaces.app /tmp/workspaces-installed-perf-verify-<date>
 ```
 
 Then test signing:
@@ -141,8 +141,10 @@ Then test signing:
 ./scripts/build-release.sh
 ./scripts/verify-app-keychain-signing.sh build/WorkSpaces.app
 ./scripts/verify-release-bundle.sh build/WorkSpaces.app
+./scripts/verify-installed-perf.sh build/WorkSpaces.app build/release-installed-perf
 # Should confirm the embedded provisioning profile, keychain access group,
-# and Developer ID signing across nested code objects
+# Developer ID signing across nested code objects, bundled Ghostty resources,
+# and installed-app terminal readiness metrics
 ```
 
 ### GitHub Actions Setup (for CI/CD)
@@ -253,6 +255,7 @@ The recommended method for production releases.
    - fetches `origin/main` and fast-forwards local `main` before mutating
    - updates `Info.plist` version/build metadata
    - prepends a changelog entry from commits since the latest `v*` tag
+   - ensures `CHANGELOG.md` contains `## [<CFBundleShortVersionString>] - <date>` for the release version before `scripts/generate-sparkle-appcast.sh` runs
    - creates commit `release: v0.3.1`
    - creates lightweight tag `v0.3.1`
    - pushes `main` first, then pushes the tag
@@ -294,6 +297,10 @@ The recommended method for production releases.
      - Publish or refresh a GitHub release with artifacts via `gh`
      - Download the published assets on hosted macOS and re-check appcast XML,
        DMG identity, stapling, and Gatekeeper assessment
+   - Appcast release notes:
+     - `scripts/generate-sparkle-appcast.sh` embeds the matching
+       `CHANGELOG.md` section in the item `<description>`
+     - appcast generation fails if the matching section is missing or empty
 
 4. **Release Tag and Assets**
 
@@ -413,6 +420,12 @@ xcrun stapler validate build/WorkSpaces-0.3.1.dmg
 # Should say "The validate action worked!"
 ```
 
+### Installed Performance
+```bash
+./scripts/verify-installed-perf.sh build/WorkSpaces.app build/release-installed-perf
+# Should report launch_to_first_prompt, terminal_first_output, and first_prompt_ready
+```
+
 ### Clean Mac Test
 
 Download the DMG from GitHub Releases onto a Mac that has never seen the app:
@@ -471,6 +484,7 @@ security find-identity -v -p codesigning
 | `scripts/build-release.sh` | Build app bundle from SPM |
 | `scripts/verify-app-keychain-signing.sh` | Verify embedded provisioning profile and signed keychain entitlements |
 | `scripts/verify-release-bundle.sh` | Verify Developer ID signing across bundled code objects before notarization |
+| `scripts/verify-installed-perf.sh` | Verify packaged Ghostty resources and installed-app terminal readiness metrics |
 | `scripts/prepare-release.sh` | Update release metadata, create the release commit, and tag/push the release |
 | `scripts/notarize.sh` | Create DMG and notarize |
 | `scripts/setup-release-secrets.sh` | Configure GitHub Actions release secrets/variables from a verified `.p12` and provisioning profile |
