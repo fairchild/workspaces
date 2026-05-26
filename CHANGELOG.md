@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.16.0] - 2026-05-26
+
+### Added
+- Report Claude command status from prompt markers through a new parser, registry, and hook forwarder (#501, #566)
+- Add workspace event/journal read APIs and default-agent command resolution foundations (#498, #500)
+- Add GitService diff, staging, discard, and branch APIs for upcoming workspace actions (#499)
+- Add Settings UI and documentation for gated experimental features (#475)
+
+### Changed
+- Embed matching changelog sections in generated Sparkle appcasts for update release notes (#497)
+- Tighten managed-review run projection, operator reporting, broker workflow, deterministic canaries, and workspace-agent identity alignment (#508, #510, #562, #568, #571, #575)
+- Clarify release performance gates and evidence expectations
+
+### Fixed
+- Stop installing Claude event-forwarder hooks on worktree create/remove events (#561)
+- Harden managed-review intent publishing and route reviewer status to run detail pages (#504, #506)
+- Fix Claude hook installation when command paths contain spaces (#513)
+- Fix evidence environment discovery in worktrees
+- Harden public agent identity routing for chat messages and dispatch
+
 ## [0.15.1] - 2026-05-19
 
 ### Fixed
