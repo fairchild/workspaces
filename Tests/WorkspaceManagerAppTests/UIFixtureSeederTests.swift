@@ -17,6 +17,7 @@ struct UIFixtureSeederTests {
         let container: ModelContainer
         let context: ModelContext
         let registry: AgentSessionRegistry
+        let commandRegistry: LastCommandStatusRegistry
         let store: HostTerminalStateStore
     }
 
@@ -29,13 +30,21 @@ struct UIFixtureSeederTests {
         let context = container.mainContext
         UIFixtureSeeder.seedDataIfNeeded(in: context)
         let registry = AgentSessionRegistry()
+        let commandRegistry = LastCommandStatusRegistry()
         let hostTerminalState = HostTerminalStateStore()
         hostTerminalState.attach(
             agentSessionRegistry: registry,
             localStateStore: nil,
-            hooksSocketPath: nil
+            hooksSocketPath: nil,
+            lastCommandStatusRegistry: commandRegistry
         )
-        return Fixtures(container: container, context: context, registry: registry, store: hostTerminalState)
+        return Fixtures(
+            container: container,
+            context: context,
+            registry: registry,
+            commandRegistry: commandRegistry,
+            store: hostTerminalState
+        )
     }
 
     private func workspace(named name: String, in context: ModelContext) throws -> Workspace {
@@ -48,12 +57,21 @@ struct UIFixtureSeederTests {
     )
         -> AgentSessionStatus?
     {
+        hostSession(for: workspace, in: store).flatMap { registry.statuses[$0.id] }
+    }
+
+    private func commandStatus(
+        for workspace: Workspace,
+        in store: HostTerminalStateStore,
+        registry: LastCommandStatusRegistry
+    ) -> LastCommandStatus? {
+        hostSession(for: workspace, in: store).flatMap { registry.statusByTerminalSession[$0.id] }
+    }
+
+    private func hostSession(for workspace: Workspace, in store: HostTerminalStateStore) -> HostTerminalSession? {
         let normalized = workspace.workspaceURL.standardizedFileURL.resolvingSymlinksInPath().path
         let key: HostTerminalSessionKey = .hostPath(normalized)
-        return
-            store.sessions
-            .first(where: { $0.key == key })
-            .flatMap { registry.statuses[$0.id] }
+        return store.sessions.first(where: { $0.key == key })
     }
 
     @Test("Seed data inserts the expected fixture repos and workspaces")
@@ -225,6 +243,59 @@ struct UIFixtureSeederTests {
         #expect(f.store.activeSessionID == firstSession?.id)
     }
 
+    @Test("Command-status fixture seeds the terminal sliver registry")
+    func commandStatusEntry() throws {
+        let f = try freshFixtures()
+        let now = Date(timeIntervalSince1970: 1_000)
+        let applied = UIFixtureSeeder.seedCommandStatusesIfNeeded(
+            from: [UIFixtureSeeder.commandStatusesEnvKey: "feature-auth:failed"],
+            in: f.context,
+            commandStatusRegistry: f.commandRegistry,
+            hostTerminalState: f.store,
+            now: now
+        )
+        #expect(applied == 1)
+
+        let featureAuth = try workspace(named: "feature-auth", in: f.context)
+        let terminalSession = try #require(hostSession(for: featureAuth, in: f.store))
+        let status = try #require(commandStatus(for: featureAuth, in: f.store, registry: f.commandRegistry))
+        #expect(f.store.activeSessionID == terminalSession.id)
+        #expect(status.commandLine == "swift test")
+        #expect(status.exitCode == 1)
+        #expect(status.isSuccess == false)
+        #expect(abs((status.duration ?? 0) - 2.4) < 0.001)
+    }
+
+    @Test("Every command-status fixture token is producible from the env var")
+    func everyCommandStatusProducible() throws {
+        let f = try freshFixtures()
+        let now = Date(timeIntervalSince1970: 1_000)
+        let raw =
+            "feature-auth:success,bugfix-422:running,refactor-state:finished,refactor-runtime:failed"
+        let applied = UIFixtureSeeder.seedCommandStatusesIfNeeded(
+            from: [UIFixtureSeeder.commandStatusesEnvKey: raw],
+            in: f.context,
+            commandStatusRegistry: f.commandRegistry,
+            hostTerminalState: f.store,
+            now: now
+        )
+        #expect(applied == 4)
+
+        let featureAuth = try workspace(named: "feature-auth", in: f.context)
+        #expect(commandStatus(for: featureAuth, in: f.store, registry: f.commandRegistry)?.exitCode == 0)
+
+        let bugfix = try workspace(named: "bugfix-422", in: f.context)
+        #expect(commandStatus(for: bugfix, in: f.store, registry: f.commandRegistry)?.isRunning == true)
+
+        let refactorState = try workspace(named: "refactor-state", in: f.context)
+        let finished = try #require(commandStatus(for: refactorState, in: f.store, registry: f.commandRegistry))
+        #expect(finished.isRunning == false)
+        #expect(finished.exitCode == nil)
+
+        let refactorRuntime = try workspace(named: "refactor-runtime", in: f.context)
+        #expect(commandStatus(for: refactorRuntime, in: f.store, registry: f.commandRegistry)?.exitCode == 1)
+    }
+
     @Test("Re-invoking the seeder is idempotent once the latch is set")
     func idempotentAfterFirstCall() throws {
         let f = try freshFixtures()
@@ -246,5 +317,27 @@ struct UIFixtureSeederTests {
         let bugfix = try workspace(named: "bugfix-422", in: f.context)
         // The second invocation must not land bugfix-422 in .errored.
         #expect(status(for: bugfix, in: f.store, registry: f.registry) == nil)
+    }
+
+    @Test("Command-status seeder is idempotent once the latch is set")
+    func commandStatusSeederIdempotentAfterFirstCall() throws {
+        let f = try freshFixtures()
+        let first = UIFixtureSeeder.seedCommandStatusesIfNeeded(
+            from: [UIFixtureSeeder.commandStatusesEnvKey: "feature-auth:failed"],
+            in: f.context,
+            commandStatusRegistry: f.commandRegistry,
+            hostTerminalState: f.store
+        )
+        #expect(first == 1)
+        let second = UIFixtureSeeder.seedCommandStatusesIfNeeded(
+            from: [UIFixtureSeeder.commandStatusesEnvKey: "bugfix-422:failed"],
+            in: f.context,
+            commandStatusRegistry: f.commandRegistry,
+            hostTerminalState: f.store
+        )
+        #expect(second == 0)
+
+        let bugfix = try workspace(named: "bugfix-422", in: f.context)
+        #expect(commandStatus(for: bugfix, in: f.store, registry: f.commandRegistry) == nil)
     }
 }

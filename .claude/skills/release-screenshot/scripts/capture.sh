@@ -24,6 +24,7 @@ Usage: capture.sh <scenario> [--output PATH] [--no-build] [--keep-running]
 
 Scenarios:
   phase-1-release   Matches .context/ux-review/release-screenshot.png
+  m6-status-sliver  Shows the terminal command-status sliver
   attention-only    Single workspace awaiting input
   clean             Baseline — no agent states
   inline:<env>      Pass <env> directly as WORKSPACES_UI_FIXTURE_AGENT_STATES
@@ -73,17 +74,25 @@ fi
 
 if [[ "$scenario" == inline:* ]]; then
     agent_states="${scenario#inline:}"
+    command_statuses=""
     scenario_id="inline"
 else
     case "$scenario" in
         phase-1-release)
             agent_states="feature-auth:thinking,bugfix-422:awaitingInput,refactor-runtime:errored"
+            command_statuses=""
+            ;;
+        m6-status-sliver)
+            agent_states=""
+            command_statuses="feature-auth:failed"
             ;;
         attention-only)
             agent_states="bugfix-422:awaitingInput"
+            command_statuses=""
             ;;
         clean)
             agent_states=""
+            command_statuses=""
             ;;
         *)
             echo "ERROR: unknown scenario '$scenario'." >&2
@@ -115,6 +124,12 @@ if [[ -n "$agent_states" ]]; then
     ws_log "WORKSPACES_UI_FIXTURE_AGENT_STATES=${agent_states}"
 else
     unset WORKSPACES_UI_FIXTURE_AGENT_STATES || true
+fi
+if [[ -n "$command_statuses" ]]; then
+    export WORKSPACES_UI_FIXTURE_COMMAND_STATUSES="$command_statuses"
+    ws_log "WORKSPACES_UI_FIXTURE_COMMAND_STATUSES=${command_statuses}"
+else
+    unset WORKSPACES_UI_FIXTURE_COMMAND_STATUSES || true
 fi
 
 if [[ $do_build -eq 1 ]]; then

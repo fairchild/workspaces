@@ -2,8 +2,8 @@
 //  UIFixtureSeeder.swift
 //  WorkspaceManager
 //
-//  Fixture-mode seeding for SwiftData and agent session state. Drives
-//  deterministic screenshots via WORKSPACES_UI_FIXTURE_AGENT_STATES.
+//  Fixture-mode seeding for SwiftData, agent session state, and command status.
+//  Drives deterministic screenshots via WORKSPACES_UI_FIXTURE_* env vars.
 //
 
 import AppKit
@@ -14,10 +14,12 @@ import WorkspaceManagerCore
 @MainActor
 enum UIFixtureSeeder {
     static let agentStatesEnvKey = "WORKSPACES_UI_FIXTURE_AGENT_STATES"
+    static let commandStatusesEnvKey = "WORKSPACES_UI_FIXTURE_COMMAND_STATUSES"
 
     /// Idempotency latch — `seedAgentStatesIfNeeded` may be invoked multiple times
     /// as views re-appear, but the synthetic events should only land once per launch.
     static var hasSeededAgentStates = false
+    static var hasSeededCommandStatuses = false
 
     /// Seeds the in-memory fixture model context with the standard set of repos,
     /// web sources, and workspaces used across screenshots. No-op when the context
@@ -180,9 +182,64 @@ enum UIFixtureSeeder {
         return applied
     }
 
+    /// Reads `WORKSPACES_UI_FIXTURE_COMMAND_STATUSES`, resolves workspace names
+    /// against `context`, ensures a host terminal session exists for each, then
+    /// publishes synthetic command status for the M6 status sliver.
+    @discardableResult
+    static func seedCommandStatusesIfNeeded(
+        from environment: [String: String],
+        in context: ModelContext,
+        commandStatusRegistry: LastCommandStatusRegistry,
+        hostTerminalState: HostTerminalStateStore,
+        now: Date = Date()
+    ) -> Int {
+        guard !hasSeededCommandStatuses else { return 0 }
+        guard let raw = environment[commandStatusesEnvKey],
+            !raw.trimmingCharacters(in: .whitespaces).isEmpty
+        else {
+            return 0
+        }
+        hasSeededCommandStatuses = true
+
+        let entries = parseCommandStatusEntries(raw)
+        guard !entries.isEmpty else { return 0 }
+
+        var applied = 0
+        var firstActivation: (key: HostTerminalSessionKey, directory: URL)?
+        let workspaces = fetchAllWorkspaces(in: context)
+        for entry in entries {
+            guard
+                let workspace = workspaces.first(where: {
+                    $0.name.caseInsensitiveCompare(entry.workspaceName) == .orderedSame
+                })
+            else {
+                NSLog("[UIFixture] No fixture workspace named '%@' — skipping", entry.workspaceName)
+                continue
+            }
+
+            let directory = workspace.workspaceURL.standardizedFileURL.resolvingSymlinksInPath()
+            let key: HostTerminalSessionKey = .hostPath(directory.path)
+            let result = hostTerminalState.activateSession(key: key, directory: directory)
+            if firstActivation == nil {
+                firstActivation = (key, directory)
+            }
+            commandStatusRegistry.setStatus(
+                entry.status.status(at: now),
+                for: result.session.id
+            )
+            applied += 1
+        }
+
+        if let primary = firstActivation {
+            hostTerminalState.activateSession(key: primary.key, directory: primary.directory)
+        }
+        return applied
+    }
+
     /// Test seam — resets the idempotency latch.
     static func resetForTesting() {
         hasSeededAgentStates = false
+        hasSeededCommandStatuses = false
     }
 
     // MARK: - Parsing
@@ -210,6 +267,67 @@ enum UIFixtureSeeder {
                 return nil
             }
             return ParsedEntry(workspaceName: name, run: run)
+        }
+    }
+
+    struct ParsedCommandStatusEntry: Equatable {
+        let workspaceName: String
+        let status: FixtureCommandStatus
+    }
+
+    enum FixtureCommandStatus: Equatable {
+        case success
+        case failed
+        case running
+        case finished
+
+        func status(at now: Date) -> LastCommandStatus {
+            switch self {
+            case .success:
+                return LastCommandStatus(
+                    commandLine: "swift build",
+                    exitCode: 0,
+                    startedAt: now.addingTimeInterval(-1.2),
+                    endedAt: now
+                )
+            case .failed:
+                return LastCommandStatus(
+                    commandLine: "swift test",
+                    exitCode: 1,
+                    startedAt: now.addingTimeInterval(-2.4),
+                    endedAt: now
+                )
+            case .running:
+                return .started(commandLine: "swift test", at: now.addingTimeInterval(-8))
+            case .finished:
+                return LastCommandStatus(
+                    commandLine: "git status",
+                    exitCode: nil,
+                    startedAt: now.addingTimeInterval(-0.4),
+                    endedAt: now
+                )
+            }
+        }
+    }
+
+    static func parseCommandStatusEntries(_ raw: String) -> [ParsedCommandStatusEntry] {
+        raw.split(separator: ",", omittingEmptySubsequences: true).compactMap { fragment in
+            let pair = fragment.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
+            guard pair.count == 2 else {
+                NSLog("[UIFixture] Malformed command-status entry '%@' — expected name:status", String(fragment))
+                return nil
+            }
+            let name = pair[0].trimmingCharacters(in: .whitespaces)
+            let stateToken = pair[1].trimmingCharacters(in: .whitespaces)
+            guard !name.isEmpty else {
+                NSLog("[UIFixture] Empty workspace name in '%@' — skipping", String(fragment))
+                return nil
+            }
+            guard let status = commandStatus(for: stateToken) else {
+                NSLog("[UIFixture] Unknown command status '%@' for '%@' — skipping", stateToken, name)
+                return nil
+            }
+            return ParsedCommandStatusEntry(workspaceName: name, status: status)
         }
     }
 
@@ -241,6 +359,21 @@ enum UIFixtureSeeder {
             return [.errored(category: category, message: message)]
         case .complete:
             return [.stopped(error: nil)]
+        }
+    }
+
+    private static func commandStatus(for token: String) -> FixtureCommandStatus? {
+        switch token.lowercased() {
+        case "success", "succeeded", "exit0", "exit-0":
+            return .success
+        case "failed", "failure", "exit1", "exit-1", "nonzero", "non-zero":
+            return .failed
+        case "running", "inflight", "in-flight":
+            return .running
+        case "finished", "unknown", "unknown-exit":
+            return .finished
+        default:
+            return nil
         }
     }
 

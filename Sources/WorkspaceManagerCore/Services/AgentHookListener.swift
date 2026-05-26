@@ -46,6 +46,8 @@ public actor AgentHookListener {
     private var listener: NWListener?
     private var lockFileDescriptor: Int32?
     private var statistics = Statistics()
+    private var commandMarkerRequestQueue: [HTTPRequest] = []
+    private var isDrainingCommandMarkerRequests = false
 
     public init(
         bundleIdentifier: String,
@@ -190,6 +192,10 @@ public actor AgentHookListener {
         let (status, body) = route(request)
         statistics.requestCount += 1
         let response = Self.httpResponse(status: status, body: body)
+        let isCommandMarkerRequest = Self.isCommandMarkerRequest(request)
+        if isCommandMarkerRequest {
+            enqueueCommandMarkerRequest(request)
+        }
         connection.send(
             content: response,
             completion: .contentProcessed { _ in
@@ -197,8 +203,10 @@ public actor AgentHookListener {
             })
 
         // Process payload off the response path so the hook caller never blocks on us.
-        Task { [request] in
-            await self.process(request: request)
+        if !isCommandMarkerRequest {
+            Task { [request] in
+                await self.process(request: request)
+            }
         }
     }
 
@@ -223,11 +231,31 @@ public actor AgentHookListener {
             await processEvent(request: request)
         case ("POST", "/statusline"):
             await processStatusLine(request: request)
-        case ("POST", "/command-markers"):
-            await processCommandMarkers(request: request)
         default:
             break
         }
+    }
+
+    private static func isCommandMarkerRequest(_ request: HTTPRequest) -> Bool {
+        request.method.uppercased() == "POST" && request.path == "/command-markers"
+    }
+
+    private func enqueueCommandMarkerRequest(_ request: HTTPRequest) {
+        commandMarkerRequestQueue.append(request)
+        guard !isDrainingCommandMarkerRequests else { return }
+
+        isDrainingCommandMarkerRequests = true
+        Task {
+            await self.drainCommandMarkerRequests()
+        }
+    }
+
+    private func drainCommandMarkerRequests() async {
+        while !commandMarkerRequestQueue.isEmpty {
+            let request = commandMarkerRequestQueue.removeFirst()
+            await processCommandMarkers(request: request)
+        }
+        isDrainingCommandMarkerRequests = false
     }
 
     private func processEvent(request: HTTPRequest) async {
@@ -282,10 +310,6 @@ public actor AgentHookListener {
             logger("dropping command markers without valid host session header")
             return
         }
-        guard await isRegisteredHostSession(hostSessionID) else {
-            logger("dropping command markers for unregistered host session \(hostSessionID.uuidString)")
-            return
-        }
         guard !request.body.isEmpty else {
             statistics.decodeFailures += 1
             logger("command marker decode failed: empty body")
@@ -304,8 +328,14 @@ public actor AgentHookListener {
             return
         }
 
-        await MainActor.run { [commandStatusRegistry, markers] in
+        let ingested = await MainActor.run { [registry, commandStatusRegistry, markers] in
+            guard registry.statuses[hostSessionID] != nil else { return false }
             commandStatusRegistry.ingest(markers: markers, for: hostSessionID)
+            return true
+        }
+        guard ingested else {
+            logger("dropping command markers for unregistered host session \(hostSessionID.uuidString)")
+            return
         }
         statistics.commandMarkerUpdates += 1
     }
