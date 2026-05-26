@@ -137,6 +137,14 @@ What still requires you (no API exists for these):
 
 **PR preview trigger.** `web-preview.yml` runs on non-draft, same-repo PRs that touch `web/**` or the preview workflow itself. Fork PRs are intentionally skipped because they cannot safely receive Vercel deployment secrets.
 
+**Managed reviewer validation.** The pre-promotion gate runs the managed
+reviewer ingress canary, broker, and monitor strictly. Post-promotion
+`validate-prod` runs the ingress canary again, skips the mutating broker, and
+treats monitor queue-health attention as advisory so a failed historical review
+run does not block production Playwright smoke or release readiness. Use the
+scheduled Managed Reviewer Broker/Health workflows and
+`uv run --script scripts/pr-reviewer-runs.py` for operational reviewer failures.
+
 ## Design decisions worth understanding
 
 - **Why monolithic `cd.yml` not split workflows.** Promote needs `needs:` semantics across web + workers. Splitting loses the "all validators must pass before any promote" atomicity.

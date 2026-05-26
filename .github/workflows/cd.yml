@@ -339,7 +339,7 @@ jobs:
           WORKSPACES_WEBHOOK_CANARY_SECRET: ${{ secrets.WORKSPACES_WEBHOOK_CANARY_SECRET }}
         run: |
           set +e
-          python3 ../scripts/managed-reviewer-ingress-canary.py > managed-reviewer-ingress-canary.log 2>&1
+          python3 ../scripts/managed-reviewer-ingress-canary.py --skip-broker --advisory-monitor > managed-reviewer-ingress-canary.log 2>&1
           CANARY_EXIT=$?
           cat managed-reviewer-ingress-canary.log
           if [ "$CANARY_EXIT" -ne 0 ]; then

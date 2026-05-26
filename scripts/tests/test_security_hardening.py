@@ -437,6 +437,7 @@ class SecurityHardeningTests(unittest.TestCase):
         self.assertIn("canary-secret-preflight", cd_workflow)
         self.assertIn("managed-reviewer-canary-preflight", cd_workflow)
         self.assertIn("Managed reviewer ingress canary before promotion", cd_workflow)
+        self.assertIn("--skip-broker --advisory-monitor", cd_workflow)
         self.assertIn("pre-prod-managed-reviewer-ingress-findings", cd_workflow)
         self.assertIn(
             "WORKSPACES_WEBHOOK_CANARY_SECRET is required before production promotion",
@@ -447,6 +448,10 @@ class SecurityHardeningTests(unittest.TestCase):
         self.assertIn("wrangler deploy --dry-run", workflow)
         self.assertIn("urllib.request", canary_script)
         self.assertIn("SAFE_RESPONSE_KEYS", canary_script)
+        self.assertIn("SAFE_RUN_KEYS", canary_script)
+        self.assertIn("def safe_runs", canary_script)
+        self.assertIn("--advisory-monitor", canary_script)
+        self.assertIn("def broker_url", canary_script)
         self.assertIn("scripts/pr-reviewer-broker.py", broker_workflow)
         self.assertIn("schedule:", broker_workflow)
         self.assertNotIn("scripts/managed-reviewer-ingress-canary.py", broker_workflow)
