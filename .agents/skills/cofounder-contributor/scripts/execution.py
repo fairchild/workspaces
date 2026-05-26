@@ -59,6 +59,34 @@ from github_state import (
 
 _label_cache: set[str] | None = None
 
+APP_BOT_GIT_IDENTITIES = {
+    # PR authorship comes from the GitHub App token; commit/contributor
+    # attribution comes from this git identity. Keep reviewer-only apps out of
+    # this table so they cannot accidentally seed CONTRIBUTOR status.
+    "april-clearwater": {
+        "login": "april-clearwater[bot]",
+        "email": "268297116+april-clearwater[bot]@users.noreply.github.com",
+    },
+    "workspace-agents": {
+        "login": "workspace-agents[bot]",
+        "email": "266434718+workspace-agents[bot]@users.noreply.github.com",
+    },
+}
+
+
+def app_bot_git_identity(env: dict[str, str], persona: str, bot_login: str) -> tuple[str, str]:
+    app_slug = env.get("GH_APP_SLUG", "").strip()
+    if not app_slug:
+        return bot_login or short_persona_name(persona), f"{persona_slug(persona)}@users.noreply.github.com"
+
+    identity = APP_BOT_GIT_IDENTITIES.get(app_slug)
+    if identity is None:
+        raise RuntimeError(
+            f"GH_APP_SLUG={app_slug!r} does not have an approved commit identity. "
+            "Add it to APP_BOT_GIT_IDENTITIES only for apps that are allowed to push commits."
+        )
+    return identity["login"], identity["email"]
+
 
 def _dismiss_own_blocking_reviews(pr_number: int, bot_login: str, env: dict[str, str]) -> None:
     """Dismiss prior CHANGES_REQUESTED reviews from this bot before approving."""
@@ -192,8 +220,7 @@ def build_execution_summary_body(
 
 
 def set_git_identity(env: dict[str, str], persona: str, bot_login: str) -> None:
-    user_name = bot_login or short_persona_name(persona)
-    user_email = f"{persona_slug(persona)}@users.noreply.github.com"
+    user_name, user_email = app_bot_git_identity(env, persona, bot_login)
     run_checked(["git", "config", "user.name", user_name], timeout=GITHUB_API_TIMEOUT, cwd=REPO_ROOT, env=env)
     run_checked(["git", "config", "user.email", user_email], timeout=GITHUB_API_TIMEOUT, cwd=REPO_ROOT, env=env)
 

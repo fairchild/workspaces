@@ -10,7 +10,7 @@ Use it when you want to remember:
 - how to redirect or stop agents
 - what signals the agents actually listen to
 
-For the implementation details behind this protocol, see [agent-team.md](/Users/fairchild/.codex/worktrees/7a0f/workspaces/docs/development/agent-team.md).
+For the implementation details behind this protocol, see [agent-team.md](agent-team.md). For GitHub App identity, contributor attribution, reviewer isolation, and code-owner approval policy, see [github-app-identities.md](github-app-identities.md).
 
 ## Core Rule
 
@@ -23,6 +23,8 @@ The current control points are:
 3. You approve execution by reacting with 👍 on Peter's planning summary comment.
 4. April and Plat pick up approved work on their next wake-up.
 5. You review and merge PRs yourself.
+
+The intended merge gate is two approvals: one from the contributing app bot and one from you as `@fairchild`, the sole global code owner in `.github/CODEOWNERS`. Branch protection or rulesets must enable required code-owner review for CODEOWNERS to become a merge gate.
 
 ## Quick Reference
 
@@ -76,6 +78,13 @@ Internally, the next contributor wake-up converts that discussion approval into 
 There is no agent merge signal.
 
 You merge the PR yourself when it is ready.
+
+When branch protection is configured for this policy, wait for both approval signals:
+
+- the contributing app bot approval
+- your `@fairchild` code-owner approval
+
+Do not treat `workspaces-claude-pr-reviewer[bot]` as the contributing bot approval. That app is review-only and must not be seeded with commit history.
 
 ## Recommended Workflow
 
@@ -191,7 +200,8 @@ Good examples:
 ## If Native App Reviews Break
 
 - Workflow `permissions:` only affect the built-in `GITHUB_TOKEN`. They do not grant pull request review authority to GitHub App installation tokens.
-- Update the affected GitHub App in GitHub settings so the repository permissions include `pull_requests: write`, `contents: write`, `issues: write`, `discussions: write`, and `metadata: read`.
+- For contributing apps such as `april-clearwater` and `workspace-agents`, update the affected GitHub App in GitHub settings so repository permissions include `contents: write`, `pull_requests: write`, and `metadata: read`.
+- For `workspaces-claude-pr-reviewer`, keep the app review-only: `contents: read`, `pull_requests: write`, `statuses: write`, and `metadata: read`. Do not grant it `contents: write`.
 - After saving the permission change, re-approve the app installation for `fairchild/workspaces`. Existing installations do not pick up new permissions until you do.
 - Run the manual `GitHub App Review Smoke` workflow against a disposable PR before relying on app-native reviews again.
 

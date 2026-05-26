@@ -2,6 +2,34 @@ import crypto from "node:crypto";
 import type { EventStats } from "./events";
 import type { ChatMessage } from "./types";
 
+const FORBIDDEN_PUBLIC_AGENT_MENTION_RE =
+	/(^|[^A-Za-z0-9_-])@(april)(?![A-Za-z0-9_-])/i;
+const PUBLIC_AGENT_TARGET_RE = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
+
+export function findForbiddenPublicAgentMention(text: string): string | null {
+	const match = text.match(FORBIDDEN_PUBLIC_AGENT_MENTION_RE);
+	return match ? `@${match[2]}` : null;
+}
+
+export function validatePublicAgentTarget(
+	target: string | null | undefined,
+	options: { allowSpaces?: boolean } = {},
+): string | null {
+	if (!target) return null;
+	if (!PUBLIC_AGENT_TARGET_RE.test(target)) {
+		return "Agent names may contain only letters, numbers, underscores, and hyphens.";
+	}
+	if (target.toLowerCase() === "spaces") {
+		return options.allowSpaces === false
+			? "@spaces is a bot command target, not a dispatchable agent."
+			: null;
+	}
+	if (target.toLowerCase() === "april") {
+		return "Use @april-clearwater instead of @april; @april is a different GitHub user.";
+	}
+	return null;
+}
+
 export async function handleBotCommand(params: {
 	target: string | null;
 	message: string;
