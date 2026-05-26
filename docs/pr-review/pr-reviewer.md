@@ -125,12 +125,13 @@ completed ReviewRun could not be published or marked superseded.
 
 Reviewer ingress is covered by `.github/workflows/managed-reviewer-ingress.yml`.
 The workflow runs when either side of the Cloudflare-to-Vercel contract changes:
-the Worker relay, the web webhook route, the reviewer trigger/runtime files, or
-the shared trigger fixtures. It runs:
+the Worker relay, the web webhook route, the reviewer trigger parser, the shared
+trigger fixtures, the ingress canary script, or the workflow itself. It runs:
 
 - `pnpm exec vitest run src/app/api/webhooks/github/route.test.ts`
 - `cd infra/cloudflare-webhook-relay && bun run test:e2e`
 - `cd infra/cloudflare-webhook-relay && bun run --bun wrangler deploy --dry-run`
+- `python3 scripts/managed-reviewer-ingress-canary.py --help`
 
 The shared trigger fixture matrix lives in
 `web/src/lib/agent-runtime/__tests__/pr-review-trigger-fixtures.ts` and is
@@ -138,16 +139,15 @@ imported by both the Vercel route tests and the Cloudflare relay e2e harness.
 This is the regression guard for drift between "forward this webhook" and
 "start the reviewer".
 
-Production CD requires `WORKSPACES_WEBHOOK_CANARY_SECRET`. Before promotion it
-runs the ingress canary, broker, and monitor as a strict gate so a known-broken
-reviewer does not get papered over by a deploy. After promotion, `validate-prod`
-checks the ingress canary again before the production Playwright smoke, skips
-the mutating broker, and reports monitor attention as advisory queue health. The
-scheduled broker and health workflows remain the source of truth for live
-reviewer reconciliation failures.
+Production CD requires `WORKSPACES_WEBHOOK_CANARY_SECRET`, runs the ingress
+canary before promotion, then repeats it in `validate-prod` after promotion
+before the production Playwright smoke. That canary proves only relay delivery,
+route HMAC validation, canary-secret validation, and dry-run trigger selection.
+It does not broker completed runs or report queue health; the scheduled broker
+and health workflows own live reviewer reconciliation failures.
 
-The scheduled ingress workflow is a contract probe, not the normal broker
-driver. Use `Managed Reviewer Broker` to reconcile completed runs on demand.
+The scheduled ingress workflow is a contract probe. It does not reconcile
+completed runs and does not report queue health.
 
 Production canary:
 
@@ -155,6 +155,12 @@ Production canary:
 curl --fail-with-body -sS -X POST \
   https://webhooks.cloudcompute.com/canary/pr-review-ingress \
   -H "X-Workspace-Webhook-Canary: $WORKSPACES_WEBHOOK_CANARY_SECRET"
+```
+
+Broker reconciliation:
+
+```bash
+uv run --script scripts/pr-reviewer-broker.py --limit 5
 ```
 
 Operator run report:
@@ -179,18 +185,6 @@ route verifies the GitHub-style HMAC and the canary secret before returning the
 dry-run result, and returns before `pushEvent()` or `triggerPrReview()` so no
 managed-agent session or GitHub review is created.
 
-The same workflow also calls:
-
-```bash
-curl --fail-with-body -sS -X POST \
-  "https://spaces.cloudcompute.com/api/webhooks/github/pr-reviewer-broker?limit=5" \
-  -H "X-Workspace-Webhook-Canary: $WORKSPACES_WEBHOOK_CANARY_SECRET"
-
-curl --fail-with-body -sS \
-  "https://spaces.cloudcompute.com/api/webhooks/github/pr-reviewer-monitor?windowMinutes=90" \
-  -H "X-Workspace-Webhook-Canary: $WORKSPACES_WEBHOOK_CANARY_SECRET"
-```
-
 The broker inspects `started` rows in `managed_pr_review_runs`, skips sessions
 that are still running, validates completed review-intent JSON, and posts the
 review with the GitHub App token. The row keeps two lifecycle fields: `status`
@@ -199,12 +193,12 @@ or failure projection. Before posting, the broker re-checks current managed
 reviews on the PR; if another managed review was submitted after the session
 started, the stale session is marked `superseded`. If the superseding review is
 for an older head, the broker starts a fresh follow-up session so the newer-head
-review includes the prior review context. The monitor then compares recent
+review includes the prior review context. The run report compares recent
 reviewer-eligible rows in `webhook_events` with `managed_pr_review_runs`
-records and classifies the current ReviewRun rows into starting, executing,
-needs-projection, failed, and terminal buckets. These routes return only run
-metadata, details URLs, stored failure reasons, and missing event identifiers,
-not raw payloads or secrets.
+records and classifies ReviewRun rows into starting, executing,
+needs-projection, failed, and terminal buckets. Broker and report routes return
+only run metadata, details URLs, stored failure reasons, and missing event
+identifiers, not raw payloads or secrets.
 
 ## Observing Sessions
 
