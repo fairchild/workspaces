@@ -58,6 +58,8 @@ To make another app a contributing bot:
 5. Run a disposable PR with that app token and verify the PR author and commit attribution resolve to the bot.
 6. After a bot-authored commit lands in the default branch history, verify a later review from that bot reports `authorAssociation: CONTRIBUTOR`.
 
+When seeding contributor status through a PR, merge with a merge commit. Squash or rebase merging can remove the bot-authored commit from default-branch history and invalidate the contributor evidence.
+
 Do not repeat this process for `workspaces-claude-pr-reviewer`. That app is intentionally review-only.
 
 ## Verification Checklist
