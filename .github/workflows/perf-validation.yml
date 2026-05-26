@@ -17,7 +17,7 @@ on:
       - scripts/perf_schema.py
       - scripts/perf-compare.py
       - scripts/new-workspace-perf.sh
-      - scripts/test_perf_tools.py
+      - scripts/tests/test_perf_tools.py
       - scripts/launch-installed-diagnostics.sh
       - scripts/verify-installed-perf.sh
       - Sources/**
@@ -170,7 +170,7 @@ jobs:
         run: swift build
 
       - name: Validate perf tooling
-        run: python3 scripts/test_perf_tools.py
+        run: uv run --script scripts/tests/test_perf_tools.py
 
       - name: Capture perf baseline
         run: ./scripts/perf-baseline.sh 3 6 --record --assert-budget

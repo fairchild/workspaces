@@ -3,7 +3,12 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""Regression tests for the workflow and Lume security hardening."""
+"""Security policy tests for workflows, setup, and local runner surfaces.
+
+Intent: keep open-source repo automation fail-closed by checking public
+trigger secret isolation, GitHub App identity routing, CODEOWNERS ownership,
+Lume password handling, pinned actions, and setup/mise trust boundaries.
+"""
 
 from __future__ import annotations
 
@@ -20,7 +25,7 @@ import unittest
 from pathlib import Path
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 class SecurityHardeningTests(unittest.TestCase):

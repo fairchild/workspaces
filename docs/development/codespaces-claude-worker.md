@@ -89,7 +89,7 @@ Inside the Codespace, Claude artifacts live under `.context/codespaces-claude-wo
 Quick local checks for the control-plane scripts:
 
 ```bash
-uv run --script ./scripts/test_codespaces_claude_launch.py
+uv run --script ./scripts/tests/test_codespaces_claude_launch.py
 uv run --script ./scripts/codespaces-claude-launch.py --help
 bash -n ./scripts/codespaces-claude-worker.sh
 ```

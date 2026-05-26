@@ -62,7 +62,7 @@ Run `mise tasks` from the repo root for the current catalog. Web dashboard tasks
 
 - `uv run --script ./scripts/codespaces-claude-launch.py --help`
   - Shows the runner-side CLI that creates a Codespace, uploads a request file, and launches the repo's in-Codespace Claude worker.
-- `uv run --script ./scripts/test_codespaces_claude_launch.py`
+- `uv run --script ./scripts/tests/test_codespaces_claude_launch.py`
   - Runs stdlib tests for the launcher path.
 - `./scripts/codespaces-claude-worker.sh --help`
   - Shows the Codespace-side Claude runner contract.
@@ -79,6 +79,22 @@ Run `mise tasks` from the repo root for the current catalog. Web dashboard tasks
   - Fails if `terminal_first_output` / `first_prompt_ready` are missing or if known Ghostty resource warnings appear.
   - Requires an interactive display-capable macOS session; it is not valid in headless AppKit environments.
   - `--allow-skip-noninteractive` converts only the known display-session limitation into a recorded skip for release automation.
+
+## Script Test Harnesses
+
+Standalone script tests live in `./scripts/tests/`. Keep those files executable
+UV scripts with module docstrings that explain intent, not just mechanics. That
+directory is for lightweight harnesses around scripts in `./scripts/`; tests for
+repo-owned agent skills stay with the skill or under `.agents/scripts/`.
+
+Common examples:
+
+- `uv run --script ./scripts/tests/test_agent_triage.py`
+  - Public GitHub mention triage and approval-gate policy tests.
+- `uv run --script ./scripts/tests/test_run_contributor.py`
+  - Contributor runner policy tests, including app-bot git identity selection.
+- `uv run --script ./scripts/tests/test_security_hardening.py`
+  - Workflow, setup, Lume, CODEOWNERS, and open-source automation hardening tests.
 
 ## Performance Contract
 

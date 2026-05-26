@@ -3,7 +3,12 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""Tests for scripts/validate-release-changes.py."""
+"""Release-gate tests for validating release-sensitive diffs.
+
+Intent: keep release automation honest by classifying release metadata changes
+and ensuring the workflow reports actionable validation failures before tags,
+appcast updates, or package publishing proceed.
+"""
 
 from __future__ import annotations
 
@@ -12,7 +17,7 @@ import unittest
 from pathlib import Path
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "validate-release-changes.py"
 
 spec = importlib.util.spec_from_file_location("validate_release_changes", SCRIPT_PATH)

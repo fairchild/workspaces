@@ -6,11 +6,17 @@ on:
     paths:
       - ".agents/**"
       - ".github/workflows/ci-agents.yml"
+      - "scripts/agent-triage-request.py"
+      - "scripts/tests/test_agent_triage.py"
+      - "scripts/tests/test_run_contributor.py"
   pull_request:
     branches: [main]
     paths:
       - ".agents/**"
       - ".github/workflows/ci-agents.yml"
+      - "scripts/agent-triage-request.py"
+      - "scripts/tests/test_agent_triage.py"
+      - "scripts/tests/test_run_contributor.py"
   workflow_dispatch:
 
 permissions:
@@ -38,3 +44,9 @@ jobs:
 
       - name: Run gh-discuss tests
         run: uv run .agents/skills/gh-discuss/scripts/test_gh_discuss.py
+
+      - name: Run public agent triage tests
+        run: uv run --script scripts/tests/test_agent_triage.py
+
+      - name: Run contributor runner policy tests
+        run: uv run --script scripts/tests/test_run_contributor.py

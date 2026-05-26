@@ -3,7 +3,12 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""Stdlib tests for the ops reporting script."""
+"""Fixture tests for the ops reporting script.
+
+Intent: protect the live-ops report generator using checked-in fixtures so
+cooldown, breach selection, and report rendering behavior can be validated
+without writing real ops snapshots or mutating GitHub state.
+"""
 
 from __future__ import annotations
 
@@ -19,9 +24,10 @@ from pathlib import Path
 from unittest import mock
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 FIXTURES_DIR = REPO_ROOT / "fixtures" / "ops-report"
 SCRIPT_PATH = REPO_ROOT / "scripts" / "ops-report.py"
+sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 
 def load_module(name: str, path: Path):

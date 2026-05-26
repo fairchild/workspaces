@@ -3,7 +3,12 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""Tests for scripts/pr-review-health.py."""
+"""Health tests for the managed PR reviewer monitor.
+
+Intent: keep the scheduled reviewer-health check focused on stale or missing
+managed reviews while avoiding false failures for drafts, inactive PRs, or
+ordinary review states that do not need operator intervention.
+"""
 
 from __future__ import annotations
 
@@ -14,7 +19,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "pr-review-health.py"
 
 spec = importlib.util.spec_from_file_location("pr_review_health", SCRIPT_PATH)
