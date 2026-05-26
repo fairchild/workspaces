@@ -89,6 +89,11 @@ export interface ManagedPrReviewRunsTable {
 	projection_updated_at: string | null;
 	projection_error: string | null;
 	github_review_id: string | null;
+	active_claim_key: string | null;
+	coalesced_head_sha: string | null;
+	coalesced_trigger_kind: string | null;
+	coalesced_trigger_source_id: string | null;
+	coalesced_at: string | null;
 }
 
 interface Database {

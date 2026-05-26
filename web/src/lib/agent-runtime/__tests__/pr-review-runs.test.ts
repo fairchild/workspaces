@@ -53,6 +53,130 @@ describe("recordRunStart", () => {
 		expect(second.inserted).toBe(false);
 	});
 
+	it("coalesces a different active fingerprint for the same PR and reviewer config", async () => {
+		const { getPrReviewRunByFingerprint, recordRunStart } = await loadModule();
+		const active = makeInput({
+			fingerprint: "fp_active",
+			headSha: "head-a",
+			triggerKind: "synchronize",
+			triggerSourceId: "head-a",
+		});
+		const newer = makeInput({
+			fingerprint: "fp_newer",
+			headSha: "head-b",
+			triggerKind: "edited",
+			triggerSourceId: "body-new",
+		});
+
+		await expect(recordRunStart(active)).resolves.toEqual({ inserted: true });
+		const coalesced = await recordRunStart(newer);
+
+		expect(coalesced).toMatchObject({
+			inserted: false,
+			coalesced: true,
+			activeFingerprint: "fp_active",
+			priorStatus: "started",
+		});
+		const row = await getPrReviewRunByFingerprint("fp_active");
+		expect(row).toMatchObject({
+			coalescedHeadSha: "head-b",
+			coalescedTriggerKind: "edited",
+			coalescedTriggerSourceId: "body-new",
+		});
+		expect(row?.coalescedAt).toEqual(expect.any(String));
+	});
+
+	it("clears the active claim when a run reaches a terminal state", async () => {
+		const { recordRunStart, recordRunResult } = await loadModule();
+		const first = makeInput({
+			fingerprint: "fp_first",
+			headSha: "head-a",
+			triggerSourceId: "head-a",
+		});
+		const second = makeInput({
+			fingerprint: "fp_second",
+			headSha: "head-b",
+			triggerSourceId: "head-b",
+		});
+
+		await recordRunStart(first);
+		await recordRunResult(first.fingerprint, {
+			sessionId: "sesn_first",
+			status: "completed",
+		});
+
+		const next = await recordRunStart(second);
+		expect(next).toEqual({ inserted: true });
+	});
+
+	it("can release an active claim without changing the run status", async () => {
+		const { releaseRunActiveClaim, recordRunStart } = await loadModule();
+		const active = makeInput({
+			fingerprint: "fp_claim_release",
+			headSha: "head-a",
+			triggerSourceId: "head-a",
+		});
+		const followUp = makeInput({
+			fingerprint: "fp_after_release",
+			headSha: "head-b",
+			triggerSourceId: "head-b",
+		});
+
+		await recordRunStart(active);
+		await releaseRunActiveClaim(active.fingerprint);
+
+		await expect(recordRunStart(followUp)).resolves.toEqual({
+			inserted: true,
+		});
+	});
+
+	it("does not coalesce across different reviewer config hashes", async () => {
+		const { recordRunStart } = await loadModule();
+		const first = makeInput({
+			fingerprint: "fp_cfg_a",
+			reviewerConfigHash: "cfg-a",
+		});
+		const second = makeInput({
+			fingerprint: "fp_cfg_b",
+			reviewerConfigHash: "cfg-b",
+		});
+
+		await expect(recordRunStart(first)).resolves.toEqual({ inserted: true });
+		await expect(recordRunStart(second)).resolves.toEqual({ inserted: true });
+	});
+
+	it("releases a stale active claim so a newer fingerprint can start", async () => {
+		const { getPrReviewRunByFingerprint, recordRunStart } = await loadModule();
+		const stale = makeInput({
+			fingerprint: "fp_stale_active",
+			headSha: "head-a",
+			triggerSourceId: "head-a",
+		});
+		const newer = makeInput({
+			fingerprint: "fp_after_stale",
+			headSha: "head-b",
+			triggerSourceId: "head-b",
+		});
+
+		await recordRunStart(stale);
+		const { getDb } = await import("../../db");
+		const oldStamp = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+		await getDb()
+			.updateTable("managed_pr_review_runs")
+			.set({ updated_at: oldStamp })
+			.where("fingerprint", "=", stale.fingerprint)
+			.execute();
+
+		await expect(recordRunStart(newer)).resolves.toEqual({ inserted: true });
+		await expect(
+			getPrReviewRunByFingerprint(stale.fingerprint),
+		).resolves.toMatchObject({
+			status: "superseded",
+			projectionStatus: "superseded",
+			error: expect.stringContaining("active claim became stale"),
+		});
+	});
+
 	it("treats a completed prior run as a permanent skip", async () => {
 		const { recordRunStart, recordRunResult } = await loadModule();
 		const input = makeInput();
@@ -98,6 +222,44 @@ describe("recordRunStart", () => {
 		const retry = await recordRunStart(input);
 		expect(retry.inserted).toBe(true);
 		expect(retry.priorStatus).toBe("failed");
+	});
+
+	it("coalesces a failed exact-fingerprint retry if a different run is already active", async () => {
+		const { getPrReviewRunByFingerprint, recordRunStart, recordRunResult } =
+			await loadModule();
+		const failed = makeInput({
+			fingerprint: "fp_failed_exact",
+			headSha: "head-a",
+			triggerSourceId: "head-a",
+		});
+		const active = makeInput({
+			fingerprint: "fp_active_other",
+			headSha: "head-b",
+			triggerSourceId: "head-b",
+		});
+
+		await recordRunStart(failed);
+		await recordRunResult(failed.fingerprint, {
+			sessionId: null,
+			status: "failed",
+			error: "session failed before kickoff",
+		});
+		await expect(recordRunStart(active)).resolves.toEqual({ inserted: true });
+
+		const retry = await recordRunStart(failed);
+
+		expect(retry).toMatchObject({
+			inserted: false,
+			coalesced: true,
+			activeFingerprint: active.fingerprint,
+			priorStatus: "started",
+		});
+		await expect(
+			getPrReviewRunByFingerprint(active.fingerprint),
+		).resolves.toMatchObject({
+			coalescedHeadSha: "head-a",
+			coalescedTriggerSourceId: "head-a",
+		});
 	});
 
 	it("retries when a prior `started` row is stale (likely crashed)", async () => {
@@ -178,6 +340,10 @@ describe("bucketPrReviewRuns", () => {
 			error: null,
 			projectionError: null,
 			githubReviewId: null,
+			coalescedHeadSha: null,
+			coalescedTriggerKind: null,
+			coalescedTriggerSourceId: null,
+			coalescedAt: null,
 		};
 		const pendingRun = (overrides: {
 			fingerprint: string;

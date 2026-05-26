@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
 	fetch: vi.fn(),
 	recordRunStart: vi.fn(),
 	recordRunResult: vi.fn(),
+	releaseRunActiveClaim: vi.fn(),
 	listStartedPrReviewRuns: vi.fn(),
 	computeRunFingerprint: vi.fn(),
 }));
@@ -47,6 +48,7 @@ vi.mock("../pr-review-runs", () => ({
 	listStartedPrReviewRuns: mocks.listStartedPrReviewRuns,
 	recordRunStart: mocks.recordRunStart,
 	recordRunResult: mocks.recordRunResult,
+	releaseRunActiveClaim: mocks.releaseRunActiveClaim,
 }));
 
 vi.stubGlobal("fetch", mocks.fetch);
@@ -227,6 +229,7 @@ beforeEach(() => {
 	mocks.fetch.mockReset();
 	mocks.recordRunStart.mockReset();
 	mocks.recordRunResult.mockReset();
+	mocks.releaseRunActiveClaim.mockReset();
 	mocks.listStartedPrReviewRuns.mockReset();
 	mocks.computeRunFingerprint.mockReset();
 
@@ -239,6 +242,7 @@ beforeEach(() => {
 	mocks.computeRunFingerprint.mockReturnValue("fp_test");
 	mocks.recordRunStart.mockResolvedValue({ inserted: true });
 	mocks.recordRunResult.mockResolvedValue(undefined);
+	mocks.releaseRunActiveClaim.mockResolvedValue(undefined);
 	mocks.listStartedPrReviewRuns.mockResolvedValue([]);
 });
 
@@ -771,6 +775,119 @@ describe("processPendingPrReviewRuns", () => {
 			skippedRunning: 1,
 		});
 		expect(mocks.recordRunResult).not.toHaveBeenCalled();
+	});
+
+	it("suppresses stale completed output when a newer trigger was coalesced", async () => {
+		mocks.listStartedPrReviewRuns.mockResolvedValue([
+			{
+				fingerprint: "fp_coalesced_old",
+				repoFullName: "fairchild/workspaces",
+				prNumber: 486,
+				headSha: "old-head",
+				triggerKind: "synchronize",
+				triggerSourceId: "old-head",
+				sessionId: "sesn_old",
+				createdAt: "2026-05-17T06:24:27Z",
+				updatedAt: "2026-05-17T06:24:27Z",
+				coalescedHeadSha: "new-head",
+				coalescedTriggerKind: "edited",
+				coalescedTriggerSourceId: "body-new",
+				coalescedAt: "2026-05-17T06:25:00Z",
+			},
+		]);
+		mocks.listEvents.mockReturnValue(
+			asyncEvents([
+				{
+					type: "agent.message",
+					content: [
+						{
+							type: "text",
+							text: `Stale review output.
+
+\`\`\`json
+{"event":"APPROVE","body":"Old output should not post","labels":[]}
+\`\`\``,
+						},
+					],
+				},
+				{
+					type: "session.status_idle",
+					stop_reason: { type: "end_turn" },
+				},
+			]),
+		);
+		mocks.fetch.mockImplementation(
+			async (url: string, options?: RequestInit) => {
+				if (url.endsWith("/pulls/486")) {
+					return {
+						ok: true,
+						json: async () =>
+							githubPr(486, {
+								title: "Refactor main window orchestration",
+								html_url: "https://github.com/fairchild/workspaces/pull/486",
+								body: "Updated PR body",
+								head: { ref: "codex/main-window", sha: "new-head" },
+								base: { ref: "main" },
+							}),
+					};
+				}
+				if (url.includes("/pulls?")) {
+					return { ok: true, json: async () => [] };
+				}
+				if (url.includes("/labels?")) {
+					return { ok: true, json: async () => [] };
+				}
+				if (url.includes("/issues/486/comments?")) {
+					return { ok: true, json: async () => [] };
+				}
+				if (url.includes("/pulls/486/reviews?")) {
+					return { ok: true, json: async () => [] };
+				}
+				if (url.endsWith("/pulls/486/reviews")) {
+					throw new Error("stale review output should not be posted");
+				}
+				if (isManagedReviewStatusUrl(url)) {
+					expect(options?.method).toBe("POST");
+					return okResponse();
+				}
+				throw new Error(`Unexpected fetch URL: ${url}`);
+			},
+		);
+
+		const result = await processPendingPrReviewRuns({ limit: 1 });
+
+		expect(result).toMatchObject({
+			checked: 1,
+			completed: 0,
+			superseded: 1,
+			requeued: 1,
+		});
+		expect(mocks.createSession).toHaveBeenCalledTimes(1);
+		expect(mocks.releaseRunActiveClaim).toHaveBeenCalledWith(
+			"fp_coalesced_old",
+		);
+		expect(mocks.recordRunResult).toHaveBeenLastCalledWith(
+			"fp_coalesced_old",
+			expect.objectContaining({
+				sessionId: "sesn_old",
+				status: "superseded",
+				projectionStatus: "superseded",
+				error: expect.stringContaining("Follow-up session sesn_01 started"),
+			}),
+		);
+		expect(mocks.recordRunStart).toHaveBeenCalledWith(
+			expect.objectContaining({
+				triggerKind: "superseded_retry",
+				triggerSourceId: "coalesced-2026-05-17T06:25:00Z-head-new-head",
+			}),
+		);
+		expect(
+			mocks.fetch.mock.calls.some(
+				([url, options]) =>
+					String(url).endsWith("/pulls/486/reviews") &&
+					options?.method === "POST",
+			),
+		).toBe(false);
 	});
 
 	it("supersedes a completed session when a newer managed review already covers the same head", async () => {
@@ -1363,6 +1480,41 @@ describe("triggerPrReview rerun behavior", () => {
 
 		expect(mocks.createSession).not.toHaveBeenCalled();
 		expect(mocks.sendEvent).not.toHaveBeenCalled();
+	});
+
+	it("updates the PR status when a trigger coalesces into an active run", async () => {
+		mockPrList([githubPr(9), githubPr(8)]);
+		mocks.recordRunStart.mockResolvedValueOnce({
+			inserted: false,
+			priorStatus: "started",
+			coalesced: true,
+			activeFingerprint: "fp_active",
+		});
+
+		await expect(
+			triggerPrReview(payload(), {
+				kind: "edited",
+				triggerSourceId: "body-new",
+				reason: "PR body changed",
+			}),
+		).resolves.toBeNull();
+
+		expect(mocks.createSession).not.toHaveBeenCalled();
+		expect(mocks.sendEvent).not.toHaveBeenCalled();
+		const statusPost = mocks.fetch.mock.calls.find(([url]) =>
+			String(url).includes(
+				"/statuses/deadbeefcafebabe1234567890abcdef12345678",
+			),
+		);
+		expect(statusPost?.[1]).toMatchObject({ method: "POST" });
+		expect(JSON.parse(String(statusPost?.[1]?.body))).toMatchObject({
+			state: "pending",
+			context: "WorkSpaces Managed Review",
+			description:
+				"Managed reviewer already running; latest trigger coalesced.",
+			target_url:
+				"https://spaces.cloudcompute.com/dashboard/review-runs/fp_active",
+		});
 	});
 
 	it("includes prior managed reviews in the kickoff for reruns", async () => {
