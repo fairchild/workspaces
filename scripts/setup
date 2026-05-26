@@ -83,8 +83,14 @@ fi
 # any sibling worktree that actually has the env file.
 env_source_for() {
   local envfile="$1"
+  local conductor_source="${CONDUCTOR_ROOT_PATH:-}"
   local preferred_source="$HOME/code/$(basename "$REPO_ROOT")/$envfile"
   local worktree_path=""
+
+  if [[ -n "$conductor_source" && "$conductor_source/$envfile" != "$REPO_ROOT/$envfile" && -f "$conductor_source/$envfile" ]]; then
+    printf '%s\n' "$conductor_source/$envfile"
+    return 0
+  fi
 
   if [[ "$preferred_source" != "$REPO_ROOT/$envfile" && -f "$preferred_source" ]]; then
     printf '%s\n' "$preferred_source"
@@ -113,6 +119,11 @@ link_env_from_main() {
   [[ "$git_common" != "$git_dir" ]] || return 0  # not a worktree
 
   for envfile in .env .env.local; do
+    if [[ -L "$REPO_ROOT/$envfile" && ! -e "$REPO_ROOT/$envfile" ]]; then
+      echo "=> Replacing broken $envfile symlink"
+      rm "$REPO_ROOT/$envfile"
+    fi
+
     if [[ ! -e "$REPO_ROOT/$envfile" && ! -L "$REPO_ROOT/$envfile" ]]; then
       env_source="$(env_source_for "$envfile" || true)"
       if [[ -n "$env_source" ]]; then
