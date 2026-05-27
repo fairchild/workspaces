@@ -316,6 +316,27 @@ The recommended method for production releases.
       - `WorkSpaces-<version>.dmg`
       - `WorkSpaces-latest.dmg`
 
+5. **Final Download And Update Check**
+
+   After the release workflow passes and the published asset validation is
+   green, finish the release with an operator/user-visible update-path check:
+
+   ```bash
+   gh release download v<X.Y.Z> \
+       --repo fairchild/workspaces \
+       --pattern "WorkSpaces-<X.Y.Z>.dmg" \
+       --dir /tmp/workspaces-release-v<X.Y.Z> \
+       --clobber
+   ```
+
+   - Confirm the versioned DMG downloads from the published GitHub Release; do
+     not stop at seeing the asset listed in the browser.
+   - Ask the user to open the installed app and choose
+     `WorkSpaces > Check for Updates...`.
+   - The user should confirm Sparkle offers the newly published version and
+     shows the matching release notes.
+   - Record that user confirmation in the release handoff/status update.
+
 ### Method 1B: Tag-Driven Release (Main Commit Only)
 
 If you prefer to cut the tag yourself first, you can push a release tag from a `main` commit:
