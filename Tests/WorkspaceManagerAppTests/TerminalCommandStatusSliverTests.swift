@@ -5,9 +5,9 @@
 
 import Foundation
 import Testing
+import WorkspaceManagerCore
 
 @testable import WorkspaceManager
-import WorkspaceManagerCore
 
 @Suite("TerminalCommandStatusSliver")
 struct TerminalCommandStatusSliverPresentationTests {
