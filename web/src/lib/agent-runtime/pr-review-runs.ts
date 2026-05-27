@@ -50,12 +50,22 @@ async function ensureRunsTable(): Promise<void> {
 		.addColumn("projection_updated_at", "text")
 		.addColumn("projection_error", "text")
 		.addColumn("github_review_id", "text")
+		.addColumn("active_claim_key", "text")
+		.addColumn("coalesced_head_sha", "text")
+		.addColumn("coalesced_trigger_kind", "text")
+		.addColumn("coalesced_trigger_source_id", "text")
+		.addColumn("coalesced_at", "text")
 		.execute();
 	for (const [column, type] of [
 		["projection_status", "text"],
 		["projection_updated_at", "text"],
 		["projection_error", "text"],
 		["github_review_id", "text"],
+		["active_claim_key", "text"],
+		["coalesced_head_sha", "text"],
+		["coalesced_trigger_kind", "text"],
+		["coalesced_trigger_source_id", "text"],
+		["coalesced_at", "text"],
 	] as const) {
 		try {
 			await db.schema
@@ -71,6 +81,16 @@ async function ensureRunsTable(): Promise<void> {
 		.ifNotExists()
 		.on("managed_pr_review_runs")
 		.columns(["repo_full_name", "pr_number"])
+		.execute();
+	// New rows hold this nullable unique value only while active. Existing
+	// pre-migration `started` rows are intentionally not backfilled; they age out
+	// through the normal stale-started path rather than risking a broad migration.
+	await db.schema
+		.createIndex("ux_managed_pr_review_runs_active_claim")
+		.ifNotExists()
+		.on("managed_pr_review_runs")
+		.column("active_claim_key")
+		.unique()
 		.execute();
 	migrated = true;
 }
@@ -92,6 +112,8 @@ export function computeRunFingerprint(
 export interface RecordRunStartResult {
 	inserted: boolean;
 	priorStatus?: PrReviewRunStatus;
+	coalesced?: boolean;
+	activeFingerprint?: string;
 }
 
 /** Treat a `started` row older than this as crashed and eligible for retry. */
@@ -127,13 +149,81 @@ function normalizeProjectionStatus(
 	return projectionStatusForRunStatus(runStatus);
 }
 
+function activeClaimKey(input: {
+	repoFullName: string;
+	prNumber: number;
+	reviewerConfigHash: string;
+}): string {
+	return [
+		input.repoFullName,
+		String(input.prNumber),
+		input.reviewerConfigHash,
+	].join("|");
+}
+
+async function coalesceIntoActiveRun(input: {
+	activeClaimKey: string;
+	headSha: string;
+	triggerKind: string;
+	triggerSourceId: string;
+	now: string;
+}): Promise<RecordRunStartResult | null> {
+	const db = getDb();
+	const active = await db
+		.selectFrom("managed_pr_review_runs")
+		.select(["fingerprint", "status", "updated_at"])
+		.where("active_claim_key", "=", input.activeClaimKey)
+		.executeTakeFirst();
+	if (!active || active.status !== "started") return null;
+
+	const updatedMs = Date.parse(active.updated_at);
+	const ageMs = Number.isFinite(updatedMs) ? Date.now() - updatedMs : 0;
+	if (ageMs >= STALE_STARTED_MS) {
+		await db
+			.updateTable("managed_pr_review_runs")
+			.set({
+				status: "superseded",
+				error:
+					"Superseded by a newer trigger after the active claim became stale.",
+				updated_at: input.now,
+				projection_status: "superseded",
+				projection_updated_at: input.now,
+				active_claim_key: null,
+			})
+			.where("fingerprint", "=", active.fingerprint)
+			.execute();
+		return null;
+	}
+
+	await db
+		.updateTable("managed_pr_review_runs")
+		.set({
+			coalesced_head_sha: input.headSha,
+			coalesced_trigger_kind: input.triggerKind,
+			coalesced_trigger_source_id: input.triggerSourceId,
+			coalesced_at: input.now,
+			updated_at: input.now,
+		})
+		.where("fingerprint", "=", active.fingerprint)
+		.execute();
+
+	return {
+		inserted: false,
+		priorStatus: "started",
+		coalesced: true,
+		activeFingerprint: active.fingerprint,
+	};
+}
+
 /**
- * Claim a run slot for the fingerprint. Returns `inserted: true` when the
- * caller should proceed with the session; `inserted: false` when this run
- * should be treated as an idempotent skip.
+ * Claim a run slot. Exact fingerprint idempotency is preserved, and automatic
+ * PR-level bursts coalesce behind one active `(repo, PR, reviewer config)` run.
+ * Returns `inserted: true` when the caller should proceed with a new session.
  *
  * The semantics are:
- * - no row → insert and proceed.
+ * - no row and no active claim → insert and proceed.
+ * - no exact row, but a fresh active claim exists → record the latest trigger
+ *   on the active row and skip creating another session.
  * - row with `completed` → skip; the previous run already produced a review.
  * - row with `superseded` → skip; a later broker pass intentionally retired
  *   that run because a newer managed review was already visible.
@@ -151,6 +241,7 @@ export async function recordRunStart(
 	await ensureRunsTable();
 	const now = new Date().toISOString();
 	const db = getDb();
+	const claimKey = activeClaimKey(input);
 	const insert = await db
 		.insertInto("managed_pr_review_runs")
 		.values({
@@ -170,8 +261,13 @@ export async function recordRunStart(
 			projection_updated_at: now,
 			projection_error: null,
 			github_review_id: null,
+			active_claim_key: claimKey,
+			coalesced_head_sha: null,
+			coalesced_trigger_kind: null,
+			coalesced_trigger_source_id: null,
+			coalesced_at: null,
 		})
-		.onConflict((oc) => oc.column("fingerprint").doNothing())
+		.onConflict((oc) => oc.doNothing())
 		.executeTakeFirst();
 	if (Number(insert?.numInsertedOrUpdatedRows ?? 0) > 0) {
 		return { inserted: true };
@@ -183,8 +279,17 @@ export async function recordRunStart(
 		.where("fingerprint", "=", input.fingerprint)
 		.executeTakeFirst();
 	if (!existing) {
-		// Race: row vanished between insert attempt and select. Try insert again
-		// without doNothing() to surface any real error to the caller.
+		const coalesced = await coalesceIntoActiveRun({
+			activeClaimKey: claimKey,
+			headSha: input.headSha,
+			triggerKind: input.triggerKind,
+			triggerSourceId: input.triggerSourceId,
+			now,
+		});
+		if (coalesced) return coalesced;
+
+		// Race: the conflicting active row vanished between insert attempt and
+		// lookup. Try insert again without doNothing() to surface any real error.
 		await db
 			.insertInto("managed_pr_review_runs")
 			.values({
@@ -204,6 +309,11 @@ export async function recordRunStart(
 				projection_updated_at: now,
 				projection_error: null,
 				github_review_id: null,
+				active_claim_key: claimKey,
+				coalesced_head_sha: null,
+				coalesced_trigger_kind: null,
+				coalesced_trigger_source_id: null,
+				coalesced_at: null,
 			})
 			.execute();
 		return { inserted: true };
@@ -220,6 +330,16 @@ export async function recordRunStart(
 			return { inserted: false, priorStatus };
 		}
 	}
+	if (priorStatus === "failed") {
+		const coalesced = await coalesceIntoActiveRun({
+			activeClaimKey: claimKey,
+			headSha: input.headSha,
+			triggerKind: input.triggerKind,
+			triggerSourceId: input.triggerSourceId,
+			now,
+		});
+		if (coalesced) return coalesced;
+	}
 
 	// failed, or stale started — reset and proceed.
 	await db
@@ -233,6 +353,11 @@ export async function recordRunStart(
 			projection_updated_at: now,
 			projection_error: null,
 			github_review_id: null,
+			active_claim_key: claimKey,
+			coalesced_head_sha: null,
+			coalesced_trigger_kind: null,
+			coalesced_trigger_source_id: null,
+			coalesced_at: null,
 		})
 		.where("fingerprint", "=", input.fingerprint)
 		.execute();
@@ -256,23 +381,44 @@ export async function recordRunResult(
 	const now = new Date().toISOString();
 	const projectionStatus =
 		input.projectionStatus ?? projectionStatusForRunStatus(input.status);
+	const updates = {
+		session_id: input.sessionId,
+		status: input.status,
+		error: input.error ?? null,
+		updated_at: now,
+		projection_status: projectionStatus,
+		projection_updated_at: now,
+		projection_error:
+			input.projectionError !== undefined
+				? input.projectionError
+				: projectionStatus === "failed"
+					? (input.error ?? null)
+					: null,
+		github_review_id: input.githubReviewId ?? null,
+		...(input.status === "started"
+			? {}
+			: {
+					active_claim_key: null,
+					coalesced_head_sha: null,
+					coalesced_trigger_kind: null,
+					coalesced_trigger_source_id: null,
+					coalesced_at: null,
+				}),
+	};
 	await getDb()
 		.updateTable("managed_pr_review_runs")
-		.set({
-			session_id: input.sessionId,
-			status: input.status,
-			error: input.error ?? null,
-			updated_at: now,
-			projection_status: projectionStatus,
-			projection_updated_at: now,
-			projection_error:
-				input.projectionError !== undefined
-					? input.projectionError
-					: projectionStatus === "failed"
-						? (input.error ?? null)
-						: null,
-			github_review_id: input.githubReviewId ?? null,
-		})
+		.set(updates)
+		.where("fingerprint", "=", fingerprint)
+		.execute();
+}
+
+export async function releaseRunActiveClaim(
+	fingerprint: string,
+): Promise<void> {
+	await ensureRunsTable();
+	await getDb()
+		.updateTable("managed_pr_review_runs")
+		.set({ active_claim_key: null })
 		.where("fingerprint", "=", fingerprint)
 		.execute();
 }
@@ -293,6 +439,10 @@ export interface PrReviewRunSummary {
 	projectionUpdatedAt: string;
 	projectionError: string | null;
 	githubReviewId: string | null;
+	coalescedHeadSha: string | null;
+	coalescedTriggerKind: string | null;
+	coalescedTriggerSourceId: string | null;
+	coalescedAt: string | null;
 }
 
 export interface PrReviewRunDetails extends PrReviewRunSummary {
@@ -309,6 +459,10 @@ export interface StartedPrReviewRun {
 	sessionId: string;
 	createdAt: string;
 	updatedAt: string;
+	coalescedHeadSha: string | null;
+	coalescedTriggerKind: string | null;
+	coalescedTriggerSourceId: string | null;
+	coalescedAt: string | null;
 }
 
 function mapRunDetails(row: {
@@ -328,6 +482,10 @@ function mapRunDetails(row: {
 	projection_updated_at: string | null;
 	projection_error: string | null;
 	github_review_id: string | null;
+	coalesced_head_sha: string | null;
+	coalesced_trigger_kind: string | null;
+	coalesced_trigger_source_id: string | null;
+	coalesced_at: string | null;
 }): PrReviewRunDetails {
 	const status = row.status as PrReviewRunStatus;
 	return {
@@ -348,6 +506,10 @@ function mapRunDetails(row: {
 		projectionError:
 			row.projection_error ?? (status === "failed" ? row.error : null),
 		githubReviewId: row.github_review_id,
+		coalescedHeadSha: row.coalesced_head_sha,
+		coalescedTriggerKind: row.coalesced_trigger_kind,
+		coalescedTriggerSourceId: row.coalesced_trigger_source_id,
+		coalescedAt: row.coalesced_at,
 	};
 }
 
@@ -400,6 +562,10 @@ export async function listRecentPrReviewRuns(input: {
 			"projection_updated_at",
 			"projection_error",
 			"github_review_id",
+			"coalesced_head_sha",
+			"coalesced_trigger_kind",
+			"coalesced_trigger_source_id",
+			"coalesced_at",
 		])
 		.where("created_at", ">=", input.sinceIso)
 		.where("repo_full_name", "=", input.repoFullName)
@@ -427,6 +593,10 @@ export async function listRecentPrReviewRuns(input: {
 			projectionError:
 				row.projection_error ?? (status === "failed" ? row.error : null),
 			githubReviewId: row.github_review_id,
+			coalescedHeadSha: row.coalesced_head_sha,
+			coalescedTriggerKind: row.coalesced_trigger_kind,
+			coalescedTriggerSourceId: row.coalesced_trigger_source_id,
+			coalescedAt: row.coalesced_at,
 		};
 	});
 }
@@ -567,6 +737,10 @@ export async function listStartedPrReviewRuns(
 			"session_id",
 			"created_at",
 			"updated_at",
+			"coalesced_head_sha",
+			"coalesced_trigger_kind",
+			"coalesced_trigger_source_id",
+			"coalesced_at",
 		])
 		.where("status", "=", "started")
 		.where("session_id", "is not", null)
@@ -589,6 +763,10 @@ export async function listStartedPrReviewRuns(
 			sessionId: row.session_id as string,
 			createdAt: row.created_at,
 			updatedAt: row.updated_at,
+			coalescedHeadSha: row.coalesced_head_sha,
+			coalescedTriggerKind: row.coalesced_trigger_kind,
+			coalescedTriggerSourceId: row.coalesced_trigger_source_id,
+			coalescedAt: row.coalesced_at,
 		}));
 }
 

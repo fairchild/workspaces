@@ -12,7 +12,7 @@ GitHub PR opened
 → Cloudflare webhook relay
 → signed forward to web/api/webhooks/github (webhook route)
 → triggerPrReview() (fire-and-forget)
-→ record new run and post pending `WorkSpaces Managed Review` commit status
+→ record new run or coalesce into the active run, then post pending `WorkSpaces Managed Review` commit status
 → getOrCreateAgent/Environment (idempotent, DB-cached)
 → sessions.create (mounts repo at PR branch)
 → events.send (kickoff message)
@@ -191,9 +191,12 @@ review with the GitHub App token. The row keeps two lifecycle fields: `status`
 for the managed-agent run and `projection_status` for the GitHub-facing review
 or failure projection. Before posting, the broker re-checks current managed
 reviews on the PR; if another managed review was submitted after the session
-started, the stale session is marked `superseded`. If the superseding review is
-for an older head, the broker starts a fresh follow-up session so the newer-head
-review includes the prior review context. The run report compares recent
+started, the stale session is marked `superseded`. If a newer PR update was
+coalesced into the active run, the broker suppresses the older completed output,
+marks that run `superseded`, and starts exactly one follow-up session against the
+latest PR state. If the superseding review is for an older head, the broker
+starts a fresh follow-up session so the newer-head review includes the prior
+review context. The run report compares recent
 reviewer-eligible rows in `webhook_events` with `managed_pr_review_runs`
 records and classifies ReviewRun rows into starting, executing,
 needs-projection, failed, and terminal buckets. Broker and report routes return
@@ -336,11 +339,15 @@ itself) and from `Bot`-typed senders.
 
 Every dispatch computes a fingerprint over
 `(repo, pr, headSha, triggerKind, triggerSourceId, reviewerConfigHash)` and
-inserts a row into `managed_pr_review_runs` (created on first use). The row is
-the source of truth for both lifecycles: `status` tracks the managed agent, while
-`projection_status` tracks whether the broker has projected the result back to
-GitHub. The skip decision honors the prior run's agent status so failed/crashed
-dispatches stay retriable:
+inserts a row into `managed_pr_review_runs` (created on first use). The exact
+fingerprint is still the idempotency key. Automatic triggers also claim one
+active slot per `(repo, pr, reviewerConfigHash)` so body edits, evidence
+comments, or new commits arriving while a same-config session is already active
+update the active row's coalesced trigger fields instead of creating another
+managed-agent session. The row is the source of truth for both lifecycles:
+`status` tracks the managed agent, while `projection_status` tracks whether the
+broker has projected the result back to GitHub. The skip decision honors the
+prior run's agent status so failed/crashed dispatches stay retriable:
 
 - `completed` → skip; the previous run already produced a review.
 - `superseded` → skip; a later managed review intentionally covered this run.
@@ -355,7 +362,9 @@ Effects:
 - Webhook redeliveries for the same trigger are no-ops.
 - A new commit changes `headSha` → new fingerprint → rerun.
 - Distinct evidence comments on the same head produce distinct
-  `triggerSourceId` values → each runs once.
+  `triggerSourceId` values. If no same-config run is active, each runs once. If
+  a run is active, they coalesce into that run and the broker starts one
+  follow-up against the latest PR state.
 - A reviewer prompt or model change rotates `reviewerConfigHash`, allowing a
   re-evaluation of the same head without manual intervention.
 

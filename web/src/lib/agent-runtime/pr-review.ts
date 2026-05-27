@@ -12,6 +12,7 @@ import {
 	listStartedPrReviewRuns,
 	recordRunResult,
 	recordRunStart,
+	releaseRunActiveClaim,
 } from "./pr-review-runs";
 
 const MANAGED_REVIEWER_LOGIN = "workspaces-claude-pr-reviewer[bot]";
@@ -956,6 +957,7 @@ async function collectCompletedReviewIntentText(
 async function payloadFromStartedRun(
 	githubToken: string,
 	run: StartedPrReviewRun,
+	options: { preferCurrentHead?: boolean } = {},
 ): Promise<PrReviewPayload | null> {
 	const [owner, repo] = run.repoFullName.split("/");
 	if (!owner || !repo) return null;
@@ -971,7 +973,9 @@ async function payloadFromStartedRun(
 		htmlUrl: fetched.htmlUrl,
 		body: fetched.body,
 		headRef: fetched.headRef,
-		headSha: run.headSha || fetched.headSha,
+		headSha: options.preferCurrentHead
+			? fetched.headSha
+			: run.headSha || fetched.headSha,
 		baseRef: fetched.baseRef,
 		repoUrl: `https://github.com/${run.repoFullName}`,
 		repoFullName: run.repoFullName,
@@ -1099,6 +1103,48 @@ export async function processPendingPrReviewRuns(
 				htmlUrl: payload.htmlUrl,
 				fingerprint: run.fingerprint,
 			};
+
+			if (run.coalescedAt) {
+				const latestPayload =
+					(await payloadFromStartedRun(githubToken, run, {
+						preferCurrentHead: true,
+					})) ?? payload;
+				const retryReason = `New ${run.coalescedTriggerKind ?? "PR"} trigger arrived while session ${run.sessionId} was active; re-running against the latest PR state.`;
+				let retrySessionId: string | null = null;
+				await releaseRunActiveClaim(run.fingerprint);
+				try {
+					retrySessionId = await triggerPrReview(latestPayload, {
+						kind: "superseded_retry",
+						triggerSourceId: `coalesced-${run.coalescedAt}-head-${latestPayload.headSha || run.coalescedHeadSha || run.headSha}`,
+						reason: retryReason,
+					});
+				} catch (err) {
+					console.error("[pr-review] coalesced retry failed:", err);
+				}
+				const error = retrySessionId
+					? `${retryReason} Follow-up session ${retrySessionId} started.`
+					: `${retryReason} Follow-up session was not started.`;
+				await recordRunResult(run.fingerprint, {
+					sessionId: run.sessionId,
+					status: "superseded",
+					error,
+					projectionStatus: "superseded",
+				});
+				result.superseded += 1;
+				if (retrySessionId) result.requeued += 1;
+				result.runs.push({
+					fingerprint: run.fingerprint,
+					sessionId: run.sessionId,
+					prNumber: run.prNumber,
+					status: "superseded",
+					error,
+					retrySessionId,
+				});
+				console.log(
+					`[pr-review] Broker superseded coalesced run for PR #${run.prNumber} (fingerprint=${run.fingerprint}): ${run.sessionId}`,
+				);
+				continue;
+			}
 
 			const currentReviewHistory = await fetchCurrentPrReviewHistory(
 				githubToken,
@@ -1313,6 +1359,24 @@ export async function triggerPrReview(
 		reviewerConfigHash,
 	});
 	if (!start.inserted) {
+		if (start.coalesced && start.activeFingerprint) {
+			await postManagedReviewStatus(
+				githubToken,
+				{
+					repoFullName: resolvedPayload.repoFullName,
+					number: resolvedPayload.number,
+					headSha: resolvedPayload.headSha,
+					htmlUrl: resolvedPayload.htmlUrl,
+					fingerprint: start.activeFingerprint,
+				},
+				"pending",
+				"Managed reviewer already running; latest trigger coalesced.",
+			);
+			console.log(
+				`[pr-review] coalesced run for PR #${resolvedPayload.number} into active fingerprint ${start.activeFingerprint}`,
+			);
+			return null;
+		}
 		console.log(
 			`[pr-review] skipping duplicate run for PR #${resolvedPayload.number} (fingerprint=${fingerprint})`,
 		);
