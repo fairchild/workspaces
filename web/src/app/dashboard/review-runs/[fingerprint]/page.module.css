@@ -115,6 +115,30 @@
 	background: #f9fafb;
 }
 
+.actionCard {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	border: 1px solid #d1d5db;
+	border-radius: 8px;
+	padding: 12px;
+	background: #ffffff;
+}
+
+.actionCard span {
+	color: #6b7280;
+	font-size: 12px;
+}
+
+.actionCard strong {
+	font-size: 14px;
+}
+
+.actionCard small {
+	color: #6b7280;
+	font-size: 12px;
+}
+
 .transcriptCard {
 	display: flex;
 	flex: 1;

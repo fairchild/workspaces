@@ -29,6 +29,7 @@ export default async function ReviewRunPage({
 	const [owner, repo] = run.repoFullName.split("/");
 	const prUrl = `https://github.com/${run.repoFullName}/pull/${run.prNumber}`;
 	const commitUrl = `https://github.com/${run.repoFullName}/commit/${run.headSha}`;
+	const latestCommitUrl = `https://github.com/${run.repoFullName}/commit/${run.latestKnownHeadSha}`;
 	const dashboardUrl =
 		owner && repo
 			? `/dashboard/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}?tab=terminal&agent=pr-reviewer`
@@ -67,8 +68,16 @@ export default async function ReviewRunPage({
 					</strong>
 				</div>
 				<div>
-					<span>Head</span>
+					<span>Execution</span>
+					<strong>{run.executionState}</strong>
+				</div>
+				<div>
+					<span>Target head</span>
 					<strong>{run.headSha.slice(0, 12)}</strong>
+				</div>
+				<div>
+					<span>Latest known head</span>
+					<strong>{run.latestKnownHeadSha.slice(0, 12)}</strong>
 				</div>
 				<div>
 					<span>Updated</span>
@@ -87,15 +96,42 @@ export default async function ReviewRunPage({
 						<strong>{run.githubReviewId}</strong>
 					</div>
 				)}
+				{run.failureKind && (
+					<div>
+						<span>Failure</span>
+						<strong>{run.failureKind}</strong>
+					</div>
+				)}
+				{run.failureRetryable !== null && (
+					<div>
+						<span>Retryable</span>
+						<strong>{run.failureRetryable ? "yes" : "no"}</strong>
+					</div>
+				)}
 			</section>
 
 			<nav className={styles.links} aria-label="Run links">
 				<Link href={prUrl}>Open PR</Link>
 				<Link href={commitUrl}>Open commit</Link>
+				{run.latestKnownHeadSha !== run.headSha && (
+					<Link href={latestCommitUrl}>Open latest known commit</Link>
+				)}
 				<Link href={dashboardUrl}>Open terminal tab</Link>
 			</nav>
 
-			{run.error && <pre className={styles.errorBlock}>{run.error}</pre>}
+			<section className={styles.actionCard}>
+				<span>Next action</span>
+				<strong>{run.nextAction}</strong>
+				{run.failedAt && (
+					<small>
+						Failure recorded {new Date(run.failedAt).toLocaleString()}
+					</small>
+				)}
+			</section>
+
+			{run.failureMessage && (
+				<pre className={styles.errorBlock}>{run.failureMessage}</pre>
+			)}
 			{projectionError && (
 				<pre className={styles.errorBlock}>{projectionError}</pre>
 			)}

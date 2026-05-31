@@ -85,6 +85,10 @@ export interface ManagedPrReviewRunsTable {
 	created_at: string;
 	updated_at: string;
 	error: string | null;
+	failure_kind: string | null;
+	failure_message: string | null;
+	failure_retryable: number | null;
+	failed_at: string | null;
 	projection_status: string | null;
 	projection_updated_at: string | null;
 	projection_error: string | null;
