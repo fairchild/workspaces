@@ -183,6 +183,8 @@ class PRReviewHealthTests(unittest.TestCase):
             pending_timeout=timedelta(minutes=30),
         )
 
+        self.assertIn("## Managed Reviewer GitHub Projection Audit", rendered)
+        self.assertIn("ReviewRun health comes from `scripts/pr-reviewer-runs.py`", rendered)
         self.assertIn("pending within timeout; PR merge state is blocked", rendered)
 
     def test_render_markdown_does_not_treat_skipped_prs_as_global_health(self) -> None:
