@@ -600,6 +600,56 @@ struct AgentHookListenerTests {
         await listener.stop()
     }
 
+    @Test("command-markers POST preserves start/end order across separate requests")
+    func commandMarkersPreserveOrderAcrossSeparateRequests() async throws {
+        let socket = Self.makeTempSocketURL()
+        let registry = await TestRegistry(cwd: "/tmp")
+        let registeredID = registry.registeredID
+        let commandStatusRegistry = await MainActor.run { LastCommandStatusRegistry() }
+        let listener = AgentHookListener(
+            bundleIdentifier: "com.test.workspaces",
+            registry: registry,
+            commandStatusRegistry: commandStatusRegistry,
+            socketURLOverride: socket
+        )
+        try await listener.start()
+        defer { Task { await listener.stop() } }
+        try await Task.sleep(nanoseconds: 250_000_000)
+
+        let startStatus = await Self.curlPost(
+            socket: socket,
+            path: "/command-markers",
+            body: Self.osc133("B"),
+            hostSessionID: registeredID
+        )
+        #expect(startStatus == 0)
+
+        let endStatus = await Self.curlPost(
+            socket: socket,
+            path: "/command-markers",
+            body: Self.osc133("D;0"),
+            hostSessionID: registeredID
+        )
+        #expect(endStatus == 0)
+
+        let reached = await waitUntil {
+            await MainActor.run {
+                commandStatusRegistry.statusByTerminalSession[registeredID]?.exitCode == 0
+                    && commandStatusRegistry.statusByTerminalSession[registeredID]?.isRunning == false
+            }
+        }
+        #expect(reached)
+        let live = await MainActor.run {
+            commandStatusRegistry.statusByTerminalSession[registeredID]
+        }
+        #expect(live?.isSuccess == true)
+
+        let stats = await listener.currentStatistics()
+        #expect(stats.commandMarkerUpdates == 2)
+
+        await listener.stop()
+    }
+
     @Test("command-markers POST drops missing and unregistered sessions")
     func commandMarkersDropMissingAndUnregisteredSessions() async throws {
         let socket = Self.makeTempSocketURL()

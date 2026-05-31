@@ -3,6 +3,7 @@
 ## [0.16.0] - 2026-05-26
 
 ### Added
+- Add opt-in Claude Code integration for live agent-session signal in the host app: sidebar status, macOS notifications, status-line fields, and conversation-log context. Enable in Settings -> Agents; see `docs/development/claude-code-integration.md` (#443, #451, #452, #454, #455, #466, #473, #477, #513)
 - Report Claude command status from prompt markers through a new parser, registry, and hook forwarder (#501, #566)
 - Add workspace event/journal read APIs and default-agent command resolution foundations (#498, #500)
 - Add GitService diff, staging, discard, and branch APIs for upcoming workspace actions (#499)

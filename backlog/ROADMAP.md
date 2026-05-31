@@ -26,7 +26,7 @@ Workspaces now spans three surfaces — a Mac-native app, a web dashboard, and a
 
 **Web dashboard** (`web/`). Next.js 15 on Vercel with GitHub OAuth (Better Auth) and LibSQL+Kysely persistence. A ghostty-web terminal tab and a TerminalShare Cloudflare Worker proxy. A multi-provider agent runtime now covering Vercel Sandbox and Anthropic Managed Agents, with Daytona/GitHub Actions registered as unavailable stubs and `mock` available for tests (#332). Persistent-sandbox snapshot/restore for conversation continuity (#277); tmux inside the sandbox for real resume continuity (#311/#312/#315, clarified in #324). Automated PR review posted by Managed Agents (#345). Preview → validate → promote CD pipeline with a bootstrap orchestrator (#344). PostHog telemetry (#336). A `qa-web` skill + subagent (#343) covers black-box exploratory testing, author-mode spec generation, and heal-mode regression-vs-selector-drift triage.
 
-**Agent automation.** The `.agents/skills/` library (`workspaces-performance-system`, `workspaces-optimization`, `drive`, `peter-planner`, `gh-discuss`, and others). April agent workflow runs on a Lume self-hosted runner. Most autonomous automations are currently gated off behind `AGENT_AUTOMATIONS_ENABLED`, pending runner policy and prompt-injection defense hardening.
+**Agent automation.** The `.agents/skills/` library (`workspaces-performance-system`, `workspaces-optimization`, `drive`, `peter-planner`, `gh-discuss`, and others). April agent workflow runs on a Lume self-hosted runner. Managed PR review is shipped, but its operational model is still being simplified around ReviewRun as the source of truth. Most autonomous automations remain gated off behind `AGENT_AUTOMATIONS_ENABLED`, pending runner policy, prompt-injection defense hardening, and proof that the managed-review path is understandable and repairable.
 
 **Shipping cadence.** Weekly-ish releases. Latest release `v0.15.1`.
 
@@ -36,6 +36,7 @@ What this means for planning.
 - The highest risk is now complexity management and determinism across surfaces, not raw feature absence.
 - Terminal-first remains the product's core promise; everything else is in service of that, including the web and agent surfaces.
 - Performance has moved from crisis to system. Ongoing measurement via the canonical contract is the norm, not a fire drill.
+- Agent automation must earn expansion by improving delivery throughput and reducing review drag on already-shipped workflows, not by adding more autonomous surfaces first.
 
 ---
 
@@ -71,6 +72,7 @@ Agent automation:
 - April agent on a Lume self-hosted runner
 - evidence workflow via Cloudflare R2 + `scripts/evidence.sh`
 - notification relay via Cloudflare Worker + Durable Object
+- managed PR reviewer via Anthropic Managed Agents, now in a ReviewRun-first hardening phase
 
 ---
 
@@ -127,6 +129,8 @@ Priority is driven by three filters, in this order:
 - Expand side systems only after they are trustworthy enough not to drag on the core.
 - Treat a red release/deploy gate as a temporary interrupt above the product bands until it is either fixed, rolled back, or explicitly accepted as non-blocking.
 
+Throughput means fewer stuck PRs, fewer manual review repairs, clearer operator state, and less rework on the workflows already in use. It does not mean adding new agent capabilities before the current managed-review system is reliable and explainable.
+
 ---
 
 ## Priority Bands
@@ -155,31 +159,41 @@ P0 because these integration files still carry the highest regression risk when 
 
 Phase 1 complete: `AppActivationPolicy` (PR #374) gates all `NSApp.activate` calls — launch *and* runtime — behind `WORKSPACES_NO_ACTIVATE_ON_LAUNCH=1` / `CI`. `scripts/capture-window.sh` provides window-id capture without activation. Remaining items (capture handshake, separate-user execution lane, VM-backed CI lane) drop to P2 — promote back when a concrete daily-driver scenario forces the issue. Phase 1 source: `backlog/done/shared-desktop-focus-contention-followup.md` (closed #82 + residual notes).
 
+#### 4. Managed reviewer reliability and understandability
+
+GitHub: [#584](https://github.com/fairchild/workspaces/issues/584) · milestone [Managed reviewer: understandable ReviewRun-first system](https://github.com/fairchild/workspaces/milestone/8) · `area: platform`
+
+Managed PR review is now part of the delivery loop, so ambiguity here directly slows every other lane. The current priority is not broader agent automation; it is making the shipped reviewer reliable, repairable, and understandable. ReviewRun should be the durable source of truth, GitHub statuses/reviews should be projections, health should start from unreconciled ReviewRuns, and the docs/quiz should let a maintainer explain the system without spelunking workflow logs.
+
+This P0 lane is justified as throughput hardening, not product expansion. It should absorb the useful scope from the older continuous-reruns plan ([#545](https://github.com/fairchild/workspaces/issues/545)) and block new managed-agent feature growth until closure validation proves pickup, terminal state, details URL, projection repair, health reporting, and maintainer understanding.
+
 ### Next (P1)
 
-#### 4. Terminal continuity — tmux + cross-session
+#### 5. Terminal continuity — tmux + cross-session
 
 GitHub: [#549](https://github.com/fairchild/workspaces/issues/549) (tmux implementation) + [#548](https://github.com/fairchild/workspaces/issues/548) (across-session restore) + [#564](https://github.com/fairchild/workspaces/issues/564) (terminal status producer) · `arc:terminal-continuity`
 
 Decided 2026-04-23 (`docs/decisions/terminal-multiplexing.md`): tmux primary; pane-tree deferred indefinitely. Two paired issues now sit under one theme. Tmux delivers reattach within a session. The continuity issue addresses the gap tmux does not close (close laptop, reopen, pick up where you left off). First continuity slice is active on `codex-continuity-dimension`: tmux preserves live process state when the server survives, and a terminal continuity manifest records the target plus launch directory for the honest fallback when it does not.
 
-The newest dependency is the terminal status producer (#564): the parser/registry prep exists, but the registry needs a real prompt-marker producer before any status-sliver UI ships. Keep #564 in this arc as a pre-UI infrastructure slice, not a separate visual feature.
-
-#### 5. Lume runtime architecture cleanup
+#### 6. Lume runtime architecture cleanup
 
 Closed: #87, #88, #89 · `arc:lume-runtime`
 
 Contract proven (PR #54). The three decomposition follow-ups (shared HTTP transport, native detachment + VM typing, doc refresh) all closed; reviewer-friction work is complete. Source plan archived to `backlog/done/lume-runtime-architecture-followups_followup.md`.
 
-#### 6. Notification client catch-up + reconnect correctness
+#### 7. Notification client catch-up + reconnect correctness
 
 GitHub: [#547](https://github.com/fairchild/workspaces/issues/547) · `arc:notification-catchup`
 
 Stable client identity, ACK cadence, duplicate/replay behavior. Reliability step before richer activity UX.
 
+#### 8. Agent automation expansion
+
+New autonomous-agent surfaces, broader reviewer features, and narration/eval expansion stay behind the managed-reviewer hardening milestone. After #584 closes, reassess whether the next highest-leverage move is more reviewer capability, notification catch-up, or returning to terminal continuity.
+
 ### Later (P2)
 
-#### 7. Strategic isolation backend direction
+#### 9. Strategic isolation backend direction
 
 GitHub: [#533](https://github.com/fairchild/workspaces/issues/533) (VZ Tahoe tracking) + [#555](https://github.com/fairchild/workspaces/issues/555) (remote runtime expansion tracking) + [#532](https://github.com/fairchild/workspaces/issues/532) (Daytona native Swift) · `arc:isolation-backend`
 
@@ -212,6 +226,7 @@ Theme-to-milestone map:
 | Roadmap theme | Arc label | Milestone posture |
 |---|---|---|
 | Core reliability and maintainability | `arc:core-reliability` | Active P0 theme |
+| Managed reviewer reliability and understandability | `area: platform` | Active P0 throughput-hardening milestone: [#584](https://github.com/fairchild/workspaces/issues/584) / [milestone 8](https://github.com/fairchild/workspaces/milestone/8). Blocks new managed-agent expansion. |
 | Lume runtime hardening | `arc:lume-runtime` | Closed (#87/#88/#89). Label retained for future Lume work. |
 | Notification catch-up and reconnect correctness | `arc:notification-catchup` | Next standalone after core-reliability theme clears |
 | Terminal continuity (tmux + cross-session) | `arc:terminal-continuity` | Decided 2026-04-23 (tmux primary). Implementation milestone after notification-catchup unless continuity gap forces it sooner. |
@@ -237,13 +252,14 @@ Live source of truth is GitHub Issues on `fairchild/workspaces`. This table mirr
 | Workspace creation hang root cause | product | P0 | [#554](https://github.com/fairchild/workspaces/issues/554) |
 | CD managed-reviewer canary incident | ops | Done | [#509](https://github.com/fairchild/workspaces/issues/509), [#569](https://github.com/fairchild/workspaces/issues/569), [#570](https://github.com/fairchild/workspaces/issues/570); resolved by [#575](https://github.com/fairchild/workspaces/pull/575) |
 | Main-window + sidebar maintainability | product | P0 | covered by closed #81 + residual notes in `backlog/done/main-window-sidebar-maintainability_followup.md` |
+| Managed reviewer ReviewRun-first hardening | quality | P0 | [#584](https://github.com/fairchild/workspaces/issues/584) + [milestone 8](https://github.com/fairchild/workspaces/milestone/8) |
 | Ghostty appearance hardening | product | Done | closed #84 |
 | Tmux per-worktree implementation | product | P1 | [#549](https://github.com/fairchild/workspaces/issues/549) (chosen 2026-04-23 — `docs/decisions/terminal-multiplexing.md`) |
 | Desktop continuity (across-session restore) | product | P1 | [#548](https://github.com/fairchild/workspaces/issues/548) (paired with #549) |
 | Terminal status producer | product | P1 | [#564](https://github.com/fairchild/workspaces/issues/564) (producer before status UI) |
 | Lume runtime architecture follow-ups | product | Done | closed #87, #88, #89 |
 | Notification client catch-up | product | P1 | [#547](https://github.com/fairchild/workspaces/issues/547) |
-| Managed PR reviewer continuous reruns | product | P1 | [#545](https://github.com/fairchild/workspaces/issues/545) |
+| Managed PR reviewer continuous reruns | quality | absorbed | [#545](https://github.com/fairchild/workspaces/issues/545) is absorbed by [#584](https://github.com/fairchild/workspaces/issues/584) / [milestone 8](https://github.com/fairchild/workspaces/milestone/8) |
 | PR reviewer narration eval skill | product | — | [#546](https://github.com/fairchild/workspaces/issues/546) |
 | Daytona native Swift API | product | — | [#532](https://github.com/fairchild/workspaces/issues/532) |
 | Remote runtime expansion (tracking) | product | — | [#555](https://github.com/fairchild/workspaces/issues/555) |

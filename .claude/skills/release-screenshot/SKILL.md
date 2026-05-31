@@ -1,6 +1,6 @@
 ---
 name: release-screenshot
-description: Capture deterministic screenshots of the WorkSpaces macOS app in a known UI state. Use when the user asks to "capture a release screenshot", "screenshot the app", "show the Phase 1 state", or wants evidence for a PR / release notes / design brief. Wraps the fixture-mode env vars (WORKSPACES_UI_FIXTURE + WORKSPACES_UI_FIXTURE_AGENT_STATES) and the existing scripts/sidebar-capture.sh capture pipeline. Triggers on "release screenshot", "screenshot the app", "capture the app", "fixture screenshot", "ui evidence", "/release-screenshot".
+description: Capture deterministic screenshots of the WorkSpaces macOS app in a known UI state. Use when the user asks to "capture a release screenshot", "screenshot the app", "show the Phase 1 state", or wants evidence for a PR / release notes / design brief. Wraps the fixture-mode env vars (WORKSPACES_UI_FIXTURE, WORKSPACES_UI_FIXTURE_AGENT_STATES, and WORKSPACES_UI_FIXTURE_COMMAND_STATUSES) and the existing scripts/sidebar-capture.sh capture pipeline. Triggers on "release screenshot", "screenshot the app", "capture the app", "fixture screenshot", "ui evidence", "/release-screenshot".
 ---
 
 # release-screenshot
@@ -9,7 +9,7 @@ Project skill for producing deterministic, reproducible screenshots of the WorkS
 
 ## Overview
 
-The skill orchestrates `WORKSPACES_UI_FIXTURE=1` plus `WORKSPACES_UI_FIXTURE_AGENT_STATES=<scenario value>` and the existing `scripts/lib/ui-test-common.sh` helpers to launch the debug build, drive the sidebar into a chosen run-state configuration, capture the window, and quit. The bundled script `scripts/capture.sh` is the single entry point.
+The skill orchestrates `WORKSPACES_UI_FIXTURE=1` plus named scenario env vars and the existing `scripts/lib/ui-test-common.sh` helpers to launch the debug build, drive the app into a chosen fixture state, capture the window, and quit. Scenarios may set agent run states, terminal command statuses, or both. The bundled script `scripts/capture.sh` is the single entry point.
 
 Default output: `output/release-screenshots/<scenario>-<iso8601>.png`. Override with `--output`.
 
@@ -31,6 +31,7 @@ Flags:
 | Scenario | Visible |
 |----------|---------|
 | `phase-1-release` | Bertram-chat repo expanded with `feature-auth` selected (blue thinking), `bugfix-422` yellow (awaiting input), `refactor-state` idle; `bread-builder` collapsed with red bubbled errored dot; toolbar pill reads "2 need you". Matches `.context/ux-review/release-screenshot.png`. |
+| `m6-status-sliver` | `feature-auth` selected with a compact terminal sliver showing a failed `swift test` command, exit `1`, and duration. |
 | `attention-only` | A single workspace (`bugfix-422`) in `awaitingInput` — useful when only the toolbar pill matters. |
 | `clean` | No agent states applied — baseline sidebar, no dots. |
 
@@ -55,7 +56,7 @@ See `references/extending.md`. Two-step: add a `case` arm to `scripts/capture.sh
 - **Build fails / GhosttyKit out of date:** `./scripts/build-ghosttykit.sh` once, then retry.
 - **Permission prompts (`cliclick`, `screencapture`):** open System Settings → Privacy & Security and grant Accessibility + Screen Recording to the terminal you're running from.
 - **App launches but no fixture data:** verify the env var made it through with `ps aux | rg WORKSPACES_UI_FIXTURE`. If absent, you launched the installed `/Applications/WorkSpaces.app` by accident — `pkill -f WorkspaceManager` first.
-- **Status dots don't match what you expected:** scenarios drive the agent registry via synthetic events; check the env-var value in `references/scenarios.md` matches your mental model.
+- **Status dots or slivers don't match what you expected:** scenarios drive the agent registry and command-status registry via synthetic events; check the env-var values in `references/scenarios.md` match your mental model.
 
 ## Known limits
 

@@ -1,14 +1,15 @@
 # Scenarios
 
-Each named scenario maps to one literal value of `WORKSPACES_UI_FIXTURE_AGENT_STATES`. The script `scripts/capture.sh` is the single source of truth — this table mirrors its `case` arm. If you edit one, edit both.
+Each named scenario maps to literal UI fixture env vars. The script `scripts/capture.sh` is the single source of truth — this table mirrors its `case` arm. If you edit one, edit both.
 
 ## Named scenarios
 
-| Scenario id | `WORKSPACES_UI_FIXTURE_AGENT_STATES` | Expected visual |
-|-------------|--------------------------------------|-----------------|
-| `phase-1-release` | `feature-auth:thinking,bugfix-422:awaitingInput,refactor-runtime:errored` | `bertram-chat` expanded with `feature-auth` selected (blue thinking dot), `bugfix-422` yellow (awaiting input), `refactor-state` no dot (idle); `bread-builder` collapsed with red bubbled errored dot from `refactor-runtime`; toolbar pill reads "2 need you". Matches `.context/ux-review/release-screenshot.png`. |
-| `attention-only` | `bugfix-422:awaitingInput` | Only `bugfix-422` shows a yellow dot; toolbar pill reads "1 needs you". |
-| `clean` | *(unset)* | Baseline sidebar with no agent-state dots; toolbar pill hidden. |
+| Scenario id | `WORKSPACES_UI_FIXTURE_AGENT_STATES` | `WORKSPACES_UI_FIXTURE_COMMAND_STATUSES` | Expected visual |
+|-------------|--------------------------------------|----------------------------------------------------|-----------------|
+| `phase-1-release` | `feature-auth:thinking,bugfix-422:awaitingInput,refactor-runtime:errored` | *(unset)* | `bertram-chat` expanded with `feature-auth` selected (blue thinking dot), `bugfix-422` yellow (awaiting input), `refactor-state` no dot (idle); `bread-builder` collapsed with red bubbled errored dot from `refactor-runtime`; toolbar pill reads "2 need you". Matches `.context/ux-review/release-screenshot.png`. |
+| `m6-status-sliver` | *(unset)* | `feature-auth:failed` | `feature-auth` selected with a compact terminal sliver showing a failed `swift test` command, exit `1`, and duration. |
+| `attention-only` | `bugfix-422:awaitingInput` | *(unset)* | Only `bugfix-422` shows a yellow dot; toolbar pill reads "1 needs you". |
+| `clean` | *(unset)* | *(unset)* | Baseline sidebar with no agent-state dots; toolbar pill hidden. |
 
 ## Inline form
 
@@ -32,6 +33,17 @@ The string after `inline:` becomes `WORKSPACES_UI_FIXTURE_AGENT_STATES` verbatim
 | `awaitingInput` | `.awaitingInput(reason: .permissionPrompt)` | Yellow dot (contributes to attention count) |
 | `errored` | `.errored(category: .toolFailure, message: "Tool failed")` | Red dot (contributes to attention count) |
 | `complete` | `.complete` | No dot |
+
+## Supported command statuses
+
+`WORKSPACES_UI_FIXTURE_COMMAND_STATUSES` uses the same comma-separated `workspaceName:status` shape. It creates or activates the matching host terminal session and publishes a synthetic `LastCommandStatus` for the terminal sliver.
+
+| Token | Resulting command status | Visual |
+|-------|--------------------------|--------|
+| `success` | `swift build`, exit `0` | Green success sliver |
+| `failed` | `swift test`, exit `1` | Red failed sliver |
+| `running` | running `swift test` | Running sliver |
+| `finished` | `git status`, unknown exit code | Neutral finished sliver |
 
 ## Available fixture workspaces
 

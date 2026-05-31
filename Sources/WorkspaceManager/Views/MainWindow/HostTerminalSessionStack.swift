@@ -3,6 +3,8 @@ import SwiftUI
 import WorkspaceManagerCore
 
 struct HostTerminalSessionStack: View {
+    @EnvironmentObject private var commandStatusRegistry: LastCommandStatusRegistry
+
     let sessions: [HostTerminalSession]
     let activeSessionID: UUID?
     let splitSession: HostTerminalSession?
@@ -31,19 +33,26 @@ struct HostTerminalSessionStack: View {
         for session: HostTerminalSession,
         axis: HostTerminalStateStore.SplitPaneLayout.Axis
     ) -> some View {
-        PersistentHostTerminalContainerView(
-            session: session,
-            surfaceStore: surfaceStore,
-            onProcessExit: {
-                onTerminalProcessExit?(session.id)
-            },
-            onCloseConfirmationRequired: {
-                onCloseConfirmationRequired?(session.id)
-            },
-            contextMenuProvider: {
-                contextMenuProvider?(session)
-            }
-        )
+        VStack(spacing: 0) {
+            TerminalCommandStatusSliver(
+                status: commandStatusRegistry.statusByTerminalSession[session.id]
+            )
+
+            PersistentHostTerminalContainerView(
+                session: session,
+                surfaceStore: surfaceStore,
+                onProcessExit: {
+                    onTerminalProcessExit?(session.id)
+                },
+                onCloseConfirmationRequired: {
+                    onCloseConfirmationRequired?(session.id)
+                },
+                contextMenuProvider: {
+                    contextMenuProvider?(session)
+                }
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
         .frame(
             minWidth: axis == .leadingTrailing ? 240 : nil,
             minHeight: axis == .topBottom ? 160 : nil

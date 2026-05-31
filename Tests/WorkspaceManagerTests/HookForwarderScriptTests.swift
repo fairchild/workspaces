@@ -92,6 +92,53 @@ struct HookForwarderScriptTests {
         return (process.terminationStatus, stdout, stderr)
     }
 
+    private static func runZshCommandStatusRegisteredHooks(
+        socket: URL,
+        hostSessionID: UUID,
+        installExistingPrecmd: Bool
+    ) throws -> (status: Int32, stdout: String, stderr: String) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        let existingPrecmdSetup =
+            installExistingPrecmd
+            ? """
+            autoload -Uz add-zsh-hook
+            __workspaces_test_existing_precmd() { return 0 }
+            add-zsh-hook precmd __workspaces_test_existing_precmd
+            """
+            : ""
+        process.arguments = [
+            "-f",
+            "-c",
+            """
+            \(existingPrecmdSetup)
+            source "$WORKSPACES_COMMAND_STATUS_ZSH"
+            __workspaces_command_status_preexec "false"
+            false
+            for hook in $precmd_functions; do
+                "$hook"
+            done
+            """,
+        ]
+        var environment = ProcessInfo.processInfo.environment
+        environment["WORKSPACES_HOOKS_SOCKET"] = socket.path
+        environment["WORKSPACES_HOST_SESSION_ID"] = hostSessionID.uuidString
+        environment["WORKSPACES_COMMAND_STATUS_ZSH"] = hookForwarder(named: "command-status.zsh").path
+        process.environment = environment
+
+        let output = Pipe()
+        let error = Pipe()
+        process.standardOutput = output
+        process.standardError = error
+
+        try process.run()
+        process.waitUntilExit()
+
+        let stdout = String(data: output.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        let stderr = String(data: error.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        return (process.terminationStatus, stdout, stderr)
+    }
+
     @Test("event-forwarder posts hook JSON with host-session header")
     @MainActor
     func eventForwarderPostsHookJSONWithHostSessionHeader() async throws {
@@ -188,6 +235,41 @@ struct HookForwarderScriptTests {
         let result = try Self.runZshCommandStatusHook(
             socket: socket,
             hostSessionID: hostSessionID
+        )
+
+        #expect(result.status == 0)
+        #expect(result.stdout.isEmpty)
+        #expect(result.stderr.isEmpty)
+        let reached = await waitUntil {
+            await MainActor.run {
+                commandStatusRegistry.statusByTerminalSession[hostSessionID]?.exitCode == 1
+            }
+        }
+        #expect(reached)
+        #expect(commandStatusRegistry.statusByTerminalSession[hostSessionID]?.isSuccess == false)
+    }
+
+    @Test("command-status zsh hook preserves exit code when existing precmd hooks are installed")
+    @MainActor
+    func commandStatusZshHookRunsBeforeExistingPrecmdHooks() async throws {
+        let socket = Self.makeTempSocketURL()
+        let registry = AgentSessionRegistry()
+        let commandStatusRegistry = LastCommandStatusRegistry()
+        let hostSessionID = UUID()
+        registry.register(hostSessionID: hostSessionID, cwd: "/tmp", kind: .claudeCode)
+        let listener = AgentHookListener(
+            bundleIdentifier: "com.test.workspaces",
+            registry: registry,
+            commandStatusRegistry: commandStatusRegistry,
+            socketURLOverride: socket
+        )
+        try await listener.start()
+        defer { Task { await listener.stop() } }
+
+        let result = try Self.runZshCommandStatusRegisteredHooks(
+            socket: socket,
+            hostSessionID: hostSessionID,
+            installExistingPrecmd: true
         )
 
         #expect(result.status == 0)
