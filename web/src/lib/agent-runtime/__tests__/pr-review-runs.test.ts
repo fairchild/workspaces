@@ -368,6 +368,93 @@ describe("listStartedPrReviewRuns", () => {
 	});
 });
 
+describe("listPrReviewRunsForBroker", () => {
+	it("returns active sessions and completed runs that still need projection", async () => {
+		const {
+			getPrReviewRunByFingerprint,
+			listPrReviewRunsForBroker,
+			recordRunStart,
+			recordRunResult,
+		} = await loadModule();
+		const started = makeInput({
+			fingerprint: "fp_broker_started",
+			prNumber: 10,
+		});
+		const repair = makeInput({
+			fingerprint: "fp_broker_repair",
+			prNumber: 11,
+		});
+		const missingIntent = makeInput({
+			fingerprint: "fp_broker_missing_intent",
+			prNumber: 12,
+		});
+		const projected = makeInput({
+			fingerprint: "fp_broker_projected",
+			prNumber: 13,
+		});
+
+		await recordRunStart(started);
+		await recordRunResult(started.fingerprint, {
+			sessionId: "sesn_started",
+			status: "started",
+		});
+		await recordRunStart(repair);
+		await recordRunResult(repair.fingerprint, {
+			sessionId: "sesn_repair",
+			status: "completed",
+			projectionStatus: "failed",
+			projectionError: "GitHub status update failed 503",
+			reviewIntent: {
+				event: "COMMENT",
+				body: "Persisted review body.",
+				labels: ["refactor"],
+			},
+		});
+		await recordRunStart(missingIntent);
+		await recordRunResult(missingIntent.fingerprint, {
+			sessionId: "sesn_missing",
+			status: "completed",
+			projectionStatus: "failed",
+			projectionError: "missing persisted intent",
+		});
+		await recordRunStart(projected);
+		await recordRunResult(projected.fingerprint, {
+			sessionId: "sesn_projected",
+			status: "completed",
+		});
+
+		const rows = await listPrReviewRunsForBroker();
+
+		expect(rows.map((row) => row.fingerprint).sort()).toEqual([
+			"fp_broker_missing_intent",
+			"fp_broker_repair",
+			"fp_broker_started",
+		]);
+		expect(
+			rows.find((row) => row.fingerprint === repair.fingerprint),
+		).toMatchObject({
+			status: "completed",
+			projectionStatus: "failed",
+			reviewIntent: {
+				event: "COMMENT",
+				body: "Persisted review body.",
+				labels: ["refactor"],
+			},
+		});
+		await expect(
+			getPrReviewRunByFingerprint(repair.fingerprint),
+		).resolves.toMatchObject({
+			status: "completed",
+			projectionStatus: "failed",
+			reviewIntent: {
+				event: "COMMENT",
+				body: "Persisted review body.",
+				labels: ["refactor"],
+			},
+		});
+	});
+});
+
 describe("projection ledger", () => {
 	it("hashes desired payloads stably and records successful projection state", async () => {
 		const {
@@ -558,6 +645,7 @@ describe("bucketPrReviewRuns", () => {
 			error: null,
 			projectionError: null,
 			githubReviewId: null,
+			reviewIntent: null,
 			coalescedHeadSha: null,
 			coalescedTriggerKind: null,
 			coalescedTriggerSourceId: null,
@@ -696,9 +784,46 @@ describe("run detail lookups", () => {
 		});
 	});
 
+	it("allows unpublished completed runs to be superseded during repair", async () => {
+		const {
+			getPrReviewRunByFingerprint,
+			markRunCompleted,
+			markRunSuperseded,
+			recordRunStart,
+		} = await loadModule();
+		const input = makeInput({
+			fingerprint: "fp_unpublished_completed_supersede",
+		});
+
+		await recordRunStart(input);
+		await markRunCompleted(input.fingerprint, {
+			sessionId: "sesn_unpublished_completed",
+			projectionStatus: "failed",
+			projectionError: "GitHub status update failed 503",
+		});
+		await markRunSuperseded(input.fingerprint, {
+			sessionId: "sesn_unpublished_completed",
+			reason: "PR head moved before projection could be repaired.",
+		});
+
+		await expect(
+			getPrReviewRunByFingerprint(input.fingerprint),
+		).resolves.toMatchObject({
+			status: "superseded",
+			projectionStatus: "superseded",
+			error: "PR head moved before projection could be repaired.",
+			nextAction:
+				"No action needed for this run; a newer run or review replaced it.",
+		});
+	});
+
 	it("blocks lifecycle transitions away from a terminal state", async () => {
-		const { markRunCompleted, markRunFailed, recordRunStart } =
-			await loadModule();
+		const {
+			markRunCompleted,
+			markRunFailed,
+			markRunSuperseded,
+			recordRunStart,
+		} = await loadModule();
 		const input = makeInput({ fingerprint: "fp_terminal_guard" });
 
 		await recordRunStart(input);
@@ -710,6 +835,12 @@ describe("run detail lookups", () => {
 			markRunFailed(input.fingerprint, {
 				sessionId: "sesn_terminal",
 				error: "late failure",
+			}),
+		).rejects.toThrow("is terminal");
+		await expect(
+			markRunSuperseded(input.fingerprint, {
+				sessionId: "sesn_terminal",
+				reason: "late supersede",
 			}),
 		).rejects.toThrow("is terminal");
 	});

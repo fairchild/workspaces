@@ -46,6 +46,12 @@ export type PrReviewExecutionState =
 	| "failed"
 	| "superseded";
 
+export interface PrReviewRunReviewIntent {
+	event: string;
+	body: string;
+	labels: string[];
+}
+
 export interface PrReviewRunFingerprintInput {
 	repoFullName: string;
 	prNumber: number;
@@ -88,6 +94,10 @@ async function ensureRunsTable(): Promise<void> {
 		.addColumn("projection_updated_at", "text")
 		.addColumn("projection_error", "text")
 		.addColumn("github_review_id", "text")
+		.addColumn("review_intent_event", "text")
+		.addColumn("review_intent_body", "text")
+		.addColumn("review_intent_labels", "text")
+		.addColumn("review_intent_recorded_at", "text")
 		.addColumn("active_claim_key", "text")
 		.addColumn("coalesced_head_sha", "text")
 		.addColumn("coalesced_trigger_kind", "text")
@@ -103,6 +113,10 @@ async function ensureRunsTable(): Promise<void> {
 		["projection_updated_at", "text"],
 		["projection_error", "text"],
 		["github_review_id", "text"],
+		["review_intent_event", "text"],
+		["review_intent_body", "text"],
+		["review_intent_labels", "text"],
+		["review_intent_recorded_at", "text"],
 		["active_claim_key", "text"],
 		["coalesced_head_sha", "text"],
 		["coalesced_trigger_kind", "text"],
@@ -446,6 +460,40 @@ function sanitizeFailureMessage(
 	return `${sanitized.slice(0, MAX_FAILURE_MESSAGE_LENGTH - 1)}...`;
 }
 
+function serializeReviewIntentLabels(labels: string[]): string {
+	return JSON.stringify(
+		labels.map((label) => label.trim()).filter((label) => label.length > 0),
+	);
+}
+
+function parseReviewIntentLabels(labelsJson: string | null): string[] {
+	if (!labelsJson) return [];
+	try {
+		const parsed = JSON.parse(labelsJson);
+		if (!Array.isArray(parsed)) return [];
+		return parsed
+			.map((label) => String(label).trim())
+			.filter((label) => label.length > 0);
+	} catch {
+		return [];
+	}
+}
+
+function reviewIntentFromRow(row: {
+	review_intent_event: string | null;
+	review_intent_body: string | null;
+	review_intent_labels: string | null;
+}): PrReviewRunReviewIntent | null {
+	const event = row.review_intent_event?.trim() ?? "";
+	const body = row.review_intent_body?.trim() ?? "";
+	if (!event || !body) return null;
+	return {
+		event,
+		body,
+		labels: parseReviewIntentLabels(row.review_intent_labels),
+	};
+}
+
 function classifyFailureKind(
 	status: PrReviewRunStatus,
 	message: string | null | undefined,
@@ -708,6 +756,10 @@ export async function recordRunStart(
 			projection_updated_at: now,
 			projection_error: null,
 			github_review_id: null,
+			review_intent_event: null,
+			review_intent_body: null,
+			review_intent_labels: null,
+			review_intent_recorded_at: null,
 			active_claim_key: claimKey,
 			coalesced_head_sha: null,
 			coalesced_trigger_kind: null,
@@ -760,6 +812,10 @@ export async function recordRunStart(
 				projection_updated_at: now,
 				projection_error: null,
 				github_review_id: null,
+				review_intent_event: null,
+				review_intent_body: null,
+				review_intent_labels: null,
+				review_intent_recorded_at: null,
 				active_claim_key: claimKey,
 				coalesced_head_sha: null,
 				coalesced_trigger_kind: null,
@@ -808,6 +864,10 @@ export async function recordRunStart(
 			projection_updated_at: now,
 			projection_error: null,
 			github_review_id: null,
+			review_intent_event: null,
+			review_intent_body: null,
+			review_intent_labels: null,
+			review_intent_recorded_at: null,
 			active_claim_key: claimKey,
 			coalesced_head_sha: null,
 			coalesced_trigger_kind: null,
@@ -1042,6 +1102,7 @@ export interface RecordRunResultInput {
 	projectionStatus?: PrReviewProjectionStatus;
 	projectionError?: string | null;
 	githubReviewId?: string | null;
+	reviewIntent?: PrReviewRunReviewIntent | null;
 }
 
 const TERMINAL_RUN_STATUSES = new Set<PrReviewRunStatus>([
@@ -1056,13 +1117,24 @@ async function assertTransitionAllowed(
 ): Promise<void> {
 	const current = await getDb()
 		.selectFrom("managed_pr_review_runs")
-		.select(["status"])
+		.select(["status", "projection_status"])
 		.where("fingerprint", "=", fingerprint)
 		.executeTakeFirst();
 	if (!current) {
 		throw new Error(`ReviewRun ${fingerprint} does not exist`);
 	}
 	const currentStatus = current.status as PrReviewRunStatus;
+	const currentProjectionStatus = normalizeProjectionStatus(
+		current.projection_status,
+		currentStatus,
+	);
+	if (
+		currentStatus === "completed" &&
+		nextStatus === "superseded" &&
+		currentProjectionStatus !== "projected"
+	) {
+		return;
+	}
 	if (
 		TERMINAL_RUN_STATUSES.has(currentStatus) &&
 		currentStatus !== nextStatus
@@ -1082,6 +1154,7 @@ interface RunLifecycleUpdateInput {
 	projectionStatus?: PrReviewProjectionStatus;
 	projectionError?: string | null;
 	githubReviewId?: string | null;
+	reviewIntent?: PrReviewRunReviewIntent | null;
 }
 
 async function updateRunLifecycle(
@@ -1106,6 +1179,17 @@ async function updateRunLifecycle(
 			: projectionStatus === "failed"
 				? failureMessage
 				: null;
+	const reviewIntentUpdates =
+		input.reviewIntent !== undefined
+			? {
+					review_intent_event: input.reviewIntent?.event ?? null,
+					review_intent_body: input.reviewIntent?.body ?? null,
+					review_intent_labels: input.reviewIntent
+						? serializeReviewIntentLabels(input.reviewIntent.labels)
+						: null,
+					review_intent_recorded_at: input.reviewIntent ? now : null,
+				}
+			: {};
 	const updates = {
 		session_id: input.sessionId,
 		status: input.status,
@@ -1119,8 +1203,14 @@ async function updateRunLifecycle(
 		projection_updated_at: now,
 		projection_error: projectionError,
 		github_review_id: input.githubReviewId ?? null,
+		...reviewIntentUpdates,
 		...(input.status === "started"
-			? {}
+			? {
+					review_intent_event: null,
+					review_intent_body: null,
+					review_intent_labels: null,
+					review_intent_recorded_at: null,
+				}
 			: {
 					active_claim_key: null,
 					coalesced_head_sha: null,
@@ -1149,12 +1239,21 @@ export async function markRunSessionStarted(
 
 export async function markRunCompleted(
 	fingerprint: string,
-	input: { sessionId: string | null; githubReviewId?: string | null },
+	input: {
+		sessionId: string | null;
+		githubReviewId?: string | null;
+		projectionStatus?: PrReviewProjectionStatus;
+		projectionError?: string | null;
+		reviewIntent?: PrReviewRunReviewIntent | null;
+	},
 ): Promise<void> {
 	await updateRunLifecycle(fingerprint, {
 		sessionId: input.sessionId,
 		status: "completed",
 		githubReviewId: input.githubReviewId ?? null,
+		projectionStatus: input.projectionStatus,
+		projectionError: input.projectionError,
+		reviewIntent: input.reviewIntent,
 	});
 }
 
@@ -1212,6 +1311,9 @@ export async function recordRunResult(
 			await markRunCompleted(fingerprint, {
 				sessionId: input.sessionId,
 				githubReviewId: input.githubReviewId,
+				projectionStatus: input.projectionStatus,
+				projectionError: input.projectionError,
+				reviewIntent: input.reviewIntent,
 			});
 			return;
 		case "failed":
@@ -1276,6 +1378,7 @@ export interface PrReviewRunSummary {
 
 export interface PrReviewRunDetails extends PrReviewRunSummary {
 	reviewerConfigHash: string;
+	reviewIntent: PrReviewRunReviewIntent | null;
 	projections: PrReviewProjectionRecord[];
 }
 
@@ -1293,6 +1396,14 @@ export interface StartedPrReviewRun {
 	coalescedTriggerKind: string | null;
 	coalescedTriggerSourceId: string | null;
 	coalescedAt: string | null;
+}
+
+export interface BrokerPrReviewRun
+	extends Omit<StartedPrReviewRun, "sessionId"> {
+	status: PrReviewRunStatus;
+	projectionStatus: PrReviewProjectionStatus;
+	sessionId: string | null;
+	reviewIntent: PrReviewRunReviewIntent | null;
 }
 
 function mapRunDetails(row: {
@@ -1316,6 +1427,9 @@ function mapRunDetails(row: {
 	projection_updated_at: string | null;
 	projection_error: string | null;
 	github_review_id: string | null;
+	review_intent_event: string | null;
+	review_intent_body: string | null;
+	review_intent_labels: string | null;
 	coalesced_head_sha: string | null;
 	coalesced_trigger_kind: string | null;
 	coalesced_trigger_source_id: string | null;
@@ -1370,6 +1484,7 @@ function mapRunDetails(row: {
 		projectionUpdatedAt: row.projection_updated_at ?? row.updated_at,
 		projectionError,
 		githubReviewId: row.github_review_id,
+		reviewIntent: reviewIntentFromRow(row),
 		coalescedHeadSha: row.coalesced_head_sha,
 		coalescedTriggerKind: row.coalesced_trigger_kind,
 		coalescedTriggerSourceId: row.coalesced_trigger_source_id,
@@ -1615,6 +1730,118 @@ export function bucketPrReviewRuns(
 	}
 
 	return buckets;
+}
+
+function mapBrokerRun(row: {
+	fingerprint: string;
+	repo_full_name: string;
+	pr_number: number;
+	head_sha: string;
+	trigger_kind: string;
+	trigger_source_id: string;
+	status: string;
+	session_id: string | null;
+	created_at: string;
+	updated_at: string;
+	projection_status: string | null;
+	review_intent_event: string | null;
+	review_intent_body: string | null;
+	review_intent_labels: string | null;
+	coalesced_head_sha: string | null;
+	coalesced_trigger_kind: string | null;
+	coalesced_trigger_source_id: string | null;
+	coalesced_at: string | null;
+}): BrokerPrReviewRun {
+	const status = row.status as PrReviewRunStatus;
+	return {
+		fingerprint: row.fingerprint,
+		repoFullName: row.repo_full_name,
+		prNumber: row.pr_number,
+		headSha: row.head_sha,
+		triggerKind: row.trigger_kind,
+		triggerSourceId: row.trigger_source_id,
+		status,
+		projectionStatus: normalizeProjectionStatus(row.projection_status, status),
+		sessionId: row.session_id,
+		createdAt: row.created_at,
+		updatedAt: row.updated_at,
+		reviewIntent: reviewIntentFromRow(row),
+		coalescedHeadSha: row.coalesced_head_sha,
+		coalescedTriggerKind: row.coalesced_trigger_kind,
+		coalescedTriggerSourceId: row.coalesced_trigger_source_id,
+		coalescedAt: row.coalesced_at,
+	};
+}
+
+const BROKER_RUN_COLUMNS = [
+	"fingerprint",
+	"repo_full_name",
+	"pr_number",
+	"head_sha",
+	"trigger_kind",
+	"trigger_source_id",
+	"status",
+	"session_id",
+	"created_at",
+	"updated_at",
+	"projection_status",
+	"review_intent_event",
+	"review_intent_body",
+	"review_intent_labels",
+	"coalesced_head_sha",
+	"coalesced_trigger_kind",
+	"coalesced_trigger_source_id",
+	"coalesced_at",
+] as const;
+
+export async function listPrReviewRunsForBroker(
+	input: {
+		limit?: number;
+		repoFullName?: string;
+	} = {},
+): Promise<BrokerPrReviewRun[]> {
+	await ensureRunsTable();
+	const limit = input.limit ?? 10;
+	let startedQuery = getDb()
+		.selectFrom("managed_pr_review_runs")
+		.select(BROKER_RUN_COLUMNS)
+		.where("status", "=", "started")
+		.where("session_id", "is not", null);
+	let completedQuery = getDb()
+		.selectFrom("managed_pr_review_runs")
+		.select(BROKER_RUN_COLUMNS)
+		.where("status", "=", "completed")
+		.where("projection_status", "in", ["pending", "failed"]);
+	if (input.repoFullName) {
+		startedQuery = startedQuery.where(
+			"repo_full_name",
+			"=",
+			input.repoFullName,
+		);
+		completedQuery = completedQuery.where(
+			"repo_full_name",
+			"=",
+			input.repoFullName,
+		);
+	}
+
+	const [startedRows, completedRows] = await Promise.all([
+		startedQuery.orderBy("updated_at", "asc").limit(limit).execute(),
+		completedQuery
+			.orderBy("projection_updated_at", "asc")
+			.limit(limit)
+			.execute(),
+	]);
+
+	return [...startedRows, ...completedRows]
+		.map(mapBrokerRun)
+		.sort((a, b) => {
+			const updated = a.updatedAt.localeCompare(b.updatedAt);
+			return updated === 0
+				? a.fingerprint.localeCompare(b.fingerprint)
+				: updated;
+		})
+		.slice(0, limit);
 }
 
 export async function listStartedPrReviewRuns(

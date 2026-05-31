@@ -25,10 +25,13 @@ describe("/api/webhooks/github/pr-reviewer-broker POST", () => {
 		mocks.processPendingPrReviewRuns.mockReset();
 		mocks.processPendingPrReviewRuns.mockResolvedValue({
 			checked: 1,
+			applied: 1,
 			completed: 1,
 			failed: 0,
+			skipped: 0,
 			skippedRunning: 0,
 			superseded: 0,
+			retryable: 0,
 			requeued: 0,
 			runs: [
 				{
@@ -36,6 +39,7 @@ describe("/api/webhooks/github/pr-reviewer-broker POST", () => {
 					sessionId: "sesn_123",
 					prNumber: 486,
 					status: "completed",
+					outcome: "applied",
 				},
 			],
 		});
@@ -80,10 +84,13 @@ describe("/api/webhooks/github/pr-reviewer-broker POST", () => {
 	it("accepts bearer auth and reports broker failures", async () => {
 		mocks.processPendingPrReviewRuns.mockResolvedValue({
 			checked: 1,
+			applied: 0,
 			completed: 0,
 			failed: 1,
+			skipped: 0,
 			skippedRunning: 0,
 			superseded: 0,
+			retryable: 0,
 			requeued: 0,
 			runs: [
 				{
@@ -91,6 +98,7 @@ describe("/api/webhooks/github/pr-reviewer-broker POST", () => {
 					sessionId: "sesn_123",
 					prNumber: 486,
 					status: "failed",
+					outcome: "failed",
 					error: "No valid PR review intent JSON found",
 				},
 			],
@@ -106,6 +114,44 @@ describe("/api/webhooks/github/pr-reviewer-broker POST", () => {
 			ok: false,
 			checked: 1,
 			failed: 1,
+		});
+	});
+
+	it("reports retryable projection failures as not ok", async () => {
+		mocks.processPendingPrReviewRuns.mockResolvedValue({
+			checked: 1,
+			applied: 0,
+			completed: 0,
+			failed: 0,
+			skipped: 0,
+			skippedRunning: 0,
+			superseded: 0,
+			retryable: 1,
+			requeued: 0,
+			runs: [
+				{
+					fingerprint: "fp",
+					sessionId: "sesn_123",
+					prNumber: 486,
+					status: "completed",
+					outcome: "retryable",
+					error: "GitHub status update failed 503",
+					retryable: true,
+				},
+			],
+		});
+
+		const { POST } = await import("./route");
+		const response = await POST(
+			brokerRequest({ authorization: `Bearer ${BROKER_SECRET}` }),
+		);
+
+		expect(response.status).toBe(200);
+		await expect(response.json()).resolves.toMatchObject({
+			ok: false,
+			checked: 1,
+			failed: 0,
+			retryable: 1,
 		});
 	});
 

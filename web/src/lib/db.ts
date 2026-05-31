@@ -93,6 +93,10 @@ export interface ManagedPrReviewRunsTable {
 	projection_updated_at: string | null;
 	projection_error: string | null;
 	github_review_id: string | null;
+	review_intent_event: string | null;
+	review_intent_body: string | null;
+	review_intent_labels: string | null;
+	review_intent_recorded_at: string | null;
 	active_claim_key: string | null;
 	coalesced_head_sha: string | null;
 	coalesced_trigger_kind: string | null;
