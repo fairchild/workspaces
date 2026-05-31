@@ -321,7 +321,11 @@ The reviewer is **continuous**: it reruns on meaningful PR updates and carries
 its own prior review state into each rerun so it can revise (or approve) a
 stale `REQUEST_CHANGES` instead of repeating itself.
 
-`parsePrReviewTrigger()` in `web/src/app/api/webhooks/github/route.ts` accepts:
+`classifyPrReviewTrigger()` in
+`web/src/lib/agent-runtime/pr-review-trigger.ts` classifies webhook activity
+before any ReviewRun claim or active-run coalescing happens. Only material
+classifications become `parsePrReviewTrigger()` results and start or coalesce a
+managed review run:
 
 | Event | Action | Behavior |
 |-------|--------|----------|
@@ -329,8 +333,12 @@ stale `REQUEST_CHANGES` instead of repeating itself.
 | `pull_request` | `reopened` | Rerun (skip drafts) |
 | `pull_request` | `ready_for_review` | Rerun even when previous state was draft |
 | `pull_request` | `synchronize` | Rerun on new head SHA (skip drafts) |
-| `pull_request` | `edited` | Rerun when `changes.body` or `changes.base` is present — base retargets materially change the diff (skip drafts) |
-| `issue_comment` | `created` | Rerun when the comment is on a PR thread, the sender is a non-bot, and the body matches an evidence signal: `evidence.cloudcompute.com`, `Evidence:`, `swift test`, `playwright`, `screenshot`, `recording`, `validation` |
+| `pull_request` | `edited` | Rerun when `changes.body` or `changes.base` is present; title-only and other metadata edits do not start sessions |
+| `pull_request` | `labeled`, `unlabeled` | Metadata only; no managed-review session |
+| `pull_request` | `closed` | Terminal PR activity; no managed-review session |
+| `issue_comment` | `created` with evidence | Rerun when the comment is on a PR thread, the sender is a non-bot, and the body matches an evidence signal: `evidence.cloudcompute.com`, `Evidence:`, `swift test`, `playwright`, `screenshot`, `recording`, `validation` |
+| `issue_comment` | `created` without evidence | Metadata only; no managed-review session |
+| `pull_request_review_comment`, `pull_request_review` | any | Metadata only; no managed-review session |
 
 Loop guards skip events from any `*[bot]` sender (including the reviewer
 itself) and from `Bot`-typed senders.
@@ -361,10 +369,13 @@ Effects:
 
 - Webhook redeliveries for the same trigger are no-ops.
 - A new commit changes `headSha` → new fingerprint → rerun.
-- Distinct evidence comments on the same head produce distinct
-  `triggerSourceId` values. If no same-config run is active, each runs once. If
-  a run is active, they coalesce into that run and the broker starts one
-  follow-up against the latest PR state.
+- Distinct body edits and evidence comments on the same head produce distinct
+  `triggerSourceId` values. If no same-config run is active, each material
+  trigger runs once. If a run is active, material triggers coalesce into that
+  run and the broker starts one follow-up against the latest PR state.
+- Metadata-only activity such as title edits, label changes, non-evidence
+  comments, review comments, and PR closure does not create or coalesce managed
+  review runs.
 - A reviewer prompt or model change rotates `reviewerConfigHash`, allowing a
   re-evaluation of the same head without manual intervention.
 

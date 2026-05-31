@@ -26,6 +26,8 @@ const SUPPORTED_EVENTS = new Set<string>([
 	"push",
 	"issues",
 	"issue_comment",
+	"pull_request_review",
+	"pull_request_review_comment",
 	"workflow_run",
 ]);
 

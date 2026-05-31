@@ -1,4 +1,7 @@
-export type PrReviewContractEventType = "pull_request" | "issue_comment";
+export type PrReviewContractEventType =
+	| "pull_request"
+	| "issue_comment"
+	| "pull_request_review_comment";
 
 export type ExpectedPrReviewTriggerKind =
 	| "opened"
@@ -84,6 +87,25 @@ function issueCommentPayload(
 			created_at: "2026-05-13T12:00:00Z",
 			user: humanSender,
 			...overrides.comment,
+		},
+	};
+}
+
+function reviewCommentPayload(number: number): Record<string, unknown> {
+	return {
+		action: "created",
+		sender: humanSender,
+		repository: repo,
+		pull_request: {
+			number,
+			html_url: `https://github.com/fairchild/workspaces/pull/${number}`,
+		},
+		comment: {
+			id: 910000 + number,
+			body: "Could this be simpler?",
+			html_url: `https://github.com/fairchild/workspaces/pull/${number}#discussion_r${910000 + number}`,
+			created_at: "2026-05-13T12:00:00Z",
+			user: humanSender,
 		},
 	};
 }
@@ -177,6 +199,22 @@ export const PR_REVIEW_WEBHOOK_CONTRACT_CASES: PrReviewWebhookContractCase[] = [
 		expectedTriggerKind: null,
 	},
 	{
+		name: "PR label added",
+		deliveryId: "contract-pr-labeled",
+		eventType: "pull_request",
+		payload: pullRequestPayload("labeled", 8114),
+		expectedForwarded: false,
+		expectedTriggerKind: null,
+	},
+	{
+		name: "PR closed",
+		deliveryId: "contract-pr-closed",
+		eventType: "pull_request",
+		payload: pullRequestPayload("closed", 8115),
+		expectedForwarded: false,
+		expectedTriggerKind: null,
+	},
+	{
 		name: "reviewer bot synchronized",
 		deliveryId: "contract-pr-bot-sender",
 		eventType: "pull_request",
@@ -212,6 +250,14 @@ export const PR_REVIEW_WEBHOOK_CONTRACT_CASES: PrReviewWebhookContractCase[] = [
 		payload: issueCommentPayload(8113, "Evidence: attached", {
 			issue: { pull_request: undefined },
 		}),
+		expectedForwarded: false,
+		expectedTriggerKind: null,
+	},
+	{
+		name: "PR review comment created",
+		deliveryId: "contract-pr-review-comment",
+		eventType: "pull_request_review_comment",
+		payload: reviewCommentPayload(8116),
 		expectedForwarded: false,
 		expectedTriggerKind: null,
 	},

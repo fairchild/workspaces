@@ -13,6 +13,8 @@ export const TYPE_LABEL: Record<WebhookEventType, string> = {
 	push: "PUSH",
 	issues: "ISSUE",
 	issue_comment: "ISSUE",
+	pull_request_review: "PR",
+	pull_request_review_comment: "PR",
 	workflow_run: "CI",
 };
 
@@ -25,5 +27,7 @@ export const TYPE_COLOR: Record<WebhookEventType, ColorKey> = {
 	push: "push",
 	issues: "issue",
 	issue_comment: "issue",
+	pull_request_review: "pr",
+	pull_request_review_comment: "pr",
 	workflow_run: "ci",
 };

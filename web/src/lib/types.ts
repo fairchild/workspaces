@@ -54,6 +54,8 @@ export type WebhookEventType =
 	| "push"
 	| "issues"
 	| "issue_comment"
+	| "pull_request_review"
+	| "pull_request_review_comment"
 	| "workflow_run";
 
 export const WORKSPACE_STATUS_LABELS: Record<WorkspaceStatus, string> = {
@@ -72,6 +74,8 @@ export const WEBHOOK_EVENT_ICONS: Record<WebhookEventType, string> = {
 	push: "git-commit",
 	issues: "circle-dot",
 	issue_comment: "message-circle",
+	pull_request_review: "message-square",
+	pull_request_review_comment: "message-circle",
 	workflow_run: "play-circle",
 };
 

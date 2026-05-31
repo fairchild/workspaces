@@ -1,5 +1,10 @@
 import crypto from "node:crypto";
 import { PR_REVIEW_WEBHOOK_CONTRACT_CASES } from "@/lib/agent-runtime/__tests__/pr-review-trigger-fixtures";
+import {
+	type PrReviewTriggerClassification,
+	type PrReviewTriggerClassificationKind,
+	classifyPrReviewTrigger,
+} from "@/lib/agent-runtime/pr-review-trigger";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -24,6 +29,36 @@ vi.mock("@/lib/events", () => ({
 	pushEvent: mocks.pushEvent,
 }));
 
+function makePullRequestPayload(
+	action: string,
+	overrides: {
+		pull_request?: Record<string, unknown>;
+		changes?: Record<string, unknown>;
+		sender?: Record<string, unknown>;
+	} = {},
+): Record<string, unknown> {
+	return {
+		action,
+		sender: overrides.sender ?? { login: "fairchild", type: "User" },
+		repository: {
+			full_name: "fairchild/workspaces",
+			html_url: "https://github.com/fairchild/workspaces",
+			name: "workspaces",
+		},
+		pull_request: {
+			number: 123,
+			title: "Fix review kickoff",
+			html_url: "https://github.com/fairchild/workspaces/pull/123",
+			body: "## Evidence\n- [x] Test evidence attached",
+			head: { ref: "codex-fix-review-kickoff", sha: "abc123def456" },
+			base: { ref: "main" },
+			draft: false,
+			...overrides.pull_request,
+		},
+		...(overrides.changes ? { changes: overrides.changes } : {}),
+	};
+}
+
 function makePullRequestRequest(
 	action: string,
 	overrides: {
@@ -38,27 +73,45 @@ function makePullRequestRequest(
 			"x-github-delivery": `delivery-${action}`,
 			"x-github-event": "pull_request",
 		},
-		body: JSON.stringify({
-			action,
-			sender: overrides.sender ?? { login: "fairchild", type: "User" },
-			repository: {
-				full_name: "fairchild/workspaces",
-				html_url: "https://github.com/fairchild/workspaces",
-				name: "workspaces",
-			},
-			pull_request: {
-				number: 123,
-				title: "Fix review kickoff",
-				html_url: "https://github.com/fairchild/workspaces/pull/123",
-				body: "## Evidence\n- [x] Test evidence attached",
-				head: { ref: "codex-fix-review-kickoff", sha: "abc123def456" },
-				base: { ref: "main" },
-				draft: false,
-				...overrides.pull_request,
-			},
-			...(overrides.changes ? { changes: overrides.changes } : {}),
-		}),
+		body: JSON.stringify(makePullRequestPayload(action, overrides)),
 	});
+}
+
+function makeIssueCommentPayload(
+	body: string,
+	overrides: {
+		sender?: Record<string, unknown>;
+		comment_id?: number;
+		issue_overrides?: Record<string, unknown>;
+	} = {},
+): Record<string, unknown> {
+	return {
+		action: "created",
+		sender: overrides.sender ?? { login: "fairchild", type: "User" },
+		repository: {
+			full_name: "fairchild/workspaces",
+			html_url: "https://github.com/fairchild/workspaces",
+			name: "workspaces",
+		},
+		issue: {
+			number: 123,
+			title: "Fix review kickoff",
+			html_url: "https://github.com/fairchild/workspaces/pull/123",
+			pull_request: {
+				html_url: "https://github.com/fairchild/workspaces/pull/123",
+			},
+			body: "PR description",
+			...overrides.issue_overrides,
+		},
+		comment: {
+			id: overrides.comment_id ?? 9001,
+			body,
+			html_url:
+				"https://github.com/fairchild/workspaces/pull/123#issuecomment-9001",
+			created_at: "2026-05-09T12:00:00Z",
+			user: { login: "fairchild" },
+		},
+	};
 }
 
 function makeIssueCommentRequest(
@@ -75,34 +128,60 @@ function makeIssueCommentRequest(
 			"x-github-delivery": "delivery-comment",
 			"x-github-event": "issue_comment",
 		},
-		body: JSON.stringify({
-			action: "created",
-			sender: overrides.sender ?? { login: "fairchild", type: "User" },
-			repository: {
-				full_name: "fairchild/workspaces",
-				html_url: "https://github.com/fairchild/workspaces",
-				name: "workspaces",
-			},
-			issue: {
-				number: 123,
-				title: "Fix review kickoff",
-				html_url: "https://github.com/fairchild/workspaces/pull/123",
-				pull_request: {
-					html_url: "https://github.com/fairchild/workspaces/pull/123",
-				},
-				body: "PR description",
-				...overrides.issue_overrides,
-			},
-			comment: {
-				id: overrides.comment_id ?? 9001,
-				body,
-				html_url:
-					"https://github.com/fairchild/workspaces/pull/123#issuecomment-9001",
-				created_at: "2026-05-09T12:00:00Z",
-				user: { login: "fairchild" },
-			},
-		}),
+		body: JSON.stringify(makeIssueCommentPayload(body, overrides)),
 	});
+}
+
+function makeReviewCommentPayload(): Record<string, unknown> {
+	return {
+		action: "created",
+		sender: { login: "fairchild", type: "User" },
+		repository: {
+			full_name: "fairchild/workspaces",
+			html_url: "https://github.com/fairchild/workspaces",
+			name: "workspaces",
+		},
+		pull_request: {
+			number: 123,
+			html_url: "https://github.com/fairchild/workspaces/pull/123",
+		},
+		comment: {
+			id: 9201,
+			body: "Could this helper be smaller?",
+			html_url:
+				"https://github.com/fairchild/workspaces/pull/123#discussion_r9201",
+		},
+	};
+}
+
+function expectTrigger(
+	classification: PrReviewTriggerClassification,
+	kind: PrReviewTriggerClassificationKind,
+) {
+	expect(classification).toMatchObject({
+		decision: "trigger_review",
+		relevance: "material",
+		kind,
+	});
+	if (classification.decision !== "trigger_review") {
+		throw new Error(`expected ${kind} to trigger review`);
+	}
+	return classification.trigger;
+}
+
+function expectSkip(
+	classification: PrReviewTriggerClassification,
+	kind: PrReviewTriggerClassificationKind,
+	relevance: "metadata" | "terminal" | "ignored",
+) {
+	expect(classification).toMatchObject({
+		decision: "skip_review",
+		kind,
+		relevance,
+	});
+	if (classification.decision !== "skip_review") {
+		throw new Error(`expected ${kind} to skip review`);
+	}
 }
 
 function pullRequestOpenedRequest(): Request {
@@ -134,6 +213,210 @@ function signedWebhookRequest(
 		body,
 	});
 }
+
+describe("PR review trigger relevance classifier", () => {
+	it("classifies material review triggers explicitly", () => {
+		const opened = expectTrigger(
+			classifyPrReviewTrigger(
+				"pull_request",
+				"opened",
+				makePullRequestPayload("opened"),
+			),
+			"opened",
+		);
+		expect(opened.context.kind).toBe("opened");
+
+		const synchronize = expectTrigger(
+			classifyPrReviewTrigger(
+				"pull_request",
+				"synchronize",
+				makePullRequestPayload("synchronize", {
+					pull_request: { head: { ref: "feature/x", sha: "head-new" } },
+				}),
+			),
+			"synchronize",
+		);
+		expect(synchronize.context).toMatchObject({
+			kind: "synchronize",
+			triggerSourceId: "head-new",
+		});
+
+		const bodyEdit = expectTrigger(
+			classifyPrReviewTrigger(
+				"pull_request",
+				"edited",
+				makePullRequestPayload("edited", {
+					pull_request: { body: "Updated evidence and summary" },
+					changes: { body: { from: "old body" } },
+				}),
+			),
+			"body_edit",
+		);
+		expect(bodyEdit.context.kind).toBe("edited");
+		expect(bodyEdit.context.triggerSourceId).toMatch(/^body-/);
+
+		const baseEdit = expectTrigger(
+			classifyPrReviewTrigger(
+				"pull_request",
+				"edited",
+				makePullRequestPayload("edited", {
+					pull_request: { base: { ref: "release/2026-05" } },
+					changes: { base: { ref: { from: "main" } } },
+				}),
+			),
+			"base_edit",
+		);
+		expect(baseEdit.context.triggerSourceId).toBe(
+			"base-release/2026-05-abc123def456",
+		);
+
+		const evidenceComment = expectTrigger(
+			classifyPrReviewTrigger(
+				"issue_comment",
+				"created",
+				makeIssueCommentPayload(
+					"Evidence: https://evidence.cloudcompute.com/pr-123.png",
+				),
+			),
+			"evidence_comment",
+		);
+		expect(evidenceComment.context).toMatchObject({
+			kind: "evidence_comment",
+			triggerSourceId: "comment-9001",
+		});
+	});
+
+	it("classifies metadata and terminal events without managed-review sessions", () => {
+		expectSkip(
+			classifyPrReviewTrigger(
+				"pull_request",
+				"edited",
+				makePullRequestPayload("edited", {
+					changes: { title: { from: "old title" } },
+				}),
+			),
+			"metadata_edit",
+			"metadata",
+		);
+		expectSkip(
+			classifyPrReviewTrigger(
+				"issue_comment",
+				"created",
+				makeIssueCommentPayload("looks good, ship it"),
+			),
+			"non_evidence_comment",
+			"metadata",
+		);
+		expectSkip(
+			classifyPrReviewTrigger(
+				"pull_request_review_comment",
+				"created",
+				makeReviewCommentPayload(),
+			),
+			"review_comment",
+			"metadata",
+		);
+		expectSkip(
+			classifyPrReviewTrigger(
+				"pull_request",
+				"labeled",
+				makePullRequestPayload("labeled"),
+			),
+			"label",
+			"metadata",
+		);
+		expectSkip(
+			classifyPrReviewTrigger(
+				"pull_request",
+				"closed",
+				makePullRequestPayload("closed"),
+			),
+			"closed",
+			"terminal",
+		);
+	});
+
+	it("keeps repeated body edits and evidence comments idempotent by source id", () => {
+		const firstBody = expectTrigger(
+			classifyPrReviewTrigger(
+				"pull_request",
+				"edited",
+				makePullRequestPayload("edited", {
+					pull_request: { body: "body version one" },
+					changes: { body: { from: "old body" } },
+				}),
+			),
+			"body_edit",
+		);
+		const redeliveredBody = expectTrigger(
+			classifyPrReviewTrigger(
+				"pull_request",
+				"edited",
+				makePullRequestPayload("edited", {
+					pull_request: { body: "body version one" },
+					changes: { body: { from: "old body" } },
+				}),
+			),
+			"body_edit",
+		);
+		const updatedBody = expectTrigger(
+			classifyPrReviewTrigger(
+				"pull_request",
+				"edited",
+				makePullRequestPayload("edited", {
+					pull_request: { body: "body version two" },
+					changes: { body: { from: "body version one" } },
+				}),
+			),
+			"body_edit",
+		);
+
+		expect(redeliveredBody.context.triggerSourceId).toBe(
+			firstBody.context.triggerSourceId,
+		);
+		expect(updatedBody.context.triggerSourceId).not.toBe(
+			firstBody.context.triggerSourceId,
+		);
+
+		const firstEvidence = expectTrigger(
+			classifyPrReviewTrigger(
+				"issue_comment",
+				"created",
+				makeIssueCommentPayload("Evidence: validation attached", {
+					comment_id: 9101,
+				}),
+			),
+			"evidence_comment",
+		);
+		const redeliveredEvidence = expectTrigger(
+			classifyPrReviewTrigger(
+				"issue_comment",
+				"created",
+				makeIssueCommentPayload("Evidence: validation attached", {
+					comment_id: 9101,
+				}),
+			),
+			"evidence_comment",
+		);
+		const nextEvidence = expectTrigger(
+			classifyPrReviewTrigger(
+				"issue_comment",
+				"created",
+				makeIssueCommentPayload("Evidence: validation attached", {
+					comment_id: 9102,
+				}),
+			),
+			"evidence_comment",
+		);
+
+		expect(redeliveredEvidence.context.triggerSourceId).toBe(
+			firstEvidence.context.triggerSourceId,
+		);
+		expect(nextEvidence.context.triggerSourceId).not.toBe(
+			firstEvidence.context.triggerSourceId,
+		);
+	});
+});
 
 describe("/api/webhooks/github POST", () => {
 	beforeEach(() => {
@@ -264,6 +547,46 @@ describe("/api/webhooks/github POST", () => {
 				}),
 			);
 			expect(mocks.triggerPrReview).not.toHaveBeenCalled();
+		});
+
+		it("does not start review sessions for metadata-only PR events", async () => {
+			const { POST } = await import("./route");
+			await POST(makePullRequestRequest("labeled"));
+			await POST(makePullRequestRequest("unlabeled"));
+			await POST(makePullRequestRequest("closed"));
+			await POST(
+				makePullRequestRequest("edited", {
+					changes: { title: { from: "old title" } },
+				}),
+			);
+			expect(mocks.triggerPrReview).not.toHaveBeenCalled();
+		});
+
+		it("routes mixed metadata and material triggers without metadata sessions", async () => {
+			const { POST } = await import("./route");
+			await POST(makePullRequestRequest("labeled"));
+			await POST(
+				makePullRequestRequest("synchronize", {
+					pull_request: {
+						head: { ref: "feature/x", sha: "materialsha123" },
+					},
+				}),
+			);
+			await POST(
+				makeIssueCommentRequest("Evidence: tests uploaded", {
+					comment_id: 9002,
+				}),
+			);
+
+			expect(mocks.triggerPrReview).toHaveBeenCalledTimes(2);
+			expect(mocks.triggerPrReview.mock.calls[0][1]).toMatchObject({
+				kind: "synchronize",
+				triggerSourceId: "materialsha123",
+			});
+			expect(mocks.triggerPrReview.mock.calls[1][1]).toMatchObject({
+				kind: "evidence_comment",
+				triggerSourceId: "comment-9002",
+			});
 		});
 
 		it("triggers when the PR base branch is retargeted", async () => {
