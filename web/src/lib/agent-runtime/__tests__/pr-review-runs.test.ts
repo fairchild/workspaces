@@ -397,6 +397,20 @@ describe("bucketPrReviewRuns", () => {
 			projectionError?: string | null;
 		}) => ({
 			...base,
+			executionState:
+				overrides.status === "completed"
+					? ("completed" as const)
+					: overrides.status === "failed"
+						? ("failed" as const)
+						: overrides.sessionId
+							? ("running_session" as const)
+							: ("waiting_for_session" as const),
+			latestKnownHeadSha: base.headSha,
+			failureKind: null,
+			failureMessage: null,
+			failureRetryable: null,
+			failedAt: null,
+			nextAction: "",
 			projectionStatus: overrides.projectionStatus ?? ("pending" as const),
 			projectionUpdatedAt: overrides.updatedAt,
 			...overrides,
@@ -475,6 +489,83 @@ describe("bucketPrReviewRuns", () => {
 });
 
 describe("run detail lookups", () => {
+	it("uses transition helpers for valid lifecycle transitions", async () => {
+		const {
+			getPrReviewRunByFingerprint,
+			markRunCompleted,
+			markRunSessionStarted,
+			recordRunStart,
+		} = await loadModule();
+		const input = makeInput({ fingerprint: "fp_lifecycle", prNumber: 44 });
+
+		await recordRunStart(input);
+		await markRunSessionStarted(input.fingerprint, {
+			sessionId: "sesn_lifecycle",
+		});
+		await markRunCompleted(input.fingerprint, {
+			sessionId: "sesn_lifecycle",
+			githubReviewId: "9876",
+		});
+
+		await expect(
+			getPrReviewRunByFingerprint(input.fingerprint),
+		).resolves.toMatchObject({
+			status: "completed",
+			executionState: "completed",
+			projectionStatus: "projected",
+			githubReviewId: "9876",
+			failureKind: null,
+			nextAction:
+				"No action needed; the ReviewRun has been published to GitHub.",
+		});
+	});
+
+	it("blocks lifecycle transitions away from a terminal state", async () => {
+		const { markRunCompleted, markRunFailed, recordRunStart } =
+			await loadModule();
+		const input = makeInput({ fingerprint: "fp_terminal_guard" });
+
+		await recordRunStart(input);
+		await markRunCompleted(input.fingerprint, {
+			sessionId: "sesn_terminal",
+		});
+
+		await expect(
+			markRunFailed(input.fingerprint, {
+				sessionId: "sesn_terminal",
+				error: "late failure",
+			}),
+		).rejects.toThrow("is terminal");
+	});
+
+	it("persists bounded user-safe failure details", async () => {
+		const { getPrReviewRunByFingerprint, markRunFailed, recordRunStart } =
+			await loadModule();
+		const input = makeInput({ fingerprint: "fp_failure_details" });
+		const secret = `github_pat_${"a".repeat(40)}`;
+		const longError = `review intent parse failed with ${secret} ${"x".repeat(900)}`;
+
+		await recordRunStart(input);
+		await markRunFailed(input.fingerprint, {
+			sessionId: "sesn_failure",
+			error: longError,
+		});
+
+		const run = await getPrReviewRunByFingerprint(input.fingerprint);
+		expect(run).toMatchObject({
+			status: "failed",
+			executionState: "failed",
+			failureKind: "review_intent_invalid",
+			failureRetryable: false,
+			projectionStatus: "failed",
+		});
+		expect(run?.failedAt).toEqual(expect.any(String));
+		expect(run?.failureMessage).not.toContain(secret);
+		expect(run?.failureMessage).toContain("[redacted]");
+		expect(run?.failureMessage?.length).toBeLessThanOrEqual(602);
+		expect(run?.nextAction).toBe("Manual inspection required before retry.");
+	});
+
 	it("returns run details by fingerprint and session id", async () => {
 		const {
 			getPrReviewRunByFingerprint,
@@ -502,6 +593,12 @@ describe("run detail lookups", () => {
 			sessionId: "sesn_details",
 			status: "failed",
 			error: "review intent parse failed",
+			executionState: "failed",
+			latestKnownHeadSha: "abc123",
+			failureKind: "review_intent_invalid",
+			failureMessage: "review intent parse failed",
+			failureRetryable: false,
+			failedAt: expect.any(String),
 			projectionStatus: "failed",
 			projectionError: "review intent parse failed",
 		});
