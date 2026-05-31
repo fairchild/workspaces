@@ -86,6 +86,48 @@ describe("recordRunStart", () => {
 		expect(row?.coalescedAt).toEqual(expect.any(String));
 	});
 
+	it("keeps only the latest synchronize trigger while a run is active", async () => {
+		const { getPrReviewRunByFingerprint, recordRunStart } = await loadModule();
+		const active = makeInput({
+			fingerprint: "fp_active_sync",
+			headSha: "head-a",
+			triggerKind: "opened",
+			triggerSourceId: "head-a",
+		});
+		const firstPush = makeInput({
+			fingerprint: "fp_sync_head_b",
+			headSha: "head-b",
+			triggerKind: "synchronize",
+			triggerSourceId: "head-b",
+		});
+		const secondPush = makeInput({
+			fingerprint: "fp_sync_head_c",
+			headSha: "head-c",
+			triggerKind: "synchronize",
+			triggerSourceId: "head-c",
+		});
+
+		await expect(recordRunStart(active)).resolves.toEqual({ inserted: true });
+		await expect(recordRunStart(firstPush)).resolves.toMatchObject({
+			inserted: false,
+			coalesced: true,
+			activeFingerprint: active.fingerprint,
+		});
+		await expect(recordRunStart(secondPush)).resolves.toMatchObject({
+			inserted: false,
+			coalesced: true,
+			activeFingerprint: active.fingerprint,
+		});
+
+		await expect(
+			getPrReviewRunByFingerprint(active.fingerprint),
+		).resolves.toMatchObject({
+			coalescedHeadSha: "head-c",
+			coalescedTriggerKind: "synchronize",
+			coalescedTriggerSourceId: "head-c",
+		});
+	});
+
 	it("clears the active claim when a run reaches a terminal state", async () => {
 		const { recordRunStart, recordRunResult } = await loadModule();
 		const first = makeInput({

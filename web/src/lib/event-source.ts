@@ -22,6 +22,10 @@ export function getSourceUrl(
 			return str((p.issue as Nested)?.html_url) || null;
 		case "issue_comment":
 			return str((p.comment as Nested)?.html_url) || null;
+		case "pull_request_review":
+			return str((p.review as Nested)?.html_url) || null;
+		case "pull_request_review_comment":
+			return str((p.comment as Nested)?.html_url) || null;
 		case "push":
 			return str(p.compare) || null;
 		case "check_run":
