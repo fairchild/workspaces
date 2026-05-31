@@ -256,7 +256,7 @@ Live source of truth is GitHub Issues on `fairchild/workspaces`. This table mirr
 | Desktop continuity (across-session restore) | product | P1 | [#548](https://github.com/fairchild/workspaces/issues/548) (paired with #549) |
 | Lume runtime architecture follow-ups | product | Done | closed #87, #88, #89 |
 | Notification client catch-up | product | P1 | [#547](https://github.com/fairchild/workspaces/issues/547) |
-| Managed PR reviewer continuous reruns | quality | absorbed | [#545](https://github.com/fairchild/workspaces/issues/545) is absorbed by [#584](https://github.com/fairchild/workspaces/issues/584) / [#586](https://github.com/fairchild/workspaces/issues/586) |
+| Managed PR reviewer continuous reruns | quality | absorbed | [#545](https://github.com/fairchild/workspaces/issues/545) is absorbed by [#584](https://github.com/fairchild/workspaces/issues/584) / [milestone 8](https://github.com/fairchild/workspaces/milestone/8) |
 | PR reviewer narration eval skill | product | — | [#546](https://github.com/fairchild/workspaces/issues/546) |
 | Daytona native Swift API | product | — | [#532](https://github.com/fairchild/workspaces/issues/532) |
 | Remote runtime expansion (tracking) | product | — | [#555](https://github.com/fairchild/workspaces/issues/555) |
