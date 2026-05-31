@@ -49,7 +49,16 @@ export async function POST(request: Request): Promise<Response> {
 	if (authFailure) return authFailure;
 
 	if (process.env.PR_REVIEWER_ENABLED === "0") {
-		return Response.json({ ok: true, disabled: true, checked: 0 });
+		return Response.json({
+			ok: true,
+			disabled: true,
+			checked: 0,
+			applied: 0,
+			failed: 0,
+			skipped: 0,
+			superseded: 0,
+			retryable: 0,
+		});
 	}
 
 	const url = new URL(request.url);
@@ -58,5 +67,8 @@ export async function POST(request: Request): Promise<Response> {
 		repoFullName: url.searchParams.get("repo") ?? undefined,
 	});
 
-	return Response.json({ ok: result.failed === 0, ...result });
+	return Response.json({
+		ok: result.failed === 0 && result.retryable === 0,
+		...result,
+	});
 }

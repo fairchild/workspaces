@@ -12,10 +12,11 @@ const mocks = vi.hoisted(() => ({
 	recordRunStart: vi.fn(),
 	recordRunResult: vi.fn(),
 	releaseRunActiveClaim: vi.fn(),
-	listStartedPrReviewRuns: vi.fn(),
+	listPrReviewRunsForBroker: vi.fn(),
 	computeRunFingerprint: vi.fn(),
 	beginPrReviewProjectionAttempt: vi.fn(),
 	classifyPrReviewProjectionError: vi.fn(),
+	listPrReviewProjectionsForRun: vi.fn(),
 	recordPrReviewProjectionFailure: vi.fn(),
 	recordPrReviewProjectionSuccess: vi.fn(),
 }));
@@ -51,7 +52,8 @@ vi.mock("../pr-review-runs", () => ({
 	beginPrReviewProjectionAttempt: mocks.beginPrReviewProjectionAttempt,
 	classifyPrReviewProjectionError: mocks.classifyPrReviewProjectionError,
 	computeRunFingerprint: mocks.computeRunFingerprint,
-	listStartedPrReviewRuns: mocks.listStartedPrReviewRuns,
+	listPrReviewProjectionsForRun: mocks.listPrReviewProjectionsForRun,
+	listPrReviewRunsForBroker: mocks.listPrReviewRunsForBroker,
 	recordPrReviewProjectionFailure: mocks.recordPrReviewProjectionFailure,
 	recordPrReviewProjectionSuccess: mocks.recordPrReviewProjectionSuccess,
 	recordRunStart: mocks.recordRunStart,
@@ -133,6 +135,28 @@ async function* asyncEvents(events: unknown[]) {
 	for (const event of events) {
 		yield event;
 	}
+}
+
+function brokerRun(overrides: Record<string, unknown> = {}) {
+	return {
+		fingerprint: "fp_broker",
+		repoFullName: "fairchild/workspaces",
+		prNumber: 486,
+		headSha: "head-sha",
+		triggerKind: "opened",
+		triggerSourceId: "head-sha",
+		status: "started",
+		projectionStatus: "pending",
+		sessionId: "sesn_broker",
+		createdAt: "2026-05-17T06:24:27Z",
+		updatedAt: "2026-05-17T06:24:27Z",
+		reviewIntent: null,
+		coalescedHeadSha: null,
+		coalescedTriggerKind: null,
+		coalescedTriggerSourceId: null,
+		coalescedAt: null,
+		...overrides,
+	};
 }
 
 function isManagedReviewStatusUrl(url: string): boolean {
@@ -238,10 +262,11 @@ beforeEach(() => {
 	mocks.recordRunStart.mockReset();
 	mocks.recordRunResult.mockReset();
 	mocks.releaseRunActiveClaim.mockReset();
-	mocks.listStartedPrReviewRuns.mockReset();
+	mocks.listPrReviewRunsForBroker.mockReset();
 	mocks.computeRunFingerprint.mockReset();
 	mocks.beginPrReviewProjectionAttempt.mockReset();
 	mocks.classifyPrReviewProjectionError.mockReset();
+	mocks.listPrReviewProjectionsForRun.mockReset();
 	mocks.recordPrReviewProjectionFailure.mockReset();
 	mocks.recordPrReviewProjectionSuccess.mockReset();
 
@@ -255,7 +280,7 @@ beforeEach(() => {
 	mocks.recordRunStart.mockResolvedValue({ inserted: true });
 	mocks.recordRunResult.mockResolvedValue(undefined);
 	mocks.releaseRunActiveClaim.mockResolvedValue(undefined);
-	mocks.listStartedPrReviewRuns.mockResolvedValue([]);
+	mocks.listPrReviewRunsForBroker.mockResolvedValue([]);
 	mocks.beginPrReviewProjectionAttempt.mockImplementation(
 		async (input: { type: string }) => ({
 			projectionId: `proj_${input.type}`,
@@ -267,6 +292,7 @@ beforeEach(() => {
 		}),
 	);
 	mocks.classifyPrReviewProjectionError.mockReturnValue("unknown");
+	mocks.listPrReviewProjectionsForRun.mockResolvedValue([]);
 	mocks.recordPrReviewProjectionFailure.mockResolvedValue(undefined);
 	mocks.recordPrReviewProjectionSuccess.mockResolvedValue(undefined);
 });
@@ -560,8 +586,8 @@ ${JSON.stringify(reviewIntent, null, 2)}
 
 describe("processPendingPrReviewRuns", () => {
 	it("posts completed review intents from started managed-agent sessions", async () => {
-		mocks.listStartedPrReviewRuns.mockResolvedValue([
-			{
+		mocks.listPrReviewRunsForBroker.mockResolvedValue([
+			brokerRun({
 				fingerprint: "fp_486",
 				repoFullName: "fairchild/workspaces",
 				prNumber: 486,
@@ -571,7 +597,7 @@ describe("processPendingPrReviewRuns", () => {
 				sessionId: "sesn_486",
 				createdAt: "2026-05-17T06:24:27Z",
 				updatedAt: "2026-05-17T06:24:27Z",
-			},
+			}),
 		]);
 		mocks.listEvents.mockReturnValue(
 			asyncEvents([
@@ -652,15 +678,33 @@ describe("processPendingPrReviewRuns", () => {
 
 		expect(result).toMatchObject({
 			checked: 1,
+			applied: 1,
 			completed: 1,
 			failed: 0,
 			skippedRunning: 0,
 		});
-		expect(mocks.recordRunResult).toHaveBeenCalledWith("fp_486", {
-			sessionId: "sesn_486",
-			status: "completed",
-			githubReviewId: "4304929701",
-		});
+		expect(mocks.recordRunResult).toHaveBeenCalledWith(
+			"fp_486",
+			expect.objectContaining({
+				sessionId: "sesn_486",
+				status: "completed",
+				projectionStatus: "pending",
+				reviewIntent: expect.objectContaining({
+					event: "COMMENT",
+					body: expect.stringContaining("No blocking issues found"),
+					labels: ["refactor"],
+				}),
+			}),
+		);
+		expect(mocks.recordRunResult).toHaveBeenCalledWith(
+			"fp_486",
+			expect.objectContaining({
+				sessionId: "sesn_486",
+				status: "completed",
+				projectionStatus: "projected",
+				githubReviewId: "4304929701",
+			}),
+		);
 		expect(mocks.beginPrReviewProjectionAttempt).toHaveBeenCalledWith(
 			expect.objectContaining({
 				runFingerprint: "fp_486",
@@ -693,11 +737,25 @@ describe("processPendingPrReviewRuns", () => {
 			"proj_github_status",
 			{ observedExternalId: null },
 		);
+		const intentPersistOrder =
+			mocks.recordRunResult.mock.invocationCallOrder[
+				mocks.recordRunResult.mock.calls.findIndex(
+					([, input]) => input.projectionStatus === "pending",
+				)
+			];
+		const reviewPostIndex = mocks.fetch.mock.calls.findIndex(
+			([url, options]) =>
+				String(url).endsWith("/pulls/486/reviews") &&
+				options?.method === "POST",
+		);
+		expect(intentPersistOrder).toBeLessThan(
+			mocks.fetch.mock.invocationCallOrder[reviewPostIndex],
+		);
 	});
 
 	it("skips duplicate GitHub review posts when the desired projection is already projected", async () => {
-		mocks.listStartedPrReviewRuns.mockResolvedValue([
-			{
+		mocks.listPrReviewRunsForBroker.mockResolvedValue([
+			brokerRun({
 				fingerprint: "fp_duplicate_projection",
 				repoFullName: "fairchild/workspaces",
 				prNumber: 487,
@@ -707,7 +765,7 @@ describe("processPendingPrReviewRuns", () => {
 				sessionId: "sesn_duplicate_projection",
 				createdAt: "2026-05-17T06:24:27Z",
 				updatedAt: "2026-05-17T06:24:27Z",
-			},
+			}),
 		]);
 		mocks.beginPrReviewProjectionAttempt.mockImplementation(
 			async (input: { type: string }) => ({
@@ -777,16 +835,18 @@ describe("processPendingPrReviewRuns", () => {
 
 		expect(result).toMatchObject({
 			checked: 1,
+			applied: 1,
 			completed: 1,
 			failed: 0,
 		});
 		expect(mocks.recordRunResult).toHaveBeenCalledWith(
 			"fp_duplicate_projection",
-			{
+			expect.objectContaining({
 				sessionId: "sesn_duplicate_projection",
 				status: "completed",
+				projectionStatus: "projected",
 				githubReviewId: "4304929777",
-			},
+			}),
 		);
 		expect(
 			mocks.fetch.mock.calls.some(
@@ -797,9 +857,394 @@ describe("processPendingPrReviewRuns", () => {
 		).toBe(false);
 	});
 
+	it("leaves a completed ReviewRun retryable when the GitHub status write fails", async () => {
+		mocks.listPrReviewRunsForBroker.mockResolvedValue([
+			brokerRun({
+				fingerprint: "fp_status_failure",
+				prNumber: 490,
+				sessionId: "sesn_status_failure",
+			}),
+		]);
+		mocks.classifyPrReviewProjectionError.mockReturnValue("transient_api");
+		mocks.listEvents.mockReturnValue(
+			asyncEvents([
+				{
+					type: "agent.message",
+					content: [
+						{
+							type: "text",
+							text: `Review complete.
+
+\`\`\`json
+{"event":"COMMENT","body":"Ready, pending status projection.","labels":[]}
+\`\`\``,
+						},
+					],
+				},
+				{
+					type: "session.status_idle",
+					stop_reason: { type: "end_turn" },
+				},
+			]),
+		);
+		mocks.fetch.mockImplementation(
+			async (url: string, options?: RequestInit) => {
+				if (url.endsWith("/pulls/490")) {
+					return {
+						ok: true,
+						json: async () =>
+							githubPr(490, {
+								html_url: "https://github.com/fairchild/workspaces/pull/490",
+								head: { ref: "codex/status-failure", sha: "head-sha" },
+								base: { ref: "main" },
+							}),
+					};
+				}
+				if (url.includes("/pulls/490/reviews?")) {
+					return { ok: true, json: async () => [] };
+				}
+				if (url.includes("/pulls?")) {
+					return { ok: true, json: async () => [] };
+				}
+				if (url.includes("/labels?")) {
+					return { ok: true, json: async () => [] };
+				}
+				if (url.endsWith("/pulls/490/reviews")) {
+					return {
+						ok: true,
+						text: async () => "",
+						json: async () => ({ id: 490001 }),
+					};
+				}
+				if (isManagedReviewStatusUrl(url)) {
+					expect(options?.method).toBe("POST");
+					return {
+						ok: false,
+						status: 503,
+						text: async () => "temporarily unavailable",
+					};
+				}
+				if (url.endsWith("/issues/490/comments")) {
+					throw new Error("projection failures should not post comments");
+				}
+				throw new Error(`Unexpected fetch URL: ${url}`);
+			},
+		);
+
+		const result = await processPendingPrReviewRuns({ limit: 1 });
+
+		expect(result).toMatchObject({
+			checked: 1,
+			applied: 0,
+			failed: 0,
+			retryable: 1,
+		});
+		expect(mocks.recordRunResult).toHaveBeenCalledWith(
+			"fp_status_failure",
+			expect.objectContaining({
+				status: "completed",
+				projectionStatus: "pending",
+				reviewIntent: expect.objectContaining({
+					event: "COMMENT",
+					body: "Ready, pending status projection.",
+				}),
+			}),
+		);
+		expect(mocks.recordRunResult).toHaveBeenCalledWith(
+			"fp_status_failure",
+			expect.objectContaining({
+				status: "completed",
+				projectionStatus: "failed",
+				projectionError: expect.stringContaining(
+					"GitHub status update failed 503",
+				),
+				githubReviewId: "490001",
+			}),
+		);
+		expect(mocks.recordPrReviewProjectionFailure).toHaveBeenCalledWith(
+			"proj_github_status",
+			expect.objectContaining({
+				errorKind: "transient_api",
+				errorText: expect.stringContaining("GitHub status update failed 503"),
+			}),
+		);
+	});
+
+	it("leaves a completed ReviewRun retryable when the GitHub review write fails", async () => {
+		mocks.listPrReviewRunsForBroker.mockResolvedValue([
+			brokerRun({
+				fingerprint: "fp_review_failure",
+				prNumber: 491,
+				sessionId: "sesn_review_failure",
+			}),
+		]);
+		mocks.classifyPrReviewProjectionError.mockReturnValue("transient_api");
+		mocks.listEvents.mockReturnValue(
+			asyncEvents([
+				{
+					type: "agent.message",
+					content: [
+						{
+							type: "text",
+							text: `Review complete.
+
+\`\`\`json
+{"event":"COMMENT","body":"Ready, pending review projection.","labels":[]}
+\`\`\``,
+						},
+					],
+				},
+				{
+					type: "session.status_idle",
+					stop_reason: { type: "end_turn" },
+				},
+			]),
+		);
+		mocks.fetch.mockImplementation(
+			async (url: string, options?: RequestInit) => {
+				if (url.endsWith("/pulls/491")) {
+					return {
+						ok: true,
+						json: async () =>
+							githubPr(491, {
+								html_url: "https://github.com/fairchild/workspaces/pull/491",
+								head: { ref: "codex/review-failure", sha: "head-sha" },
+								base: { ref: "main" },
+							}),
+					};
+				}
+				if (url.includes("/pulls/491/reviews?")) {
+					return { ok: true, json: async () => [] };
+				}
+				if (url.includes("/pulls?")) {
+					return { ok: true, json: async () => [] };
+				}
+				if (url.includes("/labels?")) {
+					return { ok: true, json: async () => [] };
+				}
+				if (url.endsWith("/pulls/491/reviews")) {
+					expect(options?.method).toBe("POST");
+					return {
+						ok: false,
+						status: 502,
+						text: async () => "bad gateway",
+					};
+				}
+				if (isManagedReviewStatusUrl(url)) {
+					throw new Error("status should wait for review projection");
+				}
+				throw new Error(`Unexpected fetch URL: ${url}`);
+			},
+		);
+
+		const result = await processPendingPrReviewRuns({ limit: 1 });
+
+		expect(result).toMatchObject({
+			checked: 1,
+			applied: 0,
+			failed: 0,
+			retryable: 1,
+		});
+		expect(mocks.recordRunResult).toHaveBeenCalledWith(
+			"fp_review_failure",
+			expect.objectContaining({
+				status: "completed",
+				projectionStatus: "pending",
+				reviewIntent: expect.objectContaining({
+					event: "COMMENT",
+					body: "Ready, pending review projection.",
+				}),
+			}),
+		);
+		expect(mocks.recordRunResult).toHaveBeenCalledWith(
+			"fp_review_failure",
+			expect.objectContaining({
+				status: "completed",
+				projectionStatus: "failed",
+				projectionError: expect.stringContaining(
+					"GitHub review post failed 502",
+				),
+				githubReviewId: null,
+			}),
+		);
+		expect(mocks.recordPrReviewProjectionFailure).toHaveBeenCalledWith(
+			"proj_github_review",
+			expect.objectContaining({
+				errorKind: "transient_api",
+				errorText: expect.stringContaining("GitHub review post failed 502"),
+			}),
+		);
+	});
+
+	it("repairs a completed ReviewRun from persisted intent without rerunning the agent", async () => {
+		mocks.listPrReviewRunsForBroker.mockResolvedValue([
+			brokerRun({
+				fingerprint: "fp_repair",
+				prNumber: 492,
+				status: "completed",
+				projectionStatus: "failed",
+				sessionId: "sesn_repair",
+				reviewIntent: {
+					event: "COMMENT",
+					body: "Repair me from persisted intent.",
+					labels: [],
+				},
+			}),
+		]);
+		mocks.fetch.mockImplementation(
+			async (url: string, options?: RequestInit) => {
+				if (url.endsWith("/pulls/492")) {
+					return {
+						ok: true,
+						json: async () =>
+							githubPr(492, {
+								html_url: "https://github.com/fairchild/workspaces/pull/492",
+								head: { ref: "codex/repair", sha: "head-sha" },
+								base: { ref: "main" },
+							}),
+					};
+				}
+				if (url.includes("/pulls/492/reviews?")) {
+					return { ok: true, json: async () => [] };
+				}
+				if (url.endsWith("/pulls/492/reviews")) {
+					expect(options?.method).toBe("POST");
+					expect(JSON.parse(String(options?.body))).toMatchObject({
+						event: "COMMENT",
+						body: "Repair me from persisted intent.",
+					});
+					return {
+						ok: true,
+						text: async () => "",
+						json: async () => ({ id: 492001 }),
+					};
+				}
+				if (isManagedReviewStatusUrl(url)) {
+					return okResponse();
+				}
+				throw new Error(`Unexpected fetch URL: ${url}`);
+			},
+		);
+
+		const result = await processPendingPrReviewRuns({ limit: 1 });
+
+		expect(result).toMatchObject({
+			checked: 1,
+			applied: 1,
+			completed: 1,
+			failed: 0,
+			retryable: 0,
+		});
+		expect(mocks.listEvents).not.toHaveBeenCalled();
+		expect(mocks.createSession).not.toHaveBeenCalled();
+		expect(mocks.recordRunResult).toHaveBeenCalledWith(
+			"fp_repair",
+			expect.objectContaining({
+				status: "completed",
+				projectionStatus: "projected",
+				githubReviewId: "492001",
+			}),
+		);
+	});
+
+	it("skips completed ReviewRuns that do not have a persisted review intent", async () => {
+		mocks.listPrReviewRunsForBroker.mockResolvedValue([
+			brokerRun({
+				fingerprint: "fp_missing_intent",
+				status: "completed",
+				projectionStatus: "failed",
+				sessionId: "sesn_missing_intent",
+				reviewIntent: null,
+			}),
+		]);
+
+		const result = await processPendingPrReviewRuns({ limit: 1 });
+
+		expect(result).toMatchObject({
+			checked: 1,
+			skipped: 1,
+			failed: 0,
+			retryable: 0,
+			runs: [
+				{
+					fingerprint: "fp_missing_intent",
+					status: "skipped_missing_intent",
+					outcome: "skipped",
+				},
+			],
+		});
+		expect(mocks.fetch).not.toHaveBeenCalled();
+		expect(mocks.recordRunResult).not.toHaveBeenCalled();
+	});
+
+	it("reprocesses completed projection retries idempotently", async () => {
+		mocks.listPrReviewRunsForBroker.mockResolvedValue([
+			brokerRun({
+				fingerprint: "fp_repair_idempotent",
+				prNumber: 493,
+				status: "completed",
+				projectionStatus: "failed",
+				sessionId: "sesn_repair_idempotent",
+				reviewIntent: {
+					event: "COMMENT",
+					body: "Already projected.",
+					labels: [],
+				},
+			}),
+		]);
+		mocks.beginPrReviewProjectionAttempt.mockImplementation(
+			async (input: { type: string }) => ({
+				projectionId: `proj_${input.type}`,
+				desiredPayloadHash: "hash_01",
+				shouldProject: false,
+				attempts: 1,
+				state: "projected",
+				observedExternalId:
+					input.type === "github_review" ? "493001" : "status-493001",
+			}),
+		);
+		mocks.fetch.mockImplementation(async (url: string) => {
+			if (url.endsWith("/pulls/493")) {
+				return {
+					ok: true,
+					json: async () =>
+						githubPr(493, {
+							html_url: "https://github.com/fairchild/workspaces/pull/493",
+							head: { ref: "codex/idempotent", sha: "head-sha" },
+							base: { ref: "main" },
+						}),
+				};
+			}
+			if (url.includes("/pulls/493/reviews?")) {
+				return { ok: true, json: async () => [] };
+			}
+			if (url.endsWith("/pulls/493/reviews") || isManagedReviewStatusUrl(url)) {
+				throw new Error("projected ledger entries should skip GitHub writes");
+			}
+			throw new Error(`Unexpected fetch URL: ${url}`);
+		});
+
+		const result = await processPendingPrReviewRuns({ limit: 1 });
+
+		expect(result).toMatchObject({
+			checked: 1,
+			applied: 1,
+			failed: 0,
+			retryable: 0,
+		});
+		expect(mocks.recordRunResult).toHaveBeenCalledWith(
+			"fp_repair_idempotent",
+			expect.objectContaining({
+				status: "completed",
+				projectionStatus: "projected",
+				githubReviewId: "493001",
+			}),
+		);
+	});
+
 	it("posts an operator-visible failure comment when a completed intent cannot be published", async () => {
-		mocks.listStartedPrReviewRuns.mockResolvedValue([
-			{
+		mocks.listPrReviewRunsForBroker.mockResolvedValue([
+			brokerRun({
 				fingerprint: "fp_bad_intent",
 				repoFullName: "fairchild/workspaces",
 				prNumber: 486,
@@ -809,7 +1254,7 @@ describe("processPendingPrReviewRuns", () => {
 				sessionId: "sesn_bad_intent",
 				createdAt: "2026-05-17T06:24:27Z",
 				updatedAt: "2026-05-17T06:24:27Z",
-			},
+			}),
 		]);
 		mocks.listEvents.mockReturnValue(
 			asyncEvents([
@@ -892,8 +1337,8 @@ describe("processPendingPrReviewRuns", () => {
 	});
 
 	it("leaves still-running sessions in started state", async () => {
-		mocks.listStartedPrReviewRuns.mockResolvedValue([
-			{
+		mocks.listPrReviewRunsForBroker.mockResolvedValue([
+			brokerRun({
 				fingerprint: "fp_running",
 				repoFullName: "fairchild/workspaces",
 				prNumber: 486,
@@ -903,7 +1348,7 @@ describe("processPendingPrReviewRuns", () => {
 				sessionId: "sesn_running",
 				createdAt: "2026-05-17T06:24:27Z",
 				updatedAt: "2026-05-17T06:24:27Z",
-			},
+			}),
 		]);
 		mocks.listEvents.mockReturnValue(
 			asyncEvents([
@@ -926,8 +1371,8 @@ describe("processPendingPrReviewRuns", () => {
 	});
 
 	it("suppresses stale completed output when a newer trigger was coalesced", async () => {
-		mocks.listStartedPrReviewRuns.mockResolvedValue([
-			{
+		mocks.listPrReviewRunsForBroker.mockResolvedValue([
+			brokerRun({
 				fingerprint: "fp_coalesced_old",
 				repoFullName: "fairchild/workspaces",
 				prNumber: 486,
@@ -941,7 +1386,7 @@ describe("processPendingPrReviewRuns", () => {
 				coalescedTriggerKind: "edited",
 				coalescedTriggerSourceId: "body-new",
 				coalescedAt: "2026-05-17T06:25:00Z",
-			},
+			}),
 		]);
 		mocks.listEvents.mockReturnValue(
 			asyncEvents([
@@ -1039,8 +1484,8 @@ describe("processPendingPrReviewRuns", () => {
 	});
 
 	it("supersedes a completed session when a newer managed review already covers the same head", async () => {
-		mocks.listStartedPrReviewRuns.mockResolvedValue([
-			{
+		mocks.listPrReviewRunsForBroker.mockResolvedValue([
+			brokerRun({
 				fingerprint: "fp_stale",
 				repoFullName: "fairchild/workspaces",
 				prNumber: 489,
@@ -1050,7 +1495,7 @@ describe("processPendingPrReviewRuns", () => {
 				sessionId: "sesn_stale",
 				createdAt: "2026-05-17T06:39:00Z",
 				updatedAt: "2026-05-17T06:39:10Z",
-			},
+			}),
 		]);
 		mocks.listEvents.mockReturnValue(
 			asyncEvents([
@@ -1135,8 +1580,8 @@ describe("processPendingPrReviewRuns", () => {
 	});
 
 	it("does not requeue when any newer managed review covers the current head", async () => {
-		mocks.listStartedPrReviewRuns.mockResolvedValue([
-			{
+		mocks.listPrReviewRunsForBroker.mockResolvedValue([
+			brokerRun({
 				fingerprint: "fp_mixed_reviews",
 				repoFullName: "fairchild/workspaces",
 				prNumber: 489,
@@ -1146,7 +1591,7 @@ describe("processPendingPrReviewRuns", () => {
 				sessionId: "sesn_mixed_reviews",
 				createdAt: "2026-05-17T06:39:00Z",
 				updatedAt: "2026-05-17T06:39:10Z",
-			},
+			}),
 		]);
 		mocks.listEvents.mockReturnValue(
 			asyncEvents([
@@ -1231,8 +1676,8 @@ describe("processPendingPrReviewRuns", () => {
 	});
 
 	it("requeues a stale completed session when the newer managed review is for an older head", async () => {
-		mocks.listStartedPrReviewRuns.mockResolvedValue([
-			{
+		mocks.listPrReviewRunsForBroker.mockResolvedValue([
+			brokerRun({
 				fingerprint: "fp_new_head_stale",
 				repoFullName: "fairchild/workspaces",
 				prNumber: 489,
@@ -1242,7 +1687,7 @@ describe("processPendingPrReviewRuns", () => {
 				sessionId: "sesn_new_head_stale",
 				createdAt: "2026-05-17T06:39:00Z",
 				updatedAt: "2026-05-17T06:39:10Z",
-			},
+			}),
 		]);
 		mocks.listEvents.mockReturnValue(
 			asyncEvents([
@@ -1332,7 +1777,7 @@ describe("processPendingPrReviewRuns", () => {
 		expect(mocks.recordRunResult).toHaveBeenCalledWith("fp_new_head_stale", {
 			sessionId: "sesn_new_head_stale",
 			status: "superseded",
-			error: expect.stringContaining("retry session sesn_01 started"),
+			error: expect.stringContaining("Follow-up session sesn_01 started"),
 			projectionStatus: "superseded",
 			githubReviewId: "4304929065",
 		});
