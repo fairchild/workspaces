@@ -63,4 +63,6 @@ __workspaces_command_status_precmd() {
 
 autoload -Uz add-zsh-hook 2>/dev/null || return 0
 add-zsh-hook preexec __workspaces_command_status_preexec 2>/dev/null || true
-add-zsh-hook precmd __workspaces_command_status_precmd 2>/dev/null || true
+if add-zsh-hook precmd __workspaces_command_status_precmd 2>/dev/null; then
+    precmd_functions=(__workspaces_command_status_precmd ${precmd_functions:#__workspaces_command_status_precmd})
+fi

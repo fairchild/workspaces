@@ -333,6 +333,12 @@ private struct AgentSessionRegistryAttacher: ViewModifier {
                     registry: registry,
                     hostTerminalState: hostTerminalState
                 )
+                UIFixtureSeeder.seedCommandStatusesIfNeeded(
+                    from: ProcessInfo.processInfo.environment,
+                    in: modelContext,
+                    commandStatusRegistry: commandStatusRegistry,
+                    hostTerminalState: hostTerminalState
+                )
             }
         }
     }
