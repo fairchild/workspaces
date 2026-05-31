@@ -321,6 +321,7 @@ def emit_markdown(since: datetime, now: datetime, summaries: list[RepoSummary]) 
         other_matches = [
             issue
             for issue in summary.incident_query_matches
+            # confirmed_incidents is derived from incident_query_matches without copying.
             if issue not in summary.confirmed_incidents
         ]
         if other_matches:
@@ -378,7 +379,9 @@ def main() -> int:
     args = parse_args()
     now = datetime.now(UTC)
     if args.since:
-        since = datetime.fromisoformat(args.since.replace("Z", "+00:00")).astimezone(UTC)
+        since = parse_iso(args.since)
+        if since is None:
+            raise RuntimeError("--since must be a non-empty ISO timestamp")
     else:
         since = parse_last_window_end(args.automation_memory)
     repos = tuple(args.repo) if args.repo else DEFAULT_REPOS
