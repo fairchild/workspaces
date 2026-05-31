@@ -8,8 +8,12 @@ import {
 } from "./managed-agents-cache";
 import {
 	type StartedPrReviewRun,
+	beginPrReviewProjectionAttempt,
+	classifyPrReviewProjectionError,
 	computeRunFingerprint,
 	listStartedPrReviewRuns,
+	recordPrReviewProjectionFailure,
+	recordPrReviewProjectionSuccess,
 	recordRunResult,
 	recordRunStart,
 	releaseRunActiveClaim,
@@ -724,6 +728,7 @@ async function postGitHubReviewIntent(
 	githubToken: string,
 	payload: PrReviewPayload,
 	intent: PrReviewIntent,
+	options: { fingerprint?: string } = {},
 ): Promise<{ reviewId: string | null }> {
 	const [owner, repo] = payload.repoFullName.split("/");
 	if (!owner || !repo) {
@@ -736,18 +741,58 @@ async function postGitHubReviewIntent(
 		"X-GitHub-Api-Version": "2022-11-28",
 		"Content-Type": "application/json",
 	};
-	const reviewRes = await fetch(
-		`${GITHUB_API}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls/${payload.number}/reviews`,
-		{
-			method: "POST",
-			headers,
-			body: JSON.stringify({ event: intent.event, body: intent.body }),
-		},
-	);
-	if (!reviewRes.ok) {
-		throw new Error(
-			`GitHub review post failed ${reviewRes.status}: ${await reviewRes.text()}`,
+
+	const projection = options.fingerprint
+		? await beginPrReviewProjectionAttempt({
+				runFingerprint: options.fingerprint,
+				type: "github_review",
+				projectionKey: "final-review",
+				desiredPayload: {
+					repoFullName: payload.repoFullName,
+					prNumber: payload.number,
+					event: intent.event,
+					body: intent.body,
+					labels: intent.labels,
+				},
+			})
+		: null;
+	if (projection && !projection.shouldProject) {
+		return { reviewId: projection.observedExternalId };
+	}
+
+	let reviewRes: Response;
+	try {
+		reviewRes = await fetch(
+			`${GITHUB_API}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls/${payload.number}/reviews`,
+			{
+				method: "POST",
+				headers,
+				body: JSON.stringify({ event: intent.event, body: intent.body }),
+			},
 		);
+	} catch (err) {
+		const message = err instanceof Error ? err.message : String(err);
+		if (projection) {
+			await recordPrReviewProjectionFailure(projection.projectionId, {
+				errorKind: classifyPrReviewProjectionError({ message }),
+				errorText: message,
+			});
+		}
+		throw err;
+	}
+	if (!reviewRes.ok) {
+		const responseText = await reviewRes.text();
+		const message = `GitHub review post failed ${reviewRes.status}: ${responseText}`;
+		if (projection) {
+			await recordPrReviewProjectionFailure(projection.projectionId, {
+				errorKind: classifyPrReviewProjectionError({
+					status: reviewRes.status,
+					message: responseText,
+				}),
+				errorText: message,
+			});
+		}
+		throw new Error(message);
 	}
 	const reviewJson = (await reviewRes.json().catch(() => null)) as {
 		id?: unknown;
@@ -756,6 +801,11 @@ async function postGitHubReviewIntent(
 		reviewJson?.id !== undefined && reviewJson.id !== null
 			? String(reviewJson.id)
 			: null;
+	if (projection) {
+		await recordPrReviewProjectionSuccess(projection.projectionId, {
+			observedExternalId: reviewId,
+		});
+	}
 
 	if (intent.labels.length === 0) return { reviewId };
 
@@ -886,6 +936,26 @@ async function postManagedReviewStatus(
 		return;
 	}
 
+	const statusBody = {
+		state,
+		context: MANAGED_REVIEW_STATUS_CONTEXT,
+		description,
+		target_url: buildManagedReviewStatusTargetUrl(payload),
+	};
+	const projection = payload.fingerprint
+		? await beginPrReviewProjectionAttempt({
+				runFingerprint: payload.fingerprint,
+				type: "github_status",
+				projectionKey: MANAGED_REVIEW_STATUS_CONTEXT,
+				desiredPayload: {
+					repoFullName: payload.repoFullName,
+					headSha: payload.headSha,
+					...statusBody,
+				},
+			})
+		: null;
+	if (projection && !projection.shouldProject) return;
+
 	try {
 		const res = await fetch(
 			`${GITHUB_API}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/statuses/${encodeURIComponent(payload.headSha)}`,
@@ -897,20 +967,44 @@ async function postManagedReviewStatus(
 					"X-GitHub-Api-Version": "2022-11-28",
 					"Content-Type": "application/json",
 				},
-				body: JSON.stringify({
-					state,
-					context: MANAGED_REVIEW_STATUS_CONTEXT,
-					description,
-					target_url: buildManagedReviewStatusTargetUrl(payload),
-				}),
+				body: JSON.stringify(statusBody),
 			},
 		);
 		if (!res.ok) {
+			const responseText = await res.text();
+			if (projection) {
+				await recordPrReviewProjectionFailure(projection.projectionId, {
+					errorKind: classifyPrReviewProjectionError({
+						status: res.status,
+						message: responseText,
+					}),
+					errorText: `GitHub status update failed ${res.status}: ${responseText}`,
+				});
+			}
 			console.warn(
-				`[pr-review] managed review status update failed ${res.status}: ${await res.text()}`,
+				`[pr-review] managed review status update failed ${res.status}: ${responseText}`,
 			);
+			return;
+		}
+		const statusJson = (await res.json().catch(() => null)) as {
+			id?: unknown;
+		} | null;
+		if (projection) {
+			await recordPrReviewProjectionSuccess(projection.projectionId, {
+				observedExternalId:
+					statusJson?.id !== undefined && statusJson.id !== null
+						? String(statusJson.id)
+						: null,
+			});
 		}
 	} catch (err) {
+		if (projection) {
+			const message = err instanceof Error ? err.message : String(err);
+			await recordPrReviewProjectionFailure(projection.projectionId, {
+				errorKind: classifyPrReviewProjectionError({ message }),
+				errorText: message,
+			});
+		}
 		console.warn(
 			"[pr-review] managed review status update failed:",
 			err instanceof Error ? err.message : err,
@@ -1224,6 +1318,7 @@ export async function processPendingPrReviewRuns(
 				githubToken,
 				payload,
 				intent,
+				{ fingerprint: run.fingerprint },
 			);
 			await postManagedReviewStatus(
 				githubToken,

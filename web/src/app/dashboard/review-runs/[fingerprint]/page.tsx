@@ -136,6 +136,67 @@ export default async function ReviewRunPage({
 				<pre className={styles.errorBlock}>{projectionError}</pre>
 			)}
 
+			<section className={styles.projections}>
+				<div className={styles.sectionHeader}>
+					<h2>GitHub projections</h2>
+					<span>{run.projections.length}</span>
+				</div>
+				{run.projections.length === 0 ? (
+					<p className={styles.muted}>No projection records yet.</p>
+				) : (
+					<div className={styles.projectionList}>
+						{run.projections.map((projection) => (
+							<div
+								className={styles.projectionRow}
+								key={projection.projectionId}
+							>
+								<div>
+									<strong>{projection.type}</strong>
+									<span>{projection.projectionKey}</span>
+								</div>
+								<div>
+									<span>State</span>
+									<strong>{projection.state}</strong>
+								</div>
+								<div>
+									<span>Attempts</span>
+									<strong>{projection.attempts}</strong>
+								</div>
+								<div>
+									<span>Last attempt</span>
+									<strong>
+										{projection.lastAttemptedAt
+											? new Date(projection.lastAttemptedAt).toLocaleString()
+											: "none"}
+									</strong>
+								</div>
+								<div>
+									<span>Desired hash</span>
+									<strong>{projection.desiredPayloadHash.slice(0, 16)}</strong>
+								</div>
+								{projection.observedExternalId && (
+									<div>
+										<span>External ID</span>
+										<strong>{projection.observedExternalId}</strong>
+									</div>
+								)}
+								{projection.errorKind && (
+									<div>
+										<span>Error</span>
+										<strong>{projection.errorKind}</strong>
+									</div>
+								)}
+								{projection.errorText && (
+									<pre className={styles.projectionError}>
+										{projection.errorText}
+									</pre>
+								)}
+							</div>
+						))}
+					</div>
+				)}
+			</section>
+
 			<ReviewRunTranscript
 				fingerprint={run.fingerprint}
 				initialSessionId={run.sessionId}

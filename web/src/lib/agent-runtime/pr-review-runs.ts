@@ -13,6 +13,22 @@ export type PrReviewProjectionStatus =
 	| "failed"
 	| "superseded";
 
+export type PrReviewProjectionType = "github_status" | "github_review";
+
+export type PrReviewProjectionLedgerState =
+	| "pending"
+	| "projecting"
+	| "projected"
+	| "failed"
+	| "superseded";
+
+export type PrReviewProjectionErrorKind =
+	| "auth"
+	| "rate_limit"
+	| "transient_api"
+	| "validation"
+	| "unknown";
+
 export type PrReviewFailureKind =
 	| "session_start_failed"
 	| "session_output_failed"
@@ -44,6 +60,7 @@ export interface PrReviewRunRecordInput extends PrReviewRunFingerprintInput {
 }
 
 let migrated = false;
+let projectionsMigrated = false;
 
 async function ensureRunsTable(): Promise<void> {
 	if (migrated) return;
@@ -120,6 +137,55 @@ async function ensureRunsTable(): Promise<void> {
 	migrated = true;
 }
 
+async function ensureProjectionLedgerTable(): Promise<void> {
+	await ensureRunsTable();
+	if (projectionsMigrated) return;
+	const db = getDb();
+	await db.schema
+		.createTable("managed_pr_review_projections")
+		.ifNotExists()
+		.addColumn("projection_id", "text", (c) => c.primaryKey())
+		.addColumn("run_fingerprint", "text", (c) => c.notNull())
+		.addColumn("projection_type", "text", (c) => c.notNull())
+		.addColumn("projection_key", "text", (c) => c.notNull())
+		.addColumn("desired_payload_hash", "text", (c) => c.notNull())
+		.addColumn("desired_payload", "text", (c) => c.notNull())
+		.addColumn("state", "text", (c) => c.notNull())
+		.addColumn("attempts", "integer", (c) => c.notNull().defaultTo(0))
+		.addColumn("last_attempted_at", "text")
+		.addColumn("observed_external_id", "text")
+		.addColumn("error_kind", "text")
+		.addColumn("error_text", "text")
+		.addColumn("created_at", "text", (c) => c.notNull())
+		.addColumn("updated_at", "text", (c) => c.notNull())
+		.execute();
+	await db.schema
+		.createIndex("ux_managed_pr_review_projections_desired")
+		.ifNotExists()
+		.on("managed_pr_review_projections")
+		.columns([
+			"run_fingerprint",
+			"projection_type",
+			"projection_key",
+			"desired_payload_hash",
+		])
+		.unique()
+		.execute();
+	await db.schema
+		.createIndex("idx_managed_pr_review_projections_run")
+		.ifNotExists()
+		.on("managed_pr_review_projections")
+		.column("run_fingerprint")
+		.execute();
+	await db.schema
+		.createIndex("idx_managed_pr_review_projections_state")
+		.ifNotExists()
+		.on("managed_pr_review_projections")
+		.columns(["state", "updated_at"])
+		.execute();
+	projectionsMigrated = true;
+}
+
 export function computeRunFingerprint(
 	input: PrReviewRunFingerprintInput,
 ): string {
@@ -134,6 +200,200 @@ export function computeRunFingerprint(
 	return createHash("sha256").update(payload).digest("hex").slice(0, 32);
 }
 
+function computeProjectionId(input: {
+	runFingerprint: string;
+	type: PrReviewProjectionType;
+	projectionKey: string;
+	desiredPayloadHash: string;
+}): string {
+	return createHash("sha256")
+		.update(
+			[
+				input.runFingerprint,
+				input.type,
+				input.projectionKey,
+				input.desiredPayloadHash,
+			].join("|"),
+		)
+		.digest("hex")
+		.slice(0, 32);
+}
+
+function normalizeProjectionPayload(
+	value: unknown,
+	options: { stringLimit: number | null },
+	depth = 0,
+): unknown {
+	if (value === null || typeof value === "boolean") return value;
+	if (typeof value === "number") return Number.isFinite(value) ? value : null;
+	if (typeof value === "string") {
+		const redacted = redactSensitiveText(value);
+		return options.stringLimit === null
+			? redacted
+			: truncateText(redacted, options.stringLimit);
+	}
+	if (Array.isArray(value)) {
+		if (depth >= MAX_PROJECTION_DEPTH) return "[truncated-depth]";
+		const items = value
+			.slice(0, MAX_PROJECTION_ARRAY_ITEMS)
+			.map((item) => normalizeProjectionPayload(item, options, depth + 1));
+		if (value.length > MAX_PROJECTION_ARRAY_ITEMS) {
+			items.push(
+				`[truncated ${value.length - MAX_PROJECTION_ARRAY_ITEMS} items]`,
+			);
+		}
+		return items;
+	}
+	if (typeof value === "object") {
+		if (depth >= MAX_PROJECTION_DEPTH) return "[truncated-depth]";
+		const input = value as Record<string, unknown>;
+		const output: Record<string, unknown> = {};
+		const keys = Object.keys(input).sort();
+		for (const key of keys.slice(0, MAX_PROJECTION_OBJECT_KEYS)) {
+			const item = input[key];
+			if (item === undefined || typeof item === "function") continue;
+			output[key] = SENSITIVE_PROJECTION_KEY.test(key)
+				? "[redacted]"
+				: normalizeProjectionPayload(item, options, depth + 1);
+		}
+		if (keys.length > MAX_PROJECTION_OBJECT_KEYS) {
+			output.__truncatedKeys = keys.length - MAX_PROJECTION_OBJECT_KEYS;
+		}
+		return output;
+	}
+	return String(value);
+}
+
+function stableProjectionJson(
+	value: unknown,
+	options: { stringLimit: number | null },
+): string {
+	return JSON.stringify(normalizeProjectionPayload(value, options));
+}
+
+function boundProjectionPayloadJson(canonicalJson: string): string {
+	if (canonicalJson.length <= MAX_PROJECTION_PAYLOAD_JSON_LENGTH) {
+		return canonicalJson;
+	}
+	let preview = canonicalJson.slice(0, MAX_PROJECTION_PAYLOAD_JSON_LENGTH);
+	let bounded = "";
+	while (preview.length > 0) {
+		bounded = JSON.stringify({
+			truncated: true,
+			originalLength: canonicalJson.length,
+			preview,
+		});
+		if (bounded.length <= MAX_PROJECTION_PAYLOAD_JSON_LENGTH) return bounded;
+		preview = preview.slice(0, -128);
+	}
+	return JSON.stringify({
+		truncated: true,
+		originalLength: canonicalJson.length,
+		preview: "",
+	});
+}
+
+function sanitizeProjectionError(
+	message: string | null | undefined,
+): string | null {
+	if (!message) return null;
+	return truncateText(
+		redactSensitiveText(message).replace(/\s+$/g, ""),
+		MAX_PROJECTION_ERROR_LENGTH,
+	);
+}
+
+export function classifyPrReviewProjectionError(input: {
+	status?: number | null;
+	message?: string | null;
+}): PrReviewProjectionErrorKind {
+	const status = input.status ?? null;
+	const lower = String(input.message ?? "").toLowerCase();
+	if (status === 401 || status === 403) return "auth";
+	if (
+		lower.includes("bad credentials") ||
+		lower.includes("unauthorized") ||
+		lower.includes("forbidden") ||
+		lower.includes("permission") ||
+		lower.includes("token")
+	) {
+		return "auth";
+	}
+	if (
+		status === 429 ||
+		lower.includes("rate limit") ||
+		lower.includes("secondary rate")
+	) {
+		return "rate_limit";
+	}
+	if (
+		status === 400 ||
+		status === 422 ||
+		lower.includes("validation") ||
+		lower.includes("invalid")
+	) {
+		return "validation";
+	}
+	if (
+		(status !== null && status >= 500) ||
+		lower.includes("timeout") ||
+		lower.includes("temporar") ||
+		lower.includes("econnreset") ||
+		lower.includes("fetch failed")
+	) {
+		return "transient_api";
+	}
+	return "unknown";
+}
+
+function prepareProjectionPayload(desiredPayload: unknown): {
+	desiredPayloadHash: string;
+	boundedPayloadJson: string;
+} {
+	const hashJson = stableProjectionJson(desiredPayload, { stringLimit: null });
+	const storageJson = stableProjectionJson(desiredPayload, {
+		stringLimit: MAX_PROJECTION_STRING_LENGTH,
+	});
+	return {
+		desiredPayloadHash: createHash("sha256").update(hashJson).digest("hex"),
+		boundedPayloadJson: boundProjectionPayloadJson(storageJson),
+	};
+}
+
+function normalizeProjectionLedgerState(
+	state: string,
+): PrReviewProjectionLedgerState {
+	if (
+		state === "pending" ||
+		state === "projecting" ||
+		state === "projected" ||
+		state === "failed" ||
+		state === "superseded"
+	) {
+		return state;
+	}
+	return "pending";
+}
+
+function normalizeProjectionType(type: string): PrReviewProjectionType {
+	return type === "github_review" ? "github_review" : "github_status";
+}
+
+function normalizeProjectionErrorKind(
+	kind: string | null,
+): PrReviewProjectionErrorKind | null {
+	if (
+		kind === "auth" ||
+		kind === "rate_limit" ||
+		kind === "transient_api" ||
+		kind === "validation" ||
+		kind === "unknown"
+	) {
+		return kind;
+	}
+	return null;
+}
+
 export interface RecordRunStartResult {
 	inserted: boolean;
 	priorStatus?: PrReviewRunStatus;
@@ -144,6 +404,12 @@ export interface RecordRunStartResult {
 /** Treat a `started` row older than this as crashed and eligible for retry. */
 const STALE_STARTED_MS = 15 * 60 * 1000;
 const MAX_FAILURE_MESSAGE_LENGTH = 600;
+const MAX_PROJECTION_ERROR_LENGTH = 600;
+const MAX_PROJECTION_STRING_LENGTH = 1000;
+const MAX_PROJECTION_PAYLOAD_JSON_LENGTH = 4096;
+const MAX_PROJECTION_ARRAY_ITEMS = 50;
+const MAX_PROJECTION_OBJECT_KEYS = 50;
+const MAX_PROJECTION_DEPTH = 6;
 
 const TOKEN_REDACTIONS: RegExp[] = [
 	/ghp_[A-Za-z0-9_]{20,}/g,
@@ -154,14 +420,27 @@ const TOKEN_REDACTIONS: RegExp[] = [
 	/\bsecret["'\s:=]+[A-Za-z0-9._-]{20,}/gi,
 ];
 
-function sanitizeFailureMessage(
-	message: string | null | undefined,
-): string | null {
-	if (!message) return null;
+const SENSITIVE_PROJECTION_KEY =
+	/(authorization|token|secret|password|private[_-]?key|raw[_-]?webhook|webhook[_-]?payload)/i;
+
+function redactSensitiveText(message: string): string {
 	let sanitized = message;
 	for (const pattern of TOKEN_REDACTIONS) {
 		sanitized = sanitized.replace(pattern, "[redacted]");
 	}
+	return sanitized;
+}
+
+function truncateText(value: string, limit: number): string {
+	if (value.length <= limit) return value;
+	return `${value.slice(0, limit - 1)}...`;
+}
+
+function sanitizeFailureMessage(
+	message: string | null | undefined,
+): string | null {
+	if (!message) return null;
+	let sanitized = redactSensitiveText(message);
 	sanitized = sanitized.replace(/\s+$/g, "");
 	if (sanitized.length <= MAX_FAILURE_MESSAGE_LENGTH) return sanitized;
 	return `${sanitized.slice(0, MAX_FAILURE_MESSAGE_LENGTH - 1)}...`;
@@ -540,6 +819,220 @@ export async function recordRunStart(
 	return { inserted: true, priorStatus };
 }
 
+export interface PrReviewProjectionRecord {
+	projectionId: string;
+	runFingerprint: string;
+	type: PrReviewProjectionType;
+	projectionKey: string;
+	desiredPayloadHash: string;
+	desiredPayload: unknown;
+	state: PrReviewProjectionLedgerState;
+	attempts: number;
+	lastAttemptedAt: string | null;
+	observedExternalId: string | null;
+	errorKind: PrReviewProjectionErrorKind | null;
+	errorText: string | null;
+	createdAt: string;
+	updatedAt: string;
+}
+
+export interface BeginPrReviewProjectionAttemptInput {
+	runFingerprint: string;
+	type: PrReviewProjectionType;
+	projectionKey: string;
+	desiredPayload: unknown;
+}
+
+export interface BeginPrReviewProjectionAttemptResult {
+	projectionId: string;
+	desiredPayloadHash: string;
+	shouldProject: boolean;
+	attempts: number;
+	state: PrReviewProjectionLedgerState;
+	observedExternalId: string | null;
+}
+
+function parseStoredProjectionPayload(payload: string): unknown {
+	try {
+		return JSON.parse(payload);
+	} catch {
+		return { unparseable: true };
+	}
+}
+
+function mapProjectionRecord(row: {
+	projection_id: string;
+	run_fingerprint: string;
+	projection_type: string;
+	projection_key: string;
+	desired_payload_hash: string;
+	desired_payload: string;
+	state: string;
+	attempts: number;
+	last_attempted_at: string | null;
+	observed_external_id: string | null;
+	error_kind: string | null;
+	error_text: string | null;
+	created_at: string;
+	updated_at: string;
+}): PrReviewProjectionRecord {
+	return {
+		projectionId: row.projection_id,
+		runFingerprint: row.run_fingerprint,
+		type: normalizeProjectionType(row.projection_type),
+		projectionKey: row.projection_key,
+		desiredPayloadHash: row.desired_payload_hash,
+		desiredPayload: parseStoredProjectionPayload(row.desired_payload),
+		state: normalizeProjectionLedgerState(row.state),
+		attempts: Number(row.attempts ?? 0),
+		lastAttemptedAt: row.last_attempted_at,
+		observedExternalId: row.observed_external_id,
+		errorKind: normalizeProjectionErrorKind(row.error_kind),
+		errorText: sanitizeProjectionError(row.error_text),
+		createdAt: row.created_at,
+		updatedAt: row.updated_at,
+	};
+}
+
+export async function beginPrReviewProjectionAttempt(
+	input: BeginPrReviewProjectionAttemptInput,
+): Promise<BeginPrReviewProjectionAttemptResult> {
+	await ensureProjectionLedgerTable();
+	const now = new Date().toISOString();
+	const { desiredPayloadHash, boundedPayloadJson } = prepareProjectionPayload(
+		input.desiredPayload,
+	);
+	const projectionId = computeProjectionId({
+		runFingerprint: input.runFingerprint,
+		type: input.type,
+		projectionKey: input.projectionKey,
+		desiredPayloadHash,
+	});
+	const db = getDb();
+	await db
+		.insertInto("managed_pr_review_projections")
+		.values({
+			projection_id: projectionId,
+			run_fingerprint: input.runFingerprint,
+			projection_type: input.type,
+			projection_key: input.projectionKey,
+			desired_payload_hash: desiredPayloadHash,
+			desired_payload: boundedPayloadJson,
+			state: "pending",
+			attempts: 0,
+			last_attempted_at: null,
+			observed_external_id: null,
+			error_kind: null,
+			error_text: null,
+			created_at: now,
+			updated_at: now,
+		})
+		.onConflict((oc) => oc.doNothing())
+		.executeTakeFirst();
+
+	const existing = await db
+		.selectFrom("managed_pr_review_projections")
+		.select([
+			"state",
+			"attempts",
+			"observed_external_id",
+			"desired_payload_hash",
+		])
+		.where("projection_id", "=", projectionId)
+		.executeTakeFirstOrThrow();
+	const existingState = normalizeProjectionLedgerState(existing.state);
+	if (existingState === "projected") {
+		return {
+			projectionId,
+			desiredPayloadHash: existing.desired_payload_hash,
+			shouldProject: false,
+			attempts: Number(existing.attempts ?? 0),
+			state: existingState,
+			observedExternalId: existing.observed_external_id,
+		};
+	}
+
+	const attempts = Number(existing.attempts ?? 0) + 1;
+	await db
+		.updateTable("managed_pr_review_projections")
+		.set({
+			state: "projecting",
+			attempts,
+			last_attempted_at: now,
+			error_kind: null,
+			error_text: null,
+			updated_at: now,
+		})
+		.where("projection_id", "=", projectionId)
+		.execute();
+	return {
+		projectionId,
+		desiredPayloadHash,
+		shouldProject: true,
+		attempts,
+		state: "projecting",
+		observedExternalId: existing.observed_external_id,
+	};
+}
+
+export async function recordPrReviewProjectionSuccess(
+	projectionId: string,
+	input: { observedExternalId?: string | null } = {},
+): Promise<void> {
+	await ensureProjectionLedgerTable();
+	const now = new Date().toISOString();
+	const updates = {
+		state: "projected" as const,
+		error_kind: null,
+		error_text: null,
+		updated_at: now,
+		// Omitted means "no new GitHub ID", not "erase the known GitHub ID".
+		...(input.observedExternalId !== undefined
+			? { observed_external_id: input.observedExternalId }
+			: {}),
+	};
+	await getDb()
+		.updateTable("managed_pr_review_projections")
+		.set(updates)
+		.where("projection_id", "=", projectionId)
+		.execute();
+}
+
+export async function recordPrReviewProjectionFailure(
+	projectionId: string,
+	input: {
+		errorKind: PrReviewProjectionErrorKind;
+		errorText: string;
+	},
+): Promise<void> {
+	await ensureProjectionLedgerTable();
+	const now = new Date().toISOString();
+	await getDb()
+		.updateTable("managed_pr_review_projections")
+		.set({
+			state: "failed",
+			error_kind: input.errorKind,
+			error_text: sanitizeProjectionError(input.errorText),
+			updated_at: now,
+		})
+		.where("projection_id", "=", projectionId)
+		.execute();
+}
+
+export async function listPrReviewProjectionsForRun(
+	runFingerprint: string,
+): Promise<PrReviewProjectionRecord[]> {
+	await ensureProjectionLedgerTable();
+	const rows = await getDb()
+		.selectFrom("managed_pr_review_projections")
+		.selectAll()
+		.where("run_fingerprint", "=", runFingerprint)
+		.orderBy("created_at", "asc")
+		.orderBy("projection_type", "asc")
+		.execute();
+	return rows.map(mapProjectionRecord);
+}
+
 export interface RecordRunResultInput {
 	sessionId: string | null;
 	status: PrReviewRunStatus;
@@ -783,6 +1276,7 @@ export interface PrReviewRunSummary {
 
 export interface PrReviewRunDetails extends PrReviewRunSummary {
 	reviewerConfigHash: string;
+	projections: PrReviewProjectionRecord[];
 }
 
 export interface StartedPrReviewRun {
@@ -880,6 +1374,7 @@ function mapRunDetails(row: {
 		coalescedTriggerKind: row.coalesced_trigger_kind,
 		coalescedTriggerSourceId: row.coalesced_trigger_source_id,
 		coalescedAt: row.coalesced_at,
+		projections: [],
 	};
 }
 
@@ -893,7 +1388,12 @@ export async function getPrReviewRunByFingerprint(
 		.where("fingerprint", "=", fingerprint)
 		.executeTakeFirst();
 
-	return row ? mapRunDetails(row) : null;
+	if (!row) return null;
+	const run = mapRunDetails(row);
+	return {
+		...run,
+		projections: await listPrReviewProjectionsForRun(run.fingerprint),
+	};
 }
 
 export async function getPrReviewRunBySessionId(
@@ -906,7 +1406,12 @@ export async function getPrReviewRunBySessionId(
 		.where("session_id", "=", sessionId)
 		.executeTakeFirst();
 
-	return row ? mapRunDetails(row) : null;
+	if (!row) return null;
+	const run = mapRunDetails(row);
+	return {
+		...run,
+		projections: await listPrReviewProjectionsForRun(run.fingerprint),
+	};
 }
 
 export async function listRecentPrReviewRuns(input: {
@@ -1167,4 +1672,5 @@ export async function listStartedPrReviewRuns(
 /** Test-only hook so per-test in-memory DBs re-run table creation. */
 export function __resetPrReviewRunsForTests(): void {
 	migrated = false;
+	projectionsMigrated = false;
 }

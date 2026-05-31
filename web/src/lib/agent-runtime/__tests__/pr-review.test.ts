@@ -14,6 +14,10 @@ const mocks = vi.hoisted(() => ({
 	releaseRunActiveClaim: vi.fn(),
 	listStartedPrReviewRuns: vi.fn(),
 	computeRunFingerprint: vi.fn(),
+	beginPrReviewProjectionAttempt: vi.fn(),
+	classifyPrReviewProjectionError: vi.fn(),
+	recordPrReviewProjectionFailure: vi.fn(),
+	recordPrReviewProjectionSuccess: vi.fn(),
 }));
 
 vi.mock("@anthropic-ai/sdk", () => {
@@ -44,8 +48,12 @@ vi.mock("../../github-app-auth", () => ({
 }));
 
 vi.mock("../pr-review-runs", () => ({
+	beginPrReviewProjectionAttempt: mocks.beginPrReviewProjectionAttempt,
+	classifyPrReviewProjectionError: mocks.classifyPrReviewProjectionError,
 	computeRunFingerprint: mocks.computeRunFingerprint,
 	listStartedPrReviewRuns: mocks.listStartedPrReviewRuns,
+	recordPrReviewProjectionFailure: mocks.recordPrReviewProjectionFailure,
+	recordPrReviewProjectionSuccess: mocks.recordPrReviewProjectionSuccess,
 	recordRunStart: mocks.recordRunStart,
 	recordRunResult: mocks.recordRunResult,
 	releaseRunActiveClaim: mocks.releaseRunActiveClaim,
@@ -232,6 +240,10 @@ beforeEach(() => {
 	mocks.releaseRunActiveClaim.mockReset();
 	mocks.listStartedPrReviewRuns.mockReset();
 	mocks.computeRunFingerprint.mockReset();
+	mocks.beginPrReviewProjectionAttempt.mockReset();
+	mocks.classifyPrReviewProjectionError.mockReset();
+	mocks.recordPrReviewProjectionFailure.mockReset();
+	mocks.recordPrReviewProjectionSuccess.mockReset();
 
 	mocks.getOrCreateAgent.mockResolvedValue("agent_01");
 	mocks.getOrCreateEnvironment.mockResolvedValue("env_01");
@@ -244,6 +256,19 @@ beforeEach(() => {
 	mocks.recordRunResult.mockResolvedValue(undefined);
 	mocks.releaseRunActiveClaim.mockResolvedValue(undefined);
 	mocks.listStartedPrReviewRuns.mockResolvedValue([]);
+	mocks.beginPrReviewProjectionAttempt.mockImplementation(
+		async (input: { type: string }) => ({
+			projectionId: `proj_${input.type}`,
+			desiredPayloadHash: "hash_01",
+			shouldProject: true,
+			attempts: 1,
+			state: "projecting",
+			observedExternalId: null,
+		}),
+	);
+	mocks.classifyPrReviewProjectionError.mockReturnValue("unknown");
+	mocks.recordPrReviewProjectionFailure.mockResolvedValue(undefined);
+	mocks.recordPrReviewProjectionSuccess.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -636,6 +661,23 @@ describe("processPendingPrReviewRuns", () => {
 			status: "completed",
 			githubReviewId: "4304929701",
 		});
+		expect(mocks.beginPrReviewProjectionAttempt).toHaveBeenCalledWith(
+			expect.objectContaining({
+				runFingerprint: "fp_486",
+				type: "github_review",
+				projectionKey: "final-review",
+				desiredPayload: expect.objectContaining({
+					repoFullName: "fairchild/workspaces",
+					prNumber: 486,
+					event: "COMMENT",
+					labels: ["refactor"],
+				}),
+			}),
+		);
+		expect(mocks.recordPrReviewProjectionSuccess).toHaveBeenCalledWith(
+			"proj_github_review",
+			{ observedExternalId: "4304929701" },
+		);
 		const statusPost = mocks.fetch.mock.calls.find(([url]) =>
 			String(url).includes("/statuses/head-sha"),
 		);
@@ -647,6 +689,112 @@ describe("processPendingPrReviewRuns", () => {
 			target_url:
 				"https://spaces.cloudcompute.com/dashboard/review-runs/fp_486",
 		});
+		expect(mocks.recordPrReviewProjectionSuccess).toHaveBeenCalledWith(
+			"proj_github_status",
+			{ observedExternalId: null },
+		);
+	});
+
+	it("skips duplicate GitHub review posts when the desired projection is already projected", async () => {
+		mocks.listStartedPrReviewRuns.mockResolvedValue([
+			{
+				fingerprint: "fp_duplicate_projection",
+				repoFullName: "fairchild/workspaces",
+				prNumber: 487,
+				headSha: "head-sha",
+				triggerKind: "opened",
+				triggerSourceId: "head-sha",
+				sessionId: "sesn_duplicate_projection",
+				createdAt: "2026-05-17T06:24:27Z",
+				updatedAt: "2026-05-17T06:24:27Z",
+			},
+		]);
+		mocks.beginPrReviewProjectionAttempt.mockImplementation(
+			async (input: { type: string }) => ({
+				projectionId: `proj_${input.type}`,
+				desiredPayloadHash: "hash_01",
+				shouldProject: input.type !== "github_review",
+				attempts: 1,
+				state: input.type === "github_review" ? "projected" : "projecting",
+				observedExternalId:
+					input.type === "github_review" ? "4304929777" : null,
+			}),
+		);
+		mocks.listEvents.mockReturnValue(
+			asyncEvents([
+				{
+					type: "agent.message",
+					content: [
+						{
+							type: "text",
+							text: `Review complete.
+
+\`\`\`json
+{"event":"COMMENT","body":"No duplicate review please.","labels":[]}
+\`\`\``,
+						},
+					],
+				},
+				{
+					type: "session.status_idle",
+					stop_reason: { type: "end_turn" },
+				},
+			]),
+		);
+		mocks.fetch.mockImplementation(
+			async (url: string, options?: RequestInit) => {
+				if (url.endsWith("/pulls/487")) {
+					return {
+						ok: true,
+						json: async () =>
+							githubPr(487, {
+								html_url: "https://github.com/fairchild/workspaces/pull/487",
+								head: { ref: "codex/no-duplicate", sha: "head-sha" },
+								base: { ref: "main" },
+							}),
+					};
+				}
+				if (url.includes("/pulls/487/reviews?")) {
+					return { ok: true, json: async () => [] };
+				}
+				if (url.includes("/pulls?")) {
+					return { ok: true, json: async () => [] };
+				}
+				if (url.includes("/labels?")) {
+					return { ok: true, json: async () => [] };
+				}
+				if (url.endsWith("/pulls/487/reviews") && options?.method === "POST") {
+					throw new Error("duplicate review post");
+				}
+				if (isManagedReviewStatusUrl(url)) {
+					return okResponse();
+				}
+				throw new Error(`Unexpected fetch URL: ${url}`);
+			},
+		);
+
+		const result = await processPendingPrReviewRuns({ limit: 1 });
+
+		expect(result).toMatchObject({
+			checked: 1,
+			completed: 1,
+			failed: 0,
+		});
+		expect(mocks.recordRunResult).toHaveBeenCalledWith(
+			"fp_duplicate_projection",
+			{
+				sessionId: "sesn_duplicate_projection",
+				status: "completed",
+				githubReviewId: "4304929777",
+			},
+		);
+		expect(
+			mocks.fetch.mock.calls.some(
+				([url, options]) =>
+					String(url).endsWith("/pulls/487/reviews") &&
+					options?.method === "POST",
+			),
+		).toBe(false);
 	});
 
 	it("posts an operator-visible failure comment when a completed intent cannot be published", async () => {

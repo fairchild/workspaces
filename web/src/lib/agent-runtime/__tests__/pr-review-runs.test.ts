@@ -368,6 +368,182 @@ describe("listStartedPrReviewRuns", () => {
 	});
 });
 
+describe("projection ledger", () => {
+	it("hashes desired payloads stably and records successful projection state", async () => {
+		const {
+			beginPrReviewProjectionAttempt,
+			listPrReviewProjectionsForRun,
+			recordPrReviewProjectionSuccess,
+		} = await loadModule();
+
+		const first = await beginPrReviewProjectionAttempt({
+			runFingerprint: "fp_projection_hash",
+			type: "github_status",
+			projectionKey: "WorkSpaces Managed Review",
+			desiredPayload: { state: "success", description: "done" },
+		});
+		await recordPrReviewProjectionSuccess(first.projectionId, {
+			observedExternalId: "status-1",
+		});
+		await recordPrReviewProjectionSuccess(first.projectionId);
+		const duplicate = await beginPrReviewProjectionAttempt({
+			runFingerprint: "fp_projection_hash",
+			type: "github_status",
+			projectionKey: "WorkSpaces Managed Review",
+			desiredPayload: { description: "done", state: "success" },
+		});
+
+		expect(duplicate).toMatchObject({
+			projectionId: first.projectionId,
+			desiredPayloadHash: first.desiredPayloadHash,
+			shouldProject: false,
+			attempts: 1,
+			state: "projected",
+			observedExternalId: "status-1",
+		});
+		await expect(
+			listPrReviewProjectionsForRun("fp_projection_hash"),
+		).resolves.toMatchObject([
+			{
+				type: "github_status",
+				state: "projected",
+				attempts: 1,
+				observedExternalId: "status-1",
+			},
+		]);
+	});
+
+	it("retries failed desired projections without creating duplicate records", async () => {
+		const {
+			beginPrReviewProjectionAttempt,
+			listPrReviewProjectionsForRun,
+			recordPrReviewProjectionFailure,
+		} = await loadModule();
+		const input = {
+			runFingerprint: "fp_projection_retry",
+			type: "github_review" as const,
+			projectionKey: "final-review",
+			desiredPayload: { event: "COMMENT", body: "retry me", labels: [] },
+		};
+
+		const first = await beginPrReviewProjectionAttempt(input);
+		await recordPrReviewProjectionFailure(first.projectionId, {
+			errorKind: "transient_api",
+			errorText: "GitHub review post failed 503: temporarily unavailable",
+		});
+		const retry = await beginPrReviewProjectionAttempt(input);
+
+		expect(retry).toMatchObject({
+			projectionId: first.projectionId,
+			shouldProject: true,
+			attempts: 2,
+			state: "projecting",
+		});
+		const records = await listPrReviewProjectionsForRun("fp_projection_retry");
+		expect(records).toHaveLength(1);
+		expect(records[0]).toMatchObject({
+			state: "projecting",
+			attempts: 2,
+			errorKind: null,
+			errorText: null,
+		});
+	});
+
+	it("stores bounded redacted projection errors with classified context", async () => {
+		const {
+			beginPrReviewProjectionAttempt,
+			classifyPrReviewProjectionError,
+			listPrReviewProjectionsForRun,
+			recordPrReviewProjectionFailure,
+		} = await loadModule();
+		const secret = `ghp_${"a".repeat(40)}`;
+		const attempt = await beginPrReviewProjectionAttempt({
+			runFingerprint: "fp_projection_error",
+			type: "github_status",
+			projectionKey: "WorkSpaces Managed Review",
+			desiredPayload: { state: "failure", description: "failed" },
+		});
+
+		await recordPrReviewProjectionFailure(attempt.projectionId, {
+			errorKind: classifyPrReviewProjectionError({
+				status: 403,
+				message: `forbidden ${secret}`,
+			}),
+			errorText: `GitHub status update failed 403: forbidden ${secret} ${"x".repeat(900)}`,
+		});
+
+		const [record] = await listPrReviewProjectionsForRun("fp_projection_error");
+		expect(record).toMatchObject({
+			state: "failed",
+			attempts: 1,
+			errorKind: "auth",
+		});
+		expect(record.errorText).not.toContain(secret);
+		expect(record.errorText).toContain("[redacted]");
+		expect(record.errorText?.length).toBeLessThanOrEqual(603);
+	});
+
+	it("classifies projection API failures into operator-safe buckets", async () => {
+		const { classifyPrReviewProjectionError } = await loadModule();
+
+		expect(
+			classifyPrReviewProjectionError({ status: 401, message: "bad token" }),
+		).toBe("auth");
+		expect(
+			classifyPrReviewProjectionError({
+				status: 429,
+				message: "secondary rate limit",
+			}),
+		).toBe("rate_limit");
+		expect(
+			classifyPrReviewProjectionError({
+				status: 503,
+				message: "temporarily unavailable",
+			}),
+		).toBe("transient_api");
+		expect(
+			classifyPrReviewProjectionError({
+				status: 422,
+				message: "validation failed",
+			}),
+		).toBe("validation");
+		expect(
+			classifyPrReviewProjectionError({ status: 418, message: "teapot" }),
+		).toBe("unknown");
+	});
+
+	it("does not expose secrets, raw webhook payloads, or unbounded managed output", async () => {
+		const { beginPrReviewProjectionAttempt, listPrReviewProjectionsForRun } =
+			await loadModule();
+		const secret = `github_pat_${"b".repeat(40)}`;
+
+		await beginPrReviewProjectionAttempt({
+			runFingerprint: "fp_projection_security",
+			type: "github_review",
+			projectionKey: "final-review",
+			desiredPayload: {
+				event: "COMMENT",
+				body: `${secret} ${"managed output ".repeat(600)}`,
+				rawWebhookPayload: { token: secret, action: "synchronize" },
+				authorizationToken: secret,
+			},
+		});
+
+		const [record] = await listPrReviewProjectionsForRun(
+			"fp_projection_security",
+		);
+		const serialized = JSON.stringify(record.desiredPayload);
+		expect(serialized).not.toContain(secret);
+		expect(serialized).not.toContain("github_pat_");
+		expect(serialized).not.toContain("synchronize");
+		expect(serialized.length).toBeLessThanOrEqual(4096);
+		expect(
+			String((record.desiredPayload as { body: string }).body).length,
+		).toBeLessThanOrEqual(1002);
+		expect(serialized).toContain("[redacted]");
+	});
+});
+
 describe("bucketPrReviewRuns", () => {
 	it("separates runs that are starting, executing, due for projection, failed, and terminal", async () => {
 		const { bucketPrReviewRuns } = await loadModule();

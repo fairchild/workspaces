@@ -100,6 +100,23 @@ export interface ManagedPrReviewRunsTable {
 	coalesced_at: string | null;
 }
 
+export interface ManagedPrReviewProjectionsTable {
+	projection_id: string;
+	run_fingerprint: string;
+	projection_type: string;
+	projection_key: string;
+	desired_payload_hash: string;
+	desired_payload: string;
+	state: string;
+	attempts: number;
+	last_attempted_at: string | null;
+	observed_external_id: string | null;
+	error_kind: string | null;
+	error_text: string | null;
+	created_at: string;
+	updated_at: string;
+}
+
 interface Database {
 	webhook_events: EventsTable;
 	chat_messages: ChatMessagesTable;
@@ -108,6 +125,7 @@ interface Database {
 	base_snapshots: BaseSnapshotsTable;
 	managed_agents_cache: ManagedAgentsCacheTable;
 	managed_pr_review_runs: ManagedPrReviewRunsTable;
+	managed_pr_review_projections: ManagedPrReviewProjectionsTable;
 }
 
 let _turso: Client | undefined;
