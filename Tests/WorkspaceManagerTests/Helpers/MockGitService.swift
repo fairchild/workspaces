@@ -53,6 +53,7 @@ final class MockGitService: GitServiceProtocol, @unchecked Sendable {
         if let error = createWorktreeError {
             throw error
         }
+        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
     }
 
     func checkoutBranch(_ name: String, at path: URL) async throws {}

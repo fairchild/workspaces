@@ -24,6 +24,38 @@ struct WorkspaceServiceTests {
         }
     }
 
+    final class RecordingWorkspaceMaterializer: WorkspaceMaterializer, @unchecked Sendable {
+        var materializeCalls: [(sanitizedName: String, destination: URL, source: URL)] = []
+        var removeCalls: [URL] = []
+        var materializeError: Error?
+        var resultBranch = "workspace/recorded"
+        var createsDestination = false
+
+        var failureOperationDescription: String {
+            "record workspace materialization"
+        }
+
+        func materializeWorkspace(
+            named sanitizedName: String,
+            at destination: URL,
+            from sourceRepository: URL
+        ) async throws -> MaterializedWorkspace {
+            materializeCalls.append((sanitizedName: sanitizedName, destination: destination, source: sourceRepository))
+            if createsDestination {
+                try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+            }
+            if let materializeError {
+                throw materializeError
+            }
+            return MaterializedWorkspace(gitBranch: resultBranch)
+        }
+
+        func removeWorkspace(at workspaceURL: URL) async throws {
+            removeCalls.append(workspaceURL)
+            try? await WorkspaceDirectoryRemover.remove(at: workspaceURL)
+        }
+    }
+
     // MARK: - Helpers
 
     /// Creates a temp directory with a fake repo and a separate workspaces root.
@@ -252,8 +284,31 @@ struct WorkspaceServiceTests {
 
     // MARK: - createWorkspace Tests
 
-    @Test("createWorkspace calls git createWorktree with correct branch and path")
-    func createWorkspaceCallsCreateWorktree() async throws {
+    @Test("createWorkspace delegates directory creation to the injected materializer")
+    func createWorkspaceDelegatesDirectoryCreationToInjectedMaterializer() async throws {
+        let materializer = RecordingWorkspaceMaterializer()
+        materializer.resultBranch = "workspace/my-feature"
+        materializer.createsDestination = true
+        let service = WorkspaceService(materializer: materializer)
+        let (testRoot, repoDir, wsRoot) = try makeWorkspaceFixture()
+        defer { try? FileManager.default.removeItem(at: testRoot) }
+        let originalRoot = setWorkspacesRoot(wsRoot)
+        defer { restoreWorkspacesRoot(originalRoot) }
+
+        _ = try await service.createWorkspace(repoName: "test-repo", repoLocalURL: repoDir, name: "my-feature")
+
+        let workspaceDir =
+            wsRoot
+            .appendingPathComponent("test-repo", isDirectory: true)
+            .appendingPathComponent("my-feature", isDirectory: true)
+        #expect(materializer.materializeCalls.count == 1)
+        #expect(materializer.materializeCalls[0].sanitizedName == "my-feature")
+        #expect(materializer.materializeCalls[0].destination == workspaceDir)
+        #expect(materializer.materializeCalls[0].source == repoDir)
+    }
+
+    @Test("default materializer creates a git worktree branch")
+    func defaultMaterializerCreatesGitWorktreeBranch() async throws {
         let mockGit = MockGitService()
         let service = WorkspaceService(gitService: mockGit)
         let (testRoot, repoDir, wsRoot) = try makeWorkspaceFixture()
@@ -273,11 +328,12 @@ struct WorkspaceServiceTests {
         #expect(mockGit.createWorktreeCalls[0].source == repoDir)
     }
 
-    @Test("createWorkspace fails clearly when worktree creation fails")
-    func createWorkspaceFailsWhenWorktreeCreationFails() async throws {
-        let mockGit = MockGitService()
-        mockGit.createWorktreeError = GitError.commandFailed(args: ["worktree", "add"], stderr: "already exists")
-        let service = WorkspaceService(gitService: mockGit)
+    @Test("createWorkspace fails clearly when materialization fails")
+    func createWorkspaceFailsWhenMaterializationFails() async throws {
+        let materializer = RecordingWorkspaceMaterializer()
+        materializer.createsDestination = true
+        materializer.materializeError = GitError.commandFailed(args: ["worktree", "add"], stderr: "already exists")
+        let service = WorkspaceService(materializer: materializer)
         let (testRoot, repoDir, wsRoot) = try makeWorkspaceFixture()
         defer { try? FileManager.default.removeItem(at: testRoot) }
         let originalRoot = setWorkspacesRoot(wsRoot)
@@ -291,6 +347,7 @@ struct WorkspaceServiceTests {
             wsRoot
             .appendingPathComponent("test-repo", isDirectory: true)
             .appendingPathComponent("test-ws", isDirectory: true)
+        #expect(materializer.removeCalls == [workspaceDir])
         #expect(!FileManager.default.fileExists(atPath: workspaceDir.path))
     }
 
@@ -427,6 +484,40 @@ struct WorkspaceServiceTests {
         #expect(self.worktreeList(worktreeList, contains: info.path))
     }
 
+    @Test("createWorkspace can materialize with repository copy adapter")
+    func createWorkspaceCanMaterializeWithRepositoryCopyAdapter() async throws {
+        let service = WorkspaceService(materializer: GitCloneWorkspaceMaterializer())
+        let (testRoot, repoDir, wsRoot) = try makeGitWorkspaceFixture()
+        defer { try? FileManager.default.removeItem(at: testRoot) }
+        let originalRoot = setWorkspacesRoot(wsRoot)
+        defer { restoreWorkspacesRoot(originalRoot) }
+
+        let info = try await service.createWorkspace(
+            repoName: "test-repo",
+            repoLocalURL: repoDir,
+            name: "copy-mode"
+        )
+
+        #expect(info.gitBranch == "workspace/copy-mode")
+        #expect(FileManager.default.fileExists(atPath: info.path.appendingPathComponent("README.md").path))
+
+        var gitPathIsDirectory: ObjCBool = false
+        #expect(
+            FileManager.default.fileExists(
+                atPath: info.path.appendingPathComponent(".git").path,
+                isDirectory: &gitPathIsDirectory
+            )
+        )
+        #expect(gitPathIsDirectory.boolValue)
+
+        let currentBranch = try runGit(["branch", "--show-current"], at: info.path)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        #expect(currentBranch == "workspace/copy-mode")
+
+        let worktreeList = try runGit(["worktree", "list", "--porcelain"], at: repoDir)
+        #expect(!self.worktreeList(worktreeList, contains: info.path))
+    }
+
     @Test("createWorkspace can materialize from a linked worktree source")
     func createWorkspaceMaterializesFromLinkedWorktreeSource() async throws {
         let service = WorkspaceService()
@@ -453,6 +544,40 @@ struct WorkspaceServiceTests {
 
         let worktreeList = try runGit(["worktree", "list", "--porcelain"], at: sourceWorktree)
         #expect(self.worktreeList(worktreeList, contains: info.path))
+    }
+
+    @Test("createWorkspace runs project-scripts setup from the new worktree")
+    func createWorkspaceRunsProjectScriptsSetupFromNewWorktree() async throws {
+        let service = WorkspaceService()
+        let (testRoot, repoDir, wsRoot) = try makeGitWorkspaceFixture()
+        defer { try? FileManager.default.removeItem(at: testRoot) }
+        let originalRoot = setWorkspacesRoot(wsRoot)
+        defer { restoreWorkspacesRoot(originalRoot) }
+
+        let scriptsDir = repoDir.appendingPathComponent("scripts", isDirectory: true)
+        try FileManager.default.createDirectory(at: scriptsDir, withIntermediateDirectories: true)
+        try """
+        #!/usr/bin/env bash
+        set -euo pipefail
+        pwd > setup.cwd
+        touch setup.marker
+        """.write(to: scriptsDir.appendingPathComponent("setup"), atomically: true, encoding: .utf8)
+        _ = try runGit(["add", "-A"], at: repoDir)
+        _ = try runGit(["commit", "-m", "add project setup script"], at: repoDir)
+
+        let info = try await service.createWorkspace(
+            repoName: "test-repo",
+            repoLocalURL: repoDir,
+            name: "project-setup"
+        )
+
+        #expect(FileManager.default.fileExists(atPath: info.path.appendingPathComponent("setup.marker").path))
+        let setupCWD = try String(contentsOf: info.path.appendingPathComponent("setup.cwd"), encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        #expect(
+            URL(fileURLWithPath: setupCWD).standardizedFileURL.resolvingSymlinksInPath()
+                == info.path.standardizedFileURL.resolvingSymlinksInPath()
+        )
     }
 
     @Test("createWorkspace cleans up when workspace branch already exists")
@@ -628,6 +753,62 @@ struct WorkspaceServiceTests {
         try await service.archiveWorkspace(at: tempDir)
 
         #expect(FileManager.default.fileExists(atPath: tempDir.appendingPathComponent("archived.marker").path))
+    }
+
+    @Test("archiveWorkspace runs project-scripts stop then archive")
+    func archiveWorkspaceRunsProjectScriptsStopThenArchive() async throws {
+        let mockGit = MockGitService()
+        let service = WorkspaceService(gitService: mockGit)
+        let tempDir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let scriptsDir = tempDir.appendingPathComponent("scripts", isDirectory: true)
+        try FileManager.default.createDirectory(at: scriptsDir, withIntermediateDirectories: true)
+        let orderFile = tempDir.appendingPathComponent("teardown-order.log")
+        try """
+        #!/usr/bin/env bash
+        set -euo pipefail
+        printf "stop\\n" >> "\(orderFile.path)"
+        """.write(to: scriptsDir.appendingPathComponent("stop"), atomically: true, encoding: .utf8)
+        try """
+        #!/usr/bin/env bash
+        set -euo pipefail
+        printf "archive\\n" >> "\(orderFile.path)"
+        """.write(to: scriptsDir.appendingPathComponent("archive"), atomically: true, encoding: .utf8)
+
+        try await service.archiveWorkspace(at: tempDir)
+
+        let order = try String(contentsOf: orderFile, encoding: .utf8)
+        #expect(order == "stop\narchive\n")
+    }
+
+    @Test("deleteWorkspace runs project-scripts teardown before removing workspace")
+    func deleteWorkspaceRunsProjectScriptsTeardownBeforeRemovingWorkspace() async throws {
+        let mockGit = MockGitService()
+        let service = WorkspaceService(gitService: mockGit)
+        let tempDir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let wsDir = tempDir.appendingPathComponent("test-repo/ws-project-scripts")
+        let scriptsDir = wsDir.appendingPathComponent("scripts", isDirectory: true)
+        try FileManager.default.createDirectory(at: scriptsDir, withIntermediateDirectories: true)
+        let orderFile = tempDir.appendingPathComponent("delete-teardown-order.log")
+        try """
+        #!/usr/bin/env bash
+        set -euo pipefail
+        printf "stop\\n" >> "\(orderFile.path)"
+        """.write(to: scriptsDir.appendingPathComponent("stop"), atomically: true, encoding: .utf8)
+        try """
+        #!/usr/bin/env bash
+        set -euo pipefail
+        printf "archive\\n" >> "\(orderFile.path)"
+        """.write(to: scriptsDir.appendingPathComponent("archive"), atomically: true, encoding: .utf8)
+
+        try await service.deleteWorkspace(at: wsDir, deleteFiles: true)
+
+        let order = try String(contentsOf: orderFile, encoding: .utf8)
+        #expect(order == "stop\narchive\n")
+        #expect(!FileManager.default.fileExists(atPath: wsDir.path))
     }
 
     // MARK: - getWorkspaceSize Tests

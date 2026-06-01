@@ -476,6 +476,37 @@ struct SidebarWorkspaceControllerBehaviorTests {
         #expect(await provider.archiveCallCount() == 1)
     }
 
+    @Test("Local archive runs WorkspaceService lifecycle before updating status")
+    @MainActor
+    func localArchiveRunsWorkspaceServiceLifecycleBeforeUpdatingStatus() async throws {
+        let fixture = try makeModelContext()
+        let context = fixture.context
+        let repo = Repo(name: "api", localPath: URL(fileURLWithPath: "/tmp/api"))
+        let workspaceURL = URL(fileURLWithPath: "/tmp/workspaces/api/feature-a")
+        let workspace = Workspace(
+            name: "feature-a",
+            path: workspaceURL,
+            sourceRepo: repo,
+            status: .active,
+            backendIdentifier: LocalWorkspaceProvider.identifier
+        )
+        context.insert(repo)
+        context.insert(workspace)
+        try context.save()
+
+        let workspaceService = MockWorkspaceService()
+        let controller = makeController(
+            context: context,
+            workspaceService: workspaceService,
+            providers: [LocalWorkspaceProvider()]
+        )
+
+        try await controller.archive(workspace)
+
+        #expect(workspaceService.archiveWorkspaceCalls == [workspaceURL])
+        #expect(workspace.status == .archived)
+    }
+
     @Test("Managed lifecycle operations fail closed when remote identifier is missing")
     @MainActor
     func managedLifecycleOperationsFailClosedWhenRemoteIdentifierIsMissing() async throws {
@@ -581,6 +612,7 @@ private final class MockWorkspaceService: WorkspaceServiceProtocol, @unchecked S
 
     var createWorkspaceResult: NewWorkspaceInfo?
     var createWorkspaceCalls: [CreateWorkspaceCall] = []
+    var archiveWorkspaceCalls: [URL] = []
     var deleteWorkspaceCalls: [(workspaceURL: URL, deleteFiles: Bool)] = []
     var createWorkspaceDelay: @Sendable () async -> Void = {}
 
@@ -609,7 +641,9 @@ private final class MockWorkspaceService: WorkspaceServiceProtocol, @unchecked S
         )
     }
 
-    func archiveWorkspace(at workspaceURL: URL) async throws {}
+    func archiveWorkspace(at workspaceURL: URL) async throws {
+        archiveWorkspaceCalls.append(workspaceURL)
+    }
 
     func deleteWorkspace(at workspaceURL: URL, deleteFiles: Bool) async throws {
         deleteWorkspaceCalls.append((workspaceURL, deleteFiles))

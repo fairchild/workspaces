@@ -44,7 +44,7 @@ WorkSpaces gives you a native app that wraps a terminal with some niceties for s
 - Embedded web views with global, repo-owned, and workspace-owned scope
 - File browser and git status view
 - `cmd+o` to open repo in editor, defaulting to zed
-- Lifecycle hooks (`setup.sh` / `archive.sh`)
+- Lifecycle hooks (`scripts/setup`, `scripts/stop`, `scripts/archive`; legacy `setup.sh` / `archive.sh`)
 
 ## Usage
 
@@ -74,7 +74,7 @@ Open Settings (`Cmd+,`) to configure workspace root location.
 WorkSpaces is designed to be forked. There's no plugin system or extension API — instead, the codebase itself is the API. Common customizations:
 
 - **Change the layout**: Edit `ContentView.swift` to rearrange panes
-- **Add lifecycle hooks**: Drop scripts into workspace directories (`setup.sh`, `archive.sh`)
+- **Add lifecycle hooks**: Drop project lifecycle scripts into `scripts/` (`setup`, `stop`, `archive`) or use legacy root hooks (`setup.sh`, `archive.sh`)
 - **Customize repo overview and sidebar behavior**: Start with `RepoLandingView.swift`, `SidebarView.swift`, and `SidebarRows.swift`
 - **Swap the terminal**: The `TerminalView` wrapper abstracts the terminal backend
 - **Adjust keyboard shortcuts**: See `ShortcutRoutingPolicy.swift`

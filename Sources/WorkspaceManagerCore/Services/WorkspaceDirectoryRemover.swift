@@ -18,10 +18,23 @@ enum WorkspaceDirectoryRemover {
         if isLinkedGitWorktree(at: workspaceURL, fileManager: fileManager) {
             let branchName = try? await currentBranchName(at: workspaceURL)
             let commonGitDirectory = try? await commonGitDirectory(at: workspaceURL)
+            let removalArguments: [String]
+            if let commonGitDirectory {
+                removalArguments = [
+                    "--git-dir",
+                    commonGitDirectory.path,
+                    "worktree",
+                    "remove",
+                    "--force",
+                    workspaceURL.path,
+                ]
+            } else {
+                removalArguments = ["worktree", "remove", "--force", workspaceURL.path]
+            }
             let result = try await ProcessRunner.run(
                 executable: "/usr/bin/git",
-                arguments: ["worktree", "remove", "--force", workspaceURL.path],
-                currentDirectory: workspaceURL
+                arguments: removalArguments,
+                currentDirectory: workspaceURL.deletingLastPathComponent()
             )
 
             guard result.success else {

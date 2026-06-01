@@ -2,7 +2,7 @@
 //  WorkspaceService.swift
 //  WorkspaceManager
 //
-//  Workspace creation, git worktree materialization, lifecycle hooks, and management
+//  Workspace creation, lifecycle hooks, and management
 //
 
 import Foundation
@@ -13,7 +13,7 @@ private let log = Logger(subsystem: "com.cloudcompute.workspaces", category: "Wo
 public actor WorkspaceService: WorkspaceServiceProtocol {
     public static let shared = WorkspaceService()
 
-    private let gitService: any GitServiceProtocol
+    private let materializer: any WorkspaceMaterializer
 
     // MARK: - Workspace Root Configuration
 
@@ -40,15 +40,23 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
     }
 
     public init(gitService: any GitServiceProtocol = GitService.shared) {
-        self.gitService = gitService
+        self.init(materializer: GitWorktreeWorkspaceMaterializer(gitService: gitService))
+    }
+
+    init(materializer: any WorkspaceMaterializer) {
+        self.materializer = materializer
+        Self.ensureDefaultWorkspacesRootExists()
+    }
+
+    private static func ensureDefaultWorkspacesRootExists() {
         do {
             try FileManager.default.createDirectory(
-                at: Self.defaultWorkspacesRoot,
+                at: defaultWorkspacesRoot,
                 withIntermediateDirectories: true
             )
         } catch {
             log.warning(
-                "Failed to create default workspaces root at \(Self.defaultWorkspacesRoot.path): \(error.localizedDescription)"
+                "Failed to create default workspaces root at \(defaultWorkspacesRoot.path): \(error.localizedDescription)"
             )
         }
     }
@@ -88,29 +96,38 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
 
         var warnings: [String] = []
 
-        let branchName = "workspace/\(sanitizedName)"
         await progress?(.creatingWorktree)
+        let materializedWorkspace: MaterializedWorkspace
         do {
-            try await gitService.createWorktree(
-                branchName: branchName,
+            materializedWorkspace = try await materializer.materializeWorkspace(
+                named: sanitizedName,
                 at: workspaceDir,
                 from: repoLocalURL
             )
         } catch {
-            try? await WorkspaceDirectoryRemover.remove(at: workspaceDir)
-            throw WorkspaceError.worktreeCreationFailed(reason: error.localizedDescription)
+            try? await materializer.removeWorkspace(at: workspaceDir)
+            throw WorkspaceError.materializationFailed(
+                operation: materializer.failureOperationDescription,
+                reason: error.localizedDescription
+            )
+        }
+        guard FileManager.default.fileExists(atPath: workspaceDir.path) else {
+            try? await materializer.removeWorkspace(at: workspaceDir)
+            throw WorkspaceError.materializationFailed(
+                operation: materializer.failureOperationDescription,
+                reason: "Materializer did not create workspace directory at \(workspaceDir.path)"
+            )
         }
 
         do {
-            let currentBranch = try? await gitService.getCurrentBranch(at: workspaceDir)
-
             await progress?(.runningSetupScript)
-            let setupResult = try await runLifecycleScript("setup.sh", in: workspaceDir)
-            if !setupResult.stdout.isEmpty {
-                log.info("setup.sh output: \(setupResult.stdout)")
+            let setupRun = try await runLifecycleAction(.setup, in: workspaceDir)
+            if !setupRun.result.stdout.isEmpty {
+                log.info("\(setupRun.scriptName ?? "setup") output: \(setupRun.result.stdout)")
             }
-            if setupResult.exitCode != 0 {
-                let msg = "setup.sh exited with code \(setupResult.exitCode): \(setupResult.stderr)"
+            if setupRun.result.exitCode != 0 {
+                let scriptName = setupRun.scriptName ?? "setup"
+                let msg = "\(scriptName) exited with code \(setupRun.result.exitCode): \(setupRun.result.stderr)"
                 log.warning("\(msg)")
                 warnings.append(msg)
             }
@@ -120,11 +137,11 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
             return NewWorkspaceInfo(
                 name: name,
                 path: workspaceDir,
-                gitBranch: currentBranch ?? branchName,
+                gitBranch: materializedWorkspace.gitBranch,
                 warnings: warnings
             )
         } catch {
-            try? await WorkspaceDirectoryRemover.remove(at: workspaceDir)
+            try? await materializer.removeWorkspace(at: workspaceDir)
             throw error
         }
     }
@@ -132,19 +149,13 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
     // MARK: - Archive Workspace
 
     public func archiveWorkspace(at workspaceURL: URL) async throws {
-        let archiveResult = try await runLifecycleScript("archive.sh", in: workspaceURL)
-        if !archiveResult.stdout.isEmpty {
-            log.info("archive.sh output: \(archiveResult.stdout)")
-        }
-        if archiveResult.exitCode != 0 {
-            log.warning("archive.sh exited with code \(archiveResult.exitCode): \(archiveResult.stderr)")
-        }
+        try await runTeardownLifecycle(in: workspaceURL)
     }
 
     // MARK: - Delete Workspace
 
     public func deleteWorkspace(at workspaceURL: URL, deleteFiles: Bool) async throws {
-        _ = try await runLifecycleScript("archive.sh", in: workspaceURL)
+        try await runTeardownLifecycle(in: workspaceURL)
 
         if deleteFiles {
             try await WorkspaceDirectoryRemover.remove(at: workspaceURL)
@@ -169,6 +180,81 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
 
     public func runLifecycleScript(_ scriptName: String, in directory: URL) async throws -> ScriptResult {
         let scriptPath = directory.appendingPathComponent(scriptName)
+        return try await runLifecycleScript(at: scriptPath, in: directory)
+    }
+
+    private struct LifecycleScriptRun: Sendable {
+        let scriptName: String?
+        let result: ScriptResult
+    }
+
+    private enum LifecycleScriptAction: String, Sendable {
+        case setup
+        case stop
+        case archive
+
+        var legacyScriptName: String? {
+            switch self {
+            case .setup:
+                return "setup.sh"
+            case .stop:
+                return nil
+            case .archive:
+                return "archive.sh"
+            }
+        }
+
+        var candidateScriptNames: [String] {
+            var candidates = [
+                "scripts/\(rawValue)",
+                "scripts/\(rawValue).sh",
+            ]
+            if let legacyScriptName {
+                candidates.append(legacyScriptName)
+            }
+            return candidates
+        }
+    }
+
+    private func runLifecycleAction(
+        _ action: LifecycleScriptAction,
+        in directory: URL
+    ) async throws -> LifecycleScriptRun {
+        for scriptName in action.candidateScriptNames {
+            let scriptPath = directory.appendingPathComponent(scriptName)
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: scriptPath.path, isDirectory: &isDirectory),
+                !isDirectory.boolValue
+            else {
+                continue
+            }
+
+            let result = try await runLifecycleScript(at: scriptPath, in: directory)
+            return LifecycleScriptRun(scriptName: scriptName, result: result)
+        }
+
+        return LifecycleScriptRun(
+            scriptName: nil,
+            result: ScriptResult(exitCode: 0, stdout: "", stderr: "")
+        )
+    }
+
+    private func runTeardownLifecycle(in directory: URL) async throws {
+        for action in [LifecycleScriptAction.stop, .archive] {
+            let run = try await runLifecycleAction(action, in: directory)
+            guard let scriptName = run.scriptName else {
+                continue
+            }
+            if !run.result.stdout.isEmpty {
+                log.info("\(scriptName) output: \(run.result.stdout)")
+            }
+            if run.result.exitCode != 0 {
+                log.warning("\(scriptName) exited with code \(run.result.exitCode): \(run.result.stderr)")
+            }
+        }
+    }
+
+    private func runLifecycleScript(at scriptPath: URL, in directory: URL) async throws -> ScriptResult {
 
         guard FileManager.default.fileExists(atPath: scriptPath.path) else {
             return ScriptResult(exitCode: 0, stdout: "", stderr: "")
@@ -281,7 +367,7 @@ public enum WorkspaceError: LocalizedError {
     case notAGitRepo
     case alreadyExists(name: String)
     case invalidName(name: String)
-    case worktreeCreationFailed(reason: String)
+    case materializationFailed(operation: String, reason: String)
     case deletionFailed(reason: String)
 
     public var errorDescription: String? {
@@ -292,8 +378,8 @@ public enum WorkspaceError: LocalizedError {
             return "A workspace named '\(name)' already exists"
         case .invalidName(let name):
             return "Workspace name '\(name)' is not valid"
-        case .worktreeCreationFailed(let reason):
-            return "Failed to create git worktree: \(reason)"
+        case .materializationFailed(let operation, let reason):
+            return "Failed to \(operation): \(reason)"
         case .deletionFailed(let reason):
             return "Failed to delete workspace: \(reason)"
         }

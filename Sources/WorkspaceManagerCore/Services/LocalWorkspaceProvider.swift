@@ -71,7 +71,7 @@ public struct LocalWorkspaceProvider: WorkspaceProviderProtocol {
         case .creatingWorktree:
             return "Creating git worktree..."
         case .runningSetupScript:
-            return "Running setup script..."
+            return "Running setup..."
         case .finished:
             return "Finishing workspace..."
         }

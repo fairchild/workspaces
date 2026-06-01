@@ -189,7 +189,7 @@ struct SettingsView: View {
 
                     VStack(alignment: .leading, spacing: 4) {
                         Label {
-                            Text("setup.sh")
+                            Text("scripts/setup")
                                 .font(.system(.body, design: .monospaced))
                             Text("— Runs after workspace is created")
                                 .foregroundStyle(.secondary)
@@ -199,9 +199,9 @@ struct SettingsView: View {
                         }
 
                         Label {
-                            Text("archive.sh")
+                            Text("scripts/stop, scripts/archive")
                                 .font(.system(.body, design: .monospaced))
-                            Text("— Runs when workspace is closed")
+                            Text("— Runs before archive or delete")
                                 .foregroundStyle(.secondary)
                         } icon: {
                             Image(systemName: "archivebox")
@@ -210,7 +210,7 @@ struct SettingsView: View {
                     }
                     .font(.callout)
 
-                    Text("Add these scripts to your repository to automate workspace setup and cleanup.")
+                    Text("WorkSpaces also supports legacy setup.sh and archive.sh hooks.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

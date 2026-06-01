@@ -1432,19 +1432,15 @@ struct ContentView: View {
 
     @MainActor
     private func archiveWorkspaceFromLanding(_ workspace: Workspace) async {
-        if workspace.backend != .local {
-            let controller = SidebarWorkspaceController(
-                modelContext: modelContext,
-                workspaceService: workspaceService,
-                workspaceProviderRegistry: workspaceProviderRegistry
-            )
-            do {
-                try await controller.archive(workspace)
-            } catch {
-                landingErrorMessage = "Failed to archive workspace: \(error.localizedDescription)"
-            }
-        } else {
-            workspace.status = .archived
+        let controller = SidebarWorkspaceController(
+            modelContext: modelContext,
+            workspaceService: workspaceService,
+            workspaceProviderRegistry: workspaceProviderRegistry
+        )
+        do {
+            try await controller.archive(workspace)
+        } catch {
+            landingErrorMessage = "Failed to archive workspace: \(error.localizedDescription)"
         }
     }
 

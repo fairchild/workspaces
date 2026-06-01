@@ -24,7 +24,7 @@ Think of it as **a terminal session manager for your code portfolio, with worksp
 - **Scoped Web Views**: Global, repo-owned, and workspace-owned web views live alongside terminal contexts
 - **Workspace Creation**: Create isolated git worktree workspaces per repo
 - **Inline Workspace Progress**: Repo rows show coarse creation progress while worktree creation/setup is in flight
-- **Lifecycle Hooks**: `setup.sh` runs after creation, `archive.sh` runs on close
+- **Lifecycle Hooks**: `scripts/setup` runs after creation; `scripts/stop` and `scripts/archive` run before archive/delete. Legacy `setup.sh` and `archive.sh` still work.
 - **Embedded Terminal**: GhosttyKit (`libghostty`) terminal as the primary interface
 - **Two-Pane Split Control**: Ghostty split actions can create, focus, resize, and equalize the current two-pane stack
 - **Ghostty-First Shortcut Routing**: Terminal keybindings should default to Ghostty behavior; app-level shortcuts are for non-overlapping chrome actions
