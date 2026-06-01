@@ -6,6 +6,13 @@ broker projects the completed run back to GitHub. Operator surfaces read from
 the same run record so a missing, pending, failed, or stale review can be
 diagnosed from one vocabulary.
 
+If you are learning the system or checking that a docs change still teaches the
+right operator decisions, use the scenario-based
+[`understanding-guide.md`](understanding-guide.md) and offline quiz:
+[`uv run --script scripts/pr-reviewer-quiz.py --check-answer-key`](../../scripts/pr-reviewer-quiz.py).
+They exercise the vocabulary here without requiring network access or
+production secrets.
+
 ## Vocabulary
 
 | Term | Meaning |
