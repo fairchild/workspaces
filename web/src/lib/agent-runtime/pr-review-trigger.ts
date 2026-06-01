@@ -51,7 +51,7 @@ export type PrReviewTriggerClassification =
 	| PrReviewTriggerSkipClassification;
 
 const EVIDENCE_SIGNAL =
-	/(evidence\.cloudcompute\.com|^Evidence:|swift test|playwright|screenshot|recording|validation)/im;
+	/(evidence\.cloudcompute\.com|^\s*(?:Evidence|Validation):|\bswift test\b|\bplaywright\b|\bscreenshot\b|\brecording\b)/im;
 const PR_REVIEWER_BOT_LOGIN = "workspaces-claude-pr-reviewer[bot]";
 
 function isBotSender(payload: Record<string, unknown>): boolean {
