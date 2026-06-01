@@ -27,15 +27,40 @@ const MONITOR_SECRET = "monitor-secret";
 
 function webhookRowFromContractCase(
 	testCase: (typeof PR_REVIEW_WEBHOOK_CONTRACT_CASES)[number],
+	overrides: Partial<{
+		id: string;
+		timestamp: string;
+		payload: Record<string, unknown>;
+	}> = {},
 ) {
-	const payload = testCase.payload as { action?: string };
+	const payload = (overrides.payload ?? testCase.payload) as {
+		action?: string;
+	};
 	return {
-		id: testCase.deliveryId,
+		id: overrides.id ?? testCase.deliveryId,
 		type: testCase.eventType,
 		action: String(payload.action ?? ""),
-		timestamp: new Date().toISOString(),
-		payload: JSON.stringify(testCase.payload),
+		timestamp: overrides.timestamp ?? new Date().toISOString(),
+		payload: JSON.stringify(payload),
 	};
+}
+
+function pullRequestPayloadFor(
+	testCase: (typeof PR_REVIEW_WEBHOOK_CONTRACT_CASES)[number],
+	prNumber: number,
+	headSha: string,
+): Record<string, unknown> {
+	const payload = JSON.parse(JSON.stringify(testCase.payload)) as Record<
+		string,
+		unknown
+	>;
+	const pullRequest = payload.pull_request as Record<string, unknown>;
+	pullRequest.number = prNumber;
+	pullRequest.head = {
+		...(pullRequest.head as Record<string, unknown>),
+		sha: headSha,
+	};
+	return payload;
 }
 
 function monitorRequest(headers: Record<string, string> = {}): Request {
@@ -299,6 +324,92 @@ describe("/api/webhooks/github/pr-reviewer-monitor GET", () => {
 				{
 					eventIds: ["contract-pr-opened", "contract-pr-opened-redelivery"],
 					eventCount: 2,
+				},
+			],
+		});
+	});
+
+	it("does not report missing run keys for PRs closed after eligible triggers", async () => {
+		const edited = PR_REVIEW_WEBHOOK_CONTRACT_CASES.find(
+			(testCase) => testCase.deliveryId === "contract-pr-edited-body",
+		);
+		const closed = PR_REVIEW_WEBHOOK_CONTRACT_CASES.find(
+			(testCase) => testCase.deliveryId === "contract-pr-closed",
+		);
+		if (!edited || !closed) throw new Error("missing PR fixtures");
+		mocks.executeWebhookQuery.mockResolvedValue([
+			webhookRowFromContractCase(edited, {
+				id: "contract-pr-edited-before-close",
+				timestamp: "2026-06-01T03:00:00.000Z",
+				payload: pullRequestPayloadFor(edited, 8120, "terminalsha8120"),
+			}),
+			webhookRowFromContractCase(closed, {
+				id: "contract-pr-closed-after-edit",
+				timestamp: "2026-06-01T03:01:00.000Z",
+				payload: pullRequestPayloadFor(closed, 8120, "terminalsha8120"),
+			}),
+		]);
+		mocks.listRecentPrReviewRuns.mockResolvedValue([]);
+
+		const { GET } = await import("./route");
+		const response = await GET(
+			monitorRequest({ "x-workspace-webhook-canary": MONITOR_SECRET }),
+		);
+
+		expect(response.status).toBe(200);
+		await expect(response.json()).resolves.toMatchObject({
+			ok: true,
+			health: "healthy",
+			eligibleEvents: 1,
+			candidateRunKeys: 1,
+			eligibleRunKeys: 0,
+			terminalRunKeys: 1,
+			supersededTriggerRunKeys: 0,
+			missingRunKeys: 0,
+			missing: [],
+		});
+	});
+
+	it("reports only the latest missing trigger key for a still-open PR", async () => {
+		const opened = PR_REVIEW_WEBHOOK_CONTRACT_CASES[0];
+		const synchronize = PR_REVIEW_WEBHOOK_CONTRACT_CASES.find(
+			(testCase) => testCase.expectedTriggerKind === "synchronize",
+		);
+		if (!synchronize) throw new Error("missing synchronize fixture");
+		mocks.executeWebhookQuery.mockResolvedValue([
+			webhookRowFromContractCase(opened, {
+				timestamp: "2026-06-01T03:00:00.000Z",
+				payload: pullRequestPayloadFor(opened, 8121, "oldsha8121"),
+			}),
+			webhookRowFromContractCase(synchronize, {
+				timestamp: "2026-06-01T03:02:00.000Z",
+				payload: pullRequestPayloadFor(synchronize, 8121, "newsha8121"),
+			}),
+		]);
+		mocks.listRecentPrReviewRuns.mockResolvedValue([]);
+
+		const { GET } = await import("./route");
+		const response = await GET(
+			monitorRequest({ "x-workspace-webhook-canary": MONITOR_SECRET }),
+		);
+
+		expect(response.status).toBe(503);
+		await expect(response.json()).resolves.toMatchObject({
+			ok: false,
+			health: "unhealthy",
+			eligibleEvents: 2,
+			candidateRunKeys: 2,
+			eligibleRunKeys: 1,
+			supersededTriggerRunKeys: 1,
+			missingRunKeys: 1,
+			missing: [
+				{
+					key: "fairchild/workspaces|8121|newsha8121",
+					eventIds: ["contract-pr-synchronize"],
+					eventCount: 1,
+					prNumber: 8121,
+					triggerKind: "synchronize",
+					headSha: "newsha8121",
 				},
 			],
 		});

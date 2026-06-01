@@ -33,7 +33,10 @@ class PRReviewerRunsTests(unittest.TestCase):
             "repo": "fairchild/workspaces",
             "windowMinutes": 90,
             "eligibleEvents": 3,
+            "candidateRunKeys": 3,
             "eligibleRunKeys": 2,
+            "terminalRunKeys": 1,
+            "supersededTriggerRunKeys": 0,
             "missingRunKeys": 1,
             "attentionRequired": 2,
             "starting": 0,
@@ -96,7 +99,10 @@ class PRReviewerRunsTests(unittest.TestCase):
 
         rendered = output.getvalue()
         self.assertIn("ReviewRun report for fairchild/workspaces over 90m: unhealthy", rendered)
-        self.assertIn("events eligible=3 run_keys=2 missing_keys=1 attention=2", rendered)
+        self.assertIn(
+            "events eligible=3 candidate_keys=3 run_keys=2 terminal_keys=1 superseded_keys=0 missing_keys=1 attention=2",
+            rendered,
+        )
         self.assertIn("projectionFailed=1", rendered)
         self.assertIn("github projection audit: not_checked (scripts/pr-review-health.py)", rendered)
         self.assertIn("Missing ReviewRun keys:", rendered)

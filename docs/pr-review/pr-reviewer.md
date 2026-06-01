@@ -101,6 +101,13 @@ Interpret the ReviewRun report as:
 - `unhealthy`: a coalesced ReviewRun key is missing, pickup/execution/projection
   SLOs have been breached, or an execution/projection failure is stored.
 
+The report intentionally separates raw event volume from actionable keys.
+`candidateRunKeys` is the raw reviewer-eligible webhook history grouped by
+PR/head. `eligibleRunKeys` is the current actionable set after closed PRs and
+older material triggers for the same PR are removed. `terminalRunKeys` and
+`supersededTriggerRunKeys` explain why historical webhook rows are not treated
+as missing work.
+
 `.github/workflows/managed-reviewer-health.yml` runs the same split on a
 schedule and can be dispatched manually. Its first job calls
 `scripts/pr-reviewer-runs.py` with the protected canary secret and fails on
@@ -178,7 +185,8 @@ uv run --script scripts/pr-reviewer-runs.py
 ```
 
 Use the report as the first read of production health. `missingRuns` means a
-coalesced reviewer-eligible key did not create a `managed_pr_review_runs` row.
+current actionable reviewer-eligible key did not create a
+`managed_pr_review_runs` row.
 `running` means the managed-agent session has been created and remains inside
 the execution SLO. `runningTooLong` means the session exceeded the execution
 SLO. `completedAwaitingProjection` means the broker still needs to publish or
@@ -207,10 +215,11 @@ marks that run `superseded`, and starts exactly one follow-up session against th
 latest PR state. If the superseding review is for an older head, the broker
 starts a fresh follow-up session so the newer-head review includes the prior
 review context. The run report compares recent
-reviewer-eligible rows in `webhook_events` with coalesced ReviewRun keys from
-`managed_pr_review_runs` records and classifies rows into source-of-truth health
-buckets. Broker and report routes return only run metadata, details URLs, stored
-failure reasons, and missing event identifiers, not raw payloads or secrets.
+reviewer-eligible rows in `webhook_events` with current actionable ReviewRun
+keys from `managed_pr_review_runs` records and classifies rows into
+source-of-truth health buckets. Broker and report routes return only run
+metadata, details URLs, stored failure reasons, and missing event identifiers,
+not raw payloads or secrets.
 
 ## Observing Sessions
 
