@@ -101,15 +101,18 @@ Interpret the ReviewRun report as:
 - `unhealthy`: a coalesced ReviewRun key is missing, pickup/execution/projection
   SLOs have been breached, or an execution/projection failure is stored.
 
-GitHub-facing projection drift is audited separately by
-`scripts/pr-review-health.py` and `.github/workflows/managed-reviewer-health.yml`.
-That workflow runs on a schedule and can be dispatched manually. It checks recent
-open PRs for the `WorkSpaces Managed Review` status, stale pending status,
-failure statuses, and success statuses that do not have a current-head managed
-review. Older or draft PRs are reported but skipped by default so pre-indicator
-branches do not keep the projection-audit job red forever. Do not treat a green
-projection audit as proof that ReviewRun ingestion, session execution, or broker
-projection is healthy.
+`.github/workflows/managed-reviewer-health.yml` runs the same split on a
+schedule and can be dispatched manually. Its first job calls
+`scripts/pr-reviewer-runs.py` with the protected canary secret and fails on
+ReviewRun attention-needed state. Its second job calls
+`scripts/pr-review-health.py` to audit GitHub-facing projection drift.
+
+The projection audit checks recent open PRs for the `WorkSpaces Managed Review`
+status, stale pending status, failure statuses, and success statuses that do not
+have a current-head managed review. Older or draft PRs are reported but skipped
+by default so pre-indicator branches do not keep the projection-audit job red
+forever. Do not treat a green projection audit as proof that ReviewRun
+ingestion, session execution, or broker projection is healthy.
 
 The Cloudflare relay forwards only managed-review trigger candidates:
 `pull_request.opened`, `reopened`, `ready_for_review`, `synchronize`, eligible

@@ -54,4 +54,6 @@ jobs:
           mise --version
 
       - name: Verify mise security controls
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: ./scripts/verify-mise-security.sh

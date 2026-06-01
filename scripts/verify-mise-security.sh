@@ -5,8 +5,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 cd "$REPO_ROOT"
 
-MISE_EXPECTED_VERSION="v2026.5.15"
-MISE_EXPECTED_LINUX_X64_SHA256="a86aa65c8ca48a548c3f9904853489383bb8cdebfd8f2cf8ddd18b675e03bbf4"
+MISE_EXPECTED_VERSION="v2026.5.18"
+MISE_EXPECTED_LINUX_X64_SHA256="cfac593469d028d7ae5fe36e37bd7c59118b5238e92d8a876209578464f24a84"
 ZIG_VERSION="0.15.2"
 
 fail() {
@@ -16,6 +16,18 @@ fail() {
 
 require_cmd() {
   command -v "$1" >/dev/null 2>&1 || fail "$1 is required"
+}
+
+curl_github_api() {
+  local url="$1"
+  if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+    curl -fsSL \
+      -H "Authorization: Bearer $GITHUB_TOKEN" \
+      -H "X-GitHub-Api-Version: 2022-11-28" \
+      "$url"
+  else
+    curl -fsSL "$url"
+  fi
 }
 
 verify_mise_configs() {
@@ -113,7 +125,7 @@ verify_latest_mise_pin() {
   require_cmd python3
 
   local latest_json latest_tag prerelease draft shasum_line
-  latest_json="$(curl -fsSL https://api.github.com/repos/jdx/mise/releases/latest)"
+  latest_json="$(curl_github_api https://api.github.com/repos/jdx/mise/releases/latest)"
   latest_tag="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["tag_name"])' <<<"$latest_json")"
   prerelease="$(python3 -c 'import json,sys; print(str(json.load(sys.stdin)["prerelease"]).lower())' <<<"$latest_json")"
   draft="$(python3 -c 'import json,sys; print(str(json.load(sys.stdin)["draft"]).lower())' <<<"$latest_json")"
