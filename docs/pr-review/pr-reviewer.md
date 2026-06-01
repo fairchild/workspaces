@@ -354,7 +354,7 @@ managed review run:
 | `pull_request` | `edited` | Rerun when `changes.body` or `changes.base` is present; title-only and other metadata edits do not start sessions |
 | `pull_request` | `labeled`, `unlabeled` | Metadata only; no managed-review session |
 | `pull_request` | `closed` | Terminal PR activity; no managed-review session |
-| `issue_comment` | `created` with evidence | Rerun when the comment is on a PR thread, the sender is a non-bot, and the body matches an evidence signal: `evidence.cloudcompute.com`, `Evidence:`, `Validation:`, `swift test`, `playwright`, `screenshot`, or `recording`. Plain status comments that merely mention validation do not rerun review. |
+| `issue_comment` | `created` with evidence | Rerun when the comment is on a PR thread, the sender is a non-bot, and the body explicitly supplies evidence: `evidence.cloudcompute.com`, `Evidence:`, or `Validation:` at the start of a line. Plain review responses that mention tools, screenshots, recordings, or validation do not rerun review. |
 | `issue_comment` | `created` without evidence | Metadata only; no managed-review session |
 | `pull_request_review_comment`, `pull_request_review` | any | Metadata only; no managed-review session |
 

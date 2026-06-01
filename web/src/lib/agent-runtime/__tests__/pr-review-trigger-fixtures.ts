@@ -244,6 +244,17 @@ export const PR_REVIEW_WEBHOOK_CONTRACT_CASES: PrReviewWebhookContractCase[] = [
 		expectedTriggerKind: null,
 	},
 	{
+		name: "review response mentions validation tool",
+		deliveryId: "contract-pr-review-response-tool-comment",
+		eventType: "issue_comment",
+		payload: issueCommentPayload(
+			8117,
+			"Review response: no changes. The Playwright cache path is working as intended.",
+		),
+		expectedForwarded: false,
+		expectedTriggerKind: null,
+	},
+	{
 		name: "evidence issue comment created",
 		deliveryId: "contract-issue-evidence-comment",
 		eventType: "issue_comment",

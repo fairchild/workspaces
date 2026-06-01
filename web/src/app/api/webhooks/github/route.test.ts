@@ -338,6 +338,17 @@ describe("PR review trigger relevance classifier", () => {
 		);
 		expectSkip(
 			classifyPrReviewTrigger(
+				"issue_comment",
+				"created",
+				makeIssueCommentPayload(
+					"Review response: no changes. The Playwright cache path is working as intended.",
+				),
+			),
+			"non_evidence_comment",
+			"metadata",
+		);
+		expectSkip(
+			classifyPrReviewTrigger(
 				"pull_request_review_comment",
 				"created",
 				makeReviewCommentPayload(),
@@ -703,6 +714,11 @@ describe("/api/webhooks/github POST", () => {
 			await POST(
 				makeIssueCommentRequest(
 					"Managed review approved with no requested changes. Local and CI validation are green.",
+				),
+			);
+			await POST(
+				makeIssueCommentRequest(
+					"Review response: no changes. The Playwright cache path is working as intended.",
 				),
 			);
 			expect(mocks.triggerPrReview).not.toHaveBeenCalled();

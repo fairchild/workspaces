@@ -157,7 +157,7 @@ async function handleAuthSession(request: Request, env: Env): Promise<Response> 
 // ---------------------------------------------------------------------------
 
 const EVIDENCE_SIGNAL =
-  /(evidence\.cloudcompute\.com|^Evidence:|swift test|playwright|screenshot|recording|validation)/im;
+  /(evidence\.cloudcompute\.com|^\s*(?:Evidence|Validation):)/im;
 
 function isBotSender(payload: Record<string, unknown>): boolean {
   const sender = payload.sender as Record<string, unknown> | undefined;
