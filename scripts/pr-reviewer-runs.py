@@ -9,8 +9,12 @@ This is the first command to run when the managed PR reviewer looks stuck. It
 asks the protected production monitor route for the ReviewRun database view and
 prints the current queue in operator terms:
 
-- ``missingRuns``: a reviewer-eligible webhook exists, but no ReviewRun row was
-  created. Investigate trigger/ingress.
+- ``candidateRunKeys``: reviewer-eligible webhook deliveries grouped by PR/head
+  before terminal or superseded history is removed.
+- ``eligibleRunKeys``: the current actionable keys after closed PRs and older
+  triggers for the same PR are coalesced away.
+- ``missingRuns``: an actionable key exists, but no ReviewRun row was created.
+  Investigate trigger/ingress.
 - ``starting``: a ReviewRun row exists, but the managed-agent session id has not
   been recorded yet. Briefly normal immediately after pickup.
 - ``stuckStarting``: a starting row is old enough to need attention.
@@ -196,7 +200,10 @@ def print_report(status: int, payload: dict[str, Any]) -> None:
     print(
         "events "
         f"eligible={as_int(payload, 'eligibleEvents')} "
+        f"candidate_keys={as_int(payload, 'candidateRunKeys')} "
         f"run_keys={as_int(payload, 'eligibleRunKeys')} "
+        f"terminal_keys={as_int(payload, 'terminalRunKeys')} "
+        f"superseded_keys={as_int(payload, 'supersededTriggerRunKeys')} "
         f"missing_keys={as_int(payload, 'missingRunKeys') or as_int(payload, 'missingRuns')} "
         f"attention={as_int(payload, 'attentionRequired')}"
     )

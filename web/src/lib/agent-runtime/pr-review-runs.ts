@@ -1803,7 +1803,13 @@ export async function listRecentPrReviewRuns(input: {
 			"coalesced_trigger_source_id",
 			"coalesced_at",
 		])
-		.where("created_at", ">=", input.sinceIso)
+		.where((eb) =>
+			eb.or([
+				eb("created_at", ">=", input.sinceIso),
+				eb("updated_at", ">=", input.sinceIso),
+				eb("coalesced_at", ">=", input.sinceIso),
+			]),
+		)
 		.where("repo_full_name", "=", input.repoFullName)
 		.execute();
 
