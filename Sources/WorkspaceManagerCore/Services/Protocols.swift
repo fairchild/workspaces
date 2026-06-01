@@ -14,7 +14,7 @@ public struct NewWorkspaceInfo: Sendable {
     public let name: String
     public let path: URL
     public let gitBranch: String
-    /// Non-fatal issues encountered during creation (e.g. branch creation failed, setup script non-zero).
+    /// Non-fatal issues encountered during creation (e.g. setup script non-zero).
     public let warnings: [String]
 
     public init(name: String, path: URL, gitBranch: String, warnings: [String] = []) {
@@ -75,8 +75,7 @@ public struct LocalWorkspaceContext: Sendable, Equatable {
 
 public enum WorkspaceCreationPhase: String, CaseIterable, Sendable {
     case preparing
-    case copyingRepository
-    case creatingBranch
+    case creatingWorktree
     case runningSetupScript
     case finished
 }
@@ -88,6 +87,7 @@ public protocol GitServiceProtocol: Sendable {
     func getRemoteURL(at path: URL) async throws -> String?
     func getCurrentBranch(at path: URL) async throws -> String?
     func createBranch(_ name: String, at path: URL) async throws
+    func createWorktree(branchName: String, at destination: URL, from source: URL) async throws
     func checkoutBranch(_ name: String, at path: URL) async throws
     func getFileTree(at path: URL, maxDepth: Int) async throws -> FileNode
     func diff(file: String, at path: URL) async throws -> UnifiedDiff

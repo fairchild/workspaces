@@ -22,8 +22,8 @@ Think of it as **a terminal session manager for your code portfolio, with worksp
 - **Repo Overview Launcher**: Clicking a repo opens an overview with workspace and web-view actions
 - **Persistent Terminal Sessions**: Repo and workspace terminals resume instead of restarting from scratch
 - **Scoped Web Views**: Global, repo-owned, and workspace-owned web views live alongside terminal contexts
-- **Workspace Creation**: Create isolated workspace copies per repo
-- **Inline Workspace Progress**: Repo rows show coarse creation progress while a workspace copy/setup is in flight
+- **Workspace Creation**: Create isolated git worktree workspaces per repo
+- **Inline Workspace Progress**: Repo rows show coarse creation progress while worktree creation/setup is in flight
 - **Lifecycle Hooks**: `setup.sh` runs after creation, `archive.sh` runs on close
 - **Embedded Terminal**: GhosttyKit (`libghostty`) terminal as the primary interface
 - **Two-Pane Split Control**: Ghostty split actions can create, focus, resize, and equalize the current two-pane stack

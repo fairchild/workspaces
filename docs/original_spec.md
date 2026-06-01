@@ -472,15 +472,15 @@ actor WorkspaceService {
 1. Sanitize name for filesystem
 2. Create directory path: `{workspacesRoot}/{repo.name}/{sanitizedName}`
 3. Check doesn't already exist
-4. Copy repo using `ditto --rsrc`
-5. Create git branch `workspace/{name}` (best effort, don't fail if git fails)
+4. Create git worktree at that path with branch `workspace/{name}`
+5. Fail clearly and clean up if branch or worktree creation fails
 6. **Run `setup.sh` if exists** (capture output, show in terminal)
 7. Return Workspace model (caller inserts into SwiftData)
 
 **Workspace Archive/Delete Steps**:
 1. **Run `archive.sh` if exists** (capture output, show in terminal)
 2. Update status to archived OR delete from SwiftData
-3. Optionally delete workspace directory from disk
+3. Optionally remove the workspace directory/worktree from disk
 
 **Lifecycle Script Execution**:
 ```swift

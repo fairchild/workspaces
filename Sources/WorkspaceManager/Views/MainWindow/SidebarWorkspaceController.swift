@@ -58,10 +58,8 @@ struct SidebarWorkspaceController {
         switch phase {
         case .preparing:
             return "Preparing workspace..."
-        case .copyingRepository:
-            return "Copying repository..."
-        case .creatingBranch:
-            return "Creating branch..."
+        case .creatingWorktree:
+            return "Creating git worktree..."
         case .runningSetupScript:
             return "Running setup script..."
         case .finished:
