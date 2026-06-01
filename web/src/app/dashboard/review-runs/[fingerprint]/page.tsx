@@ -4,6 +4,7 @@ import { getSession } from "@/lib/auth-server";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import styles from "./page.module.css";
+import { ReviewRunRecoveryAction } from "./review-run-recovery-action";
 import { ReviewRunTranscript } from "./review-run-transcript";
 
 export const dynamic = "force-dynamic";
@@ -127,6 +128,10 @@ export default async function ReviewRunPage({
 						Failure recorded {new Date(run.failedAt).toLocaleString()}
 					</small>
 				)}
+				<ReviewRunRecoveryAction
+					fingerprint={run.fingerprint}
+					recovery={run.recovery}
+				/>
 			</section>
 
 			{run.failureMessage && (

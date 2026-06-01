@@ -7,11 +7,18 @@ import {
 	getOrCreateEnvironment,
 } from "./managed-agents-cache";
 import {
+	type ActivePrReviewRunSuccessor,
 	type BrokerPrReviewRun,
+	type PrReviewRunDetails,
 	type PrReviewRunReviewIntent,
+	type PrReviewRunSuccessor,
 	beginPrReviewProjectionAttempt,
 	classifyPrReviewProjectionError,
 	computeRunFingerprint,
+	getActivePrReviewRunSuccessor,
+	getNewerCurrentHeadPrReviewRun,
+	getPrReviewRunByFingerprint,
+	getPrReviewRunByTrigger,
 	listPrReviewProjectionsForRun,
 	listPrReviewRunsForBroker,
 	recordPrReviewProjectionFailure,
@@ -115,7 +122,8 @@ export type PrReviewTriggerKind =
 	| "synchronize"
 	| "edited"
 	| "evidence_comment"
-	| "superseded_retry";
+	| "superseded_retry"
+	| "manual_retry";
 
 export interface PrReviewTrigger {
 	kind: PrReviewTriggerKind;
@@ -730,7 +738,7 @@ async function postGitHubReviewIntent(
 	githubToken: string,
 	payload: PrReviewPayload,
 	intent: PrReviewIntent,
-	options: { fingerprint?: string } = {},
+	options: { fingerprint?: string; existingReviewId?: string | null } = {},
 ): Promise<{ reviewId: string | null }> {
 	const [owner, repo] = payload.repoFullName.split("/");
 	if (!owner || !repo) {
@@ -759,7 +767,16 @@ async function postGitHubReviewIntent(
 			})
 		: null;
 	if (projection && !projection.shouldProject) {
-		return { reviewId: projection.observedExternalId };
+		return {
+			reviewId:
+				projection.observedExternalId ?? options.existingReviewId ?? null,
+		};
+	}
+	if (projection && options.existingReviewId) {
+		await recordPrReviewProjectionSuccess(projection.projectionId, {
+			observedExternalId: options.existingReviewId,
+		});
+		return { reviewId: options.existingReviewId };
 	}
 
 	let reviewRes: Response;
@@ -1198,7 +1215,10 @@ async function publishReviewRunIntent(
 			githubToken,
 			payload,
 			intent,
-			{ fingerprint: run.fingerprint },
+			{
+				fingerprint: run.fingerprint,
+				existingReviewId: run.githubReviewId,
+			},
 		);
 		reviewId = postedReview.reviewId;
 		await postManagedReviewStatus(
@@ -1241,6 +1261,432 @@ async function publishReviewRunIntent(
 			retryable,
 		};
 	}
+}
+
+type PrReviewRunRecoveryAction = "retry_execution" | "repair_projection";
+
+export type PrReviewRunRecoveryOutcome =
+	| "execution_retry_started"
+	| "execution_retry_already_active"
+	| "execution_retry_already_exists"
+	| "projection_repaired"
+	| "projection_already_projected";
+
+export type PrReviewRunRecoveryFailureReason =
+	| "not_found"
+	| "reviewer_unavailable"
+	| "current_head_unavailable"
+	| "stale_run"
+	| "superseded_run"
+	| "run_still_active"
+	| "active_successor"
+	| "newer_run_exists"
+	| "failure_not_retryable"
+	| "missing_review_intent"
+	| "unsupported_state"
+	| "retry_not_started"
+	| "projection_repair_failed";
+
+export type PrReviewRunRecoveryResult =
+	| {
+			ok: true;
+			action: PrReviewRunRecoveryAction;
+			outcome: PrReviewRunRecoveryOutcome;
+			fingerprint: string;
+			currentHeadSha: string;
+			message: string;
+			sessionId?: string | null;
+			successorFingerprint?: string;
+			brokerRun?: PrReviewBrokerRunResult;
+	  }
+	| {
+			ok: false;
+			status: number;
+			reason: PrReviewRunRecoveryFailureReason;
+			error: string;
+			currentHeadSha?: string;
+			activeSuccessor?: ActivePrReviewRunSuccessor;
+			successor?: PrReviewRunSuccessor;
+			brokerRun?: PrReviewBrokerRunResult;
+	  };
+
+const MANUAL_RETRY_TRIGGER_KIND = "manual_retry";
+
+function manualRetryTriggerSource(
+	failedFingerprint: string,
+	currentHeadSha: string,
+): string {
+	return `manual-retry-${failedFingerprint}-head-${currentHeadSha}`;
+}
+
+function recoveryFailure(
+	status: number,
+	reason: PrReviewRunRecoveryFailureReason,
+	error: string,
+	extra: Omit<
+		Extract<PrReviewRunRecoveryResult, { ok: false }>,
+		"ok" | "status" | "reason" | "error"
+	> = {},
+): PrReviewRunRecoveryResult {
+	return { ok: false, status, reason, error, ...extra };
+}
+
+function payloadFromRunMetadata(
+	run: Pick<PrReviewRunDetails, "repoFullName" | "prNumber">,
+	metadata: NonNullable<Awaited<ReturnType<typeof fetchPrHeadMetadata>>>,
+): PrReviewPayload {
+	const [, repo] = run.repoFullName.split("/");
+	return {
+		number: run.prNumber,
+		title: metadata.title,
+		htmlUrl: metadata.htmlUrl,
+		body: metadata.body,
+		headRef: metadata.headRef,
+		headSha: metadata.headSha,
+		baseRef: metadata.baseRef,
+		repoUrl: `https://github.com/${run.repoFullName}`,
+		repoFullName: run.repoFullName,
+		repoName: repo ?? "",
+	};
+}
+
+function brokerRunFromDetails(run: PrReviewRunDetails): BrokerPrReviewRun {
+	return {
+		fingerprint: run.fingerprint,
+		repoFullName: run.repoFullName,
+		prNumber: run.prNumber,
+		headSha: run.headSha,
+		triggerKind: run.triggerKind,
+		triggerSourceId: run.triggerSourceId,
+		status: run.status,
+		projectionStatus: run.projectionStatus,
+		sessionId: run.sessionId,
+		githubReviewId: run.githubReviewId,
+		createdAt: run.createdAt,
+		updatedAt: run.updatedAt,
+		reviewIntent: run.reviewIntent,
+		coalescedHeadSha: run.coalescedHeadSha,
+		coalescedTriggerKind: run.coalescedTriggerKind,
+		coalescedTriggerSourceId: run.coalescedTriggerSourceId,
+		coalescedAt: run.coalescedAt,
+	};
+}
+
+function matchingManualRetrySuccessor(
+	successor: ActivePrReviewRunSuccessor | PrReviewRunSuccessor | null,
+	triggerSourceId: string,
+): successor is ActivePrReviewRunSuccessor | PrReviewRunSuccessor {
+	return (
+		successor?.triggerKind === MANUAL_RETRY_TRIGGER_KIND &&
+		successor.triggerSourceId === triggerSourceId
+	);
+}
+
+function retryOutcomeForExistingRun(
+	run: PrReviewRunSuccessor | PrReviewRunDetails,
+): PrReviewRunRecoveryOutcome {
+	return run.status === "started"
+		? "execution_retry_already_active"
+		: "execution_retry_already_exists";
+}
+
+async function fetchLiveCurrentHeadForRecovery(
+	githubToken: string,
+	run: Pick<PrReviewRunDetails, "repoFullName" | "prNumber">,
+): Promise<NonNullable<
+	Awaited<ReturnType<typeof fetchPrHeadMetadata>>
+> | null> {
+	const metadata = await fetchPrHeadMetadata(
+		githubToken,
+		run.repoFullName,
+		run.prNumber,
+	);
+	if (!metadata?.headSha) return null;
+	return metadata;
+}
+
+async function retryFailedReviewRun(
+	run: PrReviewRunDetails,
+	currentPayload: PrReviewPayload,
+	activeSuccessor: ActivePrReviewRunSuccessor | null,
+	newerCurrentHeadRun: PrReviewRunSuccessor | null,
+): Promise<PrReviewRunRecoveryResult> {
+	const triggerSourceId = manualRetryTriggerSource(
+		run.fingerprint,
+		currentPayload.headSha,
+	);
+	if (matchingManualRetrySuccessor(activeSuccessor, triggerSourceId)) {
+		return {
+			ok: true,
+			action: "retry_execution",
+			outcome: "execution_retry_already_active",
+			fingerprint: run.fingerprint,
+			currentHeadSha: currentPayload.headSha,
+			successorFingerprint: activeSuccessor.fingerprint,
+			sessionId: activeSuccessor.sessionId,
+			message: "A deterministic manual retry is already active for this run.",
+		};
+	}
+	if (matchingManualRetrySuccessor(newerCurrentHeadRun, triggerSourceId)) {
+		return {
+			ok: true,
+			action: "retry_execution",
+			outcome: retryOutcomeForExistingRun(newerCurrentHeadRun),
+			fingerprint: run.fingerprint,
+			currentHeadSha: currentPayload.headSha,
+			successorFingerprint: newerCurrentHeadRun.fingerprint,
+			sessionId: newerCurrentHeadRun.sessionId,
+			message: "The deterministic manual retry already exists.",
+		};
+	}
+	if (activeSuccessor) {
+		return recoveryFailure(
+			409,
+			"active_successor",
+			"A newer ReviewRun is already active for this PR.",
+			{ currentHeadSha: currentPayload.headSha, activeSuccessor },
+		);
+	}
+	if (newerCurrentHeadRun) {
+		return recoveryFailure(
+			409,
+			"newer_run_exists",
+			"A newer ReviewRun already exists for the current PR head.",
+			{
+				currentHeadSha: currentPayload.headSha,
+				successor: newerCurrentHeadRun,
+			},
+		);
+	}
+
+	const sessionId = await triggerPrReview(currentPayload, {
+		kind: MANUAL_RETRY_TRIGGER_KIND,
+		triggerSourceId,
+		reason: `Manual operator retry for failed ReviewRun ${run.fingerprint}.`,
+	});
+	if (sessionId) {
+		const successor = await getPrReviewRunByTrigger({
+			repoFullName: run.repoFullName,
+			prNumber: run.prNumber,
+			triggerKind: MANUAL_RETRY_TRIGGER_KIND,
+			triggerSourceId,
+		});
+		return {
+			ok: true,
+			action: "retry_execution",
+			outcome: "execution_retry_started",
+			fingerprint: run.fingerprint,
+			currentHeadSha: currentPayload.headSha,
+			successorFingerprint: successor?.fingerprint,
+			sessionId,
+			message: "Started a manual execution retry for the current PR head.",
+		};
+	}
+
+	const existingRetry = await getPrReviewRunByTrigger({
+		repoFullName: run.repoFullName,
+		prNumber: run.prNumber,
+		triggerKind: MANUAL_RETRY_TRIGGER_KIND,
+		triggerSourceId,
+	});
+	if (existingRetry) {
+		return {
+			ok: true,
+			action: "retry_execution",
+			outcome: retryOutcomeForExistingRun(existingRetry),
+			fingerprint: run.fingerprint,
+			currentHeadSha: currentPayload.headSha,
+			successorFingerprint: existingRetry.fingerprint,
+			sessionId: existingRetry.sessionId,
+			message: "The deterministic manual retry already exists.",
+		};
+	}
+
+	return recoveryFailure(
+		503,
+		"retry_not_started",
+		"Manual retry did not start; reviewer credentials or runtime may be unavailable.",
+		{ currentHeadSha: currentPayload.headSha },
+	);
+}
+
+async function repairCompletedReviewRunProjection(
+	githubToken: string,
+	run: PrReviewRunDetails,
+	currentPayload: PrReviewPayload,
+	activeSuccessor: ActivePrReviewRunSuccessor | null,
+	newerCurrentHeadRun: PrReviewRunSuccessor | null,
+): Promise<PrReviewRunRecoveryResult> {
+	if (activeSuccessor) {
+		return recoveryFailure(
+			409,
+			"active_successor",
+			"A newer ReviewRun is already active for this PR.",
+			{ currentHeadSha: currentPayload.headSha, activeSuccessor },
+		);
+	}
+	if (newerCurrentHeadRun) {
+		return recoveryFailure(
+			409,
+			"newer_run_exists",
+			"A newer ReviewRun already exists for the current PR head.",
+			{
+				currentHeadSha: currentPayload.headSha,
+				successor: newerCurrentHeadRun,
+			},
+		);
+	}
+
+	const intent = persistedReviewIntentForRun(run.reviewIntent);
+	if (!intent) {
+		return recoveryFailure(
+			409,
+			"missing_review_intent",
+			"Completed ReviewRun has no persisted review intent to repair.",
+			{ currentHeadSha: currentPayload.headSha },
+		);
+	}
+
+	const brokerRun = await publishReviewRunIntent(
+		githubToken,
+		brokerRunFromDetails(run),
+		currentPayload,
+		{
+			repoFullName: currentPayload.repoFullName,
+			number: currentPayload.number,
+			headSha: currentPayload.headSha,
+			htmlUrl: currentPayload.htmlUrl,
+			fingerprint: run.fingerprint,
+		},
+		intent,
+	);
+	if (brokerRun.outcome === "applied") {
+		return {
+			ok: true,
+			action: "repair_projection",
+			outcome: "projection_repaired",
+			fingerprint: run.fingerprint,
+			currentHeadSha: currentPayload.headSha,
+			brokerRun,
+			message: "Repaired GitHub projection for the completed ReviewRun.",
+		};
+	}
+
+	return recoveryFailure(
+		brokerRun.outcome === "retryable" ? 503 : 422,
+		"projection_repair_failed",
+		brokerRun.error ?? "Projection repair failed.",
+		{ currentHeadSha: currentPayload.headSha, brokerRun },
+	);
+}
+
+export async function recoverPrReviewRun(
+	fingerprint: string,
+): Promise<PrReviewRunRecoveryResult> {
+	const run = await getPrReviewRunByFingerprint(fingerprint);
+	if (!run) {
+		return recoveryFailure(404, "not_found", "ReviewRun not found.");
+	}
+
+	if (run.status === "superseded") {
+		return recoveryFailure(
+			409,
+			"superseded_run",
+			"Superseded ReviewRuns cannot be retried or repaired.",
+		);
+	}
+	if (run.status === "started") {
+		return recoveryFailure(
+			409,
+			"run_still_active",
+			"Active ReviewRuns cannot be retried or repaired.",
+		);
+	}
+	if (run.status === "completed" && run.projectionStatus === "projected") {
+		return {
+			ok: true,
+			action: "repair_projection",
+			outcome: "projection_already_projected",
+			fingerprint: run.fingerprint,
+			currentHeadSha: run.headSha,
+			message: "ReviewRun is already published; no repair was needed.",
+		};
+	}
+
+	const githubToken = await resolveGitHubToken();
+	if (!githubToken) {
+		return recoveryFailure(
+			503,
+			"reviewer_unavailable",
+			"Missing GitHub App credentials or reviewer is disabled.",
+		);
+	}
+
+	const currentHead = await fetchLiveCurrentHeadForRecovery(githubToken, run);
+	if (!currentHead) {
+		return recoveryFailure(
+			502,
+			"current_head_unavailable",
+			"Could not resolve the current PR head from GitHub.",
+		);
+	}
+	if (run.headSha !== currentHead.headSha) {
+		return recoveryFailure(
+			409,
+			"stale_run",
+			`ReviewRun targets ${run.headSha}; current PR head is ${currentHead.headSha}.`,
+			{ currentHeadSha: currentHead.headSha },
+		);
+	}
+
+	const currentPayload = payloadFromRunMetadata(run, currentHead);
+	const activeSuccessor = await getActivePrReviewRunSuccessor({
+		fingerprint: run.fingerprint,
+		repoFullName: run.repoFullName,
+		prNumber: run.prNumber,
+		createdAt: run.createdAt,
+	});
+	const newerCurrentHeadRun = await getNewerCurrentHeadPrReviewRun({
+		fingerprint: run.fingerprint,
+		repoFullName: run.repoFullName,
+		prNumber: run.prNumber,
+		headSha: currentPayload.headSha,
+		createdAt: run.createdAt,
+	});
+
+	if (run.status === "failed") {
+		if (run.failureRetryable === false) {
+			return recoveryFailure(
+				409,
+				"failure_not_retryable",
+				"This failed ReviewRun is marked non-retryable.",
+				{ currentHeadSha: currentPayload.headSha },
+			);
+		}
+		return retryFailedReviewRun(
+			run,
+			currentPayload,
+			activeSuccessor,
+			newerCurrentHeadRun,
+		);
+	}
+
+	if (run.status === "completed" && run.projectionStatus === "failed") {
+		return repairCompletedReviewRunProjection(
+			githubToken,
+			run,
+			currentPayload,
+			activeSuccessor,
+			newerCurrentHeadRun,
+		);
+	}
+
+	return recoveryFailure(
+		409,
+		"unsupported_state",
+		"This ReviewRun is not failed or projection-failed.",
+		{ currentHeadSha: currentPayload.headSha },
+	);
 }
 
 function countBrokerRun(
