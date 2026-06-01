@@ -10,7 +10,9 @@ needs to learn the system through scenarios before operating or changing it. Use
 [`pr-reviewer.md`](pr-reviewer.md) for runtime configuration, webhook ingress,
 broker scheduling, canaries, and debugging commands. The current storage
 reference in [`review-run-schema.sql`](review-run-schema.sql) mirrors the
-ReviewRun-centered tables used by the web runtime.
+ReviewRun-centered tables used by the web runtime. Use
+[`milestone-validation.md`](milestone-validation.md) for the latest closure
+evidence and maintainer understanding check.
 
 The operational rule is simple: **ReviewRun rows are the source of truth**.
 GitHub commit statuses, GitHub reviews, dashboard pages, and health reports are
