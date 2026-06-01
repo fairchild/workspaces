@@ -5,24 +5,10 @@ on Anthropic's infrastructure, reads the diff, explores surrounding code, runs
 tests, and returns a structured review intent. The web server validates that
 intent and posts the GitHub review with the PR reviewer GitHub App token.
 
-## Architecture
-
-```
-GitHub PR opened
-→ Cloudflare webhook relay
-→ signed forward to web/api/webhooks/github (webhook route)
-→ triggerPrReview() (fire-and-forget)
-→ record new run or coalesce into the active run, then post pending `WorkSpaces Managed Review` commit status
-→ getOrCreateAgent/Environment (idempotent, DB-cached)
-→ sessions.create (mounts repo at PR branch)
-→ events.send (kickoff message)
-→ Agent runs autonomously on Anthropic → returns review-intent JSON
-→ scheduled/protected broker route validates intent → posts GitHub review
-→ commit status flips to success or failure
-```
-
-For the target source-of-truth model and schema sketch, see
-[`README.md`](README.md) and [`review-run-schema.sql`](review-run-schema.sql).
+For the current ReviewRun architecture, lifecycle vocabulary, diagrams, and
+operator triage surfaces, start with [`architecture.md`](architecture.md). This
+file is the runtime and operations reference: configuration, ingress canaries,
+broker scheduling, and debugging commands.
 
 ## Key Files
 
