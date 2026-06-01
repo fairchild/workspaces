@@ -297,14 +297,4 @@ struct SidebarWorkspaceController {
         }
     }
 
-    private static func cleanupWorkspaceDirectoryAfterFailedPersistence(_ workspaceURL: URL) {
-        try? FileManager.default.removeItem(at: workspaceURL)
-
-        let parentDirectory = workspaceURL.deletingLastPathComponent()
-        if let contents = try? FileManager.default.contentsOfDirectory(atPath: parentDirectory.path),
-            contents.isEmpty
-        {
-            try? FileManager.default.removeItem(at: parentDirectory)
-        }
-    }
 }

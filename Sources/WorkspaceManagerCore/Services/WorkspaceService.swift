@@ -2,7 +2,7 @@
 //  WorkspaceService.swift
 //  WorkspaceManager
 //
-//  Workspace creation, git worktree materialization, lifecycle hooks, and management
+//  Workspace creation, lifecycle hooks, and management
 //
 
 import Foundation
@@ -13,7 +13,7 @@ private let log = Logger(subsystem: "com.cloudcompute.workspaces", category: "Wo
 public actor WorkspaceService: WorkspaceServiceProtocol {
     public static let shared = WorkspaceService()
 
-    private let gitService: any GitServiceProtocol
+    private let materializer: any WorkspaceMaterializer
 
     // MARK: - Workspace Root Configuration
 
@@ -40,15 +40,23 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
     }
 
     public init(gitService: any GitServiceProtocol = GitService.shared) {
-        self.gitService = gitService
+        self.init(materializer: GitWorktreeWorkspaceMaterializer(gitService: gitService))
+    }
+
+    init(materializer: any WorkspaceMaterializer) {
+        self.materializer = materializer
+        Self.ensureDefaultWorkspacesRootExists()
+    }
+
+    private static func ensureDefaultWorkspacesRootExists() {
         do {
             try FileManager.default.createDirectory(
-                at: Self.defaultWorkspacesRoot,
+                at: defaultWorkspacesRoot,
                 withIntermediateDirectories: true
             )
         } catch {
             log.warning(
-                "Failed to create default workspaces root at \(Self.defaultWorkspacesRoot.path): \(error.localizedDescription)"
+                "Failed to create default workspaces root at \(defaultWorkspacesRoot.path): \(error.localizedDescription)"
             )
         }
     }
@@ -88,22 +96,30 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
 
         var warnings: [String] = []
 
-        let branchName = "workspace/\(sanitizedName)"
         await progress?(.creatingWorktree)
+        let materializedWorkspace: MaterializedWorkspace
         do {
-            try await gitService.createWorktree(
-                branchName: branchName,
+            materializedWorkspace = try await materializer.materializeWorkspace(
+                named: sanitizedName,
                 at: workspaceDir,
                 from: repoLocalURL
             )
         } catch {
-            try? await WorkspaceDirectoryRemover.remove(at: workspaceDir)
-            throw WorkspaceError.worktreeCreationFailed(reason: error.localizedDescription)
+            try? await materializer.removeWorkspace(at: workspaceDir)
+            throw WorkspaceError.materializationFailed(
+                operation: materializer.failureOperationDescription,
+                reason: error.localizedDescription
+            )
+        }
+        guard FileManager.default.fileExists(atPath: workspaceDir.path) else {
+            try? await materializer.removeWorkspace(at: workspaceDir)
+            throw WorkspaceError.materializationFailed(
+                operation: materializer.failureOperationDescription,
+                reason: "Materializer did not create workspace directory at \(workspaceDir.path)"
+            )
         }
 
         do {
-            let currentBranch = try? await gitService.getCurrentBranch(at: workspaceDir)
-
             await progress?(.runningSetupScript)
             let setupResult = try await runLifecycleScript("setup.sh", in: workspaceDir)
             if !setupResult.stdout.isEmpty {
@@ -120,11 +136,11 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
             return NewWorkspaceInfo(
                 name: name,
                 path: workspaceDir,
-                gitBranch: currentBranch ?? branchName,
+                gitBranch: materializedWorkspace.gitBranch,
                 warnings: warnings
             )
         } catch {
-            try? await WorkspaceDirectoryRemover.remove(at: workspaceDir)
+            try? await materializer.removeWorkspace(at: workspaceDir)
             throw error
         }
     }
@@ -281,7 +297,7 @@ public enum WorkspaceError: LocalizedError {
     case notAGitRepo
     case alreadyExists(name: String)
     case invalidName(name: String)
-    case worktreeCreationFailed(reason: String)
+    case materializationFailed(operation: String, reason: String)
     case deletionFailed(reason: String)
 
     public var errorDescription: String? {
@@ -292,8 +308,8 @@ public enum WorkspaceError: LocalizedError {
             return "A workspace named '\(name)' already exists"
         case .invalidName(let name):
             return "Workspace name '\(name)' is not valid"
-        case .worktreeCreationFailed(let reason):
-            return "Failed to create git worktree: \(reason)"
+        case .materializationFailed(let operation, let reason):
+            return "Failed to \(operation): \(reason)"
         case .deletionFailed(let reason):
             return "Failed to delete workspace: \(reason)"
         }
