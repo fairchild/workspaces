@@ -75,8 +75,7 @@ struct SidebarViewTests {
     @Test("Local creation message matches progress phase")
     func localCreationMessageMatchesPhase() {
         #expect(SidebarWorkspaceController.localCreationMessage(for: .preparing) == "Preparing workspace...")
-        #expect(SidebarWorkspaceController.localCreationMessage(for: .copyingRepository) == "Copying repository...")
-        #expect(SidebarWorkspaceController.localCreationMessage(for: .creatingBranch) == "Creating branch...")
+        #expect(SidebarWorkspaceController.localCreationMessage(for: .creatingWorktree) == "Creating git worktree...")
         #expect(SidebarWorkspaceController.localCreationMessage(for: .runningSetupScript) == "Running setup script...")
         #expect(SidebarWorkspaceController.localCreationMessage(for: .finished) == "Finishing workspace...")
     }

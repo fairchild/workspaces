@@ -301,7 +301,7 @@ The smoke path:
 - auto-confirms Lume setup or repair if needed
 - waits for `workspace_active`
 - runs a host-side `lume ssh <vmName>` probe
-- cleans up the disposable repo, workspace copy, and VM on success
+- cleans up the disposable repo, host workspace, and VM on success
 - preserves all artifacts on failure
 
 Artifacts are written to:

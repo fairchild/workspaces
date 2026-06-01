@@ -262,7 +262,7 @@ public actor LumeWorkspaceProvider: WorkspaceProviderProtocol {
                 )
             }
             if let localInfo {
-                cleanupWorkspaceDirectory(localInfo.path)
+                try? await WorkspaceDirectoryRemover.remove(at: localInfo.path)
             }
             throw error
         }
@@ -902,17 +902,6 @@ public actor LumeWorkspaceProvider: WorkspaceProviderProtocol {
             )
         } catch {
             throw WorkspaceProviderError.unavailable(error.localizedDescription)
-        }
-    }
-
-    private func cleanupWorkspaceDirectory(_ workspaceURL: URL) {
-        try? fileManager.removeItem(at: workspaceURL)
-
-        let parentDirectory = workspaceURL.deletingLastPathComponent()
-        if let contents = try? fileManager.contentsOfDirectory(atPath: parentDirectory.path),
-            contents.isEmpty
-        {
-            try? fileManager.removeItem(at: parentDirectory)
         }
     }
 

@@ -44,7 +44,7 @@
 │                 │                      │                            │
 │  • getStatus()  │  • createWorkspace() │    LocalBackend            │
 │  • getFileTree()│  • deleteWorkspace() │    DaytonaBackend          │
-│  • getBranch()  │  • copyRepo()        │                            │
+│  • getBranch()  │  • createWorktree()  │                            │
 └─────────────────┴──────────────────────┴────────────────────────────┘
                               │
                               ▼
@@ -319,9 +319,7 @@ User right-clicks repo → "New Workspace..."
          │
          ├─→ Create directory in workspaces root
          │
-         ├─→ Copy repo with `ditto`
-         │
-         ├─→ Create git branch (optional)
+         ├─→ Create git worktree and workspace branch
          │
          ├─→ Run setup.sh if exists (show output in terminal)
          │
