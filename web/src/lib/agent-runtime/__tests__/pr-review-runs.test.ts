@@ -86,6 +86,48 @@ describe("recordRunStart", () => {
 		expect(row?.coalescedAt).toEqual(expect.any(String));
 	});
 
+	it("keeps only the latest synchronize trigger while a run is active", async () => {
+		const { getPrReviewRunByFingerprint, recordRunStart } = await loadModule();
+		const active = makeInput({
+			fingerprint: "fp_active_sync",
+			headSha: "head-a",
+			triggerKind: "opened",
+			triggerSourceId: "head-a",
+		});
+		const firstPush = makeInput({
+			fingerprint: "fp_sync_head_b",
+			headSha: "head-b",
+			triggerKind: "synchronize",
+			triggerSourceId: "head-b",
+		});
+		const secondPush = makeInput({
+			fingerprint: "fp_sync_head_c",
+			headSha: "head-c",
+			triggerKind: "synchronize",
+			triggerSourceId: "head-c",
+		});
+
+		await expect(recordRunStart(active)).resolves.toEqual({ inserted: true });
+		await expect(recordRunStart(firstPush)).resolves.toMatchObject({
+			inserted: false,
+			coalesced: true,
+			activeFingerprint: active.fingerprint,
+		});
+		await expect(recordRunStart(secondPush)).resolves.toMatchObject({
+			inserted: false,
+			coalesced: true,
+			activeFingerprint: active.fingerprint,
+		});
+
+		await expect(
+			getPrReviewRunByFingerprint(active.fingerprint),
+		).resolves.toMatchObject({
+			coalescedHeadSha: "head-c",
+			coalescedTriggerKind: "synchronize",
+			coalescedTriggerSourceId: "head-c",
+		});
+	});
+
 	it("clears the active claim when a run reaches a terminal state", async () => {
 		const { recordRunStart, recordRunResult } = await loadModule();
 		const first = makeInput({
@@ -326,8 +368,431 @@ describe("listStartedPrReviewRuns", () => {
 	});
 });
 
+describe("ReviewRun recovery metadata", () => {
+	it("exposes execution retry availability for retryable failed runs", async () => {
+		const { getPrReviewRunByFingerprint, recordRunStart, recordRunResult } =
+			await loadModule();
+		const failed = makeInput({ fingerprint: "fp_recovery_failed" });
+
+		await recordRunStart(failed);
+		await recordRunResult(failed.fingerprint, {
+			sessionId: "sesn_failed",
+			status: "failed",
+			error: "session output failed",
+		});
+
+		await expect(
+			getPrReviewRunByFingerprint(failed.fingerprint),
+		).resolves.toMatchObject({
+			recovery: {
+				available: true,
+				action: "retry_execution",
+				reasonCode: "execution_failed",
+			},
+		});
+	});
+
+	it("exposes projection repair availability only with persisted intent", async () => {
+		const { getPrReviewRunByFingerprint, recordRunStart, recordRunResult } =
+			await loadModule();
+		const repair = makeInput({ fingerprint: "fp_recovery_repair" });
+
+		await recordRunStart(repair);
+		await recordRunResult(repair.fingerprint, {
+			sessionId: "sesn_repair",
+			status: "completed",
+			projectionStatus: "failed",
+			projectionError: "GitHub status update failed 503",
+			reviewIntent: {
+				event: "COMMENT",
+				body: "Persisted review body.",
+				labels: [],
+			},
+		});
+
+		await expect(
+			getPrReviewRunByFingerprint(repair.fingerprint),
+		).resolves.toMatchObject({
+			recovery: {
+				available: true,
+				action: "repair_projection",
+				reasonCode: "projection_failed",
+			},
+		});
+	});
+
+	it("finds a newer active successor for safe recovery refusal", async () => {
+		const {
+			getActivePrReviewRunSuccessor,
+			getPrReviewRunByFingerprint,
+			recordRunStart,
+			recordRunResult,
+		} = await loadModule();
+		const failed = makeInput({
+			fingerprint: "fp_successor_failed",
+			headSha: "head-a",
+			triggerSourceId: "head-a",
+		});
+		const successor = makeInput({
+			fingerprint: "fp_successor_active",
+			headSha: "head-b",
+			triggerKind: "manual_retry",
+			triggerSourceId: "manual-retry-fp_successor_failed-head-head-b",
+		});
+
+		await recordRunStart(failed);
+		await recordRunResult(failed.fingerprint, {
+			sessionId: "sesn_failed",
+			status: "failed",
+			error: "session output failed",
+		});
+		const { getDb } = await import("../../db");
+		const oldStamp = new Date(Date.now() - 60 * 1000).toISOString();
+		await getDb()
+			.updateTable("managed_pr_review_runs")
+			.set({ created_at: oldStamp })
+			.where("fingerprint", "=", failed.fingerprint)
+			.execute();
+		await recordRunStart(successor);
+
+		const failedRun = await getPrReviewRunByFingerprint(failed.fingerprint);
+		expect(failedRun).not.toBeNull();
+		await expect(
+			getActivePrReviewRunSuccessor({
+				fingerprint: failedRun?.fingerprint ?? "",
+				repoFullName: failedRun?.repoFullName ?? "",
+				prNumber: failedRun?.prNumber ?? 0,
+				createdAt: failedRun?.createdAt ?? "",
+			}),
+		).resolves.toMatchObject({
+			fingerprint: successor.fingerprint,
+			triggerKind: "manual_retry",
+			triggerSourceId: "manual-retry-fp_successor_failed-head-head-b",
+		});
+	});
+
+	it("finds a newer current-head run so old failures are not retried", async () => {
+		const {
+			getNewerCurrentHeadPrReviewRun,
+			getPrReviewRunByFingerprint,
+			recordRunStart,
+			recordRunResult,
+		} = await loadModule();
+		const failed = makeInput({
+			fingerprint: "fp_newer_failed",
+			headSha: "same-head",
+			triggerSourceId: "same-head",
+		});
+		const newer = makeInput({
+			fingerprint: "fp_newer_terminal",
+			headSha: "same-head",
+			triggerKind: "manual_retry",
+			triggerSourceId: "manual-retry-fp_newer_failed-head-same-head",
+		});
+
+		await recordRunStart(failed);
+		await recordRunResult(failed.fingerprint, {
+			sessionId: "sesn_failed",
+			status: "failed",
+			error: "session output failed",
+		});
+		const { getDb } = await import("../../db");
+		const oldStamp = new Date(Date.now() - 60 * 1000).toISOString();
+		await getDb()
+			.updateTable("managed_pr_review_runs")
+			.set({ created_at: oldStamp })
+			.where("fingerprint", "=", failed.fingerprint)
+			.execute();
+		await recordRunStart(newer);
+		await recordRunResult(newer.fingerprint, {
+			sessionId: "sesn_newer",
+			status: "completed",
+			projectionStatus: "projected",
+		});
+
+		const failedRun = await getPrReviewRunByFingerprint(failed.fingerprint);
+		expect(failedRun).not.toBeNull();
+		await expect(
+			getNewerCurrentHeadPrReviewRun({
+				fingerprint: failedRun?.fingerprint ?? "",
+				repoFullName: failedRun?.repoFullName ?? "",
+				prNumber: failedRun?.prNumber ?? 0,
+				headSha: "same-head",
+				createdAt: failedRun?.createdAt ?? "",
+			}),
+		).resolves.toMatchObject({
+			fingerprint: newer.fingerprint,
+			status: "completed",
+			projectionStatus: "projected",
+		});
+	});
+});
+
+describe("listPrReviewRunsForBroker", () => {
+	it("returns active sessions and completed runs that still need projection", async () => {
+		const {
+			getPrReviewRunByFingerprint,
+			listPrReviewRunsForBroker,
+			recordRunStart,
+			recordRunResult,
+		} = await loadModule();
+		const started = makeInput({
+			fingerprint: "fp_broker_started",
+			prNumber: 10,
+		});
+		const repair = makeInput({
+			fingerprint: "fp_broker_repair",
+			prNumber: 11,
+		});
+		const missingIntent = makeInput({
+			fingerprint: "fp_broker_missing_intent",
+			prNumber: 12,
+		});
+		const projected = makeInput({
+			fingerprint: "fp_broker_projected",
+			prNumber: 13,
+		});
+
+		await recordRunStart(started);
+		await recordRunResult(started.fingerprint, {
+			sessionId: "sesn_started",
+			status: "started",
+		});
+		await recordRunStart(repair);
+		await recordRunResult(repair.fingerprint, {
+			sessionId: "sesn_repair",
+			status: "completed",
+			projectionStatus: "failed",
+			projectionError: "GitHub status update failed 503",
+			reviewIntent: {
+				event: "COMMENT",
+				body: "Persisted review body.",
+				labels: ["refactor"],
+			},
+		});
+		await recordRunStart(missingIntent);
+		await recordRunResult(missingIntent.fingerprint, {
+			sessionId: "sesn_missing",
+			status: "completed",
+			projectionStatus: "failed",
+			projectionError: "missing persisted intent",
+		});
+		await recordRunStart(projected);
+		await recordRunResult(projected.fingerprint, {
+			sessionId: "sesn_projected",
+			status: "completed",
+		});
+
+		const rows = await listPrReviewRunsForBroker();
+
+		expect(rows.map((row) => row.fingerprint).sort()).toEqual([
+			"fp_broker_missing_intent",
+			"fp_broker_repair",
+			"fp_broker_started",
+		]);
+		expect(
+			rows.find((row) => row.fingerprint === repair.fingerprint),
+		).toMatchObject({
+			status: "completed",
+			projectionStatus: "failed",
+			reviewIntent: {
+				event: "COMMENT",
+				body: "Persisted review body.",
+				labels: ["refactor"],
+			},
+		});
+		await expect(
+			getPrReviewRunByFingerprint(repair.fingerprint),
+		).resolves.toMatchObject({
+			status: "completed",
+			projectionStatus: "failed",
+			reviewIntent: {
+				event: "COMMENT",
+				body: "Persisted review body.",
+				labels: ["refactor"],
+			},
+		});
+	});
+});
+
+describe("projection ledger", () => {
+	it("hashes desired payloads stably and records successful projection state", async () => {
+		const {
+			beginPrReviewProjectionAttempt,
+			listPrReviewProjectionsForRun,
+			recordPrReviewProjectionSuccess,
+		} = await loadModule();
+
+		const first = await beginPrReviewProjectionAttempt({
+			runFingerprint: "fp_projection_hash",
+			type: "github_status",
+			projectionKey: "WorkSpaces Managed Review",
+			desiredPayload: { state: "success", description: "done" },
+		});
+		await recordPrReviewProjectionSuccess(first.projectionId, {
+			observedExternalId: "status-1",
+		});
+		await recordPrReviewProjectionSuccess(first.projectionId);
+		const duplicate = await beginPrReviewProjectionAttempt({
+			runFingerprint: "fp_projection_hash",
+			type: "github_status",
+			projectionKey: "WorkSpaces Managed Review",
+			desiredPayload: { description: "done", state: "success" },
+		});
+
+		expect(duplicate).toMatchObject({
+			projectionId: first.projectionId,
+			desiredPayloadHash: first.desiredPayloadHash,
+			shouldProject: false,
+			attempts: 1,
+			state: "projected",
+			observedExternalId: "status-1",
+		});
+		await expect(
+			listPrReviewProjectionsForRun("fp_projection_hash"),
+		).resolves.toMatchObject([
+			{
+				type: "github_status",
+				state: "projected",
+				attempts: 1,
+				observedExternalId: "status-1",
+			},
+		]);
+	});
+
+	it("retries failed desired projections without creating duplicate records", async () => {
+		const {
+			beginPrReviewProjectionAttempt,
+			listPrReviewProjectionsForRun,
+			recordPrReviewProjectionFailure,
+		} = await loadModule();
+		const input = {
+			runFingerprint: "fp_projection_retry",
+			type: "github_review" as const,
+			projectionKey: "final-review",
+			desiredPayload: { event: "COMMENT", body: "retry me", labels: [] },
+		};
+
+		const first = await beginPrReviewProjectionAttempt(input);
+		await recordPrReviewProjectionFailure(first.projectionId, {
+			errorKind: "transient_api",
+			errorText: "GitHub review post failed 503: temporarily unavailable",
+		});
+		const retry = await beginPrReviewProjectionAttempt(input);
+
+		expect(retry).toMatchObject({
+			projectionId: first.projectionId,
+			shouldProject: true,
+			attempts: 2,
+			state: "projecting",
+		});
+		const records = await listPrReviewProjectionsForRun("fp_projection_retry");
+		expect(records).toHaveLength(1);
+		expect(records[0]).toMatchObject({
+			state: "projecting",
+			attempts: 2,
+			errorKind: null,
+			errorText: null,
+		});
+	});
+
+	it("stores bounded redacted projection errors with classified context", async () => {
+		const {
+			beginPrReviewProjectionAttempt,
+			classifyPrReviewProjectionError,
+			listPrReviewProjectionsForRun,
+			recordPrReviewProjectionFailure,
+		} = await loadModule();
+		const secret = `ghp_${"a".repeat(40)}`;
+		const attempt = await beginPrReviewProjectionAttempt({
+			runFingerprint: "fp_projection_error",
+			type: "github_status",
+			projectionKey: "WorkSpaces Managed Review",
+			desiredPayload: { state: "failure", description: "failed" },
+		});
+
+		await recordPrReviewProjectionFailure(attempt.projectionId, {
+			errorKind: classifyPrReviewProjectionError({
+				status: 403,
+				message: `forbidden ${secret}`,
+			}),
+			errorText: `GitHub status update failed 403: forbidden ${secret} ${"x".repeat(900)}`,
+		});
+
+		const [record] = await listPrReviewProjectionsForRun("fp_projection_error");
+		expect(record).toMatchObject({
+			state: "failed",
+			attempts: 1,
+			errorKind: "auth",
+		});
+		expect(record.errorText).not.toContain(secret);
+		expect(record.errorText).toContain("[redacted]");
+		expect(record.errorText?.length).toBeLessThanOrEqual(603);
+	});
+
+	it("classifies projection API failures into operator-safe buckets", async () => {
+		const { classifyPrReviewProjectionError } = await loadModule();
+
+		expect(
+			classifyPrReviewProjectionError({ status: 401, message: "bad token" }),
+		).toBe("auth");
+		expect(
+			classifyPrReviewProjectionError({
+				status: 429,
+				message: "secondary rate limit",
+			}),
+		).toBe("rate_limit");
+		expect(
+			classifyPrReviewProjectionError({
+				status: 503,
+				message: "temporarily unavailable",
+			}),
+		).toBe("transient_api");
+		expect(
+			classifyPrReviewProjectionError({
+				status: 422,
+				message: "validation failed",
+			}),
+		).toBe("validation");
+		expect(
+			classifyPrReviewProjectionError({ status: 418, message: "teapot" }),
+		).toBe("unknown");
+	});
+
+	it("does not expose secrets, raw webhook payloads, or unbounded managed output", async () => {
+		const { beginPrReviewProjectionAttempt, listPrReviewProjectionsForRun } =
+			await loadModule();
+		const secret = `github_pat_${"b".repeat(40)}`;
+
+		await beginPrReviewProjectionAttempt({
+			runFingerprint: "fp_projection_security",
+			type: "github_review",
+			projectionKey: "final-review",
+			desiredPayload: {
+				event: "COMMENT",
+				body: `${secret} ${"managed output ".repeat(600)}`,
+				rawWebhookPayload: { token: secret, action: "synchronize" },
+				authorizationToken: secret,
+			},
+		});
+
+		const [record] = await listPrReviewProjectionsForRun(
+			"fp_projection_security",
+		);
+		const serialized = JSON.stringify(record.desiredPayload);
+		expect(serialized).not.toContain(secret);
+		expect(serialized).not.toContain("github_pat_");
+		expect(serialized).not.toContain("synchronize");
+		expect(serialized.length).toBeLessThanOrEqual(4096);
+		expect(
+			String((record.desiredPayload as { body: string }).body).length,
+		).toBeLessThanOrEqual(1002);
+		expect(serialized).toContain("[redacted]");
+	});
+});
+
 describe("bucketPrReviewRuns", () => {
-	it("separates runs that are starting, executing, due for projection, failed, and terminal", async () => {
+	it("separates ReviewRun health by execution and projection state with SLO latencies", async () => {
 		const { bucketPrReviewRuns } = await loadModule();
 		const now = new Date("2026-05-24T12:00:00.000Z");
 		const base = {
@@ -336,10 +801,10 @@ describe("bucketPrReviewRuns", () => {
 			headSha: "abc123",
 			triggerKind: "opened",
 			triggerSourceId: "abc123",
-			createdAt: "2026-05-24T11:00:00.000Z",
 			error: null,
 			projectionError: null,
 			githubReviewId: null,
+			reviewIntent: null,
 			coalescedHeadSha: null,
 			coalescedTriggerKind: null,
 			coalescedTriggerSourceId: null,
@@ -347,16 +812,34 @@ describe("bucketPrReviewRuns", () => {
 		};
 		const pendingRun = (overrides: {
 			fingerprint: string;
-			status: "started" | "completed" | "failed";
+			status: "started" | "completed" | "failed" | "superseded";
 			sessionId: string | null;
+			createdAt: string;
 			updatedAt: string;
 			error?: string | null;
-			projectionStatus?: "pending" | "projected" | "failed";
+			projectionStatus?: "pending" | "projected" | "failed" | "superseded";
+			projectionUpdatedAt?: string;
 			projectionError?: string | null;
 		}) => ({
 			...base,
+			executionState:
+				overrides.status === "completed"
+					? ("completed" as const)
+					: overrides.status === "failed"
+						? ("failed" as const)
+						: overrides.status === "superseded"
+							? ("superseded" as const)
+							: overrides.sessionId
+								? ("running_session" as const)
+								: ("waiting_for_session" as const),
+			latestKnownHeadSha: base.headSha,
+			failureKind: null,
+			failureMessage: null,
+			failureRetryable: null,
+			failedAt: null,
+			nextAction: "",
 			projectionStatus: overrides.projectionStatus ?? ("pending" as const),
-			projectionUpdatedAt: overrides.updatedAt,
+			projectionUpdatedAt: overrides.projectionUpdatedAt ?? overrides.updatedAt,
 			...overrides,
 		});
 
@@ -366,39 +849,71 @@ describe("bucketPrReviewRuns", () => {
 					fingerprint: "fp_starting",
 					status: "started" as const,
 					sessionId: null,
+					createdAt: "2026-05-24T11:59:00.000Z",
 					updatedAt: "2026-05-24T11:59:00.000Z",
 				}),
 				pendingRun({
 					fingerprint: "fp_stuck_starting",
 					status: "started" as const,
 					sessionId: null,
+					createdAt: "2026-05-24T11:50:00.000Z",
 					updatedAt: "2026-05-24T11:50:00.000Z",
 				}),
 				pendingRun({
-					fingerprint: "fp_executing",
+					fingerprint: "fp_running",
 					status: "started" as const,
-					sessionId: "sesn_executing",
+					sessionId: "sesn_running",
+					createdAt: "2026-05-24T11:35:00.000Z",
 					updatedAt: "2026-05-24T11:40:00.000Z",
 				}),
 				pendingRun({
-					fingerprint: "fp_needs_projection",
+					fingerprint: "fp_running_too_long",
 					status: "started" as const,
-					sessionId: "sesn_projection",
+					sessionId: "sesn_slow",
+					createdAt: "2026-05-24T11:00:00.000Z",
 					updatedAt: "2026-05-24T11:20:00.000Z",
+				}),
+				pendingRun({
+					fingerprint: "fp_completed_awaiting_projection",
+					status: "completed" as const,
+					sessionId: "sesn_completed",
+					createdAt: "2026-05-24T11:00:00.000Z",
+					updatedAt: "2026-05-24T11:35:00.000Z",
+					projectionStatus: "pending",
+					projectionUpdatedAt: "2026-05-24T11:45:00.000Z",
 				}),
 				pendingRun({
 					fingerprint: "fp_failed",
 					status: "failed" as const,
 					sessionId: "sesn_failed",
+					createdAt: "2026-05-24T11:50:00.000Z",
 					updatedAt: "2026-05-24T11:58:00.000Z",
 					error: "review intent parse failed",
 					projectionStatus: "failed",
 					projectionError: "review intent parse failed",
 				}),
 				pendingRun({
-					fingerprint: "fp_completed",
+					fingerprint: "fp_projection_failed",
 					status: "completed" as const,
-					sessionId: "sesn_completed",
+					sessionId: "sesn_projection_failed",
+					createdAt: "2026-05-24T11:10:00.000Z",
+					updatedAt: "2026-05-24T11:40:00.000Z",
+					projectionStatus: "failed",
+					projectionError: "GitHub status update failed 503",
+				}),
+				pendingRun({
+					fingerprint: "fp_superseded",
+					status: "superseded" as const,
+					sessionId: "sesn_superseded",
+					createdAt: "2026-05-24T11:05:00.000Z",
+					updatedAt: "2026-05-24T11:55:00.000Z",
+					projectionStatus: "superseded",
+				}),
+				pendingRun({
+					fingerprint: "fp_published",
+					status: "completed" as const,
+					sessionId: "sesn_published",
+					createdAt: "2026-05-24T11:05:00.000Z",
 					updatedAt: "2026-05-24T11:58:00.000Z",
 					projectionStatus: "projected",
 				}),
@@ -407,6 +922,7 @@ describe("bucketPrReviewRuns", () => {
 				now,
 				thresholds: {
 					startingTimeoutMinutes: 5,
+					runningTimeoutMinutes: 30,
 					projectionTimeoutMinutes: 30,
 				},
 			},
@@ -418,21 +934,163 @@ describe("bucketPrReviewRuns", () => {
 		expect(buckets.stuckStarting.map((run) => run.fingerprint)).toEqual([
 			"fp_stuck_starting",
 		]);
-		expect(buckets.executing.map((run) => run.fingerprint)).toEqual([
-			"fp_executing",
+		expect(buckets.running.map((run) => run.fingerprint)).toEqual([
+			"fp_running",
 		]);
-		expect(buckets.needsProjection.map((run) => run.fingerprint)).toEqual([
-			"fp_needs_projection",
+		expect(buckets.runningTooLong.map((run) => run.fingerprint)).toEqual([
+			"fp_running_too_long",
 		]);
-		expect(buckets.failed.map((run) => run.fingerprint)).toEqual(["fp_failed"]);
-		expect(buckets.terminal.map((run) => run.fingerprint)).toEqual([
-			"fp_completed",
+		expect(
+			buckets.completedAwaitingProjection.map((run) => run.fingerprint),
+		).toEqual(["fp_completed_awaiting_projection"]);
+		expect(buckets.failedExecution.map((run) => run.fingerprint)).toEqual([
+			"fp_failed",
 		]);
-		expect(buckets.needsProjection[0].ageMinutes).toBe(40);
+		expect(buckets.projectionFailed.map((run) => run.fingerprint)).toEqual([
+			"fp_projection_failed",
+		]);
+		expect(buckets.superseded.map((run) => run.fingerprint)).toEqual([
+			"fp_superseded",
+		]);
+		expect(buckets.published.map((run) => run.fingerprint)).toEqual([
+			"fp_published",
+		]);
+		expect(buckets.runningTooLong[0]).toMatchObject({
+			ageMinutes: 40,
+			pickupLatencyMinutes: 20,
+			executionDurationMinutes: 40,
+			projectionLatencyMinutes: null,
+			sloBreached: true,
+		});
+		expect(buckets.completedAwaitingProjection[0]).toMatchObject({
+			ageMinutes: 15,
+			projectionLatencyMinutes: 15,
+			sloBreached: false,
+		});
 	});
 });
 
 describe("run detail lookups", () => {
+	it("uses transition helpers for valid lifecycle transitions", async () => {
+		const {
+			getPrReviewRunByFingerprint,
+			markRunCompleted,
+			markRunSessionStarted,
+			recordRunStart,
+		} = await loadModule();
+		const input = makeInput({ fingerprint: "fp_lifecycle", prNumber: 44 });
+
+		await recordRunStart(input);
+		await markRunSessionStarted(input.fingerprint, {
+			sessionId: "sesn_lifecycle",
+		});
+		await markRunCompleted(input.fingerprint, {
+			sessionId: "sesn_lifecycle",
+			githubReviewId: "9876",
+		});
+
+		await expect(
+			getPrReviewRunByFingerprint(input.fingerprint),
+		).resolves.toMatchObject({
+			status: "completed",
+			executionState: "completed",
+			projectionStatus: "projected",
+			githubReviewId: "9876",
+			failureKind: null,
+			nextAction:
+				"No action needed; the ReviewRun has been published to GitHub.",
+		});
+	});
+
+	it("allows unpublished completed runs to be superseded during repair", async () => {
+		const {
+			getPrReviewRunByFingerprint,
+			markRunCompleted,
+			markRunSuperseded,
+			recordRunStart,
+		} = await loadModule();
+		const input = makeInput({
+			fingerprint: "fp_unpublished_completed_supersede",
+		});
+
+		await recordRunStart(input);
+		await markRunCompleted(input.fingerprint, {
+			sessionId: "sesn_unpublished_completed",
+			projectionStatus: "failed",
+			projectionError: "GitHub status update failed 503",
+		});
+		await markRunSuperseded(input.fingerprint, {
+			sessionId: "sesn_unpublished_completed",
+			reason: "PR head moved before projection could be repaired.",
+		});
+
+		await expect(
+			getPrReviewRunByFingerprint(input.fingerprint),
+		).resolves.toMatchObject({
+			status: "superseded",
+			projectionStatus: "superseded",
+			error: "PR head moved before projection could be repaired.",
+			nextAction:
+				"No action needed for this run; a newer run or review replaced it.",
+		});
+	});
+
+	it("blocks lifecycle transitions away from a terminal state", async () => {
+		const {
+			markRunCompleted,
+			markRunFailed,
+			markRunSuperseded,
+			recordRunStart,
+		} = await loadModule();
+		const input = makeInput({ fingerprint: "fp_terminal_guard" });
+
+		await recordRunStart(input);
+		await markRunCompleted(input.fingerprint, {
+			sessionId: "sesn_terminal",
+		});
+
+		await expect(
+			markRunFailed(input.fingerprint, {
+				sessionId: "sesn_terminal",
+				error: "late failure",
+			}),
+		).rejects.toThrow("is terminal");
+		await expect(
+			markRunSuperseded(input.fingerprint, {
+				sessionId: "sesn_terminal",
+				reason: "late supersede",
+			}),
+		).rejects.toThrow("is terminal");
+	});
+
+	it("persists bounded user-safe failure details", async () => {
+		const { getPrReviewRunByFingerprint, markRunFailed, recordRunStart } =
+			await loadModule();
+		const input = makeInput({ fingerprint: "fp_failure_details" });
+		const secret = `github_pat_${"a".repeat(40)}`;
+		const longError = `review intent parse failed with ${secret} ${"x".repeat(900)}`;
+
+		await recordRunStart(input);
+		await markRunFailed(input.fingerprint, {
+			sessionId: "sesn_failure",
+			error: longError,
+		});
+
+		const run = await getPrReviewRunByFingerprint(input.fingerprint);
+		expect(run).toMatchObject({
+			status: "failed",
+			executionState: "failed",
+			failureKind: "review_intent_invalid",
+			failureRetryable: false,
+			projectionStatus: "failed",
+		});
+		expect(run?.failedAt).toEqual(expect.any(String));
+		expect(run?.failureMessage).not.toContain(secret);
+		expect(run?.failureMessage).toContain("[redacted]");
+		expect(run?.failureMessage?.length).toBeLessThanOrEqual(602);
+		expect(run?.nextAction).toBe("Manual inspection required before retry.");
+	});
+
 	it("returns run details by fingerprint and session id", async () => {
 		const {
 			getPrReviewRunByFingerprint,
@@ -460,6 +1118,12 @@ describe("run detail lookups", () => {
 			sessionId: "sesn_details",
 			status: "failed",
 			error: "review intent parse failed",
+			executionState: "failed",
+			latestKnownHeadSha: "abc123",
+			failureKind: "review_intent_invalid",
+			failureMessage: "review intent parse failed",
+			failureRetryable: false,
+			failedAt: expect.any(String),
 			projectionStatus: "failed",
 			projectionError: "review intent parse failed",
 		});

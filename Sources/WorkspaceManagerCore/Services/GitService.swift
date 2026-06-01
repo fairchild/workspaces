@@ -72,6 +72,20 @@ public actor GitService: GitServiceProtocol {
         _ = try await runGit(["checkout", "-b", name], at: path)
     }
 
+    public func createWorktree(branchName: String, at destination: URL, from source: URL) async throws {
+        if try await localBranchExists(branchName, at: source) {
+            throw GitError.branchAlreadyExists(name: branchName)
+        }
+
+        let args = ["worktree", "add", "-b", branchName, destination.path, "HEAD"]
+        let result = try await runGitResult(args, at: source)
+        guard result.success else {
+            try? await deleteLocalBranchIfExists(branchName, at: source)
+            let stderr = result.stderr.isEmpty ? "Unknown error" : result.stderr
+            throw GitError.commandFailed(args: args, stderr: stderr)
+        }
+    }
+
     public func checkoutBranch(_ name: String, at path: URL) async throws {
         _ = try await runGit(["checkout", name], at: path)
     }
@@ -229,11 +243,7 @@ public actor GitService: GitServiceProtocol {
     // MARK: - Run Git Command
 
     private func runGit(_ args: [String], at path: URL) async throws -> String {
-        let result = try await ProcessRunner.run(
-            executable: "/usr/bin/git",
-            arguments: args,
-            currentDirectory: path
-        )
+        let result = try await runGitResult(args, at: path)
 
         if result.exitCode != 0 {
             let stderr = result.stderr.isEmpty ? "Unknown error" : result.stderr
@@ -241,6 +251,44 @@ public actor GitService: GitServiceProtocol {
         }
 
         return result.stdout
+    }
+
+    private func runGitResult(_ args: [String], at path: URL) async throws -> ProcessResult {
+        try await ProcessRunner.run(
+            executable: "/usr/bin/git",
+            arguments: args,
+            currentDirectory: path
+        )
+    }
+
+    private func localBranchExists(_ name: String, at path: URL) async throws -> Bool {
+        let args = ["show-ref", "--verify", "--quiet", "refs/heads/\(name)"]
+        let result = try await ProcessRunner.run(
+            executable: "/usr/bin/git",
+            arguments: args,
+            currentDirectory: path
+        )
+
+        if result.exitCode == 0 {
+            return true
+        }
+        if result.exitCode == 1 {
+            return false
+        }
+
+        let stderr = result.stderr.isEmpty ? "Unknown error" : result.stderr
+        throw GitError.commandFailed(args: args, stderr: stderr)
+    }
+
+    private func deleteLocalBranchIfExists(_ name: String, at path: URL) async throws {
+        guard try await localBranchExists(name, at: path) else { return }
+        let args = ["branch", "-D", name]
+        let result = try await runGitResult(args, at: path)
+
+        if result.exitCode != 0 {
+            let stderr = result.stderr.isEmpty ? "Unknown error" : result.stderr
+            throw GitError.commandFailed(args: args, stderr: stderr)
+        }
     }
 
     private func mapStatus(from porcelainCode: String) -> GitStatus {
@@ -289,6 +337,7 @@ extension String {
 public enum GitError: LocalizedError {
     case commandFailed(args: [String], stderr: String)
     case notARepository
+    case branchAlreadyExists(name: String)
 
     public var errorDescription: String? {
         switch self {
@@ -296,6 +345,8 @@ public enum GitError: LocalizedError {
             return "Git command failed: git \(args.joined(separator: " "))\n\(stderr)"
         case .notARepository:
             return "Not a git repository"
+        case .branchAlreadyExists(let name):
+            return "A branch named '\(name)' already exists"
         }
     }
 }

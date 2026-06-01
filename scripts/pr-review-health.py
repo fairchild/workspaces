@@ -3,10 +3,11 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""Summarize managed PR reviewer health across recent open pull requests.
+"""Audit managed PR reviewer GitHub projection drift on recent open PRs.
 
-This is an operational monitor for the WorkSpaces managed PR reviewer, not a
-general "all open PRs are mergeable" gate.
+This is a GitHub-facing projection audit for the WorkSpaces managed PR
+reviewer, not the source-of-truth ReviewRun health report and not a general "all
+open PRs are mergeable" gate.
 
 Use ``scripts/pr-reviewer-runs.py`` when you need the ReviewRun database view:
 trigger rows, executing sessions, projection-due rows, and stored failures. This
@@ -342,8 +343,10 @@ def result_summary(result: PullRequestResult) -> str:
 
 def render_markdown(report: HealthReport, *, updated_within: timedelta, pending_timeout: timedelta) -> str:
     lines = [
-        "## Managed Reviewer Health",
+        "## Managed Reviewer GitHub Projection Audit",
         "",
+        "- Source of truth: ReviewRun health comes from `scripts/pr-reviewer-runs.py`",
+        "- This audit checks GitHub status/review drift on open PRs",
         f"- Scope: open PRs updated within {format_timedelta(updated_within)}",
         f"- Pending timeout: {format_timedelta(pending_timeout)}",
         f"- Active PRs checked: {len(report.active_results)}",

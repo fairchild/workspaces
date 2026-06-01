@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import {
 	type ClassifiedPrReviewRun,
+	type PrReviewRunSummary,
 	bucketPrReviewRuns,
 	listRecentPrReviewRuns,
 } from "@/lib/agent-runtime/pr-review-runs";
@@ -13,6 +14,7 @@ const SECRET_HEADER = "x-workspace-webhook-canary";
 const DEFAULT_REPO = "fairchild/workspaces";
 const DEFAULT_WINDOW_MINUTES = 90;
 const DEFAULT_STARTING_TIMEOUT_MINUTES = 5;
+const DEFAULT_RUNNING_TIMEOUT_MINUTES = 45;
 const DEFAULT_PROJECTION_TIMEOUT_MINUTES = 30;
 const MAX_WINDOW_MINUTES = 24 * 60;
 
@@ -24,6 +26,31 @@ interface ExpectedRun {
 	headSha: string;
 	triggerKind: string;
 	triggerSourceId: string;
+}
+
+interface ExpectedRunGroup {
+	key: string;
+	eventIds: string[];
+	eventCount: number;
+	firstTimestamp: string;
+	lastTimestamp: string;
+	repoFullName: string;
+	prNumber: number;
+	headSha: string;
+	triggerKind: string;
+	triggerSourceId: string;
+}
+
+interface TerminalPullRequest {
+	repoFullName: string;
+	prNumber: number;
+	timestamp: string;
+}
+
+interface CoalescedExpectedRunGroups {
+	actionable: ExpectedRunGroup[];
+	terminal: ExpectedRunGroup[];
+	superseded: ExpectedRunGroup[];
 }
 
 interface OperatorRunItem {
@@ -43,6 +70,10 @@ interface OperatorRunItem {
 	state: string;
 	sessionId: string | null;
 	ageMinutes: number;
+	pickupLatencyMinutes: number | null;
+	executionDurationMinutes: number | null;
+	projectionLatencyMinutes: number | null;
+	sloBreached: boolean;
 	createdAt: string;
 	updatedAt: string;
 	detailsUrl: string;
@@ -118,6 +149,10 @@ function operatorRunItem(
 		state: run.state,
 		sessionId: run.sessionId,
 		ageMinutes: run.ageMinutes,
+		pickupLatencyMinutes: run.pickupLatencyMinutes,
+		executionDurationMinutes: run.executionDurationMinutes,
+		projectionLatencyMinutes: run.projectionLatencyMinutes,
+		sloBreached: run.sloBreached,
 		createdAt: run.createdAt,
 		updatedAt: run.updatedAt,
 		detailsUrl: reviewRunDetailsUrl(requestUrl, run.fingerprint),
@@ -125,6 +160,126 @@ function operatorRunItem(
 		...(run.projectionError ? { projectionError: run.projectionError } : {}),
 		...(run.githubReviewId ? { githubReviewId: run.githubReviewId } : {}),
 	};
+}
+
+function expectedRunGroupKey(expected: ExpectedRun): string {
+	return [
+		expected.repoFullName,
+		String(expected.prNumber),
+		expected.headSha || "*",
+	].join("|");
+}
+
+function expectedRunPrKey(
+	expected: Pick<ExpectedRun, "repoFullName" | "prNumber">,
+): string {
+	return [expected.repoFullName, String(expected.prNumber)].join("|");
+}
+
+function groupExpectedRuns(expectedRuns: ExpectedRun[]): ExpectedRunGroup[] {
+	const groups = new Map<string, ExpectedRunGroup>();
+	for (const expected of [...expectedRuns].sort((a, b) =>
+		a.timestamp.localeCompare(b.timestamp),
+	)) {
+		const key = expectedRunGroupKey(expected);
+		const existing = groups.get(key);
+		if (existing) {
+			existing.eventIds.push(expected.eventId);
+			existing.eventCount += 1;
+			existing.lastTimestamp = expected.timestamp;
+			existing.triggerKind = expected.triggerKind;
+			existing.triggerSourceId = expected.triggerSourceId;
+			continue;
+		}
+		groups.set(key, {
+			key,
+			eventIds: [expected.eventId],
+			eventCount: 1,
+			firstTimestamp: expected.timestamp,
+			lastTimestamp: expected.timestamp,
+			repoFullName: expected.repoFullName,
+			prNumber: expected.prNumber,
+			headSha: expected.headSha,
+			triggerKind: expected.triggerKind,
+			triggerSourceId: expected.triggerSourceId,
+		});
+	}
+	return [...groups.values()];
+}
+
+function coalesceExpectedRunGroups(
+	groups: ExpectedRunGroup[],
+	terminalPrs: TerminalPullRequest[],
+): CoalescedExpectedRunGroups {
+	const terminalByPr = new Map<string, string>();
+	for (const terminal of terminalPrs) {
+		const key = expectedRunPrKey(terminal);
+		const priorTimestamp = terminalByPr.get(key);
+		if (!priorTimestamp || priorTimestamp < terminal.timestamp) {
+			terminalByPr.set(key, terminal.timestamp);
+		}
+	}
+
+	const terminal: ExpectedRunGroup[] = [];
+	const openGroupsByPr = new Map<string, ExpectedRunGroup[]>();
+	for (const group of groups) {
+		const key = expectedRunPrKey(group);
+		const terminalTimestamp = terminalByPr.get(key);
+		if (terminalTimestamp && terminalTimestamp >= group.lastTimestamp) {
+			terminal.push(group);
+			continue;
+		}
+		const existing = openGroupsByPr.get(key);
+		if (existing) {
+			existing.push(group);
+		} else {
+			openGroupsByPr.set(key, [group]);
+		}
+	}
+
+	const actionable: ExpectedRunGroup[] = [];
+	const superseded: ExpectedRunGroup[] = [];
+	for (const prGroups of openGroupsByPr.values()) {
+		const sorted = [...prGroups].sort((a, b) =>
+			a.lastTimestamp.localeCompare(b.lastTimestamp),
+		);
+		const latest = sorted.at(-1);
+		if (!latest) continue;
+		superseded.push(...sorted.slice(0, -1));
+		actionable.push(latest);
+	}
+
+	return { actionable, terminal, superseded };
+}
+
+function runCoversExpectedGroup(
+	run: PrReviewRunSummary,
+	expected: ExpectedRunGroup,
+): boolean {
+	if (
+		run.repoFullName !== expected.repoFullName ||
+		run.prNumber !== expected.prNumber
+	) {
+		return false;
+	}
+	if (!expected.headSha) return true;
+	return (
+		run.headSha === expected.headSha ||
+		run.latestKnownHeadSha === expected.headSha ||
+		run.coalescedHeadSha === expected.headSha
+	);
+}
+
+function maxMetric(values: Array<number | null>): number | null {
+	const present = values.filter((value): value is number => value !== null);
+	return present.length ? Math.max(...present) : null;
+}
+
+function runItems(
+	requestUrl: URL,
+	runs: ClassifiedPrReviewRun[],
+): OperatorRunItem[] {
+	return runs.map((run) => operatorRunItem(requestUrl, run));
 }
 
 function expectedRunFromWebhookEvent(row: {
@@ -155,6 +310,35 @@ function expectedRunFromWebhookEvent(row: {
 	};
 }
 
+function terminalPrFromWebhookEvent(row: {
+	type: string;
+	action: string;
+	timestamp: string;
+	payload: string;
+}): TerminalPullRequest | null {
+	if (row.type !== "pull_request" || row.action !== "closed") return null;
+
+	let payload: Record<string, unknown>;
+	try {
+		payload = JSON.parse(row.payload) as Record<string, unknown>;
+	} catch {
+		return null;
+	}
+
+	const pr = payload.pull_request as Record<string, unknown> | undefined;
+	const repo = payload.repository as Record<string, unknown> | undefined;
+	const repoFullName =
+		typeof repo?.full_name === "string" ? repo.full_name : "";
+	const prNumber = Number(pr?.number);
+	if (!repoFullName || !Number.isInteger(prNumber)) return null;
+
+	return {
+		repoFullName,
+		prNumber,
+		timestamp: row.timestamp,
+	};
+}
+
 export async function GET(request: Request): Promise<Response> {
 	const authFailure = authenticate(request);
 	if (authFailure) return authFailure;
@@ -165,30 +349,68 @@ export async function GET(request: Request): Promise<Response> {
 			disabled: true,
 			checked: 0,
 			eligibleEvents: 0,
+			candidateRunKeys: 0,
+			eligibleRunKeys: 0,
+			terminalRunKeys: 0,
+			supersededTriggerRunKeys: 0,
 			missingRuns: 0,
+			missingRunKeys: 0,
 			attentionRequired: 0,
+			health: "disabled",
 			starting: 0,
 			stuckStarting: 0,
-			executing: 0,
-			needsProjection: 0,
-			failed: 0,
-			terminal: 0,
+			running: 0,
+			runningTooLong: 0,
+			completedAwaitingProjection: 0,
+			failedExecution: 0,
+			projectionFailed: 0,
+			superseded: 0,
+			published: 0,
+			failedRunCount: 0,
+			projectionFailedCount: 0,
+			staleRunCount: 0,
+			supersededRunCount: 0,
+			staleOrSupersededCount: 0,
 			runStates: {
 				starting: 0,
 				stuckStarting: 0,
-				executing: 0,
-				needsProjection: 0,
-				failed: 0,
-				terminal: 0,
+				running: 0,
+				runningTooLong: 0,
+				completedAwaitingProjection: 0,
+				failedExecution: 0,
+				projectionFailed: 0,
+				superseded: 0,
+				published: 0,
+			},
+			slo: {
+				pickupTimeoutMinutes: DEFAULT_STARTING_TIMEOUT_MINUTES,
+				runningTimeoutMinutes: DEFAULT_RUNNING_TIMEOUT_MINUTES,
+				projectionTimeoutMinutes: DEFAULT_PROJECTION_TIMEOUT_MINUTES,
+				maxPickupLatencyMinutes: null,
+				maxExecutionDurationMinutes: null,
+				maxProjectionLatencyMinutes: null,
+			},
+			reviewRunHealth: {
+				status: "disabled",
+				missingRunKeys: 0,
+				unhealthyRunCount: 0,
+				degradedRunCount: 0,
+			},
+			githubProjectionAudit: {
+				status: "not_checked",
+				script: "scripts/pr-review-health.py",
 			},
 			missing: [],
 			runs: {
 				starting: [],
 				stuckStarting: [],
-				executing: [],
-				needsProjection: [],
-				failed: [],
-				terminal: [],
+				running: [],
+				runningTooLong: [],
+				completedAwaitingProjection: [],
+				failedExecution: [],
+				projectionFailed: [],
+				superseded: [],
+				published: [],
 			},
 		});
 	}
@@ -200,6 +422,11 @@ export async function GET(request: Request): Promise<Response> {
 		url,
 		"startingTimeoutMinutes",
 		DEFAULT_STARTING_TIMEOUT_MINUTES,
+	);
+	const runningTimeoutMinutes = timeoutMinutesFromUrl(
+		url,
+		"runningTimeoutMinutes",
+		DEFAULT_RUNNING_TIMEOUT_MINUTES,
 	);
 	const projectionTimeoutMinutes = timeoutMinutesFromUrl(
 		url,
@@ -219,68 +446,153 @@ export async function GET(request: Request): Promise<Response> {
 	const expectedRuns = webhookRows
 		.map(expectedRunFromWebhookEvent)
 		.filter((entry): entry is ExpectedRun => Boolean(entry));
+	const expectedRunGroups = groupExpectedRuns(expectedRuns);
+	const terminalPrs = webhookRows
+		.map(terminalPrFromWebhookEvent)
+		.filter((entry): entry is TerminalPullRequest => Boolean(entry));
+	const expectedWork = coalesceExpectedRunGroups(
+		expectedRunGroups,
+		terminalPrs,
+	);
 
 	const runs = await listRecentPrReviewRuns({ sinceIso, repoFullName });
 	const runBuckets = bucketPrReviewRuns(runs, {
-		thresholds: { startingTimeoutMinutes, projectionTimeoutMinutes },
+		thresholds: {
+			startingTimeoutMinutes,
+			runningTimeoutMinutes,
+			projectionTimeoutMinutes,
+		},
 	});
-	const missing = expectedRuns.filter(
-		(expected) =>
-			!runs.some(
-				(run) =>
-					run.repoFullName === expected.repoFullName &&
-					run.prNumber === expected.prNumber &&
-					(!expected.headSha || run.headSha === expected.headSha) &&
-					run.triggerKind === expected.triggerKind &&
-					run.triggerSourceId === expected.triggerSourceId,
-			),
+	const missing = expectedWork.actionable.filter(
+		(expected) => !runs.some((run) => runCoversExpectedGroup(run, expected)),
 	);
-	const attentionRequired =
-		missing.length +
+	const staleCompletedAwaitingProjection =
+		runBuckets.completedAwaitingProjection.filter((run) => run.sloBreached);
+	const unhealthyRunCount =
 		runBuckets.stuckStarting.length +
-		runBuckets.needsProjection.length +
-		runBuckets.failed.length;
-	const ok = attentionRequired === 0;
+		runBuckets.runningTooLong.length +
+		runBuckets.failedExecution.length +
+		runBuckets.projectionFailed.length +
+		staleCompletedAwaitingProjection.length;
+	const degradedRunCount =
+		runBuckets.completedAwaitingProjection.length -
+		staleCompletedAwaitingProjection.length;
+	const attentionRequired = missing.length + unhealthyRunCount;
+	const health =
+		attentionRequired > 0
+			? "unhealthy"
+			: degradedRunCount > 0
+				? "degraded"
+				: "healthy";
+	const ok = health !== "unhealthy";
+	const allClassifiedRuns = [
+		...runBuckets.starting,
+		...runBuckets.stuckStarting,
+		...runBuckets.running,
+		...runBuckets.runningTooLong,
+		...runBuckets.completedAwaitingProjection,
+		...runBuckets.failedExecution,
+		...runBuckets.projectionFailed,
+		...runBuckets.superseded,
+		...runBuckets.published,
+	];
+	const staleRunCount =
+		runBuckets.stuckStarting.length +
+		runBuckets.runningTooLong.length +
+		staleCompletedAwaitingProjection.length;
+	const supersededRunCount = runBuckets.superseded.length;
 
 	return Response.json(
 		{
 			ok,
 			disabled: false,
+			health,
 			repo: repoFullName,
 			windowMinutes,
 			startingTimeoutMinutes,
+			runningTimeoutMinutes,
 			projectionTimeoutMinutes,
 			since: sinceIso,
-			checked: expectedRuns.length,
+			checked: expectedWork.actionable.length,
 			eligibleEvents: expectedRuns.length,
+			candidateRunKeys: expectedRunGroups.length,
+			eligibleRunKeys: expectedWork.actionable.length,
+			terminalRunKeys: expectedWork.terminal.length,
+			supersededTriggerRunKeys: expectedWork.superseded.length,
 			missingRuns: missing.length,
+			missingRunKeys: missing.length,
 			attentionRequired,
 			starting: runBuckets.starting.length,
 			stuckStarting: runBuckets.stuckStarting.length,
-			executing: runBuckets.executing.length,
-			needsProjection: runBuckets.needsProjection.length,
-			failed: runBuckets.failed.length,
-			terminal: runBuckets.terminal.length,
+			running: runBuckets.running.length,
+			runningTooLong: runBuckets.runningTooLong.length,
+			completedAwaitingProjection:
+				runBuckets.completedAwaitingProjection.length,
+			failedExecution: runBuckets.failedExecution.length,
+			projectionFailed: runBuckets.projectionFailed.length,
+			superseded: runBuckets.superseded.length,
+			published: runBuckets.published.length,
+			failedRunCount: runBuckets.failedExecution.length,
+			projectionFailedCount: runBuckets.projectionFailed.length,
+			staleRunCount,
+			supersededRunCount,
+			staleOrSupersededCount: staleRunCount + supersededRunCount,
 			runStates: {
 				starting: runBuckets.starting.length,
 				stuckStarting: runBuckets.stuckStarting.length,
-				executing: runBuckets.executing.length,
-				needsProjection: runBuckets.needsProjection.length,
-				failed: runBuckets.failed.length,
-				terminal: runBuckets.terminal.length,
+				running: runBuckets.running.length,
+				runningTooLong: runBuckets.runningTooLong.length,
+				completedAwaitingProjection:
+					runBuckets.completedAwaitingProjection.length,
+				failedExecution: runBuckets.failedExecution.length,
+				projectionFailed: runBuckets.projectionFailed.length,
+				superseded: runBuckets.superseded.length,
+				published: runBuckets.published.length,
+			},
+			slo: {
+				pickupTimeoutMinutes: startingTimeoutMinutes,
+				runningTimeoutMinutes,
+				projectionTimeoutMinutes,
+				maxPickupLatencyMinutes: maxMetric(
+					allClassifiedRuns.map((run) => run.pickupLatencyMinutes),
+				),
+				maxExecutionDurationMinutes: maxMetric(
+					allClassifiedRuns.map((run) => run.executionDurationMinutes),
+				),
+				maxProjectionLatencyMinutes: maxMetric(
+					allClassifiedRuns.map((run) => run.projectionLatencyMinutes),
+				),
+			},
+			reviewRunHealth: {
+				status: health,
+				missingRunKeys: missing.length,
+				unhealthyRunCount,
+				degradedRunCount,
+				failedRunCount: runBuckets.failedExecution.length,
+				projectionFailedCount: runBuckets.projectionFailed.length,
+				staleRunCount,
+				supersededRunCount,
+				staleOrSupersededCount: staleRunCount + supersededRunCount,
+			},
+			githubProjectionAudit: {
+				status: "not_checked",
+				script: "scripts/pr-review-health.py",
+				note: "GitHub status/review drift is audited separately from ReviewRun source-of-truth health.",
 			},
 			missing,
 			runs: {
-				starting: runBuckets.starting.map((run) => operatorRunItem(url, run)),
-				stuckStarting: runBuckets.stuckStarting.map((run) =>
-					operatorRunItem(url, run),
+				starting: runItems(url, runBuckets.starting),
+				stuckStarting: runItems(url, runBuckets.stuckStarting),
+				running: runItems(url, runBuckets.running),
+				runningTooLong: runItems(url, runBuckets.runningTooLong),
+				completedAwaitingProjection: runItems(
+					url,
+					runBuckets.completedAwaitingProjection,
 				),
-				executing: runBuckets.executing.map((run) => operatorRunItem(url, run)),
-				needsProjection: runBuckets.needsProjection.map((run) =>
-					operatorRunItem(url, run),
-				),
-				failed: runBuckets.failed.map((run) => operatorRunItem(url, run)),
-				terminal: runBuckets.terminal.map((run) => operatorRunItem(url, run)),
+				failedExecution: runItems(url, runBuckets.failedExecution),
+				projectionFailed: runItems(url, runBuckets.projectionFailed),
+				superseded: runItems(url, runBuckets.superseded),
+				published: runItems(url, runBuckets.published),
 			},
 		},
 		{ status: ok ? 200 : 503 },

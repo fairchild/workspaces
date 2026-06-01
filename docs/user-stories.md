@@ -160,8 +160,8 @@ sequenceDiagram
     User->>App: Right-click repo → "New Workspace..."
     App-->>User: Name input sheet
     User->>App: Enters "approach-b"
-    App->>FS: Copy repo to ~/workspaces/project/approach-b
-    FS-->>App: Copy complete
+    App->>FS: Create git worktree at ~/workspaces/project/approach-b
+    FS-->>App: Worktree ready
     App->>FS: Run setup.sh
     FS-->>App: Setup output
     App-->>User: New workspace selected
@@ -184,11 +184,11 @@ sequenceDiagram
 └──────────────────┘
 
 ~/workspaces/my-api/
-├── approach-a/     ← Independent copy
-│   ├── .git/
+├── approach-a/     ← Independent worktree
+│   ├── .git
 │   └── src/
-└── approach-b/     ← Independent copy
-    ├── .git/
+└── approach-b/     ← Independent worktree
+    ├── .git
     └── src/
 ```
 
@@ -196,7 +196,7 @@ sequenceDiagram
 
 1. **Right-click repo** — Context menu appears with "New Workspace..." option
 2. **Name workspace** — User enters descriptive name like "approach-b"
-3. **Copy created** — Full repo copy made to workspaces directory
+3. **Worktree created** — Git worktree made in the workspaces directory
 4. **Setup runs** — If setup.sh exists, it runs automatically
 5. **Workspace ready** — New workspace selected, terminal opens there
 

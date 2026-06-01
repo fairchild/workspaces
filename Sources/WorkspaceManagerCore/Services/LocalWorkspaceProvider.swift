@@ -12,7 +12,7 @@ public struct LocalWorkspaceProvider: WorkspaceProviderProtocol {
     public static let providerDescriptor = WorkspaceProviderDescriptor(
         id: LocalWorkspaceProvider.identifier,
         displayName: "Local",
-        description: "Create a normal workspace on the host filesystem.",
+        description: "Create a git worktree workspace on this Mac.",
         sheetStatusPolicy: .immediate,
         usesHostWorkspaceFiles: true
     )
@@ -68,10 +68,8 @@ public struct LocalWorkspaceProvider: WorkspaceProviderProtocol {
         switch phase {
         case .preparing:
             return "Preparing workspace..."
-        case .copyingRepository:
-            return "Copying repository..."
-        case .creatingBranch:
-            return "Creating branch..."
+        case .creatingWorktree:
+            return "Creating git worktree..."
         case .runningSetupScript:
             return "Running setup script..."
         case .finished:

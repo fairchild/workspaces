@@ -9,24 +9,34 @@ This is the first command to run when the managed PR reviewer looks stuck. It
 asks the protected production monitor route for the ReviewRun database view and
 prints the current queue in operator terms:
 
-- ``missingRuns``: a reviewer-eligible webhook exists, but no ReviewRun row was
-  created. Investigate trigger/ingress.
+- ``candidateRunKeys``: reviewer-eligible webhook deliveries grouped by PR/head
+  before terminal or superseded history is removed.
+- ``eligibleRunKeys``: the current actionable keys after closed PRs and older
+  triggers for the same PR are coalesced away.
+- ``missingRuns``: an actionable key exists, but no ReviewRun row was created.
+  Investigate trigger/ingress.
 - ``starting``: a ReviewRun row exists, but the managed-agent session id has not
   been recorded yet. Briefly normal immediately after pickup.
 - ``stuckStarting``: a starting row is old enough to need attention.
-- ``executing``: a managed-agent session exists and its GitHub projection is
-  still inside the normal window.
-- ``needsProjection``: the agent run is old enough that the broker should have
-  posted a GitHub review or failure status by now.
-- ``failed``: either the agent lifecycle or GitHub projection failed and stored
-  a reason.
-- ``terminal``: completed or superseded rows. These are counted, but omitted
-  from the terse text output unless ``--json`` is used.
+- ``running``: a managed-agent session exists and is still inside the execution
+  SLO.
+- ``runningTooLong``: a managed-agent session has exceeded the execution SLO.
+- ``completedAwaitingProjection``: the agent completed and the broker still
+  needs to publish or repair the GitHub projection.
+- ``failedExecution``: the agent/session lifecycle failed and stored a reason.
+- ``projectionFailed``: the ReviewRun completed, but GitHub projection failed.
+- ``superseded``: a newer run or managed review intentionally replaced this row.
+- ``published``: the ReviewRun has been projected to GitHub.
+
+GitHub status/review drift is intentionally separate. Run
+``scripts/pr-review-health.py`` when you need the GitHub-facing projection audit
+for open PRs.
 
 The script is read-only. It does not run the broker, create sessions, or post
-GitHub statuses. Exit code 0 means the monitor reported healthy, 1 means the
-monitor returned attention-needed state, and 2 means the report could not be
-fetched or parsed.
+GitHub statuses. Exit code 0 means the monitor reported no unhealthy
+attention-needed state (healthy or degraded), 1 means the monitor returned
+unhealthy attention-needed state, and 2 means the report could not be fetched or
+parsed.
 """
 
 from __future__ import annotations
@@ -121,6 +131,10 @@ def as_int(payload: dict[str, Any], key: str) -> int:
     return value if isinstance(value, int) else 0
 
 
+def format_optional_minutes(value: object) -> str:
+    return f"{value}m" if isinstance(value, int) else "-"
+
+
 def run_buckets(payload: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
     runs = payload.get("runs")
     if not isinstance(runs, dict):
@@ -147,10 +161,22 @@ def print_run_bucket(label: str, runs: list[dict[str, Any]]) -> None:
         state = run.get("state", "-")
         session_id = run.get("sessionId")
         details_url = run.get("detailsUrl")
+        latencies = []
+        for label_key, run_key in (
+            ("pickup", "pickupLatencyMinutes"),
+            ("execution", "executionDurationMinutes"),
+            ("projection", "projectionLatencyMinutes"),
+        ):
+            value = run.get(run_key)
+            if isinstance(value, int):
+                latencies.append(f"{label_key}={value}m")
+        latency_text = f", {' '.join(latencies)}" if latencies else ""
         print(
             f"  - PR #{pr_number} {short_sha} {state} "
-            f"(agent={agent_status}, projection={projection_status}), age {age}m"
+            f"(agent={agent_status}, projection={projection_status}), age {age}m{latency_text}"
         )
+        if run.get("sloBreached") is True:
+            print("    slo: breached")
         if session_id:
             print(f"    session: {session_id}")
         if run.get("githubReviewId"):
@@ -164,47 +190,88 @@ def print_run_bucket(label: str, runs: list[dict[str, Any]]) -> None:
 
 
 def print_report(status: int, payload: dict[str, Any]) -> None:
-    health = "healthy" if payload.get("ok") is True else "attention needed"
+    health = str(
+        payload.get("health")
+        or ("healthy" if payload.get("ok") is True else "attention needed")
+    )
     repo = payload.get("repo", "unknown repo")
     window = payload.get("windowMinutes", "?")
     print(f"ReviewRun report for {repo} over {window}m: {health} (HTTP {status})")
     print(
         "events "
         f"eligible={as_int(payload, 'eligibleEvents')} "
-        f"missing={as_int(payload, 'missingRuns')} "
+        f"candidate_keys={as_int(payload, 'candidateRunKeys')} "
+        f"run_keys={as_int(payload, 'eligibleRunKeys')} "
+        f"terminal_keys={as_int(payload, 'terminalRunKeys')} "
+        f"superseded_keys={as_int(payload, 'supersededTriggerRunKeys')} "
+        f"missing_keys={as_int(payload, 'missingRunKeys') or as_int(payload, 'missingRuns')} "
         f"attention={as_int(payload, 'attentionRequired')}"
     )
     print(
         "runs "
         f"starting={as_int(payload, 'starting')} "
         f"stuckStarting={as_int(payload, 'stuckStarting')} "
-        f"executing={as_int(payload, 'executing')} "
-        f"needsProjection={as_int(payload, 'needsProjection')} "
-        f"failed={as_int(payload, 'failed')} "
-        f"terminal={as_int(payload, 'terminal')}"
+        f"running={as_int(payload, 'running')} "
+        f"runningTooLong={as_int(payload, 'runningTooLong')} "
+        f"completedAwaitingProjection={as_int(payload, 'completedAwaitingProjection')} "
+        f"failedExecution={as_int(payload, 'failedExecution')} "
+        f"projectionFailed={as_int(payload, 'projectionFailed')} "
+        f"superseded={as_int(payload, 'superseded')} "
+        f"published={as_int(payload, 'published')}"
     )
+    print(
+        "signals "
+        f"failedRuns={as_int(payload, 'failedRunCount')} "
+        f"projectionFailed={as_int(payload, 'projectionFailedCount')} "
+        f"staleOrSuperseded={as_int(payload, 'staleOrSupersededCount')}"
+    )
+    slo = payload.get("slo")
+    if isinstance(slo, dict):
+        print(
+            "slo "
+            f"pickup<={format_optional_minutes(slo.get('pickupTimeoutMinutes'))} "
+            f"execution<={format_optional_minutes(slo.get('runningTimeoutMinutes'))} "
+            f"projection<={format_optional_minutes(slo.get('projectionTimeoutMinutes'))} "
+            f"maxPickup={format_optional_minutes(slo.get('maxPickupLatencyMinutes'))} "
+            f"maxExecution={format_optional_minutes(slo.get('maxExecutionDurationMinutes'))} "
+            f"maxProjection={format_optional_minutes(slo.get('maxProjectionLatencyMinutes'))}"
+        )
+    projection_audit = payload.get("githubProjectionAudit")
+    if isinstance(projection_audit, dict):
+        print(
+            "github projection audit: "
+            f"{projection_audit.get('status', 'not_checked')} "
+            f"({projection_audit.get('script', 'scripts/pr-review-health.py')})"
+        )
 
     missing = payload.get("missing")
     if isinstance(missing, list) and missing:
-        print("\nMissing run rows:")
+        print("\nMissing ReviewRun keys:")
         for item in missing:
             if not isinstance(item, dict):
                 continue
             print(
                 "  - "
-                f"event={item.get('eventId', '?')} "
+                f"key={item.get('key', '?')} "
+                f"events={item.get('eventCount', '?')} "
                 f"PR #{item.get('prNumber', '?')} "
                 f"{item.get('triggerKind', '?')} "
                 f"{str(item.get('headSha', ''))[:7] or '-'}"
             )
 
     buckets = run_buckets(payload)
-    # Print attention buckets before normal progress buckets; terminal rows stay
+    # Print attention buckets before normal progress buckets; published rows stay
     # available in --json without making the default report noisy.
     print_run_bucket("Stuck starting", buckets.get("stuckStarting", []))
-    print_run_bucket("Needs projection", buckets.get("needsProjection", []))
-    print_run_bucket("Failed", buckets.get("failed", []))
-    print_run_bucket("Executing", buckets.get("executing", []))
+    print_run_bucket("Running too long", buckets.get("runningTooLong", []))
+    print_run_bucket(
+        "Completed awaiting projection",
+        buckets.get("completedAwaitingProjection", []),
+    )
+    print_run_bucket("Failed execution", buckets.get("failedExecution", []))
+    print_run_bucket("Projection failed", buckets.get("projectionFailed", []))
+    print_run_bucket("Superseded", buckets.get("superseded", []))
+    print_run_bucket("Running", buckets.get("running", []))
     print_run_bucket("Starting", buckets.get("starting", []))
 
 

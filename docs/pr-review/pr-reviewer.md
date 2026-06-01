@@ -5,24 +5,10 @@ on Anthropic's infrastructure, reads the diff, explores surrounding code, runs
 tests, and returns a structured review intent. The web server validates that
 intent and posts the GitHub review with the PR reviewer GitHub App token.
 
-## Architecture
-
-```
-GitHub PR opened
-→ Cloudflare webhook relay
-→ signed forward to web/api/webhooks/github (webhook route)
-→ triggerPrReview() (fire-and-forget)
-→ record new run or coalesce into the active run, then post pending `WorkSpaces Managed Review` commit status
-→ getOrCreateAgent/Environment (idempotent, DB-cached)
-→ sessions.create (mounts repo at PR branch)
-→ events.send (kickoff message)
-→ Agent runs autonomously on Anthropic → returns review-intent JSON
-→ scheduled/protected broker route validates intent → posts GitHub review
-→ commit status flips to success or failure
-```
-
-For the target source-of-truth model and schema sketch, see
-[`README.md`](README.md) and [`review-run-schema.sql`](review-run-schema.sql).
+For the current ReviewRun architecture, lifecycle vocabulary, diagrams, and
+operator triage surfaces, start with [`architecture.md`](architecture.md). This
+file is the runtime and operations reference: configuration, ingress canaries,
+broker scheduling, and debugging commands.
 
 ## Key Files
 
@@ -98,13 +84,42 @@ the `statuses:write` permission.
 
 ### Health monitoring
 
-Managed-reviewer coverage is summarized by
-`scripts/pr-review-health.py` and `.github/workflows/managed-reviewer-health.yml`.
-The workflow runs on a schedule and can be dispatched manually. It checks recent
-open PRs for the `WorkSpaces Managed Review` status, stale pending pickup,
-failure statuses, and success statuses that do not have a current-head managed
-review. Older or draft PRs are reported but skipped by default so pre-indicator
-branches do not keep the health job red forever.
+ReviewRun rows are the source of truth for managed-reviewer health. Start with
+`scripts/pr-reviewer-runs.py` or the protected
+`/api/webhooks/github/pr-reviewer-monitor` route when diagnosing the queue. The
+report groups rows into `starting`, `stuckStarting`, `running`,
+`runningTooLong`, `completedAwaitingProjection`, `failedExecution`,
+`projectionFailed`, `superseded`, and `published`, and includes pickup,
+execution, and projection latency signals where the row has enough timestamps.
+
+Interpret the ReviewRun report as:
+
+- `healthy`: no missing coalesced ReviewRun keys and no row has breached an SLO
+  or stored a failure.
+- `degraded`: ReviewRuns are present and within SLO, but at least one completed
+  run is awaiting GitHub projection.
+- `unhealthy`: a coalesced ReviewRun key is missing, pickup/execution/projection
+  SLOs have been breached, or an execution/projection failure is stored.
+
+The report intentionally separates raw event volume from actionable keys.
+`candidateRunKeys` is the raw reviewer-eligible webhook history grouped by
+PR/head. `eligibleRunKeys` is the current actionable set after closed PRs and
+older material triggers for the same PR are removed. `terminalRunKeys` and
+`supersededTriggerRunKeys` explain why historical webhook rows are not treated
+as missing work.
+
+`.github/workflows/managed-reviewer-health.yml` runs the same split on a
+schedule and can be dispatched manually. Its first job calls
+`scripts/pr-reviewer-runs.py` with the protected canary secret and fails on
+ReviewRun attention-needed state. Its second job calls
+`scripts/pr-review-health.py` to audit GitHub-facing projection drift.
+
+The projection audit checks recent open PRs for the `WorkSpaces Managed Review`
+status, stale pending status, failure statuses, and success statuses that do not
+have a current-head managed review. Older or draft PRs are reported but skipped
+by default so pre-indicator branches do not keep the projection-audit job red
+forever. Do not treat a green projection audit as proof that ReviewRun
+ingestion, session execution, or broker projection is healthy.
 
 The Cloudflare relay forwards only managed-review trigger candidates:
 `pull_request.opened`, `reopened`, `ready_for_review`, `synchronize`, eligible
@@ -170,12 +185,15 @@ uv run --script scripts/pr-reviewer-runs.py
 ```
 
 Use the report as the first read of production health. `missingRuns` means a
-reviewer-eligible webhook did not create a `managed_pr_review_runs` row.
-`executing` means the managed-agent session has been created and the GitHub
-projection is still inside the normal window. `needsProjection` means the row is
-old enough that the broker should have posted the GitHub review or failure
-status. `failed` shows agent or projection failures with the stored reason and a
-details URL.
+current actionable reviewer-eligible key did not create a
+`managed_pr_review_runs` row.
+`running` means the managed-agent session has been created and remains inside
+the execution SLO. `runningTooLong` means the session exceeded the execution
+SLO. `completedAwaitingProjection` means the broker still needs to publish or
+repair GitHub projection for a completed run. `failedExecution` and
+`projectionFailed` separate managed-agent failures from GitHub projection
+failures. Actionable run rows include details URLs for inspecting the stored
+metadata and transcript.
 
 The Worker requires `WORKSPACES_WEBHOOK_CANARY_SECRET`, signs a canonical
 reviewer-eligible PR payload with `GITHUB_WEBHOOK_SECRET`, forwards it to the
@@ -197,11 +215,11 @@ marks that run `superseded`, and starts exactly one follow-up session against th
 latest PR state. If the superseding review is for an older head, the broker
 starts a fresh follow-up session so the newer-head review includes the prior
 review context. The run report compares recent
-reviewer-eligible rows in `webhook_events` with `managed_pr_review_runs`
-records and classifies ReviewRun rows into starting, executing,
-needs-projection, failed, and terminal buckets. Broker and report routes return
-only run metadata, details URLs, stored failure reasons, and missing event
-identifiers, not raw payloads or secrets.
+reviewer-eligible rows in `webhook_events` with current actionable ReviewRun
+keys from `managed_pr_review_runs` records and classifies rows into
+source-of-truth health buckets. Broker and report routes return only run
+metadata, details URLs, stored failure reasons, and missing event identifiers,
+not raw payloads or secrets.
 
 ## Observing Sessions
 
@@ -321,7 +339,11 @@ The reviewer is **continuous**: it reruns on meaningful PR updates and carries
 its own prior review state into each rerun so it can revise (or approve) a
 stale `REQUEST_CHANGES` instead of repeating itself.
 
-`parsePrReviewTrigger()` in `web/src/app/api/webhooks/github/route.ts` accepts:
+`classifyPrReviewTrigger()` in
+`web/src/lib/agent-runtime/pr-review-trigger.ts` classifies webhook activity
+before any ReviewRun claim or active-run coalescing happens. Only material
+classifications become `parsePrReviewTrigger()` results and start or coalesce a
+managed review run:
 
 | Event | Action | Behavior |
 |-------|--------|----------|
@@ -329,8 +351,12 @@ stale `REQUEST_CHANGES` instead of repeating itself.
 | `pull_request` | `reopened` | Rerun (skip drafts) |
 | `pull_request` | `ready_for_review` | Rerun even when previous state was draft |
 | `pull_request` | `synchronize` | Rerun on new head SHA (skip drafts) |
-| `pull_request` | `edited` | Rerun when `changes.body` or `changes.base` is present — base retargets materially change the diff (skip drafts) |
-| `issue_comment` | `created` | Rerun when the comment is on a PR thread, the sender is a non-bot, and the body matches an evidence signal: `evidence.cloudcompute.com`, `Evidence:`, `swift test`, `playwright`, `screenshot`, `recording`, `validation` |
+| `pull_request` | `edited` | Rerun when `changes.body` or `changes.base` is present; title-only and other metadata edits do not start sessions |
+| `pull_request` | `labeled`, `unlabeled` | Metadata only; no managed-review session |
+| `pull_request` | `closed` | Terminal PR activity; no managed-review session |
+| `issue_comment` | `created` with evidence | Rerun when the comment is on a PR thread, the sender is a non-bot, and the body explicitly supplies evidence: `evidence.cloudcompute.com`, `Evidence:`, or `Validation:` at the start of a line. Plain review responses that mention tools, screenshots, recordings, or validation do not rerun review. |
+| `issue_comment` | `created` without evidence | Metadata only; no managed-review session |
+| `pull_request_review_comment`, `pull_request_review` | any | Metadata only; no managed-review session |
 
 Loop guards skip events from any `*[bot]` sender (including the reviewer
 itself) and from `Bot`-typed senders.
@@ -361,10 +387,13 @@ Effects:
 
 - Webhook redeliveries for the same trigger are no-ops.
 - A new commit changes `headSha` → new fingerprint → rerun.
-- Distinct evidence comments on the same head produce distinct
-  `triggerSourceId` values. If no same-config run is active, each runs once. If
-  a run is active, they coalesce into that run and the broker starts one
-  follow-up against the latest PR state.
+- Distinct body edits and evidence comments on the same head produce distinct
+  `triggerSourceId` values. If no same-config run is active, each material
+  trigger runs once. If a run is active, material triggers coalesce into that
+  run and the broker starts one follow-up against the latest PR state.
+- Metadata-only activity such as title edits, label changes, non-evidence
+  comments, review comments, and PR closure does not create or coalesce managed
+  review runs.
 - A reviewer prompt or model change rotates `reviewerConfigHash`, allowing a
   re-evaluation of the same head without manual intervention.
 

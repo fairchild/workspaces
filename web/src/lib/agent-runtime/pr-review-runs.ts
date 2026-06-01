@@ -13,6 +13,45 @@ export type PrReviewProjectionStatus =
 	| "failed"
 	| "superseded";
 
+export type PrReviewProjectionType = "github_status" | "github_review";
+
+export type PrReviewProjectionLedgerState =
+	| "pending"
+	| "projecting"
+	| "projected"
+	| "failed"
+	| "superseded";
+
+export type PrReviewProjectionErrorKind =
+	| "auth"
+	| "rate_limit"
+	| "transient_api"
+	| "validation"
+	| "unknown";
+
+export type PrReviewFailureKind =
+	| "session_start_failed"
+	| "session_output_failed"
+	| "review_intent_invalid"
+	| "pr_metadata_unavailable"
+	| "github_projection_failed"
+	| "broker_failed"
+	| "stale_active_claim"
+	| "unknown";
+
+export type PrReviewExecutionState =
+	| "waiting_for_session"
+	| "running_session"
+	| "completed"
+	| "failed"
+	| "superseded";
+
+export interface PrReviewRunReviewIntent {
+	event: string;
+	body: string;
+	labels: string[];
+}
+
 export interface PrReviewRunFingerprintInput {
 	repoFullName: string;
 	prNumber: number;
@@ -27,6 +66,7 @@ export interface PrReviewRunRecordInput extends PrReviewRunFingerprintInput {
 }
 
 let migrated = false;
+let projectionsMigrated = false;
 
 async function ensureRunsTable(): Promise<void> {
 	if (migrated) return;
@@ -46,10 +86,18 @@ async function ensureRunsTable(): Promise<void> {
 		.addColumn("created_at", "text", (c) => c.notNull())
 		.addColumn("updated_at", "text", (c) => c.notNull())
 		.addColumn("error", "text")
+		.addColumn("failure_kind", "text")
+		.addColumn("failure_message", "text")
+		.addColumn("failure_retryable", "integer")
+		.addColumn("failed_at", "text")
 		.addColumn("projection_status", "text")
 		.addColumn("projection_updated_at", "text")
 		.addColumn("projection_error", "text")
 		.addColumn("github_review_id", "text")
+		.addColumn("review_intent_event", "text")
+		.addColumn("review_intent_body", "text")
+		.addColumn("review_intent_labels", "text")
+		.addColumn("review_intent_recorded_at", "text")
 		.addColumn("active_claim_key", "text")
 		.addColumn("coalesced_head_sha", "text")
 		.addColumn("coalesced_trigger_kind", "text")
@@ -57,10 +105,18 @@ async function ensureRunsTable(): Promise<void> {
 		.addColumn("coalesced_at", "text")
 		.execute();
 	for (const [column, type] of [
+		["failure_kind", "text"],
+		["failure_message", "text"],
+		["failure_retryable", "integer"],
+		["failed_at", "text"],
 		["projection_status", "text"],
 		["projection_updated_at", "text"],
 		["projection_error", "text"],
 		["github_review_id", "text"],
+		["review_intent_event", "text"],
+		["review_intent_body", "text"],
+		["review_intent_labels", "text"],
+		["review_intent_recorded_at", "text"],
 		["active_claim_key", "text"],
 		["coalesced_head_sha", "text"],
 		["coalesced_trigger_kind", "text"],
@@ -95,6 +151,55 @@ async function ensureRunsTable(): Promise<void> {
 	migrated = true;
 }
 
+async function ensureProjectionLedgerTable(): Promise<void> {
+	await ensureRunsTable();
+	if (projectionsMigrated) return;
+	const db = getDb();
+	await db.schema
+		.createTable("managed_pr_review_projections")
+		.ifNotExists()
+		.addColumn("projection_id", "text", (c) => c.primaryKey())
+		.addColumn("run_fingerprint", "text", (c) => c.notNull())
+		.addColumn("projection_type", "text", (c) => c.notNull())
+		.addColumn("projection_key", "text", (c) => c.notNull())
+		.addColumn("desired_payload_hash", "text", (c) => c.notNull())
+		.addColumn("desired_payload", "text", (c) => c.notNull())
+		.addColumn("state", "text", (c) => c.notNull())
+		.addColumn("attempts", "integer", (c) => c.notNull().defaultTo(0))
+		.addColumn("last_attempted_at", "text")
+		.addColumn("observed_external_id", "text")
+		.addColumn("error_kind", "text")
+		.addColumn("error_text", "text")
+		.addColumn("created_at", "text", (c) => c.notNull())
+		.addColumn("updated_at", "text", (c) => c.notNull())
+		.execute();
+	await db.schema
+		.createIndex("ux_managed_pr_review_projections_desired")
+		.ifNotExists()
+		.on("managed_pr_review_projections")
+		.columns([
+			"run_fingerprint",
+			"projection_type",
+			"projection_key",
+			"desired_payload_hash",
+		])
+		.unique()
+		.execute();
+	await db.schema
+		.createIndex("idx_managed_pr_review_projections_run")
+		.ifNotExists()
+		.on("managed_pr_review_projections")
+		.column("run_fingerprint")
+		.execute();
+	await db.schema
+		.createIndex("idx_managed_pr_review_projections_state")
+		.ifNotExists()
+		.on("managed_pr_review_projections")
+		.columns(["state", "updated_at"])
+		.execute();
+	projectionsMigrated = true;
+}
+
 export function computeRunFingerprint(
 	input: PrReviewRunFingerprintInput,
 ): string {
@@ -109,6 +214,200 @@ export function computeRunFingerprint(
 	return createHash("sha256").update(payload).digest("hex").slice(0, 32);
 }
 
+function computeProjectionId(input: {
+	runFingerprint: string;
+	type: PrReviewProjectionType;
+	projectionKey: string;
+	desiredPayloadHash: string;
+}): string {
+	return createHash("sha256")
+		.update(
+			[
+				input.runFingerprint,
+				input.type,
+				input.projectionKey,
+				input.desiredPayloadHash,
+			].join("|"),
+		)
+		.digest("hex")
+		.slice(0, 32);
+}
+
+function normalizeProjectionPayload(
+	value: unknown,
+	options: { stringLimit: number | null },
+	depth = 0,
+): unknown {
+	if (value === null || typeof value === "boolean") return value;
+	if (typeof value === "number") return Number.isFinite(value) ? value : null;
+	if (typeof value === "string") {
+		const redacted = redactSensitiveText(value);
+		return options.stringLimit === null
+			? redacted
+			: truncateText(redacted, options.stringLimit);
+	}
+	if (Array.isArray(value)) {
+		if (depth >= MAX_PROJECTION_DEPTH) return "[truncated-depth]";
+		const items = value
+			.slice(0, MAX_PROJECTION_ARRAY_ITEMS)
+			.map((item) => normalizeProjectionPayload(item, options, depth + 1));
+		if (value.length > MAX_PROJECTION_ARRAY_ITEMS) {
+			items.push(
+				`[truncated ${value.length - MAX_PROJECTION_ARRAY_ITEMS} items]`,
+			);
+		}
+		return items;
+	}
+	if (typeof value === "object") {
+		if (depth >= MAX_PROJECTION_DEPTH) return "[truncated-depth]";
+		const input = value as Record<string, unknown>;
+		const output: Record<string, unknown> = {};
+		const keys = Object.keys(input).sort();
+		for (const key of keys.slice(0, MAX_PROJECTION_OBJECT_KEYS)) {
+			const item = input[key];
+			if (item === undefined || typeof item === "function") continue;
+			output[key] = SENSITIVE_PROJECTION_KEY.test(key)
+				? "[redacted]"
+				: normalizeProjectionPayload(item, options, depth + 1);
+		}
+		if (keys.length > MAX_PROJECTION_OBJECT_KEYS) {
+			output.__truncatedKeys = keys.length - MAX_PROJECTION_OBJECT_KEYS;
+		}
+		return output;
+	}
+	return String(value);
+}
+
+function stableProjectionJson(
+	value: unknown,
+	options: { stringLimit: number | null },
+): string {
+	return JSON.stringify(normalizeProjectionPayload(value, options));
+}
+
+function boundProjectionPayloadJson(canonicalJson: string): string {
+	if (canonicalJson.length <= MAX_PROJECTION_PAYLOAD_JSON_LENGTH) {
+		return canonicalJson;
+	}
+	let preview = canonicalJson.slice(0, MAX_PROJECTION_PAYLOAD_JSON_LENGTH);
+	let bounded = "";
+	while (preview.length > 0) {
+		bounded = JSON.stringify({
+			truncated: true,
+			originalLength: canonicalJson.length,
+			preview,
+		});
+		if (bounded.length <= MAX_PROJECTION_PAYLOAD_JSON_LENGTH) return bounded;
+		preview = preview.slice(0, -128);
+	}
+	return JSON.stringify({
+		truncated: true,
+		originalLength: canonicalJson.length,
+		preview: "",
+	});
+}
+
+function sanitizeProjectionError(
+	message: string | null | undefined,
+): string | null {
+	if (!message) return null;
+	return truncateText(
+		redactSensitiveText(message).replace(/\s+$/g, ""),
+		MAX_PROJECTION_ERROR_LENGTH,
+	);
+}
+
+export function classifyPrReviewProjectionError(input: {
+	status?: number | null;
+	message?: string | null;
+}): PrReviewProjectionErrorKind {
+	const status = input.status ?? null;
+	const lower = String(input.message ?? "").toLowerCase();
+	if (status === 401 || status === 403) return "auth";
+	if (
+		lower.includes("bad credentials") ||
+		lower.includes("unauthorized") ||
+		lower.includes("forbidden") ||
+		lower.includes("permission") ||
+		lower.includes("token")
+	) {
+		return "auth";
+	}
+	if (
+		status === 429 ||
+		lower.includes("rate limit") ||
+		lower.includes("secondary rate")
+	) {
+		return "rate_limit";
+	}
+	if (
+		status === 400 ||
+		status === 422 ||
+		lower.includes("validation") ||
+		lower.includes("invalid")
+	) {
+		return "validation";
+	}
+	if (
+		(status !== null && status >= 500) ||
+		lower.includes("timeout") ||
+		lower.includes("temporar") ||
+		lower.includes("econnreset") ||
+		lower.includes("fetch failed")
+	) {
+		return "transient_api";
+	}
+	return "unknown";
+}
+
+function prepareProjectionPayload(desiredPayload: unknown): {
+	desiredPayloadHash: string;
+	boundedPayloadJson: string;
+} {
+	const hashJson = stableProjectionJson(desiredPayload, { stringLimit: null });
+	const storageJson = stableProjectionJson(desiredPayload, {
+		stringLimit: MAX_PROJECTION_STRING_LENGTH,
+	});
+	return {
+		desiredPayloadHash: createHash("sha256").update(hashJson).digest("hex"),
+		boundedPayloadJson: boundProjectionPayloadJson(storageJson),
+	};
+}
+
+function normalizeProjectionLedgerState(
+	state: string,
+): PrReviewProjectionLedgerState {
+	if (
+		state === "pending" ||
+		state === "projecting" ||
+		state === "projected" ||
+		state === "failed" ||
+		state === "superseded"
+	) {
+		return state;
+	}
+	return "pending";
+}
+
+function normalizeProjectionType(type: string): PrReviewProjectionType {
+	return type === "github_review" ? "github_review" : "github_status";
+}
+
+function normalizeProjectionErrorKind(
+	kind: string | null,
+): PrReviewProjectionErrorKind | null {
+	if (
+		kind === "auth" ||
+		kind === "rate_limit" ||
+		kind === "transient_api" ||
+		kind === "validation" ||
+		kind === "unknown"
+	) {
+		return kind;
+	}
+	return null;
+}
+
 export interface RecordRunStartResult {
 	inserted: boolean;
 	priorStatus?: PrReviewRunStatus;
@@ -118,6 +417,193 @@ export interface RecordRunStartResult {
 
 /** Treat a `started` row older than this as crashed and eligible for retry. */
 const STALE_STARTED_MS = 15 * 60 * 1000;
+const MAX_FAILURE_MESSAGE_LENGTH = 600;
+const MAX_PROJECTION_ERROR_LENGTH = 600;
+const MAX_PROJECTION_STRING_LENGTH = 1000;
+const MAX_PROJECTION_PAYLOAD_JSON_LENGTH = 4096;
+const MAX_PROJECTION_ARRAY_ITEMS = 50;
+const MAX_PROJECTION_OBJECT_KEYS = 50;
+const MAX_PROJECTION_DEPTH = 6;
+
+const TOKEN_REDACTIONS: RegExp[] = [
+	/ghp_[A-Za-z0-9_]{20,}/g,
+	/github_pat_[A-Za-z0-9_]{20,}/g,
+	/(?:sk|sk-ant|sk-proj)-[A-Za-z0-9_-]{20,}/g,
+	/\bBearer\s+[A-Za-z0-9._-]{20,}/gi,
+	/\btoken["'\s:=]+[A-Za-z0-9._-]{20,}/gi,
+	/\bsecret["'\s:=]+[A-Za-z0-9._-]{20,}/gi,
+];
+
+const SENSITIVE_PROJECTION_KEY =
+	/(authorization|token|secret|password|private[_-]?key|raw[_-]?webhook|webhook[_-]?payload)/i;
+
+function redactSensitiveText(message: string): string {
+	let sanitized = message;
+	for (const pattern of TOKEN_REDACTIONS) {
+		sanitized = sanitized.replace(pattern, "[redacted]");
+	}
+	return sanitized;
+}
+
+function truncateText(value: string, limit: number): string {
+	if (value.length <= limit) return value;
+	return `${value.slice(0, limit - 1)}...`;
+}
+
+function sanitizeFailureMessage(
+	message: string | null | undefined,
+): string | null {
+	if (!message) return null;
+	let sanitized = redactSensitiveText(message);
+	sanitized = sanitized.replace(/\s+$/g, "");
+	if (sanitized.length <= MAX_FAILURE_MESSAGE_LENGTH) return sanitized;
+	return `${sanitized.slice(0, MAX_FAILURE_MESSAGE_LENGTH - 1)}...`;
+}
+
+function serializeReviewIntentLabels(labels: string[]): string {
+	return JSON.stringify(
+		labels.map((label) => label.trim()).filter((label) => label.length > 0),
+	);
+}
+
+function parseReviewIntentLabels(labelsJson: string | null): string[] {
+	if (!labelsJson) return [];
+	try {
+		const parsed = JSON.parse(labelsJson);
+		if (!Array.isArray(parsed)) return [];
+		return parsed
+			.map((label) => String(label).trim())
+			.filter((label) => label.length > 0);
+	} catch {
+		return [];
+	}
+}
+
+function reviewIntentFromRow(row: {
+	review_intent_event: string | null;
+	review_intent_body: string | null;
+	review_intent_labels: string | null;
+}): PrReviewRunReviewIntent | null {
+	const event = row.review_intent_event?.trim() ?? "";
+	const body = row.review_intent_body?.trim() ?? "";
+	if (!event || !body) return null;
+	return {
+		event,
+		body,
+		labels: parseReviewIntentLabels(row.review_intent_labels),
+	};
+}
+
+function classifyFailureKind(
+	status: PrReviewRunStatus,
+	message: string | null | undefined,
+): PrReviewFailureKind | null {
+	if (status !== "failed") return null;
+	const lower = String(message ?? "").toLowerCase();
+	if (
+		lower.includes("review intent") ||
+		lower.includes("invalid intent") ||
+		lower.includes("json")
+	) {
+		return "review_intent_invalid";
+	}
+	if (
+		lower.includes("could not resolve pr metadata") ||
+		lower.includes("could not resolve head metadata")
+	) {
+		return "pr_metadata_unavailable";
+	}
+	if (
+		lower.includes("github") ||
+		lower.includes("status") ||
+		/\b(?:401|403|404|422|500|502|503)\b/.test(lower)
+	) {
+		return "github_projection_failed";
+	}
+	if (lower.includes("session") || lower.includes("managed agent")) {
+		return "session_output_failed";
+	}
+	return "broker_failed";
+}
+
+function defaultRetryable(kind: PrReviewFailureKind | null): boolean | null {
+	switch (kind) {
+		case null:
+			return null;
+		case "review_intent_invalid":
+			return false;
+		case "github_projection_failed":
+		case "pr_metadata_unavailable":
+		case "session_output_failed":
+		case "session_start_failed":
+		case "broker_failed":
+		case "stale_active_claim":
+		case "unknown":
+			return true;
+	}
+}
+
+function normalizeFailureRetryable(value: boolean | null): number | null {
+	if (value === null) return null;
+	return value ? 1 : 0;
+}
+
+function normalizeFailureKind(kind: string | null): PrReviewFailureKind | null {
+	if (
+		kind === "session_start_failed" ||
+		kind === "session_output_failed" ||
+		kind === "review_intent_invalid" ||
+		kind === "pr_metadata_unavailable" ||
+		kind === "github_projection_failed" ||
+		kind === "broker_failed" ||
+		kind === "stale_active_claim" ||
+		kind === "unknown"
+	) {
+		return kind;
+	}
+	return null;
+}
+
+function executionStateForRun(input: {
+	status: PrReviewRunStatus;
+	sessionId: string | null;
+}): PrReviewExecutionState {
+	if (input.status === "completed") return "completed";
+	if (input.status === "failed") return "failed";
+	if (input.status === "superseded") return "superseded";
+	return input.sessionId ? "running_session" : "waiting_for_session";
+}
+
+function nextActionForRun(input: {
+	status: PrReviewRunStatus;
+	sessionId: string | null;
+	projectionStatus: PrReviewProjectionStatus;
+	failureRetryable: boolean | null;
+	coalescedAt: string | null;
+}): string {
+	if (input.coalescedAt && input.status === "started") {
+		return "Broker will supersede this run and start one follow-up review for the latest PR state.";
+	}
+	if (input.status === "started" && !input.sessionId) {
+		return "Waiting for the managed-agent session to be created.";
+	}
+	if (input.status === "started") {
+		return "Waiting for the broker to collect completed managed-agent output.";
+	}
+	if (input.status === "completed" && input.projectionStatus === "projected") {
+		return "No action needed; the ReviewRun has been published to GitHub.";
+	}
+	if (input.status === "completed") {
+		return "Broker or repair tooling should publish the completed ReviewRun projection to GitHub.";
+	}
+	if (input.status === "superseded") {
+		return "No action needed for this run; a newer run or review replaced it.";
+	}
+	if (input.failureRetryable) {
+		return "Retry is allowed after confirming this run still targets the current PR head.";
+	}
+	return "Manual inspection required before retry.";
+}
 
 function projectionStatusForRunStatus(
 	status: PrReviewRunStatus,
@@ -185,6 +671,11 @@ async function coalesceIntoActiveRun(input: {
 				status: "superseded",
 				error:
 					"Superseded by a newer trigger after the active claim became stale.",
+				failure_kind: "stale_active_claim",
+				failure_message:
+					"Superseded by a newer trigger after the active claim became stale.",
+				failure_retryable: 1,
+				failed_at: input.now,
 				updated_at: input.now,
 				projection_status: "superseded",
 				projection_updated_at: input.now,
@@ -257,10 +748,18 @@ export async function recordRunStart(
 			created_at: now,
 			updated_at: now,
 			error: null,
+			failure_kind: null,
+			failure_message: null,
+			failure_retryable: null,
+			failed_at: null,
 			projection_status: "pending",
 			projection_updated_at: now,
 			projection_error: null,
 			github_review_id: null,
+			review_intent_event: null,
+			review_intent_body: null,
+			review_intent_labels: null,
+			review_intent_recorded_at: null,
 			active_claim_key: claimKey,
 			coalesced_head_sha: null,
 			coalesced_trigger_kind: null,
@@ -305,10 +804,18 @@ export async function recordRunStart(
 				created_at: now,
 				updated_at: now,
 				error: null,
+				failure_kind: null,
+				failure_message: null,
+				failure_retryable: null,
+				failed_at: null,
 				projection_status: "pending",
 				projection_updated_at: now,
 				projection_error: null,
 				github_review_id: null,
+				review_intent_event: null,
+				review_intent_body: null,
+				review_intent_labels: null,
+				review_intent_recorded_at: null,
 				active_claim_key: claimKey,
 				coalesced_head_sha: null,
 				coalesced_trigger_kind: null,
@@ -348,11 +855,19 @@ export async function recordRunStart(
 			status: "started",
 			session_id: null,
 			error: null,
+			failure_kind: null,
+			failure_message: null,
+			failure_retryable: null,
+			failed_at: null,
 			updated_at: now,
 			projection_status: "pending",
 			projection_updated_at: now,
 			projection_error: null,
 			github_review_id: null,
+			review_intent_event: null,
+			review_intent_body: null,
+			review_intent_labels: null,
+			review_intent_recorded_at: null,
 			active_claim_key: claimKey,
 			coalesced_head_sha: null,
 			coalesced_trigger_kind: null,
@@ -364,39 +879,338 @@ export async function recordRunStart(
 	return { inserted: true, priorStatus };
 }
 
+export interface PrReviewProjectionRecord {
+	projectionId: string;
+	runFingerprint: string;
+	type: PrReviewProjectionType;
+	projectionKey: string;
+	desiredPayloadHash: string;
+	desiredPayload: unknown;
+	state: PrReviewProjectionLedgerState;
+	attempts: number;
+	lastAttemptedAt: string | null;
+	observedExternalId: string | null;
+	errorKind: PrReviewProjectionErrorKind | null;
+	errorText: string | null;
+	createdAt: string;
+	updatedAt: string;
+}
+
+export interface BeginPrReviewProjectionAttemptInput {
+	runFingerprint: string;
+	type: PrReviewProjectionType;
+	projectionKey: string;
+	desiredPayload: unknown;
+}
+
+export interface BeginPrReviewProjectionAttemptResult {
+	projectionId: string;
+	desiredPayloadHash: string;
+	shouldProject: boolean;
+	attempts: number;
+	state: PrReviewProjectionLedgerState;
+	observedExternalId: string | null;
+}
+
+function parseStoredProjectionPayload(payload: string): unknown {
+	try {
+		return JSON.parse(payload);
+	} catch {
+		return { unparseable: true };
+	}
+}
+
+function mapProjectionRecord(row: {
+	projection_id: string;
+	run_fingerprint: string;
+	projection_type: string;
+	projection_key: string;
+	desired_payload_hash: string;
+	desired_payload: string;
+	state: string;
+	attempts: number;
+	last_attempted_at: string | null;
+	observed_external_id: string | null;
+	error_kind: string | null;
+	error_text: string | null;
+	created_at: string;
+	updated_at: string;
+}): PrReviewProjectionRecord {
+	return {
+		projectionId: row.projection_id,
+		runFingerprint: row.run_fingerprint,
+		type: normalizeProjectionType(row.projection_type),
+		projectionKey: row.projection_key,
+		desiredPayloadHash: row.desired_payload_hash,
+		desiredPayload: parseStoredProjectionPayload(row.desired_payload),
+		state: normalizeProjectionLedgerState(row.state),
+		attempts: Number(row.attempts ?? 0),
+		lastAttemptedAt: row.last_attempted_at,
+		observedExternalId: row.observed_external_id,
+		errorKind: normalizeProjectionErrorKind(row.error_kind),
+		errorText: sanitizeProjectionError(row.error_text),
+		createdAt: row.created_at,
+		updatedAt: row.updated_at,
+	};
+}
+
+export async function beginPrReviewProjectionAttempt(
+	input: BeginPrReviewProjectionAttemptInput,
+): Promise<BeginPrReviewProjectionAttemptResult> {
+	await ensureProjectionLedgerTable();
+	const now = new Date().toISOString();
+	const { desiredPayloadHash, boundedPayloadJson } = prepareProjectionPayload(
+		input.desiredPayload,
+	);
+	const projectionId = computeProjectionId({
+		runFingerprint: input.runFingerprint,
+		type: input.type,
+		projectionKey: input.projectionKey,
+		desiredPayloadHash,
+	});
+	const db = getDb();
+	await db
+		.insertInto("managed_pr_review_projections")
+		.values({
+			projection_id: projectionId,
+			run_fingerprint: input.runFingerprint,
+			projection_type: input.type,
+			projection_key: input.projectionKey,
+			desired_payload_hash: desiredPayloadHash,
+			desired_payload: boundedPayloadJson,
+			state: "pending",
+			attempts: 0,
+			last_attempted_at: null,
+			observed_external_id: null,
+			error_kind: null,
+			error_text: null,
+			created_at: now,
+			updated_at: now,
+		})
+		.onConflict((oc) => oc.doNothing())
+		.executeTakeFirst();
+
+	const existing = await db
+		.selectFrom("managed_pr_review_projections")
+		.select([
+			"state",
+			"attempts",
+			"observed_external_id",
+			"desired_payload_hash",
+		])
+		.where("projection_id", "=", projectionId)
+		.executeTakeFirstOrThrow();
+	const existingState = normalizeProjectionLedgerState(existing.state);
+	if (existingState === "projected") {
+		return {
+			projectionId,
+			desiredPayloadHash: existing.desired_payload_hash,
+			shouldProject: false,
+			attempts: Number(existing.attempts ?? 0),
+			state: existingState,
+			observedExternalId: existing.observed_external_id,
+		};
+	}
+
+	const attempts = Number(existing.attempts ?? 0) + 1;
+	await db
+		.updateTable("managed_pr_review_projections")
+		.set({
+			state: "projecting",
+			attempts,
+			last_attempted_at: now,
+			error_kind: null,
+			error_text: null,
+			updated_at: now,
+		})
+		.where("projection_id", "=", projectionId)
+		.execute();
+	return {
+		projectionId,
+		desiredPayloadHash,
+		shouldProject: true,
+		attempts,
+		state: "projecting",
+		observedExternalId: existing.observed_external_id,
+	};
+}
+
+export async function recordPrReviewProjectionSuccess(
+	projectionId: string,
+	input: { observedExternalId?: string | null } = {},
+): Promise<void> {
+	await ensureProjectionLedgerTable();
+	const now = new Date().toISOString();
+	const updates = {
+		state: "projected" as const,
+		error_kind: null,
+		error_text: null,
+		updated_at: now,
+		// Omitted means "no new GitHub ID", not "erase the known GitHub ID".
+		...(input.observedExternalId !== undefined
+			? { observed_external_id: input.observedExternalId }
+			: {}),
+	};
+	await getDb()
+		.updateTable("managed_pr_review_projections")
+		.set(updates)
+		.where("projection_id", "=", projectionId)
+		.execute();
+}
+
+export async function recordPrReviewProjectionFailure(
+	projectionId: string,
+	input: {
+		errorKind: PrReviewProjectionErrorKind;
+		errorText: string;
+	},
+): Promise<void> {
+	await ensureProjectionLedgerTable();
+	const now = new Date().toISOString();
+	await getDb()
+		.updateTable("managed_pr_review_projections")
+		.set({
+			state: "failed",
+			error_kind: input.errorKind,
+			error_text: sanitizeProjectionError(input.errorText),
+			updated_at: now,
+		})
+		.where("projection_id", "=", projectionId)
+		.execute();
+}
+
+export async function listPrReviewProjectionsForRun(
+	runFingerprint: string,
+): Promise<PrReviewProjectionRecord[]> {
+	await ensureProjectionLedgerTable();
+	const rows = await getDb()
+		.selectFrom("managed_pr_review_projections")
+		.selectAll()
+		.where("run_fingerprint", "=", runFingerprint)
+		.orderBy("created_at", "asc")
+		.orderBy("projection_type", "asc")
+		.execute();
+	return rows.map(mapProjectionRecord);
+}
+
 export interface RecordRunResultInput {
 	sessionId: string | null;
 	status: PrReviewRunStatus;
 	error?: string | null;
+	failureKind?: PrReviewFailureKind | null;
+	failureRetryable?: boolean | null;
 	projectionStatus?: PrReviewProjectionStatus;
 	projectionError?: string | null;
 	githubReviewId?: string | null;
+	reviewIntent?: PrReviewRunReviewIntent | null;
 }
 
-export async function recordRunResult(
+const TERMINAL_RUN_STATUSES = new Set<PrReviewRunStatus>([
+	"completed",
+	"failed",
+	"superseded",
+]);
+
+async function assertTransitionAllowed(
 	fingerprint: string,
-	input: RecordRunResultInput,
+	nextStatus: PrReviewRunStatus,
+): Promise<void> {
+	const current = await getDb()
+		.selectFrom("managed_pr_review_runs")
+		.select(["status", "projection_status"])
+		.where("fingerprint", "=", fingerprint)
+		.executeTakeFirst();
+	if (!current) {
+		throw new Error(`ReviewRun ${fingerprint} does not exist`);
+	}
+	const currentStatus = current.status as PrReviewRunStatus;
+	const currentProjectionStatus = normalizeProjectionStatus(
+		current.projection_status,
+		currentStatus,
+	);
+	if (
+		currentStatus === "completed" &&
+		nextStatus === "superseded" &&
+		currentProjectionStatus !== "projected"
+	) {
+		return;
+	}
+	if (
+		TERMINAL_RUN_STATUSES.has(currentStatus) &&
+		currentStatus !== nextStatus
+	) {
+		throw new Error(
+			`ReviewRun ${fingerprint} is terminal (${currentStatus}); cannot mark ${nextStatus}`,
+		);
+	}
+}
+
+interface RunLifecycleUpdateInput {
+	sessionId: string | null;
+	status: PrReviewRunStatus;
+	error?: string | null;
+	failureKind?: PrReviewFailureKind | null;
+	failureRetryable?: boolean | null;
+	projectionStatus?: PrReviewProjectionStatus;
+	projectionError?: string | null;
+	githubReviewId?: string | null;
+	reviewIntent?: PrReviewRunReviewIntent | null;
+}
+
+async function updateRunLifecycle(
+	fingerprint: string,
+	input: RunLifecycleUpdateInput,
 ): Promise<void> {
 	await ensureRunsTable();
 	const now = new Date().toISOString();
+	await assertTransitionAllowed(fingerprint, input.status);
 	const projectionStatus =
 		input.projectionStatus ?? projectionStatusForRunStatus(input.status);
+	const failureKind =
+		input.failureKind ?? classifyFailureKind(input.status, input.error);
+	const sanitizedError = sanitizeFailureMessage(input.error);
+	const failureMessage =
+		input.status === "failed" || failureKind ? sanitizedError : null;
+	const failureRetryable =
+		input.failureRetryable ?? defaultRetryable(failureKind);
+	const projectionError =
+		input.projectionError !== undefined
+			? sanitizeFailureMessage(input.projectionError)
+			: projectionStatus === "failed"
+				? failureMessage
+				: null;
+	const reviewIntentUpdates =
+		input.reviewIntent !== undefined
+			? {
+					review_intent_event: input.reviewIntent?.event ?? null,
+					review_intent_body: input.reviewIntent?.body ?? null,
+					review_intent_labels: input.reviewIntent
+						? serializeReviewIntentLabels(input.reviewIntent.labels)
+						: null,
+					review_intent_recorded_at: input.reviewIntent ? now : null,
+				}
+			: {};
 	const updates = {
 		session_id: input.sessionId,
 		status: input.status,
-		error: input.error ?? null,
+		error: sanitizedError,
+		failure_kind: failureKind,
+		failure_message: failureMessage,
+		failure_retryable: normalizeFailureRetryable(failureRetryable),
+		failed_at: failureKind ? now : null,
 		updated_at: now,
 		projection_status: projectionStatus,
 		projection_updated_at: now,
-		projection_error:
-			input.projectionError !== undefined
-				? input.projectionError
-				: projectionStatus === "failed"
-					? (input.error ?? null)
-					: null,
+		projection_error: projectionError,
 		github_review_id: input.githubReviewId ?? null,
+		...reviewIntentUpdates,
 		...(input.status === "started"
-			? {}
+			? {
+					review_intent_event: null,
+					review_intent_body: null,
+					review_intent_labels: null,
+					review_intent_recorded_at: null,
+				}
 			: {
 					active_claim_key: null,
 					coalesced_head_sha: null,
@@ -410,6 +1224,116 @@ export async function recordRunResult(
 		.set(updates)
 		.where("fingerprint", "=", fingerprint)
 		.execute();
+}
+
+export async function markRunSessionStarted(
+	fingerprint: string,
+	input: { sessionId: string },
+): Promise<void> {
+	await updateRunLifecycle(fingerprint, {
+		sessionId: input.sessionId,
+		status: "started",
+		projectionStatus: "pending",
+	});
+}
+
+export async function markRunCompleted(
+	fingerprint: string,
+	input: {
+		sessionId: string | null;
+		githubReviewId?: string | null;
+		projectionStatus?: PrReviewProjectionStatus;
+		projectionError?: string | null;
+		reviewIntent?: PrReviewRunReviewIntent | null;
+	},
+): Promise<void> {
+	await updateRunLifecycle(fingerprint, {
+		sessionId: input.sessionId,
+		status: "completed",
+		githubReviewId: input.githubReviewId ?? null,
+		projectionStatus: input.projectionStatus,
+		projectionError: input.projectionError,
+		reviewIntent: input.reviewIntent,
+	});
+}
+
+export async function markRunFailed(
+	fingerprint: string,
+	input: {
+		sessionId: string | null;
+		error: string;
+		failureKind?: PrReviewFailureKind | null;
+		failureRetryable?: boolean | null;
+		projectionError?: string | null;
+	},
+): Promise<void> {
+	await updateRunLifecycle(fingerprint, {
+		sessionId: input.sessionId,
+		status: "failed",
+		error: input.error,
+		failureKind: input.failureKind,
+		failureRetryable: input.failureRetryable,
+		projectionStatus: "failed",
+		projectionError: input.projectionError,
+	});
+}
+
+export async function markRunSuperseded(
+	fingerprint: string,
+	input: {
+		sessionId: string | null;
+		reason: string;
+		projectionStatus?: PrReviewProjectionStatus;
+		githubReviewId?: string | null;
+	},
+): Promise<void> {
+	await updateRunLifecycle(fingerprint, {
+		sessionId: input.sessionId,
+		status: "superseded",
+		error: input.reason,
+		projectionStatus: input.projectionStatus ?? "superseded",
+		githubReviewId: input.githubReviewId ?? null,
+	});
+}
+
+export async function recordRunResult(
+	fingerprint: string,
+	input: RecordRunResultInput,
+): Promise<void> {
+	switch (input.status) {
+		case "started":
+			if (!input.sessionId) {
+				throw new Error("ReviewRun session start requires a session id");
+			}
+			await markRunSessionStarted(fingerprint, { sessionId: input.sessionId });
+			return;
+		case "completed":
+			await markRunCompleted(fingerprint, {
+				sessionId: input.sessionId,
+				githubReviewId: input.githubReviewId,
+				projectionStatus: input.projectionStatus,
+				projectionError: input.projectionError,
+				reviewIntent: input.reviewIntent,
+			});
+			return;
+		case "failed":
+			await markRunFailed(fingerprint, {
+				sessionId: input.sessionId,
+				error: input.error ?? "Managed review failed.",
+				failureKind: input.failureKind,
+				failureRetryable: input.failureRetryable,
+				projectionError: input.projectionError,
+			});
+			return;
+		case "superseded":
+			await markRunSuperseded(fingerprint, {
+				sessionId: input.sessionId,
+				reason: input.error ?? "Managed review was superseded.",
+				projectionStatus: input.projectionStatus,
+				githubReviewId: input.githubReviewId,
+			});
+			return;
+	}
 }
 
 export async function releaseRunActiveClaim(
@@ -435,6 +1359,13 @@ export interface PrReviewRunSummary {
 	createdAt: string;
 	updatedAt: string;
 	error: string | null;
+	executionState: PrReviewExecutionState;
+	latestKnownHeadSha: string;
+	failureKind: PrReviewFailureKind | null;
+	failureMessage: string | null;
+	failureRetryable: boolean | null;
+	failedAt: string | null;
+	nextAction: string;
 	projectionStatus: PrReviewProjectionStatus;
 	projectionUpdatedAt: string;
 	projectionError: string | null;
@@ -447,6 +1378,9 @@ export interface PrReviewRunSummary {
 
 export interface PrReviewRunDetails extends PrReviewRunSummary {
 	reviewerConfigHash: string;
+	reviewIntent: PrReviewRunReviewIntent | null;
+	projections: PrReviewProjectionRecord[];
+	recovery: PrReviewRunRecoveryAvailability;
 }
 
 export interface StartedPrReviewRun {
@@ -465,6 +1399,143 @@ export interface StartedPrReviewRun {
 	coalescedAt: string | null;
 }
 
+export interface BrokerPrReviewRun
+	extends Omit<StartedPrReviewRun, "sessionId"> {
+	status: PrReviewRunStatus;
+	projectionStatus: PrReviewProjectionStatus;
+	sessionId: string | null;
+	reviewIntent: PrReviewRunReviewIntent | null;
+	githubReviewId: string | null;
+}
+
+export type PrReviewRunRecoveryAction = "retry_execution" | "repair_projection";
+
+export interface PrReviewRunRecoveryAvailability {
+	available: boolean;
+	action: PrReviewRunRecoveryAction | null;
+	label: string | null;
+	reason: string;
+	reasonCode:
+		| "execution_failed"
+		| "projection_failed"
+		| "failure_not_retryable"
+		| "missing_review_intent"
+		| "run_active"
+		| "run_superseded"
+		| "already_published"
+		| "projection_not_failed"
+		| "unsupported_state";
+}
+
+export interface ActivePrReviewRunSuccessor {
+	fingerprint: string;
+	headSha: string;
+	triggerKind: string;
+	triggerSourceId: string;
+	sessionId: string | null;
+	createdAt: string;
+	updatedAt: string;
+}
+
+export interface PrReviewRunSuccessor extends ActivePrReviewRunSuccessor {
+	status: PrReviewRunStatus;
+	projectionStatus: PrReviewProjectionStatus;
+}
+
+function recoveryAvailabilityForRun(input: {
+	status: PrReviewRunStatus;
+	projectionStatus: PrReviewProjectionStatus;
+	failureRetryable: boolean | null;
+	reviewIntent: PrReviewRunReviewIntent | null;
+}): PrReviewRunRecoveryAvailability {
+	if (input.status === "failed") {
+		if (input.failureRetryable === false) {
+			return {
+				available: false,
+				action: null,
+				label: null,
+				reason: "This failed ReviewRun is marked non-retryable.",
+				reasonCode: "failure_not_retryable",
+			};
+		}
+		return {
+			available: true,
+			action: "retry_execution",
+			label: "Retry execution",
+			reason:
+				"This failed ReviewRun can be retried after live current-head checks pass.",
+			reasonCode: "execution_failed",
+		};
+	}
+
+	if (input.status === "completed") {
+		if (input.projectionStatus === "projected") {
+			return {
+				available: false,
+				action: null,
+				label: null,
+				reason: "This ReviewRun has already been published to GitHub.",
+				reasonCode: "already_published",
+			};
+		}
+		if (input.projectionStatus === "failed") {
+			if (!input.reviewIntent) {
+				return {
+					available: false,
+					action: null,
+					label: null,
+					reason:
+						"This completed ReviewRun has no persisted review intent to repair.",
+					reasonCode: "missing_review_intent",
+				};
+			}
+			return {
+				available: true,
+				action: "repair_projection",
+				label: "Repair GitHub output",
+				reason:
+					"This completed ReviewRun can repair GitHub projection without rerunning the agent.",
+				reasonCode: "projection_failed",
+			};
+		}
+		return {
+			available: false,
+			action: null,
+			label: null,
+			reason: "This completed ReviewRun is not in a failed projection state.",
+			reasonCode: "projection_not_failed",
+		};
+	}
+
+	if (input.status === "started") {
+		return {
+			available: false,
+			action: null,
+			label: null,
+			reason: "This ReviewRun is still active.",
+			reasonCode: "run_active",
+		};
+	}
+
+	if (input.status === "superseded") {
+		return {
+			available: false,
+			action: null,
+			label: null,
+			reason: "This ReviewRun was superseded by newer review activity.",
+			reasonCode: "run_superseded",
+		};
+	}
+
+	return {
+		available: false,
+		action: null,
+		label: null,
+		reason: "This ReviewRun state does not support operator recovery.",
+		reasonCode: "unsupported_state",
+	};
+}
+
 function mapRunDetails(row: {
 	fingerprint: string;
 	repo_full_name: string;
@@ -478,16 +1549,40 @@ function mapRunDetails(row: {
 	created_at: string;
 	updated_at: string;
 	error: string | null;
+	failure_kind: string | null;
+	failure_message: string | null;
+	failure_retryable: number | null;
+	failed_at: string | null;
 	projection_status: string | null;
 	projection_updated_at: string | null;
 	projection_error: string | null;
 	github_review_id: string | null;
+	review_intent_event: string | null;
+	review_intent_body: string | null;
+	review_intent_labels: string | null;
 	coalesced_head_sha: string | null;
 	coalesced_trigger_kind: string | null;
 	coalesced_trigger_source_id: string | null;
 	coalesced_at: string | null;
 }): PrReviewRunDetails {
 	const status = row.status as PrReviewRunStatus;
+	const projectionStatus = normalizeProjectionStatus(
+		row.projection_status,
+		status,
+	);
+	const reviewIntent = reviewIntentFromRow(row);
+	const latestKnownHeadSha = row.coalesced_head_sha ?? row.head_sha;
+	const failureKind = normalizeFailureKind(row.failure_kind);
+	const failureMessage = sanitizeFailureMessage(
+		row.failure_message ?? row.error,
+	);
+	const projectionError = sanitizeFailureMessage(
+		row.projection_error ?? (status === "failed" ? row.error : null),
+	);
+	const executionState = executionStateForRun({
+		status,
+		sessionId: row.session_id,
+	});
 	return {
 		fingerprint: row.fingerprint,
 		repoFullName: row.repo_full_name,
@@ -500,16 +1595,39 @@ function mapRunDetails(row: {
 		sessionId: row.session_id,
 		createdAt: row.created_at,
 		updatedAt: row.updated_at,
-		error: row.error,
-		projectionStatus: normalizeProjectionStatus(row.projection_status, status),
+		error: failureMessage,
+		executionState,
+		latestKnownHeadSha,
+		failureKind,
+		failureMessage,
+		failureRetryable:
+			row.failure_retryable === null ? null : row.failure_retryable === 1,
+		failedAt: row.failed_at,
+		nextAction: nextActionForRun({
+			status,
+			sessionId: row.session_id,
+			projectionStatus,
+			failureRetryable:
+				row.failure_retryable === null ? null : row.failure_retryable === 1,
+			coalescedAt: row.coalesced_at,
+		}),
+		projectionStatus,
 		projectionUpdatedAt: row.projection_updated_at ?? row.updated_at,
-		projectionError:
-			row.projection_error ?? (status === "failed" ? row.error : null),
+		projectionError,
 		githubReviewId: row.github_review_id,
+		reviewIntent,
 		coalescedHeadSha: row.coalesced_head_sha,
 		coalescedTriggerKind: row.coalesced_trigger_kind,
 		coalescedTriggerSourceId: row.coalesced_trigger_source_id,
 		coalescedAt: row.coalesced_at,
+		projections: [],
+		recovery: recoveryAvailabilityForRun({
+			status,
+			projectionStatus,
+			failureRetryable:
+				row.failure_retryable === null ? null : row.failure_retryable === 1,
+			reviewIntent,
+		}),
 	};
 }
 
@@ -523,7 +1641,12 @@ export async function getPrReviewRunByFingerprint(
 		.where("fingerprint", "=", fingerprint)
 		.executeTakeFirst();
 
-	return row ? mapRunDetails(row) : null;
+	if (!row) return null;
+	const run = mapRunDetails(row);
+	return {
+		...run,
+		projections: await listPrReviewProjectionsForRun(run.fingerprint),
+	};
 }
 
 export async function getPrReviewRunBySessionId(
@@ -536,7 +1659,116 @@ export async function getPrReviewRunBySessionId(
 		.where("session_id", "=", sessionId)
 		.executeTakeFirst();
 
-	return row ? mapRunDetails(row) : null;
+	if (!row) return null;
+	const run = mapRunDetails(row);
+	return {
+		...run,
+		projections: await listPrReviewProjectionsForRun(run.fingerprint),
+	};
+}
+
+export async function getActivePrReviewRunSuccessor(input: {
+	fingerprint: string;
+	repoFullName: string;
+	prNumber: number;
+	createdAt: string;
+}): Promise<ActivePrReviewRunSuccessor | null> {
+	await ensureRunsTable();
+	const row = await getDb()
+		.selectFrom("managed_pr_review_runs")
+		.select([
+			"fingerprint",
+			"head_sha",
+			"trigger_kind",
+			"trigger_source_id",
+			"session_id",
+			"created_at",
+			"updated_at",
+		])
+		.where("repo_full_name", "=", input.repoFullName)
+		.where("pr_number", "=", input.prNumber)
+		.where("fingerprint", "!=", input.fingerprint)
+		.where("status", "=", "started")
+		.where("created_at", ">=", input.createdAt)
+		.orderBy("created_at", "desc")
+		.executeTakeFirst();
+	if (!row) return null;
+	return {
+		fingerprint: row.fingerprint,
+		headSha: row.head_sha,
+		triggerKind: row.trigger_kind,
+		triggerSourceId: row.trigger_source_id,
+		sessionId: row.session_id,
+		createdAt: row.created_at,
+		updatedAt: row.updated_at,
+	};
+}
+
+export async function getNewerCurrentHeadPrReviewRun(input: {
+	fingerprint: string;
+	repoFullName: string;
+	prNumber: number;
+	headSha: string;
+	createdAt: string;
+}): Promise<PrReviewRunSuccessor | null> {
+	await ensureRunsTable();
+	const row = await getDb()
+		.selectFrom("managed_pr_review_runs")
+		.select([
+			"fingerprint",
+			"head_sha",
+			"trigger_kind",
+			"trigger_source_id",
+			"status",
+			"projection_status",
+			"session_id",
+			"created_at",
+			"updated_at",
+		])
+		.where("repo_full_name", "=", input.repoFullName)
+		.where("pr_number", "=", input.prNumber)
+		.where("head_sha", "=", input.headSha)
+		.where("fingerprint", "!=", input.fingerprint)
+		.where("created_at", ">", input.createdAt)
+		.orderBy("created_at", "desc")
+		.executeTakeFirst();
+	if (!row) return null;
+	const status = row.status as PrReviewRunStatus;
+	return {
+		fingerprint: row.fingerprint,
+		headSha: row.head_sha,
+		triggerKind: row.trigger_kind,
+		triggerSourceId: row.trigger_source_id,
+		status,
+		projectionStatus: normalizeProjectionStatus(row.projection_status, status),
+		sessionId: row.session_id,
+		createdAt: row.created_at,
+		updatedAt: row.updated_at,
+	};
+}
+
+export async function getPrReviewRunByTrigger(input: {
+	repoFullName: string;
+	prNumber: number;
+	triggerKind: string;
+	triggerSourceId: string;
+}): Promise<PrReviewRunDetails | null> {
+	await ensureRunsTable();
+	const row = await getDb()
+		.selectFrom("managed_pr_review_runs")
+		.selectAll()
+		.where("repo_full_name", "=", input.repoFullName)
+		.where("pr_number", "=", input.prNumber)
+		.where("trigger_kind", "=", input.triggerKind)
+		.where("trigger_source_id", "=", input.triggerSourceId)
+		.orderBy("created_at", "desc")
+		.executeTakeFirst();
+	if (!row) return null;
+	const run = mapRunDetails(row);
+	return {
+		...run,
+		projections: await listPrReviewProjectionsForRun(run.fingerprint),
+	};
 }
 
 export async function listRecentPrReviewRuns(input: {
@@ -558,6 +1790,10 @@ export async function listRecentPrReviewRuns(input: {
 			"created_at",
 			"updated_at",
 			"error",
+			"failure_kind",
+			"failure_message",
+			"failure_retryable",
+			"failed_at",
 			"projection_status",
 			"projection_updated_at",
 			"projection_error",
@@ -567,12 +1803,24 @@ export async function listRecentPrReviewRuns(input: {
 			"coalesced_trigger_source_id",
 			"coalesced_at",
 		])
-		.where("created_at", ">=", input.sinceIso)
+		.where((eb) =>
+			eb.or([
+				eb("created_at", ">=", input.sinceIso),
+				eb("updated_at", ">=", input.sinceIso),
+				eb("coalesced_at", ">=", input.sinceIso),
+			]),
+		)
 		.where("repo_full_name", "=", input.repoFullName)
 		.execute();
 
 	return rows.map((row) => {
 		const status = row.status as PrReviewRunStatus;
+		const projectionStatus = normalizeProjectionStatus(
+			row.projection_status,
+			status,
+		);
+		const failureRetryable =
+			row.failure_retryable === null ? null : row.failure_retryable === 1;
 		return {
 			fingerprint: row.fingerprint,
 			repoFullName: row.repo_full_name,
@@ -584,14 +1832,28 @@ export async function listRecentPrReviewRuns(input: {
 			sessionId: row.session_id,
 			createdAt: row.created_at,
 			updatedAt: row.updated_at,
-			error: row.error,
-			projectionStatus: normalizeProjectionStatus(
-				row.projection_status,
+			error: sanitizeFailureMessage(row.failure_message ?? row.error),
+			executionState: executionStateForRun({
 				status,
-			),
+				sessionId: row.session_id,
+			}),
+			latestKnownHeadSha: row.coalesced_head_sha ?? row.head_sha,
+			failureKind: normalizeFailureKind(row.failure_kind),
+			failureMessage: sanitizeFailureMessage(row.failure_message ?? row.error),
+			failureRetryable,
+			failedAt: row.failed_at,
+			nextAction: nextActionForRun({
+				status,
+				sessionId: row.session_id,
+				projectionStatus,
+				failureRetryable,
+				coalescedAt: row.coalesced_at,
+			}),
+			projectionStatus,
 			projectionUpdatedAt: row.projection_updated_at ?? row.updated_at,
-			projectionError:
+			projectionError: sanitizeFailureMessage(
 				row.projection_error ?? (status === "failed" ? row.error : null),
+			),
 			githubReviewId: row.github_review_id,
 			coalescedHeadSha: row.coalesced_head_sha,
 			coalescedTriggerKind: row.coalesced_trigger_kind,
@@ -604,28 +1866,39 @@ export async function listRecentPrReviewRuns(input: {
 export type PrReviewRunOperatorState =
 	| "starting"
 	| "stuck_starting"
-	| "executing"
-	| "needs_projection"
-	| "failed"
-	| "terminal";
+	| "running"
+	| "running_too_long"
+	| "failed_execution"
+	| "completed_awaiting_projection"
+	| "projection_failed"
+	| "superseded"
+	| "published";
 
 export interface PrReviewRunStateThresholds {
 	startingTimeoutMinutes: number;
+	runningTimeoutMinutes?: number;
 	projectionTimeoutMinutes: number;
 }
 
 export interface ClassifiedPrReviewRun extends PrReviewRunSummary {
 	state: PrReviewRunOperatorState;
 	ageMinutes: number;
+	pickupLatencyMinutes: number | null;
+	executionDurationMinutes: number | null;
+	projectionLatencyMinutes: number | null;
+	sloBreached: boolean;
 }
 
 export interface PrReviewRunStateBuckets {
 	starting: ClassifiedPrReviewRun[];
 	stuckStarting: ClassifiedPrReviewRun[];
-	executing: ClassifiedPrReviewRun[];
-	needsProjection: ClassifiedPrReviewRun[];
-	failed: ClassifiedPrReviewRun[];
-	terminal: ClassifiedPrReviewRun[];
+	running: ClassifiedPrReviewRun[];
+	runningTooLong: ClassifiedPrReviewRun[];
+	failedExecution: ClassifiedPrReviewRun[];
+	completedAwaitingProjection: ClassifiedPrReviewRun[];
+	projectionFailed: ClassifiedPrReviewRun[];
+	superseded: ClassifiedPrReviewRun[];
+	published: ClassifiedPrReviewRun[];
 }
 
 function elapsedMinutes(sinceIso: string, now: Date): number {
@@ -633,6 +1906,48 @@ function elapsedMinutes(sinceIso: string, now: Date): number {
 	const nowMs = now.getTime();
 	if (!Number.isFinite(sinceMs) || !Number.isFinite(nowMs)) return 0;
 	return Math.max(0, Math.floor((nowMs - sinceMs) / (60 * 1000)));
+}
+
+function elapsedMinutesBetween(
+	startIso: string | null | undefined,
+	endIso: string | Date | null | undefined,
+): number | null {
+	if (!startIso || !endIso) return null;
+	const startMs = Date.parse(startIso);
+	const endMs = endIso instanceof Date ? endIso.getTime() : Date.parse(endIso);
+	if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) return null;
+	return Math.max(0, Math.floor((endMs - startMs) / (60 * 1000)));
+}
+
+function runLatencies(
+	run: PrReviewRunSummary,
+	now: Date,
+): Pick<
+	ClassifiedPrReviewRun,
+	| "pickupLatencyMinutes"
+	| "executionDurationMinutes"
+	| "projectionLatencyMinutes"
+> {
+	const pickupLatencyMinutes =
+		run.status !== "started"
+			? null
+			: run.sessionId
+				? elapsedMinutesBetween(run.createdAt, run.updatedAt)
+				: elapsedMinutesBetween(run.createdAt, now);
+	const executionDurationMinutes = run.sessionId
+		? run.status === "started"
+			? elapsedMinutesBetween(run.updatedAt, now)
+			: elapsedMinutesBetween(run.createdAt, run.updatedAt)
+		: null;
+	const projectionLatencyMinutes =
+		run.status === "completed" && run.projectionStatus !== "projected"
+			? elapsedMinutesBetween(run.projectionUpdatedAt, now)
+			: null;
+	return {
+		pickupLatencyMinutes,
+		executionDurationMinutes,
+		projectionLatencyMinutes,
+	};
 }
 
 export function classifyPrReviewRun(
@@ -645,34 +1960,60 @@ export function classifyPrReviewRun(
 	const now = options.now ?? new Date();
 	let ageSource = run.updatedAt;
 	let state: PrReviewRunOperatorState;
+	let sloBreached = false;
+	const runningTimeoutMinutes =
+		options.thresholds.runningTimeoutMinutes ??
+		options.thresholds.projectionTimeoutMinutes;
 
-	if (run.status === "failed" || run.projectionStatus === "failed") {
-		state = "failed";
+	if (run.status === "failed") {
+		state = "failed_execution";
+		ageSource = run.failedAt ?? run.updatedAt;
+	} else if (run.projectionStatus === "failed") {
+		state = "projection_failed";
+		ageSource = run.projectionUpdatedAt;
 	} else if (
-		run.status === "completed" ||
 		run.status === "superseded" ||
-		run.projectionStatus === "projected" ||
 		run.projectionStatus === "superseded"
 	) {
-		state = "terminal";
+		state = "superseded";
+		ageSource = run.updatedAt;
+	} else if (run.status === "completed") {
+		if (run.projectionStatus === "projected") {
+			state = "published";
+			ageSource = run.projectionUpdatedAt;
+		} else {
+			state = "completed_awaiting_projection";
+			ageSource = run.projectionUpdatedAt;
+			sloBreached =
+				elapsedMinutes(ageSource, now) >=
+				options.thresholds.projectionTimeoutMinutes;
+		}
 	} else if (!run.sessionId) {
 		const ageMinutes = elapsedMinutes(ageSource, now);
-		state =
-			ageMinutes >= options.thresholds.startingTimeoutMinutes
-				? "stuck_starting"
-				: "starting";
+		if (ageMinutes >= options.thresholds.startingTimeoutMinutes) {
+			state = "stuck_starting";
+			sloBreached = true;
+		} else {
+			state = "starting";
+		}
 	} else {
-		// Once a session exists, age reports projection staleness rather than
-		// wall-clock run age so operators can see when the broker is overdue.
-		ageSource = run.projectionUpdatedAt;
+		ageSource = run.updatedAt;
 		const ageMinutes = elapsedMinutes(ageSource, now);
-		state =
-			ageMinutes >= options.thresholds.projectionTimeoutMinutes
-				? "needs_projection"
-				: "executing";
+		if (ageMinutes >= runningTimeoutMinutes) {
+			state = "running_too_long";
+			sloBreached = true;
+		} else {
+			state = "running";
+		}
 	}
 
-	return { ...run, state, ageMinutes: elapsedMinutes(ageSource, now) };
+	return {
+		...run,
+		state,
+		ageMinutes: elapsedMinutes(ageSource, now),
+		...runLatencies(run, now),
+		sloBreached,
+	};
 }
 
 export function bucketPrReviewRuns(
@@ -685,10 +2026,13 @@ export function bucketPrReviewRuns(
 	const buckets: PrReviewRunStateBuckets = {
 		starting: [],
 		stuckStarting: [],
-		executing: [],
-		needsProjection: [],
-		failed: [],
-		terminal: [],
+		running: [],
+		runningTooLong: [],
+		failedExecution: [],
+		completedAwaitingProjection: [],
+		projectionFailed: [],
+		superseded: [],
+		published: [],
 	};
 
 	for (const run of runs) {
@@ -700,22 +2044,146 @@ export function bucketPrReviewRuns(
 			case "stuck_starting":
 				buckets.stuckStarting.push(classified);
 				break;
-			case "executing":
-				buckets.executing.push(classified);
+			case "running":
+				buckets.running.push(classified);
 				break;
-			case "needs_projection":
-				buckets.needsProjection.push(classified);
+			case "running_too_long":
+				buckets.runningTooLong.push(classified);
 				break;
-			case "failed":
-				buckets.failed.push(classified);
+			case "failed_execution":
+				buckets.failedExecution.push(classified);
 				break;
-			case "terminal":
-				buckets.terminal.push(classified);
+			case "completed_awaiting_projection":
+				buckets.completedAwaitingProjection.push(classified);
+				break;
+			case "projection_failed":
+				buckets.projectionFailed.push(classified);
+				break;
+			case "superseded":
+				buckets.superseded.push(classified);
+				break;
+			case "published":
+				buckets.published.push(classified);
 				break;
 		}
 	}
 
 	return buckets;
+}
+
+function mapBrokerRun(row: {
+	fingerprint: string;
+	repo_full_name: string;
+	pr_number: number;
+	head_sha: string;
+	trigger_kind: string;
+	trigger_source_id: string;
+	status: string;
+	session_id: string | null;
+	github_review_id: string | null;
+	created_at: string;
+	updated_at: string;
+	projection_status: string | null;
+	review_intent_event: string | null;
+	review_intent_body: string | null;
+	review_intent_labels: string | null;
+	coalesced_head_sha: string | null;
+	coalesced_trigger_kind: string | null;
+	coalesced_trigger_source_id: string | null;
+	coalesced_at: string | null;
+}): BrokerPrReviewRun {
+	const status = row.status as PrReviewRunStatus;
+	return {
+		fingerprint: row.fingerprint,
+		repoFullName: row.repo_full_name,
+		prNumber: row.pr_number,
+		headSha: row.head_sha,
+		triggerKind: row.trigger_kind,
+		triggerSourceId: row.trigger_source_id,
+		status,
+		projectionStatus: normalizeProjectionStatus(row.projection_status, status),
+		sessionId: row.session_id,
+		githubReviewId: row.github_review_id,
+		createdAt: row.created_at,
+		updatedAt: row.updated_at,
+		reviewIntent: reviewIntentFromRow(row),
+		coalescedHeadSha: row.coalesced_head_sha,
+		coalescedTriggerKind: row.coalesced_trigger_kind,
+		coalescedTriggerSourceId: row.coalesced_trigger_source_id,
+		coalescedAt: row.coalesced_at,
+	};
+}
+
+const BROKER_RUN_COLUMNS = [
+	"fingerprint",
+	"repo_full_name",
+	"pr_number",
+	"head_sha",
+	"trigger_kind",
+	"trigger_source_id",
+	"status",
+	"session_id",
+	"github_review_id",
+	"created_at",
+	"updated_at",
+	"projection_status",
+	"review_intent_event",
+	"review_intent_body",
+	"review_intent_labels",
+	"coalesced_head_sha",
+	"coalesced_trigger_kind",
+	"coalesced_trigger_source_id",
+	"coalesced_at",
+] as const;
+
+export async function listPrReviewRunsForBroker(
+	input: {
+		limit?: number;
+		repoFullName?: string;
+	} = {},
+): Promise<BrokerPrReviewRun[]> {
+	await ensureRunsTable();
+	const limit = input.limit ?? 10;
+	let startedQuery = getDb()
+		.selectFrom("managed_pr_review_runs")
+		.select(BROKER_RUN_COLUMNS)
+		.where("status", "=", "started")
+		.where("session_id", "is not", null);
+	let completedQuery = getDb()
+		.selectFrom("managed_pr_review_runs")
+		.select(BROKER_RUN_COLUMNS)
+		.where("status", "=", "completed")
+		.where("projection_status", "in", ["pending", "failed"]);
+	if (input.repoFullName) {
+		startedQuery = startedQuery.where(
+			"repo_full_name",
+			"=",
+			input.repoFullName,
+		);
+		completedQuery = completedQuery.where(
+			"repo_full_name",
+			"=",
+			input.repoFullName,
+		);
+	}
+
+	const [startedRows, completedRows] = await Promise.all([
+		startedQuery.orderBy("updated_at", "asc").limit(limit).execute(),
+		completedQuery
+			.orderBy("projection_updated_at", "asc")
+			.limit(limit)
+			.execute(),
+	]);
+
+	return [...startedRows, ...completedRows]
+		.map(mapBrokerRun)
+		.sort((a, b) => {
+			const updated = a.updatedAt.localeCompare(b.updatedAt);
+			return updated === 0
+				? a.fingerprint.localeCompare(b.fingerprint)
+				: updated;
+		})
+		.slice(0, limit);
 }
 
 export async function listStartedPrReviewRuns(
@@ -773,4 +2241,5 @@ export async function listStartedPrReviewRuns(
 /** Test-only hook so per-test in-memory DBs re-run table creation. */
 export function __resetPrReviewRunsForTests(): void {
 	migrated = false;
+	projectionsMigrated = false;
 }

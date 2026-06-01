@@ -419,7 +419,7 @@ struct WorkspaceEnvironmentOptionsController {
 
         return WorkspaceEnvironmentSheetOption(
             title: "Local",
-            subtitle: "Create a local workspace copy on this Mac",
+            subtitle: "Create a git worktree workspace on this Mac",
             description: descriptor.description,
             iconName: "plus.rectangle.on.folder.fill",
             providerID: LocalWorkspaceProvider.identifier,

@@ -2,7 +2,7 @@
 //  WorkspaceService.swift
 //  WorkspaceManager
 //
-//  Workspace creation, copying, lifecycle hooks, and management
+//  Workspace creation, git worktree materialization, lifecycle hooks, and management
 //
 
 import Foundation
@@ -85,55 +85,47 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
         )
 
         await progress?(.preparing)
-        await progress?(.copyingRepository)
-        try await copyRepository(from: repoLocalURL, to: workspaceDir)
 
         var warnings: [String] = []
 
         let branchName = "workspace/\(sanitizedName)"
-        await progress?(.creatingBranch)
+        await progress?(.creatingWorktree)
         do {
-            try await gitService.createBranch(branchName, at: workspaceDir)
+            try await gitService.createWorktree(
+                branchName: branchName,
+                at: workspaceDir,
+                from: repoLocalURL
+            )
         } catch {
-            let msg = "Could not create branch '\(branchName)': \(error)"
-            log.warning("\(msg)")
-            warnings.append(msg)
+            try? await WorkspaceDirectoryRemover.remove(at: workspaceDir)
+            throw WorkspaceError.worktreeCreationFailed(reason: error.localizedDescription)
         }
 
-        let currentBranch = try? await gitService.getCurrentBranch(at: workspaceDir)
+        do {
+            let currentBranch = try? await gitService.getCurrentBranch(at: workspaceDir)
 
-        await progress?(.runningSetupScript)
-        let setupResult = try await runLifecycleScript("setup.sh", in: workspaceDir)
-        if !setupResult.stdout.isEmpty {
-            log.info("setup.sh output: \(setupResult.stdout)")
-        }
-        if setupResult.exitCode != 0 {
-            let msg = "setup.sh exited with code \(setupResult.exitCode): \(setupResult.stderr)"
-            log.warning("\(msg)")
-            warnings.append(msg)
-        }
+            await progress?(.runningSetupScript)
+            let setupResult = try await runLifecycleScript("setup.sh", in: workspaceDir)
+            if !setupResult.stdout.isEmpty {
+                log.info("setup.sh output: \(setupResult.stdout)")
+            }
+            if setupResult.exitCode != 0 {
+                let msg = "setup.sh exited with code \(setupResult.exitCode): \(setupResult.stderr)"
+                log.warning("\(msg)")
+                warnings.append(msg)
+            }
 
-        await progress?(.finished)
+            await progress?(.finished)
 
-        return NewWorkspaceInfo(
-            name: name,
-            path: workspaceDir,
-            gitBranch: currentBranch ?? branchName,
-            warnings: warnings
-        )
-    }
-
-    // MARK: - Copy Repository
-
-    private func copyRepository(from source: URL, to destination: URL) async throws {
-        let result = try await ProcessRunner.run(
-            executable: "/usr/bin/ditto",
-            arguments: ["--rsrc", source.path, destination.path]
-        )
-
-        guard result.success else {
-            let reason = result.stderr.isEmpty ? "Unknown error" : result.stderr
-            throw WorkspaceError.copyFailed(reason: reason)
+            return NewWorkspaceInfo(
+                name: name,
+                path: workspaceDir,
+                gitBranch: currentBranch ?? branchName,
+                warnings: warnings
+            )
+        } catch {
+            try? await WorkspaceDirectoryRemover.remove(at: workspaceDir)
+            throw error
         }
     }
 
@@ -155,14 +147,7 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
         _ = try await runLifecycleScript("archive.sh", in: workspaceURL)
 
         if deleteFiles {
-            try FileManager.default.removeItem(at: workspaceURL)
-
-            let parentDir = workspaceURL.deletingLastPathComponent()
-            if let contents = try? FileManager.default.contentsOfDirectory(atPath: parentDir.path),
-                contents.isEmpty
-            {
-                try? FileManager.default.removeItem(at: parentDir)
-            }
+            try await WorkspaceDirectoryRemover.remove(at: workspaceURL)
         }
     }
 
@@ -296,7 +281,7 @@ public enum WorkspaceError: LocalizedError {
     case notAGitRepo
     case alreadyExists(name: String)
     case invalidName(name: String)
-    case copyFailed(reason: String)
+    case worktreeCreationFailed(reason: String)
     case deletionFailed(reason: String)
 
     public var errorDescription: String? {
@@ -307,8 +292,8 @@ public enum WorkspaceError: LocalizedError {
             return "A workspace named '\(name)' already exists"
         case .invalidName(let name):
             return "Workspace name '\(name)' is not valid"
-        case .copyFailed(let reason):
-            return "Failed to copy repository: \(reason)"
+        case .worktreeCreationFailed(let reason):
+            return "Failed to create git worktree: \(reason)"
         case .deletionFailed(let reason):
             return "Failed to delete workspace: \(reason)"
         }

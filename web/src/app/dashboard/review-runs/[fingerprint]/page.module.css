@@ -115,6 +115,139 @@
 	background: #f9fafb;
 }
 
+.actionCard {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	border: 1px solid #d1d5db;
+	border-radius: 8px;
+	padding: 12px;
+	background: #ffffff;
+}
+
+.actionCard span {
+	color: #6b7280;
+	font-size: 12px;
+}
+
+.actionCard strong {
+	font-size: 14px;
+}
+
+.actionCard small {
+	color: #6b7280;
+	font-size: 12px;
+}
+
+.recoveryAction {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	gap: 6px 12px;
+	align-items: center;
+	margin-top: 8px;
+	border-top: 1px solid #e5e7eb;
+	padding-top: 10px;
+}
+
+.recoveryAction span,
+.recoveryAction strong,
+.recoveryAction small {
+	grid-column: 1;
+}
+
+.recoveryAction button {
+	grid-row: 1 / span 3;
+	grid-column: 2;
+	border: 1px solid #111827;
+	border-radius: 6px;
+	padding: 7px 10px;
+	background: #111827;
+	color: #ffffff;
+	font-size: 13px;
+	font-weight: 700;
+	cursor: pointer;
+}
+
+.recoveryAction button:disabled {
+	border-color: #9ca3af;
+	background: #9ca3af;
+	cursor: progress;
+}
+
+.projections {
+	overflow: hidden;
+	border: 1px solid #d1d5db;
+	border-radius: 8px;
+	background: #ffffff;
+}
+
+.sectionHeader {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	padding: 12px 14px;
+	border-bottom: 1px solid #e5e7eb;
+}
+
+.sectionHeader h2 {
+	margin: 0;
+	font-size: 15px;
+}
+
+.sectionHeader span {
+	color: #6b7280;
+	font-size: 12px;
+	font-weight: 700;
+}
+
+.projectionList {
+	display: flex;
+	flex-direction: column;
+}
+
+.projectionRow {
+	display: grid;
+	grid-template-columns: minmax(180px, 1.4fr) repeat(5, minmax(112px, 1fr));
+	gap: 12px;
+	padding: 12px 14px;
+	border-top: 1px solid #f3f4f6;
+}
+
+.projectionRow:first-child {
+	border-top: 0;
+}
+
+.projectionRow div {
+	min-width: 0;
+}
+
+.projectionRow span {
+	display: block;
+	margin-bottom: 3px;
+	color: #6b7280;
+	font-size: 11px;
+}
+
+.projectionRow strong {
+	display: block;
+	overflow-wrap: anywhere;
+	font-size: 12px;
+}
+
+.projectionError {
+	grid-column: 1 / -1;
+	margin: 0;
+	overflow: auto;
+	border: 1px solid #fecaca;
+	border-radius: 6px;
+	padding: 8px;
+	background: #fef2f2;
+	color: #991b1b;
+	font-size: 12px;
+	white-space: pre-wrap;
+}
+
 .transcriptCard {
 	display: flex;
 	flex: 1;
@@ -173,4 +306,26 @@
 	background: #fef2f2;
 	color: #991b1b;
 	white-space: pre-wrap;
+}
+
+@media (max-width: 900px) {
+	.projectionRow {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+	}
+}
+
+@media (max-width: 560px) {
+	.projectionRow {
+		grid-template-columns: 1fr;
+	}
+
+	.recoveryAction {
+		grid-template-columns: 1fr;
+	}
+
+	.recoveryAction button {
+		grid-row: auto;
+		grid-column: 1;
+		justify-self: start;
+	}
 }

@@ -286,9 +286,10 @@ class SecurityHardeningTests(unittest.TestCase):
 
     def test_mise_invocations_are_locked_and_pinned(self) -> None:
         verify_mise = (REPO_ROOT / "scripts/verify-mise-security.sh").read_text()
-        self.assertIn("MISE_EXPECTED_VERSION=\"v2026.5.15\"", verify_mise)
+        self.assertIn("MISE_EXPECTED_VERSION=\"v2026.5.18\"", verify_mise)
         self.assertIn("verify_locked_zig_exec", verify_mise)
         self.assertIn("github.com/repos/jdx/mise/releases/latest", verify_mise)
+        self.assertIn("Authorization: Bearer $GITHUB_TOKEN", verify_mise)
         self.assertIn("SHASUMS256.txt", verify_mise)
 
         build_ghosttykit = (REPO_ROOT / "scripts/build-ghosttykit.sh").read_text()
@@ -312,9 +313,9 @@ class SecurityHardeningTests(unittest.TestCase):
         self.assertIn("enable-global-virtual-store=true", web_npmrc)
 
         sandbox = (REPO_ROOT / "web/src/lib/agent-runtime/vercel-sandbox.ts").read_text()
-        self.assertIn("MISE_VERSION='v2026.5.15'", sandbox)
+        self.assertIn("MISE_VERSION='v2026.5.18'", sandbox)
         self.assertIn(
-            "MISE_SHA256='a86aa65c8ca48a548c3f9904853489383bb8cdebfd8f2cf8ddd18b675e03bbf4'",
+            "MISE_SHA256='cfac593469d028d7ae5fe36e37bd7c59118b5238e92d8a876209578464f24a84'",
             sandbox,
         )
         self.assertIn("sha256sum -c -", sandbox)
@@ -323,6 +324,7 @@ class SecurityHardeningTests(unittest.TestCase):
     def test_mise_security_workflow_runs_for_mise_changes(self) -> None:
         workflow = (REPO_ROOT / ".github/workflows/mise-security.yml").read_text()
         self.assertIn("name: Mise Security", workflow)
+        self.assertIn("GITHUB_TOKEN: ${{ github.token }}", workflow)
         self.assertIn("scripts/verify-mise-security.sh", workflow)
         for expected_path in (
             ".mise.toml",
@@ -395,9 +397,13 @@ class SecurityHardeningTests(unittest.TestCase):
         broker_workflow = (
             REPO_ROOT / ".github/workflows/managed-reviewer-broker.yml"
         ).read_text()
+        health_workflow = (
+            REPO_ROOT / ".github/workflows/managed-reviewer-health.yml"
+        ).read_text()
         cd_workflow = (REPO_ROOT / ".github/workflows/cd.yml").read_text()
         canary_script = (REPO_ROOT / "scripts/managed-reviewer-ingress-canary.py").read_text()
         broker_script = (REPO_ROOT / "scripts/pr-reviewer-broker.py").read_text()
+        runs_script = (REPO_ROOT / "scripts/pr-reviewer-runs.py").read_text()
 
         for source in (
             route,
@@ -406,9 +412,11 @@ class SecurityHardeningTests(unittest.TestCase):
             worker,
             workflow,
             broker_workflow,
+            health_workflow,
             cd_workflow,
             canary_script,
             broker_script,
+            runs_script,
         ):
             self.assertIn("WORKSPACES_WEBHOOK_CANARY_SECRET", source)
 
@@ -477,6 +485,14 @@ class SecurityHardeningTests(unittest.TestCase):
         self.assertIn("Authorization", broker_script)
         self.assertNotIn("pr-reviewer-monitor", broker_script)
         self.assertNotIn("canary/pr-review-ingress", broker_script)
+        self.assertIn("scripts/pr-reviewer-runs.py", health_workflow)
+        self.assertIn("scripts/pr-review-health.py", health_workflow)
+        self.assertIn("Check ReviewRun health", health_workflow)
+        self.assertIn("Audit GitHub projection drift", health_workflow)
+        self.assertLess(
+            health_workflow.index("scripts/pr-reviewer-runs.py"),
+            health_workflow.index("scripts/pr-review-health.py"),
+        )
 
         result = subprocess.run(
             ["python3", "scripts/managed-reviewer-ingress-canary.py"],

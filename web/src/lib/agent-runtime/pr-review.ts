@@ -7,9 +7,22 @@ import {
 	getOrCreateEnvironment,
 } from "./managed-agents-cache";
 import {
-	type StartedPrReviewRun,
+	type ActivePrReviewRunSuccessor,
+	type BrokerPrReviewRun,
+	type PrReviewRunDetails,
+	type PrReviewRunReviewIntent,
+	type PrReviewRunSuccessor,
+	beginPrReviewProjectionAttempt,
+	classifyPrReviewProjectionError,
 	computeRunFingerprint,
-	listStartedPrReviewRuns,
+	getActivePrReviewRunSuccessor,
+	getNewerCurrentHeadPrReviewRun,
+	getPrReviewRunByFingerprint,
+	getPrReviewRunByTrigger,
+	listPrReviewProjectionsForRun,
+	listPrReviewRunsForBroker,
+	recordPrReviewProjectionFailure,
+	recordPrReviewProjectionSuccess,
 	recordRunResult,
 	recordRunStart,
 	releaseRunActiveClaim,
@@ -109,7 +122,8 @@ export type PrReviewTriggerKind =
 	| "synchronize"
 	| "edited"
 	| "evidence_comment"
-	| "superseded_retry";
+	| "superseded_retry"
+	| "manual_retry";
 
 export interface PrReviewTrigger {
 	kind: PrReviewTriggerKind;
@@ -724,6 +738,7 @@ async function postGitHubReviewIntent(
 	githubToken: string,
 	payload: PrReviewPayload,
 	intent: PrReviewIntent,
+	options: { fingerprint?: string; existingReviewId?: string | null } = {},
 ): Promise<{ reviewId: string | null }> {
 	const [owner, repo] = payload.repoFullName.split("/");
 	if (!owner || !repo) {
@@ -736,18 +751,67 @@ async function postGitHubReviewIntent(
 		"X-GitHub-Api-Version": "2022-11-28",
 		"Content-Type": "application/json",
 	};
-	const reviewRes = await fetch(
-		`${GITHUB_API}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls/${payload.number}/reviews`,
-		{
-			method: "POST",
-			headers,
-			body: JSON.stringify({ event: intent.event, body: intent.body }),
-		},
-	);
-	if (!reviewRes.ok) {
-		throw new Error(
-			`GitHub review post failed ${reviewRes.status}: ${await reviewRes.text()}`,
+
+	const projection = options.fingerprint
+		? await beginPrReviewProjectionAttempt({
+				runFingerprint: options.fingerprint,
+				type: "github_review",
+				projectionKey: "final-review",
+				desiredPayload: {
+					repoFullName: payload.repoFullName,
+					prNumber: payload.number,
+					event: intent.event,
+					body: intent.body,
+					labels: intent.labels,
+				},
+			})
+		: null;
+	if (projection && !projection.shouldProject) {
+		return {
+			reviewId:
+				projection.observedExternalId ?? options.existingReviewId ?? null,
+		};
+	}
+	if (projection && options.existingReviewId) {
+		await recordPrReviewProjectionSuccess(projection.projectionId, {
+			observedExternalId: options.existingReviewId,
+		});
+		return { reviewId: options.existingReviewId };
+	}
+
+	let reviewRes: Response;
+	try {
+		reviewRes = await fetch(
+			`${GITHUB_API}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls/${payload.number}/reviews`,
+			{
+				method: "POST",
+				headers,
+				body: JSON.stringify({ event: intent.event, body: intent.body }),
+			},
 		);
+	} catch (err) {
+		const message = err instanceof Error ? err.message : String(err);
+		if (projection) {
+			await recordPrReviewProjectionFailure(projection.projectionId, {
+				errorKind: classifyPrReviewProjectionError({ message }),
+				errorText: message,
+			});
+		}
+		throw err;
+	}
+	if (!reviewRes.ok) {
+		const responseText = await reviewRes.text();
+		const message = `GitHub review post failed ${reviewRes.status}: ${responseText}`;
+		if (projection) {
+			await recordPrReviewProjectionFailure(projection.projectionId, {
+				errorKind: classifyPrReviewProjectionError({
+					status: reviewRes.status,
+					message: responseText,
+				}),
+				errorText: message,
+			});
+		}
+		throw new Error(message);
 	}
 	const reviewJson = (await reviewRes.json().catch(() => null)) as {
 		id?: unknown;
@@ -756,6 +820,11 @@ async function postGitHubReviewIntent(
 		reviewJson?.id !== undefined && reviewJson.id !== null
 			? String(reviewJson.id)
 			: null;
+	if (projection) {
+		await recordPrReviewProjectionSuccess(projection.projectionId, {
+			observedExternalId: reviewId,
+		});
+	}
 
 	if (intent.labels.length === 0) return { reviewId };
 
@@ -877,15 +946,39 @@ async function postManagedReviewStatus(
 	payload: ManagedReviewStatusPayload,
 	state: ManagedReviewStatusState,
 	description: string,
-): Promise<void> {
+	options: { strict?: boolean } = {},
+): Promise<{ projected: boolean }> {
 	const [owner, repo] = payload.repoFullName.split("/");
 	if (!owner || !repo || !payload.headSha) {
-		console.warn(
-			`[pr-review] managed review status skipped for PR #${payload.number}: missing repo or head SHA`,
-		);
-		return;
+		const message = `managed review status skipped for PR #${payload.number}: missing repo or head SHA`;
+		if (options.strict) throw new Error(message);
+		console.warn(`[pr-review] ${message}`);
+		return { projected: false };
 	}
 
+	const statusBody = {
+		state,
+		context: MANAGED_REVIEW_STATUS_CONTEXT,
+		description,
+		target_url: buildManagedReviewStatusTargetUrl(payload),
+	};
+	const projection = payload.fingerprint
+		? await beginPrReviewProjectionAttempt({
+				runFingerprint: payload.fingerprint,
+				type: "github_status",
+				projectionKey: MANAGED_REVIEW_STATUS_CONTEXT,
+				desiredPayload: {
+					repoFullName: payload.repoFullName,
+					headSha: payload.headSha,
+					...statusBody,
+				},
+			})
+		: null;
+	if (projection && !projection.shouldProject) {
+		return { projected: projection.state === "projected" };
+	}
+
+	let recordedProjectionFailure = false;
 	try {
 		const res = await fetch(
 			`${GITHUB_API}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/statuses/${encodeURIComponent(payload.headSha)}`,
@@ -897,24 +990,54 @@ async function postManagedReviewStatus(
 					"X-GitHub-Api-Version": "2022-11-28",
 					"Content-Type": "application/json",
 				},
-				body: JSON.stringify({
-					state,
-					context: MANAGED_REVIEW_STATUS_CONTEXT,
-					description,
-					target_url: buildManagedReviewStatusTargetUrl(payload),
-				}),
+				body: JSON.stringify(statusBody),
 			},
 		);
 		if (!res.ok) {
+			const responseText = await res.text();
+			const message = `GitHub status update failed ${res.status}: ${responseText}`;
+			if (projection) {
+				await recordPrReviewProjectionFailure(projection.projectionId, {
+					errorKind: classifyPrReviewProjectionError({
+						status: res.status,
+						message: responseText,
+					}),
+					errorText: message,
+				});
+				recordedProjectionFailure = true;
+			}
 			console.warn(
-				`[pr-review] managed review status update failed ${res.status}: ${await res.text()}`,
+				`[pr-review] managed review status update failed ${res.status}: ${responseText}`,
 			);
+			if (options.strict) throw new Error(message);
+			return { projected: false };
 		}
+		const statusJson = (await res.json().catch(() => null)) as {
+			id?: unknown;
+		} | null;
+		if (projection) {
+			await recordPrReviewProjectionSuccess(projection.projectionId, {
+				observedExternalId:
+					statusJson?.id !== undefined && statusJson.id !== null
+						? String(statusJson.id)
+						: null,
+			});
+		}
+		return { projected: true };
 	} catch (err) {
+		if (projection && !recordedProjectionFailure) {
+			const message = err instanceof Error ? err.message : String(err);
+			await recordPrReviewProjectionFailure(projection.projectionId, {
+				errorKind: classifyPrReviewProjectionError({ message }),
+				errorText: message,
+			});
+		}
 		console.warn(
 			"[pr-review] managed review status update failed:",
 			err instanceof Error ? err.message : err,
 		);
+		if (options.strict) throw err;
+		return { projected: false };
 	}
 }
 
@@ -956,7 +1079,7 @@ async function collectCompletedReviewIntentText(
 
 async function payloadFromStartedRun(
 	githubToken: string,
-	run: StartedPrReviewRun,
+	run: Pick<BrokerPrReviewRun, "repoFullName" | "prNumber" | "headSha">,
 	options: { preferCurrentHead?: boolean } = {},
 ): Promise<PrReviewPayload | null> {
 	const [owner, repo] = run.repoFullName.split("/");
@@ -997,7 +1120,7 @@ function reviewSubmittedAfter(
 
 function reviewsAfterRunStarted(
 	history: PrPriorReviewContext,
-	run: StartedPrReviewRun,
+	run: Pick<BrokerPrReviewRun, "createdAt">,
 ): PrPriorReviewItem[] {
 	if (history.unavailableReason) return [];
 	return history.reviews.filter((review) =>
@@ -1007,7 +1130,7 @@ function reviewsAfterRunStarted(
 
 function currentHeadAlreadyReviewed(
 	review: PrPriorReviewItem,
-	run: StartedPrReviewRun,
+	run: Pick<BrokerPrReviewRun, "headSha">,
 	payload: PrReviewPayload,
 ): boolean {
 	const reviewedSha = review.commitSha.trim();
@@ -1017,22 +1140,709 @@ function currentHeadAlreadyReviewed(
 
 export interface PrReviewBrokerRunResult {
 	fingerprint: string;
-	sessionId: string;
+	sessionId: string | null;
 	prNumber: number;
-	status: "completed" | "failed" | "skipped_running" | "superseded";
+	status:
+		| "completed"
+		| "failed"
+		| "skipped_running"
+		| "skipped_missing_intent"
+		| "superseded";
+	outcome: "applied" | "failed" | "skipped" | "superseded" | "retryable";
 	error?: string;
+	retryable?: boolean;
 	supersededByReviewId?: number;
 	retrySessionId?: string | null;
 }
 
 export interface PrReviewBrokerResult {
 	checked: number;
+	applied: number;
 	completed: number;
 	failed: number;
+	skipped: number;
 	skippedRunning: number;
 	superseded: number;
+	retryable: number;
 	requeued: number;
 	runs: PrReviewBrokerRunResult[];
+}
+
+function persistedReviewIntentForRun(
+	intent: PrReviewRunReviewIntent | null,
+): PrReviewIntent | null {
+	if (!intent) return null;
+	const event = intent.event.trim();
+	const body = intent.body.trim();
+	if (!VALID_REVIEW_EVENTS.has(event) || !body) {
+		throw new Error("completed ReviewRun has invalid persisted review intent");
+	}
+	return {
+		event: event as PrReviewIntentEvent,
+		body,
+		labels: [...new Set(intent.labels.map((label) => label.trim()))].filter(
+			(label) => label.length > 0,
+		),
+	};
+}
+
+function projectionFailureRetryable(reason: string): boolean {
+	return classifyPrReviewProjectionError({ message: reason }) !== "validation";
+}
+
+async function hasProjectedReviewProjection(
+	fingerprint: string,
+): Promise<boolean> {
+	const projections = await listPrReviewProjectionsForRun(fingerprint);
+	return projections.some(
+		(projection) =>
+			projection.type === "github_review" &&
+			projection.projectionKey === "final-review" &&
+			projection.state === "projected",
+	);
+}
+
+async function publishReviewRunIntent(
+	githubToken: string,
+	run: BrokerPrReviewRun,
+	payload: PrReviewPayload,
+	statusPayload: ManagedReviewStatusPayload,
+	intent: PrReviewIntent,
+): Promise<PrReviewBrokerRunResult> {
+	let reviewId: string | null = null;
+	try {
+		const postedReview = await postGitHubReviewIntent(
+			githubToken,
+			payload,
+			intent,
+			{
+				fingerprint: run.fingerprint,
+				existingReviewId: run.githubReviewId,
+			},
+		);
+		reviewId = postedReview.reviewId;
+		await postManagedReviewStatus(
+			githubToken,
+			statusPayload,
+			"success",
+			"Managed review posted.",
+			{ strict: true },
+		);
+		await recordRunResult(run.fingerprint, {
+			sessionId: run.sessionId,
+			status: "completed",
+			githubReviewId: reviewId,
+			projectionStatus: "projected",
+		});
+		return {
+			fingerprint: run.fingerprint,
+			sessionId: run.sessionId,
+			prNumber: run.prNumber,
+			status: "completed",
+			outcome: "applied",
+		};
+	} catch (err) {
+		const reason = err instanceof Error ? err.message : String(err);
+		const retryable = projectionFailureRetryable(reason);
+		await recordRunResult(run.fingerprint, {
+			sessionId: run.sessionId,
+			status: "completed",
+			githubReviewId: reviewId,
+			projectionStatus: "failed",
+			projectionError: reason,
+		});
+		return {
+			fingerprint: run.fingerprint,
+			sessionId: run.sessionId,
+			prNumber: run.prNumber,
+			status: "completed",
+			outcome: retryable ? "retryable" : "failed",
+			error: reason,
+			retryable,
+		};
+	}
+}
+
+type PrReviewRunRecoveryAction = "retry_execution" | "repair_projection";
+
+export type PrReviewRunRecoveryOutcome =
+	| "execution_retry_started"
+	| "execution_retry_already_active"
+	| "execution_retry_already_exists"
+	| "projection_repaired"
+	| "projection_already_projected";
+
+export type PrReviewRunRecoveryFailureReason =
+	| "not_found"
+	| "reviewer_unavailable"
+	| "current_head_unavailable"
+	| "stale_run"
+	| "superseded_run"
+	| "run_still_active"
+	| "active_successor"
+	| "newer_run_exists"
+	| "failure_not_retryable"
+	| "missing_review_intent"
+	| "unsupported_state"
+	| "retry_not_started"
+	| "projection_repair_failed";
+
+export type PrReviewRunRecoveryResult =
+	| {
+			ok: true;
+			action: PrReviewRunRecoveryAction;
+			outcome: PrReviewRunRecoveryOutcome;
+			fingerprint: string;
+			currentHeadSha: string;
+			message: string;
+			sessionId?: string | null;
+			successorFingerprint?: string;
+			brokerRun?: PrReviewBrokerRunResult;
+	  }
+	| {
+			ok: false;
+			status: number;
+			reason: PrReviewRunRecoveryFailureReason;
+			error: string;
+			currentHeadSha?: string;
+			activeSuccessor?: ActivePrReviewRunSuccessor;
+			successor?: PrReviewRunSuccessor;
+			brokerRun?: PrReviewBrokerRunResult;
+	  };
+
+const MANUAL_RETRY_TRIGGER_KIND = "manual_retry";
+
+function manualRetryTriggerSource(
+	failedFingerprint: string,
+	currentHeadSha: string,
+): string {
+	return `manual-retry-${failedFingerprint}-head-${currentHeadSha}`;
+}
+
+function recoveryFailure(
+	status: number,
+	reason: PrReviewRunRecoveryFailureReason,
+	error: string,
+	extra: Omit<
+		Extract<PrReviewRunRecoveryResult, { ok: false }>,
+		"ok" | "status" | "reason" | "error"
+	> = {},
+): PrReviewRunRecoveryResult {
+	return { ok: false, status, reason, error, ...extra };
+}
+
+function payloadFromRunMetadata(
+	run: Pick<PrReviewRunDetails, "repoFullName" | "prNumber">,
+	metadata: NonNullable<Awaited<ReturnType<typeof fetchPrHeadMetadata>>>,
+): PrReviewPayload {
+	const [, repo] = run.repoFullName.split("/");
+	return {
+		number: run.prNumber,
+		title: metadata.title,
+		htmlUrl: metadata.htmlUrl,
+		body: metadata.body,
+		headRef: metadata.headRef,
+		headSha: metadata.headSha,
+		baseRef: metadata.baseRef,
+		repoUrl: `https://github.com/${run.repoFullName}`,
+		repoFullName: run.repoFullName,
+		repoName: repo ?? "",
+	};
+}
+
+function brokerRunFromDetails(run: PrReviewRunDetails): BrokerPrReviewRun {
+	return {
+		fingerprint: run.fingerprint,
+		repoFullName: run.repoFullName,
+		prNumber: run.prNumber,
+		headSha: run.headSha,
+		triggerKind: run.triggerKind,
+		triggerSourceId: run.triggerSourceId,
+		status: run.status,
+		projectionStatus: run.projectionStatus,
+		sessionId: run.sessionId,
+		githubReviewId: run.githubReviewId,
+		createdAt: run.createdAt,
+		updatedAt: run.updatedAt,
+		reviewIntent: run.reviewIntent,
+		coalescedHeadSha: run.coalescedHeadSha,
+		coalescedTriggerKind: run.coalescedTriggerKind,
+		coalescedTriggerSourceId: run.coalescedTriggerSourceId,
+		coalescedAt: run.coalescedAt,
+	};
+}
+
+function matchingManualRetrySuccessor(
+	successor: ActivePrReviewRunSuccessor | PrReviewRunSuccessor | null,
+	triggerSourceId: string,
+): successor is ActivePrReviewRunSuccessor | PrReviewRunSuccessor {
+	return (
+		successor?.triggerKind === MANUAL_RETRY_TRIGGER_KIND &&
+		successor.triggerSourceId === triggerSourceId
+	);
+}
+
+function retryOutcomeForExistingRun(
+	run: PrReviewRunSuccessor | PrReviewRunDetails,
+): PrReviewRunRecoveryOutcome {
+	return run.status === "started"
+		? "execution_retry_already_active"
+		: "execution_retry_already_exists";
+}
+
+async function fetchLiveCurrentHeadForRecovery(
+	githubToken: string,
+	run: Pick<PrReviewRunDetails, "repoFullName" | "prNumber">,
+): Promise<NonNullable<
+	Awaited<ReturnType<typeof fetchPrHeadMetadata>>
+> | null> {
+	const metadata = await fetchPrHeadMetadata(
+		githubToken,
+		run.repoFullName,
+		run.prNumber,
+	);
+	if (!metadata?.headSha) return null;
+	return metadata;
+}
+
+async function retryFailedReviewRun(
+	run: PrReviewRunDetails,
+	currentPayload: PrReviewPayload,
+	activeSuccessor: ActivePrReviewRunSuccessor | null,
+	newerCurrentHeadRun: PrReviewRunSuccessor | null,
+): Promise<PrReviewRunRecoveryResult> {
+	const triggerSourceId = manualRetryTriggerSource(
+		run.fingerprint,
+		currentPayload.headSha,
+	);
+	if (matchingManualRetrySuccessor(activeSuccessor, triggerSourceId)) {
+		return {
+			ok: true,
+			action: "retry_execution",
+			outcome: "execution_retry_already_active",
+			fingerprint: run.fingerprint,
+			currentHeadSha: currentPayload.headSha,
+			successorFingerprint: activeSuccessor.fingerprint,
+			sessionId: activeSuccessor.sessionId,
+			message: "A deterministic manual retry is already active for this run.",
+		};
+	}
+	if (matchingManualRetrySuccessor(newerCurrentHeadRun, triggerSourceId)) {
+		return {
+			ok: true,
+			action: "retry_execution",
+			outcome: retryOutcomeForExistingRun(newerCurrentHeadRun),
+			fingerprint: run.fingerprint,
+			currentHeadSha: currentPayload.headSha,
+			successorFingerprint: newerCurrentHeadRun.fingerprint,
+			sessionId: newerCurrentHeadRun.sessionId,
+			message: "The deterministic manual retry already exists.",
+		};
+	}
+	if (activeSuccessor) {
+		return recoveryFailure(
+			409,
+			"active_successor",
+			"A newer ReviewRun is already active for this PR.",
+			{ currentHeadSha: currentPayload.headSha, activeSuccessor },
+		);
+	}
+	if (newerCurrentHeadRun) {
+		return recoveryFailure(
+			409,
+			"newer_run_exists",
+			"A newer ReviewRun already exists for the current PR head.",
+			{
+				currentHeadSha: currentPayload.headSha,
+				successor: newerCurrentHeadRun,
+			},
+		);
+	}
+
+	const sessionId = await triggerPrReview(currentPayload, {
+		kind: MANUAL_RETRY_TRIGGER_KIND,
+		triggerSourceId,
+		reason: `Manual operator retry for failed ReviewRun ${run.fingerprint}.`,
+	});
+	if (sessionId) {
+		const successor = await getPrReviewRunByTrigger({
+			repoFullName: run.repoFullName,
+			prNumber: run.prNumber,
+			triggerKind: MANUAL_RETRY_TRIGGER_KIND,
+			triggerSourceId,
+		});
+		return {
+			ok: true,
+			action: "retry_execution",
+			outcome: "execution_retry_started",
+			fingerprint: run.fingerprint,
+			currentHeadSha: currentPayload.headSha,
+			successorFingerprint: successor?.fingerprint,
+			sessionId,
+			message: "Started a manual execution retry for the current PR head.",
+		};
+	}
+
+	const existingRetry = await getPrReviewRunByTrigger({
+		repoFullName: run.repoFullName,
+		prNumber: run.prNumber,
+		triggerKind: MANUAL_RETRY_TRIGGER_KIND,
+		triggerSourceId,
+	});
+	if (existingRetry) {
+		return {
+			ok: true,
+			action: "retry_execution",
+			outcome: retryOutcomeForExistingRun(existingRetry),
+			fingerprint: run.fingerprint,
+			currentHeadSha: currentPayload.headSha,
+			successorFingerprint: existingRetry.fingerprint,
+			sessionId: existingRetry.sessionId,
+			message: "The deterministic manual retry already exists.",
+		};
+	}
+
+	return recoveryFailure(
+		503,
+		"retry_not_started",
+		"Manual retry did not start; reviewer credentials or runtime may be unavailable.",
+		{ currentHeadSha: currentPayload.headSha },
+	);
+}
+
+async function repairCompletedReviewRunProjection(
+	githubToken: string,
+	run: PrReviewRunDetails,
+	currentPayload: PrReviewPayload,
+	activeSuccessor: ActivePrReviewRunSuccessor | null,
+	newerCurrentHeadRun: PrReviewRunSuccessor | null,
+): Promise<PrReviewRunRecoveryResult> {
+	if (activeSuccessor) {
+		return recoveryFailure(
+			409,
+			"active_successor",
+			"A newer ReviewRun is already active for this PR.",
+			{ currentHeadSha: currentPayload.headSha, activeSuccessor },
+		);
+	}
+	if (newerCurrentHeadRun) {
+		return recoveryFailure(
+			409,
+			"newer_run_exists",
+			"A newer ReviewRun already exists for the current PR head.",
+			{
+				currentHeadSha: currentPayload.headSha,
+				successor: newerCurrentHeadRun,
+			},
+		);
+	}
+
+	const intent = persistedReviewIntentForRun(run.reviewIntent);
+	if (!intent) {
+		return recoveryFailure(
+			409,
+			"missing_review_intent",
+			"Completed ReviewRun has no persisted review intent to repair.",
+			{ currentHeadSha: currentPayload.headSha },
+		);
+	}
+
+	const brokerRun = await publishReviewRunIntent(
+		githubToken,
+		brokerRunFromDetails(run),
+		currentPayload,
+		{
+			repoFullName: currentPayload.repoFullName,
+			number: currentPayload.number,
+			headSha: currentPayload.headSha,
+			htmlUrl: currentPayload.htmlUrl,
+			fingerprint: run.fingerprint,
+		},
+		intent,
+	);
+	if (brokerRun.outcome === "applied") {
+		return {
+			ok: true,
+			action: "repair_projection",
+			outcome: "projection_repaired",
+			fingerprint: run.fingerprint,
+			currentHeadSha: currentPayload.headSha,
+			brokerRun,
+			message: "Repaired GitHub projection for the completed ReviewRun.",
+		};
+	}
+
+	return recoveryFailure(
+		brokerRun.outcome === "retryable" ? 503 : 422,
+		"projection_repair_failed",
+		brokerRun.error ?? "Projection repair failed.",
+		{ currentHeadSha: currentPayload.headSha, brokerRun },
+	);
+}
+
+export async function recoverPrReviewRun(
+	fingerprint: string,
+): Promise<PrReviewRunRecoveryResult> {
+	const run = await getPrReviewRunByFingerprint(fingerprint);
+	if (!run) {
+		return recoveryFailure(404, "not_found", "ReviewRun not found.");
+	}
+
+	if (run.status === "superseded") {
+		return recoveryFailure(
+			409,
+			"superseded_run",
+			"Superseded ReviewRuns cannot be retried or repaired.",
+		);
+	}
+	if (run.status === "started") {
+		return recoveryFailure(
+			409,
+			"run_still_active",
+			"Active ReviewRuns cannot be retried or repaired.",
+		);
+	}
+	if (run.status === "completed" && run.projectionStatus === "projected") {
+		return {
+			ok: true,
+			action: "repair_projection",
+			outcome: "projection_already_projected",
+			fingerprint: run.fingerprint,
+			currentHeadSha: run.headSha,
+			message: "ReviewRun is already published; no repair was needed.",
+		};
+	}
+
+	const githubToken = await resolveGitHubToken();
+	if (!githubToken) {
+		return recoveryFailure(
+			503,
+			"reviewer_unavailable",
+			"Missing GitHub App credentials or reviewer is disabled.",
+		);
+	}
+
+	const currentHead = await fetchLiveCurrentHeadForRecovery(githubToken, run);
+	if (!currentHead) {
+		return recoveryFailure(
+			502,
+			"current_head_unavailable",
+			"Could not resolve the current PR head from GitHub.",
+		);
+	}
+	if (run.headSha !== currentHead.headSha) {
+		return recoveryFailure(
+			409,
+			"stale_run",
+			`ReviewRun targets ${run.headSha}; current PR head is ${currentHead.headSha}.`,
+			{ currentHeadSha: currentHead.headSha },
+		);
+	}
+
+	const currentPayload = payloadFromRunMetadata(run, currentHead);
+	const activeSuccessor = await getActivePrReviewRunSuccessor({
+		fingerprint: run.fingerprint,
+		repoFullName: run.repoFullName,
+		prNumber: run.prNumber,
+		createdAt: run.createdAt,
+	});
+	const newerCurrentHeadRun = await getNewerCurrentHeadPrReviewRun({
+		fingerprint: run.fingerprint,
+		repoFullName: run.repoFullName,
+		prNumber: run.prNumber,
+		headSha: currentPayload.headSha,
+		createdAt: run.createdAt,
+	});
+
+	if (run.status === "failed") {
+		if (run.failureRetryable === false) {
+			return recoveryFailure(
+				409,
+				"failure_not_retryable",
+				"This failed ReviewRun is marked non-retryable.",
+				{ currentHeadSha: currentPayload.headSha },
+			);
+		}
+		return retryFailedReviewRun(
+			run,
+			currentPayload,
+			activeSuccessor,
+			newerCurrentHeadRun,
+		);
+	}
+
+	if (run.status === "completed" && run.projectionStatus === "failed") {
+		return repairCompletedReviewRunProjection(
+			githubToken,
+			run,
+			currentPayload,
+			activeSuccessor,
+			newerCurrentHeadRun,
+		);
+	}
+
+	return recoveryFailure(
+		409,
+		"unsupported_state",
+		"This ReviewRun is not failed or projection-failed.",
+		{ currentHeadSha: currentPayload.headSha },
+	);
+}
+
+function countBrokerRun(
+	result: PrReviewBrokerResult,
+	runResult: PrReviewBrokerRunResult,
+): void {
+	switch (runResult.outcome) {
+		case "applied":
+			result.applied += 1;
+			result.completed += 1;
+			break;
+		case "failed":
+			result.failed += 1;
+			break;
+		case "skipped":
+			result.skipped += 1;
+			if (runResult.status === "skipped_running") {
+				result.skippedRunning += 1;
+			}
+			break;
+		case "superseded":
+			result.superseded += 1;
+			if (runResult.retrySessionId) result.requeued += 1;
+			break;
+		case "retryable":
+			result.retryable += 1;
+			break;
+	}
+	result.runs.push(runResult);
+}
+
+async function supersedeRunWithRetry(
+	githubToken: string,
+	run: BrokerPrReviewRun,
+	payload: PrReviewPayload,
+	reason: string,
+	triggerSourceId: string,
+	referenceReviewId?: number,
+): Promise<PrReviewBrokerRunResult> {
+	let retrySessionId: string | null = null;
+	await releaseRunActiveClaim(run.fingerprint);
+	try {
+		retrySessionId = await triggerPrReview(payload, {
+			kind: "superseded_retry",
+			triggerSourceId,
+			reason,
+		});
+	} catch (err) {
+		console.error("[pr-review] superseded retry failed:", err);
+	}
+	const error = retrySessionId
+		? `${reason} Follow-up session ${retrySessionId} started.`
+		: `${reason} Follow-up session was not started.`;
+	await recordRunResult(run.fingerprint, {
+		sessionId: run.sessionId,
+		status: "superseded",
+		error,
+		projectionStatus: "superseded",
+		githubReviewId:
+			referenceReviewId === undefined ? undefined : String(referenceReviewId),
+	});
+	return {
+		fingerprint: run.fingerprint,
+		sessionId: run.sessionId,
+		prNumber: run.prNumber,
+		status: "superseded",
+		outcome: "superseded",
+		error,
+		supersededByReviewId: referenceReviewId,
+		retrySessionId,
+	};
+}
+
+async function maybeSupersedeForCurrentHeadMove(
+	githubToken: string,
+	run: BrokerPrReviewRun,
+): Promise<PrReviewBrokerRunResult | null> {
+	const latestPayload = await payloadFromStartedRun(githubToken, run, {
+		preferCurrentHead: true,
+	});
+	if (
+		!latestPayload?.headSha ||
+		!run.headSha ||
+		latestPayload.headSha === run.headSha
+	) {
+		return null;
+	}
+	const reason = `PR head moved from ${run.headSha} to ${latestPayload.headSha} before session ${run.sessionId ?? run.fingerprint} was published; re-running against the latest PR state.`;
+	return supersedeRunWithRetry(
+		githubToken,
+		run,
+		latestPayload,
+		reason,
+		`head-moved-${latestPayload.headSha}`,
+	);
+}
+
+async function maybeSupersedeForLaterReview(
+	githubToken: string,
+	run: BrokerPrReviewRun,
+	payload: PrReviewPayload,
+	statusPayload: ManagedReviewStatusPayload,
+): Promise<PrReviewBrokerRunResult | null> {
+	if (await hasProjectedReviewProjection(run.fingerprint)) return null;
+
+	const currentReviewHistory = await fetchCurrentPrReviewHistory(
+		githubToken,
+		payload,
+	);
+	const supersedingReviews = reviewsAfterRunStarted(currentReviewHistory, run);
+	const supersedingReview = supersedingReviews[0] ?? null;
+	if (!supersedingReview) return null;
+
+	const currentHeadReview =
+		supersedingReviews.find((review) =>
+			currentHeadAlreadyReviewed(review, run, payload),
+		) ?? null;
+	const reviewedCurrentHead = currentHeadReview !== null;
+	const referenceReview = currentHeadReview ?? supersedingReview;
+
+	if (reviewedCurrentHead) {
+		const error = `Superseded by managed review ${referenceReview.id} on the same head.`;
+		await postManagedReviewStatus(
+			githubToken,
+			statusPayload,
+			"success",
+			"Managed review posted.",
+		);
+		await recordRunResult(run.fingerprint, {
+			sessionId: run.sessionId,
+			status: "superseded",
+			error,
+			projectionStatus: "projected",
+			githubReviewId: String(referenceReview.id),
+		});
+		return {
+			fingerprint: run.fingerprint,
+			sessionId: run.sessionId,
+			prNumber: run.prNumber,
+			status: "superseded",
+			outcome: "superseded",
+			error,
+			supersededByReviewId: referenceReview.id,
+			retrySessionId: null,
+		};
+	}
+
+	const reason = `Managed review ${supersedingReview.id} posted after session ${run.sessionId ?? run.fingerprint} started; re-running with prior review context.`;
+	return supersedeRunWithRetry(
+		githubToken,
+		run,
+		payload,
+		reason,
+		`review-${supersedingReview.id}-head-${run.headSha || payload.headSha}`,
+		referenceReview.id,
+	);
 }
 
 export async function processPendingPrReviewRuns(
@@ -1043,23 +1853,28 @@ export async function processPendingPrReviewRuns(
 ): Promise<PrReviewBrokerResult> {
 	const apiKey = process.env.ANTHROPIC_API_KEY;
 	const githubToken = await resolveGitHubToken();
-	if (!apiKey || !githubToken) {
-		throw new Error(
-			"missing ANTHROPIC_API_KEY, GitHub App credentials, or reviewer is disabled",
-		);
+	if (!githubToken) {
+		throw new Error("missing GitHub App credentials or reviewer is disabled");
 	}
 
-	const client = new Anthropic({ apiKey });
-	const pendingRuns = await listStartedPrReviewRuns({
+	const pendingRuns = await listPrReviewRunsForBroker({
 		limit: input.limit ?? 5,
 		repoFullName: input.repoFullName,
 	});
+	const needsAnthropic = pendingRuns.some((run) => run.status === "started");
+	if (needsAnthropic && !apiKey) {
+		throw new Error("missing ANTHROPIC_API_KEY");
+	}
+	const client = apiKey ? new Anthropic({ apiKey }) : null;
 	const result: PrReviewBrokerResult = {
 		checked: pendingRuns.length,
+		applied: 0,
 		completed: 0,
 		failed: 0,
+		skipped: 0,
 		skippedRunning: 0,
 		superseded: 0,
+		retryable: 0,
 		requeued: 0,
 		runs: [],
 	};
@@ -1074,21 +1889,38 @@ export async function processPendingPrReviewRuns(
 			fingerprint: run.fingerprint,
 		};
 		try {
-			const collected = await collectCompletedReviewIntentText(
-				client,
-				run.sessionId,
-			);
-			if (!collected.done) {
-				result.skippedRunning += 1;
-				result.runs.push({
+			if (run.status === "completed" && !run.reviewIntent) {
+				countBrokerRun(result, {
 					fingerprint: run.fingerprint,
 					sessionId: run.sessionId,
 					prNumber: run.prNumber,
-					status: "skipped_running",
+					status: "skipped_missing_intent",
+					outcome: "skipped",
+					error: "completed ReviewRun does not have a persisted review intent",
 				});
 				continue;
 			}
-			completedOutput = collected.output;
+
+			if (run.status === "started") {
+				if (!client || !run.sessionId) {
+					throw new Error("started ReviewRun is missing an agent session");
+				}
+				const collected = await collectCompletedReviewIntentText(
+					client,
+					run.sessionId,
+				);
+				if (!collected.done) {
+					countBrokerRun(result, {
+						fingerprint: run.fingerprint,
+						sessionId: run.sessionId,
+						prNumber: run.prNumber,
+						status: "skipped_running",
+						outcome: "skipped",
+					});
+					continue;
+				}
+				completedOutput = collected.output;
+			}
 
 			const payload = await payloadFromStartedRun(githubToken, run);
 			if (!payload) {
@@ -1104,7 +1936,7 @@ export async function processPendingPrReviewRuns(
 				fingerprint: run.fingerprint,
 			};
 
-			if (run.coalescedAt) {
+			if (run.status === "started" && run.coalescedAt) {
 				const latestPayload =
 					(await payloadFromStartedRun(githubToken, run, {
 						preferCurrentHead: true,
@@ -1130,13 +1962,12 @@ export async function processPendingPrReviewRuns(
 					error,
 					projectionStatus: "superseded",
 				});
-				result.superseded += 1;
-				if (retrySessionId) result.requeued += 1;
-				result.runs.push({
+				countBrokerRun(result, {
 					fingerprint: run.fingerprint,
 					sessionId: run.sessionId,
 					prNumber: run.prNumber,
 					status: "superseded",
+					outcome: "superseded",
 					error,
 					retrySessionId,
 				});
@@ -1146,108 +1977,90 @@ export async function processPendingPrReviewRuns(
 				continue;
 			}
 
-			const currentReviewHistory = await fetchCurrentPrReviewHistory(
-				githubToken,
-				payload,
-			);
-			const supersedingReviews = reviewsAfterRunStarted(
-				currentReviewHistory,
-				run,
-			);
-			const supersedingReview = supersedingReviews[0] ?? null;
-			if (supersedingReview) {
-				let retrySessionId: string | null = null;
-				const currentHeadReview =
-					supersedingReviews.find((review) =>
-						currentHeadAlreadyReviewed(review, run, payload),
-					) ?? null;
-				const reviewedCurrentHead = currentHeadReview !== null;
-				const referenceReview = currentHeadReview ?? supersedingReview;
-				if (!reviewedCurrentHead) {
-					try {
-						retrySessionId = await triggerPrReview(payload, {
-							kind: "superseded_retry",
-							triggerSourceId: `review-${supersedingReview.id}-head-${run.headSha || payload.headSha}`,
-							reason: `Managed review ${supersedingReview.id} posted after session ${run.sessionId} started; re-running with prior review context.`,
-						});
-					} catch (err) {
-						console.error("[pr-review] superseded retry failed:", err);
-					}
-				}
+			const headMove = await maybeSupersedeForCurrentHeadMove(githubToken, run);
+			if (headMove) {
+				countBrokerRun(result, headMove);
+				continue;
+			}
 
-				const error = reviewedCurrentHead
-					? `Superseded by managed review ${referenceReview.id} on the same head.`
-					: retrySessionId
-						? `Superseded by managed review ${referenceReview.id}; retry session ${retrySessionId} started.`
-						: `Superseded by managed review ${referenceReview.id}; retry session was not started.`;
-				if (reviewedCurrentHead) {
-					await postManagedReviewStatus(
-						githubToken,
-						statusPayload,
-						"success",
-						"Managed review posted.",
-					);
-				}
-				await recordRunResult(run.fingerprint, {
-					sessionId: run.sessionId,
-					status: "superseded",
-					error,
-					projectionStatus: reviewedCurrentHead ? "projected" : "superseded",
-					githubReviewId: String(referenceReview.id),
-				});
-				result.superseded += 1;
-				if (retrySessionId) result.requeued += 1;
-				result.runs.push({
-					fingerprint: run.fingerprint,
-					sessionId: run.sessionId,
-					prNumber: run.prNumber,
-					status: "superseded",
-					error,
-					supersededByReviewId: referenceReview.id,
-					retrySessionId,
-				});
+			const superseded = await maybeSupersedeForLaterReview(
+				githubToken,
+				run,
+				payload,
+				statusPayload,
+			);
+			if (superseded) {
+				countBrokerRun(result, superseded);
 				console.log(
 					`[pr-review] Broker superseded stale review for PR #${run.prNumber}: ${run.sessionId}`,
 				);
 				continue;
 			}
 
-			const narrativeContext = await fetchPrNarrativeContext(
+			let intent: PrReviewIntent | null;
+			if (run.status === "started") {
+				const narrativeContext = await fetchPrNarrativeContext(
+					githubToken,
+					payload,
+				);
+				intent = parseReviewIntentFromText(
+					completedOutput,
+					narrativeContext.availableLabels.map((label) => label.name),
+				);
+				await recordRunResult(run.fingerprint, {
+					sessionId: run.sessionId,
+					status: "completed",
+					projectionStatus: "pending",
+					reviewIntent: intent,
+				});
+			} else {
+				intent = persistedReviewIntentForRun(run.reviewIntent);
+				if (!intent) {
+					countBrokerRun(result, {
+						fingerprint: run.fingerprint,
+						sessionId: run.sessionId,
+						prNumber: run.prNumber,
+						status: "skipped_missing_intent",
+						outcome: "skipped",
+						error:
+							"completed ReviewRun does not have a persisted review intent",
+					});
+					continue;
+				}
+			}
+
+			const projected = await publishReviewRunIntent(
 				githubToken,
+				run,
 				payload,
-			);
-			const intent = parseReviewIntentFromText(
-				collected.output,
-				narrativeContext.availableLabels.map((label) => label.name),
-			);
-			const postedReview = await postGitHubReviewIntent(
-				githubToken,
-				payload,
+				statusPayload,
 				intent,
 			);
-			await postManagedReviewStatus(
-				githubToken,
-				statusPayload,
-				"success",
-				"Managed review posted.",
-			);
-			await recordRunResult(run.fingerprint, {
-				sessionId: run.sessionId,
-				status: "completed",
-				githubReviewId: postedReview.reviewId,
-			});
-			result.completed += 1;
-			result.runs.push({
-				fingerprint: run.fingerprint,
-				sessionId: run.sessionId,
-				prNumber: run.prNumber,
-				status: "completed",
-			});
+			countBrokerRun(result, projected);
 			console.log(
 				`[pr-review] Broker posted review for PR #${run.prNumber} (${run.triggerKind}): ${run.sessionId}`,
 			);
 		} catch (err) {
 			const reason = err instanceof Error ? err.message : String(err);
+			if (run.status === "completed") {
+				await recordRunResult(run.fingerprint, {
+					sessionId: run.sessionId,
+					status: "completed",
+					projectionStatus: "failed",
+					projectionError: reason,
+				});
+				countBrokerRun(result, {
+					fingerprint: run.fingerprint,
+					sessionId: run.sessionId,
+					prNumber: run.prNumber,
+					status: "completed",
+					outcome: "failed",
+					error: reason,
+					retryable: false,
+				});
+				console.error("[pr-review] broker failed:", err);
+				continue;
+			}
 			await postManagedReviewFailureComment(
 				githubToken,
 				statusPayload,
@@ -1270,12 +2083,12 @@ export async function processPendingPrReviewRuns(
 				status: "failed",
 				error: reason,
 			});
-			result.failed += 1;
-			result.runs.push({
+			countBrokerRun(result, {
 				fingerprint: run.fingerprint,
 				sessionId: run.sessionId,
 				prNumber: run.prNumber,
 				status: "failed",
+				outcome: "failed",
 				error: reason,
 			});
 			console.error("[pr-review] broker failed:", err);
