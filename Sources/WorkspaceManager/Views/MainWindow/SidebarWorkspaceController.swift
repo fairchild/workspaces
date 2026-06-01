@@ -182,8 +182,12 @@ struct SidebarWorkspaceController {
     }
 
     func archive(_ workspace: Workspace) async throws {
-        let provider = try provider(for: workspace)
-        try await provider.archiveWorkspace(WorkspaceProviderTarget(workspace))
+        if workspace.backend == .local {
+            try await workspaceService.archiveWorkspace(at: workspace.workspaceURL)
+        } else {
+            let provider = try provider(for: workspace)
+            try await provider.archiveWorkspace(WorkspaceProviderTarget(workspace))
+        }
         workspace.status = .archived
         try saveModelContext(action: "archive workspace")
     }

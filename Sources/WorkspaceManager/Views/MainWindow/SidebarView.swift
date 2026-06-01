@@ -860,7 +860,7 @@ struct SidebarView: View {
     private func localWorkspaceActions(_ workspace: Workspace) -> some View {
         if workspace.status == .active {
             Button("Archive") {
-                toggleLocalWorkspaceArchive(workspace, archived: true)
+                performArchive(workspace)
             }
         } else {
             Button("Unarchive") {
