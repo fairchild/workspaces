@@ -1380,6 +1380,7 @@ export interface PrReviewRunDetails extends PrReviewRunSummary {
 	reviewerConfigHash: string;
 	reviewIntent: PrReviewRunReviewIntent | null;
 	projections: PrReviewProjectionRecord[];
+	recovery: PrReviewRunRecoveryAvailability;
 }
 
 export interface StartedPrReviewRun {
@@ -1404,6 +1405,135 @@ export interface BrokerPrReviewRun
 	projectionStatus: PrReviewProjectionStatus;
 	sessionId: string | null;
 	reviewIntent: PrReviewRunReviewIntent | null;
+	githubReviewId: string | null;
+}
+
+export type PrReviewRunRecoveryAction = "retry_execution" | "repair_projection";
+
+export interface PrReviewRunRecoveryAvailability {
+	available: boolean;
+	action: PrReviewRunRecoveryAction | null;
+	label: string | null;
+	reason: string;
+	reasonCode:
+		| "execution_failed"
+		| "projection_failed"
+		| "failure_not_retryable"
+		| "missing_review_intent"
+		| "run_active"
+		| "run_superseded"
+		| "already_published"
+		| "projection_not_failed"
+		| "unsupported_state";
+}
+
+export interface ActivePrReviewRunSuccessor {
+	fingerprint: string;
+	headSha: string;
+	triggerKind: string;
+	triggerSourceId: string;
+	sessionId: string | null;
+	createdAt: string;
+	updatedAt: string;
+}
+
+export interface PrReviewRunSuccessor extends ActivePrReviewRunSuccessor {
+	status: PrReviewRunStatus;
+	projectionStatus: PrReviewProjectionStatus;
+}
+
+function recoveryAvailabilityForRun(input: {
+	status: PrReviewRunStatus;
+	projectionStatus: PrReviewProjectionStatus;
+	failureRetryable: boolean | null;
+	reviewIntent: PrReviewRunReviewIntent | null;
+}): PrReviewRunRecoveryAvailability {
+	if (input.status === "failed") {
+		if (input.failureRetryable === false) {
+			return {
+				available: false,
+				action: null,
+				label: null,
+				reason: "This failed ReviewRun is marked non-retryable.",
+				reasonCode: "failure_not_retryable",
+			};
+		}
+		return {
+			available: true,
+			action: "retry_execution",
+			label: "Retry execution",
+			reason:
+				"This failed ReviewRun can be retried after live current-head checks pass.",
+			reasonCode: "execution_failed",
+		};
+	}
+
+	if (input.status === "completed") {
+		if (input.projectionStatus === "projected") {
+			return {
+				available: false,
+				action: null,
+				label: null,
+				reason: "This ReviewRun has already been published to GitHub.",
+				reasonCode: "already_published",
+			};
+		}
+		if (input.projectionStatus === "failed") {
+			if (!input.reviewIntent) {
+				return {
+					available: false,
+					action: null,
+					label: null,
+					reason:
+						"This completed ReviewRun has no persisted review intent to repair.",
+					reasonCode: "missing_review_intent",
+				};
+			}
+			return {
+				available: true,
+				action: "repair_projection",
+				label: "Repair GitHub output",
+				reason:
+					"This completed ReviewRun can repair GitHub projection without rerunning the agent.",
+				reasonCode: "projection_failed",
+			};
+		}
+		return {
+			available: false,
+			action: null,
+			label: null,
+			reason: "This completed ReviewRun is not in a failed projection state.",
+			reasonCode: "projection_not_failed",
+		};
+	}
+
+	if (input.status === "started") {
+		return {
+			available: false,
+			action: null,
+			label: null,
+			reason: "This ReviewRun is still active.",
+			reasonCode: "run_active",
+		};
+	}
+
+	if (input.status === "superseded") {
+		return {
+			available: false,
+			action: null,
+			label: null,
+			reason: "This ReviewRun was superseded by newer review activity.",
+			reasonCode: "run_superseded",
+		};
+	}
+
+	return {
+		available: false,
+		action: null,
+		label: null,
+		reason: "This ReviewRun state does not support operator recovery.",
+		reasonCode: "unsupported_state",
+	};
 }
 
 function mapRunDetails(row: {
@@ -1440,6 +1570,7 @@ function mapRunDetails(row: {
 		row.projection_status,
 		status,
 	);
+	const reviewIntent = reviewIntentFromRow(row);
 	const latestKnownHeadSha = row.coalesced_head_sha ?? row.head_sha;
 	const failureKind = normalizeFailureKind(row.failure_kind);
 	const failureMessage = sanitizeFailureMessage(
@@ -1484,12 +1615,19 @@ function mapRunDetails(row: {
 		projectionUpdatedAt: row.projection_updated_at ?? row.updated_at,
 		projectionError,
 		githubReviewId: row.github_review_id,
-		reviewIntent: reviewIntentFromRow(row),
+		reviewIntent,
 		coalescedHeadSha: row.coalesced_head_sha,
 		coalescedTriggerKind: row.coalesced_trigger_kind,
 		coalescedTriggerSourceId: row.coalesced_trigger_source_id,
 		coalescedAt: row.coalesced_at,
 		projections: [],
+		recovery: recoveryAvailabilityForRun({
+			status,
+			projectionStatus,
+			failureRetryable:
+				row.failure_retryable === null ? null : row.failure_retryable === 1,
+			reviewIntent,
+		}),
 	};
 }
 
@@ -1521,6 +1659,110 @@ export async function getPrReviewRunBySessionId(
 		.where("session_id", "=", sessionId)
 		.executeTakeFirst();
 
+	if (!row) return null;
+	const run = mapRunDetails(row);
+	return {
+		...run,
+		projections: await listPrReviewProjectionsForRun(run.fingerprint),
+	};
+}
+
+export async function getActivePrReviewRunSuccessor(input: {
+	fingerprint: string;
+	repoFullName: string;
+	prNumber: number;
+	createdAt: string;
+}): Promise<ActivePrReviewRunSuccessor | null> {
+	await ensureRunsTable();
+	const row = await getDb()
+		.selectFrom("managed_pr_review_runs")
+		.select([
+			"fingerprint",
+			"head_sha",
+			"trigger_kind",
+			"trigger_source_id",
+			"session_id",
+			"created_at",
+			"updated_at",
+		])
+		.where("repo_full_name", "=", input.repoFullName)
+		.where("pr_number", "=", input.prNumber)
+		.where("fingerprint", "!=", input.fingerprint)
+		.where("status", "=", "started")
+		.where("created_at", ">=", input.createdAt)
+		.orderBy("created_at", "desc")
+		.executeTakeFirst();
+	if (!row) return null;
+	return {
+		fingerprint: row.fingerprint,
+		headSha: row.head_sha,
+		triggerKind: row.trigger_kind,
+		triggerSourceId: row.trigger_source_id,
+		sessionId: row.session_id,
+		createdAt: row.created_at,
+		updatedAt: row.updated_at,
+	};
+}
+
+export async function getNewerCurrentHeadPrReviewRun(input: {
+	fingerprint: string;
+	repoFullName: string;
+	prNumber: number;
+	headSha: string;
+	createdAt: string;
+}): Promise<PrReviewRunSuccessor | null> {
+	await ensureRunsTable();
+	const row = await getDb()
+		.selectFrom("managed_pr_review_runs")
+		.select([
+			"fingerprint",
+			"head_sha",
+			"trigger_kind",
+			"trigger_source_id",
+			"status",
+			"projection_status",
+			"session_id",
+			"created_at",
+			"updated_at",
+		])
+		.where("repo_full_name", "=", input.repoFullName)
+		.where("pr_number", "=", input.prNumber)
+		.where("head_sha", "=", input.headSha)
+		.where("fingerprint", "!=", input.fingerprint)
+		.where("created_at", ">", input.createdAt)
+		.orderBy("created_at", "desc")
+		.executeTakeFirst();
+	if (!row) return null;
+	const status = row.status as PrReviewRunStatus;
+	return {
+		fingerprint: row.fingerprint,
+		headSha: row.head_sha,
+		triggerKind: row.trigger_kind,
+		triggerSourceId: row.trigger_source_id,
+		status,
+		projectionStatus: normalizeProjectionStatus(row.projection_status, status),
+		sessionId: row.session_id,
+		createdAt: row.created_at,
+		updatedAt: row.updated_at,
+	};
+}
+
+export async function getPrReviewRunByTrigger(input: {
+	repoFullName: string;
+	prNumber: number;
+	triggerKind: string;
+	triggerSourceId: string;
+}): Promise<PrReviewRunDetails | null> {
+	await ensureRunsTable();
+	const row = await getDb()
+		.selectFrom("managed_pr_review_runs")
+		.selectAll()
+		.where("repo_full_name", "=", input.repoFullName)
+		.where("pr_number", "=", input.prNumber)
+		.where("trigger_kind", "=", input.triggerKind)
+		.where("trigger_source_id", "=", input.triggerSourceId)
+		.orderBy("created_at", "desc")
+		.executeTakeFirst();
 	if (!row) return null;
 	const run = mapRunDetails(row);
 	return {
@@ -1832,6 +2074,7 @@ function mapBrokerRun(row: {
 	trigger_source_id: string;
 	status: string;
 	session_id: string | null;
+	github_review_id: string | null;
 	created_at: string;
 	updated_at: string;
 	projection_status: string | null;
@@ -1854,6 +2097,7 @@ function mapBrokerRun(row: {
 		status,
 		projectionStatus: normalizeProjectionStatus(row.projection_status, status),
 		sessionId: row.session_id,
+		githubReviewId: row.github_review_id,
 		createdAt: row.created_at,
 		updatedAt: row.updated_at,
 		reviewIntent: reviewIntentFromRow(row),
@@ -1873,6 +2117,7 @@ const BROKER_RUN_COLUMNS = [
 	"trigger_source_id",
 	"status",
 	"session_id",
+	"github_review_id",
 	"created_at",
 	"updated_at",
 	"projection_status",

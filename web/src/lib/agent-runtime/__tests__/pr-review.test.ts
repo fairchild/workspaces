@@ -12,6 +12,10 @@ const mocks = vi.hoisted(() => ({
 	recordRunStart: vi.fn(),
 	recordRunResult: vi.fn(),
 	releaseRunActiveClaim: vi.fn(),
+	getActivePrReviewRunSuccessor: vi.fn(),
+	getNewerCurrentHeadPrReviewRun: vi.fn(),
+	getPrReviewRunByFingerprint: vi.fn(),
+	getPrReviewRunByTrigger: vi.fn(),
 	listPrReviewRunsForBroker: vi.fn(),
 	computeRunFingerprint: vi.fn(),
 	beginPrReviewProjectionAttempt: vi.fn(),
@@ -52,6 +56,10 @@ vi.mock("../pr-review-runs", () => ({
 	beginPrReviewProjectionAttempt: mocks.beginPrReviewProjectionAttempt,
 	classifyPrReviewProjectionError: mocks.classifyPrReviewProjectionError,
 	computeRunFingerprint: mocks.computeRunFingerprint,
+	getActivePrReviewRunSuccessor: mocks.getActivePrReviewRunSuccessor,
+	getNewerCurrentHeadPrReviewRun: mocks.getNewerCurrentHeadPrReviewRun,
+	getPrReviewRunByFingerprint: mocks.getPrReviewRunByFingerprint,
+	getPrReviewRunByTrigger: mocks.getPrReviewRunByTrigger,
 	listPrReviewProjectionsForRun: mocks.listPrReviewProjectionsForRun,
 	listPrReviewRunsForBroker: mocks.listPrReviewRunsForBroker,
 	recordPrReviewProjectionFailure: mocks.recordPrReviewProjectionFailure,
@@ -71,6 +79,7 @@ import {
 	formatPrNarrativeContext,
 	parseReviewIntentFromText,
 	processPendingPrReviewRuns,
+	recoverPrReviewRun,
 	triggerPrReview,
 } from "../pr-review";
 
@@ -148,6 +157,7 @@ function brokerRun(overrides: Record<string, unknown> = {}) {
 		status: "started",
 		projectionStatus: "pending",
 		sessionId: "sesn_broker",
+		githubReviewId: null,
 		createdAt: "2026-05-17T06:24:27Z",
 		updatedAt: "2026-05-17T06:24:27Z",
 		reviewIntent: null,
@@ -155,6 +165,49 @@ function brokerRun(overrides: Record<string, unknown> = {}) {
 		coalescedTriggerKind: null,
 		coalescedTriggerSourceId: null,
 		coalescedAt: null,
+		...overrides,
+	};
+}
+
+function reviewRunDetails(overrides: Record<string, unknown> = {}) {
+	return {
+		fingerprint: "fp_recovery",
+		repoFullName: "fairchild/workspaces",
+		prNumber: 588,
+		headSha: "current-head",
+		triggerKind: "synchronize",
+		triggerSourceId: "current-head",
+		reviewerConfigHash: "cfg",
+		status: "failed",
+		sessionId: "sesn_failed",
+		createdAt: "2026-05-17T06:24:27Z",
+		updatedAt: "2026-05-17T06:25:27Z",
+		error: "session output failed",
+		executionState: "failed",
+		latestKnownHeadSha: "current-head",
+		failureKind: "session_output_failed",
+		failureMessage: "session output failed",
+		failureRetryable: true,
+		failedAt: "2026-05-17T06:25:27Z",
+		nextAction:
+			"Retry is allowed after confirming this run still targets the current PR head.",
+		projectionStatus: "failed",
+		projectionUpdatedAt: "2026-05-17T06:25:27Z",
+		projectionError: "session output failed",
+		githubReviewId: null,
+		reviewIntent: null,
+		coalescedHeadSha: null,
+		coalescedTriggerKind: null,
+		coalescedTriggerSourceId: null,
+		coalescedAt: null,
+		projections: [],
+		recovery: {
+			available: true,
+			action: "retry_execution",
+			label: "Retry execution",
+			reason: "retry",
+			reasonCode: "execution_failed",
+		},
 		...overrides,
 	};
 }
@@ -242,6 +295,59 @@ function mockNarrativeFetch({
 	});
 }
 
+function mockRecoveryFetch({
+	prNumber = 588,
+	headSha = "current-head",
+	reviewId = 588001,
+}: {
+	prNumber?: number;
+	headSha?: string;
+	reviewId?: number;
+} = {}) {
+	mocks.fetch.mockImplementation(async (url: string, options?: RequestInit) => {
+		if (url.endsWith(`/pulls/${prNumber}`)) {
+			return {
+				ok: true,
+				json: async () =>
+					githubPr(prNumber, {
+						title: "Recover managed reviewer run",
+						html_url: `https://github.com/fairchild/workspaces/pull/${prNumber}`,
+						body: "PR body",
+						head: { ref: "codex/recovery", sha: headSha },
+						base: { ref: "main" },
+					}),
+			};
+		}
+		if (url.includes("/pulls?")) {
+			return { ok: true, json: async () => [] };
+		}
+		if (url.includes("/labels?")) {
+			return { ok: true, json: async () => [] };
+		}
+		if (url.includes(`/issues/${prNumber}/comments?`)) {
+			return { ok: true, json: async () => [] };
+		}
+		if (url.includes(`/pulls/${prNumber}/reviews?`)) {
+			return { ok: true, json: async () => [] };
+		}
+		if (url.endsWith(`/pulls/${prNumber}/reviews`)) {
+			expect(options?.method).toBe("POST");
+			return {
+				ok: true,
+				text: async () => "",
+				json: async () => ({ id: reviewId }),
+			};
+		}
+		if (url.endsWith(`/issues/${prNumber}/labels`)) {
+			return okResponse();
+		}
+		if (isManagedReviewStatusUrl(url)) {
+			return okResponse();
+		}
+		throw new Error(`Unexpected fetch URL: ${url}`);
+	});
+}
+
 beforeEach(() => {
 	vi.stubEnv("ANTHROPIC_API_KEY", "sk-test");
 	vi.stubEnv("GITHUB_TOKEN", "ghp_test");
@@ -262,6 +368,10 @@ beforeEach(() => {
 	mocks.recordRunStart.mockReset();
 	mocks.recordRunResult.mockReset();
 	mocks.releaseRunActiveClaim.mockReset();
+	mocks.getActivePrReviewRunSuccessor.mockReset();
+	mocks.getNewerCurrentHeadPrReviewRun.mockReset();
+	mocks.getPrReviewRunByFingerprint.mockReset();
+	mocks.getPrReviewRunByTrigger.mockReset();
 	mocks.listPrReviewRunsForBroker.mockReset();
 	mocks.computeRunFingerprint.mockReset();
 	mocks.beginPrReviewProjectionAttempt.mockReset();
@@ -280,6 +390,10 @@ beforeEach(() => {
 	mocks.recordRunStart.mockResolvedValue({ inserted: true });
 	mocks.recordRunResult.mockResolvedValue(undefined);
 	mocks.releaseRunActiveClaim.mockResolvedValue(undefined);
+	mocks.getActivePrReviewRunSuccessor.mockResolvedValue(null);
+	mocks.getNewerCurrentHeadPrReviewRun.mockResolvedValue(null);
+	mocks.getPrReviewRunByFingerprint.mockResolvedValue(null);
+	mocks.getPrReviewRunByTrigger.mockResolvedValue(null);
 	mocks.listPrReviewRunsForBroker.mockResolvedValue([]);
 	mocks.beginPrReviewProjectionAttempt.mockImplementation(
 		async (input: { type: string }) => ({
@@ -581,6 +695,283 @@ ${JSON.stringify(reviewIntent, null, 2)}
 				'```json\n{"event":"MERGE","body":"ship it","labels":[]}\n```',
 			),
 		).toThrow(/unsupported review event/);
+	});
+});
+
+describe("recoverPrReviewRun", () => {
+	it("refuses superseded runs before any live retry work", async () => {
+		mocks.getPrReviewRunByFingerprint.mockResolvedValue(
+			reviewRunDetails({
+				fingerprint: "fp_superseded",
+				status: "superseded",
+				projectionStatus: "superseded",
+				recovery: {
+					available: false,
+					action: null,
+					label: null,
+					reason: "superseded",
+					reasonCode: "run_superseded",
+				},
+			}),
+		);
+
+		const result = await recoverPrReviewRun("fp_superseded");
+
+		expect(result).toMatchObject({
+			ok: false,
+			status: 409,
+			reason: "superseded_run",
+		});
+		expect(mocks.fetch).not.toHaveBeenCalled();
+		expect(mocks.createSession).not.toHaveBeenCalled();
+	});
+
+	it("refuses a stale failed run when GitHub reports a newer current head", async () => {
+		mocks.getPrReviewRunByFingerprint.mockResolvedValue(
+			reviewRunDetails({ fingerprint: "fp_stale", headSha: "old-head" }),
+		);
+		mockRecoveryFetch({ headSha: "current-head" });
+
+		const result = await recoverPrReviewRun("fp_stale");
+
+		expect(result).toMatchObject({
+			ok: false,
+			status: 409,
+			reason: "stale_run",
+			currentHeadSha: "current-head",
+		});
+		expect(mocks.getActivePrReviewRunSuccessor).not.toHaveBeenCalled();
+		expect(mocks.createSession).not.toHaveBeenCalled();
+	});
+
+	it("makes duplicate manual retry calls idempotent when the deterministic retry is active", async () => {
+		mocks.getPrReviewRunByFingerprint.mockResolvedValue(
+			reviewRunDetails({ fingerprint: "fp_failed" }),
+		);
+		mocks.getActivePrReviewRunSuccessor.mockResolvedValue({
+			fingerprint: "fp_retry",
+			headSha: "current-head",
+			triggerKind: "manual_retry",
+			triggerSourceId: "manual-retry-fp_failed-head-current-head",
+			sessionId: "sesn_retry",
+			createdAt: "2026-05-17T06:26:00Z",
+			updatedAt: "2026-05-17T06:26:10Z",
+		});
+		mockRecoveryFetch({ headSha: "current-head" });
+
+		const result = await recoverPrReviewRun("fp_failed");
+
+		expect(result).toMatchObject({
+			ok: true,
+			action: "retry_execution",
+			outcome: "execution_retry_already_active",
+			successorFingerprint: "fp_retry",
+			sessionId: "sesn_retry",
+		});
+		expect(mocks.createSession).not.toHaveBeenCalled();
+		expect(mocks.recordRunStart).not.toHaveBeenCalled();
+	});
+
+	it("refuses a failed run when a different active successor exists", async () => {
+		mocks.getPrReviewRunByFingerprint.mockResolvedValue(
+			reviewRunDetails({ fingerprint: "fp_failed" }),
+		);
+		mocks.getActivePrReviewRunSuccessor.mockResolvedValue({
+			fingerprint: "fp_active_other",
+			headSha: "current-head",
+			triggerKind: "synchronize",
+			triggerSourceId: "current-head",
+			sessionId: "sesn_active_other",
+			createdAt: "2026-05-17T06:26:00Z",
+			updatedAt: "2026-05-17T06:26:10Z",
+		});
+		mockRecoveryFetch({ headSha: "current-head" });
+
+		const result = await recoverPrReviewRun("fp_failed");
+
+		expect(result).toMatchObject({
+			ok: false,
+			status: 409,
+			reason: "active_successor",
+			activeSuccessor: { fingerprint: "fp_active_other" },
+		});
+		expect(mocks.createSession).not.toHaveBeenCalled();
+		expect(mocks.recordRunStart).not.toHaveBeenCalled();
+	});
+
+	it("refuses an older failed run when a newer current-head run exists", async () => {
+		mocks.getPrReviewRunByFingerprint.mockResolvedValue(
+			reviewRunDetails({ fingerprint: "fp_failed" }),
+		);
+		mocks.getNewerCurrentHeadPrReviewRun.mockResolvedValue({
+			fingerprint: "fp_newer_terminal",
+			headSha: "current-head",
+			triggerKind: "synchronize",
+			triggerSourceId: "current-head",
+			status: "completed",
+			projectionStatus: "projected",
+			sessionId: "sesn_newer",
+			createdAt: "2026-05-17T06:26:00Z",
+			updatedAt: "2026-05-17T06:27:00Z",
+		});
+		mockRecoveryFetch({ headSha: "current-head" });
+
+		const result = await recoverPrReviewRun("fp_failed");
+
+		expect(result).toMatchObject({
+			ok: false,
+			status: 409,
+			reason: "newer_run_exists",
+			successor: { fingerprint: "fp_newer_terminal" },
+		});
+		expect(mocks.createSession).not.toHaveBeenCalled();
+		expect(mocks.recordRunStart).not.toHaveBeenCalled();
+	});
+
+	it("starts an execution retry with a deterministic manual retry trigger", async () => {
+		mocks.getPrReviewRunByFingerprint.mockResolvedValue(
+			reviewRunDetails({ fingerprint: "fp_failed" }),
+		);
+		mockRecoveryFetch({ headSha: "current-head" });
+
+		const result = await recoverPrReviewRun("fp_failed");
+
+		expect(result).toMatchObject({
+			ok: true,
+			action: "retry_execution",
+			outcome: "execution_retry_started",
+			sessionId: "sesn_01",
+			currentHeadSha: "current-head",
+		});
+		expect(mocks.recordRunStart).toHaveBeenCalledWith(
+			expect.objectContaining({
+				prNumber: 588,
+				headSha: "current-head",
+				triggerKind: "manual_retry",
+				triggerSourceId: "manual-retry-fp_failed-head-current-head",
+			}),
+		);
+		expect(mocks.recordRunResult).toHaveBeenCalledWith("fp_test", {
+			sessionId: "sesn_01",
+			status: "started",
+		});
+	});
+
+	it("repairs projection output from a completed run without rerunning the agent", async () => {
+		mocks.getPrReviewRunByFingerprint.mockResolvedValue(
+			reviewRunDetails({
+				fingerprint: "fp_projection_failed",
+				status: "completed",
+				executionState: "completed",
+				projectionStatus: "failed",
+				projectionError: "GitHub status update failed 503",
+				failureKind: null,
+				failureRetryable: null,
+				reviewIntent: {
+					event: "COMMENT",
+					body: "Repair persisted intent.",
+					labels: [],
+				},
+				recovery: {
+					available: true,
+					action: "repair_projection",
+					label: "Repair GitHub output",
+					reason: "repair",
+					reasonCode: "projection_failed",
+				},
+			}),
+		);
+		mockRecoveryFetch({ headSha: "current-head", reviewId: 588002 });
+
+		const result = await recoverPrReviewRun("fp_projection_failed");
+
+		expect(result).toMatchObject({
+			ok: true,
+			action: "repair_projection",
+			outcome: "projection_repaired",
+			currentHeadSha: "current-head",
+		});
+		expect(mocks.createSession).not.toHaveBeenCalled();
+		expect(mocks.listEvents).not.toHaveBeenCalled();
+		expect(mocks.recordRunResult).toHaveBeenCalledWith(
+			"fp_projection_failed",
+			expect.objectContaining({
+				status: "completed",
+				projectionStatus: "projected",
+				githubReviewId: "588002",
+			}),
+		);
+	});
+
+	it("refuses projection repair when a newer current-head run exists", async () => {
+		mocks.getPrReviewRunByFingerprint.mockResolvedValue(
+			reviewRunDetails({
+				fingerprint: "fp_projection_failed",
+				status: "completed",
+				executionState: "completed",
+				projectionStatus: "failed",
+				projectionError: "GitHub status update failed 503",
+				failureKind: null,
+				failureRetryable: null,
+				reviewIntent: {
+					event: "COMMENT",
+					body: "Repair persisted intent.",
+					labels: [],
+				},
+			}),
+		);
+		mocks.getNewerCurrentHeadPrReviewRun.mockResolvedValue({
+			fingerprint: "fp_newer_projection",
+			headSha: "current-head",
+			triggerKind: "manual_retry",
+			triggerSourceId: "manual-retry-other-head-current-head",
+			status: "completed",
+			projectionStatus: "projected",
+			sessionId: "sesn_newer_projection",
+			createdAt: "2026-05-17T06:26:00Z",
+			updatedAt: "2026-05-17T06:27:00Z",
+		});
+		mockRecoveryFetch({ headSha: "current-head" });
+
+		const result = await recoverPrReviewRun("fp_projection_failed");
+
+		expect(result).toMatchObject({
+			ok: false,
+			status: 409,
+			reason: "newer_run_exists",
+		});
+		expect(mocks.createSession).not.toHaveBeenCalled();
+		expect(mocks.recordRunResult).not.toHaveBeenCalledWith(
+			"fp_projection_failed",
+			expect.objectContaining({ projectionStatus: "projected" }),
+		);
+	});
+
+	it("returns an idempotent no-op for an already projected completed run", async () => {
+		mocks.getPrReviewRunByFingerprint.mockResolvedValue(
+			reviewRunDetails({
+				fingerprint: "fp_projected",
+				status: "completed",
+				projectionStatus: "projected",
+				recovery: {
+					available: false,
+					action: null,
+					label: null,
+					reason: "published",
+					reasonCode: "already_published",
+				},
+			}),
+		);
+
+		const result = await recoverPrReviewRun("fp_projected");
+
+		expect(result).toMatchObject({
+			ok: true,
+			action: "repair_projection",
+			outcome: "projection_already_projected",
+		});
+		expect(mocks.fetch).not.toHaveBeenCalled();
+		expect(mocks.createSession).not.toHaveBeenCalled();
 	});
 });
 

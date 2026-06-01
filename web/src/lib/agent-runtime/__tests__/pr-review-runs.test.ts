@@ -368,6 +368,166 @@ describe("listStartedPrReviewRuns", () => {
 	});
 });
 
+describe("ReviewRun recovery metadata", () => {
+	it("exposes execution retry availability for retryable failed runs", async () => {
+		const { getPrReviewRunByFingerprint, recordRunStart, recordRunResult } =
+			await loadModule();
+		const failed = makeInput({ fingerprint: "fp_recovery_failed" });
+
+		await recordRunStart(failed);
+		await recordRunResult(failed.fingerprint, {
+			sessionId: "sesn_failed",
+			status: "failed",
+			error: "session output failed",
+		});
+
+		await expect(
+			getPrReviewRunByFingerprint(failed.fingerprint),
+		).resolves.toMatchObject({
+			recovery: {
+				available: true,
+				action: "retry_execution",
+				reasonCode: "execution_failed",
+			},
+		});
+	});
+
+	it("exposes projection repair availability only with persisted intent", async () => {
+		const { getPrReviewRunByFingerprint, recordRunStart, recordRunResult } =
+			await loadModule();
+		const repair = makeInput({ fingerprint: "fp_recovery_repair" });
+
+		await recordRunStart(repair);
+		await recordRunResult(repair.fingerprint, {
+			sessionId: "sesn_repair",
+			status: "completed",
+			projectionStatus: "failed",
+			projectionError: "GitHub status update failed 503",
+			reviewIntent: {
+				event: "COMMENT",
+				body: "Persisted review body.",
+				labels: [],
+			},
+		});
+
+		await expect(
+			getPrReviewRunByFingerprint(repair.fingerprint),
+		).resolves.toMatchObject({
+			recovery: {
+				available: true,
+				action: "repair_projection",
+				reasonCode: "projection_failed",
+			},
+		});
+	});
+
+	it("finds a newer active successor for safe recovery refusal", async () => {
+		const {
+			getActivePrReviewRunSuccessor,
+			getPrReviewRunByFingerprint,
+			recordRunStart,
+			recordRunResult,
+		} = await loadModule();
+		const failed = makeInput({
+			fingerprint: "fp_successor_failed",
+			headSha: "head-a",
+			triggerSourceId: "head-a",
+		});
+		const successor = makeInput({
+			fingerprint: "fp_successor_active",
+			headSha: "head-b",
+			triggerKind: "manual_retry",
+			triggerSourceId: "manual-retry-fp_successor_failed-head-head-b",
+		});
+
+		await recordRunStart(failed);
+		await recordRunResult(failed.fingerprint, {
+			sessionId: "sesn_failed",
+			status: "failed",
+			error: "session output failed",
+		});
+		const { getDb } = await import("../../db");
+		const oldStamp = new Date(Date.now() - 60 * 1000).toISOString();
+		await getDb()
+			.updateTable("managed_pr_review_runs")
+			.set({ created_at: oldStamp })
+			.where("fingerprint", "=", failed.fingerprint)
+			.execute();
+		await recordRunStart(successor);
+
+		const failedRun = await getPrReviewRunByFingerprint(failed.fingerprint);
+		expect(failedRun).not.toBeNull();
+		await expect(
+			getActivePrReviewRunSuccessor({
+				fingerprint: failedRun?.fingerprint ?? "",
+				repoFullName: failedRun?.repoFullName ?? "",
+				prNumber: failedRun?.prNumber ?? 0,
+				createdAt: failedRun?.createdAt ?? "",
+			}),
+		).resolves.toMatchObject({
+			fingerprint: successor.fingerprint,
+			triggerKind: "manual_retry",
+			triggerSourceId: "manual-retry-fp_successor_failed-head-head-b",
+		});
+	});
+
+	it("finds a newer current-head run so old failures are not retried", async () => {
+		const {
+			getNewerCurrentHeadPrReviewRun,
+			getPrReviewRunByFingerprint,
+			recordRunStart,
+			recordRunResult,
+		} = await loadModule();
+		const failed = makeInput({
+			fingerprint: "fp_newer_failed",
+			headSha: "same-head",
+			triggerSourceId: "same-head",
+		});
+		const newer = makeInput({
+			fingerprint: "fp_newer_terminal",
+			headSha: "same-head",
+			triggerKind: "manual_retry",
+			triggerSourceId: "manual-retry-fp_newer_failed-head-same-head",
+		});
+
+		await recordRunStart(failed);
+		await recordRunResult(failed.fingerprint, {
+			sessionId: "sesn_failed",
+			status: "failed",
+			error: "session output failed",
+		});
+		const { getDb } = await import("../../db");
+		const oldStamp = new Date(Date.now() - 60 * 1000).toISOString();
+		await getDb()
+			.updateTable("managed_pr_review_runs")
+			.set({ created_at: oldStamp })
+			.where("fingerprint", "=", failed.fingerprint)
+			.execute();
+		await recordRunStart(newer);
+		await recordRunResult(newer.fingerprint, {
+			sessionId: "sesn_newer",
+			status: "completed",
+			projectionStatus: "projected",
+		});
+
+		const failedRun = await getPrReviewRunByFingerprint(failed.fingerprint);
+		expect(failedRun).not.toBeNull();
+		await expect(
+			getNewerCurrentHeadPrReviewRun({
+				fingerprint: failedRun?.fingerprint ?? "",
+				repoFullName: failedRun?.repoFullName ?? "",
+				prNumber: failedRun?.prNumber ?? 0,
+				headSha: "same-head",
+				createdAt: failedRun?.createdAt ?? "",
+			}),
+		).resolves.toMatchObject({
+			fingerprint: newer.fingerprint,
+			status: "completed",
+			projectionStatus: "projected",
+		});
+	});
+});
+
 describe("listPrReviewRunsForBroker", () => {
 	it("returns active sessions and completed runs that still need projection", async () => {
 		const {
