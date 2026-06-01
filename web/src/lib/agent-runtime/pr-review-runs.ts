@@ -1618,28 +1618,39 @@ export async function listRecentPrReviewRuns(input: {
 export type PrReviewRunOperatorState =
 	| "starting"
 	| "stuck_starting"
-	| "executing"
-	| "needs_projection"
-	| "failed"
-	| "terminal";
+	| "running"
+	| "running_too_long"
+	| "failed_execution"
+	| "completed_awaiting_projection"
+	| "projection_failed"
+	| "superseded"
+	| "published";
 
 export interface PrReviewRunStateThresholds {
 	startingTimeoutMinutes: number;
+	runningTimeoutMinutes?: number;
 	projectionTimeoutMinutes: number;
 }
 
 export interface ClassifiedPrReviewRun extends PrReviewRunSummary {
 	state: PrReviewRunOperatorState;
 	ageMinutes: number;
+	pickupLatencyMinutes: number | null;
+	executionDurationMinutes: number | null;
+	projectionLatencyMinutes: number | null;
+	sloBreached: boolean;
 }
 
 export interface PrReviewRunStateBuckets {
 	starting: ClassifiedPrReviewRun[];
 	stuckStarting: ClassifiedPrReviewRun[];
-	executing: ClassifiedPrReviewRun[];
-	needsProjection: ClassifiedPrReviewRun[];
-	failed: ClassifiedPrReviewRun[];
-	terminal: ClassifiedPrReviewRun[];
+	running: ClassifiedPrReviewRun[];
+	runningTooLong: ClassifiedPrReviewRun[];
+	failedExecution: ClassifiedPrReviewRun[];
+	completedAwaitingProjection: ClassifiedPrReviewRun[];
+	projectionFailed: ClassifiedPrReviewRun[];
+	superseded: ClassifiedPrReviewRun[];
+	published: ClassifiedPrReviewRun[];
 }
 
 function elapsedMinutes(sinceIso: string, now: Date): number {
@@ -1647,6 +1658,48 @@ function elapsedMinutes(sinceIso: string, now: Date): number {
 	const nowMs = now.getTime();
 	if (!Number.isFinite(sinceMs) || !Number.isFinite(nowMs)) return 0;
 	return Math.max(0, Math.floor((nowMs - sinceMs) / (60 * 1000)));
+}
+
+function elapsedMinutesBetween(
+	startIso: string | null | undefined,
+	endIso: string | Date | null | undefined,
+): number | null {
+	if (!startIso || !endIso) return null;
+	const startMs = Date.parse(startIso);
+	const endMs = endIso instanceof Date ? endIso.getTime() : Date.parse(endIso);
+	if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) return null;
+	return Math.max(0, Math.floor((endMs - startMs) / (60 * 1000)));
+}
+
+function runLatencies(
+	run: PrReviewRunSummary,
+	now: Date,
+): Pick<
+	ClassifiedPrReviewRun,
+	| "pickupLatencyMinutes"
+	| "executionDurationMinutes"
+	| "projectionLatencyMinutes"
+> {
+	const pickupLatencyMinutes =
+		run.status !== "started"
+			? null
+			: run.sessionId
+				? elapsedMinutesBetween(run.createdAt, run.updatedAt)
+				: elapsedMinutesBetween(run.createdAt, now);
+	const executionDurationMinutes = run.sessionId
+		? run.status === "started"
+			? elapsedMinutesBetween(run.updatedAt, now)
+			: elapsedMinutesBetween(run.createdAt, run.updatedAt)
+		: null;
+	const projectionLatencyMinutes =
+		run.status === "completed" && run.projectionStatus !== "projected"
+			? elapsedMinutesBetween(run.projectionUpdatedAt, now)
+			: null;
+	return {
+		pickupLatencyMinutes,
+		executionDurationMinutes,
+		projectionLatencyMinutes,
+	};
 }
 
 export function classifyPrReviewRun(
@@ -1659,34 +1712,60 @@ export function classifyPrReviewRun(
 	const now = options.now ?? new Date();
 	let ageSource = run.updatedAt;
 	let state: PrReviewRunOperatorState;
+	let sloBreached = false;
+	const runningTimeoutMinutes =
+		options.thresholds.runningTimeoutMinutes ??
+		options.thresholds.projectionTimeoutMinutes;
 
-	if (run.status === "failed" || run.projectionStatus === "failed") {
-		state = "failed";
+	if (run.status === "failed") {
+		state = "failed_execution";
+		ageSource = run.failedAt ?? run.updatedAt;
+	} else if (run.projectionStatus === "failed") {
+		state = "projection_failed";
+		ageSource = run.projectionUpdatedAt;
 	} else if (
-		run.status === "completed" ||
 		run.status === "superseded" ||
-		run.projectionStatus === "projected" ||
 		run.projectionStatus === "superseded"
 	) {
-		state = "terminal";
+		state = "superseded";
+		ageSource = run.updatedAt;
+	} else if (run.status === "completed") {
+		if (run.projectionStatus === "projected") {
+			state = "published";
+			ageSource = run.projectionUpdatedAt;
+		} else {
+			state = "completed_awaiting_projection";
+			ageSource = run.projectionUpdatedAt;
+			sloBreached =
+				elapsedMinutes(ageSource, now) >=
+				options.thresholds.projectionTimeoutMinutes;
+		}
 	} else if (!run.sessionId) {
 		const ageMinutes = elapsedMinutes(ageSource, now);
-		state =
-			ageMinutes >= options.thresholds.startingTimeoutMinutes
-				? "stuck_starting"
-				: "starting";
+		if (ageMinutes >= options.thresholds.startingTimeoutMinutes) {
+			state = "stuck_starting";
+			sloBreached = true;
+		} else {
+			state = "starting";
+		}
 	} else {
-		// Once a session exists, age reports projection staleness rather than
-		// wall-clock run age so operators can see when the broker is overdue.
-		ageSource = run.projectionUpdatedAt;
+		ageSource = run.updatedAt;
 		const ageMinutes = elapsedMinutes(ageSource, now);
-		state =
-			ageMinutes >= options.thresholds.projectionTimeoutMinutes
-				? "needs_projection"
-				: "executing";
+		if (ageMinutes >= runningTimeoutMinutes) {
+			state = "running_too_long";
+			sloBreached = true;
+		} else {
+			state = "running";
+		}
 	}
 
-	return { ...run, state, ageMinutes: elapsedMinutes(ageSource, now) };
+	return {
+		...run,
+		state,
+		ageMinutes: elapsedMinutes(ageSource, now),
+		...runLatencies(run, now),
+		sloBreached,
+	};
 }
 
 export function bucketPrReviewRuns(
@@ -1699,10 +1778,13 @@ export function bucketPrReviewRuns(
 	const buckets: PrReviewRunStateBuckets = {
 		starting: [],
 		stuckStarting: [],
-		executing: [],
-		needsProjection: [],
-		failed: [],
-		terminal: [],
+		running: [],
+		runningTooLong: [],
+		failedExecution: [],
+		completedAwaitingProjection: [],
+		projectionFailed: [],
+		superseded: [],
+		published: [],
 	};
 
 	for (const run of runs) {
@@ -1714,17 +1796,26 @@ export function bucketPrReviewRuns(
 			case "stuck_starting":
 				buckets.stuckStarting.push(classified);
 				break;
-			case "executing":
-				buckets.executing.push(classified);
+			case "running":
+				buckets.running.push(classified);
 				break;
-			case "needs_projection":
-				buckets.needsProjection.push(classified);
+			case "running_too_long":
+				buckets.runningTooLong.push(classified);
 				break;
-			case "failed":
-				buckets.failed.push(classified);
+			case "failed_execution":
+				buckets.failedExecution.push(classified);
 				break;
-			case "terminal":
-				buckets.terminal.push(classified);
+			case "completed_awaiting_projection":
+				buckets.completedAwaitingProjection.push(classified);
+				break;
+			case "projection_failed":
+				buckets.projectionFailed.push(classified);
+				break;
+			case "superseded":
+				buckets.superseded.push(classified);
+				break;
+			case "published":
+				buckets.published.push(classified);
 				break;
 		}
 	}

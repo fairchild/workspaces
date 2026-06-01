@@ -98,13 +98,32 @@ the `statuses:write` permission.
 
 ### Health monitoring
 
-Managed-reviewer coverage is summarized by
+ReviewRun rows are the source of truth for managed-reviewer health. Start with
+`scripts/pr-reviewer-runs.py` or the protected
+`/api/webhooks/github/pr-reviewer-monitor` route when diagnosing the queue. The
+report groups rows into `starting`, `stuckStarting`, `running`,
+`runningTooLong`, `completedAwaitingProjection`, `failedExecution`,
+`projectionFailed`, `superseded`, and `published`, and includes pickup,
+execution, and projection latency signals where the row has enough timestamps.
+
+Interpret the ReviewRun report as:
+
+- `healthy`: no missing coalesced ReviewRun keys and no row has breached an SLO
+  or stored a failure.
+- `degraded`: ReviewRuns are present and within SLO, but at least one completed
+  run is awaiting GitHub projection.
+- `unhealthy`: a coalesced ReviewRun key is missing, pickup/execution/projection
+  SLOs have been breached, or an execution/projection failure is stored.
+
+GitHub-facing projection drift is audited separately by
 `scripts/pr-review-health.py` and `.github/workflows/managed-reviewer-health.yml`.
-The workflow runs on a schedule and can be dispatched manually. It checks recent
-open PRs for the `WorkSpaces Managed Review` status, stale pending pickup,
+That workflow runs on a schedule and can be dispatched manually. It checks recent
+open PRs for the `WorkSpaces Managed Review` status, stale pending status,
 failure statuses, and success statuses that do not have a current-head managed
 review. Older or draft PRs are reported but skipped by default so pre-indicator
-branches do not keep the health job red forever.
+branches do not keep the projection-audit job red forever. Do not treat a green
+projection audit as proof that ReviewRun ingestion, session execution, or broker
+projection is healthy.
 
 The Cloudflare relay forwards only managed-review trigger candidates:
 `pull_request.opened`, `reopened`, `ready_for_review`, `synchronize`, eligible
@@ -170,12 +189,14 @@ uv run --script scripts/pr-reviewer-runs.py
 ```
 
 Use the report as the first read of production health. `missingRuns` means a
-reviewer-eligible webhook did not create a `managed_pr_review_runs` row.
-`executing` means the managed-agent session has been created and the GitHub
-projection is still inside the normal window. `needsProjection` means the row is
-old enough that the broker should have posted the GitHub review or failure
-status. `failed` shows agent or projection failures with the stored reason and a
-details URL.
+coalesced reviewer-eligible key did not create a `managed_pr_review_runs` row.
+`running` means the managed-agent session has been created and remains inside
+the execution SLO. `runningTooLong` means the session exceeded the execution
+SLO. `completedAwaitingProjection` means the broker still needs to publish or
+repair GitHub projection for a completed run. `failedExecution` and
+`projectionFailed` separate managed-agent failures from GitHub projection
+failures. Actionable run rows include details URLs for inspecting the stored
+metadata and transcript.
 
 The Worker requires `WORKSPACES_WEBHOOK_CANARY_SECRET`, signs a canonical
 reviewer-eligible PR payload with `GITHUB_WEBHOOK_SECRET`, forwards it to the
@@ -197,11 +218,10 @@ marks that run `superseded`, and starts exactly one follow-up session against th
 latest PR state. If the superseding review is for an older head, the broker
 starts a fresh follow-up session so the newer-head review includes the prior
 review context. The run report compares recent
-reviewer-eligible rows in `webhook_events` with `managed_pr_review_runs`
-records and classifies ReviewRun rows into starting, executing,
-needs-projection, failed, and terminal buckets. Broker and report routes return
-only run metadata, details URLs, stored failure reasons, and missing event
-identifiers, not raw payloads or secrets.
+reviewer-eligible rows in `webhook_events` with coalesced ReviewRun keys from
+`managed_pr_review_runs` records and classifies rows into source-of-truth health
+buckets. Broker and report routes return only run metadata, details URLs, stored
+failure reasons, and missing event identifiers, not raw payloads or secrets.
 
 ## Observing Sessions
 

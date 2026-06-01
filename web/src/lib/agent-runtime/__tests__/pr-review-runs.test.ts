@@ -632,7 +632,7 @@ describe("projection ledger", () => {
 });
 
 describe("bucketPrReviewRuns", () => {
-	it("separates runs that are starting, executing, due for projection, failed, and terminal", async () => {
+	it("separates ReviewRun health by execution and projection state with SLO latencies", async () => {
 		const { bucketPrReviewRuns } = await loadModule();
 		const now = new Date("2026-05-24T12:00:00.000Z");
 		const base = {
@@ -641,7 +641,6 @@ describe("bucketPrReviewRuns", () => {
 			headSha: "abc123",
 			triggerKind: "opened",
 			triggerSourceId: "abc123",
-			createdAt: "2026-05-24T11:00:00.000Z",
 			error: null,
 			projectionError: null,
 			githubReviewId: null,
@@ -653,11 +652,13 @@ describe("bucketPrReviewRuns", () => {
 		};
 		const pendingRun = (overrides: {
 			fingerprint: string;
-			status: "started" | "completed" | "failed";
+			status: "started" | "completed" | "failed" | "superseded";
 			sessionId: string | null;
+			createdAt: string;
 			updatedAt: string;
 			error?: string | null;
-			projectionStatus?: "pending" | "projected" | "failed";
+			projectionStatus?: "pending" | "projected" | "failed" | "superseded";
+			projectionUpdatedAt?: string;
 			projectionError?: string | null;
 		}) => ({
 			...base,
@@ -666,9 +667,11 @@ describe("bucketPrReviewRuns", () => {
 					? ("completed" as const)
 					: overrides.status === "failed"
 						? ("failed" as const)
-						: overrides.sessionId
-							? ("running_session" as const)
-							: ("waiting_for_session" as const),
+						: overrides.status === "superseded"
+							? ("superseded" as const)
+							: overrides.sessionId
+								? ("running_session" as const)
+								: ("waiting_for_session" as const),
 			latestKnownHeadSha: base.headSha,
 			failureKind: null,
 			failureMessage: null,
@@ -676,7 +679,7 @@ describe("bucketPrReviewRuns", () => {
 			failedAt: null,
 			nextAction: "",
 			projectionStatus: overrides.projectionStatus ?? ("pending" as const),
-			projectionUpdatedAt: overrides.updatedAt,
+			projectionUpdatedAt: overrides.projectionUpdatedAt ?? overrides.updatedAt,
 			...overrides,
 		});
 
@@ -686,39 +689,71 @@ describe("bucketPrReviewRuns", () => {
 					fingerprint: "fp_starting",
 					status: "started" as const,
 					sessionId: null,
+					createdAt: "2026-05-24T11:59:00.000Z",
 					updatedAt: "2026-05-24T11:59:00.000Z",
 				}),
 				pendingRun({
 					fingerprint: "fp_stuck_starting",
 					status: "started" as const,
 					sessionId: null,
+					createdAt: "2026-05-24T11:50:00.000Z",
 					updatedAt: "2026-05-24T11:50:00.000Z",
 				}),
 				pendingRun({
-					fingerprint: "fp_executing",
+					fingerprint: "fp_running",
 					status: "started" as const,
-					sessionId: "sesn_executing",
+					sessionId: "sesn_running",
+					createdAt: "2026-05-24T11:35:00.000Z",
 					updatedAt: "2026-05-24T11:40:00.000Z",
 				}),
 				pendingRun({
-					fingerprint: "fp_needs_projection",
+					fingerprint: "fp_running_too_long",
 					status: "started" as const,
-					sessionId: "sesn_projection",
+					sessionId: "sesn_slow",
+					createdAt: "2026-05-24T11:00:00.000Z",
 					updatedAt: "2026-05-24T11:20:00.000Z",
+				}),
+				pendingRun({
+					fingerprint: "fp_completed_awaiting_projection",
+					status: "completed" as const,
+					sessionId: "sesn_completed",
+					createdAt: "2026-05-24T11:00:00.000Z",
+					updatedAt: "2026-05-24T11:35:00.000Z",
+					projectionStatus: "pending",
+					projectionUpdatedAt: "2026-05-24T11:45:00.000Z",
 				}),
 				pendingRun({
 					fingerprint: "fp_failed",
 					status: "failed" as const,
 					sessionId: "sesn_failed",
+					createdAt: "2026-05-24T11:50:00.000Z",
 					updatedAt: "2026-05-24T11:58:00.000Z",
 					error: "review intent parse failed",
 					projectionStatus: "failed",
 					projectionError: "review intent parse failed",
 				}),
 				pendingRun({
-					fingerprint: "fp_completed",
+					fingerprint: "fp_projection_failed",
 					status: "completed" as const,
-					sessionId: "sesn_completed",
+					sessionId: "sesn_projection_failed",
+					createdAt: "2026-05-24T11:10:00.000Z",
+					updatedAt: "2026-05-24T11:40:00.000Z",
+					projectionStatus: "failed",
+					projectionError: "GitHub status update failed 503",
+				}),
+				pendingRun({
+					fingerprint: "fp_superseded",
+					status: "superseded" as const,
+					sessionId: "sesn_superseded",
+					createdAt: "2026-05-24T11:05:00.000Z",
+					updatedAt: "2026-05-24T11:55:00.000Z",
+					projectionStatus: "superseded",
+				}),
+				pendingRun({
+					fingerprint: "fp_published",
+					status: "completed" as const,
+					sessionId: "sesn_published",
+					createdAt: "2026-05-24T11:05:00.000Z",
 					updatedAt: "2026-05-24T11:58:00.000Z",
 					projectionStatus: "projected",
 				}),
@@ -727,6 +762,7 @@ describe("bucketPrReviewRuns", () => {
 				now,
 				thresholds: {
 					startingTimeoutMinutes: 5,
+					runningTimeoutMinutes: 30,
 					projectionTimeoutMinutes: 30,
 				},
 			},
@@ -738,17 +774,39 @@ describe("bucketPrReviewRuns", () => {
 		expect(buckets.stuckStarting.map((run) => run.fingerprint)).toEqual([
 			"fp_stuck_starting",
 		]);
-		expect(buckets.executing.map((run) => run.fingerprint)).toEqual([
-			"fp_executing",
+		expect(buckets.running.map((run) => run.fingerprint)).toEqual([
+			"fp_running",
 		]);
-		expect(buckets.needsProjection.map((run) => run.fingerprint)).toEqual([
-			"fp_needs_projection",
+		expect(buckets.runningTooLong.map((run) => run.fingerprint)).toEqual([
+			"fp_running_too_long",
 		]);
-		expect(buckets.failed.map((run) => run.fingerprint)).toEqual(["fp_failed"]);
-		expect(buckets.terminal.map((run) => run.fingerprint)).toEqual([
-			"fp_completed",
+		expect(
+			buckets.completedAwaitingProjection.map((run) => run.fingerprint),
+		).toEqual(["fp_completed_awaiting_projection"]);
+		expect(buckets.failedExecution.map((run) => run.fingerprint)).toEqual([
+			"fp_failed",
 		]);
-		expect(buckets.needsProjection[0].ageMinutes).toBe(40);
+		expect(buckets.projectionFailed.map((run) => run.fingerprint)).toEqual([
+			"fp_projection_failed",
+		]);
+		expect(buckets.superseded.map((run) => run.fingerprint)).toEqual([
+			"fp_superseded",
+		]);
+		expect(buckets.published.map((run) => run.fingerprint)).toEqual([
+			"fp_published",
+		]);
+		expect(buckets.runningTooLong[0]).toMatchObject({
+			ageMinutes: 40,
+			pickupLatencyMinutes: 20,
+			executionDurationMinutes: 40,
+			projectionLatencyMinutes: null,
+			sloBreached: true,
+		});
+		expect(buckets.completedAwaitingProjection[0]).toMatchObject({
+			ageMinutes: 15,
+			projectionLatencyMinutes: 15,
+			sloBreached: false,
+		});
 	});
 });
 

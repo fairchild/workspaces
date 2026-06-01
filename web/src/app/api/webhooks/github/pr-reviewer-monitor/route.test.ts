@@ -62,19 +62,38 @@ function runRow(
 		projectionUpdatedAt: string;
 		projectionError: string | null;
 		githubReviewId: string | null;
+		executionState:
+			| "waiting_for_session"
+			| "running_session"
+			| "completed"
+			| "failed"
+			| "superseded";
+		latestKnownHeadSha: string;
+		failureKind: string | null;
+		failureMessage: string | null;
+		failureRetryable: boolean | null;
+		failedAt: string | null;
+		nextAction: string;
+		coalescedHeadSha: string | null;
+		coalescedTriggerKind: string | null;
+		coalescedTriggerSourceId: string | null;
+		coalescedAt: string | null;
 	}> = {},
 ) {
 	const now = new Date().toISOString();
 	const status = overrides.status ?? "started";
+	const headSha = overrides.headSha ?? "abc8101def456";
+	const sessionId =
+		overrides.sessionId === undefined ? "sesn_123" : overrides.sessionId;
 	return {
 		fingerprint: "fp_monitor_test",
 		repoFullName: "fairchild/workspaces",
 		prNumber: 8101,
-		headSha: "abc8101def456",
+		headSha,
 		triggerKind: "opened",
 		triggerSourceId: "abc8101def456",
 		status,
-		sessionId: "sesn_123",
+		sessionId,
 		createdAt: now,
 		updatedAt: now,
 		error: null,
@@ -93,6 +112,28 @@ function runRow(
 			overrides.projectionError ??
 			(status === "failed" ? (overrides.error ?? null) : null),
 		githubReviewId: null,
+		executionState:
+			overrides.executionState ??
+			(status === "completed"
+				? "completed"
+				: status === "failed"
+					? "failed"
+					: status === "superseded"
+						? "superseded"
+						: sessionId
+							? "running_session"
+							: "waiting_for_session"),
+		latestKnownHeadSha:
+			overrides.latestKnownHeadSha ?? overrides.coalescedHeadSha ?? headSha,
+		failureKind: null,
+		failureMessage: null,
+		failureRetryable: null,
+		failedAt: null,
+		nextAction: "",
+		coalescedHeadSha: null,
+		coalescedTriggerKind: null,
+		coalescedTriggerSourceId: null,
+		coalescedAt: null,
 		...overrides,
 	};
 }
@@ -154,8 +195,11 @@ describe("/api/webhooks/github/pr-reviewer-monitor GET", () => {
 			ok: true,
 			checked: 1,
 			eligibleEvents: 1,
+			eligibleRunKeys: 1,
 			missingRuns: 0,
-			executing: 1,
+			missingRunKeys: 0,
+			health: "healthy",
+			running: 1,
 			missing: [],
 		});
 	});
@@ -189,11 +233,12 @@ describe("/api/webhooks/github/pr-reviewer-monitor GET", () => {
 		await expect(response.json()).resolves.toMatchObject({
 			ok: true,
 			checked: 1,
+			eligibleRunKeys: 1,
 			missing: [],
 		});
 	});
 
-	it("returns 503 with metadata when an eligible webhook has no run row", async () => {
+	it("returns 503 with metadata when an eligible run key has no run row", async () => {
 		const opened = PR_REVIEW_WEBHOOK_CONTRACT_CASES[0];
 		mocks.executeWebhookQuery.mockResolvedValue([
 			webhookRowFromContractCase(opened),
@@ -208,11 +253,17 @@ describe("/api/webhooks/github/pr-reviewer-monitor GET", () => {
 		expect(response.status).toBe(503);
 		await expect(response.json()).resolves.toMatchObject({
 			ok: false,
+			health: "unhealthy",
 			checked: 1,
+			eligibleEvents: 1,
+			eligibleRunKeys: 1,
 			missingRuns: 1,
+			missingRunKeys: 1,
 			missing: [
 				{
-					eventId: "contract-pr-opened",
+					key: "fairchild/workspaces|8101|abc8101def456",
+					eventIds: ["contract-pr-opened"],
+					eventCount: 1,
 					repoFullName: "fairchild/workspaces",
 					prNumber: 8101,
 					triggerKind: "opened",
@@ -222,14 +273,79 @@ describe("/api/webhooks/github/pr-reviewer-monitor GET", () => {
 		});
 	});
 
+	it("deduplicates missing run checks by coalesced PR head key", async () => {
+		const opened = PR_REVIEW_WEBHOOK_CONTRACT_CASES[0];
+		mocks.executeWebhookQuery.mockResolvedValue([
+			webhookRowFromContractCase(opened),
+			{
+				...webhookRowFromContractCase(opened),
+				id: "contract-pr-opened-redelivery",
+			},
+		]);
+		mocks.listRecentPrReviewRuns.mockResolvedValue([]);
+
+		const { GET } = await import("./route");
+		const response = await GET(
+			monitorRequest({ "x-workspace-webhook-canary": MONITOR_SECRET }),
+		);
+
+		expect(response.status).toBe(503);
+		await expect(response.json()).resolves.toMatchObject({
+			eligibleEvents: 2,
+			checked: 1,
+			eligibleRunKeys: 1,
+			missingRunKeys: 1,
+			missing: [
+				{
+					eventIds: ["contract-pr-opened", "contract-pr-opened-redelivery"],
+					eventCount: 2,
+				},
+			],
+		});
+	});
+
+	it("accepts a coalesced ReviewRun as covering a newer webhook head", async () => {
+		const synchronize = PR_REVIEW_WEBHOOK_CONTRACT_CASES.find(
+			(testCase) => testCase.expectedTriggerKind === "synchronize",
+		);
+		if (!synchronize) throw new Error("missing synchronize fixture");
+		mocks.executeWebhookQuery.mockResolvedValue([
+			webhookRowFromContractCase(synchronize),
+		]);
+		mocks.listRecentPrReviewRuns.mockResolvedValue([
+			runRow({
+				fingerprint: "fp_coalesced",
+				prNumber: 8105,
+				headSha: "older-head",
+				coalescedHeadSha: "newsha8105abc",
+				coalescedTriggerKind: "synchronize",
+				coalescedTriggerSourceId: "newsha8105abc",
+				coalescedAt: new Date().toISOString(),
+			}),
+		]);
+
+		const { GET } = await import("./route");
+		const response = await GET(
+			monitorRequest({ "x-workspace-webhook-canary": MONITOR_SECRET }),
+		);
+
+		expect(response.status).toBe(200);
+		await expect(response.json()).resolves.toMatchObject({
+			ok: true,
+			checked: 1,
+			missingRunKeys: 0,
+			missing: [],
+		});
+	});
+
 	it("fails the operator report when existing runs need attention", async () => {
 		mocks.executeWebhookQuery.mockResolvedValue([]);
 		const oldStamp = new Date(Date.now() - 45 * 60 * 1000).toISOString();
 		mocks.listRecentPrReviewRuns.mockResolvedValue([
 			runRow({
-				fingerprint: "fp_needs_projection",
+				fingerprint: "fp_running_too_long",
 				prNumber: 9001,
-				sessionId: "sesn_projection",
+				sessionId: "sesn_slow",
 				updatedAt: oldStamp,
 			}),
 			runRow({
@@ -238,6 +354,15 @@ describe("/api/webhooks/github/pr-reviewer-monitor GET", () => {
 				status: "failed",
 				sessionId: "sesn_failed",
 				error: "review intent parse failed",
+				updatedAt: oldStamp,
+			}),
+			runRow({
+				fingerprint: "fp_projection_failed",
+				prNumber: 9003,
+				status: "completed",
+				sessionId: "sesn_projection_failed",
+				projectionStatus: "failed",
+				projectionError: "GitHub status update failed 503",
 				updatedAt: oldStamp,
 			}),
 		]);
@@ -250,26 +375,100 @@ describe("/api/webhooks/github/pr-reviewer-monitor GET", () => {
 		expect(response.status).toBe(503);
 		await expect(response.json()).resolves.toMatchObject({
 			ok: false,
-			attentionRequired: 2,
-			needsProjection: 1,
-			failed: 1,
+			health: "unhealthy",
+			attentionRequired: 3,
+			runningTooLong: 1,
+			failedExecution: 1,
+			projectionFailed: 1,
+			failedRunCount: 1,
+			projectionFailedCount: 1,
+			githubProjectionAudit: {
+				status: "not_checked",
+				script: "scripts/pr-review-health.py",
+			},
 			runs: {
-				needsProjection: [
+				runningTooLong: [
 					{
-						fingerprint: "fp_needs_projection",
-						state: "needs_projection",
+						fingerprint: "fp_running_too_long",
+						state: "running_too_long",
 						agentStatus: "started",
 						projectionStatus: "pending",
 						detailsUrl:
-							"http://localhost/dashboard/review-runs/fp_needs_projection",
+							"http://localhost/dashboard/review-runs/fp_running_too_long",
 					},
 				],
-				failed: [
+				failedExecution: [
 					{
 						fingerprint: "fp_failed",
-						state: "failed",
+						state: "failed_execution",
 						projectionStatus: "failed",
 						error: "review intent parse failed",
+					},
+				],
+				projectionFailed: [
+					{
+						fingerprint: "fp_projection_failed",
+						state: "projection_failed",
+						projectionStatus: "failed",
+						projectionError: "GitHub status update failed 503",
+					},
+				],
+			},
+		});
+	});
+
+	it("reports stale projection and superseded runs without collapsing them into GitHub drift", async () => {
+		mocks.executeWebhookQuery.mockResolvedValue([]);
+		const projectionStamp = new Date(Date.now() - 45 * 60 * 1000).toISOString();
+		mocks.listRecentPrReviewRuns.mockResolvedValue([
+			runRow({
+				fingerprint: "fp_awaiting_projection",
+				status: "completed",
+				sessionId: "sesn_completed",
+				projectionStatus: "pending",
+				projectionUpdatedAt: projectionStamp,
+			}),
+			runRow({
+				fingerprint: "fp_superseded",
+				status: "superseded",
+				sessionId: "sesn_superseded",
+				projectionStatus: "superseded",
+			}),
+		]);
+
+		const { GET } = await import("./route");
+		const response = await GET(
+			monitorRequest({ authorization: `Bearer ${MONITOR_SECRET}` }),
+		);
+
+		expect(response.status).toBe(503);
+		await expect(response.json()).resolves.toMatchObject({
+			completedAwaitingProjection: 1,
+			superseded: 1,
+			staleRunCount: 1,
+			supersededRunCount: 1,
+			staleOrSupersededCount: 2,
+			reviewRunHealth: {
+				status: "unhealthy",
+				staleRunCount: 1,
+				supersededRunCount: 1,
+			},
+			githubProjectionAudit: {
+				status: "not_checked",
+			},
+			runs: {
+				completedAwaitingProjection: [
+					{
+						fingerprint: "fp_awaiting_projection",
+						state: "completed_awaiting_projection",
+						projectionLatencyMinutes: expect.any(Number),
+						sloBreached: true,
+					},
+				],
+				superseded: [
+					{
+						fingerprint: "fp_superseded",
+						state: "superseded",
 					},
 				],
 			},
