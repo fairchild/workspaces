@@ -1,9 +1,11 @@
-# Managed reviewer broker is the projection driver. It advances completed
-# ReviewRuns into GitHub reviews/statuses without running ingress canaries or
-# failing on unrelated monitor backlog.
+# Managed reviewer broker driver. Production review projection is event-driven:
+# when the webhook route creates the pending WorkSpaces Managed Review status,
+# this workflow polls the protected broker route until the agent output is ready
+# to project. Manual dispatch stays available as a repair path.
 name: Managed Reviewer Broker
 
 on:
+  status:
   push:
     branches: [main]
     paths:
@@ -25,14 +27,15 @@ on:
         description: "Repository to reconcile"
         default: "fairchild/workspaces"
         required: true
-  schedule:
-    - cron: "*/5 * * * *"
-
+      attempts:
+        description: "Broker polling attempts before giving up"
+        default: "1"
+        required: true
 permissions:
   contents: read
 
 concurrency:
-  group: managed-reviewer-broker
+  group: managed-reviewer-broker-${{ github.event_name }}-${{ github.event.sha || github.run_id }}
   cancel-in-progress: true
 
 jobs:
@@ -58,11 +61,16 @@ jobs:
 
   broker:
     name: Reconcile completed managed reviews
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'status' &&
+       github.event.context == 'WorkSpaces Managed Review' &&
+       github.event.state == 'pending')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
+          ref: main
           persist-credentials: false
 
       - name: Run managed reviewer broker
@@ -70,4 +78,43 @@ jobs:
           WORKSPACES_WEBHOOK_CANARY_SECRET: ${{ secrets.WORKSPACES_WEBHOOK_CANARY_SECRET }}
           BROKER_LIMIT: ${{ github.event.inputs.limit || '10' }}
           BROKER_REPO: ${{ github.event.inputs.repo || github.repository }}
-        run: python3 scripts/pr-reviewer-broker.py --limit "$BROKER_LIMIT" --repo "$BROKER_REPO"
+          BROKER_ATTEMPTS: ${{ github.event_name == 'status' && '30' || github.event.inputs.attempts || '1' }}
+        run: |
+          for attempt in $(seq 1 "$BROKER_ATTEMPTS"); do
+            echo "Managed reviewer broker attempt $attempt/$BROKER_ATTEMPTS"
+            output="$(python3 scripts/pr-reviewer-broker.py --json --limit "$BROKER_LIMIT" --repo "$BROKER_REPO")"
+            echo "$output"
+
+            metrics="$(python3 -c 'import json, sys; p=json.load(sys.stdin); print(p.get("checked", 0), p.get("applied", 0), p.get("failed", 0), p.get("retryable", 0), p.get("skippedRunning", 0), p.get("superseded", 0), p.get("requeued", 0))' <<<"$output")"
+            set -- $metrics
+            checked="$1"
+            applied="$2"
+            failed="$3"
+            retryable="$4"
+            skipped_running="$5"
+            superseded="$6"
+            requeued="$7"
+
+            if [ "$failed" -gt 0 ] || [ "$retryable" -gt 0 ]; then
+              echo "::error::Managed reviewer broker reported failed=$failed retryable=$retryable"
+              exit 1
+            fi
+            if [ "$skipped_running" -eq 0 ] && { [ "$applied" -gt 0 ] || [ "$superseded" -gt 0 ] || [ "$requeued" -gt 0 ]; }; then
+              echo "Managed reviewer broker advanced ReviewRuns and has no running sessions in this pass."
+              exit 0
+            fi
+            if [ "$checked" -eq 0 ]; then
+              echo "No active broker work remains."
+              exit 0
+            fi
+            if [ "$skipped_running" -eq 0 ]; then
+              echo "Broker pass checked runs without remaining active sessions."
+              exit 0
+            fi
+            if [ "$attempt" -lt "$BROKER_ATTEMPTS" ]; then
+              sleep 60
+            fi
+          done
+
+          echo "::error::Managed reviewer broker still has running sessions after $BROKER_ATTEMPTS attempts."
+          exit 1
