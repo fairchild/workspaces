@@ -284,6 +284,24 @@ describe("PR review trigger relevance classifier", () => {
 			kind: "evidence_comment",
 			triggerSourceId: "comment-9001",
 		});
+
+		const validationComment = expectTrigger(
+			classifyPrReviewTrigger(
+				"issue_comment",
+				"created",
+				makeIssueCommentPayload(
+					"Validation: mise -C web run web:check passed",
+					{
+						comment_id: 9002,
+					},
+				),
+			),
+			"evidence_comment",
+		);
+		expect(validationComment.context).toMatchObject({
+			kind: "evidence_comment",
+			triggerSourceId: "comment-9002",
+		});
 	});
 
 	it("classifies metadata and terminal events without managed-review sessions", () => {
@@ -303,6 +321,17 @@ describe("PR review trigger relevance classifier", () => {
 				"issue_comment",
 				"created",
 				makeIssueCommentPayload("looks good, ship it"),
+			),
+			"non_evidence_comment",
+			"metadata",
+		);
+		expectSkip(
+			classifyPrReviewTrigger(
+				"issue_comment",
+				"created",
+				makeIssueCommentPayload(
+					"Managed review approved with no requested changes. Local and CI validation are green.",
+				),
 			),
 			"non_evidence_comment",
 			"metadata",
@@ -671,6 +700,11 @@ describe("/api/webhooks/github POST", () => {
 		it("does not trigger on a comment without evidence signals", async () => {
 			const { POST } = await import("./route");
 			await POST(makeIssueCommentRequest("looks good, ship it"));
+			await POST(
+				makeIssueCommentRequest(
+					"Managed review approved with no requested changes. Local and CI validation are green.",
+				),
+			);
 			expect(mocks.triggerPrReview).not.toHaveBeenCalled();
 		});
 
