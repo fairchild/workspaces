@@ -76,7 +76,7 @@ struct SidebarViewTests {
     func localCreationMessageMatchesPhase() {
         #expect(SidebarWorkspaceController.localCreationMessage(for: .preparing) == "Preparing workspace...")
         #expect(SidebarWorkspaceController.localCreationMessage(for: .creatingWorktree) == "Creating git worktree...")
-        #expect(SidebarWorkspaceController.localCreationMessage(for: .runningSetupScript) == "Running setup script...")
+        #expect(SidebarWorkspaceController.localCreationMessage(for: .runningSetupScript) == "Running setup...")
         #expect(SidebarWorkspaceController.localCreationMessage(for: .finished) == "Finishing workspace...")
     }
 }

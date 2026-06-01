@@ -121,12 +121,13 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
 
         do {
             await progress?(.runningSetupScript)
-            let setupResult = try await runLifecycleScript("setup.sh", in: workspaceDir)
-            if !setupResult.stdout.isEmpty {
-                log.info("setup.sh output: \(setupResult.stdout)")
+            let setupRun = try await runLifecycleAction(.setup, in: workspaceDir)
+            if !setupRun.result.stdout.isEmpty {
+                log.info("\(setupRun.scriptName ?? "setup") output: \(setupRun.result.stdout)")
             }
-            if setupResult.exitCode != 0 {
-                let msg = "setup.sh exited with code \(setupResult.exitCode): \(setupResult.stderr)"
+            if setupRun.result.exitCode != 0 {
+                let scriptName = setupRun.scriptName ?? "setup"
+                let msg = "\(scriptName) exited with code \(setupRun.result.exitCode): \(setupRun.result.stderr)"
                 log.warning("\(msg)")
                 warnings.append(msg)
             }
@@ -148,19 +149,13 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
     // MARK: - Archive Workspace
 
     public func archiveWorkspace(at workspaceURL: URL) async throws {
-        let archiveResult = try await runLifecycleScript("archive.sh", in: workspaceURL)
-        if !archiveResult.stdout.isEmpty {
-            log.info("archive.sh output: \(archiveResult.stdout)")
-        }
-        if archiveResult.exitCode != 0 {
-            log.warning("archive.sh exited with code \(archiveResult.exitCode): \(archiveResult.stderr)")
-        }
+        try await runTeardownLifecycle(in: workspaceURL)
     }
 
     // MARK: - Delete Workspace
 
     public func deleteWorkspace(at workspaceURL: URL, deleteFiles: Bool) async throws {
-        _ = try await runLifecycleScript("archive.sh", in: workspaceURL)
+        try await runTeardownLifecycle(in: workspaceURL)
 
         if deleteFiles {
             try await WorkspaceDirectoryRemover.remove(at: workspaceURL)
@@ -185,6 +180,81 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
 
     public func runLifecycleScript(_ scriptName: String, in directory: URL) async throws -> ScriptResult {
         let scriptPath = directory.appendingPathComponent(scriptName)
+        return try await runLifecycleScript(at: scriptPath, in: directory)
+    }
+
+    private struct LifecycleScriptRun: Sendable {
+        let scriptName: String?
+        let result: ScriptResult
+    }
+
+    private enum LifecycleScriptAction: String, Sendable {
+        case setup
+        case stop
+        case archive
+
+        var legacyScriptName: String? {
+            switch self {
+            case .setup:
+                return "setup.sh"
+            case .stop:
+                return nil
+            case .archive:
+                return "archive.sh"
+            }
+        }
+
+        var candidateScriptNames: [String] {
+            var candidates = [
+                "scripts/\(rawValue)",
+                "scripts/\(rawValue).sh",
+            ]
+            if let legacyScriptName {
+                candidates.append(legacyScriptName)
+            }
+            return candidates
+        }
+    }
+
+    private func runLifecycleAction(
+        _ action: LifecycleScriptAction,
+        in directory: URL
+    ) async throws -> LifecycleScriptRun {
+        for scriptName in action.candidateScriptNames {
+            let scriptPath = directory.appendingPathComponent(scriptName)
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: scriptPath.path, isDirectory: &isDirectory),
+                !isDirectory.boolValue
+            else {
+                continue
+            }
+
+            let result = try await runLifecycleScript(at: scriptPath, in: directory)
+            return LifecycleScriptRun(scriptName: scriptName, result: result)
+        }
+
+        return LifecycleScriptRun(
+            scriptName: nil,
+            result: ScriptResult(exitCode: 0, stdout: "", stderr: "")
+        )
+    }
+
+    private func runTeardownLifecycle(in directory: URL) async throws {
+        for action in [LifecycleScriptAction.stop, .archive] {
+            let run = try await runLifecycleAction(action, in: directory)
+            guard let scriptName = run.scriptName else {
+                continue
+            }
+            if !run.result.stdout.isEmpty {
+                log.info("\(scriptName) output: \(run.result.stdout)")
+            }
+            if run.result.exitCode != 0 {
+                log.warning("\(scriptName) exited with code \(run.result.exitCode): \(run.result.stderr)")
+            }
+        }
+    }
+
+    private func runLifecycleScript(at scriptPath: URL, in directory: URL) async throws -> ScriptResult {
 
         guard FileManager.default.fileExists(atPath: scriptPath.path) else {
             return ScriptResult(exitCode: 0, stdout: "", stderr: "")

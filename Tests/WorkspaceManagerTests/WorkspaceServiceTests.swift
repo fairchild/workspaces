@@ -546,6 +546,40 @@ struct WorkspaceServiceTests {
         #expect(self.worktreeList(worktreeList, contains: info.path))
     }
 
+    @Test("createWorkspace runs project-scripts setup from the new worktree")
+    func createWorkspaceRunsProjectScriptsSetupFromNewWorktree() async throws {
+        let service = WorkspaceService()
+        let (testRoot, repoDir, wsRoot) = try makeGitWorkspaceFixture()
+        defer { try? FileManager.default.removeItem(at: testRoot) }
+        let originalRoot = setWorkspacesRoot(wsRoot)
+        defer { restoreWorkspacesRoot(originalRoot) }
+
+        let scriptsDir = repoDir.appendingPathComponent("scripts", isDirectory: true)
+        try FileManager.default.createDirectory(at: scriptsDir, withIntermediateDirectories: true)
+        try """
+        #!/usr/bin/env bash
+        set -euo pipefail
+        pwd > setup.cwd
+        touch setup.marker
+        """.write(to: scriptsDir.appendingPathComponent("setup"), atomically: true, encoding: .utf8)
+        _ = try runGit(["add", "-A"], at: repoDir)
+        _ = try runGit(["commit", "-m", "add project setup script"], at: repoDir)
+
+        let info = try await service.createWorkspace(
+            repoName: "test-repo",
+            repoLocalURL: repoDir,
+            name: "project-setup"
+        )
+
+        #expect(FileManager.default.fileExists(atPath: info.path.appendingPathComponent("setup.marker").path))
+        let setupCWD = try String(contentsOf: info.path.appendingPathComponent("setup.cwd"), encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        #expect(
+            URL(fileURLWithPath: setupCWD).standardizedFileURL.resolvingSymlinksInPath()
+                == info.path.standardizedFileURL.resolvingSymlinksInPath()
+        )
+    }
+
     @Test("createWorkspace cleans up when workspace branch already exists")
     func createWorkspaceCleansUpWhenWorkspaceBranchExists() async throws {
         let service = WorkspaceService()
@@ -719,6 +753,62 @@ struct WorkspaceServiceTests {
         try await service.archiveWorkspace(at: tempDir)
 
         #expect(FileManager.default.fileExists(atPath: tempDir.appendingPathComponent("archived.marker").path))
+    }
+
+    @Test("archiveWorkspace runs project-scripts stop then archive")
+    func archiveWorkspaceRunsProjectScriptsStopThenArchive() async throws {
+        let mockGit = MockGitService()
+        let service = WorkspaceService(gitService: mockGit)
+        let tempDir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let scriptsDir = tempDir.appendingPathComponent("scripts", isDirectory: true)
+        try FileManager.default.createDirectory(at: scriptsDir, withIntermediateDirectories: true)
+        let orderFile = tempDir.appendingPathComponent("teardown-order.log")
+        try """
+        #!/usr/bin/env bash
+        set -euo pipefail
+        printf "stop\\n" >> "\(orderFile.path)"
+        """.write(to: scriptsDir.appendingPathComponent("stop"), atomically: true, encoding: .utf8)
+        try """
+        #!/usr/bin/env bash
+        set -euo pipefail
+        printf "archive\\n" >> "\(orderFile.path)"
+        """.write(to: scriptsDir.appendingPathComponent("archive"), atomically: true, encoding: .utf8)
+
+        try await service.archiveWorkspace(at: tempDir)
+
+        let order = try String(contentsOf: orderFile, encoding: .utf8)
+        #expect(order == "stop\narchive\n")
+    }
+
+    @Test("deleteWorkspace runs project-scripts teardown before removing workspace")
+    func deleteWorkspaceRunsProjectScriptsTeardownBeforeRemovingWorkspace() async throws {
+        let mockGit = MockGitService()
+        let service = WorkspaceService(gitService: mockGit)
+        let tempDir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let wsDir = tempDir.appendingPathComponent("test-repo/ws-project-scripts")
+        let scriptsDir = wsDir.appendingPathComponent("scripts", isDirectory: true)
+        try FileManager.default.createDirectory(at: scriptsDir, withIntermediateDirectories: true)
+        let orderFile = tempDir.appendingPathComponent("delete-teardown-order.log")
+        try """
+        #!/usr/bin/env bash
+        set -euo pipefail
+        printf "stop\\n" >> "\(orderFile.path)"
+        """.write(to: scriptsDir.appendingPathComponent("stop"), atomically: true, encoding: .utf8)
+        try """
+        #!/usr/bin/env bash
+        set -euo pipefail
+        printf "archive\\n" >> "\(orderFile.path)"
+        """.write(to: scriptsDir.appendingPathComponent("archive"), atomically: true, encoding: .utf8)
+
+        try await service.deleteWorkspace(at: wsDir, deleteFiles: true)
+
+        let order = try String(contentsOf: orderFile, encoding: .utf8)
+        #expect(order == "stop\narchive\n")
+        #expect(!FileManager.default.fileExists(atPath: wsDir.path))
     }
 
     // MARK: - getWorkspaceSize Tests

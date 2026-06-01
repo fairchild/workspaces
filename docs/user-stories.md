@@ -43,8 +43,8 @@ sequenceDiagram
     App-->>User: Shows name input sheet
     User->>App: Enters "feature-auth" → Create
     App-->>User: Shows inline progress on repo row
-    App->>App: Copies repo to ~/workspaces/my-project/feature-auth
-    App->>App: Runs setup.sh (if exists)
+    App->>App: Creates git worktree at ~/workspaces/my-project/feature-auth
+    App->>App: Runs setup lifecycle script if present
     App-->>User: Workspace selected, session available
     User->>Terminal: Types "claude" to start AI session
 ```
@@ -162,7 +162,7 @@ sequenceDiagram
     User->>App: Enters "approach-b"
     App->>FS: Create git worktree at ~/workspaces/project/approach-b
     FS-->>App: Worktree ready
-    App->>FS: Run setup.sh
+    App->>FS: Run scripts/setup
     FS-->>App: Setup output
     App-->>User: New workspace selected
 
@@ -197,7 +197,7 @@ sequenceDiagram
 1. **Right-click repo** — Context menu appears with "New Workspace..." option
 2. **Name workspace** — User enters descriptive name like "approach-b"
 3. **Worktree created** — Git worktree made in the workspaces directory
-4. **Setup runs** — If setup.sh exists, it runs automatically
+4. **Setup runs** — If `scripts/setup`, `scripts/setup.sh`, or legacy `setup.sh` exists, it runs automatically
 5. **Workspace ready** — New workspace selected, terminal opens there
 
 ---
@@ -222,8 +222,8 @@ sequenceDiagram
     App-->>User: Confirmation dialog
     Note over User,App: Explicit choice: keep files or remove files
     User->>App: Confirms desired delete mode
-    App->>FS: Run archive.sh (if exists)
-    FS-->>App: Archive output
+    App->>FS: Run scripts/stop and scripts/archive if present
+    FS-->>App: Teardown output
     App->>FS: Delete workspace directory
     FS-->>App: Deleted
     App->>App: Remove from SwiftData
@@ -251,7 +251,7 @@ sequenceDiagram
 1. **Right-click workspace** — Context menu shows Archive and Delete options
 2. **Click Delete** — Confirmation dialog appears
 3. **Choose file handling** — User picks "Delete (Keep Files)" or "Delete and Remove Files"
-4. **archive.sh runs** — If present, cleanup script runs first
+4. **Lifecycle runs** — If present, `scripts/stop` and `scripts/archive` run first. Legacy `archive.sh` still works.
 5. **Workspace removed** — Deleted from list (and optionally from disk)
 
 ---
