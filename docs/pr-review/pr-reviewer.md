@@ -145,6 +145,9 @@ When the workflow runs for ordinary `pull_request` changes, the
 `Reconcile completed managed reviews` job is expected to show as skipped. That
 job is intentionally limited to `status` events for the pending managed-review
 context and to manual `workflow_dispatch` repair runs.
+Non-pending status events can also create skipped workflow runs, but the
+workflow concurrency key includes status context and state so those skipped runs
+do not cancel an active pending-status broker poll.
 
 A broker failure means a completed ReviewRun could not be published or marked
 superseded.
