@@ -130,11 +130,19 @@ signature before creating any managed-agent session.
 ### Broker reconciliation
 
 Completed managed-agent sessions are projected to GitHub by
-`.github/workflows/managed-reviewer-broker.yml`, which runs
-`scripts/pr-reviewer-broker.py` every five minutes. This workflow calls only the
-protected broker route; it does not run the ingress canary or fail because the
-monitor has unrelated historical attention items. A broker failure means a
-completed ReviewRun could not be published or marked superseded.
+`.github/workflows/managed-reviewer-broker.yml`. The production path is
+event-driven: when the webhook route creates the pending
+`WorkSpaces Managed Review` commit status, GitHub emits a `status` event. The
+broker workflow filters to that pending context and polls the protected broker
+route for up to 30 minutes, matching the default health pending timeout, until
+the managed-agent session has completed or the attempt window expires.
+
+The same workflow remains the manual repair path and script smoke test. Manual
+`workflow_dispatch` runs `scripts/pr-reviewer-broker.py` against the broker
+route once by default, or for a caller-provided number of attempts.
+
+A broker failure means a completed ReviewRun could not be published or marked
+superseded.
 
 ## Ingress Contract And Canary
 

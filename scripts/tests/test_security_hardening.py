@@ -286,7 +286,7 @@ class SecurityHardeningTests(unittest.TestCase):
 
     def test_mise_invocations_are_locked_and_pinned(self) -> None:
         verify_mise = (REPO_ROOT / "scripts/verify-mise-security.sh").read_text()
-        self.assertIn("MISE_EXPECTED_VERSION=\"v2026.5.18\"", verify_mise)
+        self.assertIn("MISE_EXPECTED_VERSION=\"v2026.6.0\"", verify_mise)
         self.assertIn("verify_locked_zig_exec", verify_mise)
         self.assertIn("github.com/repos/jdx/mise/releases/latest", verify_mise)
         self.assertIn("Authorization: Bearer $GITHUB_TOKEN", verify_mise)
@@ -313,9 +313,9 @@ class SecurityHardeningTests(unittest.TestCase):
         self.assertIn("enable-global-virtual-store=true", web_npmrc)
 
         sandbox = (REPO_ROOT / "web/src/lib/agent-runtime/vercel-sandbox.ts").read_text()
-        self.assertIn("MISE_VERSION='v2026.5.18'", sandbox)
+        self.assertIn("MISE_VERSION='v2026.6.0'", sandbox)
         self.assertIn(
-            "MISE_SHA256='cfac593469d028d7ae5fe36e37bd7c59118b5238e92d8a876209578464f24a84'",
+            "MISE_SHA256='9d225e07427b7e05cc4ae7f09f111dfdefdfebb58956513403711935ce313202'",
             sandbox,
         )
         self.assertIn("sha256sum -c -", sandbox)
@@ -478,7 +478,14 @@ class SecurityHardeningTests(unittest.TestCase):
         self.assertNotIn("--advisory-monitor", canary_script)
         self.assertNotIn("def broker_url", canary_script)
         self.assertIn("scripts/pr-reviewer-broker.py", broker_workflow)
-        self.assertIn("schedule:", broker_workflow)
+        self.assertIn("status:", broker_workflow)
+        self.assertNotIn("schedule:", broker_workflow)
+        self.assertIn("github.event.context == 'WorkSpaces Managed Review'", broker_workflow)
+        self.assertIn("github.event.state == 'pending'", broker_workflow)
+        self.assertIn("ref: main", broker_workflow)
+        self.assertIn("persist-credentials: false", broker_workflow)
+        self.assertIn("github.event_name == 'status' && '30'", broker_workflow)
+        self.assertIn("--json --limit", broker_workflow)
         self.assertNotIn("scripts/managed-reviewer-ingress-canary.py", broker_workflow)
         self.assertNotIn("pr-reviewer-monitor", broker_workflow)
         self.assertIn("pr-reviewer-broker", broker_script)
