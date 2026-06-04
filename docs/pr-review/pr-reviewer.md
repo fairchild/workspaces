@@ -141,6 +141,11 @@ The same workflow remains the manual repair path and script smoke test. Manual
 `workflow_dispatch` runs `scripts/pr-reviewer-broker.py` against the broker
 route once by default, or for a caller-provided number of attempts.
 
+When the workflow runs for ordinary `pull_request` changes, the
+`Reconcile completed managed reviews` job is expected to show as skipped. That
+job is intentionally limited to `status` events for the pending managed-review
+context and to manual `workflow_dispatch` repair runs.
+
 A broker failure means a completed ReviewRun could not be published or marked
 superseded.
 
@@ -166,8 +171,8 @@ Production CD requires `WORKSPACES_WEBHOOK_CANARY_SECRET`, runs the ingress
 canary before promotion, then repeats it in `validate-prod` after promotion
 before the production Playwright smoke. That canary proves only relay delivery,
 route HMAC validation, canary-secret validation, and dry-run trigger selection.
-It does not broker completed runs or report queue health; the scheduled broker
-and health workflows own live reviewer reconciliation failures.
+It does not broker completed runs or report queue health; the broker and health
+workflows own live reviewer reconciliation failures.
 
 The scheduled ingress workflow is a contract probe. It does not reconcile
 completed runs and does not report queue health.
@@ -303,7 +308,7 @@ If using the GitHub App: check that `PR_REVIEWER_APP_ID`, `PR_REVIEWER_PRIVATE_K
 
 Check the session events for the final fenced `json` review intent, then check
 Vercel logs for `[pr-review] broker failed`. Common causes:
-- `WORKSPACES_WEBHOOK_CANARY_SECRET` is missing, so scheduled broker calls are not authenticated
+- `WORKSPACES_WEBHOOK_CANARY_SECRET` is missing, so broker calls are not authenticated
 - GitHub App token exchange failed — check Vercel logs for `[pr-review] GitHub App token failed`
 - `PR_REVIEWER_ENABLED=0` is set
 - the managed agent did not return valid fenced JSON with `event`, `body`, and `labels`

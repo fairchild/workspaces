@@ -482,6 +482,8 @@ class SecurityHardeningTests(unittest.TestCase):
         self.assertNotIn("schedule:", broker_workflow)
         self.assertIn("github.event.context == 'WorkSpaces Managed Review'", broker_workflow)
         self.assertIn("github.event.state == 'pending'", broker_workflow)
+        self.assertIn("github.event.context || 'none'", broker_workflow)
+        self.assertIn("github.event.state || 'none'", broker_workflow)
         self.assertIn("ref: main", broker_workflow)
         self.assertIn("persist-credentials: false", broker_workflow)
         self.assertIn("github.event_name == 'status' && '30'", broker_workflow)
