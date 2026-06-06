@@ -70,29 +70,51 @@ print_header() {
     echo ""
 }
 
-# Return the latest check-run state for this release SHA:
+# Return the latest check-run state for this release SHA.
+#
+# GitHub can attach many check-runs to busy release commits, so collect every
+# paginated page and choose the newest matching check by timestamp.
+#
 # - terminal conclusions such as success, failure, cancelled
 # - queued or in_progress while GitHub Actions is still running
 # - not_found when no matching check run exists on the commit
 check_workflow_state() {
     local workflow_name="$1"
-    local jq_filter
-    local state
+    local check_runs
+    local name
+    local status
+    local conclusion
+    local timestamp
+    local latest_state="not_found"
+    local latest_timestamp="0000-00-00T00:00:00Z"
 
-    jq_filter=".check_runs
-        | map(select(.name == \"$workflow_name\"))
-        | sort_by(.started_at // .created_at // \"\")
-        | last
-        | if . == null then empty
-          elif .status == \"completed\" then .conclusion
-          else .status
-          end"
+    if ! check_runs=$(gh api \
+	--paginate \
+	"repos/$REPO/commits/$SHA/check-runs?per_page=100" \
+	--jq '.check_runs[] | [.name, .status, (.conclusion // "__no_conclusion__"), (.started_at // .created_at // "0000-00-00T00:00:00Z")] | @tsv' \
+	2>/dev/null); then
+	echo "not_found"
+	return
+    fi
 
-    state=$(gh api \
-        "repos/$REPO/commits/$SHA/check-runs" \
-        --jq "$jq_filter" \
-        2>/dev/null)
-    echo "${state:-not_found}"
+    while IFS=$'\t' read -r name status conclusion timestamp; do
+	[[ -n "${name:-}" ]] || continue
+	[[ "$name" == "$workflow_name" ]] || continue
+	[[ "$timestamp" > "$latest_timestamp" ]] || continue
+
+	latest_timestamp="$timestamp"
+	if [[ "$status" == "completed" ]]; then
+	    if [[ "$conclusion" == "__no_conclusion__" ]]; then
+		latest_state="completed"
+	    else
+		latest_state="$conclusion"
+	    fi
+	else
+	    latest_state="${status:-not_found}"
+	fi
+    done <<<"$check_runs"
+
+    echo "$latest_state"
 }
 
 check_any_workflow() {
