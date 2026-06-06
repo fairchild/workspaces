@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.17.0] - 2026-06-05
+
+### Added
+- Use git worktrees for Local workspace creation, avoiding repository-copy failures on Git internals and making new local workspaces faster (#606)
+- Add workspace materializer strategy docs and lifecycle behavior for project scripts so setup/archive hooks are part of the local workspace flow (#609)
+- Add managed reviewer recovery controls, a projection ledger, architecture documentation, an understanding quiz, and a visual guide for maintainers (#600, #601, #602, #610)
+- Add the terminal status sliver and weekly engineering summary generator to improve session visibility and reporting (#578, #583)
+
+### Changed
+- Center managed reviewer health on durable ReviewRun state with clearer SLO/operator signals and coalesced run expectations (#599, #603, #604)
+- Tighten managed-review trigger classification and evidence-comment handling so ordinary review responses do not create noisy reruns (#580, #605, #608)
+- Document the final release update verification path so release closure includes a downloaded DMG and installed-app update check
+
+### Fixed
+- Repair managed review projection from completed ReviewRuns before broker repair, keeping GitHub status aligned with the durable run state (#598)
+- Trigger the managed-review broker from pending status events and isolate status-event concurrency so completed reviews are projected promptly without duplicate-status interference (#611, #612, #613)
+- Cache Playwright browsers in CD to reduce deployment validation friction (#607)
+
 ## [0.16.0] - 2026-05-26
 
 ### Added
