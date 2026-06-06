@@ -26,9 +26,9 @@ Workspaces now spans three surfaces — a Mac-native app, a web dashboard, and a
 
 **Web dashboard** (`web/`). Next.js 15 on Vercel with GitHub OAuth (Better Auth) and LibSQL+Kysely persistence. A ghostty-web terminal tab and a TerminalShare Cloudflare Worker proxy. A multi-provider agent runtime now covering Vercel Sandbox and Anthropic Managed Agents, with Daytona/GitHub Actions registered as unavailable stubs and `mock` available for tests (#332). Persistent-sandbox snapshot/restore for conversation continuity (#277); tmux inside the sandbox for real resume continuity (#311/#312/#315, clarified in #324). Automated PR review posted by Managed Agents (#345). Preview → validate → promote CD pipeline with a bootstrap orchestrator (#344). PostHog telemetry (#336). A `qa-web` skill + subagent (#343) covers black-box exploratory testing, author-mode spec generation, and heal-mode regression-vs-selector-drift triage.
 
-**Agent automation.** The `.agents/skills/` library (`workspaces-performance-system`, `workspaces-optimization`, `drive`, `peter-planner`, `gh-discuss`, and others). April agent workflow runs on a Lume self-hosted runner. Managed PR review is shipped, but its operational model is still being simplified around ReviewRun as the source of truth. Most autonomous automations remain gated off behind `AGENT_AUTOMATIONS_ENABLED`, pending runner policy, prompt-injection defense hardening, and proof that the managed-review path is understandable and repairable.
+**Agent automation.** The `.agents/skills/` library (`workspaces-performance-system`, `workspaces-optimization`, `drive`, `peter-planner`, `gh-discuss`, and others). April agent workflow runs on a Lume self-hosted runner. Managed PR review is now ReviewRun-first, repairable, documented, quiz-validated, and closed under milestone #8. Most broader autonomous automations remain gated off behind `AGENT_AUTOMATIONS_ENABLED`, pending runner policy, prompt-injection defense hardening, and proof that new automation surfaces reduce delivery drag rather than adding operator noise.
 
-**Shipping cadence.** Weekly-ish releases. Latest release `v0.11.1`.
+**Shipping cadence.** Weekly-ish releases. Latest release `v0.17.0`.
 
 What this means for planning.
 
@@ -37,6 +37,7 @@ What this means for planning.
 - Terminal-first remains the product's core promise; everything else is in service of that, including the web and agent surfaces.
 - Performance has moved from crisis to system. Ongoing measurement via the canonical contract is the norm, not a fire drill.
 - Agent automation must earn expansion by improving delivery throughput and reducing review drag on already-shipped workflows, not by adding more autonomous surfaces first.
+- The post-`v0.17.0` reset point is clean: no open PRs, managed-reviewer reliability closed, and the next work should retire small reliability/dependency debt before reopening breadth.
 
 ---
 
@@ -72,7 +73,7 @@ Agent automation:
 - April agent on a Lume self-hosted runner
 - evidence workflow via Cloudflare R2 + `scripts/evidence.sh`
 - notification relay via Cloudflare Worker + Durable Object
-- managed PR reviewer via Anthropic Managed Agents, now in a ReviewRun-first hardening phase
+- managed PR reviewer via Anthropic Managed Agents, with ReviewRun-first execution/projection state, health reporting, repair posture, docs, visual guide, and quiz validation closed under milestone #8
 
 ---
 
@@ -128,7 +129,7 @@ Priority is driven by three filters, in this order:
 - Fix dependency debt before adding breadth — work that reduces regression risk outranks adjacent feature growth.
 - Expand side systems only after they are trustworthy enough not to drag on the core.
 
-Throughput means fewer stuck PRs, fewer manual review repairs, clearer operator state, and less rework on the workflows already in use. It does not mean adding new agent capabilities before the current managed-review system is reliable and explainable.
+Throughput means fewer stuck PRs, fewer manual review repairs, clearer operator state, and less rework on the workflows already in use. With managed-reviewer reliability closed, the next throughput gains should come from fixing the small release/configuration debts found during closure before broadening agent automation.
 
 ---
 
@@ -158,45 +159,54 @@ P0 because these integration files still carry the highest regression risk when 
 
 Phase 1 complete: `AppActivationPolicy` (PR #374) gates all `NSApp.activate` calls — launch *and* runtime — behind `WORKSPACES_NO_ACTIVATE_ON_LAUNCH=1` / `CI`. `scripts/capture-window.sh` provides window-id capture without activation. Remaining items (capture handshake, separate-user execution lane, VM-backed CI lane) drop to P2 — promote back when a concrete daily-driver scenario forces the issue. Phase 1 source: `backlog/done/shared-desktop-focus-contention-followup.md` (closed #82 + residual notes).
 
-#### 4. Managed reviewer reliability and understandability
+#### 4. Release and local-configuration reliability debt
+
+GitHub: [#615](https://github.com/fairchild/workspaces/issues/615) + [#617](https://github.com/fairchild/workspaces/issues/617) · `area: platform` / `area: distribution` / `devEx`
+
+The `v0.17.0` release and follow-up dotfiles maintenance exposed two small but high-leverage reliability debts:
+
+- **Release preflight check-run pagination** ([#615](https://github.com/fairchild/workspaces/issues/615)). `scripts/release-preflight.sh` should reliably find required checks on busy commits without needing a fresh tag CI run to make `build-and-test` visible.
+- **Claude hook installer idempotence and backup hygiene** ([#617](https://github.com/fairchild/workspaces/issues/617)). WorkSpaces should keep `~/.claude/settings.json` shell-safe, avoid unnecessary rewrites, and stop littering version-controlled dotfiles directories with timestamped backups.
+
+These are not product breadth. They are dependency/reliability debt in the delivery loop and local developer environment, so they should land before Web Dashboard expansion, AgentFS exploration, or new managed-agent capability.
+
+#### 5. Managed reviewer reliability and understandability — completed in `v0.17.0`
 
 GitHub: [#584](https://github.com/fairchild/workspaces/issues/584) · milestone [Managed reviewer: understandable ReviewRun-first system](https://github.com/fairchild/workspaces/milestone/8) · `area: platform`
 
-Managed PR review is now part of the delivery loop, so ambiguity here directly slows every other lane. The current priority is not broader agent automation; it is making the shipped reviewer reliable, repairable, and understandable. ReviewRun should be the durable source of truth, GitHub statuses/reviews should be projections, health should start from unreconciled ReviewRuns, and the docs/quiz should let a maintainer explain the system without spelunking workflow logs.
-
-This P0 lane is justified as throughput hardening, not product expansion. It should absorb the useful scope from the older continuous-reruns plan ([#545](https://github.com/fairchild/workspaces/issues/545)) and block new managed-agent feature growth until closure validation proves pickup, terminal state, details URL, projection repair, health reporting, and maintainer understanding.
+Milestone #8 is closed. Closure validation covered pickup, terminal state, details URL, projection repair behavior, ReviewRun-first health, GitHub projection audit separation, release/Sparkle verification, and human-maintainer quiz review. Keep the shipped ReviewRun-first model as baseline operating doctrine, and file any new reviewer work as specific follow-up debt rather than reopening the milestone.
 
 ### Next (P1)
 
-#### 5. Terminal continuity — tmux + cross-session
+#### 6. Terminal continuity — tmux + cross-session
 
 GitHub: [#549](https://github.com/fairchild/workspaces/issues/549) (tmux implementation) + [#548](https://github.com/fairchild/workspaces/issues/548) (across-session restore) · `arc:terminal-continuity`
 
 Decided 2026-04-23 (`docs/decisions/terminal-multiplexing.md`): tmux primary; pane-tree deferred indefinitely. Two paired issues now sit under one theme. Tmux delivers reattach within a session. The continuity issue addresses the gap tmux does not close (close laptop, reopen, pick up where you left off). First continuity slice is active on `codex-continuity-dimension`: tmux preserves live process state when the server survives, and a terminal continuity manifest records the target plus launch directory for the honest fallback when it does not.
 
-#### 6. Lume runtime architecture cleanup
+#### 7. Lume runtime architecture cleanup
 
 Closed: #87, #88, #89 · `arc:lume-runtime`
 
 Contract proven (PR #54). The three decomposition follow-ups (shared HTTP transport, native detachment + VM typing, doc refresh) all closed; reviewer-friction work is complete. Source plan archived to `backlog/done/lume-runtime-architecture-followups_followup.md`.
 
-#### 7. Notification client catch-up + reconnect correctness
+#### 8. Notification client catch-up + reconnect correctness
 
 GitHub: [#547](https://github.com/fairchild/workspaces/issues/547) · `arc:notification-catchup`
 
 Stable client identity, ACK cadence, duplicate/replay behavior. Reliability step before richer activity UX.
 
-#### 8. Agent automation expansion
+#### 9. Agent automation expansion
 
-New autonomous-agent surfaces, broader reviewer features, and narration/eval expansion stay behind the managed-reviewer hardening milestone. After #584 closes, reassess whether the next highest-leverage move is more reviewer capability, notification catch-up, or returning to terminal continuity.
+New autonomous-agent surfaces, broader reviewer features, and narration/eval expansion are no longer blocked by the managed-reviewer closure milestone, but they still sit behind the priority rule: first retire the post-release reliability debt above, then reassess whether the next highest-leverage move is more reviewer capability, notification catch-up, terminal continuity, or Web Dashboard work.
 
 ### Later (P2)
 
-#### 9. Strategic isolation backend direction
+#### 10. Strategic isolation backend direction
 
-GitHub: [#533](https://github.com/fairchild/workspaces/issues/533) (VZ Tahoe tracking) + [#555](https://github.com/fairchild/workspaces/issues/555) (remote runtime expansion tracking) + [#532](https://github.com/fairchild/workspaces/issues/532) (Daytona native Swift) · `arc:isolation-backend`
+GitHub: [#533](https://github.com/fairchild/workspaces/issues/533) (VZ Tahoe tracking) + [#555](https://github.com/fairchild/workspaces/issues/555) (remote runtime expansion tracking) + [#532](https://github.com/fairchild/workspaces/issues/532) (Daytona native Swift) + [#616](https://github.com/fairchild/workspaces/issues/616) (AgentFS provider spike) · `arc:isolation-backend`
 
-Current native-backend direction. Lume and Daytona already ship; VZ/Tahoe stays P2 until earlier quality debt is materially lower. `backlog/done/isolation-strategies.md` holds the long-form option tradeoff history.
+Current native-backend direction. Lume and Daytona already ship; VZ/Tahoe stays P2 until earlier quality debt is materially lower. AgentFS is promising as an experimental provider, not a replacement for the current git-worktree local default; validate filesystem, git, lifecycle, symlink/binary, and terminal-wrapper-vs-mounted-path behavior before product implementation. `backlog/done/isolation-strategies.md` holds the long-form option tradeoff history.
 
 ### Icebox (P3)
 
@@ -225,7 +235,8 @@ Theme-to-milestone map:
 | Roadmap theme | Arc label | Milestone posture |
 |---|---|---|
 | Core reliability and maintainability | `arc:core-reliability` | Active P0 theme |
-| Managed reviewer reliability and understandability | `area: platform` | Active P0 throughput-hardening milestone: [#584](https://github.com/fairchild/workspaces/issues/584) / [milestone 8](https://github.com/fairchild/workspaces/milestone/8). Blocks new managed-agent expansion. |
+| Release and local-configuration reliability debt | `area: platform` / `area: distribution` / `devEx` | Active P0 follow-up theme: [#615](https://github.com/fairchild/workspaces/issues/615) and [#617](https://github.com/fairchild/workspaces/issues/617). Keep small and mergeable; no milestone needed yet. |
+| Managed reviewer reliability and understandability | `area: platform` | Closed in `v0.17.0`: [#584](https://github.com/fairchild/workspaces/issues/584) / [milestone 8](https://github.com/fairchild/workspaces/milestone/8). Treat the ReviewRun-first model as baseline doctrine. |
 | Lume runtime hardening | `arc:lume-runtime` | Closed (#87/#88/#89). Label retained for future Lume work. |
 | Notification catch-up and reconnect correctness | `arc:notification-catchup` | Next standalone after core-reliability theme clears |
 | Terminal continuity (tmux + cross-session) | `arc:terminal-continuity` | Decided 2026-04-23 (tmux primary). Implementation milestone after notification-catchup unless continuity gap forces it sooner. |
@@ -250,7 +261,9 @@ Live source of truth is GitHub Issues on `fairchild/workspaces`. This table mirr
 |------|-------|----------|-------|
 | Workspace creation hang root cause | product | P0 | [#554](https://github.com/fairchild/workspaces/issues/554) |
 | Main-window + sidebar maintainability | product | P0 | covered by closed #81 + residual notes in `backlog/done/main-window-sidebar-maintainability_followup.md` |
-| Managed reviewer ReviewRun-first hardening | quality | P0 | [#584](https://github.com/fairchild/workspaces/issues/584) + [milestone 8](https://github.com/fairchild/workspaces/milestone/8) |
+| Release preflight check-run pagination | quality | P0 | [#615](https://github.com/fairchild/workspaces/issues/615) |
+| Claude hook installer idempotence and backup hygiene | quality | P0 | [#617](https://github.com/fairchild/workspaces/issues/617) |
+| Managed reviewer ReviewRun-first hardening | quality | Done | [#584](https://github.com/fairchild/workspaces/issues/584) + [milestone 8](https://github.com/fairchild/workspaces/milestone/8) |
 | Ghostty appearance hardening | product | Done | closed #84 |
 | Tmux per-worktree implementation | product | P1 | [#549](https://github.com/fairchild/workspaces/issues/549) (chosen 2026-04-23 — `docs/decisions/terminal-multiplexing.md`) |
 | Desktop continuity (across-session restore) | product | P1 | [#548](https://github.com/fairchild/workspaces/issues/548) (paired with #549) |
@@ -270,6 +283,7 @@ Live source of truth is GitHub Issues on `fairchild/workspaces`. This table mirr
 | CD auto-opener stale-close / dedup policy | quality | — | [#557](https://github.com/fairchild/workspaces/issues/557) |
 | Shared-desktop focus contention Phase 2 | quality | P2 | residual notes in `backlog/done/shared-desktop-focus-contention-followup.md` (Phase 1 closed under #82) |
 | Tahoe VZ backend execution brief (tracking) | product | P2 | [#533](https://github.com/fairchild/workspaces/issues/533) |
+| AgentFS experimental provider spike | product | P2 | [#616](https://github.com/fairchild/workspaces/issues/616) |
 | Web dashboard Phase 3 (tracking) | product | P2 | [#537](https://github.com/fairchild/workspaces/issues/537) + children #538–#541 |
 | Spaces agent discovery dashboard | product | P2 | [#542](https://github.com/fairchild/workspaces/issues/542) |
 | Sparkle auto-update | product | Done | covered by closed #2 (verified shipped) |
