@@ -152,6 +152,15 @@ public enum TileTreeLayout {
 
     /// Clamp a proposed `first`-child ratio into `[minimumRatio, maximumRatio]`.
     public static func clampRatio(_ ratio: Double) -> Double {
-        min(max(ratio, minimumRatio), maximumRatio)
+        if ratio.isNaN {
+            return defaultRatio
+        }
+        if ratio == .infinity {
+            return maximumRatio
+        }
+        if ratio == -.infinity {
+            return minimumRatio
+        }
+        return min(max(ratio, minimumRatio), maximumRatio)
     }
 }

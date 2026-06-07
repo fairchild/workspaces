@@ -325,6 +325,27 @@ struct TileTreeReducerTests {
         #expect(ratio(of: low.root) == TileTreeLayout.minimumRatio)
     }
 
+    @Test("Non-finite ratios resolve to valid split fractions")
+    func nonFiniteRatiosStayValid() {
+        let (state, reducer, _, _) = twoPane(axis: .leadingTrailing)
+        guard case .split(let splitID, _, _, _, _) = state.root else {
+            Issue.record("expected a split")
+            return
+        }
+
+        let nan = reducer.reduce(state, .setRatio(split: splitID, ratio: .nan))
+        #expect(ratio(of: nan.root) == TileTreeLayout.defaultRatio)
+        #expect(TileTreeInvariants.isValid(nan))
+
+        let high = reducer.reduce(state, .setRatio(split: splitID, ratio: .infinity))
+        #expect(ratio(of: high.root) == TileTreeLayout.maximumRatio)
+        #expect(TileTreeInvariants.isValid(high))
+
+        let low = reducer.reduce(state, .resize(split: splitID, ratioDelta: -.infinity))
+        #expect(ratio(of: low.root) == TileTreeLayout.minimumRatio)
+        #expect(TileTreeInvariants.isValid(low))
+    }
+
     @Test("Resize on an unknown split is a no-op")
     func resizeUnknownNoOp() {
         let (state, reducer, _, _) = twoPane(axis: .leadingTrailing)
