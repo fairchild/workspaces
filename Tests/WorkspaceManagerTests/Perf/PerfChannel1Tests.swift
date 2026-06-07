@@ -502,7 +502,7 @@ struct PerfChannel1Tests {
 
         let entries =
             (try? FileManager.default.contentsOfDirectory(
-                at: homeDir.appendingPathComponent(".claude"),
+                at: ClaudeSettingsInstaller.defaultBackupDirectory(homeDirectory: homeDir),
                 includingPropertiesForKeys: nil
             )) ?? []
         let backups = entries.filter { $0.path.contains("workspaces-backup-") }

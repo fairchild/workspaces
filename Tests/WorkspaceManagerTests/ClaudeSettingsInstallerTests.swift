@@ -44,6 +44,10 @@ struct ClaudeSettingsInstallerTests {
         return try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
     }
 
+    private func backupDirectory(for home: URL) -> URL {
+        ClaudeSettingsInstaller.defaultBackupDirectory(homeDirectory: home)
+    }
+
     @Test("Non-destructive merge preserves unrelated keys and user hooks")
     func nonDestructiveMerge() async throws {
         let home = makeTempHome()
@@ -131,8 +135,14 @@ struct ClaudeSettingsInstallerTests {
         let installer = installer(home: home)
         try await installer.install()
 
-        let backups = try FileManager.default.contentsOfDirectory(
+        let legacyBackups = try FileManager.default.contentsOfDirectory(
             at: claudeDir,
+            includingPropertiesForKeys: nil
+        ).filter { $0.lastPathComponent.hasPrefix("settings.json.workspaces-backup-") }
+        #expect(legacyBackups.isEmpty)
+
+        let backups = try FileManager.default.contentsOfDirectory(
+            at: backupDirectory(for: home),
             includingPropertiesForKeys: nil
         ).filter { $0.lastPathComponent.hasPrefix("settings.json.workspaces-backup-") }
         #expect(backups.count == 1)
@@ -164,12 +174,82 @@ struct ClaudeSettingsInstallerTests {
         }
         #expect(eventForwarderEntries.count == 1)
 
-        let backups = try FileManager.default.contentsOfDirectory(
+        let legacyBackups = try FileManager.default.contentsOfDirectory(
             at: claudeDir,
+            includingPropertiesForKeys: nil
+        ).filter { $0.lastPathComponent.hasPrefix("settings.json.workspaces-backup-") }
+        #expect(legacyBackups.isEmpty)
+
+        let backups = try FileManager.default.contentsOfDirectory(
+            at: backupDirectory(for: home),
             includingPropertiesForKeys: nil
         ).filter { $0.lastPathComponent.hasPrefix("settings.json.workspaces-backup-") }
         #expect(backups.count == 1)
         #expect(await installer.isInstalled())
+    }
+
+    @Test("Install skips byte rewrite for semantically equivalent hook settings")
+    func equivalentHookSettingsDoNotRewrite() async throws {
+        let home = makeTempHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        let claudeDir = home.appendingPathComponent(".claude", isDirectory: true)
+        try FileManager.default.createDirectory(at: claudeDir, withIntermediateDirectories: true)
+        let settingsURL = claudeDir.appendingPathComponent("settings.json")
+        let hookEvents = [
+            "SessionStart",
+            "UserPromptSubmit",
+            "PreToolUse",
+            "PostToolUse",
+            "PostToolBatch",
+            "PostToolUseFailure",
+            "PermissionRequest",
+            "Notification",
+            "Stop",
+            "StopFailure",
+            "TaskCreated",
+            "TaskCompleted",
+        ]
+        let handler: [String: Any] = [
+            "type": "command",
+            "command": eventForwarder,
+            "async": true,
+        ]
+        var hooks: [String: Any] = [:]
+        for event in hookEvents {
+            hooks[event] = [["hooks": [handler]]]
+        }
+        let originalData = try JSONSerialization.data(
+            withJSONObject: [
+                "statusLine": [
+                    "refreshInterval": 5000,
+                    "command": statusline,
+                    "type": "command",
+                ],
+                "hooks": hooks,
+            ],
+            options: []
+        )
+        try originalData.write(to: settingsURL)
+
+        let installer = installer(home: home)
+        try await installer.install()
+
+        #expect(try Data(contentsOf: settingsURL) == originalData)
+        #expect(await installer.isInstalled())
+
+        let legacyBackups = try FileManager.default.contentsOfDirectory(
+            at: claudeDir,
+            includingPropertiesForKeys: nil
+        ).filter { $0.lastPathComponent.hasPrefix("settings.json.workspaces-backup-") }
+        #expect(legacyBackups.isEmpty)
+
+        let externalBackups =
+            (try? FileManager.default.contentsOfDirectory(
+                at: backupDirectory(for: home),
+                includingPropertiesForKeys: nil
+            )) ?? []
+        #expect(externalBackups.isEmpty)
     }
 
     @Test("Re-install scrubs legacy WorkSpaces http+unix hooks only")
