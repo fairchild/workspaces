@@ -66,12 +66,12 @@ describe("ensureSchema", () => {
 		expect(applied.rows).toHaveLength(1);
 	});
 
-	it("reconciles an existing pre-migration database without losing data", async () => {
+	it("converges an existing database with a narrower schema without losing data", async () => {
 		const { ensureSchema, getTurso } = await load();
 		const turso = getTurso();
 
-		// Simulate a production DB created by the old ifNotExists path: tables
-		// missing later-added columns, real rows, and no schema_migrations row.
+		// A database that already holds some tables with a narrower column set,
+		// real rows, and no schema_migrations entry.
 		await turso.execute(
 			"CREATE TABLE webhook_events (id TEXT PRIMARY KEY, type TEXT NOT NULL, action TEXT NOT NULL DEFAULT '', summary TEXT NOT NULL DEFAULT '', repo TEXT NOT NULL DEFAULT 'unknown', timestamp TEXT NOT NULL)",
 		);

@@ -1,11 +1,33 @@
+/**
+ * Schema definition for the web database.
+ *
+ * The schema is an ordered, append-only list of migrations (`MIGRATIONS`). Each has
+ * a stable `id` and an idempotent `up(db)` that brings a database to the state that
+ * migration describes. `ensureSchema()` (in ./index) runs the pending migrations in
+ * order and records each `id` in the `schema_migrations` table, so any given
+ * migration runs at most once per database.
+ *
+ * Changing the schema:
+ *  - Append a new migration with the next ordered id; never edit one that has
+ *    shipped — it is already recorded and will not run again, so add a follow-up
+ *    migration instead.
+ *  - Keep `up` idempotent: `createTable().ifNotExists()`, `createIndex().ifNotExists()`,
+ *    `addMissingColumns()` for added columns, and data writes guarded by a WHERE
+ *    clause. The runner records a migration only after `up` resolves, so a failure
+ *    partway through re-runs `up` from the top on the next call — `up` must tolerate
+ *    that.
+ *  - Add the table's row type to the `Database` interface in ../db for typed access.
+ *    (Raw-libsql tables like `user_repos`/`terminal_access_tickets` are the exception;
+ *    their DDL still lives here so all schema is in one place.)
+ *
+ * Design rationale and tradeoffs: web/docs/schema-management.md and
+ * docs/decisions/web-schema-toolchain.md.
+ */
+
 import { type Kysely, sql } from "kysely";
 import { type Database, getTurso } from "../db";
 
-/**
- * A tracked, ordered schema migration. `id` is recorded in `schema_migrations`
- * once `up` succeeds; migrations are applied in array order and each must be
- * idempotent (safe to re-run if a prior attempt failed before being recorded).
- */
+/** One tracked migration: a stable `id` and an idempotent `up`. */
 export interface Migration {
 	id: string;
 	up(db: Kysely<Database>): Promise<void>;
@@ -19,10 +41,11 @@ interface MissingColumn {
 }
 
 /**
- * Add columns that are missing from a table that already exists. Introspection-
- * driven and idempotent — no swallowed try/catch. Reconciles databases created
- * before a column was introduced (the prod DB predates `schema_migrations`).
- * Table names are internal constants, so interpolation into PRAGMA is safe.
+ * Add the listed columns that aren't already on `table`. Reads the live columns
+ * (`PRAGMA table_info`) and adds only the missing ones, so a table that exists with
+ * a narrower set of columns converges to the target shape — idempotent, with no
+ * blind try/catch. Table names are internal constants, so interpolating into the
+ * PRAGMA is safe.
  */
 async function addMissingColumns(
 	db: Kysely<Database>,
@@ -47,11 +70,10 @@ async function addMissingColumns(
 }
 
 /**
- * Baseline: the union of the nine former per-module `ensure*Table()` bodies.
- * On a fresh database it builds the full schema; against an existing production
- * database (tables created by the old ifNotExists path, no `schema_migrations`
- * row) it reconciles missing columns and re-applies the idempotent data
- * migrations, leaving existing rows intact.
+ * Baseline schema: every table, index, and data normalization the app needs.
+ * Idempotent and reconciling — it creates missing tables, adds missing columns, and
+ * normalizes data through guarded writes, converging any database (empty or partial)
+ * to this schema without disturbing existing rows.
  */
 const baseline: Migration = {
 	id: "0001_baseline",
@@ -148,8 +170,8 @@ const baseline: Migration = {
 			.on("agent_sessions")
 			.columns(["user_id", "repo", "agent_name", "thread_id"])
 			.execute();
-		// One-shot rename of the synthetic terminal slot "terminal" → "shell"
-		// (PR #299 changed the default fallback but left existing rows behind).
+		// Synthetic terminal sessions use the canonical name "shell"; normalize any
+		// rows that still hold the non-canonical "terminal".
 		await db
 			.updateTable("agent_sessions")
 			.set({ agent_name: "shell" })
@@ -161,8 +183,8 @@ const baseline: Migration = {
 		await db.schema
 			.createTable("workspaces")
 			.ifNotExists()
-			// Kept literal ("default") rather than importing
-			// DEFAULT_WORKSPACE_OWNER_ID to avoid a migrations→module dependency.
+			// Literal rather than importing DEFAULT_WORKSPACE_OWNER_ID, to keep
+			// migrations free of app-module imports.
 			.addColumn("owner_id", "text", (c) => c.notNull().defaultTo("default"))
 			.addColumn("id", "text", (c) => c.primaryKey())
 			.addColumn("name", "text", (c) => c.notNull())
@@ -280,9 +302,9 @@ const baseline: Migration = {
 			.on("managed_pr_review_runs")
 			.columns(["repo_full_name", "pr_number"])
 			.execute();
-		// Nullable unique value held only while a run is active. Pre-migration
-		// `started` rows are intentionally not backfilled; they age out via the
-		// stale-started path rather than risk a broad migration.
+		// active_claim_key is unique but nullable; SQLite permits many NULLs, so the
+		// constraint binds only runs currently holding a claim. Idle/completed runs
+		// (NULL) age out through the stale-started path.
 		await db.schema
 			.createIndex("ux_managed_pr_review_runs_active_claim")
 			.ifNotExists()
