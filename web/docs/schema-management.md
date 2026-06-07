@@ -44,18 +44,18 @@ getDb()/getTurso() ─▶ one libsql client (Turso remote in prod; file: in dev;
 
 `ensureSchema()`:
 
-1. memoizes a single in-flight promise, so concurrent serverless callers share one bootstrap (and a failure clears the memo so a later request retries);
+1. memoizes a single in-flight promise inside one warm serverless instance, so same-process callers share one bootstrap (and a failure clears the memo so a later request retries);
 2. ensures the `schema_migrations` bookkeeping table exists;
 3. reads which migration ids have already run;
 4. runs each pending migration's `up()` in order, recording its id only after it succeeds.
 
-It runs **at request time, once per warm serverless instance** — there is no separate build- or deploy-time DB step. The first query after a cold start triggers the bootstrap; every call after that is a cached no-op.
+It runs **at request time, once per warm serverless instance** — there is no separate build- or deploy-time DB step. The first query after a cold start triggers the bootstrap; every call after that is a cached no-op. Separate cold starts can overlap, so migrations are written to tolerate another instance making the same DDL change first and the migration record insert is idempotent.
 
 ## Changing the schema
 
 - **Append** a new migration to `MIGRATIONS`: `{ id: "0002_add_thing", up: async (db) => { … } }`. Use a zero-padded, ordered id.
 - **Never edit a migration that has shipped.** It's already recorded in `schema_migrations` on production and will not re-run. Add a new migration instead.
-- **Keep `up()` idempotent**: `createTable().ifNotExists()`, `createIndex().ifNotExists()`, introspection-guarded column adds (see `addMissingColumns`), idempotent data `UPDATE`s. The runner records a migration only after `up()` succeeds; a partial failure is re-run from the top on the next request.
+- **Keep `up()` idempotent**: `createTable().ifNotExists()`, `createIndex().ifNotExists()`, introspection-guarded column adds (see `addMissingColumns`), idempotent data `UPDATE`s. The runner records a migration only after `up()` succeeds; a partial failure is re-run from the top on the next request, and overlapping cold starts can run the same pending `up()` at the same time.
 - **Put data migrations** (backfills, renames) in a migration, not in a query module. The `terminal`→`shell` rename and `owner_id` backfill live in `0001_baseline` for exactly this reason.
 - **Add the row type** to the `Database` interface in `db.ts` for typed Kysely access. Two tables — `user_repos` and `terminal_access_tickets` — are instead queried via raw `getTurso()` SQL; their DDL still lives in the baseline so *all* schema stays in one place.
 

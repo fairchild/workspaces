@@ -4,8 +4,9 @@
  * The schema is an ordered, append-only list of migrations (`MIGRATIONS`). Each has
  * a stable `id` and an idempotent `up(db)` that brings a database to the state that
  * migration describes. `ensureSchema()` (in ./index) runs the pending migrations in
- * order and records each `id` in the `schema_migrations` table, so any given
- * migration runs at most once per database.
+ * order and records each `id` in the `schema_migrations` table. A concurrent cold
+ * start may enter the same pending migration before another instance records it, so
+ * `up` functions must stay idempotent and tolerate benign DDL races.
  *
  * Changing the schema:
  *  - Append a new migration with the next ordered id; never edit one that has
@@ -14,8 +15,8 @@
  *  - Keep `up` idempotent: `createTable().ifNotExists()`, `createIndex().ifNotExists()`,
  *    `addMissingColumns()` for added columns, and data writes guarded by a WHERE
  *    clause. The runner records a migration only after `up` resolves, so a failure
- *    partway through re-runs `up` from the top on the next call — `up` must tolerate
- *    that.
+ *    partway through re-runs `up` from the top on the next call. A second cold-start
+ *    runner can also overlap the first — `up` must tolerate both cases.
  *  - Add the table's row type to the `Database` interface in ../db for typed access.
  *    (Raw-libsql tables like `user_repos`/`terminal_access_tickets` are the exception;
  *    their DDL still lives here so all schema is in one place.)
@@ -65,8 +66,20 @@ async function addMissingColumns(
 				if (col.defaultTo !== undefined) built = built.defaultTo(col.defaultTo);
 				return built;
 			})
-			.execute();
+			.execute()
+			.catch((err: unknown) => {
+				if (isDuplicateColumnError(err, col.name)) return;
+				throw err;
+			});
 	}
+}
+
+function isDuplicateColumnError(err: unknown, column: string): boolean {
+	const message = err instanceof Error ? err.message : String(err);
+	return (
+		message.toLowerCase().includes("duplicate column name") &&
+		message.includes(column)
+	);
 }
 
 /**

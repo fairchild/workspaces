@@ -8,9 +8,9 @@ import { getDb, getTurso } from "../db";
 import { MIGRATIONS } from "./migrations";
 
 /**
- * Single in-flight bootstrap promise so concurrent callers (one warm serverless
- * instance serves many requests) await one run rather than racing — a plain boolean
- * would flip before its async body finished. Cleared on failure so a later call retries.
+ * Single in-flight bootstrap promise so concurrent callers in one warm serverless
+ * instance await one run rather than racing — a plain boolean would flip before its
+ * async body finished. Cleared on failure so a later call retries.
  */
 let schemaReady: Promise<void> | undefined;
 
@@ -42,7 +42,7 @@ async function runMigrations(): Promise<void> {
 		if (applied.has(migration.id)) continue;
 		await migration.up(db);
 		await turso.execute({
-			sql: "INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)",
+			sql: "INSERT OR IGNORE INTO schema_migrations (id, applied_at) VALUES (?, ?)",
 			args: [migration.id, new Date().toISOString()],
 		});
 	}

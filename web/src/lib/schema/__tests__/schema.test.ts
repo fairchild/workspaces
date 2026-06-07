@@ -1,3 +1,4 @@
+import type { InArgs, InStatement } from "@libsql/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Fresh in-memory libsql DB per test so the bootstrap runs against a real
@@ -64,6 +65,45 @@ describe("ensureSchema", () => {
 			"SELECT id FROM schema_migrations",
 		);
 		expect(applied.rows).toHaveLength(1);
+	});
+
+	it("tolerates another bootstrap adding a missing column after introspection", async () => {
+		const { ensureSchema, getTurso } = await load();
+		const turso = getTurso();
+		await turso.execute(
+			"CREATE TABLE webhook_events (id TEXT PRIMARY KEY, type TEXT NOT NULL, action TEXT NOT NULL DEFAULT '', summary TEXT NOT NULL DEFAULT '', repo TEXT NOT NULL DEFAULT 'unknown', timestamp TEXT NOT NULL)",
+		);
+
+		const originalExecute = turso.execute.bind(turso) as (
+			statement: InStatement | string,
+			args?: InArgs,
+		) => ReturnType<typeof turso.execute>;
+		let raced = false;
+		vi.spyOn(turso, "execute").mockImplementation(
+			async (statement: InStatement | string, args?: InArgs) => {
+				const sqlText =
+					typeof statement === "string" ? statement : statement.sql;
+				if (!raced && sqlText === 'PRAGMA table_info("webhook_events")') {
+					raced = true;
+					const result = await originalExecute(statement, args);
+					await originalExecute(
+						"ALTER TABLE webhook_events ADD COLUMN payload TEXT NOT NULL DEFAULT '{}'",
+					);
+					return result;
+				}
+				return originalExecute(statement, args);
+			},
+		);
+
+		await expect(ensureSchema()).resolves.toBeUndefined();
+		expect(raced).toBe(true);
+
+		const eventColumns = await turso.execute(
+			'PRAGMA table_info("webhook_events")',
+		);
+		expect(eventColumns.rows.map((r) => String(r.name))).toContain("payload");
+		const applied = await turso.execute("SELECT id FROM schema_migrations");
+		expect(applied.rows.map((r) => String(r.id))).toEqual(["0001_baseline"]);
 	});
 
 	it("converges an existing database with a narrower schema without losing data", async () => {
