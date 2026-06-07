@@ -1,73 +1,10 @@
 import { getDb } from "./db";
+import { ensureSchema } from "./schema";
 import type {
 	AgentSession,
 	AgentSessionStatus,
 	ComputeBackendId,
 } from "./types";
-
-let migrated = false;
-
-async function ensureSessionTable(): Promise<void> {
-	if (migrated) return;
-	const db = getDb();
-	await db.schema
-		.createTable("agent_sessions")
-		.ifNotExists()
-		.addColumn("id", "text", (c) => c.primaryKey())
-		.addColumn("user_id", "text", (c) => c.notNull())
-		.addColumn("repo", "text", (c) => c.notNull())
-		.addColumn("agent_name", "text", (c) => c.notNull())
-		.addColumn("compute_backend", "text", (c) => c.notNull())
-		.addColumn("compute_instance_id", "text")
-		.addColumn("thread_id", "text", (c) => c.notNull())
-		.addColumn("discussion_id", "text")
-		.addColumn("status", "text", (c) => c.notNull())
-		.addColumn("created_at", "text", (c) => c.notNull())
-		.addColumn("last_activity_at", "text", (c) => c.notNull())
-		.addColumn("snapshot_id", "text")
-		.addColumn("claude_session_id", "text")
-		.execute();
-	await db.schema
-		.createIndex("idx_agent_sessions_thread")
-		.ifNotExists()
-		.on("agent_sessions")
-		.columns(["repo", "agent_name", "thread_id"])
-		.execute();
-	// Migrate: add columns if table already existed without them
-	for (const col of ["snapshot_id", "claude_session_id", "user_id"] as const) {
-		try {
-			await db.schema
-				.alterTable("agent_sessions")
-				.addColumn(col, "text")
-				.execute();
-		} catch {
-			// Column already exists
-		}
-	}
-	await db.schema
-		.createIndex("idx_agent_sessions_user_thread")
-		.ifNotExists()
-		.on("agent_sessions")
-		.columns(["user_id", "repo", "agent_name", "thread_id"])
-		.execute();
-	// Migrate: rename the synthetic terminal slot from "terminal" to "shell".
-	// PR #299 changed the default fallback from "terminal" to "shell" but
-	// existing rows weren't updated. Without this, those rows are orphaned —
-	// the UI shows them as "shell" via the display alias but the Stop button
-	// sends agentName="shell" which doesn't match. One-shot rename so the DB
-	// matches the new vocabulary.
-	try {
-		await db
-			.updateTable("agent_sessions")
-			.set({ agent_name: "shell" })
-			.where("agent_name", "=", "terminal")
-			.where("status", "in", ["active", "streaming", "snapshotted"] as never[])
-			.execute();
-	} catch {
-		// Best-effort — don't block startup if the migration fails
-	}
-	migrated = true;
-}
 
 function rowToSession(r: {
 	id: string;
@@ -102,7 +39,7 @@ function rowToSession(r: {
 }
 
 export async function createSession(session: AgentSession): Promise<void> {
-	await ensureSessionTable();
+	await ensureSchema();
 	const db = getDb();
 	await db
 		.insertInto("agent_sessions")
@@ -126,7 +63,7 @@ export async function createSession(session: AgentSession): Promise<void> {
 }
 
 export async function getSession(id: string): Promise<AgentSession | null> {
-	await ensureSessionTable();
+	await ensureSchema();
 	const db = getDb();
 	const row = await db
 		.selectFrom("agent_sessions")
@@ -140,7 +77,7 @@ export async function getSessionByInstanceId(
 	userId: string,
 	instanceId: string,
 ): Promise<AgentSession | null> {
-	await ensureSessionTable();
+	await ensureSchema();
 	const db = getDb();
 	const row = await db
 		.selectFrom("agent_sessions")
@@ -159,7 +96,7 @@ export async function getActiveSessionForThread(
 	agentName: string,
 	threadId: string,
 ): Promise<AgentSession | null> {
-	await ensureSessionTable();
+	await ensureSchema();
 	const db = getDb();
 	const row = await db
 		.selectFrom("agent_sessions")
@@ -179,7 +116,7 @@ export async function updateSessionStatus(
 	id: string,
 	status: AgentSessionStatus,
 ): Promise<void> {
-	await ensureSessionTable();
+	await ensureSchema();
 	const db = getDb();
 	await db
 		.updateTable("agent_sessions")
@@ -192,7 +129,7 @@ export async function updateComputeInstance(
 	id: string,
 	computeInstanceId: string,
 ): Promise<void> {
-	await ensureSessionTable();
+	await ensureSchema();
 	const db = getDb();
 	await db
 		.updateTable("agent_sessions")
@@ -205,7 +142,7 @@ export async function updateSnapshotId(
 	id: string,
 	snapshotId: string,
 ): Promise<void> {
-	await ensureSessionTable();
+	await ensureSchema();
 	const db = getDb();
 	await db
 		.updateTable("agent_sessions")
@@ -222,7 +159,7 @@ export async function updateSnapshotId(
  * Returns true if this caller won the race (status transitioned snapshotted → streaming).
  */
 export async function claimSnapshotSession(id: string): Promise<boolean> {
-	await ensureSessionTable();
+	await ensureSchema();
 	const db = getDb();
 	const result = await db
 		.updateTable("agent_sessions")
@@ -238,7 +175,7 @@ export async function getActiveSessionForRepo(
 	userId: string,
 	repo: string,
 ): Promise<AgentSession | null> {
-	await ensureSessionTable();
+	await ensureSchema();
 	const db = getDb();
 	const row = await db
 		.selectFrom("agent_sessions")
@@ -262,7 +199,7 @@ export async function getSessionsForRepo(
 	userId: string,
 	repo: string,
 ): Promise<AgentSession[]> {
-	await ensureSessionTable();
+	await ensureSchema();
 	const db = getDb();
 	const rows = await db
 		.selectFrom("agent_sessions")
@@ -297,7 +234,7 @@ export async function getSessionForAgent(
 	repo: string,
 	agentName: string,
 ): Promise<AgentSession | null> {
-	await ensureSessionTable();
+	await ensureSchema();
 	const db = getDb();
 	const row = await db
 		.selectFrom("agent_sessions")
@@ -320,7 +257,7 @@ export async function getSnapshotSessionForThread(
 	agentName: string,
 	threadId: string,
 ): Promise<AgentSession | null> {
-	await ensureSessionTable();
+	await ensureSchema();
 	const db = getDb();
 	const row = await db
 		.selectFrom("agent_sessions")

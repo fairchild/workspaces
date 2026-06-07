@@ -1,4 +1,5 @@
 import { getDb } from "./db";
+import { ensureSchema } from "./schema";
 import type {
 	AuthorType,
 	ChatMessage,
@@ -6,35 +7,8 @@ import type {
 	WebhookEventType,
 } from "./types";
 
-let migrated = false;
-
-async function ensureChatTable(): Promise<void> {
-	if (migrated) return;
-	const db = getDb();
-	await db.schema
-		.createTable("chat_messages")
-		.ifNotExists()
-		.addColumn("id", "text", (c) => c.primaryKey())
-		.addColumn("repo", "text", (c) => c.notNull())
-		.addColumn("author", "text", (c) => c.notNull())
-		.addColumn("author_type", "text", (c) => c.notNull())
-		.addColumn("content", "text", (c) => c.notNull())
-		.addColumn("agent_target", "text")
-		.addColumn("discussion_id", "text")
-		.addColumn("discussion_url", "text")
-		.addColumn("timestamp", "text", (c) => c.notNull())
-		.execute();
-	await db.schema
-		.createIndex("idx_chat_messages_repo_ts")
-		.ifNotExists()
-		.on("chat_messages")
-		.columns(["repo", "timestamp desc"])
-		.execute();
-	migrated = true;
-}
-
 export async function pushChatMessage(msg: ChatMessage): Promise<void> {
-	await ensureChatTable();
+	await ensureSchema();
 	const db = getDb();
 	await db
 		.insertInto("chat_messages")
@@ -58,7 +32,7 @@ export async function getChatMessages(
 	limit = 50,
 	since?: string,
 ): Promise<ChatMessage[]> {
-	await ensureChatTable();
+	await ensureSchema();
 	const db = getDb();
 	let query = db
 		.selectFrom("chat_messages")
@@ -87,7 +61,7 @@ export async function updateChatMessageContent(
 	id: string,
 	content: string,
 ): Promise<void> {
-	await ensureChatTable();
+	await ensureSchema();
 	const db = getDb();
 	await db
 		.updateTable("chat_messages")
@@ -99,7 +73,7 @@ export async function updateChatMessageContent(
 export async function getChatMessageByDiscussionId(
 	discussionId: string,
 ): Promise<ChatMessage | null> {
-	await ensureChatTable();
+	await ensureSchema();
 	const db = getDb();
 	const row = await db
 		.selectFrom("chat_messages")
@@ -128,7 +102,7 @@ export async function getMixedTimeline(
 	limit = 50,
 	since?: string,
 ): Promise<TimelineEntry[]> {
-	await ensureChatTable();
+	await ensureSchema();
 	const db = getDb();
 
 	let eventsQuery = db

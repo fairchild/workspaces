@@ -1,27 +1,9 @@
 import { getTurso } from "./db";
+import { ensureSchema } from "./schema";
 import type { SelectedRepo } from "./types";
 
-let tableReady: Promise<void> | undefined;
-
-function ensureTable(): Promise<void> {
-	if (!tableReady) {
-		tableReady = getTurso()
-			.execute(`
-			CREATE TABLE IF NOT EXISTS user_repos (
-				user_id TEXT NOT NULL,
-				owner TEXT NOT NULL,
-				repo TEXT NOT NULL,
-				added_at TEXT NOT NULL DEFAULT (datetime('now')),
-				PRIMARY KEY (user_id, owner, repo)
-			)
-		`)
-			.then(() => {});
-	}
-	return tableReady;
-}
-
 export async function getUserRepos(userId: string): Promise<SelectedRepo[]> {
-	await ensureTable();
+	await ensureSchema();
 	const result = await getTurso().execute({
 		sql: "SELECT owner, repo, added_at FROM user_repos WHERE user_id = ? ORDER BY added_at",
 		args: [userId],
@@ -37,7 +19,7 @@ export async function setUserRepos(
 	userId: string,
 	repos: Array<{ owner: string; repo: string }>,
 ): Promise<void> {
-	await ensureTable();
+	await ensureSchema();
 	const db = getTurso();
 	await db.execute({
 		sql: "DELETE FROM user_repos WHERE user_id = ?",
@@ -54,7 +36,7 @@ export async function setUserRepos(
 }
 
 export async function hasUserRepos(userId: string): Promise<boolean> {
-	await ensureTable();
+	await ensureSchema();
 	const result = await getTurso().execute({
 		sql: "SELECT 1 FROM user_repos WHERE user_id = ? LIMIT 1",
 		args: [userId],
@@ -68,7 +50,7 @@ export async function isRepoOwnedByUser(
 ): Promise<boolean> {
 	const [owner, name] = repo.split("/");
 	if (!owner || !name) return false;
-	await ensureTable();
+	await ensureSchema();
 	const result = await getTurso().execute({
 		sql: "SELECT 1 FROM user_repos WHERE user_id = ? AND owner = ? AND repo = ? LIMIT 1",
 		args: [userId, owner, name],

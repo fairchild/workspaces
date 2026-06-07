@@ -3,6 +3,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import type { BetaManagedAgentsAgentToolset20260401Params } from "@anthropic-ai/sdk/resources/beta/agents/agents";
 import type { BetaCloudConfigParams } from "@anthropic-ai/sdk/resources/beta/environments";
 import { getDb } from "../db";
+import { ensureSchema, resetSchemaForTests } from "../schema";
 
 /**
  * In-process + durable cache of Managed Agents `agent` and `environment`
@@ -17,28 +18,6 @@ type Kind = "agent" | "environment";
 
 const memoryCache = new Map<string, string>();
 
-let migrated = false;
-async function ensureCacheTable(): Promise<void> {
-	if (migrated) return;
-	const db = getDb();
-	await db.schema
-		.createTable("managed_agents_cache")
-		.ifNotExists()
-		.addColumn("kind", "text", (c) => c.notNull())
-		.addColumn("hash", "text", (c) => c.notNull())
-		.addColumn("remote_id", "text", (c) => c.notNull())
-		.addColumn("created_at", "text", (c) => c.notNull())
-		.addColumn("metadata", "text")
-		.execute();
-	await db.schema
-		.createIndex("idx_managed_agents_cache_key")
-		.ifNotExists()
-		.on("managed_agents_cache")
-		.columns(["kind", "hash"])
-		.execute();
-	migrated = true;
-}
-
 function sha16(input: string): string {
 	return createHash("sha256").update(input).digest("hex").slice(0, 16);
 }
@@ -50,7 +29,7 @@ function cacheKey(kind: Kind, hash: string): string {
 async function readCache(kind: Kind, hash: string): Promise<string | null> {
 	const hit = memoryCache.get(cacheKey(kind, hash));
 	if (hit) return hit;
-	await ensureCacheTable();
+	await ensureSchema();
 	const row = await getDb()
 		.selectFrom("managed_agents_cache")
 		.select("remote_id")
@@ -70,7 +49,7 @@ async function writeCache(
 	remoteId: string,
 	metadata?: Record<string, unknown>,
 ): Promise<void> {
-	await ensureCacheTable();
+	await ensureSchema();
 	memoryCache.set(cacheKey(kind, hash), remoteId);
 	await getDb()
 		.insertInto("managed_agents_cache")
@@ -171,5 +150,5 @@ function stableStringify(value: unknown): unknown {
 /** Test-only hook. */
 export function __resetCacheForTests(): void {
 	memoryCache.clear();
-	migrated = false;
+	resetSchemaForTests();
 }
