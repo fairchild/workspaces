@@ -182,6 +182,36 @@ struct TileTreeReducerTests {
         #expect(next == state)
     }
 
+    @Test("Closing the only tile with a mismatched target is a no-op")
+    func closeSingleMismatchedTargetNoOp() {
+        let gen = IDGen()
+        let reducer = makeReducer(gen)
+        let t1 = gen.tile()
+        let state = TileTreeState(singleTile: t1)
+        let next = reducer.reduce(state, .close(TileID()))
+        #expect(next == state)
+    }
+
+    @Test("Closing the focused tile in a deeper tree moves focus to the adjacent survivor")
+    func closeFocusedReassignsToNeighbor() {
+        // tree = split(t1, split(t2, t3)); focus the nested middle leaf t2 and close it.
+        let gen = IDGen()
+        let reducer = makeReducer(gen)
+        let t1 = gen.tile()
+        var state = TileTreeState(singleTile: t1)
+        state = reducer.reduce(state, .split(parent: t1, axis: .leadingTrailing, insertNewBefore: false))
+        let t2 = state.focusedTileID
+        state = reducer.reduce(state, .split(parent: t2, axis: .leadingTrailing, insertNewBefore: false))
+        let t3 = state.focusedTileID
+        state = reducer.reduce(state, .setFocus(t2))
+
+        let next = reducer.reduce(state, .close(t2))
+        // The survivor across the collapsing split is t3 (the leaf t2 sat next to).
+        #expect(next.focusedTileID == t3)
+        #expect(Set(next.leafIDs) == [t1, t3])
+        #expect(TileTreeInvariants.isValid(next))
+    }
+
     // MARK: - Directional focus (depth-1 parity with splitFocusTarget)
 
     @Test("Directional focus across a leading/trailing split")
