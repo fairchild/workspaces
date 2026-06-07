@@ -37,7 +37,7 @@ enum GhosttyThemeCatalog {
         "Nightfox",
         "Dayfox",
         "Ayu Light",
-        "Snazzy"
+        "Snazzy",
     ]
 
     /// Built-in fallback used to fill an unspecified slot so the dual
@@ -68,7 +68,8 @@ enum GhosttyThemeCatalog {
                 .filter { !$0.isEmpty && !$0.hasPrefix(".") }
         )
 
-        return names
+        return
+            names
             .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
             .map(GhosttyTheme.init(name:))
     }
@@ -77,7 +78,8 @@ enum GhosttyThemeCatalog {
     /// not actually present.
     static func featured(in all: [GhosttyTheme]) -> [GhosttyTheme] {
         let present = Set(all.map(\.name))
-        return featuredNames
+        return
+            featuredNames
             .filter { present.contains($0) }
             .map(GhosttyTheme.init(name:))
     }
@@ -106,7 +108,8 @@ enum GhosttyThemeCatalog {
             return (theme, 1)
         }
 
-        return scored
+        return
+            scored
             .sorted { lhs, rhs in
                 if lhs.tier != rhs.tier { return lhs.tier < rhs.tier }
                 return lhs.theme.name.localizedCaseInsensitiveCompare(rhs.theme.name) == .orderedAscending
