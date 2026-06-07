@@ -37,6 +37,12 @@ final class GhosttyAppManager: NSObject {
     private var initialized = false
     private var currentColorScheme: ghostty_color_scheme_e?
 
+    /// Live surfaces, weakly held, so a Terminal Theme change can be broadcast
+    /// to every open terminal via `ghostty_surface_update_config`. Weak objects
+    /// drop automatically when a `GhosttySurfaceView` deallocates, so a stale
+    /// entry can never be visited.
+    private let surfaceViews = NSHashTable<GhosttySurfaceView>.weakObjects()
+
     private override init() {
         super.init()
     }
@@ -69,12 +75,10 @@ final class GhosttyAppManager: NSObject {
             return
         }
 
-        guard let config = ghostty_config_new() else {
-            NSLog("[GhosttyAppManager] ghostty_config_new failed")
+        guard let config = makeConfig(for: GhosttyThemePersistence.load()) else {
+            NSLog("[GhosttyAppManager] failed to build initial Ghostty config")
             return
         }
-
-        ghostty_config_finalize(config)
         self.config = config
 
         var runtimeConfig = GhosttyRuntimeConfigFactory.make(userdata: Unmanaged.passUnretained(self).toOpaque())
@@ -115,6 +119,64 @@ final class GhosttyAppManager: NSObject {
 
         ghostty_app_set_color_scheme(app, colorSchemeToApply)
         currentColorScheme = colorSchemeToApply
+    }
+
+    // MARK: Surface registry
+
+    func registerSurface(_ view: GhosttySurfaceView) {
+        surfaceViews.add(view)
+    }
+
+    func unregisterSurface(_ view: GhosttySurfaceView) {
+        surfaceViews.remove(view)
+    }
+
+    // MARK: Terminal Theme
+
+    /// Apply a light/dark Terminal Theme pair to the app and every live surface
+    /// without recreating surfaces (scrollback is preserved). Mirrors the real
+    /// Ghostty reload-config path: rebuild a fresh config from the app-owned
+    /// file, broadcast it via `ghostty_app_update_config` /
+    /// `ghostty_surface_update_config`, then free the previous config.
+    ///
+    /// Callers persist the selection separately; this only drives the live
+    /// apply, so it serves both committed changes and transient previews.
+    func applyTheme(lightTheme: String, darkTheme: String) {
+        guard initialized, let app else { return }
+        let pair = GhosttyThemePersistence.Pair(lightTheme: lightTheme, darkTheme: darkTheme)
+        guard let newConfig = makeConfig(for: pair) else { return }
+
+        ghostty_app_update_config(app, newConfig)
+        for view in surfaceViews.allObjects {
+            guard let surface = view.surface else { continue }
+            ghostty_surface_update_config(surface, newConfig)
+        }
+
+        if let previous = config {
+            ghostty_config_free(previous)
+        }
+        config = newConfig
+    }
+
+    /// Build a finalized `ghostty_config_t` for the given theme pair. When a
+    /// theme is selected, the app-owned config file is (re)written and loaded;
+    /// when nothing is selected, a bare config preserves Ghostty's default.
+    private func makeConfig(for pair: GhosttyThemePersistence.Pair) -> ghostty_config_t? {
+        guard let config = ghostty_config_new() else {
+            NSLog("[GhosttyAppManager] ghostty_config_new failed")
+            return nil
+        }
+
+        let writeResult = try? GhosttyThemeConfig.writeConfigFile(
+            lightTheme: pair.lightTheme,
+            darkTheme: pair.darkTheme
+        )
+        if let url = writeResult.flatMap({ $0 }) {
+            ghostty_config_load_file(config, url.path)
+        }
+
+        ghostty_config_finalize(config)
+        return config
     }
 
     @objc private func keyboardSelectionDidChange(_ notification: Notification) {

@@ -211,6 +211,15 @@ struct WorkspaceManagerApp: App {
                     modifiers: AppChromeShortcut.workspaceSwitcher.eventModifiers
                 )
                 .disabled(!appCommandState.mainWindowAvailability.canOpenCommandPalette)
+
+                Button("Terminal Theme...") {
+                    appCommandState.perform(.openCommandRunner)
+                }
+                .keyboardShortcut(
+                    AppChromeShortcut.commandRunner.keyEquivalent,
+                    modifiers: AppChromeShortcut.commandRunner.eventModifiers
+                )
+                .disabled(!appCommandState.mainWindowAvailability.canOpenCommandRunner)
             }
 
             SidebarCommands()
@@ -641,6 +650,7 @@ struct MainWindowFocusedActions {
     var revealInFinder: Action? = nil
     var copyPath: Action? = nil
     var openCommandPalette: Action? = nil
+    var openCommandRunner: Action? = nil
 
     @MainActor static let empty = MainWindowFocusedActions()
 }
@@ -660,6 +670,7 @@ struct MainWindowCommandAvailability: Equatable {
     let canRevealInFinder: Bool
     let canCopyPath: Bool
     let canOpenCommandPalette: Bool
+    let canOpenCommandRunner: Bool
 
     static let empty = MainWindowCommandAvailability(
         canToggleSidebar: false,
@@ -675,7 +686,8 @@ struct MainWindowCommandAvailability: Equatable {
         canOpenDesktop: false,
         canRevealInFinder: false,
         canCopyPath: false,
-        canOpenCommandPalette: false
+        canOpenCommandPalette: false,
+        canOpenCommandRunner: false
     )
 }
 
@@ -694,6 +706,7 @@ enum MainWindowCommand {
     case revealInFinder
     case copyPath
     case openCommandPalette
+    case openCommandRunner
 }
 
 @MainActor
@@ -758,6 +771,8 @@ final class AppCommandState: ObservableObject {
             mainWindowActions.copyPath?()
         case .openCommandPalette:
             mainWindowActions.openCommandPalette?()
+        case .openCommandRunner:
+            mainWindowActions.openCommandRunner?()
         }
     }
 }

@@ -62,6 +62,7 @@ struct MainWindowViewState {
     var connectingWorkspaceID: UUID?
     var terminalCloseConfirmation: TerminalCloseConfirmation?
     var isShowingCommandPalette = false
+    var isShowingThemeOverlay = false
 }
 
 enum MainWindowOpenInEditorContextKey: Equatable {

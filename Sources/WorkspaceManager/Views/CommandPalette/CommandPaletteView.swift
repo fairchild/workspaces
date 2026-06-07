@@ -9,16 +9,28 @@
 import SwiftUI
 import WorkspaceManagerCore
 
+/// A non-navigational command surfaced in the palette (e.g. "Change Terminal
+/// Theme…"). Seeds the switcher with actions, distinct from items you switch to.
+private struct CommandPaletteAction: Identifiable {
+    let id: String
+    let title: String
+    let subtitle: String
+    let systemImage: String
+    let perform: () -> Void
+}
+
 private enum PaletteRow: SwitchableItem {
     case workspace(WorkspaceSwitchableItem)
     case repo(RepoSwitchableItem)
     case web(WebSourceSwitchableItem)
+    case command(CommandPaletteAction)
 
     var id: String {
         switch self {
         case .workspace(let item): return "ws-\(item.id.uuidString)"
         case .repo(let item): return "repo-\(item.id.uuidString)"
         case .web(let item): return "web-\(item.id.uuidString)"
+        case .command(let action): return "cmd-\(action.id)"
         }
     }
 
@@ -27,6 +39,7 @@ private enum PaletteRow: SwitchableItem {
         case .workspace(let item): return item.title
         case .repo(let item): return item.title
         case .web(let item): return item.title
+        case .command(let action): return action.title
         }
     }
 
@@ -35,6 +48,7 @@ private enum PaletteRow: SwitchableItem {
         case .workspace(let item): return item.subtitle
         case .repo(let item): return item.subtitle
         case .web(let item): return item.subtitle
+        case .command(let action): return action.subtitle
         }
     }
 
@@ -43,6 +57,7 @@ private enum PaletteRow: SwitchableItem {
         case .workspace(let item): return item.indicator
         case .repo(let item): return item.indicator
         case .web(let item): return item.indicator
+        case .command: return .inactive
         }
     }
 
@@ -51,6 +66,8 @@ private enum PaletteRow: SwitchableItem {
         case .workspace(let item): return item.sortKey
         case .repo(let item): return item.sortKey
         case .web(let item): return item.sortKey
+        // Pin commands above recency-sorted items on an empty query.
+        case .command: return .distantFuture
         }
     }
 
@@ -59,6 +76,10 @@ private enum PaletteRow: SwitchableItem {
         case .workspace(let item): return item.matches(query)
         case .repo(let item): return item.matches(query)
         case .web(let item): return item.matches(query)
+        case .command(let action):
+            guard !query.isEmpty else { return true }
+            return action.title.localizedCaseInsensitiveContains(query)
+                || action.subtitle.localizedCaseInsensitiveContains(query)
         }
     }
 
@@ -67,6 +88,7 @@ private enum PaletteRow: SwitchableItem {
         case .workspace(let item): item.activate(context)
         case .repo(let item): item.activate(context)
         case .web(let item): item.activate(context)
+        case .command(let action): action.perform()
         }
     }
 }
@@ -81,6 +103,7 @@ struct CommandPaletteView: View {
     let onSelectRepo: (Repo) -> Void
     let onSelectWebSource: (WebSource) -> Void
     let onDismiss: () -> Void
+    let onOpenThemeSwitcher: () -> Void
 
     @State private var query = ""
     @State private var highlightedIndex = 0
@@ -218,6 +241,7 @@ struct CommandPaletteView: View {
         case .workspace: return "terminal"
         case .repo: return "folder"
         case .web: return "globe"
+        case .command(let action): return action.systemImage
         }
     }
 
@@ -244,7 +268,18 @@ struct CommandPaletteView: View {
         let webRows: [PaletteRow] = webSources.map { source in
             .web(WebSourceSwitchableItem(source: source))
         }
-        return SwitchableIndex.rank(workspaceRows + repoRows + webRows, query: query)
+        let commandRows: [PaletteRow] = [
+            .command(
+                CommandPaletteAction(
+                    id: "change-terminal-theme",
+                    title: "Change Terminal Theme…",
+                    subtitle: "Command · ⇧⌘P",
+                    systemImage: "paintpalette",
+                    perform: onOpenThemeSwitcher
+                )
+            )
+        ]
+        return SwitchableIndex.rank(commandRows + workspaceRows + repoRows + webRows, query: query)
     }
 
     private func waitingDescriptor(for state: AgentRunState?) -> String? {

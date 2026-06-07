@@ -85,6 +85,8 @@ final class GhosttySurfaceView: NSView {
 
     deinit {
         MainActor.assumeIsolated {
+            GhosttyAppManager.shared.unregisterSurface(self)
+
             if let eventMonitor {
                 NSEvent.removeMonitor(eventMonitor)
                 self.eventMonitor = nil
@@ -287,6 +289,7 @@ final class GhosttySurfaceView: NSView {
         }
 
         surface = createdSurface
+        GhosttyAppManager.shared.registerSurface(self)
         updateScaleAndSize()
         applySystemColorSchemeIfNeeded(force: true)
         readinessDiagnostics.markSurfaceCreateSucceeded()

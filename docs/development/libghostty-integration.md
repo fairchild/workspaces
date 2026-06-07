@@ -53,6 +53,8 @@ Behavior:
 - `ghostty_app_new/free/tick`
 - app-wide focus sync via `ghostty_app_set_focus(...)`
 - clipboard callbacks + app-level color-scheme synchronization
+- the live Terminal Theme apply (`applyTheme(lightTheme:darkTheme:)`) and a weak
+  registry of live `GhosttySurfaceView`s to broadcast it to (see "Terminal Theme")
 
 Registered callbacks in `ghostty_runtime_config_s`:
 - `wakeup_cb`: schedules `ghostty_app_tick` on main queue
@@ -125,10 +127,54 @@ Current migration uses surface/runtime config only:
 - `font_size`
 
 Not configured yet (by design in this migration):
-- app-owned color palette / theme overrides
 - app-owned font-family override
 
-Reason: keep integration on stable C fields and avoid config file management in v1.
+Reason: keep integration on stable C fields. The Terminal Theme (below) is the
+one app-owned config-file key we manage.
+
+## Terminal Theme (app-owned config + live update)
+
+WorkSpaces sets the terminal color theme through a small, app-owned config file
+applied live — never via OSC escapes or surface recreation. See the ADR
+`docs/decisions/ghostty-theme-config.md` for the rationale.
+
+Contract:
+
+- **Config file**: `<dataDir>/ghostty/workspaces.config` (the `WORKSPACES_DATA_DIR`
+  convention, else the app support dir), isolated from `~/.config/ghostty`, which
+  we never load. It contains only `theme = light:<L>,dark:<D>`.
+- **Catalog**: themes are enumerated at runtime from `<resources>/ghostty/themes/`
+  via `GhosttyResourcesLocator.resolvedResourcesDirectory()` — each filename *is*
+  the `theme =` value. `GhosttyThemeCatalog` exposes `all`, `featured`, and fuzzy
+  `rank`. Release bundles the resources; dev builds do not, so the catalog is
+  empty unless `GHOSTTY_RESOURCES_DIR` points at a Ghostty share dir.
+  `launch-dev.sh` auto-resolves one from the pinned checkout
+  (`~/.cache/workspacemanager/ghostty/zig-out/share/ghostty`), so a plain
+  `./scripts/launch-dev.sh` shows themes; a direct-binary launch still needs the
+  env var set by hand.
+- **Startup**: `initializeIfNeeded()` builds the initial `ghostty_config_t` from
+  the persisted pair (`GhosttyThemePersistence`, `UserDefaults`). With no
+  selection it stays a bare default; with a selection it writes the file and
+  `ghostty_config_load_file`s it before `ghostty_app_new`, so the first surfaces
+  inherit the theme.
+- **Live change**: `applyTheme(lightTheme:darkTheme:)` rewrites the file, rebuilds
+  a fresh config, broadcasts via `ghostty_app_update_config(app, cfg)` and
+  `ghostty_surface_update_config(surface, cfg)` over the weak surface registry,
+  then frees the previous config. Scrollback is preserved; new splits/tabs
+  inherit the theme from the updated app config.
+- **Dual form is required**: Ghostty rejects a single-sided `theme = light:foo`,
+  so an unset slot is filled with `Builtin Light` / `Builtin Dark`; both unset
+  writes no theme line (bare default).
+- **Preview/commit**: `GhosttyThemeStore` (the observable both the Settings
+  pickers and the Cmd+Shift+P overlay bind to) drives debounced previews
+  (`preview`/`endPreview`, no persistence) and commits (`setLightTheme` /
+  `setDarkTheme`, persisted). The active half follows the macOS appearance via
+  the existing `set_color_scheme` path, so a slot only previews live while its
+  matching appearance is active.
+- **Recents**: committed themes are remembered (`recentThemes`, persisted under
+  `terminalThemeRecents`, most-recent-first, capped at 8) and pinned in a
+  "Recent" section above Featured. The picker's initial highlight lands on the
+  most recent theme, so re-selecting a recent is a single arrow press away.
 
 ## Appearance Sync
 

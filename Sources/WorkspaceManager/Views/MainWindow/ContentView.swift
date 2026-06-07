@@ -326,7 +326,8 @@ struct ContentView: View {
             openDesktop: openDesktopFocusedAction,
             revealInFinder: revealInFinderFocusedAction,
             copyPath: copyPathFocusedAction,
-            openCommandPalette: { viewState.isShowingCommandPalette = true }
+            openCommandPalette: { viewState.isShowingCommandPalette = true },
+            openCommandRunner: { viewState.isShowingThemeOverlay = true }
         )
     }
 
@@ -345,7 +346,8 @@ struct ContentView: View {
             canOpenDesktop: openDesktopFocusedAction != nil,
             canRevealInFinder: revealInFinderFocusedAction != nil,
             canCopyPath: copyPathFocusedAction != nil,
-            canOpenCommandPalette: true
+            canOpenCommandPalette: true,
+            canOpenCommandRunner: true
         )
     }
 
@@ -833,7 +835,17 @@ struct ContentView: View {
                     },
                     onDismiss: {
                         viewState.isShowingCommandPalette = false
+                    },
+                    onOpenThemeSwitcher: {
+                        viewState.isShowingCommandPalette = false
+                        viewState.isShowingThemeOverlay = true
                     }
+                )
+            }
+            .sheet(isPresented: $viewState.isShowingThemeOverlay) {
+                TerminalThemeOverlay(
+                    store: .shared,
+                    onDismiss: { viewState.isShowingThemeOverlay = false }
                 )
             }
             .alert(
