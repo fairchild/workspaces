@@ -41,10 +41,10 @@ final class ClaudeIntegrationLifecycle: ObservableObject {
             )
         }
 
-        let statusLinePath = ClaudeIntegrationLifecycle.bundledStatusLineForwarderPath()
+        let statusLinePath = ClaudeIntegrationLifecycle.extractStatusLineForwarderScript()
         if statusLinePath == nil {
             NSLog(
-                "[ClaudeIntegration] statusline.sh not found in bundle; skipping Channel 2 contribution"
+                "[ClaudeIntegration] statusline.sh extraction failed; skipping Channel 2 contribution"
             )
         }
 
@@ -52,13 +52,6 @@ final class ClaudeIntegrationLifecycle: ObservableObject {
             eventForwarderScriptPath: eventForwarderPath,
             statusLineForwarderPath: statusLinePath
         )
-    }
-
-    /// Locate the Channel 2 status-line forwarder shell shipped alongside the app.
-    /// Returns nil if the bundle was assembled without it — caller logs and
-    /// proceeds without registering Channel 2.
-    nonisolated static func bundledStatusLineForwarderPath() -> String? {
-        bundledHookForwarderURL(named: "statusline")?.path
     }
 
     /// Locate the sourceable zsh command-status producer shipped alongside the app.
@@ -146,37 +139,58 @@ final class ClaudeIntegrationLifecycle: ObservableObject {
     }
 
     /// Copy the bundled `event-forwarder.sh` (Channel 1 hook event forwarder) to a
-    /// stable location under Application Support and chmod it executable. Returns
-    /// the destination path, or nil if extraction failed — the contribution then
-    /// declines to register, and Channel 1 stays dormant for this session.
+    /// stable location and chmod it executable. Returns the destination path, or
+    /// nil if extraction failed — the contribution then declines to register, and
+    /// Channel 1 stays dormant for this session.
     nonisolated static func extractEventForwarderScript() -> String? {
         extractHookForwarderScript(named: "event-forwarder")
     }
 
-    /// Generic helper used by the event-forwarder extractor:
-    /// copies `<name>.sh` from the bundle's `HookForwarders/` resource directory
-    /// to `~/Library/Application Support/<bundle-id>/HookForwarders/<name>.sh`,
-    /// chmods it 0o755, returns the destination path. Nil on any failure.
-    nonisolated private static func extractHookForwarderScript(named name: String) -> String? {
-        let bundleID = Bundle.main.bundleIdentifier ?? "com.cloudcompute.workspaces"
-        let appSupport = FileManager.default.urls(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask
-        ).first
-        guard let appSupport else { return nil }
-        let dir =
-            appSupport
-            .appendingPathComponent(bundleID, isDirectory: true)
-            .appendingPathComponent("HookForwarders", isDirectory: true)
+    /// Copy the bundled `statusline.sh` (Channel 2 status-line forwarder) to the
+    /// same stable extraction dir as Channel 1, symmetric with the event
+    /// forwarder. Returns the destination path, or nil if extraction failed.
+    nonisolated static func extractStatusLineForwarderScript() -> String? {
+        extractHookForwarderScript(named: "statusline")
+    }
+
+    /// Stable, space-free directory the app extracts hook/status forwarders into.
+    /// Honors `XDG_DATA_HOME`, defaulting to `~/.local/share`. Deliberately kept
+    /// out of `~/.claude` so an extracted script never dirties the dotclaude git
+    /// tree, and space-free so the command the installer writes to
+    /// `settings.json` stays a clean, unquoted, machine-agnostic tilde path.
+    nonisolated static func hookForwarderInstallDirectory() -> URL {
+        let dataHome: URL
+        if let xdg = ProcessInfo.processInfo.environment["XDG_DATA_HOME"], !xdg.isEmpty {
+            dataHome = URL(fileURLWithPath: xdg)
+        } else {
+            dataHome = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent(".local", isDirectory: true)
+                .appendingPathComponent("share", isDirectory: true)
+        }
+        return
+            dataHome
+            .appendingPathComponent("workspaces", isDirectory: true)
+            .appendingPathComponent("hook-forwarders", isDirectory: true)
+    }
+
+    /// Generic helper used by the forwarder extractors: copies `<name>.<ext>` from
+    /// the bundle's `HookForwarders/` resource directory to
+    /// `hookForwarderInstallDirectory()/<name>.<ext>`, chmods it 0o755, and returns
+    /// the destination path. Nil on any failure.
+    nonisolated private static func extractHookForwarderScript(
+        named name: String,
+        fileExtension: String = "sh"
+    ) -> String? {
+        let dir = hookForwarderInstallDirectory()
         try? FileManager.default.createDirectory(
             at: dir, withIntermediateDirectories: true
         )
-        let dest = dir.appendingPathComponent("\(name).sh")
+        let dest = dir.appendingPathComponent("\(name).\(fileExtension)")
 
-        // Source: bundled .sh file. Packaged apps expose flattened resources
+        // Source: bundled resource file. Packaged apps expose flattened resources
         // through Bundle.main; SwiftPM builds expose them through a sibling
         // WorkspaceManager_WorkspaceManager.bundle.
-        let bundleURL = bundledHookForwarderURL(named: name)
+        let bundleURL = bundledHookForwarderURL(named: name, fileExtension: fileExtension)
         guard let bundleURL else {
             return nil
         }

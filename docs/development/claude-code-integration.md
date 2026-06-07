@@ -103,14 +103,29 @@ X-WorkSpaces-Host-Session-ID: <uuid>
 The listener decodes with `ClaudeHookTranslator.decodeAgentEvent(from:)` and
 applies the resulting `AgentEvent` to the registry with origin `.hook`.
 
+The app extracts `event-forwarder.sh` to a stable, space-free directory —
+`~/.local/share/workspaces/hook-forwarders/` (honoring `XDG_DATA_HOME`) — and
+writes a tilde-relative, unquoted command into `settings.json`. The path is
+identical on every machine, so the committed dotclaude config matches the runtime
+config and `~/.claude` stops going dirty. See § "Settings Installer" for why the
+command shape matters and `docs/decisions/hook-forwarder-command-shape.md` for the
+rule.
+
 The old `type: "http"` plus `http+unix://...` transport is not used. Real Claude
 Code does not speak that URL scheme. The installer still scrubs only the old
 WorkSpaces-owned `http+unix://.../hooks-<pid>.sock/event` handlers so opted-in
-users self-heal without deleting user-owned Unix-socket hooks.
+users self-heal without deleting user-owned Unix-socket hooks. It also replaces
+any prior machine-specific event-forwarder command (an `Application Support` path
+or a `.build` bundle path, quoted or unquoted, ending in
+`HookForwarders/event-forwarder.sh`) with the generic tilde command.
 
 ## Channel 2: Status-Line Forwarder
 
-Script: `Sources/WorkspaceManager/Resources/HookForwarders/statusline.sh`.
+Script: `Sources/WorkspaceManager/Resources/HookForwarders/statusline.sh`,
+extracted to the same `~/.local/share/workspaces/hook-forwarders/` directory as
+Channel 1 and written to `statusLine.command` as the same tilde-relative,
+unquoted shape. The installer overwrites any prior status-line command, so a
+stale bundle or `.build` path converges to the generic command on next launch.
 
 Claude Code runs it as `statusLine.command`. The script posts status JSON to
 `/statusline` and prints a single space so Claude's own status row stays visually
@@ -188,6 +203,22 @@ owns the complete WorkSpaces patch:
 - `preferredNotifChannel: "iterm2"`
 - migration scrub for old WorkSpaces `http+unix://...hooks-<pid>.sock/event`
 - migration removal for old WorkSpaces `title-emit.sh` hooks
+- migration replacement of machine-specific event-forwarder/status-line paths with
+  the generic tilde command
+
+Both commands the app writes to `~/.claude/settings.json` are **machine-agnostic**:
+the extracted script lives in a stable, space-free dir
+(`~/.local/share/workspaces/hook-forwarders/`) and the command is emitted as a
+tilde-relative, **unquoted** path
+(`~/.local/share/workspaces/hook-forwarders/event-forwarder.sh`). Tilde expansion
+is not subject to field splitting, so the path expands cleanly even if the home
+directory contains a space — which removes the quoting that an absolute
+`Application Support` path needed. `shellEscapedCommand` keeps a clean tilde path
+verbatim (it is in the safe-scalar set) and still quotes anything carrying a space
+or other unsafe scalar. Because the committed and runtime forms are byte-identical
+on every machine, `~/.claude` no longer goes dirty from per-launch rewrites and the
+dotclaude auto-deploy stops silently skipping. The rule is captured in
+`docs/decisions/hook-forwarder-command-shape.md`.
 
 The public UI-facing protocol remains:
 
@@ -222,7 +253,10 @@ listener starts dormant and logs that ownership decision. A dormant listener doe
 not remove the owner socket on shutdown.
 
 This avoids pid-scoped socket churn, per-launch settings rewrites, and stale
-paths synced through `~/.claude/`.
+paths synced through `~/.claude/`. The forwarder **commands** the installer writes
+get the same machine-agnostic treatment — a stable, space-free extraction dir plus
+a tilde-relative unquoted path — so the same drift sources cannot reappear through
+`statusLine.command` or the hook command strings. See § "Settings Installer".
 
 ## Production Wiring
 
