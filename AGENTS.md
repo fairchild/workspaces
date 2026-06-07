@@ -315,6 +315,19 @@ mise run web:deps:remove -- <pkg>           # pnpm remove + auto-fix formatting
 | PR reviewer status script | scripts/pr-reviewer-status.py |
 | Web architecture doc | web/docs/architecture.md |
 
+## File Purpose Blocks
+
+Where a file's purpose isn't obvious from its name, it opens with a short (≈2–4 line)
+top-of-file doc block stating **what it does and why** — present tense (what the file
+is, not the history of how it got there). Add one when creating or substantially
+editing such a file; skip self-evident utils and tests.
+
+This doubles as a fast index when exploring: `head` a file (the block is the first
+thing) or `rg` a shared phrase to summarize a whole family without opening them —
+e.g. `rg -n "^ \* Persistence for"` lists every persistence module with its one-liner.
+Lean on this before reading files in explore mode, and keep the blocks accurate so it
+stays trustworthy.
+
 ## Key Patterns
 
 1. **URL Storage**: SwiftData can't store URLs directly. Store as String, access via computed property:
