@@ -440,7 +440,11 @@ struct SidebarView: View {
                 if !isRepoExpanded(repo) {
                     expansionController.expandRepo(repo.id)
                 }
-                onRepoSelected(repo)
+                if paneCount(for: repoSessionKey) > 0 {
+                    onRepoTerminalSelected(repo)
+                } else {
+                    onRepoSelected(repo)
+                }
             },
             onNewWorkspace: {
                 Task { @MainActor in

@@ -65,6 +65,8 @@ CREATE TABLE IF NOT EXISTS terminal_sessions (
     custom_command_present INTEGER NOT NULL DEFAULT 0
         CHECK (custom_command_present IN (0, 1)),
     hooks_socket_path TEXT,
+    -- Active tab for this terminal scope; more than one row can be active
+    -- globally when they belong to different Home/Repository/Workspace scopes.
     is_active INTEGER NOT NULL DEFAULT 0
         CHECK (is_active IN (0, 1)),
     created_at TEXT NOT NULL,

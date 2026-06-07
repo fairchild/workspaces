@@ -5,6 +5,7 @@
 
 import Foundation
 import Testing
+import WorkspaceManagerCore
 
 @testable import WorkspaceManager
 
@@ -115,6 +116,72 @@ struct TerminalContinuityManifestTests {
         )
 
         #expect(restored.path == root.path)
+    }
+
+    @Test("Host session snapshot restores tabs and active tab by scope")
+    func hostSessionSnapshotRestoresTabsByScope() throws {
+        let home = try temporaryDirectory()
+        let repo = try temporaryDirectory()
+        let homeSession = HostTerminalSession(key: .defaultHome, directory: home)
+        let repoSession = HostTerminalSession(key: .repoPath(repo.path), directory: repo)
+        let secondRepoSession = HostTerminalSession(key: .repoPath(repo.path), directory: repo)
+
+        let manifest = TerminalContinuityManifest(
+            targetKind: .repo,
+            targetID: UUID(),
+            rootURL: repo,
+            launchURL: repo,
+            terminalMode: .ghosttyManagedSplits,
+            sessions: [homeSession, repoSession, secondRepoSession],
+            activeSessionID: secondRepoSession.id,
+            activeSessionIDByScopeKey: [
+                .defaultHome: homeSession.id,
+                .repoPath(repo.path): secondRepoSession.id,
+            ],
+            updatedAt: Date(timeIntervalSince1970: 100)
+        )
+
+        let decoded = try #require(TerminalContinuityManifest.decode(from: manifest.rawValue))
+        let snapshot = try #require(decoded.hostSessionSnapshot())
+
+        #expect(snapshot.sessions.map(\.id) == [homeSession.id, repoSession.id, secondRepoSession.id])
+        #expect(snapshot.activeSessionID == secondRepoSession.id)
+        #expect(snapshot.activeSessionIDByScopeKey[.defaultHome] == homeSession.id)
+        #expect(snapshot.activeSessionIDByScopeKey[.repoPath(repo.path)] == secondRepoSession.id)
+    }
+
+    @Test("Host session snapshot skips provider-backed command sessions")
+    func hostSessionSnapshotSkipsProviderBackedCommandSessions() throws {
+        let home = try temporaryDirectory()
+        let remoteWorkingDirectory = try temporaryDirectory()
+        let homeSession = HostTerminalSession(key: .defaultHome, directory: home)
+        let remoteSession = HostTerminalSession(
+            key: .backendSession(providerID: "lume", instanceID: "vm-123"),
+            directory: remoteWorkingDirectory,
+            customCommand: "/usr/local/bin/lume ssh vm-123"
+        )
+
+        let manifest = TerminalContinuityManifest(
+            targetKind: .workspace,
+            targetID: UUID(),
+            rootURL: home,
+            launchURL: home,
+            terminalMode: .ghosttyManagedSplits,
+            sessions: [homeSession, remoteSession],
+            activeSessionID: remoteSession.id,
+            activeSessionIDByScopeKey: [
+                .defaultHome: homeSession.id,
+                .backendSession(providerID: "lume", instanceID: "vm-123"): remoteSession.id,
+            ],
+            updatedAt: Date(timeIntervalSince1970: 100)
+        )
+
+        let snapshot = try #require(manifest.hostSessionSnapshot())
+
+        #expect(snapshot.sessions.map(\.id) == [homeSession.id])
+        #expect(snapshot.activeSessionID == homeSession.id)
+        #expect(snapshot.activeSessionIDByScopeKey[.defaultHome] == homeSession.id)
+        #expect(snapshot.activeSessionIDByScopeKey[.backendSession(providerID: "lume", instanceID: "vm-123")] == nil)
     }
 
     private func temporaryDirectory() throws -> URL {

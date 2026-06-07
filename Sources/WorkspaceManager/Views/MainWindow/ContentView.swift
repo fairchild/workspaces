@@ -337,8 +337,8 @@ struct ContentView: View {
             canToggleTerminalPanel: true,
             canCreateTerminalTab: hostTerminalState.hasSessions,
             canCloseTerminalTab: hostTerminalState.hasSessions,
-            canSelectNextTerminalTab: hostTerminalState.sessions.count > 1,
-            canSelectPreviousTerminalTab: hostTerminalState.sessions.count > 1,
+            canSelectNextTerminalTab: hostTerminalState.scopedSessions.count > 1,
+            canSelectPreviousTerminalTab: hostTerminalState.scopedSessions.count > 1,
             canOpenInEditor: openInEditorFocusedAction != nil,
             canOpenInBrowser: openInBrowserFocusedAction != nil,
             canReloadWebSource: reloadWebSourceFocusedAction != nil,
@@ -380,6 +380,7 @@ struct ContentView: View {
             selectedRepo: selectedRepoForInspector,
             activeHostSession: activeHostSession,
             hostTerminalSessions: hostTerminalState.sessions,
+            visibleHostTerminalSessions: hostTerminalState.scopedSessions,
             activeHostTerminalSessionID: hostTerminalState.activeSessionID,
             activeSplitHostSession: hostTerminalState.splitSession(for: hostTerminalState.activeSessionID),
             activeSplitLayout: hostTerminalState.splitLayout(for: hostTerminalState.activeSessionID),
@@ -395,6 +396,7 @@ struct ContentView: View {
                     forPrimarySessionID: activeSessionID
                 )
             },
+            onOpenRepoOverview: handleRepoSelection,
             onSelectTerminalTab: selectTerminalTab(sessionID:),
             onCloseTerminalTab: closeTerminalTab(sessionID:),
             onTerminalCloseConfirmationRequired: requestCloseConfirmationForTerminalTab(sessionID:),
@@ -557,6 +559,10 @@ struct ContentView: View {
             }
             .onChange(of: hostTerminalState.sessions) { _, _ in
                 refreshWorkspaceStatusAggregator()
+                persistTerminalContinuitySnapshot()
+            }
+            .onChange(of: hostTerminalState.activeSessionID) { _, _ in
+                persistTerminalContinuitySnapshot()
             }
             .task {
                 await performDeferredStartupWorkspaceStatusSync()
@@ -1259,7 +1265,7 @@ struct ContentView: View {
         let providerTarget = WorkspaceProviderTarget(workspace)
         let sessionKey = provider.sessionKey(for: providerTarget)
         if workspace.status == .active,
-            let existing = hostTerminalState.sessions.first(where: { $0.key == sessionKey })
+            let existing = hostTerminalState.activeSession(inScope: sessionKey)
         {
             abandonPendingRemoteConnection(reason: "remote_workspace_reused_existing_session")
             markAccessed(workspace: workspace)
@@ -1820,6 +1826,18 @@ struct ContentView: View {
 
     @MainActor
     private func ensureInitialHostSession() {
+        if !hostTerminalState.hasSessions,
+            let snapshot = TerminalContinuityManifest.decode(from: terminalContinuityManifestRawValue)?
+                .hostSessionSnapshot()
+        {
+            hostTerminalState.restoreSessions(
+                snapshot.sessions,
+                activeSessionID: snapshot.activeSessionID,
+                activeSessionIDByScopeKey: snapshot.activeSessionIDByScopeKey
+            )
+            return
+        }
+
         terminalSessionController.ensureInitialHostSession(
             hostTerminalState: hostTerminalState,
             defaultHomeDirectory: resolvedDefaultHostDirectory,
@@ -1994,7 +2012,10 @@ struct ContentView: View {
             targetID: targetID,
             rootURL: rootURL,
             launchURL: launchURL,
-            terminalMode: terminalMultiplexingMode
+            terminalMode: terminalMultiplexingMode,
+            sessions: hostTerminalState.sessions,
+            activeSessionID: hostTerminalState.activeSessionID,
+            activeSessionIDByScopeKey: hostTerminalState.activeSessionIDByScopeKey
         )
         terminalContinuityManifestRawValue = manifest.rawValue
         NSLog(
@@ -2006,6 +2027,18 @@ struct ContentView: View {
             manifest.tmuxSessionName,
             manifest.terminalMode.rawValue
         )
+    }
+
+    private func persistTerminalContinuitySnapshot() {
+        let manifest = TerminalContinuityManifest.snapshot(
+            previous: TerminalContinuityManifest.decode(from: terminalContinuityManifestRawValue),
+            defaultHomeURL: resolvedDefaultHostDirectory,
+            terminalMode: terminalMultiplexingMode,
+            sessions: hostTerminalState.sessions,
+            activeSessionID: hostTerminalState.activeSessionID,
+            activeSessionIDByScopeKey: hostTerminalState.activeSessionIDByScopeKey
+        )
+        terminalContinuityManifestRawValue = manifest.rawValue
     }
 
     private func restoredLaunchDirectory(for repo: Repo) -> URL? {
@@ -2291,6 +2324,7 @@ struct MainTerminalDetailView: View {
     let selectedRepo: Repo?
     let activeHostSession: HostTerminalSession?
     let hostTerminalSessions: [HostTerminalSession]
+    let visibleHostTerminalSessions: [HostTerminalSession]
     let activeHostTerminalSessionID: UUID?
     let activeSplitHostSession: HostTerminalSession?
     let activeSplitLayout: HostTerminalStateStore.SplitPaneLayout?
@@ -2300,6 +2334,7 @@ struct MainTerminalDetailView: View {
     let agentStatuses: [AgentSessionStatus]
     let terminalContextMenuProvider: (HostTerminalSession) -> NSMenu?
     let onSplitFractionChanged: (CGFloat) -> Void
+    let onOpenRepoOverview: (Repo) -> Void
     var onSelectTerminalTab: ((UUID) -> Void)?
     var onCloseTerminalTab: ((UUID) -> Void)?
     var onTerminalCloseConfirmationRequired: ((UUID) -> Void)?
@@ -2374,6 +2409,14 @@ struct MainTerminalDetailView: View {
 
     @ViewBuilder
     private var previewAndTerminalPanel: some View {
+        VStack(spacing: 0) {
+            repoTerminalBreadcrumb
+            previewAndTerminalPanelContent
+        }
+    }
+
+    @ViewBuilder
+    private var previewAndTerminalPanelContent: some View {
         if let selectedCodePreview {
             if isTerminalPanelVisible {
                 VSplitView {
@@ -2409,9 +2452,47 @@ struct MainTerminalDetailView: View {
         }
     }
 
+    @ViewBuilder
+    private var repoTerminalBreadcrumb: some View {
+        if selectedWorkspace == nil, let selectedRepo {
+            HStack(spacing: 8) {
+                Button {
+                    onOpenRepoOverview(selectedRepo)
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 11, weight: .semibold))
+                        Image(systemName: "folder")
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(selectedRepo.name)
+                                .font(.callout.weight(.semibold))
+                                .lineLimit(1)
+                            Text(selectedRepo.localPath)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Open Repo Overview")
+
+                Spacer(minLength: 8)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Color(nsColor: .windowBackgroundColor))
+            .overlay(alignment: .bottom) {
+                Divider()
+            }
+        }
+    }
+
     private var hostTerminalPanel: some View {
         HostTerminalSessionStack(
-            sessions: hostTerminalSessions,
+            sessions: visibleHostTerminalSessions,
             activeSessionID: activeHostTerminalSessionID,
             splitSession: activeSplitHostSession,
             splitLayout: activeSplitLayout,
