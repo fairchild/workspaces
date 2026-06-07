@@ -27,6 +27,9 @@ struct TerminalContinuityManifest: Codable, Equatable {
         }
 
         func restoredSession(fileManager: FileManager = .default) -> HostTerminalSession? {
+            guard isSafeForDirectRestore else {
+                return nil
+            }
             guard Self.isExistingDirectory(directoryPath, fileManager: fileManager) else {
                 return nil
             }
@@ -37,6 +40,12 @@ struct TerminalContinuityManifest: Codable, Equatable {
                 directory: URL(fileURLWithPath: directoryPath, isDirectory: true),
                 customCommand: customCommand
             )
+        }
+
+        private var isSafeForDirectRestore: Bool {
+            guard customCommand == nil else { return false }
+            guard case .backendSession = key else { return true }
+            return false
         }
 
         private static func isExistingDirectory(_ path: String, fileManager: FileManager) -> Bool {

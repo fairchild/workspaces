@@ -96,6 +96,19 @@ final class HostTerminalStateStore: ObservableObject {
         coordinator.sessions(inScope: scopeKey)
     }
 
+    func activeSession(inScope scopeKey: HostTerminalSessionKey) -> HostTerminalSession? {
+        let scopedSessions = coordinator.sessions(inScope: scopeKey)
+        guard !scopedSessions.isEmpty else { return nil }
+
+        if let activeSessionID = coordinator.activeSessionIDByScopeKey[scopeKey.normalized()],
+            let activeSession = scopedSessions.first(where: { $0.id == activeSessionID })
+        {
+            return activeSession
+        }
+
+        return scopedSessions.first
+    }
+
     @discardableResult
     func activateSession(
         key: HostTerminalSessionKey,

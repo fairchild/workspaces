@@ -1265,7 +1265,7 @@ struct ContentView: View {
         let providerTarget = WorkspaceProviderTarget(workspace)
         let sessionKey = provider.sessionKey(for: providerTarget)
         if workspace.status == .active,
-            let existing = hostTerminalState.sessions.first(where: { $0.key == sessionKey })
+            let existing = hostTerminalState.activeSession(inScope: sessionKey)
         {
             abandonPendingRemoteConnection(reason: "remote_workspace_reused_existing_session")
             markAccessed(workspace: workspace)

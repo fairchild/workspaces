@@ -150,6 +150,40 @@ struct TerminalContinuityManifestTests {
         #expect(snapshot.activeSessionIDByScopeKey[.repoPath(repo.path)] == secondRepoSession.id)
     }
 
+    @Test("Host session snapshot skips provider-backed command sessions")
+    func hostSessionSnapshotSkipsProviderBackedCommandSessions() throws {
+        let home = try temporaryDirectory()
+        let remoteWorkingDirectory = try temporaryDirectory()
+        let homeSession = HostTerminalSession(key: .defaultHome, directory: home)
+        let remoteSession = HostTerminalSession(
+            key: .backendSession(providerID: "lume", instanceID: "vm-123"),
+            directory: remoteWorkingDirectory,
+            customCommand: "/usr/local/bin/lume ssh vm-123"
+        )
+
+        let manifest = TerminalContinuityManifest(
+            targetKind: .workspace,
+            targetID: UUID(),
+            rootURL: home,
+            launchURL: home,
+            terminalMode: .ghosttyManagedSplits,
+            sessions: [homeSession, remoteSession],
+            activeSessionID: remoteSession.id,
+            activeSessionIDByScopeKey: [
+                .defaultHome: homeSession.id,
+                .backendSession(providerID: "lume", instanceID: "vm-123"): remoteSession.id,
+            ],
+            updatedAt: Date(timeIntervalSince1970: 100)
+        )
+
+        let snapshot = try #require(manifest.hostSessionSnapshot())
+
+        #expect(snapshot.sessions.map(\.id) == [homeSession.id])
+        #expect(snapshot.activeSessionID == homeSession.id)
+        #expect(snapshot.activeSessionIDByScopeKey[.defaultHome] == homeSession.id)
+        #expect(snapshot.activeSessionIDByScopeKey[.backendSession(providerID: "lume", instanceID: "vm-123")] == nil)
+    }
+
     private func temporaryDirectory() throws -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("TerminalContinuityManifestTests-\(UUID().uuidString)", isDirectory: true)

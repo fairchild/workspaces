@@ -110,6 +110,30 @@ struct HostTerminalStateStoreTests {
         #expect(store.scopedSessions.map(\.id) == [home.id, secondHomeTab.id])
     }
 
+    @Test("Active session lookup restores the active backend scope tab")
+    func activeSessionLookupRestoresActiveBackendScopeTab() throws {
+        let store = HostTerminalStateStore()
+        let backendKey = HostTerminalSessionKey.backendSession(providerID: "lume", instanceID: "vm-123")
+        _ =
+            store.activateSession(
+                key: backendKey,
+                directory: URL(fileURLWithPath: "/tmp/workspaces/vm-123"),
+                customCommand: "/usr/local/bin/lume ssh vm-123"
+            ).session
+        let secondBackendTab = try #require(store.createTab())
+        _ =
+            store.activateSession(
+                key: .defaultHome,
+                directory: URL(fileURLWithPath: "/Users/test")
+            ).session
+
+        let activeBackendTab = try #require(store.activeSession(inScope: backendKey))
+
+        #expect(activeBackendTab.id == secondBackendTab.id)
+        #expect(store.activateExistingSession(sessionID: activeBackendTab.id))
+        #expect(store.activeSessionID == secondBackendTab.id)
+    }
+
     @Test("Close other and right candidates stay within the source scope")
     func closeCandidatesStayWithinSourceScope() throws {
         let store = HostTerminalStateStore()
