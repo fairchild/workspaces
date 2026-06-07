@@ -33,6 +33,7 @@ struct TerminalThemeOverlay: View {
             TerminalThemeListView(
                 allThemes: allThemes,
                 featuredThemes: featuredThemes,
+                recentThemes: store.recentThemes,
                 currentSelectionName: currentSelectionName,
                 showsDefaultRow: true,
                 onPreview: preview(_:),

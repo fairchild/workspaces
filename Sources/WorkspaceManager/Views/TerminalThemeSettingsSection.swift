@@ -74,6 +74,7 @@ private struct TerminalThemeSlotField: View {
                 TerminalThemeListView(
                     allThemes: allThemes,
                     featuredThemes: featuredThemes,
+                    recentThemes: store.recentThemes,
                     currentSelectionName: committedName,
                     showsDefaultRow: true,
                     onPreview: preview(_:),

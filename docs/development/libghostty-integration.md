@@ -171,6 +171,10 @@ Contract:
   `setDarkTheme`, persisted). The active half follows the macOS appearance via
   the existing `set_color_scheme` path, so a slot only previews live while its
   matching appearance is active.
+- **Recents**: committed themes are remembered (`recentThemes`, persisted under
+  `terminalThemeRecents`, most-recent-first, capped at 8) and pinned in a
+  "Recent" section above Featured. The picker's initial highlight lands on the
+  most recent theme, so re-selecting a recent is a single arrow press away.
 
 ## Appearance Sync
 

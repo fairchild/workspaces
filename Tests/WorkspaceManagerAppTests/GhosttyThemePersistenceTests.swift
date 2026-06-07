@@ -41,4 +41,13 @@ struct GhosttyThemePersistenceTests {
         let lightOnly = GhosttyThemePersistence.Pair(lightTheme: "Nord", darkTheme: "")
         #expect(lightOnly.hasSelection)
     }
+
+    @Test("Recents are empty by default and round-trip in order")
+    func recentsRoundTrip() {
+        let defaults = makeDefaults()
+        #expect(GhosttyThemePersistence.loadRecents(from: defaults).isEmpty)
+
+        GhosttyThemePersistence.saveRecents(["Dracula", "Nord", "Gruvbox Dark"], to: defaults)
+        #expect(GhosttyThemePersistence.loadRecents(from: defaults) == ["Dracula", "Nord", "Gruvbox Dark"])
+    }
 }

@@ -13,6 +13,9 @@ import SwiftUI
 struct TerminalThemeListView: View {
     let allThemes: [GhosttyTheme]
     let featuredThemes: [GhosttyTheme]
+    /// Recently committed theme names, most-recent-first. Pinned in a "Recent"
+    /// section above Featured so the last-used themes are an arrow-key away.
+    var recentThemes: [String] = []
     /// Currently committed name for the slot being edited ("" = Ghostty default).
     let currentSelectionName: String
     /// Whether to offer a "Ghostty Default" row that clears the slot.
@@ -212,11 +215,29 @@ struct TerminalThemeListView: View {
             ]
         }
 
-        let featuredNames = Set(featuredThemes.map(\.name))
-        let rest = allThemes.filter { !featuredNames.contains($0.name) }
+        // Recent first (most-recent-first), then Featured, then everything else.
+        // A theme appears in exactly one section so row IDs stay unique.
+        let byName = Dictionary(allThemes.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
+        var recent: [GhosttyTheme] = []
+        var recentSeen = Set<String>()
+        for name in recentThemes {
+            guard let theme = byName[name], !recentSeen.contains(name) else { continue }
+            recentSeen.insert(name)
+            recent.append(theme)
+        }
+
+        let featured = featuredThemes.filter { !recentSeen.contains($0.name) }
+        let excluded = recentSeen.union(featured.map(\.name))
+        let rest = allThemes.filter { !excluded.contains($0.name) }
+
         var sections: [DisplaySection] = []
+        if !recent.isEmpty {
+            sections.append(
+                DisplaySection(id: "recent", header: "Recent", includesDefault: false, themes: recent)
+            )
+        }
         sections.append(
-            DisplaySection(id: "featured", header: "Featured", includesDefault: showsDefaultRow, themes: featuredThemes)
+            DisplaySection(id: "featured", header: "Featured", includesDefault: showsDefaultRow, themes: featured)
         )
         sections.append(
             DisplaySection(id: "all", header: "All Themes", includesDefault: false, themes: rest)
@@ -232,15 +253,18 @@ struct TerminalThemeListView: View {
     }
 
     private var initialHighlightID: String? {
-        if !currentSelectionName.isEmpty,
-            orderedSelectableIDs.contains(currentSelectionName)
-        {
+        let ids = orderedSelectableIDs
+        // Prefer the most-recently-used theme so it's a single arrow press away.
+        if let firstRecent = ids.first(where: { recentThemes.contains($0) }) {
+            return firstRecent
+        }
+        if !currentSelectionName.isEmpty, ids.contains(currentSelectionName) {
             return currentSelectionName
         }
         if currentSelectionName.isEmpty, showsDefaultRow {
             return Self.defaultEntryID
         }
-        return orderedSelectableIDs.first
+        return ids.first
     }
 
     private func name(forID id: String) -> String {

@@ -14,6 +14,7 @@ import Foundation
 enum GhosttyThemePersistence {
     static let lightThemeKey = "terminalThemeLight"
     static let darkThemeKey = "terminalThemeDark"
+    static let recentsKey = "terminalThemeRecents"
 
     struct Pair: Equatable, Sendable {
         var lightTheme: String
@@ -34,5 +35,14 @@ enum GhosttyThemePersistence {
     static func save(_ pair: Pair, to defaults: UserDefaults = .standard) {
         defaults.set(pair.lightTheme, forKey: lightThemeKey)
         defaults.set(pair.darkTheme, forKey: darkThemeKey)
+    }
+
+    /// Recently committed theme names, most-recent-first.
+    static func loadRecents(from defaults: UserDefaults = .standard) -> [String] {
+        defaults.stringArray(forKey: recentsKey) ?? []
+    }
+
+    static func saveRecents(_ recents: [String], to defaults: UserDefaults = .standard) {
+        defaults.set(recents, forKey: recentsKey)
     }
 }

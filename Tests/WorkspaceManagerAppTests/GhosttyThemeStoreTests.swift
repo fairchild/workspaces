@@ -75,4 +75,52 @@ struct GhosttyThemeStoreTests {
         #expect(recorder.last?.dark == "Dracula")
         #expect(store.darkTheme == "Dracula")
     }
+
+    @Test("Committing themes records them most-recent-first, deduped")
+    func recordsRecentsMostRecentFirst() {
+        let (store, defaults, _) = makeStore()
+
+        store.setDarkTheme("Nord")
+        store.setLightTheme("Catppuccin Latte")
+        store.setDarkTheme("Dracula")
+        store.setDarkTheme("Nord")  // re-use moves it to front, no duplicate
+
+        #expect(store.recentThemes == ["Nord", "Dracula", "Catppuccin Latte"])
+        #expect(GhosttyThemePersistence.loadRecents(from: defaults) == store.recentThemes)
+    }
+
+    @Test("The Ghostty Default (empty) selection is not recorded as a recent")
+    func emptySelectionNotRecorded() {
+        let (store, _, _) = makeStore()
+
+        store.setDarkTheme("Dracula")
+        store.setLightTheme("")  // clear the light slot
+
+        #expect(store.recentThemes == ["Dracula"])
+    }
+
+    @Test("Recents are capped at the most recent eight")
+    func recentsAreCapped() {
+        let (store, _, _) = makeStore()
+
+        for index in 1...10 {
+            store.setDarkTheme("Theme \(index)")
+        }
+
+        #expect(store.recentThemes.count == 8)
+        #expect(store.recentThemes.first == "Theme 10")
+        #expect(store.recentThemes.last == "Theme 3")
+        #expect(!store.recentThemes.contains("Theme 1"))
+    }
+
+    @Test("Recents reload from persistence in a new store")
+    func recentsReloadFromPersistence() {
+        let defaults = UserDefaults(suiteName: "GhosttyThemeStoreTests-\(UUID().uuidString)")!
+        let first = GhosttyThemeStore(defaults: defaults, debounce: .zero) { _, _ in }
+        first.setDarkTheme("Dracula")
+        first.setLightTheme("Nord")
+
+        let reloaded = GhosttyThemeStore(defaults: defaults, debounce: .zero) { _, _ in }
+        #expect(reloaded.recentThemes == ["Nord", "Dracula"])
+    }
 }
