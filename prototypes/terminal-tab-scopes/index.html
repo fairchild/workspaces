@@ -1,0 +1,410 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Per-Scope Terminal Tab Collections — Prototype</title>
+<style>
+  :root {
+    --bg: #1c1c1e;
+    --sidebar-bg: #252527;
+    --sidebar-bg2: #202022;
+    --row-sel: #3a3a3d;
+    --row-hover: #2e2e30;
+    --main-bg: #1a1a1c;
+    --header-bg: #232325;
+    --tabbar-bg: #202022;
+    --tab-active: #2c2c2f;
+    --tab-inactive: transparent;
+    --border: #38383b;
+    --border-soft: #2c2c2f;
+    --text: #e8e8ea;
+    --text-dim: #98989d;
+    --text-faint: #6a6a6e;
+    --accent: #2f6bff;
+    --accent-soft: #3b82f6;
+    --term-green: #7ee787;
+    --term-dim: #5a5a5e;
+    --good: #34c759;
+    --radius: 7px;
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #0d0d0f;
+    color: var(--text);
+    font-family: var(--sans);
+    -webkit-font-smoothing: antialiased;
+    padding: 28px 20px 56px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 18px;
+  }
+  .intro { max-width: 1040px; width: 100%; }
+  .intro h1 { font-size: 19px; font-weight: 600; letter-spacing: -0.01em; }
+  .intro p { color: var(--text-dim); font-size: 13.5px; line-height: 1.55; margin-top: 7px; }
+  .intro code { font-family: var(--mono); font-size: 12px; background: #2a2a2d; padding: 1px 5px; border-radius: 4px; color: #d0d0d4; }
+
+  .controls {
+    display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+    max-width: 1040px; width: 100%; font-size: 12.5px; color: var(--text-dim);
+  }
+  .toggle {
+    display: inline-flex; align-items: center; gap: 7px; cursor: pointer;
+    background: #232326; border: 1px solid var(--border); padding: 6px 11px; border-radius: 20px;
+    user-select: none;
+  }
+  .toggle .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--term-dim); transition: background .15s; }
+  .toggle.on .dot { background: var(--good); }
+  .toggle .label { color: var(--text); font-size: 12px; }
+
+  /* ---- App window ---- */
+  .window {
+    width: 1040px; height: 600px; background: var(--bg);
+    border-radius: 12px; overflow: hidden; display: flex; flex-direction: column;
+    box-shadow: 0 24px 70px rgba(0,0,0,.55), 0 0 0 1px rgba(255,255,255,.04);
+  }
+  .titlebar {
+    height: 38px; flex: none; display: flex; align-items: center;
+    background: var(--header-bg); border-bottom: 1px solid var(--border-soft);
+    padding: 0 14px; gap: 8px;
+  }
+  .lights { display: flex; gap: 8px; }
+  .light { width: 12px; height: 12px; border-radius: 50%; }
+  .light.r { background: #ff5f57; } .light.y { background: #febc2e; } .light.g { background: #28c840; }
+  .titlebar .spacer { flex: 1; }
+  .pill-btn {
+    display: inline-flex; align-items: center; gap: 5px; height: 23px; padding: 0 9px;
+    background: #303034; border: 1px solid #3d3d41; border-radius: 6px;
+    color: var(--text); font-size: 12px; cursor: pointer;
+  }
+  .icon-btn { color: var(--text-dim); font-size: 15px; padding: 2px 5px; cursor: pointer; }
+
+  .body { flex: 1; display: flex; min-height: 0; }
+
+  /* ---- Sidebar ---- */
+  .sidebar {
+    width: 244px; flex: none; background: var(--sidebar-bg);
+    border-right: 1px solid var(--border-soft); display: flex; flex-direction: column;
+  }
+  .sb-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 11px 14px 7px; color: var(--text-faint);
+    font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em;
+  }
+  .sb-scroll { overflow-y: auto; padding: 2px 8px 12px; flex: 1; }
+  .row {
+    display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 8px;
+    border-radius: 6px; cursor: pointer; color: var(--text); font-size: 13px;
+    position: relative; user-select: none;
+  }
+  .row:hover { background: var(--row-hover); }
+  .row.sel { background: var(--row-sel); }
+  .row .ico { width: 17px; text-align: center; font-size: 13px; color: var(--text-dim); flex: none; }
+  .row.sel .ico, .row.live .ico { color: var(--accent-soft); }
+  .row .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex: none; }
+  .row.child { margin-left: 16px; }
+  .row.child2 { margin-left: 30px; }
+  .disclosure { width: 12px; font-size: 9px; color: var(--text-faint); flex: none; text-align: center; }
+  .hint {
+    font-size: 10.5px; color: var(--text-faint); margin: 1px 0 6px 34px;
+    font-style: italic; line-height: 1.3;
+  }
+
+  /* ---- Main pane ---- */
+  .main { flex: 1; min-width: 0; background: var(--main-bg); display: flex; flex-direction: column; }
+  .main-head {
+    height: 46px; flex: none; display: flex; align-items: center; gap: 8px;
+    padding: 0 16px; border-bottom: 1px solid var(--border-soft); background: var(--header-bg);
+  }
+  .crumb { display: flex; align-items: center; gap: 6px; font-size: 14px; font-weight: 600; }
+  .crumb .back {
+    color: var(--accent-soft); cursor: pointer; font-weight: 500; font-size: 13px;
+    display: inline-flex; align-items: center; gap: 4px;
+  }
+  .crumb .back:hover { text-decoration: underline; }
+  .crumb .sep { color: var(--text-faint); font-weight: 400; }
+  .main-head .spacer { flex: 1; }
+  .scope-badge {
+    font-size: 10.5px; color: var(--text-faint); border: 1px solid var(--border);
+    border-radius: 5px; padding: 2px 7px; font-family: var(--mono);
+  }
+
+  /* tab strip */
+  .tabbar {
+    height: 36px; flex: none; display: flex; align-items: center; gap: 4px;
+    padding: 0 8px; background: var(--tabbar-bg); border-bottom: 1px solid var(--border-soft);
+    overflow-x: auto;
+  }
+  .tab {
+    display: inline-flex; align-items: center; gap: 7px; height: 25px; padding: 0 9px;
+    border-radius: 6px; font-size: 12px; color: var(--text-dim); cursor: pointer;
+    white-space: nowrap; flex: none;
+  }
+  .tab:hover { background: #2a2a2d; }
+  .tab.active { background: var(--tab-active); color: var(--text); }
+  .tab .tico { font-size: 11px; opacity: .8; }
+  .tab .x { color: var(--text-faint); font-size: 13px; opacity: 0; }
+  .tab:hover .x, .tab.active .x { opacity: .7; }
+  .tab .x:hover { color: var(--text); }
+  .tab-new { color: var(--text-faint); font-size: 16px; padding: 0 9px; cursor: pointer; flex: none; }
+  .tab-new:hover { color: var(--text); }
+
+  /* terminal canvas */
+  .term { flex: 1; min-height: 0; padding: 16px 18px; font-family: var(--mono); font-size: 12.5px; line-height: 1.65; overflow: hidden; }
+  .term .dim { color: var(--term-dim); }
+  .term .grn { color: var(--term-green); }
+  .term .cwd { color: #79b8ff; }
+  .term .cursor { display: inline-block; width: 7px; height: 14px; background: var(--text); vertical-align: -2px; animation: blink 1.1s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  /* overview */
+  .overview { flex: 1; min-height: 0; overflow-y: auto; padding: 20px 22px; }
+  .ov-top { display: flex; align-items: center; gap: 12px; margin-bottom: 22px; }
+  .ov-folder { width: 42px; height: 42px; border-radius: 9px; background: #303034; display: grid; place-items: center; font-size: 19px; }
+  .ov-title { font-size: 15px; font-weight: 600; }
+  .ov-sub { font-size: 12px; color: var(--text-dim); margin-top: 2px; }
+  .ov-actions { margin-left: auto; display: flex; gap: 9px; }
+  .ov-btn { height: 30px; padding: 0 13px; border-radius: 7px; font-size: 12.5px; display: inline-flex; align-items: center; gap: 6px; cursor: pointer; border: 1px solid #3d3d41; background: #2c2c30; color: var(--text); }
+  .ov-btn.primary { background: var(--accent); border-color: var(--accent); }
+  .ov-sec-h { font-size: 12px; font-weight: 600; color: var(--text-dim); margin: 6px 0 11px; }
+  .ov-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 26px; }
+  .ws-card { border: 1px solid var(--border-soft); border-radius: 9px; padding: 13px; background: #202023; cursor: pointer; }
+  .ws-card:hover { border-color: #4a4a4f; }
+  .ws-card.new { display: grid; place-items: center; color: var(--text-faint); border-style: dashed; min-height: 92px; gap: 6px; }
+  .ws-card .ws-name { font-size: 13px; font-weight: 600; display: flex; justify-content: space-between; align-items: center; }
+  .ws-card .ws-active { font-size: 10px; color: var(--good); font-weight: 600; }
+  .ws-card .ws-branch { font-size: 11px; color: var(--text-dim); margin-top: 10px; font-family: var(--mono); }
+  .ov-web { border: 1px solid var(--border-soft); border-radius: 9px; padding: 12px 14px; display: flex; align-items: center; gap: 10px; background: #202023; }
+  .ov-web .gl { font-size: 15px; }
+  .ov-web .wt { font-size: 13px; font-weight: 500; }
+  .ov-web .wu { font-size: 11px; color: var(--text-dim); }
+
+  .annot { max-width: 1040px; width: 100%; font-size: 12.5px; color: var(--text-dim); line-height: 1.55; display:flex; gap:18px; flex-wrap:wrap; }
+  .annot .k { color: var(--accent-soft); font-weight: 600; }
+  .legend { display:flex; gap:7px; align-items:flex-start; flex:1; min-width: 280px; }
+  .legend .b { color: var(--text); font-weight:600; }
+</style>
+</head>
+<body>
+
+<div class="intro">
+  <h1>Per-Scope Terminal Tab Collections</h1>
+  <p>Each <b>Terminal Scope</b> — Home (<code>~/code</code>), a Repository's root terminal, or a Workspace — owns its own tab strip. Selecting one in the sidebar shows <i>only</i> that scope's tabs. The repo-root terminal is <b>not</b> a Workspace; it's reached from the Overview, and once it has live tabs the folder row resumes it directly. Click around — it's live.</p>
+</div>
+
+<div class="controls">
+  <div class="toggle on" id="liveToggle" onclick="toggleLive()">
+    <span class="dot"></span>
+    <span class="label">Repo “workspaces” has live root-terminal tabs</span>
+  </div>
+  <span>← toggle to see the folder-row behavior change between <b>resume terminal</b> and <b>show Overview</b></span>
+</div>
+
+<div class="window">
+  <div class="titlebar">
+    <div class="lights"><span class="light r"></span><span class="light y"></span><span class="light g"></span></div>
+    <div class="spacer"></div>
+    <div class="pill-btn">＋ <span style="font-size:9px;opacity:.7">▾</span></div>
+    <div class="icon-btn">▭</div>
+  </div>
+  <div class="body">
+    <!-- Sidebar -->
+    <div class="sidebar">
+      <div class="sb-head"><span>Repositories</span><span style="font-size:13px">⇅</span></div>
+      <div class="sb-scroll" id="sidebar"></div>
+    </div>
+    <!-- Main -->
+    <div class="main" id="main"></div>
+  </div>
+</div>
+
+<div class="annot">
+  <div class="legend"><span class="b">Folder row&nbsp;</span><span>resumes the repo-root terminal when it has live tabs, otherwise opens the Overview. The repo name in the terminal header is a breadcrumb back to the Overview — its only entry once the row resumes the terminal.</span></div>
+</div>
+
+<script>
+const state = { repoLive: true, sel: 'ws:brisk-sparrow' };
+
+// ---- model ----
+const scopes = {
+  'home': {
+    kind: 'terminal', title: '~/code', badge: 'scope: Home',
+    cwd: '~/code',
+    tabs: [{ico:'❯_', name:'code'}],
+  },
+  'repo:workspaces': {
+    kind: 'terminal', title: 'workspaces', badge: 'scope: Repository · workspaces',
+    cwd: '~/code/workspaces', crumb: true,
+    tabs: [{ico:'❯_', name:'main'}, {ico:'⚙', name:'build'}, {ico:'≣', name:'logs'}],
+  },
+  'overview:workspaces': { kind: 'overview' },
+  'ws:brisk-sparrow': {
+    kind: 'terminal', title: 'brisk-sparrow', badge: 'scope: Workspace · brisk-sparrow',
+    cwd: '~/workspaces/brisk-sparrow', branch: 'workspace/brisk-sparrow',
+    tabs: [{ico:'❯_', name:'zsh'}, {ico:'✦', name:'claude'}],
+  },
+  'ws:brisk-trail': {
+    kind: 'terminal', title: 'brisk-trail', badge: 'scope: Workspace · brisk-trail',
+    cwd: '~/workspaces/brisk-trail', branch: 'workspace/brisk-trail',
+    tabs: [{ico:'❯_', name:'zsh'}],
+  },
+  'ws:zesty-comet': {
+    kind: 'terminal', title: 'zesty-comet', badge: 'scope: Workspace · zesty-comet',
+    cwd: '~/workspaces/zesty-comet', branch: 'workspace/zesty-comet',
+    tabs: [{ico:'❯_', name:'zsh'}, {ico:'▶', name:'server'}],
+  },
+};
+const activeTab = { 'home':0, 'repo:workspaces':0, 'ws:brisk-sparrow':1, 'ws:brisk-trail':0, 'ws:zesty-comet':1 };
+
+// ---- sidebar ----
+function renderSidebar() {
+  const live = state.repoLive;
+  const rows = [];
+  rows.push(repoRow());
+  rows.push(`<div class="hint">${live
+    ? 'has live tabs → clicking resumes the root terminal'
+    : 'no live tabs → clicking opens the Overview'}</div>`);
+  rows.push(wsRow('spaces', '🌐', 'web', 'web:spaces', false));
+  rows.push(wsRow('brisk-sparrow', '❯_', 'ws:brisk-sparrow'));
+  rows.push(wsRow('brisk-trail', '❯_', 'ws:brisk-trail'));
+  rows.push(wsRow('zesty-comet', '❯_', 'ws:zesty-comet'));
+  // a couple of sibling repos for context
+  rows.push(plainRepo('keep'));
+  rows.push(plainRepo('dotclaude'));
+  rows.push(plainRepo('voxcode'));
+  document.getElementById('sidebar').innerHTML = rows.join('');
+}
+function repoRow() {
+  const live = state.repoLive;
+  const isSel = state.sel === 'repo:workspaces' || state.sel === 'overview:workspaces';
+  const cls = ['row']; if (isSel) cls.push('sel'); if (live) cls.push('live');
+  return `<div class="${cls.join(' ')}" onclick="clickRepo()">
+    <span class="disclosure">▾</span>
+    <span class="ico">📁</span>
+    <span class="name">workspaces</span>
+    ${live ? '<span class="live-dot"></span>' : ''}
+  </div>`;
+}
+function wsRow(name, ico, sel, isWeb) {
+  const k = sel.startsWith('ws') ? sel : sel;
+  const id = arguments.length >= 4 ? arguments[3] : sel; // handle web overload
+  const realSel = (typeof isWeb === 'string') ? isWeb : sel;
+  const selId = (sel === 'web') ? 'web:spaces' : sel;
+  // normalize
+  const target = (ico === '🌐') ? null : sel;
+  const active = state.sel === sel;
+  const cls = ['row','child']; if (active) cls.push('sel');
+  const onclick = target ? `onclick="select('${sel}')"` : '';
+  return `<div class="${cls.join(' ')}" ${onclick}>
+    <span class="ico">${ico}</span>
+    <span class="name">${name}</span>
+    ${(ico !== '🌐') ? '<span class="live-dot"></span>' : ''}
+  </div>`;
+}
+function plainRepo(name) {
+  return `<div class="row" style="opacity:.78"><span class="disclosure"></span><span class="ico">📁</span><span class="name">${name}</span></div>`;
+}
+
+// ---- interactions ----
+function clickRepo() {
+  state.sel = state.repoLive ? 'repo:workspaces' : 'overview:workspaces';
+  render();
+}
+function select(id) { state.sel = id; render(); }
+function gotoOverview() { state.sel = 'overview:workspaces'; render(); }
+function gotoRepoTerminal() { state.sel = 'repo:workspaces'; state.repoLive = true; syncToggle(); render(); }
+function toggleLive() {
+  state.repoLive = !state.repoLive;
+  if (!state.repoLive && state.sel === 'repo:workspaces') state.sel = 'overview:workspaces';
+  syncToggle(); render();
+}
+function syncToggle(){ document.getElementById('liveToggle').classList.toggle('on', state.repoLive); }
+function setTab(scopeId, i){ activeTab[scopeId] = i; render(); }
+
+// ---- main pane ----
+function renderMain() {
+  const id = state.sel;
+  const scope = scopes[id];
+  const main = document.getElementById('main');
+  if (!scope || scope.kind === 'overview') { main.innerHTML = overviewHTML(); return; }
+  main.innerHTML = terminalHTML(id, scope);
+}
+
+function terminalHTML(id, s) {
+  const ai = activeTab[id] ?? 0;
+  const tabs = s.tabs.map((t,i) =>
+    `<div class="tab ${i===ai?'active':''}" onclick="setTab('${id}',${i})">
+       <span class="tico">${t.ico}</span><span>${t.name}</span><span class="x">×</span>
+     </div>`).join('');
+  const header = s.crumb
+    ? `<div class="crumb"><span class="back" onclick="gotoOverview()">‹ workspaces</span><span class="sep">/</span><span>Terminal</span></div>`
+    : `<div class="crumb"><span>${s.title}</span></div>`;
+  const tabName = s.tabs[ai].name;
+  return `
+    <div class="main-head">
+      ${header}
+      <div class="spacer"></div>
+      <span class="scope-badge">${s.badge}</span>
+    </div>
+    <div class="tabbar">
+      ${tabs}
+      <span class="tab-new">＋</span>
+    </div>
+    <div class="term">
+      <div class="dim">Last login: Sat Jun  7 23:35 on ttys00${ai+1}</div>
+      <div style="height:8px"></div>
+      <div><span class="grn">${s.title}</span> <span class="cwd">${s.cwd}</span> <span class="dim">— ${tabName}</span></div>
+      <div>›&nbsp;<span class="cursor"></span></div>
+    </div>`;
+}
+
+function overviewHTML() {
+  return `
+    <div class="main-head"><div class="crumb"><span>workspaces</span></div></div>
+    <div class="overview">
+      <div class="ov-top">
+        <div class="ov-folder">📁</div>
+        <div>
+          <div class="ov-title">~/code/workspaces</div>
+          <div class="ov-sub">3 workspaces</div>
+        </div>
+        <div class="ov-actions">
+          <div class="ov-btn" onclick="gotoRepoTerminal()">❯_ Terminal</div>
+          <div class="ov-btn primary">＋ New Workspace</div>
+        </div>
+      </div>
+      <div class="ov-sec-h">Workspaces</div>
+      <div class="ov-grid">
+        ${wsCard('brisk-sparrow','workspace/brisk-…','ws:brisk-sparrow')}
+        ${wsCard('brisk-trail','workspace/brisk-tr…','ws:brisk-trail')}
+        ${wsCard('zesty-comet','workspace/zesty-c…','ws:zesty-comet')}
+        <div class="ws-card new"><div style="font-size:20px">＋</div><div>New Workspace</div></div>
+      </div>
+      <div class="ov-sec-h">Web Views</div>
+      <div class="ov-web"><span class="gl">🌐</span><div><div class="wt">spaces</div><div class="wu">spaces.cloudcompute.com</div></div></div>
+    </div>`;
+}
+function wsCard(name, branch, sel) {
+  return `<div class="ws-card" onclick="select('${sel}')">
+    <div class="ws-name">${name} <span class="ws-active">Active</span></div>
+    <div class="ws-branch">⑂ ${branch}</div>
+  </div>`;
+}
+
+function render(){ renderSidebar(); renderMain(); }
+// optional deep-link for screenshots: #repo, #overview, #home, #ws:zesty-comet
+if (location.hash) {
+  const h = location.hash.slice(1);
+  if (h === 'repo') { state.sel = 'repo:workspaces'; }
+  else if (h === 'overview') { state.sel = 'overview:workspaces'; }
+  else if (h === 'home') { state.sel = 'home'; }
+  else if (scopes[h]) { state.sel = h; }
+}
+render();
+</script>
+</body>
+</html>
