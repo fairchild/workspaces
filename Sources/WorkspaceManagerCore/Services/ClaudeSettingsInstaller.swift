@@ -196,12 +196,15 @@ public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
         var hooks = (current["hooks"]?.value as? [String: Any]) ?? [:]
 
         if let eventForwarderScriptPath {
-            let eventForwarder = CommandContribution(rawPath: eventForwarderScriptPath)
+            let eventForwarder = CommandContribution(
+                rawPath: homeRelativeCommand(eventForwarderScriptPath)
+            )
             var addedEvents: [String] = []
             var normalizedEvents: [String] = []
             var scrubbedLegacyEvents: [String] = []
             var scrubbedTitleEvents: [String] = []
             var scrubbedUnescapedForwarderEvents: [String] = []
+            var scrubbedLegacyForwarderEvents: [String] = []
 
             for name in Self.hookEventNames {
                 let rawEntries = (hooks[name] as? [Any]) ?? []
@@ -227,6 +230,14 @@ public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
                 groups = unescapedForwarderResult.groups
                 if unescapedForwarderResult.removedCount > 0 {
                     scrubbedUnescapedForwarderEvents.append(name)
+                }
+
+                let legacyForwarderResult = scrubHandlers(in: groups) { handler in
+                    isLegacyWorkspacesEventForwarderHook(handler, contribution: eventForwarder)
+                }
+                groups = legacyForwarderResult.groups
+                if legacyForwarderResult.removedCount > 0 {
+                    scrubbedLegacyForwarderEvents.append(name)
                 }
 
                 let eventForwarderPresent = groups.contains { group in
@@ -268,6 +279,11 @@ public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
                     "replace unescaped WorkSpaces event-forwarder command in \(scrubbedUnescapedForwarderEvents.count) events"
                 )
             }
+            if !scrubbedLegacyForwarderEvents.isEmpty {
+                lines.append(
+                    "replace machine-specific WorkSpaces event-forwarder path in \(scrubbedLegacyForwarderEvents.count) events"
+                )
+            }
             if !normalizedEvents.isEmpty {
                 lines.append(
                     "normalize legacy hook group shape for \(normalizedEvents.joined(separator: ", "))"
@@ -282,7 +298,9 @@ public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
         }
 
         if let statusLineForwarderPath {
-            let statusLineCommand = CommandContribution(rawPath: statusLineForwarderPath).command
+            let statusLineCommand = CommandContribution(
+                rawPath: homeRelativeCommand(statusLineForwarderPath)
+            ).command
             var block = (current["statusLine"]?.value as? [String: Any]) ?? [:]
             let oldCommand = block["command"] as? String
             let oldInterval = block["refreshInterval"] as? Int
@@ -426,6 +444,47 @@ public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
         return command == contribution.rawPath
     }
 
+    /// Recognizes a stale, machine-specific WorkSpaces event-forwarder command —
+    /// any prior shape extracted to a `HookForwarders/` directory (an
+    /// `Application Support` path, a `.build` bundle path, quoted or unquoted) —
+    /// so it can be replaced with the canonical machine-agnostic tilde command.
+    /// The canonical command is excluded so an already-installed entry is kept.
+    private func isLegacyWorkspacesEventForwarderHook(
+        _ handler: [String: Any],
+        contribution: CommandContribution
+    ) -> Bool {
+        guard (handler["type"] as? String) == "command" else { return false }
+        guard let command = handler["command"] as? String else { return false }
+        guard command != contribution.command else { return false }
+        let unquoted = unquoteSingleQuotedCommand(command)
+        return unquoted.hasSuffix("/HookForwarders/event-forwarder.sh")
+    }
+
+    /// Strip a single layer of POSIX single quotes (and `'\''` escapes) so a
+    /// quoted command path can be suffix-matched. Returns the input unchanged when
+    /// it is not single-quoted.
+    private func unquoteSingleQuotedCommand(_ command: String) -> String {
+        guard command.count >= 2, command.hasPrefix("'"), command.hasSuffix("'") else {
+            return command
+        }
+        let inner = command.dropFirst().dropLast()
+        return inner.replacingOccurrences(of: "'\\''", with: "'")
+    }
+
+    /// Rewrite an absolute path under the installer's home directory to a
+    /// `~/...` tilde path so the command written to `settings.json` is identical
+    /// on every machine. Tilde expansion is not subject to field splitting, so the
+    /// result stays unquoted even when the home directory contains a space. Paths
+    /// outside the home directory are returned unchanged.
+    private func homeRelativeCommand(_ absolutePath: String) -> String {
+        let home = homeDirectory.standardizedFileURL.path
+        let normalizedHome = home.hasSuffix("/") ? String(home.dropLast()) : home
+        if absolutePath == normalizedHome { return "~" }
+        let prefix = normalizedHome + "/"
+        guard absolutePath.hasPrefix(prefix) else { return absolutePath }
+        return "~/" + absolutePath.dropFirst(prefix.count)
+    }
+
     private struct CommandContribution {
         let rawPath: String
         let command: String
@@ -437,8 +496,13 @@ public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
     }
 
     private static func shellEscapedCommand(_ raw: String) -> String {
+        // `~` is in the safe set so a clean home-relative path
+        // (`~/.local/share/workspaces/hook-forwarders/event-forwarder.sh`) stays
+        // unquoted — quoting would defeat tilde expansion. A tilde path that also
+        // contains a space or other unsafe scalar still falls through to quoting;
+        // it cannot occur for the controlled extraction dir, but the guard holds.
         let safeScalars = CharacterSet(
-            charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_@%+=:,./-"
+            charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_@%+=:,./-~"
         )
         if raw.unicodeScalars.allSatisfy({ safeScalars.contains($0) }) {
             return raw

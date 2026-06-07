@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- Write machine-agnostic Claude Code hook and status-line commands: both forwarders extract to a stable, space-free dir (`~/.local/share/workspaces/hook-forwarders/`) and `settings.json` carries a tilde-relative, unquoted path identical on every machine. This keeps the committed dotclaude config matching runtime so `~/.claude` stops going dirty and the auto-deploy no longer silently skips. Opted-in users migrate off the older `Application Support` / `.build` bundle paths on next launch. See `docs/decisions/hook-forwarder-command-shape.md`.
+
 ## [0.17.0] - 2026-06-05
 
 ### Added
