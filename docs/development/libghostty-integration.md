@@ -146,8 +146,12 @@ Contract:
 - **Catalog**: themes are enumerated at runtime from `<resources>/ghostty/themes/`
   via `GhosttyResourcesLocator.resolvedResourcesDirectory()` — each filename *is*
   the `theme =` value. `GhosttyThemeCatalog` exposes `all`, `featured`, and fuzzy
-  `rank`. In a dev build this needs `GHOSTTY_RESOURCES_DIR` pointed at a Ghostty
-  share dir (release bundles the resources); without it the catalog is empty.
+  `rank`. Release bundles the resources; dev builds do not, so the catalog is
+  empty unless `GHOSTTY_RESOURCES_DIR` points at a Ghostty share dir.
+  `launch-dev.sh` auto-resolves one from the pinned checkout
+  (`~/.cache/workspacemanager/ghostty/zig-out/share/ghostty`), so a plain
+  `./scripts/launch-dev.sh` shows themes; a direct-binary launch still needs the
+  env var set by hand.
 - **Startup**: `initializeIfNeeded()` builds the initial `ghostty_config_t` from
   the persisted pair (`GhosttyThemePersistence`, `UserDefaults`). With no
   selection it stays a bare default; with a selection it writes the file and

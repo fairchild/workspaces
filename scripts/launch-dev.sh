@@ -348,6 +348,36 @@ configure_launch_behavior() {
     fi
 }
 
+# Dev builds don't bundle Ghostty's themes/terminfo (only release does), so the
+# in-app GhosttyResourcesLocator finds nothing unless GHOSTTY_RESOURCES_DIR
+# points at a Ghostty share dir. Resolve one from the pinned checkout so the
+# theme catalog + terminfo work in dev without an explicit flag. Mirrors
+# build-release.sh's share-dir resolution; honors a user-provided value.
+configure_ghostty_resources() {
+    # Respect an explicit --env override or an inherited value.
+    local entry
+    for entry in "${ENV_VARS[@]}"; do
+        [[ "$entry" == GHOSTTY_RESOURCES_DIR=* ]] && return
+    done
+    [[ -n "${GHOSTTY_RESOURCES_DIR:-}" ]] && return
+
+    local -a share_candidates=()
+    [[ -n "${GHOSTTY_SHARE_DIR:-}" ]] && share_candidates+=("$(expand_home_prefix "$GHOSTTY_SHARE_DIR")")
+    [[ -n "${GHOSTTY_DIR:-}" ]] && share_candidates+=("$(expand_home_prefix "$GHOSTTY_DIR")/zig-out/share")
+    share_candidates+=("$HOME/.cache/workspacemanager/ghostty/zig-out/share")
+
+    local share
+    for share in "${share_candidates[@]}"; do
+        if [[ -d "$share/ghostty/themes" && -f "$share/terminfo/78/xterm-ghostty" ]]; then
+            ENV_VARS+=("GHOSTTY_RESOURCES_DIR=$share/ghostty")
+            log "Using Ghostty resources: $share/ghostty"
+            return
+        fi
+    done
+
+    log "Ghostty resources dir not found; terminal themes/terminfo may be unavailable in this dev launch."
+}
+
 prepare_log_path() {
     mkdir -p "$LOG_DIR"
     LOG_PATH="$LOG_DIR/launch-dev-$(date +%Y%m%d-%H%M%S).log"
@@ -575,6 +605,7 @@ main() {
     configure_data_root
     configure_fixture_mode
     configure_launch_behavior
+    configure_ghostty_resources
     prepare_log_path
     print_launch_plan
 
