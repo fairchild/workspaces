@@ -48,6 +48,59 @@ public enum HostTerminalSessionKey: Hashable, Sendable, CustomDebugStringConvert
     }
 }
 
+extension HostTerminalSessionKey: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case path
+        case providerID
+        case instanceID
+    }
+
+    private enum Kind: String, Codable {
+        case defaultHome
+        case repoPath
+        case hostPath
+        case backendSession
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let kind = try container.decode(Kind.self, forKey: .kind)
+
+        switch kind {
+        case .defaultHome:
+            self = .defaultHome
+        case .repoPath:
+            self = .repoPath(try container.decode(String.self, forKey: .path))
+        case .hostPath:
+            self = .hostPath(try container.decode(String.self, forKey: .path))
+        case .backendSession:
+            self = .backendSession(
+                providerID: try container.decode(String.self, forKey: .providerID),
+                instanceID: try container.decode(String.self, forKey: .instanceID)
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .defaultHome:
+            try container.encode(Kind.defaultHome, forKey: .kind)
+        case .repoPath(let path):
+            try container.encode(Kind.repoPath, forKey: .kind)
+            try container.encode(path, forKey: .path)
+        case .hostPath(let path):
+            try container.encode(Kind.hostPath, forKey: .kind)
+            try container.encode(path, forKey: .path)
+        case .backendSession(let providerID, let instanceID):
+            try container.encode(Kind.backendSession, forKey: .kind)
+            try container.encode(providerID, forKey: .providerID)
+            try container.encode(instanceID, forKey: .instanceID)
+        }
+    }
+}
+
 public struct HostTerminalSession: Identifiable, Hashable, Sendable {
     public let id: UUID
     public let key: HostTerminalSessionKey
@@ -103,13 +156,47 @@ public struct HostTerminalSessionPresentation: Sendable, Equatable {
 public struct HostTerminalSessionCoordinator: Sendable {
     public private(set) var sessions: [HostTerminalSession]
     public private(set) var activeSessionID: UUID?
+    public private(set) var activeSessionIDByScopeKey: [HostTerminalSessionKey: UUID]
 
     public init(
         sessions: [HostTerminalSession] = [],
-        activeSessionID: UUID? = nil
+        activeSessionID: UUID? = nil,
+        activeSessionIDByScopeKey: [HostTerminalSessionKey: UUID] = [:]
     ) {
         self.sessions = sessions
-        self.activeSessionID = activeSessionID
+        self.activeSessionID = nil
+        self.activeSessionIDByScopeKey = [:]
+
+        let validSessionIDs = Set(sessions.map(\.id))
+        for (scopeKey, sessionID) in activeSessionIDByScopeKey
+        where validSessionIDs.contains(sessionID)
+            && sessions.contains(where: { $0.id == sessionID && $0.key == scopeKey.normalized() })
+        {
+            self.activeSessionIDByScopeKey[scopeKey.normalized()] = sessionID
+        }
+
+        let restoredScopeKeys = Set(self.activeSessionIDByScopeKey.keys)
+        for session in sessions where !restoredScopeKeys.contains(session.key) {
+            self.activeSessionIDByScopeKey[session.key] = session.id
+        }
+
+        if let activeSessionID, validSessionIDs.contains(activeSessionID) {
+            setActiveSessionID(activeSessionID)
+        } else {
+            self.activeSessionID = sessions.last?.id
+            if let activeSessionID = self.activeSessionID {
+                setActiveSessionID(activeSessionID)
+            }
+        }
+    }
+
+    public var activeScopeKey: HostTerminalSessionKey? {
+        activeSessionID.flatMap(session(withID:))?.key
+    }
+
+    public func sessions(inScope scopeKey: HostTerminalSessionKey?) -> [HostTerminalSession] {
+        guard let normalizedScopeKey = scopeKey?.normalized() else { return [] }
+        return sessions.filter { $0.key == normalizedScopeKey }
     }
 
     @discardableResult
@@ -122,8 +209,13 @@ public struct HostTerminalSessionCoordinator: Sendable {
         let normalizedPath = normalizedDirectory.path
         let normalizedKey = key.normalized()
 
+        if let activeScopeSession = activeSessionIDByScopeKey[normalizedKey].flatMap(session(withID:)) {
+            setActiveSessionID(activeScopeSession.id)
+            return HostTerminalSessionActivationResult(session: activeScopeSession, created: false)
+        }
+
         if let existing = sessions.first(where: { $0.key == normalizedKey }) {
-            activeSessionID = existing.id
+            setActiveSessionID(existing.id)
             return HostTerminalSessionActivationResult(session: existing, created: false)
         }
 
@@ -132,7 +224,7 @@ public struct HostTerminalSessionCoordinator: Sendable {
                 shouldReuseByDirectoryPath(for: $0.key) && $0.directoryPath == normalizedPath
             })
         {
-            activeSessionID = existing.id
+            setActiveSessionID(existing.id)
             return HostTerminalSessionActivationResult(session: existing, created: false)
         }
 
@@ -142,8 +234,15 @@ public struct HostTerminalSessionCoordinator: Sendable {
             customCommand: customCommand
         )
         sessions.append(session)
-        activeSessionID = session.id
+        setActiveSessionID(session.id)
         return HostTerminalSessionActivationResult(session: session, created: true)
+    }
+
+    @discardableResult
+    public mutating func activate(sessionID: UUID) -> HostTerminalSession? {
+        guard let session = session(withID: sessionID) else { return nil }
+        setActiveSessionID(session.id)
+        return session
     }
 
     @discardableResult
@@ -154,53 +253,71 @@ public struct HostTerminalSessionCoordinator: Sendable {
             customCommand: source.customCommand
         )
         sessions.append(session)
-        activeSessionID = session.id
+        setActiveSessionID(session.id)
         return session
     }
 
     @discardableResult
     public mutating func activateAdjacent(to sessionID: UUID, offset: Int) -> HostTerminalSession? {
-        guard !sessions.isEmpty,
-            let currentIndex = sessions.firstIndex(where: { $0.id == sessionID })
+        guard let currentSession = session(withID: sessionID) else {
+            return nil
+        }
+
+        let scopedSessions = sessions(inScope: currentSession.key)
+        guard !scopedSessions.isEmpty,
+            let currentIndex = scopedSessions.firstIndex(where: { $0.id == sessionID })
         else {
             return nil
         }
 
-        let nextIndex = wrappedIndex(currentIndex + offset, count: sessions.count)
-        let session = sessions[nextIndex]
-        activeSessionID = session.id
+        let nextIndex = wrappedIndex(currentIndex + offset, count: scopedSessions.count)
+        let session = scopedSessions[nextIndex]
+        setActiveSessionID(session.id)
         return session
     }
 
     @discardableResult
     public mutating func activateTab(atOneBasedIndex index: Int) -> HostTerminalSession? {
-        guard !sessions.isEmpty else { return nil }
-        let clampedIndex = min(max(index - 1, 0), sessions.count - 1)
-        let session = sessions[clampedIndex]
-        activeSessionID = session.id
+        let scopedSessions = sessions(inScope: activeScopeKey)
+        guard !scopedSessions.isEmpty else { return nil }
+        let clampedIndex = min(max(index - 1, 0), scopedSessions.count - 1)
+        let session = scopedSessions[clampedIndex]
+        setActiveSessionID(session.id)
         return session
     }
 
     @discardableResult
     public mutating func activateLastTab() -> HostTerminalSession? {
-        guard let session = sessions.last else { return nil }
-        activeSessionID = session.id
+        guard let session = sessions(inScope: activeScopeKey).last else { return nil }
+        setActiveSessionID(session.id)
         return session
     }
 
     @discardableResult
     public mutating func moveTab(sessionID: UUID, offset: Int) -> Bool {
-        guard sessions.count > 1,
+        guard let currentSession = session(withID: sessionID) else { return false }
+
+        let scopedIndices = sessions.indices.filter { sessions[$0].key == currentSession.key }
+        guard scopedIndices.count > 1,
             offset != 0,
-            let currentIndex = sessions.firstIndex(where: { $0.id == sessionID })
+            let currentGlobalIndex = sessions.firstIndex(where: { $0.id == sessionID }),
+            let currentScopedIndex = scopedIndices.firstIndex(of: currentGlobalIndex)
         else {
             return false
         }
 
-        let session = sessions.remove(at: currentIndex)
-        let nextIndex = wrappedIndex(currentIndex + offset, count: sessions.count + 1)
-        sessions.insert(session, at: nextIndex)
-        activeSessionID = session.id
+        let nextScopedIndex = wrappedIndex(currentScopedIndex + offset, count: scopedIndices.count)
+        let session = sessions.remove(at: currentGlobalIndex)
+        let remainingScopeIndices = sessions.indices.filter { sessions[$0].key == currentSession.key }
+        let insertionIndex: Int
+        if nextScopedIndex >= remainingScopeIndices.count {
+            insertionIndex = remainingScopeIndices.last.map { sessions.index(after: $0) } ?? sessions.endIndex
+        } else {
+            insertionIndex = remainingScopeIndices[nextScopedIndex]
+        }
+
+        sessions.insert(session, at: insertionIndex)
+        setActiveSessionID(session.id)
         return true
     }
 
@@ -239,7 +356,11 @@ public struct HostTerminalSessionCoordinator: Sendable {
         sessions.removeAll { removedSet.contains($0.id) }
 
         if let activeSessionID, removedSet.contains(activeSessionID) {
-            self.activeSessionID = sessions.last?.id
+            setActiveSessionID(sessions.last?.id)
+        }
+
+        for sessionID in removedIDs {
+            removeActiveScopeReference(for: sessionID)
         }
 
         return removedIDs
@@ -253,8 +374,10 @@ public struct HostTerminalSessionCoordinator: Sendable {
 
         let removed = sessions.remove(at: index)
         if activeSessionID == sessionID {
-            activeSessionID = sessions.last?.id
+            let sameScopeFallback = sessions.last(where: { $0.key == removed.key })
+            setActiveSessionID(sameScopeFallback?.id ?? sessions.last?.id)
         }
+        removeActiveScopeReference(for: sessionID, removedScopeKey: removed.key)
 
         return removed
     }
@@ -287,5 +410,38 @@ public struct HostTerminalSessionCoordinator: Sendable {
             hasDefaultHomeSession: hasDefaultHomeSession,
             isDefaultHomeSessionActive: isDefaultHomeSessionActive
         )
+    }
+
+    private func session(withID sessionID: UUID) -> HostTerminalSession? {
+        sessions.first(where: { $0.id == sessionID })
+    }
+
+    private mutating func setActiveSessionID(_ sessionID: UUID?) {
+        activeSessionID = sessionID
+        guard let sessionID, let session = session(withID: sessionID) else { return }
+        activeSessionIDByScopeKey[session.key] = sessionID
+    }
+
+    private mutating func removeActiveScopeReference(
+        for sessionID: UUID,
+        removedScopeKey: HostTerminalSessionKey? = nil
+    ) {
+        let affectedScopeKeys = activeSessionIDByScopeKey.compactMap { scopeKey, activeSessionID in
+            activeSessionID == sessionID ? scopeKey : nil
+        }
+
+        for scopeKey in affectedScopeKeys {
+            activeSessionIDByScopeKey.removeValue(forKey: scopeKey)
+            if let fallbackSession = sessions.last(where: { $0.key == scopeKey }) {
+                activeSessionIDByScopeKey[scopeKey] = fallbackSession.id
+            }
+        }
+
+        if let removedScopeKey,
+            activeSessionIDByScopeKey[removedScopeKey] == nil,
+            let fallbackSession = sessions.last(where: { $0.key == removedScopeKey })
+        {
+            activeSessionIDByScopeKey[removedScopeKey] = fallbackSession.id
+        }
     }
 }

@@ -24,6 +24,7 @@ final class HostTerminalStateStore: ObservableObject {
     private static let splitResizeStep: CGFloat = 0.05
 
     @Published private(set) var sessions: [HostTerminalSession] = []
+    @Published private(set) var scopedSessions: [HostTerminalSession] = []
     @Published private(set) var activeSessionID: UUID?
     @Published private(set) var splitSessionsByPrimaryID: [UUID: HostTerminalSession] = [:]
     @Published private(set) var splitLayoutsByPrimaryID: [UUID: SplitPaneLayout] = [:]
@@ -83,6 +84,18 @@ final class HostTerminalStateStore: ObservableObject {
         !sessions.isEmpty
     }
 
+    var activeScopeKey: HostTerminalSessionKey? {
+        coordinator.activeScopeKey
+    }
+
+    var activeSessionIDByScopeKey: [HostTerminalSessionKey: UUID] {
+        coordinator.activeSessionIDByScopeKey
+    }
+
+    func sessions(inScope scopeKey: HostTerminalSessionKey?) -> [HostTerminalSession] {
+        coordinator.sessions(inScope: scopeKey)
+    }
+
     @discardableResult
     func activateSession(
         key: HostTerminalSessionKey,
@@ -96,13 +109,23 @@ final class HostTerminalStateStore: ObservableObject {
 
     @discardableResult
     func activateExistingSession(sessionID: UUID) -> Bool {
-        guard let session = coordinator.sessions.first(where: { $0.id == sessionID }) else {
-            return false
-        }
-
-        _ = coordinator.activate(key: session.key, directory: session.directoryURL)
+        guard coordinator.activate(sessionID: sessionID) != nil else { return false }
         publishSnapshot()
         return true
+    }
+
+    func restoreSessions(
+        _ sessions: [HostTerminalSession],
+        activeSessionID: UUID?,
+        activeSessionIDByScopeKey: [HostTerminalSessionKey: UUID]
+    ) {
+        guard !sessions.isEmpty else { return }
+        coordinator = HostTerminalSessionCoordinator(
+            sessions: sessions,
+            activeSessionID: activeSessionID,
+            activeSessionIDByScopeKey: activeSessionIDByScopeKey
+        )
+        publishSnapshot()
     }
 
     @discardableResult
@@ -156,8 +179,13 @@ final class HostTerminalStateStore: ObservableObject {
 
     func tabIDsForClose(mode: GhosttyAppManager.TabCloseMode, sourceSessionID: UUID?) -> [UUID] {
         guard let primarySessionID = resolvedPrimarySessionID(sourceSessionID),
-            let primaryIndex = coordinator.sessions.firstIndex(where: { $0.id == primarySessionID })
+            let primarySession = coordinator.sessions.first(where: { $0.id == primarySessionID })
         else {
+            return []
+        }
+
+        let scopedSessions = coordinator.sessions(inScope: primarySession.key)
+        guard let primaryIndex = scopedSessions.firstIndex(where: { $0.id == primarySessionID }) else {
             return []
         }
 
@@ -165,11 +193,11 @@ final class HostTerminalStateStore: ObservableObject {
         case .this:
             return [primarySessionID]
         case .other:
-            return coordinator.sessions.map(\.id).filter { $0 != primarySessionID }
+            return scopedSessions.map(\.id).filter { $0 != primarySessionID }
         case .right:
-            let rightStart = coordinator.sessions.index(after: primaryIndex)
-            guard rightStart < coordinator.sessions.endIndex else { return [] }
-            return coordinator.sessions[rightStart...].map(\.id)
+            let rightStart = scopedSessions.index(after: primaryIndex)
+            guard rightStart < scopedSessions.endIndex else { return [] }
+            return scopedSessions[rightStart...].map(\.id)
         }
     }
 
@@ -434,6 +462,7 @@ final class HostTerminalStateStore: ObservableObject {
 
     private func publishSnapshot() {
         sessions = coordinator.sessions
+        scopedSessions = coordinator.sessions(inScope: coordinator.activeScopeKey)
         activeSessionID = coordinator.activeSessionID
         sessionPresentation = coordinator.presentation
 
@@ -446,7 +475,10 @@ final class HostTerminalStateStore: ObservableObject {
         syncRegistry()
 
         for session in sessions {
-            recordTerminalSession(session, isActive: session.id == activeSessionID)
+            recordTerminalSession(
+                session,
+                isActive: coordinator.activeSessionIDByScopeKey[session.key] == session.id
+            )
         }
         for splitSession in splitSessionsByPrimaryID.values {
             recordTerminalSession(splitSession, isActive: false)
@@ -472,7 +504,10 @@ final class HostTerminalStateStore: ObservableObject {
                 kind: kind
             )
             registeredAgentSessionIDs.insert(session.id)
-            recordTerminalSession(session, isActive: session.id == activeSessionID)
+            recordTerminalSession(
+                session,
+                isActive: coordinator.activeSessionIDByScopeKey[session.key] == session.id
+            )
         }
 
         // Deregister sessions that have left the coordinator.

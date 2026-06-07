@@ -5,6 +5,7 @@
 
 import Foundation
 import Testing
+import WorkspaceManagerCore
 
 @testable import WorkspaceManager
 
@@ -115,6 +116,38 @@ struct TerminalContinuityManifestTests {
         )
 
         #expect(restored.path == root.path)
+    }
+
+    @Test("Host session snapshot restores tabs and active tab by scope")
+    func hostSessionSnapshotRestoresTabsByScope() throws {
+        let home = try temporaryDirectory()
+        let repo = try temporaryDirectory()
+        let homeSession = HostTerminalSession(key: .defaultHome, directory: home)
+        let repoSession = HostTerminalSession(key: .repoPath(repo.path), directory: repo)
+        let secondRepoSession = HostTerminalSession(key: .repoPath(repo.path), directory: repo)
+
+        let manifest = TerminalContinuityManifest(
+            targetKind: .repo,
+            targetID: UUID(),
+            rootURL: repo,
+            launchURL: repo,
+            terminalMode: .ghosttyManagedSplits,
+            sessions: [homeSession, repoSession, secondRepoSession],
+            activeSessionID: secondRepoSession.id,
+            activeSessionIDByScopeKey: [
+                .defaultHome: homeSession.id,
+                .repoPath(repo.path): secondRepoSession.id,
+            ],
+            updatedAt: Date(timeIntervalSince1970: 100)
+        )
+
+        let decoded = try #require(TerminalContinuityManifest.decode(from: manifest.rawValue))
+        let snapshot = try #require(decoded.hostSessionSnapshot())
+
+        #expect(snapshot.sessions.map(\.id) == [homeSession.id, repoSession.id, secondRepoSession.id])
+        #expect(snapshot.activeSessionID == secondRepoSession.id)
+        #expect(snapshot.activeSessionIDByScopeKey[.defaultHome] == homeSession.id)
+        #expect(snapshot.activeSessionIDByScopeKey[.repoPath(repo.path)] == secondRepoSession.id)
     }
 
     private func temporaryDirectory() throws -> URL {

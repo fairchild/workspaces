@@ -43,10 +43,11 @@ struct MainWindowTerminalSessionControllerTests {
             key: .defaultHome,
             directory: URL(fileURLWithPath: "/Users/test")
         )
-        let workspaceSession = store.activateSession(
+        let firstWorkspaceSession = store.activateSession(
             key: .hostPath(fixture.workspace.path),
             directory: fixture.workspace.workspaceURL
         ).session
+        let secondWorkspaceSession = try #require(store.createTab())
 
         let result = try #require(
             controller.selectAdjacentTab(
@@ -57,18 +58,18 @@ struct MainWindowTerminalSessionControllerTests {
             )
         )
 
-        #expect(result.focusSessionID != workspaceSession.id)
-        #expect(result.syncedWorkspace == nil)
+        #expect(result.focusSessionID == firstWorkspaceSession.id)
+        #expect(result.syncedWorkspace?.id == fixture.workspace.id)
 
         let workspaceResult = try #require(
             controller.selectTab(
-                sessionID: workspaceSession.id,
+                sessionID: secondWorkspaceSession.id,
                 hostTerminalState: store,
                 repos: [fixture.repo],
                 normalizePath: normalizePath
             )
         )
-        #expect(workspaceResult.focusSessionID == workspaceSession.id)
+        #expect(workspaceResult.focusSessionID == secondWorkspaceSession.id)
         #expect(workspaceResult.syncedWorkspace?.id == fixture.workspace.id)
     }
 

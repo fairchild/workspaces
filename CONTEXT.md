@@ -17,8 +17,12 @@ An isolated working copy or provider-backed environment created from a repositor
 _Avoid_: Session, tab, branch
 
 **Terminal Session**:
-A resumable terminal context attached to a repository or workspace.
+A resumable terminal context attached to Home, a repository, or a workspace.
 _Avoid_: Shell, pane, console
+
+**Terminal Scope**:
+The owner of a single tab collection — exactly one of Home, a Repository, or a Workspace.
+_Avoid_: Tab group, session group, context
 
 **Surface**:
 The currently selected main content target, such as a repo overview, repository terminal, workspace terminal, or web view.
@@ -70,7 +74,9 @@ _Avoid_: Notifications, alerts, warnings, tasks
 - A **Repository** owns zero or more repo-scoped **Web Sources**.
 - A **Workspace** belongs to exactly one **Repository**.
 - A **Workspace** owns zero or more workspace-scoped **Web Sources**.
-- A **Terminal Session** attaches to either a **Repository** or a **Workspace**.
+- A **Terminal Session** belongs to exactly one **Terminal Scope**: Home, a **Repository**, or a **Workspace**.
+- A **Terminal Scope** owns an ordered collection of **Terminal Sessions** and one active tab.
+- **Home** is the app-level **Terminal Scope** rooted at `~/code`, owned by neither a **Repository** nor a **Workspace**.
 - A **Surface** is one selected **Repo Overview**, repository **Terminal Session**, workspace **Terminal Session**, or **Web Source**.
 - The **Detail Pane** follows the selected **Surface** when that surface has repository or workspace context.
 - An **Agent** runs inside a **Terminal Session** and emits **Workspace Events** that the **Workspace Journal** persists.

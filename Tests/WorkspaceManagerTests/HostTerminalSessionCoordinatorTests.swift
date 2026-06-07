@@ -230,6 +230,63 @@ struct HostTerminalSessionCoordinatorTests {
         #expect(coordinator.activeSessionID == workspaceSession.id)
     }
 
+    @Test("Scope activation restores the last active tab for that scope")
+    func scopeActivationRestoresLastActiveTab() throws {
+        var coordinator = HostTerminalSessionCoordinator()
+        let homeURL = URL(fileURLWithPath: "/Users/test/code")
+        let repoURL = URL(fileURLWithPath: "/Users/test/code/repo-a")
+
+        let home = coordinator.activate(key: .defaultHome, directory: homeURL).session
+        let secondHomeTab = coordinator.createTab(from: home)
+        let repo = coordinator.activate(key: .repoPath(repoURL.path), directory: repoURL).session
+        let secondRepoTab = coordinator.createTab(from: repo)
+
+        _ = coordinator.activate(key: .defaultHome, directory: homeURL)
+        #expect(coordinator.activeSessionID == secondHomeTab.id)
+
+        let restoredRepo = coordinator.activate(key: .repoPath(repoURL.path), directory: repoURL)
+        #expect(!restoredRepo.created)
+        #expect(restoredRepo.session.id == secondRepoTab.id)
+        #expect(coordinator.activeSessionID == secondRepoTab.id)
+    }
+
+    @Test("Tab navigation stays within the active scope")
+    func tabNavigationStaysWithinActiveScope() throws {
+        var coordinator = HostTerminalSessionCoordinator()
+        let homeURL = URL(fileURLWithPath: "/Users/test/code")
+        let repoURL = URL(fileURLWithPath: "/Users/test/code/repo-a")
+
+        let home = coordinator.activate(key: .defaultHome, directory: homeURL).session
+        let secondHomeTab = coordinator.createTab(from: home)
+        let repo = coordinator.activate(key: .repoPath(repoURL.path), directory: repoURL).session
+        let secondRepoTab = coordinator.createTab(from: repo)
+
+        #expect(coordinator.activateAdjacent(to: secondRepoTab.id, offset: 1)?.id == repo.id)
+        #expect(coordinator.activateAdjacent(to: repo.id, offset: -1)?.id == secondRepoTab.id)
+        #expect(coordinator.activateTab(atOneBasedIndex: 1)?.id == repo.id)
+        #expect(coordinator.activateLastTab()?.id == secondRepoTab.id)
+
+        _ = coordinator.activate(key: .defaultHome, directory: homeURL)
+        #expect(coordinator.activateAdjacent(to: secondHomeTab.id, offset: 1)?.id == home.id)
+    }
+
+    @Test("Moving tabs reorders only the source scope")
+    func movingTabsReordersOnlySourceScope() throws {
+        var coordinator = HostTerminalSessionCoordinator()
+        let homeURL = URL(fileURLWithPath: "/Users/test/code")
+        let repoURL = URL(fileURLWithPath: "/Users/test/code/repo-a")
+
+        let home = coordinator.activate(key: .defaultHome, directory: homeURL).session
+        let secondHomeTab = coordinator.createTab(from: home)
+        let repo = coordinator.activate(key: .repoPath(repoURL.path), directory: repoURL).session
+        let secondRepoTab = coordinator.createTab(from: repo)
+
+        let didMoveRepoTab = coordinator.moveTab(sessionID: secondRepoTab.id, offset: -1)
+        #expect(didMoveRepoTab)
+        #expect(coordinator.sessions(inScope: .repoPath(repoURL.path)).map(\.id) == [secondRepoTab.id, repo.id])
+        #expect(coordinator.sessions(inScope: .defaultHome).map(\.id) == [home.id, secondHomeTab.id])
+    }
+
     @Test("Canonical-path-equivalent selections do not duplicate sessions")
     func canonicalEquivalentSelectionsDoNotDuplicateSessions() throws {
         var coordinator = HostTerminalSessionCoordinator()
