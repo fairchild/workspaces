@@ -1,3 +1,9 @@
+/**
+ * Persistence for `base_snapshots` — the provider base-image snapshot id for each
+ * (provider, version), so a new sandbox restores a prepared base instead of
+ * rebuilding it.
+ */
+
 import { getDb } from "./db";
 import { ensureSchema } from "./schema";
 

@@ -1,3 +1,9 @@
+/**
+ * Persistence for `user_repos` — the per-user allow-list of selected repos. Backs
+ * `isRepoOwnedByUser`, the gate every repo-scoped API route authorizes against.
+ * Queries run as raw libsql (`getTurso`); the table's DDL lives in the baseline migration.
+ */
+
 import { getTurso } from "./db";
 import { ensureSchema } from "./schema";
 import type { SelectedRepo } from "./types";

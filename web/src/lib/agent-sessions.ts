@@ -1,3 +1,9 @@
+/**
+ * Persistence for `agent_sessions` — the per-(user, repo, agent, thread) compute
+ * sessions behind agent chat and terminals. Tracks lifecycle status and the
+ * snapshot/restore claim used to resume a session.
+ */
+
 import { getDb } from "./db";
 import { ensureSchema } from "./schema";
 import type {

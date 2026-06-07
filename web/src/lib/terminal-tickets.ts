@@ -1,3 +1,10 @@
+/**
+ * Single-use, short-TTL terminal access tickets (`terminal_access_tickets`): issued
+ * per request and redeemed exactly once, scoped to a user + session, so a client can
+ * authorize a ttyd connection without carrying a long-lived credential. Queries run
+ * as raw libsql (`getTurso`); the table's DDL lives in the baseline migration.
+ */
+
 import crypto from "node:crypto";
 import { getTurso } from "./db";
 import { ensureSchema } from "./schema";

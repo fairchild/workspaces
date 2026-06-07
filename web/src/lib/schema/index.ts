@@ -1,3 +1,9 @@
+/**
+ * The schema runner. Applies the migrations defined in ./migrations to the database
+ * and records which have run. `ensureSchema()` is the entry point every persistence
+ * query awaits before its first database access.
+ */
+
 import { getDb, getTurso } from "../db";
 import { MIGRATIONS } from "./migrations";
 

@@ -1,3 +1,10 @@
+/**
+ * Persistence and lifecycle for managed PR review runs and their GitHub projection
+ * ledger (`managed_pr_review_runs`, `managed_pr_review_projections`): the run state
+ * machine, coalescing of redundant triggers, failure classification, and the
+ * broker/monitor queries. Consumed by pr-review.ts and the reviewer webhook routes.
+ */
+
 import { createHash } from "node:crypto";
 import { getDb } from "../db";
 import { ensureSchema, resetSchemaForTests } from "../schema";

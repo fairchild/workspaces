@@ -58,6 +58,9 @@ untouched: `pr-review.ts`, `app/api/webhooks/github/pr-reviewer-monitor/route.ts
 - **`index.ts`** (barrel) — `export * from "./domain"; export * from "./store"; export * from "./lifecycle";`
   and re-export `__resetPrReviewRunsForTests` (it currently delegates to `resetSchemaForTests()`).
 
+Give each of `domain.ts`, `store.ts`, `lifecycle.ts` a short (2–4 line) top-of-file doc
+block stating what it is and why, present-tense.
+
 ## Guidance / gotchas
 
 - **Keep each function whole** — don't split one function across modules. The store/lifecycle

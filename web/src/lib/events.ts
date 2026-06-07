@@ -1,3 +1,9 @@
+/**
+ * Persistence for `webhook_events` — the GitHub webhook activity stream behind the
+ * dashboard's event feed and stats card. Stores incoming events and serves the
+ * repo-scoped, time-ordered reads the poll endpoints hit.
+ */
+
 import { getDb } from "./db";
 import { ensureSchema } from "./schema";
 import type { WebhookEvent, WebhookEventType } from "./types";

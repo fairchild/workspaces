@@ -1,3 +1,8 @@
+/**
+ * Persistence for `workspaces` — the workspace list mirrored from the desktop app
+ * via sync, scoped per owner, plus the Markdown status-card formatter.
+ */
+
 import { getDb } from "./db";
 import { ensureSchema } from "./schema";
 import { formatRelativeTime } from "./timeline-utils";

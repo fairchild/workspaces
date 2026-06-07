@@ -1,3 +1,9 @@
+/**
+ * Persistence for `chat_messages` — dispatch and agent chat history, plus
+ * `getMixedTimeline`, which merges chat messages with webhook events into one
+ * time-ordered feed for the dashboard.
+ */
+
 import { getDb } from "./db";
 import { ensureSchema } from "./schema";
 import type {
