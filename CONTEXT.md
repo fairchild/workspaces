@@ -56,6 +56,14 @@ _Avoid_: Log, history, activity feed, audit trail
 The last shell command observed in a **Terminal Session** — its exit code, duration, and whether it is still running. Sourced from OSC 133 prompt marks or an equivalent shell hook.
 _Avoid_: Exit status, shell result, return code
 
+**Terminal Theme**:
+The color scheme applied to **Terminal Sessions**, expressed as a light/dark pair of named Ghostty themes. The active half follows the macOS appearance.
+_Avoid_: Color scheme (ambiguous with macOS appearance), palette, skin
+
+**Command Palette**:
+WorkSpaces' own keyboard-driven command/finder overlay — the Cmd+P switcher and the Cmd+Shift+P command runner. Distinct from Ghostty's native palette, which WorkSpaces does not render.
+_Avoid_: Quick open, launcher, Ghostty palette
+
 **Diff**:
 A unified `git diff` for a single file in a **Workspace**, structured as hunks of context / added / removed lines. The Changes tab of the **Detail Pane** renders it inline.
 _Avoid_: Patch, changeset, edit

@@ -13,6 +13,7 @@ struct SettingsView: View {
     @Environment(\.lumeRuntimeService) private var lumeRuntimeService
     @Environment(\.claudeSettingsInstaller) private var claudeSettingsInstaller
     @EnvironmentObject private var modelStoreStatusController: ModelStoreStatusController
+    @ObservedObject private var terminalThemeStore = GhosttyThemeStore.shared
 
     @AppStorage("workspacesRoot") private var workspacesRootPath: String = ""
     @AppStorage(TerminalMultiplexingMode.storageKey)
@@ -240,6 +241,11 @@ struct SettingsView: View {
                     Text(terminalMultiplexingMode.summary)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+
+                    Divider()
+                        .padding(.vertical, 4)
+
+                    TerminalThemeSettingsSection(store: terminalThemeStore)
                 }
             } header: {
                 Text("Terminal")

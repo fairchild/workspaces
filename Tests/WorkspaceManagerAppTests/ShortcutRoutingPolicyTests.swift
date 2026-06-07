@@ -48,6 +48,17 @@ struct ShortcutRoutingPolicyTests {
         #expect(AppChromeShortcutCatalog.appOwnedDefaults.contains(.settings))
     }
 
+    @Test("Command runner (Cmd+Shift+P) is app-owned so it no longer falls through to Ghostty")
+    func commandRunnerRoutesToAppChrome() {
+        policy.clearOverrides()
+
+        let chord = AppChromeShortcut.commandRunner.chord
+        #expect(chord == ShortcutChord(key: "p", modifiers: [.command, .shift]))
+        #expect(chord != AppChromeShortcut.workspaceSwitcher.chord)
+        #expect(policy.route(for: chord) == .appChrome)
+        #expect(AppChromeShortcutCatalog.appOwnedDefaults.contains(.commandRunner))
+    }
+
     @Test("Non-reserved shortcuts route to Ghostty by default")
     func nonReservedShortcutsRouteToGhostty() {
         policy.clearOverrides()
