@@ -198,9 +198,11 @@ The public UI-facing protocol remains:
 - `mostRecentBackupPath()`
 - `userSettingsModificationDate()`
 
-`install()` compares the merged JSON bytes with the file on disk. If nothing
-changes, it skips both the write and backup creation. When it does write, it
-keeps at most five `*.workspaces-backup-*` files per settings file.
+`install()` compares the merged JSON semantically with the file on disk. If
+nothing changes, it skips both the write and backup creation, preserving the
+user's formatting. When it does write, backups go under
+`~/Library/Application Support/com.cloudcompute.workspaces/ClaudeSettingsBackups`
+and rotation keeps at most five `*.workspaces-backup-*` files per settings file.
 
 `ClaudeIntegrationLifecycle.start(registry:)` publishes the installer, starts the
 stable socket listener, and repairs settings only when the user has opted in and

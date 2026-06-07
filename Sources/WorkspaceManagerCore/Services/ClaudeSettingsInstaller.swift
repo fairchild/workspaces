@@ -25,6 +25,7 @@ public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
     /// Maximum number of `*.workspaces-backup-*` files to retain per settings file.
     /// Older backups beyond this count are deleted on each `install()` call.
     public static let maxBackupsPerFile: Int = 5
+    public static let defaultBundleIdentifier = "com.cloudcompute.workspaces"
 
     private enum Target: CaseIterable {
         case userSettingsJSON
@@ -50,6 +51,7 @@ public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
     private let eventForwarderScriptPath: String?
     private let statusLineForwarderPath: String?
     private let statusLineRefreshInterval: Int
+    private let backupDirectory: URL
     private let preferredNotifChannel = "iterm2"
     private var lastBackupPath: String?
 
@@ -57,12 +59,16 @@ public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
         eventForwarderScriptPath: String? = nil,
         statusLineForwarderPath: String? = nil,
-        statusLineRefreshInterval: Int = 5000
+        statusLineRefreshInterval: Int = 5000,
+        backupDirectory: URL? = nil
     ) {
         self.homeDirectory = homeDirectory
         self.eventForwarderScriptPath = eventForwarderScriptPath
         self.statusLineForwarderPath = statusLineForwarderPath
         self.statusLineRefreshInterval = statusLineRefreshInterval
+        self.backupDirectory =
+            backupDirectory
+            ?? Self.defaultBackupDirectory(homeDirectory: homeDirectory)
     }
 
     public func userSettingsURL() -> URL {
@@ -125,13 +131,21 @@ public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
                 options: [.prettyPrinted, .sortedKeys]
             )
 
+            if areJSONEqual(current, next) {
+                continue
+            }
+
             if let originalData, originalData == mergedData {
                 continue
             }
 
             if let originalData {
-                let backupURL = url.appendingPathExtension(
-                    "workspaces-backup-\(Self.iso8601Timestamp())"
+                try FileManager.default.createDirectory(
+                    at: backupDirectory,
+                    withIntermediateDirectories: true
+                )
+                let backupURL = backupDirectory.appendingPathComponent(
+                    "\(url.lastPathComponent).workspaces-backup-\(Self.iso8601Timestamp())"
                 )
                 try originalData.write(to: backupURL)
                 if target == .userSettingsJSON {
@@ -446,6 +460,14 @@ public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
         }
     }
 
+    public nonisolated static func defaultBackupDirectory(homeDirectory: URL) -> URL {
+        homeDirectory
+            .appendingPathComponent("Library", isDirectory: true)
+            .appendingPathComponent("Application Support", isDirectory: true)
+            .appendingPathComponent(defaultBundleIdentifier, isDirectory: true)
+            .appendingPathComponent("ClaudeSettingsBackups", isDirectory: true)
+    }
+
     private func ensureParentExists(for url: URL) throws {
         let parent = url.deletingLastPathComponent()
         try FileManager.default.createDirectory(
@@ -460,12 +482,11 @@ public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
     }
 
     private func rotateBackups(forSettingsFile url: URL) {
-        let parent = url.deletingLastPathComponent()
         let baseName = url.lastPathComponent
         let prefix = "\(baseName).workspaces-backup-"
         let entries =
             (try? FileManager.default.contentsOfDirectory(
-                at: parent,
+                at: backupDirectory,
                 includingPropertiesForKeys: [.contentModificationDateKey],
                 options: []
             )) ?? []
