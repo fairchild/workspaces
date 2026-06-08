@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.18.0] - 2026-06-07
+
+### Added
+- terminal color theme switcher (#622)
+
+### Fixed
+- paginate release preflight check runs (#619)
+- write machine-agnostic Claude hook + status-line commands (#621)
+
+### Other
+- refresh roadmap after v0.17.0 (#618)
+- fix claude hook install churn (#620)
+- [codex] Scope host terminal tabs (#623)
+- consolidate schema bootstrap into one tracked-migration seam (#624)
+
 ## [Unreleased]
 
 ### Fixed
