@@ -274,10 +274,10 @@ struct TileTreeReducerTests {
         #expect(s.focusedTileID == second)
 
         s = reducer.reduce(s, .focusRelative(from: second, order: .next))
-        #expect(s.focusedTileID == first) // wraps
+        #expect(s.focusedTileID == first)  // wraps
 
         s = reducer.reduce(s, .focusRelative(from: first, order: .previous))
-        #expect(s.focusedTileID == second) // wraps backward
+        #expect(s.focusedTileID == second)  // wraps backward
     }
 
     @Test("Relative focus on a single tile is a no-op")
@@ -359,7 +359,8 @@ struct TileTreeReducerTests {
         let reducer = makeReducer(gen)
         var state = TileTreeState(singleTile: gen.tile())
         // Build two nested splits and skew their ratios.
-        state = reducer.reduce(state, .split(parent: state.focusedTileID, axis: .leadingTrailing, insertNewBefore: false))
+        state = reducer.reduce(
+            state, .split(parent: state.focusedTileID, axis: .leadingTrailing, insertNewBefore: false))
         state = reducer.reduce(state, .split(parent: state.focusedTileID, axis: .topBottom, insertNewBefore: false))
         for splitID in state.root.splitIDs {
             state = reducer.reduce(state, .setRatio(split: splitID, ratio: 0.75))
@@ -375,7 +376,8 @@ struct TileTreeReducerTests {
         let gen = IDGen()
         let reducer = makeReducer(gen)
         var state = TileTreeState(singleTile: gen.tile())
-        state = reducer.reduce(state, .split(parent: state.focusedTileID, axis: .leadingTrailing, insertNewBefore: false))
+        state = reducer.reduce(
+            state, .split(parent: state.focusedTileID, axis: .leadingTrailing, insertNewBefore: false))
         let outerSplit = state.root.splitIDs[0]
         state = reducer.reduce(state, .split(parent: state.focusedTileID, axis: .topBottom, insertNewBefore: false))
         let innerSplit = state.root.splitIDs.first { $0 != outerSplit }!
@@ -384,7 +386,7 @@ struct TileTreeReducerTests {
         state = reducer.reduce(state, .setRatio(split: innerSplit, ratio: 0.7))
 
         let equalized = reducer.reduce(state, .equalize(subtreeRoot: innerSplit))
-        #expect(ratioOfSplit(equalized.root, outerSplit) == 0.7) // untouched
+        #expect(ratioOfSplit(equalized.root, outerSplit) == 0.7)  // untouched
         #expect(ratioOfSplit(equalized.root, innerSplit) == TileTreeLayout.defaultRatio)
     }
 
