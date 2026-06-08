@@ -1,61 +1,15 @@
+/**
+ * Persistence for `webhook_events` — the GitHub webhook activity stream behind the
+ * dashboard's event feed and stats card. Stores incoming events and serves the
+ * repo-scoped, time-ordered reads the poll endpoints hit.
+ */
+
 import { getDb } from "./db";
+import { ensureSchema } from "./schema";
 import type { WebhookEvent, WebhookEventType } from "./types";
 
-let migrated = false;
-
-async function ensureEventsTable(): Promise<void> {
-	if (migrated) return;
-	const db = getDb();
-	await db.schema
-		.createTable("webhook_events")
-		.ifNotExists()
-		.addColumn("id", "text", (c) => c.primaryKey())
-		.addColumn("type", "text", (c) => c.notNull())
-		.addColumn("action", "text", (c) => c.notNull().defaultTo(""))
-		.addColumn("summary", "text", (c) => c.notNull().defaultTo(""))
-		.addColumn("repo", "text", (c) => c.notNull().defaultTo("unknown"))
-		.addColumn("timestamp", "text", (c) => c.notNull())
-		.addColumn("payload", "text", (c) => c.notNull().defaultTo("{}"))
-		.execute();
-	// Ensure payload column exists on tables created before this migration
-	try {
-		await db.schema
-			.alterTable("webhook_events")
-			.addColumn("payload", "text", (c) => c.notNull().defaultTo("{}"))
-			.execute();
-	} catch {
-		/* column already exists */
-	}
-	await db.schema
-		.createIndex("idx_webhook_events_timestamp")
-		.ifNotExists()
-		.on("webhook_events")
-		.column("timestamp desc")
-		.execute();
-	await db.schema
-		.createIndex("idx_webhook_events_repo")
-		.ifNotExists()
-		.on("webhook_events")
-		.column("repo")
-		.execute();
-	// Composite index for `WHERE repo = ? ORDER BY timestamp DESC LIMIT N`.
-	// Without this, that query scans every event for the repo — the chat
-	// panel and activity feed poll endpoints hit this path every 5-10s
-	// and blew through 500M Turso row-reads in a single month for one
-	// user. The separate single-column indexes above are not enough; the
-	// planner needs a composite that matches the filter + order.
-	// See docs/development/agent-chat-sandbox.md § "DB query volume".
-	await db.schema
-		.createIndex("idx_webhook_events_repo_ts")
-		.ifNotExists()
-		.on("webhook_events")
-		.columns(["repo", "timestamp desc"])
-		.execute();
-	migrated = true;
-}
-
 export async function pushEvent(event: WebhookEvent): Promise<void> {
-	await ensureEventsTable();
+	await ensureSchema();
 	const db = getDb();
 	await db
 		.insertInto("webhook_events")
@@ -76,7 +30,7 @@ export async function getEvents(
 	limit = 50,
 	repo?: string | null,
 ): Promise<WebhookEvent[]> {
-	await ensureEventsTable();
+	await ensureSchema();
 	const db = getDb();
 	let query = db
 		.selectFrom("webhook_events")
@@ -102,7 +56,7 @@ export async function getEventsForRepos(
 	limit = 50,
 ): Promise<WebhookEvent[]> {
 	if (repos.length === 0) return [];
-	await ensureEventsTable();
+	await ensureSchema();
 	const db = getDb();
 	const rows = await db
 		.selectFrom("webhook_events")
@@ -122,7 +76,7 @@ export async function getEventsForRepos(
 }
 
 export async function getEvent(id: string): Promise<WebhookEvent | null> {
-	await ensureEventsTable();
+	await ensureSchema();
 	const db = getDb();
 	const row = await db
 		.selectFrom("webhook_events")
@@ -142,7 +96,7 @@ export async function getEvent(id: string): Promise<WebhookEvent | null> {
 }
 
 export async function getLastEventTime(repo: string): Promise<string | null> {
-	await ensureEventsTable();
+	await ensureSchema();
 	const db = getDb();
 	const row = await db
 		.selectFrom("webhook_events")
@@ -177,7 +131,7 @@ export async function getEventStats(): Promise<EventStats> {
 		return cachedEventStats.value;
 	}
 
-	await ensureEventsTable();
+	await ensureSchema();
 	const db = getDb();
 	const today = new Date();
 	today.setHours(0, 0, 0, 0);
@@ -210,7 +164,7 @@ export async function getEventStatsForRepos(
 ): Promise<EventStats> {
 	if (repos.length === 0) return { eventsToday: 0, repos: [] };
 
-	await ensureEventsTable();
+	await ensureSchema();
 	const db = getDb();
 	const today = new Date();
 	today.setHours(0, 0, 0, 0);

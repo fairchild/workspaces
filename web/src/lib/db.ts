@@ -121,7 +121,7 @@ export interface ManagedPrReviewProjectionsTable {
 	updated_at: string;
 }
 
-interface Database {
+export interface Database {
 	webhook_events: EventsTable;
 	chat_messages: ChatMessagesTable;
 	workspaces: WorkspacesTable;

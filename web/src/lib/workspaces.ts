@@ -1,55 +1,14 @@
+/**
+ * Persistence for `workspaces` — the workspace list mirrored from the desktop app
+ * via sync, scoped per owner, plus the Markdown status-card formatter.
+ */
+
 import { getDb } from "./db";
+import { ensureSchema } from "./schema";
 import { formatRelativeTime } from "./timeline-utils";
 import type { Workspace, WorkspaceStatus } from "./types";
 
 export const DEFAULT_WORKSPACE_OWNER_ID = "default";
-
-let migrated = false;
-
-async function ensureWorkspacesTable(): Promise<void> {
-	if (migrated) return;
-	const db = getDb();
-	await db.schema
-		.createTable("workspaces")
-		.ifNotExists()
-		.addColumn("owner_id", "text", (c) =>
-			c.notNull().defaultTo(DEFAULT_WORKSPACE_OWNER_ID),
-		)
-		.addColumn("id", "text", (c) => c.primaryKey())
-		.addColumn("name", "text", (c) => c.notNull())
-		.addColumn("path", "text", (c) => c.notNull())
-		.addColumn("repo_id", "text")
-		.addColumn("repo_name", "text")
-		.addColumn("created_at", "text", (c) => c.notNull())
-		.addColumn("last_accessed_at", "text", (c) => c.notNull())
-		.addColumn("status", "text", (c) => c.notNull().defaultTo("stopped"))
-		.addColumn("git_branch", "text")
-		.addColumn("backend_identifier", "text", (c) =>
-			c.notNull().defaultTo("local"),
-		)
-		.addColumn("synced_at", "text", (c) => c.notNull())
-		.execute();
-	try {
-		await db.schema
-			.alterTable("workspaces")
-			.addColumn("owner_id", "text")
-			.execute();
-	} catch {
-		// Column already exists.
-	}
-	await db
-		.updateTable("workspaces")
-		.set({ owner_id: DEFAULT_WORKSPACE_OWNER_ID })
-		.where("owner_id", "is", null)
-		.execute();
-	await db.schema
-		.createIndex("idx_workspaces_owner")
-		.ifNotExists()
-		.on("workspaces")
-		.column("owner_id")
-		.execute();
-	migrated = true;
-}
 
 export interface SyncWorkspaceInput {
 	id: string;
@@ -68,7 +27,7 @@ export async function syncWorkspaces(
 	ownerId: string,
 	workspaces: SyncWorkspaceInput[],
 ): Promise<number> {
-	await ensureWorkspacesTable();
+	await ensureSchema();
 	const db = getDb();
 	const now = new Date().toISOString();
 
@@ -115,7 +74,7 @@ export async function getWorkspaces(
 	ownerId: string,
 	repo?: string | null,
 ): Promise<Workspace[]> {
-	await ensureWorkspacesTable();
+	await ensureSchema();
 	const db = getDb();
 	let query = db
 		.selectFrom("workspaces")

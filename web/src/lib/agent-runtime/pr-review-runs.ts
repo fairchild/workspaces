@@ -1,5 +1,13 @@
+/**
+ * Persistence and lifecycle for managed PR review runs and their GitHub projection
+ * ledger (`managed_pr_review_runs`, `managed_pr_review_projections`): the run state
+ * machine, coalescing of redundant triggers, failure classification, and the
+ * broker/monitor queries. Consumed by pr-review.ts and the reviewer webhook routes.
+ */
+
 import { createHash } from "node:crypto";
 import { getDb } from "../db";
+import { ensureSchema, resetSchemaForTests } from "../schema";
 
 export type PrReviewRunStatus =
 	| "started"
@@ -65,140 +73,9 @@ export interface PrReviewRunRecordInput extends PrReviewRunFingerprintInput {
 	fingerprint: string;
 }
 
-let migrated = false;
-let projectionsMigrated = false;
-
-async function ensureRunsTable(): Promise<void> {
-	if (migrated) return;
-	const db = getDb();
-	await db.schema
-		.createTable("managed_pr_review_runs")
-		.ifNotExists()
-		.addColumn("fingerprint", "text", (c) => c.primaryKey())
-		.addColumn("repo_full_name", "text", (c) => c.notNull())
-		.addColumn("pr_number", "integer", (c) => c.notNull())
-		.addColumn("head_sha", "text", (c) => c.notNull())
-		.addColumn("trigger_kind", "text", (c) => c.notNull())
-		.addColumn("trigger_source_id", "text", (c) => c.notNull())
-		.addColumn("reviewer_config_hash", "text", (c) => c.notNull())
-		.addColumn("session_id", "text")
-		.addColumn("status", "text", (c) => c.notNull())
-		.addColumn("created_at", "text", (c) => c.notNull())
-		.addColumn("updated_at", "text", (c) => c.notNull())
-		.addColumn("error", "text")
-		.addColumn("failure_kind", "text")
-		.addColumn("failure_message", "text")
-		.addColumn("failure_retryable", "integer")
-		.addColumn("failed_at", "text")
-		.addColumn("projection_status", "text")
-		.addColumn("projection_updated_at", "text")
-		.addColumn("projection_error", "text")
-		.addColumn("github_review_id", "text")
-		.addColumn("review_intent_event", "text")
-		.addColumn("review_intent_body", "text")
-		.addColumn("review_intent_labels", "text")
-		.addColumn("review_intent_recorded_at", "text")
-		.addColumn("active_claim_key", "text")
-		.addColumn("coalesced_head_sha", "text")
-		.addColumn("coalesced_trigger_kind", "text")
-		.addColumn("coalesced_trigger_source_id", "text")
-		.addColumn("coalesced_at", "text")
-		.execute();
-	for (const [column, type] of [
-		["failure_kind", "text"],
-		["failure_message", "text"],
-		["failure_retryable", "integer"],
-		["failed_at", "text"],
-		["projection_status", "text"],
-		["projection_updated_at", "text"],
-		["projection_error", "text"],
-		["github_review_id", "text"],
-		["review_intent_event", "text"],
-		["review_intent_body", "text"],
-		["review_intent_labels", "text"],
-		["review_intent_recorded_at", "text"],
-		["active_claim_key", "text"],
-		["coalesced_head_sha", "text"],
-		["coalesced_trigger_kind", "text"],
-		["coalesced_trigger_source_id", "text"],
-		["coalesced_at", "text"],
-	] as const) {
-		try {
-			await db.schema
-				.alterTable("managed_pr_review_runs")
-				.addColumn(column, type)
-				.execute();
-		} catch {
-			// Column already exists.
-		}
-	}
-	await db.schema
-		.createIndex("idx_managed_pr_review_runs_pr")
-		.ifNotExists()
-		.on("managed_pr_review_runs")
-		.columns(["repo_full_name", "pr_number"])
-		.execute();
-	// New rows hold this nullable unique value only while active. Existing
-	// pre-migration `started` rows are intentionally not backfilled; they age out
-	// through the normal stale-started path rather than risking a broad migration.
-	await db.schema
-		.createIndex("ux_managed_pr_review_runs_active_claim")
-		.ifNotExists()
-		.on("managed_pr_review_runs")
-		.column("active_claim_key")
-		.unique()
-		.execute();
-	migrated = true;
-}
-
-async function ensureProjectionLedgerTable(): Promise<void> {
-	await ensureRunsTable();
-	if (projectionsMigrated) return;
-	const db = getDb();
-	await db.schema
-		.createTable("managed_pr_review_projections")
-		.ifNotExists()
-		.addColumn("projection_id", "text", (c) => c.primaryKey())
-		.addColumn("run_fingerprint", "text", (c) => c.notNull())
-		.addColumn("projection_type", "text", (c) => c.notNull())
-		.addColumn("projection_key", "text", (c) => c.notNull())
-		.addColumn("desired_payload_hash", "text", (c) => c.notNull())
-		.addColumn("desired_payload", "text", (c) => c.notNull())
-		.addColumn("state", "text", (c) => c.notNull())
-		.addColumn("attempts", "integer", (c) => c.notNull().defaultTo(0))
-		.addColumn("last_attempted_at", "text")
-		.addColumn("observed_external_id", "text")
-		.addColumn("error_kind", "text")
-		.addColumn("error_text", "text")
-		.addColumn("created_at", "text", (c) => c.notNull())
-		.addColumn("updated_at", "text", (c) => c.notNull())
-		.execute();
-	await db.schema
-		.createIndex("ux_managed_pr_review_projections_desired")
-		.ifNotExists()
-		.on("managed_pr_review_projections")
-		.columns([
-			"run_fingerprint",
-			"projection_type",
-			"projection_key",
-			"desired_payload_hash",
-		])
-		.unique()
-		.execute();
-	await db.schema
-		.createIndex("idx_managed_pr_review_projections_run")
-		.ifNotExists()
-		.on("managed_pr_review_projections")
-		.column("run_fingerprint")
-		.execute();
-	await db.schema
-		.createIndex("idx_managed_pr_review_projections_state")
-		.ifNotExists()
-		.on("managed_pr_review_projections")
-		.columns(["state", "updated_at"])
-		.execute();
-	projectionsMigrated = true;
-}
+// Schema for managed_pr_review_runs + managed_pr_review_projections lives in
+// the baseline migration (web/src/lib/schema/migrations.ts). Queries below call
+// ensureSchema() before touching the database.
 
 export function computeRunFingerprint(
 	input: PrReviewRunFingerprintInput,
@@ -729,7 +606,7 @@ async function coalesceIntoActiveRun(input: {
 export async function recordRunStart(
 	input: PrReviewRunRecordInput,
 ): Promise<RecordRunStartResult> {
-	await ensureRunsTable();
+	await ensureSchema();
 	const now = new Date().toISOString();
 	const db = getDb();
 	const claimKey = activeClaimKey(input);
@@ -957,7 +834,7 @@ function mapProjectionRecord(row: {
 export async function beginPrReviewProjectionAttempt(
 	input: BeginPrReviewProjectionAttemptInput,
 ): Promise<BeginPrReviewProjectionAttemptResult> {
-	await ensureProjectionLedgerTable();
+	await ensureSchema();
 	const now = new Date().toISOString();
 	const { desiredPayloadHash, boundedPayloadJson } = prepareProjectionPayload(
 		input.desiredPayload,
@@ -1039,7 +916,7 @@ export async function recordPrReviewProjectionSuccess(
 	projectionId: string,
 	input: { observedExternalId?: string | null } = {},
 ): Promise<void> {
-	await ensureProjectionLedgerTable();
+	await ensureSchema();
 	const now = new Date().toISOString();
 	const updates = {
 		state: "projected" as const,
@@ -1065,7 +942,7 @@ export async function recordPrReviewProjectionFailure(
 		errorText: string;
 	},
 ): Promise<void> {
-	await ensureProjectionLedgerTable();
+	await ensureSchema();
 	const now = new Date().toISOString();
 	await getDb()
 		.updateTable("managed_pr_review_projections")
@@ -1082,7 +959,7 @@ export async function recordPrReviewProjectionFailure(
 export async function listPrReviewProjectionsForRun(
 	runFingerprint: string,
 ): Promise<PrReviewProjectionRecord[]> {
-	await ensureProjectionLedgerTable();
+	await ensureSchema();
 	const rows = await getDb()
 		.selectFrom("managed_pr_review_projections")
 		.selectAll()
@@ -1161,7 +1038,7 @@ async function updateRunLifecycle(
 	fingerprint: string,
 	input: RunLifecycleUpdateInput,
 ): Promise<void> {
-	await ensureRunsTable();
+	await ensureSchema();
 	const now = new Date().toISOString();
 	await assertTransitionAllowed(fingerprint, input.status);
 	const projectionStatus =
@@ -1339,7 +1216,7 @@ export async function recordRunResult(
 export async function releaseRunActiveClaim(
 	fingerprint: string,
 ): Promise<void> {
-	await ensureRunsTable();
+	await ensureSchema();
 	await getDb()
 		.updateTable("managed_pr_review_runs")
 		.set({ active_claim_key: null })
@@ -1634,7 +1511,7 @@ function mapRunDetails(row: {
 export async function getPrReviewRunByFingerprint(
 	fingerprint: string,
 ): Promise<PrReviewRunDetails | null> {
-	await ensureRunsTable();
+	await ensureSchema();
 	const row = await getDb()
 		.selectFrom("managed_pr_review_runs")
 		.selectAll()
@@ -1652,7 +1529,7 @@ export async function getPrReviewRunByFingerprint(
 export async function getPrReviewRunBySessionId(
 	sessionId: string,
 ): Promise<PrReviewRunDetails | null> {
-	await ensureRunsTable();
+	await ensureSchema();
 	const row = await getDb()
 		.selectFrom("managed_pr_review_runs")
 		.selectAll()
@@ -1673,7 +1550,7 @@ export async function getActivePrReviewRunSuccessor(input: {
 	prNumber: number;
 	createdAt: string;
 }): Promise<ActivePrReviewRunSuccessor | null> {
-	await ensureRunsTable();
+	await ensureSchema();
 	const row = await getDb()
 		.selectFrom("managed_pr_review_runs")
 		.select([
@@ -1711,7 +1588,7 @@ export async function getNewerCurrentHeadPrReviewRun(input: {
 	headSha: string;
 	createdAt: string;
 }): Promise<PrReviewRunSuccessor | null> {
-	await ensureRunsTable();
+	await ensureSchema();
 	const row = await getDb()
 		.selectFrom("managed_pr_review_runs")
 		.select([
@@ -1753,7 +1630,7 @@ export async function getPrReviewRunByTrigger(input: {
 	triggerKind: string;
 	triggerSourceId: string;
 }): Promise<PrReviewRunDetails | null> {
-	await ensureRunsTable();
+	await ensureSchema();
 	const row = await getDb()
 		.selectFrom("managed_pr_review_runs")
 		.selectAll()
@@ -1775,7 +1652,7 @@ export async function listRecentPrReviewRuns(input: {
 	sinceIso: string;
 	repoFullName: string;
 }): Promise<PrReviewRunSummary[]> {
-	await ensureRunsTable();
+	await ensureSchema();
 	const rows = await getDb()
 		.selectFrom("managed_pr_review_runs")
 		.select([
@@ -2142,7 +2019,7 @@ export async function listPrReviewRunsForBroker(
 		repoFullName?: string;
 	} = {},
 ): Promise<BrokerPrReviewRun[]> {
-	await ensureRunsTable();
+	await ensureSchema();
 	const limit = input.limit ?? 10;
 	let startedQuery = getDb()
 		.selectFrom("managed_pr_review_runs")
@@ -2192,7 +2069,7 @@ export async function listStartedPrReviewRuns(
 		repoFullName?: string;
 	} = {},
 ): Promise<StartedPrReviewRun[]> {
-	await ensureRunsTable();
+	await ensureSchema();
 	let query = getDb()
 		.selectFrom("managed_pr_review_runs")
 		.select([
@@ -2240,6 +2117,5 @@ export async function listStartedPrReviewRuns(
 
 /** Test-only hook so per-test in-memory DBs re-run table creation. */
 export function __resetPrReviewRunsForTests(): void {
-	migrated = false;
-	projectionsMigrated = false;
+	resetSchemaForTests();
 }

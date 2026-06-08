@@ -1,9 +1,15 @@
+/**
+ * Single-use, short-TTL terminal access tickets (`terminal_access_tickets`): issued
+ * per request and redeemed exactly once, scoped to a user + session, so a client can
+ * authorize a ttyd connection without carrying a long-lived credential. Queries run
+ * as raw libsql (`getTurso`); the table's DDL lives in the baseline migration.
+ */
+
 import crypto from "node:crypto";
 import { getTurso } from "./db";
+import { ensureSchema } from "./schema";
 
 export const TERMINAL_TICKET_TTL_MS = 30_000;
-
-let migrated = false;
 
 export interface IssuedTerminalTicket {
 	ticket: string;
@@ -27,29 +33,6 @@ export type ConsumeTerminalTicketResult =
 			reason: "invalid" | "wrong-user" | "expired" | "redeemed";
 	  };
 
-async function ensureTerminalTicketsTable(): Promise<void> {
-	if (migrated) return;
-	const db = getTurso();
-	await db.execute(`
-		CREATE TABLE IF NOT EXISTS terminal_access_tickets (
-			ticket_hash TEXT PRIMARY KEY,
-			user_id TEXT NOT NULL,
-			repo TEXT NOT NULL,
-			session_id TEXT NOT NULL,
-			compute_instance_id TEXT NOT NULL,
-			compute_backend TEXT NOT NULL,
-			created_at TEXT NOT NULL,
-			expires_at TEXT NOT NULL,
-			redeemed_at TEXT
-		)
-	`);
-	await db.execute(`
-		CREATE INDEX IF NOT EXISTS idx_terminal_access_tickets_session
-		ON terminal_access_tickets (user_id, repo, session_id, expires_at)
-	`);
-	migrated = true;
-}
-
 function ticketHash(ticket: string): string {
 	return crypto.createHash("sha256").update(ticket, "utf8").digest("hex");
 }
@@ -71,7 +54,7 @@ export async function issueTerminalTicket(
 	},
 	now = new Date(),
 ): Promise<IssuedTerminalTicket> {
-	await ensureTerminalTicketsTable();
+	await ensureSchema();
 
 	const ticket = crypto.randomBytes(32).toString("base64url");
 	const createdAt = now.toISOString();
@@ -110,7 +93,7 @@ export async function consumeTerminalTicket(
 	userId: string,
 	now = new Date(),
 ): Promise<ConsumeTerminalTicketResult> {
-	await ensureTerminalTicketsTable();
+	await ensureSchema();
 
 	const nowIso = now.toISOString();
 	const hash = ticketHash(ticket);

@@ -65,6 +65,18 @@
 | Deployment | Vercel | Hosting, serverless functions |
 | Infrastructure | Cloudflare Workers | Webhook relay, evidence store, terminal proxy |
 
+## Database & Schema
+
+The schema is defined in one ordered migration list (`src/lib/schema/migrations.ts`)
+and applied by `ensureSchema()` (`src/lib/schema/index.ts`), which every persistence
+query awaits before touching the database. It runs at request time, once per warm
+serverless instance, tracked via a `schema_migrations` table. The typed row shapes
+live in the `Database` interface in `src/lib/db.ts`.
+
+See [`schema-management.md`](./schema-management.md) for where each piece lives, how
+to add a migration, and the design tradeoffs; the Kysely-vs-Drizzle decision is in
+[`docs/decisions/web-schema-toolchain.md`](../../docs/decisions/web-schema-toolchain.md).
+
 ## Agent Runtime
 
 The agent runtime executes Claude Code through the `ComputeProviderRegistry` at `src/lib/agent-runtime/provider-registry.ts`. The registry loads Vercel Sandbox, Daytona, GitHub Actions, and Anthropic Managed Agents providers by default; Daytona and GitHub Actions are registered stubs that currently report unavailable. `MOCK_AGENT=1` adds the test-only mock provider and makes it the default.
