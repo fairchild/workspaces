@@ -1187,21 +1187,21 @@ struct ContentView: View {
 
         terminalFocusCoordinator.cancelPendingFocusRequest(reason: "repo_terminal_selected")
         abandonPendingRemoteConnection(reason: "repo_terminal_selected")
-        markAccessed(repo: repo)
-        applyNavigationDestination(.repoTerminal(repo))
         let session = activateHostSession(
             key: .repoPath(repoDirectory.path),
             directory: launchDirectory
         )
+        terminalFocusCoordinator.beginRepoClickMeasurement(
+            sessionID: session.id,
+            repoPath: repoDirectory.path
+        )
+        markAccessed(repo: repo)
+        applyNavigationDestination(.repoTerminal(repo))
         persistTerminalContinuity(
             targetKind: .repo,
             targetID: repo.id,
             rootURL: repoDirectory,
             launchURL: launchDirectory
-        )
-        terminalFocusCoordinator.beginRepoClickMeasurement(
-            sessionID: session.id,
-            repoPath: repoDirectory.path
         )
         terminalFocusCoordinator.requestMainTerminalFocus(
             targetSessionID: session.id,
@@ -1230,8 +1230,6 @@ struct ContentView: View {
             handleProviderBackedWorkspaceSelection(workspace)
         } else {
             abandonPendingRemoteConnection(reason: "local_workspace_selected")
-            markAccessed(workspace: workspace)
-            applyNavigationDestination(.workspaceTerminal(workspace))
             let workspaceDirectory = workspace.workspaceURL.standardizedFileURL.resolvingSymlinksInPath()
             let launchDirectory = preferredSessionDirectory(
                 preferredDirectory,
@@ -1241,15 +1239,17 @@ struct ContentView: View {
                 key: .hostPath(workspaceDirectory.path),
                 directory: launchDirectory
             )
+            terminalFocusCoordinator.beginWorkspaceClickMeasurement(
+                sessionID: session.id,
+                workspacePath: workspaceDirectory.path
+            )
+            markAccessed(workspace: workspace)
+            applyNavigationDestination(.workspaceTerminal(workspace))
             persistTerminalContinuity(
                 targetKind: .workspace,
                 targetID: workspace.id,
                 rootURL: workspaceDirectory,
                 launchURL: launchDirectory
-            )
-            terminalFocusCoordinator.beginWorkspaceClickMeasurement(
-                sessionID: session.id,
-                workspacePath: workspaceDirectory.path
             )
             terminalFocusCoordinator.requestMainTerminalFocus(
                 targetSessionID: session.id,

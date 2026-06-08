@@ -10,7 +10,7 @@ Canonical scenarios:
 
 | Scenario | Build Kind | Purpose |
 |---|---|---|
-| `debug_no_activate` | `debug` | Raw SwiftPM debug startup and switch timing without app activation; use for branch deltas and trend history, not release signoff |
+| `debug_no_activate` | `debug` | Raw SwiftPM debug startup without app activation; use for branch deltas and trend history, not release signoff |
 | `debug_activate` | `debug` | Interactive debug startup timing with normal activation |
 | `installed_clean_shell` | `installed` | Packaged-app release signoff with shell init bypassed and bundled Ghostty resources verified |
 | `installed_login_shell` | `installed` | Installed-app startup with normal login shell cost included |
@@ -93,6 +93,11 @@ Why it matters:
 
 Notes:
 - Current flow uses immediate focus request plus a short retry. You may see outcome `focused_retry`, which still means focus was successfully restored.
+- `debug_no_activate` intentionally does not gate this metric. Shared-desktop
+  no-activation mode skips foreground focus, and automation can reuse a
+  prompt-ready terminal before the repo-selection timer has a foreground focus
+  callback to complete. Use `debug_activate` when validating repo-switch focus
+  timing.
 
 ```mermaid
 sequenceDiagram
@@ -134,6 +139,11 @@ Sub-spans (emitted via `InvestigationDiagnostics.emitFocus`):
 
 Notes:
 - Mirrors the `repo_click_to_focus` pattern exactly. Outcome `focused` means focus was successfully restored.
+- `debug_no_activate` intentionally does not gate this metric. Shared-desktop
+  no-activation mode skips foreground focus, and automation can reuse a
+  prompt-ready terminal before the workspace-selection timer has a foreground
+  focus callback to complete. Use `debug_activate` when validating workspace
+  switch focus timing.
 
 ```mermaid
 sequenceDiagram
