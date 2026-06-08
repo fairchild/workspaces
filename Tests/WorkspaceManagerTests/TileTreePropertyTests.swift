@@ -74,7 +74,8 @@ struct TileTreePropertyTests {
         case 4 where !splits.isEmpty:
             return .resize(split: splits.randomElement(using: &rng)!, ratioDelta: deltas.randomElement(using: &rng)!)
         case 5 where !splits.isEmpty:
-            return .setRatio(split: splits.randomElement(using: &rng)!, ratio: Double.random(in: -0.5...1.5, using: &rng))
+            return .setRatio(
+                split: splits.randomElement(using: &rng)!, ratio: Double.random(in: -0.5...1.5, using: &rng))
         case 6:
             return .equalize(subtreeRoot: splits.randomElement(using: &rng))
         default:
@@ -140,7 +141,8 @@ struct TileTreePropertyTests {
         let gen = IDGen()
         let reducer = TileTreeReducer(makeTileID: gen.tile, makeSplitID: gen.split)
         var state = TileTreeState(singleTile: gen.tile())
-        state = reducer.reduce(state, .split(parent: state.focusedTileID, axis: .leadingTrailing, insertNewBefore: false))
+        state = reducer.reduce(
+            state, .split(parent: state.focusedTileID, axis: .leadingTrailing, insertNewBefore: false))
         state = reducer.reduce(state, .split(parent: state.focusedTileID, axis: .topBottom, insertNewBefore: true))
 
         let data = try! JSONEncoder().encode(state)
