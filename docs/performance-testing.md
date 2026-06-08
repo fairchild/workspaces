@@ -111,9 +111,29 @@ dashboard trend updates:
 ```
 
 This is not the release signoff path. The raw debug binary may carry debug-build
-overhead or miss packaged Ghostty resources that the release app bundles
-correctly. Compare debug captures only against debug captures from the same
-machine, launch mode, and workload shape.
+overhead that the optimized packaged app does not. Budgeted debug runs resolve
+the pinned Ghostty resources from `GHOSTTY_RESOURCES_DIR`, `GHOSTTY_SHARE_DIR`,
+`GHOSTTY_DIR`, or the default `~/.cache/workspacemanager/ghostty/zig-out/share`
+checkout; with `--assert-budget`, the script fails before launch if those
+resources are unavailable. Compare debug captures only against debug captures
+from the same machine, launch mode, and workload shape.
+
+`debug_no_activate` is a startup and hydration trend scenario. It no longer
+gates focus-restoration metrics such as `repo_click_to_focus` or
+`workspace_click_to_focus`, because shared-desktop no-activation mode
+intentionally skips foreground focus and can reuse a prompt-ready terminal
+before selection focus timing can complete. Use `debug_activate` for
+repo/workspace switch focus timing.
+
+The `debug_no_activate` `launch_to_first_prompt` reference was refreshed on
+2026-06-08 from a 10-run raw SwiftPM debug capture on Mac16,13 / macOS 26.4.1
+after the script began enforcing clean-shell diagnostics and pinned Ghostty
+resources:
+
+- `launch_to_first_prompt`: median `591.72ms`, p95 `630.14ms`
+- `repo_hydration`: median `1.32ms`, p95 `19.53ms`
+- `repo_click_to_focus`: missing by scenario contract
+- `workspace_click_to_focus`: missing by scenario contract
 
 To persist results and generate a visual trend dashboard:
 

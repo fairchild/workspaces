@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "reference_baseline_note": "Seed baseline derived from validated local runs and historical debug gates. Refresh with a 10-run reference capture before tightening budgets.",
+  "reference_baseline_note": "Seed baseline derived from validated local runs and historical debug gates. debug_no_activate launch_to_first_prompt was refreshed on 2026-06-08 from a 10-run raw SwiftPM debug capture on Mac16,13 after the harness began enforcing pinned Ghostty resources and clean-shell diagnostics. Refresh with a 10-run reference capture before tightening budgets.",
   "budget_formula": {
     "gate": {
       "stat": "median",
@@ -94,8 +94,8 @@
       ],
       "reference_baselines": {
         "debug_no_activate": {
-          "median_ms": 200,
-          "p95_ms": 260
+          "median_ms": 592,
+          "p95_ms": 631
         },
         "debug_activate": {
           "median_ms": 220,
@@ -179,14 +179,9 @@
       "name": "repo_click_to_focus",
       "unit": "ms",
       "supported_scenarios": [
-        "debug_no_activate",
         "debug_activate"
       ],
       "reference_baselines": {
-        "debug_no_activate": {
-          "median_ms": 200,
-          "p95_ms": 260
-        },
         "debug_activate": {
           "median_ms": 220,
           "p95_ms": 300
@@ -197,14 +192,9 @@
       "name": "workspace_click_to_focus",
       "unit": "ms",
       "supported_scenarios": [
-        "debug_no_activate",
         "debug_activate"
       ],
       "reference_baselines": {
-        "debug_no_activate": {
-          "median_ms": 220,
-          "p95_ms": 300
-        },
         "debug_activate": {
           "median_ms": 240,
           "p95_ms": 320

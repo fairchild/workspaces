@@ -86,6 +86,62 @@ OUTPUT_DIR="/tmp/workspaces-perf-baseline-$(date +%Y%m%d-%H%M%S)"
 PERF_DATA_DIR="$OUTPUT_DIR/app-data"
 DEBUG_BINARY="$ROOT_DIR/.build/arm64-apple-macosx/debug/WorkspaceManager"
 
+expand_home_prefix() {
+    local path="$1"
+    if [[ "$path" == "~" ]]; then
+        printf '%s\n' "$HOME"
+        return
+    fi
+    if [[ "$path" == "~/"* ]]; then
+        printf '%s\n' "$HOME/${path#~/}"
+        return
+    fi
+    printf '%s\n' "$path"
+}
+
+is_usable_ghostty_resources_dir() {
+    local resources_dir="$1"
+    local share_dir
+    share_dir="$(cd "$resources_dir/.." 2>/dev/null && pwd -P)" || return 1
+
+    [[ -d "$resources_dir/themes" ]] || return 1
+    [[ -f "$share_dir/terminfo/78/xterm-ghostty" ]] || return 1
+}
+
+resolve_ghostty_resources_dir() {
+    local -a share_candidates=()
+    local candidate=""
+
+    if [[ -n "${GHOSTTY_RESOURCES_DIR:-}" ]]; then
+        candidate="$(expand_home_prefix "$GHOSTTY_RESOURCES_DIR")"
+        if is_usable_ghostty_resources_dir "$candidate"; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    fi
+
+    if [[ -n "${GHOSTTY_SHARE_DIR:-}" ]]; then
+        share_candidates+=("$(expand_home_prefix "$GHOSTTY_SHARE_DIR")")
+    fi
+
+    if [[ -n "${GHOSTTY_DIR:-}" ]]; then
+        share_candidates+=("$(expand_home_prefix "$GHOSTTY_DIR")/zig-out/share")
+    fi
+
+    share_candidates+=("$HOME/.cache/workspacemanager/ghostty/zig-out/share")
+
+    local share
+    for share in "${share_candidates[@]}"; do
+        candidate="$share/ghostty"
+        if is_usable_ghostty_resources_dir "$candidate"; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
 mkdir -p "$OUTPUT_DIR" "$PERF_DATA_DIR"
 
 if [[ ! -x "$DEBUG_BINARY" ]]; then
@@ -95,6 +151,21 @@ if [[ ! -x "$DEBUG_BINARY" ]]; then
     )
 fi
 
+GHOSTTY_RESOURCES_DIR_RESOLVED=""
+if GHOSTTY_RESOURCES_DIR_RESOLVED="$(resolve_ghostty_resources_dir)"; then
+    export GHOSTTY_RESOURCES_DIR="$GHOSTTY_RESOURCES_DIR_RESOLVED"
+else
+    if [[ "$ASSERT_BUDGET" -eq 1 ]]; then
+        echo "Ghostty resources dir unavailable; cannot assert debug perf budget against a non-comparable launch." >&2
+        echo "Set GHOSTTY_RESOURCES_DIR, GHOSTTY_SHARE_DIR, or GHOSTTY_DIR, or run ./scripts/build-ghosttykit.sh first." >&2
+        exit 1
+    fi
+fi
+
+SHELL_PROFILE_MODE="${WORKSPACES_SHELL_PROFILE_MODE:-clean}"
+TERMINAL_DIAGNOSTICS="${WORKSPACES_TERMINAL_DIAGNOSTICS:-1}"
+DISABLE_STATE_RESTORATION="${WORKSPACES_DISABLE_STATE_RESTORATION:-1}"
+
 echo "WorkspaceManager perf baseline"
 echo "  runs: $RUNS"
 echo "  sleep per run: ${SLEEP_SECONDS}s"
@@ -103,6 +174,9 @@ echo "  record in repo docs: $RECORD"
 echo "  assert budget: $ASSERT_BUDGET"
 echo "  output: $OUTPUT_DIR"
 echo "  data dir: $PERF_DATA_DIR"
+echo "  ghostty resources: ${GHOSTTY_RESOURCES_DIR_RESOLVED:-unavailable}"
+echo "  shell profile mode: $SHELL_PROFILE_MODE"
+echo "  terminal diagnostics: $TERMINAL_DIAGNOSTICS"
 
 for i in $(seq 1 "$RUNS"); do
     LOG_FILE="$OUTPUT_DIR/run-$i.log"
@@ -118,11 +192,17 @@ for i in $(seq 1 "$RUNS"); do
             WORKSPACES_DATA_DIR="$PERF_DATA_DIR" \
             WORKSPACES_NO_ACTIVATE_ON_LAUNCH=1 \
             WORKSPACES_PERF_AUTO_SELECT_FIRST_REPO=1 \
-            "$DEBUG_BINARY" >"$LOG_FILE" 2>&1
+            WORKSPACES_SHELL_PROFILE_MODE="$SHELL_PROFILE_MODE" \
+            WORKSPACES_TERMINAL_DIAGNOSTICS="$TERMINAL_DIAGNOSTICS" \
+            WORKSPACES_DISABLE_STATE_RESTORATION="$DISABLE_STATE_RESTORATION" \
+            "$DEBUG_BINARY" -ApplePersistenceIgnoreState YES >"$LOG_FILE" 2>&1
         else
             WORKSPACES_DATA_DIR="$PERF_DATA_DIR" \
             WORKSPACES_PERF_AUTO_SELECT_FIRST_REPO=1 \
-            "$DEBUG_BINARY" >"$LOG_FILE" 2>&1
+            WORKSPACES_SHELL_PROFILE_MODE="$SHELL_PROFILE_MODE" \
+            WORKSPACES_TERMINAL_DIAGNOSTICS="$TERMINAL_DIAGNOSTICS" \
+            WORKSPACES_DISABLE_STATE_RESTORATION="$DISABLE_STATE_RESTORATION" \
+            "$DEBUG_BINARY" -ApplePersistenceIgnoreState YES >"$LOG_FILE" 2>&1
         fi
     ) &
     APP_PID=$!
@@ -142,7 +222,7 @@ ARCH="$(uname -m)"
 MODEL="$(sysctl -n hw.model 2>/dev/null || echo unknown)"
 TIMESTAMP="$(date '+%Y-%m-%dT%H:%M:%S%z')"
 
-PERF_SUMMARY_TIMESTAMP="$TIMESTAMP" PYTHONPATH="$ROOT_DIR/scripts${PYTHONPATH:+:$PYTHONPATH}" python3 - "$OUTPUT_DIR" "$ROOT_DIR" "$RUNS" "$SLEEP_SECONDS" "$RECORD" "$TIMESTAMP" "$OS_VERSION" "$OS_BUILD" "$ARCH" "$MODEL" "$LAUNCH_MODE" "$ASSERT_BUDGET" <<'PY'
+PERF_SUMMARY_TIMESTAMP="$TIMESTAMP" PYTHONPATH="$ROOT_DIR/scripts${PYTHONPATH:+:$PYTHONPATH}" python3 - "$OUTPUT_DIR" "$ROOT_DIR" "$RUNS" "$SLEEP_SECONDS" "$RECORD" "$TIMESTAMP" "$OS_VERSION" "$OS_BUILD" "$ARCH" "$MODEL" "$LAUNCH_MODE" "$ASSERT_BUDGET" "$GHOSTTY_RESOURCES_DIR_RESOLVED" "$SHELL_PROFILE_MODE" "$TERMINAL_DIAGNOSTICS" "$DISABLE_STATE_RESTORATION" <<'PY'
 import csv
 from datetime import datetime
 import json
@@ -165,6 +245,10 @@ arch = sys.argv[9]
 model = sys.argv[10]
 launch_mode = sys.argv[11]
 assert_budget = int(sys.argv[12]) == 1
+ghostty_resources_dir = sys.argv[13] or None
+shell_profile_mode = sys.argv[14]
+terminal_diagnostics = sys.argv[15]
+disable_state_restoration = sys.argv[16]
 
 duration_pattern = re.compile(r"metric=([a-z_]+) duration_ms=([0-9]+(?:\.[0-9]+)?)")
 hydration_meta_pattern = re.compile(
@@ -247,7 +331,7 @@ findings = []
 launch_stats = metrics_summary.get("launch_to_first_prompt")
 if launch_stats and launch_stats["median"] > 500:
     findings.append(
-        f"launch_to_first_prompt median is {launch_stats['median']:.2f} ms in {scenario}. Startup remains visibly slower than the debug gate."
+        f"launch_to_first_prompt median is {launch_stats['median']:.2f} ms in {scenario}. Raw SwiftPM debug startup should be compared against debug-only references, not packaged-app release gates."
     )
 repo_focus_stats = metrics_summary.get("repo_click_to_focus")
 if repo_focus_stats and repo_focus_stats["median"] > 300:
@@ -289,6 +373,10 @@ summary = canonical_summary(
                 statistics.median(activation_to_first_prompt_values)
                 if activation_to_first_prompt_values else None
             ),
+            "ghostty_resources_dir": ghostty_resources_dir,
+            "shell_profile_mode": shell_profile_mode,
+            "terminal_diagnostics": terminal_diagnostics,
+            "disable_state_restoration": disable_state_restoration,
         }
     },
 )
@@ -319,13 +407,13 @@ budget_exit_code = 0
 if assert_budget:
     violations = []
     for metric_name in ["launch_to_first_prompt", "repo_hydration", "repo_click_to_focus"]:
-        stats = summary["metrics"].get(metric_name)
         budget = summary["budget_results"].get(metric_name, {})
         target = budget.get("gate_budget_ms")
+        if target is None:
+            continue
+        stats = summary["metrics"].get(metric_name)
         if stats is None:
             violations.append(f"  {metric_name}: MISSING (no data collected)")
-            continue
-        if target is None:
             continue
         median = float(stats["median"])
         if median > float(target):
