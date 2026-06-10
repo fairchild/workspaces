@@ -311,7 +311,8 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
             executable: "/bin/bash",
             arguments: [scriptPath.path],
             currentDirectory: directory,
-            environment: env
+            environment: env,
+            timeout: 600
         )
 
         return ScriptResult(

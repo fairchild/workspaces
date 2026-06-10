@@ -79,7 +79,8 @@ public actor LocalBackend {
             executable: executableURL.path,
             arguments: Array(command.dropFirst()),
             currentDirectory: workDir,
-            environment: env
+            environment: env,
+            timeout: 600
         )
     }
 
@@ -98,7 +99,8 @@ public actor LocalBackend {
     private func resolveExecutable(_ name: String) async throws -> String {
         let result = try await ProcessRunner.run(
             executable: "/usr/bin/which",
-            arguments: [name]
+            arguments: [name],
+            timeout: 5
         )
 
         let path = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)

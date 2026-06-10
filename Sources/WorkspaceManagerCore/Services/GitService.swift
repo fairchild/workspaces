@@ -257,7 +257,8 @@ public actor GitService: GitServiceProtocol {
         try await ProcessRunner.run(
             executable: "/usr/bin/git",
             arguments: args,
-            currentDirectory: path
+            currentDirectory: path,
+            timeout: 30
         )
     }
 
@@ -266,7 +267,8 @@ public actor GitService: GitServiceProtocol {
         let result = try await ProcessRunner.run(
             executable: "/usr/bin/git",
             arguments: args,
-            currentDirectory: path
+            currentDirectory: path,
+            timeout: 30
         )
 
         if result.exitCode == 0 {

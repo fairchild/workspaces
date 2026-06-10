@@ -85,7 +85,8 @@ struct GitCloneWorkspaceMaterializer: WorkspaceMaterializer {
         let cloneResult = try await ProcessRunner.run(
             executable: "/usr/bin/git",
             arguments: cloneArguments,
-            currentDirectory: sourceRepository.deletingLastPathComponent()
+            currentDirectory: sourceRepository.deletingLastPathComponent(),
+            timeout: 30
         )
         guard cloneResult.success else {
             let reason = cloneResult.stderr.isEmpty ? "Unknown error" : cloneResult.stderr

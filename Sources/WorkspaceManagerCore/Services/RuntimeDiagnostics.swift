@@ -251,11 +251,13 @@ public struct LiveRuntimeProcessSnapshotProvider: RuntimeProcessSnapshotProvidin
     public func processes() async throws -> [RuntimeProcessSample] {
         async let processOutput = ProcessRunner.run(
             executable: "/bin/ps",
-            arguments: ["-axo", "pid=,ppid=,pcpu=,rss=,time=,comm=,args="]
+            arguments: ["-axo", "pid=,ppid=,pcpu=,rss=,time=,comm=,args="],
+            timeout: 10
         )
         async let cwdOutput = ProcessRunner.run(
             executable: "/usr/sbin/lsof",
-            arguments: ["-d", "cwd", "-F", "pcn"]
+            arguments: ["-d", "cwd", "-F", "pcn"],
+            timeout: 10
         )
 
         let processResult = try await processOutput
