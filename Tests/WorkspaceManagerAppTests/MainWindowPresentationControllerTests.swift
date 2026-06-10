@@ -89,6 +89,59 @@ struct MainWindowPresentationControllerTests {
         #expect(paneCounts[defaultHome.key] == 1)
     }
 
+    @Test("Toolbar title nests workspace under its source repo")
+    func toolbarTitleNestsWorkspaceUnderSourceRepo() {
+        let repo = Repo(name: "pi-mono", localPath: URL(fileURLWithPath: "/tmp/pi-mono"))
+        let workspace = Workspace(
+            name: "gentle-frog",
+            path: URL(fileURLWithPath: "/tmp/workspaces/pi-mono/gentle-frog"),
+            sourceRepo: repo
+        )
+
+        let title = controller.toolbarTitle(
+            selectedWorkspace: workspace,
+            selectedRepo: repo,
+            activeHostSession: nil
+        )
+
+        #expect(title?.repoName == "pi-mono")
+        #expect(title?.workspaceName == "gentle-frog")
+        #expect(title?.windowTitle == "pi-mono / gentle-frog")
+    }
+
+    @Test("Toolbar title shows only repo for root terminal")
+    func toolbarTitleShowsOnlyRepoForRootTerminal() {
+        let repo = Repo(name: "pi-mono", localPath: URL(fileURLWithPath: "/tmp/pi-mono"))
+
+        let title = controller.toolbarTitle(
+            selectedWorkspace: nil,
+            selectedRepo: repo,
+            activeHostSession: nil
+        )
+
+        #expect(title?.repoName == "pi-mono")
+        #expect(title?.workspaceName == nil)
+        #expect(title?.windowTitle == "pi-mono")
+    }
+
+    @Test("Toolbar title falls back to active terminal directory when no repo is selected")
+    func toolbarTitleFallsBackToActiveTerminalDirectory() {
+        let session = HostTerminalSession(
+            key: .hostPath("/tmp/scratch"),
+            directory: URL(fileURLWithPath: "/tmp/scratch")
+        )
+
+        let title = controller.toolbarTitle(
+            selectedWorkspace: nil,
+            selectedRepo: nil,
+            activeHostSession: session
+        )
+
+        #expect(title?.repoName == "scratch")
+        #expect(title?.workspaceName == nil)
+        #expect(title?.windowTitle == "scratch")
+    }
+
     @Test("Open in editor target prefers file selection over workspace and repo")
     func openInEditorTargetPrefersFileSelection() {
         let repo = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))
