@@ -37,6 +37,28 @@ struct SurfaceStoreTests {
         #expect(created == [tile])
     }
 
+    @Test("Rebinding a tile to a new session evicts the old surface and rebinds the resolver")
+    func rebindTileToNewSessionReplacesSurface() {
+        let store = SurfaceStore()
+        var invalidated: [TileID] = []
+        store.onSurfaceInvalidated = { invalidated.append($0) }
+
+        let tile = TileID()
+        let firstSession = makeSession(path: "/Users/test/first")
+        let secondSession = makeSession(path: "/Users/test/second")
+
+        let firstSurface = store.terminalSurface(for: tile, session: firstSession)
+        let firstView = firstSurface.surfaceView
+        let secondSurface = store.terminalSurface(for: tile, session: secondSession)
+
+        #expect(secondSurface !== firstSurface)
+        #expect(invalidated == [tile])
+        #expect(store.retainedTileIDs == [tile])
+        #expect(store.sessionID(for: secondSurface.surfaceView) == secondSession.id)
+        // The old view's identity must no longer resolve — the reason the guard exists.
+        #expect(store.sessionID(for: firstView) == nil)
+    }
+
     @Test("Resolver maps a surface view back to its session and tile")
     func resolverMapsViewToSessionAndTile() {
         let store = SurfaceStore()

@@ -52,7 +52,7 @@ final class SurfaceStore {
             }
         }
 
-        if let existing = surfaces[tileID] as? TerminalSurface {
+        if let existing = surfaces[tileID] as? TerminalSurface, existing.session.id == session.id {
             existing.update(
                 onProcessExit: wrappedOnProcessExit,
                 onCloseConfirmationRequired: onCloseConfirmationRequired,
@@ -60,6 +60,10 @@ final class SurfaceStore {
             )
             return existing
         }
+
+        // A stale binding (tile rebound to a different session) or a mismatched/absent surface: evict
+        // before recreating so `sessionID(for:)` never reports the previous session's identity.
+        invalidate(tileID: tileID)
 
         let created = TerminalSurface(
             tileID: tileID,
@@ -83,10 +87,13 @@ final class SurfaceStore {
         source: WebSource,
         onBlockedNavigation: ((URL) -> Void)? = nil
     ) -> WebSurface {
-        if let existing = surfaces[tileID] as? WebSurface {
+        if let existing = surfaces[tileID] as? WebSurface, existing.source.id == source.id {
             existing.onBlockedNavigation = onBlockedNavigation
             return existing
         }
+
+        // Stale/mismatched binding: evict before rebinding the tile to a different source.
+        invalidate(tileID: tileID)
 
         let created = WebSurface(
             tileID: tileID,
@@ -128,6 +135,11 @@ final class SurfaceStore {
     // MARK: - Eviction
 
     /// Evict the surface for `tileID`: tear it down and fire `onSurfaceInvalidated`. No-op if absent.
+    ///
+    /// Deliberate parity delta from the legacy `HostTerminalSurfaceStore.invalidate(sessionID:)`, which
+    /// fired `onSurfaceInvalidated` unconditionally: here an absent tile is a silent no-op, so listeners
+    /// see invalidations only for surfaces that actually existed. Phase 5 routes all teardown through
+    /// `sync`, so this guard is what keeps that flip from emitting phantom invalidations.
     func invalidate(tileID: TileID) {
         guard let surface = surfaces.removeValue(forKey: tileID) else { return }
         surface.tearDown()
