@@ -109,6 +109,24 @@ class PRReadinessTests(unittest.TestCase):
             result.failures,
         )
 
+    def test_docs_only_pr_without_evidence_passes(self) -> None:
+        body = GOOD_BODY.replace(
+            "- ![tests](https://evidence.cloudcompute.com/workspaces/pr-1/tests.svg)",
+            "- Docs-only change; no test or screenshot evidence applicable.",
+        )
+        result = pr_readiness.evaluate(pr(body), ["backlog/ROADMAP.md"])
+        self.assertEqual(result.failures, [])
+
+    def test_mixed_docs_and_code_still_requires_evidence(self) -> None:
+        body = GOOD_BODY.replace(
+            "- ![tests](https://evidence.cloudcompute.com/workspaces/pr-1/tests.svg)",
+            "- Docs-only change; no test or screenshot evidence applicable.",
+        )
+        result = pr_readiness.evaluate(
+            pr(body), ["backlog/ROADMAP.md", "Sources/WorkspaceManager/Foo.swift"]
+        )
+        self.assertIn("No test/evidence signal found in PR body.", result.failures)
+
     def test_draft_pr_is_advisory(self) -> None:
         result = pr_readiness.evaluate(pr("", draft=True), [".github/workflows/release.yml"])
         self.assertEqual(result.failures, [])
