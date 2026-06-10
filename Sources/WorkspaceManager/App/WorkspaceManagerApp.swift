@@ -284,6 +284,7 @@ private struct MainWindowRootView: View {
     @StateObject private var hostTerminalState = HostTerminalStateStore()
     @StateObject private var workspaceProviderSetupCoordinator = WorkspaceProviderSetupCoordinator()
     @StateObject private var hostLumeSmokeAutomation: HostLumeSmokeAutomationController
+    @StateObject private var desktopUISmokeAutomation: DesktopUISmokeAutomationController
 
     init(
         appRuntimeDependencies: AppRuntimeDependencies,
@@ -294,6 +295,9 @@ private struct MainWindowRootView: View {
         _hostLumeSmokeAutomation = StateObject(
             wrappedValue: HostLumeSmokeAutomationController()
         )
+        _desktopUISmokeAutomation = StateObject(
+            wrappedValue: DesktopUISmokeAutomationController()
+        )
     }
 
     var body: some View {
@@ -303,7 +307,8 @@ private struct MainWindowRootView: View {
             appCommandState: appCommandState,
             hostTerminalState: hostTerminalState,
             workspaceProviderSetupCoordinator: workspaceProviderSetupCoordinator,
-            hostLumeSmokeAutomation: hostLumeSmokeAutomation
+            hostLumeSmokeAutomation: hostLumeSmokeAutomation,
+            desktopUISmokeAutomation: desktopUISmokeAutomation
         )
         .onOpenURL { url in
             if deepLinkState.enqueue(url: url) {

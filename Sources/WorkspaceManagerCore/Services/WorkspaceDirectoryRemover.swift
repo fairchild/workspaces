@@ -6,6 +6,9 @@
 //
 
 import Foundation
+import os.log
+
+private let log = Logger(subsystem: "com.cloudcompute.workspaces", category: "WorkspaceDirectoryRemover")
 
 enum WorkspaceDirectoryRemover {
     static func remove(at workspaceURL: URL) async throws {
@@ -16,10 +19,28 @@ enum WorkspaceDirectoryRemover {
         }
 
         if isLinkedGitWorktree(at: workspaceURL, fileManager: fileManager) {
-            let branchName = try? await currentBranchName(at: workspaceURL)
-            let commonGitDirectory = try? await commonGitDirectory(at: workspaceURL)
+            let branchName: String?
+            do {
+                branchName = try await currentBranchName(at: workspaceURL)
+            } catch {
+                branchName = nil
+                log.warning(
+                    "Failed to read current branch for workspace cleanup at \(workspaceURL.path): \(error.localizedDescription)"
+                )
+            }
+
+            let commonGitDirectoryURL: URL?
+            do {
+                commonGitDirectoryURL = try await commonGitDirectory(at: workspaceURL)
+            } catch {
+                commonGitDirectoryURL = nil
+                log.warning(
+                    "Failed to read common git directory for workspace cleanup at \(workspaceURL.path): \(error.localizedDescription)"
+                )
+            }
+
             let removalArguments: [String]
-            if let commonGitDirectory {
+            if let commonGitDirectory = commonGitDirectoryURL {
                 removalArguments = [
                     "--git-dir",
                     commonGitDirectory.path,
@@ -44,12 +65,25 @@ enum WorkspaceDirectoryRemover {
 
             if let branchName,
                 branchName.hasPrefix("workspace/"),
-                let commonGitDirectory
+                let commonGitDirectory = commonGitDirectoryURL
             {
-                _ = try? await ProcessRunner.run(
-                    executable: "/usr/bin/git",
-                    arguments: ["--git-dir", commonGitDirectory.path, "branch", "-D", branchName]
-                )
+                let branchDeletionArguments = ["--git-dir", commonGitDirectory.path, "branch", "-D", branchName]
+                do {
+                    let branchDeletionResult = try await ProcessRunner.run(
+                        executable: "/usr/bin/git",
+                        arguments: branchDeletionArguments
+                    )
+                    if !branchDeletionResult.success {
+                        let reason = branchDeletionResult.stderr.isEmpty ? "Unknown error" : branchDeletionResult.stderr
+                        log.warning(
+                            "Failed best-effort workspace branch cleanup for \(branchName) at \(commonGitDirectory.path): \(reason)"
+                        )
+                    }
+                } catch {
+                    log.warning(
+                        "Failed best-effort workspace branch cleanup for \(branchName) at \(commonGitDirectory.path): \(error.localizedDescription)"
+                    )
+                }
             }
         } else {
             try fileManager.removeItem(at: workspaceURL)
@@ -74,7 +108,10 @@ enum WorkspaceDirectoryRemover {
             arguments: ["branch", "--show-current"],
             currentDirectory: workspaceURL
         )
-        guard result.success else { return nil }
+        guard result.success else {
+            let reason = result.stderr.isEmpty ? "Unknown error" : result.stderr
+            throw GitError.commandFailed(args: ["branch", "--show-current"], stderr: reason)
+        }
         let branchName = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         return branchName.isEmpty ? nil : branchName
     }
@@ -85,17 +122,30 @@ enum WorkspaceDirectoryRemover {
             arguments: ["rev-parse", "--path-format=absolute", "--git-common-dir"],
             currentDirectory: workspaceURL
         )
-        guard result.success else { return nil }
+        guard result.success else {
+            let reason = result.stderr.isEmpty ? "Unknown error" : result.stderr
+            throw GitError.commandFailed(
+                args: ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+                stderr: reason
+            )
+        }
         let path = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         return path.isEmpty ? nil : URL(fileURLWithPath: path)
     }
 
     private static func cleanupEmptyParent(of workspaceURL: URL, fileManager: FileManager) {
         let parentDir = workspaceURL.deletingLastPathComponent()
-        if let contents = try? fileManager.contentsOfDirectory(atPath: parentDir.path),
-            contents.isEmpty
-        {
-            try? fileManager.removeItem(at: parentDir)
+        guard fileManager.fileExists(atPath: parentDir.path) else { return }
+
+        do {
+            let contents = try fileManager.contentsOfDirectory(atPath: parentDir.path)
+            if contents.isEmpty {
+                try fileManager.removeItem(at: parentDir)
+            }
+        } catch {
+            log.warning(
+                "Failed best-effort empty parent cleanup at \(parentDir.path): \(error.localizedDescription)"
+            )
         }
     }
 }

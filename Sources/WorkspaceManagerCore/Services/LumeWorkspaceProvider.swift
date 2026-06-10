@@ -6,6 +6,9 @@
 //
 
 import Foundation
+import os.log
+
+private let log = Logger(subsystem: "com.cloudcompute.workspaces", category: "LumeWorkspaceProvider")
 
 public struct LumeWorkspaceMetadata: Codable, Sendable, Equatable {
     public let vmName: String
@@ -255,14 +258,18 @@ public actor LumeWorkspaceProvider: WorkspaceProviderProtocol {
             return finalResult
         } catch {
             if let vmName {
-                try? await deleteVM(
+                await deleteVMBestEffort(
                     named: vmName,
                     storagePath: vmStoragePath,
-                    guestOS: guestOS
+                    guestOS: guestOS,
+                    context: "createWorkspace failure"
                 )
             }
             if let localInfo {
-                try? await WorkspaceDirectoryRemover.remove(at: localInfo.path)
+                await removeLocalWorkspaceBestEffort(
+                    at: localInfo.path,
+                    context: "createWorkspace failure"
+                )
             }
             throw error
         }
@@ -521,7 +528,11 @@ public actor LumeWorkspaceProvider: WorkspaceProviderProtocol {
             await progressMessage?(
                 "Lume's background service could not provision macOS directly. Retrying with the Lume CLI..."
             )
-            try? await deleteVMWithCLI(named: vmName, storagePath: storagePath)
+            await deleteVMWithCLIBestEffort(
+                named: vmName,
+                storagePath: storagePath,
+                context: "macOS provisioning HTTP fallback"
+            )
             try await createMacOSVMWithCLI(
                 named: vmName,
                 hostProfile: hostProfile,
@@ -663,6 +674,21 @@ public actor LumeWorkspaceProvider: WorkspaceProviderProtocol {
         )
     }
 
+    private func deleteVMBestEffort(
+        named vmName: String,
+        storagePath: String?,
+        guestOS: WorkspaceGuestOS,
+        context: String
+    ) async {
+        do {
+            try await deleteVM(named: vmName, storagePath: storagePath, guestOS: guestOS)
+        } catch {
+            log.warning(
+                "Failed best-effort Lume VM cleanup after \(context) for \(vmName): \(error.localizedDescription)"
+            )
+        }
+    }
+
     private func stopVMWithCLI(named vmName: String, storagePath: String?) async throws {
         var arguments = ["stop", vmName]
         if let storagePath {
@@ -684,6 +710,26 @@ public actor LumeWorkspaceProvider: WorkspaceProviderProtocol {
 
         guard result.success else {
             throw WorkspaceProviderError.unavailable("Failed to delete macOS VM '\(vmName)'.")
+        }
+    }
+
+    private func deleteVMWithCLIBestEffort(named vmName: String, storagePath: String?, context: String) async {
+        do {
+            try await deleteVMWithCLI(named: vmName, storagePath: storagePath)
+        } catch {
+            log.warning(
+                "Failed best-effort Lume CLI VM cleanup after \(context) for \(vmName): \(error.localizedDescription)"
+            )
+        }
+    }
+
+    private func removeLocalWorkspaceBestEffort(at workspaceURL: URL, context: String) async {
+        do {
+            try await WorkspaceDirectoryRemover.remove(at: workspaceURL)
+        } catch {
+            log.warning(
+                "Failed best-effort Lume local workspace cleanup after \(context) at \(workspaceURL.path): \(error.localizedDescription)"
+            )
         }
     }
 

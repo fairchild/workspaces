@@ -20,6 +20,11 @@ Continuous improvement of `AGENTS.md` is important to the health and longevity o
 
 Issues and PRDs live in GitHub Issues for `fairchild/workspaces`. See `docs/agents/issue-tracker.md`.
 
+When the user asks to work a GitHub issue, or gives an issue link/number, treat it as a backlog claim even if the `backlog` skill was not named.
+Before implementation, read the issue, apply the `claimed` label, remove `ready` if present, and post a claim comment naming the active Codex thread title/name and session ID.
+If either identifier is unavailable, say so explicitly in the comment instead of omitting it.
+Then continue through the issue lifecycle in `backlog/AGENTS.md`.
+
 ### Triage labels
 
 Use lane + state labels: `agent`/`human` for ownership, `ready`/`claimed`/`review`/`mergeable` for lifecycle, and `needs-human` only for human intervention blockers. See `docs/agents/triage-labels.md`.
@@ -41,7 +46,8 @@ When changing terminal/keyboard/sidebar behavior, run the canonical self-verific
 3. Confirm you're testing the debug app, not `/Applications`: `ps aux | rg '.build/arm64-apple-macosx/debug/WorkspaceManager'`. Debug builds show a `DEV` Dock badge and `Development Build` window subtitle; kill `/Applications/WorkSpaces.app` if both are running.
 4. Verify shortcuts: `Cmd+B` toggles the sidebar; `Cmd+D` creates a visible right split. If a split fails, check `.dev-data/logs/` for `"[GhosttyAppManager] action=new_split direction="`.
 5. Capture evidence without forcing activation: `./scripts/capture-window.sh`. With `--no-activate`, pause your own input, capture, resume — it's a capture-only handshake, not an input-driving lane. Run activation-driving scripts (e.g. `./scripts/shortcut-pass-through-smoke.sh`, Ghostty Splits mode only) only when foreground input is acceptable; for input-driving automation that must not disturb the desktop, use Tart/Lume or a separate macOS user/session.
-6. `mise` shortcuts: `dev-launch`, `dev-watch`, `dev-smoke`, `dev-lume-ensure`, `dev-lume-preflight`, `dev-lume-standalone-validate`, `dev-lume-macos-smoke`.
+6. Verify the daily-driver flows end to end with `./scripts/desktop-ui-smoke.sh --no-build` (`mise run dev-ui-smoke`): the `desktop-ui-smoke` automation mode creates a local workspace via the UI and switches selection workspace→repo→workspace, then asserts the JSONL milestone sequence (`workspace_created`, `sidebar_updated`, `terminal_session_attached`, `surface_focused`) under `output/desktop-ui-smoke/<timestamp>/`. Headless-safe (`--no-activate`); terminal-attach + follows-selection are hard gates, `surface_focused` is best-effort (focus is non-deterministic with the app backgrounded). Scheduled non-PR-blocking lane first; promote to a gate once stable.
+7. `mise` shortcuts: `dev-launch`, `dev-watch`, `dev-smoke`, `dev-ui-smoke`, `dev-lume-ensure`, `dev-lume-preflight`, `dev-lume-standalone-validate`, `dev-lume-macos-smoke`.
 
 Launcher contract: `launch-dev.sh` reports success only once the debug process is alive and a visible window exists; on failure, inspect the latest `.dev-data/logs/launch-diagnostics-<timestamp>/` bundle first.
 

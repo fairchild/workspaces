@@ -471,6 +471,46 @@ struct HostTerminalStateStoreTests {
         #expect(commandStatusRegistry.statusByTerminalSession[pre.id] == nil)
     }
 
+    @Test("Retiring a workspace scope removes primary tabs, splits, and registry state")
+    func retiringWorkspaceScopeRemovesSessionsAndRegistryState() throws {
+        let store = HostTerminalStateStore()
+        let defaultHome = store.activateSession(
+            key: .defaultHome,
+            directory: URL(fileURLWithPath: "/Users/test")
+        ).session
+        let workspaceURL = URL(fileURLWithPath: "/Users/test/code/repo/workspaces/feature-a")
+        let firstWorkspaceTab = store.activateSession(
+            key: .hostPath(workspaceURL.path),
+            directory: workspaceURL
+        ).session
+        let secondWorkspaceTab = try #require(store.createTab())
+        let split = try #require(store.ensureSplit(forPrimarySessionID: firstWorkspaceTab.id))
+
+        let registry = AgentSessionRegistry()
+        let commandStatusRegistry = LastCommandStatusRegistry()
+        store.attach(
+            agentSessionRegistry: registry,
+            localStateStore: nil,
+            hooksSocketPath: nil,
+            lastCommandStatusRegistry: commandStatusRegistry
+        )
+        commandStatusRegistry.ingest(markers: [.commandStart], for: firstWorkspaceTab.id, commandLine: "make")
+        commandStatusRegistry.ingest(markers: [.commandStart], for: split.id, commandLine: "claude")
+
+        let retired = store.retireSessions(inScope: .hostPath(workspaceURL.path))
+
+        #expect(Set(retired) == Set([split.id, firstWorkspaceTab.id, secondWorkspaceTab.id]))
+        #expect(store.sessions.map(\.id) == [defaultHome.id])
+        #expect(store.activeSessionID == defaultHome.id)
+        #expect(store.splitSession(for: firstWorkspaceTab.id) == nil)
+        #expect(registry.statuses[firstWorkspaceTab.id] == nil)
+        #expect(registry.statuses[secondWorkspaceTab.id] == nil)
+        #expect(registry.statuses[split.id] == nil)
+        #expect(registry.statuses[defaultHome.id] != nil)
+        #expect(commandStatusRegistry.statusByTerminalSession[firstWorkspaceTab.id] == nil)
+        #expect(commandStatusRegistry.statusByTerminalSession[split.id] == nil)
+    }
+
     @Test("Process exit helper returns active fallback session when others remain")
     func processExitHelperReturnsRemainingActiveSession() throws {
         let store = HostTerminalStateStore()

@@ -283,6 +283,30 @@ final class HostTerminalStateStore: ObservableObject {
     }
 
     @discardableResult
+    func retireSessions(inScope scopeKey: HostTerminalSessionKey) -> [UUID] {
+        let primarySessionIDs = coordinator.sessions(inScope: scopeKey).map(\.id)
+        guard !primarySessionIDs.isEmpty else { return [] }
+
+        var retiredSessionIDs: [UUID] = []
+        for primarySessionID in primarySessionIDs {
+            for splitSession in dropSplitTree(forPrimarySessionID: primarySessionID) {
+                retireTerminalSession(splitSession.id)
+                retiredSessionIDs.append(splitSession.id)
+            }
+
+            guard coordinator.remove(sessionID: primarySessionID) != nil else { continue }
+            retireTerminalSession(primarySessionID)
+            tabTitleOverridesBySessionID.removeValue(forKey: primarySessionID)
+            retiredSessionIDs.append(primarySessionID)
+        }
+
+        if !retiredSessionIDs.isEmpty {
+            publishSnapshot()
+        }
+        return retiredSessionIDs
+    }
+
+    @discardableResult
     func handleProcessExit(for sessionID: UUID) -> Bool {
         var removed = false
 
@@ -665,35 +689,57 @@ final class HostTerminalStateStore: ObservableObject {
         registeredAgentSessionIDs.subtract(removed)
     }
 
-    /// Collapses the split for `primarySessionID` by dropping its tree entry and every binding it
-    /// owned, then deregistering the split session(s) it held. Dropping the dict entry — rather than
-    /// reducing a `.close` (which would re-seed a single tile) — is the sparse-model collapse: no
-    /// entry ⇒ single pane. The primary tile binding falls away with the tree; the primary session
-    /// itself stays in the coordinator and is untouched here.
+    /// Collapses the split for `primarySessionID` (process-exit / reconcile path): drops its tree and
+    /// bindings, then *invalidates* the split surface(s) and deregisters them. Dropping the dict entry
+    /// — rather than reducing a `.close` (which would re-seed a single tile) — is the sparse-model
+    /// collapse: no entry ⇒ single pane.
     private func removeSplitState(forPrimarySessionID primarySessionID: UUID) {
-        guard let tree = treesByPrimaryID.removeValue(forKey: primarySessionID) else { return }
+        for session in dropSplitTree(forPrimarySessionID: primarySessionID) {
+            surfaceStore.invalidate(sessionID: session.id)
+            deregisterTerminalSession(session.id)
+        }
+    }
+
+    /// Drops the split tree for `primarySessionID` and every binding it owned, returning the split
+    /// session(s) it held (the non-primary leaves) so the caller can tear them down its own way —
+    /// `invalidate` on collapse vs `retire` on workspace deletion. The primary tile binding falls
+    /// away with the tree; the primary session itself stays in the coordinator and is untouched here.
+    @discardableResult
+    private func dropSplitTree(forPrimarySessionID primarySessionID: UUID) -> [HostTerminalSession] {
+        guard let tree = treesByPrimaryID.removeValue(forKey: primarySessionID) else { return [] }
         // A live tree always carries its primary tile binding; without it the `tileID != primaryTile`
-        // guard below would treat the primary as a split and deregister a session still in the
-        // coordinator. The collapse mutates the tree dict, so notify (callers also `publishSnapshot`,
+        // guard below would treat the primary as a split and tear down a session still in the
+        // coordinator. The drop mutates the tree dict, so notify (callers also `publishSnapshot`,
         // making this a benign double-fire that keeps the mutator self-sufficient for direct callers).
         let primaryTile = tileIDBySessionID[primarySessionID]
         assert(primaryTile != nil, "primary tile binding must exist while its split tree does")
         objectWillChange.send()
 
+        var splitSessions: [HostTerminalSession] = []
         for tileID in tree.leafIDs {
             guard let session = sessionByTileID.removeValue(forKey: tileID) else { continue }
             tileIDBySessionID.removeValue(forKey: session.id)
             guard tileID != primaryTile else { continue }
 
             primaryIDBySplitSessionID.removeValue(forKey: session.id)
-            surfaceStore.invalidate(sessionID: session.id)
-            if registeredAgentSessionIDs.contains(session.id) {
-                agentSessionRegistry?.deregister(hostSessionID: session.id)
-                lastCommandStatusRegistry?.clear(terminalSessionID: session.id)
-                recordTerminalSessionEnded(session.id)
-                registeredAgentSessionIDs.remove(session.id)
-            }
+            splitSessions.append(session)
         }
+        return splitSessions
+    }
+
+    /// Deregisters a session from the agent subsystems if it was registered. Shared by the
+    /// collapse and retire teardown paths, which differ only in their surface-store call.
+    private func deregisterTerminalSession(_ sessionID: UUID) {
+        guard registeredAgentSessionIDs.contains(sessionID) else { return }
+        agentSessionRegistry?.deregister(hostSessionID: sessionID)
+        lastCommandStatusRegistry?.clear(terminalSessionID: sessionID)
+        recordTerminalSessionEnded(sessionID)
+        registeredAgentSessionIDs.remove(sessionID)
+    }
+
+    private func retireTerminalSession(_ sessionID: UUID) {
+        surfaceStore.retire(sessionID: sessionID)
+        deregisterTerminalSession(sessionID)
     }
 
     private func recordTerminalSession(_ session: HostTerminalSession, isActive: Bool) {
