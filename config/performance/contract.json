@@ -80,6 +80,26 @@
       "id": "channel2_statusline_burst",
       "build_kind": "debug",
       "description": "In-process burst of 1000 status-line POSTs at parallelism=8 against AgentHookListener /statusline; measures end-to-end HTTP and registry-update latency."
+    },
+    {
+      "id": "main_window_agent_activity_burst",
+      "build_kind": "debug",
+      "description": "In-process main-window status aggregation burst across 10 repos, 20 workspaces, and 30 retained host sessions; measures per-refresh sidebar status latency while agent status events arrive repeatedly."
+    },
+    {
+      "id": "main_window_workspace_create_ui_stall",
+      "build_kind": "debug",
+      "description": "Debug New Workspace sheet-open flow launched through the existing automated sheet benchmark; measures user-visible sheet readiness after provider availability and runtime snapshot refresh."
+    },
+    {
+      "id": "main_window_idle_cpu_diagnostics_closed",
+      "build_kind": "debug",
+      "description": "Debug app idle capture in UI fixture mode with the diagnostics pane closed; measures WorkspaceManager process CPU while the app is background-safe and not sampling the Diagnostics tab."
+    },
+    {
+      "id": "main_window_resident_memory_20_workspaces",
+      "build_kind": "debug",
+      "description": "In-process retained Ghostty surface benchmark for 20 workspace terminal sessions; measures app-process RSS after the surface store has created and retained one terminal surface per workspace."
     }
   ],
   "metrics": [
@@ -355,6 +375,84 @@
       "reference_baselines": {
         "channel4_replay_10k_records": {
           "max_mb": 50
+        }
+      }
+    },
+    {
+      "name": "main_window_agent_activity_burst_sidebar_latency_ms",
+      "unit": "ms",
+      "supported_scenarios": [
+        "main_window_agent_activity_burst"
+      ],
+      "reference_baselines": {
+        "main_window_agent_activity_burst": {
+          "median_ms": 8,
+          "p95_ms": 16
+        }
+      }
+    },
+    {
+      "name": "new_workspace_sheet_ready",
+      "unit": "ms",
+      "supported_scenarios": [
+        "main_window_workspace_create_ui_stall"
+      ],
+      "reference_baselines": {
+        "main_window_workspace_create_ui_stall": {
+          "median_ms": 400,
+          "p95_ms": 800
+        }
+      }
+    },
+    {
+      "name": "workspace_provider_availability_refresh",
+      "unit": "ms",
+      "supported_scenarios": [
+        "main_window_workspace_create_ui_stall"
+      ],
+      "reference_baselines": {
+        "main_window_workspace_create_ui_stall": {
+          "median_ms": 100,
+          "p95_ms": 250
+        }
+      }
+    },
+    {
+      "name": "lume_runtime_snapshot_refresh",
+      "unit": "ms",
+      "supported_scenarios": [
+        "main_window_workspace_create_ui_stall"
+      ],
+      "reference_baselines": {
+        "main_window_workspace_create_ui_stall": {
+          "median_ms": 250,
+          "p95_ms": 500
+        }
+      }
+    },
+    {
+      "name": "main_window_idle_cpu_diagnostics_closed_percent",
+      "unit": "percent",
+      "supported_scenarios": [
+        "main_window_idle_cpu_diagnostics_closed"
+      ],
+      "reference_baselines": {
+        "main_window_idle_cpu_diagnostics_closed": {
+          "median": 2,
+          "p95": 5
+        }
+      }
+    },
+    {
+      "name": "main_window_resident_memory_20_workspaces_mb",
+      "unit": "MB",
+      "supported_scenarios": [
+        "main_window_resident_memory_20_workspaces"
+      ],
+      "reference_baselines": {
+        "main_window_resident_memory_20_workspaces": {
+          "median_mb": 1200,
+          "p95_mb": 1500
         }
       }
     }
