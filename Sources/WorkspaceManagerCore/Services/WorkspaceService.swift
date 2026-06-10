@@ -179,8 +179,22 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
 
     // MARK: - Archive Workspace
 
-    public func archiveWorkspace(at workspaceURL: URL) async throws {
+    /// Runs teardown lifecycle scripts, then moves the workspace directory into the
+    /// `.archived/` area of the workspaces root. Returns the new archived location.
+    @discardableResult
+    public func archiveWorkspace(at workspaceURL: URL) async throws -> URL {
         try await runTeardownLifecycle(in: workspaceURL)
+        let destination = WorkspaceDirectoryArchiver.archivedDestination(for: workspaceURL)
+        try await WorkspaceDirectoryArchiver.move(from: workspaceURL, to: destination)
+        return destination
+    }
+
+    /// Moves an archived workspace directory back to its live location and returns it.
+    @discardableResult
+    public func unarchiveWorkspace(at workspaceURL: URL) async throws -> URL {
+        let destination = WorkspaceDirectoryArchiver.restoredDestination(for: workspaceURL)
+        try await WorkspaceDirectoryArchiver.move(from: workspaceURL, to: destination)
+        return destination
     }
 
     // MARK: - Delete Workspace

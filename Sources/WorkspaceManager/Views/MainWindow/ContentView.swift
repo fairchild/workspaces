@@ -1802,6 +1802,72 @@ struct ContentView: View {
 
         await syncWorkspaceStatuses(trigger: "launch_deferred")
         await refreshWorkspaceOrphans(trigger: "launch_deferred")
+        await purgeExpiredArchivedWorkspaces(trigger: "launch_deferred")
+    }
+
+    /// Local archived workspaces whose `.archived/` directory has aged past the
+    /// configured retention. Pure so the selection rule is unit-testable; workspaces
+    /// without an `archivedAt` (archived before this was tracked) are never auto-purged.
+    static func expiredArchivedWorkspaces(
+        _ workspaces: [Workspace],
+        now: Date,
+        delayDays: Int
+    ) -> [Workspace] {
+        guard delayDays > 0 else { return [] }
+        let cutoff = now.addingTimeInterval(-Double(delayDays) * 86_400)
+        return workspaces.filter { workspace in
+            workspace.backend == .local
+                && workspace.status == .archived
+                && (workspace.archivedAt.map { $0 <= cutoff } ?? false)
+        }
+    }
+
+    @MainActor
+    private func purgeExpiredArchivedWorkspaces(trigger: String) async {
+        let delayDays = ArchivedWorkspaceSettings.purgeDays()
+        let candidates = Self.expiredArchivedWorkspaces(
+            repos.flatMap(\.workspaces),
+            now: Date(),
+            delayDays: delayDays
+        )
+        guard !candidates.isEmpty else { return }
+
+        let startedAt = Date()
+        let controller = SidebarWorkspaceController(
+            modelContext: modelContext,
+            workspaceService: workspaceService,
+            workspaceProviderRegistry: workspaceProviderRegistry,
+            retireTerminalSessions: { key in
+                await retireTerminalSessions(inScope: key)
+            }
+        )
+
+        var purgedCount = 0
+        for workspace in candidates {
+            let wasSelected = currentSelectedWorkspace?.id == workspace.id
+            do {
+                try await controller.deleteWorkspace(workspace, deleteFiles: true)
+                if wasSelected {
+                    setSelectedWorkspace(nil)
+                }
+                purgedCount += 1
+            } catch {
+                NSLog(
+                    "[ArchivedWorkspacePurge] Failed to purge '%@': %@",
+                    workspace.name,
+                    error.localizedDescription
+                )
+            }
+        }
+
+        NSLog(
+            "[Perf] metric=archived_workspace_purge duration_ms=%.2f trigger=%@ delay_days=%ld candidate_count=%ld purged_count=%ld",
+            Date().timeIntervalSince(startedAt) * 1000,
+            trigger,
+            delayDays,
+            candidates.count,
+            purgedCount
+        )
     }
 
     @MainActor

@@ -786,31 +786,44 @@ struct WorkspaceServiceTests {
 
     // MARK: - archiveWorkspace Tests
 
-    @Test("archiveWorkspace succeeds when no archive script exists")
+    @Test("archiveWorkspace moves the directory into .archived when no script exists")
     func archiveWorkspaceSucceedsWithoutScript() async throws {
         let mockGit = MockGitService()
         let service = WorkspaceService(gitService: mockGit)
         let tempDir = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: tempDir) }
 
-        try await service.archiveWorkspace(at: tempDir)
+        let wsDir = tempDir.appendingPathComponent("repo/ws", isDirectory: true)
+        try FileManager.default.createDirectory(at: wsDir, withIntermediateDirectories: true)
+
+        let destination = try await service.archiveWorkspace(at: wsDir)
+
+        #expect(destination.path == tempDir.appendingPathComponent(".archived/repo/ws").path)
+        #expect(!FileManager.default.fileExists(atPath: wsDir.path))
+        #expect(FileManager.default.fileExists(atPath: destination.path))
     }
 
-    @Test("archiveWorkspace runs archive.sh")
+    @Test("archiveWorkspace runs archive.sh before moving the directory")
     func archiveWorkspaceRunsScript() async throws {
         let mockGit = MockGitService()
         let service = WorkspaceService(gitService: mockGit)
         let tempDir = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: tempDir) }
 
+        let wsDir = tempDir.appendingPathComponent("repo/ws", isDirectory: true)
+        try FileManager.default.createDirectory(at: wsDir, withIntermediateDirectories: true)
+
+        // Marker is written outside the workspace dir so it survives the archive move.
         try """
         #!/bin/bash
         touch "\(tempDir.path)/archived.marker"
-        """.write(to: tempDir.appendingPathComponent("archive.sh"), atomically: true, encoding: .utf8)
+        """.write(to: wsDir.appendingPathComponent("archive.sh"), atomically: true, encoding: .utf8)
 
-        try await service.archiveWorkspace(at: tempDir)
+        let destination = try await service.archiveWorkspace(at: wsDir)
 
         #expect(FileManager.default.fileExists(atPath: tempDir.appendingPathComponent("archived.marker").path))
+        #expect(FileManager.default.fileExists(atPath: destination.path))
+        #expect(!FileManager.default.fileExists(atPath: wsDir.path))
     }
 
     @Test("archiveWorkspace runs project-scripts stop then archive")
@@ -820,7 +833,8 @@ struct WorkspaceServiceTests {
         let tempDir = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: tempDir) }
 
-        let scriptsDir = tempDir.appendingPathComponent("scripts", isDirectory: true)
+        let wsDir = tempDir.appendingPathComponent("repo/ws", isDirectory: true)
+        let scriptsDir = wsDir.appendingPathComponent("scripts", isDirectory: true)
         try FileManager.default.createDirectory(at: scriptsDir, withIntermediateDirectories: true)
         let orderFile = tempDir.appendingPathComponent("teardown-order.log")
         try """
@@ -834,10 +848,73 @@ struct WorkspaceServiceTests {
         printf "archive\\n" >> "\(orderFile.path)"
         """.write(to: scriptsDir.appendingPathComponent("archive"), atomically: true, encoding: .utf8)
 
-        try await service.archiveWorkspace(at: tempDir)
+        try await service.archiveWorkspace(at: wsDir)
 
         let order = try String(contentsOf: orderFile, encoding: .utf8)
         #expect(order == "stop\narchive\n")
+    }
+
+    @Test("archived and restored destinations round-trip")
+    func archivedRestoredDestinationsRoundTrip() {
+        let source = URL(fileURLWithPath: "/tmp/roots/myrepo/feature-x", isDirectory: true)
+        let archived = WorkspaceDirectoryArchiver.archivedDestination(for: source)
+        #expect(archived.path == "/tmp/roots/.archived/myrepo/feature-x")
+        let restored = WorkspaceDirectoryArchiver.restoredDestination(for: archived)
+        #expect(restored.path == source.path)
+    }
+
+    @Test("archiveWorkspace moves a linked worktree and updates git metadata")
+    func archiveWorkspaceMovesLinkedWorktree() async throws {
+        let service = WorkspaceService()
+        let (testRoot, repoDir, wsRoot) = try makeGitWorkspaceFixture()
+        defer { try? FileManager.default.removeItem(at: testRoot) }
+        let originalRoot = setWorkspacesRoot(wsRoot)
+        defer { restoreWorkspacesRoot(originalRoot) }
+
+        let info = try await service.createWorkspace(
+            repoName: "test-repo",
+            repoLocalURL: repoDir,
+            name: "archive-me"
+        )
+
+        let archivedURL = try await service.archiveWorkspace(at: info.path)
+
+        #expect(archivedURL.path == wsRoot.appendingPathComponent(".archived/test-repo/archive-me").path)
+        #expect(!FileManager.default.fileExists(atPath: info.path.path))
+        #expect(FileManager.default.fileExists(atPath: archivedURL.path))
+
+        let list = try runGit(["worktree", "list", "--porcelain"], at: repoDir)
+        #expect(self.worktreeList(list, contains: archivedURL))
+        #expect(!self.worktreeList(list, contains: info.path))
+
+        // The moved worktree is still a valid git worktree (status succeeds, doesn't throw).
+        _ = try runGit(["status", "--porcelain"], at: archivedURL)
+    }
+
+    @Test("unarchiveWorkspace restores a linked worktree to its original path")
+    func unarchiveWorkspaceRestoresLinkedWorktree() async throws {
+        let service = WorkspaceService()
+        let (testRoot, repoDir, wsRoot) = try makeGitWorkspaceFixture()
+        defer { try? FileManager.default.removeItem(at: testRoot) }
+        let originalRoot = setWorkspacesRoot(wsRoot)
+        defer { restoreWorkspacesRoot(originalRoot) }
+
+        let info = try await service.createWorkspace(
+            repoName: "test-repo",
+            repoLocalURL: repoDir,
+            name: "round-trip"
+        )
+        let archivedURL = try await service.archiveWorkspace(at: info.path)
+
+        let restoredURL = try await service.unarchiveWorkspace(at: archivedURL)
+
+        #expect(restoredURL.path == info.path.path)
+        #expect(FileManager.default.fileExists(atPath: restoredURL.path))
+        #expect(!FileManager.default.fileExists(atPath: archivedURL.path))
+
+        let list = try runGit(["worktree", "list", "--porcelain"], at: repoDir)
+        #expect(self.worktreeList(list, contains: restoredURL))
+        #expect(!self.worktreeList(list, contains: archivedURL))
     }
 
     @Test("deleteWorkspace runs project-scripts teardown before removing workspace")
