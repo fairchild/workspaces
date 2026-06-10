@@ -21,7 +21,7 @@ After: every push to `main` produces a preview deployment, gets validated agains
 
 **"Validated artifact ships" invariant.** `vercel promote <preview-url>` re-points the production alias to the existing preview deployment without rebuilding. The bytes you tested are the bytes that go live. This is the single most important property of the design — see [`backlog/`](../../backlog/) for the analysis of Deploy Hooks vs. CLI promote.
 
-**Rolling failure issues, not per-failure issues.** One issue per validator (`CD: playwright failures on main`, `CD: lighthouse failures on main`), identified by hidden HTML markers. New failures append a comment; the issue auto-reopens if closed. Avoids issue-tracker flooding during a regression burst.
+**Rolling failure issues, not per-failure issues.** One issue per validator (`CD: playwright failures on main`, `CD: lighthouse failures on main`), identified by hidden HTML markers. New failures append a comment; the issue auto-reopens if closed. Production validation uses one open `cd-failure:prod` issue for the prod surface, and the next green prod validation comments on and closes open auto-opened prod failure issues. Avoids issue-tracker flooding during a regression burst.
 
 **Configuration as code.** The Vercel Git auto-deploy guard lives in `web/vercel.json` (`git.deploymentEnabled = false`), not in dashboard settings. Vercel stays connected for metadata, while GitHub Actions owns PR previews and production promotion.
 
@@ -72,7 +72,8 @@ After: every push to `main` produces a preview deployment, gets validated agains
 
 | File | What it does |
 |---|---|
-| `.github/workflows/cd.yml` | The 7-job CD pipeline: preview-web, preview-workers, playwright-validate, lighthouse, promote, fail-notify-{playwright,lighthouse}. |
+| `.github/workflows/cd.yml` | The CD pipeline: preview-web, preview-workers, validation, promotion, failure notification, and prod alert resolution. |
+| `.github/workflows/cd-prod-alert.js` | Shared prod alert issue policy: dedup failed prod validation into one open issue and close auto-opened prod issues after green validation. |
 | `.github/workflows/web-preview.yml` | Path-filtered PR preview deployment for `web/**`, with a single updated PR comment. |
 | `scripts/cd/bootstrap-preview.py` | Interactive setup wizard for first-time configuration. Prompts for tokens, writes secrets to GitHub + Cloudflare, generates `web/vercel.json`. |
 | `scripts/cd/config.toml` | Declarative manifest. Workers, preview health URLs, secret names, GitHub Actions secrets. **Add a worker = one TOML block.** |
@@ -129,7 +130,7 @@ What still requires you (no API exists for these):
 
 **`--only STEP`** runs a single phase (`prereq | vercel | cloudflare | github | validate`). Useful when one step fails and you want to retry just that one.
 
-**Failure issue dedup.** Failures from the same validator update one rolling issue rather than spamming. Close the issue when you've handled it; the next failure reopens it.
+**Failure issue dedup.** Failures from the same validator update one rolling issue rather than spamming. Prod failures update the newest open `auto-opened` + `cd-failure:prod` issue instead of opening a new urgent issue. Close the issue when you've handled it; the next failure reopens or recreates the surface issue.
 
 **Workflow trigger.** `cd.yml` runs on `push: branches: [main]` and `workflow_dispatch:` (so you can dispatch test runs from the Actions tab without merging).
 
