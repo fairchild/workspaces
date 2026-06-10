@@ -64,6 +64,8 @@
 
     let currentDocs = [];
     let renderRequestId = 0;
+    let renderTimer = 0;
+    const searchDebounceMs = 120;
 
     function escapeHtml(value) {
       return String(value || "")
@@ -242,6 +244,16 @@
       }
     }
 
+    function renderImmediately() {
+      window.clearTimeout(renderTimer);
+      render();
+    }
+
+    function scheduleRender() {
+      window.clearTimeout(renderTimer);
+      renderTimer = window.setTimeout(render, searchDebounceMs);
+    }
+
     function renderAutocomplete(docs, active) {
       const shouldShow = Boolean(active.q) && docs.length > 0;
       elements.autocomplete.classList.toggle("active", shouldShow);
@@ -354,9 +366,9 @@
 
     elements.routeForm.addEventListener("submit", (event) => {
       event.preventDefault();
-      render();
+      renderImmediately();
     });
-    elements.routeInput.addEventListener("input", render);
+    elements.routeInput.addEventListener("input", scheduleRender);
     elements.routeShowAll.addEventListener("click", clearFilters);
     elements.openAll.addEventListener("click", clearFilters);
     elements.routeGrid.addEventListener("click", handleFilterClick);
