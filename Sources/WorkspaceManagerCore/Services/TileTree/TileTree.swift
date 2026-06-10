@@ -110,6 +110,34 @@ extension TileTree {
             return second.lastLeafID
         }
     }
+
+    /// The innermost split directly enclosing `tileID`, plus which side the tile sits on. `nil` for a
+    /// bare tile or when the subtree does not contain `tileID`. Drives "resize the split around the
+    /// focused pane" at any depth, without assuming the enclosing split is the root.
+    public func enclosingSplit(of tileID: TileID) -> EnclosingSplit? {
+        guard case .split(let id, let axis, _, let first, let second) = self else { return nil }
+        if first.contains(tileID) {
+            return first.enclosingSplit(of: tileID) ?? EnclosingSplit(id: id, axis: axis, leafIsFirst: true)
+        }
+        if second.contains(tileID) {
+            return second.enclosingSplit(of: tileID) ?? EnclosingSplit(id: id, axis: axis, leafIsFirst: false)
+        }
+        return nil
+    }
+}
+
+/// The split that directly encloses a tile, located by `TileTree.enclosingSplit(of:)`.
+public struct EnclosingSplit: Equatable, Sendable {
+    public let id: SplitID
+    public let axis: SplitAxis
+    /// Whether the located tile lives in this split's `first` (leading / top) child subtree.
+    public let leafIsFirst: Bool
+
+    public init(id: SplitID, axis: SplitAxis, leafIsFirst: Bool) {
+        self.id = id
+        self.axis = axis
+        self.leafIsFirst = leafIsFirst
+    }
 }
 
 // MARK: - State

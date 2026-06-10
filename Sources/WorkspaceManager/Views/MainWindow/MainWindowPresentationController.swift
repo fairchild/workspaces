@@ -46,16 +46,13 @@ struct MainWindowPresentationController {
 
     func paneCountBySessionKey(
         sessions: [HostTerminalSession],
-        splitSession: (UUID) -> HostTerminalSession?
+        paneCount: (UUID) -> Int
     ) -> [HostTerminalSessionKey: Int] {
         var paneCounts: [HostTerminalSessionKey: Int] = [:]
         paneCounts.reserveCapacity(sessions.count)
 
         for session in sessions {
-            paneCounts[session.key, default: 0] &+= 1
-            if splitSession(session.id) != nil {
-                paneCounts[session.key, default: 0] &+= 1
-            }
+            paneCounts[session.key, default: 0] &+= paneCount(session.id)
         }
 
         return paneCounts

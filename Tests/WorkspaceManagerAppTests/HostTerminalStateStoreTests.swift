@@ -68,7 +68,7 @@ struct HostTerminalStateStoreTests {
             key: .defaultHome,
             directory: URL(fileURLWithPath: "/Users/test")
         ).session
-        let split = try #require(store.ensureSplit(forPrimarySessionID: primary.id))
+        let split = try #require(store.splitFocusedTile(inTabContaining: primary.id))
 
         #expect(store.setTabTitle("Build", for: split.id))
         #expect(store.tabTitleOverride(for: primary.id) == "Build")
@@ -160,8 +160,8 @@ struct HostTerminalStateStoreTests {
         #expect(store.tabIDsForClose(mode: .right, sourceSessionID: secondRepoTab.id) == [thirdRepoTab.id])
     }
 
-    @Test("ensureSplit stores preferred top-bottom layout")
-    func ensureSplitStoresPreferredLayout() {
+    @Test("Splitting stores the preferred top-bottom layout")
+    func splitStoresPreferredLayout() {
         let store = HostTerminalStateStore()
         let activation = store.activateSession(
             key: .defaultHome,
@@ -172,8 +172,8 @@ struct HostTerminalStateStoreTests {
             axis: .topBottom,
             splitBeforePrimary: false
         )
-        let split = store.ensureSplit(
-            forPrimarySessionID: activation.session.id,
+        let split = store.splitFocusedTile(
+            inTabContaining: activation.session.id,
             preferredLayout: preferredLayout
         )
 
@@ -190,8 +190,8 @@ struct HostTerminalStateStoreTests {
             directory: URL(fileURLWithPath: "/Users/test/code")
         )
         let primaryID = activation.session.id
-        _ = store.ensureSplit(
-            forPrimarySessionID: primaryID,
+        _ = store.splitFocusedTile(
+            inTabContaining: primaryID,
             preferredLayout: .defaultTrailing
         )
 
@@ -211,8 +211,8 @@ struct HostTerminalStateStoreTests {
         )
         let primaryID = activation.session.id
         let split = try #require(
-            store.ensureSplit(
-                forPrimarySessionID: primaryID,
+            store.splitFocusedTile(
+                inTabContaining: primaryID,
                 preferredLayout: .defaultTrailing
             )
         )
@@ -231,8 +231,8 @@ struct HostTerminalStateStoreTests {
         )
         let primaryID = activation.session.id
         let split = try #require(
-            store.ensureSplit(
-                forPrimarySessionID: primaryID,
+            store.splitFocusedTile(
+                inTabContaining: primaryID,
                 preferredLayout: .defaultTrailing
             )
         )
@@ -250,8 +250,8 @@ struct HostTerminalStateStoreTests {
         )
         let primaryID = activation.session.id
         let split = try #require(
-            store.ensureSplit(
-                forPrimarySessionID: primaryID,
+            store.splitFocusedTile(
+                inTabContaining: primaryID,
                 preferredLayout: .defaultTrailing
             )
         )
@@ -274,8 +274,8 @@ struct HostTerminalStateStoreTests {
             axis: .topBottom,
             splitBeforePrimary: false
         )
-        let split = store.ensureSplit(
-            forPrimarySessionID: primaryID,
+        let split = store.splitFocusedTile(
+            inTabContaining: primaryID,
             preferredLayout: splitLayout
         )
 
@@ -295,8 +295,8 @@ struct HostTerminalStateStoreTests {
         let primaryID = activation.session.id
 
         let split = try #require(
-            store.ensureSplit(
-                forPrimarySessionID: primaryID,
+            store.splitFocusedTile(
+                inTabContaining: primaryID,
                 preferredLayout: .defaultTrailing
             )
         )
@@ -329,8 +329,8 @@ struct HostTerminalStateStoreTests {
         )
 
         let split = try #require(
-            store.ensureSplit(
-                forPrimarySessionID: primaryID,
+            store.splitFocusedTile(
+                inTabContaining: primaryID,
                 preferredLayout: .defaultTrailing
             )
         )
@@ -367,8 +367,8 @@ struct HostTerminalStateStoreTests {
             directory: URL(fileURLWithPath: "/Users/test/code/repo")
         ).session
         _ = try #require(
-            store.ensureSplit(
-                forPrimarySessionID: repoSession.id,
+            store.splitFocusedTile(
+                inTabContaining: repoSession.id,
                 preferredLayout: .defaultTrailing
             )
         )
@@ -394,8 +394,8 @@ struct HostTerminalStateStoreTests {
         )
         let primaryID = activation.session.id
         let split = try #require(
-            store.ensureSplit(
-                forPrimarySessionID: primaryID,
+            store.splitFocusedTile(
+                inTabContaining: primaryID,
                 preferredLayout: .defaultTrailing
             )
         )
@@ -484,7 +484,7 @@ struct HostTerminalStateStoreTests {
             directory: workspaceURL
         ).session
         let secondWorkspaceTab = try #require(store.createTab())
-        let split = try #require(store.ensureSplit(forPrimarySessionID: firstWorkspaceTab.id))
+        let split = try #require(store.splitFocusedTile(inTabContaining: firstWorkspaceTab.id))
 
         let registry = AgentSessionRegistry()
         let commandStatusRegistry = LastCommandStatusRegistry()
@@ -534,8 +534,8 @@ struct HostTerminalStateStoreTests {
         #expect(store.sessions.first?.id == defaultHome.id)
     }
 
-    @Test("ensureSplit registers the split session and tears it down on split exit")
-    func ensureSplitRegistersSplitSessionLifecycle() throws {
+    @Test("Splitting registers the split session and tears it down on split exit")
+    func splitRegistersSplitSessionLifecycle() throws {
         let store = HostTerminalStateStore()
         let registry = AgentSessionRegistry()
         let commandStatusRegistry = LastCommandStatusRegistry()
@@ -552,8 +552,8 @@ struct HostTerminalStateStoreTests {
         )
 
         let split = try #require(
-            store.ensureSplit(
-                forPrimarySessionID: primaryID,
+            store.splitFocusedTile(
+                inTabContaining: primaryID,
                 preferredLayout: .defaultTrailing
             )
         )
@@ -573,8 +573,8 @@ struct HostTerminalStateStoreTests {
         #expect(registry.statuses[primaryID] != nil)
     }
 
-    @Test("ensureSplit relayout preserves split-session identity and fraction")
-    func ensureSplitRelayoutPreservesIdentityAndFraction() throws {
+    @Test("Splitting the focused tile grows the tree to three distinct panes")
+    func splittingFocusedTileGrowsTree() throws {
         let store = HostTerminalStateStore()
         let activation = store.activateSession(
             key: .defaultHome,
@@ -582,22 +582,100 @@ struct HostTerminalStateStoreTests {
         )
         let primaryID = activation.session.id
 
-        let split = try #require(
-            store.ensureSplit(forPrimarySessionID: primaryID, preferredLayout: .defaultTrailing)
+        let splitA = try #require(
+            store.splitFocusedTile(inTabContaining: primaryID, preferredLayout: .defaultTrailing)
         )
-        #expect(store.updateSplitFraction(0.7, forPrimarySessionID: primaryID))
-
-        let relaidOut = HostTerminalStateStore.SplitPaneLayout(axis: .topBottom, splitBeforePrimary: true)
-        let after = try #require(
-            store.ensureSplit(forPrimarySessionID: primaryID, preferredLayout: relaidOut)
+        // The new pane is now focused/source; splitting it again deepens the tree rather than relaying.
+        let splitB = try #require(
+            store.splitFocusedTile(inTabContaining: splitA.id, preferredLayout: .defaultTrailing)
         )
 
-        // Same live split session — a fresh tile/session would orphan the running terminal.
-        #expect(after.id == split.id)
-        #expect(store.splitSession(for: primaryID)?.id == split.id)
-        // Relayout swaps axis/order but leaves the existing fraction in place.
-        #expect(store.splitLayout(for: primaryID) == relaidOut)
-        #expect(store.splitFraction(for: primaryID) == 0.7)
+        #expect(splitB.id != splitA.id)
+        let tree = try #require(store.tileTree(forPrimarySessionID: primaryID))
+        #expect(tree.leafIDs.count == 3)
+
+        let leafSessionIDs = tree.leafIDs.compactMap { store.session(forTile: $0)?.id }
+        #expect(Set(leafSessionIDs) == Set([primaryID, splitA.id, splitB.id]))
+    }
+
+    @Test("Every split pane registers with the agent registry at depth ≥ 2")
+    func depthTwoRegistersEverySplitSession() throws {
+        let store = HostTerminalStateStore()
+        let registry = AgentSessionRegistry()
+        let activation = store.activateSession(
+            key: .defaultHome,
+            directory: URL(fileURLWithPath: "/Users/test/code")
+        )
+        let primaryID = activation.session.id
+        store.attach(agentSessionRegistry: registry, localStateStore: nil, hooksSocketPath: nil)
+
+        let splitA = try #require(store.splitFocusedTile(inTabContaining: primaryID))
+        let splitB = try #require(store.splitFocusedTile(inTabContaining: splitA.id))
+
+        // The derived split-session set is every non-primary leaf, so both deep panes are registered.
+        #expect(registry.statuses[primaryID] != nil)
+        #expect(registry.statuses[splitA.id] != nil)
+        #expect(registry.statuses[splitB.id] != nil)
+
+        // Collapsing the tab tears every pane down with it.
+        #expect(store.handleProcessExit(for: primaryID))
+        #expect(registry.statuses[splitA.id] == nil)
+        #expect(registry.statuses[splitB.id] == nil)
+    }
+
+    @Test("Resize targets the split enclosing the source pane, not the root")
+    func resizeTargetsEnclosingSplit() throws {
+        let store = HostTerminalStateStore()
+        let activation = store.activateSession(
+            key: .defaultHome,
+            directory: URL(fileURLWithPath: "/Users/test/code")
+        )
+        let primaryID = activation.session.id
+
+        // [primary | A], then split A top/bottom → primary beside an (A over B) column.
+        let splitA = try #require(
+            store.splitFocusedTile(inTabContaining: primaryID, preferredLayout: .defaultTrailing)
+        )
+        let splitB = try #require(
+            store.splitFocusedTile(
+                inTabContaining: splitA.id,
+                preferredLayout: HostTerminalStateStore.SplitPaneLayout(axis: .topBottom, splitBeforePrimary: false)
+            )
+        )
+
+        // Growing B upward resizes the inner top/bottom split; the root left/right split is untouched.
+        #expect(store.resizeSplit(containing: splitB.id, direction: .up, amount: 100))
+
+        let tree = try #require(store.tileTree(forPrimarySessionID: primaryID))
+        guard case .split(_, .leadingTrailing, let rootRatio, _, let second) = tree.root else {
+            Issue.record("Expected a leading/trailing root split")
+            return
+        }
+        #expect(rootRatio == 0.5)
+        guard case .split(_, .topBottom, let innerRatio, _, _) = second else {
+            Issue.record("Expected a top/bottom inner split")
+            return
+        }
+        #expect(innerRatio == 0.45)
+    }
+
+    @Test("Relative split focus cycles through every pane in order")
+    func relativeFocusCyclesAllPanes() throws {
+        let store = HostTerminalStateStore()
+        let activation = store.activateSession(
+            key: .defaultHome,
+            directory: URL(fileURLWithPath: "/Users/test/code")
+        )
+        let primaryID = activation.session.id
+
+        let splitA = try #require(store.splitFocusedTile(inTabContaining: primaryID))
+        let splitB = try #require(store.splitFocusedTile(inTabContaining: splitA.id))
+
+        // Depth-first leaf order is [primary, A, B]; next wraps, previous walks back.
+        #expect(store.splitFocusTarget(from: primaryID, direction: .next) == splitA.id)
+        #expect(store.splitFocusTarget(from: splitA.id, direction: .next) == splitB.id)
+        #expect(store.splitFocusTarget(from: splitB.id, direction: .next) == primaryID)
+        #expect(store.splitFocusTarget(from: primaryID, direction: .previous) == splitB.id)
     }
 
     @Test(
@@ -617,9 +695,42 @@ struct HostTerminalStateStoreTests {
         )
         let primaryID = activation.session.id
 
-        _ = try #require(store.ensureSplit(forPrimarySessionID: primaryID, preferredLayout: layout))
+        _ = try #require(store.splitFocusedTile(inTabContaining: primaryID, preferredLayout: layout))
 
         #expect(store.splitLayout(for: primaryID) == layout)
         #expect(store.splitFraction(for: primaryID) == HostTerminalStateStore.defaultSplitFraction)
+    }
+
+    @Test("Closing one pane of three rebalances the tree instead of collapsing it")
+    func closingOnePaneOfThreeRebalances() throws {
+        let store = HostTerminalStateStore()
+        let registry = AgentSessionRegistry()
+        let activation = store.activateSession(
+            key: .defaultHome,
+            directory: URL(fileURLWithPath: "/Users/test/code")
+        )
+        let primaryID = activation.session.id
+        store.attach(agentSessionRegistry: registry, localStateStore: nil, hooksSocketPath: nil)
+
+        let splitA = try #require(store.splitFocusedTile(inTabContaining: primaryID))
+        let splitB = try #require(store.splitFocusedTile(inTabContaining: splitA.id))
+
+        // Closing B (process exit) leaves primary + A, not a bare single pane.
+        #expect(store.handleProcessExit(for: splitB.id))
+        let afterClose = try #require(store.tileTree(forPrimarySessionID: primaryID))
+        #expect(afterClose.leafIDs.count == 2)
+        #expect(
+            Set(afterClose.leafIDs.compactMap { store.session(forTile: $0)?.id })
+                == Set([primaryID, splitA.id])
+        )
+        #expect(registry.statuses[splitB.id] == nil)
+        #expect(registry.statuses[splitA.id] != nil)
+
+        // Closing the last split pane collapses the tab to the sparse single-pane shape.
+        #expect(store.handleProcessExit(for: splitA.id))
+        #expect(store.tileTree(forPrimarySessionID: primaryID) == nil)
+        #expect(store.sessions.map(\.id) == [primaryID])
+        #expect(registry.statuses[splitA.id] == nil)
+        #expect(registry.statuses[primaryID] != nil)
     }
 }

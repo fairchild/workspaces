@@ -170,8 +170,8 @@ struct ContentView: View {
     private var paneCountBySessionKeyForSidebar: [HostTerminalSessionKey: Int] {
         presentationController.paneCountBySessionKey(
             sessions: hostTerminalState.sessions,
-            splitSession: { sessionID in
-                hostTerminalState.splitSession(for: sessionID)
+            paneCount: { sessionID in
+                hostTerminalState.paneCount(forPrimarySessionID: sessionID)
             }
         )
     }
@@ -393,17 +393,17 @@ struct ContentView: View {
             hostTerminalSessions: hostTerminalState.sessions,
             visibleHostTerminalSessions: hostTerminalState.scopedSessions,
             activeHostTerminalSessionID: hostTerminalState.activeSessionID,
-            activeSplitHostSession: hostTerminalState.splitSession(for: hostTerminalState.activeSessionID),
-            activeSplitLayout: hostTerminalState.splitLayout(for: hostTerminalState.activeSessionID),
-            activeSplitFraction: hostTerminalState.splitFraction(for: hostTerminalState.activeSessionID),
+            activeTabTree: hostTerminalState.tileTree(forPrimarySessionID: hostTerminalState.activeSessionID),
+            resolveTileSession: { hostTerminalState.session(forTile: $0) },
             hostSurfaceStore: hostTerminalState.surfaceStore,
             tabTitleOverrides: hostTerminalState.tabTitleOverridesBySessionID,
             agentStatuses: Array(agentSessionRegistry.statuses.values),
             terminalContextMenuProvider: terminalContextMenu(for:),
-            onSplitFractionChanged: { nextFraction in
+            onSetSplitRatio: { splitID, ratio in
                 guard let activeSessionID = hostTerminalState.activeSessionID else { return }
-                _ = hostTerminalState.updateSplitFraction(
-                    nextFraction,
+                _ = hostTerminalState.updateSplitRatio(
+                    ratio,
+                    splitID: splitID,
                     forPrimarySessionID: activeSessionID
                 )
             },
@@ -2578,14 +2578,13 @@ struct MainTerminalDetailView: View {
     let hostTerminalSessions: [HostTerminalSession]
     let visibleHostTerminalSessions: [HostTerminalSession]
     let activeHostTerminalSessionID: UUID?
-    let activeSplitHostSession: HostTerminalSession?
-    let activeSplitLayout: HostTerminalStateStore.SplitPaneLayout?
-    let activeSplitFraction: CGFloat?
+    let activeTabTree: TileTreeState?
+    let resolveTileSession: (TileID) -> HostTerminalSession?
     let hostSurfaceStore: HostTerminalSurfaceStore
     let tabTitleOverrides: [UUID: String]
     let agentStatuses: [AgentSessionStatus]
     let terminalContextMenuProvider: (HostTerminalSession) -> NSMenu?
-    let onSplitFractionChanged: (CGFloat) -> Void
+    let onSetSplitRatio: (SplitID, CGFloat) -> Void
     let onOpenRepoOverview: (Repo) -> Void
     var onSelectTerminalTab: ((UUID) -> Void)?
     var onCloseTerminalTab: ((UUID) -> Void)?
@@ -2638,10 +2637,9 @@ struct MainTerminalDetailView: View {
         var seen = Set<String>()
         var directories: [URL] = []
 
+        // Split panes share their primary's directory, which is already in `hostTerminalSessions`, so
+        // the tab tree contributes no new diagnostic directories.
         var candidateDirectories = hostTerminalSessions.map(\.directoryURL)
-        if let activeSplitHostSession {
-            candidateDirectories.append(activeSplitHostSession.directoryURL)
-        }
         if let selectedWorkspaceDirectory = selectedWorkspace?.localDirectoryURL {
             candidateDirectories.append(selectedWorkspaceDirectory)
         }
@@ -2746,12 +2744,11 @@ struct MainTerminalDetailView: View {
         HostTerminalSessionStack(
             sessions: visibleHostTerminalSessions,
             activeSessionID: activeHostTerminalSessionID,
-            splitSession: activeSplitHostSession,
-            splitLayout: activeSplitLayout,
-            splitFraction: activeSplitFraction,
+            tree: activeTabTree,
+            resolveSession: resolveTileSession,
             surfaceStore: hostSurfaceStore,
             tabTitleOverrides: tabTitleOverrides,
-            onSplitFractionChanged: onSplitFractionChanged,
+            onSetSplitRatio: onSetSplitRatio,
             onSelectTab: onSelectTerminalTab,
             onCloseTab: onCloseTerminalTab,
             onCloseConfirmationRequired: onTerminalCloseConfirmationRequired,
