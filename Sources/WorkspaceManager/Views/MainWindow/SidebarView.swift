@@ -57,6 +57,7 @@ struct SidebarView: View {
     let retireTerminalSessions: @MainActor (HostTerminalSessionKey) async -> Void
     let workspaceProviderSetupCoordinator: WorkspaceProviderSetupCoordinator
     let hostLumeSmokeAutomation: HostLumeSmokeAutomationController
+    let desktopUISmokeAutomation: DesktopUISmokeAutomationController
 
     @AppStorage(SidebarRepoSortMode.storageKey)
     private var repoSortModeRawValue: String = SidebarRepoSortMode.alphabetical.rawValue
@@ -238,6 +239,9 @@ struct SidebarView: View {
             Task { @MainActor in
                 await maybeDriveHostLumeSmokeAutomation()
             }
+            Task { @MainActor in
+                await maybeDriveDesktopUISmokeAutomation()
+            }
         }
         .onChange(of: repoSortModeRawValue) { _, _ in
             syncRepoSortSnapshot(forceRefresh: true)
@@ -256,6 +260,7 @@ struct SidebarView: View {
         .task {
             _ = await seedFixtureProviderStateIfNeeded()
             await maybeDriveHostLumeSmokeAutomation()
+            await maybeDriveDesktopUISmokeAutomation()
         }
         .onChange(of: errorMessage) { _, message in
             guard let message else { return }
@@ -264,6 +269,9 @@ struct SidebarView: View {
                     message: message,
                     recoveryHints: hostLumeSmokeRecoveryHints(for: message)
                 )
+            }
+            Task { @MainActor in
+                await desktopUISmokeAutomation.noteFailure(message: message)
             }
         }
     }
@@ -1163,6 +1171,110 @@ struct SidebarView: View {
         }
 
         await addRepo(from: targetRepoURL)
+    }
+
+    /// Drives the daily-driver desktop flows for the `desktop-ui-smoke`
+    /// automation mode: import the target repo if needed, create a local
+    /// workspace, confirm it lands in the sidebar with a live terminal, then
+    /// switch selection to the repo terminal and back to prove the surface
+    /// follows selection. Milestones stream to the events JSONL the host smoke
+    /// script asserts against.
+    @MainActor
+    private func maybeDriveDesktopUISmokeAutomation() async {
+        guard desktopUISmokeAutomation.isEnabled else { return }
+        guard let targetRepoURL = desktopUISmokeAutomation.targetRepoURL else { return }
+
+        guard
+            let repo = desktopUISmokeAutomation.matchingRepo(
+                in: repos,
+                normalizePath: normalizePath(_:)
+            )
+        else {
+            guard FileManager.default.fileExists(atPath: targetRepoURL.path) else {
+                let message = "Desktop UI smoke repo path does not exist: \(targetRepoURL.path)"
+                errorMessage = message
+                showingError = true
+                return
+            }
+            await addRepo(from: targetRepoURL)
+            return
+        }
+
+        await desktopUISmokeAutomation.noteRepoReady(repo)
+        guard desktopUISmokeAutomation.shouldStartScenario() else { return }
+        await runDesktopUISmokeScenario(repo: repo)
+    }
+
+    @MainActor
+    private func runDesktopUISmokeScenario(repo: Repo) async {
+        let workspaceName = desktopUISmokeAutomation.targetWorkspaceName ?? "desktop-ui-smoke"
+
+        await desktopUISmokeAutomation.noteWorkspaceCreationStarted(repo: repo)
+
+        let focusBaselineBeforeCreate = desktopUISmokeAutomation.surfaceFocusCount
+        await createWorkspace(
+            from: repo,
+            name: workspaceName,
+            nameSource: .manual,
+            providerID: LocalWorkspaceProvider.identifier
+        )
+
+        guard let workspace = selectedWorkspace else {
+            await desktopUISmokeAutomation.noteFailure(
+                message: "Local workspace was not created or selected."
+            )
+            return
+        }
+
+        await desktopUISmokeAutomation.noteWorkspaceCreated(workspace)
+        await emitDesktopUISmokeSidebarUpdate(for: workspace)
+
+        // Flow 1: the freshly created workspace's terminal becomes ready.
+        _ = await desktopUISmokeAutomation.waitForSurfaceFocus(
+            after: focusBaselineBeforeCreate,
+            timeout: .seconds(15)
+        )
+
+        // Flow 2: switch selection to the repo terminal, then back to the
+        // workspace. Distinct attached session IDs prove the surface follows
+        // selection rather than stranding a stale session.
+        let focusBaselineBeforeRepo = desktopUISmokeAutomation.surfaceFocusCount
+        onRepoTerminalSelected(repo)
+        _ = await desktopUISmokeAutomation.waitForSurfaceFocus(
+            after: focusBaselineBeforeRepo,
+            timeout: .seconds(15)
+        )
+
+        let focusBaselineBeforeReselect = desktopUISmokeAutomation.surfaceFocusCount
+        selectWorkspace(workspace)
+        _ = await desktopUISmokeAutomation.waitForSurfaceFocus(
+            after: focusBaselineBeforeReselect,
+            timeout: .seconds(15)
+        )
+
+        await desktopUISmokeAutomation.noteScenarioComplete()
+    }
+
+    /// Confirms the new workspace is present under its repo in the live sidebar
+    /// model before emitting `sidebar_updated`, polling briefly because the
+    /// `@Query` repo list can lag a save by a run loop.
+    @MainActor
+    private func emitDesktopUISmokeSidebarUpdate(for workspace: Workspace) async {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while ContinuousClock.now < deadline {
+            let sidebarWorkspaces = repos.flatMap(\.workspaces)
+            if sidebarWorkspaces.contains(where: { $0.id == workspace.id }) {
+                await desktopUISmokeAutomation.noteSidebarUpdated(
+                    workspace: workspace,
+                    sidebarWorkspaceCount: sidebarWorkspaces.count
+                )
+                return
+            }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        await desktopUISmokeAutomation.noteFailure(
+            message: "Created workspace did not appear in the sidebar: \(workspace.name)"
+        )
     }
 
     @MainActor
