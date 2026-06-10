@@ -30,153 +30,59 @@ Single-context repo; use root docs plus `docs/decisions/` for architectural deci
 
 ### Local state schema
 
-The native app's local SQLite sidecar schema lives in `docs/schema.sql`, with the implementation plan in `docs/development/local-state-store-plan.md`. Use them when working on continuity, diagnostics, exports, or local state history. Keep the schema doc manually in sync with `LocalStateStore` migrations whenever tables, indexes, or persisted meanings change.
+The native app's local SQLite sidecar schema lives in `docs/schema.sql`, with the implementation plan in `docs/development/local-state-store-plan.md`. Keep the schema doc manually in sync with `LocalStateStore` migrations whenever tables, indexes, or persisted meanings change.
 
 ## Dev Verification Practice (required)
 
-When changing terminal/keyboard/sidebar behavior, use this loop so future sessions can self-verify reliably:
+When changing terminal/keyboard/sidebar behavior, run the canonical self-verification loop in `docs/development/libghostty-integration.md` § "Agent self-verification runbook". The short form:
 
-1. Build pinned GhosttyKit and app:
-   - `./scripts/build-ghosttykit.sh`
-   - `swift build`
-2. Launch only the debug binary:
-   - fastest startup sanity check: `./scripts/dev-smoke.sh --no-build`
-   - `./scripts/launch-dev.sh --no-build`
-   - shared-desktop mode (preferred when user is actively using machine): `./scripts/launch-dev.sh --no-build --no-activate`
-   - keep logs attached while debugging launcher/startup issues: `./scripts/launch-dev.sh --no-build --watch`
-   - direct binary fallback if the launcher is being debugged:
-     `WORKSPACES_DATA_DIR=.dev-data/workspacemanager WORKSPACES_APP_VARIANT=dev .build/arm64-apple-macosx/debug/WorkspaceManager`
-3. Confirm the running process is the debug path (not `/Applications`):
-   - `ps aux | rg '.build/arm64-apple-macosx/debug/WorkspaceManager'`
-4. Distinguish the debug app from the installed app:
-   - debug launches set `WORKSPACES_APP_VARIANT=dev`
-   - the debug app shows a `DEV` Dock badge and `Development Build` window subtitle
-   - if both apps are running, kill `/Applications/WorkSpaces.app` before testing
-5. Verify shortcut behavior:
-   - `Cmd+B` toggles left sidebar
-   - `Cmd+D` creates a visible right split for the focused terminal
-6. If split fails, check launch logs in `.dev-data/logs/` for:
-   - `"[GhosttyAppManager] action=new_split direction="`
-7. Capture verification evidence without forcing app activation:
-   - `./scripts/capture-window.sh`
-   - when using `--no-activate`, pause your own keyboard/mouse input first, capture, then resume
-   - treat `--no-activate` as a capture-only shared-desktop handshake, not an input-driving automation lane
-   - run activation-driving scripts such as `./scripts/shortcut-pass-through-smoke.sh` only when foreground input is acceptable and `Terminal Multiplexing Mode` is set to `Ghostty Splits`
-   - if you need input-driving automation without disturbing the active desktop, use Tart/Lume or a separate macOS user/session
-8. `mise` convenience tasks:
-   - `mise run dev-launch`
-   - `mise run dev-watch`
-   - `mise run dev-smoke`
-   - `mise run dev-lume-ensure`
-   - `mise run dev-lume-preflight`
-   - `mise run dev-lume-standalone-validate`
-   - `mise run dev-lume-macos-smoke`
+1. `./scripts/build-ghosttykit.sh` (once / after pin changes), then `swift build`.
+2. Launch only the debug binary: `./scripts/launch-dev.sh --no-build` — add `--no-activate` on a shared desktop (preferred when the user is actively using the machine), `--watch` to keep logs attached; `./scripts/dev-smoke.sh --no-build` is the fastest startup sanity check.
+3. Confirm you're testing the debug app, not `/Applications`: `ps aux | rg '.build/arm64-apple-macosx/debug/WorkspaceManager'`. Debug builds show a `DEV` Dock badge and `Development Build` window subtitle; kill `/Applications/WorkSpaces.app` if both are running.
+4. Verify shortcuts: `Cmd+B` toggles the sidebar; `Cmd+D` creates a visible right split. If a split fails, check `.dev-data/logs/` for `"[GhosttyAppManager] action=new_split direction="`.
+5. Capture evidence without forcing activation: `./scripts/capture-window.sh`. With `--no-activate`, pause your own input, capture, resume — it's a capture-only handshake, not an input-driving lane. Run activation-driving scripts (e.g. `./scripts/shortcut-pass-through-smoke.sh`, Ghostty Splits mode only) only when foreground input is acceptable; for input-driving automation that must not disturb the desktop, use Tart/Lume or a separate macOS user/session.
+6. `mise` shortcuts: `dev-launch`, `dev-watch`, `dev-smoke`, `dev-lume-ensure`, `dev-lume-preflight`, `dev-lume-standalone-validate`, `dev-lume-macos-smoke`.
 
-For Lume daemon reliability:
+Launcher contract: `launch-dev.sh` reports success only once the debug process is alive and a visible window exists; on failure, inspect the latest `.dev-data/logs/launch-diagnostics-<timestamp>/` bundle first.
 
-1. Before any Lume work, ensure the daemon is up:
-   - `mise run dev-lume-ensure` (idempotent, self-healing)
-   - see `docs/development/lume-integration.md` § "Daemon Reliability" for diagnostics and failure modes
-2. The daemon must run from the **installed** binary, not a debug build
-3. The LaunchAgent has `KeepAlive: true` so launchd restarts it on crash
+**Lume.** Before any Lume work run `mise run dev-lume-ensure` (idempotent, self-healing); the daemon must run from the **installed** binary and its LaunchAgent has `KeepAlive: true`. Validation lanes, the storage contract (validated bases vs workspace VMs), unattended overrides under `config/lume/unattended/`, the upstream local-testing rules, and the app smoke's automation mode (`WORKSPACES_AUTOMATION_MODE=host-lume-macos-smoke`, JSONL milestones, artifacts under `output/lume-host-smoke/`) are all canonical in:
 
-For real-host Lume validation:
+- `docs/development/lume-integration.md` (§ "Daemon Reliability", storage layout, upstream testing note)
+- `docs/development/lume-validation.md` (standalone validate → preflight → full macOS smoke)
+- `docs/development/lume-recreate-runbook.md`, `docs/development/lume-runner-setup.md`
 
-1. Prove Lume itself first:
-   - `./scripts/lume-standalone-validate.sh`
-   - `mise run dev-lume-standalone-validate`
-2. Run the fast machine preflight for the app layer:
-   - `./scripts/lume-host-preflight.sh`
-   - `mise run dev-lume-preflight`
-3. Run the full smoke when you need a real macOS VM end to end:
-   - `./scripts/lume-host-macos-smoke.sh`
-   - `mise run dev-lume-macos-smoke`
-4. The app smoke uses a dev-only app automation mode, not fixture providers:
-   - `WORKSPACES_AUTOMATION_MODE=host-lume-macos-smoke`
-   - it writes JSONL milestones to the configured `WORKSPACES_AUTOMATION_EVENTS_PATH`
-   - artifacts land under `output/lume-host-smoke/<timestamp>/`
-5. Lume storage contract:
-   - standalone validated bases live under `~/Library/Application Support/WorkspaceManager/LumeStorage/validated-bases`
-   - app-created workspace VMs live under `~/Library/Application Support/WorkspaceManager/LumeStorage/workspace-vms`
-   - only the standalone validator may mark a base ready, via `~/Library/Application Support/WorkspaceManager/LumeValidatedBases/<vmName>.json`
-6. WorkSpaces-owned unattended overrides for stock base prep live under:
-   - `config/lume/unattended/`
-   - current default NAT Tahoe override: `config/lume/unattended/tahoe-workspaces-v26.yml`
-   - bridged Tahoe diagnostics override: `config/lume/unattended/tahoe-workspaces-bridged-v27.yml`
-   - current from-scratch recovery helper: `config/lume/unattended/tahoe-workspaces-v18-official-run-bootstrap-ssh.yml`
-7. Upstream Lume local-testing note:
-   - do not point the standalone validator at raw `libs/lume/.build/debug/lume`
-   - for local upstream validation, use `libs/lume/scripts/install-local.sh` into an isolated install dir and point `LUME_BIN` at that installed binary
-   - `install-local.sh --no-background-service` unloads the current `com.trycua.lume_daemon` LaunchAgent during cleanup, so restart the daemon manually or reinstall the LaunchAgent before normal WorkSpaces validation
-8. Canonical Lume docs:
-   - `docs/development/lume-integration.md`
-   - `docs/development/lume-validation.md`
-   - `docs/development/lume-recreate-runbook.md`
-   - `docs/development/lume-runner-setup.md`
-
-Launcher contract:
-- `launch-dev.sh` should only report success once the debug process is still alive and a visible app window exists.
-- if startup fails, inspect the latest `.dev-data/logs/launch-diagnostics-<timestamp>/` bundle first.
-
-Canonical reference:
-- `docs/development/libghostty-integration.md` ("Shortcut + split contract" and "Agent self-verification runbook")
-- `docs/development/shortcut-routing.md` ("Shortcut Routing Architecture")
-- `backlog/shared-desktop-focus-contention-followup.md` (longer-term isolation follow-up)
+Shortcut/split routing references: `docs/development/shortcut-routing.md`; longer-term shared-desktop isolation: `backlog/done/shared-desktop-focus-contention-followup.md`.
 
 ## Evidence-Driven Development
 
-Evidence is a merge gate. Do not create a PR without it. Follow these steps in order:
-
-### Before creating any PR
+Evidence is a merge gate. Do not create a PR without it. In order:
 
 1. **Run tests** — `swift test` or `cd web && pnpm test`
-2. **Capture evidence** — `./scripts/evidence.sh --pr <number> --name <slug>`
-   - Swift PRs: test summary screenshot; for UI changes, also screenshot the running app
-   - Web PRs: test output or Playwright report screenshot
-   - Web screenshots without auth: start dev server with `DEV_BYPASS_AUTH=1 pnpm dev`
-   - API-only: test output counts — pipe to file, screenshot, upload
-3. **Include evidence URLs in the PR body** — paste into the Evidence section of the template
-4. **Only then create the PR** — do not use `[pending-ci]` unless you genuinely cannot produce evidence locally
+2. **Capture evidence** — `./scripts/evidence.sh --pr <number> --name <slug>` (screenshots for UI changes, test output otherwise; web screenshots without auth: `mise run web:dev`)
+3. **Paste the uploaded evidence URLs into the PR body**
+4. **Only then create the PR** — no `[pending-ci]` unless evidence is genuinely impossible locally
 
 ```bash
-# One-liner: capture screenshot + upload + print markdown
-./scripts/evidence.sh --pr <number> --name <slug>
-
-# Upload an existing file
-./scripts/evidence.sh --pr <number> --name <slug> --file /tmp/screenshot.png
-
-# Via mise
-mise run evidence -- --pr <number> --name <slug>
+./scripts/evidence.sh --pr <N> --name <slug>                  # capture + upload + print markdown
+./scripts/evidence.sh --pr <N> --name <slug> --file <path>    # upload an existing file
+mise run evidence -- --pr <N> --name <slug>
 ```
 
-The script auto-sources `.env` for `EVIDENCE_UPLOAD_TOKEN` and falls back to shared worktree env files. If a worktree is missing `.env`, run `./scripts/setup --env-only` before claiming evidence is blocked. Uploads go to `https://evidence.cloudcompute.com/`. See `docs/development/evidence.md` for the full guide.
+Rules: no local-only proof (upload via `evidence.sh`); blocked evidence is an explicit state (`blocked on evidence` in the PR, with why); performance-sensitive changes need before/after/delta baselines in the PR body. The script auto-sources `.env` (and sibling worktree env files) for `EVIDENCE_UPLOAD_TOKEN`; if a worktree lacks `.env`, run `./scripts/setup --env-only` before claiming evidence is blocked. Uploads go to `https://evidence.cloudcompute.com/`. Full guide: `docs/development/evidence.md`.
 
-### Evidence rules
-
-- **No local-only proof.** Screenshots and logs must be uploaded via `evidence.sh`, not referenced from local paths.
-- **Blocked evidence is an explicit state.** Say `blocked on evidence` in the PR, explain why, and do not merge without approval.
-- **Performance-sensitive changes need baselines.** Before/after/delta in the PR body.
-
-### PR summary style
-
-When reporting PR readiness or evidence, prefer concise Markdown links for completed checks/artifacts when URLs are available, for example:
-
-- [Web CI passed](https://...)
-- [Vercel preview passed](https://...)
-
-This is a readability preference, not a merge gate. If links are unavailable, a plain-text status summary is fine. Visible evidence links and performance gates keep reviews aligned with our quality and speed goals.
+PR summary style: prefer concise Markdown links for completed checks/artifacts (e.g. `[Web CI passed](url)`). Readability preference, not a merge gate.
 
 ## High-Signal Lessons
 
 - **Never use bare `self-hosted` for workflows in this repo.** Use GitHub-hosted macOS (`macos-15`) for generic build/test jobs, `[self-hosted, tart-ui]` for UI/perf automation, `[self-hosted, lume-macos]` for agent execution (preferred, with ubuntu-latest fallback), and `[self-hosted, signing-host]` for release/signing/notarization.
-- **Keep terminal surfaces nearly chrome-free.** Repo overview pages can carry metadata and actions, but terminal views should default to the canvas with minimal surrounding UI.
+- **Keep terminal surfaces nearly chrome-free.** Repo overview pages can carry metadata and actions, but terminal views default to the canvas with minimal surrounding UI.
 - **Prefer quiet discoverability over persistent controls.** Avoid right-click-only primary actions, but also avoid always-visible sidebar affordances that add noise. Hover-visible scoped actions are usually the right compromise.
 - **Persist selection state by stable IDs, not live SwiftData objects.** Restore and fallback logic should resolve models late and validate them against current data before selection.
 - **Release version metadata must have one source of truth.** Tag, app version, and packaged artifact version should be validated against each other before a release is created.
-- **If the app opens or closes unexpectedly on a dev machine, check the launching process first.** On this project, CI/self-hosted runner behavior can look like an app bug.
-- **Vercel `Sandbox.create({env: {...}})` does NOT propagate to `sandbox.runCommand()`.** Every `runCommand` spawns with an empty environment relative to the sandbox config. If your runner needs env vars, write them to an `env.sh` file and `source` it at the top of the script. See `docs/development/agent-chat-sandbox.md` § "Claude CLI Authentication" for the pattern.
-- **Ship a diagnostic probe instead of your third guess.** Terminal arc #306 → #307 → #308 → #309: two guess-fixes both merged with green tests and failed in production. One temporary runner-script probe (`#308`) captured the exact state of the broken sandbox and revealed the root cause in a single ship cycle. When you're guessing, stop and instrument instead.
-- **"Tests green" is not the same as "works in production" for agent paths.** The web test surface doesn't include the `does claude actually authenticate inside a provisioned Vercel sandbox` path, so a broken fix sails through CI. For changes that touch `createSandbox`, `restoreSnapshot`, `createTerminalSandbox`, or `streamOutput`, send a real chat message in production and read the agent stream before declaring victory.
+- **If the app opens or closes unexpectedly on a dev machine, check the launching process first.** CI/self-hosted runner behavior can look like an app bug.
+- **Vercel `Sandbox.create({env: {...}})` does NOT propagate to `sandbox.runCommand()`.** Write env vars to an `env.sh` and `source` it at the top of the script. See `docs/development/agent-chat-sandbox.md` § "Claude CLI Authentication".
+- **Ship a diagnostic probe instead of your third guess.** Terminal arc #306→#309: two guess-fixes merged green and failed in production; one temporary probe (#308) revealed the root cause in a single ship cycle. When you're guessing, stop and instrument.
+- **"Tests green" ≠ "works in production" for agent paths.** For changes touching `createSandbox`, `restoreSnapshot`, `createTerminalSandbox`, or `streamOutput`, send a real chat message in production and read the agent stream before declaring victory.
 
 ## Commit Hygiene
 
@@ -185,68 +91,30 @@ This is a readability preference, not a merge gate. If links are unavailable, a 
 ## Quick Commands
 
 ```bash
-./scripts/build-ghosttykit.sh  # Build GhosttyKit.xcframework (required once/after pin changes)
-swift build   # Build
-swift test    # Test
-swift run     # Run
-
-# Evidence (required before PRs):
-./scripts/evidence.sh --pr <N> --name <slug>  # Capture + upload screenshot
-
-# Or via mise:
-mise run build-ghosttykit  # Build GhosttyKit
-mise run build             # Build
-mise run test              # Test
-mise run evidence -- --pr <N> --name <slug>  # Evidence
+./scripts/build-ghosttykit.sh  # Build GhosttyKit.xcframework (once / after pin changes)
+swift build / swift test / swift run
+mise run lint                  # swift-format lint --strict (CI fails without it)
+./scripts/evidence.sh --pr <N> --name <slug>   # required before PRs
 ```
 
-### Web dashboard tasks (`web/.mise.toml`)
+### Web dashboard (`web/`)
 
-**Use these instead of raw compound commands.** They are auto-allowed via `Bash(mise run web:*)` and guarded by a hook that blocks execution if `.mise.toml` has uncommitted changes.
-
-**Important:** these tasks live in `web/.mise.toml` and are not chain-loaded from the root `.mise.toml`. Run them either (a) after `cd web/`, or (b) with `-C web` from anywhere in the repo, e.g. `mise -C web run web:check`.
+Always use the `mise run web:*` tasks, never raw pnpm chains — catalog, caveats, and anti-patterns in `web/docs/local-dev.md`. Tasks live in `web/.mise.toml` (not chain-loaded from root): run after `cd web/` or with `mise -C web run ...`. Most used:
 
 ```bash
 mise run web:check                          # typecheck + lint + unit tests
-mise run web:dev                            # seed DB + auth bypass + start dev server
-mise run web:e2e                            # Playwright E2E (fast + full)
-mise run web:e2e:demo                       # Playwright demo with video recording
-mise run web:e2e:explore                    # qa-explore project (video + trace + axe-core)
-mise run web:qa:init-agents                 # one-shot: scaffold Playwright's agent-loop files
-mise run web:qa:codegen                     # interactive Playwright codegen recorder
-mise run web:evidence -- --pr <N> --name <slug>  # screenshot capture + evidence upload
-mise run web:deps -- <pkg>                  # pnpm add + auto-fix package.json formatting
-mise run web:deps:remove -- <pkg>           # pnpm remove + auto-fix formatting
+mise run web:dev                            # seed DB + auth bypass + dev server
+DEV_GH_TOKEN=$(gh auth token) mise run web:dev   # bypass with real GitHub API access
+mise run web:e2e                            # Playwright E2E
+mise run web:evidence -- --pr <N> --name <slug>
+mise run web:deps -- <pkg>                  # add dep + fix package.json formatting
 ```
 
-**Local vs CI caveats:**
-- `fast/unauth-*` Playwright specs require `NODE_ENV=production` — they pass in CI (which uses `pnpm start`) and fail under `pnpm dev` (bypass active in development). Expected; not a regression.
-- **Dev-bypass token plumbing** — `mise run web:dev` hardcodes `DEV_BYPASS_AUTH=1`, which creates a fake "dev-user" session but gives routes a placeholder string in place of a real GitHub PAT. Any call that hits the real GitHub API (agent discovery, pipeline, webhook-status, login lookup) 401s and the UI prompts "sign out / sign in". To light up GitHub-backed features without running the full OAuth flow, prefix the task with a real token:
-
-  ```bash
-  DEV_GH_TOKEN=$(gh auth token) mise run web:dev
-  ```
-
-  `getDevBypassToken()` in `web/src/lib/auth-server.ts` prefers `DEV_GH_TOKEN` over the placeholder when set. Setting `GITHUB_WEB_WORKSPACES_CLIENT_ID` vetoes the bypass entirely and forces the real OAuth flow.
-
-**Anti-patterns to avoid** (use the mise tasks instead):
-- `pnpm typecheck && pnpm lint && pnpm test` → `mise run web:check`
-- `pnpm add <pkg>` then `pnpm biome check --write package.json` → `mise run web:deps -- <pkg>`
-- Manual DB seeding + `DEV_BYPASS_AUTH=1 pnpm dev` → `mise run web:dev`
-- Ad-hoc Playwright screenshot scripts → `mise run web:evidence -- --pr <N>`
+Known caveat: `fast/unauth-*` specs need `NODE_ENV=production` — they fail under `pnpm dev` by design (see `web/docs/local-dev.md`).
 
 ## Python Script Preference
 
-- Prefer single-file UV scripts for new standalone Python utilities.
-- Make scripts directly executable with shebang:
-  - `#!/usr/bin/env -S uv run --script`
-- Include PEP 723 metadata block at the top of each script:
-  - `# /// script`
-  - `# requires-python = ">=3.11"`
-  - `# dependencies = [...]` (use `[]` when stdlib-only)
-  - `# ///`
-- Prefer `uv run --script <path>` in docs/examples; direct execution is acceptable for executable files.
-- Only use non-UV Python layout when explicitly requested or when project tooling requires package/module structure.
+New standalone Python utilities are single-file UV scripts: `#!/usr/bin/env -S uv run --script` plus a PEP 723 metadata block (`# /// script` … `# ///`, `requires-python = ">=3.11"`, `dependencies = [...]`). Prefer `uv run --script <path>` in docs/examples. Use package/module layout only when explicitly requested or tooling requires it.
 
 ## Doc Navigation
 
@@ -255,7 +123,7 @@ mise run web:deps:remove -- <pkg>           # pnpm remove + auto-fix formatting
 | Understand the app | README.md | backlog/ |
 | Architectural decisions | ARCHITECTURE.md | backlog/ |
 | Implement a component | docs/original_spec.md (find relevant section) | Read whole file |
-| libghostty internals | docs/development/libghostty-integration.md | - |
+| libghostty internals + dev verification runbook | docs/development/libghostty-integration.md | - |
 | Notifications / webhooks | docs/development/notifications.md | - |
 | Debug an issue | docs/development/troubleshooting.md | - |
 | Add Settings-gated experimental UI | docs/development/experimental-features.md | - |
@@ -264,8 +132,10 @@ mise run web:deps:remove -- <pkg>           # pnpm remove + auto-fix formatting
 | UI fixture mode + release screenshots | docs/development/ui-fixture-mode.md | - |
 | Local SQLite state schema | docs/schema.sql | - |
 | Local state store plan | docs/development/local-state-store-plan.md | - |
+| Lume integration / daemon reliability | docs/development/lume-integration.md | - |
+| Lume validation lanes | docs/development/lume-validation.md | - |
 | Lume runner setup | docs/development/lume-runner-setup.md | - |
-| Lume daemon reliability | docs/development/lume-integration.md § "Daemon Reliability" | - |
+| Web local dev (mise tasks, auth bypass) | web/docs/local-dev.md | - |
 | Web architecture | web/docs/architecture.md | - |
 | PR reviewer agent | docs/pr-review/pr-reviewer.md | - |
 | Roadmap/planning | backlog/ROADMAP.md | - |
@@ -313,20 +183,12 @@ mise run web:deps:remove -- <pkg>           # pnpm remove + auto-fix formatting
 | Web API auth helpers | web/src/lib/api-auth.ts |
 | Web PR reviewer agent | web/src/lib/agent-runtime/pr-review.ts |
 | PR reviewer status script | scripts/pr-reviewer-status.py |
-| Web architecture doc | web/docs/architecture.md |
 
 ## File Purpose Blocks
 
-Where a file's purpose isn't obvious from its name, it opens with a short (≈2–4 line)
-top-of-file doc block stating **what it does and why** — present tense (what the file
-is, not the history of how it got there). Add one when creating or substantially
-editing such a file; skip self-evident utils and tests.
+Where a file's purpose isn't obvious from its name, it opens with a short (≈2–4 line) top-of-file doc block stating **what it does and why** — present tense (what the file is, not the history of how it got there). Add one when creating or substantially editing such a file; skip self-evident utils and tests.
 
-This doubles as a fast index when exploring: `head` a file (the block is the first
-thing) or `rg` a shared phrase to summarize a whole family without opening them —
-e.g. `rg -n "^ \* Persistence for"` lists every persistence module with its one-liner.
-Lean on this before reading files in explore mode, and keep the blocks accurate so it
-stays trustworthy.
+This doubles as a fast index when exploring: `head` a file or `rg` a shared phrase to summarize a whole family without opening them — e.g. `rg -n "^ \* Persistence for"` lists every persistence module with its one-liner. Lean on this before reading files in explore mode, and keep the blocks accurate so it stays trustworthy.
 
 ## Key Patterns
 
@@ -344,12 +206,7 @@ stays trustworthy.
 
 5. **Keyboard Focus**: Ghostty-style retry-based focus restoration. See `docs/development/solution-terminal-keyboard.md`.
 
-6. **App Activation Policy**: All `NSApp.activate(ignoringOtherApps:)` calls — launch and runtime — route through `AppActivationPolicy` (`Sources/WorkspaceManager/App/AppActivationPolicy.swift`). Three modes:
-   - Normal launch: `.regular` + `activate()` — full foreground
-   - `WORKSPACES_NO_ACTIVATE_ON_LAUNCH=1`: `.regular`, no `activate()` on launch *or* during runtime focus restoration — dock visible, no focus steal ever
-   - `CI=true`: `.accessory` — fully invisible (no dock, no Cmd+Tab); the policy also blocks runtime activate calls for clarity
-
-   This prevents the app from stealing focus on self-hosted runners *and* on a shared desktop during normal use (e.g., when a teammate's automation triggers a workspace selection). Any script that launches the app headlessly should set `WORKSPACES_NO_ACTIVATE_ON_LAUNCH=1`. The env var name is historical — it now governs runtime activation too. See `AppActivationPolicy.swift` and `WorkspaceManagerApp.swift` `AppDelegate`.
+6. **App Activation Policy**: All `NSApp.activate` calls — launch and runtime — route through `AppActivationPolicy` (`Sources/WorkspaceManager/App/AppActivationPolicy.swift`). Normal launch: full foreground. `WORKSPACES_NO_ACTIVATE_ON_LAUNCH=1`: dock visible, no focus steal ever (launch *or* runtime — the env var name is historical). `CI=true`: fully invisible accessory app. Any script that launches the app headlessly should set `WORKSPACES_NO_ACTIVATE_ON_LAUNCH=1`. This prevents focus stealing on self-hosted runners and shared desktops.
 
 ## Testing
 
@@ -370,49 +227,27 @@ Tests use **Swift Testing** (`@Suite`, `@Test`, `#expect`), not XCTest. Test beh
 ## Tech Stack
 
 ### macOS App
-- **UI**: SwiftUI + AppKit hybrid
-- **Terminal**: GhosttyKit (`libghostty`) binary target
-- **Persistence**: SwiftData
-- **Target**: macOS 14.0+
-- **Distribution**: Direct (non-sandboxed, App Store sandbox blocks shell execution)
+- **UI**: SwiftUI + AppKit hybrid · **Terminal**: GhosttyKit (`libghostty`) binary target · **Persistence**: SwiftData · **Target**: macOS 14.0+ · **Distribution**: Direct (non-sandboxed; App Store sandbox blocks shell execution)
 
 ### Web Dashboard (`web/`)
-- **Framework**: Next.js 15 (App Router), deployed to Vercel
-- **Auth**: Better Auth + GitHub OAuth
-- **Database**: LibSQL + Kysely
-- **Terminal**: ghostty-web (WASM-compiled Ghostty)
-- **Agent runtime**: Multi-provider (Vercel Sandbox, Cloudflare Sandbox, Daytona, GitHub Actions)
-- **Styling**: CSS Modules + CSS custom properties (no Tailwind)
-- **Tests**: Vitest (unit), Playwright (E2E with video)
+- **Framework**: Next.js 15 (App Router) on Vercel · **Auth**: Better Auth + GitHub OAuth · **DB**: LibSQL + Kysely · **Terminal**: ghostty-web (WASM) · **Agent runtime**: multi-provider (Vercel Sandbox, Cloudflare Sandbox, Daytona, GitHub Actions) · **Styling**: CSS Modules + custom properties (no Tailwind) · **Tests**: Vitest (unit), Playwright (E2E with video)
 
 ### Infrastructure
-- **Webhook relay**: Cloudflare Worker + Durable Object (`infra/cloudflare-webhook-relay/`)
-- **Evidence store**: Cloudflare Worker + R2 (`infra/cloudflare-evidence-store/`)
-- **Terminal proxy**: Cloudflare Worker + Durable Object (`infra/terminalshare-proxy/`)
+- Cloudflare Workers: webhook relay + Durable Object (`infra/cloudflare-webhook-relay/`), evidence store + R2 (`infra/cloudflare-evidence-store/`), terminal proxy + Durable Object (`infra/terminalshare-proxy/`)
 
 ## Multi-Agent Coordination
 
-Agents coordinate via GitHub Discussions. See `.agents/skills/gh-discuss/SKILL.md` for conventions and the CLI script.
-
-Quick start: `uv run .agents/skills/gh-discuss/scripts/gh-discuss.py dashboard`
+Agents coordinate via GitHub Discussions. See `.agents/skills/gh-discuss/SKILL.md` for conventions and the CLI script. Quick start: `uv run .agents/skills/gh-discuss/scripts/gh-discuss.py dashboard`
 
 ### QA of the web/ app
 
-`qa-web-agent` (`.claude/agents/qa-web-agent.md`) is the project-local subagent for `web/` testing. It runs in three phases — **Explore** (black-box, no reading `web/src/**`), **Author** (spec-first, human-gated, uses Playwright Test Agents 1.56+), **Heal** (distinguishes selector drift from regressions). Invoke via the `/qa` slash command (`.claude/commands/qa.md`):
-
-- `/qa` or `/qa explore [area]` — exploratory pass with a11y + screenshot evidence under `output/qa-agent/<ISO-date>/`.
-- `/qa author <slug>` — write a spec to `web/specs/<slug>.md`, pause for human approval, then generate a `.spec.ts`.
-- `/qa heal [test-path]` — triage a failing Playwright test.
-- `/qa run` — run `mise run web:check && mise run web:e2e` with a structured summary.
-- `/qa ledger` — summarize gaps in `web/tests/LEDGER.md`.
-
-Coverage is measured against `web/tests/LEDGER.md` (behavior → test → last-verified date), not line-coverage %. New behaviors worth automating should land in the ledger with a matching spec and test.
+`qa-web-agent` (`.claude/agents/qa-web-agent.md`) is the project-local subagent for `web/` testing — Explore (black-box), Author (spec-first, human-gated), Heal (selector drift vs regression). Invoke via `/qa` (`.claude/commands/qa.md`): `explore [area]`, `author <slug>`, `heal [test-path]`, `run`, `ledger`. Coverage is measured against `web/tests/LEDGER.md` (behavior → test → last-verified date), not line-coverage %; new behaviors worth automating land in the ledger with a matching spec and test.
 
 Milestone delivery: use `.agents/skills/drive/SKILL.md` to plan first, refresh the latest milestone state from GitHub, and execute issues to completion one at a time.
 
 ## Prototypes
 
-Self-contained HTML prototypes live in `prototypes/<project-name>/`. Each prototype is a standalone file you can open directly in a browser — no build step. Use prototypes to explore layout, interaction, and design system choices before committing to implementation. See `prototypes/README.md` for the index.
+Self-contained HTML prototypes live in `prototypes/<project-name>/` — standalone files you can open directly in a browser, for exploring layout/interaction/design choices before implementation. See `prototypes/README.md` for the index.
 
 ## Don't
 
