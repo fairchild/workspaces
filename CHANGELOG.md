@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.19.0] - 2026-06-10
+
+### Added
+- tile-tree core model + reducer (Phase 0–1)
+- tile-tree Phase 2 — protocol Surface seam + SurfaceStore (#633)
+- desktop UI smoke for daily-driver flows (create workspace, terminal follows selection)
+- tile-tree Phase 3 — TileTreeState is the split-layout source of truth (#645)
+- reconcile orphaned workspace resources (#650)
+- adopt ProcessRunner.run timeout: at all non-Lume call sites (#648)
+- archive workspaces to .archived/ with purge and hidden UI (#661)
+
+### Fixed
+- harden tile tree ratio clamping
+- harden ProcessRunner against subprocess hang classes (#634) (#640)
+- exempt docs-only PRs from the readiness evidence gate
+- trust mise config first in setup so new workspaces don't show trust errors (#657)
+
+### Other
+- lock close-focus reassignment + single-tile close no-op
+- satisfy swift-format strict lint in tile-tree tests
+- Fix debug performance benchmark contract
+- refresh roadmap — tile-tree reversal, v0.18.0, core-reliability cluster
+- tighten AGENTS.md to its startup budget (#626)
+- Coordinate workspace deletion cleanup
+- Document GitHub issue claim workflow in AGENTS
+- bump pinned mise to v2026.6.1 to satisfy verify-mise-security
+- Improve managed review timing observability
+- Stabilize docs operator search
+- Dedup and close prod CD failure issues
+- add main window hotspot baselines (#655)
+- Speed up managed review turnaround (#656)
+- Simplify repo terminal toolbar title (#659)
+
 ## [0.18.0] - 2026-06-07
 
 ### Added
