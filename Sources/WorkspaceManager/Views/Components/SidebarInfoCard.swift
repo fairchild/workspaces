@@ -1,32 +1,33 @@
 //
-//  WorkspaceInfoCard.swift
+//  SidebarInfoCard.swift
 //  WorkspaceManager
 //
-//  Hover card for a sidebar workspace row: branch, the active agent's icon and
-//  run-state summary, and agent telemetry (model, context, cost, last active).
-//  Styled to match WorkspaceCardView so the popover feels native.
+//  Hover card for a sidebar item (repo root or workspace): the git branch, the
+//  active agent's icon and run-state summary, and agent telemetry (model,
+//  context, cost, last active). Styled to match WorkspaceCardView.
 //
 
 import SwiftUI
 import WorkspaceManagerCore
 
-struct WorkspaceInfoCard: View {
-    let workspace: Workspace
+struct SidebarInfoCard: View {
+    let name: String
+    var branch: String? = nil
     var agentStatus: AgentSessionStatus? = nil
 
-    private var branch: String? {
-        guard let branch = workspace.gitBranch, !branch.isEmpty else { return nil }
+    private var trimmedBranch: String? {
+        guard let branch, !branch.isEmpty else { return nil }
         return branch
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(workspace.name)
+            Text(name)
                 .font(.callout.weight(.semibold))
                 .lineLimit(1)
 
-            if let branch {
-                Label(branch, systemImage: "arrow.triangle.branch")
+            if let trimmedBranch {
+                Label(trimmedBranch, systemImage: "arrow.triangle.branch")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -69,35 +70,29 @@ struct WorkspaceInfoCard: View {
             }
 
             if let model = status.modelDisplayName, !model.isEmpty {
-                detailRow("Model", model)
+                detailRow("Model") { Text(model) }
             }
             if let context = status.contextUsedPercent {
-                detailRow("Context", "\(Int(context.rounded()))%")
+                detailRow("Context") { Text("\(Int(context.rounded()))%") }
             }
             if let cost = status.costUSD {
-                detailRow("Cost", String(format: "$%.2f", cost))
+                detailRow("Cost") { Text(String(format: "$%.2f", cost)) }
             }
-            detailRow("Last active", relativeLastActive(status.lastEventAt))
+            detailRow("Last active") { Text(status.lastEventAt, style: .relative) }
         }
     }
 
     @ViewBuilder
-    private func detailRow(_ label: String, _ value: String) -> some View {
+    private func detailRow(_ label: String, @ViewBuilder _ value: () -> some View) -> some View {
         HStack {
             Text(label)
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
             Spacer(minLength: 12)
-            Text(value)
+            value()
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
         }
-    }
-
-    private func relativeLastActive(_ date: Date) -> String {
-        let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .abbreviated
-        return formatter.localizedString(for: date, relativeTo: Date())
     }
 }

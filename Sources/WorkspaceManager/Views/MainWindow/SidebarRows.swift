@@ -212,6 +212,8 @@ struct RepoRow: View {
     let onSelectRepo: () -> Void
     let onNewWorkspace: (() -> Void)?
     let onNewWebView: (() -> Void)?
+    /// Resolved lazily only when the hover card opens (the repo root session).
+    var agentStatusProvider: (() -> AgentSessionStatus?)? = nil
 
     @State private var isHovering = false
 
@@ -254,8 +256,8 @@ struct RepoRow: View {
             RoundedRectangle(cornerRadius: 5)
                 .fill(isSelected ? Color.accentColor.opacity(0.1) : .clear)
         )
-        .onHover { hovering in
-            isHovering = hovering
+        .sidebarHoverCard(onHoverChange: { isHovering = $0 }) {
+            SidebarInfoCard(name: repo.name, agentStatus: agentStatusProvider?())
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(accessibilityDescription)
@@ -348,13 +350,11 @@ struct WorkspaceRow: View {
     var isNested: Bool = false
     var isExpanded: Bool = false
     var showsDisclosure: Bool = false
-    var agentStatus: AgentSessionStatus? = nil
+    /// Resolved lazily only when the hover card opens, so frequent agent-status
+    /// updates never re-render idle rows.
+    var agentStatusProvider: (() -> AgentSessionStatus?)? = nil
     var onToggleExpansion: (() -> Void)? = nil
     var onSelect: (() -> Void)? = nil
-
-    @State private var isHovering = false
-    @State private var showCard = false
-    @State private var hoverTask: Task<Void, Never>?
 
     private var isBusy: Bool {
         statusMessage != nil || workspace.status == .provisioning
@@ -432,21 +432,12 @@ struct WorkspaceRow: View {
                 + (workspace.status == .archived ? ", archived" : "")
                 + (statusMessage.map { ", \($0)" } ?? "")
         )
-        .onHover { hovering in
-            isHovering = hovering
-            hoverTask?.cancel()
-            guard hovering else {
-                showCard = false
-                return
-            }
-            hoverTask = Task {
-                try? await Task.sleep(nanoseconds: 400_000_000)
-                guard !Task.isCancelled, isHovering else { return }
-                showCard = true
-            }
-        }
-        .popover(isPresented: $showCard, arrowEdge: .trailing) {
-            WorkspaceInfoCard(workspace: workspace, agentStatus: agentStatus)
+        .sidebarHoverCard {
+            SidebarInfoCard(
+                name: workspace.name,
+                branch: workspace.gitBranch,
+                agentStatus: agentStatusProvider?()
+            )
         }
     }
 
@@ -497,5 +488,47 @@ struct WorkspaceRow: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
+    }
+}
+
+/// Shows an info card popover after a short hover delay, dismissing on hover-out.
+/// The delay avoids flashing cards while the pointer crosses the list; the card
+/// closure is evaluated only while presented, so its agent lookup stays lazy.
+private struct SidebarHoverCardModifier<Card: View>: ViewModifier {
+    var onHoverChange: ((Bool) -> Void)? = nil
+    @ViewBuilder var card: () -> Card
+
+    @State private var isHovering = false
+    @State private var showCard = false
+    @State private var hoverTask: Task<Void, Never>?
+
+    func body(content: Content) -> some View {
+        content
+            .onHover { hovering in
+                isHovering = hovering
+                onHoverChange?(hovering)
+                hoverTask?.cancel()
+                guard hovering else {
+                    showCard = false
+                    return
+                }
+                hoverTask = Task {
+                    try? await Task.sleep(nanoseconds: 400_000_000)
+                    guard !Task.isCancelled, isHovering else { return }
+                    showCard = true
+                }
+            }
+            .popover(isPresented: $showCard, arrowEdge: .trailing) {
+                card()
+            }
+    }
+}
+
+extension View {
+    func sidebarHoverCard(
+        onHoverChange: ((Bool) -> Void)? = nil,
+        @ViewBuilder card: @escaping () -> some View
+    ) -> some View {
+        modifier(SidebarHoverCardModifier(onHoverChange: onHoverChange, card: card))
     }
 }

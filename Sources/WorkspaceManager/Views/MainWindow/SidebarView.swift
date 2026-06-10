@@ -463,7 +463,8 @@ struct SidebarView: View {
             },
             onNewWebView: {
                 onRequestWebSourceCreation(.repo(repo))
-            }
+            },
+            agentStatusProvider: { agentStatus(for: repoSessionKey) }
         )
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
@@ -524,7 +525,7 @@ struct SidebarView: View {
                     isNested: true,
                     isExpanded: isWorkspaceExpanded(workspace),
                     showsDisclosure: !workspace.webSources.isEmpty,
-                    agentStatus: agentStatus(for: workspace),
+                    agentStatusProvider: { agentStatus(for: workspace) },
                     onToggleExpansion: {
                         toggleWorkspaceExpansion(workspace)
                     },
@@ -1384,12 +1385,16 @@ struct SidebarView: View {
         )
     }
 
-    private func agentStatus(for workspace: Workspace) -> AgentSessionStatus? {
+    private func agentStatus(for key: HostTerminalSessionKey) -> AgentSessionStatus? {
         workspacePresentationController.freshestAgentStatus(
-            for: sessionKey(for: workspace),
+            for: key,
             sessions: hostSessions,
             agentStatusBySessionID: agentStatusBySessionID
         )
+    }
+
+    private func agentStatus(for workspace: Workspace) -> AgentSessionStatus? {
+        agentStatus(for: sessionKey(for: workspace))
     }
 
     /// Merge the repo's own-session baseline with the aggregator-bubbled state derived
