@@ -18,6 +18,8 @@ from typing import Any
 
 
 DEFAULT_SURFACE = "desktop / web / agent-runtime / infra / docs"
+DOC_EVIDENCE_EXEMPT_SUFFIXES = (".md", ".mdx", ".markdown", ".txt")
+DOC_EVIDENCE_EXEMPT_PREFIXES = ("docs/", "backlog/")
 RELEASE_PATHS = {
     ".github/workflows/release.yml",
     "scripts/build-release.sh",
@@ -105,6 +107,14 @@ def changed_release_files(files: list[str]) -> list[str]:
     return [path for path in files if path in RELEASE_PATHS]
 
 
+def is_docs_only(files: list[str]) -> bool:
+    return bool(files) and all(
+        path.endswith(DOC_EVIDENCE_EXEMPT_SUFFIXES)
+        or path.startswith(DOC_EVIDENCE_EXEMPT_PREFIXES)
+        for path in files
+    )
+
+
 def evaluate(pr: dict[str, Any], files: list[str]) -> Result:
     body = pr.get("body") or ""
     title = pr.get("title") or ""
@@ -141,7 +151,7 @@ def evaluate(pr: dict[str, Any], files: list[str]) -> Result:
     if re.search(r"(?i)\bdo not merge(?:\s+this\s+pr|\s+until|\b)", f"{title}\n{body}"):
         failures.append("PR text contains a merge-stop instruction.")
 
-    if not has_any_evidence(body):
+    if not has_any_evidence(body) and not is_docs_only(files):
         failures.append("No test/evidence signal found in PR body.")
 
     release_files = changed_release_files(files)
