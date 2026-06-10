@@ -50,6 +50,48 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
+# Trust mise configs before any other setup work. Codex worktrees run setup
+# without an interactive terminal, but mise tasks can execute arbitrary shell,
+# so keep the trust surface small and fail closed if a new config appears.
+# Running this first means a freshly created workspace trusts its .mise.toml as
+# early as possible, so the interactive shell's mise hook does not print
+# "config not trusted" errors while the rest of setup runs.
+allowed_mise_config() {
+  case "$1" in
+    "$REPO_ROOT/.mise.toml"|"$REPO_ROOT/web/.mise.toml") return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+validate_mise_config() {
+  local mise_config="$1"
+  local relative="${mise_config#$REPO_ROOT/}"
+  local forbidden_regex='(^[[:space:]]*\[(env|hooks)\][[:space:]]*$|trusted_config_paths|^[[:space:]]*(yes|ci)[[:space:]]*=[[:space:]]*true([[:space:]]*(#.*)?)?$|_[.](source|file)[[:space:]]*=)'
+
+  if ! allowed_mise_config "$mise_config"; then
+    echo "error: unallowlisted mise config: $relative" >&2
+    echo "Add it to scripts/setup only after reviewing its trust boundary." >&2
+    exit 1
+  fi
+
+  if grep -En "$forbidden_regex" "$mise_config" >&2; then
+    echo "error: forbidden trust/env directive in $relative" >&2
+    exit 1
+  fi
+}
+
+while IFS= read -r mise_config; do
+  validate_mise_config "$mise_config"
+  echo "=> Trusting mise config ${mise_config#$REPO_ROOT/}"
+  mise trust "$mise_config"
+done < <(
+  find "$REPO_ROOT" \
+    -path "*/.git" -prune -o \
+    -path "*/node_modules" -prune -o \
+    -path "*/.pnpm-store" -prune -o \
+    -name ".mise.toml" -print | sort
+)
+
 print_prek_install_instructions() {
   echo "error: prek not found in PATH but prek.toml is present." >&2
   echo "Install it with one of:" >&2
@@ -138,45 +180,6 @@ link_env_from_main
 if [[ "$ENV_ONLY" == "1" ]]; then
   exit 0
 fi
-
-# Trust and install mise-managed tools. Codex worktrees run setup without an
-# interactive terminal, but mise tasks can execute arbitrary shell. Keep the
-# trust surface small and fail closed if a new config appears.
-allowed_mise_config() {
-  case "$1" in
-    "$REPO_ROOT/.mise.toml"|"$REPO_ROOT/web/.mise.toml") return 0 ;;
-    *) return 1 ;;
-  esac
-}
-
-validate_mise_config() {
-  local mise_config="$1"
-  local relative="${mise_config#$REPO_ROOT/}"
-  local forbidden_regex='(^[[:space:]]*\[(env|hooks)\][[:space:]]*$|trusted_config_paths|^[[:space:]]*(yes|ci)[[:space:]]*=[[:space:]]*true([[:space:]]*(#.*)?)?$|_[.](source|file)[[:space:]]*=)'
-
-  if ! allowed_mise_config "$mise_config"; then
-    echo "error: unallowlisted mise config: $relative" >&2
-    echo "Add it to scripts/setup only after reviewing its trust boundary." >&2
-    exit 1
-  fi
-
-  if grep -En "$forbidden_regex" "$mise_config" >&2; then
-    echo "error: forbidden trust/env directive in $relative" >&2
-    exit 1
-  fi
-}
-
-while IFS= read -r mise_config; do
-  validate_mise_config "$mise_config"
-  echo "=> Trusting mise config ${mise_config#$REPO_ROOT/}"
-  mise trust "$mise_config"
-done < <(
-  find "$REPO_ROOT" \
-    -path "*/.git" -prune -o \
-    -path "*/node_modules" -prune -o \
-    -path "*/.pnpm-store" -prune -o \
-    -name ".mise.toml" -print | sort
-)
 
 if [[ "$FAST" == "1" ]]; then
   exit 0
