@@ -12,6 +12,11 @@ afterEach(() => {
 	vi.resetModules();
 });
 
+const EXPECTED_MIGRATIONS = [
+	"0001_baseline",
+	"0002_managed_pr_review_run_session_started_at",
+];
+
 // db + schema must come from the same fresh module graph so getTurso() in the
 // test shares the singleton client ensureSchema() bootstraps.
 async function load() {
@@ -49,7 +54,7 @@ describe("ensureSchema", () => {
 		const applied = await getTurso().execute(
 			"SELECT id FROM schema_migrations",
 		);
-		expect(applied.rows.map((r) => String(r.id))).toEqual(["0001_baseline"]);
+		expect(applied.rows.map((r) => String(r.id))).toEqual(EXPECTED_MIGRATIONS);
 	});
 
 	it("re-running the migration runner is a no-op (idempotent skip, no duplicate record)", async () => {
@@ -64,7 +69,7 @@ describe("ensureSchema", () => {
 		const applied = await getTurso().execute(
 			"SELECT id FROM schema_migrations",
 		);
-		expect(applied.rows).toHaveLength(1);
+		expect(applied.rows).toHaveLength(EXPECTED_MIGRATIONS.length);
 	});
 
 	it("tolerates another bootstrap adding a missing column after introspection", async () => {
@@ -103,7 +108,34 @@ describe("ensureSchema", () => {
 		);
 		expect(eventColumns.rows.map((r) => String(r.name))).toContain("payload");
 		const applied = await turso.execute("SELECT id FROM schema_migrations");
-		expect(applied.rows.map((r) => String(r.id))).toEqual(["0001_baseline"]);
+		expect(applied.rows.map((r) => String(r.id))).toEqual(EXPECTED_MIGRATIONS);
+	});
+
+	it("applies the ReviewRun session-start migration after the baseline is already recorded", async () => {
+		const { ensureSchema, getTurso } = await load();
+		const turso = getTurso();
+		await turso.execute(
+			"CREATE TABLE schema_migrations (id TEXT PRIMARY KEY, applied_at TEXT NOT NULL)",
+		);
+		await turso.execute(
+			"INSERT INTO schema_migrations (id, applied_at) VALUES ('0001_baseline', '2026-01-01T00:00:00Z')",
+		);
+		await turso.execute(
+			"CREATE TABLE managed_pr_review_runs (fingerprint TEXT PRIMARY KEY, session_id TEXT)",
+		);
+
+		await expect(ensureSchema()).resolves.toBeUndefined();
+
+		const columns = await turso.execute(
+			'PRAGMA table_info("managed_pr_review_runs")',
+		);
+		expect(columns.rows.map((r) => String(r.name))).toContain(
+			"session_started_at",
+		);
+		const applied = await turso.execute(
+			"SELECT id FROM schema_migrations ORDER BY id",
+		);
+		expect(applied.rows.map((r) => String(r.id))).toEqual(EXPECTED_MIGRATIONS);
 	});
 
 	it("converges an existing database with a narrower schema without losing data", async () => {

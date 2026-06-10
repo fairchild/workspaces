@@ -81,6 +81,7 @@ export interface ManagedPrReviewRunsTable {
 	trigger_source_id: string;
 	reviewer_config_hash: string;
 	session_id: string | null;
+	session_started_at: string | null;
 	status: string;
 	created_at: string;
 	updated_at: string;

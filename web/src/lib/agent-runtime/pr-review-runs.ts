@@ -621,6 +621,7 @@ export async function recordRunStart(
 			trigger_source_id: input.triggerSourceId,
 			reviewer_config_hash: input.reviewerConfigHash,
 			session_id: null,
+			session_started_at: null,
 			status: "started",
 			created_at: now,
 			updated_at: now,
@@ -677,6 +678,7 @@ export async function recordRunStart(
 				trigger_source_id: input.triggerSourceId,
 				reviewer_config_hash: input.reviewerConfigHash,
 				session_id: null,
+				session_started_at: null,
 				status: "started",
 				created_at: now,
 				updated_at: now,
@@ -731,6 +733,7 @@ export async function recordRunStart(
 		.set({
 			status: "started",
 			session_id: null,
+			session_started_at: null,
 			error: null,
 			failure_kind: null,
 			failure_message: null,
@@ -1069,6 +1072,9 @@ async function updateRunLifecycle(
 			: {};
 	const updates = {
 		session_id: input.sessionId,
+		...(input.status === "started"
+			? { session_started_at: input.sessionId ? now : null }
+			: {}),
 		status: input.status,
 		error: sanitizedError,
 		failure_kind: failureKind,
@@ -1233,6 +1239,7 @@ export interface PrReviewRunSummary {
 	triggerSourceId: string;
 	status: PrReviewRunStatus;
 	sessionId: string | null;
+	sessionStartedAt: string | null;
 	createdAt: string;
 	updatedAt: string;
 	error: string | null;
@@ -1268,6 +1275,7 @@ export interface StartedPrReviewRun {
 	triggerKind: string;
 	triggerSourceId: string;
 	sessionId: string;
+	sessionStartedAt: string | null;
 	createdAt: string;
 	updatedAt: string;
 	coalescedHeadSha: string | null;
@@ -1310,6 +1318,7 @@ export interface ActivePrReviewRunSuccessor {
 	triggerKind: string;
 	triggerSourceId: string;
 	sessionId: string | null;
+	sessionStartedAt: string | null;
 	createdAt: string;
 	updatedAt: string;
 }
@@ -1423,6 +1432,7 @@ function mapRunDetails(row: {
 	reviewer_config_hash: string;
 	status: string;
 	session_id: string | null;
+	session_started_at: string | null;
 	created_at: string;
 	updated_at: string;
 	error: string | null;
@@ -1470,6 +1480,7 @@ function mapRunDetails(row: {
 		reviewerConfigHash: row.reviewer_config_hash,
 		status,
 		sessionId: row.session_id,
+		sessionStartedAt: row.session_started_at,
 		createdAt: row.created_at,
 		updatedAt: row.updated_at,
 		error: failureMessage,
@@ -1559,6 +1570,7 @@ export async function getActivePrReviewRunSuccessor(input: {
 			"trigger_kind",
 			"trigger_source_id",
 			"session_id",
+			"session_started_at",
 			"created_at",
 			"updated_at",
 		])
@@ -1576,6 +1588,7 @@ export async function getActivePrReviewRunSuccessor(input: {
 		triggerKind: row.trigger_kind,
 		triggerSourceId: row.trigger_source_id,
 		sessionId: row.session_id,
+		sessionStartedAt: row.session_started_at,
 		createdAt: row.created_at,
 		updatedAt: row.updated_at,
 	};
@@ -1599,6 +1612,7 @@ export async function getNewerCurrentHeadPrReviewRun(input: {
 			"status",
 			"projection_status",
 			"session_id",
+			"session_started_at",
 			"created_at",
 			"updated_at",
 		])
@@ -1619,6 +1633,7 @@ export async function getNewerCurrentHeadPrReviewRun(input: {
 		status,
 		projectionStatus: normalizeProjectionStatus(row.projection_status, status),
 		sessionId: row.session_id,
+		sessionStartedAt: row.session_started_at,
 		createdAt: row.created_at,
 		updatedAt: row.updated_at,
 	};
@@ -1664,6 +1679,7 @@ export async function listRecentPrReviewRuns(input: {
 			"trigger_source_id",
 			"status",
 			"session_id",
+			"session_started_at",
 			"created_at",
 			"updated_at",
 			"error",
@@ -1707,6 +1723,7 @@ export async function listRecentPrReviewRuns(input: {
 			triggerSourceId: row.trigger_source_id,
 			status,
 			sessionId: row.session_id,
+			sessionStartedAt: row.session_started_at,
 			createdAt: row.created_at,
 			updatedAt: row.updated_at,
 			error: sanitizeFailureMessage(row.failure_message ?? row.error),
@@ -1805,16 +1822,18 @@ function runLatencies(
 	| "executionDurationMinutes"
 	| "projectionLatencyMinutes"
 > {
+	const sessionStartedAt =
+		run.sessionStartedAt ?? (run.sessionId ? run.createdAt : null);
 	const pickupLatencyMinutes =
 		run.status !== "started"
 			? null
 			: run.sessionId
-				? elapsedMinutesBetween(run.createdAt, run.updatedAt)
+				? elapsedMinutesBetween(run.createdAt, sessionStartedAt)
 				: elapsedMinutesBetween(run.createdAt, now);
 	const executionDurationMinutes = run.sessionId
 		? run.status === "started"
-			? elapsedMinutesBetween(run.updatedAt, now)
-			: elapsedMinutesBetween(run.createdAt, run.updatedAt)
+			? elapsedMinutesBetween(sessionStartedAt, now)
+			: elapsedMinutesBetween(sessionStartedAt, run.updatedAt)
 		: null;
 	const projectionLatencyMinutes =
 		run.status === "completed" && run.projectionStatus !== "projected"
@@ -1874,7 +1893,7 @@ export function classifyPrReviewRun(
 			state = "starting";
 		}
 	} else {
-		ageSource = run.updatedAt;
+		ageSource = run.sessionStartedAt ?? run.createdAt;
 		const ageMinutes = elapsedMinutes(ageSource, now);
 		if (ageMinutes >= runningTimeoutMinutes) {
 			state = "running_too_long";
@@ -1957,6 +1976,7 @@ function mapBrokerRun(row: {
 	trigger_source_id: string;
 	status: string;
 	session_id: string | null;
+	session_started_at: string | null;
 	github_review_id: string | null;
 	created_at: string;
 	updated_at: string;
@@ -1980,6 +2000,7 @@ function mapBrokerRun(row: {
 		status,
 		projectionStatus: normalizeProjectionStatus(row.projection_status, status),
 		sessionId: row.session_id,
+		sessionStartedAt: row.session_started_at,
 		githubReviewId: row.github_review_id,
 		createdAt: row.created_at,
 		updatedAt: row.updated_at,
@@ -2000,6 +2021,7 @@ const BROKER_RUN_COLUMNS = [
 	"trigger_source_id",
 	"status",
 	"session_id",
+	"session_started_at",
 	"github_review_id",
 	"created_at",
 	"updated_at",
@@ -2080,6 +2102,7 @@ export async function listStartedPrReviewRuns(
 			"trigger_kind",
 			"trigger_source_id",
 			"session_id",
+			"session_started_at",
 			"created_at",
 			"updated_at",
 			"coalesced_head_sha",
@@ -2106,6 +2129,7 @@ export async function listStartedPrReviewRuns(
 			triggerKind: row.trigger_kind,
 			triggerSourceId: row.trigger_source_id,
 			sessionId: row.session_id as string,
+			sessionStartedAt: row.session_started_at,
 			createdAt: row.created_at,
 			updatedAt: row.updated_at,
 			coalescedHeadSha: row.coalesced_head_sha,

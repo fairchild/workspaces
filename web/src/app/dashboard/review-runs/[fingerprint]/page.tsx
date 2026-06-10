@@ -73,6 +73,16 @@ export default async function ReviewRunPage({
 					<strong>{run.executionState}</strong>
 				</div>
 				<div>
+					<span>Created</span>
+					<strong>{new Date(run.createdAt).toLocaleString()}</strong>
+				</div>
+				{run.sessionStartedAt && (
+					<div>
+						<span>Session started</span>
+						<strong>{new Date(run.sessionStartedAt).toLocaleString()}</strong>
+					</div>
+				)}
+				<div>
 					<span>Target head</span>
 					<strong>{run.headSha.slice(0, 12)}</strong>
 				</div>
@@ -84,6 +94,16 @@ export default async function ReviewRunPage({
 					<span>Updated</span>
 					<strong>{new Date(run.updatedAt).toLocaleString()}</strong>
 				</div>
+				{run.coalescedAt && (
+					<div>
+						<span>Coalesced trigger</span>
+						<strong>
+							{run.coalescedTriggerKind ?? "trigger"} /{" "}
+							{run.coalescedHeadSha?.slice(0, 12) ?? "same head"} /{" "}
+							{new Date(run.coalescedAt).toLocaleString()}
+						</strong>
+					</div>
+				)}
 				<div>
 					<span>Projection</span>
 					<strong>

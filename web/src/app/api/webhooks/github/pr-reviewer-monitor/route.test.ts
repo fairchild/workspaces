@@ -80,6 +80,7 @@ function runRow(
 		triggerSourceId: string;
 		status: "started" | "completed" | "failed" | "superseded";
 		sessionId: string | null;
+		sessionStartedAt: string | null;
 		createdAt: string;
 		updatedAt: string;
 		error: string | null;
@@ -119,6 +120,9 @@ function runRow(
 		triggerSourceId: "abc8101def456",
 		status,
 		sessionId,
+		sessionStartedAt: sessionId
+			? (overrides.sessionStartedAt ?? overrides.updatedAt ?? now)
+			: null,
 		createdAt: now,
 		updatedAt: now,
 		error: null,

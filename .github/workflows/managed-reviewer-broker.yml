@@ -35,7 +35,10 @@ permissions:
   contents: read
 
 concurrency:
-  group: managed-reviewer-broker-${{ github.event_name }}-${{ github.event.sha || github.run_id }}-${{ github.event.context || 'none' }}-${{ github.event.state || 'none' }}
+  # Status-triggered broker passes poll the repo-wide ReviewRun queue, not a
+  # single SHA. Coalesce pending status bursts into one loop while still keeping
+  # non-pending status events from canceling an active pending pass.
+  group: managed-reviewer-broker-${{ github.event_name }}-${{ github.repository }}-${{ github.event_name == 'status' && (github.event.context || 'none') || github.ref || github.run_id }}-${{ github.event_name == 'status' && (github.event.state || 'none') || github.run_id }}
   cancel-in-progress: true
 
 jobs:

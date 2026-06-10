@@ -1361,6 +1361,7 @@ function brokerRunFromDetails(run: PrReviewRunDetails): BrokerPrReviewRun {
 		status: run.status,
 		projectionStatus: run.projectionStatus,
 		sessionId: run.sessionId,
+		sessionStartedAt: run.sessionStartedAt,
 		githubReviewId: run.githubReviewId,
 		createdAt: run.createdAt,
 		updatedAt: run.updatedAt,

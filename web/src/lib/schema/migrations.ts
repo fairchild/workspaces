@@ -406,4 +406,16 @@ const baseline: Migration = {
 	},
 };
 
-export const MIGRATIONS: Migration[] = [baseline];
+const managedPrReviewRunSessionStartedAt: Migration = {
+	id: "0002_managed_pr_review_run_session_started_at",
+	async up(db) {
+		await addMissingColumns(db, "managed_pr_review_runs", [
+			{ name: "session_started_at", type: "text" },
+		]);
+	},
+};
+
+export const MIGRATIONS: Migration[] = [
+	baseline,
+	managedPrReviewRunSessionStartedAt,
+];
