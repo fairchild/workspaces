@@ -348,8 +348,13 @@ struct WorkspaceRow: View {
     var isNested: Bool = false
     var isExpanded: Bool = false
     var showsDisclosure: Bool = false
+    var agentStatus: AgentSessionStatus? = nil
     var onToggleExpansion: (() -> Void)? = nil
     var onSelect: (() -> Void)? = nil
+
+    @State private var isHovering = false
+    @State private var showCard = false
+    @State private var hoverTask: Task<Void, Never>?
 
     private var isBusy: Bool {
         statusMessage != nil || workspace.status == .provisioning
@@ -427,6 +432,22 @@ struct WorkspaceRow: View {
                 + (workspace.status == .archived ? ", archived" : "")
                 + (statusMessage.map { ", \($0)" } ?? "")
         )
+        .onHover { hovering in
+            isHovering = hovering
+            hoverTask?.cancel()
+            guard hovering else {
+                showCard = false
+                return
+            }
+            hoverTask = Task {
+                try? await Task.sleep(nanoseconds: 400_000_000)
+                guard !Task.isCancelled, isHovering else { return }
+                showCard = true
+            }
+        }
+        .popover(isPresented: $showCard, arrowEdge: .trailing) {
+            WorkspaceInfoCard(workspace: workspace, agentStatus: agentStatus)
+        }
     }
 
     private var rowContent: some View {

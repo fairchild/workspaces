@@ -524,6 +524,7 @@ struct SidebarView: View {
                     isNested: true,
                     isExpanded: isWorkspaceExpanded(workspace),
                     showsDisclosure: !workspace.webSources.isEmpty,
+                    agentStatus: agentStatus(for: workspace),
                     onToggleExpansion: {
                         toggleWorkspaceExpansion(workspace)
                     },
@@ -1378,6 +1379,14 @@ struct SidebarView: View {
             for: key,
             paneCountBySessionKey: paneCountBySessionKey,
             activeSessionKey: activeSessionKey,
+            sessions: hostSessions,
+            agentStatusBySessionID: agentStatusBySessionID
+        )
+    }
+
+    private func agentStatus(for workspace: Workspace) -> AgentSessionStatus? {
+        workspacePresentationController.freshestAgentStatus(
+            for: sessionKey(for: workspace),
             sessions: hostSessions,
             agentStatusBySessionID: agentStatusBySessionID
         )
