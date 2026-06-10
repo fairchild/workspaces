@@ -20,6 +20,8 @@ struct SettingsView: View {
     private var terminalMultiplexingModeRawValue: String = TerminalMultiplexingMode.defaultValue.rawValue
     @AppStorage(NotificationConstants.enabledKey)
     private var notificationsEnabled: Bool = NotificationConstants.defaultEnabled
+    @AppStorage(ArchivedWorkspaceSettings.purgeDaysKey)
+    private var archivedWorkspacePurgeDays: Int = ArchivedWorkspaceSettings.defaultPurgeDays
 
     @State private var showFolderPicker = false
     @State private var commandLineToolStatus: CommandLineToolStatus?
@@ -96,6 +98,23 @@ struct SettingsView: View {
                             .font(.caption)
                         }
                     }
+                }
+
+                Divider()
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Stepper(
+                        "Delete archived workspaces after \(archivedWorkspacePurgeDays) days",
+                        value: $archivedWorkspacePurgeDays,
+                        in: 1...365
+                    )
+                    .font(.headline)
+
+                    Text(
+                        "Archiving moves a workspace into a hidden .archived folder. It is permanently deleted after this delay."
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 }
             } header: {
                 Text("General")

@@ -201,13 +201,27 @@ struct SidebarWorkspaceController {
         await retireTerminalSessions(sessionKey)
 
         if workspace.backend == .local {
-            try await workspaceService.archiveWorkspace(at: workspace.workspaceURL)
+            let archivedURL = try await workspaceService.archiveWorkspace(at: workspace.workspaceURL)
+            workspace.path = archivedURL.path
         } else {
             let provider = try provider(for: workspace)
             try await provider.archiveWorkspace(WorkspaceProviderTarget(workspace))
         }
+        workspace.archivedAt = Date()
         workspace.status = .archived
         try saveModelContext(action: "archive workspace")
+    }
+
+    /// Restores a local workspace: moves its directory back out of `.archived/` and
+    /// clears the archived state. Non-local workspaces just flip status back.
+    func unarchive(_ workspace: Workspace) async throws {
+        if workspace.backend == .local {
+            let restoredURL = try await workspaceService.unarchiveWorkspace(at: workspace.workspaceURL)
+            workspace.path = restoredURL.path
+        }
+        workspace.archivedAt = nil
+        workspace.status = .active
+        try saveModelContext(action: "unarchive workspace")
     }
 
     private func upsertWorkspace(

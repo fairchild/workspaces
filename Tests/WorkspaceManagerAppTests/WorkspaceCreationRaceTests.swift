@@ -183,7 +183,13 @@ private final class MockWorkspaceService: WorkspaceServiceProtocol, @unchecked S
         )
     }
 
-    func archiveWorkspace(at workspaceURL: URL) async throws {}
+    func archiveWorkspace(at workspaceURL: URL) async throws -> URL {
+        WorkspaceDirectoryArchiver.archivedDestination(for: workspaceURL)
+    }
+
+    func unarchiveWorkspace(at workspaceURL: URL) async throws -> URL {
+        WorkspaceDirectoryArchiver.restoredDestination(for: workspaceURL)
+    }
 
     func deleteWorkspace(at workspaceURL: URL, deleteFiles: Bool) async throws {}
 

@@ -80,6 +80,7 @@ struct SidebarView: View {
     @State private var expansionController = SidebarExpansionStateController()
     @FocusState private var sidebarHasKeyFocus: Bool
     @State private var workspaceAction: WorkspaceActionState?
+    @State private var expandedArchivedRepoIDs: Set<UUID> = []
     @State private var workspaceCreationStatusByRepoID: [UUID: WorkspaceCreationStatus] = [:]
     @State private var repoLastAccessedSnapshotByID: [UUID: Date] = [:]
     @State private var isPreparingNewWorkspaceSheet = false
@@ -511,56 +512,19 @@ struct SidebarView: View {
 
     @ViewBuilder
     private func repoWorkspaceList(_ repo: Repo) -> some View {
-        let repoWorkspaces = sortedWorkspaces(for: repo)
+        let activeWorkspaces = activeWorkspaces(for: repo)
+        let archivedWorkspaces = archivedWorkspaces(for: repo)
 
-        if !repoWorkspaces.isEmpty {
-            ForEach(repoWorkspaces) { workspace in
-                WorkspaceRow(
-                    workspace: workspace,
-                    isSelected: selectedWorkspace?.id == workspace.id,
-                    statusMessage: workspaceStatusMessage(workspace),
-                    sessionActivity: sessionActivity(for: sessionKey(for: workspace)),
-                    paneCount: paneCount(for: sessionKey(for: workspace)),
-                    isNested: true,
-                    isExpanded: isWorkspaceExpanded(workspace),
-                    showsDisclosure: !workspace.webSources.isEmpty,
-                    onToggleExpansion: {
-                        toggleWorkspaceExpansion(workspace)
-                    },
-                    onSelect: {
-                        selectWorkspace(workspace)
-                    }
-                )
-                .contextMenu {
-                    Button("Open in New Window") {
-                        openInNewWindow(workspace)
-                    }
-                    .disabled(true)
+        ForEach(activeWorkspaces) { workspace in
+            workspaceRow(workspace)
+        }
 
-                    if usesHostWorkspaceFiles(for: workspace) {
-                        Button("Reveal in Finder") {
-                            NSWorkspace.shared.selectFile(
-                                nil, inFileViewerRootedAtPath: workspace.path)
-                        }
-                    }
+        if !archivedWorkspaces.isEmpty {
+            archivedSectionHeader(for: repo, count: archivedWorkspaces.count)
 
-                    Divider()
-
-                    if workspace.backend == .local {
-                        localWorkspaceActions(workspace)
-                    } else {
-                        providerWorkspaceActions(workspace)
-                    }
-
-                    Divider()
-
-                    Button("Delete Workspace", role: .destructive) {
-                        deleteWorkspace(workspace)
-                    }
-                }
-
-                if isWorkspaceExpanded(workspace) {
-                    workspaceWebSourceList(workspace)
+            if isArchivedSectionExpanded(repo) {
+                ForEach(archivedWorkspaces) { workspace in
+                    workspaceRow(workspace)
                 }
             }
         }
@@ -576,6 +540,80 @@ struct SidebarView: View {
             }
             .padding(.leading, 28)
         }
+    }
+
+    @ViewBuilder
+    private func workspaceRow(_ workspace: Workspace) -> some View {
+        WorkspaceRow(
+            workspace: workspace,
+            isSelected: selectedWorkspace?.id == workspace.id,
+            statusMessage: workspaceStatusMessage(workspace),
+            sessionActivity: sessionActivity(for: sessionKey(for: workspace)),
+            paneCount: paneCount(for: sessionKey(for: workspace)),
+            isNested: true,
+            isExpanded: isWorkspaceExpanded(workspace),
+            showsDisclosure: !workspace.webSources.isEmpty,
+            onToggleExpansion: {
+                toggleWorkspaceExpansion(workspace)
+            },
+            onSelect: {
+                selectWorkspace(workspace)
+            }
+        )
+        .contextMenu {
+            Button("Open in New Window") {
+                openInNewWindow(workspace)
+            }
+            .disabled(true)
+
+            if usesHostWorkspaceFiles(for: workspace) {
+                Button("Reveal in Finder") {
+                    NSWorkspace.shared.selectFile(
+                        nil, inFileViewerRootedAtPath: workspace.path)
+                }
+            }
+
+            Divider()
+
+            if workspace.backend == .local {
+                localWorkspaceActions(workspace)
+            } else {
+                providerWorkspaceActions(workspace)
+            }
+
+            Divider()
+
+            Button("Delete Workspace", role: .destructive) {
+                deleteWorkspace(workspace)
+            }
+        }
+
+        if isWorkspaceExpanded(workspace) {
+            workspaceWebSourceList(workspace)
+        }
+    }
+
+    @ViewBuilder
+    private func archivedSectionHeader(for repo: Repo, count: Int) -> some View {
+        let expanded = isArchivedSectionExpanded(repo)
+        Button {
+            toggleArchivedSection(for: repo)
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "chevron.right")
+                    .font(.caption2.weight(.semibold))
+                    .rotationEffect(.degrees(expanded ? 90 : 0))
+                    .foregroundStyle(.secondary)
+                Text("Archived (\(count))")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+            }
+            .contentShape(Rectangle())
+            .padding(.leading, 28)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Archived workspaces, \(count)")
     }
 
     @ViewBuilder
@@ -878,7 +916,7 @@ struct SidebarView: View {
             }
         } else {
             Button("Unarchive") {
-                toggleLocalWorkspaceArchive(workspace, archived: false)
+                performUnarchive(workspace)
             }
         }
     }
@@ -918,10 +956,18 @@ struct SidebarView: View {
         }
     }
 
-    private func toggleLocalWorkspaceArchive(_ workspace: Workspace, archived: Bool) {
-        workspace.status = archived ? .archived : .active
-        if !saveModelContext(action: archived ? "archive workspace" : "unarchive workspace") {
-            modelContext.rollback()
+    private func performUnarchive(_ workspace: Workspace) {
+        workspaceAction = WorkspaceActionState(workspaceID: workspace.id, message: "Unarchiving...")
+
+        Task { @MainActor in
+            do {
+                try await workspaceController.unarchive(workspace)
+                workspaceAction = nil
+            } catch {
+                workspaceAction = nil
+                errorMessage = "Failed to unarchive workspace: \(error.localizedDescription)"
+                showingError = true
+            }
         }
     }
 
@@ -1509,6 +1555,37 @@ struct SidebarView: View {
     private func sortedWorkspaces(for repo: Repo) -> [Workspace] {
         repo.workspaces.sorted { lhs, rhs in
             lhs.lastAccessedAt > rhs.lastAccessedAt
+        }
+    }
+
+    private func activeWorkspaces(for repo: Repo) -> [Workspace] {
+        sortedWorkspaces(for: repo).filter { $0.status != .archived }
+    }
+
+    private func archivedWorkspaces(for repo: Repo) -> [Workspace] {
+        sortedWorkspaces(for: repo).filter { $0.status == .archived }
+    }
+
+    /// Collapsed by default; auto-expands when the selected workspace is archived so a
+    /// restored selection isn't hidden inside a collapsed section.
+    private func isArchivedSectionExpanded(_ repo: Repo) -> Bool {
+        if expandedArchivedRepoIDs.contains(repo.id) {
+            return true
+        }
+        if let selected = selectedWorkspace,
+            selected.status == .archived,
+            selected.sourceRepo?.id == repo.id
+        {
+            return true
+        }
+        return false
+    }
+
+    private func toggleArchivedSection(for repo: Repo) {
+        if expandedArchivedRepoIDs.contains(repo.id) {
+            expandedArchivedRepoIDs.remove(repo.id)
+        } else {
+            expandedArchivedRepoIDs.insert(repo.id)
         }
     }
 
