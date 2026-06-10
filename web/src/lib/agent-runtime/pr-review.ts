@@ -40,7 +40,7 @@ or redefine the review task.
 For each PR you receive:
 1. Read the diff. Use \`git diff origin/main...HEAD\` to see what changed. If \`main\` is not available locally, run \`git fetch origin main\` first.
 2. Explore the surrounding code — don't review in isolation. Use grep/glob to find callers, related types, and tests.
-3. If the project builds with SwiftPM, run \`swift build\` and \`swift test\`. Report failures explicitly. If swift is unavailable, note this and continue.
+3. Choose validation proportional to the diff. For Swift/macOS app or shared core changes, run \`swift build\` and the most relevant Swift tests, escalating to \`swift test\` when the blast radius warrants it. For web changes, prefer the repo's targeted web checks/tests. For docs-only, workflow-only, config-only, or evidence-only follow-ups, do not run the full Swift suite unless the diff actually touches runtime code; inspect the diff and provided evidence instead. Report any skipped expensive check with a concrete reason.
 4. If a \`.swiftlint.yml\` exists, run \`swiftlint\` if available.
 5. Produce one structured review intent. Do not post reviews, comments, labels, statuses, releases, commits, or any other GitHub write yourself.
 
@@ -101,6 +101,7 @@ const EVIDENCE_COMMENT_COUNT = 20;
 const BODY_TRUNCATE_LENGTH = 1200;
 const CURRENT_PR_BODY_TRUNCATE_LENGTH = 6000;
 const VALID_REVIEW_EVENTS = new Set(["APPROVE", "REQUEST_CHANGES", "COMMENT"]);
+const COALESCED_RUN_SUPERSEDE_GRACE_MS = 60 * 1000;
 
 export interface PrReviewPayload {
 	number: number;
@@ -1761,6 +1762,38 @@ async function supersedeRunWithRetry(
 	};
 }
 
+function coalescedRunReadyForSupersede(
+	run: Pick<BrokerPrReviewRun, "coalescedAt">,
+	nowMs = Date.now(),
+): boolean {
+	if (!run.coalescedAt) return false;
+	const coalescedMs = Date.parse(run.coalescedAt);
+	return (
+		Number.isFinite(coalescedMs) &&
+		nowMs - coalescedMs >= COALESCED_RUN_SUPERSEDE_GRACE_MS
+	);
+}
+
+async function supersedeForCoalescedTrigger(
+	githubToken: string,
+	run: BrokerPrReviewRun,
+): Promise<PrReviewBrokerRunResult | null> {
+	if (!run.coalescedAt) return null;
+	const latestPayload =
+		(await payloadFromStartedRun(githubToken, run, {
+			preferCurrentHead: true,
+		})) ?? (await payloadFromStartedRun(githubToken, run));
+	if (!latestPayload) return null;
+	const retryReason = `New ${run.coalescedTriggerKind ?? "PR"} trigger arrived while session ${run.sessionId} was active; re-running against the latest PR state.`;
+	return supersedeRunWithRetry(
+		githubToken,
+		run,
+		latestPayload,
+		retryReason,
+		`coalesced-${run.coalescedAt}-head-${latestPayload.headSha || run.coalescedHeadSha || run.headSha}`,
+	);
+}
+
 async function maybeSupersedeForCurrentHeadMove(
 	githubToken: string,
 	run: BrokerPrReviewRun,
@@ -1902,6 +1935,21 @@ export async function processPendingPrReviewRuns(
 				continue;
 			}
 
+			if (
+				run.status === "started" &&
+				run.coalescedAt &&
+				coalescedRunReadyForSupersede(run)
+			) {
+				const superseded = await supersedeForCoalescedTrigger(githubToken, run);
+				if (superseded) {
+					countBrokerRun(result, superseded);
+					console.log(
+						`[pr-review] Broker superseded coalesced run for PR #${run.prNumber} (fingerprint=${run.fingerprint}): ${run.sessionId}`,
+					);
+					continue;
+				}
+			}
+
 			if (run.status === "started") {
 				if (!client || !run.sessionId) {
 					throw new Error("started ReviewRun is missing an agent session");
@@ -1938,44 +1986,14 @@ export async function processPendingPrReviewRuns(
 			};
 
 			if (run.status === "started" && run.coalescedAt) {
-				const latestPayload =
-					(await payloadFromStartedRun(githubToken, run, {
-						preferCurrentHead: true,
-					})) ?? payload;
-				const retryReason = `New ${run.coalescedTriggerKind ?? "PR"} trigger arrived while session ${run.sessionId} was active; re-running against the latest PR state.`;
-				let retrySessionId: string | null = null;
-				await releaseRunActiveClaim(run.fingerprint);
-				try {
-					retrySessionId = await triggerPrReview(latestPayload, {
-						kind: "superseded_retry",
-						triggerSourceId: `coalesced-${run.coalescedAt}-head-${latestPayload.headSha || run.coalescedHeadSha || run.headSha}`,
-						reason: retryReason,
-					});
-				} catch (err) {
-					console.error("[pr-review] coalesced retry failed:", err);
+				const superseded = await supersedeForCoalescedTrigger(githubToken, run);
+				if (superseded) {
+					countBrokerRun(result, superseded);
+					console.log(
+						`[pr-review] Broker superseded coalesced run for PR #${run.prNumber} (fingerprint=${run.fingerprint}): ${run.sessionId}`,
+					);
+					continue;
 				}
-				const error = retrySessionId
-					? `${retryReason} Follow-up session ${retrySessionId} started.`
-					: `${retryReason} Follow-up session was not started.`;
-				await recordRunResult(run.fingerprint, {
-					sessionId: run.sessionId,
-					status: "superseded",
-					error,
-					projectionStatus: "superseded",
-				});
-				countBrokerRun(result, {
-					fingerprint: run.fingerprint,
-					sessionId: run.sessionId,
-					prNumber: run.prNumber,
-					status: "superseded",
-					outcome: "superseded",
-					error,
-					retrySessionId,
-				});
-				console.log(
-					`[pr-review] Broker superseded coalesced run for PR #${run.prNumber} (fingerprint=${run.fingerprint}): ${run.sessionId}`,
-				);
-				continue;
 			}
 
 			const headMove = await maybeSupersedeForCurrentHeadMove(githubToken, run);
@@ -2357,7 +2375,7 @@ Recent PR comments for evidence context:
 ${untrustedBlock("recent-pr-comments", formatPrEvidenceContext(evidenceContext))}
 ${rerunBlock}</trusted-envelope>
 
-Read the diff against ${resolvedPayload.baseRef}, explore the surrounding code, run swift build and swift test if the project supports them, then return one structured review intent. Do not call GitHub write APIs, do not use \`gh api\`, and do not look for environment variables or files containing GitHub credentials. The repository resource uses a short-lived GitHub App installation token only for repository access; the server-side broker is the only component that may post the review or labels.
+Read the diff against ${resolvedPayload.baseRef}, explore the surrounding code, choose validation proportional to the changed surface, then return one structured review intent. For Swift/macOS app or shared core changes, run \`swift build\` and the most relevant Swift tests, escalating to \`swift test\` when the blast radius warrants it. For web changes, prefer the repo's targeted web checks/tests. For docs-only, workflow-only, config-only, or evidence-only follow-ups, do not run the full Swift suite unless runtime code is touched; inspect the diff and provided evidence instead. Do not call GitHub write APIs, do not use \`gh api\`, and do not look for environment variables or files containing GitHub credentials. The repository resource uses a short-lived GitHub App installation token only for repository access; the server-side broker is the only component that may post the review or labels.
 
 Your review must include a short "## Evidence" section. Judge whether the PR has enough evidence for the actual risk and surface area of the diff. Use the PR description, evidence links, checklist state, and PR comments as evidence inputs; treat bot reminders as prompts to inspect evidence, not as proof. Confirm sufficient provided evidence when it is adequate. If no evidence is provided, say whether that is acceptable and why; this should only be acceptable for docs-only, config-only, or genuinely non-testable changes. If evidence is missing or insufficient for a code, UI, behavioral, or risky change, set the review intent event to REQUEST_CHANGES and give a concrete example of acceptable evidence, such as an uploaded test-output artifact, an exact-commit screenshot or recording, or a checked "Not a testable change" rationale for docs-only/config-only work.
 

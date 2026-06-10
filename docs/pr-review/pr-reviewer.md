@@ -134,8 +134,17 @@ Completed managed-agent sessions are projected to GitHub by
 event-driven: when the webhook route creates the pending
 `WorkSpaces Managed Review` commit status, GitHub emits a `status` event. The
 broker workflow filters to that pending context and polls the protected broker
-route for up to 30 minutes, matching the default health pending timeout, until
-the managed-agent session has completed or the attempt window expires.
+route every 15 seconds for up to 30 minutes, matching the default health pending
+timeout, until the managed-agent session has completed or the attempt window
+expires. The shorter poll interval keeps completed sessions from waiting up to a
+full minute before projection while preserving the same repair window.
+
+When a newer PR trigger arrives while an older session is still running, the
+webhook coalesces that trigger onto the active ReviewRun. After a short
+60-second settle window, the broker supersedes the stale running session and
+starts one follow-up session for the latest PR state instead of waiting for the
+old session to finish. This keeps force-push/edit bursts from adding the full
+runtime of an obsolete review to the latest review's wall-clock time.
 
 The same workflow remains the manual repair path and script smoke test. Manual
 `workflow_dispatch` runs `scripts/pr-reviewer-broker.py` against the broker
