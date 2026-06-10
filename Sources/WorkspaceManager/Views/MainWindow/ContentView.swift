@@ -478,6 +478,9 @@ struct ContentView: View {
                     webSourceCreationTarget = target
                 },
                 onWorkspaceCreated: handleWorkspaceCreated,
+                retireTerminalSessions: { key in
+                    await retireTerminalSessions(inScope: key)
+                },
                 workspaceProviderSetupCoordinator: workspaceProviderSetupCoordinator,
                 hostLumeSmokeAutomation: hostLumeSmokeAutomation
             )
@@ -1429,7 +1432,10 @@ struct ContentView: View {
         let controller = SidebarWorkspaceController(
             modelContext: modelContext,
             workspaceService: workspaceService,
-            workspaceProviderRegistry: workspaceProviderRegistry
+            workspaceProviderRegistry: workspaceProviderRegistry,
+            retireTerminalSessions: { key in
+                await retireTerminalSessions(inScope: key)
+            }
         )
         let workspace = try await controller.createWorkspace(
             from: repo,
@@ -1453,7 +1459,10 @@ struct ContentView: View {
         let controller = SidebarWorkspaceController(
             modelContext: modelContext,
             workspaceService: workspaceService,
-            workspaceProviderRegistry: workspaceProviderRegistry
+            workspaceProviderRegistry: workspaceProviderRegistry,
+            retireTerminalSessions: { key in
+                await retireTerminalSessions(inScope: key)
+            }
         )
         do {
             try await controller.archive(workspace)
@@ -1551,6 +1560,14 @@ struct ContentView: View {
             )
         else { return }
         applyTerminalSessionResult(result)
+    }
+
+    @MainActor
+    private func retireTerminalSessions(inScope scopeKey: HostTerminalSessionKey) async {
+        let retiredSessionIDs = hostTerminalState.retireSessions(inScope: scopeKey)
+        guard !retiredSessionIDs.isEmpty else { return }
+
+        terminalFocusCoordinator.cancelPendingFocusRequest(reason: "workspace_lifecycle_retired_sessions")
     }
 
     @MainActor

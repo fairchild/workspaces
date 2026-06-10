@@ -54,6 +54,7 @@ struct SidebarView: View {
     let onWebSourceSelected: (WebSource) -> Void
     let onRequestWebSourceCreation: (WebSourceCreationTarget) -> Void
     let onWorkspaceCreated: () -> Void
+    let retireTerminalSessions: @MainActor (HostTerminalSessionKey) async -> Void
     let workspaceProviderSetupCoordinator: WorkspaceProviderSetupCoordinator
     let hostLumeSmokeAutomation: HostLumeSmokeAutomationController
 
@@ -95,7 +96,8 @@ struct SidebarView: View {
         SidebarWorkspaceController(
             modelContext: modelContext,
             workspaceService: workspaceService,
-            workspaceProviderRegistry: workspaceProviderRegistry
+            workspaceProviderRegistry: workspaceProviderRegistry,
+            retireTerminalSessions: retireTerminalSessions
         )
     }
 

@@ -116,6 +116,19 @@ final class HostTerminalSurfaceStore {
         }
         onSurfaceInvalidated?(sessionID)
     }
+
+    @discardableResult
+    func retire(sessionID: UUID) -> Bool {
+        guard let removed = surfaces.removeValue(forKey: sessionID) else {
+            onSurfaceInvalidated?(sessionID)
+            return false
+        }
+
+        sessionIDsBySurfaceIdentity.removeValue(forKey: ObjectIdentifier(removed))
+        removed.forceCloseForSessionRetirement()
+        onSurfaceInvalidated?(sessionID)
+        return true
+    }
 }
 
 struct TerminalContainerView: View {

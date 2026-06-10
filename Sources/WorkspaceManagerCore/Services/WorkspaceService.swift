@@ -10,10 +10,23 @@ import os.log
 
 private let log = Logger(subsystem: "com.cloudcompute.workspaces", category: "WorkspaceService")
 
+struct WorkspaceCleanupFailure: Sendable, Equatable {
+    let context: String
+    let targetPath: String
+    let errorDescription: String
+}
+
+private let defaultCleanupFailureReporter: @Sendable (WorkspaceCleanupFailure) -> Void = { failure in
+    log.warning(
+        "Failed best-effort workspace cleanup after \(failure.context) at \(failure.targetPath): \(failure.errorDescription)"
+    )
+}
+
 public actor WorkspaceService: WorkspaceServiceProtocol {
     public static let shared = WorkspaceService()
 
     private let materializer: any WorkspaceMaterializer
+    private let cleanupFailureReporter: @Sendable (WorkspaceCleanupFailure) -> Void
 
     // MARK: - Workspace Root Configuration
 
@@ -43,8 +56,12 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
         self.init(materializer: GitWorktreeWorkspaceMaterializer(gitService: gitService))
     }
 
-    init(materializer: any WorkspaceMaterializer) {
+    init(
+        materializer: any WorkspaceMaterializer,
+        cleanupFailureReporter: @escaping @Sendable (WorkspaceCleanupFailure) -> Void = defaultCleanupFailureReporter
+    ) {
         self.materializer = materializer
+        self.cleanupFailureReporter = cleanupFailureReporter
         Self.ensureDefaultWorkspacesRootExists()
     }
 
@@ -105,14 +122,14 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
                 from: repoLocalURL
             )
         } catch {
-            try? await materializer.removeWorkspace(at: workspaceDir)
+            await cleanupMaterializedWorkspace(at: workspaceDir, context: "materialization failure")
             throw WorkspaceError.materializationFailed(
                 operation: materializer.failureOperationDescription,
                 reason: error.localizedDescription
             )
         }
         guard FileManager.default.fileExists(atPath: workspaceDir.path) else {
-            try? await materializer.removeWorkspace(at: workspaceDir)
+            await cleanupMaterializedWorkspace(at: workspaceDir, context: "missing workspace directory")
             throw WorkspaceError.materializationFailed(
                 operation: materializer.failureOperationDescription,
                 reason: "Materializer did not create workspace directory at \(workspaceDir.path)"
@@ -141,8 +158,22 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
                 warnings: warnings
             )
         } catch {
-            try? await materializer.removeWorkspace(at: workspaceDir)
+            await cleanupMaterializedWorkspace(at: workspaceDir, context: "setup lifecycle failure")
             throw error
+        }
+    }
+
+    private func cleanupMaterializedWorkspace(at workspaceURL: URL, context: String) async {
+        do {
+            try await materializer.removeWorkspace(at: workspaceURL)
+        } catch {
+            cleanupFailureReporter(
+                WorkspaceCleanupFailure(
+                    context: context,
+                    targetPath: workspaceURL.path,
+                    errorDescription: error.localizedDescription
+                )
+            )
         }
     }
 

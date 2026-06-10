@@ -31,6 +31,19 @@ struct SidebarWorkspaceController {
     let modelContext: ModelContext
     let workspaceService: any WorkspaceServiceProtocol
     let workspaceProviderRegistry: WorkspaceProviderRegistry
+    let retireTerminalSessions: @MainActor (HostTerminalSessionKey) async -> Void
+
+    init(
+        modelContext: ModelContext,
+        workspaceService: any WorkspaceServiceProtocol,
+        workspaceProviderRegistry: WorkspaceProviderRegistry,
+        retireTerminalSessions: @escaping @MainActor (HostTerminalSessionKey) async -> Void = { _ in }
+    ) {
+        self.modelContext = modelContext
+        self.workspaceService = workspaceService
+        self.workspaceProviderRegistry = workspaceProviderRegistry
+        self.retireTerminalSessions = retireTerminalSessions
+    }
 
     nonisolated static func preferredRepoForNewWorkspace(
         selectedWorkspace: Workspace?,
@@ -152,6 +165,8 @@ struct SidebarWorkspaceController {
 
     func deleteWorkspace(_ workspace: Workspace, deleteFiles: Bool) async throws {
         let workspaceURL = workspace.workspaceURL
+        let sessionKey = try terminalSessionKey(for: workspace)
+        await retireTerminalSessions(sessionKey)
 
         if workspace.backend == .local {
             try await workspaceService.deleteWorkspace(at: workspaceURL, deleteFiles: deleteFiles)
@@ -182,6 +197,9 @@ struct SidebarWorkspaceController {
     }
 
     func archive(_ workspace: Workspace) async throws {
+        let sessionKey = try terminalSessionKey(for: workspace)
+        await retireTerminalSessions(sessionKey)
+
         if workspace.backend == .local {
             try await workspaceService.archiveWorkspace(at: workspace.workspaceURL)
         } else {
@@ -223,6 +241,15 @@ struct SidebarWorkspaceController {
         }
 
         try saveModelContext(action: "save workspace")
+    }
+
+    private func terminalSessionKey(for workspace: Workspace) throws -> HostTerminalSessionKey {
+        let target = WorkspaceProviderTarget(workspace)
+        if workspace.backend == .local {
+            return LocalWorkspaceProvider().sessionKey(for: target)
+        }
+
+        return try provider(for: workspace).sessionKey(for: target)
     }
 
     private func reserveWorkspaceName(
