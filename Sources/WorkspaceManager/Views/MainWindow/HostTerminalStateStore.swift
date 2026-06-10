@@ -264,6 +264,32 @@ final class HostTerminalStateStore: ObservableObject {
     }
 
     @discardableResult
+    func retireSessions(inScope scopeKey: HostTerminalSessionKey) -> [UUID] {
+        let primarySessionIDs = coordinator.sessions(inScope: scopeKey).map(\.id)
+        guard !primarySessionIDs.isEmpty else { return [] }
+
+        var retiredSessionIDs: [UUID] = []
+        for primarySessionID in primarySessionIDs {
+            if let splitSession = splitSessionsByPrimaryID.removeValue(forKey: primarySessionID) {
+                retireTerminalSession(splitSession.id)
+                retiredSessionIDs.append(splitSession.id)
+            }
+            splitLayoutsByPrimaryID.removeValue(forKey: primarySessionID)
+            splitFractionsByPrimaryID.removeValue(forKey: primarySessionID)
+
+            guard coordinator.remove(sessionID: primarySessionID) != nil else { continue }
+            retireTerminalSession(primarySessionID)
+            tabTitleOverridesBySessionID.removeValue(forKey: primarySessionID)
+            retiredSessionIDs.append(primarySessionID)
+        }
+
+        if !retiredSessionIDs.isEmpty {
+            publishSnapshot()
+        }
+        return retiredSessionIDs
+    }
+
+    @discardableResult
     func handleProcessExit(for sessionID: UUID) -> Bool {
         var removed = false
 
@@ -545,6 +571,16 @@ final class HostTerminalStateStore: ObservableObject {
         }
         splitLayoutsByPrimaryID.removeValue(forKey: primarySessionID)
         splitFractionsByPrimaryID.removeValue(forKey: primarySessionID)
+    }
+
+    private func retireTerminalSession(_ sessionID: UUID) {
+        surfaceStore.retire(sessionID: sessionID)
+        if registeredAgentSessionIDs.contains(sessionID) {
+            agentSessionRegistry?.deregister(hostSessionID: sessionID)
+            lastCommandStatusRegistry?.clear(terminalSessionID: sessionID)
+            recordTerminalSessionEnded(sessionID)
+            registeredAgentSessionIDs.remove(sessionID)
+        }
     }
 
     private func recordTerminalSession(_ session: HostTerminalSession, isActive: Bool) {

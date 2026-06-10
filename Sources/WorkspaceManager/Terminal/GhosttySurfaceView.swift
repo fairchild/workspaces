@@ -242,6 +242,17 @@ final class GhosttySurfaceView: NSView {
         ghostty_surface_request_close(surface)
     }
 
+    func forceCloseForSessionRetirement() {
+        onCloseConfirmationRequired = nil
+        onProcessExit = nil
+        didProcessExit = true
+
+        guard let surface else { return }
+        GhosttyAppManager.shared.unregisterSurface(self)
+        ghostty_surface_free(surface)
+        self.surface = nil
+    }
+
     // MARK: - Local event monitor
 
     private func setupEventMonitor() {

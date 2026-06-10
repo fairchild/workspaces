@@ -24,10 +24,32 @@ struct WorkspaceServiceTests {
         }
     }
 
+    final class CleanupFailureRecorder: @unchecked Sendable {
+        private let lock = NSLock()
+        private var failures: [WorkspaceCleanupFailure] = []
+
+        func record(_ failure: WorkspaceCleanupFailure) {
+            lock.lock()
+            defer { lock.unlock() }
+            failures.append(failure)
+        }
+
+        func snapshot() -> [WorkspaceCleanupFailure] {
+            lock.lock()
+            defer { lock.unlock() }
+            return failures
+        }
+    }
+
+    struct CleanupError: LocalizedError {
+        let errorDescription: String? = "cleanup failed"
+    }
+
     final class RecordingWorkspaceMaterializer: WorkspaceMaterializer, @unchecked Sendable {
         var materializeCalls: [(sanitizedName: String, destination: URL, source: URL)] = []
         var removeCalls: [URL] = []
         var materializeError: Error?
+        var removeError: Error?
         var resultBranch = "workspace/recorded"
         var createsDestination = false
 
@@ -52,6 +74,9 @@ struct WorkspaceServiceTests {
 
         func removeWorkspace(at workspaceURL: URL) async throws {
             removeCalls.append(workspaceURL)
+            if let removeError {
+                throw removeError
+            }
             try? await WorkspaceDirectoryRemover.remove(at: workspaceURL)
         }
     }
@@ -349,6 +374,39 @@ struct WorkspaceServiceTests {
             .appendingPathComponent("test-ws", isDirectory: true)
         #expect(materializer.removeCalls == [workspaceDir])
         #expect(!FileManager.default.fileExists(atPath: workspaceDir.path))
+    }
+
+    @Test("createWorkspace reports failed best-effort materializer cleanup")
+    func createWorkspaceReportsFailedMaterializerCleanup() async throws {
+        let materializer = RecordingWorkspaceMaterializer()
+        materializer.createsDestination = true
+        materializer.materializeError = GitError.commandFailed(args: ["worktree", "add"], stderr: "already exists")
+        materializer.removeError = CleanupError()
+        let cleanupFailures = CleanupFailureRecorder()
+        let service = WorkspaceService(
+            materializer: materializer,
+            cleanupFailureReporter: { failure in
+                cleanupFailures.record(failure)
+            }
+        )
+        let (testRoot, repoDir, wsRoot) = try makeWorkspaceFixture()
+        defer { try? FileManager.default.removeItem(at: testRoot) }
+        let originalRoot = setWorkspacesRoot(wsRoot)
+        defer { restoreWorkspacesRoot(originalRoot) }
+
+        await #expect(throws: WorkspaceError.self) {
+            _ = try await service.createWorkspace(repoName: "test-repo", repoLocalURL: repoDir, name: "test-ws")
+        }
+
+        let workspaceDir =
+            wsRoot
+            .appendingPathComponent("test-repo", isDirectory: true)
+            .appendingPathComponent("test-ws", isDirectory: true)
+        let failure = try #require(cleanupFailures.snapshot().first)
+        #expect(materializer.removeCalls == [workspaceDir])
+        #expect(failure.context == "materialization failure")
+        #expect(failure.targetPath == workspaceDir.path)
+        #expect(failure.errorDescription == "cleanup failed")
     }
 
     @Test("createWorkspace throws when directory already exists")
