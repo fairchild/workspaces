@@ -57,6 +57,10 @@ struct ContentView: View {
     @State private var landingErrorMessage: String?
     @State private var workspaceEnvironmentSheetState = WorkspaceEnvironmentSheetState.empty
     @State private var didScheduleInitialWorkspaceStatusSync = false
+    @State private var workspaceOrphanItems: [WorkspaceOrphanItem] = []
+    @State private var dismissedWorkspaceOrphanItemIDs: Set<String> = []
+    @State private var cleaningWorkspaceOrphanItemIDs: Set<String> = []
+    @State private var pendingWorkspaceOrphanCleanup: WorkspaceOrphanItem?
     @State private var accessRecorder = MainWindowAccessRecorder()
     @StateObject private var rightPaneStateStore = RightPaneStateStore()
     @StateObject private var webSurfaceStore = WebSurfaceStore()
@@ -118,6 +122,10 @@ struct ContentView: View {
             workspaceIDs: repos.flatMap(\.workspaces).map(\.id),
             webSourceIDs: webSources.map(\.id)
         )
+    }
+
+    private var visibleWorkspaceOrphanItems: [WorkspaceOrphanItem] {
+        workspaceOrphanItems.filter { !dismissedWorkspaceOrphanItemIDs.contains($0.id) }
     }
 
     private var normalizedRepoPathSnapshot: Set<String> {
@@ -531,6 +539,20 @@ struct ContentView: View {
             if modelStoreStatusController.shouldShowDegradedWarning {
                 ModelStoreDegradedBanner()
             }
+            if !visibleWorkspaceOrphanItems.isEmpty {
+                WorkspaceOrphanReconciliationBanner(
+                    items: visibleWorkspaceOrphanItems,
+                    cleaningItemIDs: cleaningWorkspaceOrphanItemIDs,
+                    onClean: { item in
+                        pendingWorkspaceOrphanCleanup = item
+                    },
+                    onDismiss: {
+                        dismissedWorkspaceOrphanItemIDs.formUnion(
+                            visibleWorkspaceOrphanItems.map(\.id)
+                        )
+                    }
+                )
+            }
             baseSplitView
         }
         .background(
@@ -667,6 +689,26 @@ struct ContentView: View {
                 Button("OK", role: .cancel) { viewState.workspaceOperationErrorMessage = nil }
             } message: {
                 Text(viewState.workspaceOperationErrorMessage ?? "Unknown error.")
+            }
+            .alert(
+                workspaceOrphanCleanupTitle(for: pendingWorkspaceOrphanCleanup),
+                isPresented: Binding(
+                    get: { pendingWorkspaceOrphanCleanup != nil },
+                    set: { if !$0 { pendingWorkspaceOrphanCleanup = nil } }
+                )
+            ) {
+                Button("Clean", role: .destructive) {
+                    guard let item = pendingWorkspaceOrphanCleanup else { return }
+                    pendingWorkspaceOrphanCleanup = nil
+                    Task { @MainActor in
+                        await cleanWorkspaceOrphan(item)
+                    }
+                }
+                Button("Cancel", role: .cancel) {
+                    pendingWorkspaceOrphanCleanup = nil
+                }
+            } message: {
+                Text(workspaceOrphanCleanupMessage(for: pendingWorkspaceOrphanCleanup))
             }
             .alert(
                 "Could Not Complete Provider Setup",
@@ -1756,6 +1798,7 @@ struct ContentView: View {
         guard !Task.isCancelled else { return }
 
         await syncWorkspaceStatuses(trigger: "launch_deferred")
+        await refreshWorkspaceOrphans(trigger: "launch_deferred")
     }
 
     @MainActor
@@ -1837,6 +1880,145 @@ struct ContentView: View {
             changedCount,
             hadFailure ? "partial_failure" : "success"
         )
+    }
+
+    @MainActor
+    private func refreshWorkspaceOrphans(trigger: String) async {
+        let scanStartedAt = Date()
+        let snapshots = workspaceOrphanRepositorySnapshots()
+        let workspacesRoot = await workspaceService.workspacesRoot
+        let lumeWorkspaceStorageURL = await LumeValidatedBaseService.shared.workspaceVMStorageDirectoryURL
+        let reconciler = WorkspaceOrphanReconciler(
+            workspacesRoot: workspacesRoot,
+            lumeWorkspaceStorageURL: lumeWorkspaceStorageURL
+        )
+
+        let result = await reconciler.scan(repositories: snapshots)
+        workspaceOrphanItems = result.items
+        let currentIDs = Set(result.items.map(\.id))
+        dismissedWorkspaceOrphanItemIDs = dismissedWorkspaceOrphanItemIDs.intersection(currentIDs)
+
+        NSLog(
+            "[Perf] metric=workspace_orphan_scan duration_ms=%.2f trigger=%@ repo_count=%ld item_count=%ld",
+            Date().timeIntervalSince(scanStartedAt) * 1000,
+            trigger,
+            snapshots.count,
+            result.items.count
+        )
+    }
+
+    @MainActor
+    private func workspaceOrphanRepositorySnapshots() -> [WorkspaceOrphanRepositorySnapshot] {
+        repos.map { repo in
+            WorkspaceOrphanRepositorySnapshot(
+                id: repo.id,
+                name: repo.name,
+                localPath: repo.localPath,
+                workspaces: repo.workspaces.map { workspace in
+                    WorkspaceOrphanWorkspaceSnapshot(
+                        id: workspace.id,
+                        name: workspace.name,
+                        path: workspace.path,
+                        gitBranch: workspace.gitBranch,
+                        backendIdentifier: workspace.backendIdentifier,
+                        remoteId: workspace.remoteId,
+                        backendMetadataRaw: workspace.backendMetadataRaw,
+                        usesHostWorkspaceFiles: workspace.usesHostWorkspaceFiles
+                    )
+                }
+            )
+        }
+    }
+
+    @MainActor
+    private func cleanWorkspaceOrphan(_ item: WorkspaceOrphanItem) async {
+        guard !cleaningWorkspaceOrphanItemIDs.contains(item.id) else { return }
+        cleaningWorkspaceOrphanItemIDs.insert(item.id)
+        defer {
+            cleaningWorkspaceOrphanItemIDs.remove(item.id)
+        }
+
+        let workspacesRoot = await workspaceService.workspacesRoot
+        let lumeWorkspaceStorageURL = await LumeValidatedBaseService.shared.workspaceVMStorageDirectoryURL
+        let reconciler = WorkspaceOrphanReconciler(
+            workspacesRoot: workspacesRoot,
+            lumeWorkspaceStorageURL: lumeWorkspaceStorageURL
+        )
+
+        do {
+            switch item.kind {
+            case .gitWorktreeWithoutRecord:
+                try await reconciler.cleanupGitWorktree(item)
+            case .workspaceRecordMissingDirectory:
+                if item.hasPrunableGitMetadata {
+                    try await reconciler.cleanupGitWorktree(item)
+                }
+                try deleteWorkspaceRecord(for: item)
+            case .lumeVMWithoutWorkspace:
+                try await cleanupLumeVMOrphan(item)
+            }
+
+            workspaceOrphanItems.removeAll { $0.id == item.id }
+            dismissedWorkspaceOrphanItemIDs.remove(item.id)
+            await refreshWorkspaceOrphans(trigger: "cleanup")
+        } catch {
+            viewState.workspaceOperationErrorMessage =
+                "Could not clean '\(item.resourceName)': \(error.localizedDescription)"
+        }
+    }
+
+    @MainActor
+    private func deleteWorkspaceRecord(for item: WorkspaceOrphanItem) throws {
+        guard let workspaceID = item.workspaceID,
+            let workspace = repos.flatMap(\.workspaces).first(where: { $0.id == workspaceID })
+        else {
+            throw WorkspaceOrphanReconciliationError.unsupportedCleanupItem
+        }
+
+        modelContext.delete(workspace)
+        do {
+            try modelContext.save()
+        } catch {
+            modelContext.rollback()
+            throw error
+        }
+    }
+
+    @MainActor
+    private func cleanupLumeVMOrphan(_ item: WorkspaceOrphanItem) async throws {
+        guard let target = item.lumeCleanupTarget(),
+            let provider = workspaceProviderRegistry.provider(for: LumeWorkspaceProvider.identifier)
+        else {
+            throw WorkspaceOrphanReconciliationError.unsupportedCleanupItem
+        }
+
+        try await provider.deleteWorkspace(target)
+    }
+
+    private func workspaceOrphanCleanupTitle(for item: WorkspaceOrphanItem?) -> String {
+        guard let item else { return "Clean Workspace Leftover?" }
+        switch item.kind {
+        case .gitWorktreeWithoutRecord:
+            return "Remove Orphaned Worktree?"
+        case .workspaceRecordMissingDirectory:
+            return "Remove Missing Workspace Record?"
+        case .lumeVMWithoutWorkspace:
+            return "Delete Orphaned Lume VM?"
+        }
+    }
+
+    private func workspaceOrphanCleanupMessage(for item: WorkspaceOrphanItem?) -> String {
+        guard let item else { return "" }
+        switch item.kind {
+        case .gitWorktreeWithoutRecord:
+            return
+                "This removes the git worktree '\(item.resourceName)' and its workspace branch when it is a workspace-owned branch."
+        case .workspaceRecordMissingDirectory:
+            return
+                "This removes the workspace record for '\(item.resourceName)'. No workspace directory exists at its saved path."
+        case .lumeVMWithoutWorkspace:
+            return "This deletes the Lume VM '\(item.resourceName)' from workspace VM storage."
+        }
     }
 
     @MainActor
