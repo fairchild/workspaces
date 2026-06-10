@@ -22,13 +22,13 @@ This roadmap is grounded in the current codebase and recent releases, not older 
 
 Workspaces now spans three surfaces — a Mac-native app, a web dashboard, and an agent-automation track. Each surface carries its own complexity and its own hardening agenda.
 
-**Desktop app.** Terminal-first main window with repo overview and persistent repo/workspace terminals. Calmer repo-first sidebar with explicit sorting and per-window last-surface restoration. Ghostty-backed terminal with split/focus/resize/equalize and working shortcut routing. Local workspaces plus Lume and Daytona provider tracks, including host-side validation and setup flows for Lume. Notification/auth/activity infrastructure, workspace process monitoring, and agent-awareness in repo overview cards. A canonical performance system (`workspaces-performance-system` skill + `config/performance/contract.json`) enforces scenario budgets across debug, installed, release, and CI environments.
+**Desktop app.** Terminal-first main window with repo overview and persistent repo/workspace terminals. Calmer repo-first sidebar with explicit sorting and per-window last-surface restoration. Ghostty-backed terminal with split/focus/resize/equalize and working shortcut routing. Local workspaces plus Lume and Daytona provider tracks, including host-side validation and setup flows for Lume. Notification/auth/activity infrastructure, workspace process monitoring, and agent-awareness in repo overview cards. A canonical performance system (`workspaces-performance-system` skill + `config/performance/contract.json`) enforces scenario budgets across debug, installed, release, and CI environments. The terminal layout model is mid-transition: the Tile Tree + Surface abstraction epic ([#627](https://github.com/fairchild/workspaces/issues/627)) is replacing the two-pane split maps with a recursive tile tree, Phases 0–2 landed/in review (PRs #625, #633).
 
 **Web dashboard** (`web/`). Next.js 15 on Vercel with GitHub OAuth (Better Auth) and LibSQL+Kysely persistence. A ghostty-web terminal tab and a TerminalShare Cloudflare Worker proxy. A multi-provider agent runtime now covering Vercel Sandbox and Anthropic Managed Agents, with Daytona/GitHub Actions registered as unavailable stubs and `mock` available for tests (#332). Persistent-sandbox snapshot/restore for conversation continuity (#277); tmux inside the sandbox for real resume continuity (#311/#312/#315, clarified in #324). Automated PR review posted by Managed Agents (#345). Preview → validate → promote CD pipeline with a bootstrap orchestrator (#344). PostHog telemetry (#336). A `qa-web` skill + subagent (#343) covers black-box exploratory testing, author-mode spec generation, and heal-mode regression-vs-selector-drift triage.
 
 **Agent automation.** The `.agents/skills/` library (`workspaces-performance-system`, `workspaces-optimization`, `drive`, `peter-planner`, `gh-discuss`, and others). April agent workflow runs on a Lume self-hosted runner. Managed PR review is now ReviewRun-first, repairable, documented, quiz-validated, and closed under milestone #8. Most broader autonomous automations remain gated off behind `AGENT_AUTOMATIONS_ENABLED`, pending runner policy, prompt-injection defense hardening, and proof that new automation surfaces reduce delivery drag rather than adding operator noise.
 
-**Shipping cadence.** Weekly-ish releases. Latest release `v0.17.0`.
+**Shipping cadence.** Weekly-ish releases. Latest release `v0.18.0`.
 
 What this means for planning.
 
@@ -37,7 +37,7 @@ What this means for planning.
 - Terminal-first remains the product's core promise; everything else is in service of that, including the web and agent surfaces.
 - Performance has moved from crisis to system. Ongoing measurement via the canonical contract is the norm, not a fire drill.
 - Agent automation must earn expansion by improving delivery throughput and reducing review drag on already-shipped workflows, not by adding more autonomous surfaces first.
-- The post-`v0.17.0` reset point is clean: no open PRs, managed-reviewer reliability closed, and the next work should retire small reliability/dependency debt before reopening breadth.
+- Post-`v0.18.0`, the release/config debts from the `v0.17.0` closure are retired (#615/#617) and one product epic is mid-flight: Tile Tree + Surface abstraction (#627, stacked PRs). A 2026-06-09 daily-driver readiness review converted the remaining reliability/performance gaps into concrete issues (#634–#638); retiring those alongside the epic outranks reopening breadth.
 
 ---
 
@@ -129,7 +129,7 @@ Priority is driven by three filters, in this order:
 - Fix dependency debt before adding breadth — work that reduces regression risk outranks adjacent feature growth.
 - Expand side systems only after they are trustworthy enough not to drag on the core.
 
-Throughput means fewer stuck PRs, fewer manual review repairs, clearer operator state, and less rework on the workflows already in use. With managed-reviewer reliability closed, the next throughput gains should come from fixing the small release/configuration debts found during closure before broadening agent automation.
+Throughput means fewer stuck PRs, fewer manual review repairs, clearer operator state, and less rework on the workflows already in use. With managed-reviewer reliability closed and the `v0.17.0` release/configuration debts retired (#615/#617), the next throughput gains come from the core-reliability hardening cluster (#634/#635) and keeping the tile-tree epic's stacked PRs small and mergeable — before broadening agent automation.
 
 ---
 
@@ -145,32 +145,35 @@ Diagnostics shipped in PR #190 (`os.Logger` signposts + a 30-second watchdog). R
 
 **Gate: live repro.** The hang has not been reproduced with the current diagnostics. In-vitro investigation has gone as far as it can — `WorkspaceCreationRaceTests` rules out a basic deadlock under in-memory SwiftData, and code reading shows the MainActor-serialized save path can't deadlock without an external factor (slow disk, vanished store path, SwiftData internal locks under WAL pressure). Tackle this after a deliberate interactive session at the keyboard, not as the first reach for an autonomous session.
 
-#### 2. Main-window + Ghostty boundaries maintainability
+**Adjacent ungated hardening (2026-06-09).** A reliability review found a second, deterministic hang class upstream of the reported symptom: `ProcessRunner.run` has no timeout and requires pipe EOF, so a lifecycle script that backgrounds a child hangs creation at "Running setup..." forever (12 services share the runner). It does *not* explain the reported `.finished`-stage hang, so the live-repro gate stands for #554 itself — but the hardening is ungated and improves diagnosability when the repro lands. Tracked as [#634](https://github.com/fairchild/workspaces/issues/634); paired cleanup-visibility and deletion-coordination debt as [#635](https://github.com/fairchild/workspaces/issues/635), with startup orphan reconciliation as the P2 follow-on ([#636](https://github.com/fairchild/workspaces/issues/636)).
+
+#### 2. Tile Tree + Surface abstraction epic
+
+GitHub: [#627](https://github.com/fairchild/workspaces/issues/627) · branch `c-tile-surface-abstraction`
+
+The active product epic: replace the two-pane split maps (`HostTerminalStateStore`) with a recursive tile tree plus a `protocol Surface` seam, so a tile can host a terminal or a web view. This deliberately **reverses** the 2026-04-23 `docs/decisions/terminal-multiplexing.md` choice (pane-tree deferred indefinitely); Phase 8 records the superseding ADR. Phases 0–1 merged (PR #625), Phase 2 in review (PR #633). The risky flips are Phase 3 (tree becomes render source of truth) and Phase 5 (eviction authority) — both should land with the daily-driver smoke net ([#638](https://github.com/fairchild/workspaces/issues/638)) in place or alongside.
+
+#### 3. Main-window + Ghostty boundaries maintainability
 
 The remaining active P0 work is the structural maintainability lane. The narrow Ghostty appearance hardening lane has shipped, and the first Ghostty boundary seams have landed.
 
-- **2a. Main-window + sidebar maintainability** (structural). Sidebar Phase 1 landed (PR #36), and later controller seams moved more selection, bootstrap, surface-resolution, remote-workspace, and sorting behavior out of the root view. Remaining scope is still actionable but should stay incremental: shrink `ContentView.swift` / `SidebarView.swift` integration hotspots without changing navigation, workspace creation, split handling, or inspector behavior. Sidebar Phase 1 source plan: `backlog/done/main-window-sidebar-maintainability_followup.md` (closed #81 + residual notes).
-- **2b. Ghostty boundary cleanup** (structural). PR #387 extracted runtime callback config wiring into `GhosttyRuntimeConfigFactory`; PR #394 centralized callback userdata and main-thread bridging. Remaining Ghostty work should now focus on the still-dense `GhosttySurfaceView` / AppKit lifecycle boundary, not on the completed callback userdata/config seams.
-- **2c. Ghostty appearance hardening** (completed). Split-routing controller coverage shipped in PR #379. Appearance dedupe coverage and docs parity shipped in PR #383, and current smoke docs/scripts already state the Ghostty-splits/tmux preconditions. Closed under #84.
+- **3a. Main-window + sidebar maintainability** (structural). Sidebar Phase 1 landed (PR #36), and later controller seams moved more selection, bootstrap, surface-resolution, remote-workspace, and sorting behavior out of the root view. Remaining scope is still actionable but should stay incremental: shrink `ContentView.swift` / `SidebarView.swift` integration hotspots without changing navigation, workspace creation, split handling, or inspector behavior. Sequencing note (2026-06-09): while #627 Phases 2–5 are in flight, target the *non-terminal* seams first — the duplicated bootstrap logic (`MainWindowSurfaceResolutionController` internally instantiates its own `MainWindowBootstrapController`), the three competing error-presentation patterns, and selection-state extraction — and leave terminal-orchestration code to the epic to avoid churn. Sidebar Phase 1 source plan: `backlog/done/main-window-sidebar-maintainability_followup.md` (closed #81 + residual notes).
+- **3b. Ghostty boundary cleanup** (structural). PR #387 extracted runtime callback config wiring into `GhosttyRuntimeConfigFactory`; PR #394 centralized callback userdata and main-thread bridging. Remaining Ghostty work should now focus on the still-dense `GhosttySurfaceView` / AppKit lifecycle boundary, not on the completed callback userdata/config seams. The `TerminalSurface` conformer from #627 Phase 2 is becoming the natural home for that boundary.
+- **3c. Ghostty appearance hardening** (completed). Split-routing controller coverage shipped in PR #379. Appearance dedupe coverage and docs parity shipped in PR #383, and current smoke docs/scripts already state the Ghostty-splits/tmux preconditions. Closed under #84.
 
 P0 because these integration files still carry the highest regression risk when terminal, workspace, and activity behavior changes land. Treat this as a sequence of small behavior-preserving refactors with focused tests, not a broad rewrite.
 
-#### 3. Shared-desktop + evidence-loop reliability — Phase 1 done; Phase 2 deferred to P2
+#### 4. Shared-desktop + evidence-loop reliability — Phase 1 done; Phase 2 deferred to P2
 
 Phase 1 complete: `AppActivationPolicy` (PR #374) gates all `NSApp.activate` calls — launch *and* runtime — behind `WORKSPACES_NO_ACTIVATE_ON_LAUNCH=1` / `CI`. `scripts/capture-window.sh` provides window-id capture without activation. Remaining items (capture handshake, separate-user execution lane, VM-backed CI lane) drop to P2 — promote back when a concrete daily-driver scenario forces the issue. Phase 1 source: `backlog/done/shared-desktop-focus-contention-followup.md` (closed #82 + residual notes).
 
-#### 4. Release and local-configuration reliability debt
+#### 5. Release and local-configuration reliability debt — completed in `v0.18.0`
 
 GitHub: [#615](https://github.com/fairchild/workspaces/issues/615) + [#617](https://github.com/fairchild/workspaces/issues/617) · `area: platform` / `area: distribution` / `devEx`
 
-The `v0.17.0` release and follow-up dotfiles maintenance exposed two small but high-leverage reliability debts:
+Both closed: release preflight check-run pagination shipped (PR #619), and the Claude hook installer now writes machine-agnostic, shell-safe commands without backup churn (PRs #620/#621). The successor reliability-debt theme is the core-reliability hardening cluster under item 1 (#634/#635/#636).
 
-- **Release preflight check-run pagination** ([#615](https://github.com/fairchild/workspaces/issues/615)). `scripts/release-preflight.sh` should reliably find required checks on busy commits without needing a fresh tag CI run to make `build-and-test` visible.
-- **Claude hook installer idempotence and backup hygiene** ([#617](https://github.com/fairchild/workspaces/issues/617)). WorkSpaces should keep `~/.claude/settings.json` shell-safe, avoid unnecessary rewrites, and stop littering version-controlled dotfiles directories with timestamped backups.
-
-These are not product breadth. They are dependency/reliability debt in the delivery loop and local developer environment, so they should land before Web Dashboard expansion, AgentFS exploration, or new managed-agent capability.
-
-#### 5. Managed reviewer reliability and understandability — completed in `v0.17.0`
+#### 6. Managed reviewer reliability and understandability — completed in `v0.17.0`
 
 GitHub: [#584](https://github.com/fairchild/workspaces/issues/584) · milestone [Managed reviewer: understandable ReviewRun-first system](https://github.com/fairchild/workspaces/milestone/8) · `area: platform`
 
@@ -178,31 +181,31 @@ Milestone #8 is closed. Closure validation covered pickup, terminal state, detai
 
 ### Next (P1)
 
-#### 6. Terminal continuity — tmux + cross-session
+#### 7. Terminal continuity — cross-session restore; tmux posture pending the #627 ADR
 
 GitHub: [#549](https://github.com/fairchild/workspaces/issues/549) (tmux implementation) + [#548](https://github.com/fairchild/workspaces/issues/548) (across-session restore) · `arc:terminal-continuity`
 
-Decided 2026-04-23 (`docs/decisions/terminal-multiplexing.md`): tmux primary; pane-tree deferred indefinitely. Two paired issues now sit under one theme. Tmux delivers reattach within a session. The continuity issue addresses the gap tmux does not close (close laptop, reopen, pick up where you left off). First continuity slice is active on `codex-continuity-dimension`: tmux preserves live process state when the server survives, and a terminal continuity manifest records the target plus launch directory for the honest fallback when it does not.
+The 2026-04-23 decision (`docs/decisions/terminal-multiplexing.md`: tmux primary, pane-tree deferred) has been **partially superseded**: the Tile Tree epic (#627) deliberately reverses the pane-tree deferral and will record the new ADR in its Phase 8. What survives the reversal cleanly is the continuity question — tile trees don't keep processes alive across app restarts, so #548 (close laptop, reopen, pick up where you left off) remains valid regardless of layout model. The first continuity slice already shipped: tmux preserves live process state when the server survives, and the terminal continuity manifest records target + launch directory as the honest fallback. Hold #549 (tmux-per-worktree as the *multiplexing* layer) until the Phase 8 ADR settles how tmux and the tile tree compose; re-scope it then rather than implementing against the superseded decision.
 
-#### 7. Lume runtime architecture cleanup
+#### 8. Lume runtime architecture cleanup
 
 Closed: #87, #88, #89 · `arc:lume-runtime`
 
 Contract proven (PR #54). The three decomposition follow-ups (shared HTTP transport, native detachment + VM typing, doc refresh) all closed; reviewer-friction work is complete. Source plan archived to `backlog/done/lume-runtime-architecture-followups_followup.md`.
 
-#### 8. Notification client catch-up + reconnect correctness
+#### 9. Notification client catch-up + reconnect correctness
 
 GitHub: [#547](https://github.com/fairchild/workspaces/issues/547) · `arc:notification-catchup`
 
 Stable client identity, ACK cadence, duplicate/replay behavior. Reliability step before richer activity UX.
 
-#### 9. Agent automation expansion
+#### 10. Agent automation expansion
 
 New autonomous-agent surfaces, broader reviewer features, and narration/eval expansion are no longer blocked by the managed-reviewer closure milestone, but they still sit behind the priority rule: first retire the post-release reliability debt above, then reassess whether the next highest-leverage move is more reviewer capability, notification catch-up, terminal continuity, or Web Dashboard work.
 
 ### Later (P2)
 
-#### 10. Strategic isolation backend direction
+#### 11. Strategic isolation backend direction
 
 GitHub: [#533](https://github.com/fairchild/workspaces/issues/533) (VZ Tahoe tracking) + [#555](https://github.com/fairchild/workspaces/issues/555) (remote runtime expansion tracking) + [#532](https://github.com/fairchild/workspaces/issues/532) (Daytona native Swift) + [#616](https://github.com/fairchild/workspaces/issues/616) (AgentFS provider spike) · `arc:isolation-backend`
 
@@ -234,12 +237,13 @@ Theme-to-milestone map:
 
 | Roadmap theme | Arc label | Milestone posture |
 |---|---|---|
-| Core reliability and maintainability | `arc:core-reliability` | Active P0 theme |
-| Release and local-configuration reliability debt | `area: platform` / `area: distribution` / `devEx` | Active P0 follow-up theme: [#615](https://github.com/fairchild/workspaces/issues/615) and [#617](https://github.com/fairchild/workspaces/issues/617). Keep small and mergeable; no milestone needed yet. |
+| Core reliability and maintainability | `arc:core-reliability` | Active P0 theme; hardening cluster [#634](https://github.com/fairchild/workspaces/issues/634)/[#635](https://github.com/fairchild/workspaces/issues/635)/[#636](https://github.com/fairchild/workspaces/issues/636) |
+| Tile Tree + Surface abstraction | — (epic [#627](https://github.com/fairchild/workspaces/issues/627)) | Active execution lane: stacked PRs on `c-tile-surface-abstraction` (Phases 0–2 landed/in review). Phase 8 records the ADR reversing `docs/decisions/terminal-multiplexing.md`. |
+| Release and local-configuration reliability debt | `area: platform` / `area: distribution` / `devEx` | Closed in `v0.18.0`: [#615](https://github.com/fairchild/workspaces/issues/615) (PR #619) and [#617](https://github.com/fairchild/workspaces/issues/617) (PRs #620/#621). |
 | Managed reviewer reliability and understandability | `area: platform` | Closed in `v0.17.0`: [#584](https://github.com/fairchild/workspaces/issues/584) / [milestone 8](https://github.com/fairchild/workspaces/milestone/8). Treat the ReviewRun-first model as baseline doctrine. |
 | Lume runtime hardening | `arc:lume-runtime` | Closed (#87/#88/#89). Label retained for future Lume work. |
 | Notification catch-up and reconnect correctness | `arc:notification-catchup` | Next standalone after core-reliability theme clears |
-| Terminal continuity (tmux + cross-session) | `arc:terminal-continuity` | Decided 2026-04-23 (tmux primary). Implementation milestone after notification-catchup unless continuity gap forces it sooner. |
+| Terminal continuity (tmux + cross-session) | `arc:terminal-continuity` | 2026-04-23 decision partially superseded by #627 (pane-tree reversal; ADR in Phase 8). #548 cross-session restore stays valid; re-scope #549 after the ADR. |
 | Strategic isolation backend direction | `arc:isolation-backend` | Backlog/research until promoted by a fresh approved discussion |
 
 ---
@@ -259,13 +263,21 @@ Live source of truth is GitHub Issues on `fairchild/workspaces`. This table mirr
 
 | Item | Scope | Priority | Issue |
 |------|-------|----------|-------|
-| Workspace creation hang root cause | product | P0 | [#554](https://github.com/fairchild/workspaces/issues/554) |
+| Workspace creation hang root cause | product | P0 | [#554](https://github.com/fairchild/workspaces/issues/554) (live-repro gated; hypothesis comment 2026-06-09) |
+| Tile Tree + Surface abstraction epic | product | P0 | [#627](https://github.com/fairchild/workspaces/issues/627) (Phases 0–2: PRs #625, #633) |
+| ProcessRunner subprocess hang hardening | quality | P1 | [#634](https://github.com/fairchild/workspaces/issues/634) |
+| Workspace deletion session coordination + cleanup visibility | quality | P1 | [#635](https://github.com/fairchild/workspaces/issues/635) |
+| Startup orphan reconciliation | quality | P2 | [#636](https://github.com/fairchild/workspaces/issues/636) |
+| Performance contract: main-window hot spots | quality | P1 | [#637](https://github.com/fairchild/workspaces/issues/637) |
+| Desktop UI smoke: daily-driver flows | quality | P2 | [#638](https://github.com/fairchild/workspaces/issues/638) (protects #627 Phase 3/5 flips) |
 | Main-window + sidebar maintainability | product | P0 | covered by closed #81 + residual notes in `backlog/done/main-window-sidebar-maintainability_followup.md` |
-| Release preflight check-run pagination | quality | P0 | [#615](https://github.com/fairchild/workspaces/issues/615) |
-| Claude hook installer idempotence and backup hygiene | quality | P0 | [#617](https://github.com/fairchild/workspaces/issues/617) |
+| AGENTS.md startup-budget refactor | tooling | P1 | [#626](https://github.com/fairchild/workspaces/issues/626) |
+| Socket API + CLI for in-app agent shell control | product | — | [#628](https://github.com/fairchild/workspaces/issues/628) |
+| Release preflight check-run pagination | quality | Done | [#615](https://github.com/fairchild/workspaces/issues/615) (PR #619) |
+| Claude hook installer idempotence and backup hygiene | quality | Done | [#617](https://github.com/fairchild/workspaces/issues/617) (PRs #620/#621) |
 | Managed reviewer ReviewRun-first hardening | quality | Done | [#584](https://github.com/fairchild/workspaces/issues/584) + [milestone 8](https://github.com/fairchild/workspaces/milestone/8) |
 | Ghostty appearance hardening | product | Done | closed #84 |
-| Tmux per-worktree implementation | product | P1 | [#549](https://github.com/fairchild/workspaces/issues/549) (chosen 2026-04-23 — `docs/decisions/terminal-multiplexing.md`) |
+| Tmux per-worktree implementation | product | P1 | [#549](https://github.com/fairchild/workspaces/issues/549) (re-scope after the #627 Phase 8 ADR supersedes `docs/decisions/terminal-multiplexing.md`) |
 | Desktop continuity (across-session restore) | product | P1 | [#548](https://github.com/fairchild/workspaces/issues/548) (paired with #549) |
 | Lume runtime architecture follow-ups | product | Done | closed #87, #88, #89 |
 | Notification client catch-up | product | P1 | [#547](https://github.com/fairchild/workspaces/issues/547) |
@@ -293,7 +305,7 @@ Live source of truth is GitHub Issues on `fairchild/workspaces`. This table mirr
 
 Archived (in `backlog/done/`):
 
-- Pane-tree terminal tiling model — not chosen; see `docs/decisions/terminal-multiplexing.md` (2026-04-23)
+- Pane-tree terminal tiling model — deferred 2026-04-23 (`docs/decisions/terminal-multiplexing.md`), then deliberately revived as the Tile Tree epic [#627](https://github.com/fairchild/workspaces/issues/627) (Phase 8 records the superseding ADR)
 - Terminal multiplexing decision session — resolved by `docs/decisions/terminal-multiplexing.md` (2026-04-23)
 - Isolation strategies (research) — superseded by Tahoe VZ execution brief
 - `cloudflare-sandbox` live plan — scaffold deleted in PR #321
@@ -312,6 +324,13 @@ Archived (in `backlog/done/`):
 ---
 
 ## Learnings
+
+### 2026-06-09 — Daily-driver readiness review (issues #634–#638, PR #633 review)
+
+- **A structural review lands best as issues plus a roadmap diff, not a report.** Four parallel explorers (reliability, performance, architecture, tests) produced findings that mostly *confirmed* the existing P0s — the new value was three untracked clusters (subprocess hangs, cleanup visibility, desktop UI smoke) and two staleness fixes. Encoding them as #634–#638 with file:line evidence makes them executable by cold sessions; the report alone would have evaporated.
+- **Map the symptom string before claiming a root cause.** The ProcessRunner EOF-starvation hang is real and deterministic, but "Finishing workspace..." maps to `.finished` — *after* the setup script returns — so it can't be the reported #554 hang. Checking the phase-string-to-code mapping took one `rg` and converted an overclaim into an honest hypothesis branch plus an ungated hardening issue (#634).
+- **Performance findings route through the contract, not past it.** Code-reading found four plausible hot spots; the roadmap's own posture ("performance is a system now") means the right move is contract scenarios + baselines first (#637), fixes second. Magnitudes from reading are hypotheses.
+- **An epic that reverses a recorded decision must update the strategy docs in the same arc.** #627 deliberately reversed the 2026-04-23 multiplexing decision in April–June PRs while the roadmap still presented tmux-primary as operative — anyone planning from the roadmap would have sequenced #549 wrong. Reversal PRs should touch the roadmap (or the decision doc) in the same change, not wait for the Phase 8 ADR.
 
 ### 2026-04-27 — Split-routing tests + stale backlog reconciliation
 
