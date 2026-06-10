@@ -20,6 +20,11 @@ Continuous improvement of `AGENTS.md` is important to the health and longevity o
 
 Issues and PRDs live in GitHub Issues for `fairchild/workspaces`. See `docs/agents/issue-tracker.md`.
 
+When the user asks to work a GitHub issue, or gives an issue link/number, treat it as a backlog claim even if the `backlog` skill was not named.
+Before implementation, read the issue, apply the `claimed` label, remove `ready` if present, and post a claim comment naming the active Codex thread title/name and session ID.
+If either identifier is unavailable, say so explicitly in the comment instead of omitting it.
+Then continue through the issue lifecycle in `backlog/AGENTS.md`.
+
 ### Triage labels
 
 Use lane + state labels: `agent`/`human` for ownership, `ready`/`claimed`/`review`/`mergeable` for lifecycle, and `needs-human` only for human intervention blockers. See `docs/agents/triage-labels.md`.
