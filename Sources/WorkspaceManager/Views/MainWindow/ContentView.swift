@@ -30,6 +30,7 @@ struct ContentView: View {
     @ObservedObject var hostTerminalState: HostTerminalStateStore
     @ObservedObject var workspaceProviderSetupCoordinator: WorkspaceProviderSetupCoordinator
     @ObservedObject var hostLumeSmokeAutomation: HostLumeSmokeAutomationController
+    @ObservedObject var desktopUISmokeAutomation: DesktopUISmokeAutomationController
     @Query(sort: \Repo.addedAt, order: .reverse) private var repos: [Repo]
     @Query(sort: \WebSource.addedAt, order: .reverse) private var webSources: [WebSource]
     @AppStorage(TerminalMultiplexingMode.storageKey)
@@ -479,7 +480,8 @@ struct ContentView: View {
                 },
                 onWorkspaceCreated: handleWorkspaceCreated,
                 workspaceProviderSetupCoordinator: workspaceProviderSetupCoordinator,
-                hostLumeSmokeAutomation: hostLumeSmokeAutomation
+                hostLumeSmokeAutomation: hostLumeSmokeAutomation,
+                desktopUISmokeAutomation: desktopUISmokeAutomation
             )
             .navigationSplitViewColumnWidth(min: 200, ideal: 260, max: 350)
         } detail: {
@@ -549,6 +551,9 @@ struct ContentView: View {
                 refreshWorkspaceStatusAggregator()
                 Task { @MainActor in
                     await hostLumeSmokeAutomation.noteLaunchReady()
+                }
+                Task { @MainActor in
+                    await desktopUISmokeAutomation.noteLaunchReady()
                 }
                 notificationCoordinator.loadStoredAuth()
                 Task { @MainActor in
@@ -1195,6 +1200,11 @@ struct ContentView: View {
             sessionID: session.id,
             repoPath: repoDirectory.path
         )
+        noteDesktopUISmokeTerminalAttached(
+            kind: .repo,
+            sessionID: session.id,
+            scopePath: repoDirectory.path
+        )
         markAccessed(repo: repo)
         applyNavigationDestination(.repoTerminal(repo))
         persistTerminalContinuity(
@@ -1212,8 +1222,33 @@ struct ContentView: View {
                     sessionID: session.id,
                     outcome: "focused"
                 )
+                noteDesktopUISmokeSurfaceFocused(sessionID: session.id)
             }
         )
+    }
+
+    @MainActor
+    private func noteDesktopUISmokeTerminalAttached(
+        kind: DesktopUISmokeSelectionKind,
+        sessionID: UUID,
+        scopePath: String
+    ) {
+        guard desktopUISmokeAutomation.isEnabled else { return }
+        Task { @MainActor in
+            await desktopUISmokeAutomation.noteTerminalSessionAttached(
+                kind: kind,
+                sessionID: sessionID,
+                scopePath: scopePath
+            )
+        }
+    }
+
+    @MainActor
+    private func noteDesktopUISmokeSurfaceFocused(sessionID: UUID) {
+        guard desktopUISmokeAutomation.isEnabled else { return }
+        Task { @MainActor in
+            await desktopUISmokeAutomation.noteSurfaceFocused(sessionID: sessionID)
+        }
     }
 
     @MainActor
@@ -1243,6 +1278,11 @@ struct ContentView: View {
                 sessionID: session.id,
                 workspacePath: workspaceDirectory.path
             )
+            noteDesktopUISmokeTerminalAttached(
+                kind: .workspace,
+                sessionID: session.id,
+                scopePath: workspaceDirectory.path
+            )
             markAccessed(workspace: workspace)
             applyNavigationDestination(.workspaceTerminal(workspace))
             persistTerminalContinuity(
@@ -1260,6 +1300,7 @@ struct ContentView: View {
                         sessionID: session.id,
                         outcome: "focused"
                     )
+                    noteDesktopUISmokeSurfaceFocused(sessionID: session.id)
                 }
             )
         }
@@ -2575,6 +2616,9 @@ private struct ContentViewPreviewHost: View {
     @StateObject private var hostLumeSmokeAutomation = HostLumeSmokeAutomationController(
         environment: [:]
     )
+    @StateObject private var desktopUISmokeAutomation = DesktopUISmokeAutomationController(
+        environment: [:]
+    )
 
     var body: some View {
         ContentView(
@@ -2583,7 +2627,8 @@ private struct ContentViewPreviewHost: View {
             appCommandState: appCommandState,
             hostTerminalState: hostTerminalState,
             workspaceProviderSetupCoordinator: workspaceProviderSetupCoordinator,
-            hostLumeSmokeAutomation: hostLumeSmokeAutomation
+            hostLumeSmokeAutomation: hostLumeSmokeAutomation,
+            desktopUISmokeAutomation: desktopUISmokeAutomation
         )
     }
 }
