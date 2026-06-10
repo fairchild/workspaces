@@ -314,11 +314,19 @@ struct HostTerminalStateStoreTests {
     @Test("Process exit in primary pane removes attached split session")
     func processExitInPrimaryRemovesSplitSession() throws {
         let store = HostTerminalStateStore()
+        let registry = AgentSessionRegistry()
+        let commandStatusRegistry = LastCommandStatusRegistry()
         let activation = store.activateSession(
             key: .defaultHome,
             directory: URL(fileURLWithPath: "/Users/test/code")
         )
         let primaryID = activation.session.id
+        store.attach(
+            agentSessionRegistry: registry,
+            localStateStore: nil,
+            hooksSocketPath: nil,
+            lastCommandStatusRegistry: commandStatusRegistry
+        )
 
         let split = try #require(
             store.ensureSplit(
@@ -326,6 +334,11 @@ struct HostTerminalStateStoreTests {
                 preferredLayout: .defaultTrailing
             )
         )
+
+        // The split session is registered alongside the primary before exit.
+        #expect(registry.statuses[split.id] != nil)
+        commandStatusRegistry.ingest(markers: [.commandStart], for: split.id, commandLine: "make")
+        #expect(commandStatusRegistry.statusByTerminalSession[split.id] != nil)
 
         let removed = store.handleProcessExit(for: primaryID)
 
@@ -335,6 +348,11 @@ struct HostTerminalStateStoreTests {
         #expect(store.splitSession(for: primaryID) == nil)
         #expect(store.splitLayout(for: primaryID) == nil)
         #expect(!store.handleProcessExit(for: split.id))
+
+        // Closing the primary tears the split session down with it.
+        #expect(registry.statuses[primaryID] == nil)
+        #expect(registry.statuses[split.id] == nil)
+        #expect(commandStatusRegistry.statusByTerminalSession[split.id] == nil)
     }
 
     @Test("Process exit of active primary falls back to remaining session")
@@ -514,5 +532,94 @@ struct HostTerminalStateStoreTests {
         #expect(store.sessions.count == 1)
         #expect(store.activeSessionID == defaultHome.id)
         #expect(store.sessions.first?.id == defaultHome.id)
+    }
+
+    @Test("ensureSplit registers the split session and tears it down on split exit")
+    func ensureSplitRegistersSplitSessionLifecycle() throws {
+        let store = HostTerminalStateStore()
+        let registry = AgentSessionRegistry()
+        let commandStatusRegistry = LastCommandStatusRegistry()
+        let activation = store.activateSession(
+            key: .defaultHome,
+            directory: URL(fileURLWithPath: "/Users/test/code")
+        )
+        let primaryID = activation.session.id
+        store.attach(
+            agentSessionRegistry: registry,
+            localStateStore: nil,
+            hooksSocketPath: nil,
+            lastCommandStatusRegistry: commandStatusRegistry
+        )
+
+        let split = try #require(
+            store.ensureSplit(
+                forPrimarySessionID: primaryID,
+                preferredLayout: .defaultTrailing
+            )
+        )
+
+        // Creating the split registers it in the agent registry next to the primary.
+        #expect(registry.statuses[primaryID] != nil)
+        #expect(registry.statuses[split.id] != nil)
+        #expect(registry.statuses[split.id]?.cwd == activation.session.directoryPath)
+
+        commandStatusRegistry.ingest(markers: [.commandStart], for: split.id, commandLine: "make")
+        #expect(commandStatusRegistry.statusByTerminalSession[split.id] != nil)
+
+        // Exiting the split deregisters it and clears its command status, primary untouched.
+        #expect(store.handleProcessExit(for: split.id))
+        #expect(registry.statuses[split.id] == nil)
+        #expect(commandStatusRegistry.statusByTerminalSession[split.id] == nil)
+        #expect(registry.statuses[primaryID] != nil)
+    }
+
+    @Test("ensureSplit relayout preserves split-session identity and fraction")
+    func ensureSplitRelayoutPreservesIdentityAndFraction() throws {
+        let store = HostTerminalStateStore()
+        let activation = store.activateSession(
+            key: .defaultHome,
+            directory: URL(fileURLWithPath: "/Users/test/code")
+        )
+        let primaryID = activation.session.id
+
+        let split = try #require(
+            store.ensureSplit(forPrimarySessionID: primaryID, preferredLayout: .defaultTrailing)
+        )
+        #expect(store.updateSplitFraction(0.7, forPrimarySessionID: primaryID))
+
+        let relaidOut = HostTerminalStateStore.SplitPaneLayout(axis: .topBottom, splitBeforePrimary: true)
+        let after = try #require(
+            store.ensureSplit(forPrimarySessionID: primaryID, preferredLayout: relaidOut)
+        )
+
+        // Same live split session — a fresh tile/session would orphan the running terminal.
+        #expect(after.id == split.id)
+        #expect(store.splitSession(for: primaryID)?.id == split.id)
+        // Relayout swaps axis/order but leaves the existing fraction in place.
+        #expect(store.splitLayout(for: primaryID) == relaidOut)
+        #expect(store.splitFraction(for: primaryID) == 0.7)
+    }
+
+    @Test(
+        "Split layout projects every axis and order combination",
+        arguments: [
+            HostTerminalStateStore.SplitPaneLayout(axis: .leadingTrailing, splitBeforePrimary: false),
+            HostTerminalStateStore.SplitPaneLayout(axis: .leadingTrailing, splitBeforePrimary: true),
+            HostTerminalStateStore.SplitPaneLayout(axis: .topBottom, splitBeforePrimary: false),
+            HostTerminalStateStore.SplitPaneLayout(axis: .topBottom, splitBeforePrimary: true),
+        ]
+    )
+    func splitLayoutProjectsEveryCombination(layout: HostTerminalStateStore.SplitPaneLayout) throws {
+        let store = HostTerminalStateStore()
+        let activation = store.activateSession(
+            key: .defaultHome,
+            directory: URL(fileURLWithPath: "/Users/test/code")
+        )
+        let primaryID = activation.session.id
+
+        _ = try #require(store.ensureSplit(forPrimarySessionID: primaryID, preferredLayout: layout))
+
+        #expect(store.splitLayout(for: primaryID) == layout)
+        #expect(store.splitFraction(for: primaryID) == HostTerminalStateStore.defaultSplitFraction)
     }
 }
