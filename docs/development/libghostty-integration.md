@@ -257,8 +257,14 @@ Use this exact loop in future sessions to avoid stale-build confusion:
 3. Launch debug app (never `/Applications` during verification):
    - `./scripts/launch-dev.sh --no-build`
    - shared-desktop option: `./scripts/launch-dev.sh --no-build --no-activate`
+   - fastest startup sanity check: `./scripts/dev-smoke.sh --no-build`
+   - keep logs attached while debugging launcher/startup issues: `./scripts/launch-dev.sh --no-build --watch`
+   - direct binary fallback if the launcher itself is being debugged:
+     `WORKSPACES_DATA_DIR=.dev-data/workspacemanager WORKSPACES_APP_VARIANT=dev .build/arm64-apple-macosx/debug/WorkspaceManager`
 4. Verify process path points to `.build/.../WorkspaceManager`:
    - `ps aux | rg '.build/arm64-apple-macosx/debug/WorkspaceManager'`
+   - debug launches set `WORKSPACES_APP_VARIANT=dev`; the debug app shows a `DEV` Dock badge and a `Development Build` window subtitle
+   - if both the debug and installed apps are running, kill `/Applications/WorkSpaces.app` before testing
 5. Shared-desktop-safe capture handshake:
    - if you launched with `--no-activate`, pause your own keyboard/mouse input
    - run `./scripts/capture-window.sh`

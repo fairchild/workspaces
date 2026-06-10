@@ -71,6 +71,13 @@ What it depends on:
 - reachable Lume installer
 - reachable default golden image for the current host profile
 
+App-layer smoke mechanics (`scripts/lume-host-macos-smoke.sh`):
+
+- the app smoke uses a dev-only app automation mode, not fixture providers:
+  `WORKSPACES_AUTOMATION_MODE=host-lume-macos-smoke`
+- the app writes JSONL milestones to the configured `WORKSPACES_AUTOMATION_EVENTS_PATH`
+- artifacts land under `output/lume-host-smoke/<timestamp>/`
+
 ### 3. Standalone Lume Validation
 
 Purpose:
