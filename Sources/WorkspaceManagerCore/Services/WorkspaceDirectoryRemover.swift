@@ -94,7 +94,7 @@ enum WorkspaceDirectoryRemover {
         cleanupEmptyParent(of: workspaceURL, fileManager: fileManager)
     }
 
-    private static func isLinkedGitWorktree(at workspaceURL: URL, fileManager: FileManager) -> Bool {
+    static func isLinkedGitWorktree(at workspaceURL: URL, fileManager: FileManager) -> Bool {
         let gitFileURL = workspaceURL.appendingPathComponent(".git")
         var isDirectory: ObjCBool = false
         guard fileManager.fileExists(atPath: gitFileURL.path, isDirectory: &isDirectory) else {
@@ -119,7 +119,7 @@ enum WorkspaceDirectoryRemover {
         return branchName.isEmpty ? nil : branchName
     }
 
-    private static func commonGitDirectory(at workspaceURL: URL) async throws -> URL? {
+    static func commonGitDirectory(at workspaceURL: URL) async throws -> URL? {
         let result = try await ProcessRunner.run(
             executable: "/usr/bin/git",
             arguments: ["rev-parse", "--path-format=absolute", "--git-common-dir"],
@@ -137,7 +137,7 @@ enum WorkspaceDirectoryRemover {
         return path.isEmpty ? nil : URL(fileURLWithPath: path)
     }
 
-    private static func cleanupEmptyParent(of workspaceURL: URL, fileManager: FileManager) {
+    static func cleanupEmptyParent(of workspaceURL: URL, fileManager: FileManager) {
         let parentDir = workspaceURL.deletingLastPathComponent()
         guard fileManager.fileExists(atPath: parentDir.path) else { return }
 

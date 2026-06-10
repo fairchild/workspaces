@@ -111,7 +111,10 @@ public protocol WorkspaceServiceProtocol: Sendable {
         name: String,
         progress: WorkspaceCreationProgressHandler?
     ) async throws -> NewWorkspaceInfo
-    func archiveWorkspace(at workspaceURL: URL) async throws
+    @discardableResult
+    func archiveWorkspace(at workspaceURL: URL) async throws -> URL
+    @discardableResult
+    func unarchiveWorkspace(at workspaceURL: URL) async throws -> URL
     func deleteWorkspace(at workspaceURL: URL, deleteFiles: Bool) async throws
     func runLifecycleScript(_ scriptName: String, in directory: URL) async throws -> WorkspaceService.ScriptResult
     func getWorkspaceSize(at workspaceURL: URL) async throws -> Int64

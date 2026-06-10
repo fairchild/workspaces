@@ -289,6 +289,10 @@ public final class Workspace {
     public var statusRaw: String
     public var gitBranch: String?
 
+    /// When the workspace was archived (its directory moved to `.archived/`).
+    /// `nil` while active; drives the purge-after-delay sweep.
+    public var archivedAt: Date?
+
     /// Workspace-level default agent command (e.g. `claude --resume`). Most
     /// specific tier — overrides both the repo and global defaults.
     public var defaultAgentCommand: String?
@@ -420,6 +424,7 @@ public final class Workspace {
         lastAccessedAt: Date = Date(),
         status: WorkspaceStatus = .active,
         gitBranch: String? = nil,
+        archivedAt: Date? = nil,
         defaultAgentCommand: String? = nil,
         backendIdentifier: String = "local",
         remoteId: String? = nil,
@@ -435,6 +440,7 @@ public final class Workspace {
         self.lastAccessedAt = lastAccessedAt
         self.statusRaw = status.rawValue
         self.gitBranch = gitBranch
+        self.archivedAt = archivedAt
         self.defaultAgentCommand = defaultAgentCommand
         self.backendIdentifier = backendIdentifier
         self.remoteId = remoteId

@@ -1,6 +1,18 @@
 import Foundation
 import WorkspaceManagerCore
 
+struct MainWindowToolbarTitle: Equatable {
+    let repoName: String
+    let workspaceName: String?
+
+    var windowTitle: String {
+        if let workspaceName {
+            return "\(repoName) / \(workspaceName)"
+        }
+        return repoName
+    }
+}
+
 struct MainWindowPresentationController {
     func activeHostSession(
         activeSessionID: UUID?,
@@ -69,6 +81,50 @@ struct MainWindowPresentationController {
         guard selectedWebSource == nil else { return nil }
         guard let activeSessionID else { return nil }
         return sessions.first(where: { $0.id == activeSessionID })?.key
+    }
+
+    func toolbarTitle(
+        selectedWorkspace: Workspace?,
+        selectedRepo: Repo?,
+        activeHostSession: HostTerminalSession?
+    ) -> MainWindowToolbarTitle? {
+        if let selectedWorkspace {
+            if let sourceRepo = selectedWorkspace.sourceRepo {
+                return MainWindowToolbarTitle(
+                    repoName: sourceRepo.name,
+                    workspaceName: selectedWorkspace.name
+                )
+            }
+
+            return MainWindowToolbarTitle(
+                repoName: selectedWorkspace.name,
+                workspaceName: nil
+            )
+        }
+
+        if let selectedRepo {
+            return MainWindowToolbarTitle(
+                repoName: selectedRepo.name,
+                workspaceName: nil
+            )
+        }
+
+        guard let activeHostSession else { return nil }
+
+        switch activeHostSession.key {
+        case .defaultHome:
+            return nil
+        case .repoPath, .hostPath:
+            return MainWindowToolbarTitle(
+                repoName: activeHostSession.directoryURL.lastPathComponent,
+                workspaceName: nil
+            )
+        case .backendSession(_, let instanceID):
+            return MainWindowToolbarTitle(
+                repoName: "Workspace \(instanceID)",
+                workspaceName: nil
+            )
+        }
     }
 
     func openInEditorTarget(
