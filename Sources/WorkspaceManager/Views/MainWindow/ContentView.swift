@@ -148,6 +148,51 @@ struct ContentView: View {
         currentSelectedRepoForLanding ?? selectedRepoForInspector
     }
 
+    private var selectedWorkspaceForToolbar: Workspace? {
+        currentSelectedWorkspace ?? activeTerminalWorkspaceForToolbar
+    }
+
+    private var selectedRepoForToolbar: Repo? {
+        selectedWorkspaceForToolbar?.sourceRepo ?? selectedRepoForInspector ?? currentSelectedRepoForLanding
+    }
+
+    private var toolbarTitle: MainWindowToolbarTitle? {
+        presentationController.toolbarTitle(
+            selectedWorkspace: selectedWorkspaceForToolbar,
+            selectedRepo: selectedRepoForToolbar,
+            activeHostSession: activeHostSession
+        )
+    }
+
+    private var activeTerminalWorkspaceForToolbar: Workspace? {
+        guard currentSelectedWebSource == nil,
+            currentSelectedRepoForLanding == nil,
+            let activeHostSession
+        else { return nil }
+
+        let normalizedDirectory = normalizePath(activeHostSession.directoryPath)
+        return
+            repos
+            .flatMap(\.workspaces)
+            .compactMap { workspace -> (workspace: Workspace, pathLength: Int)? in
+                let normalizedWorkspacePath = normalizePath(workspace.path)
+                guard path(normalizedDirectory, isInside: normalizedWorkspacePath) else {
+                    return nil
+                }
+
+                return (workspace, normalizedWorkspacePath.count)
+            }
+            .sorted { lhs, rhs in
+                if lhs.pathLength != rhs.pathLength {
+                    return lhs.pathLength > rhs.pathLength
+                }
+
+                return lhs.workspace.lastAccessedAt > rhs.workspace.lastAccessedAt
+            }
+            .first?
+            .workspace
+    }
+
     private var selectedWorkspaceBinding: Binding<Workspace?> {
         Binding(
             get: { currentSelectedWorkspace },
@@ -388,8 +433,8 @@ struct ContentView: View {
     @ViewBuilder
     private var terminalDetailContent: some View {
         MainTerminalDetailView(
-            selectedWorkspace: currentSelectedWorkspace,
-            selectedRepo: selectedRepoForInspector,
+            selectedWorkspace: selectedWorkspaceForToolbar,
+            selectedRepo: selectedRepoForToolbar ?? selectedRepoForInspector,
             activeHostSession: activeHostSession,
             hostTerminalSessions: hostTerminalState.sessions,
             visibleHostTerminalSessions: hostTerminalState.scopedSessions,
@@ -408,7 +453,6 @@ struct ContentView: View {
                     forPrimarySessionID: activeSessionID
                 )
             },
-            onOpenRepoOverview: handleRepoSelection,
             onSelectTerminalTab: selectTerminalTab(sessionID:),
             onCloseTerminalTab: closeTerminalTab(sessionID:),
             onTerminalCloseConfirmationRequired: requestCloseConfirmationForTerminalTab(sessionID:),
@@ -509,7 +553,7 @@ struct ContentView: View {
                 splitViewBody
                     .toolbar {
                         ToolbarItem(placement: .principal) {
-                            AppBuildIdentityBadge(identity: buildIdentity)
+                            principalToolbarContent
                         }
 
                         ToolbarItemGroup(placement: .primaryAction) {
@@ -532,6 +576,32 @@ struct ContentView: View {
                     }
             }
         }
+    }
+
+    @ViewBuilder
+    private var principalToolbarContent: some View {
+        if let title = toolbarTitle,
+            let repo = selectedRepoForToolbar
+        {
+            MainToolbarTitleBreadcrumb(
+                title: title,
+                faviconSource: preferredToolbarIconSource(for: repo),
+                onOpenRepoOverview: { handleRepoSelection(repo) },
+                onOpenRepoTerminal: { handleRepoTerminalSelection(repo) }
+            )
+        } else {
+            AppBuildIdentityBadge(identity: buildIdentity)
+        }
+    }
+
+    private func preferredToolbarIconSource(for repo: Repo) -> WebSource? {
+        repo.webSources.sorted { lhs, rhs in
+            if lhs.lastAccessedAt != rhs.lastAccessedAt {
+                return lhs.lastAccessedAt > rhs.lastAccessedAt
+            }
+
+            return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
+        }.first
     }
 
     @ViewBuilder
@@ -2628,7 +2698,6 @@ struct MainTerminalDetailView: View {
     let agentStatuses: [AgentSessionStatus]
     let terminalContextMenuProvider: (HostTerminalSession) -> NSMenu?
     let onSplitFractionChanged: (CGFloat) -> Void
-    let onOpenRepoOverview: (Repo) -> Void
     var onSelectTerminalTab: ((UUID) -> Void)?
     var onCloseTerminalTab: ((UUID) -> Void)?
     var onTerminalCloseConfirmationRequired: ((UUID) -> Void)?
@@ -2704,7 +2773,6 @@ struct MainTerminalDetailView: View {
     @ViewBuilder
     private var previewAndTerminalPanel: some View {
         VStack(spacing: 0) {
-            repoTerminalBreadcrumb
             previewAndTerminalPanelContent
         }
     }
@@ -2746,44 +2814,6 @@ struct MainTerminalDetailView: View {
         }
     }
 
-    @ViewBuilder
-    private var repoTerminalBreadcrumb: some View {
-        if selectedWorkspace == nil, let selectedRepo {
-            HStack(spacing: 8) {
-                Button {
-                    onOpenRepoOverview(selectedRepo)
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "chevron.left")
-                            .font(.system(size: 11, weight: .semibold))
-                        Image(systemName: "folder")
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(selectedRepo.name)
-                                .font(.callout.weight(.semibold))
-                                .lineLimit(1)
-                            Text(selectedRepo.localPath)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                        }
-                    }
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .help("Open Repo Overview")
-
-                Spacer(minLength: 8)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(Color(nsColor: .windowBackgroundColor))
-            .overlay(alignment: .bottom) {
-                Divider()
-            }
-        }
-    }
-
     private var hostTerminalPanel: some View {
         HostTerminalSessionStack(
             sessions: visibleHostTerminalSessions,
@@ -2803,23 +2833,64 @@ struct MainTerminalDetailView: View {
     }
 
     private var navigationTitle: String {
-        if let selectedWorkspace {
-            return selectedWorkspace.name
+        MainWindowPresentationController().toolbarTitle(
+            selectedWorkspace: selectedWorkspace,
+            selectedRepo: selectedWorkspace?.sourceRepo ?? selectedRepo,
+            activeHostSession: activeHostSession
+        )?.windowTitle ?? "WorkSpaces"
+    }
+}
+
+private struct MainToolbarTitleBreadcrumb: View {
+    let title: MainWindowToolbarTitle
+    let faviconSource: WebSource?
+    let onOpenRepoOverview: () -> Void
+    let onOpenRepoTerminal: () -> Void
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Button(action: onOpenRepoOverview) {
+                repoIcon
+            }
+            .buttonStyle(.plain)
+            .help("Open Repo Overview")
+            .accessibilityLabel("Open Repo Overview")
+            .accessibilityIdentifier("main-toolbar.repo-overview")
+
+            Button(action: onOpenRepoTerminal) {
+                Text(title.repoName)
+                    .font(.callout.weight(.semibold))
+                    .lineLimit(1)
+            }
+            .buttonStyle(.plain)
+            .help("Open \(title.repoName) Terminal")
+            .accessibilityIdentifier("main-toolbar.repo-terminal")
+
+            if let workspaceName = title.workspaceName {
+                Text("/")
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+
+                Text(workspaceName)
+                    .font(.callout)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .accessibilityIdentifier("main-toolbar.workspace-title")
+            }
         }
+        .frame(maxWidth: 360)
+        .accessibilityIdentifier("main-toolbar.title")
+    }
 
-        if let selectedRepo {
-            return selectedRepo.name
-        }
-
-        guard let activeHostSession else { return "WorkSpaces" }
-
-        switch activeHostSession.key {
-        case .defaultHome:
-            return "WorkSpaces"
-        case .repoPath, .hostPath:
-            return activeHostSession.directoryURL.lastPathComponent
-        case .backendSession(_, let instanceID):
-            return selectedWorkspace?.name ?? "Workspace \(instanceID)"
+    @ViewBuilder
+    private var repoIcon: some View {
+        if let faviconSource {
+            WebSourceFaviconView(source: faviconSource)
+        } else {
+            Image(systemName: "folder.fill")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 16, height: 16)
         }
     }
 }
