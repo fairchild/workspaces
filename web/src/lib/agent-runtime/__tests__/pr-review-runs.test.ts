@@ -814,6 +814,7 @@ describe("bucketPrReviewRuns", () => {
 			fingerprint: string;
 			status: "started" | "completed" | "failed" | "superseded";
 			sessionId: string | null;
+			sessionStartedAt?: string | null;
 			createdAt: string;
 			updatedAt: string;
 			error?: string | null;
@@ -840,6 +841,7 @@ describe("bucketPrReviewRuns", () => {
 			nextAction: "",
 			projectionStatus: overrides.projectionStatus ?? ("pending" as const),
 			projectionUpdatedAt: overrides.projectionUpdatedAt ?? overrides.updatedAt,
+			sessionStartedAt: overrides.sessionStartedAt ?? null,
 			...overrides,
 		});
 
@@ -864,6 +866,7 @@ describe("bucketPrReviewRuns", () => {
 					status: "started" as const,
 					sessionId: "sesn_running",
 					createdAt: "2026-05-24T11:35:00.000Z",
+					sessionStartedAt: "2026-05-24T11:40:00.000Z",
 					updatedAt: "2026-05-24T11:40:00.000Z",
 				}),
 				pendingRun({
@@ -871,6 +874,7 @@ describe("bucketPrReviewRuns", () => {
 					status: "started" as const,
 					sessionId: "sesn_slow",
 					createdAt: "2026-05-24T11:00:00.000Z",
+					sessionStartedAt: "2026-05-24T11:20:00.000Z",
 					updatedAt: "2026-05-24T11:20:00.000Z",
 				}),
 				pendingRun({
@@ -966,6 +970,60 @@ describe("bucketPrReviewRuns", () => {
 			ageMinutes: 15,
 			projectionLatencyMinutes: 15,
 			sloBreached: false,
+		});
+	});
+
+	it("does not reset running age when a newer trigger coalesces", async () => {
+		const { bucketPrReviewRuns } = await loadModule();
+		const buckets = bucketPrReviewRuns(
+			[
+				{
+					fingerprint: "fp_coalesced_slow",
+					repoFullName: "fairchild/workspaces",
+					prNumber: 1,
+					headSha: "abc123",
+					triggerKind: "opened",
+					triggerSourceId: "abc123",
+					status: "started" as const,
+					sessionId: "sesn_slow",
+					sessionStartedAt: "2026-05-24T11:05:00.000Z",
+					createdAt: "2026-05-24T11:00:00.000Z",
+					updatedAt: "2026-05-24T11:59:00.000Z",
+					error: null,
+					executionState: "running_session" as const,
+					latestKnownHeadSha: "def456",
+					failureKind: null,
+					failureMessage: null,
+					failureRetryable: null,
+					failedAt: null,
+					nextAction: "",
+					projectionStatus: "pending" as const,
+					projectionUpdatedAt: "2026-05-24T11:00:00.000Z",
+					projectionError: null,
+					githubReviewId: null,
+					coalescedHeadSha: "def456",
+					coalescedTriggerKind: "synchronize",
+					coalescedTriggerSourceId: "def456",
+					coalescedAt: "2026-05-24T11:59:00.000Z",
+				},
+			],
+			{
+				now: new Date("2026-05-24T12:00:00.000Z"),
+				thresholds: {
+					startingTimeoutMinutes: 5,
+					runningTimeoutMinutes: 30,
+					projectionTimeoutMinutes: 30,
+				},
+			},
+		);
+
+		expect(buckets.running).toEqual([]);
+		expect(buckets.runningTooLong[0]).toMatchObject({
+			fingerprint: "fp_coalesced_slow",
+			ageMinutes: 55,
+			pickupLatencyMinutes: 5,
+			executionDurationMinutes: 55,
+			sloBreached: true,
 		});
 	});
 });

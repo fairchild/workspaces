@@ -22,6 +22,7 @@ CREATE TABLE managed_pr_review_runs (
   -- started | completed | failed | superseded
   status text NOT NULL,
   session_id text,
+  session_started_at text,
 
   created_at text NOT NULL,
   updated_at text NOT NULL,

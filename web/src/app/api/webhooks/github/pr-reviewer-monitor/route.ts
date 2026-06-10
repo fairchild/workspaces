@@ -69,6 +69,7 @@ interface OperatorRunItem {
 	githubReviewId?: string;
 	state: string;
 	sessionId: string | null;
+	sessionStartedAt: string | null;
 	ageMinutes: number;
 	pickupLatencyMinutes: number | null;
 	executionDurationMinutes: number | null;
@@ -77,6 +78,10 @@ interface OperatorRunItem {
 	createdAt: string;
 	updatedAt: string;
 	detailsUrl: string;
+	coalescedAt?: string;
+	coalescedHeadSha?: string | null;
+	coalescedTriggerKind?: string | null;
+	coalescedTriggerSourceId?: string | null;
 	error?: string;
 }
 
@@ -148,6 +153,7 @@ function operatorRunItem(
 		projectionUpdatedAt: run.projectionUpdatedAt,
 		state: run.state,
 		sessionId: run.sessionId,
+		sessionStartedAt: run.sessionStartedAt,
 		ageMinutes: run.ageMinutes,
 		pickupLatencyMinutes: run.pickupLatencyMinutes,
 		executionDurationMinutes: run.executionDurationMinutes,
@@ -156,6 +162,14 @@ function operatorRunItem(
 		createdAt: run.createdAt,
 		updatedAt: run.updatedAt,
 		detailsUrl: reviewRunDetailsUrl(requestUrl, run.fingerprint),
+		...(run.coalescedAt
+			? {
+					coalescedAt: run.coalescedAt,
+					coalescedHeadSha: run.coalescedHeadSha,
+					coalescedTriggerKind: run.coalescedTriggerKind,
+					coalescedTriggerSourceId: run.coalescedTriggerSourceId,
+				}
+			: {}),
 		...(run.error ? { error: run.error } : {}),
 		...(run.projectionError ? { projectionError: run.projectionError } : {}),
 		...(run.githubReviewId ? { githubReviewId: run.githubReviewId } : {}),
