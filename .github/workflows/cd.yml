@@ -403,6 +403,7 @@ jobs:
     if: failure() && !cancelled() && needs.validate-prod.result == 'failure'
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: prod-validate-findings
@@ -412,52 +413,23 @@ jobs:
           PROD_URL: https://spaces.cloudcompute.com
         with:
           script: |
-            const fs = require('fs');
-            const findings = fs.existsSync('findings.md')
-              ? fs.readFileSync('findings.md', 'utf8')
-              : '_No findings file produced._';
+            const path = require('node:path');
+            const { pathToFileURL } = require('node:url');
+            const abs = path.join(process.env.GITHUB_WORKSPACE, '.github/workflows/cd-prod-alert.js');
+            const { postProdAlert } = await import(pathToFileURL(abs).href);
+            await postProdAlert({ github, context, core });
 
-            const shortSha = context.sha.slice(0, 7);
-            const title = `🚨 Prod regression on ${shortSha}`;
-            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
-
-            const body = [
-              `**Commit:** ${context.sha}`,
-              `**Run:** ${runUrl}`,
-              `**Prod URL:** ${process.env.PROD_URL}`,
-              '',
-              '## Findings',
-              findings,
-              '',
-              '## Manual rollback runbook',
-              '',
-              '**Vercel — instant alias swap:**',
-              '```bash',
-              'vercel rollback                    # interactive picker',
-              '# or:',
-              'vercel ls --prod | head -5',
-              'vercel promote <previous-prod-url>',
-              '```',
-              '',
-              '**Workers — re-deploy from previous good SHA:**',
-              '```bash',
-              'git checkout <previous-good-sha>',
-              'cd infra/<worker> && npx wrangler@4 deploy',
-              'git checkout main',
-              '```',
-              '',
-              '## Decide: rollback vs roll forward',
-              '- [ ] Rolled back (note which surfaces): ',
-              '- [ ] Rolling forward (link the fix PR): ',
-              '',
-              '@fairchild',
-            ].join('\n');
-
-            const created = await github.rest.issues.create({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              title,
-              body,
-              labels: ['cd-failure', 'cd-failure:prod', 'urgent', 'auto-opened'],
-            });
-            core.notice(`Opened prod alert issue #${created.data.number}`);
+  resolve-prod-alert:
+    needs: [promote, validate-prod]
+    if: success() && needs.validate-prod.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
+        with:
+          script: |
+            const path = require('node:path');
+            const { pathToFileURL } = require('node:url');
+            const abs = path.join(process.env.GITHUB_WORKSPACE, '.github/workflows/cd-prod-alert.js');
+            const { closeResolvedProdAlerts } = await import(pathToFileURL(abs).href);
+            await closeResolvedProdAlerts({ github, context, core });
