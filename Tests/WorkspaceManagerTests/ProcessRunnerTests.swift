@@ -72,4 +72,53 @@ struct ProcessRunnerTests {
             #expect(result.stdout.contains(token))
         }
     }
+
+    @Test("Returns after exit when a backgrounded child holds the pipes open")
+    func returnsWhenBackgroundedChildHoldsPipes() async throws {
+        let start = ContinuousClock.now
+        let command = [
+            "echo before-background",
+            "sleep 30 &",
+            "exit 0",
+        ].joined(separator: "\n")
+
+        let result = try await ProcessRunner.run(
+            executable: "/bin/bash",
+            arguments: ["-c", command],
+            pipeDrainGracePeriod: 0.5
+        )
+        let elapsed = ContinuousClock.now - start
+
+        #expect(result.success)
+        #expect(result.stdout.contains("before-background"))
+        #expect(elapsed < .seconds(10))
+    }
+
+    @Test("Throws timedOut for a child that never exits")
+    func timesOutHungChild() async throws {
+        let start = ContinuousClock.now
+
+        await #expect(throws: ProcessRunnerError.self) {
+            _ = try await ProcessRunner.run(
+                executable: "/bin/bash",
+                arguments: ["-c", "sleep 30"],
+                timeout: 0.5
+            )
+        }
+
+        let elapsed = ContinuousClock.now - start
+        #expect(elapsed < .seconds(10))
+    }
+
+    @Test("Timeout leaves a process that completes in time untouched")
+    func timeoutUnusedForFastProcess() async throws {
+        let result = try await ProcessRunner.run(
+            executable: "/bin/echo",
+            arguments: ["fast-enough"],
+            timeout: 30
+        )
+
+        #expect(result.success)
+        #expect(result.stdout.contains("fast-enough"))
+    }
 }
