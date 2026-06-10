@@ -57,6 +57,7 @@ struct ContentView: View {
     @State private var landingErrorMessage: String?
     @State private var workspaceEnvironmentSheetState = WorkspaceEnvironmentSheetState.empty
     @State private var didScheduleInitialWorkspaceStatusSync = false
+    @State private var didPrewarmPerfTerminalSurfaces = false
     @State private var workspaceOrphanItems: [WorkspaceOrphanItem] = []
     @State private var dismissedWorkspaceOrphanItemIDs: Set<String> = []
     @State private var cleaningWorkspaceOrphanItemIDs: Set<String> = []
@@ -569,6 +570,7 @@ struct ContentView: View {
                     repos: repos, webSources: webSources, normalizePath: normalizePath
                 )
                 ensureInitialHostSession()
+                prewarmPerfTerminalSurfacesIfNeeded()
                 resolveSurfaceLifecycle()
                 applyDiagnosticsFixtureIfNeeded()
                 pruneRightPaneState()
@@ -597,6 +599,7 @@ struct ContentView: View {
                 persistTerminalContinuitySnapshot()
             }
             .task {
+                prewarmPerfTerminalSurfacesIfNeeded()
                 await performDeferredStartupWorkspaceStatusSync()
             }
             .onDisappear {
@@ -2512,6 +2515,45 @@ struct ContentView: View {
 
         workspaceEnvironmentSheetState = state
         return true
+    }
+
+    @MainActor
+    private func prewarmPerfTerminalSurfacesIfNeeded() {
+        guard !didPrewarmPerfTerminalSurfaces else { return }
+        guard
+            let rawCount = ProcessInfo.processInfo.environment["WORKSPACES_PERF_PREWARM_TERMINAL_SURFACES"]?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+            let requestedCount = Int(rawCount),
+            requestedCount > 0
+        else {
+            return
+        }
+
+        didPrewarmPerfTerminalSurfaces = true
+        let surfaceCount = min(requestedCount, 40)
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("workspaces-main-window-surface-perf", isDirectory: true)
+        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+
+        var initializedSurfaceCount = 0
+        for index in 0..<surfaceCount {
+            let directory = root.appendingPathComponent("workspace-\(index)", isDirectory: true)
+            try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let session = activateHostSession(
+                key: .hostPath(directory.path),
+                directory: directory
+            )
+            let terminal = hostTerminalState.surfaceStore.view(for: session)
+            if terminal.surface != nil {
+                initializedSurfaceCount += 1
+            }
+        }
+
+        NSLog(
+            "[Perf] metric=main_window_terminal_surface_prewarm requested=%ld initialized=%ld",
+            surfaceCount,
+            initializedSurfaceCount
+        )
     }
 
     @MainActor

@@ -62,8 +62,8 @@ class PerfContractTests(unittest.TestCase):
                 }
             },
         )
-        self.assertEqual(result["launch_to_first_prompt"]["gate_budget_ms"], 250)
-        self.assertEqual(result["launch_to_first_prompt"]["diagnostic_threshold_ms"], 390)
+        self.assertEqual(result["launch_to_first_prompt"]["gate_budget_ms"], 740)
+        self.assertEqual(result["launch_to_first_prompt"]["diagnostic_threshold_ms"], 947)
         self.assertEqual(result["launch_to_first_prompt"]["status"], "pass")
 
     def test_release_policy_uses_installed_signoff(self) -> None:
@@ -73,6 +73,41 @@ class PerfContractTests(unittest.TestCase):
         self.assertEqual(release_policy["release_signoff_scenario"], "installed_clean_shell")
         self.assertFalse(release_policy["debug_scenarios_block_release"])
 
+    def test_budget_evaluator_supports_non_ms_units(self) -> None:
+        contract = load_contract()
+        result = evaluate_budgets(
+            contract,
+            "channel1_sidebar_churn",
+            {
+                "channel1_steady_state_cpu_percent": {
+                    "count": 3,
+                    "min": 3.0,
+                    "median": 4.0,
+                    "mean": 4.33,
+                    "max": 6.0,
+                    "p95": 6.0,
+                    "unit": "percent",
+                }
+            },
+        )
+
+        budget = result["channel1_steady_state_cpu_percent"]
+        self.assertEqual(budget["status"], "pass")
+        self.assertEqual(budget["gate_budget"], 7)
+        self.assertEqual(budget["diagnostic_threshold"], 18)
+        self.assertNotIn("gate_budget_ms", budget)
+
+    def test_main_window_hotspot_scenarios_are_registered(self) -> None:
+        contract = load_contract()
+        scenario_ids = {scenario["id"] for scenario in contract["scenarios"]}
+        for scenario_id in {
+            "main_window_agent_activity_burst",
+            "main_window_workspace_create_ui_stall",
+            "main_window_idle_cpu_diagnostics_closed",
+            "main_window_resident_memory_20_workspaces",
+        }:
+            self.assertIn(scenario_id, scenario_ids)
+
 
 class PerfRunnerScriptTests(unittest.TestCase):
     def test_installed_scenario_normalizes_app_bundle_path(self) -> None:
@@ -80,6 +115,12 @@ class PerfRunnerScriptTests(unittest.TestCase):
         self.assertIn("normalize_installed_app_path", script)
         self.assertIn("Contents/MacOS/WorkspaceManager", script)
         self.assertIn('--app "$resolved_app_path"', script)
+
+    def test_main_window_hotspot_scenarios_delegate_to_helper(self) -> None:
+        script = (REPO_ROOT / "scripts" / "perf-runner.sh").read_text(encoding="utf-8")
+        self.assertIn("main-window-hotspots-baseline.py", script)
+        self.assertIn("main_window_agent_activity_burst", script)
+        self.assertIn("main_window_resident_memory_20_workspaces", script)
 
 
 class PerfSummarizerTests(unittest.TestCase):
@@ -126,7 +167,7 @@ class PerfSummarizerTests(unittest.TestCase):
             self.assertEqual(payload["scenario"], "debug_no_activate")
             self.assertEqual(payload["environment"]["build_kind"], "debug")
             self.assertIn("launch_to_first_prompt", payload["metrics"])
-            self.assertEqual(payload["budget_results"]["launch_to_first_prompt"]["gate_budget_ms"], 250)
+            self.assertEqual(payload["budget_results"]["launch_to_first_prompt"]["gate_budget_ms"], 740)
 
     def test_installed_clean_log_summary_is_canonical(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

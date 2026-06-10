@@ -15,6 +15,10 @@ Canonical scenarios:
 | `installed_clean_shell` | `installed` | Packaged-app release signoff with shell init bypassed and bundled Ghostty resources verified |
 | `installed_login_shell` | `installed` | Installed-app startup with normal login shell cost included |
 | `installed_input_short_capture` | `installed` | Short focused typing capture for input event age and handler timing |
+| `main_window_agent_activity_burst` | `debug` | In-process sidebar status aggregation burst for agent activity churn |
+| `main_window_workspace_create_ui_stall` | `debug` | New Workspace sheet-open flow, including provider availability and Lume runtime refresh submetrics |
+| `main_window_idle_cpu_diagnostics_closed` | `debug` | Debug app idle CPU while the Diagnostics pane is closed |
+| `main_window_resident_memory_20_workspaces` | `debug` | Debug app RSS after prewarming 20 retained terminal surfaces |
 
 ## Metric Definitions
 
@@ -213,6 +217,61 @@ sequenceDiagram
     Sidebar->>Sheet: set sheet presentation state
     Sidebar->>Perf: endNewWorkspaceSheetReadyIfNeeded(outcome=success)
 ```
+
+### `main_window_agent_activity_burst_sidebar_latency_ms`
+
+What it measures:
+- Time spent rebuilding sidebar agent-status inputs and updating `WorkspaceStatusAggregator` for a bursty main-window workload.
+
+Scenario:
+- `main_window_agent_activity_burst`
+
+Why it matters:
+- It guards the path that refires when agent session status changes, where repeated sidebar refresh work can become visible during active agent sessions.
+
+### `workspace_provider_availability_refresh`
+
+What it measures:
+- The provider availability refresh span emitted while preparing the New Workspace sheet.
+
+Scenario:
+- `main_window_workspace_create_ui_stall`
+
+Why it matters:
+- It separates provider option refresh cost from the final sheet-ready marker.
+
+### `lume_runtime_snapshot_refresh`
+
+What it measures:
+- The Lume runtime snapshot refresh span used while preparing New Workspace environment options.
+
+Scenario:
+- `main_window_workspace_create_ui_stall`
+
+Why it matters:
+- It captures the deferred runtime-readiness work that can make workspace creation feel stalled even when the final sheet presentation marker is short.
+
+### `main_window_idle_cpu_diagnostics_closed_percent`
+
+What it measures:
+- `WorkspaceManager` process CPU percent sampled from the debug app while the Diagnostics pane is closed.
+
+Scenario:
+- `main_window_idle_cpu_diagnostics_closed`
+
+Why it matters:
+- It verifies that diagnostics sampling and ordinary idle work stay quiet during sustained sessions when the diagnostics UI is not visible.
+
+### `main_window_resident_memory_20_workspaces_mb`
+
+What it measures:
+- `WorkspaceManager` process RSS after the debug app prewarms and retains 20 terminal surfaces.
+
+Scenario:
+- `main_window_resident_memory_20_workspaces`
+
+Why it matters:
+- It establishes a contract around retained terminal surface memory before adding any eviction or suspension policy.
 
 ### `open_in_editor_launch`
 
