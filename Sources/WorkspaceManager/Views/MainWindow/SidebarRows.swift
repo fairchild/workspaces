@@ -491,36 +491,55 @@ struct WorkspaceRow: View {
     }
 }
 
-/// Shows an info card popover after a short hover delay, dismissing on hover-out.
-/// The delay avoids flashing cards while the pointer crosses the list; the card
-/// closure is evaluated only while presented, so its agent lookup stays lazy.
+/// Shows an info card popover after a short hover delay. The show delay avoids
+/// flashing cards while the pointer crosses the list; a dismiss grace period lets
+/// the pointer travel onto the card to read it (the card's own hover cancels the
+/// dismiss). The card closure is evaluated only while presented, so its agent
+/// lookup stays lazy.
 private struct SidebarHoverCardModifier<Card: View>: ViewModifier {
+    private static var showDelay: UInt64 { 400_000_000 }
+    private static var dismissDelay: UInt64 { 250_000_000 }
+
     var onHoverChange: ((Bool) -> Void)? = nil
     @ViewBuilder var card: () -> Card
 
-    @State private var isHovering = false
     @State private var showCard = false
-    @State private var hoverTask: Task<Void, Never>?
+    @State private var showTask: Task<Void, Never>?
+    @State private var dismissTask: Task<Void, Never>?
 
     func body(content: Content) -> some View {
         content
             .onHover { hovering in
-                isHovering = hovering
                 onHoverChange?(hovering)
-                hoverTask?.cancel()
-                guard hovering else {
-                    showCard = false
-                    return
-                }
-                hoverTask = Task {
-                    try? await Task.sleep(nanoseconds: 400_000_000)
-                    guard !Task.isCancelled, isHovering else { return }
-                    showCard = true
-                }
+                if hovering { scheduleShow() } else { scheduleDismiss() }
             }
             .popover(isPresented: $showCard, arrowEdge: .trailing) {
                 card()
+                    .onHover { hovering in
+                        if hovering { dismissTask?.cancel() } else { scheduleDismiss() }
+                    }
             }
+    }
+
+    private func scheduleShow() {
+        dismissTask?.cancel()
+        guard !showCard else { return }
+        showTask?.cancel()
+        showTask = Task {
+            try? await Task.sleep(nanoseconds: Self.showDelay)
+            guard !Task.isCancelled else { return }
+            showCard = true
+        }
+    }
+
+    private func scheduleDismiss() {
+        showTask?.cancel()
+        dismissTask?.cancel()
+        dismissTask = Task {
+            try? await Task.sleep(nanoseconds: Self.dismissDelay)
+            guard !Task.isCancelled else { return }
+            showCard = false
+        }
     }
 }
 
