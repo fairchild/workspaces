@@ -565,6 +565,7 @@ struct HostTerminalStateStoreTests {
         arguments: [
             HostTerminalStateStore.SplitPaneLayout(axis: .leadingTrailing, splitBeforePrimary: false),
             HostTerminalStateStore.SplitPaneLayout(axis: .leadingTrailing, splitBeforePrimary: true),
+            HostTerminalStateStore.SplitPaneLayout(axis: .topBottom, splitBeforePrimary: false),
             HostTerminalStateStore.SplitPaneLayout(axis: .topBottom, splitBeforePrimary: true),
         ]
     )

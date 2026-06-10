@@ -369,6 +369,10 @@ final class HostTerminalStateStore: ObservableObject {
 
     /// The non-primary leaf of `tree` (the split tile). Returns `nil` if the primary binding is gone.
     private func splitTileID(in tree: TileTreeState, primarySessionID: UUID) -> TileID? {
+        // Depth-1 shim: a two-leaf tree has exactly one non-primary leaf. Once Phase 4 makes deeper
+        // trees real, "first leaf that isn't the primary" picks an arbitrary sibling and the
+        // derived-split-session set would silently drop the extra leaves — trip loudly here instead.
+        assert(tree.leafIDs.count == 2, "depth-1 projection shim — replace before deeper trees land")
         guard let primaryTile = tileIDBySessionID[primarySessionID] else { return nil }
         return tree.leafIDs.first(where: { $0 != primaryTile })
     }
@@ -668,7 +672,13 @@ final class HostTerminalStateStore: ObservableObject {
     /// itself stays in the coordinator and is untouched here.
     private func removeSplitState(forPrimarySessionID primarySessionID: UUID) {
         guard let tree = treesByPrimaryID.removeValue(forKey: primarySessionID) else { return }
+        // A live tree always carries its primary tile binding; without it the `tileID != primaryTile`
+        // guard below would treat the primary as a split and deregister a session still in the
+        // coordinator. The collapse mutates the tree dict, so notify (callers also `publishSnapshot`,
+        // making this a benign double-fire that keeps the mutator self-sufficient for direct callers).
         let primaryTile = tileIDBySessionID[primarySessionID]
+        assert(primaryTile != nil, "primary tile binding must exist while its split tree does")
+        objectWillChange.send()
 
         for tileID in tree.leafIDs {
             guard let session = sessionByTileID.removeValue(forKey: tileID) else { continue }
