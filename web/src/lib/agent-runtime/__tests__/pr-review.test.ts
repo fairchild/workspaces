@@ -1761,6 +1761,51 @@ describe("processPendingPrReviewRuns", () => {
 		expect(mocks.recordRunResult).not.toHaveBeenCalled();
 	});
 
+	it("waits through a short coalescing grace period before superseding a running session", async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2026-05-17T06:25:30Z"));
+		try {
+			mocks.listPrReviewRunsForBroker.mockResolvedValue([
+				brokerRun({
+					fingerprint: "fp_coalesced_recent",
+					repoFullName: "fairchild/workspaces",
+					prNumber: 486,
+					headSha: "old-head",
+					triggerKind: "synchronize",
+					triggerSourceId: "old-head",
+					sessionId: "sesn_recent",
+					createdAt: "2026-05-17T06:24:27Z",
+					updatedAt: "2026-05-17T06:25:00Z",
+					coalescedHeadSha: "new-head",
+					coalescedTriggerKind: "edited",
+					coalescedTriggerSourceId: "body-new",
+					coalescedAt: "2026-05-17T06:25:00Z",
+				}),
+			]);
+			mocks.listEvents.mockReturnValue(
+				asyncEvents([
+					{
+						type: "agent.message",
+						content: [{ type: "text", text: "still working" }],
+					},
+				]),
+			);
+
+			const result = await processPendingPrReviewRuns({ limit: 1 });
+
+			expect(result).toMatchObject({
+				checked: 1,
+				superseded: 0,
+				requeued: 0,
+				skippedRunning: 1,
+			});
+			expect(mocks.createSession).not.toHaveBeenCalled();
+			expect(mocks.recordRunResult).not.toHaveBeenCalled();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("suppresses stale completed output when a newer trigger was coalesced", async () => {
 		mocks.listPrReviewRunsForBroker.mockResolvedValue([
 			brokerRun({
@@ -1872,6 +1917,7 @@ describe("processPendingPrReviewRuns", () => {
 					options?.method === "POST",
 			),
 		).toBe(false);
+		expect(mocks.listEvents).not.toHaveBeenCalled();
 	});
 
 	it("supersedes a completed session when a newer managed review already covers the same head", async () => {
@@ -2696,6 +2742,15 @@ describe("triggerPrReview rerun behavior", () => {
 
 		const [, params] = mocks.sendEvent.mock.calls[0];
 		const message = params.events[0].content[0].text;
+		expect(message).toContain(
+			"choose validation proportional to the changed surface",
+		);
+		expect(message).toContain(
+			"do not run the full Swift suite unless runtime code is touched",
+		);
+		expect(message).not.toContain(
+			"run swift build and swift test if the project supports them",
+		);
 		expect(message).not.toContain("## Follow-up review format");
 		expect(message).not.toContain("## Changes Since Last Review");
 		expect(message).not.toContain("Rerun context (trusted)");
