@@ -55,7 +55,8 @@ enum WorkspaceDirectoryRemover {
             let result = try await ProcessRunner.run(
                 executable: "/usr/bin/git",
                 arguments: removalArguments,
-                currentDirectory: workspaceURL.deletingLastPathComponent()
+                currentDirectory: workspaceURL.deletingLastPathComponent(),
+                timeout: 30
             )
 
             guard result.success else {
@@ -71,7 +72,8 @@ enum WorkspaceDirectoryRemover {
                 do {
                     let branchDeletionResult = try await ProcessRunner.run(
                         executable: "/usr/bin/git",
-                        arguments: branchDeletionArguments
+                        arguments: branchDeletionArguments,
+                        timeout: 30
                     )
                     if !branchDeletionResult.success {
                         let reason = branchDeletionResult.stderr.isEmpty ? "Unknown error" : branchDeletionResult.stderr
@@ -106,7 +108,8 @@ enum WorkspaceDirectoryRemover {
         let result = try await ProcessRunner.run(
             executable: "/usr/bin/git",
             arguments: ["branch", "--show-current"],
-            currentDirectory: workspaceURL
+            currentDirectory: workspaceURL,
+            timeout: 30
         )
         guard result.success else {
             let reason = result.stderr.isEmpty ? "Unknown error" : result.stderr
@@ -120,7 +123,8 @@ enum WorkspaceDirectoryRemover {
         let result = try await ProcessRunner.run(
             executable: "/usr/bin/git",
             arguments: ["rev-parse", "--path-format=absolute", "--git-common-dir"],
-            currentDirectory: workspaceURL
+            currentDirectory: workspaceURL,
+            timeout: 30
         )
         guard result.success else {
             let reason = result.stderr.isEmpty ? "Unknown error" : result.stderr
