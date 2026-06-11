@@ -256,9 +256,15 @@ struct RepoRow: View {
             RoundedRectangle(cornerRadius: 5)
                 .fill(isSelected ? Color.accentColor.opacity(0.1) : .clear)
         )
-        .sidebarHoverCard(onHoverChange: { isHovering = $0 }) {
-            SidebarInfoCard(name: repo.name, agentStatus: agentStatusProvider?())
-        }
+        .sidebarHoverCard(
+            onHoverChange: { isHovering = $0 },
+            shouldShow: {
+                SidebarInfoCard.hasContent(branch: nil, agentStatus: agentStatusProvider?())
+            },
+            card: {
+                SidebarInfoCard(name: repo.name, agentStatus: agentStatusProvider?())
+            }
+        )
         .accessibilityElement(children: .contain)
         .accessibilityLabel(accessibilityDescription)
     }
@@ -432,13 +438,19 @@ struct WorkspaceRow: View {
                 + (workspace.status == .archived ? ", archived" : "")
                 + (statusMessage.map { ", \($0)" } ?? "")
         )
-        .sidebarHoverCard {
-            SidebarInfoCard(
-                name: workspace.name,
-                branch: workspace.gitBranch,
-                agentStatus: agentStatusProvider?()
-            )
-        }
+        .sidebarHoverCard(
+            shouldShow: {
+                SidebarInfoCard.hasContent(
+                    branch: workspace.gitBranch, agentStatus: agentStatusProvider?())
+            },
+            card: {
+                SidebarInfoCard(
+                    name: workspace.name,
+                    branch: workspace.gitBranch,
+                    agentStatus: agentStatusProvider?()
+                )
+            }
+        )
     }
 
     private var rowContent: some View {
@@ -501,6 +513,9 @@ private struct SidebarHoverCardModifier<Card: View>: ViewModifier {
     private static var dismissDelay: UInt64 { 250_000_000 }
 
     var onHoverChange: ((Bool) -> Void)? = nil
+    /// Evaluated lazily when the show delay fires; when it returns false the
+    /// popover is suppressed (e.g. a row whose card would only repeat the name).
+    var shouldShow: () -> Bool = { true }
     @ViewBuilder var card: () -> Card
 
     @State private var showCard = false
@@ -527,7 +542,7 @@ private struct SidebarHoverCardModifier<Card: View>: ViewModifier {
         showTask?.cancel()
         showTask = Task {
             try? await Task.sleep(nanoseconds: Self.showDelay)
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, shouldShow() else { return }
             showCard = true
         }
     }
@@ -546,8 +561,11 @@ private struct SidebarHoverCardModifier<Card: View>: ViewModifier {
 extension View {
     func sidebarHoverCard(
         onHoverChange: ((Bool) -> Void)? = nil,
+        shouldShow: @escaping () -> Bool = { true },
         @ViewBuilder card: @escaping () -> some View
     ) -> some View {
-        modifier(SidebarHoverCardModifier(onHoverChange: onHoverChange, card: card))
+        modifier(
+            SidebarHoverCardModifier(
+                onHoverChange: onHoverChange, shouldShow: shouldShow, card: card))
     }
 }

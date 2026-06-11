@@ -15,6 +15,12 @@ struct SidebarInfoCard: View {
     var branch: String? = nil
     var agentStatus: AgentSessionStatus? = nil
 
+    /// Whether the card would show anything beyond the name. When false the
+    /// caller should skip the popover entirely — a name-only card is just noise.
+    static func hasContent(branch: String?, agentStatus: AgentSessionStatus?) -> Bool {
+        (branch?.isEmpty == false) || agentStatus != nil
+    }
+
     private var trimmedBranch: String? {
         guard let branch, !branch.isEmpty else { return nil }
         return branch
