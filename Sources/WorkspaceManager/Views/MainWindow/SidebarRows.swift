@@ -212,8 +212,8 @@ struct RepoRow: View {
     let onSelectRepo: () -> Void
     let onNewWorkspace: (() -> Void)?
     let onNewWebView: (() -> Void)?
-    /// Resolved lazily only when the hover card opens (the repo root session).
-    var agentStatusProvider: (() -> AgentSessionStatus?)? = nil
+    /// Resolved lazily only when the hover card opens (the repo root's tabs).
+    var tabsProvider: (() -> [SidebarTabSummary])? = nil
 
     @State private var isHovering = false
 
@@ -259,10 +259,11 @@ struct RepoRow: View {
         .sidebarHoverCard(
             onHoverChange: { isHovering = $0 },
             shouldShow: {
-                SidebarInfoCard.hasContent(branch: nil, agentStatus: agentStatusProvider?())
+                SidebarInfoCard.hasContent(
+                    name: repo.name, branch: nil, tabs: tabsProvider?() ?? [])
             },
             card: {
-                SidebarInfoCard(name: repo.name, agentStatus: agentStatusProvider?())
+                SidebarInfoCard(name: repo.name, tabs: tabsProvider?() ?? [])
             }
         )
         .accessibilityElement(children: .contain)
@@ -358,7 +359,7 @@ struct WorkspaceRow: View {
     var showsDisclosure: Bool = false
     /// Resolved lazily only when the hover card opens, so frequent agent-status
     /// updates never re-render idle rows.
-    var agentStatusProvider: (() -> AgentSessionStatus?)? = nil
+    var tabsProvider: (() -> [SidebarTabSummary])? = nil
     var onToggleExpansion: (() -> Void)? = nil
     var onSelect: (() -> Void)? = nil
 
@@ -441,13 +442,14 @@ struct WorkspaceRow: View {
         .sidebarHoverCard(
             shouldShow: {
                 SidebarInfoCard.hasContent(
-                    branch: workspace.gitBranch, agentStatus: agentStatusProvider?())
+                    name: workspace.name, branch: workspace.gitBranch,
+                    tabs: tabsProvider?() ?? [])
             },
             card: {
                 SidebarInfoCard(
                     name: workspace.name,
                     branch: workspace.gitBranch,
-                    agentStatus: agentStatusProvider?()
+                    tabs: tabsProvider?() ?? []
                 )
             }
         )
