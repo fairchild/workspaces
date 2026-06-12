@@ -524,6 +524,10 @@ struct ContentView: View {
                 activeSessionKey: activeSessionKeyForSidebar,
                 hostSessions: hostTerminalState.sessions,
                 agentStatusBySessionID: agentSessionRegistry.statuses,
+                titleForSession: { session in
+                    hostTerminalState.tabTitleOverride(for: session.id)
+                        ?? hostTerminalState.surfaceStore.displayTitle(for: session)
+                },
                 connectingWorkspaceID: viewState.connectingWorkspaceID,
                 onRepoSelected: handleRepoSelection,
                 onRepoTerminalSelected: handleRepoTerminalSelection,

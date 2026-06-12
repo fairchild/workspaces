@@ -48,6 +48,9 @@ struct SidebarView: View {
     let activeSessionKey: HostTerminalSessionKey?
     let hostSessions: [HostTerminalSession]
     let agentStatusBySessionID: [UUID: AgentSessionStatus]
+    /// Display title for a terminal tab (user override → live terminal title →
+    /// directory). Resolved lazily by the hover card; mirrors the tab bar's title.
+    let titleForSession: @MainActor (HostTerminalSession) -> String
     let connectingWorkspaceID: UUID?
     let onRepoSelected: (Repo) -> Void
     let onRepoTerminalSelected: (Repo) -> Void
@@ -464,7 +467,8 @@ struct SidebarView: View {
             },
             onNewWebView: {
                 onRequestWebSourceCreation(.repo(repo))
-            }
+            },
+            tabsProvider: { tabSummaries(for: repoSessionKey) }
         )
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
@@ -553,6 +557,7 @@ struct SidebarView: View {
             isNested: true,
             isExpanded: isWorkspaceExpanded(workspace),
             showsDisclosure: !workspace.webSources.isEmpty,
+            tabsProvider: { tabSummaries(for: workspace) },
             onToggleExpansion: {
                 toggleWorkspaceExpansion(workspace)
             },
@@ -1427,6 +1432,26 @@ struct SidebarView: View {
             sessions: hostSessions,
             agentStatusBySessionID: agentStatusBySessionID
         )
+    }
+
+    /// One summary per terminal tab sharing `key`, in session order. Each carries
+    /// its display title and agent status (when that tab runs a known agent).
+    private func tabSummaries(for key: HostTerminalSessionKey) -> [SidebarTabSummary] {
+        let normalizedKey = key.normalized()
+        return
+            hostSessions
+            .filter { $0.key == normalizedKey }
+            .map { session in
+                SidebarTabSummary(
+                    id: session.id,
+                    title: titleForSession(session),
+                    agentStatus: agentStatusBySessionID[session.id]
+                )
+            }
+    }
+
+    private func tabSummaries(for workspace: Workspace) -> [SidebarTabSummary] {
+        tabSummaries(for: sessionKey(for: workspace))
     }
 
     /// Merge the repo's own-session baseline with the aggregator-bubbled state derived

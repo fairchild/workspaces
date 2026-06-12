@@ -212,6 +212,8 @@ struct RepoRow: View {
     let onSelectRepo: () -> Void
     let onNewWorkspace: (() -> Void)?
     let onNewWebView: (() -> Void)?
+    /// Resolved lazily only when the hover card opens (the repo root's tabs).
+    var tabsProvider: (() -> [SidebarTabSummary])? = nil
 
     @State private var isHovering = false
 
@@ -254,9 +256,16 @@ struct RepoRow: View {
             RoundedRectangle(cornerRadius: 5)
                 .fill(isSelected ? Color.accentColor.opacity(0.1) : .clear)
         )
-        .onHover { hovering in
-            isHovering = hovering
-        }
+        .sidebarHoverCard(
+            onHoverChange: { isHovering = $0 },
+            shouldShow: {
+                SidebarInfoCard.hasContent(
+                    name: repo.name, branch: nil, tabs: tabsProvider?() ?? [])
+            },
+            card: {
+                SidebarInfoCard(name: repo.name, tabs: tabsProvider?() ?? [])
+            }
+        )
         .accessibilityElement(children: .contain)
         .accessibilityLabel(accessibilityDescription)
     }
@@ -348,6 +357,9 @@ struct WorkspaceRow: View {
     var isNested: Bool = false
     var isExpanded: Bool = false
     var showsDisclosure: Bool = false
+    /// Resolved lazily only when the hover card opens, so frequent agent-status
+    /// updates never re-render idle rows.
+    var tabsProvider: (() -> [SidebarTabSummary])? = nil
     var onToggleExpansion: (() -> Void)? = nil
     var onSelect: (() -> Void)? = nil
 
@@ -427,6 +439,20 @@ struct WorkspaceRow: View {
                 + (workspace.status == .archived ? ", archived" : "")
                 + (statusMessage.map { ", \($0)" } ?? "")
         )
+        .sidebarHoverCard(
+            shouldShow: {
+                SidebarInfoCard.hasContent(
+                    name: workspace.name, branch: workspace.gitBranch,
+                    tabs: tabsProvider?() ?? [])
+            },
+            card: {
+                SidebarInfoCard(
+                    name: workspace.name,
+                    branch: workspace.gitBranch,
+                    tabs: tabsProvider?() ?? []
+                )
+            }
+        )
     }
 
     private var rowContent: some View {
@@ -476,5 +502,72 @@ struct WorkspaceRow: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
+    }
+}
+
+/// Shows an info card popover after a short hover delay. The show delay avoids
+/// flashing cards while the pointer crosses the list; a dismiss grace period lets
+/// the pointer travel onto the card to read it (the card's own hover cancels the
+/// dismiss). The card closure is evaluated only while presented, so its agent
+/// lookup stays lazy.
+private struct SidebarHoverCardModifier<Card: View>: ViewModifier {
+    private static var showDelay: UInt64 { 400_000_000 }
+    private static var dismissDelay: UInt64 { 250_000_000 }
+
+    var onHoverChange: ((Bool) -> Void)? = nil
+    /// Evaluated lazily when the show delay fires; when it returns false the
+    /// popover is suppressed (e.g. a row whose card would only repeat the name).
+    var shouldShow: () -> Bool = { true }
+    @ViewBuilder var card: () -> Card
+
+    @State private var showCard = false
+    @State private var showTask: Task<Void, Never>?
+    @State private var dismissTask: Task<Void, Never>?
+
+    func body(content: Content) -> some View {
+        content
+            .onHover { hovering in
+                onHoverChange?(hovering)
+                if hovering { scheduleShow() } else { scheduleDismiss() }
+            }
+            .popover(isPresented: $showCard, arrowEdge: .trailing) {
+                card()
+                    .onHover { hovering in
+                        if hovering { dismissTask?.cancel() } else { scheduleDismiss() }
+                    }
+            }
+    }
+
+    private func scheduleShow() {
+        dismissTask?.cancel()
+        guard !showCard else { return }
+        showTask?.cancel()
+        showTask = Task {
+            try? await Task.sleep(nanoseconds: Self.showDelay)
+            guard !Task.isCancelled, shouldShow() else { return }
+            showCard = true
+        }
+    }
+
+    private func scheduleDismiss() {
+        showTask?.cancel()
+        dismissTask?.cancel()
+        dismissTask = Task {
+            try? await Task.sleep(nanoseconds: Self.dismissDelay)
+            guard !Task.isCancelled else { return }
+            showCard = false
+        }
+    }
+}
+
+extension View {
+    func sidebarHoverCard(
+        onHoverChange: ((Bool) -> Void)? = nil,
+        shouldShow: @escaping () -> Bool = { true },
+        @ViewBuilder card: @escaping () -> some View
+    ) -> some View {
+        modifier(
+            SidebarHoverCardModifier(
+                onHoverChange: onHoverChange, shouldShow: shouldShow, card: card))
     }
 }
