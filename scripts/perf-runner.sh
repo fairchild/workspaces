@@ -14,6 +14,10 @@ Scenarios:
   installed_clean_shell
   installed_login_shell
   installed_input_short_capture
+  main_window_agent_activity_burst
+  main_window_workspace_create_ui_stall
+  main_window_idle_cpu_diagnostics_closed
+  main_window_resident_memory_20_workspaces
 
 Options:
   --scenario <id>         Canonical scenario id.
@@ -230,6 +234,21 @@ if missing:
 PY
 }
 
+run_main_window_hotspot() {
+    local cmd=(
+        "$ROOT_DIR/scripts/main-window-hotspots-baseline.py"
+        --scenario "$SCENARIO"
+        --output-dir "$OUTPUT_DIR"
+        --runs "$RUNS"
+        --sleep-seconds "$SLEEP_SECONDS"
+        --sample-seconds "$CAPTURE_SECONDS"
+    )
+    if [[ "$ASSERT_BUDGET" -eq 1 ]]; then
+        cmd+=(--assert-budget)
+    fi
+    UV_CACHE_DIR="${UV_CACHE_DIR:-/tmp/workspaces-uv-cache}" "${cmd[@]}"
+}
+
 case "$SCENARIO" in
     debug_no_activate)
         run_debug "no-activate"
@@ -245,6 +264,9 @@ case "$SCENARIO" in
         ;;
     installed_input_short_capture)
         run_installed_input_short_capture
+        ;;
+    main_window_agent_activity_burst|main_window_workspace_create_ui_stall|main_window_idle_cpu_diagnostics_closed|main_window_resident_memory_20_workspaces)
+        run_main_window_hotspot
         ;;
     *)
         echo "Unsupported scenario: $SCENARIO" >&2

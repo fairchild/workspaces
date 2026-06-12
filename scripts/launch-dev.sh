@@ -516,24 +516,28 @@ verify_background_process() {
         dump_recent_log_and_fail "Launch failed during warmup. Last log lines:"
     fi
 
-    local app_command
-    app_command="$(ps -p "$APP_PID" -o command= | sed -e 's/^[[:space:]]*//')"
-    if [[ "$app_command" != "$DEBUG_BINARY" && "$app_command" != "$DEBUG_BINARY "* ]]; then
-        log "Unexpected executable for pid=$APP_PID: $app_command"
-        fail "Launch verification failed: running process is not debug binary"
-    fi
+    if [[ "${WORKSPACES_LAUNCH_DEV_SKIP_PROCESS_VERIFY:-0}" == "1" ]]; then
+        log "Skipping ps-based process verification due to WORKSPACES_LAUNCH_DEV_SKIP_PROCESS_VERIFY=1"
+    else
+        local app_command
+        app_command="$(ps -p "$APP_PID" -o command= | sed -e 's/^[[:space:]]*//')"
+        if [[ "$app_command" != "$DEBUG_BINARY" && "$app_command" != "$DEBUG_BINARY "* ]]; then
+            log "Unexpected executable for pid=$APP_PID: $app_command"
+            fail "Launch verification failed: running process is not debug binary"
+        fi
 
-    ensure_no_installed_app_instance
+        ensure_no_installed_app_instance
 
-    # Guardrail against stale app confusion: surface any other WorkspaceManager
-    # processes that are not our expected debug binary.
-    local other_instances
-    other_instances="$(ps -axo pid=,command= | awk -v expected="$DEBUG_BINARY" '$2 ~ /WorkspaceManager$/ && $2 != expected { print $1 " " $2 }')"
-    if [[ -n "$other_instances" ]]; then
-        log "Warning: additional WorkspaceManager processes detected:"
-        while IFS= read -r line; do
-            [[ -n "$line" ]] && log "  - $line"
-        done <<< "$other_instances"
+        # Guardrail against stale app confusion: surface any other WorkspaceManager
+        # processes that are not our expected debug binary.
+        local other_instances
+        other_instances="$(ps -axo pid=,command= | awk -v expected="$DEBUG_BINARY" '$2 ~ /WorkspaceManager$/ && $2 != expected { print $1 " " $2 }')"
+        if [[ -n "$other_instances" ]]; then
+            log "Warning: additional WorkspaceManager processes detected:"
+            while IFS= read -r line; do
+                [[ -n "$line" ]] && log "  - $line"
+            done <<< "$other_instances"
+        fi
     fi
 
     wait_for_visible_window

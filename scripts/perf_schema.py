@@ -75,6 +75,22 @@ def _metric_reference(contract: dict[str, Any], scenario: str, metric_name: str)
     return None
 
 
+def _reference_stat_value(reference: dict[str, Any], stat: str, unit: str) -> float | None:
+    normalized_unit = unit.lower()
+    candidates: list[str] = []
+    if normalized_unit in {"ms", "millisecond", "milliseconds"}:
+        candidates.append(f"{stat}_ms")
+    elif normalized_unit in {"mb", "mib"}:
+        candidates.append(f"{stat}_mb")
+    candidates.append(stat)
+
+    for key in candidates:
+        value = reference.get(key)
+        if value is not None:
+            return float(value)
+    return None
+
+
 def evaluate_budgets(
     contract: dict[str, Any],
     scenario: str,
@@ -102,32 +118,52 @@ def evaluate_budgets(
             }
             continue
 
-        gate_reference = float(reference[f"{gate_stat}_ms"])
-        diagnostic_reference = float(reference[f"{diagnostic_stat}_ms"])
-        gate_budget_ms = _round_budget(gate_reference * gate_multiplier, gate_rounding)
-        diagnostic_threshold_ms = _round_budget(
+        unit = str(metric_stats.get("unit", "ms"))
+        gate_reference = _reference_stat_value(reference, gate_stat, unit)
+        diagnostic_reference = _reference_stat_value(reference, diagnostic_stat, unit)
+        if gate_reference is None or diagnostic_reference is None:
+            results[metric_name] = {
+                "status": "ungated",
+                "reason": "reference_baseline_missing_required_stat",
+                "reference_baseline": reference,
+            }
+            continue
+
+        gate_budget = _round_budget(gate_reference * gate_multiplier, gate_rounding)
+        diagnostic_threshold = _round_budget(
             diagnostic_reference * diagnostic_multiplier,
             diagnostic_rounding,
         )
-        observed_median_ms = metric_stats.get("median")
-        observed_p95_ms = metric_stats.get("p95")
+        observed_gate = metric_stats.get(gate_stat)
+        observed_diagnostic = metric_stats.get(diagnostic_stat)
 
         status = "pass"
-        if observed_median_ms is None:
+        if observed_gate is None:
             status = "missing"
-        elif float(observed_median_ms) > gate_budget_ms:
+        elif float(observed_gate) > gate_budget:
             status = "fail"
-        elif observed_p95_ms is not None and float(observed_p95_ms) > diagnostic_threshold_ms:
+        elif observed_diagnostic is not None and float(observed_diagnostic) > diagnostic_threshold:
             status = "warn"
 
-        results[metric_name] = {
+        result = {
             "status": status,
-            "gate_budget_ms": gate_budget_ms,
-            "diagnostic_threshold_ms": diagnostic_threshold_ms,
-            "observed_median_ms": observed_median_ms,
-            "observed_p95_ms": observed_p95_ms,
+            "gate_budget": gate_budget,
+            "diagnostic_threshold": diagnostic_threshold,
+            "observed_gate": observed_gate,
+            "observed_diagnostic": observed_diagnostic,
+            "gate_stat": gate_stat,
+            "diagnostic_stat": diagnostic_stat,
+            "unit": unit,
             "reference_baseline": reference,
         }
+        if unit.lower() in {"ms", "millisecond", "milliseconds"}:
+            result.update({
+                "gate_budget_ms": gate_budget,
+                "diagnostic_threshold_ms": diagnostic_threshold,
+                "observed_median_ms": metric_stats.get("median"),
+                "observed_p95_ms": metric_stats.get("p95"),
+            })
+        results[metric_name] = result
 
     return results
 

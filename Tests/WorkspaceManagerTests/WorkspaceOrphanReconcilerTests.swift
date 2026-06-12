@@ -328,6 +328,55 @@ struct WorkspaceOrphanReconcilerTests {
         #expect(fileSystem.directoryExistsCallCount == 0)
     }
 
+    @Test("Archived workspace under .archived produces no orphan items")
+    func archivedWorkspaceProducesNoOrphans() async throws {
+        let repo = try TestGitRepository.create()
+        defer { repo.cleanup() }
+        try repo.createFile("README.md", content: "hello\n")
+        try repo.commit(message: "initial")
+
+        let testRoot = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: testRoot) }
+        let workspacesRoot = testRoot.appendingPathComponent("workspaces", isDirectory: true)
+        let worktreeURL =
+            workspacesRoot
+            .appendingPathComponent("sample-repo", isDirectory: true)
+            .appendingPathComponent("to-archive", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: worktreeURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        _ = try runGit(
+            ["worktree", "add", "-b", "workspace/to-archive", worktreeURL.path, "HEAD"],
+            at: repo.url
+        )
+
+        // Archive moves the worktree into <workspacesRoot>/.archived/sample-repo/to-archive.
+        let archivedURL = WorkspaceDirectoryArchiver.archivedDestination(for: worktreeURL)
+        try await WorkspaceDirectoryArchiver.move(from: worktreeURL, to: archivedURL)
+
+        let workspace = workspaceSnapshot(
+            name: "to-archive",
+            path: archivedURL.path,
+            gitBranch: "workspace/to-archive"
+        )
+        let reconciler = WorkspaceOrphanReconciler(
+            workspacesRoot: workspacesRoot,
+            lumeWorkspaceStorageURL: nil
+        )
+        let result = await reconciler.scan(
+            repositories: [
+                repoSnapshot(
+                    name: "sample-repo",
+                    localPath: repo.url.path,
+                    workspaces: [workspace]
+                )
+            ]
+        )
+
+        #expect(result.items.isEmpty)
+    }
+
     private func makeTempDir() throws -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("WorkspaceOrphanReconcilerTests-\(UUID().uuidString)", isDirectory: true)

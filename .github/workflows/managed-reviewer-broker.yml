@@ -81,7 +81,8 @@ jobs:
           WORKSPACES_WEBHOOK_CANARY_SECRET: ${{ secrets.WORKSPACES_WEBHOOK_CANARY_SECRET }}
           BROKER_LIMIT: ${{ github.event.inputs.limit || '10' }}
           BROKER_REPO: ${{ github.event.inputs.repo || github.repository }}
-          BROKER_ATTEMPTS: ${{ github.event_name == 'status' && '30' || github.event.inputs.attempts || '1' }}
+          BROKER_ATTEMPTS: ${{ github.event_name == 'status' && '120' || github.event.inputs.attempts || '1' }}
+          BROKER_POLL_SECONDS: ${{ github.event_name == 'status' && '15' || '60' }}
         run: |
           for attempt in $(seq 1 "$BROKER_ATTEMPTS"); do
             echo "Managed reviewer broker attempt $attempt/$BROKER_ATTEMPTS"
@@ -115,7 +116,7 @@ jobs:
               exit 0
             fi
             if [ "$attempt" -lt "$BROKER_ATTEMPTS" ]; then
-              sleep 60
+              sleep "$BROKER_POLL_SECONDS"
             fi
           done
 
