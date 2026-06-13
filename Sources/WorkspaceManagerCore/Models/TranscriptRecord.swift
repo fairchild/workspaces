@@ -4,7 +4,7 @@
 //
 //  Tolerant decoder for Claude Code transcript JSONL records.
 //
-//  Spec: pasted_text_2026-05-03_22-18-10.txt § Channel 4. Transcripts live at
+//  Transcript JSONL reader. Transcripts live at
 //  ~/.claude/projects/<encoded-cwd>/<session-id>.jsonl. Hook payloads carry
 //  `transcript_path`; we never derive the path. Schema is technically internal
 //  and slow-moving — unknown record types decode to `.opaque(raw:)` and pass

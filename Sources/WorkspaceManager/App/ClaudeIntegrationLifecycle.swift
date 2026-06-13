@@ -37,14 +37,14 @@ final class ClaudeIntegrationLifecycle: ObservableObject {
         let eventForwarderPath = ClaudeIntegrationLifecycle.extractEventForwarderScript()
         if eventForwarderPath == nil {
             NSLog(
-                "[ClaudeIntegration] event-forwarder.sh extraction failed; Channel 1 will be skipped this session"
+                "[ClaudeIntegration] event-forwarder.sh extraction failed; command hook forwarder will be skipped this session"
             )
         }
 
         let statusLinePath = ClaudeIntegrationLifecycle.extractStatusLineForwarderScript()
         if statusLinePath == nil {
             NSLog(
-                "[ClaudeIntegration] statusline.sh extraction failed; skipping Channel 2 contribution"
+                "[ClaudeIntegration] statusline.sh extraction failed; skipping status-line forwarder"
             )
         }
 
@@ -138,17 +138,16 @@ final class ClaudeIntegrationLifecycle: ObservableObject {
         }
     }
 
-    /// Copy the bundled `event-forwarder.sh` (Channel 1 hook event forwarder) to a
-    /// stable location and chmod it executable. Returns the destination path, or
-    /// nil if extraction failed — the contribution then declines to register, and
-    /// Channel 1 stays dormant for this session.
+    /// Copy the bundled command hook forwarder to a stable location and chmod it
+    /// executable. Returns the destination path, or nil if extraction failed —
+    /// the contribution then declines to register.
     nonisolated static func extractEventForwarderScript() -> String? {
         extractHookForwarderScript(named: "event-forwarder")
     }
 
-    /// Copy the bundled `statusline.sh` (Channel 2 status-line forwarder) to the
-    /// same stable extraction dir as Channel 1, symmetric with the event
-    /// forwarder. Returns the destination path, or nil if extraction failed.
+    /// Copy the bundled status-line forwarder to the same stable extraction dir
+    /// as the command hook forwarder. Returns the destination path, or nil if
+    /// extraction failed.
     nonisolated static func extractStatusLineForwarderScript() -> String? {
         extractHookForwarderScript(named: "statusline")
     }

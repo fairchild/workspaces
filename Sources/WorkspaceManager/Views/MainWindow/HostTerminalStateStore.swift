@@ -60,7 +60,8 @@ final class HostTerminalStateStore: ObservableObject {
     private weak var lastCommandStatusRegistry: LastCommandStatusRegistry?
     private var localStateStore: LocalStateStore?
     /// Stub probe used to seed `kind` on register; PR #1 ships a fail-safe
-    /// `.claudeCode` default. Replace with the real probe in a Channel 3 follow-up.
+    /// `.claudeCode` default. Replace with the real probe in a foreground Agent
+    /// detection follow-up.
     private let foregroundProbe = PTYForegroundProbe()
     /// Set of session IDs the store has already registered with the agent registry,
     /// so we only register/deregister on real edge transitions.
@@ -91,8 +92,9 @@ final class HostTerminalStateStore: ObservableObject {
         // Backfill: any sessions already in the coordinator should be registered.
         syncRegistry()
 
-        // Channel 3: hook the surface→host-session resolver into the OSC router so
-        // libghostty desktop notifications and BEL events can find their session.
+        // Terminal attention fallback: hook the surface→host-session resolver
+        // into the OSC router so libghostty desktop notifications and BEL events
+        // can find their session.
         let store = self.surfaceStore
         AgentOSCRouter.shared.attach(registry: agentSessionRegistry) { surfaceView in
             store.sessionID(for: surfaceView)
@@ -665,7 +667,8 @@ final class HostTerminalStateStore: ObservableObject {
         // Register newly-seen sessions.
         for session in allSessions where !registeredAgentSessionIDs.contains(session.id) {
             // PR #1: probe is a stub returning `.claudeCode` for every surface.
-            // Replace surfaceID with a real value when the Channel 3 probe lands.
+            // Replace surfaceID with a real value when foreground Agent
+            // detection lands.
             let kind = foregroundProbe.detect(surfaceID: 0)
             registry.register(
                 hostSessionID: session.id,

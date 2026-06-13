@@ -5,7 +5,7 @@
 //  Detect the foreground agent type for a libghostty surface by looking at the
 //  PTY's foreground process group leader (`tcgetpgrp` + `proc_pidpath`). PR #1
 //  ships a fail-safe default that always returns `.claudeCode`, since the only
-//  rich-hooks adapter is Claude — OSC fallback covers everything else and an
+//  rich hook speaker is Claude — OSC fallback covers everything else and an
 //  upstream libghostty change is required to expose the PTY fd cleanly.
 //
 //  See coordination.md (PR #1 deviations) and spec § "Anti-patterns" → process-name
@@ -33,8 +33,8 @@ public struct PTYForegroundProbe: Sendable {
     // decodes hook payloads, and the OSC fallback covers every other agent
     // regardless of detected kind.
     //
-    // Real foreground-process detection becomes a Channel 3 concern when opencode
-    // or aider parity matters. At that point, replace the body with
+    // Real foreground-process detection becomes necessary when opencode or aider
+    // parity matters. At that point, replace the body with
     // `tcgetpgrp` + a `proc_pidpath` lookup against the slave-side PTY fd (requires
     // either an upstream libghostty addition that exposes the fd, or platform
     // traversal of the surface's child-process tree via `proc_listpids`). The

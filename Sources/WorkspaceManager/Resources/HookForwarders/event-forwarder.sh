@@ -13,7 +13,7 @@
 # pipeline errors. curl, however, supports `--unix-socket`, so we pipe through
 # it from a small command-hook script. Same pattern as `statusline.sh`.
 #
-# Spec: pasted_text_2026-05-03_22-18-10.txt § Channel 1.
+# Agent update intake purpose: command hook forwarder.
 #
 # Hard requirements:
 #   * stdlib bash + curl only — no jq, no python.

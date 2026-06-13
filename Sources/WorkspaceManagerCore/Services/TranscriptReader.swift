@@ -4,7 +4,7 @@
 //
 //  Streaming reader for Claude Code transcript JSONL files.
 //
-//  Spec: pasted_text_2026-05-03_22-18-10.txt § Channel 4. Two consumption shapes:
+//  Transcript JSONL reader. Two consumption shapes:
 //
 //    - `tail()`: opens the file, yields every record from the start, then ends.
 //      Conversation replay uses this. The reader deliberately does not rebuild

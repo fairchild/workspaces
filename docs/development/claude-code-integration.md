@@ -8,19 +8,24 @@ from terminal state, and transcript viewing.
 This document describes the shipped architecture. Deferred programmatic/headless
 Claude work is tracked separately in `backlog/headless-claude-programmatic-runner.md`.
 
-## Shipped Channels
+## Agent Update Intake
 
-The first, second, and fourth channels feed `AgentSessionRegistry`. Channel 3
-feeds `LastCommandStatusRegistry`. Channel 5 is a transcript reader for the
-conversation log UI; it is not a state recovery path.
+`AgentUpdateIntake` owns the host-side vocabulary for Agent update intake and
+maps transports to named purposes. Legacy channel numbers are retained here only
+to line up older specs and PRs; app code should prefer purpose names.
 
-| Channel | Role | Registry input |
+The command hook forwarder, status-line forwarder, and terminal attention
+fallback feed `AgentSessionRegistry`. The command-status producer feeds
+`LastCommandStatusRegistry`. The transcript reader is for the conversation log UI;
+it is not a state recovery path.
+
+| Legacy | Purpose | Registry input |
 |---|---|---|
-| 1. Command hook forwarder | Primary event stream: tool start/end, awaiting input, complete, errored | Yes |
-| 2. Status-line forwarder | Model, cost, context fill, rate-limit headroom | Yes |
-| 3. Command-status producer | Last shell command start/end and exit status | LastCommandStatusRegistry |
-| 4. libghostty OSC/BEL | Fallback attention signal for unhooked or degraded sessions | Yes |
-| 5. Transcript JSONL | Conversation replay/audit view | No |
+| 1 | Command hook forwarder | AgentSessionRegistry |
+| 2 | Status-line forwarder | AgentSessionRegistry |
+| 3 | Command-status producer | LastCommandStatusRegistry |
+| 4 | libghostty OSC/BEL fallback | AgentSessionRegistry |
+| 5 | Transcript JSONL reader | No |
 
 ```text
                  +------------------------------------+
@@ -53,11 +58,14 @@ conversation log UI; it is not a state recovery path.
   hook JSON. Unknown hook events decode to `.unknown`.
 - `Sources/WorkspaceManagerCore/Models/AgentEvent.swift` is the normalized event
   shape consumed by the registry.
-- `Sources/WorkspaceManagerCore/Services/AgentEventTranslators.swift` contains
-  the concrete Claude hook translator and OSC mapper. There is no adapter
-  protocol until a second rich hook-speaking agent exists.
-- `AgentHookListener` exposes `/event`, `/statusline`, `/command-markers`,
-  and `/healthz`.
+- `Sources/WorkspaceManagerCore/Services/AgentUpdateIntake.swift` owns purpose
+  names, HTTP route mapping, and the intake helpers used by callers.
+- `Sources/WorkspaceManagerCore/Services/AgentEventTranslators.swift` remains
+  the concrete Claude hook translator and OSC mapper. There is no adapter protocol
+  until a second rich hook-speaking agent exists.
+- `AgentHookListener` exposes `/event` for the command hook forwarder,
+  `/statusline` for the status-line forwarder, `/command-markers` for the
+  command-status producer, and `/healthz`.
 
 The registry write surface is deliberately small:
 
@@ -87,7 +95,7 @@ This replaces cwd/agent-session inference. `SessionStart` still records
 tabs and split panes on the same repository remain distinct because their host
 session IDs are distinct from terminal spawn time.
 
-## Channel 1: Command Hook Forwarder
+## Command Hook Forwarder
 
 Script: `Sources/WorkspaceManager/Resources/HookForwarders/event-forwarder.sh`.
 
@@ -100,8 +108,9 @@ Content-Type: application/json
 X-WorkSpaces-Host-Session-ID: <uuid>
 ```
 
-The listener decodes with `ClaudeHookTranslator.decodeAgentEvent(from:)` and
-applies the resulting `AgentEvent` to the registry with origin `.hook`.
+The listener routes `/event` through `AgentUpdateIntake`, which decodes with the
+concrete Claude hook translator and applies the resulting `AgentEvent` to the
+registry with origin `.hook`.
 
 The app extracts `event-forwarder.sh` to a stable, space-free directory —
 `~/.local/share/workspaces/hook-forwarders/` (honoring `XDG_DATA_HOME`) — and
@@ -119,13 +128,14 @@ any prior machine-specific event-forwarder command (an `Application Support` pat
 or a `.build` bundle path, quoted or unquoted, ending in
 `HookForwarders/event-forwarder.sh`) with the generic tilde command.
 
-## Channel 2: Status-Line Forwarder
+## Status-Line Forwarder
 
 Script: `Sources/WorkspaceManager/Resources/HookForwarders/statusline.sh`,
 extracted to the same `~/.local/share/workspaces/hook-forwarders/` directory as
-Channel 1 and written to `statusLine.command` as the same tilde-relative,
-unquoted shape. The installer overwrites any prior status-line command, so a
-stale bundle or `.build` path converges to the generic command on next launch.
+the command hook forwarder and written to `statusLine.command` as the same
+tilde-relative, unquoted shape. The installer overwrites any prior status-line
+command, so a stale bundle or `.build` path converges to the generic command on
+next launch.
 
 Claude Code runs it as `statusLine.command`. The script posts status JSON to
 `/statusline` and prints a single space so Claude's own status row stays visually
@@ -136,7 +146,7 @@ it through the same registry write surface.
 Status-line ticks never change `AgentRunState`; they only update display fields
 such as model, cost, context used, and five-hour limit state.
 
-## Channel 3: Command-Status Producer
+## Command-Status Producer
 
 Script: `Sources/WorkspaceManager/Resources/HookForwarders/command-status.zsh`.
 
@@ -158,7 +168,7 @@ The app does not mutate shell profiles automatically. Missing socket/session
 environment, missing `curl`, stopped host listeners, and malformed payloads
 drop quietly with diagnostics.
 
-## Channel 4: libghostty OSC/BEL
+## Terminal Attention Fallback
 
 `GhosttyRuntimeActionBridge` recognizes:
 
@@ -166,7 +176,7 @@ drop quietly with diagnostics.
 - `GHOSTTY_ACTION_RING_BELL`
 
 `AgentOSCRouter` resolves the `GhosttySurfaceView` back to its host session and
-uses `AgentOSCEventMapper` to create an `AgentEvent`. Claude Code OSC bodies get
+uses `AgentUpdateIntake` to create an `AgentEvent`. Claude Code OSC bodies get
 small permission/idle heuristics; other agent kinds map to a generic custom
 awaiting-input event.
 
@@ -178,7 +188,7 @@ Notification channel selection is concrete installer behavior: `~/.claude.json`
 is patched to `preferredNotifChannel: "iterm2"` because OSC 9 is the reliable
 path libghostty surfaces today.
 
-## Channel 5: Transcript JSONL
+## Transcript JSONL Reader
 
 `Sources/WorkspaceManagerCore/Services/TranscriptReader.swift` reads Claude Code
 transcripts for `ConversationLogView`.

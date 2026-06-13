@@ -7,7 +7,7 @@
 //  actual on-disk install state so the toggle is self-healing if the user reverts
 //  the install externally.
 //
-//  Spec: pasted_text_2026-05-03_22-18-10.txt § Channel 1 ("Configuration").
+//  Installs the command hook and status-line forwarders.
 //
 
 import AppKit
@@ -409,8 +409,8 @@ private struct ClaudeHookRevertSheet: View {
     }
 }
 
-/// Compact status row that surfaces the live status fields populated by Channel 2
-/// (status-line forwarder). Reads `AgentSessionRegistry.statuses` directly — no
+/// Compact status row that surfaces the live status fields populated by the
+/// status-line forwarder. Reads `AgentSessionRegistry.statuses` directly — no
 /// new `@Published` publisher; we observe via the registry's own `objectWillChange`.
 ///
 /// "Focused session" is the most-recently-updated session in the registry. PR #2
@@ -422,7 +422,7 @@ private struct AgentStatusFieldsIndicator: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Live Status (Channel 2)")
+            Text("Live Status")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
 

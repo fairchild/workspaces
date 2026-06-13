@@ -2,15 +2,13 @@
 //  AgentHookListener.swift
 //  WorkspaceManagerCore
 //
-//  Unix domain socket listener for Claude Code's HTTP hook channel.
-//  Spec: pasted_text_2026-05-03_22-18-10.txt § Channel 1 ("Listener", "Async by default").
+//  Unix domain socket listener for Agent update forwarders.
 //
 //  Routes:
-//    POST /event       — hook event, decoded via ClaudeHookTranslator
-//    POST /statusline  — Channel 2 status-line forwarder; decodes StatusLinePayload
-//                        and applies status fields for the header-routed session
+//    POST /event       — command hook forwarder, decoded via AgentUpdateIntake
+//    POST /statusline  — status-line forwarder, decoded via AgentUpdateIntake
 //    POST /command-markers
-//                      — raw OSC 133 command markers for LastCommandStatusRegistry
+//                      — command-status producer for LastCommandStatusRegistry
 //    GET  /healthz     — 200 OK "OK"
 //
 //  Framing: minimal HTTP/1.1 — request line, headers, body. We respond 200 OK
@@ -211,25 +209,15 @@ public actor AgentHookListener {
     }
 
     private func route(_ request: HTTPRequest) -> (Int, Data) {
-        switch (request.method.uppercased(), request.path) {
-        case ("GET", "/healthz"):
-            return (200, Data("OK".utf8))
-        case ("POST", "/event"):
-            return (200, Data())
-        case ("POST", "/statusline"):
-            return (200, Data())
-        case ("POST", "/command-markers"):
-            return (200, Data())
-        default:
-            return (200, Data())
-        }
+        let route = AgentUpdateIntake.httpRoute(method: request.method, path: request.path)
+        return (200, route?.responseBody ?? Data())
     }
 
     private func process(request: HTTPRequest) async {
-        switch (request.method.uppercased(), request.path) {
-        case ("POST", "/event"):
+        switch AgentUpdateIntake.httpRoute(method: request.method, path: request.path)?.purpose {
+        case .commandHookForwarder:
             await processEvent(request: request)
-        case ("POST", "/statusline"):
+        case .statusLineForwarder:
             await processStatusLine(request: request)
         default:
             break
@@ -237,7 +225,8 @@ public actor AgentHookListener {
     }
 
     private static func isCommandMarkerRequest(_ request: HTTPRequest) -> Bool {
-        request.method.uppercased() == "POST" && request.path == "/command-markers"
+        AgentUpdateIntake.httpRoute(method: request.method, path: request.path)?.purpose
+            == .commandStatusProducer
     }
 
     private func enqueueCommandMarkerRequest(_ request: HTTPRequest) {
@@ -270,7 +259,7 @@ public actor AgentHookListener {
 
         let event: AgentEvent?
         do {
-            event = try ClaudeHookTranslator.decodeAgentEvent(from: request.body)
+            event = try AgentUpdateIntake.decodeHookEvent(from: request.body)
         } catch {
             statistics.decodeFailures += 1
             logger("decode error: \(error)")
@@ -292,13 +281,12 @@ public actor AgentHookListener {
             return
         }
 
-        guard let payload = StatusLinePayload.decode(from: request.body) else {
+        guard let fields = AgentUpdateIntake.decodeStatusFields(from: request.body) else {
             statistics.decodeFailures += 1
             logger("statusline decode failed")
             return
         }
 
-        let fields = payload.toStatusFields()
         await MainActor.run { [registry] in
             registry.apply(events: [.statusFields(fields)], for: hostSessionID, origin: .statusLine)
         }
@@ -316,7 +304,7 @@ public actor AgentHookListener {
             return
         }
 
-        let markers = CommandMarkerParser.parse(request.body)
+        let markers = AgentUpdateIntake.decodeCommandMarkers(from: request.body)
         guard !markers.isEmpty else {
             statistics.decodeFailures += 1
             logger("command marker decode failed: no OSC 133 markers")
