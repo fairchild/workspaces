@@ -197,9 +197,9 @@ final class GhosttySurfaceView: NSView {
         promptReadinessSignposts.completeIfNeeded(signal: signal)
     }
 
-    /// Channel 3: an OSC 9 / OSC 777 notification from the agent. Forward to the
-    /// registry via the OSC router so the sidebar dot, macOS notifications, and
-    /// the dedup window all see the same event.
+    /// Terminal attention fallback: an OSC 9 / OSC 777 notification from the
+    /// agent. Forward to the registry via the OSC router so the sidebar dot,
+    /// macOS notifications, and the dedup window all see the same event.
     func handleDesktopNotification(
         title: String?,
         body: String,
@@ -213,8 +213,9 @@ final class GhosttySurfaceView: NSView {
         )
     }
 
-    /// Channel 3: terminal BEL. Routed through the OSC router so the registry's
-    /// adapter has a single ingestion path for non-hook attention signals.
+    /// Terminal attention fallback: terminal BEL. Routed through the OSC router
+    /// so the registry has a single ingestion path for non-hook attention
+    /// signals.
     func handleRingBell(surfaceAddress: UInt) {
         AgentOSCRouter.shared.handleRingBell(
             surfaceView: self,

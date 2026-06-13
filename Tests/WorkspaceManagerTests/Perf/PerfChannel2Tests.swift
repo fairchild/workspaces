@@ -2,7 +2,7 @@
 //  PerfChannel2Tests.swift
 //  WorkspaceManagerTests
 //
-//  In-process perf scenario for the Channel 2 status-line route. Mirrors the
+//  In-process perf scenario for the status-line forwarder route. Mirrors the
 //  Scenario A pattern from PerfChannel1Tests; differences are: the URL path
 //  is `/statusline`, the body is a status-line payload, and we measure the
 //  same two metrics (HTTP 200 latency, registry update latency).

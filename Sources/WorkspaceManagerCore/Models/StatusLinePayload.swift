@@ -7,7 +7,7 @@
 //  feeds it on stdin to the host's `/statusline` route. We decode tolerantly:
 //  missing fields are nil, unknown keys are ignored.
 //
-//  Spec: pasted_text_2026-05-03_22-18-10.txt § Channel 2 ("Fields the host reads").
+//  Wire payload for the status-line forwarder.
 //
 
 import Foundation

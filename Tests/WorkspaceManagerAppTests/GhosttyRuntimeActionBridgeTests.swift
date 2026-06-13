@@ -2,10 +2,10 @@
 //  GhosttyRuntimeActionBridgeTests.swift
 //  WorkspaceManagerAppTests
 //
-//  Channel 3: confirms the runtime bridge recognizes the desktop-notification
-//  and bell action tags and routes them through `runOnMainAsync` to a resolved
-//  surface view. The full end-to-end registry integration is covered by
-//  OSCDedupIntegrationTests in WorkspaceManagerTests.
+//  Terminal attention fallback: confirms the runtime bridge recognizes the
+//  desktop-notification and bell action tags and routes them through
+//  `runOnMainAsync` to a resolved surface view. The full end-to-end registry
+//  integration is covered by OSCDedupIntegrationTests in WorkspaceManagerTests.
 //
 
 import Foundation
@@ -14,7 +14,7 @@ import Testing
 
 @testable import WorkspaceManager
 
-@Suite("GhosttyRuntimeActionBridge — Channel 3 dispatch")
+@Suite("GhosttyRuntimeActionBridge — terminal attention dispatch")
 struct GhosttyRuntimeActionBridgeTests {
 
     @Test("DESKTOP_NOTIFICATION returns true and schedules main-thread work")

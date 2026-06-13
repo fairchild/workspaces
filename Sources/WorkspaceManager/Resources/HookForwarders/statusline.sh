@@ -8,7 +8,7 @@
 # single space so the terminal status row stays empty (the host owns
 # visualization).
 #
-# Spec: pasted_text_2026-05-03_22-18-10.txt § Channel 2.
+# Agent update intake purpose: status-line forwarder.
 #
 # Hard requirements:
 #   * stdlib bash + curl only — no jq, no python.

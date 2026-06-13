@@ -2,8 +2,8 @@
 //  ClaudeSettingsInstallerBackupRotationTests.swift
 //  WorkspaceManagerTests
 //
-//  Channel 3 mitigation: backups should not accumulate without bound. The
-//  installer caps `*.workspaces-backup-*` files per settings file at
+//  Settings installer mitigation: backups should not accumulate without bound.
+//  The installer caps `*.workspaces-backup-*` files per settings file at
 //  `maxBackupsPerFile`, deleting older entries by mtime on each install.
 //
 

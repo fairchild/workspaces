@@ -3,8 +3,8 @@
 //  WorkspaceManager
 //
 //  Observes the AgentSessionRegistry and posts a macOS user notification when a
-//  session transitions into `.awaitingInput(.permissionPrompt)`. Per spec § Channel 1
-//  ("Notification → permission_prompt"), this is the canonical attention signal.
+//  session transitions into `.awaitingInput(.permissionPrompt)`. Command hook
+//  notification events are the canonical attention signal.
 //
 //  Coalescing: at most one notification per host session per 30s.
 //

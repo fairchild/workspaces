@@ -3,10 +3,8 @@
 //  WorkspaceManagerCore
 //
 //  Live registry of agent session statuses keyed by host session ID. Consumes
-//  AgentEvent values from hook, status-line, and OSC inputs, then produces a
-//  normalized AgentRunState for the UI.
-//
-//  Spec: pasted_text_2026-05-03_22-18-10.txt § Channel 1, Channel 3 ("Dedup with hooks").
+//  AgentEvent values from hook, status-line, and terminal attention inputs,
+//  then produces a normalized AgentRunState for the UI.
 //
 
 import Combine

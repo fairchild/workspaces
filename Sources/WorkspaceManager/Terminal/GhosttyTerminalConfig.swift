@@ -48,9 +48,9 @@ struct GhosttyTerminalConfig {
         environment["COLORTERM"] = "truecolor"
         environment["LANG"] = "en_US.UTF-8"
 
-        // Channel 1 plumbing: when both pieces of context are available, expose them to
-        // the embedded shell so Claude Code (and any forwarder script) can address the
-        // host's hook listener over its Unix socket without per-process discovery.
+        // Command hook plumbing: when both pieces of context are available,
+        // expose them to the embedded shell so Agent hooks can address the host's
+        // hook listener over its Unix socket without per-process discovery.
         if let hooksSocketPath, let hostSessionID {
             environment["WORKSPACES_HOOKS_SOCKET"] = hooksSocketPath
             environment["WORKSPACES_HOST_SESSION_ID"] = hostSessionID.uuidString

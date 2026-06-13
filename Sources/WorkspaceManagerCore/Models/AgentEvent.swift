@@ -1,7 +1,8 @@
 import Foundation
 
-/// Agent event normalized from an input channel (HTTP hook, status line, OSC notification,
-/// or transcript reader). The registry consumes only this type.
+/// Agent event normalized from an Agent update intake path (HTTP hook, status
+/// line, terminal attention fallback, or transcript reader). The registry
+/// consumes only this type.
 ///
 /// New cases must be additive — never rename or repurpose without a migration.
 public enum AgentEvent: Sendable {
