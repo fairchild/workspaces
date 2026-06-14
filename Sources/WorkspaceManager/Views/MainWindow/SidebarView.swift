@@ -1477,10 +1477,7 @@ struct SidebarView: View {
         guard bubbled != baseline else { return nil }
         let attentionCount = repo.workspaces.reduce(into: 0) { count, workspace in
             guard let status = workspaceStatusAggregator.workspaceStatuses[workspace.id] else { return }
-            switch status.run {
-            case .awaitingInput, .errored: count += 1
-            default: break
-            }
+            if AgentChromeProjection.demandsAttention(status.run) { count += 1 }
         }
         guard attentionCount > 0 else { return nil }
         switch bubbled {

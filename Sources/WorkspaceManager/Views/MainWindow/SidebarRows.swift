@@ -66,19 +66,23 @@ enum SidebarSessionActivity: Equatable {
     }
 
     var indicatorColor: Color {
+        indicatorTone.color
+    }
+
+    var indicatorTone: AgentChromeProjection.Tone {
         switch self {
         case .inactive:
-            return .clear
+            return .hidden
         case .live:
-            return Color.accentColor.opacity(0.75)
+            return .live
         case .active:
-            return .accentColor
+            return .active
         case .thinking, .runningTool:
-            return .blue
+            return .running
         case .awaitingInput:
-            return .yellow
+            return .attention
         case .errored:
-            return .red
+            return .critical
         }
     }
 
@@ -105,13 +109,13 @@ enum SidebarSessionActivity: Equatable {
         case .active:
             return "active session"
         case .thinking:
-            return "agent thinking"
+            return AgentChromeProjection.runState(.thinking).accessibilityDescription
         case .runningTool:
-            return "agent running tool"
+            return AgentChromeProjection.runState(.runningTool(name: "", detail: nil)).accessibilityDescription
         case .awaitingInput:
-            return "agent awaiting input"
+            return AgentChromeProjection.runState(.awaitingInput(reason: .custom)).accessibilityDescription
         case .errored(let category):
-            return "agent errored (\(category.rawValue))"
+            return AgentChromeProjection.runState(.errored(category: category, message: nil)).accessibilityDescription
         }
     }
 
@@ -123,9 +127,14 @@ enum SidebarSessionActivity: Equatable {
     /// bubbled activity derived from child workspaces. Higher wins.
     var severity: Int {
         switch self {
-        case .errored: return 5
-        case .awaitingInput: return 4
-        case .runningTool, .thinking: return 3
+        case .errored(let category):
+            return AgentChromeProjection.runState(.errored(category: category, message: nil)).sidebarPriority
+        case .awaitingInput:
+            return AgentChromeProjection.runState(.awaitingInput(reason: .custom)).sidebarPriority
+        case .runningTool:
+            return AgentChromeProjection.runState(.runningTool(name: "", detail: nil)).sidebarPriority
+        case .thinking:
+            return AgentChromeProjection.runState(.thinking).sidebarPriority
         case .active: return 2
         case .live: return 1
         case .inactive: return 0

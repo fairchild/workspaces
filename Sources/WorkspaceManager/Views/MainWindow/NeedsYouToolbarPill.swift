@@ -23,7 +23,7 @@ struct NeedsYouToolbarPill: View {
             } label: {
                 HStack(spacing: 6) {
                     Circle()
-                        .fill(Color.yellow)
+                        .fill(AgentChromeProjection.attentionTone.color)
                         .frame(width: 7, height: 7)
                     Text("\(aggregator.attentionCount) need you")
                         .font(.callout.weight(.medium))
@@ -33,11 +33,11 @@ struct NeedsYouToolbarPill: View {
                 .padding(.vertical, 4)
                 .background(
                     Capsule()
-                        .fill(Color.yellow.opacity(0.18))
+                        .fill(AgentChromeProjection.attentionTone.color.opacity(0.18))
                 )
                 .overlay(
                     Capsule()
-                        .stroke(Color.yellow.opacity(0.35), lineWidth: 0.5)
+                        .stroke(AgentChromeProjection.attentionTone.color.opacity(0.35), lineWidth: 0.5)
                 )
             }
             .buttonStyle(.plain)
@@ -82,7 +82,7 @@ struct NeedsYouToolbarPill: View {
             .compactMap(displayName(for:))
             .prefix(5)
         if names.isEmpty {
-            return "\(aggregator.attentionCount) sessions awaiting input or errored"
+            return AgentChromeProjection.attentionTooltipFallback(count: aggregator.attentionCount)
         }
         let remaining = aggregator.attentionCount - names.count
         let listed = names.joined(separator: ", ")
