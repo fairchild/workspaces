@@ -52,6 +52,10 @@ _Avoid_: Log line, message, activity item
 The per-**Workspace** read API over **Workspace Events**, ordered newest first. The Timeline tab of the **Detail Pane** consumes it.
 _Avoid_: Log, history, activity feed, audit trail
 
+**GitHub Activity**:
+Live webhook activity from GitHub for pull requests, checks, and repository updates. The Activity tab of the **Detail Pane** shows this stream when notifications are enabled.
+_Avoid_: Timeline, Workspace Journal, Workspace Event
+
 **Terminal Command Status**:
 The last shell command observed in a **Terminal Session** — its exit code, duration, and whether it is still running. Sourced from OSC 133 prompt marks or an equivalent shell hook.
 _Avoid_: Exit status, shell result, return code
@@ -88,6 +92,7 @@ _Avoid_: Notifications, alerts, warnings, tasks
 - A **Surface** is one selected **Repo Overview**, repository **Terminal Session**, workspace **Terminal Session**, or **Web Source**.
 - The **Detail Pane** follows the selected **Surface** when that surface has repository or workspace context.
 - An **Agent** runs inside a **Terminal Session** and emits **Workspace Events** that the **Workspace Journal** persists.
+- **GitHub Activity** is external webhook activity and does not write to the **Workspace Journal**.
 - A **Terminal Session** observes its own **Terminal Command Status** independently of any **Agent** running inside it.
 - **Attention** rolls up across all **Workspaces** and **Repositories**; the rollup at any moment determines the toolbar indicator.
 

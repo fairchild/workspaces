@@ -3,8 +3,8 @@
 //  WorkspaceManagerCore
 //
 //  Read-side repository over `agent_status_events`, exposing a per-workspace
-//  list of `WorkspaceEvent` values ordered newest first. The Timeline inspector
-//  observes this; refresh is explicit so views can scope SQL load to the
+//  list of `WorkspaceEvent` values ordered newest first. The Detail Pane
+//  Timeline observes this; refresh is explicit so views can scope SQL load to the
 //  active workspace.
 //
 

@@ -2796,6 +2796,7 @@ struct MainTerminalDetailView: View {
                         state: state,
                         diagnosticWorkspaceDirectories: diagnosticWorkspaceDirectories,
                         agentStatuses: agentStatuses,
+                        timelineHostSessionID: timelineHostSessionID(for: selectedWorkspace),
                         onFileSelected: onFileSelected
                     )
                     .rightPaneWidth(for: state)
@@ -2838,6 +2839,33 @@ struct MainTerminalDetailView: View {
         }
 
         return directories
+    }
+
+    private func timelineHostSessionID(for workspace: Workspace) -> UUID? {
+        guard let workspaceDirectory = workspace.localDirectoryURL else { return nil }
+        let workspacePath = normalizedPath(workspaceDirectory)
+
+        if let activeHostTerminalSessionID,
+            let activeVisibleSession = visibleHostTerminalSessions.first(where: {
+                $0.id == activeHostTerminalSessionID && normalizedPath($0.directoryURL) == workspacePath
+            })
+        {
+            return activeVisibleSession.id
+        }
+
+        if let visibleSession = visibleHostTerminalSessions.first(where: {
+            normalizedPath($0.directoryURL) == workspacePath
+        }) {
+            return visibleSession.id
+        }
+
+        return hostTerminalSessions.first {
+            normalizedPath($0.directoryURL) == workspacePath
+        }?.id
+    }
+
+    private func normalizedPath(_ url: URL) -> String {
+        url.standardizedFileURL.resolvingSymlinksInPath().path
     }
 
     @ViewBuilder
