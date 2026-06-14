@@ -55,22 +55,15 @@ final class HostTerminalSurfaceStore {
             return existing
         }
 
-        let created: GhosttySurfaceView
-        if let customCommand = session.customCommand {
-            created = GhosttySurfaceView(
-                customCommand: customCommand,
-                onProcessExit: wrappedOnProcessExit,
-                onCloseConfirmationRequired: onCloseConfirmationRequired
-            )
-        } else {
-            created = GhosttySurfaceView(
-                workingDirectory: session.directoryURL,
-                hostSessionID: session.id,
-                hooksSocketPath: hooksSocketPath,
-                onProcessExit: wrappedOnProcessExit,
-                onCloseConfirmationRequired: onCloseConfirmationRequired
-            )
-        }
+        let launchContext = TerminalSessionLaunchContext.hostSession(
+            session,
+            hooksSocketPath: hooksSocketPath
+        )
+        let created = GhosttySurfaceView(
+            launchContext: launchContext,
+            onProcessExit: wrappedOnProcessExit,
+            onCloseConfirmationRequired: onCloseConfirmationRequired
+        )
         surfaces[session.id] = created
         sessionIDsBySurfaceIdentity[ObjectIdentifier(created)] = session.id
         created.contextMenuProvider = contextMenuProvider
@@ -78,7 +71,7 @@ final class HostTerminalSurfaceStore {
             phase: "surface_store_created",
             fields: [
                 "session_id": session.id.uuidString,
-                "command_mode": session.customCommand == nil ? "directory" : "custom",
+                "command_mode": launchContext.commandModeLabel,
             ]
         )
         onSurfaceCreated?(session.id)

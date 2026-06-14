@@ -78,12 +78,27 @@ individual registry fields directly.
 
 ## Host Session Routing
 
-Routing is explicit. Every persistent host terminal created from a
-`HostTerminalSession` receives:
+Routing is explicit. `TerminalSessionLaunchContext` owns the launch-context
+policy for every `HostTerminalSession`: command mode, working directory,
+host-session identity, and whether hook environment is safe to expose.
+
+Directory-backed Terminal Sessions receive:
 
 - `WORKSPACES_HOOKS_SOCKET`
 - `WORKSPACES_HOST_SESSION_ID`
 - `WORKSPACES_COMMAND_STATUS_ZSH` when the bundled zsh producer is available
+
+This includes local repository/workspace sessions, Ghostty split sessions, and
+tmux-per-session launches because the Agent runs in the same host namespace as
+the app's Unix socket.
+
+Custom-command Terminal Sessions, such as provider SSH commands, intentionally
+do not receive the hook environment. WorkSpaces cannot assume the custom command's
+child shell can reach the local Unix socket, and leaking a local socket path into
+a remote session would be misleading. These sessions can still communicate with
+app chrome through terminal signals that libghostty observes, including OSC
+desktop notifications and BEL, because the surface resolver maps the
+`GhosttySurfaceView` back to its `HostTerminalSession`.
 
 The bundled shell forwarders include
 `X-WorkSpaces-Host-Session-ID: <uuid>` on every POST. The listener accepts the

@@ -189,6 +189,17 @@ struct GhosttyTerminalConfigTests {
         #expect(missingHostID.environmentVariables["WORKSPACES_COMMAND_STATUS_ZSH"] == nil)
     }
 
+    @Test("custom command config preserves explicit command without hook environment")
+    func customCommandConfigPreservesExplicitCommandWithoutHookEnvironment() {
+        let config = GhosttyTerminalConfig(customCommand: "/usr/local/bin/lume ssh vm-123")
+
+        #expect(config.command == "/usr/local/bin/lume ssh vm-123")
+        #expect(config.shellProfileModeLabel == "custom")
+        #expect(config.environmentVariables["WORKSPACES_HOST_SESSION_ID"] == nil)
+        #expect(config.environmentVariables["WORKSPACES_HOOKS_SOCKET"] == nil)
+        #expect(config.environmentVariables["WORKSPACES_COMMAND_STATUS_ZSH"] == nil)
+    }
+
     @Test("tmux mode respects clean shell override")
     func tmuxModeRespectsCleanShellOverride() throws {
         let config = GhosttyTerminalConfig(

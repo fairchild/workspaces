@@ -34,21 +34,17 @@ final class GhosttySurfaceView: NSView {
     var contextMenuProvider: (() -> NSMenu?)?
 
     init(
-        workingDirectory: URL,
-        hostSessionID: UUID? = nil,
-        hooksSocketPath: String? = nil,
+        launchContext: TerminalSessionLaunchContext,
         onProcessExit: (() -> Void)? = nil,
         onCloseConfirmationRequired: (() -> Void)? = nil
     ) {
-        self.workingDirectory = workingDirectory
-        self.promptReadinessSignposts = TerminalPromptReadinessSignpostController(hostSessionID: hostSessionID)
+        self.workingDirectory = launchContext.workingDirectory
+        self.promptReadinessSignposts = TerminalPromptReadinessSignpostController(
+            hostSessionID: launchContext.promptReadinessHostSessionID
+        )
         self.onProcessExit = onProcessExit
         self.onCloseConfirmationRequired = onCloseConfirmationRequired
-        self.terminalConfig = GhosttyTerminalConfig(
-            workingDirectory: workingDirectory,
-            hostSessionID: hostSessionID,
-            hooksSocketPath: hooksSocketPath
-        )
+        self.terminalConfig = GhosttyTerminalConfig(launchContext: launchContext)
         self.readinessDiagnostics = TerminalReadinessDiagnostics(
             workingDirectoryName: workingDirectory.lastPathComponent,
             shellProfileMode: terminalConfig.shellProfileModeLabel
@@ -59,24 +55,34 @@ final class GhosttySurfaceView: NSView {
         createSurfaceIfNeeded()
     }
 
-    init(
+    convenience init(
+        workingDirectory: URL,
+        hostSessionID: UUID? = nil,
+        hooksSocketPath: String? = nil,
+        onProcessExit: (() -> Void)? = nil,
+        onCloseConfirmationRequired: (() -> Void)? = nil
+    ) {
+        self.init(
+            launchContext: .directoryBacked(
+                workingDirectory: workingDirectory,
+                hostSessionID: hostSessionID,
+                hooksSocketPath: hooksSocketPath
+            ),
+            onProcessExit: onProcessExit,
+            onCloseConfirmationRequired: onCloseConfirmationRequired
+        )
+    }
+
+    convenience init(
         customCommand: String,
         onProcessExit: (() -> Void)? = nil,
         onCloseConfirmationRequired: (() -> Void)? = nil
     ) {
-        self.workingDirectory = FileManager.default.temporaryDirectory
-        self.promptReadinessSignposts = TerminalPromptReadinessSignpostController(hostSessionID: nil)
-        self.onProcessExit = onProcessExit
-        self.onCloseConfirmationRequired = onCloseConfirmationRequired
-        self.terminalConfig = GhosttyTerminalConfig(customCommand: customCommand)
-        self.readinessDiagnostics = TerminalReadinessDiagnostics(
-            workingDirectoryName: workingDirectory.lastPathComponent,
-            shellProfileMode: terminalConfig.shellProfileModeLabel
+        self.init(
+            launchContext: .customCommand(customCommand),
+            onProcessExit: onProcessExit,
+            onCloseConfirmationRequired: onCloseConfirmationRequired
         )
-        super.init(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
-        self.wantsLayer = true
-
-        createSurfaceIfNeeded()
     }
 
     required init?(coder: NSCoder) {
