@@ -283,13 +283,8 @@ struct CommandPaletteView: View {
     }
 
     private func waitingDescriptor(for state: AgentRunState?) -> String? {
-        switch state {
-        case .awaitingInput: return "awaiting input"
-        case .errored: return "errored"
-        case .thinking: return "thinking"
-        case .runningTool: return "running tool"
-        case .idle, .complete, .none: return nil
-        }
+        guard let state else { return nil }
+        return AgentChromeProjection.runState(state).commandPaletteDescriptor
     }
 
     private func moveHighlight(by delta: Int) {

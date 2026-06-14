@@ -33,6 +33,25 @@ struct SidebarSessionPresentationTests {
         #expect(SidebarSessionActivity.active.hasLiveSession)
     }
 
+    @Test("Activity uses shared chrome projection tones and priorities")
+    func activityChromeProjectionPolicy() {
+        #expect(SidebarSessionActivity.inactive.indicatorTone == .hidden)
+        #expect(SidebarSessionActivity.live.indicatorTone == .live)
+        #expect(SidebarSessionActivity.active.indicatorTone == .active)
+        #expect(SidebarSessionActivity.thinking.indicatorTone == .running)
+        #expect(SidebarSessionActivity.runningTool.indicatorTone == .running)
+        #expect(SidebarSessionActivity.awaitingInput.indicatorTone == .attention)
+        #expect(SidebarSessionActivity.errored(category: .server).indicatorTone == .critical)
+
+        #expect(SidebarSessionActivity.errored(category: .server).severity == 5)
+        #expect(SidebarSessionActivity.awaitingInput.severity == 4)
+        #expect(SidebarSessionActivity.runningTool.severity == 3)
+        #expect(SidebarSessionActivity.thinking.severity == 3)
+        #expect(SidebarSessionActivity.active.severity == 2)
+        #expect(SidebarSessionActivity.live.severity == 1)
+        #expect(SidebarSessionActivity.inactive.severity == 0)
+    }
+
     @Test("Pane count badge appears only when more than one pane exists")
     func paneCountBadgeThreshold() {
         #expect(!SidebarSessionActivity.showsPaneCountBadge(for: 0))

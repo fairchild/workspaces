@@ -163,20 +163,11 @@ public final class WorkspaceStatusAggregator: ObservableObject {
     /// Both active agent states render blue in the sidebar, but a running tool
     /// outranks a merely thinking agent when choosing one bubbled status.
     public static func severity(of state: AgentRunState) -> Int {
-        switch state {
-        case .errored: return 5
-        case .awaitingInput: return 4
-        case .runningTool: return 3
-        case .thinking: return 2
-        case .idle, .complete: return 1
-        }
+        AgentChromeProjection.severity(of: state)
     }
 
     public static func demandsAttention(_ state: AgentRunState) -> Bool {
-        switch state {
-        case .awaitingInput, .errored: return true
-        case .idle, .thinking, .runningTool, .complete: return false
-        }
+        AgentChromeProjection.demandsAttention(state)
     }
 
     private static func mostSevere(among statuses: [AgentSessionStatus]) -> AgentSessionStatus? {

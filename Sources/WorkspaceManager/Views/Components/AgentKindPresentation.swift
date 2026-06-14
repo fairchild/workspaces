@@ -45,25 +45,6 @@ extension AgentKind {
 extension AgentRunState {
     /// One-line summary of what the agent is doing right now.
     var summaryText: String {
-        switch self {
-        case .idle:
-            return "Idle"
-        case .thinking:
-            return "Thinking…"
-        case .runningTool(let name, _):
-            return "Running: \(name)"
-        case .awaitingInput:
-            return "Awaiting input"
-        case .complete:
-            return "Done"
-        case .errored(let category, _):
-            switch category {
-            case .rateLimit: return "Rate limited"
-            case .authentication: return "Auth error"
-            case .server: return "Server error"
-            case .toolFailure: return "Tool failed"
-            case .unknown: return "Error"
-            }
-        }
+        AgentChromeProjection.runState(self).summaryText
     }
 }
