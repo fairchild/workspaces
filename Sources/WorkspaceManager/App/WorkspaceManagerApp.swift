@@ -20,6 +20,7 @@ struct WorkspaceManagerApp: App {
     @StateObject private var agentSessionRegistry: AgentSessionRegistry
     @StateObject private var lastCommandStatusRegistry: LastCommandStatusRegistry
     @StateObject private var workspaceStatusAggregator = WorkspaceStatusAggregator()
+    @StateObject private var workspaceJournal: WorkspaceJournal
     @StateObject private var claudeIntegrationLifecycle: ClaudeIntegrationLifecycle
     private let appRuntimeDependencies = AppRuntimeDependencies.resolved()
     private let localStateStore: LocalStateStore?
@@ -52,6 +53,7 @@ struct WorkspaceManagerApp: App {
         let commandStatusRegistry = LastCommandStatusRegistry()
         _agentSessionRegistry = StateObject(wrappedValue: registry)
         _lastCommandStatusRegistry = StateObject(wrappedValue: commandStatusRegistry)
+        _workspaceJournal = StateObject(wrappedValue: WorkspaceJournal(store: localStateBootstrap.store))
         self.sharedModelContainer = bootstrap.container
         self.localStateStore = localStateBootstrap.store
 
@@ -81,6 +83,7 @@ struct WorkspaceManagerApp: App {
             .environmentObject(agentSessionRegistry)
             .environmentObject(lastCommandStatusRegistry)
             .environmentObject(workspaceStatusAggregator)
+            .environmentObject(workspaceJournal)
             .environment(\.agentSessionRegistry, agentSessionRegistry)
             .environment(\.lastCommandStatusRegistry, lastCommandStatusRegistry)
             .environment(\.localStateStore, localStateStore)

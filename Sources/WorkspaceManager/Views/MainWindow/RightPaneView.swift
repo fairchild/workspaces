@@ -2,7 +2,7 @@
 //  RightPaneView.swift
 //  WorkspaceManager
 //
-//  Collapsible Detail Pane with Files, Changes, Activity, and Diagnostics tabs.
+//  Collapsible Detail Pane with Files, Changes, Timeline, Activity, and Diagnostics tabs.
 //
 
 import AppKit
@@ -11,6 +11,7 @@ import WorkspaceManagerCore
 
 struct RightPaneTabPolicy {
     let supportsFilesystemInspection: Bool
+    let showTimeline: Bool
     let showActivity: Bool
     let notificationsEnabled: Bool
 
@@ -18,6 +19,10 @@ struct RightPaneTabPolicy {
         var tabs: [RightPaneView.Tab] = [.files]
         if supportsFilesystemInspection {
             tabs.append(.changes)
+        }
+
+        if showTimeline {
+            tabs.append(.timeline)
         }
 
         let canShowActivity = showActivity && notificationsEnabled
@@ -78,6 +83,7 @@ final class RightPaneSessionState: ObservableObject {
     @Published var changedFiles: [FileChange] = []
     @Published var isLoading = false
     @Published var lastRefresh = Date()
+    @Published var timelineLastRefresh: Date?
     @Published var expandedDirectoryPaths: Set<String> = []
     @Published var hasLoadedOnce = false
 }
@@ -115,18 +121,23 @@ struct RightPaneView: View {
     let onFileSelected: (CodePreviewSelection) -> Void
     let diagnosticWorkspaceDirectories: [URL]
     let agentStatuses: [AgentSessionStatus]
+    private let workspaceID: UUID?
+    private let timelineHostSessionID: UUID?
+    private let showTimeline: Bool
     private let showActivity: Bool
     private let supportsFilesystemInspection: Bool
 
     @AppStorage(NotificationConstants.enabledKey)
     private var notificationsEnabled = NotificationConstants.defaultEnabled
     @Environment(\.gitService) private var gitService
+    @EnvironmentObject private var workspaceJournal: WorkspaceJournal
     @ObservedObject private var state: RightPaneSessionState
     @ObservedObject private var notificationCoordinator = NotificationCoordinator.shared
 
     enum Tab: String, CaseIterable {
         case files = "Files"
         case changes = "Changes"
+        case timeline = "Timeline"
         case activity = "Activity"
         case diagnostics = "Diagnostics"
 
@@ -134,6 +145,7 @@ struct RightPaneView: View {
             switch self {
             case .files: return "folder"
             case .changes: return "arrow.triangle.2.circlepath"
+            case .timeline: return "clock"
             case .activity: return "bell"
             case .diagnostics: return "waveform.path.ecg"
             }
@@ -145,6 +157,7 @@ struct RightPaneView: View {
         state: RightPaneSessionState,
         diagnosticWorkspaceDirectories: [URL] = [],
         agentStatuses: [AgentSessionStatus] = [],
+        timelineHostSessionID: UUID? = nil,
         onFileSelected: @escaping (CodePreviewSelection) -> Void = { _ in }
     ) {
         self.targetID = "workspace-\(workspace.id.uuidString)"
@@ -153,6 +166,9 @@ struct RightPaneView: View {
         self.onFileSelected = onFileSelected
         self.diagnosticWorkspaceDirectories = diagnosticWorkspaceDirectories
         self.agentStatuses = agentStatuses
+        self.workspaceID = workspace.id
+        self.timelineHostSessionID = timelineHostSessionID
+        self.showTimeline = true
         self.showActivity = true
         self.supportsFilesystemInspection = workspace.localDirectoryURL != nil
     }
@@ -170,6 +186,9 @@ struct RightPaneView: View {
         self.onFileSelected = onFileSelected
         self.diagnosticWorkspaceDirectories = diagnosticWorkspaceDirectories
         self.agentStatuses = agentStatuses
+        self.workspaceID = nil
+        self.timelineHostSessionID = nil
+        self.showTimeline = false
         self.showActivity = false
         self.supportsFilesystemInspection = true
     }
@@ -228,6 +247,11 @@ struct RightPaneView: View {
                         isLoading: state.isLoading,
                         onFileSelected: selectFile
                     )
+                case .timeline:
+                    TimelineTabView(
+                        events: timelineEvents,
+                        hasHostSession: timelineHostSessionID != nil
+                    )
                 case .activity:
                     ActivityTabView(
                         events: notificationCoordinator.events,
@@ -266,6 +290,13 @@ struct RightPaneView: View {
                         .help(
                             "Diagnostics starts a 5-second in-memory process sampler only while this tab is visible. Trace counts come from existing telemetry; process samples are not persisted."
                         )
+                } else if displayedTab == .timeline {
+                    Circle()
+                        .fill(timelineHostSessionID == nil ? Color.secondary : Color.mint)
+                        .frame(width: 6, height: 6)
+                    Text(timelineFooterText)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 } else if state.isLoading {
                     ProgressView()
                         .controlSize(.small)
@@ -280,14 +311,14 @@ struct RightPaneView: View {
 
                 Spacer()
 
-                if supportsFilesystemInspection, displayedTab == .files || displayedTab == .changes {
+                if supportsRefresh {
                     Button {
-                        Task { await refresh() }
+                        Task { await refreshDisplayedTab() }
                     } label: {
                         Image(systemName: "arrow.clockwise")
                     }
                     .buttonStyle(.borderless)
-                    .disabled(state.isLoading)
+                    .disabled(state.isLoading || (displayedTab == .timeline && timelineHostSessionID == nil))
                     .help("Refresh")
                 }
             }
@@ -300,6 +331,9 @@ struct RightPaneView: View {
                 await refresh()
             }
         }
+        .task(id: timelineRefreshKey) {
+            await refreshTimelineIfNeeded()
+        }
         .onChange(of: notificationsEnabled) { _, _ in
             normalizeSelectedTab()
         }
@@ -308,6 +342,7 @@ struct RightPaneView: View {
     private var tabPolicy: RightPaneTabPolicy {
         RightPaneTabPolicy(
             supportsFilesystemInspection: supportsFilesystemInspection,
+            showTimeline: showTimeline,
             showActivity: showActivity,
             notificationsEnabled: notificationsEnabled
         )
@@ -338,6 +373,9 @@ struct RightPaneView: View {
         case .files: return nil
         case .changes:
             let count = state.changedFiles.count
+            return count > 0 ? count : nil
+        case .timeline:
+            let count = timelineEvents.count
             return count > 0 ? count : nil
         case .activity:
             let count = notificationCoordinator.unseenEventCount
@@ -437,17 +475,103 @@ struct RightPaneView: View {
                 return "Working tree clean"
             }
             return "\(changeCount) changed file\(changeCount == 1 ? "" : "s")"
+        case .timeline:
+            guard timelineHostSessionID != nil else {
+                return "Open a workspace terminal to collect agent events"
+            }
+            let eventCount = timelineEvents.count
+            if eventCount == 0 {
+                return "No agent events yet"
+            }
+            return "\(eventCount) workspace event\(eventCount == 1 ? "" : "s")"
         case .activity:
             if notificationCoordinator.unseenEventCount > 0 {
                 return "\(notificationCoordinator.unseenEventCount) unseen updates"
             }
             return notificationCoordinator.isStreamConnected
-                ? "Live workspace activity"
-                : "Activity stream disconnected"
+                ? "Live GitHub activity"
+                : "GitHub activity stream disconnected"
         case .diagnostics:
             return "Runtime health and process history"
         }
     }
+
+    private var supportsRefresh: Bool {
+        switch displayedTab {
+        case .files, .changes:
+            return supportsFilesystemInspection
+        case .timeline:
+            return true
+        case .activity, .diagnostics:
+            return false
+        }
+    }
+
+    private var timelineEvents: [WorkspaceEvent] {
+        guard let workspaceID else { return [] }
+        return workspaceJournal.events(for: workspaceID)
+    }
+
+    private var timelineFooterText: String {
+        guard timelineHostSessionID != nil else {
+            return "No workspace terminal session"
+        }
+        if let refreshed = state.timelineLastRefresh {
+            return "Updated \(refreshed.formatted(.relative(presentation: .named)))"
+        }
+        return "Timeline ready"
+    }
+
+    private var latestTimelineAgentEventAt: Date? {
+        guard let timelineHostSessionID else { return nil }
+        return
+            agentStatuses
+            .filter { $0.hostSessionID == timelineHostSessionID }
+            .map(\.lastEventAt)
+            .max()
+    }
+
+    private var timelineRefreshKey: TimelineRefreshKey {
+        TimelineRefreshKey(
+            targetID: targetID,
+            selectedTab: displayedTab,
+            hostSessionID: timelineHostSessionID,
+            latestAgentEventAt: latestTimelineAgentEventAt
+        )
+    }
+
+    @MainActor
+    private func refreshDisplayedTab() async {
+        switch displayedTab {
+        case .files, .changes:
+            await refresh()
+        case .timeline:
+            await refreshTimelineIfNeeded(force: true)
+        case .activity, .diagnostics:
+            break
+        }
+    }
+
+    @MainActor
+    private func refreshTimelineIfNeeded(force: Bool = false) async {
+        guard displayedTab == .timeline || force,
+            let workspaceID,
+            let timelineHostSessionID
+        else { return }
+
+        await workspaceJournal.refresh(
+            workspaceID: workspaceID,
+            hostSessionID: timelineHostSessionID
+        )
+        state.timelineLastRefresh = Date()
+    }
+}
+
+private struct TimelineRefreshKey: Equatable {
+    let targetID: String
+    let selectedTab: RightPaneView.Tab
+    let hostSessionID: UUID?
+    let latestAgentEventAt: Date?
 }
 
 // MARK: - Files Tab
@@ -564,6 +688,202 @@ struct ChangedFilesTabView: View {
             }
             .listStyle(.plain)
         }
+    }
+}
+
+// MARK: - Timeline Tab
+
+struct WorkspaceTimelinePresentation: Equatable {
+    enum Tone: Equatable {
+        case neutral
+        case running
+        case attention
+        case critical
+        case success
+
+        var color: Color {
+            switch self {
+            case .neutral:
+                return .secondary
+            case .running:
+                return .blue
+            case .attention:
+                return .yellow
+            case .critical:
+                return .red
+            case .success:
+                return .mint
+            }
+        }
+    }
+
+    let title: String
+    let detail: String
+    let systemImage: String
+    let tone: Tone
+
+    static func event(_ event: WorkspaceEvent) -> WorkspaceTimelinePresentation {
+        switch event.kind {
+        case .started:
+            return WorkspaceTimelinePresentation(
+                title: "Agent started",
+                detail: "Workspace session began",
+                systemImage: "play.circle",
+                tone: .running
+            )
+        case .stateTransition(_, let runState):
+            return runStatePresentation(runState)
+        case .toolRun(let name):
+            return WorkspaceTimelinePresentation(
+                title: "Ran \(name)",
+                detail: "Tool execution",
+                systemImage: "hammer",
+                tone: .running
+            )
+        case .error(let category, let message):
+            return WorkspaceTimelinePresentation(
+                title: errorTitle(for: category),
+                detail: errorDetail(message),
+                systemImage: "exclamationmark.triangle",
+                tone: .critical
+            )
+        case .completed:
+            return WorkspaceTimelinePresentation(
+                title: "Agent completed",
+                detail: "Workspace session finished",
+                systemImage: "checkmark.circle",
+                tone: .success
+            )
+        }
+    }
+
+    private static func runStatePresentation(_ state: AgentRunState) -> WorkspaceTimelinePresentation {
+        let projection = AgentChromeProjection.runState(state)
+        switch state {
+        case .idle:
+            return WorkspaceTimelinePresentation(
+                title: "Agent idle",
+                detail: projection.summaryText,
+                systemImage: "pause.circle",
+                tone: .neutral
+            )
+        case .thinking:
+            return WorkspaceTimelinePresentation(
+                title: "Agent thinking",
+                detail: projection.summaryText,
+                systemImage: "brain.head.profile",
+                tone: .running
+            )
+        case .runningTool:
+            return WorkspaceTimelinePresentation(
+                title: projection.summaryText,
+                detail: "Tool execution",
+                systemImage: "hammer",
+                tone: .running
+            )
+        case .awaitingInput:
+            return WorkspaceTimelinePresentation(
+                title: "Agent needs input",
+                detail: projection.summaryText,
+                systemImage: "hand.raised",
+                tone: .attention
+            )
+        case .complete:
+            return WorkspaceTimelinePresentation(
+                title: "Agent completed",
+                detail: projection.summaryText,
+                systemImage: "checkmark.circle",
+                tone: .success
+            )
+        case .errored:
+            return WorkspaceTimelinePresentation(
+                title: projection.summaryText,
+                detail: "Agent reported an error",
+                systemImage: "exclamationmark.triangle",
+                tone: .critical
+            )
+        }
+    }
+
+    private static func errorTitle(for category: AgentErrorCategory) -> String {
+        switch category {
+        case .rateLimit:
+            return "Rate limited"
+        case .authentication:
+            return "Authentication error"
+        case .server:
+            return "Server error"
+        case .toolFailure:
+            return "Tool failed"
+        case .unknown:
+            return "Agent error"
+        }
+    }
+
+    private static func errorDetail(_ message: String?) -> String {
+        guard let message = message?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !message.isEmpty
+        else {
+            return "Agent reported an error"
+        }
+        return message
+    }
+}
+
+struct TimelineTabView: View {
+    let events: [WorkspaceEvent]
+    let hasHostSession: Bool
+
+    var body: some View {
+        if !hasHostSession {
+            ContentUnavailableView(
+                "No Timeline",
+                systemImage: "clock",
+                description: Text("Open this workspace's terminal to connect agent events to the Timeline.")
+            )
+        } else if events.isEmpty {
+            ContentUnavailableView(
+                "No Timeline Events",
+                systemImage: "clock",
+                description: Text("Agent run state changes will appear here.")
+            )
+        } else {
+            List(events) { event in
+                WorkspaceTimelineEventRow(event: event)
+            }
+            .listStyle(.plain)
+        }
+    }
+}
+
+struct WorkspaceTimelineEventRow: View {
+    let event: WorkspaceEvent
+
+    var body: some View {
+        let presentation = WorkspaceTimelinePresentation.event(event)
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: presentation.systemImage)
+                .foregroundStyle(presentation.tone.color)
+                .frame(width: 16)
+                .padding(.top, 2)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(presentation.title)
+                    .font(.callout)
+                    .lineLimit(2)
+
+                Text(presentation.detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+
+                Text(event.timestamp.formatted(.relative(presentation: .named)))
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .padding(.vertical, 2)
+        .accessibilityElement(children: .combine)
     }
 }
 
