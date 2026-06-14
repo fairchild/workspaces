@@ -29,21 +29,15 @@ final class TerminalSurface: Surface {
         self.tileID = tileID
         self.session = session
 
-        if let customCommand = session.customCommand {
-            self.surfaceView = GhosttySurfaceView(
-                customCommand: customCommand,
-                onProcessExit: onProcessExit,
-                onCloseConfirmationRequired: onCloseConfirmationRequired
-            )
-        } else {
-            self.surfaceView = GhosttySurfaceView(
-                workingDirectory: session.directoryURL,
-                hostSessionID: session.id,
-                hooksSocketPath: hooksSocketPath,
-                onProcessExit: onProcessExit,
-                onCloseConfirmationRequired: onCloseConfirmationRequired
-            )
-        }
+        let launchContext = TerminalSessionLaunchContext.hostSession(
+            session,
+            hooksSocketPath: hooksSocketPath
+        )
+        self.surfaceView = GhosttySurfaceView(
+            launchContext: launchContext,
+            onProcessExit: onProcessExit,
+            onCloseConfirmationRequired: onCloseConfirmationRequired
+        )
         self.surfaceView.contextMenuProvider = contextMenuProvider
     }
 

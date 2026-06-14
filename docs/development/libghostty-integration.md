@@ -126,6 +126,10 @@ Current migration uses surface/runtime config only:
 - `env_vars`
 - `font_size`
 
+`TerminalSessionLaunchContext` decides the command mode and hook environment
+before `GhosttyTerminalConfig` translates that policy into the libghostty surface
+fields above.
+
 Not configured yet (by design in this migration):
 - app-owned font-family override
 
