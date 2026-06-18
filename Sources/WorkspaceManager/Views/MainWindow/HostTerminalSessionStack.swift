@@ -116,6 +116,7 @@ private struct TerminalTabStrip: View {
 
     @State private var editingSessionID: UUID?
     @State private var editingTitle = ""
+    @State private var editingOriginalTitle = ""
     @FocusState private var isEditingTitleFocused: Bool
 
     var body: some View {
@@ -218,23 +219,56 @@ private struct TerminalTabStrip: View {
     private func beginRename(sessionID: UUID, title: String) {
         editingSessionID = sessionID
         editingTitle = title
+        editingOriginalTitle = title
         isEditingTitleFocused = true
     }
 
     private func commitRename(for session: HostTerminalSession) {
         guard editingSessionID == session.id else { return }
 
-        let title = editingTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let renameAction = TerminalTabRenameAction.resolve(
+            originalTitle: editingOriginalTitle,
+            editedTitle: editingTitle
+        )
         editingSessionID = nil
         editingTitle = ""
+        editingOriginalTitle = ""
         isEditingTitleFocused = false
-        onRenameTab?(session.id, title.isEmpty ? nil : title)
+
+        switch renameAction {
+        case .unchanged:
+            break
+        case .clearOverride:
+            onRenameTab?(session.id, nil)
+        case .setOverride(let title):
+            onRenameTab?(session.id, title)
+        }
     }
 
     private func cancelRename() {
         editingSessionID = nil
         editingTitle = ""
+        editingOriginalTitle = ""
         isEditingTitleFocused = false
+    }
+}
+
+enum TerminalTabRenameAction: Equatable {
+    case unchanged
+    case clearOverride
+    case setOverride(String)
+
+    static func resolve(originalTitle: String, editedTitle: String) -> Self {
+        let original = normalized(originalTitle)
+        let edited = normalized(editedTitle)
+
+        guard original != edited else { return .unchanged }
+        guard !edited.isEmpty else { return .clearOverride }
+        return .setOverride(edited)
+    }
+
+    private static func normalized(_ title: String) -> String {
+        title.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 
