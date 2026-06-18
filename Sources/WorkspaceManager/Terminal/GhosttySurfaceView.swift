@@ -34,6 +34,7 @@ final class GhosttySurfaceView: NSView {
     var workingDirectoryPath: String { workingDirectory.path }
     var contextMenuProvider: (() -> NSMenu?)?
     var onScrollbarStateChange: ((GhosttyScrollbarState) -> Void)?
+    var onTerminalTitleChanged: ((String) -> Void)?
 
     init(
         launchContext: TerminalSessionLaunchContext,
@@ -185,7 +186,11 @@ final class GhosttySurfaceView: NSView {
     // MARK: - Runtime updates
 
     func updateTerminalTitle(_ title: String) {
+        let previousTitle = terminalTitle
         terminalTitle = title
+        if previousTitle != title {
+            onTerminalTitleChanged?(title)
+        }
         guard !title.isEmpty else { return }
         observePromptReadinessSignal(.setTitle)
     }

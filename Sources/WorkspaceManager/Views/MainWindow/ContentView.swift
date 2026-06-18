@@ -455,6 +455,7 @@ struct ContentView: View {
             },
             onSelectTerminalTab: selectTerminalTab(sessionID:),
             onCloseTerminalTab: closeTerminalTab(sessionID:),
+            onRenameTerminalTab: renameTerminalTab(sessionID:title:),
             onTerminalCloseConfirmationRequired: requestCloseConfirmationForTerminalTab(sessionID:),
             onTerminalProcessExit: handleTerminalProcessExit(sessionID:),
             selectedCodePreview: $viewState.selectedCodePreview,
@@ -1810,6 +1811,11 @@ struct ContentView: View {
     }
 
     @MainActor
+    private func renameTerminalTab(sessionID: UUID, title: String?) {
+        _ = hostTerminalState.setTabTitle(title, for: sessionID)
+    }
+
+    @MainActor
     private func requestCloseTerminalTabs(_ sessionIDs: [UUID]) {
         let results = terminalSessionController.closeTabs(
             sessionIDs,
@@ -2770,6 +2776,7 @@ struct MainTerminalDetailView: View {
     let onSplitFractionChanged: (CGFloat) -> Void
     var onSelectTerminalTab: ((UUID) -> Void)?
     var onCloseTerminalTab: ((UUID) -> Void)?
+    var onRenameTerminalTab: ((UUID, String?) -> Void)?
     var onTerminalCloseConfirmationRequired: ((UUID) -> Void)?
     var onTerminalProcessExit: ((UUID) -> Void)?
     @Binding var selectedCodePreview: CodePreviewSelection?
@@ -2924,6 +2931,7 @@ struct MainTerminalDetailView: View {
             onSplitFractionChanged: onSplitFractionChanged,
             onSelectTab: onSelectTerminalTab,
             onCloseTab: onCloseTerminalTab,
+            onRenameTab: onRenameTerminalTab,
             onCloseConfirmationRequired: onTerminalCloseConfirmationRequired,
             onTerminalProcessExit: onTerminalProcessExit,
             contextMenuProvider: terminalContextMenuProvider

@@ -28,6 +28,7 @@ final class HostTerminalSurfaceStore {
     var hooksSocketPath: String?
     var onSurfaceCreated: (@MainActor (UUID) -> Void)?
     var onSurfaceInvalidated: (@MainActor (UUID) -> Void)?
+    var onTerminalTitleChanged: (@MainActor (UUID) -> Void)?
 
     func view(
         for session: HostTerminalSession,
@@ -52,6 +53,9 @@ final class HostTerminalSurfaceStore {
             existing.onProcessExit = wrappedOnProcessExit
             existing.onCloseConfirmationRequired = onCloseConfirmationRequired
             existing.contextMenuProvider = contextMenuProvider
+            existing.onTerminalTitleChanged = { [weak self] _ in
+                self?.onTerminalTitleChanged?(sessionID)
+            }
             return existing
         }
 
@@ -67,6 +71,9 @@ final class HostTerminalSurfaceStore {
         surfaces[session.id] = created
         sessionIDsBySurfaceIdentity[ObjectIdentifier(created)] = session.id
         created.contextMenuProvider = contextMenuProvider
+        created.onTerminalTitleChanged = { [weak self] _ in
+            self?.onTerminalTitleChanged?(sessionID)
+        }
         InvestigationDiagnostics.emitFocus(
             phase: "surface_store_created",
             fields: [
@@ -106,6 +113,7 @@ final class HostTerminalSurfaceStore {
     func invalidate(sessionID: UUID) {
         if let removed = surfaces.removeValue(forKey: sessionID) {
             sessionIDsBySurfaceIdentity.removeValue(forKey: ObjectIdentifier(removed))
+            removed.onTerminalTitleChanged = nil
         }
         onSurfaceInvalidated?(sessionID)
     }
@@ -118,6 +126,7 @@ final class HostTerminalSurfaceStore {
         }
 
         sessionIDsBySurfaceIdentity.removeValue(forKey: ObjectIdentifier(removed))
+        removed.onTerminalTitleChanged = nil
         removed.forceCloseForSessionRetirement()
         onSurfaceInvalidated?(sessionID)
         return true
