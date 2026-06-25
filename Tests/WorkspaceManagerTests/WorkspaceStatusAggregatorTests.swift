@@ -31,6 +31,7 @@ struct WorkspaceStatusAggregatorTests {
         aggregator.update(workspaces: [], repos: [])
         #expect(aggregator.workspaceStatuses.isEmpty)
         #expect(aggregator.repoStatuses.isEmpty)
+        #expect(aggregator.attentionItems.isEmpty)
         #expect(aggregator.attentionWorkspaces.isEmpty)
         #expect(aggregator.attentionCount == 0)
     }
@@ -71,6 +72,7 @@ struct WorkspaceStatusAggregatorTests {
         )
 
         #expect(aggregator.attentionCount == 2)
+        #expect(aggregator.attentionItems.map(\.target) == [.workspace(recentAwaiting), .workspace(olderErrored)])
         #expect(aggregator.attentionWorkspaces == [recentAwaiting, olderErrored])
     }
 
@@ -101,6 +103,7 @@ struct WorkspaceStatusAggregatorTests {
         )
 
         #expect(aggregator.attentionCount == 2)
+        #expect(aggregator.attentionItems.map(\.target) == [.repo(repoID), .workspace(wsID)])
         #expect(aggregator.attentionTargets == [.repo(repoID), .workspace(wsID)])
         #expect(aggregator.attentionRepos == [repoID])
         #expect(aggregator.attentionWorkspaces == [wsID])
@@ -251,5 +254,43 @@ struct WorkspaceStatusAggregatorTests {
         let firstSnapshot = aggregator.repoStatuses
         aggregator.update(workspaces: [workspace], repos: [.init(repoID: repoID, status: nil)])
         #expect(aggregator.repoStatuses == firstSnapshot)
+    }
+
+    @Test("Attention items preserve exact target state separate from bubbled repo status")
+    func attentionItemsPreserveExactTargetState() {
+        let aggregator = WorkspaceStatusAggregator()
+        let repoID = UUID()
+        let wsID = UUID()
+
+        aggregator.update(
+            workspaces: [
+                .init(
+                    workspaceID: wsID,
+                    repoID: repoID,
+                    lastAccessedAt: Date().addingTimeInterval(-30),
+                    status: status(run: .errored(category: .toolFailure, message: "tool failed"))
+                )
+            ],
+            repos: [
+                .init(
+                    repoID: repoID,
+                    lastAccessedAt: Date(),
+                    status: status(run: .awaitingInput(reason: .permissionPrompt))
+                )
+            ]
+        )
+
+        if case .errored = aggregator.repoStatuses[repoID]?.run {
+            // pass
+        } else {
+            Issue.record("expected workspace error to remain the bubbled repo status")
+        }
+
+        let repoAttention = aggregator.attentionItems.first { $0.target == .repo(repoID) }
+        if case .awaitingInput(reason: .permissionPrompt) = repoAttention?.run {
+            // pass
+        } else {
+            Issue.record("expected repo attention item to keep the repo terminal status")
+        }
     }
 }
