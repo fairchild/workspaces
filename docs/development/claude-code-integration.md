@@ -110,6 +110,74 @@ This replaces cwd/agent-session inference. `SessionStart` still records
 tabs and split panes on the same repository remain distinct because their host
 session IDs are distinct from terminal spawn time.
 
+## Sending Agent Status to the Needs You Dropdown
+
+The top-right "Needs You" bubble and dropdown are driven by
+`AgentSessionRegistry` via `WorkspaceStatusAggregator.attentionItems`. A terminal
+tab appears in the dropdown when its registered host session reaches
+`AgentRunState.awaitingInput` or `AgentRunState.errored`.
+
+For Claude Code, use the installed hook and status-line forwarders. For another
+agent running inside a WorkSpaces terminal, post Claude-compatible hook JSON to
+the exported Unix socket and include the exported host-session header. Do not
+invent a host session ID; unregistered IDs are dropped.
+
+```bash
+cat <<JSON | /usr/bin/curl \
+  --silent \
+  --show-error \
+  --max-time 1 \
+  --unix-socket "$WORKSPACES_HOOKS_SOCKET" \
+  -H 'Content-Type: application/json' \
+  -H "X-WorkSpaces-Host-Session-ID: $WORKSPACES_HOST_SESSION_ID" \
+  --data-binary @- \
+  'http://localhost/event'
+{
+  "hook_event_name": "Notification",
+  "session_id": "custom-agent-$WORKSPACES_HOST_SESSION_ID",
+  "cwd": "$PWD",
+  "notification_type": "permission_prompt",
+  "title": "Permission requested",
+  "message": "Approve the command to continue"
+}
+JSON
+```
+
+Useful `hook_event_name` values:
+
+| Desired UI state | Event payload |
+|---|---|
+| Permission row in the dropdown | `Notification` with `notification_type: "permission_prompt"` or `PermissionRequest` |
+| Prompt/input row in the dropdown | `Notification` with `notification_type: "idle_prompt"` |
+| Generic attention row | `Notification` with any other non-empty `notification_type` |
+| Error row | `StopFailure` or `PostToolUseFailure` with an `error` string |
+| Clear attention after success | `Stop` |
+| Active/running status dot | `UserPromptSubmit`, then `PreToolUse` / `PostToolUse` events |
+
+Status-line posts enrich the selected tab with model, context, rate-limit, and
+cost fields, but they do not create or clear a Needs You row because they never
+change `AgentRunState`:
+
+```bash
+cat <<JSON | /usr/bin/curl \
+  --silent \
+  --show-error \
+  --max-time 1 \
+  --unix-socket "$WORKSPACES_HOOKS_SOCKET" \
+  -H 'Content-Type: application/json' \
+  -H "X-WorkSpaces-Host-Session-ID: $WORKSPACES_HOST_SESSION_ID" \
+  --data-binary @- \
+  'http://localhost/statusline'
+{
+  "session_id": "custom-agent-$WORKSPACES_HOST_SESSION_ID",
+  "cwd": "$PWD",
+  "model": { "display_name": "Custom Agent" },
+  "context_window": { "used_percentage": 42 },
+  "cost": { "total_cost_usd": 0.13 }
+}
+JSON
+```
+
 ## Command Hook Forwarder
 
 Script: `Sources/WorkspaceManager/Resources/HookForwarders/event-forwarder.sh`.

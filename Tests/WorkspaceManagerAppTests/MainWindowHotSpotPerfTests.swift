@@ -33,8 +33,10 @@ struct MainWindowHotSpotPerfTests {
         var statuses = fixture.statuses
         let statusSessionIDs = Array(statuses.keys)
         let refreshes = 1_000
-        var samples: [Double] = []
-        samples.reserveCapacity(refreshes)
+        var sidebarSamples: [Double] = []
+        sidebarSamples.reserveCapacity(refreshes)
+        var dropdownSamples: [Double] = []
+        dropdownSamples.reserveCapacity(refreshes)
 
         for iteration in 0..<refreshes {
             if let sessionID = statusSessionIDs[safe: iteration % statusSessionIDs.count],
@@ -90,10 +92,19 @@ struct MainWindowHotSpotPerfTests {
 
             aggregator.update(workspaces: workspaceInputs, repos: repoInputs)
             let elapsed = DispatchTime.now().uptimeNanoseconds - started
-            samples.append(Double(elapsed) / 1_000_000.0)
+            sidebarSamples.append(Double(elapsed) / 1_000_000.0)
+
+            let dropdownStarted = DispatchTime.now().uptimeNanoseconds
+            _ = AttentionSummaryResolver.resolve(
+                attentionItems: aggregator.attentionItems,
+                repos: fixture.repos
+            )
+            let dropdownElapsed = DispatchTime.now().uptimeNanoseconds - dropdownStarted
+            dropdownSamples.append(Double(dropdownElapsed) / 1_000_000.0)
         }
 
-        let stats = summarize(samples, unit: "ms")
+        let sidebarStats = summarize(sidebarSamples, unit: "ms")
+        let dropdownStats = summarize(dropdownSamples, unit: "ms")
         try writeResult(
             [
                 "scenario": "main_window_agent_activity_burst",
@@ -102,13 +113,15 @@ struct MainWindowHotSpotPerfTests {
                 "workspace_count": fixture.repos.flatMap(\.workspaces).count,
                 "session_count": fixture.sessions.count,
                 "metrics": [
-                    "main_window_agent_activity_burst_sidebar_latency_ms": stats
+                    "main_window_agent_activity_burst_sidebar_latency_ms": sidebarStats,
+                    "main_window_attention_dropdown_resolution_ms": dropdownStats,
                 ],
             ],
             scenario: "main_window_agent_activity_burst"
         )
 
-        #expect(stats["median"] as? Double ?? .infinity < 1_000)
+        #expect(sidebarStats["median"] as? Double ?? .infinity < 1_000)
+        #expect(dropdownStats["median"] as? Double ?? .infinity < 1_000)
     }
 
     private struct SidebarFixture {
