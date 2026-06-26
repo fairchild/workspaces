@@ -106,6 +106,36 @@ struct ContentView: View {
         )
     }
 
+    private var archivedWorkspaceTerminalScopeKeys: Set<HostTerminalSessionKey> {
+        Set(
+            repos
+                .flatMap(\.workspaces)
+                .filter { $0.status == .archived }
+                .compactMap(terminalSessionKey(for:))
+        )
+    }
+
+    private var terminalContinuityInputs:
+        (
+            sessions: [HostTerminalSession],
+            activeSessionID: UUID?,
+            activeSessionIDByScopeKey: [HostTerminalSessionKey: UUID]
+        )
+    {
+        let excludedScopeKeys = archivedWorkspaceTerminalScopeKeys
+        let sessions = hostTerminalState.sessions.filter { !excludedScopeKeys.contains($0.key) }
+        let validSessionIDs = Set(sessions.map(\.id))
+        let activeSessionID =
+            hostTerminalState.activeSessionID.flatMap {
+                validSessionIDs.contains($0) ? $0 : sessions.last?.id
+            } ?? sessions.last?.id
+        let activeSessionIDByScopeKey = hostTerminalState.activeSessionIDByScopeKey.filter {
+            !excludedScopeKeys.contains($0.key) && validSessionIDs.contains($0.value)
+        }
+
+        return (sessions, activeSessionID, activeSessionIDByScopeKey)
+    }
+
     private var currentSelectedWorkspace: Workspace? {
         mainSelectionCoordinator.cachedWorkspace(with: viewState.selectedWorkspace?.workspaceID)
     }
@@ -1444,6 +1474,16 @@ struct ContentView: View {
         terminalFocusCoordinator.cancelPendingRepoClickMeasurement(reason: "workspace_selected")
         terminalFocusCoordinator.cancelPendingFocusRequest(reason: "workspace_selected")
 
+        guard workspace.status != .archived else {
+            abandonPendingRemoteConnection(reason: "archived_workspace_selected")
+            if let repo = workspace.sourceRepo {
+                applyNavigationDestination(.repoOverview(repo))
+            } else {
+                setSelectedWorkspace(nil)
+            }
+            return
+        }
+
         if workspace.backend != .local {
             handleProviderBackedWorkspaceSelection(workspace)
         } else {
@@ -2289,7 +2329,7 @@ struct ContentView: View {
     private func ensureInitialHostSession() {
         if !hostTerminalState.hasSessions,
             let snapshot = TerminalContinuityManifest.decode(from: terminalContinuityManifestRawValue)?
-                .hostSessionSnapshot()
+                .hostSessionSnapshot(excludingScopeKeys: archivedWorkspaceTerminalScopeKeys)
         {
             hostTerminalState.restoreSessions(
                 snapshot.sessions,
@@ -2512,15 +2552,16 @@ struct ContentView: View {
         rootURL: URL,
         launchURL: URL
     ) {
+        let continuityInputs = terminalContinuityInputs
         let manifest = TerminalContinuityManifest(
             targetKind: targetKind,
             targetID: targetID,
             rootURL: rootURL,
             launchURL: launchURL,
             terminalMode: terminalMultiplexingMode,
-            sessions: hostTerminalState.sessions,
-            activeSessionID: hostTerminalState.activeSessionID,
-            activeSessionIDByScopeKey: hostTerminalState.activeSessionIDByScopeKey
+            sessions: continuityInputs.sessions,
+            activeSessionID: continuityInputs.activeSessionID,
+            activeSessionIDByScopeKey: continuityInputs.activeSessionIDByScopeKey
         )
         terminalContinuityManifestRawValue = manifest.rawValue
         NSLog(
@@ -2535,13 +2576,14 @@ struct ContentView: View {
     }
 
     private func persistTerminalContinuitySnapshot() {
+        let continuityInputs = terminalContinuityInputs
         let manifest = TerminalContinuityManifest.snapshot(
             previous: TerminalContinuityManifest.decode(from: terminalContinuityManifestRawValue),
             defaultHomeURL: resolvedDefaultHostDirectory,
             terminalMode: terminalMultiplexingMode,
-            sessions: hostTerminalState.sessions,
-            activeSessionID: hostTerminalState.activeSessionID,
-            activeSessionIDByScopeKey: hostTerminalState.activeSessionIDByScopeKey
+            sessions: continuityInputs.sessions,
+            activeSessionID: continuityInputs.activeSessionID,
+            activeSessionIDByScopeKey: continuityInputs.activeSessionIDByScopeKey
         )
         terminalContinuityManifestRawValue = manifest.rawValue
     }
@@ -2565,6 +2607,18 @@ struct ContentView: View {
                 targetID: workspace.id,
                 rootURL: workspaceDirectory
             )
+    }
+
+    private func terminalSessionKey(for workspace: Workspace) -> HostTerminalSessionKey? {
+        if workspace.backend == .local {
+            return .hostPath(normalizePath(workspace.workspaceURL.path))
+        }
+
+        guard let provider = workspaceProviderRegistry.provider(for: workspace) else {
+            return nil
+        }
+
+        return provider.sessionKey(for: WorkspaceProviderTarget(workspace)).normalized()
     }
 
     private func terminalContextMenu(for session: HostTerminalSession) -> NSMenu? {
