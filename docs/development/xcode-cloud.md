@@ -29,6 +29,7 @@ Do not rename the SwiftPM targets as part of Xcode Cloud setup. Do not use the r
 `ci_post_clone.sh` installs the host tools that are not guaranteed by the Xcode
 Cloud image:
 - `mise` for the pinned Zig toolchain
+- Homebrew `zig@0.15` for GhosttyKit's patched Darwin linker path on newer macOS SDKs
 - `swift-format` for the SwiftPM validation gate
 - `gettext` for Ghostty's `msgfmt` translation compilation step
 

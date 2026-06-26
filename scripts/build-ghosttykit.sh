@@ -69,6 +69,11 @@ resolve_zig_runner() {
     return
   fi
 
+  if [[ -x "$HOMEBREW_ZIG_BIN" ]]; then
+    ZIG_RUNNER=("$HOMEBREW_ZIG_BIN")
+    return
+  fi
+
   if command -v mise >/dev/null 2>&1; then
     ZIG_RUNNER=(
       env
@@ -78,11 +83,6 @@ resolve_zig_runner() {
       MISE_PARANOID=1
       mise exec --locked "zig@$ZIG_VERSION" -- zig
     )
-    return
-  fi
-
-  if [[ -x "$HOMEBREW_ZIG_BIN" ]]; then
-    ZIG_RUNNER=("$HOMEBREW_ZIG_BIN")
     return
   fi
 
