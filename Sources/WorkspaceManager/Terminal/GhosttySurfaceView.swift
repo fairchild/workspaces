@@ -26,12 +26,14 @@ final class GhosttySurfaceView: NSView {
     private(set) var surface: ghostty_surface_t?
     private(set) var terminalTitle: String = ""
     private(set) var currentWorkingDirectory: String?
+    private(set) var latestScrollbarState: GhosttyScrollbarState?
     private var didProcessExit = false
     private var promptReadinessSignposts: TerminalPromptReadinessSignpostController
     private var lastScaleAndSize: GhosttySurfaceScaleCalculator.ScaleAndSize?
     private var trackingAreaInstalled = false
     var workingDirectoryPath: String { workingDirectory.path }
     var contextMenuProvider: (() -> NSMenu?)?
+    var onScrollbarStateChange: ((GhosttyScrollbarState) -> Void)?
 
     init(
         launchContext: TerminalSessionLaunchContext,
@@ -229,6 +231,11 @@ final class GhosttySurfaceView: NSView {
         )
     }
 
+    func updateScrollbarState(_ state: GhosttyScrollbarState) {
+        latestScrollbarState = state
+        onScrollbarStateChange?(state)
+    }
+
     func runtimeDidRequestClose(processAlive: Bool) {
         if processAlive {
             onCloseConfirmationRequired?()
@@ -398,7 +405,17 @@ final class GhosttySurfaceView: NSView {
 
     override func scrollWheel(with event: NSEvent) {
         guard let surface else { return }
-        ghostty_surface_mouse_scroll(surface, event.scrollingDeltaX, event.scrollingDeltaY, 0)
+        ghostty_surface_mouse_scroll(
+            surface,
+            event.scrollingDeltaX,
+            event.scrollingDeltaY,
+            GhosttyScrollInput.mods(from: event)
+        )
+    }
+
+    func scrollToRow(_ row: Int) {
+        guard let surface else { return }
+        _ = performBindingAction("scroll_to_row:\(row)", surface: surface)
     }
 
     // MARK: - Keyboard input

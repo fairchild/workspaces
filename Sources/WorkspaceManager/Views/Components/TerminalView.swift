@@ -172,14 +172,15 @@ struct GhosttyTerminalRepresentable: NSViewRepresentable {
     let workingDirectory: URL
     var onProcessExit: (() -> Void)?
 
-    func makeNSView(context: Context) -> GhosttySurfaceView {
-        GhosttySurfaceView(
+    func makeNSView(context: Context) -> GhosttyTerminalScrollContainerView {
+        let surfaceView = GhosttySurfaceView(
             workingDirectory: workingDirectory,
             onProcessExit: onProcessExit
         )
+        return GhosttyTerminalScrollContainerView(surfaceView: surfaceView)
     }
 
-    func updateNSView(_ nsView: GhosttySurfaceView, context: Context) {
+    func updateNSView(_ nsView: GhosttyTerminalScrollContainerView, context: Context) {
         _ = context
         _ = nsView
     }
@@ -227,18 +228,19 @@ private struct PersistentHostGhosttyRepresentable: NSViewRepresentable {
     var onCloseConfirmationRequired: (() -> Void)?
     var onProcessExit: (() -> Void)?
 
-    func makeNSView(context: Context) -> GhosttySurfaceView {
-        surfaceStore.view(
+    func makeNSView(context: Context) -> GhosttyTerminalScrollContainerView {
+        let surfaceView = surfaceStore.view(
             for: session,
             onProcessExit: onProcessExit,
             onCloseConfirmationRequired: onCloseConfirmationRequired,
             contextMenuProvider: contextMenuProvider
         )
+        return GhosttyTerminalScrollContainerView(surfaceView: surfaceView)
     }
 
-    func updateNSView(_ nsView: GhosttySurfaceView, context: Context) {
+    func updateNSView(_ nsView: GhosttyTerminalScrollContainerView, context: Context) {
         _ = context
-        nsView.onCloseConfirmationRequired = onCloseConfirmationRequired
-        nsView.contextMenuProvider = contextMenuProvider
+        nsView.surfaceView.onCloseConfirmationRequired = onCloseConfirmationRequired
+        nsView.updateContextMenuProvider(contextMenuProvider)
     }
 }
