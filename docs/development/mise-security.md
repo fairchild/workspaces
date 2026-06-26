@@ -11,7 +11,8 @@ configs can affect every later command in a checkout.
 - `./scripts/setup` rejects mise configs that contain `[env]`, `[hooks]`,
   `trusted_config_paths`, `yes = true`, `ci = true`, `_.source`, or `_.file`.
 - Root tool installs run in locked mode against the checked-in `mise.lock`.
-- GhosttyKit invokes Zig through `mise exec --locked`.
+- GhosttyKit falls back to `mise exec --locked` only when the patched Homebrew
+  `zig@0.15` binary is unavailable.
 - The hosted agent sandbox installs a pinned mise release and verifies its
   SHA-256 before making it executable.
 
