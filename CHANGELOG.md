@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.21.0-beta.1] - 2026-06-25
+
+### Added
+- Needs-you notification dropdown.
+
+### Fixed
+- Ghostty terminal scrolling.
+
 ## [0.20.0] - 2026-06-17
 
 ### Added
