@@ -53,6 +53,34 @@ struct MainWindowBootstrapControllerTests {
         }
     }
 
+    @Test("Deep link skips archived workspaces")
+    func deepLinkSkipsArchivedWorkspaces() {
+        let repo = Repo(name: "app", localPath: URL(fileURLWithPath: "/tmp/app"))
+        let workspace = Workspace(
+            name: "feature-a",
+            path: URL(fileURLWithPath: "/tmp/app/workspaces/feature-a"),
+            sourceRepo: repo,
+            status: .archived
+        )
+        repo.workspaces = [workspace]
+
+        let request = makeDeepLink(cwd: "/tmp/app/workspaces/feature-a/Sources/App/main.swift")
+        let decision = controller.deepLinkDecision(
+            pendingRequest: request,
+            repos: [repo],
+            normalizePath: normalizePath,
+            pathIsInside: path(_:isInside:)
+        )
+
+        switch decision {
+        case .selectRepo(let pendingRequest, let matchedRepo):
+            #expect(pendingRequest == request)
+            #expect(matchedRepo.id == repo.id)
+        default:
+            Issue.record("Expected deep link decision to fall back to the repo")
+        }
+    }
+
     @Test("Deep link selects matching repo when cwd is inside repo root")
     func deepLinkSelectsMatchingRepo() {
         let repo = Repo(name: "app", localPath: URL(fileURLWithPath: "/tmp/app"))
@@ -347,6 +375,32 @@ struct MainWindowBootstrapControllerTests {
         }
     }
 
+    @Test("Restored surface clears archived workspace terminals")
+    func restoredSurfaceClearsArchivedWorkspaceTerminals() {
+        let repo = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))
+        let workspace = Workspace(
+            name: "feature-a",
+            path: URL(fileURLWithPath: "/tmp/alpha/workspaces/feature-a"),
+            sourceRepo: repo,
+            status: .archived
+        )
+        repo.workspaces = [workspace]
+        let saved = MainWindowLastSurface(kind: .workspaceTerminal, id: workspace.id)
+
+        let decision = controller.restoredSurfaceDecision(
+            rawValue: saved.rawValue,
+            repos: [repo],
+            webSources: []
+        )
+
+        switch decision {
+        case .clearInvalid:
+            _ = Bool(true)
+        default:
+            Issue.record("Expected archived workspace terminal restore to clear")
+        }
+    }
+
     @Test("Restored surface clears invalid targets")
     func restoredSurfaceClearsInvalidTargets() {
         let saved = MainWindowLastSurface(kind: .repoOverview, id: UUID())
@@ -415,6 +469,38 @@ struct MainWindowBootstrapControllerTests {
         }
     }
 
+    @Test("Fallback skips archived workspaces")
+    func fallbackSkipsArchivedWorkspaces() {
+        let repo = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))
+        let archivedWorkspace = Workspace(
+            name: "archived",
+            path: URL(fileURLWithPath: "/tmp/alpha/workspaces/archived"),
+            sourceRepo: repo,
+            lastAccessedAt: Date(timeIntervalSince1970: 30),
+            status: .archived
+        )
+        let activeWorkspace = Workspace(
+            name: "active",
+            path: URL(fileURLWithPath: "/tmp/alpha/workspaces/active"),
+            sourceRepo: repo,
+            lastAccessedAt: Date(timeIntervalSince1970: 20),
+            status: .active
+        )
+        repo.workspaces = [archivedWorkspace, activeWorkspace]
+
+        let fallback = controller.fallbackSurface(
+            repos: [repo],
+            webSources: []
+        )
+
+        switch fallback {
+        case .workspace(let workspace):
+            #expect(workspace.id == activeWorkspace.id)
+        default:
+            Issue.record("Expected fallback to skip archived workspaces")
+        }
+    }
+
     @Test("Fallback prefers most recent web view before first repo when no workspace exists")
     func fallbackPrefersWebViewBeforeRepo() {
         let repo = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))
@@ -456,6 +542,28 @@ struct MainWindowBootstrapControllerTests {
             #expect(selectedWorkspace.id == workspace.id)
         default:
             Issue.record("Expected non-web fallback to prefer the most recent workspace")
+        }
+    }
+
+    @Test("Non-web fallback skips archived workspaces")
+    func nonWebFallbackSkipsArchivedWorkspaces() {
+        let repo = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))
+        let workspace = Workspace(
+            name: "archived",
+            path: URL(fileURLWithPath: "/tmp/alpha/workspaces/archived"),
+            sourceRepo: repo,
+            lastAccessedAt: Date(timeIntervalSince1970: 20),
+            status: .archived
+        )
+        repo.workspaces = [workspace]
+
+        let fallback = controller.nonWebFallbackSurface(repos: [repo])
+
+        switch fallback {
+        case .repoOverview(let selectedRepo):
+            #expect(selectedRepo.id == repo.id)
+        default:
+            Issue.record("Expected non-web fallback to skip archived workspaces")
         }
     }
 
@@ -514,6 +622,31 @@ struct MainWindowBootstrapControllerTests {
             #expect(selectedWorkspace.id == workspace.id)
         default:
             Issue.record("Expected workspace-owned web view removal to return to the workspace")
+        }
+    }
+
+    @Test("Removing workspace-owned web view skips archived workspace")
+    func removingWorkspaceOwnedWebViewSkipsArchivedWorkspace() {
+        let repo = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))
+        let workspace = Workspace(
+            name: "feature-a",
+            path: URL(fileURLWithPath: "/tmp/alpha/workspaces/feature-a"),
+            sourceRepo: repo,
+            status: .archived
+        )
+        repo.workspaces = [workspace]
+
+        let fallback = controller.fallbackSurfaceAfterRemovingWebSource(
+            ownerWorkspaceID: workspace.id,
+            ownerRepoID: repo.id,
+            repos: [repo]
+        )
+
+        switch fallback {
+        case .repoOverview(let selectedRepo):
+            #expect(selectedRepo.id == repo.id)
+        default:
+            Issue.record("Expected archived workspace-owned web fallback to use repo overview")
         }
     }
 

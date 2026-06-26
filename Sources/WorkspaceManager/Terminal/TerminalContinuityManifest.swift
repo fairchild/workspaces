@@ -208,9 +208,14 @@ struct TerminalContinuityManifest: Codable, Equatable {
         )
     }
 
-    func hostSessionSnapshot(fileManager: FileManager = .default) -> HostSessionSnapshot? {
+    func hostSessionSnapshot(
+        excludingScopeKeys excludedScopeKeys: Set<HostTerminalSessionKey> = [],
+        fileManager: FileManager = .default
+    ) -> HostSessionSnapshot? {
         let restoredSessions = sessionRecords.compactMap {
             $0.restoredSession(fileManager: fileManager)
+        }.filter {
+            !excludedScopeKeys.contains($0.key)
         }
         guard !restoredSessions.isEmpty else { return nil }
 
