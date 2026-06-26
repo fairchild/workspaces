@@ -23,6 +23,7 @@ RELEASE_PATHS = {
     "scripts/generate-sparkle-appcast.sh",
     "scripts/install-local.sh",
     "scripts/notarize.sh",
+    "scripts/prepare-prerelease.sh",
     "scripts/prepare-release.sh",
     "scripts/release-manifest.sh",
     "scripts/release-preflight.sh",

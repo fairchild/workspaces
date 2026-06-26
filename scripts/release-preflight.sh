@@ -150,6 +150,7 @@ is_ci_relevant_path() {
             scripts/generate-sparkle-appcast.sh | \
             scripts/install-local.sh | \
             scripts/notarize.sh | \
+            scripts/prepare-prerelease.sh | \
             scripts/prepare-release.sh | \
             scripts/release-preflight.sh | \
             scripts/release-version.sh | \
