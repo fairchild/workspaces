@@ -15,6 +15,9 @@ final class SurfaceStore {
 
     /// Forwarded to terminal surfaces at creation so libghostty can reach the agent hook socket.
     var hooksSocketPath: String?
+    /// Forwarded to terminal surfaces at creation so tile-local processes can reach the Automation
+    /// API with an opaque capability handle.
+    var automationEnvironmentProvider: ((HostTerminalSession) -> AutomationTerminalEnvironment?)?
 
     /// Fired when a surface is first created for a tile (drives focus-coordinator readiness).
     var onSurfaceCreated: (@MainActor (TileID) -> Void)?
@@ -69,6 +72,7 @@ final class SurfaceStore {
             tileID: tileID,
             session: session,
             hooksSocketPath: hooksSocketPath,
+            automationEnvironment: automationEnvironmentProvider?(session),
             onProcessExit: wrappedOnProcessExit,
             onCloseConfirmationRequired: onCloseConfirmationRequired,
             contextMenuProvider: contextMenuProvider

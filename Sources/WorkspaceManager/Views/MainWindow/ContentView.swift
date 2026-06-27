@@ -708,6 +708,7 @@ struct ContentView: View {
                 mainSelectionCoordinator.rebuildCachesIfNeeded(
                     repos: repos, webSources: webSources, normalizePath: normalizePath
                 )
+                configureAutomationIntegration()
                 ensureInitialHostSession()
                 prewarmPerfTerminalSurfacesIfNeeded()
                 resolveSurfaceLifecycle()
@@ -1964,6 +1965,19 @@ struct ContentView: View {
         }
         terminal.requestClose()
         return true
+    }
+
+    @MainActor
+    private func configureAutomationIntegration() {
+        AutomationIntegrationLifecycle.shared.configure(
+            hostTerminalState: hostTerminalState,
+            focusTerminal: { sessionID in
+                focusTerminalTab(sessionID)
+            },
+            requestCloseTerminal: { sessionID in
+                requestCloseTerminalTabs([sessionID])
+            }
+        )
     }
 
     @MainActor

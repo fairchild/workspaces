@@ -6,6 +6,7 @@
 import AppKit
 import Foundation
 import GhosttyKit
+import WorkspaceManagerCore
 
 struct GhosttyTerminalConfig {
     private enum ShellProfileMode: String {
@@ -50,7 +51,8 @@ struct GhosttyTerminalConfig {
                 terminalMultiplexingMode: terminalMultiplexingMode,
                 isTmuxAvailableOverride: isTmuxAvailableOverride,
                 hostSessionID: launchContext.hostSessionID,
-                hooksSocketPath: launchContext.hooksSocketPath
+                hooksSocketPath: launchContext.hooksSocketPath,
+                automationEnvironment: launchContext.automationEnvironment
             )
         }
     }
@@ -62,7 +64,8 @@ struct GhosttyTerminalConfig {
         terminalMultiplexingMode: TerminalMultiplexingMode? = nil,
         isTmuxAvailableOverride: Bool? = nil,
         hostSessionID: UUID? = nil,
-        hooksSocketPath: String? = nil
+        hooksSocketPath: String? = nil,
+        automationEnvironment: AutomationTerminalEnvironment? = nil
     ) {
         self.fontSize = fontSize
         self.workingDirectory = workingDirectory.path
@@ -81,6 +84,10 @@ struct GhosttyTerminalConfig {
             if let commandStatusHookPath = ClaudeIntegrationLifecycle.bundledCommandStatusHookPath() {
                 environment["WORKSPACES_COMMAND_STATUS_ZSH"] = commandStatusHookPath
             }
+        }
+        if let automationEnvironment {
+            environment[AutomationAPI.socketEnvironmentKey] = automationEnvironment.socketPath
+            environment[AutomationAPI.handleEnvironmentKey] = automationEnvironment.handle
         }
 
         if let path = environment["PATH"] {

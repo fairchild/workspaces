@@ -36,6 +36,9 @@ private final class CLIApp {
         "status",
         "recent",
         "doctor",
+        "automation",
+        "surface",
+        "tile",
     ]
 
     private let stateStore = CLIStateStore()
@@ -74,6 +77,12 @@ private final class CLIApp {
             return runRecent(state: state)
         case "doctor":
             return try await runDoctor(state: state)
+        case "automation":
+            return try runAutomation(arguments: tail)
+        case "surface":
+            return try runSurface(arguments: tail)
+        case "tile":
+            return try runTile(arguments: tail)
         default:
             throw CLIError("Unknown command '\(command)'. Run 'workspaces help'.")
         }
@@ -496,6 +505,186 @@ private final class CLIApp {
         print("[INFO] tracked repos: \(state.repos.count)")
         print("[INFO] tracked workspaces: \(state.workspaces.count)")
         return failures == 0 ? 0 : 1
+    }
+
+    private func runAutomation(arguments: [String]) throws -> Int32 {
+        guard let subcommand = arguments.first else {
+            throw CLIError("Missing automation subcommand. Expected: health, context")
+        }
+
+        switch subcommand {
+        case "health":
+            let result: AutomationHealthResult = try performAutomationRequest(
+                method: "GET",
+                path: "/v1/health",
+                requiresHandle: false
+            )
+            if arguments.dropFirst().contains("--json") {
+                print(try AutomationCLIResultPrinter.resultJSON(result))
+            } else {
+                print(result.status.uppercased())
+            }
+            return 0
+
+        case "context":
+            let json = try requireJSONFlag(
+                arguments: Array(arguments.dropFirst()), usage: "workspaces automation context --json")
+            let result: AutomationContextResult = try performAutomationRequest(
+                method: "GET",
+                path: "/v1/context",
+                requiresHandle: true
+            )
+            if json {
+                print(try AutomationCLIResultPrinter.resultJSON(result))
+            }
+            return 0
+
+        default:
+            throw CLIError("Unknown automation subcommand '\(subcommand)'. Expected: health, context")
+        }
+    }
+
+    private func runSurface(arguments: [String]) throws -> Int32 {
+        guard arguments.first == "list" else {
+            throw CLIError("Usage: workspaces surface list --json")
+        }
+        let json = try requireJSONFlag(arguments: Array(arguments.dropFirst()), usage: "workspaces surface list --json")
+        let result: AutomationSurfacesResult = try performAutomationRequest(
+            method: "GET",
+            path: "/v1/surfaces",
+            requiresHandle: true
+        )
+        if json {
+            print(try AutomationCLIResultPrinter.resultJSON(result))
+        }
+        return 0
+    }
+
+    private func runTile(arguments: [String]) throws -> Int32 {
+        guard let subcommand = arguments.first else {
+            throw CLIError("Missing tile subcommand. Expected: focus, split, close")
+        }
+        let tail = Array(arguments.dropFirst())
+
+        switch subcommand {
+        case "focus":
+            let direction = try singleDirectionFlag(
+                AutomationTileFocusDirection.self,
+                arguments: tail,
+                usage: "workspaces tile focus --left|--right|--up|--down|--next|--previous"
+            )
+            let body = try directionBody(direction.rawValue)
+            _ = try performAutomationRequest(
+                AutomationMutationResult.self,
+                method: "POST",
+                path: "/v1/tile/focus",
+                requiresHandle: true,
+                body: body
+            )
+            return 0
+
+        case "split":
+            let direction = try singleDirectionFlag(
+                AutomationTileSplitDirection.self,
+                arguments: tail,
+                usage: "workspaces tile split --left|--right|--up|--down"
+            )
+            let body = try directionBody(direction.rawValue)
+            _ = try performAutomationRequest(
+                AutomationMutationResult.self,
+                method: "POST",
+                path: "/v1/tile/split",
+                requiresHandle: true,
+                body: body
+            )
+            return 0
+
+        case "close":
+            guard tail.isEmpty else {
+                throw CLIError("Usage: workspaces tile close")
+            }
+            _ = try performAutomationRequest(
+                AutomationMutationResult.self,
+                method: "POST",
+                path: "/v1/tile/close",
+                requiresHandle: true
+            )
+            return 0
+
+        default:
+            throw CLIError("Unknown tile subcommand '\(subcommand)'. Expected: focus, split, close")
+        }
+    }
+
+    private func performAutomationRequest<Result>(
+        _ type: Result.Type = Result.self,
+        method: String,
+        path: String,
+        requiresHandle: Bool,
+        body: Data = Data()
+    ) throws -> Result where Result: Codable & Sendable & Equatable {
+        let client = try automationClient()
+        let handle = try automationHandle(required: requiresHandle)
+        let response = try client.request(
+            method: method,
+            path: path,
+            handle: handle,
+            body: body
+        )
+        do {
+            return try AutomationCLIResultPrinter.decodeEnvelope(type, from: response)
+        } catch let error as AutomationServiceError {
+            throw CLIError(
+                "automation request failed: \(error.response.code.rawValue): \(error.response.message)"
+            )
+        }
+    }
+
+    private func automationClient() throws -> AutomationSocketClient {
+        let environment = ProcessInfo.processInfo.environment
+        let socketPath =
+            environment[AutomationAPI.socketEnvironmentKey]
+            ?? AutomationListener.defaultSocketURL(bundleIdentifier: Self.appBundleIdentifier).path
+        return AutomationSocketClient(socketPath: socketPath)
+    }
+
+    private func automationHandle(required: Bool) throws -> String? {
+        guard required else { return nil }
+        guard
+            let handle = ProcessInfo.processInfo.environment[AutomationAPI.handleEnvironmentKey],
+            !handle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            throw CLIError(
+                "\(AutomationAPI.handleEnvironmentKey) is missing. Run this command from a WorkSpaces terminal tile."
+            )
+        }
+        return handle
+    }
+
+    private func requireJSONFlag(arguments: [String], usage: String) throws -> Bool {
+        guard arguments == ["--json"] else {
+            throw CLIError("Usage: \(usage)")
+        }
+        return true
+    }
+
+    private func singleDirectionFlag<Direction>(
+        _ type: Direction.Type,
+        arguments: [String],
+        usage: String
+    ) throws -> Direction where Direction: CaseIterable & RawRepresentable, Direction.RawValue == String {
+        guard arguments.count == 1, let rawFlag = arguments.first, rawFlag.hasPrefix("--") else {
+            throw CLIError("Usage: \(usage)")
+        }
+        let rawValue = String(rawFlag.dropFirst(2))
+        guard let direction = Direction(rawValue: rawValue) else {
+            throw CLIError("Usage: \(usage)")
+        }
+        return direction
+    }
+
+    private func directionBody(_ direction: String) throws -> Data {
+        try JSONSerialization.data(withJSONObject: ["direction": direction], options: [.sortedKeys])
     }
 
     private func printGitStatus(for workspace: WorkspaceRecord, workspaceURL: URL) async throws {
@@ -938,6 +1127,12 @@ private func printHelp() {
           workspaces status <workspace> [--watch] [--interval <seconds>]
           workspaces recent
           workspaces doctor
+          workspaces automation health
+          workspaces automation context --json
+          workspaces surface list --json
+          workspaces tile focus --left|--right|--up|--down|--next|--previous
+          workspaces tile split --left|--right|--up|--down
+          workspaces tile close
           workspaces help
 
         Launch behavior:

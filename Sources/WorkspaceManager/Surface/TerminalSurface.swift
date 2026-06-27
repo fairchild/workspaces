@@ -22,6 +22,7 @@ final class TerminalSurface: Surface {
         tileID: TileID,
         session: HostTerminalSession,
         hooksSocketPath: String?,
+        automationEnvironment: AutomationTerminalEnvironment? = nil,
         onProcessExit: (() -> Void)? = nil,
         onCloseConfirmationRequired: (() -> Void)? = nil,
         contextMenuProvider: (() -> NSMenu?)? = nil
@@ -31,7 +32,8 @@ final class TerminalSurface: Surface {
 
         let launchContext = TerminalSessionLaunchContext.hostSession(
             session,
-            hooksSocketPath: hooksSocketPath
+            hooksSocketPath: hooksSocketPath,
+            automationEnvironment: automationEnvironment
         )
         self.surfaceView = GhosttySurfaceView(
             launchContext: launchContext,
