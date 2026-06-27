@@ -194,6 +194,7 @@ public protocol NotificationCoordinatorProtocol: AnyObject {
     func connectStream(remoteURL: String) async
     func disconnectStream() async
     func markActivitySeen()
+    func jwtForFeedbackSubmission() async -> String?
 }
 
 public struct RuntimeCapabilities: Sendable, Equatable {

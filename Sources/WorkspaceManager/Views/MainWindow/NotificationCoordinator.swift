@@ -225,6 +225,15 @@ final class NotificationCoordinator: NotificationCoordinatorProtocol, Observable
         unseenEventCount = 0
     }
 
+    func jwtForFeedbackSubmission() async -> String? {
+        guard case .signedIn = authState else { return nil }
+        if jwtNeedsRefresh() {
+            let refreshed = await refreshJWT()
+            guard refreshed else { return nil }
+        }
+        return try? credentialStore.loadString(key: NotificationConstants.keychainJWTKey)
+    }
+
     // MARK: - Private
 
     private func handleEvent(_ event: WebhookEvent) {
