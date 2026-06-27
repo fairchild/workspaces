@@ -1,14 +1,15 @@
 import AppKit
 import WorkspaceManagerCore
 
-/// Owns the live `Surface` for each `TileID` in a tile tree: a `[TileID: any Surface]` map plus the
-/// resolver behavior the legacy `HostTerminalSurfaceStore` provided (surface-view → session lookup,
-/// create/invalidate callbacks, display titles).
+/// Owns the live `Surface` for each `TileID` in a tile tree: a `[TileID: any Surface]` map plus a
+/// session-keyed facade (surface-view → session lookup, terminal-by-session resolution, display
+/// titles, create/invalidate callbacks) for the consumers that still address terminals by
+/// `HostTerminalSession.id` — the focus coordinator, OSC routing, and the tab strip.
 ///
-/// This is the generalized, `TileID`-keyed successor to `HostTerminalSurfaceStore`. It is not yet on
-/// the live render path — Phase 3 swaps the renderer onto it, and Phase 5 makes `sync` the single
-/// surface-eviction authority. Built and tested ahead of those flips so the wiring lands against a
-/// proven store.
+/// The live surface owner of the main terminal column: the recursive renderer vends every tile's
+/// surface here, and `sync(activeLeafIDs:)` is the single eviction authority — `HostTerminalStateStore`
+/// calls it after each tree mutation, so a leaf leaving the tree is the one trigger for surface
+/// teardown (the agent-domain teardown bundle stays paired in the store via `syncRegistry`).
 @MainActor
 final class SurfaceStore {
     private var surfaces: [TileID: any Surface] = [:]
@@ -23,6 +24,15 @@ final class SurfaceStore {
     var onSurfaceCreated: (@MainActor (TileID) -> Void)?
     /// Fired when a surface is evicted for a tile (process exit, close, or `sync` diff).
     var onSurfaceInvalidated: (@MainActor (TileID) -> Void)?
+
+    /// Session-keyed mirrors of the tile callbacks, fired for terminal surfaces only. They let the
+    /// session-keyed `TerminalFocusCoordinator` stay session-keyed across the render-path flip: it
+    /// drives pending-focus by `HostTerminalSession.id`, and the store resolves the owning session
+    /// when it creates / evicts a `TerminalSurface`. Web surfaces (no agent identity) skip these.
+    var onTerminalSurfaceCreated: (@MainActor (UUID) -> Void)?
+    var onTerminalSurfaceInvalidated: (@MainActor (UUID) -> Void)?
+    /// Fired when a terminal surface's libghostty title changes, so the tab strip / subtitle refresh.
+    var onTerminalTitleChanged: (@MainActor (UUID) -> Void)?
 
     // MARK: - Access
 
@@ -77,8 +87,13 @@ final class SurfaceStore {
             onCloseConfirmationRequired: onCloseConfirmationRequired,
             contextMenuProvider: contextMenuProvider
         )
+        let sessionID = session.id
+        created.surfaceView.onTerminalTitleChanged = { [weak self] _ in
+            self?.onTerminalTitleChanged?(sessionID)
+        }
         surfaces[tileID] = created
         onSurfaceCreated?(tileID)
+        onTerminalSurfaceCreated?(sessionID)
         return created
     }
 
@@ -136,6 +151,47 @@ final class SurfaceStore {
         surfaces[tileID]?.displayTitle
     }
 
+    // MARK: - Session-keyed facade
+    //
+    // The render path keys surfaces by `TileID`, but the focus coordinator, OSC routing, and tab
+    // strip address terminals by `HostTerminalSession.id`. These resolve session → owning terminal
+    // surface by scanning the (shallow, one-per-visible-pane) surface map, so those consumers keep
+    // their session-keyed shape without `SurfaceStore` learning the tile↔session binding (that stays
+    // in `HostTerminalStateStore`).
+
+    private func terminalSurface(forSession sessionID: UUID) -> TerminalSurface? {
+        surfaces.values
+            .lazy
+            .compactMap { $0 as? TerminalSurface }
+            .first { $0.session.id == sessionID }
+    }
+
+    /// The libghostty view backing `sessionID`'s terminal tile, if mounted. Focus restoration and
+    /// close-intent routing resolve through this.
+    func terminal(for sessionID: UUID) -> GhosttySurfaceView? {
+        terminalSurface(forSession: sessionID)?.surfaceView
+    }
+
+    /// The display title for `session`'s terminal, falling back to its directory name before the
+    /// surface mounts. Mirrors the legacy `HostTerminalSurfaceStore.displayTitle(for:)`.
+    func displayTitle(for session: HostTerminalSession) -> String {
+        if let title = terminalSurface(forSession: session.id)?.displayTitle, !title.isEmpty {
+            return title
+        }
+        let fallback = session.directoryURL.lastPathComponent
+        return fallback.isEmpty ? "Terminal" : fallback
+    }
+
+    /// Run the terminal's session-retirement close (process-alive teardown) if a surface is mounted.
+    @discardableResult
+    func closeForSessionRetirement(sessionID: UUID) async throws -> Bool {
+        guard let surfaceView = terminalSurface(forSession: sessionID)?.surfaceView else {
+            return false
+        }
+        try await surfaceView.requestCloseForSessionRetirement()
+        return true
+    }
+
     // MARK: - Eviction
 
     /// Evict the surface for `tileID`: tear it down and fire `onSurfaceInvalidated`. No-op if absent.
@@ -146,8 +202,12 @@ final class SurfaceStore {
     /// `sync`, so this guard is what keeps that flip from emitting phantom invalidations.
     func invalidate(tileID: TileID) {
         guard let surface = surfaces.removeValue(forKey: tileID) else { return }
+        let terminalSessionID = (surface as? TerminalSurface)?.session.id
         surface.tearDown()
         onSurfaceInvalidated?(tileID)
+        if let terminalSessionID {
+            onTerminalSurfaceInvalidated?(terminalSessionID)
+        }
     }
 
     /// Retain only the surfaces whose tiles are still live leaves; tear down the rest. A pure

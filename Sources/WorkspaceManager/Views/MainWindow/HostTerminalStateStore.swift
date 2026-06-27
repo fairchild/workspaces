@@ -47,16 +47,20 @@ final class HostTerminalStateStore: ObservableObject {
     /// `treesByPrimaryID` (non-primary leaves → `sessionByTileID`), so a dropped tree entry is the
     /// single source of truth — a stale binding can never keep a dead split registered.
     private var sessionByTileID: [TileID: HostTerminalSession] = [:]
+    /// One tile identity per live session — split leaves *and* single-pane primaries. Split tiles are
+    /// bound by `splitFocusedTile`; single-pane primaries get a stable id memoized here (and mirrored
+    /// in `sessionByTileID`) so `activeLeafTileIDs` is total. This is the unified successor to the
+    /// render binding and the #684 `automationTileIDBySessionID` map — one identity per session, shared
+    /// by the renderer, `SurfaceStore.sync`, and the automation handle registry.
     private var tileIDBySessionID: [UUID: TileID] = [:]
     private var primaryIDBySplitSessionID: [UUID: UUID] = [:]
-    private var automationTileIDBySessionID: [UUID: TileID] = [:]
     private var automationHandleRegistry: AutomationHandleRegistry?
     private var automationSocketPath: String?
     private let automationWindowScopeID = UUID().uuidString
     private let automationAppScopeID = "workspaces.local"
     private let tileTreeReducer = TileTreeReducer()
 
-    let surfaceStore = HostTerminalSurfaceStore()
+    let surfaceStore = SurfaceStore()
     private var coordinator = HostTerminalSessionCoordinator()
 
     /// Agent session registry attached at scene mount. Optional because previews and
@@ -76,6 +80,52 @@ final class HostTerminalStateStore: ObservableObject {
         surfaceStore.onTerminalTitleChanged = { [weak self] _ in
             self?.objectWillChange.send()
         }
+    }
+
+    /// The full live-leaf `TileID` set across every tab — split tabs' tree leaves plus single-pane
+    /// tabs' memoized primary tiles. This is `SurfaceStore.sync`'s input: after any mutation the
+    /// retained surface set must equal this, so a leaf that left the tree is the single trigger for
+    /// surface eviction (no scattered per-session `invalidate`).
+    private var activeLeafTileIDs: [TileID] {
+        var ids: [TileID] = []
+        var seen: Set<TileID> = []
+        for primarySession in coordinator.sessions {
+            if let tree = treesByPrimaryID[primarySession.id] {
+                for leaf in tree.leafIDs where seen.insert(leaf).inserted {
+                    ids.append(leaf)
+                }
+            } else if let tileID = tileIDBySessionID[primarySession.id], seen.insert(tileID).inserted {
+                ids.append(tileID)
+            }
+        }
+        return ids
+    }
+
+    /// The stable render `TileID` for a single-pane (unsplit) session, memoized so the renderer,
+    /// `SurfaceStore.sync`, and the automation handle all resolve one identity. Split leaves are bound
+    /// by `splitFocusedTile`; this seeds the binding for a primary that has no split yet.
+    private func renderTileID(for sessionID: UUID) -> TileID {
+        if let tileID = tileIDBySessionID[sessionID] {
+            return tileID
+        }
+        let tileID = TileID()
+        tileIDBySessionID[sessionID] = tileID
+        if let session = coordinator.sessions.first(where: { $0.id == sessionID }) {
+            sessionByTileID[tileID] = session
+        }
+        return tileID
+    }
+
+    /// The render `TileID` for the leaf filling `sessionID`, single-pane or split. The renderer uses
+    /// this to vend the tile's surface from `SurfaceStore`.
+    func renderTileID(forSession session: HostTerminalSession) -> TileID {
+        renderTileID(for: session.id)
+    }
+
+    /// Vend (get-or-create) the terminal surface view for a session's leaf — the perf-prewarm path.
+    @discardableResult
+    func terminalSurfaceView(for session: HostTerminalSession) -> GhosttySurfaceView {
+        surfaceStore.terminalSurface(for: renderTileID(for: session.id), session: session).surfaceView
     }
 
     func attach(agentSessionRegistry: AgentSessionRegistry) {
@@ -322,7 +372,6 @@ final class HostTerminalStateStore: ObservableObject {
         guard !removedSessionIDs.isEmpty else { return }
 
         for removedSessionID in removedSessionIDs {
-            surfaceStore.invalidate(sessionID: removedSessionID)
             removeSplitState(forPrimarySessionID: removedSessionID)
             tabTitleOverridesBySessionID.removeValue(forKey: removedSessionID)
         }
@@ -364,7 +413,6 @@ final class HostTerminalStateStore: ObservableObject {
         }
 
         if coordinator.remove(sessionID: sessionID) != nil {
-            surfaceStore.invalidate(sessionID: sessionID)
             removeSplitState(forPrimarySessionID: sessionID)
             tabTitleOverridesBySessionID.removeValue(forKey: sessionID)
             removed = true
@@ -550,6 +598,7 @@ final class HostTerminalStateStore: ObservableObject {
 
         syncRegistry()
         syncAutomationRegistry()
+        surfaceStore.sync(activeLeafIDs: activeLeafTileIDs)
         objectWillChange.send()
         return splitSession
     }
@@ -716,6 +765,11 @@ final class HostTerminalStateStore: ObservableObject {
         for splitSession in derivedSplitSessions {
             recordTerminalSession(splitSession, isActive: false)
         }
+
+        // Surface eviction authority: after the tree/registry reconcile settles, free every surface
+        // whose leaf is no longer live. `sync`'s absent-tile path is a silent no-op, so this is safe
+        // to run after every snapshot even when nothing was dropped.
+        surfaceStore.sync(activeLeafIDs: activeLeafTileIDs)
     }
 
     /// Mirror the coordinator's session list into the agent session registry so the
@@ -751,17 +805,17 @@ final class HostTerminalStateStore: ObservableObject {
             lastCommandStatusRegistry?.clear(terminalSessionID: sessionID)
             recordTerminalSessionEnded(sessionID)
             automationHandleRegistry?.remove(hostSessionID: sessionID)
-            automationTileIDBySessionID.removeValue(forKey: sessionID)
+            forgetTileBinding(for: sessionID)
         }
         registeredAgentSessionIDs.subtract(removed)
     }
 
+    /// Upserts an automation handle for every live session against its unified tile id. The stale-removal
+    /// half that the old `syncAutomationRegistry` carried now lives in `syncRegistry`'s removed loop and
+    /// `deregisterTerminalSession`, so eviction has one authority.
     private func syncAutomationRegistry() {
         guard let automationHandleRegistry, automationSocketPath != nil else { return }
-        let allSessions = coordinator.sessions + derivedSplitSessions
-        let liveIDs = Set(allSessions.map(\.id))
-
-        for session in allSessions {
+        for session in coordinator.sessions + derivedSplitSessions {
             _ = automationHandleRegistry.upsert(
                 hostSessionID: session.id,
                 tileID: automationTileID(for: session.id),
@@ -770,20 +824,25 @@ final class HostTerminalStateStore: ObservableObject {
                 appScopeID: automationAppScopeID
             )
         }
+    }
 
-        for staleID in Array(automationTileIDBySessionID.keys) where !liveIDs.contains(staleID) {
-            automationHandleRegistry.remove(hostSessionID: staleID)
-            automationTileIDBySessionID.removeValue(forKey: staleID)
+    /// Drops a single-pane primary's memoized tile binding when its session leaves. Split leaf bindings
+    /// are removed by the tree-collapse paths (`dropSplitTree` / `closeSplitPane`); this guards the
+    /// unsplit case so a retired single-pane session leaves no stale tile identity behind.
+    private func forgetTileBinding(for sessionID: UUID) {
+        guard let tileID = tileIDBySessionID.removeValue(forKey: sessionID) else { return }
+        if sessionByTileID[tileID]?.id == sessionID {
+            sessionByTileID.removeValue(forKey: tileID)
         }
     }
 
     /// Collapses the split for `primarySessionID` (process-exit / reconcile path): drops its tree and
-    /// bindings, then *invalidates* the split surface(s) and deregisters them. Dropping the dict entry
-    /// — rather than reducing a `.close` (which would re-seed a single tile) — is the sparse-model
-    /// collapse: no entry ⇒ single pane.
+    /// bindings, then deregisters the split session(s). Surface eviction follows from the dropped leaf
+    /// via `SurfaceStore.sync` (run by the enclosing `publishSnapshot`), not a per-session invalidate.
+    /// Dropping the dict entry — rather than reducing a `.close` (which would re-seed a single tile) —
+    /// is the sparse-model collapse: no entry ⇒ single pane.
     private func removeSplitState(forPrimarySessionID primarySessionID: UUID) {
         for session in dropSplitTree(forPrimarySessionID: primarySessionID) {
-            surfaceStore.invalidate(sessionID: session.id)
             deregisterTerminalSession(session.id)
         }
     }
@@ -807,18 +866,16 @@ final class HostTerminalStateStore: ObservableObject {
         primaryIDBySplitSessionID.removeValue(forKey: sessionID)
 
         if reduced.leafIDs.count <= 1 {
-            // Only the primary remains → collapse to the sparse single-pane shape (no tree, no tile
-            // bindings); the primary session stays in the coordinator untouched.
-            if let primaryTile = tileIDBySessionID[primarySessionID] {
-                sessionByTileID.removeValue(forKey: primaryTile)
-            }
-            tileIDBySessionID.removeValue(forKey: primarySessionID)
+            // Only the primary remains → collapse to the sparse single-pane shape (no tree). The
+            // primary keeps its tile binding: under the unified identity that tile is now the
+            // single-pane render id, so the live surface mounted on it stays bound across the
+            // collapse (re-keying would orphan the terminal and lose its scrollback) and
+            // `activeLeafTileIDs` keeps including it, so `sync` won't evict the survivor.
             treesByPrimaryID.removeValue(forKey: primarySessionID)
         } else {
             treesByPrimaryID[primarySessionID] = reduced
         }
 
-        surfaceStore.invalidate(sessionID: sessionID)
         deregisterTerminalSession(sessionID)
         objectWillChange.send()
     }
@@ -855,7 +912,7 @@ final class HostTerminalStateStore: ObservableObject {
     private func deregisterTerminalSession(_ sessionID: UUID) {
         defer {
             automationHandleRegistry?.remove(hostSessionID: sessionID)
-            automationTileIDBySessionID.removeValue(forKey: sessionID)
+            forgetTileBinding(for: sessionID)
         }
         guard registeredAgentSessionIDs.contains(sessionID) else { return }
         agentSessionRegistry?.deregister(hostSessionID: sessionID)
@@ -865,7 +922,6 @@ final class HostTerminalStateStore: ObservableObject {
     }
 
     private func retireTerminalSession(_ sessionID: UUID) {
-        surfaceStore.invalidate(sessionID: sessionID)
         deregisterTerminalSession(sessionID)
     }
 
@@ -906,17 +962,14 @@ final class HostTerminalStateStore: ObservableObject {
         automationTileID(for: sessionID).rawValue.uuidString
     }
 
+    /// The automation handle's tile id for a session — the same unified `tileIDBySessionID` identity
+    /// the renderer and `SurfaceStore.sync` use. Memoizes a single-pane primary's tile if it has no
+    /// split yet (via `renderTileID`), so automation and render never disagree on a session's tile.
     private func automationTileID(for sessionID: UUID) -> TileID {
         if let tileID = tileIDBySessionID[sessionID] {
-            automationTileIDBySessionID[sessionID] = tileID
             return tileID
         }
-        if let tileID = automationTileIDBySessionID[sessionID] {
-            return tileID
-        }
-        let tileID = TileID()
-        automationTileIDBySessionID[sessionID] = tileID
-        return tileID
+        return renderTileID(for: sessionID)
     }
 
     private func resolvedPrimarySessionID(_ sourceSessionID: UUID?) -> UUID? {

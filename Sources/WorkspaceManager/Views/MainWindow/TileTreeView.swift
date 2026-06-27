@@ -4,12 +4,12 @@ import WorkspaceManagerCore
 
 /// Renders a tab's `TileTreeState` recursively: every `.split` becomes a draggable two-pane divider,
 /// every `.tile` resolves to its `HostTerminalSession` and renders the persistent terminal surface.
-/// Surface persistence stays session-keyed (`HostTerminalSurfaceStore`) — the tree only arranges them,
-/// so growing or rebalancing the layout never re-creates a live terminal.
+/// Surfaces are owned by the `TileID`-keyed `SurfaceStore` — the tree only arranges them, so growing
+/// or rebalancing the layout never re-creates a live terminal.
 struct TileTreeView: View {
     let tree: TileTreeState
     let resolveSession: (TileID) -> HostTerminalSession?
-    let surfaceStore: HostTerminalSurfaceStore
+    let surfaceStore: SurfaceStore
     let onSetSplitRatio: (SplitID, CGFloat) -> Void
     var onCloseConfirmationRequired: ((UUID) -> Void)?
     var onTerminalProcessExit: ((UUID) -> Void)?
@@ -51,6 +51,7 @@ struct TileTreeView: View {
     ) -> some View {
         if let session = resolveSession(tileID) {
             HostTerminalPaneView(
+                tileID: tileID,
                 session: session,
                 minAxis: minAxis,
                 surfaceStore: surfaceStore,
@@ -74,9 +75,10 @@ struct TileTreeView: View {
 struct HostTerminalPaneView: View {
     @EnvironmentObject private var commandStatusRegistry: LastCommandStatusRegistry
 
+    let tileID: TileID
     let session: HostTerminalSession
     let minAxis: HostTerminalStateStore.SplitPaneLayout.Axis?
-    let surfaceStore: HostTerminalSurfaceStore
+    let surfaceStore: SurfaceStore
     var onCloseConfirmationRequired: ((UUID) -> Void)?
     var onTerminalProcessExit: ((UUID) -> Void)?
     var contextMenuProvider: ((HostTerminalSession) -> NSMenu?)?
@@ -88,6 +90,7 @@ struct HostTerminalPaneView: View {
             )
 
             PersistentHostTerminalContainerView(
+                tileID: tileID,
                 session: session,
                 surfaceStore: surfaceStore,
                 onProcessExit: {

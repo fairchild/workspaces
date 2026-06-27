@@ -8,7 +8,8 @@ struct HostTerminalSessionStack: View {
     /// The active tab's arrangement, or `nil` for a single-pane tab (sparse model).
     let tree: TileTreeState?
     let resolveSession: (TileID) -> HostTerminalSession?
-    let surfaceStore: HostTerminalSurfaceStore
+    let resolveTileID: (HostTerminalSession) -> TileID
+    let surfaceStore: SurfaceStore
     let tabTitleOverrides: [UUID: String]
     let onSetSplitRatio: (SplitID, CGFloat) -> Void
     var onSelectTab: ((UUID) -> Void)?
@@ -49,6 +50,7 @@ struct HostTerminalSessionStack: View {
                     )
                 } else {
                     HostTerminalPaneView(
+                        tileID: resolveTileID(activeSession),
                         session: activeSession,
                         minAxis: nil,
                         surfaceStore: surfaceStore,
@@ -56,6 +58,7 @@ struct HostTerminalSessionStack: View {
                         onTerminalProcessExit: onTerminalProcessExit,
                         contextMenuProvider: contextMenuProvider
                     )
+                    .id(activeSession.id)
                 }
             }
         }

@@ -11,7 +11,7 @@ struct TabRoutingControllerTests {
     func newTabNotificationForwardsThroughAdapter() throws {
         let store = makeStore()
         let first = try #require(store.sessions.first)
-        let source = store.surfaceStore.view(for: first)
+        let source = store.terminalSurfaceView(for: first)
         var focusedSessionIDs: [UUID] = []
 
         TabRoutingController().handle(
@@ -32,7 +32,7 @@ struct TabRoutingControllerTests {
         let first = try #require(store.sessions.first)
         let second = try #require(store.createTab())
         let third = try #require(store.createTab())
-        let source = store.surfaceStore.view(for: second)
+        let source = store.terminalSurfaceView(for: second)
         var closeRequests: [[UUID]] = []
 
         TabRoutingController().handle(
@@ -50,7 +50,7 @@ struct TabRoutingControllerTests {
     func setTabTitleNotificationUpdatesSourceTabTitle() throws {
         let store = makeStore()
         let first = try #require(store.sessions.first)
-        let source = store.surfaceStore.view(for: first)
+        let source = store.terminalSurfaceView(for: first)
 
         TabRoutingController().handle(
             notification: tabActionNotification(kind: .setTabTitle, title: "Build", source: source),

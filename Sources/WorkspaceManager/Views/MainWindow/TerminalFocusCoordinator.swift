@@ -19,7 +19,7 @@ final class TerminalFocusCoordinator: ObservableObject, TerminalFocusWindowDeleg
         var surfaceResolvedAtUptime: TimeInterval?
     }
 
-    private weak var attachedSurfaceStore: HostTerminalSurfaceStore?
+    private weak var attachedSurfaceStore: SurfaceStore?
     private weak var window: NSWindow?
     private var pendingRepoFocusMeasurementSessionID: UUID?
     private var pendingWorkspaceFocusMeasurementSessionID: UUID?
@@ -29,25 +29,27 @@ final class TerminalFocusCoordinator: ObservableObject, TerminalFocusWindowDeleg
 
     deinit {
         MainActor.assumeIsolated {
-            attachedSurfaceStore?.onSurfaceCreated = nil
-            attachedSurfaceStore?.onSurfaceInvalidated = nil
+            attachedSurfaceStore?.onTerminalSurfaceCreated = nil
+            attachedSurfaceStore?.onTerminalSurfaceInvalidated = nil
             if let window {
                 TerminalFocusManager.shared.unbindDelegate(from: window)
             }
         }
     }
 
-    func attach(surfaceStore: HostTerminalSurfaceStore) {
+    func attach(surfaceStore: SurfaceStore) {
         guard attachedSurfaceStore !== surfaceStore else { return }
 
-        attachedSurfaceStore?.onSurfaceCreated = nil
-        attachedSurfaceStore?.onSurfaceInvalidated = nil
+        attachedSurfaceStore?.onTerminalSurfaceCreated = nil
+        attachedSurfaceStore?.onTerminalSurfaceInvalidated = nil
 
         attachedSurfaceStore = surfaceStore
-        surfaceStore.onSurfaceCreated = { [weak self] sessionID in
+        // Pending focus is session-keyed; the store fires these session-keyed mirrors as it
+        // creates / evicts terminal surfaces by tile, so the coordinator's internals are unchanged.
+        surfaceStore.onTerminalSurfaceCreated = { [weak self] sessionID in
             self?.surfaceDidBecomeAvailable(sessionID: sessionID)
         }
-        surfaceStore.onSurfaceInvalidated = { [weak self] sessionID in
+        surfaceStore.onTerminalSurfaceInvalidated = { [weak self] sessionID in
             self?.surfaceDidInvalidate(sessionID: sessionID)
         }
     }
@@ -63,7 +65,7 @@ final class TerminalFocusCoordinator: ObservableObject, TerminalFocusWindowDeleg
         TerminalFocusManager.shared.bindDelegate(self, to: window)
     }
 
-    func focusTerminal(sessionID: UUID, surfaceStore: HostTerminalSurfaceStore) {
+    func focusTerminal(sessionID: UUID, surfaceStore: SurfaceStore) {
         guard let terminal = surfaceStore.terminal(for: sessionID) else {
             NSLog("[SplitRouting] focus skipped: no terminal for session %@", sessionID.uuidString)
             return
@@ -74,7 +76,7 @@ final class TerminalFocusCoordinator: ObservableObject, TerminalFocusWindowDeleg
     func requestMainTerminalFocus(
         targetSessionID: UUID? = nil,
         activateApp: Bool = true,
-        surfaceStore: HostTerminalSurfaceStore,
+        surfaceStore: SurfaceStore,
         activeSessionID: UUID?,
         onTargetFocused: (() -> Void)? = nil
     ) {
@@ -240,7 +242,7 @@ final class TerminalFocusCoordinator: ObservableObject, TerminalFocusWindowDeleg
         }
     }
 
-    private func attemptPendingFocus(using surfaceStore: HostTerminalSurfaceStore, reason: String) {
+    private func attemptPendingFocus(using surfaceStore: SurfaceStore, reason: String) {
         guard var pendingFocusRequest else { return }
 
         let focusFields = [
@@ -324,7 +326,7 @@ final class TerminalFocusCoordinator: ObservableObject, TerminalFocusWindowDeleg
     }
 
     private func requestFallbackFocus(
-        surfaceStore: HostTerminalSurfaceStore,
+        surfaceStore: SurfaceStore,
         activeSessionID: UUID?
     ) {
         let focusFields = [

@@ -89,8 +89,8 @@ struct TerminalFocusCoordinatorTests {
         let secondWindow = makeWindow()
         let firstCoordinator = TerminalFocusCoordinator()
         let secondCoordinator = TerminalFocusCoordinator()
-        let firstSurfaceStore = HostTerminalSurfaceStore()
-        let secondSurfaceStore = HostTerminalSurfaceStore()
+        let firstSurfaceStore = SurfaceStore()
+        let secondSurfaceStore = SurfaceStore()
 
         defer {
             TerminalFocusManager.shared.unbindDelegate(from: firstWindow)
@@ -122,7 +122,7 @@ struct TerminalFocusCoordinatorTests {
         let targetWindow = makeWindow()
         let otherWindow = makeWindow()
         let coordinator = TerminalFocusCoordinator()
-        let surfaceStore = HostTerminalSurfaceStore()
+        let surfaceStore = SurfaceStore()
         let otherSpy = FocusWindowDelegateSpy()
 
         defer {

@@ -97,7 +97,7 @@ struct HostTerminalStateStoreTests {
             key: .defaultHome,
             directory: URL(fileURLWithPath: "/Users/test")
         ).session
-        let terminal = store.surfaceStore.view(for: session)
+        let terminal = store.terminalSurfaceView(for: session)
 
         var emissions = 0
         let cancellable = store.objectWillChange.sink { _ in

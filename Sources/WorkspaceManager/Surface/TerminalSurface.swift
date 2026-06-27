@@ -81,8 +81,10 @@ final class TerminalSurface: Surface {
     }
 
     func tearDown() {
-        // Detach the view; the libghostty C handle frees via ARC/`deinit`, matching the legacy
-        // `HostTerminalSurfaceStore.invalidate` eviction path (no explicit free exists today).
+        // Detach the view and drop the title hook; the libghostty C handle frees via ARC/`deinit`
+        // (no explicit free exists today). The title hook holds a strong `self`-capture into the
+        // store's callback, so clearing it lets the surface deallocate promptly under a `sync` storm.
+        surfaceView.onTerminalTitleChanged = nil
         surfaceView.removeFromSuperview()
     }
 }
