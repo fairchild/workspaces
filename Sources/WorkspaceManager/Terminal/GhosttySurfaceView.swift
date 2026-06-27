@@ -54,6 +54,7 @@ final class GhosttySurfaceView: NSView {
         )
         super.init(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
         self.wantsLayer = true
+        registerForDraggedTypes(GhosttyDroppedContentFormatter.pasteboardTypes)
 
         createSurfaceIfNeeded()
     }
@@ -421,6 +422,29 @@ final class GhosttySurfaceView: NSView {
     func scrollToRow(_ row: Int) {
         guard let surface else { return }
         _ = performBindingAction("scroll_to_row:\(row)", surface: surface)
+    }
+
+    // MARK: - Drag and drop
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard GhosttyDroppedContentFormatter.accepts(types: sender.draggingPasteboard.types) else {
+            return []
+        }
+        return .copy
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        draggingEntered(sender)
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        guard let content = GhosttyDroppedContentFormatter.content(from: sender.draggingPasteboard) else {
+            return false
+        }
+
+        TerminalFocusManager.shared.requestFocus(for: self)
+        insertText(content, replacementRange: NSRange(location: 0, length: 0))
+        return true
     }
 
     // MARK: - Keyboard input
