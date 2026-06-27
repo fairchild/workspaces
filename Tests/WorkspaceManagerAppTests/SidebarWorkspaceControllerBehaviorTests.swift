@@ -839,9 +839,11 @@ private final class MockWorkspaceService: WorkspaceServiceProtocol, @unchecked S
         name: String,
         progress: WorkspaceCreationProgressHandler?
     ) async throws -> NewWorkspaceInfo {
-        createWorkspaceCalls.append(
-            CreateWorkspaceCall(repoName: repoName, repoLocalURL: repoLocalURL, name: name)
-        )
+        await MainActor.run {
+            createWorkspaceCalls.append(
+                CreateWorkspaceCall(repoName: repoName, repoLocalURL: repoLocalURL, name: name)
+            )
+        }
         await createWorkspaceDelay()
         if let createWorkspaceResult {
             return createWorkspaceResult
