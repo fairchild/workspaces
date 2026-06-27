@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.21.0] - 2026-06-27
+
+### Added
+- Insert dropped terminal paths into active sessions (#686).
+- Needs-you notification dropdown.
+
+### Fixed
+- Ghostty terminal scrolling.
+- Xcode Cloud Ghostty Zig selection.
+
+### Other
+- Add optional tester prerelease path (#676).
+- Enable Ghostty tab renaming.
+- Avoid no-op terminal tab title overrides.
+- Fix Lume orphan VM storage cleanup.
+- Rename Command Palette to Session Switcher.
+- Address session switcher review findings and follow-ups.
+- Close workspace terminals on archive.
+
 ## [0.21.0-beta.1] - 2026-06-25
 
 ### Added
