@@ -96,6 +96,51 @@ enum AppChromeShortcut: CaseIterable {
             modifiers: appKitModifiers
         )
     }
+
+    /// Human-readable label for the shortcut cheat-sheet (Help → Keyboard Shortcuts).
+    var displayName: String {
+        switch self {
+        case .toggleSidebar: return "Toggle Sidebar"
+        case .toggleInspector: return "Toggle Inspector"
+        case .toggleTerminalPanel: return "Toggle Terminal Panel"
+        case .newWorkspace: return "New Workspace"
+        case .newTerminalTab: return "New Terminal Tab"
+        case .closeTerminalTab: return "Close Terminal Tab"
+        case .nextTerminalTab: return "Next Terminal Tab"
+        case .previousTerminalTab: return "Previous Terminal Tab"
+        case .alternateNextTerminalTab: return "Next Terminal Tab (alternate)"
+        case .alternatePreviousTerminalTab: return "Previous Terminal Tab (alternate)"
+        case .openInEditor: return "Open in Editor"
+        case .settings: return "Settings"
+        case .workspaceSwitcher: return "Switch Session"
+        case .commandRunner: return "Terminal Theme / Commands"
+        }
+    }
+
+    /// The chord rendered as macOS modifier glyphs (⌃⌥⇧⌘) plus the key, for display.
+    var keyboardGlyphs: String {
+        Self.keyboardGlyphs(modifiers: appKitModifiers, keyString: keyString)
+    }
+
+    /// Render `(modifiers, key)` as the canonical macOS glyph string, e.g. `⌘⇧B`.
+    /// Modifiers are emitted in the platform order Control → Option → Shift → Command.
+    static func keyboardGlyphs(modifiers: NSEvent.ModifierFlags, keyString: String) -> String {
+        var result = ""
+        if modifiers.contains(.control) { result += "⌃" }
+        if modifiers.contains(.option) { result += "⌥" }
+        if modifiers.contains(.shift) { result += "⇧" }
+        if modifiers.contains(.command) { result += "⌘" }
+        result += keyGlyph(for: keyString)
+        return result
+    }
+
+    private static func keyGlyph(for keyString: String) -> String {
+        switch keyString {
+        case "\t": return "⇥"
+        case " ": return "Space"
+        default: return keyString.uppercased()
+        }
+    }
 }
 
 enum AppChromeShortcutCatalog {

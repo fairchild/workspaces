@@ -257,6 +257,8 @@ struct WorkspaceManagerApp: App {
             }
 
             CommandGroup(after: .help) {
+                KeyboardShortcutsMenuItem()
+
                 Button("Export Diagnostic Report...") {
                     Task {
                         await DiagnosticReportExporter.exportWithSavePanel()
@@ -264,6 +266,11 @@ struct WorkspaceManagerApp: App {
                 }
             }
         }
+
+        Window("Keyboard Shortcuts", id: KeyboardShortcutsView.windowID) {
+            KeyboardShortcutsView()
+        }
+        .windowResizability(.contentSize)
 
         Settings {
             SettingsView(softwareUpdateController: softwareUpdateController)
@@ -275,6 +282,18 @@ struct WorkspaceManagerApp: App {
                 .environmentObject(lastCommandStatusRegistry)
                 .environment(\.agentSessionRegistry, agentSessionRegistry)
                 .environment(\.lastCommandStatusRegistry, lastCommandStatusRegistry)
+        }
+    }
+}
+
+/// Help-menu entry that opens the keyboard-shortcut cheat-sheet window. A small view so it can hold
+/// the `openWindow` environment action the surrounding `App` body cannot.
+private struct KeyboardShortcutsMenuItem: View {
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Button("Keyboard Shortcuts") {
+            openWindow(id: KeyboardShortcutsView.windowID)
         }
     }
 }
