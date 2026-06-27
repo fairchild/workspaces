@@ -44,7 +44,7 @@ struct AutomationControllerTests {
             key: .repoPath("/Users/test/other"),
             directory: URL(fileURLWithPath: "/Users/test/other")
         )
-        _ = fixture.store.ensureSplit(forPrimarySessionID: fixture.primary.id)
+        _ = fixture.store.splitFocusedTile(inTabContaining: fixture.primary.id)
 
         let surfaces = try fixture.controller.automationSurfaces(for: fixture.primaryHandle).surfaces
         let hostIDs = Set(surfaces.compactMap(\.hostSessionID))
@@ -69,7 +69,7 @@ struct AutomationControllerTests {
     @Test("Directional and relative focus target the paired split tile")
     func focusTargetsSplitTile() throws {
         let fixture = makeFixture()
-        let split = try #require(fixture.store.ensureSplit(forPrimarySessionID: fixture.primary.id))
+        let split = try #require(fixture.store.splitFocusedTile(inTabContaining: fixture.primary.id))
         let splitHandle = try #require(fixture.store.automationEnvironment(for: split)?.handle)
 
         let right = try fixture.controller.automationFocusTile(for: fixture.primaryHandle, direction: .right)
@@ -82,7 +82,7 @@ struct AutomationControllerTests {
         #expect(fixture.focusedSessionIDs == [split.id, fixture.primary.id])
     }
 
-    @Test("Split creates or relayouts through host terminal state")
+    @Test("Split creates a new pane through host terminal state")
     func splitUsesHostTerminalState() async throws {
         let fixture = makeFixture()
 
@@ -97,28 +97,28 @@ struct AutomationControllerTests {
         #expect(fixture.focusedSessionIDs == [split.id])
     }
 
-    @Test("Split reports existing and relaid-out split surfaces without claiming creation")
-    func splitExistingSurfaceDoesNotClaimCreation() throws {
+    @Test("Split grows an existing split tree from the primary tile")
+    func splitExistingTreeCreatesNewSurface() throws {
         let fixture = makeFixture()
-        let split = try #require(fixture.store.ensureSplit(forPrimarySessionID: fixture.primary.id))
+        let firstSplit = try #require(fixture.store.splitFocusedTile(inTabContaining: fixture.primary.id))
 
-        let alreadySplit = try fixture.controller.automationSplitTile(for: fixture.primaryHandle, direction: .right)
-        let relayout = try fixture.controller.automationSplitTile(for: fixture.primaryHandle, direction: .down)
+        let secondSplit = try fixture.controller.automationSplitTile(for: fixture.primaryHandle, direction: .down)
+        let secondSurfaceIDString = try #require(secondSplit.createdSurfaceID)
+        let secondSurfaceID = try #require(UUID(uuidString: secondSurfaceIDString))
+        let surfaces = try fixture.controller.automationSurfaces(for: fixture.primaryHandle).surfaces
+        let hostIDs = Set(surfaces.compactMap(\.hostSessionID))
 
-        #expect(alreadySplit.changed)
-        #expect(alreadySplit.focusedSurfaceID == split.id.uuidString)
-        #expect(alreadySplit.createdSurfaceID == nil)
-        #expect(alreadySplit.reason == "already_split")
-        #expect(relayout.changed)
-        #expect(relayout.focusedSurfaceID == split.id.uuidString)
-        #expect(relayout.createdSurfaceID == nil)
-        #expect(relayout.reason == "relayout")
+        #expect(secondSplit.changed)
+        #expect(secondSplit.createdSurfaceID != firstSplit.id.uuidString)
+        #expect(fixture.store.paneCount(forPrimarySessionID: fixture.primary.id) == 3)
+        #expect(hostIDs.contains(firstSplit.id))
+        #expect(hostIDs.contains(secondSurfaceID))
     }
 
     @Test("Split from secondary tile is rejected until arbitrary tile splitting lands")
     func splitFromSecondaryTileIsUnsupported() throws {
         let fixture = makeFixture()
-        let split = try #require(fixture.store.ensureSplit(forPrimarySessionID: fixture.primary.id))
+        let split = try #require(fixture.store.splitFocusedTile(inTabContaining: fixture.primary.id))
         let splitHandle = try #require(fixture.store.automationEnvironment(for: split)?.handle)
 
         do {

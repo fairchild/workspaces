@@ -462,10 +462,22 @@ final class HostTerminalStateStore: ObservableObject {
     /// is registered with the agent subsystems and holds at any depth (each extra pane is a leaf here).
     private var derivedSplitSessions: [HostTerminalSession] {
         treesByPrimaryID.flatMap { primarySessionID, tree -> [HostTerminalSession] in
-            guard let primaryTile = tileIDBySessionID[primarySessionID] else { return [] }
-            return tree.leafIDs.compactMap { tileID in
-                tileID == primaryTile ? nil : sessionByTileID[tileID]
-            }
+            splitSessions(in: tree, primarySessionID: primarySessionID)
+        }
+    }
+
+    /// Live split sessions for a tab, including depth ≥ 2 panes. This is the public read path for
+    /// app controllers that need every non-primary surface; the legacy `splitSession` projection above
+    /// intentionally remains depth-1 only.
+    func splitSessions(forPrimarySessionID primarySessionID: UUID?) -> [HostTerminalSession] {
+        guard let primarySessionID, let tree = treesByPrimaryID[primarySessionID] else { return [] }
+        return splitSessions(in: tree, primarySessionID: primarySessionID)
+    }
+
+    private func splitSessions(in tree: TileTreeState, primarySessionID: UUID) -> [HostTerminalSession] {
+        guard let primaryTile = tileIDBySessionID[primarySessionID] else { return [] }
+        return tree.leafIDs.compactMap { tileID in
+            tileID == primaryTile ? nil : sessionByTileID[tileID]
         }
     }
 

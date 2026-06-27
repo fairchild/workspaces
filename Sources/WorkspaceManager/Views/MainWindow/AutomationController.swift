@@ -85,11 +85,9 @@ final class AutomationController: AutomationControlling {
         }
 
         let layout = HostTerminalStateStore.SplitPaneLayout(automationDirection: direction)
-        let existingSplit = resolved.hostTerminalState.splitSession(for: primarySessionID)
-        let existingLayout = resolved.hostTerminalState.splitLayout(for: primarySessionID)
         guard
-            let splitSession = resolved.hostTerminalState.ensureSplit(
-                forPrimarySessionID: primarySessionID,
+            let splitSession = resolved.hostTerminalState.splitFocusedTile(
+                inTabContaining: primarySessionID,
                 preferredLayout: layout
             )
         else {
@@ -99,20 +97,10 @@ final class AutomationController: AutomationControlling {
         DispatchQueue.main.asyncAfter(deadline: .now() + GhosttyTerminalIntentRouter.splitFocusDelay) {
             self.focusTerminal(splitSession.id)
         }
-        let createdSurfaceID = existingSplit == nil ? splitSession.id.uuidString : nil
-        let reason: String?
-        if existingSplit == nil {
-            reason = nil
-        } else if existingLayout != layout {
-            reason = "relayout"
-        } else {
-            reason = "already_split"
-        }
         return AutomationMutationResult(
             changed: true,
             focusedSurfaceID: splitSession.id.uuidString,
-            createdSurfaceID: createdSurfaceID,
-            reason: reason
+            createdSurfaceID: splitSession.id.uuidString
         )
     }
 
@@ -189,9 +177,7 @@ final class AutomationController: AutomationControlling {
         }
 
         var sessions = resolved.hostTerminalState.sessions(inScope: primarySession.key)
-        if let split = resolved.hostTerminalState.splitSession(for: primaryID) {
-            sessions.append(split)
-        }
+        sessions.append(contentsOf: resolved.hostTerminalState.splitSessions(forPrimarySessionID: primaryID))
 
         return sessions.compactMap { session in
             try? surfaceDescriptor(
@@ -215,8 +201,9 @@ final class AutomationController: AutomationControlling {
         {
             session = hostTerminalState.sessions.first { $0.id == hostSessionID }
         } else if let primaryID = hostTerminalState.primarySessionID(containing: hostSessionID),
-            let split = hostTerminalState.splitSession(for: primaryID),
-            split.id == hostSessionID
+            let split = hostTerminalState.splitSessions(forPrimarySessionID: primaryID).first(where: {
+                $0.id == hostSessionID
+            })
         {
             session = split
         } else {

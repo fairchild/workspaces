@@ -109,9 +109,9 @@ workspaces tile split --left
 workspaces tile split --up
 ```
 
-V1 supports splitting from a primary terminal tile. If a split already exists,
-the command focuses or relayouts that existing split instead of claiming a new
-surface was created. Calling split from the secondary split tile returns
+V1 supports splitting from a primary terminal tile. Each successful split creates
+a new terminal surface in the caller's tab and focuses it after the app's normal
+split-focus delay. Calling split from a secondary split tile returns
 `unsupported` in V1.
 
 ## Close The Current Tile
