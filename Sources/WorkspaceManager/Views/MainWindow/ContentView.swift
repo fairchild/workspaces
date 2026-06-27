@@ -2448,8 +2448,27 @@ struct ContentView: View {
     @MainActor
     private func activateSessionSwitcherHostSession(_ sessionID: UUID) {
         guard hostTerminalState.activateExistingSession(sessionID: sessionID) else { return }
-        syncSidebarSelectionToActiveSessionFromActiveHostSession()
+        if let activeHostSession,
+            let destination = terminalSessionController.terminalNavigationDestination(
+                for: activeHostSession,
+                repos: repos,
+                normalizePath: normalizePath
+            )
+        {
+            applyNavigationDestination(destination)
+        } else {
+            clearSelectionForHostTerminalSurface()
+        }
         focusTerminalTab(sessionID)
+    }
+
+    @MainActor
+    private func clearSelectionForHostTerminalSurface() {
+        setSelectedWorkspace(nil)
+        setSelectedWebSource(nil)
+        setSelectedRepoForLanding(nil)
+        clearCodePreview()
+        viewState.columnVisibility = .all
     }
 
     @MainActor

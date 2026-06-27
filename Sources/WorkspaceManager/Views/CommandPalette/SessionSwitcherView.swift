@@ -103,6 +103,8 @@ struct SessionSwitcherRow: Equatable, Identifiable {
 }
 
 struct SessionSwitcherSnapshot {
+    static let defaultResultLimit = 50
+
     let rows: [SessionSwitcherRow]
 
     static func make(
@@ -198,10 +200,14 @@ struct SessionSwitcherSnapshot {
         rows.append(contentsOf: webSources.map(webSourceRow))
         rows.append(contentsOf: commands.map(commandRow))
 
-        return SessionSwitcherSnapshot(rows: rank(rows, query: ""))
+        return SessionSwitcherSnapshot(rows: rank(rows, query: "", limit: nil))
     }
 
-    static func rank(_ rows: [SessionSwitcherRow], query: String, limit: Int? = nil) -> [SessionSwitcherRow] {
+    static func rank(
+        _ rows: [SessionSwitcherRow],
+        query: String,
+        limit: Int? = defaultResultLimit
+    ) -> [SessionSwitcherRow] {
         let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
         let filtered = rows.filter { $0.matches(normalizedQuery) }
         let ranked = filtered.sorted { lhs, rhs in

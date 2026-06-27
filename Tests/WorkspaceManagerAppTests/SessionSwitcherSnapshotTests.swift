@@ -198,4 +198,32 @@ struct SessionSwitcherSnapshotTests {
         let rows = SessionSwitcherSnapshot.rank(snapshot.rows, query: "example.test")
         #expect(rows.map(\.target) == [.webSource(source.id)])
     }
+
+    @Test("Default ranking caps displayed rows without truncating snapshot rows")
+    func defaultRankingCapsDisplayedRowsWithoutTruncatingSnapshotRows() {
+        let repos = (0..<60).map { index in
+            Repo(
+                name: "repo-\(index)",
+                localPath: URL(fileURLWithPath: "/tmp/repo-\(index)"),
+                lastAccessedAt: Date(timeIntervalSince1970: Double(index))
+            )
+        }
+
+        let snapshot = SessionSwitcherSnapshot.make(
+            repos: repos,
+            webSources: [],
+            sessions: [],
+            activeSessionID: nil,
+            agentStatuses: [:],
+            paneCountBySessionKey: [:],
+            workspaceSessionKeys: [:],
+            workspaceActivities: [:],
+            repoActivities: [:],
+            commands: []
+        )
+
+        #expect(snapshot.rows.count == 60)
+        #expect(SessionSwitcherSnapshot.rank(snapshot.rows, query: "").count == 50)
+        #expect(SessionSwitcherSnapshot.rank(snapshot.rows, query: "", limit: nil).count == 60)
+    }
 }
