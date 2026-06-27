@@ -1895,7 +1895,9 @@ export async function processPendingPrReviewRuns(
 		limit: input.limit ?? 5,
 		repoFullName: input.repoFullName,
 	});
-	const needsAnthropic = pendingRuns.some((run) => run.status === "started");
+	const needsAnthropic = pendingRuns.some(
+		(run) => run.status === "started" && run.sessionId,
+	);
 	if (needsAnthropic && !apiKey) {
 		throw new Error("missing ANTHROPIC_API_KEY");
 	}

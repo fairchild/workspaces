@@ -495,7 +495,14 @@ class SecurityHardeningTests(unittest.TestCase):
         self.assertIn("github.event.state == 'pending'", broker_workflow)
         self.assertIn("github.event.context || 'none'", broker_workflow)
         self.assertIn("github.event.state || 'none'", broker_workflow)
-        self.assertIn("ref: main", broker_workflow)
+        self.assertIn(
+            "github.event_name == 'workflow_dispatch' && github.ref || 'main'",
+            broker_workflow,
+        )
+        self.assertIn(
+            "Status-triggered broker runs are production projection repair",
+            broker_workflow,
+        )
         self.assertIn("persist-credentials: false", broker_workflow)
         self.assertIn("github.event_name == 'status' && '120'", broker_workflow)
         self.assertIn("github.event_name == 'status' && '15'", broker_workflow)
