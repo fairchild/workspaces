@@ -61,6 +61,10 @@ Current split UI model is a two-pane stack:
 - `up` / `down`: directional focus when target exists for vertical stacks.
 - Orthogonal directions remain no-ops when they do not match the active split axis.
 
+The [Automation API Reference](./automation-api.md) exposes the same directional
+focus and split vocabulary for trusted processes running inside terminal tiles.
+Do not broaden those commands here without updating the API docs and tests.
+
 ## Verification Checklist
 
 1. Launch debug app via `./scripts/launch-dev.sh --no-build`

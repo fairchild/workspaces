@@ -5,6 +5,10 @@ running inside WorkSpaces terminal tiles. V1 is intentionally narrow: a caller
 can discover its live shell context, list in-scope surfaces, and request core
 tile mutations relative to its own tile.
 
+This is the wire and maintainer reference. For example-first usage, see
+[Automation API Guide](../automation-api.md). For rationale and future-expansion
+boundaries, see [Automation API V1 Decision](../decisions/automation-api-v1.md).
+
 The API is experimental and disabled by default. Enable it from the
 Experimental Features settings, or force it on for development with:
 
@@ -38,6 +42,20 @@ processes only receive automation environment when their surface is created.
 Allowed and denied requests are appended to `automation-audit.jsonl` next to
 the socket state. The audit log stores route-level metadata and error codes,
 not terminal input or output.
+
+## Invariants
+
+- The socket listener is distinct from `AgentHookListener`.
+- Only same-user local processes that can reach the user-private socket can
+  connect.
+- Scoped routes require `x-workspaces-automation-handle`.
+- The server resolves caller identity from its live handle registry.
+- Scoped requests must not accept caller-supplied `tileID`, `surfaceID`, or
+  `hostSessionID`.
+- Capabilities are enforced before each scoped operation.
+- Mutation routes are stable product verbs, not raw `TileTreeAction` exposure.
+- Browser mutation, input injection, resize/equalize, and global control are
+  out of V1.
 
 ## Envelope
 
@@ -80,6 +98,37 @@ state. For example:
 Bodies that try to supply target identifiers such as `tileID`, `surfaceID`, or
 `hostSessionID` are rejected.
 
+## Capabilities
+
+Capabilities are attached to the live handle entry and returned in descriptors
+for discovery. They do not broaden scope; the caller is still resolved from the
+handle.
+
+| Capability | Allows |
+| --- | --- |
+| `context.read` | `GET /v1/context` |
+| `surfaces.read` | `GET /v1/surfaces` |
+| `tile.focus` | `POST /v1/tile/focus` |
+| `tile.split` | `POST /v1/tile/split` |
+| `tile.close` | `POST /v1/tile/close` |
+
+Under-capable handles fail with `capability_denied`.
+
+## Error Codes
+
+| Code | Meaning |
+| --- | --- |
+| `disabled` | The experiment is off for this launch. |
+| `capability_denied` | The handle does not include the required capability. |
+| `missing_handle` | The scoped request omitted `x-workspaces-automation-handle`. |
+| `stale_handle` | The handle is missing or no longer maps to a live terminal tile. |
+| `invalid_request` | The request shape is not allowed, including caller-supplied target IDs. |
+| `malformed_json` | A JSON body could not be decoded. |
+| `route_not_found` | The route is not part of the API. |
+| `method_not_allowed` | The path exists but the HTTP method is wrong. |
+| `unsupported` | The requested V1 operation is not supported in the current context. |
+| `internal_error` | Unexpected server-side failure. |
+
 ## CLI
 
 The `workspaces` CLI wraps the socket API. Scoped commands read the same
@@ -102,6 +151,35 @@ workspaces tile split --up
 workspaces tile split --down
 workspaces tile close
 ```
+
+## Implementation Map
+
+| Concern | File |
+| --- | --- |
+| Wire models and envelopes | `Sources/WorkspaceManagerCore/Services/Automation/AutomationAPI.swift` |
+| Socket listener and lock | `Sources/WorkspaceManagerCore/Services/Automation/AutomationListener.swift` |
+| HTTP route projection | `Sources/WorkspaceManagerCore/Services/Automation/AutomationHTTPRouter.swift` |
+| CLI socket client | `Sources/WorkspaceManagerCore/Services/Automation/AutomationSocketClient.swift` |
+| CLI formatting | `Sources/WorkspaceManagerCore/Services/Automation/AutomationCLIFormatting.swift` |
+| App-side controller | `Sources/WorkspaceManager/Views/MainWindow/AutomationController.swift` |
+| Feature lifecycle and injection | `Sources/WorkspaceManager/App/AutomationIntegrationLifecycle.swift` |
+| Terminal environment provider | `Sources/WorkspaceManager/Views/MainWindow/HostTerminalStateStore.swift` |
+| Terminal config injection | `Sources/WorkspaceManager/Terminal/GhosttyTerminalConfig.swift` |
+| CLI command router | `Sources/WorkspaceManagerCLI/main.swift` |
+
+## Verification
+
+After changing this API, run:
+
+```bash
+swift test --filter Automation
+swift test
+swift-format lint --strict --recursive Sources/ Tests/
+./scripts/dev-smoke.sh --no-build
+```
+
+If docs or public examples changed, also run the docs checks listed in
+[Docs Site Runbook](../README.md).
 
 ## V1 Non-Goals
 

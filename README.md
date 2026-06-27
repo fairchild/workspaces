@@ -137,6 +137,11 @@ For introducing Settings-gated UI experiments, see:
 
 - [docs/development/experimental-features.md](./docs/development/experimental-features.md)
 
+For local app-shell automation from WorkSpaces terminal tiles, see:
+
+- [docs/automation-api.md](./docs/automation-api.md)
+- [docs/development/automation-api.md](./docs/development/automation-api.md)
+
 For VM and provider-backed workspace architecture, see:
 
 - [docs/vm-provider-architecture.md](./docs/vm-provider-architecture.md)
