@@ -272,14 +272,12 @@ jobs:
 
           VERSION=$(./scripts/release-version.sh print)
           BUILD=$(./scripts/release-version.sh print-build)
+
           if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
             TAG="${GITHUB_REF_NAME}"
           else
-            if git rev-parse -q --verify "refs/tags/v${VERSION}" >/dev/null 2>&1; then
-              TAG="v${VERSION}"
-            else
-              TAG="workspaces-v${VERSION}-main.${GITHUB_RUN_NUMBER}"
-            fi
+            TAG="workspaces-v${VERSION}-main.${GITHUB_RUN_NUMBER}"
+            echo "::notice::Manual Release dispatch from main publishes tester prerelease ${TAG}; push or dispatch a v<version> tag for stable releases"
           fi
           DMG_PATH="build/WorkSpaces-${VERSION}.dmg"
           APPCAST_PATH="build/appcast.xml"

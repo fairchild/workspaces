@@ -67,6 +67,12 @@ final class HostTerminalStateStore: ObservableObject {
     /// so we only register/deregister on real edge transitions.
     private var registeredAgentSessionIDs: Set<UUID> = []
 
+    init() {
+        surfaceStore.onTerminalTitleChanged = { [weak self] _ in
+            self?.objectWillChange.send()
+        }
+    }
+
     func attach(agentSessionRegistry: AgentSessionRegistry) {
         attach(
             agentSessionRegistry: agentSessionRegistry,
@@ -239,10 +245,14 @@ final class HostTerminalStateStore: ObservableObject {
     func setTabTitle(_ title: String?, for sourceSessionID: UUID?) -> Bool {
         guard let primarySessionID = resolvedPrimarySessionID(sourceSessionID) else { return false }
         let normalizedTitle = title?.trimmingCharacters(in: .whitespacesAndNewlines)
+        var updatedOverrides = tabTitleOverridesBySessionID
         if let normalizedTitle, !normalizedTitle.isEmpty {
-            tabTitleOverridesBySessionID[primarySessionID] = normalizedTitle
+            updatedOverrides[primarySessionID] = normalizedTitle
         } else {
-            tabTitleOverridesBySessionID.removeValue(forKey: primarySessionID)
+            updatedOverrides.removeValue(forKey: primarySessionID)
+        }
+        if updatedOverrides != tabTitleOverridesBySessionID {
+            tabTitleOverridesBySessionID = updatedOverrides
         }
         return true
     }

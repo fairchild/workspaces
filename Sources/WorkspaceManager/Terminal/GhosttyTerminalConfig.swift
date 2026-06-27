@@ -32,6 +32,30 @@ struct GhosttyTerminalConfig {
     let shellProfileModeLabel: String
 
     init(
+        launchContext: TerminalSessionLaunchContext,
+        fontSize: Float32 = 13,
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        terminalMultiplexingMode: TerminalMultiplexingMode? = nil,
+        isTmuxAvailableOverride: Bool? = nil
+    ) {
+        switch launchContext.commandMode {
+        case .customCommand(let customCommand):
+            self.init(customCommand: customCommand, fontSize: fontSize)
+
+        case .directoryShell:
+            self.init(
+                workingDirectory: launchContext.workingDirectory,
+                fontSize: fontSize,
+                environment: environment,
+                terminalMultiplexingMode: terminalMultiplexingMode,
+                isTmuxAvailableOverride: isTmuxAvailableOverride,
+                hostSessionID: launchContext.hostSessionID,
+                hooksSocketPath: launchContext.hooksSocketPath
+            )
+        }
+    }
+
+    init(
         workingDirectory: URL,
         fontSize: Float32 = 13,
         environment: [String: String] = ProcessInfo.processInfo.environment,

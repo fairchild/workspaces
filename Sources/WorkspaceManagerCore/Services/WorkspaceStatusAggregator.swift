@@ -73,13 +73,43 @@ public final class WorkspaceStatusAggregator: ObservableObject {
         }
     }
 
+    public struct AttentionItem: Identifiable, Equatable, Sendable {
+        public let target: AttentionTarget
+        public let run: AgentRunState
+        public let lastEventAt: Date
+        public let lastAccessedAt: Date
+
+        public var id: String {
+            switch target {
+            case .workspace(let id): return "workspace-\(id.uuidString)"
+            case .repo(let id): return "repo-\(id.uuidString)"
+            }
+        }
+
+        public init(
+            target: AttentionTarget,
+            run: AgentRunState,
+            lastEventAt: Date,
+            lastAccessedAt: Date
+        ) {
+            self.target = target
+            self.run = run
+            self.lastEventAt = lastEventAt
+            self.lastAccessedAt = lastAccessedAt
+        }
+    }
+
     private struct AttentionEntry: Equatable {
         let target: AttentionTarget
+        let status: AgentSessionStatus
         let lastAccessedAt: Date
     }
 
     @Published public private(set) var workspaceStatuses: [UUID: AgentSessionStatus] = [:]
     @Published public private(set) var repoStatuses: [UUID: AgentSessionStatus] = [:]
+    /// Resolved repo or workspace targets currently demanding attention,
+    /// ordered by `lastAccessedAt` descending with their exact agent state.
+    @Published public private(set) var attentionItems: [AttentionItem] = []
     /// Repo or workspace targets currently demanding attention, ordered by
     /// `lastAccessedAt` descending.
     @Published public private(set) var attentionTargets: [AttentionTarget] = []
@@ -90,7 +120,7 @@ public final class WorkspaceStatusAggregator: ObservableObject {
     /// `lastAccessedAt` descending.
     @Published public private(set) var attentionRepos: [UUID] = []
 
-    public var attentionCount: Int { attentionTargets.count }
+    public var attentionCount: Int { attentionItems.count }
 
     public init() {}
 
@@ -120,6 +150,7 @@ public final class WorkspaceStatusAggregator: ObservableObject {
             guard let status = input.status, Self.demandsAttention(status.run) else { return nil }
             return AttentionEntry(
                 target: .workspace(input.workspaceID),
+                status: status,
                 lastAccessedAt: input.lastAccessedAt
             )
         }
@@ -127,10 +158,11 @@ public final class WorkspaceStatusAggregator: ObservableObject {
             guard let status = input.status, Self.demandsAttention(status.run) else { return nil }
             return AttentionEntry(
                 target: .repo(input.repoID),
+                status: status,
                 lastAccessedAt: input.lastAccessedAt
             )
         }
-        let attentionTargets =
+        let attentionEntries =
             (workspaceAttention + repoAttention)
             .sorted { lhs, rhs in
                 if lhs.lastAccessedAt != rhs.lastAccessedAt {
@@ -138,7 +170,15 @@ public final class WorkspaceStatusAggregator: ObservableObject {
                 }
                 return lhs.target.stableSortKey < rhs.target.stableSortKey
             }
-            .map(\.target)
+        let attentionItems = attentionEntries.map { entry in
+            AttentionItem(
+                target: entry.target,
+                run: entry.status.run,
+                lastEventAt: entry.status.lastEventAt,
+                lastAccessedAt: entry.lastAccessedAt
+            )
+        }
+        let attentionTargets = attentionItems.map(\.target)
         let attentionWorkspaces = attentionTargets.compactMap(\.workspaceID)
         let attentionRepos = attentionTargets.compactMap(\.repoID)
 
@@ -147,6 +187,9 @@ public final class WorkspaceStatusAggregator: ObservableObject {
         }
         if self.repoStatuses != repoStatuses {
             self.repoStatuses = repoStatuses
+        }
+        if self.attentionItems != attentionItems {
+            self.attentionItems = attentionItems
         }
         if self.attentionTargets != attentionTargets {
             self.attentionTargets = attentionTargets

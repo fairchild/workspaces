@@ -1,12 +1,13 @@
 # Releasing WorkspaceManager
 
-This document describes the complete process for creating a new release of WorkspaceManager.
+This document describes the complete process for creating a new release of WorkspaceManager,
+including optional tester prereleases before a stable release is published.
 
 ## Overview
 
 WorkspaceManager is distributed as a notarized DMG file via GitHub Releases. The release process involves:
 
-1. **Versioning** - Prepare version, changelog, commit, and tag through `scripts/prepare-release.sh`
+1. **Versioning** - Land a release metadata PR, then tag stable releases or dispatch tester prereleases
 2. **Building** - Create release binary with SPM
 3. **Bundling** - Package into a proper .app bundle
 4. **Signing** - Sign with Developer ID certificate
@@ -239,119 +240,150 @@ base64 -i ~/.config/apple/AuthKey_<KEY_ID>.p8 | pbcopy
 
 ## Release Methods
 
-### Method 1: Manual Release via GitHub Actions (Recommended)
+There are two normal lanes:
 
-The recommended method for production releases.
+- **Tester prerelease:** metadata PR, merge to `main`, then manually dispatch
+  `Release` from `main`. This creates a non-latest GitHub prerelease.
+- **Stable release:** metadata PR, merge to `main`, then push `v<X.Y.Z>`. This
+  creates or refreshes the latest stable GitHub Release and Sparkle appcast.
 
-1. **Prepare And Push The Release From `main`**
+Both lanes use the same protected signing, notarization, appcast, manifest,
+artifact upload, and published-asset validation workflow.
 
-   Run the helper on a clean local `main` checkout:
+### Method 1: Stable Release
+
+Use this after tester signoff or when you are ready to publish directly to all
+users.
+
+1. **Open a stable release metadata PR**
+
+   Start from current `origin/main`:
+
    ```bash
+   git fetch origin main --tags
+   git checkout -b release/v0.21.0 origin/main
+   ./scripts/prepare-release.sh --version 0.21.0 --metadata-only
+   ```
+
+   The helper updates `Info.plist` version/build metadata and prepends a
+   `CHANGELOG.md` section computed from commits since the latest stable `v*`
+   tag. It does not commit, tag, push, or publish.
+
+   Preview without mutating:
+
+   ```bash
+   ./scripts/prepare-release.sh --version 0.21.0 --metadata-only --dry-run
+   ```
+
+   Review the generated changelog notes, commit the metadata changes, open a
+   PR, attach evidence, and merge it to `main`.
+
+2. **Tag the merged `main` commit**
+
+   ```bash
+   git fetch origin main --tags
    git checkout main
-   ./scripts/prepare-release.sh --version 0.3.1
+   git pull --ff-only origin main
+   ./scripts/release-version.sh assert-tag-match v0.21.0
+   git tag v0.21.0
+   git push origin v0.21.0
    ```
 
-   The helper:
-   - fetches `origin/main` and fast-forwards local `main` before mutating
-   - updates `Info.plist` version/build metadata
-   - prepends a changelog entry from commits since the latest `v*` tag
-   - ensures `CHANGELOG.md` contains `## [<CFBundleShortVersionString>] - <date>` for the release version before `scripts/generate-sparkle-appcast.sh` runs
-   - creates commit `release: v0.3.1`
-   - creates lightweight tag `v0.3.1`
-   - pushes `main` first, then pushes the tag
+   Pushing `v0.21.0` triggers `.github/workflows/release.yml`.
 
-   Preview the computed release without mutating:
-   ```bash
-   ./scripts/prepare-release.sh --version 0.3.1 --dry-run
-   ```
-
-2. **Release Workflow Trigger**
-
-   Pushing `v0.3.1` triggers `.github/workflows/release.yml` automatically.
-
-3. **Optional Manual Rerun (from `main` or an existing release tag)**
+3. **Approve and watch the protected release workflow**
 
    - Workflow: `.github/workflows/release.yml`
-   - Trigger: `workflow_dispatch`
-   - In GitHub: Actions > `Release` > `Run workflow`
-   - Ref: `main` or an existing release tag (`v*`, `workspaces-v*`)
+   - Trigger: `push` tag `v*`
    - Runner lane: `[self-hosted, signing-host]`
-     - At least one online runner must advertise the `signing-host` label before dispatch.
-     - The release lane can be an existing signing-capable host; it does not need to be a separate machine, but it must be intentionally designated for release duties.
-     - See [docs/development/signing-runner-setup.md](./docs/development/signing-runner-setup.md) for label assignment and verification commands.
-   - Guardrails:
-     - Manual releases fail if started from a non-`main` branch.
-     - Release commit must be reachable from `origin/main`.
-     - Release preflight waits for in-flight `build-and-test` checks on source
-       changes before signing starts, so tag-triggered releases do not fail
-       only because CI has not finished yet.
-     - Tag-driven releases fail fast if app version metadata does not match the requested release tag.
-     - Temporary signing keychain is cleaned up and prior keychain defaults are restored on the shared `signing-host` runner.
-   - Actions performed:
-     - Build GhosttyKit
-     - Import signing certificate from secrets
-     - Decode provisioning profile from secrets
-     - Build signed `.app`
-     - Verify nested bundle signing before notarization
-     - Notarize and staple `.dmg`
-     - Publish or refresh a GitHub release with artifacts via `gh`
-     - Download the published assets on hosted macOS and re-check appcast XML,
-       DMG identity, stapling, and Gatekeeper assessment
-   - Appcast release notes:
-     - `scripts/generate-sparkle-appcast.sh` embeds the matching
-       `CHANGELOG.md` section in the item `<description>`
-     - appcast generation fails if the matching section is missing or empty
+   - Protected environment: `release`
 
-4. **Release Tag and Assets**
+   Guardrails:
+   - The tagged commit must be reachable from `origin/main`.
+   - Tag-driven releases fail fast if app version metadata does not match the
+     requested release tag.
+   - Release preflight waits for in-flight `build-and-test` checks on the exact
+     source commit before signing starts.
+   - Temporary signing keychain is cleaned up and prior keychain defaults are
+     restored on the shared `signing-host` runner.
 
-   - `./scripts/prepare-release.sh --version <X.Y.Z>`:
-     - creates and pushes `v<X.Y.Z>`
-     - tag push triggers the release workflow automatically
-   - Manual workflow-dispatch run from `main`:
-     - If `v<version>` already exists, release assets are published to that tag
-     - Otherwise tag format is `workspaces-v<version>-main.<run_number>`
-   - Tag-push run: supports both `v<version>` and `workspaces-v*`
-   - Rerunning the workflow for an existing tag replaces assets in place and refreshes generated release notes; no GitHub release cleanup is required.
-   - Assets:
-      - `WorkSpaces-<version>.dmg`
-      - `WorkSpaces-latest.dmg`
+4. **Final download and update check**
 
-5. **Final Download And Update Check**
-
-   After the release workflow passes and the published asset validation is
-   green, finish the release with an operator/user-visible update-path check:
+   After the release workflow passes and published-asset validation is green,
+   finish the release with an operator/user-visible update-path check:
 
    ```bash
-   gh release download v<X.Y.Z> \
+   gh release download v0.21.0 \
        --repo fairchild/workspaces \
-       --pattern "WorkSpaces-<X.Y.Z>.dmg" \
-       --dir /tmp/workspaces-release-v<X.Y.Z> \
+       --pattern "WorkSpaces-0.21.0.dmg" \
+       --dir /tmp/workspaces-release-v0.21.0 \
        --clobber
    ```
 
-   - Confirm the versioned DMG downloads from the published GitHub Release; do
-     not stop at seeing the asset listed in the browser.
-   - Ask the user to open the installed app and choose
-     `WorkSpaces > Check for Updates...`.
-   - The user should confirm Sparkle offers the newly published version and
-     shows the matching release notes.
-   - Record that user confirmation in the release handoff/status update.
+   Confirm the versioned DMG downloads from the published GitHub Release; do not
+   stop at seeing the asset listed in the browser. Ask the user to open the
+   installed app and choose `WorkSpaces > Check for Updates...`; Sparkle should
+   offer the new stable version with matching release notes. Record that
+   confirmation in the release handoff/status update.
 
-### Method 1B: Tag-Driven Release (Main Commit Only)
+### Method 1A: Optional Tester Prerelease
 
-If you prefer to cut the tag yourself first, you can push a release tag from a `main` commit:
+Use this when several changes have landed on `main` and you want testers to
+exercise the signed, notarized app before publishing a new stable release.
 
-```bash
-git checkout main
-git pull --ff-only origin main
-./scripts/release-version.sh assert-tag-match v0.3.1
-git tag v0.3.1
-git push origin v0.3.1
-```
+1. **Open a prerelease metadata PR**
 
-- The `Release` workflow triggers on both `v*` and `workspaces-v*` tags.
-- Guardrail still applies: the tagged commit must be on `origin/main` history.
-- The pushed tag is used as the release tag directly.
+   Start from current `origin/main` and choose a SemVer prerelease version:
+
+   ```bash
+   git fetch origin main --tags
+   git checkout -b release/0.21.0-beta.1 origin/main
+   ./scripts/prepare-prerelease.sh --version 0.21.0-beta.1
+   ```
+
+   The helper requires a prerelease suffix such as `-alpha.1`, `-beta.1`, or
+   `-rc.1`. It updates `Info.plist`, bumps `CFBundleVersion`, and prepends a
+   matching changelog section. It does not commit, tag, push, or publish.
+
+   Preview without mutating:
+
+   ```bash
+   ./scripts/prepare-prerelease.sh --version 0.21.0-beta.1 --dry-run
+   ```
+
+   Review the generated changelog notes, commit the metadata changes, open a
+   PR, attach evidence, and merge it to `main`.
+
+2. **Dispatch the Release workflow from `main`**
+
+   In GitHub: Actions > `Release` > `Run workflow` > Ref: `main`.
+
+   Manual dispatch from `main` always publishes a tester prerelease named
+   `workspaces-v<version>-main.<run_number>` with `--prerelease` and
+   `--latest=false`. It does not replace the latest stable release and does not
+   change the stable Sparkle feed.
+
+3. **Hand the prerelease to testers**
+
+   Send testers the GitHub prerelease URL or the versioned DMG asset from that
+   prerelease. `WorkSpaces > Check for Updates...` uses
+   `releases/latest/download/appcast.xml`, so normal update checks
+   intentionally continue to see only the latest stable release.
+
+4. **Publish stable after tester signoff**
+
+   Merge any fixes, set the final stable version if the prerelease used
+   `-alpha`, `-beta`, or `-rc`, and use Method 1 to create a fresh `v<X.Y.Z>`
+   stable tag. Do not promote the `workspaces-v...` tester tag.
+
+### Manual Reruns
+
+- Dispatch `Release` from `main` to create another tester prerelease for the
+  current app version.
+- Dispatch `Release` from an existing `v*` or `workspaces-v*` tag to rebuild and
+  refresh assets for that exact tag.
+- Tag shape controls release classification: `v<X.Y.Z>` is stable/latest;
+  SemVer prerelease tags and all `workspaces-v*` tags are GitHub prereleases.
 
 ### Method 2: Manual Local Release
 
@@ -506,7 +538,8 @@ security find-identity -v -p codesigning
 | `scripts/verify-app-keychain-signing.sh` | Verify embedded provisioning profile and signed keychain entitlements |
 | `scripts/verify-release-bundle.sh` | Verify Developer ID signing across bundled code objects before notarization |
 | `scripts/verify-installed-perf.sh` | Verify packaged Ghostty resources and installed-app terminal readiness metrics |
-| `scripts/prepare-release.sh` | Update release metadata, create the release commit, and tag/push the release |
+| `scripts/prepare-release.sh` | Prepare stable release metadata; legacy direct commit/tag/push mode remains for exceptional local use |
+| `scripts/prepare-prerelease.sh` | Prepare tester-prerelease version/build metadata and changelog notes for a PR |
 | `scripts/notarize.sh` | Create DMG and notarize |
 | `scripts/setup-release-secrets.sh` | Configure GitHub Actions release secrets/variables from a verified `.p12` and provisioning profile |
 | `scripts/signing-config.sh` | Your signing credentials (not in git) |

@@ -26,29 +26,28 @@ final class GhosttySurfaceView: NSView {
     private(set) var surface: ghostty_surface_t?
     private(set) var terminalTitle: String = ""
     private(set) var currentWorkingDirectory: String?
+    private(set) var latestScrollbarState: GhosttyScrollbarState?
     private var didProcessExit = false
     private var promptReadinessSignposts: TerminalPromptReadinessSignpostController
     private var lastScaleAndSize: GhosttySurfaceScaleCalculator.ScaleAndSize?
     private var trackingAreaInstalled = false
     var workingDirectoryPath: String { workingDirectory.path }
     var contextMenuProvider: (() -> NSMenu?)?
+    var onScrollbarStateChange: ((GhosttyScrollbarState) -> Void)?
+    var onTerminalTitleChanged: ((String) -> Void)?
 
     init(
-        workingDirectory: URL,
-        hostSessionID: UUID? = nil,
-        hooksSocketPath: String? = nil,
+        launchContext: TerminalSessionLaunchContext,
         onProcessExit: (() -> Void)? = nil,
         onCloseConfirmationRequired: (() -> Void)? = nil
     ) {
-        self.workingDirectory = workingDirectory
-        self.promptReadinessSignposts = TerminalPromptReadinessSignpostController(hostSessionID: hostSessionID)
+        self.workingDirectory = launchContext.workingDirectory
+        self.promptReadinessSignposts = TerminalPromptReadinessSignpostController(
+            hostSessionID: launchContext.promptReadinessHostSessionID
+        )
         self.onProcessExit = onProcessExit
         self.onCloseConfirmationRequired = onCloseConfirmationRequired
-        self.terminalConfig = GhosttyTerminalConfig(
-            workingDirectory: workingDirectory,
-            hostSessionID: hostSessionID,
-            hooksSocketPath: hooksSocketPath
-        )
+        self.terminalConfig = GhosttyTerminalConfig(launchContext: launchContext)
         self.readinessDiagnostics = TerminalReadinessDiagnostics(
             workingDirectoryName: workingDirectory.lastPathComponent,
             shellProfileMode: terminalConfig.shellProfileModeLabel
@@ -59,24 +58,34 @@ final class GhosttySurfaceView: NSView {
         createSurfaceIfNeeded()
     }
 
-    init(
+    convenience init(
+        workingDirectory: URL,
+        hostSessionID: UUID? = nil,
+        hooksSocketPath: String? = nil,
+        onProcessExit: (() -> Void)? = nil,
+        onCloseConfirmationRequired: (() -> Void)? = nil
+    ) {
+        self.init(
+            launchContext: .directoryBacked(
+                workingDirectory: workingDirectory,
+                hostSessionID: hostSessionID,
+                hooksSocketPath: hooksSocketPath
+            ),
+            onProcessExit: onProcessExit,
+            onCloseConfirmationRequired: onCloseConfirmationRequired
+        )
+    }
+
+    convenience init(
         customCommand: String,
         onProcessExit: (() -> Void)? = nil,
         onCloseConfirmationRequired: (() -> Void)? = nil
     ) {
-        self.workingDirectory = FileManager.default.temporaryDirectory
-        self.promptReadinessSignposts = TerminalPromptReadinessSignpostController(hostSessionID: nil)
-        self.onProcessExit = onProcessExit
-        self.onCloseConfirmationRequired = onCloseConfirmationRequired
-        self.terminalConfig = GhosttyTerminalConfig(customCommand: customCommand)
-        self.readinessDiagnostics = TerminalReadinessDiagnostics(
-            workingDirectoryName: workingDirectory.lastPathComponent,
-            shellProfileMode: terminalConfig.shellProfileModeLabel
+        self.init(
+            launchContext: .customCommand(customCommand),
+            onProcessExit: onProcessExit,
+            onCloseConfirmationRequired: onCloseConfirmationRequired
         )
-        super.init(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
-        self.wantsLayer = true
-
-        createSurfaceIfNeeded()
     }
 
     required init?(coder: NSCoder) {
@@ -177,7 +186,11 @@ final class GhosttySurfaceView: NSView {
     // MARK: - Runtime updates
 
     func updateTerminalTitle(_ title: String) {
+        let previousTitle = terminalTitle
         terminalTitle = title
+        if previousTitle != title {
+            onTerminalTitleChanged?(title)
+        }
         guard !title.isEmpty else { return }
         observePromptReadinessSignal(.setTitle)
     }
@@ -221,6 +234,11 @@ final class GhosttySurfaceView: NSView {
             surfaceView: self,
             surfaceAddress: surfaceAddress
         )
+    }
+
+    func updateScrollbarState(_ state: GhosttyScrollbarState) {
+        latestScrollbarState = state
+        onScrollbarStateChange?(state)
     }
 
     func runtimeDidRequestClose(processAlive: Bool) {
@@ -392,7 +410,17 @@ final class GhosttySurfaceView: NSView {
 
     override func scrollWheel(with event: NSEvent) {
         guard let surface else { return }
-        ghostty_surface_mouse_scroll(surface, event.scrollingDeltaX, event.scrollingDeltaY, 0)
+        ghostty_surface_mouse_scroll(
+            surface,
+            event.scrollingDeltaX,
+            event.scrollingDeltaY,
+            GhosttyScrollInput.mods(from: event)
+        )
+    }
+
+    func scrollToRow(_ row: Int) {
+        guard let surface else { return }
+        _ = performBindingAction("scroll_to_row:\(row)", surface: surface)
     }
 
     // MARK: - Keyboard input

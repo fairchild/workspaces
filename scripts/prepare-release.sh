@@ -1,10 +1,11 @@
 #!/bin/bash
 # ============================================================================
-# prepare-release.sh - Prepare and tag a versioned release from main
+# prepare-release.sh - Prepare stable release metadata and optional tag/push
 # ============================================================================
 #
 # Usage:
 #   ./scripts/prepare-release.sh --version 0.4.1
+#   ./scripts/prepare-release.sh --version 0.4.1 --metadata-only
 #   ./scripts/prepare-release.sh --version 0.4.1 --dry-run
 #   ./scripts/prepare-release.sh --version 0.4.1 --no-push
 #
@@ -20,6 +21,7 @@ RELEASE_VERSION_SCRIPT="$SCRIPT_DIR/release-version.sh"
 VERSION=""
 DRY_RUN=false
 NO_PUSH=false
+METADATA_ONLY=false
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/workspaces-prepare-release.XXXXXX")"
 
 cleanup() {
@@ -29,10 +31,11 @@ trap cleanup EXIT
 
 usage() {
     cat <<'EOF'
-Usage: ./scripts/prepare-release.sh --version <X.Y.Z> [--dry-run] [--no-push]
+Usage: ./scripts/prepare-release.sh --version <X.Y.Z> [--metadata-only] [--dry-run] [--no-push]
 
 Options:
   --version X.Y.Z   Target semantic version to release
+  --metadata-only   Update version/build and changelog only for a release PR
   --dry-run         Print the computed release plan without mutating files or git
   --no-push         Create the release commit and tag locally but do not push
   --help, -h        Show this help
@@ -95,6 +98,18 @@ sync_local_main() {
     fi
 
     fail "Local main is not a fast-forward ancestor of origin/main; reconcile main first"
+}
+
+ensure_metadata_base() {
+    git fetch origin main --tags
+
+    local head_sha=""
+    local origin_main_sha=""
+    head_sha="$(git rev-parse HEAD)"
+    origin_main_sha="$(git rev-parse origin/main)"
+
+    [[ "$head_sha" == "$origin_main_sha" ]] \
+        || fail "--metadata-only must run from a branch whose HEAD is current origin/main"
 }
 
 ensure_tag_absent() {
@@ -223,6 +238,10 @@ while [[ $# -gt 0 ]]; do
             NO_PUSH=true
             shift
             ;;
+        --metadata-only)
+            METADATA_ONLY=true
+            shift
+            ;;
         --help|-h)
             usage
             exit 0
@@ -249,11 +268,16 @@ TAG_NAME="v$VERSION"
 cd "$PROJECT_DIR"
 
 ensure_clean_worktree
-ensure_main_branch
-sync_local_main
+if [[ "$METADATA_ONLY" == true ]]; then
+    [[ "$NO_PUSH" == false ]] || fail "--metadata-only cannot be combined with --no-push"
+    ensure_metadata_base
+else
+    ensure_main_branch
+    sync_local_main
+fi
 ensure_tag_absent "$TAG_NAME"
 
-LATEST_TAG="$(git tag --list 'v*' --sort=-version:refname | head -n 1)"
+LATEST_TAG="$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-version:refname | grep -Ev -- '-[A-Za-z0-9]' | head -n 1 || true)"
 if [[ -n "$LATEST_TAG" ]]; then
     COMMIT_RANGE="$LATEST_TAG..HEAD"
 else
@@ -273,8 +297,15 @@ echo "  build: $TARGET_BUILD"
 echo "  tag: $TAG_NAME"
 echo "  last tag: ${LATEST_TAG:-<none>}"
 echo "  commit range: $COMMIT_RANGE"
-echo "  push main: $([[ "$NO_PUSH" == true ]] && printf 'no' || printf 'yes')"
-echo "  push tag: $([[ "$NO_PUSH" == true ]] && printf 'no' || printf 'yes')"
+if [[ "$METADATA_ONLY" == true ]]; then
+    echo "  mode: metadata-only PR preparation"
+    echo "  push main: no"
+    echo "  push tag: no"
+else
+    echo "  mode: direct release commit/tag"
+    echo "  push main: $([[ "$NO_PUSH" == true ]] && printf 'no' || printf 'yes')"
+    echo "  push tag: $([[ "$NO_PUSH" == true ]] && printf 'no' || printf 'yes')"
+fi
 echo ""
 echo "Computed changelog preview"
 cat "$TMP_DIR/changelog-entry.txt"
@@ -285,6 +316,12 @@ fi
 
 "$RELEASE_VERSION_SCRIPT" set "$VERSION" --bump-build >/dev/null
 prepend_changelog_entry
+
+if [[ "$METADATA_ONLY" == true ]]; then
+    log "Updated release metadata without committing, tagging, or pushing"
+    log "Next: open a PR for CHANGELOG.md and Info.plist, merge it, then tag origin/main with $TAG_NAME"
+    exit 0
+fi
 
 git add "$CHANGELOG_PATH" "$INFO_PLIST_PATH"
 git commit -m "release: $TAG_NAME"

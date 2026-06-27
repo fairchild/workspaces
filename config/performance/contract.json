@@ -392,6 +392,19 @@
       }
     },
     {
+      "name": "main_window_attention_dropdown_resolution_ms",
+      "unit": "ms",
+      "supported_scenarios": [
+        "main_window_agent_activity_burst"
+      ],
+      "reference_baselines": {
+        "main_window_agent_activity_burst": {
+          "median_ms": 2,
+          "p95_ms": 4
+        }
+      }
+    },
+    {
       "name": "new_workspace_sheet_ready",
       "unit": "ms",
       "supported_scenarios": [

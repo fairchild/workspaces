@@ -286,17 +286,26 @@ class SecurityHardeningTests(unittest.TestCase):
 
     def test_mise_invocations_are_locked_and_pinned(self) -> None:
         verify_mise = (REPO_ROOT / "scripts/verify-mise-security.sh").read_text()
-        self.assertIn("MISE_EXPECTED_VERSION=\"v2026.6.0\"", verify_mise)
+        self.assertIn("MISE_EXPECTED_VERSION=\"v2026.6.14\"", verify_mise)
         self.assertIn("verify_locked_zig_exec", verify_mise)
         self.assertIn("github.com/repos/jdx/mise/releases/latest", verify_mise)
         self.assertIn("Authorization: Bearer $GITHUB_TOKEN", verify_mise)
         self.assertIn("SHASUMS256.txt", verify_mise)
 
         build_ghosttykit = (REPO_ROOT / "scripts/build-ghosttykit.sh").read_text()
+        self.assertLess(
+            build_ghosttykit.index('[[ -x "$HOMEBREW_ZIG_BIN" ]]'),
+            build_ghosttykit.index('command -v mise >/dev/null 2>&1'),
+            "build-ghosttykit must prefer Homebrew zig@0.15 before the upstream mise Zig fallback",
+        )
         self.assertIn('mise exec --locked "zig@$ZIG_VERSION" -- zig', build_ghosttykit)
         self.assertIn("MISE_CONFIG_FILE=$PROJECT_DIR/.mise.toml", build_ghosttykit)
         self.assertIn("MISE_CONFIG_ROOT=$PROJECT_DIR", build_ghosttykit)
         self.assertIn("MISE_IGNORED_CONFIG_PATHS=$HOME/.config/mise", build_ghosttykit)
+
+        xcode_cloud_post_clone = (REPO_ROOT / "ci_scripts/ci_post_clone.sh").read_text()
+        self.assertIn("brew install zig@0.15", xcode_cloud_post_clone)
+        self.assertIn('homebrew_zig_bin="/opt/homebrew/opt/zig@0.15/bin/zig"', xcode_cloud_post_clone)
 
         setup = (REPO_ROOT / "scripts/setup").read_text()
         self.assertIn('"$REPO_ROOT/.mise.toml"|"$REPO_ROOT/web/.mise.toml"', setup)
@@ -313,9 +322,9 @@ class SecurityHardeningTests(unittest.TestCase):
         self.assertIn("enable-global-virtual-store=true", web_npmrc)
 
         sandbox = (REPO_ROOT / "web/src/lib/agent-runtime/vercel-sandbox.ts").read_text()
-        self.assertIn("MISE_VERSION='v2026.6.0'", sandbox)
+        self.assertIn("MISE_VERSION='v2026.6.14'", sandbox)
         self.assertIn(
-            "MISE_SHA256='9d225e07427b7e05cc4ae7f09f111dfdefdfebb58956513403711935ce313202'",
+            "MISE_SHA256='96ae1ef7b00a6ebbbec23ba1016d6e722f5e904966272f621d15326429e90d53'",
             sandbox,
         )
         self.assertIn("sha256sum -c -", sandbox)

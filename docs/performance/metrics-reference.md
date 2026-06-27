@@ -229,6 +229,17 @@ Scenario:
 Why it matters:
 - It guards the path that refires when agent session status changes, where repeated sidebar refresh work can become visible during active agent sessions.
 
+### `main_window_attention_dropdown_resolution_ms`
+
+What it measures:
+- Time spent resolving `WorkspaceStatusAggregator.attentionItems` into the concise rows used by the top-right "Needs You" dropdown.
+
+Scenario:
+- `main_window_agent_activity_burst`
+
+Why it matters:
+- It guards the click-prep path for the notification bubble so the dropdown stays cheap even when agent status changes rapidly across many tabs.
+
 ### `workspace_provider_availability_refresh`
 
 What it measures:

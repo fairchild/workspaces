@@ -158,20 +158,19 @@ final class GhosttyAppManager: NSObject {
         config = newConfig
     }
 
-    /// Build a finalized `ghostty_config_t` for the given theme pair. When a
-    /// theme is selected, the app-owned config file is (re)written and loaded;
-    /// when nothing is selected, a bare config preserves Ghostty's default.
+    /// Build a finalized `ghostty_config_t` from the app-owned config file.
+    /// Theme selection is optional, but WorkSpaces-owned terminal behavior
+    /// defaults such as scrollbar and scroll-speed tuning are always loaded.
     private func makeConfig(for pair: GhosttyThemePersistence.Pair) -> ghostty_config_t? {
         guard let config = ghostty_config_new() else {
             NSLog("[GhosttyAppManager] ghostty_config_new failed")
             return nil
         }
 
-        let writeResult = try? GhosttyThemeConfig.writeConfigFile(
+        if let url = try? GhosttyThemeConfig.writeConfigFile(
             lightTheme: pair.lightTheme,
             darkTheme: pair.darkTheme
-        )
-        if let url = writeResult.flatMap({ $0 }) {
+        ) {
             ghostty_config_load_file(config, url.path)
         }
 
