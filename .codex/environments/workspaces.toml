@@ -1,4 +1,4 @@
 name = "WorkSpaces"
 
 [setup]
-script = "./scripts/setup"
+script = "./scripts/setup --fast"
