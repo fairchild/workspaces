@@ -9,6 +9,11 @@ integration with GhosttyKit (`libghostty`).
 xcframework behavior can change between commits. This guide captures the exact
 integration contract in this repo so future sessions can upgrade safely.
 
+The local [Automation API Reference](./automation-api.md) builds on the same
+terminal session and surface identity model. When changing split or focus
+behavior here, keep the automation API's context, surface list, focus, and split
+semantics aligned.
+
 ## Current Integration Shape
 
 ### Build + pinning

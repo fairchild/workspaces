@@ -128,6 +128,17 @@ test.describe("Local docs server", () => {
 		const searchPayload = await search.json();
 		expect(searchPayload.results.length).toBeGreaterThan(0);
 
+		const automationSearch = await context.request.get(
+			`${baseURL}/docs/api/search?q=tile%20split&limit=5`,
+		);
+		expect(automationSearch.ok()).toBe(true);
+		const automationPayload = await automationSearch.json();
+		expect(
+			automationPayload.results.some(
+				(result: { title?: string }) => result.title === "Automation API Guide",
+			),
+		).toBe(true);
+
 		await routeInput.press("Enter");
 		await expect(page.locator("#autocomplete")).toBeVisible();
 		await expect(page.locator("#route-form + #search-hint + #autocomplete")).toHaveCount(

@@ -41,6 +41,23 @@
 			"aliases": ["surface", "surfaces", "last surface"]
 		},
 		{
+			"id": "automation",
+			"label": "Automation",
+			"definition": "The local app-shell API and CLI surface for trusted terminal processes to read context and request scoped tile actions.",
+			"chip": true,
+			"priority": 45,
+			"aliases": [
+				"automation",
+				"automation api",
+				"app-shell automation",
+				"workspaces automation",
+				"tile focus",
+				"tile split",
+				"surface list",
+				"automation socket"
+			]
+		},
+		{
 			"id": "provider",
 			"label": "Provider",
 			"definition": "A backing runtime that can create isolated workspace environments.",
@@ -217,6 +234,22 @@
 			"summary": "Daytona-backed workspace runtime notes."
 		},
 		{
+			"source": "docs/automation-api.md",
+			"dest": "automation-api.md",
+			"title": "Automation API Guide",
+			"group": "Development",
+			"topics": ["automation", "terminal-session", "surface", "workspaces"],
+			"summary": "Example-first guide for using workspaces automation health, context, surface list, tile focus, tile split, and tile close from a terminal tile."
+		},
+		{
+			"source": "docs/decisions/automation-api-v1.md",
+			"dest": "decisions/automation-api-v1.md",
+			"title": "Automation API V1 Decision",
+			"group": "Architecture",
+			"topics": ["automation", "terminal-session", "surface", "mergeability"],
+			"summary": "Decision record for the local socket, opaque handle authority model, narrow V1 scope, and excluded browser/input/global control."
+		},
+		{
 			"source": "docs/performance-testing.md",
 			"dest": "performance-testing.md",
 			"title": "Performance Testing",
@@ -239,6 +272,14 @@
 			"group": "Development",
 			"topics": ["terminal-session", "ghostty", "surface", "workspace"],
 			"summary": "Ghostty integration contract for terminal focus, shortcuts, tabs, and splits."
+		},
+		{
+			"source": "docs/development/automation-api.md",
+			"dest": "development/automation-api.md",
+			"title": "Automation API Reference",
+			"group": "Development",
+			"topics": ["automation", "terminal-session", "surface", "ghostty"],
+			"summary": "Wire reference for automation.sock, WORKSPACES_AUTOMATION_HANDLE, capabilities, envelopes, error codes, routes, and CLI behavior."
 		},
 		{
 			"source": "docs/development/lume-integration.md",

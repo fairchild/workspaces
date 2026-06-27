@@ -263,6 +263,90 @@ struct TileTreeReducerTests {
         #expect(blocked.focusedTileID == added)
     }
 
+    // MARK: - Directional focus (depth ≥ 2, cross-axis)
+    //
+    // Depth-1 directional focus is depth-1 parity above; the geometric ancestor-walk at depth ≥ 2 is
+    // new behavior with no legacy baseline (PR #658 review follow-up). These pin the cross-axis cases —
+    // moving across a split whose axis differs from the one being navigated — which exercise the
+    // "rise to the nearest matching-axis ancestor, then descend into the entering edge" traversal.
+
+    /// Focus `from`, then navigate `direction`; returns the resulting focused tile (== `from` when the
+    /// move is blocked, since the reducer leaves focus put when there is no neighbor).
+    private func directional(
+        _ state: TileTreeState,
+        reducer: TileTreeReducer,
+        from: TileID,
+        _ direction: TileFocusDirection
+    ) -> TileID {
+        let focused = reducer.reduce(state, .setFocus(from))
+        return reducer.reduce(focused, .focusDirectional(from: from, direction: direction)).focusedTileID
+    }
+
+    @Test("Directional focus crosses a leading/trailing root into a nested top/bottom column")
+    func directionalNestedColumn() {
+        // a | (b over c):  left column = a, right column = b (top) / c (bottom).
+        let reducer = TileTreeReducer()
+        let a = TileID()
+        let b = TileID()
+        let c = TileID()
+        let state = TileTreeState(
+            root: .split(
+                id: SplitID(),
+                axis: .leadingTrailing,
+                ratio: 0.5,
+                first: .tile(a),
+                second: .split(id: SplitID(), axis: .topBottom, ratio: 0.5, first: .tile(b), second: .tile(c))
+            ),
+            focusedTileID: a
+        )
+
+        // Left from either nested pane lands on the single left column.
+        #expect(directional(state, reducer: reducer, from: b, .left) == a)
+        #expect(directional(state, reducer: reducer, from: c, .left) == a)
+        // Right from the left column enters the nested column at its leading (top) edge.
+        #expect(directional(state, reducer: reducer, from: a, .right) == b)
+        // Vertical moves stay inside the nested top/bottom split.
+        #expect(directional(state, reducer: reducer, from: b, .down) == c)
+        #expect(directional(state, reducer: reducer, from: c, .up) == b)
+        // Blocked edges: no pane above b, none below c, nothing right of the nested column, none above a.
+        #expect(directional(state, reducer: reducer, from: b, .up) == b)
+        #expect(directional(state, reducer: reducer, from: c, .down) == c)
+        #expect(directional(state, reducer: reducer, from: b, .right) == b)
+        #expect(directional(state, reducer: reducer, from: a, .up) == a)
+    }
+
+    @Test("Directional focus crosses a top/bottom root into a nested leading/trailing row")
+    func directionalNestedRow() {
+        // a over (b | c):  top row = a, bottom row = b (left) / c (right).
+        let reducer = TileTreeReducer()
+        let a = TileID()
+        let b = TileID()
+        let c = TileID()
+        let state = TileTreeState(
+            root: .split(
+                id: SplitID(),
+                axis: .topBottom,
+                ratio: 0.5,
+                first: .tile(a),
+                second: .split(id: SplitID(), axis: .leadingTrailing, ratio: 0.5, first: .tile(b), second: .tile(c))
+            ),
+            focusedTileID: a
+        )
+
+        // Up from either nested pane lands on the single top row.
+        #expect(directional(state, reducer: reducer, from: b, .up) == a)
+        #expect(directional(state, reducer: reducer, from: c, .up) == a)
+        // Down from the top row enters the nested row at its leading (left) edge.
+        #expect(directional(state, reducer: reducer, from: a, .down) == b)
+        // Horizontal moves stay inside the nested leading/trailing split.
+        #expect(directional(state, reducer: reducer, from: b, .right) == c)
+        #expect(directional(state, reducer: reducer, from: c, .left) == b)
+        // Blocked edges: nothing left of b, nothing below the nested row, no horizontal neighbor for a.
+        #expect(directional(state, reducer: reducer, from: b, .left) == b)
+        #expect(directional(state, reducer: reducer, from: c, .down) == c)
+        #expect(directional(state, reducer: reducer, from: a, .left) == a)
+    }
+
     // MARK: - Relative focus
 
     @Test("Relative focus toggles between two leaves and wraps")

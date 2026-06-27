@@ -83,7 +83,11 @@ enum DiagnosticReportExporter {
         }
 
         // system-profile.txt
-        let profile = gatherSystemProfile(systemInfo)
+        let profile = gatherSystemProfile(
+            systemInfo,
+            modelStoreSnapshot: modelStoreSnapshot,
+            localStateSnapshot: localStateSnapshot
+        )
         try profile.write(to: tempDir.appendingPathComponent("system-profile.txt"), atomically: true, encoding: .utf8)
 
         // recent-logs.txt (unified log, last 5 minutes)
@@ -145,7 +149,11 @@ enum DiagnosticReportExporter {
         )
     }
 
-    private static func gatherSystemProfile(_ info: SystemInfo) -> String {
+    private static func gatherSystemProfile(
+        _ info: SystemInfo,
+        modelStoreSnapshot: ModelStoreStatusSnapshot,
+        localStateSnapshot: LocalStateStoreStatusSnapshot
+    ) -> String {
         var lines: [String] = []
         lines.append("WorkSpaces Diagnostic Report")
         lines.append("Generated: \(ISO8601DateFormatter().string(from: Date()))")
@@ -166,31 +174,25 @@ enum DiagnosticReportExporter {
         lines.append("  Path: \(AppBuildIdentity.current.fullPath)")
         lines.append("")
         lines.append("Model Store:")
-        let modelStore = MainActor.assumeIsolated {
-            ModelStoreStatusController.shared.snapshot
-        }
-        lines.append("  Mode: \(modelStore.mode.label)")
-        lines.append("  Path: \(modelStore.mode.path ?? "In-memory only")")
-        if modelStore.bootstrapErrors.isEmpty {
+        lines.append("  Mode: \(modelStoreSnapshot.mode.label)")
+        lines.append("  Path: \(modelStoreSnapshot.mode.path ?? "In-memory only")")
+        if modelStoreSnapshot.bootstrapErrors.isEmpty {
             lines.append("  Bootstrap Errors: none")
         } else {
             lines.append("  Bootstrap Errors:")
-            for error in modelStore.bootstrapErrors {
+            for error in modelStoreSnapshot.bootstrapErrors {
                 lines.append("    - \(error)")
             }
         }
         lines.append("")
         lines.append("Local State Store:")
-        let localStateStore = MainActor.assumeIsolated {
-            LocalStateStoreController.shared.snapshot
-        }
-        lines.append("  Mode: \(localStateStore.mode.label)")
-        lines.append("  Path: \(localStateStore.mode.path ?? "none")")
-        if localStateStore.bootstrapErrors.isEmpty {
+        lines.append("  Mode: \(localStateSnapshot.mode.label)")
+        lines.append("  Path: \(localStateSnapshot.mode.path ?? "none")")
+        if localStateSnapshot.bootstrapErrors.isEmpty {
             lines.append("  Bootstrap Errors: none")
         } else {
             lines.append("  Bootstrap Errors:")
-            for error in localStateStore.bootstrapErrors {
+            for error in localStateSnapshot.bootstrapErrors {
                 lines.append("    - \(error)")
             }
         }

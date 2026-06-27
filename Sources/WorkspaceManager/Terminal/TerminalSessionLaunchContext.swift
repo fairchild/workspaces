@@ -39,37 +39,43 @@ struct TerminalSessionLaunchContext: Equatable, Sendable {
     let commandMode: CommandMode
     let hostSessionID: UUID?
     let hooksSocketPath: String?
+    let automationEnvironment: AutomationTerminalEnvironment?
 
     static func hostSession(
         _ session: HostTerminalSession,
-        hooksSocketPath: String?
+        hooksSocketPath: String?,
+        automationEnvironment: AutomationTerminalEnvironment? = nil
     ) -> TerminalSessionLaunchContext {
         if let customCommand = session.customCommand {
             return TerminalSessionLaunchContext(
                 workingDirectory: session.directoryURL,
                 commandMode: .customCommand(customCommand),
                 hostSessionID: session.id,
-                hooksSocketPath: hooksSocketPath
+                hooksSocketPath: hooksSocketPath,
+                automationEnvironment: nil
             )
         }
 
         return directoryBacked(
             workingDirectory: session.directoryURL,
             hostSessionID: session.id,
-            hooksSocketPath: hooksSocketPath
+            hooksSocketPath: hooksSocketPath,
+            automationEnvironment: automationEnvironment
         )
     }
 
     static func directoryBacked(
         workingDirectory: URL,
         hostSessionID: UUID? = nil,
-        hooksSocketPath: String? = nil
+        hooksSocketPath: String? = nil,
+        automationEnvironment: AutomationTerminalEnvironment? = nil
     ) -> TerminalSessionLaunchContext {
         TerminalSessionLaunchContext(
             workingDirectory: workingDirectory,
             commandMode: .directoryShell,
             hostSessionID: hostSessionID,
-            hooksSocketPath: hooksSocketPath
+            hooksSocketPath: hooksSocketPath,
+            automationEnvironment: automationEnvironment
         )
     }
 
@@ -77,13 +83,16 @@ struct TerminalSessionLaunchContext: Equatable, Sendable {
         _ command: String,
         workingDirectory: URL = FileManager.default.temporaryDirectory,
         hostSessionID: UUID? = nil,
-        hooksSocketPath: String? = nil
+        hooksSocketPath: String? = nil,
+        automationEnvironment: AutomationTerminalEnvironment? = nil
     ) -> TerminalSessionLaunchContext {
-        TerminalSessionLaunchContext(
+        _ = automationEnvironment
+        return TerminalSessionLaunchContext(
             workingDirectory: workingDirectory,
             commandMode: .customCommand(command),
             hostSessionID: hostSessionID,
-            hooksSocketPath: hooksSocketPath
+            hooksSocketPath: hooksSocketPath,
+            automationEnvironment: nil
         )
     }
 

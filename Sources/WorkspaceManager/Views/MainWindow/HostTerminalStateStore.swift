@@ -49,6 +49,11 @@ final class HostTerminalStateStore: ObservableObject {
     private var sessionByTileID: [TileID: HostTerminalSession] = [:]
     private var tileIDBySessionID: [UUID: TileID] = [:]
     private var primaryIDBySplitSessionID: [UUID: UUID] = [:]
+    private var automationTileIDBySessionID: [UUID: TileID] = [:]
+    private var automationHandleRegistry: AutomationHandleRegistry?
+    private var automationSocketPath: String?
+    private let automationWindowScopeID = UUID().uuidString
+    private let automationAppScopeID = "workspaces.local"
     private let tileTreeReducer = TileTreeReducer()
 
     let surfaceStore = HostTerminalSurfaceStore()
@@ -90,6 +95,9 @@ final class HostTerminalStateStore: ObservableObject {
         self.localStateStore = localStateStore
         self.lastCommandStatusRegistry = lastCommandStatusRegistry
         self.surfaceStore.hooksSocketPath = hooksSocketPath
+        self.surfaceStore.automationEnvironmentProvider = { [weak self] session in
+            self?.automationEnvironment(for: session)
+        }
         guard self.agentSessionRegistry !== agentSessionRegistry else {
             syncRegistry()
             return
@@ -105,6 +113,15 @@ final class HostTerminalStateStore: ObservableObject {
         AgentOSCRouter.shared.attach(registry: agentSessionRegistry) { surfaceView in
             store.sessionID(for: surfaceView)
         }
+    }
+
+    func configureAutomation(handleRegistry: AutomationHandleRegistry?, socketPath: String?) {
+        automationHandleRegistry = handleRegistry
+        automationSocketPath = socketPath
+        surfaceStore.automationEnvironmentProvider = { [weak self] session in
+            self?.automationEnvironment(for: session)
+        }
+        syncAutomationRegistry()
     }
 
     var hasSessions: Bool {
@@ -445,10 +462,22 @@ final class HostTerminalStateStore: ObservableObject {
     /// is registered with the agent subsystems and holds at any depth (each extra pane is a leaf here).
     private var derivedSplitSessions: [HostTerminalSession] {
         treesByPrimaryID.flatMap { primarySessionID, tree -> [HostTerminalSession] in
-            guard let primaryTile = tileIDBySessionID[primarySessionID] else { return [] }
-            return tree.leafIDs.compactMap { tileID in
-                tileID == primaryTile ? nil : sessionByTileID[tileID]
-            }
+            splitSessions(in: tree, primarySessionID: primarySessionID)
+        }
+    }
+
+    /// Live split sessions for a tab, including depth ≥ 2 panes. This is the public read path for
+    /// app controllers that need every non-primary surface; the legacy `splitSession` projection above
+    /// intentionally remains depth-1 only.
+    func splitSessions(forPrimarySessionID primarySessionID: UUID?) -> [HostTerminalSession] {
+        guard let primarySessionID, let tree = treesByPrimaryID[primarySessionID] else { return [] }
+        return splitSessions(in: tree, primarySessionID: primarySessionID)
+    }
+
+    private func splitSessions(in tree: TileTreeState, primarySessionID: UUID) -> [HostTerminalSession] {
+        guard let primaryTile = tileIDBySessionID[primarySessionID] else { return [] }
+        return tree.leafIDs.compactMap { tileID in
+            tileID == primaryTile ? nil : sessionByTileID[tileID]
         }
     }
 
@@ -486,7 +515,7 @@ final class HostTerminalStateStore: ObservableObject {
         }
 
         let existingTree = treesByPrimaryID[primarySessionID]
-        let primaryTile = tileIDBySessionID[primarySessionID] ?? TileID()
+        let primaryTile = tileIDBySessionID[primarySessionID] ?? automationTileID(for: primarySessionID)
         let seedTree = existingTree ?? TileTreeState(singleTile: primaryTile)
         // Split the source pane's tile when it is bound; a freshly seeded tab has only the primary,
         // whose tile is `seedTree.focusedTileID`.
@@ -520,6 +549,7 @@ final class HostTerminalStateStore: ObservableObject {
         treesByPrimaryID[primarySessionID] = grownTree
 
         syncRegistry()
+        syncAutomationRegistry()
         objectWillChange.send()
         return splitSession
     }
@@ -675,6 +705,7 @@ final class HostTerminalStateStore: ObservableObject {
         }
 
         syncRegistry()
+        syncAutomationRegistry()
 
         for session in sessions {
             recordTerminalSession(
@@ -719,8 +750,31 @@ final class HostTerminalStateStore: ObservableObject {
             registry.deregister(hostSessionID: sessionID)
             lastCommandStatusRegistry?.clear(terminalSessionID: sessionID)
             recordTerminalSessionEnded(sessionID)
+            automationHandleRegistry?.remove(hostSessionID: sessionID)
+            automationTileIDBySessionID.removeValue(forKey: sessionID)
         }
         registeredAgentSessionIDs.subtract(removed)
+    }
+
+    private func syncAutomationRegistry() {
+        guard let automationHandleRegistry, automationSocketPath != nil else { return }
+        let allSessions = coordinator.sessions + derivedSplitSessions
+        let liveIDs = Set(allSessions.map(\.id))
+
+        for session in allSessions {
+            _ = automationHandleRegistry.upsert(
+                hostSessionID: session.id,
+                tileID: automationTileID(for: session.id),
+                surfaceKind: .terminal,
+                windowScopeID: automationWindowScopeID,
+                appScopeID: automationAppScopeID
+            )
+        }
+
+        for staleID in Array(automationTileIDBySessionID.keys) where !liveIDs.contains(staleID) {
+            automationHandleRegistry.remove(hostSessionID: staleID)
+            automationTileIDBySessionID.removeValue(forKey: staleID)
+        }
     }
 
     /// Collapses the split for `primarySessionID` (process-exit / reconcile path): drops its tree and
@@ -799,6 +853,10 @@ final class HostTerminalStateStore: ObservableObject {
     /// Deregisters a session from the agent subsystems if it was registered. Shared by the
     /// collapse and retire teardown paths, which differ only in their surface-store call.
     private func deregisterTerminalSession(_ sessionID: UUID) {
+        defer {
+            automationHandleRegistry?.remove(hostSessionID: sessionID)
+            automationTileIDBySessionID.removeValue(forKey: sessionID)
+        }
         guard registeredAgentSessionIDs.contains(sessionID) else { return }
         agentSessionRegistry?.deregister(hostSessionID: sessionID)
         lastCommandStatusRegistry?.clear(terminalSessionID: sessionID)
@@ -830,6 +888,35 @@ final class HostTerminalStateStore: ObservableObject {
         Task {
             try? await localStateStore.markTerminalSessionEnded(hostSessionID: sessionID)
         }
+    }
+
+    func automationEnvironment(for session: HostTerminalSession) -> AutomationTerminalEnvironment? {
+        guard let automationHandleRegistry, let automationSocketPath else { return nil }
+        let entry = automationHandleRegistry.upsert(
+            hostSessionID: session.id,
+            tileID: automationTileID(for: session.id),
+            surfaceKind: .terminal,
+            windowScopeID: automationWindowScopeID,
+            appScopeID: automationAppScopeID
+        )
+        return AutomationTerminalEnvironment(socketPath: automationSocketPath, handle: entry.handle)
+    }
+
+    func automationTileIDString(for sessionID: UUID) -> String? {
+        automationTileID(for: sessionID).rawValue.uuidString
+    }
+
+    private func automationTileID(for sessionID: UUID) -> TileID {
+        if let tileID = tileIDBySessionID[sessionID] {
+            automationTileIDBySessionID[sessionID] = tileID
+            return tileID
+        }
+        if let tileID = automationTileIDBySessionID[sessionID] {
+            return tileID
+        }
+        let tileID = TileID()
+        automationTileIDBySessionID[sessionID] = tileID
+        return tileID
     }
 
     private func resolvedPrimarySessionID(_ sourceSessionID: UUID?) -> UUID? {
