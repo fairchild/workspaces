@@ -3,8 +3,9 @@
 //  WorkspaceManagerAppTests
 //
 //  Opt-in performance scenarios for main-window hot spots that are hard to
-//  isolate from ordinary unit tests: sidebar status aggregation bursts. Results
-//  are written as JSON for scripts/main-window-hotspots-baseline.py.
+//  isolate from ordinary unit tests: sidebar status aggregation bursts and
+//  switcher snapshot construction. Results are written as JSON for
+//  scripts/main-window-hotspots-baseline.py.
 //
 
 import Foundation
@@ -124,10 +125,102 @@ struct MainWindowHotSpotPerfTests {
         #expect(dropdownStats["median"] as? Double ?? .infinity < 1_000)
     }
 
+    @Test("main_window_session_switcher_snapshot: snapshot build, filter, and rank latency")
+    func sessionSwitcherSnapshotLatency() throws {
+        let fixture = makeSidebarFixture(repoCount: 10, workspacesPerRepo: 2, repoSessionCount: 10)
+        let presentation = SidebarWorkspacePresentationController()
+        let registry = WorkspaceProviderRegistry(providers: [])
+        let normalize: (URL) -> String = { url in
+            url.standardizedFileURL.resolvingSymlinksInPath().path
+        }
+        let workspaceSessionKeys = Dictionary(
+            uniqueKeysWithValues: fixture.repos.flatMap(\.workspaces).map { workspace in
+                let key = presentation.sessionKey(
+                    for: workspace,
+                    registry: registry,
+                    normalizePath: normalize
+                )
+                return (workspace.id, key)
+            }
+        )
+        let workspaceActivities = Dictionary(
+            uniqueKeysWithValues: fixture.repos.flatMap(\.workspaces).map { workspace in
+                (workspace.id, SidebarSessionActivity.thinking)
+            }
+        )
+        let repoActivities = Dictionary(
+            uniqueKeysWithValues: fixture.repos.map { repo in
+                (repo.id, SidebarSessionActivity.live)
+            }
+        )
+
+        var statuses = fixture.statuses
+        let statusSessionIDs = Array(statuses.keys)
+        let queries = ["", "repo-1", "workspace-1", "fixture", "localhost", "theme", "Claude"]
+        let refreshes = 1_000
+        var samples: [Double] = []
+        samples.reserveCapacity(refreshes)
+
+        for iteration in 0..<refreshes {
+            if let sessionID = statusSessionIDs[safe: iteration % statusSessionIDs.count],
+                var status = statuses[sessionID]
+            {
+                status.lastEventAt = Date()
+                status.run =
+                    iteration % 7 == 0
+                    ? .awaitingInput(reason: .permissionPrompt)
+                    : .runningTool(
+                        name: "Read",
+                        detail: "fixture-\(iteration)"
+                    )
+                statuses[sessionID] = status
+            }
+
+            let started = DispatchTime.now().uptimeNanoseconds
+            let snapshot = SessionSwitcherSnapshot.make(
+                repos: fixture.repos,
+                webSources: fixture.webSources,
+                sessions: fixture.sessions,
+                activeSessionID: fixture.sessions.first?.id,
+                agentStatuses: statuses,
+                paneCountBySessionKey: fixture.paneCountBySessionKey,
+                workspaceSessionKeys: workspaceSessionKeys,
+                workspaceActivities: workspaceActivities,
+                repoActivities: repoActivities
+            )
+            _ = SessionSwitcherSnapshot.rank(
+                snapshot.rows,
+                query: queries[iteration % queries.count]
+            )
+            let elapsed = DispatchTime.now().uptimeNanoseconds - started
+            samples.append(Double(elapsed) / 1_000_000.0)
+        }
+
+        let stats = summarize(samples, unit: "ms")
+        try writeResult(
+            [
+                "scenario": "main_window_session_switcher_snapshot",
+                "refreshes": refreshes,
+                "repo_count": fixture.repos.count,
+                "workspace_count": fixture.repos.flatMap(\.workspaces).count,
+                "session_count": fixture.sessions.count,
+                "web_source_count": fixture.webSources.count,
+                "metrics": [
+                    "main_window_session_switcher_snapshot_ms": stats
+                ],
+            ],
+            scenario: "main_window_session_switcher_snapshot"
+        )
+
+        #expect(stats["median"] as? Double ?? .infinity < 1_000)
+    }
+
     private struct SidebarFixture {
         let repos: [Repo]
+        let webSources: [WebSource]
         let sessions: [HostTerminalSession]
         let statuses: [UUID: AgentSessionStatus]
+        let paneCountBySessionKey: [HostTerminalSessionKey: Int]
     }
 
     private func makeSidebarFixture(
@@ -138,13 +231,23 @@ struct MainWindowHotSpotPerfTests {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("workspaces-main-window-perf", isDirectory: true)
         var repos: [Repo] = []
+        var webSources: [WebSource] = []
         var sessions: [HostTerminalSession] = []
         var statuses: [UUID: AgentSessionStatus] = [:]
+        var paneCountBySessionKey: [HostTerminalSessionKey: Int] = [:]
 
         for repoIndex in 0..<repoCount {
             let repoURL = root.appendingPathComponent("repo-\(repoIndex)", isDirectory: true)
             let repo = Repo(name: "repo-\(repoIndex)", localPath: repoURL, lastAccessedAt: Date())
             var workspaces: [Workspace] = []
+            let webSource = WebSource(
+                name: "fixture-web-\(repoIndex)",
+                baseURLString: "http://localhost:\(3000 + repoIndex)",
+                allowedHost: "localhost",
+                lastAccessedAt: Date().addingTimeInterval(Double(-repoIndex)),
+                sourceRepo: repo
+            )
+            webSources.append(webSource)
 
             for workspaceIndex in 0..<workspacesPerRepo {
                 let workspaceURL = repoURL.appendingPathComponent("workspace-\(workspaceIndex)", isDirectory: true)
@@ -161,6 +264,7 @@ struct MainWindowHotSpotPerfTests {
                     directory: workspaceURL
                 )
                 sessions.append(session)
+                paneCountBySessionKey[session.key.normalized()] = workspaceIndex % 2 == 0 ? 2 : 1
                 statuses[session.id] = AgentSessionStatus(
                     hostSessionID: session.id,
                     kind: .claudeCode,
@@ -183,6 +287,7 @@ struct MainWindowHotSpotPerfTests {
                 directory: repo.localURL
             )
             sessions.append(session)
+            paneCountBySessionKey[session.key.normalized()] = 1
             statuses[session.id] = AgentSessionStatus(
                 hostSessionID: session.id,
                 kind: .claudeCode,
@@ -193,7 +298,13 @@ struct MainWindowHotSpotPerfTests {
             )
         }
 
-        return SidebarFixture(repos: repos, sessions: sessions, statuses: statuses)
+        return SidebarFixture(
+            repos: repos,
+            webSources: webSources,
+            sessions: sessions,
+            statuses: statuses,
+            paneCountBySessionKey: paneCountBySessionKey
+        )
     }
 
     private func normalize(_ url: URL) -> String {

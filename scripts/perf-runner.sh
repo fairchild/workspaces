@@ -15,6 +15,7 @@ Scenarios:
   installed_login_shell
   installed_input_short_capture
   main_window_agent_activity_burst
+  main_window_session_switcher_snapshot
   main_window_workspace_create_ui_stall
   main_window_idle_cpu_diagnostics_closed
   main_window_resident_memory_20_workspaces
@@ -124,7 +125,8 @@ run_debug() {
     if [[ "$ASSERT_BUDGET" -eq 1 ]]; then
         cmd+=("--assert-budget")
     fi
-    "${cmd[@]}"
+    local status=0
+    "${cmd[@]}" || status=$?
 
     local latest_after=""
     latest_after="$(ls -td /tmp/workspaces-perf-baseline-* 2>/dev/null | head -n 1 || true)"
@@ -134,6 +136,7 @@ run_debug() {
         cp -R "$latest_after"/. "$OUTPUT_DIR"/
         echo "copied_artifacts=$OUTPUT_DIR"
     fi
+    return "$status"
 }
 
 run_installed() {
@@ -265,7 +268,7 @@ case "$SCENARIO" in
     installed_input_short_capture)
         run_installed_input_short_capture
         ;;
-    main_window_agent_activity_burst|main_window_workspace_create_ui_stall|main_window_idle_cpu_diagnostics_closed|main_window_resident_memory_20_workspaces)
+    main_window_agent_activity_burst|main_window_session_switcher_snapshot|main_window_workspace_create_ui_stall|main_window_idle_cpu_diagnostics_closed|main_window_resident_memory_20_workspaces)
         run_main_window_hotspot
         ;;
     *)
