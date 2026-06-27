@@ -26,6 +26,8 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+CODEX_ENVIRONMENT = (REPO_ROOT / ".codex/environments/workspaces.toml").read_text()
+assert 'script = "./scripts/setup --fast"' in CODEX_ENVIRONMENT
 
 
 class SecurityHardeningTests(unittest.TestCase):
