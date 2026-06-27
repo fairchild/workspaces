@@ -64,6 +64,8 @@ docs/papers/*.pdf
 .pi/skills/sandbox/
 
 # Playwright
+web/.auth/
+web/output/preview-qa/
 web/playwright-report/
 web/test-results/
 

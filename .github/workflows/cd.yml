@@ -173,14 +173,15 @@ jobs:
       - name: Install Playwright system deps
         if: steps.pw-cache.outputs.cache-hit == 'true'
         run: pnpm exec playwright install-deps chromium
-      - name: Run Playwright fast against preview
+      - name: Run Playwright deployment smoke against preview
         env:
           PLAYWRIGHT_BASE_URL: ${{ needs.preview-web.outputs.preview_url }}
           PLAYWRIGHT_SKIP_WEB_SERVER: "1"
+          PLAYWRIGHT_SKIP_DB_FIXTURES: "1"
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
         run: |
           set +e
-          pnpm exec playwright test --project fast --reporter=json > playwright-report.json
+          pnpm exec playwright test --project deployment-smoke --reporter=json > playwright-report.json
           PW_EXIT=$?
           node scripts/playwright-findings.js playwright-report.json > findings.md || echo "_findings script failed_" > findings.md
           exit $PW_EXIT
@@ -283,7 +284,7 @@ jobs:
         env:
           VALIDATOR: playwright
           PREVIEW_URL: ${{ needs.preview-web.outputs.preview_url }}
-          REPRO_HINT: cd web && PLAYWRIGHT_BASE_URL=${{ needs.preview-web.outputs.preview_url }} PLAYWRIGHT_SKIP_WEB_SERVER=1 pnpm exec playwright test --project fast
+          REPRO_HINT: cd web && PLAYWRIGHT_BASE_URL=${{ needs.preview-web.outputs.preview_url }} PLAYWRIGHT_SKIP_WEB_SERVER=1 PLAYWRIGHT_SKIP_DB_FIXTURES=1 pnpm exec playwright test --project deployment-smoke
         with:
           script: |
             // github-script runs from its own dist dir; relative imports look
@@ -382,13 +383,14 @@ jobs:
             } > findings.md
           fi
           exit "$CANARY_EXIT"
-      - name: Playwright fast against prod
+      - name: Playwright deployment smoke against prod
         env:
           PLAYWRIGHT_BASE_URL: https://spaces.cloudcompute.com
           PLAYWRIGHT_SKIP_WEB_SERVER: "1"
+          PLAYWRIGHT_SKIP_DB_FIXTURES: "1"
         run: |
           set +e
-          pnpm exec playwright test --project fast --reporter=json > prod-report.json
+          pnpm exec playwright test --project deployment-smoke --reporter=json > prod-report.json
           PW_EXIT=$?
           node scripts/playwright-findings.js prod-report.json > findings.md || echo "_findings script failed_" > findings.md
           exit $PW_EXIT

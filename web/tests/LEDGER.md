@@ -9,7 +9,7 @@ A behavior → test mapping. The `qa-web-agent` reads this at the start of every
 Each row is a *user-visible behavior*. Columns:
 
 - **Behavior** — the oracle, stated in plain English (what a user can do or observe).
-- **Layer** — `unit` (Vitest, `web/src/**/__tests__/*.test.ts`), `e2e-fast`, `e2e-full`, `e2e-demo`, `e2e-explore`, or `manual`.
+- **Layer** — `unit` (Vitest, `web/src/**/__tests__/*.test.ts`), `e2e-deployment-smoke`, `e2e-fast`, `e2e-full`, `e2e-demo`, `e2e-explore`, or `manual`.
 - **Test** — file path + test name, or `—` if not yet automated.
 - **Verified** — ISO date the test last ran green in CI. `—` if not automated.
 - **Owner** — who cares if this breaks. `qa-web-agent` is allowed as an owner, meaning the agent is responsible for keeping it green.
@@ -23,6 +23,7 @@ Add a `[gap]` row for behaviors you know matter but aren't yet tested. `qa-web-a
 | Behavior | Layer | Test | Verified | Owner |
 |---|---|---|---|---|
 | Landing page loads with Spaces branding | e2e-fast | `fast/landing.spec.ts :: loads with Spaces branding` | 2026-04-17 | qa-web-agent |
+| Deployed app serves landing, sign-in, docs, auth redirect, and unauth sync boundary | e2e-deployment-smoke | `deployment-smoke/app.spec.ts :: Deployment smoke` | 2026-06-27 | qa-web-agent |
 | `POST /api/workspaces/sync` rejects unauthenticated requests | e2e-fast | `fast/unauth-api.spec.ts :: POST /api/workspaces/sync without auth returns unauthorized` | 2026-04-17 | qa-web-agent |
 | `GET /dashboard` redirects unauthenticated users to sign-in | e2e-fast | `fast/unauth-redirect.spec.ts :: GET /dashboard without auth redirects to sign-in` | 2026-04-17 | qa-web-agent |
 

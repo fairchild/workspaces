@@ -49,6 +49,8 @@ function minutesAgo(day: number, minutes: number): string {
 }
 
 export default async function globalSetup() {
+	if (process.env.PLAYWRIGHT_SKIP_DB_FIXTURES === "1") return;
+
 	mkdirSync("data", { recursive: true });
 	const db = createClient({ url: DB_URL });
 

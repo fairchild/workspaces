@@ -18,6 +18,7 @@
 		"test": "vitest run",
 		"test:unit": "vitest run",
 		"test:e2e": "playwright test",
+		"test:e2e:deployment-smoke": "PLAYWRIGHT_SKIP_DB_FIXTURES=1 PLAYWRIGHT_SKIP_WEB_SERVER=1 playwright test --project deployment-smoke",
 		"test:e2e:fast": "playwright test --project fast",
 		"test:e2e:docs": "PORT=3211 PLAYWRIGHT_BASE_URL=http://127.0.0.1:3211 playwright test e2e/fast/docs.spec.ts --project=fast",
 		"test:e2e:docs-local": "PLAYWRIGHT_SKIP_WEB_SERVER=1 playwright test e2e/fast/docs-local-server.spec.ts --project=fast",

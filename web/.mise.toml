@@ -87,6 +87,104 @@ echo "Removed and formatted."
 description = "Run the qa-explore Playwright project (video + trace + axe-core)."
 run = "pnpm exec playwright test --project=qa-explore --reporter=list"
 
+[tasks."web:e2e:deployment-smoke"]
+description = "Run deployment-safe Playwright smoke locally."
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+PORT="${PORT:-3212}"
+PORT="$PORT" \
+PLAYWRIGHT_BASE_URL="http://127.0.0.1:$PORT" \
+PLAYWRIGHT_SKIP_DB_FIXTURES=1 \
+pnpm exec playwright test --project=deployment-smoke --workers=1 --reporter=list
+"""
+
+[tasks."web:preview:auth"]
+description = "Create or refresh a real-OAuth Playwright storage state for a Vercel preview."
+run = "node scripts/preview-auth.mjs"
+
+[tasks."web:preview:smoke"]
+description = "Run deployment-safe Playwright smoke against a Vercel preview."
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+
+URL=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --pr)
+      shift
+      URL="https://pr-${1:?missing PR number}.spaces-preview.cloudcompute.com"
+      ;;
+    --url)
+      shift
+      URL="${1:?missing preview URL}"
+      ;;
+    *)
+      echo "usage: mise run web:preview:smoke -- --pr <number> | --url <url>" >&2
+      exit 2
+      ;;
+  esac
+  shift
+done
+
+if [[ -z "$URL" ]]; then
+  echo "usage: mise run web:preview:smoke -- --pr <number> | --url <url>" >&2
+  exit 2
+fi
+
+PLAYWRIGHT_BASE_URL="$URL" \
+PLAYWRIGHT_SKIP_WEB_SERVER=1 \
+PLAYWRIGHT_SKIP_DB_FIXTURES=1 \
+pnpm exec playwright test --project=deployment-smoke --reporter=list
+"""
+
+[tasks."web:preview:explore"]
+description = "Run exploratory Playwright QA against an authenticated Vercel preview."
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+
+URL=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --pr)
+      shift
+      URL="https://pr-${1:?missing PR number}.spaces-preview.cloudcompute.com"
+      ;;
+    --url)
+      shift
+      URL="${1:?missing preview URL}"
+      ;;
+    *)
+      echo "usage: mise run web:preview:explore -- --pr <number> | --url <url>" >&2
+      exit 2
+      ;;
+  esac
+  shift
+done
+
+if [[ -z "$URL" ]]; then
+  echo "usage: mise run web:preview:explore -- --pr <number> | --url <url>" >&2
+  exit 2
+fi
+
+HOST="$(node -e 'console.log(new URL(process.argv[1]).host.replace(/[^A-Za-z0-9_.-]/g, "_"))' "$URL")"
+STATE=".auth/preview-${HOST}.json"
+if [[ ! -f "$STATE" ]]; then
+  echo "missing $STATE; run: mise run web:preview:auth -- --url $URL" >&2
+  exit 2
+fi
+
+mkdir -p "output/preview-qa/$HOST"
+PLAYWRIGHT_BASE_URL="$URL" \
+PLAYWRIGHT_SKIP_WEB_SERVER=1 \
+PLAYWRIGHT_SKIP_DB_FIXTURES=1 \
+PLAYWRIGHT_STORAGE_STATE="$STATE" \
+PLAYWRIGHT_OUTPUT_DIR="output/preview-qa/$HOST/test-results" \
+pnpm exec playwright test --project=qa-explore --reporter=list
+"""
+
 [tasks."web:qa:init-agents"]
 description = "One-shot: scaffold Playwright's agent-loop instructions (for Claude Code) into the repo. Run once; commit the output."
 run = "pnpm exec playwright init-agents --loop=claude"

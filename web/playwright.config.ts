@@ -2,6 +2,8 @@ import { defineConfig, devices } from "@playwright/test";
 
 const BASE_URL = process.env.PLAYWRIGHT_BASE_URL ?? "http://localhost:3000";
 const SKIP_WEB_SERVER = process.env.PLAYWRIGHT_SKIP_WEB_SERVER === "1";
+const STORAGE_STATE = process.env.PLAYWRIGHT_STORAGE_STATE;
+const OUTPUT_DIR = process.env.PLAYWRIGHT_OUTPUT_DIR;
 const E2E_DATABASE_URL =
 	process.env.PLAYWRIGHT_DATABASE_URL ??
 	(process.env.CI ? "file:data/e2e-auth.db" : process.env.TURSO_DATABASE_URL);
@@ -24,12 +26,19 @@ export default defineConfig({
 	retries: process.env.CI ? 2 : 0,
 	workers: process.env.CI ? 1 : undefined,
 	reporter: "html",
+	...(OUTPUT_DIR ? { outputDir: OUTPUT_DIR } : {}),
 	use: {
 		baseURL: BASE_URL,
 		trace: "on-first-retry",
 		extraHTTPHeaders,
+		...(STORAGE_STATE ? { storageState: STORAGE_STATE } : {}),
 	},
 	projects: [
+		{
+			name: "deployment-smoke",
+			testMatch: "deployment-smoke/**",
+			use: { ...devices["Desktop Chrome"] },
+		},
 		{
 			name: "fast",
 			testMatch: "fast/**",
