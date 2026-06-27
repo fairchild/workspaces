@@ -126,23 +126,30 @@ Current migration uses surface/runtime config only:
 - `env_vars`
 - `font_size`
 
+App-owned config-file keys:
+- `theme = light:<L>,dark:<D>` when Terminal Theme is selected
+- `scrollbar = system`
+- `mouse-scroll-multiplier = precision:0.7,discrete:1`
+
 Not configured yet (by design in this migration):
 - app-owned font-family override
 
-Reason: keep integration on stable C fields. The Terminal Theme (below) is the
-one app-owned config-file key we manage.
+Reason: keep integration on stable C fields and a small isolated config file
+instead of loading the user's `~/.config/ghostty`.
 
 ## Terminal Theme (app-owned config + live update)
 
-WorkSpaces sets the terminal color theme through a small, app-owned config file
-applied live — never via OSC escapes or surface recreation. See the ADR
+WorkSpaces sets terminal behavior defaults and the optional terminal color theme
+through a small, app-owned config file applied live — never via OSC escapes or
+surface recreation. See the ADR
 `docs/decisions/ghostty-theme-config.md` for the rationale.
 
 Contract:
 
 - **Config file**: `<dataDir>/ghostty/workspaces.config` (the `WORKSPACES_DATA_DIR`
   convention, else the app support dir), isolated from `~/.config/ghostty`, which
-  we never load. It contains only `theme = light:<L>,dark:<D>`.
+  we never load. It contains WorkSpaces-managed keys only: scrollbar visibility,
+  scroll speed, and an optional `theme = light:<L>,dark:<D>`.
 - **Catalog**: themes are enumerated at runtime from `<resources>/ghostty/themes/`
   via `GhosttyResourcesLocator.resolvedResourcesDirectory()` — each filename *is*
   the `theme =` value. `GhosttyThemeCatalog` exposes `all`, `featured`, and fuzzy
@@ -153,10 +160,10 @@ Contract:
   `./scripts/launch-dev.sh` shows themes; a direct-binary launch still needs the
   env var set by hand.
 - **Startup**: `initializeIfNeeded()` builds the initial `ghostty_config_t` from
-  the persisted pair (`GhosttyThemePersistence`, `UserDefaults`). With no
-  selection it stays a bare default; with a selection it writes the file and
-  `ghostty_config_load_file`s it before `ghostty_app_new`, so the first surfaces
-  inherit the theme.
+  the persisted pair (`GhosttyThemePersistence`, `UserDefaults`). The config file
+  is always written for WorkSpaces scroll defaults; with a selected theme it also
+  includes `theme = …`. The file is loaded before `ghostty_app_new`, so the first
+  surfaces inherit the behavior.
 - **Live change**: `applyTheme(lightTheme:darkTheme:)` rewrites the file, rebuilds
   a fresh config, broadcasts via `ghostty_app_update_config(app, cfg)` and
   `ghostty_surface_update_config(surface, cfg)` over the weak surface registry,

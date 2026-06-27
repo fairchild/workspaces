@@ -12,6 +12,7 @@ Build the best Mac-native control surface for terminal-based coding agents:
 - select the right repo or workspace quickly
 - keep long-lived terminal context intact
 - attach the minimum useful chrome around that terminal
+- make concurrent agent sessions legible, steerable, and verifiable without leaving the terminal-first loop
 - add remote runtimes and activity feeds only when they make that workflow more reliable
 
 This roadmap is grounded in the current codebase and recent releases, not older MVP assumptions.
@@ -35,6 +36,7 @@ What this means for planning.
 - The product is three surfaces, not one, and they do not age at the same rate.
 - The highest risk is now complexity management and determinism across surfaces, not raw feature absence.
 - Terminal-first remains the product's core promise; everything else is in service of that, including the web and agent surfaces.
+- The next agent-facing product opportunity is not a separate dashboard; it is a calmer control layer over sessions, surfaces, and verification context that already exist in the app.
 - Performance has moved from crisis to system. Ongoing measurement via the canonical contract is the norm, not a fire drill.
 - Agent automation must earn expansion by improving delivery throughput and reducing review drag on already-shipped workflows, not by adding more autonomous surfaces first.
 - Post-`v0.18.0`, the release/config debts from the `v0.17.0` closure are retired (#615/#617) and one product epic is mid-flight: Tile Tree + Surface abstraction (#627, stacked PRs). A 2026-06-09 daily-driver readiness review converted the remaining reliability/performance gaps into concrete issues (#634–#638); retiring those alongside the epic outranks reopening breadth.
@@ -118,6 +120,17 @@ Success means:
 - shared-desktop validation is less disruptive
 - remote/runtime smoke checks are repeatable
 - refactors come with deterministic proof, not hand-waving
+
+### Goal 5: Make agent surfaces legible, controllable, and verifiable
+
+The app should help users and trusted local agents understand and steer live work without turning the terminal-first shell into a noisy dashboard.
+
+Success means:
+
+- a mission-control overlay can preview and jump to live repo/workspace/session contexts
+- sidebar and attention metadata show enough context to choose the next session confidently
+- local agent control routes through stable WorkSpaces IDs and an auditable same-user boundary
+- embedded web views can provide bounded page snapshots and safe verification hooks for agent workflows
 
 ---
 
@@ -203,9 +216,33 @@ Stable client identity, ACK cadence, duplicate/replay behavior. Reliability step
 
 New autonomous-agent surfaces, broader reviewer features, and narration/eval expansion are no longer blocked by the managed-reviewer closure milestone, but they still sit behind the priority rule: first retire the post-release reliability debt above, then reassess whether the next highest-leverage move is more reviewer capability, notification catch-up, terminal continuity, or Web Dashboard work.
 
+#### 11. Agent/session mission control and richer session metadata
+
+GitHub: [#680](https://github.com/fairchild/workspaces/issues/680) · `area: ui` / `devEx`
+
+Wanted product direction: a keyboard-first overlay/read model for live repo, workspace, terminal, web, and agent surfaces. It should rank attention-demanding sessions first, show bounded preview/status text, surface branch/worktree and cost/context data when already available, and focus the existing target without adding persistent chrome.
+
+This is the user-facing legibility layer for the agent-status work that already exists in `AgentSessionRegistry` and `WorkspaceStatusAggregator`. Prototype behind a fixture or experimental path first; productionize only after the read model is cheap, stable-ID routed, and covered by focused ordering/truncation tests.
+
+#### 12. Local app-shell control plane for agents
+
+GitHub: [#628](https://github.com/fairchild/workspaces/issues/628) · `devEx`
+
+Wanted product direction: a local socket API plus `workspaces` CLI commands that let a trusted process inside a terminal tile operate its own WorkSpaces shell: split/close/focus tiles, open a web surface, and set lightweight tab/session metadata.
+
+This should ride on the Tile Tree reducer and stable tile/surface IDs rather than inventing a parallel layout model. Gate it behind an explicit trust setting, keep the socket same-user/local-only, and scope callers to their registered surface by default.
+
+#### 13. Agent-verifiable embedded web surfaces
+
+GitHub: [#679](https://github.com/fairchild/workspaces/issues/679) · `area: ui` / `devEx`
+
+Wanted product direction: make active WorkSpaces-owned `WKWebView` surfaces inspectable and safely operable by trusted local agent sessions. The first slice is list + bounded snapshot by stable web-source ID: URL, title, bounded visible/page text, explicit truncation metadata, and structured failures.
+
+This complements the control-plane work but should not wait for a full browser automation product. Keep the first version local-only, active-surface-only, and non-disruptive to user focus. Interaction verbs such as click/fill/evaluate can follow only after the trust boundary and audit story are settled.
+
 ### Later (P2)
 
-#### 11. Strategic isolation backend direction
+#### 14. Strategic isolation backend direction
 
 GitHub: [#533](https://github.com/fairchild/workspaces/issues/533) (VZ Tahoe tracking) + [#555](https://github.com/fairchild/workspaces/issues/555) (remote runtime expansion tracking) + [#532](https://github.com/fairchild/workspaces/issues/532) (Daytona native Swift) + [#616](https://github.com/fairchild/workspaces/issues/616) (AgentFS provider spike) · `arc:isolation-backend`
 
@@ -244,6 +281,7 @@ Theme-to-milestone map:
 | Lume runtime hardening | `arc:lume-runtime` | Closed (#87/#88/#89). Label retained for future Lume work. |
 | Notification catch-up and reconnect correctness | `arc:notification-catchup` | Next standalone after core-reliability theme clears |
 | Terminal continuity (tmux + cross-session) | `arc:terminal-continuity` | 2026-04-23 decision partially superseded by #627 (pane-tree reversal; ADR in Phase 8). #548 cross-session restore stays valid; re-scope #549 after the ADR. |
+| Agent surface legibility and control | — | Next product direction: mission control [#680](https://github.com/fairchild/workspaces/issues/680), local app-shell control [#628](https://github.com/fairchild/workspaces/issues/628), and verifiable web surfaces [#679](https://github.com/fairchild/workspaces/issues/679). Sequence behind the Tile Tree identity/surface work where needed. |
 | Strategic isolation backend direction | `arc:isolation-backend` | Backlog/research until promoted by a fresh approved discussion |
 
 ---
@@ -272,7 +310,9 @@ Live source of truth is GitHub Issues on `fairchild/workspaces`. This table mirr
 | Desktop UI smoke: daily-driver flows | quality | P2 | [#638](https://github.com/fairchild/workspaces/issues/638) (protects #627 Phase 3/5 flips) |
 | Main-window + sidebar maintainability | product | P0 | covered by closed #81 + residual notes in `backlog/done/main-window-sidebar-maintainability_followup.md` |
 | AGENTS.md startup-budget refactor | tooling | P1 | [#626](https://github.com/fairchild/workspaces/issues/626) |
-| Socket API + CLI for in-app agent shell control | product | — | [#628](https://github.com/fairchild/workspaces/issues/628) |
+| Agent/session mission control and richer session metadata | product | P1 | [#680](https://github.com/fairchild/workspaces/issues/680) |
+| Local app-shell control plane for agents | product | P1 | [#628](https://github.com/fairchild/workspaces/issues/628) |
+| Agent-verifiable embedded web surfaces | product | P1 | [#679](https://github.com/fairchild/workspaces/issues/679) |
 | Release preflight check-run pagination | quality | Done | [#615](https://github.com/fairchild/workspaces/issues/615) (PR #619) |
 | Claude hook installer idempotence and backup hygiene | quality | Done | [#617](https://github.com/fairchild/workspaces/issues/617) (PRs #620/#621) |
 | Managed reviewer ReviewRun-first hardening | quality | Done | [#584](https://github.com/fairchild/workspaces/issues/584) + [milestone 8](https://github.com/fairchild/workspaces/milestone/8) |
@@ -400,9 +440,9 @@ Archived (in `backlog/done/`):
 ### 2026-03-29 — Web local dev reliability (#237)
 
 - `scripts/setup` must handle lockfile-based dependency installation, not just mise — new worktrees were missing `pnpm install` for `web/`
-- cmux workshop skill already prioritizes `scripts/setup` in its detection table, but the script itself was too minimal to be useful
+- The workshop skill already prioritizes `scripts/setup` in its detection table, but the script itself was too minimal to be useful
 - Local SQLite fallback needs `mkdirSync` for the data directory — fresh clones/worktrees hit ENOENT without it
-- Workshop setup should always run `scripts/setup` before starting dev servers — this is documented in the cmux skill but easy to skip
+- Workshop setup should always run `scripts/setup` before starting dev servers — this is documented in the workshop skill but easy to skip
 
 ### 2026-03-22 — Milestone 6: Terminal Readiness Recovery (PRs #162-#165, plus direct merges)
 

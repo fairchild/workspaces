@@ -7,14 +7,15 @@ related:
   - docs/development/shortcut-routing.md
 ---
 
-# App-owned Ghostty config carries the Terminal Theme, applied live
+# App-owned Ghostty config carries WorkSpaces terminal defaults, applied live
 
 ## Decision
 
-**WorkSpaces manages the Terminal Theme through a small, app-owned Ghostty
-config file that it generates and loads itself, and applies live via
+**WorkSpaces manages embedded-terminal defaults through a small, app-owned
+Ghostty config file that it generates and loads itself, and applies live via
 `ghostty_app_update_config` / `ghostty_surface_update_config`.** The file holds
-only a `theme = light:<L>,dark:<D>` line and lives under the
+only WorkSpaces-owned keys such as scrollbar visibility, mouse scroll speed, and
+an optional `theme = light:<L>,dark:<D>` line. It lives under the
 `WORKSPACES_DATA_DIR` convention (`<dataDir>/ghostty/workspaces.config`),
 separate from the bundled resources directory that supplies terminfo and the
 theme catalog.
@@ -34,11 +35,12 @@ Ghostty.app uses), not libghostty-vt. The pinned header (ghostty
   push a new config — including `theme = …` — to **live** surfaces with no
   recreation and no lost scrollback.
 
-So a theme change is: rewrite the file, rebuild a fresh `ghostty_config_t`,
-broadcast it to the app and every registered surface, then free the previous
-config. This mirrors how reload-config works in the real app and gives us all
-~460 bundled iTerm2 themes by name plus native dual light/dark, where the active
-half follows the macOS appearance via the existing `set_color_scheme` path.
+So a behavior or theme change is: rewrite the file, rebuild a fresh
+`ghostty_config_t`, broadcast it to the app and every registered surface, then
+free the previous config. This mirrors how reload-config works in the real app
+and gives us all ~460 bundled iTerm2 themes by name plus native dual light/dark,
+where the active half follows the macOS appearance via the existing
+`set_color_scheme` path.
 
 ## Tradeoffs
 
@@ -55,8 +57,8 @@ half follows the macOS appearance via the existing `set_color_scheme` path.
   previous one is freed after each `update_config` broadcast to avoid leaks.
 - **Single-sided pairs are invalid.** Ghostty rejects `theme = light:foo`
   without a `dark:` peer, so an unset slot is filled with `Builtin Light` /
-  `Builtin Dark`. When neither slot is set, no theme line is written and the
-  bare default behavior is preserved.
+  `Builtin Dark`. When neither slot is set, no theme line is written, but the
+  WorkSpaces-managed non-theme defaults are still loaded.
 
 ## Surface registry
 

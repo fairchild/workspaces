@@ -184,6 +184,39 @@ struct TerminalContinuityManifestTests {
         #expect(snapshot.activeSessionIDByScopeKey[.backendSession(providerID: "lume", instanceID: "vm-123")] == nil)
     }
 
+    @Test("Host session snapshot excludes archived workspace scopes")
+    func hostSessionSnapshotExcludesArchivedWorkspaceScopes() throws {
+        let home = try temporaryDirectory()
+        let workspace = try temporaryDirectory()
+        let homeSession = HostTerminalSession(key: .defaultHome, directory: home)
+        let workspaceSession = HostTerminalSession(key: .hostPath(workspace.path), directory: workspace)
+        let secondWorkspaceSession = HostTerminalSession(key: .hostPath(workspace.path), directory: workspace)
+
+        let manifest = TerminalContinuityManifest(
+            targetKind: .workspace,
+            targetID: UUID(),
+            rootURL: workspace,
+            launchURL: workspace,
+            terminalMode: .ghosttyManagedSplits,
+            sessions: [homeSession, workspaceSession, secondWorkspaceSession],
+            activeSessionID: secondWorkspaceSession.id,
+            activeSessionIDByScopeKey: [
+                .defaultHome: homeSession.id,
+                .hostPath(workspace.path): secondWorkspaceSession.id,
+            ],
+            updatedAt: Date(timeIntervalSince1970: 100)
+        )
+
+        let snapshot = try #require(
+            manifest.hostSessionSnapshot(excludingScopeKeys: [.hostPath(workspace.path)])
+        )
+
+        #expect(snapshot.sessions.map(\.id) == [homeSession.id])
+        #expect(snapshot.activeSessionID == homeSession.id)
+        #expect(snapshot.activeSessionIDByScopeKey[.defaultHome] == homeSession.id)
+        #expect(snapshot.activeSessionIDByScopeKey[.hostPath(workspace.path)] == nil)
+    }
+
     private func temporaryDirectory() throws -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("TerminalContinuityManifestTests-\(UUID().uuidString)", isDirectory: true)

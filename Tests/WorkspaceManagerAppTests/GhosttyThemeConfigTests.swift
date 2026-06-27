@@ -13,7 +13,10 @@ struct GhosttyThemeConfigTests {
     @Test("No selection produces no theme value")
     func emptyPairHasNoValue() {
         #expect(GhosttyThemeConfig.themeValue(lightTheme: "", darkTheme: "") == nil)
-        #expect(GhosttyThemeConfig.configContents(lightTheme: "", darkTheme: "") == nil)
+        #expect(
+            GhosttyThemeConfig.configContents(lightTheme: "", darkTheme: "")
+                == "scrollbar = system\nmouse-scroll-multiplier = precision:0.7,discrete:1\n"
+        )
     }
 
     @Test("Both slots set produce the dual light/dark value")
@@ -24,7 +27,8 @@ struct GhosttyThemeConfigTests {
         )
         #expect(
             GhosttyThemeConfig.configContents(lightTheme: "Nord", darkTheme: "Dracula")
-                == "theme = light:Nord,dark:Dracula\n"
+                == "scrollbar = system\nmouse-scroll-multiplier = precision:0.7,discrete:1\n"
+                + "theme = light:Nord,dark:Dracula\n"
         )
     }
 
@@ -60,28 +64,31 @@ struct GhosttyThemeConfigTests {
         #expect(url.path.hasPrefix(dataDir.path))
     }
 
-    @Test("Writing a selected pair persists the config file; clearing removes it")
-    func writeAndClearConfigFile() throws {
+    @Test("Writing always persists the WorkSpaces-managed Ghostty config file")
+    func writeConfigFile() throws {
         let dataDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         defer { try? FileManager.default.removeItem(at: dataDir) }
         let environment = ["WORKSPACES_DATA_DIR": dataDir.path]
 
-        let writtenURL = try GhosttyThemeConfig.writeConfigFile(
+        let url = try GhosttyThemeConfig.writeConfigFile(
             lightTheme: "Nord",
             darkTheme: "Dracula",
             environment: environment
         )
-        let url = try #require(writtenURL)
         let contents = try String(contentsOf: url, encoding: .utf8)
-        #expect(contents == "theme = light:Nord,dark:Dracula\n")
+        #expect(
+            contents
+                == "scrollbar = system\nmouse-scroll-multiplier = precision:0.7,discrete:1\n"
+                + "theme = light:Nord,dark:Dracula\n"
+        )
 
-        let cleared = try GhosttyThemeConfig.writeConfigFile(
+        let unthemed = try GhosttyThemeConfig.writeConfigFile(
             lightTheme: "",
             darkTheme: "",
             environment: environment
         )
-        #expect(cleared == nil)
-        #expect(!FileManager.default.fileExists(atPath: url.path))
+        #expect(unthemed == url)
+        #expect(FileManager.default.fileExists(atPath: url.path))
     }
 }
