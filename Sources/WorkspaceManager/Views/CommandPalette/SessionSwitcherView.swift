@@ -725,17 +725,6 @@ struct SessionSwitcherView: View {
     }
 }
 
-extension AgentKind {
-    fileprivate var displayName: String {
-        switch self {
-        case .claudeCode: return "Claude"
-        case .opencode: return "opencode"
-        case .aider: return "Aider"
-        case .unknown: return "Agent"
-        }
-    }
-}
-
 extension AwaitingReason {
     fileprivate var displayName: String {
         switch self {

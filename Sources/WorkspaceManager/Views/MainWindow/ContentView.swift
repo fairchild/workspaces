@@ -347,8 +347,8 @@ struct ContentView: View {
         UIFixtureDiagnosticsBootstrapConfiguration.from(environment: ProcessInfo.processInfo.environment)
     }
 
-    private var fixtureSessionSwitcherBootstrapEnabled: Bool {
-        ProcessInfo.processInfo.environment["WORKSPACES_UI_FIXTURE_OPEN_SESSION_SWITCHER"] == "1"
+    private var fixtureSessionSwitcherBootstrapConfiguration: UIFixtureSessionSwitcherBootstrapConfiguration? {
+        UIFixtureSessionSwitcherBootstrapConfiguration.from(environment: ProcessInfo.processInfo.environment)
     }
 
     private var openInEditorTarget: OpenInEditorTarget? {
@@ -1190,7 +1190,7 @@ struct ContentView: View {
 
     @MainActor
     private func applySessionSwitcherFixtureIfNeeded() {
-        guard fixtureSessionSwitcherBootstrapEnabled else { return }
+        guard fixtureSessionSwitcherBootstrapConfiguration != nil else { return }
         guard !viewState.didApplyFixtureSessionSwitcherBootstrap else { return }
 
         viewState.didApplyFixtureSessionSwitcherBootstrap = true
