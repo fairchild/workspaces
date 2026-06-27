@@ -552,6 +552,14 @@ describe("listPrReviewRunsForBroker", () => {
 			fingerprint: "fp_broker_projected",
 			prNumber: 13,
 		});
+		const stuckStarting = makeInput({
+			fingerprint: "fp_broker_stuck_starting",
+			prNumber: 14,
+		});
+		const freshStarting = makeInput({
+			fingerprint: "fp_broker_fresh_starting",
+			prNumber: 15,
+		});
 
 		await recordRunStart(started);
 		await recordRunResult(started.fingerprint, {
@@ -582,6 +590,15 @@ describe("listPrReviewRunsForBroker", () => {
 			sessionId: "sesn_projected",
 			status: "completed",
 		});
+		await recordRunStart(stuckStarting);
+		await recordRunStart(freshStarting);
+		const { getDb } = await import("../../db");
+		const oldStamp = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+		await getDb()
+			.updateTable("managed_pr_review_runs")
+			.set({ updated_at: oldStamp })
+			.where("fingerprint", "=", stuckStarting.fingerprint)
+			.execute();
 
 		const rows = await listPrReviewRunsForBroker();
 
@@ -589,7 +606,15 @@ describe("listPrReviewRunsForBroker", () => {
 			"fp_broker_missing_intent",
 			"fp_broker_repair",
 			"fp_broker_started",
+			"fp_broker_stuck_starting",
 		]);
+		expect(
+			rows.find((row) => row.fingerprint === stuckStarting.fingerprint),
+		).toMatchObject({
+			status: "started",
+			sessionId: null,
+			projectionStatus: "pending",
+		});
 		expect(
 			rows.find((row) => row.fingerprint === repair.fingerprint),
 		).toMatchObject({

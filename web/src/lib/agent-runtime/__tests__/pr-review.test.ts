@@ -1761,6 +1761,54 @@ describe("processPendingPrReviewRuns", () => {
 		expect(mocks.recordRunResult).not.toHaveBeenCalled();
 	});
 
+	it("fails stale started rows that never recorded an agent session", async () => {
+		vi.stubEnv("ANTHROPIC_API_KEY", "");
+		mocks.listPrReviewRunsForBroker.mockResolvedValue([
+			brokerRun({
+				fingerprint: "fp_stuck_starting",
+				repoFullName: "fairchild/workspaces",
+				prNumber: 486,
+				headSha: "head-sha",
+				triggerKind: "opened",
+				triggerSourceId: "head-sha",
+				sessionId: null,
+				createdAt: "2026-05-17T06:00:00Z",
+				updatedAt: "2026-05-17T06:00:00Z",
+			}),
+		]);
+		mocks.fetch.mockImplementation(async (url: string) => {
+			if (isManagedReviewStatusUrl(url)) {
+				return okResponse();
+			}
+			throw new Error(`Unexpected fetch URL: ${url}`);
+		});
+
+		const result = await processPendingPrReviewRuns({ limit: 1 });
+
+		expect(result).toMatchObject({
+			checked: 1,
+			completed: 0,
+			failed: 1,
+			skippedRunning: 0,
+		});
+		const statusPost = mocks.fetch.mock.calls.find(([url]) =>
+			String(url).includes("/statuses/head-sha"),
+		);
+		expect(statusPost?.[1]).toMatchObject({ method: "POST" });
+		expect(JSON.parse(String(statusPost?.[1]?.body))).toMatchObject({
+			state: "failure",
+			context: "WorkSpaces Managed Review",
+			description: "Managed review failed before posting.",
+			target_url:
+				"https://spaces.cloudcompute.com/dashboard/review-runs/fp_stuck_starting",
+		});
+		expect(mocks.recordRunResult).toHaveBeenCalledWith("fp_stuck_starting", {
+			sessionId: null,
+			status: "failed",
+			error: "started ReviewRun is missing an agent session",
+		});
+	});
+
 	it("waits through a short coalescing grace period before superseding a running session", async () => {
 		vi.useFakeTimers();
 		vi.setSystemTime(new Date("2026-05-17T06:25:30Z"));

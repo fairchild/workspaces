@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import socket
 import sys
 import urllib.error
 import urllib.parse
@@ -29,6 +30,7 @@ from typing import Any
 
 
 DEFAULT_BROKER_URL = "https://spaces.cloudcompute.com/api/webhooks/github/pr-reviewer-broker"
+EX_TEMPFAIL = 75
 SAFE_RESPONSE_KEYS = (
     "ok",
     "repo",
@@ -48,6 +50,10 @@ SAFE_RESPONSE_KEYS = (
 
 class BrokerError(RuntimeError):
     """Raised when the broker request fails or reports failed processing."""
+
+    def __init__(self, message: str, *, retryable: bool = False) -> None:
+        super().__init__(message)
+        self.retryable = retryable
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -108,12 +114,22 @@ def request_json(url: str, secret: str, timeout: float) -> dict[str, Any]:
             raw = response.read(64 * 1024)
     except urllib.error.HTTPError as error:
         raw = error.read(64 * 1024)
+        retryable = error.code == 408 or error.code == 429 or 500 <= error.code < 600
         raise BrokerError(
             f"managed reviewer broker returned HTTP {error.code}: "
-            f"{json.dumps(payload_for_error(raw), sort_keys=True)}"
+            f"{json.dumps(payload_for_error(raw), sort_keys=True)}",
+            retryable=retryable,
         ) from error
     except urllib.error.URLError as error:
-        raise BrokerError(f"managed reviewer broker request failed: {error.reason}") from error
+        raise BrokerError(
+            f"managed reviewer broker request failed: {error.reason}",
+            retryable=True,
+        ) from error
+    except (TimeoutError, socket.timeout) as error:
+        raise BrokerError(
+            f"managed reviewer broker request timed out: {error}",
+            retryable=True,
+        ) from error
 
     try:
         payload = json.loads(raw.decode("utf-8"))
@@ -138,7 +154,7 @@ def main(argv: list[str]) -> int:
             )
     except BrokerError as error:
         print(f"::error::{error}", file=sys.stderr)
-        return 1
+        return EX_TEMPFAIL if error.retryable else 1
 
     if args.json:
         print(json.dumps(payload, indent=2, sort_keys=True))

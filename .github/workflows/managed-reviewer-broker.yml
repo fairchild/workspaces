@@ -11,11 +11,13 @@ on:
     paths:
       - ".github/workflows/managed-reviewer-broker.yml"
       - "scripts/pr-reviewer-broker.py"
+      - "scripts/tests/test_pr_reviewer_broker.py"
       - "scripts/tests/test_security_hardening.py"
   pull_request:
     paths:
       - ".github/workflows/managed-reviewer-broker.yml"
       - "scripts/pr-reviewer-broker.py"
+      - "scripts/tests/test_pr_reviewer_broker.py"
       - "scripts/tests/test_security_hardening.py"
   workflow_dispatch:
     inputs:
@@ -51,6 +53,8 @@ jobs:
         with:
           persist-credentials: false
 
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+
       - name: Check broker script help
         run: python3 scripts/pr-reviewer-broker.py --help
 
@@ -61,6 +65,9 @@ jobs:
             exit 1
           fi
           grep -q "WORKSPACES_WEBHOOK_CANARY_SECRET is required" broker.err
+
+      - name: Run broker script unit tests
+        run: uv run --script scripts/tests/test_pr_reviewer_broker.py
 
   broker:
     name: Reconcile completed managed reviews
@@ -73,7 +80,11 @@ jobs:
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
-          ref: main
+          # Status-triggered broker runs are production projection repair and
+          # stay pinned to main. Manual dispatch may intentionally validate or
+          # recover with the selected ref, for example while repairing the
+          # broker workflow itself before merge.
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.ref || 'main' }}
           persist-credentials: false
 
       - name: Run managed reviewer broker
@@ -86,8 +97,21 @@ jobs:
         run: |
           for attempt in $(seq 1 "$BROKER_ATTEMPTS"); do
             echo "Managed reviewer broker attempt $attempt/$BROKER_ATTEMPTS"
-            output="$(python3 scripts/pr-reviewer-broker.py --json --limit "$BROKER_LIMIT" --repo "$BROKER_REPO")"
+            set +e
+            output="$(python3 scripts/pr-reviewer-broker.py --json --limit "$BROKER_LIMIT" --repo "$BROKER_REPO" 2>&1)"
+            script_status=$?
+            set -e
             echo "$output"
+
+            if [ "$script_status" -ne 0 ]; then
+              if [ "$script_status" -eq 75 ] && [ "$attempt" -lt "$BROKER_ATTEMPTS" ]; then
+                echo "::warning::Managed reviewer broker request failed transiently; retrying after $BROKER_POLL_SECONDS seconds."
+                sleep "$BROKER_POLL_SECONDS"
+                continue
+              fi
+              echo "::error::Managed reviewer broker command failed with exit code $script_status"
+              exit "$script_status"
+            fi
 
             metrics="$(python3 -c 'import json, sys; p=json.load(sys.stdin); print(p.get("checked", 0), p.get("applied", 0), p.get("failed", 0), p.get("retryable", 0), p.get("skippedRunning", 0), p.get("superseded", 0), p.get("requeued", 0))' <<<"$output")"
             set -- $metrics
