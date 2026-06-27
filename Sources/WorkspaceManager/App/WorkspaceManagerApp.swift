@@ -206,14 +206,14 @@ struct WorkspaceManagerApp: App {
                 )
                 .disabled(!appCommandState.mainWindowAvailability.canToggleTerminalPanel)
 
-                Button("Switch Workspace...") {
-                    appCommandState.perform(.openCommandPalette)
+                Button("Switch Session...") {
+                    appCommandState.perform(.openSessionSwitcher)
                 }
                 .keyboardShortcut(
                     AppChromeShortcut.workspaceSwitcher.keyEquivalent,
                     modifiers: AppChromeShortcut.workspaceSwitcher.eventModifiers
                 )
-                .disabled(!appCommandState.mainWindowAvailability.canOpenCommandPalette)
+                .disabled(!appCommandState.mainWindowAvailability.canOpenSessionSwitcher)
 
                 Button("Terminal Theme...") {
                     appCommandState.perform(.openCommandRunner)
@@ -657,7 +657,7 @@ struct MainWindowFocusedActions {
     var openDesktop: Action? = nil
     var revealInFinder: Action? = nil
     var copyPath: Action? = nil
-    var openCommandPalette: Action? = nil
+    var openSessionSwitcher: Action? = nil
     var openCommandRunner: Action? = nil
 
     @MainActor static let empty = MainWindowFocusedActions()
@@ -677,7 +677,7 @@ struct MainWindowCommandAvailability: Equatable {
     let canOpenDesktop: Bool
     let canRevealInFinder: Bool
     let canCopyPath: Bool
-    let canOpenCommandPalette: Bool
+    let canOpenSessionSwitcher: Bool
     let canOpenCommandRunner: Bool
 
     static let empty = MainWindowCommandAvailability(
@@ -694,7 +694,7 @@ struct MainWindowCommandAvailability: Equatable {
         canOpenDesktop: false,
         canRevealInFinder: false,
         canCopyPath: false,
-        canOpenCommandPalette: false,
+        canOpenSessionSwitcher: false,
         canOpenCommandRunner: false
     )
 }
@@ -713,7 +713,7 @@ enum MainWindowCommand {
     case openDesktop
     case revealInFinder
     case copyPath
-    case openCommandPalette
+    case openSessionSwitcher
     case openCommandRunner
 }
 
@@ -777,8 +777,8 @@ final class AppCommandState: ObservableObject {
             mainWindowActions.revealInFinder?()
         case .copyPath:
             mainWindowActions.copyPath?()
-        case .openCommandPalette:
-            mainWindowActions.openCommandPalette?()
+        case .openSessionSwitcher:
+            mainWindowActions.openSessionSwitcher?()
         case .openCommandRunner:
             mainWindowActions.openCommandRunner?()
         }

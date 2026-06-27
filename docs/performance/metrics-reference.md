@@ -16,6 +16,7 @@ Canonical scenarios:
 | `installed_login_shell` | `installed` | Installed-app startup with normal login shell cost included |
 | `installed_input_short_capture` | `installed` | Short focused typing capture for input event age and handler timing |
 | `main_window_agent_activity_burst` | `debug` | In-process sidebar status aggregation burst for agent activity churn |
+| `main_window_session_switcher_snapshot` | `debug` | In-process Session Switcher snapshot construction and query ranking |
 | `main_window_workspace_create_ui_stall` | `debug` | New Workspace sheet-open flow, including provider availability and Lume runtime refresh submetrics |
 | `main_window_idle_cpu_diagnostics_closed` | `debug` | Debug app idle CPU while the Diagnostics pane is closed |
 | `main_window_resident_memory_20_workspaces` | `debug` | Debug app RSS after prewarming 20 retained terminal surfaces |
@@ -239,6 +240,17 @@ Scenario:
 
 Why it matters:
 - It guards the click-prep path for the notification bubble so the dropdown stays cheap even when agent status changes rapidly across many tabs.
+
+### `main_window_session_switcher_snapshot_ms`
+
+What it measures:
+- Time spent building Session Switcher rows from already-loaded repos, web sources, host sessions, pane counts, and agent statuses, then filtering/ranking them for a query.
+
+Scenario:
+- `main_window_session_switcher_snapshot`
+
+Why it matters:
+- It keeps Cmd-P opening and search responsive as live agent/session metadata grows.
 
 ### `workspace_provider_availability_refresh`
 

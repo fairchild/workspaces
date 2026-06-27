@@ -19,6 +19,12 @@ WORKSPACES_UI_FIXTURE=1 \
 WORKSPACES_DISABLE_AUTO_IMPORT=1 \
 WORKSPACES_UI_FIXTURE_COMMAND_STATUSES="feature-auth:failed" \
 ./scripts/launch-dev.sh --no-build
+
+# Session Switcher open for capture
+WORKSPACES_UI_FIXTURE=1 \
+WORKSPACES_DISABLE_AUTO_IMPORT=1 \
+WORKSPACES_UI_FIXTURE_OPEN_SESSION_SWITCHER=1 \
+./scripts/launch-dev.sh --no-build
 ```
 
 For repeatable captures, prefer the wrapper:
@@ -35,6 +41,7 @@ For repeatable captures, prefer the wrapper:
 | `WORKSPACES_DISABLE_AUTO_IMPORT` | `1` recommended | Stops the app from auto-importing `~/code/*` repos on launch — keeps the sidebar deterministic. |
 | `WORKSPACES_UI_FIXTURE_AGENT_STATES` | optional | Comma-separated `<workspace-name>:<state>` pairs that drive specific workspaces into specific `AgentRunState`s. |
 | `WORKSPACES_UI_FIXTURE_COMMAND_STATUSES` | optional | Comma-separated `<workspace-name>:<status>` pairs that drive specific terminal sessions into synthetic `LastCommandStatus` values. |
+| `WORKSPACES_UI_FIXTURE_OPEN_SESSION_SWITCHER` | optional | `1` opens the Cmd-P Session Switcher after fixture launch for deterministic overlay captures. |
 
 ### `WORKSPACES_UI_FIXTURE_AGENT_STATES` grammar
 

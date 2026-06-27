@@ -63,6 +63,7 @@ struct ContentView: View {
     @State private var cleaningWorkspaceOrphanItemIDs: Set<String> = []
     @State private var pendingWorkspaceOrphanCleanup: WorkspaceOrphanItem?
     @State private var accessRecorder = MainWindowAccessRecorder()
+    @State private var presentedSessionSwitcherSnapshot: SessionSwitcherSnapshot?
     @StateObject private var rightPaneStateStore = RightPaneStateStore()
     @StateObject private var webSurfaceStore = WebSurfaceStore()
     @StateObject private var terminalFocusCoordinator = TerminalFocusCoordinator()
@@ -272,6 +273,35 @@ struct ContentView: View {
         )
     }
 
+    private var sessionSwitcherWorkspaceSessionKeys: [UUID: HostTerminalSessionKey] {
+        let presentation = SidebarWorkspacePresentationController()
+        let normalize: (URL) -> String = { url in normalizePath(url.path) }
+        return Dictionary(
+            uniqueKeysWithValues: repos.flatMap(\.workspaces).map { workspace in
+                let key = presentation.sessionKey(
+                    for: workspace,
+                    registry: workspaceProviderRegistry,
+                    normalizePath: normalize
+                )
+                return (workspace.id, key)
+            }
+        )
+    }
+
+    private func makeSessionSwitcherSnapshot() -> SessionSwitcherSnapshot {
+        SessionSwitcherSnapshot.make(
+            repos: repos,
+            webSources: webSources,
+            sessions: hostTerminalState.sessions,
+            activeSessionID: hostTerminalState.activeSessionID,
+            agentStatuses: agentSessionRegistry.statuses,
+            paneCountBySessionKey: paneCountBySessionKeyForSidebar,
+            workspaceSessionKeys: sessionSwitcherWorkspaceSessionKeys,
+            workspaceActivities: commandPaletteWorkspaceActivities,
+            repoActivities: commandPaletteRepoActivities
+        )
+    }
+
     static func sidebarActiveSessionKey(
         selectedWebSourceID: UUID?,
         activeSessionID: UUID?,
@@ -315,6 +345,10 @@ struct ContentView: View {
 
     private var fixtureDiagnosticsBootstrapConfiguration: UIFixtureDiagnosticsBootstrapConfiguration? {
         UIFixtureDiagnosticsBootstrapConfiguration.from(environment: ProcessInfo.processInfo.environment)
+    }
+
+    private var fixtureSessionSwitcherBootstrapEnabled: Bool {
+        ProcessInfo.processInfo.environment["WORKSPACES_UI_FIXTURE_OPEN_SESSION_SWITCHER"] == "1"
     }
 
     private var openInEditorTarget: OpenInEditorTarget? {
@@ -381,7 +415,7 @@ struct ContentView: View {
             openDesktop: openDesktopFocusedAction,
             revealInFinder: revealInFinderFocusedAction,
             copyPath: copyPathFocusedAction,
-            openCommandPalette: { viewState.isShowingCommandPalette = true },
+            openSessionSwitcher: presentSessionSwitcher,
             openCommandRunner: { viewState.isShowingThemeOverlay = true }
         )
     }
@@ -401,7 +435,7 @@ struct ContentView: View {
             canOpenDesktop: openDesktopFocusedAction != nil,
             canRevealInFinder: revealInFinderFocusedAction != nil,
             canCopyPath: copyPathFocusedAction != nil,
-            canOpenCommandPalette: true,
+            canOpenSessionSwitcher: true,
             canOpenCommandRunner: true
         )
     }
@@ -648,6 +682,7 @@ struct ContentView: View {
                 prewarmPerfTerminalSurfacesIfNeeded()
                 resolveSurfaceLifecycle()
                 applyDiagnosticsFixtureIfNeeded()
+                applySessionSwitcherFixtureIfNeeded()
                 pruneRightPaneState()
                 syncOpenInEditorShortcutRouting()
                 refreshWorkspaceStatusAggregator()
@@ -665,12 +700,15 @@ struct ContentView: View {
             }
             .onChange(of: agentSessionRegistry.statuses) { _, _ in
                 refreshWorkspaceStatusAggregator()
+                refreshSessionSwitcherSnapshotIfPresented()
             }
             .onChange(of: hostTerminalState.sessions) { _, _ in
                 refreshWorkspaceStatusAggregator()
+                refreshSessionSwitcherSnapshotIfPresented()
                 persistTerminalContinuitySnapshot()
             }
             .onChange(of: hostTerminalState.activeSessionID) { _, _ in
+                refreshSessionSwitcherSnapshotIfPresented()
                 persistTerminalContinuitySnapshot()
             }
             .task {
@@ -690,8 +728,10 @@ struct ContentView: View {
                 reconcileSelectionAfterModelChange()
                 resolveSurfaceLifecycle()
                 applyDiagnosticsFixtureIfNeeded()
+                applySessionSwitcherFixtureIfNeeded()
                 hostTerminalState.pruneRepoSessions(validRepoPaths: normalizedRepoPathSnapshot)
                 refreshWorkspaceStatusAggregator()
+                refreshSessionSwitcherSnapshotIfPresented()
             }
             .onChange(of: inspectorTargetIDSet) { _, _ in
                 pruneRightPaneState()
@@ -943,30 +983,38 @@ struct ContentView: View {
                     }
                 }
             }
-            .sheet(isPresented: $viewState.isShowingCommandPalette) {
-                CommandPaletteView(
+            .sheet(
+                isPresented: $viewState.isShowingSessionSwitcher,
+                onDismiss: {
+                    presentedSessionSwitcherSnapshot = nil
+                }
+            ) {
+                SessionSwitcherView(
+                    snapshot: presentedSessionSwitcherSnapshot ?? makeSessionSwitcherSnapshot(),
                     repos: repos,
                     webSources: webSources,
-                    workspaceActivities: commandPaletteWorkspaceActivities,
-                    repoActivities: commandPaletteRepoActivities,
                     onSelectWorkspace: { workspace in
-                        viewState.isShowingCommandPalette = false
+                        dismissSessionSwitcher()
                         handleWorkspaceSelection(workspace)
                     },
                     onSelectRepo: { repo in
-                        viewState.isShowingCommandPalette = false
+                        dismissSessionSwitcher()
                         handleRepoSelection(repo)
                     },
                     onSelectWebSource: { source in
-                        viewState.isShowingCommandPalette = false
+                        dismissSessionSwitcher()
                         handleWebSourceSelection(source)
                     },
-                    onDismiss: {
-                        viewState.isShowingCommandPalette = false
+                    onSelectHostSession: { sessionID in
+                        dismissSessionSwitcher()
+                        activateSessionSwitcherHostSession(sessionID)
                     },
                     onOpenThemeSwitcher: {
-                        viewState.isShowingCommandPalette = false
+                        dismissSessionSwitcher()
                         viewState.isShowingThemeOverlay = true
+                    },
+                    onDismiss: {
+                        dismissSessionSwitcher()
                     }
                 )
             }
@@ -1137,6 +1185,18 @@ struct ContentView: View {
             viewState.isRightPaneVisible = true
             viewState.didApplyFixtureDiagnosticsBootstrap = true
             NSLog("[UIFixture] Diagnostics bootstrap applied (repo=%@)", repo.name)
+        }
+    }
+
+    @MainActor
+    private func applySessionSwitcherFixtureIfNeeded() {
+        guard fixtureSessionSwitcherBootstrapEnabled else { return }
+        guard !viewState.didApplyFixtureSessionSwitcherBootstrap else { return }
+
+        viewState.didApplyFixtureSessionSwitcherBootstrap = true
+        Task { @MainActor in
+            presentSessionSwitcher()
+            NSLog("[UIFixture] Session switcher bootstrap applied")
         }
     }
 
@@ -2383,6 +2443,31 @@ struct ContentView: View {
     private func clearCodePreview() {
         viewState.selectedCodePreview = nil
         viewState.isTerminalPanelVisible = true
+    }
+
+    @MainActor
+    private func activateSessionSwitcherHostSession(_ sessionID: UUID) {
+        guard hostTerminalState.activateExistingSession(sessionID: sessionID) else { return }
+        syncSidebarSelectionToActiveSessionFromActiveHostSession()
+        focusTerminalTab(sessionID)
+    }
+
+    @MainActor
+    private func presentSessionSwitcher() {
+        presentedSessionSwitcherSnapshot = makeSessionSwitcherSnapshot()
+        viewState.isShowingSessionSwitcher = true
+    }
+
+    @MainActor
+    private func dismissSessionSwitcher() {
+        viewState.isShowingSessionSwitcher = false
+        presentedSessionSwitcherSnapshot = nil
+    }
+
+    @MainActor
+    private func refreshSessionSwitcherSnapshotIfPresented() {
+        guard viewState.isShowingSessionSwitcher else { return }
+        presentedSessionSwitcherSnapshot = makeSessionSwitcherSnapshot()
     }
 
     @MainActor

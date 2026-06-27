@@ -31,6 +31,7 @@ from perf_schema import canonical_summary, load_contract, numeric_stats  # noqa:
 
 SCENARIOS = {
     "main_window_agent_activity_burst",
+    "main_window_session_switcher_snapshot",
     "main_window_workspace_create_ui_stall",
     "main_window_idle_cpu_diagnostics_closed",
     "main_window_resident_memory_20_workspaces",
@@ -211,6 +212,14 @@ def run_agent_activity_burst(output_dir: Path) -> dict[str, Any]:
     return run_swift_perf_test(
         scenario="main_window_agent_activity_burst",
         filter_name="agentActivityBurstSidebarLatency",
+        output_dir=output_dir,
+    )
+
+
+def run_session_switcher_snapshot(output_dir: Path) -> dict[str, Any]:
+    return run_swift_perf_test(
+        scenario="main_window_session_switcher_snapshot",
+        filter_name="sessionSwitcherSnapshotLatency",
         output_dir=output_dir,
     )
 
@@ -518,6 +527,8 @@ def main() -> int:
 
     if args.scenario == "main_window_agent_activity_burst":
         summary = run_agent_activity_burst(output_dir)
+    elif args.scenario == "main_window_session_switcher_snapshot":
+        summary = run_session_switcher_snapshot(output_dir)
     elif args.scenario == "main_window_workspace_create_ui_stall":
         summary = run_workspace_create(output_dir, args.runs, args.sleep_seconds)
     elif args.scenario == "main_window_idle_cpu_diagnostics_closed":
