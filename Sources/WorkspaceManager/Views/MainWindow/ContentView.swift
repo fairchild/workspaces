@@ -602,7 +602,7 @@ struct ContentView: View {
                 },
                 onWorkspaceCreated: handleWorkspaceCreated,
                 retireTerminalSessions: { key in
-                    await retireTerminalSessions(inScope: key)
+                    try await retireTerminalSessions(inScope: key)
                 },
                 workspaceProviderSetupCoordinator: workspaceProviderSetupCoordinator,
                 hostLumeSmokeAutomation: hostLumeSmokeAutomation,
@@ -1695,7 +1695,7 @@ struct ContentView: View {
             workspaceService: workspaceService,
             workspaceProviderRegistry: workspaceProviderRegistry,
             retireTerminalSessions: { key in
-                await retireTerminalSessions(inScope: key)
+                try await retireTerminalSessions(inScope: key)
             }
         )
         let workspace = try await controller.createWorkspace(
@@ -1722,7 +1722,7 @@ struct ContentView: View {
             workspaceService: workspaceService,
             workspaceProviderRegistry: workspaceProviderRegistry,
             retireTerminalSessions: { key in
-                await retireTerminalSessions(inScope: key)
+                try await retireTerminalSessions(inScope: key)
             }
         )
         do {
@@ -1824,7 +1824,12 @@ struct ContentView: View {
     }
 
     @MainActor
-    private func retireTerminalSessions(inScope scopeKey: HostTerminalSessionKey) async {
+    private func retireTerminalSessions(inScope scopeKey: HostTerminalSessionKey) async throws {
+        let sessionIDs = hostTerminalState.terminalSessionIDs(inScope: scopeKey)
+        for sessionID in sessionIDs {
+            try await hostTerminalState.surfaceStore.closeForSessionRetirement(sessionID: sessionID)
+        }
+
         let retiredSessionIDs = hostTerminalState.retireSessions(inScope: scopeKey)
         guard !retiredSessionIDs.isEmpty else { return }
 
@@ -2018,7 +2023,7 @@ struct ContentView: View {
             workspaceService: workspaceService,
             workspaceProviderRegistry: workspaceProviderRegistry,
             retireTerminalSessions: { key in
-                await retireTerminalSessions(inScope: key)
+                try await retireTerminalSessions(inScope: key)
             }
         )
 

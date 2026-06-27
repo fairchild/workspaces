@@ -8,6 +8,21 @@ import Foundation
 import GhosttyKit
 import QuartzCore
 
+enum GhosttySurfaceRetirementCloseError: LocalizedError {
+    case processStillRunning(title: String)
+    case timedOut(title: String)
+
+    var errorDescription: String? {
+        switch self {
+        case .processStillRunning(let title):
+            return
+                "Terminal '\(title)' still has a running process. Close it before archiving or deleting the workspace."
+        case .timedOut(let title):
+            return "Terminal '\(title)' did not exit before the workspace lifecycle timeout."
+        }
+    }
+}
+
 @MainActor
 final class GhosttySurfaceView: NSView {
     private let workingDirectory: URL
@@ -262,15 +277,49 @@ final class GhosttySurfaceView: NSView {
         ghostty_surface_request_close(surface)
     }
 
-    func forceCloseForSessionRetirement() {
-        onCloseConfirmationRequired = nil
-        onProcessExit = nil
-        didProcessExit = true
-
+    func requestCloseForSessionRetirement(
+        timeout: Duration = .seconds(5),
+        pollInterval: Duration = .milliseconds(50)
+    ) async throws {
         guard let surface else { return }
-        GhosttyAppManager.shared.unregisterSurface(self)
-        ghostty_surface_free(surface)
-        self.surface = nil
+        guard !ghostty_surface_process_exited(surface) else { return }
+
+        var processStillRunning = false
+        let previousCloseConfirmation = onCloseConfirmationRequired
+        onCloseConfirmationRequired = {
+            processStillRunning = true
+        }
+        defer {
+            onCloseConfirmationRequired = previousCloseConfirmation
+        }
+
+        ghostty_surface_request_close(surface)
+
+        let deadline = ContinuousClock.now.advanced(by: timeout)
+        while ContinuousClock.now < deadline {
+            if self.surface == nil || ghostty_surface_process_exited(surface) {
+                return
+            }
+            if processStillRunning {
+                throw GhosttySurfaceRetirementCloseError.processStillRunning(title: displayTitleForLifecycleError)
+            }
+            try await Task.sleep(for: pollInterval)
+        }
+
+        if self.surface == nil || ghostty_surface_process_exited(surface) {
+            return
+        }
+        throw GhosttySurfaceRetirementCloseError.timedOut(title: displayTitleForLifecycleError)
+    }
+
+    private var displayTitleForLifecycleError: String {
+        let title = terminalTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !title.isEmpty {
+            return title
+        }
+
+        let fallback = workingDirectory.lastPathComponent
+        return fallback.isEmpty ? "Terminal" : fallback
     }
 
     // MARK: - Local event monitor
