@@ -5,9 +5,11 @@ import SwiftUI
 /// so they can never drift from the real bindings; terminal/tile shortcuts are libghostty defaults and
 /// are documented here as a static, clearly-labeled section (the app routes them but does not own them).
 
-struct KeyboardShortcutRow: Identifiable, Equatable {
+struct KeyboardShortcutRow: Identifiable {
     let label: String
     let glyphs: String
+    /// Labels are unique within the catalog — the App rows come from distinct `AppChromeShortcut`
+    /// cases and the tiling rows are hand-curated — so the label is a stable `ForEach` identity.
     var id: String { label }
 }
 

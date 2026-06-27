@@ -113,7 +113,7 @@ enum AppChromeShortcut: CaseIterable {
         case .openInEditor: return "Open in Editor"
         case .settings: return "Settings"
         case .workspaceSwitcher: return "Switch Session"
-        case .commandRunner: return "Terminal Theme / Commands"
+        case .commandRunner: return "Run Command"
         }
     }
 
@@ -135,6 +135,9 @@ enum AppChromeShortcut: CaseIterable {
     }
 
     private static func keyGlyph(for keyString: String) -> String {
+        // Covers the keys app shortcuts bind today (letters, digits, `,` `[` `]`, tab, space). Add
+        // arrow/escape glyph cases here before binding any app-level shortcut that uses them, else they
+        // render as the raw key string.
         switch keyString {
         case "\t": return "⇥"
         case " ": return "Space"
