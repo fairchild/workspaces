@@ -52,7 +52,6 @@ struct HostTerminalSessionStack: View {
                     HostTerminalPaneView(
                         tileID: resolveTileID(activeSession),
                         session: activeSession,
-                        minAxis: nil,
                         surfaceStore: surfaceStore,
                         onCloseConfirmationRequired: onCloseConfirmationRequired,
                         onTerminalProcessExit: onTerminalProcessExit,

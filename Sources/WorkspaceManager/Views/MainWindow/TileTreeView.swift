@@ -16,18 +16,15 @@ struct TileTreeView: View {
     var contextMenuProvider: ((HostTerminalSession) -> NSMenu?)?
 
     var body: some View {
-        node(tree.root, enclosingAxis: nil)
+        node(tree.root)
     }
 
     // Recursion crosses an opaque-type boundary, so each node is type-erased. The tree is shallow
     // (one node per visible pane) and the leaves are heavyweight terminals, so the wrapper is free.
-    private func node(
-        _ node: TileTree,
-        enclosingAxis: HostTerminalStateStore.SplitPaneLayout.Axis?
-    ) -> AnyView {
+    private func node(_ node: TileTree) -> AnyView {
         switch node {
         case .tile(let tileID):
-            return AnyView(tile(tileID, minAxis: enclosingAxis))
+            return AnyView(tile(tileID))
         case .split(let id, let axis, let ratio, let first, let second):
             let paneAxis = axis.paneAxis
             return AnyView(
@@ -36,24 +33,20 @@ struct TileTreeView: View {
                     fraction: CGFloat(ratio),
                     onFractionChanged: { onSetSplitRatio(id, $0) }
                 ) {
-                    self.node(first, enclosingAxis: paneAxis)
+                    self.node(first)
                 } trailing: {
-                    self.node(second, enclosingAxis: paneAxis)
+                    self.node(second)
                 }
             )
         }
     }
 
     @ViewBuilder
-    private func tile(
-        _ tileID: TileID,
-        minAxis: HostTerminalStateStore.SplitPaneLayout.Axis?
-    ) -> some View {
+    private func tile(_ tileID: TileID) -> some View {
         if let session = resolveSession(tileID) {
             HostTerminalPaneView(
                 tileID: tileID,
                 session: session,
-                minAxis: minAxis,
                 surfaceStore: surfaceStore,
                 onCloseConfirmationRequired: onCloseConfirmationRequired,
                 onTerminalProcessExit: onTerminalProcessExit,
@@ -70,14 +63,15 @@ struct TileTreeView: View {
     }
 }
 
-/// One terminal pane: the command-status sliver above its persistent terminal surface. `minAxis`
-/// sets the pane's minimum along its enclosing split's axis so a divider can't crush it to nothing.
+/// One terminal pane: the command-status sliver above its persistent terminal surface. The pane fills
+/// whatever width/height its enclosing split allocates — it imposes no hard minimum, so deeply nested
+/// splits stay bordered instead of overflowing into their neighbors. The split divider's
+/// `constrainedFraction` is what keeps a pane from being crushed to nothing.
 struct HostTerminalPaneView: View {
     @EnvironmentObject private var commandStatusRegistry: LastCommandStatusRegistry
 
     let tileID: TileID
     let session: HostTerminalSession
-    let minAxis: HostTerminalStateStore.SplitPaneLayout.Axis?
     let surfaceStore: SurfaceStore
     var onCloseConfirmationRequired: ((UUID) -> Void)?
     var onTerminalProcessExit: ((UUID) -> Void)?
@@ -105,10 +99,6 @@ struct HostTerminalPaneView: View {
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(
-            minWidth: minAxis == .leadingTrailing ? 240 : nil,
-            minHeight: minAxis == .topBottom ? 160 : nil
-        )
     }
 }
 
