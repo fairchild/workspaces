@@ -1,7 +1,8 @@
 ---
-status: decided
+status: superseded
 date: 2026-04-23
 decision: tmux-primary
+superseded-by: docs/decisions/tile-tree-surface-abstraction.md
 supersedes:
   - backlog/done/pane-tree-tiling_plan.md
   - backlog/done/terminal-multiplexing-decision_plan.md
@@ -12,6 +13,12 @@ related:
 ---
 
 # Terminal Multiplexing Model
+
+> **Superseded by [`tile-tree-surface-abstraction.md`](tile-tree-surface-abstraction.md).**
+> The `tmux-primary` decision below — deferring the native recursive pane-tree —
+> was reversed in favor of a recursive **Tile Tree** with a `protocol Surface`
+> seam, shipped via #625 / #633 / #645 / #658. The body is retained unchanged as
+> the historical record of the 2026-04-23 reasoning.
 
 ## Decision
 
