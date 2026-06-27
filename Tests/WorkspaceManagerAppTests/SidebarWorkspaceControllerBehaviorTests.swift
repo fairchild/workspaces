@@ -19,6 +19,10 @@ struct SidebarWorkspaceControllerBehaviorTests {
         }
     }
 
+    struct TerminalRetirementError: LocalizedError {
+        let errorDescription: String? = "terminal still running"
+    }
+
     @Test("Local request routes through WorkspaceService")
     @MainActor
     func localRequestRoutesThroughWorkspaceService() async throws {
@@ -375,6 +379,46 @@ struct SidebarWorkspaceControllerBehaviorTests {
         #expect(await recorder.snapshot() == ["retire:hostPath(\(workspaceURL.path))", "delete"])
     }
 
+    @Test("Deleting local workspace fails before service cleanup when terminal retirement fails")
+    @MainActor
+    func deletingLocalWorkspaceFailsWhenTerminalRetirementFails() async throws {
+        let fixture = try makeModelContext()
+        let context = fixture.context
+        let repo = Repo(name: "api", localPath: URL(fileURLWithPath: "/tmp/api"))
+        let workspaceURL = URL(fileURLWithPath: "/tmp/workspaces/api/feature-a")
+        let workspace = Workspace(
+            name: "feature-a",
+            path: workspaceURL,
+            sourceRepo: repo,
+            backendIdentifier: LocalWorkspaceProvider.identifier
+        )
+        context.insert(repo)
+        context.insert(workspace)
+        try context.save()
+
+        let recorder = OperationRecorder()
+        let workspaceService = MockWorkspaceService()
+        workspaceService.deleteWorkspaceWillRun = {
+            await recorder.record("delete")
+        }
+        let controller = makeController(
+            context: context,
+            workspaceService: workspaceService,
+            providers: [LocalWorkspaceProvider()],
+            retireTerminalSessions: { key in
+                await recorder.record("retire:\(key.debugDescription)")
+                throw TerminalRetirementError()
+            }
+        )
+
+        await #expect(throws: TerminalRetirementError.self) {
+            try await controller.deleteWorkspace(workspace, deleteFiles: true)
+        }
+
+        #expect(await recorder.snapshot() == ["retire:hostPath(\(workspaceURL.path))"])
+        #expect(workspaceService.deleteWorkspaceCalls.isEmpty)
+    }
+
     @Test("Deleting remote workspace preserves the record when provider deletion fails")
     @MainActor
     func deletingRemoteWorkspacePreservesRecordWhenProviderDeletionFails() async throws {
@@ -633,6 +677,48 @@ struct SidebarWorkspaceControllerBehaviorTests {
         #expect(workspace.status == .archived)
     }
 
+    @Test("Archiving local workspace fails before service lifecycle when terminal retirement fails")
+    @MainActor
+    func archivingLocalWorkspaceFailsWhenTerminalRetirementFails() async throws {
+        let fixture = try makeModelContext()
+        let context = fixture.context
+        let repo = Repo(name: "api", localPath: URL(fileURLWithPath: "/tmp/api"))
+        let workspaceURL = URL(fileURLWithPath: "/tmp/workspaces/api/feature-a")
+        let workspace = Workspace(
+            name: "feature-a",
+            path: workspaceURL,
+            sourceRepo: repo,
+            status: .active,
+            backendIdentifier: LocalWorkspaceProvider.identifier
+        )
+        context.insert(repo)
+        context.insert(workspace)
+        try context.save()
+
+        let recorder = OperationRecorder()
+        let workspaceService = MockWorkspaceService()
+        workspaceService.archiveWorkspaceWillRun = {
+            await recorder.record("archive")
+        }
+        let controller = makeController(
+            context: context,
+            workspaceService: workspaceService,
+            providers: [LocalWorkspaceProvider()],
+            retireTerminalSessions: { key in
+                await recorder.record("retire:\(key.debugDescription)")
+                throw TerminalRetirementError()
+            }
+        )
+
+        await #expect(throws: TerminalRetirementError.self) {
+            try await controller.archive(workspace)
+        }
+
+        #expect(await recorder.snapshot() == ["retire:hostPath(\(workspaceURL.path))"])
+        #expect(workspaceService.archiveWorkspaceCalls.isEmpty)
+        #expect(workspace.status == .active)
+    }
+
     @Test("Managed lifecycle operations fail closed when remote identifier is missing")
     @MainActor
     func managedLifecycleOperationsFailClosedWhenRemoteIdentifierIsMissing() async throws {
@@ -702,7 +788,7 @@ struct SidebarWorkspaceControllerBehaviorTests {
         context: ModelContext,
         workspaceService: MockWorkspaceService,
         providers: [any WorkspaceProviderProtocol],
-        retireTerminalSessions: @escaping @MainActor (HostTerminalSessionKey) async -> Void = { _ in }
+        retireTerminalSessions: @escaping @MainActor (HostTerminalSessionKey) async throws -> Void = { _ in }
     ) -> SidebarWorkspaceController {
         SidebarWorkspaceController(
             modelContext: context,

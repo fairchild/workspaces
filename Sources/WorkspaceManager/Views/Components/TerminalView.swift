@@ -119,16 +119,12 @@ final class HostTerminalSurfaceStore {
     }
 
     @discardableResult
-    func retire(sessionID: UUID) -> Bool {
-        guard let removed = surfaces.removeValue(forKey: sessionID) else {
-            onSurfaceInvalidated?(sessionID)
+    func closeForSessionRetirement(sessionID: UUID) async throws -> Bool {
+        guard let terminal = surfaces[sessionID] else {
             return false
         }
 
-        sessionIDsBySurfaceIdentity.removeValue(forKey: ObjectIdentifier(removed))
-        removed.onTerminalTitleChanged = nil
-        removed.forceCloseForSessionRetirement()
-        onSurfaceInvalidated?(sessionID)
+        try await terminal.requestCloseForSessionRetirement()
         return true
     }
 }

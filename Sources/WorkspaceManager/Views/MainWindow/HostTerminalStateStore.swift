@@ -123,6 +123,25 @@ final class HostTerminalStateStore: ObservableObject {
         coordinator.sessions(inScope: scopeKey)
     }
 
+    func terminalSessionIDs(inScope scopeKey: HostTerminalSessionKey) -> [UUID] {
+        coordinator.sessions(inScope: scopeKey).flatMap { primarySession in
+            var sessionIDs: [UUID] = []
+
+            if let tree = treesByPrimaryID[primarySession.id],
+                let primaryTile = tileIDBySessionID[primarySession.id]
+            {
+                for tileID in tree.leafIDs where tileID != primaryTile {
+                    if let splitSession = sessionByTileID[tileID] {
+                        sessionIDs.append(splitSession.id)
+                    }
+                }
+            }
+
+            sessionIDs.append(primarySession.id)
+            return sessionIDs
+        }
+    }
+
     func activeSession(inScope scopeKey: HostTerminalSessionKey) -> HostTerminalSession? {
         let scopedSessions = coordinator.sessions(inScope: scopeKey)
         guard !scopedSessions.isEmpty else { return nil }
@@ -715,8 +734,8 @@ final class HostTerminalStateStore: ObservableObject {
 
     /// Drops the split tree for `primarySessionID` and every binding it owned, returning the split
     /// session(s) it held (the non-primary leaves) so the caller can tear them down its own way —
-    /// `invalidate` on collapse vs `retire` on workspace deletion. The primary tile binding falls
-    /// away with the tree; the primary session itself stays in the coordinator and is untouched here.
+    /// collapse invalidation vs post-close workspace cleanup. The primary tile binding falls away
+    /// with the tree; the primary session itself stays in the coordinator and is untouched here.
     @discardableResult
     private func dropSplitTree(forPrimarySessionID primarySessionID: UUID) -> [HostTerminalSession] {
         guard let tree = treesByPrimaryID.removeValue(forKey: primarySessionID) else { return [] }
@@ -751,7 +770,7 @@ final class HostTerminalStateStore: ObservableObject {
     }
 
     private func retireTerminalSession(_ sessionID: UUID) {
-        surfaceStore.retire(sessionID: sessionID)
+        surfaceStore.invalidate(sessionID: sessionID)
         deregisterTerminalSession(sessionID)
     }
 

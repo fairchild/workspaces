@@ -57,7 +57,7 @@ struct SidebarView: View {
     let onWebSourceSelected: (WebSource) -> Void
     let onRequestWebSourceCreation: (WebSourceCreationTarget) -> Void
     let onWorkspaceCreated: () -> Void
-    let retireTerminalSessions: @MainActor (HostTerminalSessionKey) async -> Void
+    let retireTerminalSessions: @MainActor (HostTerminalSessionKey) async throws -> Void
     let workspaceProviderSetupCoordinator: WorkspaceProviderSetupCoordinator
     let hostLumeSmokeAutomation: HostLumeSmokeAutomationController
     let desktopUISmokeAutomation: DesktopUISmokeAutomationController
