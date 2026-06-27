@@ -2043,11 +2043,22 @@ export async function listPrReviewRunsForBroker(
 ): Promise<BrokerPrReviewRun[]> {
 	await ensureSchema();
 	const limit = input.limit ?? 10;
+	const staleStartedBefore = new Date(
+		Date.now() - STALE_STARTED_MS,
+	).toISOString();
 	let startedQuery = getDb()
 		.selectFrom("managed_pr_review_runs")
 		.select(BROKER_RUN_COLUMNS)
 		.where("status", "=", "started")
-		.where("session_id", "is not", null);
+		.where((eb) =>
+			eb.or([
+				eb("session_id", "is not", null),
+				eb.and([
+					eb("session_id", "is", null),
+					eb("updated_at", "<=", staleStartedBefore),
+				]),
+			]),
+		);
 	let completedQuery = getDb()
 		.selectFrom("managed_pr_review_runs")
 		.select(BROKER_RUN_COLUMNS)
