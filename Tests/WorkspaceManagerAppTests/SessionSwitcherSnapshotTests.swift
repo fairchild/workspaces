@@ -58,7 +58,7 @@ struct SessionSwitcherSnapshotTests {
         #expect(row.activity == .awaitingInput)
         #expect(row.chips.map(\.title).contains("codex/session-switcher"))
         #expect(row.chips.map(\.title).contains("2 panes"))
-        #expect(row.chips.map(\.title).contains("Claude"))
+        #expect(row.chips.map(\.title).contains("Claude Code"))
         #expect(row.chips.map(\.title).contains("Claude Opus"))
         #expect(row.chips.map(\.title).contains("64% ctx"))
         #expect(row.chips.map(\.title).contains("$1.25"))
