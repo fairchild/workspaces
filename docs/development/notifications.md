@@ -124,7 +124,12 @@ bun run --bun wrangler deploy --env preview # preview
 
 **Secrets** (set via `wrangler secret put`):
 - `GITHUB_WEBHOOK_SECRET` — shared secret for GitHub webhook signature verification
-- `JWT_SIGNING_SECRET` — HMAC-SHA256 key for JWT signing/verification
+- `JWT_SIGNING_SECRET` — HMAC-SHA256 key for notification-session JWT
+  signing/verification. This is a shared cross-worker secret: keep the same
+  value on `webhook-relay`, `webhook-relay-preview`, `feedback-store`, and
+  `feedback-store-preview`. Rotate all four together; mismatched values do not
+  break anonymous feedback submission, but they do break signed-in feedback
+  attribution and any other worker that verifies notification JWTs.
 - `WORKSPACES_WEBHOOK_CANARY_SECRET` — canary-only shared secret used to prove
   the signed Cloudflare-to-Vercel reviewer ingress path without starting an
   agent

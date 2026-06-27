@@ -10,28 +10,32 @@ final class MockURLProtocol: URLProtocol, @unchecked Sendable {
     static func session(
         handlers: [String: (json: [String: Any], statusCode: Int)]
     ) -> URLSession {
+        session(
+            requestHandlers: handlers.mapValues { spec in
+                { request in
+                    let data = try! JSONSerialization.data(withJSONObject: spec.json)
+                    let response = HTTPURLResponse(
+                        url: request.url!,
+                        statusCode: spec.statusCode,
+                        httpVersion: nil,
+                        headerFields: ["Content-Type": "application/json"]
+                    )!
+                    return (data, response)
+                }
+            }
+        )
+    }
+
+    static func session(
+        requestHandlers: [String: (URLRequest) -> (Data, HTTPURLResponse)]
+    ) -> URLSession {
         let sessionID = UUID().uuidString
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [MockURLProtocol.self]
         config.httpAdditionalHeaders = ["X-Mock-Session-ID": sessionID]
 
-        var resolved: [String: (URLRequest) -> (Data, HTTPURLResponse)] = [:]
-        for (path, spec) in handlers {
-            let data = try! JSONSerialization.data(withJSONObject: spec.json)
-            let statusCode = spec.statusCode
-            resolved[path] = { request in
-                let response = HTTPURLResponse(
-                    url: request.url!,
-                    statusCode: statusCode,
-                    httpVersion: nil,
-                    headerFields: ["Content-Type": "application/json"]
-                )!
-                return (data, response)
-            }
-        }
-
         lock.lock()
-        handlersBySessionID[sessionID] = resolved
+        handlersBySessionID[sessionID] = requestHandlers
         lock.unlock()
 
         return URLSession(configuration: config)

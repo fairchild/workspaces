@@ -62,6 +62,7 @@ struct ContentView: View {
     @State private var dismissedWorkspaceOrphanItemIDs: Set<String> = []
     @State private var cleaningWorkspaceOrphanItemIDs: Set<String> = []
     @State private var pendingWorkspaceOrphanCleanup: WorkspaceOrphanItem?
+    @State private var isShowingFeedbackSheet = false
     @State private var accessRecorder = MainWindowAccessRecorder()
     @State private var presentedSessionSwitcherSnapshot: SessionSwitcherSnapshot?
     @StateObject private var rightPaneStateStore = RightPaneStateStore()
@@ -446,7 +447,8 @@ struct ContentView: View {
             revealInFinder: revealInFinderFocusedAction,
             copyPath: copyPathFocusedAction,
             openSessionSwitcher: presentSessionSwitcher,
-            openCommandRunner: { viewState.isShowingThemeOverlay = true }
+            openCommandRunner: { viewState.isShowingThemeOverlay = true },
+            sendFeedback: { isShowingFeedbackSheet = true }
         )
     }
 
@@ -466,7 +468,8 @@ struct ContentView: View {
             canRevealInFinder: revealInFinderFocusedAction != nil,
             canCopyPath: copyPathFocusedAction != nil,
             canOpenSessionSwitcher: true,
-            canOpenCommandRunner: true
+            canOpenCommandRunner: true,
+            canSendFeedback: true
         )
     }
 
@@ -982,6 +985,9 @@ struct ContentView: View {
                 clearAppCommands()
                 accessRecorder.flushPendingSave(modelContext: modelContext)
             }
+            .onReceive(NotificationCenter.default.publisher(for: .showFeedbackSheet)) { _ in
+                isShowingFeedbackSheet = true
+            }
             .sheet(item: $repoForNewWorkspaceFromLanding) { repo in
                 NewWorkspaceSheet(
                     repo: repo,
@@ -1051,6 +1057,12 @@ struct ContentView: View {
                 TerminalThemeOverlay(
                     store: .shared,
                     onDismiss: { viewState.isShowingThemeOverlay = false }
+                )
+            }
+            .sheet(isPresented: $isShowingFeedbackSheet) {
+                FeedbackSheet(
+                    notificationCoordinator: notificationCoordinator,
+                    onDismiss: { isShowingFeedbackSheet = false }
                 )
             }
             .alert(

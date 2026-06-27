@@ -11,6 +11,10 @@ import SwiftData
 import SwiftUI
 import WorkspaceManagerCore
 
+extension Notification.Name {
+    static let showFeedbackSheet = Notification.Name("WorkspacesShowFeedbackSheet")
+}
+
 @main
 struct WorkspaceManagerApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
@@ -259,6 +263,11 @@ struct WorkspaceManagerApp: App {
             CommandGroup(after: .help) {
                 KeyboardShortcutsMenuItem()
 
+                Button("Send Feedback...") {
+                    appCommandState.perform(.sendFeedback)
+                }
+                .disabled(!appCommandState.mainWindowAvailability.canSendFeedback)
+
                 Button("Export Diagnostic Report...") {
                     Task {
                         await DiagnosticReportExporter.exportWithSavePanel()
@@ -447,6 +456,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Applying after activation-policy setup avoids Dock showing the generic executable icon.
         applyApplicationIconIfAvailable()
         applyVariantPresentationIfNeeded()
+        DispatchQueue.main.async { [weak self] in
+            self?.installHelpMenuItems()
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+            self?.installHelpMenuItems()
+        }
 
         // Register existing windows with focus manager
         for window in NSApp.windows {
@@ -467,6 +482,41 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     self.applyVariantPresentation(to: window)
                 }
             }
+        }
+    }
+
+    private func installHelpMenuItems() {
+        guard let helpMenu = NSApp.mainMenu?.item(withTitle: "Help")?.submenu else { return }
+
+        if helpMenu.item(withTitle: "Send Feedback...") == nil {
+            helpMenu.addItem(.separator())
+            let item = NSMenuItem(
+                title: "Send Feedback...",
+                action: #selector(showFeedbackFromHelpMenu),
+                keyEquivalent: ""
+            )
+            item.target = self
+            helpMenu.addItem(item)
+        }
+
+        if helpMenu.item(withTitle: "Export Diagnostic Report...") == nil {
+            let item = NSMenuItem(
+                title: "Export Diagnostic Report...",
+                action: #selector(exportDiagnosticReportFromHelpMenu),
+                keyEquivalent: ""
+            )
+            item.target = self
+            helpMenu.addItem(item)
+        }
+    }
+
+    @objc private func showFeedbackFromHelpMenu() {
+        NotificationCenter.default.post(name: .showFeedbackSheet, object: nil)
+    }
+
+    @objc private func exportDiagnosticReportFromHelpMenu() {
+        Task {
+            await DiagnosticReportExporter.exportWithSavePanel()
         }
     }
 
@@ -555,6 +605,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidBecomeActive(_ notification: Notification) {
         NSLog("[AppDelegate] applicationDidBecomeActive")
+        installHelpMenuItems()
         applyApplicationIconIfAvailable()
         GhosttyAppManager.shared.setFocus(true)
         TerminalFocusManager.shared.appDidBecomeActive()
@@ -608,6 +659,10 @@ private struct ClaudeSettingsInstallerKey: EnvironmentKey {
     static let defaultValue: (any ClaudeSettingsInstalling)? = nil
 }
 
+private struct FeedbackServiceKey: EnvironmentKey {
+    static let defaultValue: any FeedbackServiceProtocol = FeedbackService.shared
+}
+
 extension EnvironmentValues {
     var gitService: any GitServiceProtocol {
         get { self[GitServiceKey.self] }
@@ -658,6 +713,11 @@ extension EnvironmentValues {
         get { self[ClaudeSettingsInstallerKey.self] }
         set { self[ClaudeSettingsInstallerKey.self] = newValue }
     }
+
+    var feedbackService: any FeedbackServiceProtocol {
+        get { self[FeedbackServiceKey.self] }
+        set { self[FeedbackServiceKey.self] = newValue }
+    }
 }
 
 struct MainWindowFocusedActions {
@@ -678,6 +738,7 @@ struct MainWindowFocusedActions {
     var copyPath: Action? = nil
     var openSessionSwitcher: Action? = nil
     var openCommandRunner: Action? = nil
+    var sendFeedback: Action? = nil
 
     @MainActor static let empty = MainWindowFocusedActions()
 }
@@ -698,6 +759,7 @@ struct MainWindowCommandAvailability: Equatable {
     let canCopyPath: Bool
     let canOpenSessionSwitcher: Bool
     let canOpenCommandRunner: Bool
+    let canSendFeedback: Bool
 
     static let empty = MainWindowCommandAvailability(
         canToggleSidebar: false,
@@ -714,7 +776,8 @@ struct MainWindowCommandAvailability: Equatable {
         canRevealInFinder: false,
         canCopyPath: false,
         canOpenSessionSwitcher: false,
-        canOpenCommandRunner: false
+        canOpenCommandRunner: false,
+        canSendFeedback: false
     )
 }
 
@@ -734,6 +797,7 @@ enum MainWindowCommand {
     case copyPath
     case openSessionSwitcher
     case openCommandRunner
+    case sendFeedback
 }
 
 @MainActor
@@ -800,6 +864,8 @@ final class AppCommandState: ObservableObject {
             mainWindowActions.openSessionSwitcher?()
         case .openCommandRunner:
             mainWindowActions.openCommandRunner?()
+        case .sendFeedback:
+            mainWindowActions.sendFeedback?()
         }
     }
 }

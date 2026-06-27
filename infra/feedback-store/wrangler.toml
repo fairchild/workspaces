@@ -1,0 +1,50 @@
+name = "feedback-store"
+main = "src/index.ts"
+compatibility_date = "2025-12-01"
+
+[[routes]]
+pattern = "feedback.cloudcompute.com"
+custom_domain = true
+
+[[d1_databases]]
+binding = "FEEDBACK_DB"
+database_name = "workspaces-feedback"
+database_id = "9973e814-8556-429e-88c3-391a722b453d"
+migrations_dir = "migrations"
+
+[[r2_buckets]]
+binding = "FEEDBACK_BUCKET"
+bucket_name = "workspaces-feedback"
+
+[vars]
+GITHUB_CLIENT_ID = "Iv23liJBRgQoWIWjtRoO"
+GITHUB_OWNER = "fairchild"
+GITHUB_REPO = "workspaces"
+GITHUB_API_BASE = "https://api.github.com"
+POSTS_PER_HOUR = "10"
+ADMIN_ALLOWLIST = "fairchild"
+
+[env.preview]
+name = "feedback-store-preview"
+
+[env.preview.vars]
+GITHUB_CLIENT_ID = "Iv23liJBRgQoWIWjtRoO"
+GITHUB_OWNER = "fairchild"
+GITHUB_REPO = "workspaces"
+GITHUB_API_BASE = "https://api.github.com"
+POSTS_PER_HOUR = "10"
+ADMIN_ALLOWLIST = "fairchild"
+
+[[env.preview.routes]]
+pattern = "feedback-preview.cloudcompute.com"
+custom_domain = true
+
+[[env.preview.d1_databases]]
+binding = "FEEDBACK_DB"
+database_name = "workspaces-feedback-preview"
+database_id = "9ceb2bfb-8cb3-46aa-afe5-b0a5c5f228d6"
+migrations_dir = "migrations"
+
+[[env.preview.r2_buckets]]
+binding = "FEEDBACK_BUCKET"
+bucket_name = "workspaces-feedback-preview"

@@ -11,6 +11,15 @@ public enum NotificationConstants {
         // Safe: constant URL string, always parses successfully
         return URL(string: "https://webhooks.cloudcompute.com")!
     }()
+    public static let feedbackBaseURL: URL = {
+        if let override = ProcessInfo.processInfo.environment[
+            "WORKSPACES_FEEDBACK_URL"],
+            let url = URL(string: override)
+        {
+            return url
+        }
+        return URL(string: "https://feedback.cloudcompute.com")!
+    }()
     public static let gitHubAppClientID = "Iv23liJBRgQoWIWjtRoO"
 
     public static let enabledKey = "notificationsEnabled"

@@ -52,7 +52,8 @@ struct AppCommandStateTests {
             canRevealInFinder: false,
             canCopyPath: false,
             canOpenSessionSwitcher: true,
-            canOpenCommandRunner: true
+            canOpenCommandRunner: true,
+            canSendFeedback: true
         )
 
         state.setMainWindowActions(
