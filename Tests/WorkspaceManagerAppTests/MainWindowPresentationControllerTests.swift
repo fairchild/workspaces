@@ -76,12 +76,8 @@ struct MainWindowPresentationControllerTests {
 
         let paneCounts = controller.paneCountBySessionKey(
             sessions: [primary, defaultHome],
-            splitSession: { sessionID in
-                guard sessionID == primary.id else { return nil }
-                return HostTerminalSession(
-                    key: primary.key,
-                    directory: repoURL
-                )
+            paneCount: { sessionID in
+                sessionID == primary.id ? 2 : 1
             }
         )
 

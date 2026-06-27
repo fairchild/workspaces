@@ -342,7 +342,7 @@ final class HostTerminalStateStore: ObservableObject {
         var removed = false
 
         if let primarySessionID = primaryIDBySplitSessionID[sessionID] {
-            removeSplitState(forPrimarySessionID: primarySessionID)
+            closeSplitPane(sessionID, primarySessionID: primarySessionID)
             removed = true
         }
 
@@ -381,6 +381,14 @@ final class HostTerminalStateStore: ObservableObject {
 
         return activeSessionID
     }
+
+    // MARK: - Depth-1 split projections
+    //
+    // Read-only views of a two-leaf tree in the legacy `splitSession`/`splitLayout`/`splitFraction`
+    // vocabulary. No production code reads them — the recursive renderer and resize/focus paths walk
+    // the tree directly. They survive as the two-pane store tests' assertion vocabulary, and the
+    // `assert(leafIDs == 2)` in `splitTileID(in:)` is their depth-1 contract: a deeper tree trips it
+    // loudly rather than letting a projection silently pick one arbitrary sibling.
 
     func splitSession(for primarySessionID: UUID?) -> HostTerminalSession? {
         guard let primarySessionID, let tree = treesByPrimaryID[primarySessionID] else { return nil }
@@ -424,109 +432,117 @@ final class HostTerminalStateStore: ObservableObject {
 
     /// The non-primary leaf of `tree` (the split tile). Returns `nil` if the primary binding is gone.
     private func splitTileID(in tree: TileTreeState, primarySessionID: UUID) -> TileID? {
-        // Depth-1 shim: a two-leaf tree has exactly one non-primary leaf. Once Phase 4 makes deeper
-        // trees real, "first leaf that isn't the primary" picks an arbitrary sibling and the
-        // derived-split-session set would silently drop the extra leaves — trip loudly here instead.
-        assert(tree.leafIDs.count == 2, "depth-1 projection shim — replace before deeper trees land")
+        // Depth-1 contract for the projections above: a two-leaf tree has exactly one non-primary leaf.
+        // On a deeper tree "first leaf that isn't the primary" would pick an arbitrary sibling, so trip
+        // loudly — production reads the tree directly and never routes a deep tree through here.
+        assert(tree.leafIDs.count == 2, "split projections are depth-1 only — read the tree for deeper layouts")
         guard let primaryTile = tileIDBySessionID[primarySessionID] else { return nil }
         return tree.leafIDs.first(where: { $0 != primaryTile })
     }
 
-    /// Live split sessions across every tab, derived from the tree entries rather than a free-standing
-    /// binding scan — the single source of truth for what is registered with the agent subsystems.
+    /// Live split sessions across every tab — every non-primary leaf of every tab's tree. Derived from
+    /// the trees rather than a free-standing binding scan, so it is the single source of truth for what
+    /// is registered with the agent subsystems and holds at any depth (each extra pane is a leaf here).
     private var derivedSplitSessions: [HostTerminalSession] {
-        treesByPrimaryID.compactMap { primarySessionID, tree in
-            splitSession(in: tree, primarySessionID: primarySessionID)
+        treesByPrimaryID.flatMap { primarySessionID, tree -> [HostTerminalSession] in
+            guard let primaryTile = tileIDBySessionID[primarySessionID] else { return [] }
+            return tree.leafIDs.compactMap { tileID in
+                tileID == primaryTile ? nil : sessionByTileID[tileID]
+            }
         }
     }
 
-    @discardableResult
-    func ensureSplitForActiveSession(
-        preferredLayout: SplitPaneLayout = .defaultTrailing
-    ) -> HostTerminalSession? {
-        guard let activeSessionID else { return nil }
-        return ensureSplit(
-            forPrimarySessionID: activeSessionID,
-            preferredLayout: preferredLayout
-        )
+    /// The active arrangement for a tab, or `nil` for a single-pane tab (sparse model: no split ⇒ no
+    /// entry). The recursive renderer walks this; the depth-1 projections above read it.
+    func tileTree(forPrimarySessionID primarySessionID: UUID?) -> TileTreeState? {
+        guard let primarySessionID else { return nil }
+        return treesByPrimaryID[primarySessionID]
     }
 
+    /// Resolves the session filling a leaf tile — the renderer's `.tile` → terminal binding.
+    func session(forTile tileID: TileID) -> HostTerminalSession? {
+        sessionByTileID[tileID]
+    }
+
+    /// Live pane count for a tab: a split tab's leaf count, or `1` for a single pane. Depth-agnostic,
+    /// so the sidebar's "has live session" badge counts every tile, not just a single split sibling.
+    func paneCount(forPrimarySessionID primarySessionID: UUID) -> Int {
+        treesByPrimaryID[primarySessionID]?.leafIDs.count ?? 1
+    }
+
+    /// Splits the tile holding `sourceSessionID` along `preferredLayout`, growing the tab's tree by one
+    /// pane and binding a fresh `HostTerminalSession` to the new tile (focused on return). A tab with no
+    /// split yet is seeded with a single tile bound to its primary (the depth-0 shape), so the first
+    /// split grows from there; subsequent calls split whatever pane was the source → deeper trees.
     @discardableResult
-    func ensureSplit(
-        forPrimarySessionID primarySessionID: UUID,
+    func splitFocusedTile(
+        inTabContaining sourceSessionID: UUID,
         preferredLayout: SplitPaneLayout = .defaultTrailing
     ) -> HostTerminalSession? {
-        guard let primarySession = sessions.first(where: { $0.id == primarySessionID }) else {
+        guard let primarySessionID = primarySessionID(containing: sourceSessionID),
+            let primarySession = sessions.first(where: { $0.id == primarySessionID })
+        else {
             return nil
         }
 
-        if treesByPrimaryID[primarySessionID] != nil {
-            return relayoutSplit(forPrimarySessionID: primarySessionID, preferredLayout: preferredLayout)
-        }
+        let existingTree = treesByPrimaryID[primarySessionID]
+        let primaryTile = tileIDBySessionID[primarySessionID] ?? TileID()
+        let seedTree = existingTree ?? TileTreeState(singleTile: primaryTile)
+        // Split the source pane's tile when it is bound; a freshly seeded tab has only the primary,
+        // whose tile is `seedTree.focusedTileID`.
+        let parentTile = tileIDBySessionID[sourceSessionID] ?? seedTree.focusedTileID
+
+        let grownTree = tileTreeReducer.reduce(
+            seedTree,
+            .split(
+                parent: parentTile,
+                axis: preferredLayout.axis.tileAxis,
+                insertNewBefore: preferredLayout.splitBeforePrimary
+            )
+        )
+        let newTile = grownTree.focusedTileID
+        // The reducer focuses the inserted tile; an unchanged focus means `parentTile` was not a live
+        // leaf and no split happened — abort before mutating any binding (keeps a seeded tab pristine).
+        guard newTile != parentTile else { return nil }
 
         let splitSession = HostTerminalSession(
             key: primarySession.key,
             directory: primarySession.directoryURL
         )
-        let primaryTile = TileID()
-        var tree = TileTreeState(singleTile: primaryTile)
-        tree = tileTreeReducer.reduce(
-            tree,
-            .split(
-                parent: primaryTile,
-                axis: preferredLayout.axis.tileAxis,
-                insertNewBefore: preferredLayout.splitBeforePrimary
-            )
-        )
-        let splitTile = tree.focusedTileID
 
-        sessionByTileID[primaryTile] = primarySession
-        sessionByTileID[splitTile] = splitSession
-        tileIDBySessionID[primarySessionID] = primaryTile
-        tileIDBySessionID[splitSession.id] = splitTile
+        if existingTree == nil {
+            sessionByTileID[primaryTile] = primarySession
+            tileIDBySessionID[primarySessionID] = primaryTile
+        }
+        sessionByTileID[newTile] = splitSession
+        tileIDBySessionID[splitSession.id] = newTile
         primaryIDBySplitSessionID[splitSession.id] = primarySessionID
-        treesByPrimaryID[primarySessionID] = tree
+        treesByPrimaryID[primarySessionID] = grownTree
 
         syncRegistry()
         objectWillChange.send()
         return splitSession
     }
 
-    /// Re-applies `preferredLayout` to an existing split **without re-minting identity**: the live
-    /// terminal would orphan if relayout routed through `.close` + `.split` (fresh `TileID`/`SplitID`
-    /// and a new session). Instead the root `.split` is hand-transformed — only `axis` and the
-    /// `(first, second)` order may change; `SplitID`, `ratio`, and both tile leaves are preserved.
-    /// Fires `objectWillChange` only when axis/order actually changed, and never re-syncs the registry
-    /// (the session set is unchanged), matching the legacy relayout branch.
-    private func relayoutSplit(
-        forPrimarySessionID primarySessionID: UUID,
-        preferredLayout: SplitPaneLayout
-    ) -> HostTerminalSession? {
-        guard var tree = treesByPrimaryID[primarySessionID],
-            case .split(let splitID, let axis, let ratio, let first, let second) = tree.root,
-            let primaryTile = tileIDBySessionID[primarySessionID],
-            let splitTile = splitTileID(in: tree, primarySessionID: primarySessionID),
-            let splitSession = sessionByTileID[splitTile]
-        else {
-            return nil
-        }
-
-        let targetAxis = preferredLayout.axis.tileAxis
-        let primaryLeaf = TileTree.tile(primaryTile)
-        let splitLeaf = TileTree.tile(splitTile)
-        let (newFirst, newSecond) =
-            preferredLayout.splitBeforePrimary ? (splitLeaf, primaryLeaf) : (primaryLeaf, splitLeaf)
-
-        guard axis != targetAxis || first != newFirst || second != newSecond else {
-            return splitSession
-        }
-
-        tree.root = .split(id: splitID, axis: targetAxis, ratio: ratio, first: newFirst, second: newSecond)
-        treesByPrimaryID[primarySessionID] = tree
-        objectWillChange.send()
-        return splitSession
+    /// Sets the ratio of a specific split — the recursive renderer's divider-drag entry. `splitID`
+    /// identifies the dragged split anywhere in the tree, so depth-≥2 dividers resize their own split.
+    @discardableResult
+    func updateSplitRatio(
+        _ ratio: CGFloat,
+        splitID: SplitID,
+        forPrimarySessionID primarySessionID: UUID
+    ) -> Bool {
+        // Outer clamp before the reducer's own `clampRatio` preserves legacy NaN handling (NaN → 0.2,
+        // the host bound) rather than the reducer's NaN → defaultRatio.
+        let clampedFraction = Self.clampedSplitFraction(ratio)
+        return applySplitMutation(
+            forPrimarySessionID: primarySessionID,
+            action: .setRatio(split: splitID, ratio: Double(clampedFraction))
+        )
     }
 
+    /// Depth-1 convenience: set the root split's ratio. Retained for the two-pane store tests; the live
+    /// renderer drags through `updateSplitRatio(_:splitID:…)` with the dragged split's id.
     @discardableResult
     func updateSplitFraction(_ fraction: CGFloat, forPrimarySessionID primarySessionID: UUID) -> Bool {
         guard let tree = treesByPrimaryID[primarySessionID],
@@ -534,11 +550,7 @@ final class HostTerminalStateStore: ObservableObject {
         else {
             return false
         }
-        let clampedFraction = Self.clampedSplitFraction(fraction)
-        return applyRootSplitMutation(
-            forPrimarySessionID: primarySessionID,
-            action: .setRatio(split: splitID, ratio: Double(clampedFraction))
-        )
+        return updateSplitRatio(fraction, splitID: splitID, forPrimarySessionID: primarySessionID)
     }
 
     @discardableResult
@@ -548,7 +560,7 @@ final class HostTerminalStateStore: ObservableObject {
         else {
             return false
         }
-        return applyRootSplitMutation(
+        return applySplitMutation(
             forPrimarySessionID: primarySessionID,
             action: .equalize(subtreeRoot: nil)
         )
@@ -562,18 +574,18 @@ final class HostTerminalStateStore: ObservableObject {
     ) -> Bool {
         guard let primarySessionID = primarySessionID(containing: sourceSessionID),
             let tree = treesByPrimaryID[primarySessionID],
-            case .split(let splitID, _, _, _, _) = tree.root,
-            let splitSession = splitSession(in: tree, primarySessionID: primarySessionID)
+            let sourceTile = tileIDBySessionID[sourceSessionID],
+            let enclosing = tree.root.enclosingSplit(of: sourceTile)
         else {
             return false
         }
 
-        let layout = splitLayout(for: primarySessionID) ?? .defaultTrailing
-        let sourceIsSplit = splitSession.id == sourceSessionID
+        // Resize the split enclosing the source pane (not the root), so a nested pane grows its own
+        // divider. `leafIsFirst` plays the role the legacy leading-pane test did at depth 1.
         guard
             let delta = resizeDelta(
-                for: layout,
-                sourceIsSplit: sourceIsSplit,
+                axis: enclosing.axis,
+                sourceIsLeadingPane: enclosing.leafIsFirst,
                 direction: direction,
                 amount: amount
             )
@@ -581,79 +593,69 @@ final class HostTerminalStateStore: ObservableObject {
             return false
         }
 
-        return applyRootSplitMutation(
+        return applySplitMutation(
             forPrimarySessionID: primarySessionID,
-            action: .resize(split: splitID, ratioDelta: Double(delta))
+            action: .resize(split: enclosing.id, ratioDelta: Double(delta))
         )
     }
 
-    /// Runs a ratio-only reducer action against the tab's tree and commits it iff the root ratio
-    /// actually changed — preserving the legacy `Bool`/`objectWillChange` semantics (no over-firing).
-    private func applyRootSplitMutation(
+    /// Runs a reducer action against the tab's tree and commits it iff the tree actually changed —
+    /// preserving the `Bool`/`objectWillChange` semantics (no over-firing) while generalizing the
+    /// legacy root-ratio diff to a whole-tree compare, so a ratio change on any nested split commits.
+    private func applySplitMutation(
         forPrimarySessionID primarySessionID: UUID,
         action: TileTreeAction
     ) -> Bool {
-        guard let tree = treesByPrimaryID[primarySessionID],
-            case .split(_, _, let oldRatio, _, _) = tree.root
-        else {
-            return false
-        }
+        guard let tree = treesByPrimaryID[primarySessionID] else { return false }
         let next = tileTreeReducer.reduce(tree, action)
-        guard case .split(_, _, let newRatio, _, _) = next.root, newRatio != oldRatio else {
-            return false
-        }
+        guard next != tree else { return false }
         treesByPrimaryID[primarySessionID] = next
         objectWillChange.send()
         return true
     }
 
-    /// Computes the target session for split focus navigation in our current
-    /// two-pane split model (primary + optional split with direction-aware layout).
+    /// Resolves the focus target for `goto_split` by reducing from the source pane's tile: directional
+    /// moves use the reducer's geometric traversal, previous/next cycle the depth-first leaf order. The
+    /// reducer reproduces the legacy two-pane table exactly at depth 1; deeper traversal is new (and
+    /// flagged not-hardened). Persists the moved focus so a following split grows from the right tile.
     func splitFocusTarget(
         from sourceSessionID: UUID,
         direction: GhosttyAppManager.SplitFocusDirection
     ) -> UUID? {
         guard let primarySessionID = activatePrimarySession(containing: sourceSessionID),
-            let splitSession = splitSession(for: primarySessionID)
+            let tree = treesByPrimaryID[primarySessionID],
+            let sourceTile = tileIDBySessionID[sourceSessionID]
         else {
             return nil
         }
 
-        let layout = splitLayout(for: primarySessionID) ?? .defaultTrailing
-        let sourceIsSplit = splitSession.id == sourceSessionID
-
+        let action: TileTreeAction
         switch direction {
-        case .previous, .next:
-            return sourceIsSplit ? primarySessionID : splitSession.id
-
+        case .previous:
+            action = .focusRelative(from: sourceTile, order: .previous)
+        case .next:
+            action = .focusRelative(from: sourceTile, order: .next)
         case .left:
-            guard layout.axis == .leadingTrailing else { return nil }
-            if layout.splitBeforePrimary {
-                return sourceIsSplit ? nil : splitSession.id
-            }
-            return sourceIsSplit ? primarySessionID : nil
-
+            action = .focusDirectional(from: sourceTile, direction: .left)
         case .right:
-            guard layout.axis == .leadingTrailing else { return nil }
-            if layout.splitBeforePrimary {
-                return sourceIsSplit ? primarySessionID : nil
-            }
-            return sourceIsSplit ? nil : splitSession.id
-
+            action = .focusDirectional(from: sourceTile, direction: .right)
         case .up:
-            guard layout.axis == .topBottom else { return nil }
-            if layout.splitBeforePrimary {
-                return sourceIsSplit ? nil : splitSession.id
-            }
-            return sourceIsSplit ? primarySessionID : nil
-
+            action = .focusDirectional(from: sourceTile, direction: .up)
         case .down:
-            guard layout.axis == .topBottom else { return nil }
-            if layout.splitBeforePrimary {
-                return sourceIsSplit ? primarySessionID : nil
-            }
-            return sourceIsSplit ? nil : splitSession.id
+            action = .focusDirectional(from: sourceTile, direction: .down)
         }
+
+        // Normalize focus to the source pane first so "no neighbor" is a focus that did not move.
+        let normalized = tileTreeReducer.reduce(tree, .setFocus(sourceTile))
+        let navigated = tileTreeReducer.reduce(normalized, action)
+        guard navigated.focusedTileID != sourceTile,
+            let targetSession = sessionByTileID[navigated.focusedTileID]
+        else {
+            return nil
+        }
+
+        treesByPrimaryID[primarySessionID] = navigated
+        return targetSession.id
     }
 
     static func clampedSplitFraction(_ fraction: CGFloat) -> CGFloat {
@@ -732,6 +734,41 @@ final class HostTerminalStateStore: ObservableObject {
         }
     }
 
+    /// Closes a single split pane (its process exited): reduces `.close` on the pane's tile so its
+    /// enclosing split collapses into the surviving sibling, leaving every other pane intact. When the
+    /// tab is left with only its primary the tree drops to the sparse single-pane shape; otherwise the
+    /// rebalanced tree (one fewer pane) is kept. The pane's session is torn down either way. At depth 1
+    /// this is identical to dropping the whole tree — there is only ever one split pane to remove.
+    private func closeSplitPane(_ sessionID: UUID, primarySessionID: UUID) {
+        guard let tree = treesByPrimaryID[primarySessionID],
+            let tile = tileIDBySessionID[sessionID]
+        else {
+            return
+        }
+
+        let reduced = tileTreeReducer.reduce(tree, .close(tile))
+
+        sessionByTileID.removeValue(forKey: tile)
+        tileIDBySessionID.removeValue(forKey: sessionID)
+        primaryIDBySplitSessionID.removeValue(forKey: sessionID)
+
+        if reduced.leafIDs.count <= 1 {
+            // Only the primary remains → collapse to the sparse single-pane shape (no tree, no tile
+            // bindings); the primary session stays in the coordinator untouched.
+            if let primaryTile = tileIDBySessionID[primarySessionID] {
+                sessionByTileID.removeValue(forKey: primaryTile)
+            }
+            tileIDBySessionID.removeValue(forKey: primarySessionID)
+            treesByPrimaryID.removeValue(forKey: primarySessionID)
+        } else {
+            treesByPrimaryID[primarySessionID] = reduced
+        }
+
+        surfaceStore.invalidate(sessionID: sessionID)
+        deregisterTerminalSession(sessionID)
+        objectWillChange.send()
+    }
+
     /// Drops the split tree for `primarySessionID` and every binding it owned, returning the split
     /// session(s) it held (the non-primary leaves) so the caller can tear them down its own way —
     /// collapse invalidation vs post-close workspace cleanup. The primary tile binding falls away
@@ -803,16 +840,15 @@ final class HostTerminalStateStore: ObservableObject {
     }
 
     private func resizeDelta(
-        for layout: SplitPaneLayout,
-        sourceIsSplit: Bool,
+        axis: SplitAxis,
+        sourceIsLeadingPane: Bool,
         direction: GhosttyAppManager.SplitResizeDirection,
         amount: Int
     ) -> CGFloat? {
-        let sourceIsLeadingPane = layout.splitBeforePrimary ? sourceIsSplit : !sourceIsSplit
         let stepCount = max(1, Int(round(Double(max(amount, 1)) / 100.0)))
         let delta = CGFloat(stepCount) * Self.splitResizeStep
 
-        switch (layout.axis, sourceIsLeadingPane, direction) {
+        switch (axis, sourceIsLeadingPane, direction) {
         case (.leadingTrailing, true, .right), (.topBottom, true, .down):
             return delta
         case (.leadingTrailing, false, .left), (.topBottom, false, .up):

@@ -48,7 +48,7 @@ struct GhosttyTerminalIntentRouterTests {
     func gotoSplitReturnsFocusForPairedPane() throws {
         let store = makeStore()
         let primary = try #require(store.sessions.first)
-        let split = try #require(store.ensureSplit(forPrimarySessionID: primary.id))
+        let split = try #require(store.splitFocusedTile(inTabContaining: primary.id))
 
         let effects = router.route(
             .split(.gotoSplit(direction: .right)),
@@ -65,7 +65,7 @@ struct GhosttyTerminalIntentRouterTests {
     func resizeSplitUpdatesSplitFraction() throws {
         let store = makeStore()
         let primary = try #require(store.sessions.first)
-        let split = try #require(store.ensureSplit(forPrimarySessionID: primary.id))
+        let split = try #require(store.splitFocusedTile(inTabContaining: primary.id))
 
         let effects = router.route(
             .split(.resizeSplit(direction: .left, amount: 100)),
@@ -82,7 +82,7 @@ struct GhosttyTerminalIntentRouterTests {
     func equalizeSplitsResetsSplitFraction() throws {
         let store = makeStore()
         let primary = try #require(store.sessions.first)
-        let split = try #require(store.ensureSplit(forPrimarySessionID: primary.id))
+        let split = try #require(store.splitFocusedTile(inTabContaining: primary.id))
         #expect(store.updateSplitFraction(0.7, forPrimarySessionID: primary.id))
 
         let effects = router.route(
@@ -182,7 +182,7 @@ struct GhosttyTerminalIntentRouterTests {
     func setTabTitleUpdatesPrimaryTab() throws {
         let store = makeStore()
         let primary = try #require(store.sessions.first)
-        let split = try #require(store.ensureSplit(forPrimarySessionID: primary.id))
+        let split = try #require(store.splitFocusedTile(inTabContaining: primary.id))
 
         let effects = router.route(
             .tab(.setTabTitle("CI")),

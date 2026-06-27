@@ -156,18 +156,17 @@ struct GhosttyTerminalIntentRouter {
         direction: GhosttyAppManager.SplitDirection?,
         hostTerminalState: HostTerminalStateStore
     ) -> [GhosttyTerminalRoutingEffect] {
-        let primarySessionID =
-            sourceSessionID.flatMap { hostTerminalState.activatePrimarySession(containing: $0) }
-            ?? hostTerminalState.activeSessionID
-
-        guard let primarySessionID else {
+        // Resolve which pane to split: the live source, or the active session when fired without one.
+        guard let sourcePaneID = sourceSessionID ?? hostTerminalState.activeSessionID else {
             NSLog("[SplitRouting] new_split ignored: no active/primary session")
             return []
         }
+        // Activate the containing tab (side effect); the split itself grows from `sourcePaneID`'s tile.
+        let primarySessionID = hostTerminalState.activatePrimarySession(containing: sourcePaneID)
         NSLog(
             "[SplitRouting] new_split source=%@ primary=%@",
-            sourceSessionID?.uuidString ?? "nil",
-            primarySessionID.uuidString
+            sourcePaneID.uuidString,
+            primarySessionID?.uuidString ?? "nil"
         )
         let preferredLayout = splitLayout(for: direction)
         NSLog(
@@ -178,8 +177,8 @@ struct GhosttyTerminalIntentRouter {
         )
 
         guard
-            let splitSession = hostTerminalState.ensureSplit(
-                forPrimarySessionID: primarySessionID,
+            let splitSession = hostTerminalState.splitFocusedTile(
+                inTabContaining: sourcePaneID,
                 preferredLayout: preferredLayout
             )
         else {
