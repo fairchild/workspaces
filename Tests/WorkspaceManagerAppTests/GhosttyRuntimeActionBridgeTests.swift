@@ -2,10 +2,10 @@
 //  GhosttyRuntimeActionBridgeTests.swift
 //  WorkspaceManagerAppTests
 //
-//  Channel 3: confirms the runtime bridge recognizes the desktop-notification
-//  and bell action tags and routes them through `runOnMainAsync` to a resolved
-//  surface view. The full end-to-end registry integration is covered by
-//  OSCDedupIntegrationTests in WorkspaceManagerTests.
+//  Terminal attention fallback: confirms the runtime bridge recognizes the
+//  desktop-notification and bell action tags and routes them through
+//  `runOnMainAsync` to a resolved surface view. The full end-to-end registry
+//  integration is covered by OSCDedupIntegrationTests in WorkspaceManagerTests.
 //
 
 import Foundation
@@ -14,7 +14,7 @@ import Testing
 
 @testable import WorkspaceManager
 
-@Suite("GhosttyRuntimeActionBridge — Channel 3 dispatch")
+@Suite("GhosttyRuntimeActionBridge — terminal attention dispatch")
 struct GhosttyRuntimeActionBridgeTests {
 
     @Test("DESKTOP_NOTIFICATION returns true and schedules main-thread work")
@@ -59,20 +59,25 @@ struct GhosttyRuntimeActionBridgeTests {
         #expect(scheduledCount.value == 1)
     }
 
-    @Test("Unrecognized action tag still returns false (default fall-through)")
-    func unknownActionStillFallsThrough() async {
+    @Test("SCROLLBAR returns true and schedules main-thread work")
+    func scrollbarDispatches() async {
         var action = ghostty_action_s()
-        // SCROLLBAR is not handled by the bridge; verify the default branch.
         action.tag = GHOSTTY_ACTION_SCROLLBAR
+        action.action.scrollbar = ghostty_action_scrollbar_s(total: 120, offset: 80, len: 24)
         let target = ghostty_target_s()
+        let scheduledCount = LockedCounter()
         let handled = GhosttyRuntimeActionBridge.handle(
             target: target,
             action: action,
             resolveSurfaceAddress: { _ in 0x1 },
             resolveSurfaceView: { _ in nil },
-            runOnMainAsync: { _ in }
+            runOnMainAsync: { closure in
+                scheduledCount.increment()
+                _ = closure
+            }
         )
-        #expect(handled == false)
+        #expect(handled == true)
+        #expect(scheduledCount.value == 1)
     }
 
     @Test("Bridge skips entirely when surface address resolution fails")

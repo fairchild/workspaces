@@ -51,7 +51,7 @@ struct AppCommandStateTests {
             canOpenDesktop: false,
             canRevealInFinder: false,
             canCopyPath: false,
-            canOpenCommandPalette: true,
+            canOpenSessionSwitcher: true,
             canOpenCommandRunner: true
         )
 

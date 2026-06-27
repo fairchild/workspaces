@@ -76,7 +76,7 @@ struct MainSelectionCoordinator {
         pathIsInside: (String, String) -> Bool
     ) -> Workspace? {
         let normalizedCWD = normalizePath(cwd)
-        let allWorkspaces = repos.flatMap(\.workspaces)
+        let allWorkspaces = repos.flatMap(\.workspaces).filter { $0.status != .archived }
 
         let matches = allWorkspaces.compactMap { workspace -> (workspace: Workspace, matchLength: Int)? in
             let workspacePath = normalizePath(workspace.path)

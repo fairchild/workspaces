@@ -3,8 +3,8 @@
 //  WorkspaceManager
 //
 //  Observes the AgentSessionRegistry and posts a macOS user notification when a
-//  session transitions into `.awaitingInput(.permissionPrompt)`. Per spec § Channel 1
-//  ("Notification → permission_prompt"), this is the canonical attention signal.
+//  session transitions into `.awaitingInput(.permissionPrompt)`. Command hook
+//  notification events are the canonical attention signal.
 //
 //  Coalescing: at most one notification per host session per 30s.
 //
@@ -41,13 +41,12 @@ public final class AgentNotificationPoster {
             let previous = observedRuns[hostID]
             observedRuns[hostID] = status.run
 
-            // Only fire on *transition* into permissionPrompt awaiting state.
             guard
-                case .awaitingInput(let reason) = status.run,
-                reason == .permissionPrompt
+                AgentChromeProjection.shouldPostPermissionPromptNotification(
+                    previous: previous,
+                    current: status.run
+                )
             else { continue }
-
-            if let previous, previous == status.run { continue }
 
             // Coalesce.
             let now = Date()
@@ -86,7 +85,7 @@ public final class AgentNotificationPoster {
     private func deliverNotification(for status: AgentSessionStatus) async {
         guard Self.isUserNotificationsAvailable else { return }
         let content = UNMutableNotificationContent()
-        content.title = agentDisplayName(for: status.kind) + " is awaiting input"
+        content.title = status.kind.displayName + " is awaiting input"
         content.body = "Permission requested in \(status.cwd)"
         content.sound = .default
         let request = UNNotificationRequest(
@@ -107,13 +106,4 @@ public final class AgentNotificationPoster {
         // `swift run` it points at the executable's parent directory.
         return Bundle.main.bundleURL.pathExtension == "app"
     }()
-
-    private func agentDisplayName(for kind: AgentKind) -> String {
-        switch kind {
-        case .claudeCode: return "Claude Code"
-        case .opencode: return "OpenCode"
-        case .aider: return "Aider"
-        case .unknown: return "Agent"
-        }
-    }
 }

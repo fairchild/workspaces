@@ -102,6 +102,7 @@ class PerfContractTests(unittest.TestCase):
         scenario_ids = {scenario["id"] for scenario in contract["scenarios"]}
         for scenario_id in {
             "main_window_agent_activity_burst",
+            "main_window_session_switcher_snapshot",
             "main_window_workspace_create_ui_stall",
             "main_window_idle_cpu_diagnostics_closed",
             "main_window_resident_memory_20_workspaces",
@@ -120,6 +121,7 @@ class PerfRunnerScriptTests(unittest.TestCase):
         script = (REPO_ROOT / "scripts" / "perf-runner.sh").read_text(encoding="utf-8")
         self.assertIn("main-window-hotspots-baseline.py", script)
         self.assertIn("main_window_agent_activity_burst", script)
+        self.assertIn("main_window_session_switcher_snapshot", script)
         self.assertIn("main_window_resident_memory_20_workspaces", script)
 
 

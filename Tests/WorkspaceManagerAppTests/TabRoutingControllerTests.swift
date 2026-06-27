@@ -46,6 +46,22 @@ struct TabRoutingControllerTests {
         #expect(closeRequests == [[third.id]])
     }
 
+    @Test("set_tab_title notification updates the source tab title")
+    func setTabTitleNotificationUpdatesSourceTabTitle() throws {
+        let store = makeStore()
+        let first = try #require(store.sessions.first)
+        let source = store.surfaceStore.view(for: first)
+
+        TabRoutingController().handle(
+            notification: tabActionNotification(kind: .setTabTitle, title: "Build", source: source),
+            hostTerminalState: store,
+            focusTerminal: { _ in },
+            requestCloseTabs: { _ in }
+        )
+
+        #expect(store.tabTitleOverride(for: first.id) == "Build")
+    }
+
     @Test("Invalid tab action payload leaves terminal state unchanged")
     func invalidTabActionPayloadLeavesTerminalStateUnchanged() throws {
         let store = makeStore()

@@ -8,6 +8,21 @@ import Foundation
 import GhosttyKit
 import QuartzCore
 
+enum GhosttySurfaceRetirementCloseError: LocalizedError {
+    case processStillRunning(title: String)
+    case timedOut(title: String)
+
+    var errorDescription: String? {
+        switch self {
+        case .processStillRunning(let title):
+            return
+                "Terminal '\(title)' still has a running process. Close it before archiving or deleting the workspace."
+        case .timedOut(let title):
+            return "Terminal '\(title)' did not exit before the workspace lifecycle timeout."
+        }
+    }
+}
+
 @MainActor
 final class GhosttySurfaceView: NSView {
     private let workingDirectory: URL
@@ -26,57 +41,67 @@ final class GhosttySurfaceView: NSView {
     private(set) var surface: ghostty_surface_t?
     private(set) var terminalTitle: String = ""
     private(set) var currentWorkingDirectory: String?
+    private(set) var latestScrollbarState: GhosttyScrollbarState?
     private var didProcessExit = false
     private var promptReadinessSignposts: TerminalPromptReadinessSignpostController
     private var lastScaleAndSize: GhosttySurfaceScaleCalculator.ScaleAndSize?
     private var trackingAreaInstalled = false
     var workingDirectoryPath: String { workingDirectory.path }
     var contextMenuProvider: (() -> NSMenu?)?
+    var onScrollbarStateChange: ((GhosttyScrollbarState) -> Void)?
+    var onTerminalTitleChanged: ((String) -> Void)?
 
     init(
+        launchContext: TerminalSessionLaunchContext,
+        onProcessExit: (() -> Void)? = nil,
+        onCloseConfirmationRequired: (() -> Void)? = nil
+    ) {
+        self.workingDirectory = launchContext.workingDirectory
+        self.promptReadinessSignposts = TerminalPromptReadinessSignpostController(
+            hostSessionID: launchContext.promptReadinessHostSessionID
+        )
+        self.onProcessExit = onProcessExit
+        self.onCloseConfirmationRequired = onCloseConfirmationRequired
+        self.terminalConfig = GhosttyTerminalConfig(launchContext: launchContext)
+        self.readinessDiagnostics = TerminalReadinessDiagnostics(
+            workingDirectoryName: workingDirectory.lastPathComponent,
+            shellProfileMode: terminalConfig.shellProfileModeLabel
+        )
+        super.init(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+        self.wantsLayer = true
+        registerForDraggedTypes(GhosttyDroppedContentFormatter.pasteboardTypes)
+
+        createSurfaceIfNeeded()
+    }
+
+    convenience init(
         workingDirectory: URL,
         hostSessionID: UUID? = nil,
         hooksSocketPath: String? = nil,
         onProcessExit: (() -> Void)? = nil,
         onCloseConfirmationRequired: (() -> Void)? = nil
     ) {
-        self.workingDirectory = workingDirectory
-        self.promptReadinessSignposts = TerminalPromptReadinessSignpostController(hostSessionID: hostSessionID)
-        self.onProcessExit = onProcessExit
-        self.onCloseConfirmationRequired = onCloseConfirmationRequired
-        self.terminalConfig = GhosttyTerminalConfig(
-            workingDirectory: workingDirectory,
-            hostSessionID: hostSessionID,
-            hooksSocketPath: hooksSocketPath
+        self.init(
+            launchContext: .directoryBacked(
+                workingDirectory: workingDirectory,
+                hostSessionID: hostSessionID,
+                hooksSocketPath: hooksSocketPath
+            ),
+            onProcessExit: onProcessExit,
+            onCloseConfirmationRequired: onCloseConfirmationRequired
         )
-        self.readinessDiagnostics = TerminalReadinessDiagnostics(
-            workingDirectoryName: workingDirectory.lastPathComponent,
-            shellProfileMode: terminalConfig.shellProfileModeLabel
-        )
-        super.init(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
-        self.wantsLayer = true
-
-        createSurfaceIfNeeded()
     }
 
-    init(
+    convenience init(
         customCommand: String,
         onProcessExit: (() -> Void)? = nil,
         onCloseConfirmationRequired: (() -> Void)? = nil
     ) {
-        self.workingDirectory = FileManager.default.temporaryDirectory
-        self.promptReadinessSignposts = TerminalPromptReadinessSignpostController(hostSessionID: nil)
-        self.onProcessExit = onProcessExit
-        self.onCloseConfirmationRequired = onCloseConfirmationRequired
-        self.terminalConfig = GhosttyTerminalConfig(customCommand: customCommand)
-        self.readinessDiagnostics = TerminalReadinessDiagnostics(
-            workingDirectoryName: workingDirectory.lastPathComponent,
-            shellProfileMode: terminalConfig.shellProfileModeLabel
+        self.init(
+            launchContext: .customCommand(customCommand),
+            onProcessExit: onProcessExit,
+            onCloseConfirmationRequired: onCloseConfirmationRequired
         )
-        super.init(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
-        self.wantsLayer = true
-
-        createSurfaceIfNeeded()
     }
 
     required init?(coder: NSCoder) {
@@ -177,7 +202,11 @@ final class GhosttySurfaceView: NSView {
     // MARK: - Runtime updates
 
     func updateTerminalTitle(_ title: String) {
+        let previousTitle = terminalTitle
         terminalTitle = title
+        if previousTitle != title {
+            onTerminalTitleChanged?(title)
+        }
         guard !title.isEmpty else { return }
         observePromptReadinessSignal(.setTitle)
     }
@@ -197,9 +226,9 @@ final class GhosttySurfaceView: NSView {
         promptReadinessSignposts.completeIfNeeded(signal: signal)
     }
 
-    /// Channel 3: an OSC 9 / OSC 777 notification from the agent. Forward to the
-    /// registry via the OSC router so the sidebar dot, macOS notifications, and
-    /// the dedup window all see the same event.
+    /// Terminal attention fallback: an OSC 9 / OSC 777 notification from the
+    /// agent. Forward to the registry via the OSC router so the sidebar dot,
+    /// macOS notifications, and the dedup window all see the same event.
     func handleDesktopNotification(
         title: String?,
         body: String,
@@ -213,13 +242,19 @@ final class GhosttySurfaceView: NSView {
         )
     }
 
-    /// Channel 3: terminal BEL. Routed through the OSC router so the registry's
-    /// adapter has a single ingestion path for non-hook attention signals.
+    /// Terminal attention fallback: terminal BEL. Routed through the OSC router
+    /// so the registry has a single ingestion path for non-hook attention
+    /// signals.
     func handleRingBell(surfaceAddress: UInt) {
         AgentOSCRouter.shared.handleRingBell(
             surfaceView: self,
             surfaceAddress: surfaceAddress
         )
+    }
+
+    func updateScrollbarState(_ state: GhosttyScrollbarState) {
+        latestScrollbarState = state
+        onScrollbarStateChange?(state)
     }
 
     func runtimeDidRequestClose(processAlive: Bool) {
@@ -242,15 +277,49 @@ final class GhosttySurfaceView: NSView {
         ghostty_surface_request_close(surface)
     }
 
-    func forceCloseForSessionRetirement() {
-        onCloseConfirmationRequired = nil
-        onProcessExit = nil
-        didProcessExit = true
-
+    func requestCloseForSessionRetirement(
+        timeout: Duration = .seconds(5),
+        pollInterval: Duration = .milliseconds(50)
+    ) async throws {
         guard let surface else { return }
-        GhosttyAppManager.shared.unregisterSurface(self)
-        ghostty_surface_free(surface)
-        self.surface = nil
+        guard !ghostty_surface_process_exited(surface) else { return }
+
+        var processStillRunning = false
+        let previousCloseConfirmation = onCloseConfirmationRequired
+        onCloseConfirmationRequired = {
+            processStillRunning = true
+        }
+        defer {
+            onCloseConfirmationRequired = previousCloseConfirmation
+        }
+
+        ghostty_surface_request_close(surface)
+
+        let deadline = ContinuousClock.now.advanced(by: timeout)
+        while ContinuousClock.now < deadline {
+            if self.surface == nil || ghostty_surface_process_exited(surface) {
+                return
+            }
+            if processStillRunning {
+                throw GhosttySurfaceRetirementCloseError.processStillRunning(title: displayTitleForLifecycleError)
+            }
+            try await Task.sleep(for: pollInterval)
+        }
+
+        if self.surface == nil || ghostty_surface_process_exited(surface) {
+            return
+        }
+        throw GhosttySurfaceRetirementCloseError.timedOut(title: displayTitleForLifecycleError)
+    }
+
+    private var displayTitleForLifecycleError: String {
+        let title = terminalTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !title.isEmpty {
+            return title
+        }
+
+        let fallback = workingDirectory.lastPathComponent
+        return fallback.isEmpty ? "Terminal" : fallback
     }
 
     // MARK: - Local event monitor
@@ -391,7 +460,40 @@ final class GhosttySurfaceView: NSView {
 
     override func scrollWheel(with event: NSEvent) {
         guard let surface else { return }
-        ghostty_surface_mouse_scroll(surface, event.scrollingDeltaX, event.scrollingDeltaY, 0)
+        ghostty_surface_mouse_scroll(
+            surface,
+            event.scrollingDeltaX,
+            event.scrollingDeltaY,
+            GhosttyScrollInput.mods(from: event)
+        )
+    }
+
+    func scrollToRow(_ row: Int) {
+        guard let surface else { return }
+        _ = performBindingAction("scroll_to_row:\(row)", surface: surface)
+    }
+
+    // MARK: - Drag and drop
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard GhosttyDroppedContentFormatter.accepts(types: sender.draggingPasteboard.types) else {
+            return []
+        }
+        return .copy
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        draggingEntered(sender)
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        guard let content = GhosttyDroppedContentFormatter.content(from: sender.draggingPasteboard) else {
+            return false
+        }
+
+        TerminalFocusManager.shared.requestFocus(for: self)
+        insertText(content, replacementRange: NSRange(location: 0, length: 0))
+        return true
     }
 
     // MARK: - Keyboard input

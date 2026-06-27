@@ -3,7 +3,7 @@
 //  WorkspaceManagerCore
 //
 //  Value-type domain model over rows in the SQLite `agent_status_events`
-//  table. The Timeline inspector consumes these via `WorkspaceJournal`; the
+//  table. The Detail Pane Timeline consumes these via `WorkspaceJournal`; the
 //  shape collapses the storage event_name / run_state pair into a small set
 //  of cases keyed for display.
 //

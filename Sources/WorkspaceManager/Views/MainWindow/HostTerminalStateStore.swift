@@ -60,11 +60,18 @@ final class HostTerminalStateStore: ObservableObject {
     private weak var lastCommandStatusRegistry: LastCommandStatusRegistry?
     private var localStateStore: LocalStateStore?
     /// Stub probe used to seed `kind` on register; PR #1 ships a fail-safe
-    /// `.claudeCode` default. Replace with the real probe in a Channel 3 follow-up.
+    /// `.claudeCode` default. Replace with the real probe in a foreground Agent
+    /// detection follow-up.
     private let foregroundProbe = PTYForegroundProbe()
     /// Set of session IDs the store has already registered with the agent registry,
     /// so we only register/deregister on real edge transitions.
     private var registeredAgentSessionIDs: Set<UUID> = []
+
+    init() {
+        surfaceStore.onTerminalTitleChanged = { [weak self] _ in
+            self?.objectWillChange.send()
+        }
+    }
 
     func attach(agentSessionRegistry: AgentSessionRegistry) {
         attach(
@@ -91,8 +98,9 @@ final class HostTerminalStateStore: ObservableObject {
         // Backfill: any sessions already in the coordinator should be registered.
         syncRegistry()
 
-        // Channel 3: hook the surface→host-session resolver into the OSC router so
-        // libghostty desktop notifications and BEL events can find their session.
+        // Terminal attention fallback: hook the surface→host-session resolver
+        // into the OSC router so libghostty desktop notifications and BEL events
+        // can find their session.
         let store = self.surfaceStore
         AgentOSCRouter.shared.attach(registry: agentSessionRegistry) { surfaceView in
             store.sessionID(for: surfaceView)
@@ -113,6 +121,25 @@ final class HostTerminalStateStore: ObservableObject {
 
     func sessions(inScope scopeKey: HostTerminalSessionKey?) -> [HostTerminalSession] {
         coordinator.sessions(inScope: scopeKey)
+    }
+
+    func terminalSessionIDs(inScope scopeKey: HostTerminalSessionKey) -> [UUID] {
+        coordinator.sessions(inScope: scopeKey).flatMap { primarySession in
+            var sessionIDs: [UUID] = []
+
+            if let tree = treesByPrimaryID[primarySession.id],
+                let primaryTile = tileIDBySessionID[primarySession.id]
+            {
+                for tileID in tree.leafIDs where tileID != primaryTile {
+                    if let splitSession = sessionByTileID[tileID] {
+                        sessionIDs.append(splitSession.id)
+                    }
+                }
+            }
+
+            sessionIDs.append(primarySession.id)
+            return sessionIDs
+        }
     }
 
     func activeSession(inScope scopeKey: HostTerminalSessionKey) -> HostTerminalSession? {
@@ -237,10 +264,14 @@ final class HostTerminalStateStore: ObservableObject {
     func setTabTitle(_ title: String?, for sourceSessionID: UUID?) -> Bool {
         guard let primarySessionID = resolvedPrimarySessionID(sourceSessionID) else { return false }
         let normalizedTitle = title?.trimmingCharacters(in: .whitespacesAndNewlines)
+        var updatedOverrides = tabTitleOverridesBySessionID
         if let normalizedTitle, !normalizedTitle.isEmpty {
-            tabTitleOverridesBySessionID[primarySessionID] = normalizedTitle
+            updatedOverrides[primarySessionID] = normalizedTitle
         } else {
-            tabTitleOverridesBySessionID.removeValue(forKey: primarySessionID)
+            updatedOverrides.removeValue(forKey: primarySessionID)
+        }
+        if updatedOverrides != tabTitleOverridesBySessionID {
+            tabTitleOverridesBySessionID = updatedOverrides
         }
         return true
     }
@@ -667,7 +698,8 @@ final class HostTerminalStateStore: ObservableObject {
         // Register newly-seen sessions.
         for session in allSessions where !registeredAgentSessionIDs.contains(session.id) {
             // PR #1: probe is a stub returning `.claudeCode` for every surface.
-            // Replace surfaceID with a real value when the Channel 3 probe lands.
+            // Replace surfaceID with a real value when foreground Agent
+            // detection lands.
             let kind = foregroundProbe.detect(surfaceID: 0)
             registry.register(
                 hostSessionID: session.id,
@@ -739,8 +771,8 @@ final class HostTerminalStateStore: ObservableObject {
 
     /// Drops the split tree for `primarySessionID` and every binding it owned, returning the split
     /// session(s) it held (the non-primary leaves) so the caller can tear them down its own way —
-    /// `invalidate` on collapse vs `retire` on workspace deletion. The primary tile binding falls
-    /// away with the tree; the primary session itself stays in the coordinator and is untouched here.
+    /// collapse invalidation vs post-close workspace cleanup. The primary tile binding falls away
+    /// with the tree; the primary session itself stays in the coordinator and is untouched here.
     @discardableResult
     private func dropSplitTree(forPrimarySessionID primarySessionID: UUID) -> [HostTerminalSession] {
         guard let tree = treesByPrimaryID.removeValue(forKey: primarySessionID) else { return [] }
@@ -775,7 +807,7 @@ final class HostTerminalStateStore: ObservableObject {
     }
 
     private func retireTerminalSession(_ sessionID: UUID) {
-        surfaceStore.retire(sessionID: sessionID)
+        surfaceStore.invalidate(sessionID: sessionID)
         deregisterTerminalSession(sessionID)
     }
 

@@ -6,8 +6,7 @@
 //  conversation log") opens this view. Renders the transcript as a scrollable
 //  list. Unknown record types render as collapsed JSON.
 //
-//  Spec: pasted_text_2026-05-03_22-18-10.txt § Channel 4 ("Show me the
-//  conversation log UI per copy").
+//  Conversation log view for the transcript JSONL reader.
 //
 
 import AppKit

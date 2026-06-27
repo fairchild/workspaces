@@ -5,6 +5,7 @@
 //  Verifies split layout and directional focus behavior for host terminal splits.
 //
 
+import Combine
 import Foundation
 import Testing
 
@@ -72,6 +73,45 @@ struct HostTerminalStateStoreTests {
 
         #expect(store.setTabTitle("Build", for: split.id))
         #expect(store.tabTitleOverride(for: primary.id) == "Build")
+    }
+
+    @Test("Tab title overrides trim and clear empty titles")
+    func tabTitleOverridesTrimAndClearEmptyTitles() {
+        let store = HostTerminalStateStore()
+        let session = store.activateSession(
+            key: .defaultHome,
+            directory: URL(fileURLWithPath: "/Users/test")
+        ).session
+
+        #expect(store.setTabTitle("  Build  ", for: session.id))
+        #expect(store.tabTitleOverride(for: session.id) == "Build")
+
+        #expect(store.setTabTitle("   ", for: session.id))
+        #expect(store.tabTitleOverride(for: session.id) == nil)
+    }
+
+    @Test("Surface title changes publish host terminal state updates")
+    func surfaceTitleChangesPublishHostTerminalStateUpdates() {
+        let store = HostTerminalStateStore()
+        let session = store.activateSession(
+            key: .defaultHome,
+            directory: URL(fileURLWithPath: "/Users/test")
+        ).session
+        let terminal = store.surfaceStore.view(for: session)
+
+        var emissions = 0
+        let cancellable = store.objectWillChange.sink { _ in
+            emissions += 1
+        }
+        defer { cancellable.cancel() }
+
+        terminal.updateTerminalTitle("Build")
+
+        #expect(store.surfaceStore.displayTitle(for: session) == "Build")
+        #expect(emissions == 1)
+
+        terminal.updateTerminalTitle("Build")
+        #expect(emissions == 1)
     }
 
     @Test("Close tab candidates support this other and right")

@@ -2,9 +2,9 @@
 //  OSCDedupIntegrationTests.swift
 //  WorkspaceManagerTests
 //
-//  Channel 3 dedup: when a hook event has been applied recently, an OSC event
-//  with the same effective state is suppressed; once the 750ms window elapses
-//  the OSC event applies.
+//  Terminal attention dedup: when a hook event has been applied recently, an OSC
+//  event with the same effective state is suppressed; once the 750ms window
+//  elapses the OSC event applies.
 //
 
 import Foundation
@@ -13,7 +13,7 @@ import Testing
 @testable import WorkspaceManagerCore
 
 @MainActor
-@Suite("Channel 3 OSC dedup integration")
+@Suite("Terminal attention OSC dedup integration")
 struct OSCDedupIntegrationTests {
     private func apply(
         _ event: AgentEvent,
@@ -45,7 +45,7 @@ struct OSCDedupIntegrationTests {
         )
         let runAfterHook = registry.statuses[id]?.run
 
-        let oscEvent = AgentOSCEventMapper.mapNotification(
+        let oscEvent = AgentUpdateIntake.terminalNotificationEvent(
             kind: .claudeCode,
             title: "perm",
             body: "permission requested"
@@ -71,7 +71,7 @@ struct OSCDedupIntegrationTests {
         apply(.toolStart(name: "Read", detail: nil), to: registry, hostSessionID: id, origin: .hook)
 
         clock.advance(by: 1.0)
-        let oscEvent = AgentOSCEventMapper.mapNotification(
+        let oscEvent = AgentUpdateIntake.terminalNotificationEvent(
             kind: .claudeCode,
             title: "permission",
             body: "Tool needs permission"
@@ -92,7 +92,7 @@ struct OSCDedupIntegrationTests {
         let registry = AgentSessionRegistry()
         let id = UUID()
         registry.register(hostSessionID: id, cwd: "/tmp/opencode", kind: .opencode)
-        let event = AgentOSCEventMapper.mapNotification(
+        let event = AgentUpdateIntake.terminalNotificationEvent(
             kind: .opencode,
             title: "ready",
             body: "agent finished"

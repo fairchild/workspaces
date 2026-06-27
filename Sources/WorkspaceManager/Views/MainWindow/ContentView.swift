@@ -63,6 +63,7 @@ struct ContentView: View {
     @State private var cleaningWorkspaceOrphanItemIDs: Set<String> = []
     @State private var pendingWorkspaceOrphanCleanup: WorkspaceOrphanItem?
     @State private var accessRecorder = MainWindowAccessRecorder()
+    @State private var presentedSessionSwitcherSnapshot: SessionSwitcherSnapshot?
     @StateObject private var rightPaneStateStore = RightPaneStateStore()
     @StateObject private var webSurfaceStore = WebSurfaceStore()
     @StateObject private var terminalFocusCoordinator = TerminalFocusCoordinator()
@@ -103,6 +104,36 @@ struct ContentView: View {
             activeSessionID: hostTerminalState.activeSessionID,
             sessions: hostTerminalState.sessions
         )
+    }
+
+    private var archivedWorkspaceTerminalScopeKeys: Set<HostTerminalSessionKey> {
+        Set(
+            repos
+                .flatMap(\.workspaces)
+                .filter { $0.status == .archived }
+                .compactMap(terminalSessionKey(for:))
+        )
+    }
+
+    private var terminalContinuityInputs:
+        (
+            sessions: [HostTerminalSession],
+            activeSessionID: UUID?,
+            activeSessionIDByScopeKey: [HostTerminalSessionKey: UUID]
+        )
+    {
+        let excludedScopeKeys = archivedWorkspaceTerminalScopeKeys
+        let sessions = hostTerminalState.sessions.filter { !excludedScopeKeys.contains($0.key) }
+        let validSessionIDs = Set(sessions.map(\.id))
+        let activeSessionID =
+            hostTerminalState.activeSessionID.flatMap {
+                validSessionIDs.contains($0) ? $0 : sessions.last?.id
+            } ?? sessions.last?.id
+        let activeSessionIDByScopeKey = hostTerminalState.activeSessionIDByScopeKey.filter {
+            !excludedScopeKeys.contains($0.key) && validSessionIDs.contains($0.value)
+        }
+
+        return (sessions, activeSessionID, activeSessionIDByScopeKey)
     }
 
     private var currentSelectedWorkspace: Workspace? {
@@ -272,6 +303,35 @@ struct ContentView: View {
         )
     }
 
+    private var sessionSwitcherWorkspaceSessionKeys: [UUID: HostTerminalSessionKey] {
+        let presentation = SidebarWorkspacePresentationController()
+        let normalize: (URL) -> String = { url in normalizePath(url.path) }
+        return Dictionary(
+            uniqueKeysWithValues: repos.flatMap(\.workspaces).map { workspace in
+                let key = presentation.sessionKey(
+                    for: workspace,
+                    registry: workspaceProviderRegistry,
+                    normalizePath: normalize
+                )
+                return (workspace.id, key)
+            }
+        )
+    }
+
+    private func makeSessionSwitcherSnapshot() -> SessionSwitcherSnapshot {
+        SessionSwitcherSnapshot.make(
+            repos: repos,
+            webSources: webSources,
+            sessions: hostTerminalState.sessions,
+            activeSessionID: hostTerminalState.activeSessionID,
+            agentStatuses: agentSessionRegistry.statuses,
+            paneCountBySessionKey: paneCountBySessionKeyForSidebar,
+            workspaceSessionKeys: sessionSwitcherWorkspaceSessionKeys,
+            workspaceActivities: commandPaletteWorkspaceActivities,
+            repoActivities: commandPaletteRepoActivities
+        )
+    }
+
     static func sidebarActiveSessionKey(
         selectedWebSourceID: UUID?,
         activeSessionID: UUID?,
@@ -315,6 +375,10 @@ struct ContentView: View {
 
     private var fixtureDiagnosticsBootstrapConfiguration: UIFixtureDiagnosticsBootstrapConfiguration? {
         UIFixtureDiagnosticsBootstrapConfiguration.from(environment: ProcessInfo.processInfo.environment)
+    }
+
+    private var fixtureSessionSwitcherBootstrapConfiguration: UIFixtureSessionSwitcherBootstrapConfiguration? {
+        UIFixtureSessionSwitcherBootstrapConfiguration.from(environment: ProcessInfo.processInfo.environment)
     }
 
     private var openInEditorTarget: OpenInEditorTarget? {
@@ -381,7 +445,7 @@ struct ContentView: View {
             openDesktop: openDesktopFocusedAction,
             revealInFinder: revealInFinderFocusedAction,
             copyPath: copyPathFocusedAction,
-            openCommandPalette: { viewState.isShowingCommandPalette = true },
+            openSessionSwitcher: presentSessionSwitcher,
             openCommandRunner: { viewState.isShowingThemeOverlay = true }
         )
     }
@@ -401,7 +465,7 @@ struct ContentView: View {
             canOpenDesktop: openDesktopFocusedAction != nil,
             canRevealInFinder: revealInFinderFocusedAction != nil,
             canCopyPath: copyPathFocusedAction != nil,
-            canOpenCommandPalette: true,
+            canOpenSessionSwitcher: true,
             canOpenCommandRunner: true
         )
     }
@@ -455,6 +519,7 @@ struct ContentView: View {
             },
             onSelectTerminalTab: selectTerminalTab(sessionID:),
             onCloseTerminalTab: closeTerminalTab(sessionID:),
+            onRenameTerminalTab: renameTerminalTab(sessionID:title:),
             onTerminalCloseConfirmationRequired: requestCloseConfirmationForTerminalTab(sessionID:),
             onTerminalProcessExit: handleTerminalProcessExit(sessionID:),
             selectedCodePreview: $viewState.selectedCodePreview,
@@ -524,6 +589,10 @@ struct ContentView: View {
                 activeSessionKey: activeSessionKeyForSidebar,
                 hostSessions: hostTerminalState.sessions,
                 agentStatusBySessionID: agentSessionRegistry.statuses,
+                titleForSession: { session in
+                    hostTerminalState.tabTitleOverride(for: session.id)
+                        ?? hostTerminalState.surfaceStore.displayTitle(for: session)
+                },
                 connectingWorkspaceID: viewState.connectingWorkspaceID,
                 onRepoSelected: handleRepoSelection,
                 onRepoTerminalSelected: handleRepoTerminalSelection,
@@ -533,7 +602,7 @@ struct ContentView: View {
                 },
                 onWorkspaceCreated: handleWorkspaceCreated,
                 retireTerminalSessions: { key in
-                    await retireTerminalSessions(inScope: key)
+                    try await retireTerminalSessions(inScope: key)
                 },
                 workspaceProviderSetupCoordinator: workspaceProviderSetupCoordinator,
                 hostLumeSmokeAutomation: hostLumeSmokeAutomation,
@@ -643,6 +712,7 @@ struct ContentView: View {
                 prewarmPerfTerminalSurfacesIfNeeded()
                 resolveSurfaceLifecycle()
                 applyDiagnosticsFixtureIfNeeded()
+                applySessionSwitcherFixtureIfNeeded()
                 pruneRightPaneState()
                 syncOpenInEditorShortcutRouting()
                 refreshWorkspaceStatusAggregator()
@@ -660,12 +730,15 @@ struct ContentView: View {
             }
             .onChange(of: agentSessionRegistry.statuses) { _, _ in
                 refreshWorkspaceStatusAggregator()
+                refreshSessionSwitcherSnapshotIfPresented()
             }
             .onChange(of: hostTerminalState.sessions) { _, _ in
                 refreshWorkspaceStatusAggregator()
+                refreshSessionSwitcherSnapshotIfPresented()
                 persistTerminalContinuitySnapshot()
             }
             .onChange(of: hostTerminalState.activeSessionID) { _, _ in
+                refreshSessionSwitcherSnapshotIfPresented()
                 persistTerminalContinuitySnapshot()
             }
             .task {
@@ -685,8 +758,10 @@ struct ContentView: View {
                 reconcileSelectionAfterModelChange()
                 resolveSurfaceLifecycle()
                 applyDiagnosticsFixtureIfNeeded()
+                applySessionSwitcherFixtureIfNeeded()
                 hostTerminalState.pruneRepoSessions(validRepoPaths: normalizedRepoPathSnapshot)
                 refreshWorkspaceStatusAggregator()
+                refreshSessionSwitcherSnapshotIfPresented()
             }
             .onChange(of: inspectorTargetIDSet) { _, _ in
                 pruneRightPaneState()
@@ -938,30 +1013,38 @@ struct ContentView: View {
                     }
                 }
             }
-            .sheet(isPresented: $viewState.isShowingCommandPalette) {
-                CommandPaletteView(
+            .sheet(
+                isPresented: $viewState.isShowingSessionSwitcher,
+                onDismiss: {
+                    presentedSessionSwitcherSnapshot = nil
+                }
+            ) {
+                SessionSwitcherView(
+                    snapshot: presentedSessionSwitcherSnapshot ?? makeSessionSwitcherSnapshot(),
                     repos: repos,
                     webSources: webSources,
-                    workspaceActivities: commandPaletteWorkspaceActivities,
-                    repoActivities: commandPaletteRepoActivities,
                     onSelectWorkspace: { workspace in
-                        viewState.isShowingCommandPalette = false
+                        dismissSessionSwitcher()
                         handleWorkspaceSelection(workspace)
                     },
                     onSelectRepo: { repo in
-                        viewState.isShowingCommandPalette = false
+                        dismissSessionSwitcher()
                         handleRepoSelection(repo)
                     },
                     onSelectWebSource: { source in
-                        viewState.isShowingCommandPalette = false
+                        dismissSessionSwitcher()
                         handleWebSourceSelection(source)
                     },
-                    onDismiss: {
-                        viewState.isShowingCommandPalette = false
+                    onSelectHostSession: { sessionID in
+                        dismissSessionSwitcher()
+                        activateSessionSwitcherHostSession(sessionID)
                     },
                     onOpenThemeSwitcher: {
-                        viewState.isShowingCommandPalette = false
+                        dismissSessionSwitcher()
                         viewState.isShowingThemeOverlay = true
+                    },
+                    onDismiss: {
+                        dismissSessionSwitcher()
                     }
                 )
             }
@@ -1132,6 +1215,18 @@ struct ContentView: View {
             viewState.isRightPaneVisible = true
             viewState.didApplyFixtureDiagnosticsBootstrap = true
             NSLog("[UIFixture] Diagnostics bootstrap applied (repo=%@)", repo.name)
+        }
+    }
+
+    @MainActor
+    private func applySessionSwitcherFixtureIfNeeded() {
+        guard fixtureSessionSwitcherBootstrapConfiguration != nil else { return }
+        guard !viewState.didApplyFixtureSessionSwitcherBootstrap else { return }
+
+        viewState.didApplyFixtureSessionSwitcherBootstrap = true
+        Task { @MainActor in
+            presentSessionSwitcher()
+            NSLog("[UIFixture] Session switcher bootstrap applied")
         }
     }
 
@@ -1379,6 +1474,16 @@ struct ContentView: View {
         terminalFocusCoordinator.cancelPendingRepoClickMeasurement(reason: "workspace_selected")
         terminalFocusCoordinator.cancelPendingFocusRequest(reason: "workspace_selected")
 
+        guard workspace.status != .archived else {
+            abandonPendingRemoteConnection(reason: "archived_workspace_selected")
+            if let repo = workspace.sourceRepo {
+                applyNavigationDestination(.repoOverview(repo))
+            } else {
+                setSelectedWorkspace(nil)
+            }
+            return
+        }
+
         if workspace.backend != .local {
             handleProviderBackedWorkspaceSelection(workspace)
         } else {
@@ -1590,7 +1695,7 @@ struct ContentView: View {
             workspaceService: workspaceService,
             workspaceProviderRegistry: workspaceProviderRegistry,
             retireTerminalSessions: { key in
-                await retireTerminalSessions(inScope: key)
+                try await retireTerminalSessions(inScope: key)
             }
         )
         let workspace = try await controller.createWorkspace(
@@ -1617,7 +1722,7 @@ struct ContentView: View {
             workspaceService: workspaceService,
             workspaceProviderRegistry: workspaceProviderRegistry,
             retireTerminalSessions: { key in
-                await retireTerminalSessions(inScope: key)
+                try await retireTerminalSessions(inScope: key)
             }
         )
         do {
@@ -1719,7 +1824,12 @@ struct ContentView: View {
     }
 
     @MainActor
-    private func retireTerminalSessions(inScope scopeKey: HostTerminalSessionKey) async {
+    private func retireTerminalSessions(inScope scopeKey: HostTerminalSessionKey) async throws {
+        let sessionIDs = hostTerminalState.terminalSessionIDs(inScope: scopeKey)
+        for sessionID in sessionIDs {
+            try await hostTerminalState.surfaceStore.closeForSessionRetirement(sessionID: sessionID)
+        }
+
         let retiredSessionIDs = hostTerminalState.retireSessions(inScope: scopeKey)
         guard !retiredSessionIDs.isEmpty else { return }
 
@@ -1803,6 +1913,11 @@ struct ContentView: View {
     @MainActor
     private func closeTerminalTab(sessionID: UUID) {
         requestCloseTerminalTabs([sessionID])
+    }
+
+    @MainActor
+    private func renameTerminalTab(sessionID: UUID, title: String?) {
+        _ = hostTerminalState.setTabTitle(title, for: sessionID)
     }
 
     @MainActor
@@ -1908,7 +2023,7 @@ struct ContentView: View {
             workspaceService: workspaceService,
             workspaceProviderRegistry: workspaceProviderRegistry,
             retireTerminalSessions: { key in
-                await retireTerminalSessions(inScope: key)
+                try await retireTerminalSessions(inScope: key)
             }
         )
 
@@ -2219,7 +2334,7 @@ struct ContentView: View {
     private func ensureInitialHostSession() {
         if !hostTerminalState.hasSessions,
             let snapshot = TerminalContinuityManifest.decode(from: terminalContinuityManifestRawValue)?
-                .hostSessionSnapshot()
+                .hostSessionSnapshot(excludingScopeKeys: archivedWorkspaceTerminalScopeKeys)
         {
             hostTerminalState.restoreSessions(
                 snapshot.sessions,
@@ -2376,6 +2491,50 @@ struct ContentView: View {
     }
 
     @MainActor
+    private func activateSessionSwitcherHostSession(_ sessionID: UUID) {
+        guard hostTerminalState.activateExistingSession(sessionID: sessionID) else { return }
+        if let activeHostSession,
+            let destination = terminalSessionController.terminalNavigationDestination(
+                for: activeHostSession,
+                repos: repos,
+                normalizePath: normalizePath
+            )
+        {
+            applyNavigationDestination(destination)
+        } else {
+            clearSelectionForHostTerminalSurface()
+        }
+        focusTerminalTab(sessionID)
+    }
+
+    @MainActor
+    private func clearSelectionForHostTerminalSurface() {
+        setSelectedWorkspace(nil)
+        setSelectedWebSource(nil)
+        setSelectedRepoForLanding(nil)
+        clearCodePreview()
+        viewState.columnVisibility = .all
+    }
+
+    @MainActor
+    private func presentSessionSwitcher() {
+        presentedSessionSwitcherSnapshot = makeSessionSwitcherSnapshot()
+        viewState.isShowingSessionSwitcher = true
+    }
+
+    @MainActor
+    private func dismissSessionSwitcher() {
+        viewState.isShowingSessionSwitcher = false
+        presentedSessionSwitcherSnapshot = nil
+    }
+
+    @MainActor
+    private func refreshSessionSwitcherSnapshotIfPresented() {
+        guard viewState.isShowingSessionSwitcher else { return }
+        presentedSessionSwitcherSnapshot = makeSessionSwitcherSnapshot()
+    }
+
+    @MainActor
     private func syncAppCommands() {
         appCommandState.setMainWindowActions(
             mainWindowFocusedActions,
@@ -2398,15 +2557,16 @@ struct ContentView: View {
         rootURL: URL,
         launchURL: URL
     ) {
+        let continuityInputs = terminalContinuityInputs
         let manifest = TerminalContinuityManifest(
             targetKind: targetKind,
             targetID: targetID,
             rootURL: rootURL,
             launchURL: launchURL,
             terminalMode: terminalMultiplexingMode,
-            sessions: hostTerminalState.sessions,
-            activeSessionID: hostTerminalState.activeSessionID,
-            activeSessionIDByScopeKey: hostTerminalState.activeSessionIDByScopeKey
+            sessions: continuityInputs.sessions,
+            activeSessionID: continuityInputs.activeSessionID,
+            activeSessionIDByScopeKey: continuityInputs.activeSessionIDByScopeKey
         )
         terminalContinuityManifestRawValue = manifest.rawValue
         NSLog(
@@ -2421,13 +2581,14 @@ struct ContentView: View {
     }
 
     private func persistTerminalContinuitySnapshot() {
+        let continuityInputs = terminalContinuityInputs
         let manifest = TerminalContinuityManifest.snapshot(
             previous: TerminalContinuityManifest.decode(from: terminalContinuityManifestRawValue),
             defaultHomeURL: resolvedDefaultHostDirectory,
             terminalMode: terminalMultiplexingMode,
-            sessions: hostTerminalState.sessions,
-            activeSessionID: hostTerminalState.activeSessionID,
-            activeSessionIDByScopeKey: hostTerminalState.activeSessionIDByScopeKey
+            sessions: continuityInputs.sessions,
+            activeSessionID: continuityInputs.activeSessionID,
+            activeSessionIDByScopeKey: continuityInputs.activeSessionIDByScopeKey
         )
         terminalContinuityManifestRawValue = manifest.rawValue
     }
@@ -2451,6 +2612,18 @@ struct ContentView: View {
                 targetID: workspace.id,
                 rootURL: workspaceDirectory
             )
+    }
+
+    private func terminalSessionKey(for workspace: Workspace) -> HostTerminalSessionKey? {
+        if workspace.backend == .local {
+            return .hostPath(normalizePath(workspace.workspaceURL.path))
+        }
+
+        guard let provider = workspaceProviderRegistry.provider(for: workspace) else {
+            return nil
+        }
+
+        return provider.sessionKey(for: WorkspaceProviderTarget(workspace)).normalized()
     }
 
     private func terminalContextMenu(for session: HostTerminalSession) -> NSMenu? {
@@ -2765,6 +2938,7 @@ struct MainTerminalDetailView: View {
     let onSetSplitRatio: (SplitID, CGFloat) -> Void
     var onSelectTerminalTab: ((UUID) -> Void)?
     var onCloseTerminalTab: ((UUID) -> Void)?
+    var onRenameTerminalTab: ((UUID, String?) -> Void)?
     var onTerminalCloseConfirmationRequired: ((UUID) -> Void)?
     var onTerminalProcessExit: ((UUID) -> Void)?
     @Binding var selectedCodePreview: CodePreviewSelection?
@@ -2791,6 +2965,7 @@ struct MainTerminalDetailView: View {
                         state: state,
                         diagnosticWorkspaceDirectories: diagnosticWorkspaceDirectories,
                         agentStatuses: agentStatuses,
+                        timelineHostSessionID: timelineHostSessionID(for: selectedWorkspace),
                         onFileSelected: onFileSelected
                     )
                     .rightPaneWidth(for: state)
@@ -2832,6 +3007,33 @@ struct MainTerminalDetailView: View {
         }
 
         return directories
+    }
+
+    private func timelineHostSessionID(for workspace: Workspace) -> UUID? {
+        guard let workspaceDirectory = workspace.localDirectoryURL else { return nil }
+        let workspacePath = normalizedPath(workspaceDirectory)
+
+        if let activeHostTerminalSessionID,
+            let activeVisibleSession = visibleHostTerminalSessions.first(where: {
+                $0.id == activeHostTerminalSessionID && normalizedPath($0.directoryURL) == workspacePath
+            })
+        {
+            return activeVisibleSession.id
+        }
+
+        if let visibleSession = visibleHostTerminalSessions.first(where: {
+            normalizedPath($0.directoryURL) == workspacePath
+        }) {
+            return visibleSession.id
+        }
+
+        return hostTerminalSessions.first {
+            normalizedPath($0.directoryURL) == workspacePath
+        }?.id
+    }
+
+    private func normalizedPath(_ url: URL) -> String {
+        url.standardizedFileURL.resolvingSymlinksInPath().path
     }
 
     @ViewBuilder
@@ -2889,6 +3091,7 @@ struct MainTerminalDetailView: View {
             onSetSplitRatio: onSetSplitRatio,
             onSelectTab: onSelectTerminalTab,
             onCloseTab: onCloseTerminalTab,
+            onRenameTab: onRenameTerminalTab,
             onCloseConfirmationRequired: onTerminalCloseConfirmationRequired,
             onTerminalProcessExit: onTerminalProcessExit,
             contextMenuProvider: terminalContextMenuProvider

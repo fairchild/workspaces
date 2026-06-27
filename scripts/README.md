@@ -102,7 +102,7 @@ Common examples:
   - Runs one canonical scenario and writes a canonical summary artifact.
   - Installed scenarios accept either a `.app` bundle path or the bundled executable path.
 - `./scripts/main-window-hotspots-baseline.py --scenario <id> --output-dir <path>`
-  - Lower-level runner for the four `main_window_*` hot-spot scenarios from issue #637.
+  - Lower-level runner for canonical `main_window_*` hot-spot scenarios.
   - Prefer `perf-runner.sh`; call this directly only when debugging the hotspot runner itself.
 - `./scripts/perf-compare.py before.json after.json`
   - Compares two canonical summaries and prints metric deltas plus gate status.

@@ -48,13 +48,16 @@ struct SidebarView: View {
     let activeSessionKey: HostTerminalSessionKey?
     let hostSessions: [HostTerminalSession]
     let agentStatusBySessionID: [UUID: AgentSessionStatus]
+    /// Display title for a terminal tab (user override → live terminal title →
+    /// directory). Resolved lazily by the hover card; mirrors the tab bar's title.
+    let titleForSession: @MainActor (HostTerminalSession) -> String
     let connectingWorkspaceID: UUID?
     let onRepoSelected: (Repo) -> Void
     let onRepoTerminalSelected: (Repo) -> Void
     let onWebSourceSelected: (WebSource) -> Void
     let onRequestWebSourceCreation: (WebSourceCreationTarget) -> Void
     let onWorkspaceCreated: () -> Void
-    let retireTerminalSessions: @MainActor (HostTerminalSessionKey) async -> Void
+    let retireTerminalSessions: @MainActor (HostTerminalSessionKey) async throws -> Void
     let workspaceProviderSetupCoordinator: WorkspaceProviderSetupCoordinator
     let hostLumeSmokeAutomation: HostLumeSmokeAutomationController
     let desktopUISmokeAutomation: DesktopUISmokeAutomationController
@@ -464,7 +467,8 @@ struct SidebarView: View {
             },
             onNewWebView: {
                 onRequestWebSourceCreation(.repo(repo))
-            }
+            },
+            tabsProvider: { tabSummaries(for: repoSessionKey) }
         )
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
@@ -553,6 +557,7 @@ struct SidebarView: View {
             isNested: true,
             isExpanded: isWorkspaceExpanded(workspace),
             showsDisclosure: !workspace.webSources.isEmpty,
+            tabsProvider: { tabSummaries(for: workspace) },
             onToggleExpansion: {
                 toggleWorkspaceExpansion(workspace)
             },
@@ -1429,6 +1434,26 @@ struct SidebarView: View {
         )
     }
 
+    /// One summary per terminal tab sharing `key`, in session order. Each carries
+    /// its display title and agent status (when that tab runs a known agent).
+    private func tabSummaries(for key: HostTerminalSessionKey) -> [SidebarTabSummary] {
+        let normalizedKey = key.normalized()
+        return
+            hostSessions
+            .filter { $0.key == normalizedKey }
+            .map { session in
+                SidebarTabSummary(
+                    id: session.id,
+                    title: titleForSession(session),
+                    agentStatus: agentStatusBySessionID[session.id]
+                )
+            }
+    }
+
+    private func tabSummaries(for workspace: Workspace) -> [SidebarTabSummary] {
+        tabSummaries(for: sessionKey(for: workspace))
+    }
+
     /// Merge the repo's own-session baseline with the aggregator-bubbled state derived
     /// from its child workspaces. Most-severe wins, so a yellow `awaitingInput` child
     /// shows on a collapsed repo row even when the repo's own terminal is idle.
@@ -1452,10 +1477,7 @@ struct SidebarView: View {
         guard bubbled != baseline else { return nil }
         let attentionCount = repo.workspaces.reduce(into: 0) { count, workspace in
             guard let status = workspaceStatusAggregator.workspaceStatuses[workspace.id] else { return }
-            switch status.run {
-            case .awaitingInput, .errored: count += 1
-            default: break
-            }
+            if AgentChromeProjection.demandsAttention(status.run) { count += 1 }
         }
         guard attentionCount > 0 else { return nil }
         switch bubbled {

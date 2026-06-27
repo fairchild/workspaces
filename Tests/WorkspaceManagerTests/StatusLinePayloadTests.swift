@@ -2,9 +2,10 @@
 //  StatusLinePayloadTests.swift
 //  WorkspaceManagerTests
 //
-//  Decoder behaviour for the Channel 2 wire format. The decoder must be tolerant
-//  — unknown keys and missing fields are silent; only a non-object body returns
-//  nil. This keeps the host robust to schema additions in Claude Code.
+//  Decoder behaviour for the status-line forwarder wire format. The decoder must
+//  be tolerant — unknown keys and missing fields are silent; only a non-object
+//  body returns nil. This keeps the host robust to schema additions in Claude
+//  Code.
 //
 
 import Foundation

@@ -2,7 +2,7 @@
 //  PerfChannel1Tests.swift
 //  WorkspaceManagerTests
 //
-//  In-process perf scenarios for the Channel 1 hook stack. Opt-in via
+//  In-process perf scenarios for the command hook forwarder stack. Opt-in via
 //  WORKSPACES_PERF_RUN=1 so they don't run on every `swift test`. Each scenario
 //  writes a result.json file to WORKSPACES_PERF_OUT (or a temp path) in the
 //  shape:
@@ -521,9 +521,9 @@ struct PerfChannel1Tests {
         try Self.writeResult(
             payload, to: Self.resultPath(scenario: "channel1_risk_backup_accumulation"))
 
-        // Channel 3 mitigation: backup rotation is now active. After 10 installs
-        // we expect exactly `maxBackupsPerFile` backups on disk (the newest 5),
-        // not 10. Asserts both the cap and the rotation-on guarantee.
+        // Backup rotation is active. After 10 installs we expect exactly
+        // `maxBackupsPerFile` backups on disk (the newest 5), not 10. Asserts
+        // both the cap and the rotation-on guarantee.
         #expect(backups.count == ClaudeSettingsInstaller.maxBackupsPerFile)
         #expect(backups.count == 5)
     }

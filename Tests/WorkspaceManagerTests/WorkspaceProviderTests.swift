@@ -178,6 +178,43 @@ struct WorkspaceProviderTests {
         #expect(LumeWorkspaceProvider.defaultMacOSRunNetworkMode == "nat")
     }
 
+    @Test("Lume maps Workspaces VM storage path to configured storage name")
+    func lumeWorkspaceStorageSelectorMapsWorkspaceVMPath() {
+        let workspaceVMStoragePath =
+            "/Users/test/Library/Application Support/WorkspaceManager/LumeStorage/workspace-vms"
+
+        #expect(
+            LumeWorkspaceProvider.lumeStorageSelector(
+                for: workspaceVMStoragePath,
+                workspaceVMStoragePath: workspaceVMStoragePath
+            ) == "workspaces"
+        )
+        #expect(
+            LumeWorkspaceProvider.lumeStorageSelector(
+                for: "\(workspaceVMStoragePath)/",
+                workspaceVMStoragePath: workspaceVMStoragePath
+            ) == "workspaces"
+        )
+        #expect(
+            LumeWorkspaceProvider.lumeStorageSelector(
+                for: "workspaces",
+                workspaceVMStoragePath: workspaceVMStoragePath
+            ) == "workspaces"
+        )
+        #expect(
+            LumeWorkspaceProvider.lumeStorageSelector(
+                for: "/Users/test/Library/Application Support/WorkspaceManager/LumeStorage/validated-bases",
+                workspaceVMStoragePath: workspaceVMStoragePath
+            ) == "/Users/test/Library/Application Support/WorkspaceManager/LumeStorage/validated-bases"
+        )
+        #expect(
+            LumeWorkspaceProvider.lumeStorageSelector(
+                for: nil,
+                workspaceVMStoragePath: workspaceVMStoragePath
+            ) == nil
+        )
+    }
+
     @Test("Lume CLI progress messaging surfaces macOS download, install, and setup phases")
     func lumeCLIProgressMessaging() {
         #expect(

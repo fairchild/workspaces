@@ -10,6 +10,7 @@ Current refinement-gate latency metrics:
 2. `repo_hydration`
 3. `repo_click_to_focus`
 4. `new_workspace_sheet_ready`
+5. `main_window_session_switcher_snapshot_ms`
 
 These are emitted from production code via `PerformanceSignposts`:
 - `Sources/WorkspaceManager/Diagnostics/PerformanceSignposts.swift`

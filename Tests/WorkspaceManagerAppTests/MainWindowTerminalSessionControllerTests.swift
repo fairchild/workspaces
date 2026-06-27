@@ -148,6 +148,54 @@ struct MainWindowTerminalSessionControllerTests {
         #expect(syncedWorkspace?.id == workspace.id)
     }
 
+    @Test("Terminal navigation destination routes workspace sessions to terminal surface")
+    func terminalNavigationDestinationRoutesWorkspaceSessions() throws {
+        let fixture = makeRepoWorkspaceFixture()
+        let session = HostTerminalSession(
+            key: .hostPath(fixture.workspace.path),
+            directory: fixture.workspace.workspaceURL
+        )
+
+        let destination = try #require(
+            controller.terminalNavigationDestination(
+                for: session,
+                repos: [fixture.repo],
+                normalizePath: normalizePath
+            )
+        )
+
+        switch destination {
+        case .workspaceTerminal(let workspace):
+            #expect(workspace.id == fixture.workspace.id)
+        default:
+            Issue.record("Expected workspace terminal destination")
+        }
+    }
+
+    @Test("Terminal navigation destination routes repo sessions to terminal surface")
+    func terminalNavigationDestinationRoutesRepoSessions() throws {
+        let fixture = makeRepoWorkspaceFixture()
+        let session = HostTerminalSession(
+            key: .repoPath(fixture.repo.localPath),
+            directory: fixture.repo.localURL
+        )
+
+        let destination = try #require(
+            controller.terminalNavigationDestination(
+                for: session,
+                repos: [fixture.repo],
+                normalizePath: normalizePath
+            )
+        )
+
+        switch destination {
+        case .repoTerminal(let repo):
+            #expect(repo.id == fixture.repo.id)
+        default:
+            Issue.record("Expected repo terminal destination")
+        }
+    }
+
     @Test("Close confirmation uses tab title override")
     func closeConfirmationUsesTabTitleOverride() throws {
         let store = HostTerminalStateStore()

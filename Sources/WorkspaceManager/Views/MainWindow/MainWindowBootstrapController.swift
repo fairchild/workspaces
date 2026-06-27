@@ -205,7 +205,9 @@ struct MainWindowBootstrapController {
             return .select(.repoTerminal(repo))
 
         case .workspaceTerminal:
-            guard let workspace = selectionCoordinator.workspace(with: savedSurface.id, in: repos) else {
+            guard let workspace = selectionCoordinator.workspace(with: savedSurface.id, in: repos),
+                workspace.status != .archived
+            else {
                 return .clearInvalid
             }
             return .select(.workspace(workspace))
@@ -235,12 +237,13 @@ struct MainWindowBootstrapController {
         repos: [Repo],
         webSources: [WebSource]
     ) -> MainWindowLaunchSurface? {
-        if let workspace =
+        let workspace =
             repos
             .flatMap(\.workspaces)
+            .filter { $0.status != .archived }
             .sorted(by: { $0.lastAccessedAt > $1.lastAccessedAt })
             .first
-        {
+        if let workspace {
             return .workspace(workspace)
         }
 
@@ -273,7 +276,9 @@ struct MainWindowBootstrapController {
         ownerRepoID: UUID?,
         repos: [Repo]
     ) -> MainWindowLaunchSurface? {
-        if let workspace = selectionCoordinator.workspace(with: ownerWorkspaceID, in: repos) {
+        if let workspace = selectionCoordinator.workspace(with: ownerWorkspaceID, in: repos),
+            workspace.status != .archived
+        {
             return .workspace(workspace)
         }
 
@@ -285,12 +290,13 @@ struct MainWindowBootstrapController {
     }
 
     func nonWebFallbackSurface(repos: [Repo]) -> MainWindowLaunchSurface? {
-        if let workspace =
+        let workspace =
             repos
             .flatMap(\.workspaces)
+            .filter { $0.status != .archived }
             .sorted(by: { $0.lastAccessedAt > $1.lastAccessedAt })
             .first
-        {
+        if let workspace {
             return .workspace(workspace)
         }
 

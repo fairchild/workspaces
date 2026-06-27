@@ -56,12 +56,13 @@ struct MainWindowViewState {
     var didApplyFixturePreviewBootstrap = false
     var didApplyFixtureWebBootstrap = false
     var didApplyFixtureDiagnosticsBootstrap = false
+    var didApplyFixtureSessionSwitcherBootstrap = false
     var didResolveInitialSurface = false
     var openInEditorErrorMessage: String?
     var workspaceOperationErrorMessage: String?
     var connectingWorkspaceID: UUID?
     var terminalCloseConfirmation: TerminalCloseConfirmation?
-    var isShowingCommandPalette = false
+    var isShowingSessionSwitcher = false
     var isShowingThemeOverlay = false
 }
 

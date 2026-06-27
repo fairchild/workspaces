@@ -2,12 +2,9 @@
 //  AgentOSCRouter.swift
 //  WorkspaceManager
 //
-//  Channel 3 entry point: routes libghostty OSC notifications and BEL into the
-//  AgentSessionRegistry. Sits between GhosttyRuntimeActionBridge (raw C action
-//  tags) and the registry (typed AgentEvents) so the bridge never imports
-//  WorkspaceManagerCore directly.
-//
-//  Spec: pasted_text_2026-05-03_22-18-10.txt § Channel 3.
+//  Terminal attention fallback entry point: routes libghostty OSC notifications
+//  and BEL into the AgentSessionRegistry. Sits between GhosttyRuntimeActionBridge
+//  (raw C action tags) and the registry (typed AgentEvents).
 //
 
 import AppKit
@@ -53,7 +50,7 @@ final class AgentOSCRouter {
         guard let hostID = resolveHostSession?(surfaceView) else { return }
         guard let registry else { return }
         let kind = registry.statuses[hostID]?.kind ?? .unknown
-        let event = AgentOSCEventMapper.mapNotification(kind: kind, title: title, body: body)
+        let event = AgentUpdateIntake.terminalNotificationEvent(kind: kind, title: title, body: body)
         registry.apply(
             events: [event],
             for: hostID,
@@ -71,7 +68,7 @@ final class AgentOSCRouter {
         guard let hostID = resolveHostSession?(surfaceView) else { return }
         guard let registry else { return }
         let kind = registry.statuses[hostID]?.kind ?? .unknown
-        let event = AgentOSCEventMapper.mapBell(kind: kind)
+        let event = AgentUpdateIntake.terminalBellEvent(kind: kind)
         registry.apply(
             events: [event],
             for: hostID,

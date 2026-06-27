@@ -27,6 +27,11 @@ if ! command -v swift-format >/dev/null 2>&1; then
   brew install swift-format
 fi
 
+homebrew_zig_bin="/opt/homebrew/opt/zig@0.15/bin/zig"
+if [ ! -x "$homebrew_zig_bin" ]; then
+  brew install zig@0.15
+fi
+
 if ! command -v msgfmt >/dev/null 2>&1; then
   brew install gettext
 fi
@@ -42,5 +47,6 @@ if ! command -v msgfmt >/dev/null 2>&1; then
 fi
 
 msgfmt --version | head -n 1
+"$homebrew_zig_bin" version
 
 ./scripts/build-ghosttykit.sh

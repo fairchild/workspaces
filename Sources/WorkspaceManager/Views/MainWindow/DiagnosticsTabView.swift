@@ -660,7 +660,7 @@ private struct AgentSessionStatusList: View {
                 ForEach(sortedStatuses, id: \.hostSessionID) { status in
                     HStack(alignment: .firstTextBaseline, spacing: 10) {
                         Circle()
-                            .fill(color(for: status.run))
+                            .fill(AgentChromeProjection.runState(status.run).tone.color)
                             .frame(width: 7, height: 7)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(sessionTitle(status))
@@ -688,31 +688,7 @@ private struct AgentSessionStatusList: View {
 
     private func sessionTitle(_ status: AgentSessionStatus) -> String {
         let model = status.modelDisplayName ?? status.kind.rawValue
-        return "\(model) - \(runStateLabel(status.run))"
-    }
-
-    private func runStateLabel(_ state: AgentRunState) -> String {
-        switch state {
-        case .idle: return "Idle"
-        case .thinking: return "Thinking"
-        case .runningTool(let name, _): return "Running \(name)"
-        case .awaitingInput(let reason): return "Awaiting \(reason.rawValue)"
-        case .complete: return "Complete"
-        case .errored(let category, _): return "Errored: \(category.rawValue)"
-        }
-    }
-
-    private func color(for state: AgentRunState) -> Color {
-        switch state {
-        case .idle, .complete:
-            return .secondary
-        case .thinking, .runningTool:
-            return .blue
-        case .awaitingInput:
-            return .yellow
-        case .errored:
-            return .red
-        }
+        return "\(model) - \(AgentChromeProjection.runState(status.run).diagnosticsLabel)"
     }
 }
 

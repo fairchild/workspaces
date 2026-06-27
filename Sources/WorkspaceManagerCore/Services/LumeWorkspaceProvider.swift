@@ -63,6 +63,7 @@ public actor LumeWorkspaceProvider: WorkspaceProviderProtocol {
     )
     static let defaultNetworkMode = "nat"
     static let defaultMacOSRunNetworkMode = defaultNetworkMode
+    static let workspaceVMStorageName = "workspaces"
 
     public nonisolated let descriptor = LumeWorkspaceProvider.providerDescriptor
 
@@ -289,7 +290,9 @@ public actor LumeWorkspaceProvider: WorkspaceProviderProtocol {
         )
 
         let executablePath = try await runtimeService.executablePath()
-        let storageArgument = metadata.storagePath.map { " --storage '\($0)'" } ?? ""
+        let storageArgument =
+            (await lumeStorageSelector(for: metadata.storagePath))
+            .map { " --storage '\($0)'" } ?? ""
 
         return TerminalLaunchSpec(
             sessionKey: sessionKey(for: workspace),
@@ -598,9 +601,10 @@ public actor LumeWorkspaceProvider: WorkspaceProviderProtocol {
     }
 
     private func runVM(named vmName: String, storagePath: String?, sharedHostPath: String) async throws {
+        let storageSelector = await lumeStorageSelector(for: storagePath)
         let request = LumeRunVMRequest(
             noDisplay: true,
-            storage: storagePath,
+            storage: storageSelector,
             sharedDirectories: [
                 LumeSharedDirectoryRequest(hostPath: sharedHostPath, readOnly: false)
             ]
@@ -617,6 +621,7 @@ public actor LumeWorkspaceProvider: WorkspaceProviderProtocol {
         storagePath: String?,
         sharedHostPath: String
     ) async throws {
+        let storageSelector = await lumeStorageSelector(for: storagePath)
         var arguments = [
             "run",
             vmName,
@@ -624,8 +629,8 @@ public actor LumeWorkspaceProvider: WorkspaceProviderProtocol {
             "--shared-dir", sharedHostPath,
             "--no-display",
         ]
-        if let storagePath {
-            arguments.insert(contentsOf: ["--storage", storagePath], at: 2)
+        if let storageSelector {
+            arguments.insert(contentsOf: ["--storage", storageSelector], at: 2)
         }
 
         let logURL = detachedLaunchLogURL(for: vmName)
@@ -646,14 +651,15 @@ public actor LumeWorkspaceProvider: WorkspaceProviderProtocol {
         storagePath: String? = nil,
         guestOS: WorkspaceGuestOS
     ) async throws {
+        let storageSelector = await lumeStorageSelector(for: storagePath)
         if guestOS == .macOS {
-            return try await stopVMWithCLI(named: vmName, storagePath: storagePath)
+            return try await stopVMWithCLI(named: vmName, storagePath: storageSelector)
         }
 
         let _: LumeMessageResponse = try await sendRequest(
             method: "POST",
             path: "/vms/\(vmName)/stop",
-            body: storagePath.map(LumeStorageBody.init(storage:))
+            body: storageSelector.map(LumeStorageBody.init(storage:))
         )
     }
 
@@ -662,14 +668,15 @@ public actor LumeWorkspaceProvider: WorkspaceProviderProtocol {
         storagePath: String? = nil,
         guestOS: WorkspaceGuestOS
     ) async throws {
+        let storageSelector = await lumeStorageSelector(for: storagePath)
         if guestOS == .macOS {
-            return try await deleteVMWithCLI(named: vmName, storagePath: storagePath)
+            return try await deleteVMWithCLI(named: vmName, storagePath: storageSelector)
         }
 
         let _: LumeEmptyResponse = try await sendRequest(
             method: "DELETE",
             path: "/vms/\(vmName)",
-            queryItems: storagePath.map { [URLQueryItem(name: "storage", value: $0)] } ?? [],
+            queryItems: storageSelector.map { [URLQueryItem(name: "storage", value: $0)] } ?? [],
             body: Optional<LumeEmptyBody>.none
         )
     }
@@ -734,27 +741,29 @@ public actor LumeWorkspaceProvider: WorkspaceProviderProtocol {
     }
 
     private func listVMs(storagePath: String? = nil) async throws -> [LumeVMDetails] {
-        try await sendRequest(
+        let storageSelector = await lumeStorageSelector(for: storagePath)
+        return try await sendRequest(
             method: "GET",
             path: "/vms",
-            queryItems: storagePath.map { [URLQueryItem(name: "storage", value: $0)] } ?? [],
+            queryItems: storageSelector.map { [URLQueryItem(name: "storage", value: $0)] } ?? [],
             body: Optional<LumeEmptyBody>.none
         )
     }
 
     private func getVM(named vmName: String, storagePath: String? = nil) async throws -> LumeVMDetails {
+        let storageSelector = await lumeStorageSelector(for: storagePath)
         do {
             return try await sendRequest(
                 method: "GET",
                 path: "/vms/\(vmName)",
-                queryItems: storagePath.map { [URLQueryItem(name: "storage", value: $0)] } ?? [],
+                queryItems: storageSelector.map { [URLQueryItem(name: "storage", value: $0)] } ?? [],
                 body: Optional<LumeEmptyBody>.none
             )
         } catch {
-            guard let storagePath else {
+            guard let storageSelector else {
                 throw error
             }
-            return try await getVMViaCLI(named: vmName, storagePath: storagePath)
+            return try await getVMViaCLI(named: vmName, storagePath: storageSelector)
         }
     }
 
@@ -1033,6 +1042,49 @@ public actor LumeWorkspaceProvider: WorkspaceProviderProtocol {
             baseVMName: baseSnapshot?.profile.vmName,
             baseSourceKind: baseSnapshot?.sourceKind ?? baseSnapshot?.profile.preferredSourceKind
         )
+    }
+
+    private func lumeStorageSelector(for storagePath: String?) async -> String? {
+        let workspaceVMStoragePath = await validatedBaseService.workspaceVMStorageDirectoryURL.path
+        return Self.lumeStorageSelector(
+            for: storagePath,
+            workspaceVMStoragePath: workspaceVMStoragePath
+        )
+    }
+
+    nonisolated static func lumeStorageSelector(
+        for storagePath: String?,
+        workspaceVMStoragePath: String
+    ) -> String? {
+        guard let storagePath else { return nil }
+        guard storagePath != workspaceVMStorageName else { return storagePath }
+        guard storagePath.hasPrefix("/") else { return storagePath }
+
+        if normalizedStoragePath(storagePath) == normalizedStoragePath(workspaceVMStoragePath) {
+            return workspaceVMStorageName
+        }
+        return storagePath
+    }
+
+    private nonisolated static func normalizedStoragePath(_ path: String) -> String {
+        let resolved = URL(fileURLWithPath: path, isDirectory: true)
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+            .path
+
+        if resolved == "/var" {
+            return "/private/var"
+        }
+        if resolved.hasPrefix("/var/") {
+            return "/private\(resolved)"
+        }
+        if resolved == "/tmp" {
+            return "/private/tmp"
+        }
+        if resolved.hasPrefix("/tmp/") {
+            return "/private\(resolved)"
+        }
+        return resolved
     }
 
     private func metadataWithDetachedLaunchLogPath(

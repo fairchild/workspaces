@@ -186,6 +186,27 @@ struct MainWindowTerminalSessionController {
         )
     }
 
+    func terminalNavigationDestination(
+        for session: HostTerminalSession,
+        repos: [Repo],
+        normalizePath: (String) -> String
+    ) -> MainWindowNavigationDestination? {
+        if let workspace = syncedWorkspaceSelection(
+            activeHostSession: session,
+            repos: repos,
+            normalizePath: normalizePath
+        ) {
+            return .workspaceTerminal(workspace)
+        }
+
+        guard case .repoPath(let repoPath) = session.key else { return nil }
+        let normalizedRepoPath = normalizePath(repoPath)
+        guard let repo = repos.first(where: { normalizePath($0.localPath) == normalizedRepoPath }) else {
+            return nil
+        }
+        return .repoTerminal(repo)
+    }
+
     private func focusResult(
         sessionID: UUID,
         hostTerminalState: HostTerminalStateStore,

@@ -298,6 +298,14 @@ enum GhosttyRuntimeActionBridge {
             }
             return true
 
+        case GHOSTTY_ACTION_SCROLLBAR:
+            let scrollbarState = GhosttyScrollbarState(action.action.scrollbar)
+            runOnMainAsync {
+                guard let surfaceView = resolveSurfaceView(sourceSurfaceAddress) else { return }
+                surfaceView.updateScrollbarState(scrollbarState)
+            }
+            return true
+
         default:
             return false
         }
