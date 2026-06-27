@@ -290,14 +290,17 @@ public actor LumeWorkspaceProvider: WorkspaceProviderProtocol {
         )
 
         let executablePath = try await runtimeService.executablePath()
-        let storageArgument =
-            (await lumeStorageSelector(for: metadata.storagePath))
-            .map { " --storage '\($0)'" } ?? ""
+        let workspaceVMStoragePath = await validatedBaseService.workspaceVMStorageDirectoryURL.path
 
         return TerminalLaunchSpec(
             sessionKey: sessionKey(for: workspace),
             workingDirectory: URL(fileURLWithPath: metadata.sharedHostPath),
-            customCommand: "\(executablePath) ssh \(metadata.vmName)\(storageArgument)",
+            customCommand: Self.terminalLaunchCommand(
+                executablePath: executablePath,
+                vmName: metadata.vmName,
+                storagePath: metadata.storagePath,
+                workspaceVMStoragePath: workspaceVMStoragePath
+            ),
             statusAfterLaunch: .active
         )
     }
@@ -1064,6 +1067,19 @@ public actor LumeWorkspaceProvider: WorkspaceProviderProtocol {
             return workspaceVMStorageName
         }
         return storagePath
+    }
+
+    nonisolated static func terminalLaunchCommand(
+        executablePath: String,
+        vmName: String,
+        storagePath: String?,
+        workspaceVMStoragePath: String
+    ) -> String {
+        let storageArgument =
+            lumeStorageSelector(for: storagePath, workspaceVMStoragePath: workspaceVMStoragePath)
+            .map { " --storage '\($0)'" } ?? ""
+
+        return "\(executablePath) ssh \(vmName)\(storageArgument)"
     }
 
     private nonisolated static func normalizedStoragePath(_ path: String) -> String {
