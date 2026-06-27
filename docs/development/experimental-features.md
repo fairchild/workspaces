@@ -83,6 +83,11 @@ The Settings UI enumerates `ExperimentalFeature.allCases`, so a registered
 feature appears automatically under Settings -> Experimental Features when the
 master toggle is on.
 
+The Automation API is an example of a Settings-gated experiment with both user
+and maintainer docs. Keep [Automation API Guide](../automation-api.md) and
+[Automation API Reference](./automation-api.md) aligned when its feature flag,
+environment override, or terminal environment behavior changes.
+
 ## Environment Overrides
 
 Use a force-on environment key only for developer-launch and evidence workflows.

@@ -27,6 +27,26 @@ test.describe("Public docs", () => {
 		await expect(page.getByText("Repository").first()).toBeVisible();
 	});
 
+	test("renders the Automation API guide and reference", async ({ page }) => {
+		await page.goto("/docs/index.html");
+		await page
+			.getByRole("link", { name: /Automation API/ })
+			.first()
+			.click();
+
+		await expect(page).toHaveURL(/\/docs\/automation-api$/);
+		await expect(
+			page.getByRole("heading", { name: "WorkSpaces Automation API Guide" }),
+		).toBeVisible();
+		await expect(page.getByText("workspaces tile split --right").first()).toBeVisible();
+
+		await page.goto("/docs/development/automation-api");
+		await expect(
+			page.getByRole("heading", { name: "WorkSpaces Automation API V1" }),
+		).toBeVisible();
+		await expect(page.getByText("capability_denied").first()).toBeVisible();
+	});
+
 	test("renders README reference-style images", async ({ page }) => {
 		await page.goto("/docs/README");
 

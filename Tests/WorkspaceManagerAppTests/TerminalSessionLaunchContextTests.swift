@@ -72,6 +72,8 @@ struct TerminalSessionLaunchContextTests {
         #expect(config.workingDirectory == FileManager.default.temporaryDirectory.path)
         #expect(config.environmentVariables["WORKSPACES_HOST_SESSION_ID"] == nil)
         #expect(config.environmentVariables["WORKSPACES_HOOKS_SOCKET"] == nil)
+        #expect(config.environmentVariables["WORKSPACES_AUTOMATION_SOCKET"] == nil)
+        #expect(config.environmentVariables["WORKSPACES_AUTOMATION_HANDLE"] == nil)
         #expect(config.environmentVariables["WORKSPACES_COMMAND_STATUS_ZSH"] == nil)
     }
 }

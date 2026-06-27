@@ -7,6 +7,7 @@ import Foundation
 import Testing
 
 @testable import WorkspaceManager
+@testable import WorkspaceManagerCore
 
 @Suite("GhosttyTerminalConfig")
 struct GhosttyTerminalConfigTests {
@@ -187,6 +188,32 @@ struct GhosttyTerminalConfigTests {
         #expect(missingHostID.environmentVariables["WORKSPACES_HOST_SESSION_ID"] == nil)
         #expect(missingHostID.environmentVariables["WORKSPACES_HOOKS_SOCKET"] == nil)
         #expect(missingHostID.environmentVariables["WORKSPACES_COMMAND_STATUS_ZSH"] == nil)
+    }
+
+    @Test("Automation context exports only socket and opaque handle")
+    func exportsAutomationContextOnly() {
+        let hostSessionID = UUID(uuidString: "2D4D6044-1E11-49C9-9CB0-A1D7B9F44E31")!
+        let config = GhosttyTerminalConfig(
+            workingDirectory: URL(fileURLWithPath: "/tmp/repo-a"),
+            environment: [
+                "SHELL": "/bin/zsh",
+                "PATH": "/usr/bin:/bin",
+            ],
+            terminalMultiplexingMode: .ghosttyManagedSplits,
+            isTmuxAvailableOverride: true,
+            hostSessionID: hostSessionID,
+            hooksSocketPath: "/tmp/workspaces-hooks.sock",
+            automationEnvironment: AutomationTerminalEnvironment(
+                socketPath: "/tmp/workspaces-automation.sock",
+                handle: "opaque-handle"
+            )
+        )
+
+        #expect(config.environmentVariables["WORKSPACES_AUTOMATION_SOCKET"] == "/tmp/workspaces-automation.sock")
+        #expect(config.environmentVariables["WORKSPACES_AUTOMATION_HANDLE"] == "opaque-handle")
+        #expect(config.environmentVariables["WORKSPACES_TILE_ID"] == nil)
+        #expect(config.environmentVariables["WORKSPACES_SURFACE_ID"] == nil)
+        #expect(config.environmentVariables["WORKSPACES_HOST_SESSION_ID"] == hostSessionID.uuidString)
     }
 
     @Test("custom command config preserves explicit command without hook environment")

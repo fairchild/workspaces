@@ -26,6 +26,7 @@ final class HostTerminalSurfaceStore {
     private var surfaces: [UUID: GhosttySurfaceView] = [:]
     private var sessionIDsBySurfaceIdentity: [ObjectIdentifier: UUID] = [:]
     var hooksSocketPath: String?
+    var automationEnvironmentProvider: ((HostTerminalSession) -> AutomationTerminalEnvironment?)?
     var onSurfaceCreated: (@MainActor (UUID) -> Void)?
     var onSurfaceInvalidated: (@MainActor (UUID) -> Void)?
     var onTerminalTitleChanged: (@MainActor (UUID) -> Void)?
@@ -61,7 +62,8 @@ final class HostTerminalSurfaceStore {
 
         let launchContext = TerminalSessionLaunchContext.hostSession(
             session,
-            hooksSocketPath: hooksSocketPath
+            hooksSocketPath: hooksSocketPath,
+            automationEnvironment: automationEnvironmentProvider?(session)
         )
         let created = GhosttySurfaceView(
             launchContext: launchContext,

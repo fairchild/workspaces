@@ -7,12 +7,15 @@ import Foundation
 import SwiftUI
 
 enum ExperimentalFeature: String, CaseIterable, Identifiable {
+    case automationAPI = "automationAPI"
     case minimalToolbar = "minimalToolbar"
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
+        case .automationAPI:
+            return "Automation API"
         case .minimalToolbar:
             return "Minimal Toolbar"
         }
@@ -20,6 +23,8 @@ enum ExperimentalFeature: String, CaseIterable, Identifiable {
 
     var description: String {
         switch self {
+        case .automationAPI:
+            return "Expose a local same-user socket so terminal tiles can inspect and arrange their WorkSpaces shell."
         case .minimalToolbar:
             return "Hide secondary toolbar controls so terminal surfaces stay closer to the canvas."
         }
@@ -35,6 +40,8 @@ enum ExperimentalFeature: String, CaseIterable, Identifiable {
 
     var forceOnEnvironmentKey: String? {
         switch self {
+        case .automationAPI:
+            return "WORKSPACES_AUTOMATION_API"
         case .minimalToolbar:
             return "WORKSPACES_PERF_MINIMAL_TOOLBAR"
         }
