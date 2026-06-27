@@ -9,6 +9,7 @@ export type AuthBaseURL = string | DynamicAuthBaseURL;
 const LOCAL_ALLOWED_HOSTS = ["localhost:*", "127.0.0.1:*"];
 const VERCEL_ALLOWED_HOSTS = [
 	"spaces.cloudcompute.com",
+	"*.spaces-preview.cloudcompute.com",
 	"*.cloudcompute.vercel.app",
 	"*.vercel.app",
 ];

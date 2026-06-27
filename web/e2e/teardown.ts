@@ -28,6 +28,8 @@ const CHAT_IDS = [
 ];
 
 export default async function globalTeardown() {
+	if (process.env.PLAYWRIGHT_SKIP_DB_FIXTURES === "1") return;
+
 	const db = createClient({ url: DB_URL });
 
 	await db.execute({

@@ -22,6 +22,11 @@ jobs:
     if: ${{ !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    outputs:
+      preview_url: ${{ steps.deploy.outputs.preview_url }}
+      qa_url: ${{ steps.alias.outputs.qa_url }}
+      smoke_url: ${{ steps.alias.outputs.qa_url || steps.deploy.outputs.preview_url }}
+      qa_alias_ok: ${{ steps.alias.outputs.alias_ok }}
     env:
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
       VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
@@ -73,26 +78,72 @@ jobs:
           echo "preview_url=$URL" >> "$GITHUB_OUTPUT"
           echo "::notice::Preview deployed to $URL"
 
+      - name: Alias preview for OAuth QA
+        id: alias
+        continue-on-error: true
+        env:
+          PREVIEW_URL: ${{ steps.deploy.outputs.preview_url }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          QA_HOST="pr-${PR_NUMBER}.spaces-preview.cloudcompute.com"
+          set +e
+          OUTPUT=$(npx vercel@51 alias set "$PREVIEW_URL" "$QA_HOST" --token="$VERCEL_TOKEN" --scope="$VERCEL_ORG_ID" 2>&1)
+          STATUS=$?
+          set -e
+          printf '%s\n' "$OUTPUT"
+          if [[ "$STATUS" -eq 0 ]]; then
+            echo "qa_url=https://$QA_HOST" >> "$GITHUB_OUTPUT"
+            echo "alias_ok=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Preview QA alias https://$QA_HOST"
+          else
+            echo "qa_url=" >> "$GITHUB_OUTPUT"
+            echo "alias_ok=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "alias_error<<EOF"
+              printf '%s\n' "$OUTPUT" | tail -20
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+            echo "::error::Failed to assign Preview QA alias https://$QA_HOST"
+          fi
+
       - name: Comment preview URL
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
         env:
           PREVIEW_URL: ${{ steps.deploy.outputs.preview_url }}
+          QA_URL: ${{ steps.alias.outputs.qa_url }}
+          QA_ALIAS_OK: ${{ steps.alias.outputs.alias_ok }}
+          QA_ALIAS_ERROR: ${{ steps.alias.outputs.alias_error }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         with:
           script: |
             const marker = '<!-- spaces-web-preview -->';
             const previewUrl = process.env.PREVIEW_URL;
+            const qaUrl = process.env.QA_URL;
+            const aliasOk = process.env.QA_ALIAS_OK === 'true';
+            const aliasError = process.env.QA_ALIAS_ERROR || '';
             const headSha = process.env.HEAD_SHA;
             const shortSha = headSha.slice(0, 7);
             const workflowUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
             const issue_number = context.payload.pull_request.number;
             const { owner, repo } = context.repo;
+            const aliasErrorLine = aliasError.split('\n').filter(Boolean).at(-1);
+            const aliasLines = aliasOk
+              ? [
+                  `- Preview QA: ${qaUrl}`,
+                  'Preview QA uses the stable alias so GitHub OAuth callbacks match the production app host rules.',
+                ]
+              : [
+                  '- Preview QA: blocked until `*.spaces-preview.cloudcompute.com` is configured on Vercel/DNS',
+                  `- Deployment smoke: using raw deployment ${previewUrl}`,
+                  aliasErrorLine ? `- Alias error: \`${aliasErrorLine.replaceAll('`', "'")}\`` : '',
+                ].filter(Boolean);
 
             const body = [
               marker,
               '### Vercel Preview: `spaces-web`',
               '',
-              `- Preview: ${previewUrl}`,
+              ...aliasLines,
+              `- Raw deployment: ${previewUrl}`,
               `- Commit: \`${shortSha}\``,
               `- Workflow: [run ${process.env.GITHUB_RUN_NUMBER}](${workflowUrl})`,
               '',
@@ -122,3 +173,73 @@ jobs:
                 body,
               });
             }
+
+  preview-smoke:
+    name: Playwright deployment smoke
+    needs: preview
+    if: ${{ needs.preview.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          package_json_file: web/package.json
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Get Playwright version
+        id: pw-version
+        run: echo "version=$(pnpm exec playwright --version | tr ' ' '-')" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Playwright browsers
+        id: pw-cache
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.pw-version.outputs.version }}
+
+      - name: Install Playwright browsers
+        if: steps.pw-cache.outputs.cache-hit != 'true'
+        timeout-minutes: 15
+        run: pnpm exec playwright install chromium --with-deps
+
+      - name: Install Playwright system deps
+        if: steps.pw-cache.outputs.cache-hit == 'true'
+        run: pnpm exec playwright install-deps chromium
+
+      - name: Run deployment smoke against preview
+        env:
+          PLAYWRIGHT_BASE_URL: ${{ needs.preview.outputs.smoke_url }}
+          PLAYWRIGHT_SKIP_WEB_SERVER: "1"
+          PLAYWRIGHT_SKIP_DB_FIXTURES: "1"
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: |
+          set +e
+          pnpm exec playwright test --project deployment-smoke --reporter=json > playwright-report.json
+          PW_EXIT=$?
+          node scripts/playwright-findings.js playwright-report.json > findings.md || echo "_findings script failed_" > findings.md
+          exit "$PW_EXIT"
+
+      - if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: preview-smoke-findings
+          path: |
+            web/findings.md
+            web/playwright-report.json
+            web/test-results/
+          if-no-files-found: ignore
