@@ -161,7 +161,8 @@ struct GhosttyTerminalIntentRouter {
             NSLog("[SplitRouting] new_split ignored: no active/primary session")
             return []
         }
-        // Activate the containing tab (side effect); the split itself grows from `sourcePaneID`'s tile.
+        // Called for its tab-activation side effect only; the returned primary id is used for the log
+        // line below, not threaded into the split — `splitFocusedTile` resolves its own primary.
         let primarySessionID = hostTerminalState.activatePrimarySession(containing: sourcePaneID)
         NSLog(
             "[SplitRouting] new_split source=%@ primary=%@",

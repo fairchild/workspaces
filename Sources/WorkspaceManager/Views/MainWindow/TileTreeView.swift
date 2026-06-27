@@ -61,7 +61,9 @@ struct TileTreeView: View {
             .id(session.id)
         } else {
             // A leaf with no session binding is a transient inconsistency; fill the slot rather than
-            // collapse the geometry so neighboring panes keep their sizes until the next snapshot.
+            // collapse the geometry so neighboring panes keep their sizes until the next snapshot. This
+            // must stay transient — Phase 5's `SurfaceStore.sync` eviction should ensure an unbound tile
+            // never survives a snapshot restore, so this placeholder is never persistently visible.
             Color(nsColor: .windowBackgroundColor)
         }
     }
