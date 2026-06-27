@@ -119,18 +119,15 @@ public struct AutomationSurfaceDescriptor: Codable, Sendable, Equatable {
 }
 
 public struct AutomationContextResult: Codable, Sendable, Equatable {
-    public let handle: String
     public let surface: AutomationSurfaceDescriptor
     public let scope: AutomationScopeDescriptor
     public let system: AutomationSystemDescriptor
 
     public init(
-        handle: String,
         surface: AutomationSurfaceDescriptor,
         scope: AutomationScopeDescriptor,
         system: AutomationSystemDescriptor = AutomationSystemDescriptor()
     ) {
-        self.handle = handle
         self.surface = surface
         self.scope = scope
         self.system = system
@@ -225,6 +222,7 @@ public struct AutomationEmptyResult: Codable, Sendable, Equatable {
 
 public enum AutomationErrorCode: String, Codable, Sendable, Equatable {
     case disabled
+    case capabilityDenied = "capability_denied"
     case missingHandle = "missing_handle"
     case staleHandle = "stale_handle"
     case invalidRequest = "invalid_request"

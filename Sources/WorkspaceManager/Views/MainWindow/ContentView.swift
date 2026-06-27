@@ -708,19 +708,17 @@ struct ContentView: View {
                 mainSelectionCoordinator.rebuildCachesIfNeeded(
                     repos: repos, webSources: webSources, normalizePath: normalizePath
                 )
-                configureAutomationIntegration()
-                ensureInitialHostSession()
-                prewarmPerfTerminalSurfacesIfNeeded()
-                resolveSurfaceLifecycle()
-                applyDiagnosticsFixtureIfNeeded()
-                applySessionSwitcherFixtureIfNeeded()
-                pruneRightPaneState()
-                syncOpenInEditorShortcutRouting()
-                refreshWorkspaceStatusAggregator()
                 Task { @MainActor in
+                    await configureAutomationIntegration()
+                    ensureInitialHostSession()
+                    prewarmPerfTerminalSurfacesIfNeeded()
+                    resolveSurfaceLifecycle()
+                    applyDiagnosticsFixtureIfNeeded()
+                    applySessionSwitcherFixtureIfNeeded()
+                    pruneRightPaneState()
+                    syncOpenInEditorShortcutRouting()
+                    refreshWorkspaceStatusAggregator()
                     await hostLumeSmokeAutomation.noteLaunchReady()
-                }
-                Task { @MainActor in
                     await desktopUISmokeAutomation.noteLaunchReady()
                 }
                 notificationCoordinator.loadStoredAuth()
@@ -1968,8 +1966,8 @@ struct ContentView: View {
     }
 
     @MainActor
-    private func configureAutomationIntegration() {
-        AutomationIntegrationLifecycle.shared.configure(
+    private func configureAutomationIntegration() async {
+        await AutomationIntegrationLifecycle.shared.configure(
             hostTerminalState: hostTerminalState,
             focusTerminal: { sessionID in
                 focusTerminalTab(sessionID)

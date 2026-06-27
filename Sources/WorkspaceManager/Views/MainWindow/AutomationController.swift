@@ -31,20 +31,23 @@ final class AutomationController: AutomationControlling {
     }
 
     func automationContext(for handle: String) throws -> AutomationContextResult {
-        let resolved = try resolve(handle)
-        return try context(for: resolved, handle: handle)
+        let resolved = try resolve(handle, requiring: .contextRead)
+        return try context(for: resolved)
     }
 
     func automationSurfaces(for handle: String) throws -> AutomationSurfacesResult {
-        let resolved = try resolve(handle)
-        return AutomationSurfacesResult(surfaces: surfaceDescriptors(for: resolved))
+        let resolved = try resolve(handle, requiring: .surfacesRead)
+        return AutomationSurfacesResult(
+            surfaces: surfaceDescriptors(for: resolved),
+            system: AutomationSystemDescriptor(capabilities: resolved.entry.capabilities)
+        )
     }
 
     func automationFocusTile(
         for handle: String,
         direction: AutomationTileFocusDirection
     ) throws -> AutomationMutationResult {
-        let resolved = try resolve(handle)
+        let resolved = try resolve(handle, requiring: .tileFocus)
         let focusDirection = GhosttyAppManager.SplitFocusDirection(automationDirection: direction)
         guard
             let targetSessionID = resolved.hostTerminalState.splitFocusTarget(
@@ -66,7 +69,7 @@ final class AutomationController: AutomationControlling {
         for handle: String,
         direction: AutomationTileSplitDirection
     ) throws -> AutomationMutationResult {
-        let resolved = try resolve(handle)
+        let resolved = try resolve(handle, requiring: .tileSplit)
         guard
             let primarySessionID = resolved.hostTerminalState.activatePrimarySession(
                 containing: resolved.entry.hostSessionID
@@ -74,8 +77,16 @@ final class AutomationController: AutomationControlling {
         else {
             throw AutomationServiceError(.staleHandle, "The automation handle no longer maps to a live terminal tile.")
         }
+        guard primarySessionID == resolved.entry.hostSessionID else {
+            throw AutomationServiceError(
+                .unsupported,
+                "Splitting from a secondary split tile is not supported by Automation API V1."
+            )
+        }
 
         let layout = HostTerminalStateStore.SplitPaneLayout(automationDirection: direction)
+        let existingSplit = resolved.hostTerminalState.splitSession(for: primarySessionID)
+        let existingLayout = resolved.hostTerminalState.splitLayout(for: primarySessionID)
         guard
             let splitSession = resolved.hostTerminalState.ensureSplit(
                 forPrimarySessionID: primarySessionID,
@@ -88,15 +99,25 @@ final class AutomationController: AutomationControlling {
         DispatchQueue.main.asyncAfter(deadline: .now() + GhosttyTerminalIntentRouter.splitFocusDelay) {
             self.focusTerminal(splitSession.id)
         }
+        let createdSurfaceID = existingSplit == nil ? splitSession.id.uuidString : nil
+        let reason: String?
+        if existingSplit == nil {
+            reason = nil
+        } else if existingLayout != layout {
+            reason = "relayout"
+        } else {
+            reason = "already_split"
+        }
         return AutomationMutationResult(
             changed: true,
             focusedSurfaceID: splitSession.id.uuidString,
-            createdSurfaceID: splitSession.id.uuidString
+            createdSurfaceID: createdSurfaceID,
+            reason: reason
         )
     }
 
     func automationCloseTile(for handle: String) throws -> AutomationMutationResult {
-        let resolved = try resolve(handle)
+        let resolved = try resolve(handle, requiring: .tileClose)
         requestCloseTerminal(resolved.entry.hostSessionID)
         return AutomationMutationResult(
             changed: true,
@@ -109,13 +130,22 @@ final class AutomationController: AutomationControlling {
         let hostTerminalState: HostTerminalStateStore
     }
 
-    private func resolve(_ handle: String) throws -> ResolvedHandle {
+    private func resolve(
+        _ handle: String,
+        requiring capability: AutomationCapability
+    ) throws -> ResolvedHandle {
         guard let hostTerminalState else {
             throw AutomationServiceError(
                 .unsupported, "No WorkSpaces window is currently attached to the Automation API.")
         }
         guard let entry = handleRegistry.resolve(handle) else {
             throw AutomationServiceError(.staleHandle, "The automation handle is missing or stale.")
+        }
+        guard entry.capabilities.contains(capability) else {
+            throw AutomationServiceError(
+                .capabilityDenied,
+                "The automation handle does not include \(capability.rawValue)."
+            )
         }
         guard hostTerminalState.primarySessionID(containing: entry.hostSessionID) != nil else {
             handleRegistry.remove(hostSessionID: entry.hostSessionID)
@@ -125,13 +155,13 @@ final class AutomationController: AutomationControlling {
     }
 
     private func context(
-        for resolved: ResolvedHandle,
-        handle: String
+        for resolved: ResolvedHandle
     ) throws -> AutomationContextResult {
         let surface = try surfaceDescriptor(
             hostSessionID: resolved.entry.hostSessionID,
             callerHostSessionID: resolved.entry.hostSessionID,
-            hostTerminalState: resolved.hostTerminalState
+            hostTerminalState: resolved.hostTerminalState,
+            capabilities: resolved.entry.capabilities
         )
         let primaryID = resolved.hostTerminalState.primarySessionID(containing: resolved.entry.hostSessionID)
         let primarySession = primaryID.flatMap { id in
@@ -144,9 +174,9 @@ final class AutomationController: AutomationControlling {
             primaryHostSessionID: primaryID
         )
         return AutomationContextResult(
-            handle: handle,
             surface: surface,
-            scope: scope
+            scope: scope,
+            system: AutomationSystemDescriptor(capabilities: resolved.entry.capabilities)
         )
     }
 
@@ -167,7 +197,8 @@ final class AutomationController: AutomationControlling {
             try? surfaceDescriptor(
                 hostSessionID: session.id,
                 callerHostSessionID: resolved.entry.hostSessionID,
-                hostTerminalState: resolved.hostTerminalState
+                hostTerminalState: resolved.hostTerminalState,
+                capabilities: resolved.entry.capabilities
             )
         }
     }
@@ -175,7 +206,8 @@ final class AutomationController: AutomationControlling {
     private func surfaceDescriptor(
         hostSessionID: UUID,
         callerHostSessionID: UUID,
-        hostTerminalState: HostTerminalStateStore
+        hostTerminalState: HostTerminalStateStore,
+        capabilities: [AutomationCapability]
     ) throws -> AutomationSurfaceDescriptor {
         let session: HostTerminalSession?
         if let primaryID = hostTerminalState.primarySessionID(containing: hostSessionID),
@@ -208,7 +240,8 @@ final class AutomationController: AutomationControlling {
             cwd: session.directoryPath,
             isCaller: session.id == callerHostSessionID,
             isActive: session.id == hostTerminalState.activeSessionID,
-            isVisible: isVisible
+            isVisible: isVisible,
+            capabilities: capabilities
         )
     }
 }

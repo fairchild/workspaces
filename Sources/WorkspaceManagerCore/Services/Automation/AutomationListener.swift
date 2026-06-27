@@ -5,6 +5,7 @@ import Network
 public actor AutomationListener {
     public enum ListenerError: Error, Sendable {
         case alreadyStarted
+        case socketAlreadyOwned(String)
         case socketBindFailed(String)
     }
 
@@ -64,7 +65,7 @@ public actor AutomationListener {
         try ensureParentDirectoryExists()
         guard try acquireSocketLock() else {
             logger("listener dormant; another process owns \(socketURL.path)")
-            return
+            throw ListenerError.socketAlreadyOwned(socketURL.path)
         }
         try? FileManager.default.removeItem(at: socketURL)
 

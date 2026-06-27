@@ -12,12 +12,12 @@ struct AutomationControllerTests {
         let fixture = makeFixture()
         let context = try fixture.controller.automationContext(for: fixture.primaryHandle)
 
-        #expect(context.handle == fixture.primaryHandle)
         #expect(context.surface.hostSessionID == fixture.primary.id)
         #expect(context.surface.kind == .terminal)
         #expect(context.surface.isCaller)
         #expect(context.surface.tileID != nil)
         #expect(context.scope.primaryHostSessionID == fixture.primary.id)
+        #expect(context.system.capabilities.contains(.contextRead))
     }
 
     @Test("Missing or stale handles fail closed")
@@ -95,6 +95,71 @@ struct AutomationControllerTests {
 
         try await Task.sleep(for: .milliseconds(180))
         #expect(fixture.focusedSessionIDs == [split.id])
+    }
+
+    @Test("Split reports existing and relaid-out split surfaces without claiming creation")
+    func splitExistingSurfaceDoesNotClaimCreation() throws {
+        let fixture = makeFixture()
+        let split = try #require(fixture.store.ensureSplit(forPrimarySessionID: fixture.primary.id))
+
+        let alreadySplit = try fixture.controller.automationSplitTile(for: fixture.primaryHandle, direction: .right)
+        let relayout = try fixture.controller.automationSplitTile(for: fixture.primaryHandle, direction: .down)
+
+        #expect(alreadySplit.changed)
+        #expect(alreadySplit.focusedSurfaceID == split.id.uuidString)
+        #expect(alreadySplit.createdSurfaceID == nil)
+        #expect(alreadySplit.reason == "already_split")
+        #expect(relayout.changed)
+        #expect(relayout.focusedSurfaceID == split.id.uuidString)
+        #expect(relayout.createdSurfaceID == nil)
+        #expect(relayout.reason == "relayout")
+    }
+
+    @Test("Split from secondary tile is rejected until arbitrary tile splitting lands")
+    func splitFromSecondaryTileIsUnsupported() throws {
+        let fixture = makeFixture()
+        let split = try #require(fixture.store.ensureSplit(forPrimarySessionID: fixture.primary.id))
+        let splitHandle = try #require(fixture.store.automationEnvironment(for: split)?.handle)
+
+        do {
+            _ = try fixture.controller.automationSplitTile(for: splitHandle, direction: .right)
+            Issue.record("Expected secondary split tile request to be unsupported")
+        } catch let error as AutomationServiceError {
+            #expect(error.response.code == .unsupported)
+        }
+    }
+
+    @Test("Limited handles cannot use capabilities they were not granted")
+    func limitedHandleCapabilitiesAreEnforced() throws {
+        let store = HostTerminalStateStore()
+        let primary =
+            store.activateSession(
+                key: .repoPath("/Users/test/repo"),
+                directory: URL(fileURLWithPath: "/Users/test/repo")
+            ).session
+        let registry = AutomationHandleRegistry(makeHandle: { "limited" })
+        _ = registry.upsert(
+            hostSessionID: primary.id,
+            tileID: nil,
+            surfaceKind: .terminal,
+            windowScopeID: "window",
+            appScopeID: "app",
+            capabilities: [.contextRead]
+        )
+        let controller = AutomationController(
+            handleRegistry: registry,
+            hostTerminalState: store,
+            focusTerminal: { _ in },
+            requestCloseTerminal: { _ in }
+        )
+
+        _ = try controller.automationContext(for: "limited")
+        do {
+            _ = try controller.automationSplitTile(for: "limited", direction: .right)
+            Issue.record("Expected tile.split to require tile.split capability")
+        } catch let error as AutomationServiceError {
+            #expect(error.response.code == .capabilityDenied)
+        }
     }
 
     @Test("Close routes through existing close request path")

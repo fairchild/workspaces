@@ -189,7 +189,7 @@ enum AutomationHTTPRouter {
 
     private static func httpStatus(for code: AutomationErrorCode) -> Int {
         switch code {
-        case .disabled:
+        case .disabled, .capabilityDenied:
             return 403
         case .missingHandle, .staleHandle:
             return 401

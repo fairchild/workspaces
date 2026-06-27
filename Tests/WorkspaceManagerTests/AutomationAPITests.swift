@@ -16,7 +16,6 @@ private final class FakeAutomationController: AutomationControlling {
             throw AutomationServiceError(.staleHandle, "stale")
         }
         return AutomationContextResult(
-            handle: handle,
             surface: AutomationSurfaceDescriptor(
                 surfaceID: "surface-1",
                 tileID: "tile-1",
@@ -261,7 +260,6 @@ struct AutomationAPITests {
     @Test("CLI formatter emits result JSON and surfaces envelope errors")
     func cliFormatter() throws {
         let result = AutomationContextResult(
-            handle: "handle",
             surface: AutomationSurfaceDescriptor(
                 surfaceID: "surface",
                 tileID: "tile",
@@ -276,7 +274,8 @@ struct AutomationAPITests {
             scope: AutomationScopeDescriptor(app: "app", window: "window", scopeKey: nil, primaryHostSessionID: nil)
         )
         let json = try AutomationCLIResultPrinter.resultJSON(result)
-        #expect(json.contains(#""handle" : "handle""#))
+        #expect(!json.contains(#""handle""#))
+        #expect(json.contains(#""surfaceID" : "surface""#))
 
         let failure = AutomationResponseEnvelope<AutomationContextResult>(
             error: AutomationErrorResponse(code: .staleHandle, message: "stale")
@@ -291,6 +290,36 @@ struct AutomationAPITests {
         } catch let error as AutomationServiceError {
             #expect(error.response.code == .staleHandle)
         }
+    }
+
+    @Test("A second listener fails instead of becoming a dormant handle issuer")
+    @MainActor
+    func listenerLockContentionThrows() async throws {
+        let socket = URL(fileURLWithPath: "/tmp/wm-auto-lock-\(UUID().uuidString.prefix(8)).sock")
+        let first = AutomationListener(
+            bundleIdentifier: "com.test.workspaces",
+            controller: FakeAutomationController(),
+            socketURLOverride: socket,
+            auditLogger: nil
+        )
+        let second = AutomationListener(
+            bundleIdentifier: "com.test.workspaces",
+            controller: FakeAutomationController(),
+            socketURLOverride: socket,
+            auditLogger: nil
+        )
+        try await first.start()
+
+        do {
+            try await second.start()
+            Issue.record("Expected second listener to fail lock acquisition")
+        } catch AutomationListener.ListenerError.socketAlreadyOwned(let path) {
+            #expect(path == socket.path)
+        } catch {
+            await first.stop()
+            throw error
+        }
+        await first.stop()
     }
 }
 

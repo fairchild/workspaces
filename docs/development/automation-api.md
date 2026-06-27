@@ -29,8 +29,11 @@ The handle is the authority. Requests for scoped routes send it as
 `x-workspaces-automation-handle`; requests do not get to name their tile,
 surface, or host session. The app resolves the handle against its live mapping
 to recover the caller tile, host session, surface kind, window scope, app
-scope, and capabilities. Missing, stale, disabled, or out-of-scope handles fail
-closed.
+scope, and capabilities. Missing, stale, disabled, out-of-scope, or
+under-capable handles fail closed. Context responses do not echo the handle.
+
+Restart WorkSpaces after changing the Automation API experiment. Terminal
+processes only receive automation environment when their surface is created.
 
 Allowed and denied requests are appended to `automation-audit.jsonl` next to
 the socket state. The audit log stores route-level metadata and error codes,
@@ -64,7 +67,7 @@ Scoped routes require `x-workspaces-automation-handle`:
 | `GET /v1/context` | Returns the caller's resolved context and capabilities. |
 | `GET /v1/surfaces` | Returns visible terminal surfaces in the caller's window/app scope. |
 | `POST /v1/tile/focus` | Focuses `left`, `right`, `up`, `down`, `next`, or `previous` relative to the caller tile. |
-| `POST /v1/tile/split` | Splits `left`, `right`, `up`, or `down` relative to the caller tile. |
+| `POST /v1/tile/split` | Splits `left`, `right`, `up`, or `down` from a primary tile. Existing splits are focused or relaid out without claiming a new surface. Secondary split-tile callers return `unsupported` in V1. |
 | `POST /v1/tile/close` | Requests close for the caller tile through the normal close-confirmation path. |
 
 Mutation bodies must be projections over the supported operation, not raw tile
