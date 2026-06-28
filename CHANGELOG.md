@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.22.0] - 2026-06-28
+
+### Added
+- WorkSpaces automation API v1 for local scripting and host integration (#684).
+- Tile-tree Phase 4 recursive renderer with N-way tiling support (#658).
+- Help -> Keyboard Shortcuts cheat sheet (#691).
+- In-app feedback capture backed by feedback-store infrastructure (#699).
+- Preview deployment QA flow.
+
+### Changed
+- Redesign managed review run details.
+- Update web security dependencies.
+
+### Fixed
+- Ensure terminal sessions exit before workspace retirement (#689).
+- Fix Codex worker mise bootstrap.
+- Fix diagnostic export main actor crash (#694).
+- Fix managed review stuck-starting repair.
+
+### Other
+- Harden tile-tree focus, teardown, and Lume terminal launch storage coverage (#692, #695).
+- Record the tile-tree reversal and terminal-multiplexing ADR update (#693).
+
 ## [0.21.0] - 2026-06-27
 
 ### Added
