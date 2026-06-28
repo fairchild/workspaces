@@ -215,6 +215,44 @@ struct WorkspaceProviderTests {
         )
     }
 
+    @Test("Lume terminal launch command maps Workspaces VM storage path")
+    func lumeTerminalLaunchCommandMapsWorkspaceVMStoragePath() {
+        let workspaceVMStoragePath =
+            "/Users/test/Library/Application Support/WorkspaceManager/LumeStorage/workspace-vms"
+
+        let command = LumeWorkspaceProvider.terminalLaunchCommand(
+            executablePath: "/opt/homebrew/bin/lume",
+            vmName: "repo-feature-1234",
+            storagePath: workspaceVMStoragePath,
+            workspaceVMStoragePath: workspaceVMStoragePath
+        )
+
+        #expect(command == "/opt/homebrew/bin/lume ssh repo-feature-1234 --storage 'workspaces'")
+    }
+
+    @Test("Lume terminal launch command passes through optional storage selectors")
+    func lumeTerminalLaunchCommandPassesThroughOptionalStorageSelectors() {
+        let workspaceVMStoragePath =
+            "/Users/test/Library/Application Support/WorkspaceManager/LumeStorage/workspace-vms"
+
+        #expect(
+            LumeWorkspaceProvider.terminalLaunchCommand(
+                executablePath: "/opt/homebrew/bin/lume",
+                vmName: "repo-feature-1234",
+                storagePath: nil,
+                workspaceVMStoragePath: workspaceVMStoragePath
+            ) == "/opt/homebrew/bin/lume ssh repo-feature-1234"
+        )
+        #expect(
+            LumeWorkspaceProvider.terminalLaunchCommand(
+                executablePath: "/opt/homebrew/bin/lume",
+                vmName: "repo-feature-1234",
+                storagePath: "validated-bases",
+                workspaceVMStoragePath: workspaceVMStoragePath
+            ) == "/opt/homebrew/bin/lume ssh repo-feature-1234 --storage 'validated-bases'"
+        )
+    }
+
     @Test("Lume CLI progress messaging surfaces macOS download, install, and setup phases")
     func lumeCLIProgressMessaging() {
         #expect(
