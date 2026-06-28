@@ -57,6 +57,17 @@ Gate labels are not ownership or topic labels. They authorize or block a specifi
 
 Do not use gate labels as backlog categories. Remove them when the gate has been consumed or the intervention is no longer needed.
 
+## Backlog Hygiene Labels
+
+These two labels keep the open backlog actionable without deleting history. They are orthogonal to lane/state/dimension and may stack with anything.
+
+| Label | Meaning |
+| --- | --- |
+| `idea` | Speculative or unvalidated parking lot — a direction that *might* never be built. The honest home for "nice someday" enhancements so they stop reading as committed work. Supersedes the older `future` label for new triage. |
+| `stale` | Inactive or superseded — a candidate for closing or deleting on the next maintainer review. Use for detailed-but-unbuilt specs whose direction is now in question, dead one-offs, and work overtaken by what shipped. Tag rather than close so a human makes the final delete call. |
+
+`idea` keeps a maybe alive without implying commitment; `stale` flags work for removal without unilaterally erasing it. Neither gates the agent pipeline — an `agent` + `task` issue should not also carry `idea`/`stale` (move it out of the lane first).
+
 ## Matt Pocock Triage Mapping
 
 | Label in mattpocock/skills | Label in this repo | Meaning |
