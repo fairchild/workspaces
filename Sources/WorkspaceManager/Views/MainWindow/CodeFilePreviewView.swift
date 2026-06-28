@@ -8,12 +8,37 @@
 import AppKit
 import SwiftUI
 
+/// How the selected file is presented in the preview pane.
+/// `read` is the lightweight read-only viewer; `edit` and `reviewDiff` mount the
+/// in-app editor (plain editing vs an editable diff against HEAD).
+enum PreviewMode: String, Hashable, Sendable {
+    case read
+    case edit
+    case reviewDiff
+}
+
 struct CodePreviewSelection: Identifiable, Hashable {
     let rootURL: URL
     let relativePath: String
+    let mode: PreviewMode
+
+    init(rootURL: URL, relativePath: String, mode: PreviewMode = .read) {
+        self.rootURL = rootURL
+        self.relativePath = relativePath
+        self.mode = mode
+    }
 
     var id: String {
+        "\(rootURL.path)#\(relativePath)#\(mode.rawValue)"
+    }
+
+    /// Identity of the underlying file, independent of presentation mode.
+    var fileID: String {
         "\(rootURL.path)#\(relativePath)"
+    }
+
+    func with(mode: PreviewMode) -> CodePreviewSelection {
+        CodePreviewSelection(rootURL: rootURL, relativePath: relativePath, mode: mode)
     }
 
     var fileURL: URL {
@@ -31,6 +56,7 @@ struct CodeFilePreviewView: View {
     let defaultEditor: ExternalEditorDescriptor?
     let onOpenInDefaultEditor: () -> Void
     let onOpenInEditor: (ExternalEditorID) -> Void
+    var onEdit: () -> Void = {}
     let onClose: () -> Void
 
     @State private var state: LoadState = .loading
@@ -70,6 +96,18 @@ struct CodeFilePreviewView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
+
+                Button {
+                    onEdit()
+                } label: {
+                    Label("Edit", systemImage: "pencil")
+                        .font(.caption)
+                        .labelStyle(.titleAndIcon)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .help("Edit this file in the app")
+                .accessibilityLabel("Edit file")
 
                 if let defaultEditor {
                     OpenInEditorSplitButton(

@@ -3072,35 +3072,45 @@ struct MainTerminalDetailView: View {
         if let selectedCodePreview {
             if isTerminalPanelVisible {
                 VSplitView {
-                    CodeFilePreviewView(
-                        selection: selectedCodePreview,
-                        editorOptions: availableEditors,
-                        defaultEditor: defaultEditor,
-                        onOpenInDefaultEditor: onOpenInDefaultEditor,
-                        onOpenInEditor: onOpenInEditor
-                    ) {
-                        self.selectedCodePreview = nil
-                        self.isTerminalPanelVisible = true
-                    }
-                    .frame(minHeight: 220)
+                    previewPane(selectedCodePreview)
+                        .frame(minHeight: 220)
 
                     hostTerminalPanel
                         .frame(minHeight: 160)
                 }
             } else {
-                CodeFilePreviewView(
-                    selection: selectedCodePreview,
-                    editorOptions: availableEditors,
-                    defaultEditor: defaultEditor,
-                    onOpenInDefaultEditor: onOpenInDefaultEditor,
-                    onOpenInEditor: onOpenInEditor
-                ) {
-                    self.selectedCodePreview = nil
-                    self.isTerminalPanelVisible = true
-                }
+                previewPane(selectedCodePreview)
             }
         } else {
             hostTerminalPanel
+        }
+    }
+
+    @ViewBuilder
+    private func previewPane(_ selection: CodePreviewSelection) -> some View {
+        switch selection.mode {
+        case .read:
+            CodeFilePreviewView(
+                selection: selection,
+                editorOptions: availableEditors,
+                defaultEditor: defaultEditor,
+                onOpenInDefaultEditor: onOpenInDefaultEditor,
+                onOpenInEditor: onOpenInEditor,
+                onEdit: { self.selectedCodePreview = selection.with(mode: .edit) },
+                onClose: {
+                    self.selectedCodePreview = nil
+                    self.isTerminalPanelVisible = true
+                }
+            )
+        case .edit, .reviewDiff:
+            CodeFileEditorView(
+                selection: selection,
+                onViewReadOnly: { self.selectedCodePreview = selection.with(mode: .read) },
+                onClose: {
+                    self.selectedCodePreview = nil
+                    self.isTerminalPanelVisible = true
+                }
+            )
         }
     }
 

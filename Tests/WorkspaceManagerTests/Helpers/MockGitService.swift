@@ -85,6 +85,25 @@ final class MockGitService: GitServiceProtocol, @unchecked Sendable {
         discardCalls.append((file: file, path: path))
     }
 
+    // MARK: - File Contents (in-app editing)
+
+    var showHeadResult: String? = nil
+    var showHeadCalls: [(file: String, path: URL)] = []
+    var writeFileCalls: [(contents: String, file: String, path: URL)] = []
+    var writeFileError: Error? = nil
+
+    func showHead(file: String, at path: URL) async throws -> String? {
+        showHeadCalls.append((file: file, path: path))
+        return showHeadResult
+    }
+
+    func writeFile(_ contents: String, to file: String, at path: URL) async throws {
+        writeFileCalls.append((contents: contents, file: file, path: path))
+        if let writeFileError {
+            throw writeFileError
+        }
+    }
+
     // MARK: - Branches (M8 prep)
 
     var branchesResult: [BranchName] = []

@@ -245,7 +245,7 @@ struct RightPaneView: View {
                     ChangedFilesTabView(
                         changes: state.changedFiles,
                         isLoading: state.isLoading,
-                        onFileSelected: selectFile
+                        onFileSelected: reviewFile
                     )
                 case .timeline:
                     TimelineTabView(
@@ -441,11 +441,20 @@ struct RightPaneView: View {
     }
 
     private func selectFile(relativePath: String) {
+        select(relativePath: relativePath, mode: .read)
+    }
+
+    private func reviewFile(relativePath: String) {
+        select(relativePath: relativePath, mode: .reviewDiff)
+    }
+
+    private func select(relativePath: String, mode: PreviewMode) {
         guard !relativePath.isEmpty, let directoryURL else { return }
         onFileSelected(
             CodePreviewSelection(
                 rootURL: directoryURL,
-                relativePath: relativePath
+                relativePath: relativePath,
+                mode: mode
             )
         )
     }

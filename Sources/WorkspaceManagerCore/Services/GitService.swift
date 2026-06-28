@@ -148,6 +148,32 @@ public actor GitService: GitServiceProtocol {
         _ = try await runGit(["checkout", "--", file], at: path)
     }
 
+    // MARK: - File Contents (in-app editing)
+
+    /// Contents of `file` at HEAD, or `nil` when the file is not tracked at HEAD (newly added).
+    /// This is the base the in-app diff editor renders the working tree against.
+    public func showHead(file: String, at path: URL) async throws -> String? {
+        let result = try await runGitResult(["show", "HEAD:" + file], at: path)
+        guard result.exitCode == 0 else { return nil }
+        return result.stdout
+    }
+
+    /// Write `contents` to `file` (a repo-relative path) in the working tree, atomically.
+    /// Rejects paths that resolve outside the repository root.
+    public func writeFile(_ contents: String, to file: String, at path: URL) async throws {
+        let root = path.standardizedFileURL
+        let target = root.appendingPathComponent(file).standardizedFileURL
+        let rootPath = root.path
+        guard target.path == rootPath || target.path.hasPrefix(rootPath + "/") else {
+            throw GitError.pathOutsideRepository(file: file)
+        }
+        try FileManager.default.createDirectory(
+            at: target.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data(contents.utf8).write(to: target, options: .atomic)
+    }
+
     // MARK: - File Tree
 
     public func getFileTree(at path: URL, maxDepth: Int = 4) async throws -> FileNode {
@@ -340,6 +366,7 @@ public enum GitError: LocalizedError {
     case commandFailed(args: [String], stderr: String)
     case notARepository
     case branchAlreadyExists(name: String)
+    case pathOutsideRepository(file: String)
 
     public var errorDescription: String? {
         switch self {
@@ -349,6 +376,8 @@ public enum GitError: LocalizedError {
             return "Not a git repository"
         case .branchAlreadyExists(let name):
             return "A branch named '\(name)' already exists"
+        case .pathOutsideRepository(let file):
+            return "Refusing to write '\(file)': path resolves outside the workspace."
         }
     }
 }

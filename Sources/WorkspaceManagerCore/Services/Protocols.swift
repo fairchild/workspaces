@@ -94,6 +94,8 @@ public protocol GitServiceProtocol: Sendable {
     func stage(file: String, at path: URL) async throws
     func unstage(file: String, at path: URL) async throws
     func discard(file: String, at path: URL) async throws
+    func showHead(file: String, at path: URL) async throws -> String?
+    func writeFile(_ contents: String, to file: String, at path: URL) async throws
     func branches(at path: URL) async throws -> [BranchName]
 }
 

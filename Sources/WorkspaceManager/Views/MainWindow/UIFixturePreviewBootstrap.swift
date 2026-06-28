@@ -4,6 +4,13 @@ import WorkspaceManagerCore
 struct UIFixturePreviewBootstrapConfiguration: Equatable, Sendable {
     let repoName: String
     let relativePath: String
+    let mode: PreviewMode
+
+    init(repoName: String, relativePath: String, mode: PreviewMode = .read) {
+        self.repoName = repoName
+        self.relativePath = relativePath
+        self.mode = mode
+    }
 
     static func from(environment: [String: String]) -> Self? {
         guard environment["WORKSPACES_UI_FIXTURE"] == "1" else { return nil }
@@ -15,8 +22,17 @@ struct UIFixturePreviewBootstrapConfiguration: Equatable, Sendable {
 
         return Self(
             repoName: repoName,
-            relativePath: relativePath
+            relativePath: relativePath,
+            mode: previewMode(normalizedValue(environment["WORKSPACES_UI_FIXTURE_PREVIEW_MODE"]))
         )
+    }
+
+    private static func previewMode(_ rawValue: String?) -> PreviewMode {
+        switch rawValue?.lowercased() {
+        case "edit": return .edit
+        case "review", "reviewdiff": return .reviewDiff
+        default: return .read
+        }
     }
 
     private static func normalizedValue(_ rawValue: String?) -> String? {
@@ -62,7 +78,8 @@ enum UIFixturePreviewBootstrap {
         let relativePath = String(fileURL.path.dropFirst(rootURL.path.count + 1))
         let selection = CodePreviewSelection(
             rootURL: rootURL,
-            relativePath: relativePath
+            relativePath: relativePath,
+            mode: configuration.mode
         )
         return (repo: repo, selection: selection)
     }

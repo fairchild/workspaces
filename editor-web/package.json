@@ -1,0 +1,23 @@
+{
+  "name": "editor-web",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Embedded CodeMirror 6 diff/editor bundle hosted in the WorkspaceManager app's WKWebView surface.",
+  "type": "module",
+  "scripts": {
+    "build": "bun build ./src/main.ts --outdir dist --minify --target browser --entry-naming main.js"
+  },
+  "dependencies": {
+    "@codemirror/commands": "^6.7.1",
+    "@codemirror/lang-javascript": "^6.2.2",
+    "@codemirror/lang-json": "^6.0.1",
+    "@codemirror/lang-markdown": "^6.3.1",
+    "@codemirror/lang-python": "^6.1.6",
+    "@codemirror/language": "^6.10.8",
+    "@codemirror/legacy-modes": "^6.4.2",
+    "@codemirror/merge": "^6.7.4",
+    "@codemirror/state": "^6.5.0",
+    "@codemirror/view": "^6.36.1",
+    "codemirror": "^6.0.1"
+  }
+}

@@ -87,7 +87,10 @@ let package = Package(
                 // The installer wires them into ~/.claude/settings.json by
                 // absolute path, extracting them to a writable path on opt-in
                 // install when needed.
-                .copy("Resources/HookForwarders")
+                .copy("Resources/HookForwarders"),
+
+                // Embedded CodeMirror diff/editor bundle (built by scripts/build-editor-web.sh).
+                .copy("Resources/DiffEditorWeb")
             ],
             swiftSettings: [.enableUpcomingFeature("BareSlashRegexLiterals")],
             linkerSettings: [
