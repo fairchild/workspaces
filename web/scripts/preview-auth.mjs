@@ -3,17 +3,18 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { chromium } from "@playwright/test";
 
-const DEFAULT_PREVIEW_DOMAIN = "spaces-preview.cloudcompute.com";
+const DEFAULT_QA_HOST = "qa.spaces-preview.cloudcompute.com";
 
 function usage() {
 	return [
-		"usage: node scripts/preview-auth.mjs (--pr <number> | --url <url>)",
+		"usage: node scripts/preview-auth.mjs (--pr <number> | --url <url>) [--host <host>]",
 		"",
 		"Creates a local authenticated Playwright storage state for a Vercel preview.",
 	].join("\n");
 }
 
 function parseArgs(argv) {
+	let host = process.env.PREVIEW_QA_ALIAS_HOST ?? DEFAULT_QA_HOST;
 	let pr = "";
 	let url = "";
 	for (let i = 0; i < argv.length; i += 1) {
@@ -22,6 +23,8 @@ function parseArgs(argv) {
 			pr = argv[++i] ?? "";
 		} else if (arg === "--url") {
 			url = argv[++i] ?? "";
+		} else if (arg === "--host") {
+			host = argv[++i] ?? "";
 		} else if (arg === "--help" || arg === "-h") {
 			console.log(usage());
 			process.exit(0);
@@ -33,7 +36,8 @@ function parseArgs(argv) {
 	if (url && pr) throw new Error("pass either --pr or --url, not both");
 	if (pr) {
 		if (!/^\d+$/.test(pr)) throw new Error("--pr must be a PR number");
-		return new URL(`https://pr-${pr}.${DEFAULT_PREVIEW_DOMAIN}`);
+		if (!host) throw new Error("missing --host");
+		return new URL(`https://${host}`);
 	}
 	if (url) return new URL(url);
 	throw new Error("missing --pr or --url");

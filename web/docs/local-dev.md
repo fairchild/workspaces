@@ -18,9 +18,10 @@ mise run web:e2e                            # Playwright E2E (fast + full)
 mise run web:e2e:deployment-smoke           # remote-safe smoke against local dev server (default port 3212)
 mise run web:e2e:demo                       # Playwright demo with video recording
 mise run web:e2e:explore                    # qa-explore project (video + trace + axe-core)
-mise run web:preview:smoke -- --pr <N>      # remote-safe smoke against PR preview alias
+mise run web:preview:alias -- --pr <N>      # assign qa.spaces-preview.cloudcompute.com to this PR preview
+mise run web:preview:smoke -- --pr <N>      # remote-safe smoke against the reusable QA alias
 mise run web:preview:auth -- --pr <N>       # headed real-OAuth preview login + storage state
-mise run web:preview:explore -- --pr <N>    # authenticated exploratory QA against preview
+mise run web:preview:explore -- --pr <N>    # authenticated exploratory QA against the reusable QA alias
 mise run web:qa:init-agents                 # one-shot: scaffold Playwright's agent-loop files
 mise run web:qa:codegen                     # interactive Playwright codegen recorder
 mise run web:evidence -- --pr <N> --name <slug>  # screenshot capture + evidence upload
@@ -64,16 +65,18 @@ Screenshots without auth: start the dev server with `DEV_BYPASS_AUTH=1 pnpm dev`
 
 ## Preview QA
 
-PR previews publish an OAuth-compatible alias:
+PR previews publish a raw Vercel deployment URL. When a PR needs authenticated
+QA, assign the reusable OAuth-compatible alias to that raw preview:
 
 ```text
-https://pr-<N>.spaces-preview.cloudcompute.com
+https://qa.spaces-preview.cloudcompute.com
 ```
 
 Run the cheap deployed-app smoke first, then create or refresh the real-OAuth
 storage state, then run exploratory QA:
 
 ```bash
+mise run web:preview:alias -- --pr <N>
 mise run web:preview:smoke -- --pr <N>
 mise run web:preview:auth -- --pr <N>
 mise run web:preview:explore -- --pr <N>

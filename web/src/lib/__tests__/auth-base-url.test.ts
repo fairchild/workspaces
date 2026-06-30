@@ -22,7 +22,7 @@ describe("getAuthBaseURL", () => {
 		).toEqual({
 			allowedHosts: [
 				"spaces.cloudcompute.com",
-				"*.spaces-preview.cloudcompute.com",
+				"qa.spaces-preview.cloudcompute.com",
 				"*.cloudcompute.vercel.app",
 				"*.vercel.app",
 				"localhost:*",

@@ -103,6 +103,10 @@ pnpm exec playwright test --project=deployment-smoke --workers=1 --reporter=list
 description = "Create or refresh a real-OAuth Playwright storage state for a Vercel preview."
 run = "node scripts/preview-auth.mjs"
 
+[tasks."web:preview:alias"]
+description = "Assign the reusable OAuth QA hostname to a Vercel preview deployment."
+run = "node scripts/preview-alias.mjs"
+
 [tasks."web:preview:smoke"]
 description = "Run deployment-safe Playwright smoke against a Vercel preview."
 run = """
@@ -110,11 +114,13 @@ run = """
 set -euo pipefail
 
 URL=""
+QA_HOST="${PREVIEW_QA_ALIAS_HOST:-qa.spaces-preview.cloudcompute.com}"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --pr)
       shift
-      URL="https://pr-${1:?missing PR number}.spaces-preview.cloudcompute.com"
+      : "${1:?missing PR number}"
+      URL="https://$QA_HOST"
       ;;
     --url)
       shift
@@ -146,11 +152,13 @@ run = """
 set -euo pipefail
 
 URL=""
+QA_HOST="${PREVIEW_QA_ALIAS_HOST:-qa.spaces-preview.cloudcompute.com}"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --pr)
       shift
-      URL="https://pr-${1:?missing PR number}.spaces-preview.cloudcompute.com"
+      : "${1:?missing PR number}"
+      URL="https://$QA_HOST"
       ;;
     --url)
       shift
