@@ -11,7 +11,6 @@
 	--run-blue: #83b7ff;
 	--run-amber: #f0c46b;
 	--run-red: #ff8b8b;
-	--run-purple: #c4a1ff;
 	position: relative;
 	z-index: 2;
 	display: flex;
@@ -600,6 +599,15 @@
 
 	.lifecycleStep:nth-child(4) {
 		border-left: 0;
+	}
+
+	.lifecycleStep:nth-child(3)::after,
+	.lifecycleStep:nth-child(4)::before {
+		display: none;
+	}
+
+	.lifecycleStep:nth-child(n + 4) {
+		border-top: 1px solid var(--run-border-soft);
 	}
 }
 
