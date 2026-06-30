@@ -26,6 +26,7 @@ const CHAT_IDS = [
 	"e2e-chat-5",
 	"e2e-chat-6",
 ];
+const REVIEW_RUN_FINGERPRINT = "e2e-review-run-projected";
 
 export default async function globalTeardown() {
 	if (process.env.PLAYWRIGHT_SKIP_DB_FIXTURES === "1") return;
@@ -60,5 +61,13 @@ export default async function globalTeardown() {
 	await db.execute({
 		sql: "DELETE FROM agent_sessions WHERE id LIKE ?",
 		args: ["e2e-session-%"],
+	});
+	await db.execute({
+		sql: "DELETE FROM managed_pr_review_projections WHERE run_fingerprint = ?",
+		args: [REVIEW_RUN_FINGERPRINT],
+	});
+	await db.execute({
+		sql: "DELETE FROM managed_pr_review_runs WHERE fingerprint = ?",
+		args: [REVIEW_RUN_FINGERPRINT],
 	});
 }

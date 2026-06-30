@@ -36,9 +36,11 @@ const CHAT_IDS = [
 
 const SESSION_IDS = [
 	"e2e-session-paused-april",
+	"e2e-session-review-run",
 	// Add more here when we want running fixtures (running needs a real
 	// sandbox or mocking — paused works without any real sandbox)
 ];
+export const REVIEW_RUN_FINGERPRINT = "e2e-review-run-projected";
 
 function minutesAgo(day: number, minutes: number): string {
 	const d = new Date();
@@ -157,10 +159,68 @@ export default async function globalSetup() {
 		claude_session_id TEXT
 	)`);
 
+	await db.execute(`CREATE TABLE IF NOT EXISTS managed_pr_review_runs (
+		fingerprint TEXT PRIMARY KEY,
+		repo_full_name TEXT NOT NULL,
+		pr_number INTEGER NOT NULL,
+		head_sha TEXT NOT NULL,
+		trigger_kind TEXT NOT NULL,
+		trigger_source_id TEXT NOT NULL,
+		reviewer_config_hash TEXT NOT NULL,
+		session_id TEXT,
+		session_started_at TEXT,
+		status TEXT NOT NULL,
+		created_at TEXT NOT NULL,
+		updated_at TEXT NOT NULL,
+		error TEXT,
+		failure_kind TEXT,
+		failure_message TEXT,
+		failure_retryable INTEGER,
+		failed_at TEXT,
+		projection_status TEXT,
+		projection_updated_at TEXT,
+		projection_error TEXT,
+		github_review_id TEXT,
+		review_intent_event TEXT,
+		review_intent_body TEXT,
+		review_intent_labels TEXT,
+		review_intent_recorded_at TEXT,
+		active_claim_key TEXT,
+		coalesced_head_sha TEXT,
+		coalesced_trigger_kind TEXT,
+		coalesced_trigger_source_id TEXT,
+		coalesced_at TEXT
+	)`);
+
+	await db.execute(`CREATE TABLE IF NOT EXISTS managed_pr_review_projections (
+		projection_id TEXT PRIMARY KEY,
+		run_fingerprint TEXT NOT NULL,
+		projection_type TEXT NOT NULL,
+		projection_key TEXT NOT NULL,
+		desired_payload_hash TEXT NOT NULL,
+		desired_payload TEXT NOT NULL,
+		state TEXT NOT NULL,
+		attempts INTEGER NOT NULL DEFAULT 0,
+		last_attempted_at TEXT,
+		observed_external_id TEXT,
+		error_kind TEXT,
+		error_text TEXT,
+		created_at TEXT NOT NULL,
+		updated_at TEXT NOT NULL
+	)`);
+
 	// Wipe any e2e fixtures from previous runs so the test starts clean
 	await db.execute({
 		sql: "DELETE FROM agent_sessions WHERE id LIKE ?",
 		args: ["e2e-session-%"],
+	});
+	await db.execute({
+		sql: "DELETE FROM managed_pr_review_projections WHERE run_fingerprint = ?",
+		args: [REVIEW_RUN_FINGERPRINT],
+	});
+	await db.execute({
+		sql: "DELETE FROM managed_pr_review_runs WHERE fingerprint = ?",
+		args: [REVIEW_RUN_FINGERPRINT],
 	});
 
 	// Seed user repo
@@ -241,6 +301,61 @@ export default async function globalSetup() {
 			"snapshotted",
 			now,
 			now,
+		],
+	});
+
+	const reviewRunCreatedAt = "2026-06-30T15:00:00.000Z";
+	const reviewRunSessionStartedAt = "2026-06-30T15:01:15.000Z";
+	const reviewRunUpdatedAt = "2026-06-30T15:08:45.000Z";
+	await db.execute({
+		sql: `INSERT OR REPLACE INTO managed_pr_review_runs (
+			fingerprint, repo_full_name, pr_number, head_sha, trigger_kind,
+			trigger_source_id, reviewer_config_hash, session_id, session_started_at,
+			status, created_at, updated_at, projection_status, projection_updated_at,
+			github_review_id, review_intent_event, review_intent_body,
+			review_intent_labels, review_intent_recorded_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		args: [
+			REVIEW_RUN_FINGERPRINT,
+			TEST_REPO,
+			703,
+			"5fa95de71e7a5b376a6bdd410846ce5f8fe6d56c",
+			"pull_request",
+			"703",
+			"reviewer-config-e2e",
+			SESSION_IDS[1],
+			reviewRunSessionStartedAt,
+			"completed",
+			reviewRunCreatedAt,
+			reviewRunUpdatedAt,
+			"projected",
+			reviewRunUpdatedAt,
+			"PRR_e2e_review",
+			"APPROVE",
+			"E2E managed review body",
+			JSON.stringify(["web"]),
+			reviewRunUpdatedAt,
+		],
+	});
+	await db.execute({
+		sql: `INSERT OR REPLACE INTO managed_pr_review_projections (
+			projection_id, run_fingerprint, projection_type, projection_key,
+			desired_payload_hash, desired_payload, state, attempts,
+			last_attempted_at, observed_external_id, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		args: [
+			"e2e-review-run-projection-status",
+			REVIEW_RUN_FINGERPRINT,
+			"github_status",
+			"WorkSpaces Managed Review",
+			"sha256-e2e-status",
+			JSON.stringify({ state: "success" }),
+			"projected",
+			1,
+			reviewRunUpdatedAt,
+			"status-e2e",
+			reviewRunCreatedAt,
+			reviewRunUpdatedAt,
 		],
 	});
 }
