@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.23.0-beta.1] - 2026-06-30
+
+### Added
+- Guarded native text editing phase 1: small UTF-8 files can now open in an in-memory editable buffer, with read-only safety gates for unsupported files (#713).
+
+### Changed
+- Refactor preview QA to use a reusable alias (#702).
+
+### Other
+- Refresh roadmap to v0.22 and groom backlog labels for milestone #9 (#711).
+
 ## [0.22.0] - 2026-06-28
 
 ### Added
