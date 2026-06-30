@@ -2,7 +2,7 @@
 //  CodeFilePreviewView.swift
 //  WorkspaceManager
 //
-//  Read-only source preview with lightweight syntax highlighting.
+//  Guarded source preview/editor for small local text files.
 //
 
 import AppKit
@@ -55,8 +55,18 @@ struct CodeFilePreviewView: View {
 
                 Spacer()
 
-                if let metadata = stateMetadata {
-                    Text(metadata.language.displayName)
+                if let document = loadedDocument {
+                    if document.isDirty {
+                        Text("Unsaved")
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(.orange)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(.orange.opacity(0.12))
+                            .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+                    }
+
+                    Text(document.language.displayName)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 6)
@@ -64,11 +74,36 @@ struct CodeFilePreviewView: View {
                         .background(.secondary.opacity(0.16))
                         .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
 
-                    if metadata.isTruncated {
-                        Text("Preview truncated")
+                    if document.isReadOnly {
+                        Text(document.readOnlyBadgeText)
                             .font(.caption2)
                             .foregroundStyle(.secondary)
+                            .lineLimit(1)
                     }
+                }
+
+                if isEditorLoaded {
+                    Button {
+                        discardChanges()
+                    } label: {
+                        Image(systemName: "arrow.uturn.backward")
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(!isDirty)
+                    .help("Discard in-memory edits")
+                    .accessibilityLabel("Discard Edits")
+
+                    Button {
+                        // Phase 2 wires the safe disk-write pipeline. Keep the
+                        // control visible but inert so this slice cannot write
+                        // files before the save-safety contract is implemented.
+                    } label: {
+                        Image(systemName: "square.and.arrow.down")
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(true)
+                    .help("Save is disabled until the safe write pipeline is implemented")
+                    .accessibilityLabel("Save File")
                 }
 
                 if let defaultEditor {
@@ -110,15 +145,32 @@ struct CodeFilePreviewView: View {
                     )
 
                 case .loaded(let document):
-                    ReadOnlyCodeTextView(attributedText: document.attributedText)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    if document.canEdit {
+                        EditableCodeTextView(text: currentTextBinding)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else {
+                        VStack(spacing: 0) {
+                            if let reason = document.readOnlyReason {
+                                HStack(spacing: 8) {
+                                    Image(systemName: "lock")
+                                        .foregroundStyle(.secondary)
+                                    Text(reason)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(2)
+                                    Spacer()
+                                }
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
+                                .background(Color(nsColor: .controlBackgroundColor))
 
-                case .empty:
-                    ContentUnavailableView(
-                        "Empty File",
-                        systemImage: "doc.text",
-                        description: Text("This file has no content.")
-                    )
+                                Divider()
+                            }
+
+                            ReadOnlyCodeTextView(attributedText: document.attributedText)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        }
+                    }
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -145,23 +197,7 @@ struct CodeFilePreviewView: View {
                 "payload loaded file=\(selection.fileURL.path) chars=\(payload.text.count) truncated=\(payload.isTruncated)"
             )
 
-            if payload.text.isEmpty {
-                state = .empty(
-                    language: payload.language,
-                    isTruncated: payload.isTruncated
-                )
-                CodePreviewDiagnostics.log("state=empty file=\(selection.fileURL.path)")
-                return
-            }
-
-            let attributedText = CodeSyntaxHighlighter.makeAttributedText(from: payload)
-            state = .loaded(
-                CodePreviewDocument(
-                    attributedText: attributedText,
-                    language: payload.language,
-                    isTruncated: payload.isTruncated
-                )
-            )
+            state = .loaded(CodeEditorDocument(payload: payload))
             CodePreviewDiagnostics.log("state=loaded file=\(selection.fileURL.path)")
         } catch is CancellationError {
             CodePreviewDiagnostics.log("state=cancelled file=\(selection.fileURL.path)")
@@ -179,15 +215,101 @@ struct CodeFilePreviewView: View {
         }
     }
 
-    private var stateMetadata: (language: CodeSyntaxLanguage, isTruncated: Bool)? {
-        switch state {
-        case .loaded(let document):
-            return (language: document.language, isTruncated: document.isTruncated)
-        case .empty(let language, let isTruncated):
-            return (language: language, isTruncated: isTruncated)
-        case .loading, .failed:
-            return nil
+    private var loadedDocument: CodeEditorDocument? {
+        guard case .loaded(let document) = state else { return nil }
+        return document
+    }
+
+    private var isEditorLoaded: Bool {
+        loadedDocument != nil
+    }
+
+    private var isDirty: Bool {
+        loadedDocument?.isDirty ?? false
+    }
+
+    private var currentTextBinding: Binding<String> {
+        Binding(
+            get: {
+                loadedDocument?.currentText ?? ""
+            },
+            set: { newValue in
+                guard case .loaded(var document) = state else { return }
+                document.currentText = newValue
+                state = .loaded(document)
+            }
+        )
+    }
+
+    private func discardChanges() {
+        guard case .loaded(var document) = state else { return }
+        document.currentText = document.originalText
+        state = .loaded(document)
+    }
+}
+
+enum CodeEditorEditability: Equatable {
+    case editable
+    case readOnly(String)
+}
+
+struct CodeEditorDocument: Equatable {
+    let originalText: String
+    var currentText: String
+    let language: CodeSyntaxLanguage
+    let spans: [HighlightSpan]
+    let editability: CodeEditorEditability
+
+    init(payload: CodePreviewPayload) {
+        originalText = payload.text
+        currentText = payload.text
+        language = payload.language
+        spans = payload.spans
+        editability = Self.editability(for: payload)
+    }
+
+    var canEdit: Bool {
+        editability == .editable
+    }
+
+    var isReadOnly: Bool {
+        !canEdit
+    }
+
+    var isDirty: Bool {
+        currentText != originalText
+    }
+
+    var readOnlyReason: String? {
+        guard case .readOnly(let reason) = editability else { return nil }
+        return reason
+    }
+
+    var readOnlyBadgeText: String {
+        if case .readOnly = editability {
+            return "Read Only"
         }
+        return ""
+    }
+
+    var attributedText: NSAttributedString {
+        CodeSyntaxHighlighter.makeAttributedText(
+            from: CodePreviewPayload(
+                text: currentText,
+                language: language,
+                spans: spans,
+                isTruncated: isReadOnly
+            )
+        )
+    }
+
+    private static func editability(for payload: CodePreviewPayload) -> CodeEditorEditability {
+        if payload.isTruncated {
+            return .readOnly(
+                "This file is too large for in-app editing. The preview is truncated; open externally to edit safely."
+            )
+        }
+        return .editable
     }
 }
 
@@ -423,15 +545,120 @@ private struct ReadOnlyCodeTextView: NSViewRepresentable {
     }
 }
 
-private enum LoadState {
-    case loading
-    case loaded(CodePreviewDocument)
-    case empty(language: CodeSyntaxLanguage, isTruncated: Bool)
-    case failed(String)
+private struct EditableCodeTextView: NSViewRepresentable {
+    @Binding var text: String
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(text: $text)
+    }
+
+    func makeNSView(context: Context) -> EditableTextContainerView {
+        let textStorage = NSTextStorage()
+        let layoutManager = NSLayoutManager()
+        let textContainer = NSTextContainer(
+            size: NSSize(
+                width: CGFloat.greatestFiniteMagnitude,
+                height: CGFloat.greatestFiniteMagnitude
+            )
+        )
+        textContainer.widthTracksTextView = false
+        textContainer.heightTracksTextView = false
+        layoutManager.addTextContainer(textContainer)
+        textStorage.addLayoutManager(layoutManager)
+
+        let textView = NSTextView(frame: .zero, textContainer: textContainer)
+        textView.isEditable = true
+        textView.isSelectable = true
+        textView.isRichText = false
+        textView.importsGraphics = false
+        textView.usesFindBar = true
+        textView.allowsUndo = true
+        textView.drawsBackground = false
+        textView.isHorizontallyResizable = true
+        textView.isVerticallyResizable = true
+        textView.maxSize = NSSize(
+            width: CGFloat.greatestFiniteMagnitude,
+            height: CGFloat.greatestFiniteMagnitude
+        )
+        textView.minSize = .zero
+        textView.textContainerInset = NSSize(width: 12, height: 10)
+        textView.font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        textView.textColor = .textColor
+        textView.isAutomaticQuoteSubstitutionEnabled = false
+        textView.isAutomaticDashSubstitutionEnabled = false
+        textView.isAutomaticTextReplacementEnabled = false
+        textView.isAutomaticSpellingCorrectionEnabled = false
+        textView.isContinuousSpellCheckingEnabled = false
+        textView.delegate = context.coordinator
+
+        let containerView = EditableTextContainerView(textView: textView)
+        context.coordinator.textView = textView
+        context.coordinator.apply(text: text)
+        return containerView
+    }
+
+    func updateNSView(_ nsView: EditableTextContainerView, context: Context) {
+        _ = nsView
+        context.coordinator.text = $text
+        context.coordinator.apply(text: text)
+    }
+
+    final class EditableTextContainerView: NSView {
+        let scrollView: NSScrollView
+        let textView: NSTextView
+
+        init(textView: NSTextView) {
+            self.textView = textView
+            self.scrollView = NSScrollView(frame: .zero)
+            super.init(frame: .zero)
+
+            scrollView.frame = bounds
+            scrollView.autoresizingMask = [.width, .height]
+            scrollView.hasVerticalScroller = true
+            scrollView.hasHorizontalScroller = true
+            scrollView.autohidesScrollers = true
+            scrollView.borderType = .noBorder
+            scrollView.drawsBackground = false
+            scrollView.documentView = textView
+
+            addSubview(scrollView)
+        }
+
+        @available(*, unavailable)
+        required init?(coder: NSCoder) {
+            fatalError("init(coder:) has not been implemented")
+        }
+    }
+
+    final class Coordinator: NSObject, NSTextViewDelegate {
+        weak var textView: NSTextView?
+        var text: Binding<String>
+        private var isApplyingProgrammaticText = false
+
+        init(text: Binding<String>) {
+            self.text = text
+        }
+
+        func apply(text newText: String) {
+            guard let textView, textView.string != newText else { return }
+
+            isApplyingProgrammaticText = true
+            let selectedRange = textView.selectedRange()
+            textView.string = newText
+            let boundedLocation = min(selectedRange.location, (newText as NSString).length)
+            textView.setSelectedRange(NSRange(location: boundedLocation, length: 0))
+            isApplyingProgrammaticText = false
+        }
+
+        func textDidChange(_ notification: Notification) {
+            guard !isApplyingProgrammaticText, let textView else { return }
+            text.wrappedValue = textView.string
+        }
+    }
 }
 
-private struct CodePreviewDocument {
-    let attributedText: NSAttributedString
-    let language: CodeSyntaxLanguage
-    let isTruncated: Bool
+private enum LoadState {
+    case loading
+    case loaded(CodeEditorDocument)
+    case failed(String)
 }

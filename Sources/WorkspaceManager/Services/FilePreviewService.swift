@@ -2,7 +2,7 @@
 //  FilePreviewService.swift
 //  WorkspaceManager
 //
-//  File loading + syntax highlighting for read-only source previews.
+//  File loading + syntax highlighting for source previews and guarded editing.
 //
 
 import AppKit
@@ -41,9 +41,15 @@ enum CodePreviewLoader {
             let previewData = isTruncated ? data.prefix(maxPreviewBytes) : data[...]
             let previewBytes = Data(previewData)
 
-            let text =
-                String(data: previewBytes, encoding: .utf8)
-                ?? String(decoding: previewData, as: UTF8.self)
+            let text: String
+            if isTruncated {
+                text = String(decoding: previewData, as: UTF8.self)
+            } else if let decodedText = String(data: previewBytes, encoding: .utf8) {
+                text = decodedText
+            } else {
+                CodePreviewDiagnostics.log("load rejected unsupported encoding file=\(fileURL.path)")
+                throw CodePreviewError.unsupportedEncoding
+            }
             let language = CodeSyntaxLanguage(fileExtension: fileURL.pathExtension)
             let spans = CodeSyntaxHighlighter.highlightSpans(
                 in: text,
@@ -67,16 +73,19 @@ enum CodePreviewLoader {
 
 enum CodePreviewError: LocalizedError {
     case binaryFile
+    case unsupportedEncoding
 
     var errorDescription: String? {
         switch self {
         case .binaryFile:
             return "Binary files are not previewed in this pane."
+        case .unsupportedEncoding:
+            return "This file is not UTF-8 text. Open it externally to edit it."
         }
     }
 }
 
-enum CodeSyntaxLanguage: Sendable {
+enum CodeSyntaxLanguage: Equatable, Sendable {
     case swift
     case javascript
     case typescript
@@ -121,7 +130,7 @@ enum CodeSyntaxLanguage: Sendable {
     }
 }
 
-enum HighlightToken: Sendable {
+enum HighlightToken: Equatable, Sendable {
     case keyword
     case string
     case comment
@@ -129,7 +138,7 @@ enum HighlightToken: Sendable {
     case typeName
 }
 
-struct HighlightSpan: Sendable {
+struct HighlightSpan: Equatable, Sendable {
     let location: Int
     let length: Int
     let token: HighlightToken
