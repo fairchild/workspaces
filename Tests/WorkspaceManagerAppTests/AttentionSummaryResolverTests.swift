@@ -31,12 +31,14 @@ struct AttentionSummaryResolverTests {
             attentionItems: [
                 .init(
                     target: .workspace(workspace.id),
+                    hostSessionID: UUID(),
                     run: .awaitingInput(reason: .permissionPrompt),
                     lastEventAt: Date(),
                     lastAccessedAt: Date()
                 ),
                 .init(
                     target: .repo(repo.id),
+                    hostSessionID: UUID(),
                     run: .errored(category: .toolFailure, message: "merge failed"),
                     lastEventAt: Date(),
                     lastAccessedAt: Date().addingTimeInterval(-30)
@@ -69,6 +71,7 @@ struct AttentionSummaryResolverTests {
             attentionItems: [
                 .init(
                     target: .workspace(UUID()),
+                    hostSessionID: UUID(),
                     run: .awaitingInput(reason: .custom),
                     lastEventAt: Date(),
                     lastAccessedAt: Date()
@@ -99,12 +102,14 @@ struct AttentionSummaryResolverTests {
             attentionItems: [
                 .init(
                     target: .workspace(workspace.id),
+                    hostSessionID: UUID(),
                     run: .awaitingInput(reason: .permissionPrompt),
                     lastEventAt: Date(),
                     lastAccessedAt: Date()
                 ),
                 .init(
                     target: .workspace(UUID()),
+                    hostSessionID: UUID(),
                     run: .errored(category: .toolFailure, message: "stale session"),
                     lastEventAt: Date(),
                     lastAccessedAt: Date().addingTimeInterval(-30)

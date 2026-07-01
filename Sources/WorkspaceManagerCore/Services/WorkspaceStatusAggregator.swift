@@ -75,6 +75,7 @@ public final class WorkspaceStatusAggregator: ObservableObject {
 
     public struct AttentionItem: Identifiable, Equatable, Sendable {
         public let target: AttentionTarget
+        public let hostSessionID: UUID
         public let run: AgentRunState
         public let lastEventAt: Date
         public let lastAccessedAt: Date
@@ -88,11 +89,13 @@ public final class WorkspaceStatusAggregator: ObservableObject {
 
         public init(
             target: AttentionTarget,
+            hostSessionID: UUID,
             run: AgentRunState,
             lastEventAt: Date,
             lastAccessedAt: Date
         ) {
             self.target = target
+            self.hostSessionID = hostSessionID
             self.run = run
             self.lastEventAt = lastEventAt
             self.lastAccessedAt = lastAccessedAt
@@ -120,9 +123,22 @@ public final class WorkspaceStatusAggregator: ObservableObject {
     /// `lastAccessedAt` descending.
     @Published public private(set) var attentionRepos: [UUID] = []
 
+    private var acknowledgedAttentionEventAtBySessionID: [UUID: Date] = [:]
+
     public var attentionCount: Int { attentionItems.count }
 
     public init() {}
+
+    public func acknowledgeAttention(for status: AgentSessionStatus) {
+        guard Self.demandsAttention(status.run) else { return }
+        acknowledgedAttentionEventAtBySessionID[status.hostSessionID] = status.lastEventAt
+    }
+
+    public func acknowledgeAttention(for target: AttentionTarget) {
+        for item in attentionItems where item.target == target {
+            acknowledgedAttentionEventAtBySessionID[item.hostSessionID] = item.lastEventAt
+        }
+    }
 
     public func update(workspaces: [WorkspaceInput], repos: [RepoInput]) {
         var workspaceStatuses: [UUID: AgentSessionStatus] = [:]
@@ -147,7 +163,7 @@ public final class WorkspaceStatusAggregator: ObservableObject {
         }
 
         let workspaceAttention = workspaces.compactMap { input -> AttentionEntry? in
-            guard let status = input.status, Self.demandsAttention(status.run) else { return nil }
+            guard let status = input.status, shouldShowAttention(for: status) else { return nil }
             return AttentionEntry(
                 target: .workspace(input.workspaceID),
                 status: status,
@@ -155,7 +171,7 @@ public final class WorkspaceStatusAggregator: ObservableObject {
             )
         }
         let repoAttention = repos.compactMap { input -> AttentionEntry? in
-            guard let status = input.status, Self.demandsAttention(status.run) else { return nil }
+            guard let status = input.status, shouldShowAttention(for: status) else { return nil }
             return AttentionEntry(
                 target: .repo(input.repoID),
                 status: status,
@@ -173,6 +189,7 @@ public final class WorkspaceStatusAggregator: ObservableObject {
         let attentionItems = attentionEntries.map { entry in
             AttentionItem(
                 target: entry.target,
+                hostSessionID: entry.status.hostSessionID,
                 run: entry.status.run,
                 lastEventAt: entry.status.lastEventAt,
                 lastAccessedAt: entry.lastAccessedAt
@@ -200,6 +217,8 @@ public final class WorkspaceStatusAggregator: ObservableObject {
         if self.attentionRepos != attentionRepos {
             self.attentionRepos = attentionRepos
         }
+
+        pruneAcknowledgements(for: Array(workspaceStatuses.values) + Array(repoStatuses.values))
     }
 
     /// Severity ordering — higher number wins when choosing the bubbled state.
@@ -221,5 +240,22 @@ public final class WorkspaceStatusAggregator: ObservableObject {
                 if ls != rs { return ls < rs }
                 return lhs.lastEventAt < rhs.lastEventAt
             }
+    }
+
+    private func shouldShowAttention(for status: AgentSessionStatus) -> Bool {
+        guard Self.demandsAttention(status.run) else { return false }
+        guard let acknowledgedAt = acknowledgedAttentionEventAtBySessionID[status.hostSessionID] else {
+            return true
+        }
+        return status.lastEventAt > acknowledgedAt
+    }
+
+    private func pruneAcknowledgements(for activeStatuses: some Sequence<AgentSessionStatus>) {
+        guard !acknowledgedAttentionEventAtBySessionID.isEmpty else { return }
+
+        for status in activeStatuses {
+            guard !Self.demandsAttention(status.run) else { continue }
+            acknowledgedAttentionEventAtBySessionID.removeValue(forKey: status.hostSessionID)
+        }
     }
 }

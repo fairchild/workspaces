@@ -813,6 +813,9 @@ struct ContentView: View {
                         }
                     )
                     syncSidebarSelectionToActiveSessionFromActiveHostSession()
+                    if let activeSessionID = hostTerminalState.activeSessionID {
+                        acknowledgeVisitedAgentSession(activeSessionID)
+                    }
                 }
             }
     }
@@ -1430,6 +1433,7 @@ struct ContentView: View {
             scopePath: repoDirectory.path
         )
         markAccessed(repo: repo)
+        acknowledgeVisitedAttentionTarget(.repo(repo.id))
         applyNavigationDestination(.repoTerminal(repo))
         persistTerminalContinuity(
             targetKind: .repo,
@@ -1518,6 +1522,7 @@ struct ContentView: View {
                 scopePath: workspaceDirectory.path
             )
             markAccessed(workspace: workspace)
+            acknowledgeVisitedAttentionTarget(.workspace(workspace.id))
             applyNavigationDestination(.workspaceTerminal(workspace))
             persistTerminalContinuity(
                 targetKind: .workspace,
@@ -1556,8 +1561,10 @@ struct ContentView: View {
         {
             abandonPendingRemoteConnection(reason: "remote_workspace_reused_existing_session")
             markAccessed(workspace: workspace)
+            acknowledgeVisitedAttentionTarget(.workspace(workspace.id))
             applyNavigationDestination(.workspaceTerminal(workspace))
             hostTerminalState.activateExistingSession(sessionID: existing.id)
+            acknowledgeVisitedAgentSession(existing.id)
             terminalFocusCoordinator.requestMainTerminalFocus(
                 targetSessionID: existing.id,
                 surfaceStore: hostTerminalState.surfaceStore,
@@ -1600,6 +1607,7 @@ struct ContentView: View {
                 customCommand: launchSpec.customCommand
             )
             viewState.columnVisibility = .all
+            acknowledgeVisitedAttentionTarget(.workspace(workspace.id))
             terminalFocusCoordinator.requestMainTerminalFocus(
                 targetSessionID: session.id,
                 surfaceStore: hostTerminalState.surfaceStore,
@@ -1852,7 +1860,23 @@ struct ContentView: View {
         _ result: MainWindowTerminalSessionController.SessionFocusResult
     ) {
         setSelectedWorkspace(result.syncedWorkspace)
+        acknowledgeVisitedAgentSession(result.focusSessionID)
         focusTerminalTab(result.focusSessionID)
+    }
+
+    @MainActor
+    private func acknowledgeVisitedAttentionTarget(
+        _ target: WorkspaceStatusAggregator.AttentionTarget
+    ) {
+        workspaceStatusAggregator.acknowledgeAttention(for: target)
+        refreshWorkspaceStatusAggregator()
+    }
+
+    @MainActor
+    private func acknowledgeVisitedAgentSession(_ sessionID: UUID) {
+        guard let status = agentSessionRegistry.statuses[sessionID] else { return }
+        workspaceStatusAggregator.acknowledgeAttention(for: status)
+        refreshWorkspaceStatusAggregator()
     }
 
     @MainActor
@@ -2517,6 +2541,7 @@ struct ContentView: View {
     @MainActor
     private func activateSessionSwitcherHostSession(_ sessionID: UUID) {
         guard hostTerminalState.activateExistingSession(sessionID: sessionID) else { return }
+        acknowledgeVisitedAgentSession(sessionID)
         if let activeHostSession,
             let destination = terminalSessionController.terminalNavigationDestination(
                 for: activeHostSession,
