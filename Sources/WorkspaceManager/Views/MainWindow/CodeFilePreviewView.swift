@@ -26,6 +26,8 @@ struct CodePreviewSelection: Identifiable, Hashable {
 }
 
 struct CodeFilePreviewView: View {
+    @ObservedObject var appCommandState: AppCommandState
+
     let selection: CodePreviewSelection
     let editorOptions: [ExternalEditorDescriptor]
     let defaultEditor: ExternalEditorDescriptor?
@@ -34,6 +36,8 @@ struct CodeFilePreviewView: View {
     let onClose: () -> Void
 
     @State private var state: LoadState = .loading
+    @State private var isSaving = false
+    @State private var saveErrorMessage: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -94,15 +98,13 @@ struct CodeFilePreviewView: View {
                     .accessibilityLabel("Discard Edits")
 
                     Button {
-                        // Phase 2 wires the safe disk-write pipeline. Keep the
-                        // control visible but inert so this slice cannot write
-                        // files before the save-safety contract is implemented.
+                        triggerSave()
                     } label: {
                         Image(systemName: "square.and.arrow.down")
                     }
                     .buttonStyle(.borderless)
-                    .disabled(true)
-                    .help("Save is disabled until the safe write pipeline is implemented")
+                    .disabled(!canSaveDocument)
+                    .help(canSaveDocument ? "Save File (Cmd+S)" : "No changes to save")
                     .accessibilityLabel("Save File")
                 }
 
@@ -130,6 +132,23 @@ struct CodeFilePreviewView: View {
             .background(Color(nsColor: .windowBackgroundColor))
 
             Divider()
+
+            if let saveErrorMessage {
+                HStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .foregroundStyle(.red)
+                    Text(saveErrorMessage)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .lineLimit(2)
+                    Spacer()
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(Color.red.opacity(0.08))
+
+                Divider()
+            }
 
             Group {
                 switch state {
@@ -179,11 +198,29 @@ struct CodeFilePreviewView: View {
         .task(id: selection.id) {
             await loadPreview()
         }
+        .onAppear {
+            syncSaveCommand()
+        }
+        .onDisappear {
+            appCommandState.clearSaveDocumentAction()
+        }
+        .onChange(of: selection.id) { _, _ in
+            saveErrorMessage = nil
+            appCommandState.clearSaveDocumentAction()
+        }
+        .onChange(of: isDirty) { _, _ in
+            syncSaveCommand()
+        }
+        .onChange(of: isSaving) { _, _ in
+            syncSaveCommand()
+        }
     }
 
     @MainActor
     private func loadPreview() async {
         state = .loading
+        saveErrorMessage = nil
+        syncSaveCommand()
         CodePreviewDiagnostics.log("selected file=\(selection.fileURL.path)")
 
         do {
@@ -198,17 +235,20 @@ struct CodeFilePreviewView: View {
             )
 
             state = .loaded(CodeEditorDocument(payload: payload))
+            syncSaveCommand()
             CodePreviewDiagnostics.log("state=loaded file=\(selection.fileURL.path)")
         } catch is CancellationError {
             CodePreviewDiagnostics.log("state=cancelled file=\(selection.fileURL.path)")
             return
         } catch let error as CodePreviewError {
             state = .failed(error.errorDescription ?? "Could not load this file.")
+            syncSaveCommand()
             CodePreviewDiagnostics.log(
                 "state=failed file=\(selection.fileURL.path) error=\(error.errorDescription ?? "unknown")"
             )
         } catch {
             state = .failed(error.localizedDescription)
+            syncSaveCommand()
             CodePreviewDiagnostics.log(
                 "state=failed file=\(selection.fileURL.path) error=\(error.localizedDescription)"
             )
@@ -228,6 +268,10 @@ struct CodeFilePreviewView: View {
         loadedDocument?.isDirty ?? false
     }
 
+    private var canSaveDocument: Bool {
+        isDirty && !isSaving && loadedDocument?.canEdit == true
+    }
+
     private var currentTextBinding: Binding<String> {
         Binding(
             get: {
@@ -237,6 +281,7 @@ struct CodeFilePreviewView: View {
                 guard case .loaded(var document) = state else { return }
                 document.currentText = newValue
                 state = .loaded(document)
+                saveErrorMessage = nil
             }
         )
     }
@@ -245,16 +290,53 @@ struct CodeFilePreviewView: View {
         guard case .loaded(var document) = state else { return }
         document.currentText = document.originalText
         state = .loaded(document)
+        saveErrorMessage = nil
+    }
+
+    private func triggerSave() {
+        Task { @MainActor in
+            saveCurrentDocument()
+        }
+    }
+
+    @MainActor
+    private func saveCurrentDocument() {
+        guard canSaveDocument, case .loaded(var document) = state else { return }
+
+        isSaving = true
+        saveErrorMessage = nil
+        defer {
+            isSaving = false
+            syncSaveCommand()
+        }
+
+        do {
+            try document.save(to: selection.fileURL)
+            state = .loaded(document)
+        } catch let error as CodeEditorSaveError {
+            saveErrorMessage = error.errorDescription
+        } catch {
+            saveErrorMessage = error.localizedDescription
+        }
+    }
+
+    @MainActor
+    private func syncSaveCommand() {
+        if canSaveDocument {
+            appCommandState.setSaveDocumentAction({ triggerSave() }, isEnabled: true)
+        } else {
+            appCommandState.setSaveDocumentAction(nil, isEnabled: false)
+        }
     }
 }
 
-enum CodeEditorEditability: Equatable {
+enum CodeEditorEditability: Equatable, Sendable {
     case editable
     case readOnly(String)
 }
 
-struct CodeEditorDocument: Equatable {
-    let originalText: String
+struct CodeEditorDocument: Equatable, Sendable {
+    private(set) var originalText: String
     var currentText: String
     let language: CodeSyntaxLanguage
     let spans: [HighlightSpan]
@@ -303,6 +385,31 @@ struct CodeEditorDocument: Equatable {
         )
     }
 
+    mutating func save(to fileURL: URL) throws {
+        let data: Data
+        do {
+            data = try Data(contentsOf: fileURL)
+        } catch {
+            throw CodeEditorSaveError.readFailed(error.localizedDescription)
+        }
+
+        guard let diskText = String(data: data, encoding: .utf8) else {
+            throw CodeEditorSaveError.unsupportedEncoding
+        }
+
+        guard diskText == originalText else {
+            throw CodeEditorSaveError.changedOnDisk
+        }
+
+        do {
+            try Data(currentText.utf8).write(to: fileURL, options: .atomic)
+        } catch {
+            throw CodeEditorSaveError.writeFailed(error.localizedDescription)
+        }
+
+        originalText = currentText
+    }
+
     private static func editability(for payload: CodePreviewPayload) -> CodeEditorEditability {
         if payload.isTruncated {
             return .readOnly(
@@ -310,6 +417,26 @@ struct CodeEditorDocument: Equatable {
             )
         }
         return .editable
+    }
+}
+
+enum CodeEditorSaveError: LocalizedError, Equatable {
+    case unsupportedEncoding
+    case changedOnDisk
+    case readFailed(String)
+    case writeFailed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .unsupportedEncoding:
+            return "This file is no longer UTF-8 text. Reload it before saving."
+        case .changedOnDisk:
+            return "This file changed on disk. Reload it before saving so you do not overwrite newer changes."
+        case .readFailed(let message):
+            return "Could not read the latest file contents before saving: \(message)"
+        case .writeFailed(let message):
+            return "Could not save this file: \(message)"
+        }
     }
 }
 

@@ -500,6 +500,7 @@ struct ContentView: View {
     @ViewBuilder
     private var terminalDetailContent: some View {
         MainTerminalDetailView(
+            appCommandState: appCommandState,
             selectedWorkspace: selectedWorkspaceForToolbar,
             selectedRepo: selectedRepoForToolbar ?? selectedRepoForInspector,
             activeHostSession: activeHostSession,
@@ -2947,6 +2948,7 @@ private final class ContextMenuActionItem: NSObject {
 // MARK: - Main Terminal (Host-pinned)
 
 struct MainTerminalDetailView: View {
+    @ObservedObject var appCommandState: AppCommandState
     let selectedWorkspace: Workspace?
     let selectedRepo: Repo?
     let activeHostSession: HostTerminalSession?
@@ -3073,6 +3075,7 @@ struct MainTerminalDetailView: View {
             if isTerminalPanelVisible {
                 VSplitView {
                     CodeFilePreviewView(
+                        appCommandState: appCommandState,
                         selection: selectedCodePreview,
                         editorOptions: availableEditors,
                         defaultEditor: defaultEditor,
@@ -3089,6 +3092,7 @@ struct MainTerminalDetailView: View {
                 }
             } else {
                 CodeFilePreviewView(
+                    appCommandState: appCommandState,
                     selection: selectedCodePreview,
                     editorOptions: availableEditors,
                     defaultEditor: defaultEditor,
