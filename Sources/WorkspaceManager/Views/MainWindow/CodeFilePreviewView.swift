@@ -33,6 +33,7 @@ struct CodeFilePreviewView: View {
     let defaultEditor: ExternalEditorDescriptor?
     let onOpenInDefaultEditor: () -> Void
     let onOpenInEditor: (ExternalEditorID) -> Void
+    var onSaved: () -> Void = {}
     let onClose: () -> Void
 
     @State private var state: LoadState = .loading
@@ -269,7 +270,7 @@ struct CodeFilePreviewView: View {
     }
 
     private var canSaveDocument: Bool {
-        isDirty && !isSaving && loadedDocument?.canEdit == true
+        !isSaving && loadedDocument?.canSave == true
     }
 
     private var currentTextBinding: Binding<String> {
@@ -294,29 +295,45 @@ struct CodeFilePreviewView: View {
     }
 
     private func triggerSave() {
-        Task { @MainActor in
-            saveCurrentDocument()
+        Task {
+            await saveCurrentDocument()
         }
     }
 
     @MainActor
-    private func saveCurrentDocument() {
-        guard canSaveDocument, case .loaded(var document) = state else { return }
+    private func saveCurrentDocument() async {
+        guard canSaveDocument, case .loaded(let document) = state else { return }
+        let savedText = document.currentText
 
         isSaving = true
         saveErrorMessage = nil
-        defer {
-            isSaving = false
-            syncSaveCommand()
-        }
+        var didSave = false
 
         do {
-            try document.save(to: selection.fileURL)
-            state = .loaded(document)
+            let snapshot = try await CodeEditorSaveService.save(
+                CodeEditorSaveRequest(
+                    rootURL: selection.rootURL,
+                    relativePath: selection.relativePath,
+                    editedText: savedText,
+                    snapshot: document.fileSnapshot
+                )
+            )
+            if case .loaded(var latestDocument) = state {
+                latestDocument.markSaved(text: savedText, snapshot: snapshot)
+                state = .loaded(latestDocument)
+                didSave = true
+            }
         } catch let error as CodeEditorSaveError {
             saveErrorMessage = error.errorDescription
         } catch {
             saveErrorMessage = error.localizedDescription
+        }
+
+        isSaving = false
+        syncSaveCommand()
+
+        if didSave {
+            onSaved()
         }
     }
 
@@ -341,6 +358,7 @@ struct CodeEditorDocument: Equatable, Sendable {
     let language: CodeSyntaxLanguage
     let spans: [HighlightSpan]
     let editability: CodeEditorEditability
+    private(set) var fileSnapshot: CodeEditorFileSnapshot?
 
     init(payload: CodePreviewPayload) {
         originalText = payload.text
@@ -348,6 +366,7 @@ struct CodeEditorDocument: Equatable, Sendable {
         language = payload.language
         spans = payload.spans
         editability = Self.editability(for: payload)
+        fileSnapshot = payload.fileSnapshot
     }
 
     var canEdit: Bool {
@@ -360,6 +379,10 @@ struct CodeEditorDocument: Equatable, Sendable {
 
     var isDirty: Bool {
         currentText != originalText
+    }
+
+    var canSave: Bool {
+        canEdit && isDirty && fileSnapshot != nil
     }
 
     var readOnlyReason: String? {
@@ -385,58 +408,33 @@ struct CodeEditorDocument: Equatable, Sendable {
         )
     }
 
-    mutating func save(to fileURL: URL) throws {
-        let data: Data
-        do {
-            data = try Data(contentsOf: fileURL)
-        } catch {
-            throw CodeEditorSaveError.readFailed(error.localizedDescription)
-        }
+    mutating func markSaved(text savedText: String? = nil, snapshot: CodeEditorFileSnapshot) {
+        originalText = savedText ?? currentText
+        fileSnapshot = snapshot
+    }
 
-        guard let diskText = String(data: data, encoding: .utf8) else {
-            throw CodeEditorSaveError.unsupportedEncoding
-        }
-
-        guard diskText == originalText else {
-            throw CodeEditorSaveError.changedOnDisk
-        }
-
-        do {
-            try Data(currentText.utf8).write(to: fileURL, options: .atomic)
-        } catch {
-            throw CodeEditorSaveError.writeFailed(error.localizedDescription)
-        }
-
-        originalText = currentText
+    mutating func save(rootURL: URL, relativePath: String) throws {
+        let snapshot = try CodeEditorSaveService.saveSynchronously(
+            CodeEditorSaveRequest(
+                rootURL: rootURL,
+                relativePath: relativePath,
+                editedText: currentText,
+                snapshot: fileSnapshot
+            )
+        )
+        markSaved(snapshot: snapshot)
     }
 
     private static func editability(for payload: CodePreviewPayload) -> CodeEditorEditability {
+        if let readOnlyReason = payload.readOnlyReason {
+            return .readOnly(readOnlyReason)
+        }
         if payload.isTruncated {
             return .readOnly(
                 "This file is too large for in-app editing. The preview is truncated; open externally to edit safely."
             )
         }
         return .editable
-    }
-}
-
-enum CodeEditorSaveError: LocalizedError, Equatable {
-    case unsupportedEncoding
-    case changedOnDisk
-    case readFailed(String)
-    case writeFailed(String)
-
-    var errorDescription: String? {
-        switch self {
-        case .unsupportedEncoding:
-            return "This file is no longer UTF-8 text. Reload it before saving."
-        case .changedOnDisk:
-            return "This file changed on disk. Reload it before saving so you do not overwrite newer changes."
-        case .readFailed(let message):
-            return "Could not read the latest file contents before saving: \(message)"
-        case .writeFailed(let message):
-            return "Could not save this file: \(message)"
-        }
     }
 }
 

@@ -22,6 +22,24 @@ struct CodePreviewPayload: Sendable {
     let language: CodeSyntaxLanguage
     let spans: [HighlightSpan]
     let isTruncated: Bool
+    let fileSnapshot: CodeEditorFileSnapshot?
+    let readOnlyReason: String?
+
+    init(
+        text: String,
+        language: CodeSyntaxLanguage,
+        spans: [HighlightSpan],
+        isTruncated: Bool,
+        fileSnapshot: CodeEditorFileSnapshot? = nil,
+        readOnlyReason: String? = nil
+    ) {
+        self.text = text
+        self.language = language
+        self.spans = spans
+        self.isTruncated = isTruncated
+        self.fileSnapshot = fileSnapshot
+        self.readOnlyReason = readOnlyReason
+    }
 }
 
 enum CodePreviewLoader {
@@ -56,6 +74,14 @@ enum CodePreviewLoader {
                 language: language,
                 maxCharacters: maxHighlightCharacters
             )
+            let snapshot = isTruncated ? nil : try CodeEditorFileSnapshot.make(fileURL: fileURL, data: data)
+            let readOnlyReason: String?
+            if (try? FileManager.default.destinationOfSymbolicLink(atPath: fileURL.path)) != nil {
+                readOnlyReason =
+                    "Symbolic links are read-only in the native editor. Open externally to edit deliberately."
+            } else {
+                readOnlyReason = nil
+            }
             CodePreviewDiagnostics.log(
                 "load complete file=\(fileURL.path) chars=\(text.count) spans=\(spans.count) truncated=\(isTruncated)"
             )
@@ -64,7 +90,9 @@ enum CodePreviewLoader {
                 text: text,
                 language: language,
                 spans: spans,
-                isTruncated: isTruncated
+                isTruncated: isTruncated,
+                fileSnapshot: snapshot,
+                readOnlyReason: readOnlyReason
             )
         }
         .value

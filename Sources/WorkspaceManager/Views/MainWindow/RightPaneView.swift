@@ -86,6 +86,11 @@ final class RightPaneSessionState: ObservableObject {
     @Published var timelineLastRefresh: Date?
     @Published var expandedDirectoryPaths: Set<String> = []
     @Published var hasLoadedOnce = false
+    @Published var refreshRequestID = UUID()
+
+    func requestRefresh() {
+        refreshRequestID = UUID()
+    }
 }
 
 @MainActor
@@ -330,6 +335,10 @@ struct RightPaneView: View {
             if supportsFilesystemInspection, !state.hasLoadedOnce || state.fileTree == nil {
                 await refresh()
             }
+        }
+        .task(id: state.refreshRequestID) {
+            guard state.hasLoadedOnce else { return }
+            await refresh()
         }
         .task(id: timelineRefreshKey) {
             await refreshTimelineIfNeeded()
