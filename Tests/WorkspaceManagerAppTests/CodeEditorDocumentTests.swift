@@ -54,6 +54,61 @@ struct CodeEditorDocumentTests {
         #expect(document.currentText == "after\n")
     }
 
+    @Test("Saving writes UTF-8 text and clears dirty state")
+    func savingWritesTextAndClearsDirtyState() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let fileURL = directory.appendingPathComponent("notes.md")
+        try Data("before\n".utf8).write(to: fileURL)
+
+        var document = CodeEditorDocument(
+            payload: CodePreviewPayload(
+                text: "before\n",
+                language: .markdown,
+                spans: [],
+                isTruncated: false
+            )
+        )
+        document.currentText = "after\n"
+
+        try document.save(to: fileURL)
+
+        #expect(String(data: try Data(contentsOf: fileURL), encoding: .utf8) == "after\n")
+        #expect(!document.isDirty)
+        #expect(document.originalText == "after\n")
+    }
+
+    @Test("Saving refuses to overwrite files changed on disk")
+    func savingRefusesStaleDiskContents() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let fileURL = directory.appendingPathComponent("notes.md")
+        try Data("before\n".utf8).write(to: fileURL)
+
+        var document = CodeEditorDocument(
+            payload: CodePreviewPayload(
+                text: "before\n",
+                language: .markdown,
+                spans: [],
+                isTruncated: false
+            )
+        )
+        document.currentText = "after\n"
+        try Data("external\n".utf8).write(to: fileURL)
+
+        do {
+            try document.save(to: fileURL)
+            Issue.record("Expected changed-on-disk save error")
+        } catch let error as CodeEditorSaveError {
+            #expect(error == .changedOnDisk)
+        }
+
+        #expect(String(data: try Data(contentsOf: fileURL), encoding: .utf8) == "external\n")
+        #expect(document.isDirty)
+    }
+
     @Test("Truncated files are read-only")
     func truncatedFilesAreReadOnly() {
         let payload = CodePreviewPayload(

@@ -229,6 +229,14 @@ struct WorkspaceManagerApp: App {
                 .disabled(!appCommandState.mainWindowAvailability.canOpenCommandRunner)
             }
 
+            CommandGroup(replacing: .saveItem) {
+                Button("Save") {
+                    appCommandState.performSaveDocument()
+                }
+                .keyboardShortcut("s", modifiers: .command)
+                .disabled(!appCommandState.canSaveDocument)
+            }
+
             SidebarCommands()
 
             CommandMenu("Selection") {
@@ -803,9 +811,11 @@ enum MainWindowCommand {
 @MainActor
 final class AppCommandState: ObservableObject {
     @Published private(set) var canCreateWorkspace = false
+    @Published private(set) var canSaveDocument = false
     @Published private(set) var mainWindowAvailability = MainWindowCommandAvailability.empty
 
     private var newWorkspaceAction: (@MainActor () -> Void)?
+    private var saveDocumentAction: (@MainActor () -> Void)?
     private var mainWindowActions = MainWindowFocusedActions.empty
 
     func setNewWorkspaceAction(_ action: (@MainActor () -> Void)?) {
@@ -813,6 +823,17 @@ final class AppCommandState: ObservableObject {
         let nextAvailability = action != nil
         guard canCreateWorkspace != nextAvailability else { return }
         canCreateWorkspace = nextAvailability
+    }
+
+    func setSaveDocumentAction(_ action: (@MainActor () -> Void)?, isEnabled: Bool) {
+        saveDocumentAction = action
+        let nextAvailability = action != nil && isEnabled
+        guard canSaveDocument != nextAvailability else { return }
+        canSaveDocument = nextAvailability
+    }
+
+    func clearSaveDocumentAction() {
+        setSaveDocumentAction(nil, isEnabled: false)
     }
 
     func setMainWindowActions(
@@ -830,6 +851,11 @@ final class AppCommandState: ObservableObject {
 
     func performNewWorkspace() {
         newWorkspaceAction?()
+    }
+
+    func performSaveDocument() {
+        guard canSaveDocument else { return }
+        saveDocumentAction?()
     }
 
     func perform(_ command: MainWindowCommand) {

@@ -28,6 +28,35 @@ struct AppCommandStateTests {
         #expect(emissions == 2)
     }
 
+    @Test("save document action only runs when enabled")
+    func saveDocumentActionOnlyRunsWhenEnabled() {
+        let state = AppCommandState()
+        var saveCount = 0
+        var emissions = 0
+        let cancellable = state.objectWillChange.sink { _ in
+            emissions += 1
+        }
+        defer { cancellable.cancel() }
+
+        state.setSaveDocumentAction({ saveCount += 1 }, isEnabled: false)
+        #expect(!state.canSaveDocument)
+        #expect(emissions == 0)
+
+        state.performSaveDocument()
+        #expect(saveCount == 0)
+
+        state.setSaveDocumentAction({ saveCount += 1 }, isEnabled: true)
+        #expect(state.canSaveDocument)
+        #expect(emissions == 1)
+
+        state.performSaveDocument()
+        #expect(saveCount == 1)
+
+        state.clearSaveDocumentAction()
+        #expect(!state.canSaveDocument)
+        #expect(emissions == 2)
+    }
+
     @Test("main window actions only publish when availability changes")
     func mainWindowActionsOnlyPublishWhenAvailabilityChanges() {
         let state = AppCommandState()
