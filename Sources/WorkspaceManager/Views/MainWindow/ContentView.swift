@@ -532,6 +532,7 @@ struct ContentView: View {
             defaultEditor: defaultEditorDescriptor,
             onOpenInDefaultEditor: openInDefaultEditor,
             onOpenInEditor: openInSelectedEditor,
+            onCodePreviewSaved: requestRightPaneRefreshAfterCodeSave,
             rightPaneStateStore: rightPaneStateStore,
             isRightPaneVisible: $viewState.isRightPaneVisible
         )
@@ -2553,6 +2554,15 @@ struct ContentView: View {
     }
 
     @MainActor
+    private func requestRightPaneRefreshAfterCodeSave() {
+        if let workspace = currentSelectedWorkspace {
+            rightPaneStateStore.state(for: workspace).requestRefresh()
+        } else if let repo = currentSelectedRepoForLanding ?? selectedRepoForInspector {
+            rightPaneStateStore.state(for: repo).requestRefresh()
+        }
+    }
+
+    @MainActor
     private func refreshSessionSwitcherSnapshotIfPresented() {
         guard viewState.isShowingSessionSwitcher else { return }
         presentedSessionSwitcherSnapshot = makeSessionSwitcherSnapshot()
@@ -2972,6 +2982,7 @@ struct MainTerminalDetailView: View {
     let defaultEditor: ExternalEditorDescriptor?
     let onOpenInDefaultEditor: () -> Void
     let onOpenInEditor: (ExternalEditorID) -> Void
+    let onCodePreviewSaved: () -> Void
     let rightPaneStateStore: RightPaneStateStore
     @Binding var isRightPaneVisible: Bool
 
@@ -3077,7 +3088,8 @@ struct MainTerminalDetailView: View {
                         editorOptions: availableEditors,
                         defaultEditor: defaultEditor,
                         onOpenInDefaultEditor: onOpenInDefaultEditor,
-                        onOpenInEditor: onOpenInEditor
+                        onOpenInEditor: onOpenInEditor,
+                        onSaved: onCodePreviewSaved
                     ) {
                         self.selectedCodePreview = nil
                         self.isTerminalPanelVisible = true
@@ -3093,7 +3105,8 @@ struct MainTerminalDetailView: View {
                     editorOptions: availableEditors,
                     defaultEditor: defaultEditor,
                     onOpenInDefaultEditor: onOpenInDefaultEditor,
-                    onOpenInEditor: onOpenInEditor
+                    onOpenInEditor: onOpenInEditor,
+                    onSaved: onCodePreviewSaved
                 ) {
                     self.selectedCodePreview = nil
                     self.isTerminalPanelVisible = true

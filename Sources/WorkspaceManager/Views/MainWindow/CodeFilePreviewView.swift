@@ -31,9 +31,13 @@ struct CodeFilePreviewView: View {
     let defaultEditor: ExternalEditorDescriptor?
     let onOpenInDefaultEditor: () -> Void
     let onOpenInEditor: (ExternalEditorID) -> Void
+    let onSaved: () -> Void
     let onClose: () -> Void
 
     @State private var state: LoadState = .loading
+    @State private var isSaving = false
+    @State private var saveStatusMessage: String?
+    @State private var saveErrorMessage: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -80,6 +84,13 @@ struct CodeFilePreviewView: View {
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                     }
+
+                    if let saveStatusMessage {
+                        Text(saveStatusMessage)
+                            .font(.caption2)
+                            .foregroundStyle(.green)
+                            .lineLimit(1)
+                    }
                 }
 
                 if isEditorLoaded {
@@ -94,15 +105,18 @@ struct CodeFilePreviewView: View {
                     .accessibilityLabel("Discard Edits")
 
                     Button {
-                        // Phase 2 wires the safe disk-write pipeline. Keep the
-                        // control visible but inert so this slice cannot write
-                        // files before the save-safety contract is implemented.
+                        saveDocument()
                     } label: {
-                        Image(systemName: "square.and.arrow.down")
+                        if isSaving {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Image(systemName: "square.and.arrow.down")
+                        }
                     }
                     .buttonStyle(.borderless)
-                    .disabled(true)
-                    .help("Save is disabled until the safe write pipeline is implemented")
+                    .disabled(!canSave)
+                    .help(canSave ? "Save file" : "Save is available for dirty, safely loaded text files")
                     .accessibilityLabel("Save File")
                 }
 
@@ -145,30 +159,29 @@ struct CodeFilePreviewView: View {
                     )
 
                 case .loaded(let document):
-                    if document.canEdit {
-                        EditableCodeTextView(text: currentTextBinding)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    } else {
-                        VStack(spacing: 0) {
-                            if let reason = document.readOnlyReason {
-                                HStack(spacing: 8) {
-                                    Image(systemName: "lock")
-                                        .foregroundStyle(.secondary)
-                                    Text(reason)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                        .lineLimit(2)
-                                    Spacer()
-                                }
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 6)
-                                .background(Color(nsColor: .controlBackgroundColor))
-
-                                Divider()
+                    VStack(spacing: 0) {
+                        if let saveErrorMessage {
+                            HStack(spacing: 8) {
+                                Image(systemName: "exclamationmark.triangle")
+                                    .foregroundStyle(.orange)
+                                Text(saveErrorMessage)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(2)
+                                Spacer()
                             }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(Color(nsColor: .controlBackgroundColor))
 
-                            ReadOnlyCodeTextView(attributedText: document.attributedText)
+                            Divider()
+                        }
+
+                        if document.canEdit {
+                            EditableCodeTextView(text: currentTextBinding)
                                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        } else {
+                            readOnlyDocumentView(document)
                         }
                     }
                 }
@@ -181,9 +194,36 @@ struct CodeFilePreviewView: View {
         }
     }
 
+    @ViewBuilder
+    private func readOnlyDocumentView(_ document: CodeEditorDocument) -> some View {
+        VStack(spacing: 0) {
+            if let reason = document.readOnlyReason {
+                HStack(spacing: 8) {
+                    Image(systemName: "lock")
+                        .foregroundStyle(.secondary)
+                    Text(reason)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                    Spacer()
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(Color(nsColor: .controlBackgroundColor))
+
+                Divider()
+            }
+
+            ReadOnlyCodeTextView(attributedText: document.attributedText)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
     @MainActor
     private func loadPreview() async {
         state = .loading
+        saveStatusMessage = nil
+        saveErrorMessage = nil
         CodePreviewDiagnostics.log("selected file=\(selection.fileURL.path)")
 
         do {
@@ -228,6 +268,11 @@ struct CodeFilePreviewView: View {
         loadedDocument?.isDirty ?? false
     }
 
+    private var canSave: Bool {
+        guard let document = loadedDocument else { return false }
+        return document.canSave && !isSaving
+    }
+
     private var currentTextBinding: Binding<String> {
         Binding(
             get: {
@@ -245,6 +290,42 @@ struct CodeFilePreviewView: View {
         guard case .loaded(var document) = state else { return }
         document.currentText = document.originalText
         state = .loaded(document)
+        saveErrorMessage = nil
+        saveStatusMessage = nil
+    }
+
+    private func saveDocument() {
+        guard case .loaded(let document) = state, document.canSave else { return }
+
+        isSaving = true
+        saveErrorMessage = nil
+        saveStatusMessage = nil
+
+        Task {
+            do {
+                let snapshot = try await CodeEditorSaveService.save(
+                    CodeEditorSaveRequest(
+                        rootURL: selection.rootURL,
+                        relativePath: selection.relativePath,
+                        editedText: document.currentText,
+                        snapshot: document.fileSnapshot
+                    )
+                )
+                await MainActor.run {
+                    guard case .loaded(var latestDocument) = state else { return }
+                    latestDocument.markSaved(snapshot: snapshot)
+                    state = .loaded(latestDocument)
+                    isSaving = false
+                    saveStatusMessage = "Saved"
+                    onSaved()
+                }
+            } catch {
+                await MainActor.run {
+                    isSaving = false
+                    saveErrorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                }
+            }
+        }
     }
 }
 
@@ -254,11 +335,12 @@ enum CodeEditorEditability: Equatable {
 }
 
 struct CodeEditorDocument: Equatable {
-    let originalText: String
+    var originalText: String
     var currentText: String
     let language: CodeSyntaxLanguage
     let spans: [HighlightSpan]
     let editability: CodeEditorEditability
+    var fileSnapshot: CodeEditorFileSnapshot?
 
     init(payload: CodePreviewPayload) {
         originalText = payload.text
@@ -266,6 +348,7 @@ struct CodeEditorDocument: Equatable {
         language = payload.language
         spans = payload.spans
         editability = Self.editability(for: payload)
+        fileSnapshot = payload.fileSnapshot
     }
 
     var canEdit: Bool {
@@ -278,6 +361,10 @@ struct CodeEditorDocument: Equatable {
 
     var isDirty: Bool {
         currentText != originalText
+    }
+
+    var canSave: Bool {
+        canEdit && isDirty && fileSnapshot != nil
     }
 
     var readOnlyReason: String? {
@@ -303,7 +390,15 @@ struct CodeEditorDocument: Equatable {
         )
     }
 
+    mutating func markSaved(snapshot: CodeEditorFileSnapshot) {
+        originalText = currentText
+        fileSnapshot = snapshot
+    }
+
     private static func editability(for payload: CodePreviewPayload) -> CodeEditorEditability {
+        if let readOnlyReason = payload.readOnlyReason {
+            return .readOnly(readOnlyReason)
+        }
         if payload.isTruncated {
             return .readOnly(
                 "This file is too large for in-app editing. The preview is truncated; open externally to edit safely."
