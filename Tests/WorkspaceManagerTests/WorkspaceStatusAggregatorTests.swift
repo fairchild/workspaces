@@ -109,6 +109,142 @@ struct WorkspaceStatusAggregatorTests {
         #expect(aggregator.attentionWorkspaces == [wsID])
     }
 
+    @Test("Acknowledged attention target is removed from the global attention list")
+    func acknowledgedTargetDropsFromAttentionList() {
+        let aggregator = WorkspaceStatusAggregator()
+        let repoID = UUID()
+        let wsID = UUID()
+        let hostID = UUID()
+        let eventAt = Date()
+        let workspace = WorkspaceStatusAggregator.WorkspaceInput(
+            workspaceID: wsID,
+            repoID: repoID,
+            lastAccessedAt: eventAt,
+            status: status(
+                host: hostID,
+                run: .awaitingInput(reason: .permissionPrompt),
+                at: eventAt
+            )
+        )
+
+        aggregator.update(workspaces: [workspace], repos: [.init(repoID: repoID, status: nil)])
+        #expect(aggregator.attentionItems.map(\.target) == [.workspace(wsID)])
+
+        aggregator.acknowledgeAttention(for: .workspace(wsID))
+        aggregator.update(workspaces: [workspace], repos: [.init(repoID: repoID, status: nil)])
+
+        #expect(aggregator.attentionItems.isEmpty)
+        #expect(aggregator.attentionWorkspaces.isEmpty)
+        #expect(aggregator.workspaceStatuses[wsID]?.run == .awaitingInput(reason: .permissionPrompt))
+    }
+
+    @Test("Newer attention event reappears after acknowledgement")
+    func newerEventReappearsAfterAcknowledgement() {
+        let aggregator = WorkspaceStatusAggregator()
+        let repoID = UUID()
+        let wsID = UUID()
+        let hostID = UUID()
+        let eventAt = Date()
+        let acknowledgedWorkspace = WorkspaceStatusAggregator.WorkspaceInput(
+            workspaceID: wsID,
+            repoID: repoID,
+            lastAccessedAt: eventAt,
+            status: status(
+                host: hostID,
+                run: .awaitingInput(reason: .permissionPrompt),
+                at: eventAt
+            )
+        )
+
+        aggregator.update(
+            workspaces: [acknowledgedWorkspace],
+            repos: [.init(repoID: repoID, status: nil)]
+        )
+        aggregator.acknowledgeAttention(for: .workspace(wsID))
+        aggregator.update(
+            workspaces: [acknowledgedWorkspace],
+            repos: [.init(repoID: repoID, status: nil)]
+        )
+        #expect(aggregator.attentionItems.isEmpty)
+
+        let newerWorkspace = WorkspaceStatusAggregator.WorkspaceInput(
+            workspaceID: wsID,
+            repoID: repoID,
+            lastAccessedAt: eventAt,
+            status: status(
+                host: hostID,
+                run: .awaitingInput(reason: .permissionPrompt),
+                at: eventAt.addingTimeInterval(1)
+            )
+        )
+        aggregator.update(workspaces: [newerWorkspace], repos: [.init(repoID: repoID, status: nil)])
+
+        #expect(aggregator.attentionItems.map(\.target) == [.workspace(wsID)])
+    }
+
+    @Test("Masked acknowledged session stays hidden until it produces a newer event")
+    func maskedAcknowledgementSurvivesFreshestStatusChanges() {
+        let aggregator = WorkspaceStatusAggregator()
+        let repoID = UUID()
+        let wsID = UUID()
+        let acknowledgedHostID = UUID()
+        let maskingHostID = UUID()
+        let eventAt = Date()
+        let acknowledgedStatus = status(
+            host: acknowledgedHostID,
+            run: .awaitingInput(reason: .permissionPrompt),
+            at: eventAt
+        )
+
+        aggregator.acknowledgeAttention(for: acknowledgedStatus)
+        aggregator.update(
+            workspaces: [
+                .init(
+                    workspaceID: wsID,
+                    repoID: repoID,
+                    lastAccessedAt: eventAt,
+                    status: status(
+                        host: maskingHostID,
+                        run: .thinking,
+                        at: eventAt.addingTimeInterval(1)
+                    )
+                )
+            ],
+            repos: [.init(repoID: repoID, status: nil)]
+        )
+        aggregator.update(
+            workspaces: [
+                .init(
+                    workspaceID: wsID,
+                    repoID: repoID,
+                    lastAccessedAt: eventAt,
+                    status: acknowledgedStatus
+                )
+            ],
+            repos: [.init(repoID: repoID, status: nil)]
+        )
+
+        #expect(aggregator.attentionItems.isEmpty)
+
+        aggregator.update(
+            workspaces: [
+                .init(
+                    workspaceID: wsID,
+                    repoID: repoID,
+                    lastAccessedAt: eventAt,
+                    status: status(
+                        host: acknowledgedHostID,
+                        run: .awaitingInput(reason: .permissionPrompt),
+                        at: eventAt.addingTimeInterval(2)
+                    )
+                )
+            ],
+            repos: [.init(repoID: repoID, status: nil)]
+        )
+
+        #expect(aggregator.attentionItems.map(\.target) == [.workspace(wsID)])
+    }
+
     @Test("demandsAttention only fires for awaiting/errored")
     func demandsAttentionMatrix() {
         #expect(WorkspaceStatusAggregator.demandsAttention(.awaitingInput(reason: .permissionPrompt)))
