@@ -80,6 +80,10 @@ _Avoid_: Ref, head, version
 The project-wide rollup of **Workspaces** or **Repositories** that currently demand the user — agents that are awaiting input or have errored. Drives the "N need you" toolbar indicator.
 _Avoid_: Notifications, alerts, warnings, tasks
 
+**Attention Summary**:
+The value-level presentation of **Attention** for a **Surface**: resolved **Repository** and **Workspace** names, reason text, badge, icon name, and error flag. Derived from **Attention** plus lightweight **Repository**/**Workspace** snapshots; platform views render it but do not decide which targets demand the user.
+_Avoid_: Notification row, alert item, task card
+
 ## Relationships
 
 - A **Repository** owns zero or more **Workspaces**.
@@ -95,6 +99,7 @@ _Avoid_: Notifications, alerts, warnings, tasks
 - **GitHub Activity** is external webhook activity and does not write to the **Workspace Journal**.
 - A **Terminal Session** observes its own **Terminal Command Status** independently of any **Agent** running inside it.
 - **Attention** rolls up across all **Workspaces** and **Repositories**; the rollup at any moment determines the toolbar indicator.
+- An **Attention Summary** is derived from **Attention** plus **Repository**/**Workspace** snapshots; it is portable across Mac and companion surfaces.
 
 ## Example Dialogue
 
@@ -108,3 +113,4 @@ _Avoid_: Notifications, alerts, warnings, tasks
 - "Event" without a scope was ambiguous between **Workspace Events** (agent state changes inside a workspace) and webhook events from external systems. Resolved: use **Workspace Event** for the in-app domain type; reserve "webhook event" (lowercased, qualified) for the external GitHub stream.
 - "Journal" vs "log" vs "history" — domain reads use **Workspace Journal**; "log" stays a runtime/diagnostic term; "history" is informal narration and shouldn't appear in types.
 - "Status" is overloaded — there is workspace **Agent** status, **Terminal Command Status**, and git status (file changes). Resolved: qualify every use; never ship a public `status:` property without a scope-revealing prefix.
+- "Attention" vs "Attention Summary" — **Attention** is the domain rollup of targets demanding the user; **Attention Summary** is the display-ready value projection of those targets for Mac or companion surfaces.
