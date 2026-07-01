@@ -122,6 +122,81 @@ struct SurfaceStoreTests {
         #expect(store.displayTitle(for: TileID()) == nil)
     }
 
+    // MARK: - Session-keyed facade (Phase 5: keeps the focus coordinator / OSC / tab strip session-keyed)
+
+    @Test("Session-keyed terminal(for:) resolves a tile's view, nil for an unknown session")
+    func sessionKeyedTerminalResolvesView() {
+        let store = SurfaceStore()
+        let tile = TileID()
+        let session = makeSession()
+        let surface = store.terminalSurface(for: tile, session: session)
+
+        #expect(store.terminal(for: session.id) === surface.surfaceView)
+        #expect(store.terminal(for: UUID()) == nil)
+    }
+
+    @Test("Session-keyed displayTitle resolves by session id with a directory fallback")
+    func sessionKeyedDisplayTitle() {
+        let store = SurfaceStore()
+        let session = makeSession(path: "/Users/test/myrepo")
+        store.terminalSurface(for: TileID(), session: session)
+
+        #expect(store.displayTitle(for: session) == "myrepo")
+        // A session with no mounted surface falls back to its own directory name.
+        #expect(store.displayTitle(for: makeSession(path: "/Users/test/other")) == "other")
+    }
+
+    @Test("Terminal create / evict fire the session-keyed mirror callbacks")
+    func sessionKeyedCreateAndInvalidateCallbacks() {
+        let store = SurfaceStore()
+        var created: [UUID] = []
+        var invalidated: [UUID] = []
+        store.onTerminalSurfaceCreated = { created.append($0) }
+        store.onTerminalSurfaceInvalidated = { invalidated.append($0) }
+
+        let tile = TileID()
+        let session = makeSession()
+        store.terminalSurface(for: tile, session: session)
+        #expect(created == [session.id])
+        #expect(invalidated.isEmpty)
+
+        store.invalidate(tileID: tile)
+        #expect(invalidated == [session.id])
+    }
+
+    @Test("sync fires the session-keyed invalidation mirror for every evicted terminal")
+    func syncFiresSessionKeyedInvalidationForEvictedTiles() {
+        let store = SurfaceStore()
+        var invalidated: Set<UUID> = []
+        store.onTerminalSurfaceInvalidated = { invalidated.insert($0) }
+
+        let keep = TileID()
+        let drop = TileID()
+        let keepSession = makeSession(path: "/Users/test/keep")
+        let dropSession = makeSession(path: "/Users/test/drop")
+        store.terminalSurface(for: keep, session: keepSession)
+        store.terminalSurface(for: drop, session: dropSession)
+
+        store.sync(activeLeafIDs: [keep])
+
+        #expect(invalidated == [dropSession.id])
+        #expect(store.terminal(for: keepSession.id) != nil)
+        #expect(store.terminal(for: dropSession.id) == nil)
+    }
+
+    @Test("Terminal title changes fire onTerminalTitleChanged keyed by session")
+    func titleChangeFiresSessionKeyedHook() {
+        let store = SurfaceStore()
+        var titled: [UUID] = []
+        store.onTerminalTitleChanged = { titled.append($0) }
+
+        let session = makeSession()
+        let surface = store.terminalSurface(for: TileID(), session: session)
+        surface.surfaceView.updateTerminalTitle("Build")
+
+        #expect(titled == [session.id])
+    }
+
     private func makeSession(path: String = "/Users/test/repo") -> HostTerminalSession {
         HostTerminalSession(key: .repoPath(path), directory: URL(fileURLWithPath: path))
     }

@@ -5,7 +5,7 @@
 //  Pins the full teardown-parity contract for a closing tile/session: every close path must, in
 //  lockstep, free the surface AND fire the agent-domain + automation-handle teardown bundle
 //  (`agentSessionRegistry.deregister`, `lastCommandStatusRegistry.clear`,
-//  `automationHandleRegistry.remove`, and the `automationTileIDBySessionID` binding). This is the
+//  `automationHandleRegistry.remove`, and the unified `tileIDBySessionID` binding). This is the
 //  regression net for Phase 5's flip to `SurfaceStore.sync` as the single eviction authority: the
 //  surface-eviction side and the registry side cannot diverge (leaked surface ↔ ghost registry).
 //
@@ -204,5 +204,54 @@ struct SurfaceStoreLifecycleTests {
         // The registry holds exactly the survivors — no ghost, none missing.
         #expect(harness.agentRegistry.statuses.keys.allSatisfy { survivors.contains($0) })
         #expect(survivors.allSatisfy { harness.agentRegistry.statuses[$0] != nil })
+    }
+
+    // MARK: - SurfaceStore as the eviction authority (Phase 5 render-path flip)
+
+    @Test("sync evicts a closed single-pane tab's surface via the unified tile identity")
+    func syncEvictsClosedSinglePaneSurface() throws {
+        let harness = makeHarness()
+        let first = harness.store.activateSession(
+            key: .hostPath("/Users/test/a"),
+            directory: URL(fileURLWithPath: "/Users/test/a")
+        ).session
+        let second = try #require(harness.store.createTab())
+
+        // Mount both tabs' surfaces the way the renderer does — by the unified render tile id.
+        harness.store.terminalSurfaceView(for: first)
+        harness.store.terminalSurfaceView(for: second)
+        let firstTile = harness.store.renderTileID(forSession: first)
+        let secondTile = harness.store.renderTileID(forSession: second)
+        #expect(harness.store.surfaceStore.retainedTileIDs == [firstTile, secondTile])
+
+        // Closing the second tab leaves only the first tab's surface retained — sync, not a scattered
+        // invalidate, freed it.
+        #expect(harness.store.handleProcessExit(for: second.id))
+
+        #expect(harness.store.surfaceStore.retainedTileIDs == [firstTile])
+        #expect(harness.store.surfaceStore.terminal(for: first.id) != nil)
+        #expect(harness.store.surfaceStore.terminal(for: second.id) == nil)
+    }
+
+    @Test("A split pane's surface is evicted by sync when the pane closes, primary surface intact")
+    func syncEvictsClosedSplitSurfaceKeepsPrimary() throws {
+        let harness = makeHarness()
+        let primary = harness.store.activateSession(
+            key: .defaultHome,
+            directory: URL(fileURLWithPath: "/Users/test/code")
+        ).session
+        let split = try #require(harness.store.splitFocusedTile(inTabContaining: primary.id))
+
+        let primaryTile = harness.store.renderTileID(forSession: primary)
+        let splitTile = harness.store.renderTileID(forSession: split)
+        harness.store.surfaceStore.terminalSurface(for: primaryTile, session: primary)
+        harness.store.surfaceStore.terminalSurface(for: splitTile, session: split)
+        #expect(harness.store.surfaceStore.retainedTileIDs == [primaryTile, splitTile])
+
+        #expect(harness.store.handleProcessExit(for: split.id))
+
+        #expect(harness.store.surfaceStore.retainedTileIDs == [primaryTile])
+        #expect(harness.store.surfaceStore.terminal(for: primary.id) != nil)
+        #expect(harness.store.surfaceStore.terminal(for: split.id) == nil)
     }
 }

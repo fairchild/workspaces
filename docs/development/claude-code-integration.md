@@ -358,8 +358,8 @@ window attaches its `HostTerminalStateStore` to the app-scoped
 `AgentSessionRegistry`. The store mirrors both primary tabs and split sessions
 into the registry and wires `AgentOSCRouter` with a surface-to-session resolver.
 
-`HostTerminalSurfaceStore` injects the socket path and host session ID into every
-directory-backed persistent Ghostty surface it creates.
+`SurfaceStore` injects the socket path and host session ID into every directory-backed
+persistent Ghostty surface it creates.
 
 ## Operational Notes
 

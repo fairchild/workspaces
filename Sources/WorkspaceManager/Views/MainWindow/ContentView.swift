@@ -509,6 +509,7 @@ struct ContentView: View {
             activeHostTerminalSessionID: hostTerminalState.activeSessionID,
             activeTabTree: hostTerminalState.tileTree(forPrimarySessionID: hostTerminalState.activeSessionID),
             resolveTileSession: { hostTerminalState.session(forTile: $0) },
+            resolveTileID: { hostTerminalState.renderTileID(forSession: $0) },
             hostSurfaceStore: hostTerminalState.surfaceStore,
             tabTitleOverrides: hostTerminalState.tabTitleOverridesBySessionID,
             agentStatuses: Array(agentSessionRegistry.statuses.values),
@@ -2902,7 +2903,7 @@ struct ContentView: View {
                 key: .hostPath(directory.path),
                 directory: directory
             )
-            let terminal = hostTerminalState.surfaceStore.view(for: session)
+            let terminal = hostTerminalState.terminalSurfaceView(for: session)
             if terminal.surface != nil {
                 initializedSurfaceCount += 1
             }
@@ -2982,7 +2983,8 @@ struct MainTerminalDetailView: View {
     let activeHostTerminalSessionID: UUID?
     let activeTabTree: TileTreeState?
     let resolveTileSession: (TileID) -> HostTerminalSession?
-    let hostSurfaceStore: HostTerminalSurfaceStore
+    let resolveTileID: (HostTerminalSession) -> TileID
+    let hostSurfaceStore: SurfaceStore
     let tabTitleOverrides: [UUID: String]
     let agentStatuses: [AgentSessionStatus]
     let terminalContextMenuProvider: (HostTerminalSession) -> NSMenu?
@@ -3139,6 +3141,7 @@ struct MainTerminalDetailView: View {
             activeSessionID: activeHostTerminalSessionID,
             tree: activeTabTree,
             resolveSession: resolveTileSession,
+            resolveTileID: resolveTileID,
             surfaceStore: hostSurfaceStore,
             tabTitleOverrides: tabTitleOverrides,
             onSetSplitRatio: onSetSplitRatio,

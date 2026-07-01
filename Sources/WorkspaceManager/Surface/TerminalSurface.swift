@@ -6,8 +6,7 @@ import WorkspaceManagerCore
 /// Owns the view's lifecycle (create, focus, close, teardown) and holds the `HostTerminalSession`
 /// binding that ties this layout tile to its agent-domain identity. The agent registry, OSC routing,
 /// command status, and local-state coupling deliberately stay *outside* this type — they remain
-/// orchestrated by `HostTerminalStateStore` until Phase 5 moves eviction authority into the store —
-/// so the seam carries only what a generic surface needs.
+/// orchestrated by `HostTerminalStateStore` so the seam carries only what a generic surface needs.
 @MainActor
 final class TerminalSurface: Surface {
     let kind: SurfaceKind = .terminal
@@ -81,8 +80,10 @@ final class TerminalSurface: Surface {
     }
 
     func tearDown() {
-        // Detach the view; the libghostty C handle frees via ARC/`deinit`, matching the legacy
-        // `HostTerminalSurfaceStore.invalidate` eviction path (no explicit free exists today).
+        // Detach the view and drop the title hook; the libghostty C handle frees via ARC/`deinit`
+        // (no explicit free exists today). The title hook holds a strong `self`-capture into the
+        // store's callback, so clearing it lets the surface deallocate promptly under a `sync` storm.
+        surfaceView.onTerminalTitleChanged = nil
         surfaceView.removeFromSuperview()
     }
 }
