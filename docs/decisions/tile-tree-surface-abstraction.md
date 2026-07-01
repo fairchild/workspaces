@@ -76,8 +76,8 @@ close confirmation) distinct from `tearDown()` (store eviction). The decided evi
 model makes `SurfaceStore.sync` the single eviction authority — retaining only the tiles
 in the live leaf set, each conformer freeing per its policy (a terminal frees its
 libghostty handle on `deinit`; the web release policy, immediate vs deferred, is a
-Phase 6 decision). Adopting `SurfaceStore` and that authority is the remaining Phase 5
-work (see *Shipped vs remaining*).
+Phase 6 decision). Phase 5 adopts `SurfaceStore` and that authority for the terminal
+render path; web adoption remains Phase 6 (see *Shipped vs remaining*).
 
 ## Invariants
 
@@ -99,10 +99,8 @@ work (see *Shipped vs remaining*).
 - The three `*ByPrimaryID` maps and their two-pane special-case logic are gone; the
   reducer is the source of truth and the store is a UI projection.
 - A second `Surface` kind exists today (`WebSurface` conforms), so the seam is real
-  rather than single-implementation — but the render path has not yet adopted
-  `SurfaceStore` (it still resolves surfaces from the legacy session-keyed
-  `HostTerminalSurfaceStore`), so the seam is not yet exercised in production. That
-  adoption is Phases 5–6.
+  rather than single-implementation. The terminal render path now adopts `SurfaceStore`
+  as the live owner; routing the web main-content path through the seam remains Phase 6.
 - Directional focus is exact for depth-1 (reproducing `splitFocusTarget`); deep-mixed
   traversal (depth ≥ 2) ships as a tree-walk fallback and is explicitly *not* claimed
   zero-regression, since no baseline exists.
@@ -114,15 +112,13 @@ work (see *Shipped vs remaining*).
 This record fixes the decided architecture; the implementation is partway there, and the
 distinction matters so this ADR does not itself drift.
 
-- **Shipped (Phases 0–4):** the Core tile-tree types + pure `TileTreeReducer` + invariants
+- **Shipped (Phases 0–5):** the Core tile-tree types + pure `TileTreeReducer` + invariants
   (#625), the `Surface` / `SurfaceStore` / `TerminalSurface` / `WebSurface` seam *types*
   (#633), `TileTreeState` as the layout source of truth (#645), and the recursive
-  `TileTreeView` with N-way tiling (#658). The renderer arranges surfaces but still
-  resolves them from the legacy session-keyed `HostTerminalSurfaceStore`.
-- **Remaining:** **P5** — adopt `SurfaceStore` in the render path and make
-  `sync(activeLeafIDs:)` the single eviction authority (replacing the scattered
-  session-keyed `invalidate` calls), resolving focus/OSC via `TileID`; **P6** — route the
-  web main-content path through the seam; **P7** — finalize renames
+  `TileTreeView` with N-way tiling (#658). Phase 5 adopts `SurfaceStore` in the render
+  path and makes `sync(activeLeafIDs:)` the single eviction authority, replacing the
+  scattered session-keyed `invalidate` calls.
+- **Remaining:** **P6** — route the web main-content path through the seam; **P7** — finalize renames
   (`HostTerminalStateStore` → `TileTreeStore`). Tracked in #627.
 
 ## Deferred (explicitly out of scope)

@@ -5,7 +5,7 @@
 //  Pins the full teardown-parity contract for a closing tile/session: every close path must, in
 //  lockstep, free the surface AND fire the agent-domain + automation-handle teardown bundle
 //  (`agentSessionRegistry.deregister`, `lastCommandStatusRegistry.clear`,
-//  `automationHandleRegistry.remove`, and the `automationTileIDBySessionID` binding). This is the
+//  `automationHandleRegistry.remove`, and the unified `tileIDBySessionID` binding). This is the
 //  regression net for Phase 5's flip to `SurfaceStore.sync` as the single eviction authority: the
 //  surface-eviction side and the registry side cannot diverge (leaked surface ↔ ghost registry).
 //
