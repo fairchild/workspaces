@@ -143,12 +143,67 @@
 	right: -1px;
 }
 
+/* ── Mobile action bar (hamburger + activity toggle) ──
+   Hidden on desktop; revealed below 960px so the off-canvas Sidebar and
+   ActivityFeed drawers stay discoverable. */
+.mobileBar {
+	display: none;
+	align-items: center;
+	gap: 0.5rem;
+	padding: 0.375rem 0.75rem;
+	border-bottom: 1px solid var(--border-subtle);
+	background: var(--bg-surface);
+	flex-shrink: 0;
+}
+
+.hamburger,
+.feedToggle {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.375rem;
+	padding: 0.375rem 0.625rem;
+	background: var(--bg-elevated);
+	border: 1px solid var(--border-subtle);
+	border-radius: 6px;
+	cursor: pointer;
+	color: var(--text-secondary);
+	font-family: var(--font-mono), ui-monospace, monospace;
+	font-size: 0.75rem;
+	letter-spacing: 0.02em;
+	transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.hamburger:hover,
+.feedToggle:hover {
+	color: var(--text-primary);
+	border-color: var(--accent-muted);
+}
+
+/* The activity toggle is always right-aligned; the hamburger (when present)
+   sits at the left edge. */
+.feedToggle {
+	margin-left: auto;
+}
+
+/* The sidebar is still inline between 640–960px, so the hamburger only appears
+   once the sidebar itself goes off-canvas (<640px). */
+.hamburger {
+	display: none;
+}
+
 /* ── Responsive: collapse right pane ── */
 @media (max-width: 960px) {
 	.columns {
 		grid-template-columns: 220px 1fr;
 	}
 	.right {
+		display: none;
+	}
+	.mobileBar {
+		display: flex;
+	}
+	/* Hover-only collapse affordances don't apply once panels go off-canvas. */
+	.panelToggle {
 		display: none;
 	}
 }
@@ -159,13 +214,13 @@
 		grid-template-columns: 1fr;
 	}
 
-	.panel {
+	/* Sidebar is reachable via the hamburger drawer below 640px. */
+	.left {
 		display: none;
-		border: none;
 	}
 
-	.mobileVisible {
-		display: block;
+	.hamburger {
+		display: inline-flex;
 	}
 
 	.tabBar {
