@@ -9,7 +9,7 @@ A behavior → test mapping. The `qa-web-agent` reads this at the start of every
 Each row is a *user-visible behavior*. Columns:
 
 - **Behavior** — the oracle, stated in plain English (what a user can do or observe).
-- **Layer** — `unit` (Vitest, `web/src/**/__tests__/*.test.ts`), `e2e-deployment-smoke`, `e2e-fast`, `e2e-full`, `e2e-demo`, `e2e-explore`, or `manual`.
+- **Layer** — `unit` (Vitest, `web/src/**/__tests__/*.test.ts`, node environment), `component` (Vitest, `web/src/**/__tests__/*.test.tsx`, jsdom environment — for render/effect/race behavior pure module tests can't reach), `e2e-deployment-smoke`, `e2e-fast`, `e2e-full`, `e2e-demo`, `e2e-explore`, or `manual`.
 - **Test** — file path + test name, or `—` if not yet automated.
 - **Verified** — ISO date the test last ran green in CI. `—` if not automated.
 - **Owner** — who cares if this breaks. `qa-web-agent` is allowed as an owner, meaning the agent is responsible for keeping it green.
@@ -49,6 +49,9 @@ Add a `[gap]` row for behaviors you know matter but aren't yet tested. `qa-web-a
 | Dashboard loads with tab bar for authenticated user | e2e-full | `full/dashboard.spec.ts :: loads dashboard page with tab bar` | 2026-04-17 | qa-web-agent |
 | Sidebar shows seeded repo | e2e-full | `full/dashboard.spec.ts :: shows sidebar with seeded repo` | 2026-04-17 | qa-web-agent |
 | Clicking a repo navigates to repo detail | e2e-full | `full/dashboard.spec.ts :: navigates to repo detail` | 2026-04-17 | qa-web-agent |
+| MainPanel renders every loading/error/empty/loaded transition without a Rules-of-Hooks violation | component | `src/app/dashboard/components/__tests__/main-panel.test.tsx :: renders every state transition without a hook-order warning` | 2026-07-02 | qa-web-agent |
+| Switching repos while the previous repo's `/agents` fetch is in flight preserves the newest repo's data (stale response can't overwrite) | component | `src/app/dashboard/components/__tests__/dashboard-shell.test.tsx :: keeps the newest repo's data when an older repo's fetch resolves late` | 2026-07-02 | qa-web-agent |
+| Changing `filterRepo` prevents a stale in-flight poll response from the previous filter from rendering | component | `src/app/dashboard/components/__tests__/activity-feed.test.tsx :: does not let a stale poll result from the old filter win` | 2026-07-02 | qa-web-agent |
 
 ### Chat tab
 
