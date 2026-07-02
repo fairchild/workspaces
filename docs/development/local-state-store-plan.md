@@ -41,6 +41,7 @@ The foundation landed in PR #483 and shipped in WorkSpaces v0.15.0:
    - Add local-state queries for latest active Terminal Sessions, latest agent status per host session, and latest layout snapshot.
    - Keep restore conservative: resolve Repository/Workspace IDs through current SwiftData rows and fall back when a row is missing.
    - Tests: deleted or stale targets do not restore invalid Surfaces.
+   - Status: store-level read models landed (`fetchContinuitySessions`, `fetchLatestLayoutSnapshot`); the conservative SwiftData resolution and restore orchestration happen in the caller and are tracked in the durable-sessions epic (issue #728).
 
 4. Expose local state in diagnostics.
    - Initial Diagnostics tab section shows store mode, database path, schema version, table counts, and latest event times.

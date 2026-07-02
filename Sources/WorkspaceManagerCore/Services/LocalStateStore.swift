@@ -278,10 +278,11 @@ public actor LocalStateStore {
         activeHostSessionID: UUID?,
         selectedSurfaceKind: String?,
         selectedSurfaceID: String?,
-        splitPanes: [TerminalSplitSnapshotInput] = []
+        splitPanes: [TerminalSplitSnapshotInput] = [],
+        capturedAt: Date = Date()
     ) async throws {
         let snapshotID = UUID().uuidString
-        let now = Self.isoString(Date())
+        let now = Self.isoString(capturedAt)
         try await dbPool.write { db in
             try db.execute(
                 sql: """
@@ -462,6 +463,125 @@ public actor LocalStateStore {
                 arguments: [sessionIDString, cappedLimit]
             )
             return rows.compactMap(AgentStatusEventRow.init(row:))
+        }
+    }
+
+    /// Continuity read model (local-state-store plan, slice 3): the most recent
+    /// terminal sessions, each joined with the latest agent status event recorded
+    /// for that host session (or `nil` agent fields when none exists). Rows are
+    /// ordered newest `last_seen_at` first. Pass `activeOnly: true` to restrict to
+    /// sessions that have not been marked ended — after a crash or reboot the
+    /// previous run's sessions typically remain active, which is what a cold-start
+    /// restore wants to enumerate.
+    public func fetchContinuitySessions(
+        activeOnly: Bool = false,
+        limit: Int = 50,
+        offset: Int = 0
+    ) async throws -> [TerminalSessionContinuityRow] {
+        let cappedLimit = max(0, limit)
+        let cappedOffset = max(0, offset)
+        let activeOnlyValue = activeOnly ? 1 : 0
+        return try await dbPool.read { db -> [TerminalSessionContinuityRow] in
+            let rows = try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT
+                        ts.host_session_id,
+                        ts.session_key,
+                        ts.target_kind,
+                        ts.target_id,
+                        ts.target_path,
+                        ts.backend_identifier,
+                        ts.backend_instance_id,
+                        ts.directory_path,
+                        ts.terminal_mode,
+                        ts.tmux_session_name,
+                        ts.custom_command_present,
+                        ts.is_active,
+                        ts.created_at,
+                        ts.last_seen_at,
+                        ts.ended_at,
+                        ae.agent_session_id,
+                        ae.agent_kind,
+                        ae.run_state AS agent_run_state,
+                        ae.cwd AS agent_cwd,
+                        ae.model_display_name AS agent_model_display_name,
+                        ae.event_at AS agent_event_at
+                    FROM terminal_sessions ts
+                    LEFT JOIN (
+                        SELECT
+                            host_session_id,
+                            agent_session_id,
+                            agent_kind,
+                            run_state,
+                            cwd,
+                            model_display_name,
+                            event_at,
+                            ROW_NUMBER() OVER (
+                                PARTITION BY host_session_id
+                                ORDER BY event_at DESC, id DESC
+                            ) AS event_rank
+                        FROM agent_status_events
+                    ) ae ON ae.host_session_id = ts.host_session_id AND ae.event_rank = 1
+                    WHERE (? = 0 OR (ts.is_active = 1 AND ts.ended_at IS NULL))
+                    ORDER BY ts.last_seen_at DESC
+                    LIMIT ? OFFSET ?
+                    """,
+                arguments: [activeOnlyValue, cappedLimit, cappedOffset]
+            )
+            return rows.compactMap(TerminalSessionContinuityRow.init(row:))
+        }
+    }
+
+    /// Continuity read model (local-state-store plan, slice 3): the most recently
+    /// captured terminal layout snapshot with its split pane rows, or `nil` when
+    /// no snapshot has been recorded.
+    public func fetchLatestLayoutSnapshot() async throws -> TerminalLayoutSnapshotRow? {
+        try await dbPool.read { db -> TerminalLayoutSnapshotRow? in
+            guard
+                let snapshotRow = try Row.fetchOne(
+                    db,
+                    sql: """
+                        SELECT id, captured_at, active_host_session_id, selected_surface_kind, selected_surface_id
+                        FROM terminal_layout_snapshots
+                        ORDER BY captured_at DESC, id DESC
+                        LIMIT 1
+                        """
+                )
+            else {
+                return nil
+            }
+
+            guard let snapshotID = snapshotRow["id"] as String? else { return nil }
+            let splitRows = try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT primary_host_session_id, split_host_session_id, axis, split_before_primary, split_fraction
+                    FROM terminal_split_snapshots
+                    WHERE snapshot_id = ?
+                    """,
+                arguments: [snapshotID]
+            )
+            let splitPanes = splitRows.compactMap { row -> TerminalSplitSnapshotInput? in
+                guard let primaryString = row["primary_host_session_id"] as String?,
+                    let primaryID = UUID(uuidString: primaryString),
+                    let splitString = row["split_host_session_id"] as String?,
+                    let splitID = UUID(uuidString: splitString),
+                    let axis = row["axis"] as String?,
+                    let splitBeforePrimary = row["split_before_primary"] as Int?,
+                    let splitFraction = row["split_fraction"] as Double?
+                else {
+                    return nil
+                }
+                return TerminalSplitSnapshotInput(
+                    primaryHostSessionID: primaryID,
+                    splitHostSessionID: splitID,
+                    axis: axis,
+                    splitBeforePrimary: splitBeforePrimary == 1,
+                    splitFraction: splitFraction
+                )
+            }
+            return TerminalLayoutSnapshotRow(row: snapshotRow, splitPanes: splitPanes)
         }
     }
 
@@ -985,12 +1105,177 @@ public struct AgentStatusEventRow: Sendable, Equatable, Identifiable {
     }
 
     private static func parseISODate(_ value: String) -> Date? {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = formatter.date(from: value) { return date }
-        formatter.formatOptions = [.withInternetDateTime]
-        return formatter.date(from: value)
+        parseLocalStateISODate(value)
     }
+}
+
+/// Read-side projection of one `terminal_sessions` row joined with the latest
+/// `agent_status_events` row for the same host session. Agent fields are `nil`
+/// when no agent event was ever recorded. Strings are kept verbatim from the
+/// tables; resolving targets against current SwiftData rows is a caller concern.
+public struct TerminalSessionContinuityRow: Sendable, Equatable, Identifiable {
+    public let hostSessionID: UUID
+    public let sessionKey: String
+    public let targetKind: String
+    public let targetID: String?
+    public let targetPath: String?
+    public let backendIdentifier: String?
+    public let backendInstanceID: String?
+    public let directoryPath: String
+    public let terminalMode: String
+    public let tmuxSessionName: String?
+    public let customCommandPresent: Bool
+    public let isActive: Bool
+    public let createdAt: Date
+    public let lastSeenAt: Date
+    public let endedAt: Date?
+    public let agentSessionID: String?
+    public let agentKind: String?
+    public let agentRunState: String?
+    public let agentCwd: String?
+    public let agentModelDisplayName: String?
+    public let agentEventAt: Date?
+
+    public var id: UUID { hostSessionID }
+
+    public init(
+        hostSessionID: UUID,
+        sessionKey: String,
+        targetKind: String,
+        targetID: String?,
+        targetPath: String?,
+        backendIdentifier: String?,
+        backendInstanceID: String?,
+        directoryPath: String,
+        terminalMode: String,
+        tmuxSessionName: String?,
+        customCommandPresent: Bool,
+        isActive: Bool,
+        createdAt: Date,
+        lastSeenAt: Date,
+        endedAt: Date?,
+        agentSessionID: String?,
+        agentKind: String?,
+        agentRunState: String?,
+        agentCwd: String?,
+        agentModelDisplayName: String?,
+        agentEventAt: Date?
+    ) {
+        self.hostSessionID = hostSessionID
+        self.sessionKey = sessionKey
+        self.targetKind = targetKind
+        self.targetID = targetID
+        self.targetPath = targetPath
+        self.backendIdentifier = backendIdentifier
+        self.backendInstanceID = backendInstanceID
+        self.directoryPath = directoryPath
+        self.terminalMode = terminalMode
+        self.tmuxSessionName = tmuxSessionName
+        self.customCommandPresent = customCommandPresent
+        self.isActive = isActive
+        self.createdAt = createdAt
+        self.lastSeenAt = lastSeenAt
+        self.endedAt = endedAt
+        self.agentSessionID = agentSessionID
+        self.agentKind = agentKind
+        self.agentRunState = agentRunState
+        self.agentCwd = agentCwd
+        self.agentModelDisplayName = agentModelDisplayName
+        self.agentEventAt = agentEventAt
+    }
+
+    init?(row: Row) {
+        guard let hostSessionIDString = row["host_session_id"] as String?,
+            let hostSessionID = UUID(uuidString: hostSessionIDString),
+            let sessionKey = row["session_key"] as String?,
+            let targetKind = row["target_kind"] as String?,
+            let directoryPath = row["directory_path"] as String?,
+            let terminalMode = row["terminal_mode"] as String?,
+            let createdAtRaw = row["created_at"] as String?,
+            let createdAt = parseLocalStateISODate(createdAtRaw),
+            let lastSeenAtRaw = row["last_seen_at"] as String?,
+            let lastSeenAt = parseLocalStateISODate(lastSeenAtRaw)
+        else {
+            return nil
+        }
+
+        self.init(
+            hostSessionID: hostSessionID,
+            sessionKey: sessionKey,
+            targetKind: targetKind,
+            targetID: row["target_id"] as String?,
+            targetPath: row["target_path"] as String?,
+            backendIdentifier: row["backend_identifier"] as String?,
+            backendInstanceID: row["backend_instance_id"] as String?,
+            directoryPath: directoryPath,
+            terminalMode: terminalMode,
+            tmuxSessionName: row["tmux_session_name"] as String?,
+            customCommandPresent: (row["custom_command_present"] as Int? ?? 0) == 1,
+            isActive: (row["is_active"] as Int? ?? 0) == 1,
+            createdAt: createdAt,
+            lastSeenAt: lastSeenAt,
+            endedAt: (row["ended_at"] as String?).flatMap(parseLocalStateISODate),
+            agentSessionID: row["agent_session_id"] as String?,
+            agentKind: row["agent_kind"] as String?,
+            agentRunState: row["agent_run_state"] as String?,
+            agentCwd: row["agent_cwd"] as String?,
+            agentModelDisplayName: row["agent_model_display_name"] as String?,
+            agentEventAt: (row["agent_event_at"] as String?).flatMap(parseLocalStateISODate)
+        )
+    }
+}
+
+/// Read-side projection of the latest `terminal_layout_snapshots` row plus its
+/// `terminal_split_snapshots` children.
+public struct TerminalLayoutSnapshotRow: Sendable, Equatable, Identifiable {
+    public let id: String
+    public let capturedAt: Date
+    public let activeHostSessionID: UUID?
+    public let selectedSurfaceKind: String?
+    public let selectedSurfaceID: String?
+    public let splitPanes: [TerminalSplitSnapshotInput]
+
+    public init(
+        id: String,
+        capturedAt: Date,
+        activeHostSessionID: UUID?,
+        selectedSurfaceKind: String?,
+        selectedSurfaceID: String?,
+        splitPanes: [TerminalSplitSnapshotInput]
+    ) {
+        self.id = id
+        self.capturedAt = capturedAt
+        self.activeHostSessionID = activeHostSessionID
+        self.selectedSurfaceKind = selectedSurfaceKind
+        self.selectedSurfaceID = selectedSurfaceID
+        self.splitPanes = splitPanes
+    }
+
+    init?(row: Row, splitPanes: [TerminalSplitSnapshotInput]) {
+        guard let id = row["id"] as String?,
+            let capturedAtRaw = row["captured_at"] as String?,
+            let capturedAt = parseLocalStateISODate(capturedAtRaw)
+        else {
+            return nil
+        }
+
+        self.init(
+            id: id,
+            capturedAt: capturedAt,
+            activeHostSessionID: (row["active_host_session_id"] as String?).flatMap(UUID.init(uuidString:)),
+            selectedSurfaceKind: row["selected_surface_kind"] as String?,
+            selectedSurfaceID: row["selected_surface_id"] as String?,
+            splitPanes: splitPanes
+        )
+    }
+}
+
+private func parseLocalStateISODate(_ value: String) -> Date? {
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    if let date = formatter.date(from: value) { return date }
+    formatter.formatOptions = [.withInternetDateTime]
+    return formatter.date(from: value)
 }
 
 public struct TerminalSplitSnapshotInput: Sendable, Equatable {
