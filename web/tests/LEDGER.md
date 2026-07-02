@@ -49,6 +49,10 @@ Add a `[gap]` row for behaviors you know matter but aren't yet tested. `qa-web-a
 | Dashboard loads with tab bar for authenticated user | e2e-full | `full/dashboard.spec.ts :: loads dashboard page with tab bar` | 2026-04-17 | qa-web-agent |
 | Sidebar shows seeded repo | e2e-full | `full/dashboard.spec.ts :: shows sidebar with seeded repo` | 2026-04-17 | qa-web-agent |
 | Clicking a repo navigates to repo detail | e2e-full | `full/dashboard.spec.ts :: navigates to repo detail` | 2026-04-17 | qa-web-agent |
+| Mobile (375×667): sidebar reachable via hamburger drawer; shows repo list; Escape closes | e2e-full | `full/responsive.spec.ts :: mobile: sidebar reachable via hamburger drawer, Escape closes` | 2026-07-02 | qa-web-agent |
+| Mobile (375×667): activity feed reachable via top-bar toggle; backdrop click closes | e2e-full | `full/responsive.spec.ts :: mobile: activity feed reachable via toggle, backdrop closes` | 2026-07-02 | qa-web-agent |
+| Mobile (375×667): dashboard has no horizontal scroll | e2e-full | `full/responsive.spec.ts :: mobile: no horizontal scroll at 375px` | 2026-07-02 | qa-web-agent |
+| Desktop (1280×800): classic three-column layout intact; mobile affordances hidden | e2e-full | `full/responsive.spec.ts :: desktop: classic three-column layout intact` | 2026-07-02 | qa-web-agent |
 
 ### Chat tab
 
@@ -111,7 +115,8 @@ Add a `[gap]` row for behaviors you know matter but aren't yet tested. `qa-web-a
 | `[gap]` Dashboard has zero *serious* a11y violations (found 3 color-contrast on 2026-04-18) | color-contrast blocks low-vision users from reading critical instructions; see `output/qa-agent/2026-04-18/dashboard-a11y/finding.md` | P1 |
 | `[gap]` Error states: agent-chat when sandbox provisioning fails | current tests only cover happy path via mock provider | P1 |
 | `[gap]` Error states: terminal when SSE stream disconnects mid-session | reconnection behavior is unverified | P1 |
-| `[gap]` Mobile viewport (375×667) for dashboard, chat, terminal | no mobile tests exist yet | P2 |
+| `[gap]` Mobile viewport (375×667) for chat + terminal tabs | dashboard layout is now covered by `full/responsive.spec.ts` (sidebar drawer, activity toggle, no-horizontal-scroll); chat and terminal tab usability at 375px is still unverified | P2 |
+| `[gap]` Drawer focus-trap + focus-restore-to-trigger (component-level) | e2e covers open/close/Escape/backdrop, but Tab-cycling and focus restoration would be best asserted in a DOM component test once the `#536` component lane lands | P2 |
 | `[gap]` Slow-network / timeout behavior for chat compose | user expectation unclear when send hangs | P2 |
 | `[gap]` Visual regression baseline for dashboard + chat + terminal | catches accidental CSS regressions; deferred until Explore/Author loop is stable | P3 |
 | `[gap]` Keyboard navigation end-to-end (Tab, Escape, Enter) on dashboard | a11y-adjacent, not covered | P2 |

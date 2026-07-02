@@ -6,6 +6,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import styles from "../page.module.css";
 import { ActivityFeed } from "./activity-feed";
 import { ChatPanel } from "./chat-panel";
+import { Drawer } from "./drawer";
 import { MainPanel } from "./main-panel";
 import { Sidebar } from "./sidebar";
 import { TerminalPanel } from "./terminal-panel";
@@ -50,6 +51,18 @@ export function DashboardShell({
 	const [unreadChat, setUnreadChat] = useState(false);
 	const [leftCollapsed, setLeftCollapsed] = useState(false);
 	const [rightCollapsed, setRightCollapsed] = useState(false);
+	// Which off-canvas drawer is open on narrow viewports (null = none). Only one
+	// at a time; both reuse the real Sidebar / ActivityFeed components.
+	const [mobileDrawer, setMobileDrawer] = useState<"sidebar" | "feed" | null>(
+		null,
+	);
+
+	// Close any open drawer when navigation changes the route (e.g. tapping a
+	// repo in the sidebar drawer routes to its detail view).
+	// biome-ignore lint/correctness/useExhaustiveDependencies: pathname is the intended trigger, not a value read in the body
+	useEffect(() => {
+		setMobileDrawer(null);
+	}, [pathname]);
 
 	const setTab = useCallback(
 		(tab: TabId) => {
@@ -179,83 +192,129 @@ export function DashboardShell({
 		};
 	}, [selectedRepo]);
 
+	const feedFilter = selectedRepo
+		? `${selectedRepo.owner}/${selectedRepo.repo}`
+		: null;
+
 	return (
-		<div
-			className={[
-				styles.columns,
-				leftCollapsed && styles.columnsLeftCollapsed,
-				rightCollapsed && styles.columnsRightCollapsed,
-				leftCollapsed && rightCollapsed && styles.columnsBothCollapsed,
-			]
-				.filter(Boolean)
-				.join(" ")}
-		>
-			{/* Panel toggle affordances */}
-			<button
-				type="button"
-				className={`${styles.panelToggle} ${leftCollapsed ? styles.leftToggleCollapsed : styles.leftToggle}`}
-				onClick={() => setLeftCollapsed((v) => !v)}
-				title="Toggle sidebar (Cmd+B)"
+		<>
+			{/* Narrow-viewport action bar: hamburger + activity toggle. Hidden ≥960px. */}
+			<div className={styles.mobileBar}>
+				<button
+					type="button"
+					className={styles.hamburger}
+					aria-label="Open repositories"
+					aria-expanded={mobileDrawer === "sidebar"}
+					aria-controls="sidebar-drawer"
+					onClick={() => setMobileDrawer("sidebar")}
+				>
+					<span aria-hidden="true">{"☰"}</span>
+					<span>Repos</span>
+				</button>
+				<button
+					type="button"
+					className={styles.feedToggle}
+					aria-label="Open activity feed"
+					aria-expanded={mobileDrawer === "feed"}
+					aria-controls="feed-drawer"
+					onClick={() => setMobileDrawer("feed")}
+				>
+					<span>Activity</span>
+					<span aria-hidden="true">{"▤"}</span>
+				</button>
+			</div>
+			<div
+				className={[
+					styles.columns,
+					leftCollapsed && styles.columnsLeftCollapsed,
+					rightCollapsed && styles.columnsRightCollapsed,
+					leftCollapsed && rightCollapsed && styles.columnsBothCollapsed,
+				]
+					.filter(Boolean)
+					.join(" ")}
 			>
-				{leftCollapsed ? "\u25B8" : "\u25C2"}
-			</button>
-			<button
-				type="button"
-				className={`${styles.panelToggle} ${rightCollapsed ? styles.rightToggleCollapsed : styles.rightToggle}`}
-				onClick={() => setRightCollapsed((v) => !v)}
-				title="Toggle activity panel (Cmd+Shift+B)"
+				{/* Panel toggle affordances */}
+				<button
+					type="button"
+					className={`${styles.panelToggle} ${leftCollapsed ? styles.leftToggleCollapsed : styles.leftToggle}`}
+					onClick={() => setLeftCollapsed((v) => !v)}
+					title="Toggle sidebar (Cmd+B)"
+				>
+					{leftCollapsed ? "\u25B8" : "\u25C2"}
+				</button>
+				<button
+					type="button"
+					className={`${styles.panelToggle} ${rightCollapsed ? styles.rightToggleCollapsed : styles.rightToggle}`}
+					onClick={() => setRightCollapsed((v) => !v)}
+					title="Toggle activity panel (Cmd+Shift+B)"
+				>
+					{rightCollapsed ? "\u25C2" : "\u25B8"}
+				</button>
+				<aside className={styles.left}>
+					<Sidebar repos={repos} selectedRepo={selectedRepo} />
+				</aside>
+				<main className={styles.center}>
+					<nav className={styles.tabBar}>
+						{TABS.map(({ id, label }) => (
+							<button
+								key={id}
+								type="button"
+								className={`${styles.tab} ${activeTab === id ? styles.tabActive : ""}`}
+								onClick={() => setTab(id)}
+							>
+								{label}
+								{id === "chat" && unreadChat && (
+									<span className={styles.unreadBadge} />
+								)}
+							</button>
+						))}
+					</nav>
+					{activeTab === "dashboard" ? (
+						<MainPanel
+							agentData={agentData}
+							selectedRepo={selectedRepo}
+							loading={loading}
+							error={error}
+						/>
+					) : activeTab === "chat" ? (
+						<ChatPanel
+							selectedRepo={selectedRepo}
+							agents={agentData?.agents ?? []}
+							onNewMessage={handleNewChatMessage}
+							selectedAgent={selectedAgent}
+							onSelectAgent={setSelectedAgent}
+						/>
+					) : (
+						<TerminalPanel
+							selectedRepo={selectedRepo}
+							selectedAgent={selectedAgent}
+							onSelectAgent={setSelectedAgent}
+						/>
+					)}
+				</main>
+				<aside className={styles.right}>
+					<ActivityFeed filterRepo={feedFilter} />
+				</aside>
+			</div>
+
+			<Drawer
+				open={mobileDrawer === "sidebar"}
+				onClose={() => setMobileDrawer(null)}
+				side="left"
+				label="Repositories"
+				id="sidebar-drawer"
 			>
-				{rightCollapsed ? "\u25C2" : "\u25B8"}
-			</button>
-			<aside className={styles.left}>
 				<Sidebar repos={repos} selectedRepo={selectedRepo} />
-			</aside>
-			<main className={styles.center}>
-				<nav className={styles.tabBar}>
-					{TABS.map(({ id, label }) => (
-						<button
-							key={id}
-							type="button"
-							className={`${styles.tab} ${activeTab === id ? styles.tabActive : ""}`}
-							onClick={() => setTab(id)}
-						>
-							{label}
-							{id === "chat" && unreadChat && (
-								<span className={styles.unreadBadge} />
-							)}
-						</button>
-					))}
-				</nav>
-				{activeTab === "dashboard" ? (
-					<MainPanel
-						agentData={agentData}
-						selectedRepo={selectedRepo}
-						loading={loading}
-						error={error}
-					/>
-				) : activeTab === "chat" ? (
-					<ChatPanel
-						selectedRepo={selectedRepo}
-						agents={agentData?.agents ?? []}
-						onNewMessage={handleNewChatMessage}
-						selectedAgent={selectedAgent}
-						onSelectAgent={setSelectedAgent}
-					/>
-				) : (
-					<TerminalPanel
-						selectedRepo={selectedRepo}
-						selectedAgent={selectedAgent}
-						onSelectAgent={setSelectedAgent}
-					/>
-				)}
-			</main>
-			<aside className={styles.right}>
-				<ActivityFeed
-					filterRepo={
-						selectedRepo ? `${selectedRepo.owner}/${selectedRepo.repo}` : null
-					}
-				/>
-			</aside>
-		</div>
+			</Drawer>
+			<Drawer
+				open={mobileDrawer === "feed"}
+				onClose={() => setMobileDrawer(null)}
+				side="right"
+				label="Activity feed"
+				id="feed-drawer"
+			>
+				<ActivityFeed filterRepo={feedFilter} />
+			</Drawer>
+		</>
 	);
 }
