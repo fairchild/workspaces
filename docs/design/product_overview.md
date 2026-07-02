@@ -20,7 +20,7 @@ Add a chat layer to spaces.cloudcompute.com that:
 3. **Dispatches agent work** — creating Kanban tasks, triggering GitHub Discussions workflows, or invoking Claude directly
 4. **Streams responses** back into the conversation as agents work
 
-The Chat SDK (`@chat-adapter/github`) handles the GitHub side (mentions in Discussions/Issues trigger the bot). The web UI provides a first-party chat experience that doesn't require leaving the dashboard.
+The web UI provides a first-party chat experience that doesn't require leaving the dashboard; the GitHub side is handled directly by `/api/webhooks/github` and the Discussion-bridged `/api/chat/*` routes. (An earlier Chat SDK bot path — `@chat-adapter/*` adapters behind a `[platform]` webhook route — was retired as dead code in PR #725; see issue #540.)
 
 ## Core Capabilities
 
