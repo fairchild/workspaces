@@ -26,6 +26,8 @@ Add a `[gap]` row for behaviors you know matter but aren't yet tested. `qa-web-a
 | Deployed app serves landing, sign-in, docs, auth redirect, and unauth sync boundary | e2e-deployment-smoke | `deployment-smoke/app.spec.ts :: Deployment smoke` | 2026-06-27 | qa-web-agent |
 | `POST /api/workspaces/sync` rejects unauthenticated requests | e2e-fast | `fast/unauth-api.spec.ts :: POST /api/workspaces/sync without auth returns unauthorized` | 2026-04-17 | qa-web-agent |
 | `GET /dashboard` redirects unauthenticated users to sign-in | e2e-fast | `fast/unauth-redirect.spec.ts :: GET /dashboard without auth redirects to sign-in` | 2026-04-17 | qa-web-agent |
+| `GET /dashboard` with an expired/forged session cookie redirects from middleware at the document request (no shell flash) | e2e-fast | `fast/unauth-redirect.spec.ts :: GET /dashboard with an invalid session cookie redirects from middleware (no shell flash)` | 2026-07-02 | qa-web-agent |
+| Middleware session-cookie freshness: valid+fresh passes, expired/tampered/malformed cookie cache is stale, missing token is stale, absent cache or verify error is indeterminate | unit | `src/lib/__tests__/session-cookie.test.ts :: evaluateSessionFreshness` | 2026-07-02 | qa-web-agent |
 
 ### API authorization
 

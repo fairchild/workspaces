@@ -1,3 +1,5 @@
+import { resolveBetterAuthSecret } from "@/lib/agent-runtime/config";
+import { evaluateSessionFreshness } from "@/lib/session-cookie";
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
@@ -18,7 +20,16 @@ function isPublic(pathname: string): boolean {
 	return false;
 }
 
-export function middleware(request: NextRequest) {
+function redirectToSignIn(
+	request: NextRequest,
+	pathname: string,
+): NextResponse {
+	const signInUrl = new URL("/sign-in", request.url);
+	signInUrl.searchParams.set("callbackUrl", pathname);
+	return NextResponse.redirect(signInUrl);
+}
+
+export async function middleware(request: NextRequest) {
 	const { pathname } = request.nextUrl;
 
 	if (pathname.startsWith("/docs/") && !pathname.includes(".")) {
@@ -40,15 +51,26 @@ export function middleware(request: NextRequest) {
 		return NextResponse.next();
 	}
 
-	const sessionCookie =
-		request.cookies.get("better-auth.session_token") ??
-		request.cookies.get("__Secure-better-auth.session_token");
-	if (!sessionCookie?.value) {
-		const signInUrl = new URL("/sign-in", request.url);
-		signInUrl.searchParams.set("callbackUrl", pathname);
-		return NextResponse.redirect(signInUrl);
+	// Validate freshness, not just cookie presence: an absent token, or an
+	// expired/tampered/malformed Better Auth cookie cache, redirects straight
+	// from the edge instead of rendering the shell and bouncing at layout
+	// getSession(). If the secret can't be resolved (misconfig) we fall
+	// through so middleware never hard-fails the app; layout getSession()
+	// still gates the page.
+	let secret: string;
+	try {
+		secret = resolveBetterAuthSecret();
+	} catch {
+		return NextResponse.next();
 	}
 
+	const freshness = await evaluateSessionFreshness(request, { secret });
+	if (freshness === "stale") {
+		return redirectToSignIn(request, pathname);
+	}
+
+	// "fresh" proceeds; "indeterminate" also proceeds and defers to layout
+	// getSession() rather than logging out a possibly-valid idle session.
 	return NextResponse.next();
 }
 
