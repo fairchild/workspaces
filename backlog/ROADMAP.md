@@ -243,7 +243,7 @@ Theme-to-milestone map:
 | Managed reviewer reliability and understandability | `area: platform` | Closed in `v0.17.0`: [#584](https://github.com/fairchild/workspaces/issues/584) / [milestone 8](https://github.com/fairchild/workspaces/milestone/8). Treat the ReviewRun-first model as baseline doctrine. |
 | Lume runtime hardening | `arc:lume-runtime` | Closed (#87/#88/#89). Label retained for future Lume work. |
 | Notification catch-up and reconnect correctness | `arc:notification-catchup` | Next standalone after core-reliability theme clears |
-| Terminal continuity (tmux + cross-session) | `arc:terminal-continuity` | 2026-04-23 decision partially superseded by #627 (pane-tree reversal; ADR in Phase 8). #548 cross-session restore stays valid; re-scope #549 after the ADR. |
+| Terminal continuity (tmux + cross-session) | `arc:terminal-continuity` | Owner-promoted 2026-07-02 to milestone [#10 — Durable sessions](https://github.com/fairchild/workspaces/milestone/10): epic [#728](https://github.com/fairchild/workspaces/issues/728) (cold-start resume + history browser), #548 (warm sibling), #729 (cloud handoff, deferred tail). Re-scope #549 after the ADR before pulling it in. Sequencing vs #9 per one-active-milestone rule. |
 | Strategic isolation backend direction | `arc:isolation-backend` | Backlog/research until promoted by a fresh approved discussion |
 
 ---
