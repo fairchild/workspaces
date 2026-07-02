@@ -31,14 +31,14 @@ Add a `[gap]` row for behaviors you know matter but aren't yet tested. `qa-web-a
 
 | Behavior | Layer | Test | Verified | Owner |
 |---|---|---|---|---|
-| `GET /api/events?repo=...` rejects a repo owned by another user | e2e-fast | `fast/api-authorization.spec.ts :: GET /api/events?repo rejects another user's repo` | 2026-05-03 | qa-web-agent |
-| `GET /api/events/:id` rejects an event from another user's repo | e2e-fast | `fast/api-authorization.spec.ts :: GET /api/events/:id rejects an event from another user's repo` | 2026-05-03 | qa-web-agent |
-| `GET /api/events` rejects requests without a valid session | e2e-fast | `fast/api-authorization.spec.ts :: GET /api/events without a valid session returns unauthorized` | 2026-05-03 | qa-web-agent |
-| `GET /api/events/stats` rejects requests without a valid session | e2e-fast | `fast/api-authorization.spec.ts :: GET /api/events/stats without a valid session returns unauthorized` | 2026-05-03 | qa-web-agent |
-| `GET /api/chat/messages?repo=...` rejects a repo owned by another user | e2e-fast | `fast/api-authorization.spec.ts :: GET /api/chat/messages rejects another user's repo` | 2026-05-03 | qa-web-agent |
-| `GET /api/repos/:owner/:repo/agents` rejects a repo owned by another user | e2e-fast | `fast/api-authorization.spec.ts :: GET /api/repos/:owner/:repo/agents rejects another user's repo` | 2026-05-03 | qa-web-agent |
-| `GET /api/repos/:owner/:repo/webhook-status` rejects a repo owned by another user | e2e-fast | `fast/api-authorization.spec.ts :: GET /api/repos/:owner/:repo/webhook-status rejects another user's repo` | 2026-05-03 | qa-web-agent |
-| `GET /api/managed-agents/transcript` rejects a managed-agent session for an unauthorized repo | e2e-fast | `fast/api-authorization.spec.ts :: GET /api/managed-agents/transcript rejects a session for an unauthorized repo` | 2026-05-03 | qa-web-agent |
+| `GET /api/events?repo=...` rejects a repo owned by another user | e2e-fast | `fast/api-authorization.spec.ts :: GET /api/events?repo rejects another user's repo` | 2026-07-02 | qa-web-agent |
+| `GET /api/events/:id` rejects an event from another user's repo | e2e-fast | `fast/api-authorization.spec.ts :: GET /api/events/:id rejects an event from another user's repo` | 2026-07-02 | qa-web-agent |
+| `GET /api/events` rejects requests without a valid session | e2e-fast | `fast/api-authorization.spec.ts :: GET /api/events without a valid session returns unauthorized` | 2026-07-02 | qa-web-agent |
+| `GET /api/events/stats` rejects requests without a valid session | e2e-fast | `fast/api-authorization.spec.ts :: GET /api/events/stats without a valid session returns unauthorized` | 2026-07-02 | qa-web-agent |
+| `GET /api/chat/messages?repo=...` rejects a repo owned by another user | e2e-fast | `fast/api-authorization.spec.ts :: GET /api/chat/messages rejects another user's repo` | 2026-07-02 | qa-web-agent |
+| `GET /api/repos/:owner/:repo/agents` rejects a repo owned by another user | e2e-fast | `fast/api-authorization.spec.ts :: GET /api/repos/:owner/:repo/agents rejects another user's repo` | 2026-07-02 | qa-web-agent |
+| `GET /api/repos/:owner/:repo/webhook-status` rejects a repo owned by another user | e2e-fast | `fast/api-authorization.spec.ts :: GET /api/repos/:owner/:repo/webhook-status rejects another user's repo` | 2026-07-02 | qa-web-agent |
+| `GET /api/managed-agents/transcript` rejects a managed-agent session for an unauthorized repo | e2e-fast | `fast/api-authorization.spec.ts :: GET /api/managed-agents/transcript rejects a session for an unauthorized repo` | 2026-07-02 | qa-web-agent |
 
 ### Dashboard
 
