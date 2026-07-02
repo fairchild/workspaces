@@ -33,6 +33,10 @@ Every state transition and progress note is one comment on the issue, in this sh
 | `rescued`                | `claimer=<who>` `branch=<git-branch>`                   |
 | `retried`                | trail = `\| <reason>`                                      |
 
+### Claimer identity
+
+`claimer=` values follow `<harness>:<stable-id>` — e.g. `claude-code:session_01AB…`, `codex:silver-lake-refactor`, `gh-actions:run-28612644525`, `human:fairchild`. The branch, not the claimer, is what claim resolution keys on (below); `claimer` exists for audit trails, so prefer an identifier another agent or a human can trace back to a live session, thread, or run. If the harness exposes no stable identifier, use `<harness>:unknown` and note it in the trail.
+
 ## Claim resolution
 
 The **branch** is the claim identity (agents often share a GitHub account, so assignee isn't reliable). Walking comments chronologically:
@@ -46,6 +50,8 @@ The earliest `advanced to=claimed` since the most recent `retried`, optionally o
 ## Operating
 
 These conventions are operable directly via `gh issue` — open an issue, add the `claimed` label, post the right comment. The `backlog` skill (`add / take / advance / progress / cancel / fail / rescue / retry / maintain / status`) is a convenience layer that automates the patterns (auto-pick by priority, race-resolution at claim time, status counts) but isn't required for any of them. Mix both: skill for batch operations, raw `gh` for one-offs.
+
+The protocol is also transport-agnostic: state lives in the labels and worklog comments, not in the tool that wrote them, so the GitHub MCP tools or raw REST with `GH_TOKEN` are as valid as `gh`. See `docs/agents/issue-tracker.md` § "When `gh` Is Unavailable" for the operation mapping (remote containers commonly lack `gh`).
 
 Tasks are referenced by issue number — `take 42` or `take #42`. Titles are free text.
 
