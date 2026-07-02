@@ -1,83 +1,54 @@
 ---
 name: subagent-delegation
 description: >
-  Brief and gate implementation subagents so their PRs pass review first-try.
-  Use when orchestrating parallel implementation work across subagents/worktrees:
-  writing task briefs, choosing model tiers, and running the quality gate before
-  a PR leaves draft. Triggers on: "delegate this", "spin up agents", "orchestrate
-  the milestone", "brief a subagent", "gate this PR".
+  Repo-specific conventions for briefing implementation subagents and gating
+  their PRs before ready-for-review. Use when fanning work out across parallel
+  subagents/worktrees. Triggers: "delegate this", "spin up agents",
+  "brief a subagent", "gate this PR".
 ---
 
-# subagent-delegation: Briefs and gates for implementation subagents
+# subagent-delegation: repo conventions for briefs and gates
 
-Distilled from the 2026-07-02 web cycle (PRs #723–#732: six PRs, six first-try
-gate passes, zero fabricated evidence, zero redos). Two artifacts matter: the
-**brief** an implementing agent receives, and the **gate** its PR must pass
-before leaving draft.
+Only what's specific to this repo — general delegation practice is assumed.
+Source: the 2026-07-02 cycle (PRs #723–#732, six first-try gate passes).
 
-## The brief
+## The brief must include
 
-A subagent starts cold — the brief is its entire world. Include, in order:
+- Bootstrap: `git fetch origin main && git checkout -B claude/<slug> origin/main`.
+  Name the branch in the brief; base on fresh main, never the orchestrator's branch.
+- Grounded file:line facts marked **re-verify, don't trust — if reality differs,
+  stop and report instead of guessing**. (Caught a wrong import-graph claim in
+  #725 before it became a wrong deletion.)
+- Environment caveats pointer: `docs/development/remote-sessions.md`
+  (evidence token, mise, Playwright browser).
+- For test-adding work: a **mutation check** — re-break the covered bug, prove
+  the new test fails, revert, report which mutation ran.
+- Evidence rules: never fabricate; blocked evidence is an explicit PR state
+  with the reason; a green CI run link is the remote hosted-evidence convention.
+- Ship protocol: draft PR only (the gate flips it ready); `Closes #N` in the
+  body; on `agent`+`task` issues do **not** touch claim labels —
+  `sync-execution-state.py` owns that lane (`backlog/CLAUDE.md`).
 
-1. **Worktree bootstrap.** `git fetch origin main && git checkout -B <branch> origin/main`.
-   Name the branch in the brief. Base on the fresh tip, not the orchestrator's branch.
-2. **Reading list with a reason per item** — the issue, the plan section, the
-   target source files. Ordered; 3–5 items.
-3. **Grounded facts with file:line, marked as re-verifiable.** State what you
-   already know ("middleware gates only on cookie presence, `middleware.ts:43-50`")
-   and instruct: *re-verify, don't trust; if reality differs from the brief,
-   stop and report the discrepancy instead of guessing.* This clause caught a
-   wrong dependency-graph claim in #725 before it became a wrong deletion.
-4. **Constraints as hard rules**, not vibes: what must be preserved verbatim,
-   fail-open vs fail-closed semantics, styling-system boundaries, "follow the
-   code, not the sketch, and note the delta in the PR body."
-5. **Verification commands, exact.** Which suites, which projects, which env
-   caveats (see `docs/development/remote-sessions.md`). For test-adding work,
-   require a **mutation check**: re-break the covered bug, prove the new test
-   fails, revert, report which mutation ran.
-6. **Honest-evidence rules.** Never fabricate links; blocked evidence is an
-   explicit PR state with the reason; a green CI run link is the remote-session
-   hosted-evidence convention.
-7. **Ship protocol.** Draft PR only (never mark ready), PR-template sections
-   filled honestly, `Closes #N` in the body, commit trailers, and — for
-   `agent`+`task` labeled issues — do not touch claim labels (that lane belongs
-   to `sync-execution-state.py`; see `backlog/CLAUDE.md`).
-8. **Return format.** What the orchestrator needs back: choices made + why,
-   deltas from the brief, exact pass/fail counts, PR URL, residual risks.
+## The gate, before a PR leaves draft
 
-## Model tiering
+Calibrate depth to risk (#733 tracks formalizing the tiers).
 
-Match tier to failure cost, not task size: security-sensitive or
-design-judgment work → high tier; well-specified mechanical or verification
-work → mid tier. Evidence so far: mid-tier output on well-specified briefs has
-matched high-tier quality — when unsure, the brief's specificity buys more than
-the model tier. Revisit per #733.
-
-## The gate (before a PR leaves draft)
-
-Calibrate depth to change class (#733 tracks formalizing this):
-
-- **Always:** read the full diff; independently re-run the verification suites
-  on the branch (don't trust reported numbers); confirm CI green and cite the
-  hosted run in the Evidence section; check `Closes #N` is present.
-- **Security-touching:** adversarial pass — enumerate bypass paths, confirm
-  every failure path is no worse than the pre-change behavior, check secret /
-  config parity between the components that sign and the components that verify.
-- **UI-touching:** view the screenshots yourself; verify the suites CI doesn't
-  run (`full` project) with your own second run; deliver screenshots to the
-  owner when hosted upload is blocked.
-- **Test-adding:** confirm the mutation check actually ran and failed the
-  right test.
-- **Merge mechanics:** pre-check conflicts with `git merge-tree --write-tree`
-  (legacy `merge-tree` false-negatives); after resolving any conflict, re-run
-  the full suite on the merged tree — and capture output to a file before
-  filtering, so a one-off failure keeps its name.
-- **Record the gate** as a gate-note in the PR body (what was re-run, on which
-  commit, what the adversarial pass covered), then flip to ready.
+- Always: re-run the verification suites yourself — don't trust reported
+  counts; cite the green CI run in the Evidence section; check `Closes #N`.
+- Security-touching: adversarial pass — bypass paths, every failure path no
+  worse than pre-change behavior, signer/verifier secret parity.
+- UI-touching: view the screenshots yourself; run the Playwright `full`
+  project yourself (`web-ci.yml` runs `fast` only); when hosted upload is
+  blocked, deliver screenshots to the owner through the session.
+- Merge mechanics: pre-check with `git merge-tree --write-tree` (the legacy
+  three-arg form false-negatives real conflicts); after resolving, re-run the
+  full suite on the merged tree, capturing output to a file before filtering.
+- Record a gate note in the PR body (what re-ran, on which commit), then flip
+  to ready.
 
 ## Sequencing
 
-Serialize PRs that touch `package.json`/lockfile; everything else can run in
-parallel worktrees. `web/tests/LEDGER.md` conflicts are expected and additive —
-keep both blocks. One watch (cron or background poll) owns merge-event
-follow-through, since merge/CI-success events don't push to sessions.
+Serialize PRs touching `package.json`/lockfile; everything else parallelizes in
+worktrees. `web/tests/LEDGER.md` conflicts are expected and additive — keep
+both blocks. One watch owns merge-event follow-through (merge and CI-success
+events don't push to sessions).

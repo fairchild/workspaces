@@ -250,7 +250,7 @@ Agents coordinate via GitHub Discussions. See `.agents/skills/gh-discuss/SKILL.m
 
 `qa-web-agent` (`.claude/agents/qa-web-agent.md`) is the project-local subagent for `web/` testing — Explore (black-box), Author (spec-first, human-gated), Heal (selector drift vs regression). Invoke via `/qa` (`.claude/commands/qa.md`): `explore [area]`, `author <slug>`, `heal [test-path]`, `run`, `ledger`. Coverage is measured against `web/tests/LEDGER.md` (behavior → test → last-verified date), not line-coverage %; new behaviors worth automating land in the ledger with a matching spec and test.
 
-Milestone delivery: use `.agents/skills/drive/SKILL.md` to plan first, refresh the latest milestone state from GitHub, and execute issues to completion one at a time. For fanning work out across parallel implementation subagents (briefs, model tiers, the pre-ready quality gate), use `.agents/skills/subagent-delegation/SKILL.md`.
+Milestone delivery: use `.agents/skills/drive/SKILL.md` to plan first, refresh the latest milestone state from GitHub, and execute issues to completion one at a time. For fanning work out across parallel implementation subagents, the repo-specific brief + gate conventions are in `.agents/skills/subagent-delegation/SKILL.md`.
 
 ## Prototypes
 
