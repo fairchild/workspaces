@@ -300,12 +300,12 @@ Priority `idea` = parked in the `idea` label (speculative, may never be built); 
 | Notification client catch-up | product | P1 | [#547](https://github.com/fairchild/workspaces/issues/547) |
 | Claude integration: first-run discovery + error-state UI | product | P2 | [#517](https://github.com/fairchild/workspaces/issues/517) / [#518](https://github.com/fairchild/workspaces/issues/518) (ready) |
 | Detail Pane sticky width | product | — | [#530](https://github.com/fairchild/workspaces/issues/530) |
-| Managed PR reviewer continuous reruns | quality | absorbed | [#545](https://github.com/fairchild/workspaces/issues/545) absorbed by [#584](https://github.com/fairchild/workspaces/issues/584) / milestone 8 |
+| Managed PR reviewer continuous reruns | quality | shipped (phases 1–3) — verify residue + close | [#545](https://github.com/fairchild/workspaces/issues/545) implemented in `pr-review-trigger.ts` / `pr-review-runs.ts` / review-history injection; confirm manual-rerun + rollout-flag residue, then close (see `backlog/web-next-cycle_plan.md` W0) |
 | Daytona native Swift API | product | P2 | [#532](https://github.com/fairchild/workspaces/issues/532) (`arc:isolation-backend`) |
 | Tahoe VZ backend execution brief (tracking) | product | P2 | [#533](https://github.com/fairchild/workspaces/issues/533) |
-| Web API authorization E2E coverage | quality | — · ms7 | [#535](https://github.com/fairchild/workspaces/issues/535) |
+| Web API authorization E2E coverage | quality | shipped — verify + close | [#535](https://github.com/fairchild/workspaces/issues/535) (`web/e2e/fast/api-authorization.spec.ts` covers all 8 cases; see `backlog/web-next-cycle_plan.md` W0) |
 | Web dashboard component regression harness | quality | — · ms7 | [#536](https://github.com/fairchild/workspaces/issues/536) |
-| Web dashboard CD deployment-smoke | quality | — · ms7 | [#543](https://github.com/fairchild/workspaces/issues/543) |
+| Web dashboard CD deployment-smoke | quality | shipped — verify + close | [#543](https://github.com/fairchild/workspaces/issues/543) (`deployment-smoke` Playwright project wired into `cd.yml` preview + prod validators; see `backlog/web-next-cycle_plan.md` W0) |
 | Web Dashboard Phase 3 (tracking) | product | P2 · ms7 | [#537](https://github.com/fairchild/workspaces/issues/537) (remaining: #541 p1 / #540 decision / #539 p2; #538 shipped) |
 | Web: persistent event store (Turso events table) | quality | Done | [#538](https://github.com/fairchild/workspaces/issues/538) (`lib/events.ts` is a Kysely `webhook_events` table) |
 | Web: middleware session-freshness validation | quality | P1 · ms7 | [#541](https://github.com/fairchild/workspaces/issues/541) (top open ms7 item) |
