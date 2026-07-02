@@ -52,7 +52,7 @@ export class ComputeProviderRegistry {
 	}
 }
 
-/** Lazy singleton — same pattern as getBot() in bot.ts */
+/** Lazy singleton */
 let _registry: ComputeProviderRegistry | undefined;
 let _registryPromise: Promise<ComputeProviderRegistry> | undefined;
 
