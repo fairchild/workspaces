@@ -1,5 +1,7 @@
 # QA: Spaces Web Chat Platform
 
+> **2026-07-02 addendum:** this is a historical QA report from the March consolidation. The Chat SDK **bot path** described below (`bot.ts`, `@chat-adapter/*`, the `[platform]` webhook route, Slack adapter, AI streaming via `ai.ts`) was retired as dead code in PR #725 — see issue #540. The dashboard Chat tab, dispatch flow, and `/api/chat/*` routes remain live and never depended on the SDK.
+
 ## What was shipped
 
 Six feature branches were consolidated and merged to main as PR #246, followed by bug fixes #248 and #249. The production site is at `https://spaces.cloudcompute.com`. PR #250 (GitHub token refresh) is pending merge.

@@ -2,6 +2,8 @@
 
 Evidence is a merge gate for all PRs. Upload test results or screenshots before creating a PR.
 
+> **Remote (claude.ai) sessions:** `EVIDENCE_UPLOAD_TOKEN` is not available in those containers. The sanctioned fallback — a green CI run link on the exact branch/commit as hosted evidence, plus session-delivered screenshots for UI changes — is documented in `remote-sessions.md`.
+
 ## Quick start
 
 ```bash

@@ -19,6 +19,14 @@ const extraHTTPHeaders = BYPASS_SECRET
 		}
 	: undefined;
 
+// Remote sandboxes (claude.ai sessions) preinstall a Chromium whose revision
+// may trail the @playwright/test pin, and their proxy blocks Playwright's CDN,
+// so the pinned browser can't be downloaded. Point this at the preinstalled
+// binary (e.g. /opt/pw-browsers/chromium-*/chrome-linux/chrome) to run e2e
+// there without a local config fork. Unset everywhere else — CI and dev
+// machines use the pinned download. See docs/development/remote-sessions.md.
+const CHROMIUM_EXECUTABLE = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH;
+
 export default defineConfig({
 	testDir: "./e2e",
 	fullyParallel: true,
@@ -32,6 +40,9 @@ export default defineConfig({
 		trace: "on-first-retry",
 		extraHTTPHeaders,
 		...(STORAGE_STATE ? { storageState: STORAGE_STATE } : {}),
+		...(CHROMIUM_EXECUTABLE
+			? { launchOptions: { executablePath: CHROMIUM_EXECUTABLE } }
+			: {}),
 	},
 	projects: [
 		{

@@ -74,7 +74,7 @@ Evidence is a merge gate. Do not create a PR without it. In order:
 mise run evidence -- --pr <N> --name <slug>
 ```
 
-Rules: no local-only proof (upload via `evidence.sh`); blocked evidence is an explicit state (`blocked on evidence` in the PR, with why); performance-sensitive changes need before/after/delta baselines in the PR body. The script auto-sources `.env` (and sibling worktree env files) for `EVIDENCE_UPLOAD_TOKEN`; if a worktree lacks `.env`, run `./scripts/setup --env-only` before claiming evidence is blocked. Uploads go to `https://evidence.cloudcompute.com/`. Full guide: `docs/development/evidence.md`.
+Rules: no local-only proof (upload via `evidence.sh`); blocked evidence is an explicit state (`blocked on evidence` in the PR, with why); performance-sensitive changes need before/after/delta baselines in the PR body. The script auto-sources `.env` (and sibling worktree env files) for `EVIDENCE_UPLOAD_TOKEN`; if a worktree lacks `.env`, run `./scripts/setup --env-only` before claiming evidence is blocked. Uploads go to `https://evidence.cloudcompute.com/`. Full guide: `docs/development/evidence.md`. Remote (claude.ai) sessions lack the token, mise, and a matching Playwright browser — the sanctioned workarounds (green-CI-link evidence, raw-pnpm equivalents, `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH`) are canonical in `docs/development/remote-sessions.md`.
 
 PR summary style: prefer concise Markdown links for completed checks/artifacts (e.g. `[Web CI passed](url)`). Readability preference, not a merge gate.
 
@@ -89,6 +89,7 @@ PR summary style: prefer concise Markdown links for completed checks/artifacts (
 - **Vercel `Sandbox.create({env: {...}})` does NOT propagate to `sandbox.runCommand()`.** Write env vars to an `env.sh` and `source` it at the top of the script. See `docs/development/agent-chat-sandbox.md` § "Claude CLI Authentication".
 - **Ship a diagnostic probe instead of your third guess.** Terminal arc #306→#309: two guess-fixes merged green and failed in production; one temporary probe (#308) revealed the root cause in a single ship cycle. When you're guessing, stop and instrument.
 - **"Tests green" ≠ "works in production" for agent paths.** For changes touching `createSandbox`, `restoreSnapshot`, `createTerminalSandbox`, or `streamOutput`, send a real chat message in production and read the agent stream before declaring victory.
+- **The tracker lags the code — verify before planning from it.** Three grooming/planning passes in a row (2026-06-28 ×2, 2026-07-02) found open issues whose work had already shipped. Before sequencing work from open issues, `rg` the acceptance criteria against the tree; close what's done in the same cycle that ships it (`Closes #N` in every implementing PR).
 
 ## Commit Hygiene
 
@@ -236,7 +237,7 @@ Tests use **Swift Testing** (`@Suite`, `@Test`, `#expect`), not XCTest. Test beh
 - **UI**: SwiftUI + AppKit hybrid · **Terminal**: GhosttyKit (`libghostty`) binary target · **Persistence**: SwiftData · **Target**: macOS 14.0+ · **Distribution**: Direct (non-sandboxed; App Store sandbox blocks shell execution)
 
 ### Web Dashboard (`web/`)
-- **Framework**: Next.js 15 (App Router) on Vercel · **Auth**: Better Auth + GitHub OAuth · **DB**: LibSQL + Kysely · **Terminal**: ghostty-web (WASM) · **Agent runtime**: multi-provider (Vercel Sandbox, Cloudflare Sandbox, Daytona, GitHub Actions) · **Styling**: CSS Modules + custom properties (no Tailwind) · **Tests**: Vitest (unit), Playwright (E2E with video)
+- **Framework**: Next.js 15 (App Router) on Vercel · **Auth**: Better Auth + GitHub OAuth · **DB**: LibSQL + Kysely · **Terminal**: ghostty-web (WASM) · **Agent runtime**: multi-provider (Vercel Sandbox + Anthropic Managed Agents live; Daytona/GitHub Actions unavailable stubs; mock for tests) · **Styling**: CSS Modules + custom properties (no Tailwind) · **Tests**: Vitest (unit `node` + component `jsdom` projects), Playwright (E2E with video)
 
 ### Infrastructure
 - Cloudflare Workers: webhook relay + Durable Object (`infra/cloudflare-webhook-relay/`), evidence store + R2 (`infra/cloudflare-evidence-store/`), terminal proxy + Durable Object (`infra/terminalshare-proxy/`)
@@ -249,7 +250,7 @@ Agents coordinate via GitHub Discussions. See `.agents/skills/gh-discuss/SKILL.m
 
 `qa-web-agent` (`.claude/agents/qa-web-agent.md`) is the project-local subagent for `web/` testing — Explore (black-box), Author (spec-first, human-gated), Heal (selector drift vs regression). Invoke via `/qa` (`.claude/commands/qa.md`): `explore [area]`, `author <slug>`, `heal [test-path]`, `run`, `ledger`. Coverage is measured against `web/tests/LEDGER.md` (behavior → test → last-verified date), not line-coverage %; new behaviors worth automating land in the ledger with a matching spec and test.
 
-Milestone delivery: use `.agents/skills/drive/SKILL.md` to plan first, refresh the latest milestone state from GitHub, and execute issues to completion one at a time.
+Milestone delivery: use `.agents/skills/drive/SKILL.md` to plan first, refresh the latest milestone state from GitHub, and execute issues to completion one at a time. For fanning work out across parallel implementation subagents (briefs, model tiers, the pre-ready quality gate), use `.agents/skills/subagent-delegation/SKILL.md`.
 
 ## Prototypes
 
