@@ -376,6 +376,108 @@ describe("PR review trigger relevance classifier", () => {
 		);
 	});
 
+	it("gates rerun trigger kinds behind PR_REVIEWER_RERUNS_ENABLED while opened is unaffected", () => {
+		const disabledEnv = { PR_REVIEWER_RERUNS_ENABLED: "0" };
+
+		const openedWhileDisabled = expectTrigger(
+			classifyPrReviewTrigger(
+				"pull_request",
+				"opened",
+				makePullRequestPayload("opened"),
+				disabledEnv,
+			),
+			"opened",
+		);
+		expect(openedWhileDisabled.context.kind).toBe("opened");
+
+		expectSkip(
+			classifyPrReviewTrigger(
+				"pull_request",
+				"reopened",
+				makePullRequestPayload("reopened"),
+				disabledEnv,
+			),
+			"reruns_disabled",
+			"ignored",
+		);
+		expectSkip(
+			classifyPrReviewTrigger(
+				"pull_request",
+				"ready_for_review",
+				makePullRequestPayload("ready_for_review"),
+				disabledEnv,
+			),
+			"reruns_disabled",
+			"ignored",
+		);
+		expectSkip(
+			classifyPrReviewTrigger(
+				"pull_request",
+				"synchronize",
+				makePullRequestPayload("synchronize", {
+					pull_request: { head: { ref: "feature/x", sha: "head-new" } },
+				}),
+				disabledEnv,
+			),
+			"reruns_disabled",
+			"ignored",
+		);
+		expectSkip(
+			classifyPrReviewTrigger(
+				"pull_request",
+				"edited",
+				makePullRequestPayload("edited", {
+					pull_request: { body: "Updated evidence and summary" },
+					changes: { body: { from: "old body" } },
+				}),
+				disabledEnv,
+			),
+			"reruns_disabled",
+			"ignored",
+		);
+		expectSkip(
+			classifyPrReviewTrigger(
+				"pull_request",
+				"edited",
+				makePullRequestPayload("edited", {
+					pull_request: { base: { ref: "release/2026-05" } },
+					changes: { base: { ref: { from: "main" } } },
+				}),
+				disabledEnv,
+			),
+			"reruns_disabled",
+			"ignored",
+		);
+		expectSkip(
+			classifyPrReviewTrigger(
+				"issue_comment",
+				"created",
+				makeIssueCommentPayload(
+					"Evidence: https://evidence.cloudcompute.com/pr-123.png",
+				),
+				disabledEnv,
+			),
+			"reruns_disabled",
+			"ignored",
+		);
+
+		// Explicitly-enabled and unset (the default used throughout this file)
+		// both preserve current rerun behavior.
+		const enabledEnv = { PR_REVIEWER_RERUNS_ENABLED: "1" };
+		const synchronizeEnabled = expectTrigger(
+			classifyPrReviewTrigger(
+				"pull_request",
+				"synchronize",
+				makePullRequestPayload("synchronize", {
+					pull_request: { head: { ref: "feature/x", sha: "head-new" } },
+				}),
+				enabledEnv,
+			),
+			"synchronize",
+		);
+		expect(synchronizeEnabled.context.kind).toBe("synchronize");
+	});
+
 	it("keeps repeated body edits and evidence comments idempotent by source id", () => {
 		const firstBody = expectTrigger(
 			classifyPrReviewTrigger(
@@ -564,6 +666,73 @@ describe("/api/webhooks/github POST", () => {
 				kind: "synchronize",
 				triggerSourceId: "newsha123456",
 			});
+		});
+
+		it("skips rerun triggers when PR_REVIEWER_RERUNS_ENABLED=0 but still triggers on opened", async () => {
+			vi.stubEnv("PR_REVIEWER_RERUNS_ENABLED", "0");
+			const consoleLog = vi.spyOn(console, "log").mockImplementation(() => {});
+			const { POST } = await import("./route");
+
+			await POST(
+				makePullRequestRequest("synchronize", {
+					pull_request: {
+						head: { ref: "feature/x", sha: "newsha123456" },
+					},
+				}),
+			);
+			expect(mocks.triggerPrReview).not.toHaveBeenCalled();
+			expect(consoleLog).toHaveBeenCalledTimes(1);
+			const logged = JSON.parse(consoleLog.mock.calls[0][0] as string);
+			expect(logged).toMatchObject({
+				scope: "pr-review-trigger",
+				decision: "skip_review",
+				kind: "reruns_disabled",
+				eventType: "pull_request",
+				action: "synchronize",
+				repo: "fairchild/workspaces",
+				prNumber: 123,
+			});
+
+			mocks.triggerPrReview.mockClear();
+			consoleLog.mockClear();
+
+			await POST(pullRequestOpenedRequest());
+			expect(mocks.triggerPrReview).toHaveBeenCalledTimes(1);
+			expect(mocks.triggerPrReview.mock.calls[0][1]).toMatchObject({
+				kind: "opened",
+			});
+			expect(consoleLog).not.toHaveBeenCalled();
+
+			consoleLog.mockRestore();
+		});
+
+		it("logs a structured skip reason for draft PRs", async () => {
+			const consoleLog = vi.spyOn(console, "log").mockImplementation(() => {});
+			const { POST } = await import("./route");
+
+			await POST(
+				makePullRequestRequest("synchronize", {
+					pull_request: {
+						draft: true,
+						head: { ref: "feature/x", sha: "newsha123456" },
+					},
+				}),
+			);
+
+			expect(mocks.triggerPrReview).not.toHaveBeenCalled();
+			expect(consoleLog).toHaveBeenCalledTimes(1);
+			const logged = JSON.parse(consoleLog.mock.calls[0][0] as string);
+			expect(logged).toMatchObject({
+				scope: "pr-review-trigger",
+				decision: "skip_review",
+				kind: "draft",
+				eventType: "pull_request",
+				action: "synchronize",
+				repo: "fairchild/workspaces",
+				prNumber: 123,
+			});
+
+			consoleLog.mockRestore();
 		});
 
 		it("triggers on PR body edits when changes.body is present", async () => {

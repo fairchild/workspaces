@@ -1,6 +1,9 @@
 import crypto from "node:crypto";
 import { triggerPrReview } from "@/lib/agent-runtime/pr-review";
-import { parsePrReviewTrigger } from "@/lib/agent-runtime/pr-review-trigger";
+import {
+	type PrReviewTriggerSkipClassification,
+	classifyPrReviewTrigger,
+} from "@/lib/agent-runtime/pr-review-trigger";
 import {
 	getChatMessageByDiscussionId,
 	pushChatMessage,
@@ -32,6 +35,65 @@ const SUPPORTED_EVENTS = new Set<string>([
 ]);
 
 const WEBHOOK_CANARY_HEADER = "x-workspace-webhook-canary";
+
+// Event types the PR review trigger classifier meaningfully evaluates. Other
+// SUPPORTED_EVENTS members (push, issues, check_run, workflow_run, discussion,
+// discussion_comment) reach this route for unrelated bridging duties and
+// always classify as the classifier's generic "unsupported" catch-all, so
+// logging their skip reason here would just be per-webhook noise.
+const PR_REVIEW_TRIGGER_LOG_EVENTS = new Set<string>([
+	"pull_request",
+	"issue_comment",
+	"pull_request_review",
+	"pull_request_review_comment",
+]);
+
+function extractPrNumberForLog(
+	eventType: string,
+	payload: Record<string, unknown>,
+): number | null {
+	if (eventType === "pull_request" || eventType === "pull_request_review") {
+		const pr = payload.pull_request as Record<string, unknown> | undefined;
+		const number = Number(pr?.number ?? 0);
+		return number || null;
+	}
+	if (
+		eventType === "issue_comment" ||
+		eventType === "pull_request_review_comment"
+	) {
+		const issue = payload.issue as Record<string, unknown> | undefined;
+		if (issue) {
+			const number = Number(issue.number ?? 0);
+			if (number) return number;
+		}
+		const pr = payload.pull_request as Record<string, unknown> | undefined;
+		const number = Number(pr?.number ?? 0);
+		return number || null;
+	}
+	return null;
+}
+
+function logPrReviewTriggerSkip(
+	classification: PrReviewTriggerSkipClassification,
+	eventType: string,
+	action: string,
+	repo: string | undefined,
+	payload: Record<string, unknown>,
+): void {
+	console.log(
+		JSON.stringify({
+			scope: "pr-review-trigger",
+			decision: classification.decision,
+			kind: classification.kind,
+			relevance: classification.relevance,
+			reason: classification.reason,
+			eventType,
+			action,
+			repo: repo ?? "unknown",
+			prNumber: extractPrNumberForLog(eventType, payload),
+		}),
+	);
+}
 
 async function verifySignature(
 	body: string,
@@ -154,7 +216,11 @@ export async function POST(request: Request): Promise<Response> {
 	const action = String(payload.action ?? "");
 	const repo = (payload.repository as Record<string, unknown> | undefined)
 		?.full_name as string | undefined;
-	const trigger = parsePrReviewTrigger(eventType, action, payload);
+	const classification = classifyPrReviewTrigger(eventType, action, payload);
+	const trigger =
+		classification.decision === "trigger_review"
+			? classification.trigger
+			: null;
 
 	if (canary.active) {
 		const wouldTrigger = Boolean(trigger);
@@ -167,6 +233,13 @@ export async function POST(request: Request): Promise<Response> {
 			action,
 			repo: repo ?? "unknown",
 		});
+	}
+
+	if (
+		classification.decision === "skip_review" &&
+		PR_REVIEW_TRIGGER_LOG_EVENTS.has(eventType)
+	) {
+		logPrReviewTriggerSkip(classification, eventType, action, repo, payload);
 	}
 
 	const event: WebhookEvent = {

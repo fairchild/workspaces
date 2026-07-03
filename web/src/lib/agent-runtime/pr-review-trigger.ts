@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isPrReviewerRerunsEnabled } from "./config";
 import type { PrReviewPayload, PrReviewTrigger } from "./pr-review";
 
 export interface ParsedPrTrigger {
@@ -22,7 +23,8 @@ export type PrReviewTriggerClassificationKind =
 	| "draft"
 	| "bot_sender"
 	| "malformed"
-	| "unsupported";
+	| "unsupported"
+	| "reruns_disabled";
 
 type PrReviewTriggerSkipRelevance = "metadata" | "terminal" | "ignored";
 
@@ -123,7 +125,18 @@ function materialClassification(input: {
 	};
 }
 
-export function classifyPrReviewTrigger(
+// Rerun kinds are gated by PR_REVIEWER_RERUNS_ENABLED; "opened" always runs
+// regardless of the flag so disabling reruns never blocks the initial review.
+const RERUN_TRIGGER_KINDS = new Set<PrReviewTriggerClassificationKind>([
+	"reopened",
+	"ready_for_review",
+	"synchronize",
+	"body_edit",
+	"base_edit",
+	"evidence_comment",
+]);
+
+function classifyPrReviewTriggerCore(
 	eventType: string,
 	action: string,
 	payload: Record<string, unknown>,
@@ -415,6 +428,33 @@ export function classifyPrReviewTrigger(
 		kind: "unsupported",
 		reason: `Unsupported webhook event for managed review: ${eventType}`,
 	});
+}
+
+export function classifyPrReviewTrigger(
+	eventType: string,
+	action: string,
+	payload: Record<string, unknown>,
+	env: Partial<NodeJS.ProcessEnv> = process.env,
+): PrReviewTriggerClassification {
+	const classification = classifyPrReviewTriggerCore(
+		eventType,
+		action,
+		payload,
+	);
+	if (
+		classification.decision === "trigger_review" &&
+		RERUN_TRIGGER_KINDS.has(classification.kind) &&
+		!isPrReviewerRerunsEnabled(env)
+	) {
+		return skipClassification({
+			eventType,
+			action,
+			kind: "reruns_disabled",
+			reason:
+				"PR_REVIEWER_RERUNS_ENABLED is disabled; only initial PR opens trigger managed reviews",
+		});
+	}
+	return classification;
 }
 
 export function parsePrReviewTrigger(
