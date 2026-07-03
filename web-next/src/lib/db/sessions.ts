@@ -77,6 +77,34 @@ export async function createSession(
 	return rowToSession(row);
 }
 
+/** A sessions-home row: the session plus its repo's display name. */
+export interface SessionListItem extends Session {
+	repoFullName: string | null;
+}
+
+/**
+ * Sessions for the home screen, most recently active first (served by the
+ * `idx_sessions_last_activity` index).
+ */
+export async function listSessions(
+	handle: DatabaseHandle,
+	limit = 100,
+): Promise<SessionListItem[]> {
+	await ensureSchema(handle);
+	const rows = await handle.db
+		.selectFrom("sessions")
+		.leftJoin("repos", "repos.id", "sessions.repo_id")
+		.selectAll("sessions")
+		.select("repos.full_name as repo_full_name")
+		.orderBy("sessions.last_activity_at", "desc")
+		.limit(limit)
+		.execute();
+	return rows.map((row) => ({
+		...rowToSession(row),
+		repoFullName: row.repo_full_name,
+	}));
+}
+
 export async function getSession(
 	handle: DatabaseHandle,
 	id: string,

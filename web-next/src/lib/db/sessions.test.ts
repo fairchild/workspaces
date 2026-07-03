@@ -45,7 +45,10 @@ describe("session store", () => {
 		const recorded = await handle.client.execute(
 			"SELECT id FROM schema_migrations ORDER BY id",
 		);
-		expect(recorded.rows.map((r) => String(r.id))).toEqual(["0001_baseline"]);
+		expect(recorded.rows.map((r) => String(r.id))).toEqual([
+			"0001_baseline",
+			"0002_auth_tables",
+		]);
 	});
 
 	test("creates and reads back a session", async () => {

@@ -8,11 +8,13 @@ import { expect, test } from "@playwright/test";
 // The mock turn takes ~5s of scripted delays end to end.
 const TURN_TIMEOUT = 20_000;
 
-test("home links to the spike", async ({ page }) => {
-	await page.goto("/");
-	await expect(page.getByRole("heading", { name: "Spaces" })).toBeVisible();
-	await page.getByRole("link", { name: /transcript spike/i }).click();
-	await expect(page).toHaveURL(/\/spike$/);
+// Dev fixture: unlisted since the sessions home replaced the placeholder
+// home page (#747) — reachable by direct URL only.
+test("the spike stays reachable at its direct URL", async ({ page }) => {
+	await page.goto("/spike");
+	await expect(
+		page.getByPlaceholder("Ask the agent to fix something…"),
+	).toBeVisible();
 });
 
 test("streams a mock coding turn with tool cards", async ({ page }) => {

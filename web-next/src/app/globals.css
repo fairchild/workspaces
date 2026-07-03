@@ -187,6 +187,10 @@
 	}
 
 	body {
+		/* Fill the viewport so the themed background (notably the dark
+		   radial gradient) has no seam below short pages. */
+		min-height: 100vh;
+		min-height: 100dvh;
 		background: var(--paper);
 		color: var(--ink);
 		font-family: var(--font-serif);

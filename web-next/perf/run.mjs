@@ -9,8 +9,11 @@ import { execFileSync, execSync } from "node:child_process";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
 import {
+	bypassServerEnv,
+	connectSeedClient,
 	launchChromium,
 	startProductionServer,
+	testAuthCookie,
 	WEB_NEXT_ROOT,
 } from "../scripts/harness.mjs";
 
@@ -43,7 +46,13 @@ function aggregate(stat, samples) {
 
 // --- first-load JS from the build manifests -------------------------------
 // Same basis as `next build`'s First Load JS column: gzipped size of the
-// route's client chunks (shared root chunks + layout + page).
+// route's client chunks (shared root chunks + layouts + page). Manifest keys
+// carry route groups ("/(app)/sessions/[id]/page"); scenarios name routes by
+// URL path, so keys are matched with groups stripped.
+
+function stripRouteGroups(key) {
+	return key.replace(/\/\([^)]+\)/g, "") || "/";
+}
 
 function firstLoadJsKb(route) {
 	const nextDir = path.join(WEB_NEXT_ROOT, ".next");
@@ -54,12 +63,20 @@ function firstLoadJsKb(route) {
 		readFileSync(path.join(nextDir, "app-build-manifest.json"), "utf8"),
 	);
 	const routeKey = route === "/" ? "/page" : `${route}/page`;
+	const appliesToRoute = (key) => {
+		const stripped = stripRouteGroups(key);
+		if (stripped === routeKey) return true; // the page itself
+		if (!stripped.endsWith("/layout")) return false;
+		// A layout applies when the route sits under its segment path.
+		const layoutDir = stripped.slice(0, -"layout".length);
+		return routeKey.startsWith(layoutDir);
+	};
 	const files = new Set(
-		[
-			...(buildManifest.rootMainFiles ?? []),
-			...(appManifest.pages["/layout"] ?? []),
-			...(appManifest.pages[routeKey] ?? []),
-		].filter((file) => file.endsWith(".js")),
+		Object.entries(appManifest.pages)
+			.filter(([key]) => appliesToRoute(key))
+			.flatMap(([, chunkFiles]) => chunkFiles)
+			.concat(buildManifest.rootMainFiles ?? [])
+			.filter((file) => file.endsWith(".js")),
 	);
 	let bytes = 0;
 	for (const file of files) {
@@ -70,8 +87,15 @@ function firstLoadJsKb(route) {
 
 // --- in-page helpers -------------------------------------------------------
 
-async function openSpike(browser, baseUrl) {
+/** A cold, signed-in context (routes are behind auth — see contract note). */
+async function newSignedInContext(browser, baseUrl) {
 	const context = await browser.newContext({ baseURL: baseUrl });
+	await context.addCookies([testAuthCookie(baseUrl)]);
+	return context;
+}
+
+async function openSpike(browser, baseUrl) {
+	const context = await newSignedInContext(browser, baseUrl);
 	const page = await context.newPage();
 	await page.goto("/spike", { waitUntil: "networkidle" });
 	return { context, page };
@@ -141,11 +165,14 @@ async function runStreamingCadence(browser, baseUrl, runs) {
 	return { longest_task_ms: samples };
 }
 
-async function runRoute(browser, baseUrl, route, runs) {
+// `scenario.manifest_route` maps a concrete URL (e.g. /sessions/perf-empty)
+// to its build-manifest route (/sessions/[id]) for the first-load-JS lookup.
+async function runRoute(browser, baseUrl, scenario) {
+	const { route, runs } = scenario;
 	const lcpSamples = [];
 	const tbtSamples = [];
 	for (let i = 0; i < runs; i++) {
-		const context = await browser.newContext({ baseURL: baseUrl });
+		const context = await newSignedInContext(browser, baseUrl);
 		const page = await context.newPage();
 		await page.addInitScript(() => {
 			window.__routePerf = { lcp: 0, longTasks: [] };
@@ -171,7 +198,7 @@ async function runRoute(browser, baseUrl, route, runs) {
 	return {
 		lcp_ms: lcpSamples,
 		tbt_ms: tbtSamples,
-		first_load_js_kb: [firstLoadJsKb(route)],
+		first_load_js_kb: [firstLoadJsKb(scenario.manifest_route ?? route)],
 	};
 }
 
@@ -182,7 +209,7 @@ async function runTranscriptRender(browser, baseUrl, route, runs) {
 	const messageCount = Number(new URL(route, baseUrl).searchParams.get("seed"));
 	const samples = [];
 	for (let i = 0; i < runs; i++) {
-		const context = await browser.newContext({ baseURL: baseUrl });
+		const context = await newSignedInContext(browser, baseUrl);
 		const page = await context.newPage();
 		await page.goto(route, { waitUntil: "commit" });
 		await page.waitForFunction(
@@ -219,12 +246,10 @@ const SCENARIO_RUNNERS = {
 	transcript_render_200: (browser, baseUrl, scenario) =>
 		runTranscriptRender(browser, baseUrl, scenario.route, scenario.runs),
 	projection_200: (browser, baseUrl, scenario) => runProjectionBench(scenario),
-	route_home: (browser, baseUrl, scenario) =>
-		runRoute(browser, baseUrl, scenario.route, scenario.runs),
-	route_spike: (browser, baseUrl, scenario) =>
-		runRoute(browser, baseUrl, scenario.route, scenario.runs),
-	route_sessions_demo: (browser, baseUrl, scenario) =>
-		runRoute(browser, baseUrl, scenario.route, scenario.runs),
+	route_home: runRoute,
+	route_session_empty: runRoute,
+	route_spike: runRoute,
+	route_sessions_demo: runRoute,
 };
 
 // --- reporting -------------------------------------------------------------
@@ -268,7 +293,24 @@ async function main() {
 	};
 	let failed = false;
 
-	const server = await startProductionServer(PORT);
+	const { env, databaseUrl } = bypassServerEnv("perf-db");
+	const server = await startProductionServer(PORT, env);
+	// Seed the fixed rows the route scenarios navigate to: one repo, one
+	// empty session at a stable id.
+	const db = await connectSeedClient(server.baseUrl, databaseUrl);
+	const now = new Date().toISOString();
+	await db.execute({
+		sql: "INSERT INTO repos (id, full_name, default_branch, created_at) VALUES (?, ?, 'main', ?)",
+		args: ["fairchild/workspaces", "fairchild/workspaces", now],
+	});
+	await db.execute({
+		sql: `INSERT INTO sessions
+			(id, repo_id, title, provider, status, claude_session_id, created_at, last_activity_at)
+			VALUES ('perf-empty', 'fairchild/workspaces', '', 'mock', 'active', NULL, ?, ?)`,
+		args: [now, now],
+	});
+	db.close();
+
 	const browser = await launchChromium();
 	try {
 		for (const scenario of contract.scenarios) {
