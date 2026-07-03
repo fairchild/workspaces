@@ -6,7 +6,8 @@
 		"long_tasks": "PerformanceObserver longtask entries, observed in-page. The longtask API only reports tasks >= 50ms, so longest_task_ms reads 0 in a clean run and any nonzero value is a budget violation.",
 		"tbt": "Sum of (longtask duration - 50ms) for buffered long tasks within the settle window after navigation.",
 		"first_load_js": "Gzipped size of the route's client JS chunks from the .next build manifests — same basis as the `next build` First Load JS column.",
-		"projection": "In-process (no browser): perf/projection-bench.mjs, run under tsx, builds a deterministic 200-event log and times projectSessionEvents over N runs after one warmup, printing JSON samples run.mjs aggregates. Measures the pure events→UIMessage[] projection (adapter + readUIMessageStream reduction) that #749's tail/resume path replays through."
+		"projection": "In-process (no browser): perf/projection-bench.mjs, run under tsx, builds a deterministic 200-event log and times projectSessionEvents over N runs after one warmup, printing JSON samples run.mjs aggregates. Measures the pure events→UIMessage[] projection (adapter + readUIMessageStream reduction) that #749's tail/resume path replays through.",
+		"auth": "Routes are behind auth (#747). The server runs in test-bypass mode (AUTH_BYPASS=1, throwaway database seeded with one repo + one empty session) and every browser context carries the signed-in test cookie, so route metrics include the middleware + server auth gate — same work production requests do."
 	},
 	"scenarios": [
 		{
@@ -50,8 +51,21 @@
 		{
 			"id": "route_home",
 			"status": "measured",
-			"description": "Cold production load of /: LCP, total blocking time, and first-load JS.",
+			"description": "Cold production load of / (the sessions home, one seeded session row, auth gate included): LCP, total blocking time, and first-load JS.",
 			"route": "/",
+			"runs": 3,
+			"metrics": {
+				"lcp_ms": { "stat": "median", "budget": 1200 },
+				"tbt_ms": { "stat": "median", "budget": 200 },
+				"first_load_js_kb": { "stat": "exact", "budget": 200 }
+			}
+		},
+		{
+			"id": "route_session_empty",
+			"status": "measured",
+			"description": "Cold production load of a real empty session at /sessions/[id] (seeded row, Folio surface, autofocused compose): LCP, total blocking time, and first-load JS.",
+			"route": "/sessions/perf-empty",
+			"manifest_route": "/sessions/[id]",
 			"runs": 3,
 			"metrics": {
 				"lcp_ms": { "stat": "median", "budget": 1200 },

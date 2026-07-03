@@ -1,17 +1,21 @@
 /*
- * Evidence capture: screenshots of /, /spike (after a full streamed mock
- * turn), and the Folio session demo (/sessions/demo) in both themes —
- * plus the refine-folio prototype itself, captured beside the demo for
- * pixel comparison. Output goes to output/evidence/ (gitignored); CI
- * uploads it as an artifact — the sanctioned publish path per
- * docs/development/remote-sessions.md.
+ * Evidence capture, light + dark: the sessions home (empty and populated),
+ * an empty session reached through the real new-session flow, /spike after
+ * a full streamed mock turn, the Folio session demo, and the refine-folio
+ * prototype beside it for pixel comparison. Runs against a production
+ * build in auth-bypass mode over a throwaway database. Output goes to
+ * output/evidence/ (gitignored); CI uploads it as an artifact — the
+ * sanctioned publish path per docs/development/remote-sessions.md.
  */
 import { execFileSync } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import {
+	bypassServerEnv,
+	connectSeedClient,
 	launchChromium,
 	startProductionServer,
+	testAuthCookie,
 	WEB_NEXT_ROOT,
 } from "./harness.mjs";
 
@@ -25,8 +29,54 @@ const PROTOTYPE_PATH = path.resolve(
 	"../prototypes/web-session-redesign/refine-folio.html",
 );
 
-async function captureHome(page, file) {
+// --- database state ----------------------------------------------------------
+// Each theme pass replays the same story on clean tables: empty home →
+// UI-created session → a seeded, lived-in home.
+
+async function wipeRows(db) {
+	for (const table of ["session_events", "sessions", "repos"]) {
+		await db.execute(`DELETE FROM ${table}`);
+	}
+}
+
+/** Two titled sessions with staggered recency behind the UI-created one. */
+async function seedPopulatedHome(db) {
+	const hoursAgo = (h) => new Date(Date.now() - h * 3_600_000).toISOString();
+	await db.execute({
+		sql: "INSERT OR IGNORE INTO repos (id, full_name, default_branch, created_at) VALUES (?, ?, ?, ?)",
+		args: ["fairchild/dotfiles", "fairchild/dotfiles", "main", hoursAgo(30)],
+	});
+	const sessions = [
+		["seed-resume", "fairchild/workspaces", "Fix the session-resume path", "active", 2],
+		["seed-masthead", "fairchild/dotfiles", "Ship the Folio masthead", "idle", 26],
+	];
+	for (const [id, repoId, title, status, hours] of sessions) {
+		await db.execute({
+			sql: `INSERT INTO sessions
+				(id, repo_id, title, provider, status, claude_session_id, created_at, last_activity_at)
+				VALUES (?, ?, ?, 'mock', ?, NULL, ?, ?)`,
+			args: [id, repoId, title, status, hoursAgo(hours + 1), hoursAgo(hours)],
+		});
+	}
+}
+
+// --- captures ------------------------------------------------------------------
+
+async function captureSettled(page, url, file) {
+	await page.goto(url, { waitUntil: "networkidle" });
+	await page.waitForTimeout(ANIMATION_SETTLE_MS);
+	await page.screenshot({ path: file });
+}
+
+/** Drives the real new-session flow and captures the empty session it makes. */
+async function captureNewSessionFlow(page, file) {
 	await page.goto("/", { waitUntil: "networkidle" });
+	await page
+		.getByRole("textbox", { name: "Repository (owner/name)" })
+		.fill("fairchild/workspaces");
+	await page.keyboard.press("Enter");
+	await page.waitForURL(/\/sessions\//, { timeout: TURN_TIMEOUT_MS });
+	await page.waitForTimeout(ANIMATION_SETTLE_MS);
 	await page.screenshot({ path: file });
 }
 
@@ -53,12 +103,6 @@ async function captureSpikeAfterTurn(page, file) {
 		const transcript = document.querySelector("main > div.overflow-y-auto");
 		if (transcript) transcript.scrollTop = transcript.scrollHeight;
 	});
-	await page.screenshot({ path: file });
-}
-
-async function captureSessionsDemo(page, file) {
-	await page.goto("/sessions/demo", { waitUntil: "networkidle" });
-	await page.waitForTimeout(ANIMATION_SETTLE_MS);
 	await page.screenshot({ path: file });
 }
 
@@ -119,7 +163,9 @@ async function capturePrototype(page, theme, file) {
 
 async function main() {
 	mkdirSync(OUTPUT_DIR, { recursive: true });
-	const server = await startProductionServer(PORT);
+	const { env, databaseUrl } = bypassServerEnv("evidence-db");
+	const server = await startProductionServer(PORT, env);
+	const db = await connectSeedClient(server.baseUrl, databaseUrl);
 	const browser = await launchChromium();
 	try {
 		for (const colorScheme of ["light", "dark"]) {
@@ -131,21 +177,29 @@ async function main() {
 				viewport: { width: 1280, height: 800 },
 				deviceScaleFactor: 2,
 			});
+			await context.addCookies([testAuthCookie(server.baseUrl)]);
 			await routeFontsThroughCurl(context);
 			const page = await context.newPage();
 			const shot = (name) => path.join(OUTPUT_DIR, `${name}-${colorScheme}.png`);
-			await captureHome(page, shot("home"));
+
+			await wipeRows(db);
+			await captureSettled(page, "/", shot("home-empty"));
+			await captureNewSessionFlow(page, shot("session-empty"));
+			await seedPopulatedHome(db);
+			await captureSettled(page, "/", shot("home-populated"));
+
 			await captureSpikeAfterTurn(page, shot("spike"));
-			await captureSessionsDemo(page, shot("sessions-demo"));
+			await captureSettled(page, "/sessions/demo", shot("sessions-demo"));
 			await capturePrototype(page, colorScheme, shot("prototype-folio"));
 			await context.close();
 			console.log(
-				`captured home + spike + sessions-demo + prototype (${colorScheme})`,
+				`captured home (empty+populated) + session-empty + spike + sessions-demo + prototype (${colorScheme})`,
 			);
 		}
 	} finally {
 		await browser.close();
 		await server.stop();
+		db.close();
 	}
 	console.log(`evidence written to ${OUTPUT_DIR}`);
 }
