@@ -24,6 +24,8 @@ private struct ModelSnapshot: Equatable {
 
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.localStateStore) private var localStateStore
+    @ExperimentalFeatureFlag(.restoreSessionsOnLaunch) private var restoreSessionsOnLaunchEnabled: Bool
     @Binding var deepLinkState: WorkspaceDeepLinkState
     @Binding var lastSurfaceRawValue: String
     @ObservedObject var appCommandState: AppCommandState
@@ -717,6 +719,7 @@ struct ContentView: View {
                 Task { @MainActor in
                     await configureAutomationIntegration()
                     ensureInitialHostSession()
+                    await computeRestorePlanIfEnabled()
                     prewarmPerfTerminalSurfacesIfNeeded()
                     resolveSurfaceLifecycle()
                     applyDiagnosticsFixtureIfNeeded()
@@ -2825,6 +2828,28 @@ struct ContentView: View {
     private func normalizePath(_ rawPath: String) -> String {
         let expanded = NSString(string: rawPath).expandingTildeInPath
         return URL(fileURLWithPath: expanded).standardizedFileURL.resolvingSymlinksInPath().path
+    }
+
+    /// Cold-start restore (experimental, opt-in): compute what could be restored
+    /// from the previous run and log the result. Wiring only — nothing is launched
+    /// and no UI is shown here; the restore banner and execution land in a
+    /// follow-up. A no-op unless the `restoreSessionsOnLaunch` flag is enabled.
+    @MainActor
+    private func computeRestorePlanIfEnabled() async {
+        guard restoreSessionsOnLaunchEnabled, let localStateStore else { return }
+        let index = RestoreTargetIndexBuilder(
+            homeDirectoryPath: resolvedDefaultHostDirectory.path,
+            normalizePath: RestorePathNormalization.normalize
+        ).build(repos: repos)
+        let plan = await TerminalRestoreCoordinator(
+            localStateStore: localStateStore,
+            normalizePath: RestorePathNormalization.normalize
+        ).makePlan(index: index)
+        if plan.surfaces.isEmpty {
+            NSLog("[Restore] no restorable surfaces from previous run")
+        } else {
+            NSLog("[Restore] planned %ld restorable surface(s)", plan.surfaces.count)
+        }
     }
 
     private func refreshWorkspaceStatusAggregator() {

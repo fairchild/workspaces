@@ -9,6 +9,7 @@ import SwiftUI
 enum ExperimentalFeature: String, CaseIterable, Identifiable {
     case automationAPI = "automationAPI"
     case minimalToolbar = "minimalToolbar"
+    case restoreSessionsOnLaunch = "restoreSessionsOnLaunch"
 
     var id: String { rawValue }
 
@@ -18,6 +19,8 @@ enum ExperimentalFeature: String, CaseIterable, Identifiable {
             return "Automation API"
         case .minimalToolbar:
             return "Minimal Toolbar"
+        case .restoreSessionsOnLaunch:
+            return "Restore Sessions on Launch"
         }
     }
 
@@ -27,6 +30,8 @@ enum ExperimentalFeature: String, CaseIterable, Identifiable {
             return "Expose a local same-user socket so terminal tiles can inspect and arrange their WorkSpaces shell."
         case .minimalToolbar:
             return "Hide secondary toolbar controls so terminal surfaces stay closer to the canvas."
+        case .restoreSessionsOnLaunch:
+            return "Offer to reopen the terminal sessions from your previous run when the app starts."
         }
     }
 
@@ -44,6 +49,8 @@ enum ExperimentalFeature: String, CaseIterable, Identifiable {
             return "WORKSPACES_AUTOMATION_API"
         case .minimalToolbar:
             return "WORKSPACES_PERF_MINIMAL_TOOLBAR"
+        case .restoreSessionsOnLaunch:
+            return "WORKSPACES_RESTORE_SESSIONS_ON_LAUNCH"
         }
     }
 }
