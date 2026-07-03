@@ -10,8 +10,10 @@ the Turso row-read discipline).
   `ensureSchema()` (`src/lib/db/schema.ts`), which records each id in
   `schema_migrations`. Never edit a shipped migration — append a new one.
 - **Row types:** the `Database` interface in `src/lib/db/client.ts`.
-- **Store API:** `src/lib/db/sessions.ts` (create/read sessions, append/read
-  events, project a transcript).
+- **Store API:** `src/lib/db/sessions.ts` (create/read/list sessions,
+  append/read events, project a transcript), `src/lib/db/repos.ts`
+  (list/ensure connected repos), `src/lib/db/start-session.ts` (the
+  new-session write path).
 
 Keep this doc in sync with the migrations whenever tables, indexes, or persisted
 meanings change.
@@ -70,6 +72,15 @@ the monotonic cursor **and** lets the resume/tail query
 `WHERE session_id = ? AND seq > ? ORDER BY seq` seek the index instead of
 scanning the table — the Turso row-read lesson carried over from `web/`.
 `seq` is the resume cursor #749's tail route reads.
+
+### Better Auth tables (`user`, `session`, `account`, `verification`)
+
+Migration `0002_auth_tables` (#747) creates Better Auth's default sqlite
+tables — camelCase columns, queried by Better Auth's own adapter, so they are
+deliberately **not** in the Kysely `Database` type. One addition: `user.githubLogin`
+(text, nullable), persisted from the GitHub OAuth profile at sign-in — it is
+what the `ALLOWED_LOGINS` allowlist checks (emails can be private). Only used
+in real-OAuth mode; the test bypass never touches these tables.
 
 ## Payload shape decision: store StreamChunk-shaped, project at read time
 
