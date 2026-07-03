@@ -326,6 +326,7 @@ Priority `idea` = parked in the `idea` label (speculative, may never be built); 
 
 Archived (in `backlog/done/`):
 
+- Web next-cycle plan (2026-07) — fully executed same-day 2026-07-02 (PRs #723–#735; milestone #7 closed); see `backlog/done/web-next-cycle_plan.md`
 - Pane-tree terminal tiling model — deferred 2026-04-23 (`docs/decisions/terminal-multiplexing.md`), then deliberately revived as the Tile Tree epic [#627](https://github.com/fairchild/workspaces/issues/627) (Phase 8 records the superseding ADR)
 - Terminal multiplexing decision session — resolved by `docs/decisions/terminal-multiplexing.md` (2026-04-23)
 - Isolation strategies (research) — superseded by Tahoe VZ execution brief
