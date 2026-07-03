@@ -200,6 +200,27 @@ export async function readEvents(
 	}));
 }
 
+/**
+ * The `created_at` of a session's most recent event, or undefined if it has
+ * none. The tail route uses it as a liveness clock: an "active" turn whose
+ * newest event is older than the stale threshold is treated as abandoned (its
+ * runner died) rather than left hanging the client.
+ */
+export async function newestEventAt(
+	handle: DatabaseHandle,
+	sessionId: string,
+): Promise<string | undefined> {
+	await ensureSchema(handle);
+	const row = await handle.db
+		.selectFrom("session_events")
+		.select("created_at")
+		.where("session_id", "=", sessionId)
+		.orderBy("seq", "desc")
+		.limit(1)
+		.executeTakeFirst();
+	return row?.created_at;
+}
+
 /** Convenience: read a session's full log and project it to a transcript. */
 export async function readTranscript(
 	handle: DatabaseHandle,

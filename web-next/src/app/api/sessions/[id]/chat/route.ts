@@ -6,6 +6,7 @@
  * UIMessage stream flows back to useChat.
  */
 import { createUIMessageStreamResponse } from "ai";
+import { after } from "next/server";
 import { getAuthState } from "@/lib/auth/auth-state";
 import { runSessionTurn } from "@/lib/agent-runtime/run-turn";
 import { getDatabase } from "@/lib/db/client";
@@ -39,7 +40,16 @@ export async function POST(
 		return Response.json({ error: "text is required" }, { status: 400 });
 	}
 
-	return createUIMessageStreamResponse({
-		stream: await runSessionTurn(handle, session, text),
-	});
+	const turn = await runSessionTurn(handle, session, text);
+	// The ingest loop already runs eagerly (the stream below tails it live).
+	// after() keeps a serverless invocation alive until the turn settles — the
+	// waitUntil seam; a no-op on a long-running node server. after() is only
+	// valid in a request scope, so guard it (unit tests call runSessionTurn
+	// directly, outside one).
+	try {
+		after(() => turn.ingest);
+	} catch {
+		// Not in a request scope (e.g. a test harness) — ingest still runs.
+	}
+	return createUIMessageStreamResponse({ stream: turn.stream });
 }

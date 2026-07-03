@@ -23,6 +23,12 @@ const TURN_TIMEOUT_MS = 20_000;
 // Time to keep observing after load so late long tasks and LCP updates land.
 const ROUTE_SETTLE_MS = 1500;
 
+// resume_latency_100: one seeded session per run, each an interrupted turn
+// whose last event carries this marker (its paint means "caught up").
+const RESUME_SESSION_PREFIX = "perf-resume-";
+const RESUME_MARKER = "RESUME_CAUGHT_UP";
+const RESUME_EVENT_COUNT = 100;
+
 const contract = JSON.parse(
 	readFileSync(path.join(PERF_DIR, "contract.json"), "utf8"),
 );
@@ -208,6 +214,30 @@ async function runRoute(browser, baseUrl, scenario) {
 	};
 }
 
+// Reconnect-to-caught-up for an interrupted turn: navigate to a session whose
+// ~100-event assistant turn was left in flight (seeded stale, no `done`), so
+// the client resumes it — the tail route closes the abandoned turn and
+// backfills the whole log. Time from navigation start until the turn's last
+// event (a marker) is painted, on a cold context per run.
+async function runResumeLatency(browser, baseUrl, scenario) {
+	const samples = [];
+	for (let i = 0; i < scenario.runs; i++) {
+		const context = await newSignedInContext(browser, baseUrl);
+		const page = await context.newPage();
+		await page.goto(`/sessions/${RESUME_SESSION_PREFIX}${i}`, {
+			waitUntil: "commit",
+		});
+		await page.waitForFunction(
+			(marker) => document.body.innerText.includes(marker),
+			RESUME_MARKER,
+			{ timeout: TURN_TIMEOUT_MS },
+		);
+		samples.push(await page.evaluate(() => performance.now()));
+		await context.close();
+	}
+	return { resume_ms: samples };
+}
+
 // Time from navigation start until every seeded message is present in a
 // painted frame (waitForFunction polls on rAF; performance.now() is relative
 // to navigationStart), on a cold context per run.
@@ -249,6 +279,7 @@ const SCENARIO_RUNNERS = {
 		runTtftMock(browser, baseUrl, scenario.runs),
 	streaming_cadence: (browser, baseUrl, scenario) =>
 		runStreamingCadence(browser, baseUrl, scenario.runs),
+	resume_latency_100: runResumeLatency,
 	transcript_render_200: (browser, baseUrl, scenario) =>
 		runTranscriptRender(browser, baseUrl, scenario.route, scenario.runs),
 	projection_200: (browser, baseUrl, scenario) => runProjectionBench(scenario),
@@ -315,6 +346,26 @@ async function main() {
 				VALUES (?, 'fairchild/workspaces', '', 'mock', 'active', NULL, ?, ?)`,
 			args: [id, now, now],
 		});
+	// A ~100-event assistant turn with no `done`, backdated so it reads as
+	// stale (an interrupted turn). seq 1 is the user prompt; seq 2..N are
+	// assistant text deltas, the last carrying the caught-up marker.
+	const seedInterruptedTurn = async (db, id) => {
+		const old = new Date(Date.now() - 60_000).toISOString();
+		const event = (seq, role, chunk) =>
+			db.execute({
+				sql: `INSERT INTO session_events (session_id, seq, role, kind, payload, created_at)
+					VALUES (?, ?, ?, ?, ?, ?)`,
+				args: [id, seq, role, chunk.type, JSON.stringify(chunk), old],
+			});
+		await event(1, "user", { type: "text", content: "Resume a long turn" });
+		for (let seq = 2; seq < RESUME_EVENT_COUNT; seq++) {
+			await event(seq, "assistant", { type: "text", content: `token${seq} ` });
+		}
+		await event(RESUME_EVENT_COUNT, "assistant", {
+			type: "text",
+			content: RESUME_MARKER,
+		});
+	};
 	await seedSession("perf-empty");
 	const runsOf = (id) =>
 		contract.scenarios.find((scenario) => scenario.id === id)?.runs ?? 0;
@@ -323,6 +374,14 @@ async function main() {
 	}
 	for (let i = 0; i < runsOf("streaming_cadence"); i++) {
 		await seedSession(`perf-cadence-${i}`);
+	}
+	// resume_latency_100: one interrupted turn per run. Each is a ~100-event
+	// assistant turn with NO `done` and a backdated clock, so resolveTurn reads
+	// it as stale and the client resumes it on load.
+	for (let i = 0; i < runsOf("resume_latency_100"); i++) {
+		const id = `${RESUME_SESSION_PREFIX}${i}`;
+		await seedSession(id);
+		await seedInterruptedTurn(db, id);
 	}
 	db.close();
 

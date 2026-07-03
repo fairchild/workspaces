@@ -35,6 +35,7 @@ export function LiveSessionView({
 	session,
 	author,
 	initialMessages,
+	resume = false,
 }: {
 	sessionId: string;
 	session: Omit<SessionViewData, "messages" | "activeTurn">;
@@ -42,6 +43,8 @@ export function LiveSessionView({
 	author: string;
 	/** The persisted transcript, projected server-side from session_events. */
 	initialMessages: FolioMessage[];
+	/** When a turn is in flight on mount, reconnect to its tail and catch up. */
+	resume?: boolean;
 }) {
 	// Transient provider statuses of the in-flight turn, oldest first.
 	const [steps, setSteps] = useState<string[]>([]);
@@ -55,6 +58,11 @@ export function LiveSessionView({
 				prepareSendMessagesRequest: ({ messages }) => ({
 					body: { text: lastUserText(messages) },
 				}),
+				// Resume reconnects here — the durable tail route, not the send
+				// endpoint's default `${api}/${chatId}/stream`.
+				prepareReconnectToStreamRequest: () => ({
+					api: `/api/sessions/${sessionId}/stream`,
+				}),
 			}),
 		[sessionId],
 	);
@@ -63,6 +71,7 @@ export function LiveSessionView({
 		id: sessionId,
 		transport,
 		messages: initialMessages,
+		resume,
 		experimental_throttle: TOKEN_THROTTLE_MS,
 		onData: (part) => {
 			if (part.type === "data-status") {

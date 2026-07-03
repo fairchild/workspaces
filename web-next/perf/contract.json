@@ -87,12 +87,11 @@
 		},
 		{
 			"id": "resume_latency_100",
-			"status": "pending",
-			"reason": "durable/resumable turns land with #749; budget is provisional until first measurement",
-			"description": "Reconnect to a session with a ~100-event log; time from reconnect to transcript caught up.",
+			"status": "measured",
+			"description": "Load a session whose ~100-event assistant turn was left in flight (seeded stale, no `done`): the client resumes it, the tail route closes the abandoned turn and backfills the whole log. Median time from navigation start to the turn's last event (a marker) painted. One fresh interrupted session per run.",
 			"runs": 3,
 			"metrics": {
-				"resume_ms": { "stat": "median", "budget": 1000 }
+				"resume_ms": { "stat": "median", "budget": 800 }
 			}
 		}
 	]
