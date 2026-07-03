@@ -683,7 +683,7 @@ def parse_args() -> argparse.Namespace:
                         help="Generate commentary without posting")
     parser.add_argument("--fixtures-dir", type=Path,
                         help="Load data from fixture pack instead of live GitHub")
-    parser.add_argument("--model", default="claude-sonnet-4-20250514",
+    parser.add_argument("--model", default="claude-sonnet-5",
                         help="Claude model for commentary generation")
     parser.add_argument("--threshold", type=int, default=5,
                         help="Minimum activity score to post (default: 5)")
@@ -706,6 +706,16 @@ def output_result(
 
 def main() -> None:
     args = parse_args()
+
+    # Fail fast before spending minutes on GitHub calls: a live post needs the
+    # API key, and the daily cron has repeatedly wasted its whole run reaching
+    # the call site only to abort for a missing key.
+    live_post = not (args.fixtures_dir or args.dry_run)
+    if live_post and not os.environ.get("ANTHROPIC_API_KEY", "").strip():
+        raise CarlError(
+            "ANTHROPIC_API_KEY is required to post commentary. "
+            "Set it as a repo Actions secret, or run with --dry-run."
+        )
 
     if args.fixtures_dir:
         fixture_path = args.fixtures_dir
@@ -768,9 +778,7 @@ def main() -> None:
         output_result(result, json_output=args.json_output)
         return
 
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if not api_key:
-        raise CarlError("ANTHROPIC_API_KEY environment variable is required")
+    api_key = os.environ["ANTHROPIC_API_KEY"]  # guaranteed by the fail-fast check above
     log(f"Calling Claude ({args.model})...")
     commentary = call_claude(system_msg, user_msg, model=args.model, api_key=api_key)
 
