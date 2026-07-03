@@ -9,6 +9,12 @@ import type { StreamChunk } from "../agent-runtime/stream-chunk";
 export interface AdapterOptions {
 	messageId?: string;
 	generateId?: () => string;
+	/**
+	 * Message metadata factory. Called with the chunks consumed so far and
+	 * emitted twice: on `start` (no chunks yet — e.g. the author label) and on
+	 * `finish` (the whole turn — e.g. derived turn stats).
+	 */
+	messageMetadata?: (chunks: readonly StreamChunk[]) => unknown;
 }
 
 function defaultGenerateId(): string {
@@ -26,6 +32,8 @@ function asString(value: unknown): string | undefined {
  * - Contiguous `text` chunks form one text part; any tool/error chunk closes it.
  * - `tool_use`/`tool_result` become dynamic tool parts. Results pair by
  *   `metadata.toolUseId` when present, otherwise FIFO against unresolved calls.
+ * - A `tool_result` carrying `metadata.diff` additionally surfaces it as a
+ *   persistent `data-diff` part (the Folio contextual diff card).
  * - `status` becomes a transient `data-status` chunk (delivered via onData,
  *   never persisted into the message).
  * - `done` — or the source ending — closes open parts and emits `finish`.
@@ -39,6 +47,7 @@ export async function* toUIMessageChunks(
 	let openTextId: string | null = null;
 	let finished = false;
 	const unresolvedToolIds: string[] = [];
+	const consumed: StreamChunk[] = [];
 
 	function closeText(): UIMessageChunk[] {
 		if (openTextId === null) return [];
@@ -47,10 +56,15 @@ export async function* toUIMessageChunks(
 		return [end];
 	}
 
-	yield { type: "start", messageId: options.messageId };
+	yield {
+		type: "start",
+		messageId: options.messageId,
+		messageMetadata: options.messageMetadata?.(consumed),
+	};
 
 	for await (const chunk of source) {
 		if (finished) break;
+		consumed.push(chunk);
 
 		switch (chunk.type) {
 			case "text": {
@@ -97,6 +111,13 @@ export async function* toUIMessageChunks(
 						: { output: chunk.metadata?.output ?? chunk.content }),
 					dynamic: true,
 				} as UIMessageChunk;
+				if (chunk.metadata?.diff !== undefined) {
+					yield {
+						type: "data-diff",
+						id: generateId(),
+						data: chunk.metadata.diff,
+					};
+				}
 				break;
 			}
 			case "status": {
@@ -120,7 +141,10 @@ export async function* toUIMessageChunks(
 	}
 
 	yield* closeText();
-	yield { type: "finish" };
+	yield {
+		type: "finish",
+		messageMetadata: options.messageMetadata?.(consumed),
+	};
 }
 
 /** Wraps the adapted stream as a ReadableStream for createUIMessageStreamResponse. */

@@ -145,4 +145,24 @@ describe("formatTurnStats", () => {
 			formatTurnStats({ toolCount: 2, tokenCount: 12000, durationMs: 900 }),
 		).toBe("2 tools · 12k tokens · 0.9s");
 	});
+
+	it("slots in files, line delta, and tests when the turn produced them", () => {
+		expect(
+			formatTurnStats({
+				toolCount: 3,
+				tokenCount: 1100,
+				durationMs: 6200,
+				filesChanged: 1,
+				additions: 3,
+				deletions: 1,
+				testsPassed: 4,
+			}),
+		).toBe("3 tools · 1 file · +3 −1 · 4 tests · 1.1k tokens · 6.2s");
+	});
+
+	it("omits figures the turn never produced", () => {
+		expect(formatTurnStats({ toolCount: 0, durationMs: 500 })).toBe(
+			"0 tools · 0.5s",
+		);
+	});
 });

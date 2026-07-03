@@ -172,8 +172,25 @@ function formatDuration(ms: number): string {
 	return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`;
 }
 
-/** "4 tools · 3.2k tokens · 18.6s" */
+function plural(count: number, noun: string): string {
+	return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+
+/**
+ * "4 tools · 3.2k tokens · 18.6s" — optional figures (files, line delta,
+ * tests) slot in when the turn produced them, in workflow order:
+ * tools · files · delta · tests · tokens · duration.
+ */
 export function formatTurnStats(stats: TurnStatsData): string {
-	const tools = `${stats.toolCount} tool${stats.toolCount === 1 ? "" : "s"}`;
-	return `${tools} · ${formatTokenCount(stats.tokenCount)} tokens · ${formatDuration(stats.durationMs)}`;
+	const figures = [plural(stats.toolCount, "tool")];
+	if (stats.filesChanged !== undefined)
+		figures.push(plural(stats.filesChanged, "file"));
+	if (stats.additions !== undefined || stats.deletions !== undefined)
+		figures.push(`+${stats.additions ?? 0} −${stats.deletions ?? 0}`);
+	if (stats.testsPassed !== undefined)
+		figures.push(plural(stats.testsPassed, "test"));
+	if (stats.tokenCount !== undefined)
+		figures.push(`${formatTokenCount(stats.tokenCount)} tokens`);
+	figures.push(formatDuration(stats.durationMs));
+	return figures.join(" · ");
 }

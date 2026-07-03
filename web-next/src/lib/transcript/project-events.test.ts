@@ -38,7 +38,8 @@ describe("projectSessionEvents", () => {
 		];
 
 		// This asserted value IS the projection example: same log in, same
-		// UIMessage[] out, every id derived from session id + seq.
+		// UIMessage[] out, every id derived from session id + seq. Completed
+		// assistant turns carry the derived Folio metadata (author + receipt).
 		expect(await projectSessionEvents("sess-1", events)).toEqual([
 			{
 				id: "sess-1:1",
@@ -50,6 +51,10 @@ describe("projectSessionEvents", () => {
 			{
 				id: "sess-1:2",
 				role: "assistant",
+				metadata: {
+					author: "Claude",
+					turnStats: { toolCount: 1, durationMs: 0 },
+				},
 				parts: [
 					{ type: "text", text: "Let me read the file. ", state: "done" },
 					{
@@ -126,6 +131,36 @@ describe("projectSessionEvents", () => {
 		expect(messages[1]).toMatchObject({
 			role: "assistant",
 			parts: [{ type: "text", text: "partial answer" }],
+		});
+	});
+
+	test("an unfinished turn projects without a receipt; a done one with it", async () => {
+		const [unfinished] = await projectSessionEvents("s", [
+			a(1, "text", "still going"),
+		]);
+		expect(unfinished.metadata).toEqual({ author: "Claude" });
+
+		const [complete] = await projectSessionEvents("s", [
+			a(1, "text", "done now"),
+			a(2, "done", "", { durationMs: 6200, tokenCount: 1100 }),
+		]);
+		expect(complete.metadata).toEqual({
+			author: "Claude",
+			turnStats: { toolCount: 0, durationMs: 6200, tokenCount: 1100 },
+		});
+	});
+
+	test("a diff-carrying tool result projects to a persistent data-diff part", async () => {
+		const diff = { file: "a.ts", additions: 3, deletions: 1, lines: [] };
+		const messages = await projectSessionEvents("s", [
+			a(1, "tool_use", "Edit", { toolUseId: "t-1", toolName: "Edit" }),
+			a(2, "tool_result", "ok", { toolUseId: "t-1", diff }),
+			a(3, "done", ""),
+		]);
+		expect(messages[0].parts).toContainEqual({
+			type: "data-diff",
+			id: "s:1:p0",
+			data: diff,
 		});
 	});
 
