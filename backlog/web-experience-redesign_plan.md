@@ -1,7 +1,11 @@
 # Web Experience Redesign — Sessions-First Greenfield Rewrite
 
 Status: **active** — direction confirmed with Michael (2026-07-03): greenfield
-rewrite, sessions-first, single-user product. Phase 0 in progress on this branch.
+rewrite, sessions-first, single-user product. Phase 0 shipped. **Design locked:
+"Refined Folio"** (`prototypes/web-session-redesign/refine-folio.html`).
+Execution is an autonomous milestone run — operating contract in
+`backlog/web-next-execution-brief.md`, work tracked in the GitHub milestone
+**"Sessions-first web (web-next)"**.
 
 ## Intent
 
