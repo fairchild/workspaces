@@ -68,8 +68,16 @@ public struct ClaudeTranscriptResumability: Sendable {
     }
 
     public func isResumable(agentSessionID: String, cwd: String) -> Bool {
+        existingTranscriptURL(agentSessionID: agentSessionID, cwd: cwd) != nil
+    }
+
+    /// The transcript URL for this session when the file still exists on disk,
+    /// else `nil`. Same predicate as `isResumable`, but returns the resolved URL
+    /// so a history view can both badge resumability and render the transcript
+    /// from one `claudeHome` resolution.
+    public func existingTranscriptURL(agentSessionID: String, cwd: String) -> URL? {
         let url = locator.transcriptURL(claudeHome: claudeHome, cwd: cwd, sessionID: agentSessionID)
-        return fileExists(url.path)
+        return fileExists(url.path) ? url : nil
     }
 
     /// Adapt to the planner's injected `TranscriptResumabilityCheck` closure.
