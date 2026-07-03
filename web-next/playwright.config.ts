@@ -1,10 +1,32 @@
 /*
  * Playwright e2e config for web-next: runs specs in tests/e2e against a
  * production build served on port 3100 (webServer builds only when needed).
+ * The server runs in auth-bypass mode (see e2e:server) and every test starts
+ * signed in as the allowlisted user via the seeded test cookie; auth specs
+ * override storageState to exercise signed-out / wrong-user requests.
  */
 import { defineConfig, devices } from "@playwright/test";
 
 const BASE_URL = "http://localhost:3100";
+
+/** Must match ALLOWED_LOGINS in the e2e:server script. */
+export const E2E_LOGIN = "fairchild";
+
+export const signedInAs = (login: string) => ({
+	cookies: [
+		{
+			name: "test-auth-login",
+			value: login,
+			domain: "localhost",
+			path: "/",
+			expires: -1,
+			httpOnly: false,
+			secure: false,
+			sameSite: "Lax" as const,
+		},
+	],
+	origins: [],
+});
 
 // Remote sandboxes (claude.ai sessions) preinstall a Chromium whose revision
 // may trail the @playwright/test pin, and their proxy blocks Playwright's CDN,
@@ -24,6 +46,7 @@ export default defineConfig({
 		: [["list"]],
 	use: {
 		baseURL: BASE_URL,
+		storageState: signedInAs(E2E_LOGIN),
 		trace: "on-first-retry",
 		...(CHROMIUM_EXECUTABLE
 			? { launchOptions: { executablePath: CHROMIUM_EXECUTABLE } }

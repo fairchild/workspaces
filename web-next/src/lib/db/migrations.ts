@@ -10,7 +10,7 @@
  * `up` idempotent — `ifNotExists()` throughout — so a partial run re-applies
  * cleanly and two cold starts can overlap.
  */
-import type { Kysely } from "kysely";
+import { type Kysely, sql } from "kysely";
 import type { Database } from "./client";
 
 /** One tracked migration: a stable `id` and an idempotent `up`. */
@@ -74,4 +74,74 @@ const baseline: Migration = {
 	},
 };
 
-export const MIGRATIONS: Migration[] = [baseline];
+/**
+ * Better Auth tables (real GitHub OAuth mode), in Better Auth's default
+ * sqlite shape — camelCase columns, table names `user`/`session`/`account`/
+ * `verification` — plus `githubLogin`, which the provider persists at
+ * sign-in and the allowlist checks. Queried by Better Auth's own adapter,
+ * so they are deliberately absent from the Kysely `Database` type.
+ */
+const authTables: Migration = {
+	id: "0002_auth_tables",
+	async up(db) {
+		await sql`CREATE TABLE IF NOT EXISTS "user" (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			email TEXT NOT NULL UNIQUE,
+			emailVerified INTEGER NOT NULL DEFAULT 0,
+			image TEXT,
+			githubLogin TEXT,
+			createdAt TEXT NOT NULL DEFAULT (datetime('now')),
+			updatedAt TEXT NOT NULL DEFAULT (datetime('now'))
+		)`.execute(db);
+
+		await sql`CREATE TABLE IF NOT EXISTS session (
+			id TEXT PRIMARY KEY,
+			expiresAt TEXT NOT NULL,
+			token TEXT NOT NULL UNIQUE,
+			createdAt TEXT NOT NULL DEFAULT (datetime('now')),
+			updatedAt TEXT NOT NULL DEFAULT (datetime('now')),
+			ipAddress TEXT,
+			userAgent TEXT,
+			userId TEXT NOT NULL,
+			FOREIGN KEY (userId) REFERENCES "user"(id) ON DELETE CASCADE
+		)`.execute(db);
+		await sql`CREATE INDEX IF NOT EXISTS idx_session_userId ON session(userId)`.execute(
+			db,
+		);
+
+		await sql`CREATE TABLE IF NOT EXISTS account (
+			id TEXT PRIMARY KEY,
+			accountId TEXT NOT NULL,
+			providerId TEXT NOT NULL,
+			userId TEXT NOT NULL,
+			accessToken TEXT,
+			refreshToken TEXT,
+			idToken TEXT,
+			accessTokenExpiresAt TEXT,
+			refreshTokenExpiresAt TEXT,
+			scope TEXT,
+			password TEXT,
+			createdAt TEXT NOT NULL DEFAULT (datetime('now')),
+			updatedAt TEXT NOT NULL DEFAULT (datetime('now')),
+			FOREIGN KEY (userId) REFERENCES "user"(id) ON DELETE CASCADE
+		)`.execute(db);
+		await sql`CREATE INDEX IF NOT EXISTS idx_account_userId ON account(userId)`.execute(
+			db,
+		);
+
+		await sql`CREATE TABLE IF NOT EXISTS verification (
+			id TEXT PRIMARY KEY,
+			identifier TEXT NOT NULL,
+			value TEXT NOT NULL,
+			expiresAt TEXT NOT NULL,
+			createdAt TEXT NOT NULL DEFAULT (datetime('now')),
+			updatedAt TEXT NOT NULL DEFAULT (datetime('now'))
+		)`.execute(db);
+		await sql`CREATE INDEX IF NOT EXISTS idx_verification_identifier ON verification(identifier)`.execute(
+			db,
+		);
+	},
+};
+
+export const MIGRATIONS: Migration[] = [baseline, authTables];
