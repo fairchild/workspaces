@@ -42,4 +42,7 @@ jobs:
           uv run scripts/carl-community.py "${ARGS[@]}"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Reuse the fleet's existing OAuth token; ANTHROPIC_API_KEY is an
+          # optional fallback and may be unset.
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}

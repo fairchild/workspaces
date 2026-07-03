@@ -567,25 +567,37 @@ Write your commentary post now. Output only the markdown body, no preamble."""
 
 
 def call_claude(
-    system: str, user: str, *, model: str, api_key: str,
+    system: str, user: str, *, model: str, oauth_token: str = "", api_key: str = "",
 ) -> str:
-    """Call the Anthropic Messages API via urllib (no SDK dependency)."""
+    """Call the Anthropic Messages API via urllib (no SDK dependency).
+
+    Prefers a Claude Code OAuth token (Authorization: Bearer + the oauth beta
+    header) so Carl can reuse the CLAUDE_CODE_OAUTH_TOKEN the rest of the fleet
+    already has; falls back to a raw ANTHROPIC_API_KEY via x-api-key. Never
+    sends both — the API rejects that.
+    """
+    # Sonnet 5 (and the 4.7+ family) reject sampling params like temperature.
     payload = json.dumps({
         "model": model,
         "max_tokens": 1024,
-        "temperature": 0.7,
         "system": system,
         "messages": [{"role": "user", "content": user}],
     }).encode()
 
+    headers = {
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+    }
+    if oauth_token:
+        headers["Authorization"] = f"Bearer {oauth_token}"
+        headers["anthropic-beta"] = "oauth-2025-04-20"
+    else:
+        headers["x-api-key"] = api_key
+
     req = Request(
         "https://api.anthropic.com/v1/messages",
         data=payload,
-        headers={
-            "x-api-key": api_key,
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json",
-        },
+        headers=headers,
         method="POST",
     )
 
@@ -707,14 +719,17 @@ def output_result(
 def main() -> None:
     args = parse_args()
 
-    # Fail fast before spending minutes on GitHub calls: a live post needs the
-    # API key, and the daily cron has repeatedly wasted its whole run reaching
-    # the call site only to abort for a missing key.
+    # Fail fast before spending minutes on GitHub calls: a live post needs a
+    # credential, and the daily cron has repeatedly wasted its whole run
+    # reaching the call site only to abort for a missing one.
+    oauth_token = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "").strip()
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
     live_post = not (args.fixtures_dir or args.dry_run)
-    if live_post and not os.environ.get("ANTHROPIC_API_KEY", "").strip():
+    if live_post and not (oauth_token or api_key):
         raise CarlError(
-            "ANTHROPIC_API_KEY is required to post commentary. "
-            "Set it as a repo Actions secret, or run with --dry-run."
+            "No Anthropic credential found. Set CLAUDE_CODE_OAUTH_TOKEN "
+            "(preferred; already used by the rest of the fleet) or "
+            "ANTHROPIC_API_KEY, or run with --dry-run."
         )
 
     if args.fixtures_dir:
@@ -778,9 +793,11 @@ def main() -> None:
         output_result(result, json_output=args.json_output)
         return
 
-    api_key = os.environ["ANTHROPIC_API_KEY"]  # guaranteed by the fail-fast check above
-    log(f"Calling Claude ({args.model})...")
-    commentary = call_claude(system_msg, user_msg, model=args.model, api_key=api_key)
+    log(f"Calling Claude ({args.model})...")  # credential guaranteed by the fail-fast check above
+    commentary = call_claude(
+        system_msg, user_msg, model=args.model,
+        oauth_token=oauth_token, api_key=api_key,
+    )
 
     # Append watermark and post
     timestamp = now_utc().strftime("%Y-%m-%dT%H:%M:%SZ")
