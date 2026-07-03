@@ -28,6 +28,9 @@ Source: the 2026-07-02 cycle (PRs #723–#732, six first-try gate passes).
 - Ship protocol: draft PR only (the gate flips it ready); `Closes #N` in the
   body; on `agent`+`task` issues do **not** touch claim labels —
   `sync-execution-state.py` owns that lane (`backlog/CLAUDE.md`).
+- PR-body Mergeability fields need real prose — the `readiness` check
+  (`scripts/pr-readiness.py`) fails on empty/default/`n/a` answers; when a
+  field doesn't apply, write *why* it doesn't.
 
 ## The gate, before a PR leaves draft
 
