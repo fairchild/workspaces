@@ -1,0 +1,74 @@
+{
+	"version": 1,
+	"note": "Canonical web-next performance scenarios + budgets (mirrors config/performance/contract.json culture). Budgets gate local + CI runs of perf/run.mjs against a production build (`next start` on localhost, headless Chromium). Baselines live in BASELINE.md; refresh them before tightening a budget. Pending scenarios are declared here so the runner and budgets exist before their surfaces land — the runner reports them as pending and never fails on them.",
+	"methodology": {
+		"paint_timing": "waitForFunction polls on requestAnimationFrame, so 'painted' means the frame after the DOM change — within one frame of true paint.",
+		"long_tasks": "PerformanceObserver longtask entries, observed in-page. The longtask API only reports tasks >= 50ms, so longest_task_ms reads 0 in a clean run and any nonzero value is a budget violation.",
+		"tbt": "Sum of (longtask duration - 50ms) for buffered long tasks within the settle window after navigation.",
+		"first_load_js": "Gzipped size of the route's client JS chunks from the .next build manifests — same basis as the `next build` First Load JS column."
+	},
+	"scenarios": [
+		{
+			"id": "ttft_mock",
+			"status": "measured",
+			"description": "On /spike, submit a message to the mock provider; time from submit to the first assistant token painted.",
+			"runs": 3,
+			"metrics": {
+				"ttft_ms": { "stat": "median", "budget": 1500 }
+			}
+		},
+		{
+			"id": "streaming_cadence",
+			"status": "measured",
+			"description": "While a full mock turn streams on /spike, no main-thread long task may exceed 50ms — the transcript stays responsive at streaming rate.",
+			"runs": 3,
+			"metrics": {
+				"longest_task_ms": { "stat": "max", "budget": 50 }
+			}
+		},
+		{
+			"id": "transcript_render_200",
+			"status": "pending",
+			"reason": "transcript-at-scale surface lands with the Folio session view (#745/#748); budget is provisional until first measurement",
+			"description": "Seed a session with ~200 messages; initial transcript render stays within budget.",
+			"runs": 3,
+			"metrics": {
+				"initial_render_ms": { "stat": "median", "budget": 500 }
+			}
+		},
+		{
+			"id": "route_home",
+			"status": "measured",
+			"description": "Cold production load of /: LCP, total blocking time, and first-load JS.",
+			"route": "/",
+			"runs": 3,
+			"metrics": {
+				"lcp_ms": { "stat": "median", "budget": 1200 },
+				"tbt_ms": { "stat": "median", "budget": 200 },
+				"first_load_js_kb": { "stat": "exact", "budget": 200 }
+			}
+		},
+		{
+			"id": "route_spike",
+			"status": "measured",
+			"description": "Cold production load of /spike (stand-in for /sessions/[id] until it exists): LCP, total blocking time, and first-load JS.",
+			"route": "/spike",
+			"runs": 3,
+			"metrics": {
+				"lcp_ms": { "stat": "median", "budget": 1200 },
+				"tbt_ms": { "stat": "median", "budget": 200 },
+				"first_load_js_kb": { "stat": "exact", "budget": 200 }
+			}
+		},
+		{
+			"id": "resume_latency_100",
+			"status": "pending",
+			"reason": "durable/resumable turns land with #749; budget is provisional until first measurement",
+			"description": "Reconnect to a session with a ~100-event log; time from reconnect to transcript caught up.",
+			"runs": 3,
+			"metrics": {
+				"resume_ms": { "stat": "median", "budget": 1000 }
+			}
+		}
+	]
+}
