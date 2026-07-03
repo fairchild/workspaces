@@ -7,6 +7,16 @@ Execution is an autonomous milestone run — operating contract in
 `backlog/web-next-execution-brief.md`, work tracked in the GitHub milestone
 **"Sessions-first web (web-next)"**.
 
+> **Revision 2026-07-03 — runtime.** The session runtime is now **`@ai-sdk/harness`**
+> (Claude Code / Codex / Pi through one AI SDK surface), behind a thin app-owned
+> `SessionRuntime` interface — see `docs/decisions/web-next-harness-runtime.md`.
+> This supersedes the hand-built runtime described in the "Backend" and "Ported
+> vs fresh" sections below (custom `StreamChunk → UIMessage` adapter, ported Vercel
+> provider, bespoke durable turns, Claude Code sandbox auth): the harness owns
+> those. We still own persistence, reconnect policy, and the terminal. The
+> **authoritative, current plan is the ordered ticket list in the execution
+> brief**; sections below are retained as design history.
+
 ## Intent
 
 The web app becomes a place you **enter a coding session** — the same feeling as
