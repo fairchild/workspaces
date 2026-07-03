@@ -96,3 +96,5 @@ failed: dead-letter
 ## ROADMAP
 
 Strategic counterpart at `backlog/ROADMAP.md`. See the `backlog` skill's `references/roadmap.md`.
+
+Closing an arc — milestone done, or a plan moving to `backlog/done/` — includes running the `retro` skill (`.agents/skills/retro/SKILL.md`); the archive commit and the retro's encodings usually travel together.
