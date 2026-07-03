@@ -1,7 +1,7 @@
-# Web Experience Redesign — Sessions-First
+# Web Experience Redesign — Sessions-First Greenfield Rewrite
 
-Status: **proposed** — direction confirmed with Michael (2026-07-03); four secondary
-decisions below are recommendations awaiting sign-off before Phase 1 starts.
+Status: **active** — direction confirmed with Michael (2026-07-03): greenfield
+rewrite, sessions-first, single-user product. Phase 0 in progress on this branch.
 
 ## Intent
 
@@ -17,7 +17,7 @@ Test for done: from a phone or a fresh browser, sign in, open a recent session
 edit files and run tests as structured tool events — not a wall of text — and
 come back an hour later to a transcript that caught up without losing the thread.
 
-## Why (diagnosis of today's confusion)
+## Why (diagnosis of the current `web/` app)
 
 - The IA is repo-and-monitoring-first. The prime use case — a session — has no
   first-class home; Chat and Terminal are two disconnected tabs that sometimes
@@ -32,7 +32,7 @@ come back an hour later to a transcript that caught up without losing the thread
 - Structural noise: orphaned review-runs page, unused DispatchDialog, silent
   `catch {}` failures, 10 s polling, agent-identity slug hacks in the UI.
 
-## Decisions (confirmed)
+## Decisions (confirmed 2026-07-03)
 
 1. **Session-first IA.** Sessions are the primary object: a home screen of
    active/recent sessions; "new session" picks a repo; entering one gives a
@@ -43,108 +43,112 @@ come back an hour later to a transcript that caught up without losing the thread
    Lume/local later. Capability flags (PTY? snapshot? max duration?) drive
    which affordances a session shows.
 3. **Vercel AI SDK + AI Elements** for the chat/transcript layer: `useChat`
-   transport, UIMessage message-parts model, AI Elements components for
+   transport, UIMessage message-parts model, AI Elements-style components for
    messages/tool cards/code blocks, restyled to our design system.
+4. **Greenfield rewrite.** A new app is built from scratch in `web-next/`
+   (renamed to `web/` at cutover) with its own Vercel project. The old app
+   keeps running untouched — including its webhook intake and the managed PR
+   reviewer — until the new app reaches cutover. Organs are **ported by copy**
+   from `web/src/lib/` where they encode paid-for lessons (agent-runtime
+   providers, Claude CLI sandbox auth via `env.sh`, base snapshots, ttyd
+   ticket/HMAC terminal security); everything UI, schema, and route-level is
+   designed fresh.
+5. **Single-user product.** Michael is the only user. Auth stays (the app is
+   internet-facing and holds GitHub tokens + sandbox access) but collapses to
+   GitHub OAuth + a login allowlist. No multi-tenant authz matrix, no
+   onboarding polish, no cross-tenant test suite, no data migration — the new
+   DB starts empty and the repo list is re-picked once.
 
-## Open questions (recommended defaults — confirm or veto)
+## Design defaults (standing unless vetoed)
 
-1. **Rewrite flavor** — recommended: **strangler-fig in-place**. Same Next.js
-   app, auth, DB, deployment, and `src/lib/` runtime; the new `/sessions`
-   surface is built fresh (Tailwind v4 + shadcn/AI Elements coexisting with
-   CSS Modules during transition) and the old Dashboard/Chat/Terminal tabs are
-   **deleted** in the final phase — replace, not co-exist forever. A true
-   greenfield skeleton re-learns paid-for lessons (Claude CLI auth in
-   sandboxes, Turso quota limits, ttyd ticket/HMAC model, cross-tenant authz)
-   for zero product gain and adds a dark period.
-2. **Visual identity** — recommended: **keep the Spaces aesthetic** (Instrument
-   Serif + JetBrains Mono, mint `#a6ffdf` on `#0e1117`), mapped onto
-   Tailwind/shadcn theme variables; consider softening noise/scanlines inside
-   the transcript for readability. Past prototypes that ignored the identity
-   "felt wrong immediately".
-3. **Session layout** — recommended: **chat primary, terminal on demand**. The
-   session is a transcript; a real PTY (ghostty-web) into the same sandbox
-   opens as a collapsible drawer/panel. Split-view can come later for desktop.
-4. **Monitoring** — recommended: **sessions first, port monitoring later**. The
-   old dashboard keeps running untouched while `/sessions` is built; a slim
-   mission-control view is rebuilt in the new stack afterwards (aligns with
-   roadmap item #680).
+- **Visual identity: keep the Spaces aesthetic** — Instrument Serif +
+  JetBrains Mono, mint `#a6ffdf` on `#0e1117` — mapped onto Tailwind theme
+  variables; soften noise/scanlines inside the transcript for readability.
+- **Session layout: chat primary, terminal on demand.** The session is a
+  transcript; a real PTY (ghostty-web) into the same sandbox opens as a
+  collapsible drawer. Desktop split-view can come later.
+- **Monitoring: sessions first.** The old dashboard keeps serving monitoring
+  until a slim mission-control view is rebuilt late in the new stack.
 
 ## Target architecture
 
 ### Information architecture
 
-- `/sessions` — home: active + recent sessions across repos (status, repo,
+- `/` — sessions home: active + recent sessions across repos (status, repo,
   provider, last activity), "New session" (repo picker → provider/agent).
-- `/sessions/[id]` — the workspace: transcript (AI Elements), compose bar,
-  session header (repo, branch, provider, sandbox state, stop/resume),
-  terminal drawer (PTY providers only), context rail later (diff, PRs).
-- Old `/dashboard/*` untouched until Phase 4, then slimmed to mission control.
+  Single-user: no marketing landing; unauthenticated → sign-in.
+- `/sessions/[id]` — the workspace: transcript (message parts + tool cards),
+  compose bar, session header (repo, branch, provider, sandbox state,
+  stop/resume), terminal drawer (PTY providers only), context rail later
+  (diff, PRs).
 
-### Backend: durable, resumable turns (the heart of the work)
-
-Today: turn = one ≤300 s SSE request; sandbox snapshot+stop per turn.
-Target:
+### Durable, resumable turns (the heart of the work)
 
 - **`session_events` table** — append-only structured event log per session
-  (seq, session_id, part type, payload). The single source of truth for the
-  transcript; replaces flat `chat_messages` for sessions. UIMessages are
-  projected from it.
+  (seq, session_id, part payload). The single source of truth for the
+  transcript; UIMessages are projected from it. Designed fresh — no legacy
+  `chat_messages` compatibility.
 - **Detached execution**: the agent turn runs detached inside the sandbox (or
-  as a Managed Agents session) and its `StreamChunk`s are written to
-  `session_events` by a lightweight ingest path; the browser-facing route only
-  **tails** the log (SSE with `Last-Event-ID`/seq resume, AI SDK resumable
-  stream on the client). Closing the tab never kills a turn; reconnect catches
-  up. The 300 s route cap stops mattering.
+  as a Managed Agents session) and its `StreamChunk`s are ingested into
+  `session_events`; the browser-facing route only **tails** the log (SSE with
+  seq-based resume, AI SDK resumable stream on the client). Closing the tab
+  never kills a turn; reconnect catches up. Route duration caps stop mattering.
 - **Adapter**: `StreamChunk → UIMessage stream parts` (text, tool-input,
-  tool-output, status). One adapter serves both providers; `TranscriptTerminal`
-  logic informs the tool-part rendering.
+  tool-output, status). One adapter serves both providers. De-risked first
+  (Phase 0) as a pure module with unit tests.
 - **Session lifecycle**: sandbox stays alive across turns within a session;
   idle timeout → snapshot+pause (existing snapshot path); explicit
-  resume/stop controls. `full` tools enabled for sessions (per-session toggle,
-  default on; the sandbox is already network-allowlisted and repo-scoped).
+  resume/stop controls. `full` tools (Write/Edit/Bash) on by default —
+  single-user, repo-scoped, network-allowlisted sandboxes.
 
-### What stays / what goes
+### Ported vs fresh vs left behind
 
-- **Stays untouched**: Better Auth + GitHub OAuth, Kysely/libSQL, provider
-  registry + both providers, terminal ticket/HMAC + ttyd/tmux, PR reviewer
-  subsystem, webhook relay, setup flow.
-- **Extended**: schema (`session_events`, session metadata), session-manager
-  (long-lived lifecycle), agent-stream route (replaced by tail route).
-- **Deleted (Phase 4)**: dashboard-shell tabs, chat-panel/streaming-bubble,
-  terminal-panel tab (canvas component is reused in the drawer), DispatchDialog,
-  old `chat_messages` write path for sessions.
+- **Ported by copy (with their tests where they exist)**: agent-runtime
+  (`types.ts`, provider registry, `vercel-sandbox.ts`, `managed-agents.ts` +
+  event mapping), terminal ticket/HMAC + ttyd/tmux logic, Better Auth + GitHub
+  OAuth config, Kysely/libSQL setup.
+- **Fresh**: all UI (Tailwind v4 + AI Elements-style components), schema
+  (`sessions`, `session_events`, minimal `repos`), API routes, session
+  orchestration (long-lived lifecycle replaces snapshot-per-turn
+  `session-manager.ts`).
+- **Left running in old `web/` until late**: webhook intake, managed PR
+  reviewer, activity feed, dashboard/monitoring. Ported or re-pointed at
+  cutover; the PR reviewer is the largest port and is explicitly its own
+  phase, not a blocker for sessions.
 
-## Phased plan (each phase ships)
+## Phased plan (each phase ships to the new app's preview URL)
 
-- **Phase 0 — Foundation + spike.** Add `ai`, AI Elements, Tailwind v4
-  (scoped so CSS Modules keep working); map design tokens; throwaway
-  `/sessions/spike` page proving StreamChunk→UIMessage adapter end-to-end
-  against the mock provider. Exit: streamed tool cards render in our skin.
+- **Phase 0 — Skeleton + adapter spike.** `web-next/` scaffold (Next 15, AI
+  SDK, Tailwind v4, design tokens ported), the `StreamChunk → UIMessage`
+  adapter as a pure unit-tested module, and a spike page streaming mock
+  provider chunks through the adapter into `useChat` with tool-part rendering.
+  Exit: streamed tool cards render in the Spaces skin.
 - **Phase 1 — Durable transcript backend.** `session_events` schema +
-  projection to UIMessages; detached runner ingest for vercel-sandbox;
-  Managed Agents event ingest; tail route with resume. Exit: a turn survives
-  tab close/reopen; transcript replays from DB.
-- **Phase 2 — The session surface.** `/sessions` home + `/sessions/[id]`
-  chat with AI Elements (tool cards, code blocks, status), new-session flow,
-  full tools on, sandbox alive across turns with idle snapshot. Exit: real
-  coding session (edit + run tests) completed entirely via web chat.
+  UIMessage projection; detached-runner ingest for vercel-sandbox; Managed
+  Agents event ingest; tail route with seq resume; auth (GitHub OAuth +
+  allowlist). Exit: a turn survives tab close/reopen; transcript replays
+  from DB.
+- **Phase 2 — The session surface.** Sessions home + `/sessions/[id]` with
+  full transcript UI, new-session flow, full tools on, sandbox alive across
+  turns with idle snapshot. Exit: a real coding session (edit + run tests)
+  completed entirely via the new app.
 - **Phase 3 — Terminal + lifecycle polish.** Terminal drawer (PTY attach to
-  the session sandbox), pause/resume/stop controls, error surfaces (no more
-  silent `catch {}` in the new surface), mobile pass for the transcript.
-- **Phase 4 — Cutover.** Route `/dashboard` chat/terminal users to sessions;
-  delete old tabs/components; rebuild slim mission-control (agent grid,
-  pipeline, activity, review-runs links) in the new stack; reconcile
-  `web/tests/LEDGER.md` (old behaviors retired, new ones added).
+  the session sandbox via ported ticket flow), pause/resume/stop controls,
+  first-class error surfaces, mobile pass for the transcript.
+- **Phase 4 — Cutover.** Point the production domain at the new app; port or
+  re-home webhook intake, PR reviewer, and a slim mission-control view;
+  retire the old `web/` (delete or archive) and rename `web-next/` → `web/`;
+  rebuild the test LEDGER around the new surface.
 
 ## Risks
 
-- **AI SDK protocol fit**: our two providers must both express cleanly as
-  UIMessage parts — de-risked in Phase 0 with the adapter spike before any UI
-  investment.
-- **Tailwind/CSS-Modules coexistence**: scope Tailwind preflight to the new
-  surface to avoid restyling the legacy dashboard accidentally.
+- **AI SDK protocol fit**: both providers must express cleanly as UIMessage
+  parts — de-risked in Phase 0 before any UI investment.
+- **PR reviewer port** is the long tail of cutover; mitigated by keeping the
+  old app deployed as the webhook/reviewer backend indefinitely until its
+  port is proven. Nothing in Phases 0–3 touches it.
+- **Two apps sharing sandbox/token secrets** during the transition: separate
+  Vercel projects, separate DBs; only provider credentials are shared.
 - **Long-lived sandboxes cost more** than snapshot-per-turn: idle timeout +
-  visible sandbox state + stop button keep it bounded.
-- **Full tools on a web surface**: sandbox is already repo-scoped,
-  network-allowlisted, token-scrubbed; keep the per-session toggle and audit
-  trail via `session_events`.
+  visible sandbox state + stop button keep it bounded; single user caps blast
+  radius.
