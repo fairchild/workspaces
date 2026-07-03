@@ -64,6 +64,8 @@ struct ContentView: View {
     @State private var dismissedWorkspaceOrphanItemIDs: Set<String> = []
     @State private var cleaningWorkspaceOrphanItemIDs: Set<String> = []
     @State private var pendingWorkspaceOrphanCleanup: WorkspaceOrphanItem?
+    @State private var pendingRestorePlan: RestorePlan?
+    @State private var restoreBannerDismissed = false
     @State private var isShowingFeedbackSheet = false
     @State private var accessRecorder = MainWindowAccessRecorder()
     @State private var presentedSessionSwitcherSnapshot: SessionSwitcherSnapshot?
@@ -698,6 +700,18 @@ struct ContentView: View {
                         dismissedWorkspaceOrphanItemIDs.formUnion(
                             visibleWorkspaceOrphanItems.map(\.id)
                         )
+                    }
+                )
+            }
+            if let plan = pendingRestorePlan, !plan.surfaces.isEmpty, !restoreBannerDismissed {
+                RestoreSessionsBanner(
+                    sessionCount: plan.surfaces.count,
+                    onRestore: {
+                        executeRestore(plan)
+                        restoreBannerDismissed = true
+                    },
+                    onDismiss: {
+                        restoreBannerDismissed = true
                     }
                 )
             }
@@ -2831,9 +2845,8 @@ struct ContentView: View {
     }
 
     /// Cold-start restore (experimental, opt-in): compute what could be restored
-    /// from the previous run and log the result. Wiring only — nothing is launched
-    /// and no UI is shown here; the restore banner and execution land in a
-    /// follow-up. A no-op unless the `restoreSessionsOnLaunch` flag is enabled.
+    /// from the previous run and, when non-empty, surface the restore banner.
+    /// A no-op unless the `restoreSessionsOnLaunch` flag is enabled.
     @MainActor
     private func computeRestorePlanIfEnabled() async {
         guard restoreSessionsOnLaunchEnabled, let localStateStore else { return }
@@ -2849,7 +2862,33 @@ struct ContentView: View {
             NSLog("[Restore] no restorable surfaces from previous run")
         } else {
             NSLog("[Restore] planned %ld restorable surface(s)", plan.surfaces.count)
+            pendingRestorePlan = plan
         }
+    }
+
+    /// Launch each surface in a restore plan. Reattach/fresh surfaces are a plain
+    /// directory-backed launch (the deterministic tmux name reattaches a surviving
+    /// session automatically); resume surfaces carry a `claude --resume` command.
+    /// Then honor the plan's advisory focus by re-activating the selected surface.
+    @MainActor
+    private func executeRestore(_ plan: RestorePlan) {
+        var activatedByHostSessionID: [UUID: HostTerminalSession] = [:]
+        for surface in plan.surfaces {
+            let command: String?
+            switch surface.action {
+            case .reattachTmux, .freshShell:
+                command = nil
+            case .resumeClaude(let agentSessionID):
+                command = RestoreLaunchCommand.claudeResume(cwd: surface.directory, sessionID: agentSessionID)
+            }
+            let session = activateHostSession(key: surface.key, directory: surface.directory, customCommand: command)
+            activatedByHostSessionID[surface.hostSessionID] = session
+        }
+
+        if let selected = plan.selectedHostSessionID, let target = activatedByHostSessionID[selected] {
+            _ = activateHostSession(key: target.key, directory: target.directoryURL)
+        }
+        NSLog("[Restore] executed %ld surface(s)", plan.surfaces.count)
     }
 
     private func refreshWorkspaceStatusAggregator() {
