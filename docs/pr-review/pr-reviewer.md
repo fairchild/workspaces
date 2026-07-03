@@ -29,6 +29,7 @@ broker scheduling, and debugging commands.
 | `PR_REVIEWER_PRIVATE_KEY` | Vercel | GitHub App private key (PEM) |
 | `PR_REVIEWER_INSTALLATION_ID` | Vercel | GitHub App installation ID for this repo |
 | `PR_REVIEWER_ENABLED` | Vercel (optional) | `0` disables the reviewer; `1` enables it explicitly. If omitted, complete App credentials enable it. |
+| `PR_REVIEWER_RERUNS_ENABLED` | Vercel (optional) | Gates only the continuous-rerun triggers (`reopened`, `ready_for_review`, `synchronize`, body/base edits, evidence comments) independently of `PR_REVIEWER_ENABLED`. Enabled by default; set to `0` to fall back to the original `opened`-only trigger without disabling the reviewer entirely. |
 | `PR_REVIEWER_VAULT_ID` | Vercel (optional) | Vault for MCP credentials (not currently used) |
 | `PR_REVIEWER_MODEL` | Vercel (optional) | Override model (default: `claude-opus-4-6`) |
 | `GITHUB_WEB_WORKSPACES_WEBHOOK_SECRET` | Vercel | Same GitHub webhook secret used by the Cloudflare relay; verifies the forwarded raw payload |

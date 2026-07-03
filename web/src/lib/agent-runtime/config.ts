@@ -40,6 +40,18 @@ function isPrReviewerConfigured(env: Env): boolean {
 	return hasAnyPrReviewerCredential(env);
 }
 
+/**
+ * Gates the continuous-rerun trigger surface (reopened, ready_for_review,
+ * synchronize, body/base edits, evidence comments) independently of the
+ * managed reviewer as a whole. Reruns have been live in production for
+ * weeks, so the default is enabled — only an explicit "0" disables them,
+ * falling back to the original opened-only trigger. See
+ * docs/pr-review/pr-reviewer.md.
+ */
+export function isPrReviewerRerunsEnabled(env: Env = process.env): boolean {
+	return env.PR_REVIEWER_RERUNS_ENABLED !== "0";
+}
+
 function requireEnv(
 	env: Env,
 	name: string,
