@@ -8,3 +8,4 @@ Open any file directly in a browser — no build step needed.
 | Project | Description | Status |
 |---------|-------------|--------|
 | [spaces-dashboard](spaces-dashboard/) | Agent discovery dashboard for spaces.cloudcompute.com | Chosen: Prototype D |
+| [web-session-redesign](web-session-redesign/) | Session-view concepts for the sessions-first web rewrite (calm, iA-Writer direction) | Chosen: Refined Folio (`refine-folio.html`) |
