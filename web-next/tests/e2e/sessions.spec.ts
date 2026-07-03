@@ -19,6 +19,13 @@ const SESSION_URL = /\/sessions\/[0-9a-f-]{36}$/;
 const TURN_TIMEOUT = 20_000;
 
 test.beforeAll(async () => {
+	// Warm the schema first: migrations run lazily on the first authorized
+	// request, and in auth-bypass mode the unauthenticated readiness probe
+	// never touches the session tables — so without this the DELETEs below can
+	// hit tables that don't exist yet on a cold server.
+	await fetch("http://localhost:3100/", {
+		headers: { cookie: "test-auth-login=fairchild" },
+	});
 	// Same file the e2e server opened (see e2e:server); libSQL file handles
 	// are plain SQLite, safe to write from a second process.
 	const db = createClient({
@@ -166,7 +173,7 @@ test("a reload renders the same turn from the persisted event log", async ({
 	await expect(page.getByTestId("activity-line")).toHaveCount(0);
 });
 
-test("reloading mid-turn keeps the persisted prefix of the interrupted turn", async ({
+test("a turn survives a mid-stream reload and resumes to completion", async ({
 	page,
 }) => {
 	await page.goto(turnSessionUrl);
@@ -178,15 +185,55 @@ test("reloading mid-turn keeps the persisted prefix of the interrupted turn", as
 	await expect(page.getByTestId("tool-row")).toHaveCount(4, {
 		timeout: TURN_TIMEOUT,
 	});
-	// …then abandon the stream mid-turn.
+	// …then abandon the stream mid-turn. The turn runs detached server-side, so
+	// the reload does not kill it.
 	await page.reload();
 
-	// Both turns' user messages survive; the interrupted turn shows the
-	// prefix that reached the event log (its opening prose at least).
+	// Both turns' user messages survive; the reopened tab resumes the in-flight
+	// turn from the event log and it finishes — a second receipt lands and the
+	// full ledger (both turns, 3 tools each) is present.
 	await expect(page.locator('[data-message-role="user"]')).toHaveCount(2);
-	await expect(
-		page.locator('[data-message-role="assistant"]').nth(1),
-	).toContainText('You asked: "Now add a regression test"');
-	// No receipt for a turn that never finished.
-	await expect(page.getByTestId("turn-stats")).toHaveCount(1);
+	await expect(page.getByTestId("turn-stats")).toHaveCount(2, {
+		timeout: TURN_TIMEOUT,
+	});
+	await expect(page.getByTestId("tool-row")).toHaveCount(6);
+	// Nothing is in flight once the resumed turn completes.
+	await expect(page.getByTestId("activity-line")).toHaveCount(0);
+});
+
+test("closing the tab mid-turn does not kill it — a fresh tab catches up", async ({
+	page,
+	context,
+}) => {
+	// A brand-new session, isolated from the shared turn session above.
+	await page.goto("/");
+	await page.getByRole("button", { name: "+ new session" }).click();
+	await page
+		.getByTestId("new-session-picker")
+		.getByRole("button", { name: "fairchild/workspaces" })
+		.click();
+	await expect(page).toHaveURL(SESSION_URL);
+	const sessionUrl = page.url();
+
+	const compose = page.getByRole("textbox", { name: "Reply to Claude" });
+	await compose.fill("Fix the failing session test");
+	await page.keyboard.press("Enter");
+	// The turn is genuinely under way (first prose streamed) before we leave.
+	await expect(page.locator('[data-message-role="assistant"]')).toContainText(
+		"Let me look at the failing test",
+		{ timeout: TURN_TIMEOUT },
+	);
+
+	// Close the tab entirely, then reopen the session in a fresh tab.
+	await page.close();
+	const reopened = await context.newPage();
+	await reopened.goto(sessionUrl);
+
+	// The detached turn kept running; the reopened tab resumes it from the log
+	// and it completes — the receipt is the proof it caught up live.
+	await expect(reopened.getByTestId("turn-stats")).toContainText(
+		"3 tools · 1 file · +3 −1 · 4 tests",
+		{ timeout: TURN_TIMEOUT },
+	);
+	await expect(reopened.getByTestId("activity-line")).toHaveCount(0);
 });
