@@ -82,7 +82,7 @@ Read these repo sources before acting:
 ### 6. Close out the milestone
 
 - Make sure each issue has a completion note and the relevant PR link.
-- Update the milestone with retro notes covering outcome, what went well, what was learned, and explicit follow-ups.
+- Run the `retro` skill (`.agents/skills/retro/SKILL.md`) — its output is shipped encodings and filed issues, not notes; summarize the outcome on the milestone.
 - If the milestone is truly complete, say so clearly in the final summary.
 
 ## PR Strategy Rules
