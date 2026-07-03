@@ -220,11 +220,27 @@ tilde-relative, unquoted shape. The installer overwrites any prior status-line
 command, so a stale bundle or `.build` path converges to the generic command on
 next launch.
 
-Claude Code runs it as `statusLine.command`. The script posts status JSON to
-`/statusline` and prints a single space so Claude's own status row stays visually
-empty. `StatusLinePayload` tolerates snake_case/camelCase keys and common ISO
-date variants. The listener maps the payload to `.statusFields(...)` and applies
-it through the same registry write surface.
+Claude Code runs it as `statusLine.command`. With a reachable host socket, the
+script posts status JSON to `/statusline` and prints a single space so Claude's
+own status row stays visually empty — the host owns visualization.
+`StatusLinePayload` tolerates snake_case/camelCase keys and common ISO date
+variants. The listener maps the payload to `.statusFields(...)` and applies it
+through the same registry write surface.
+
+Without a reachable socket — a terminal outside WorkSpaces, or the app not
+running — the script renders a one-line status itself from the same JSON: model
+display name, cwd (tilde-shortened; `workspace.current_dir` falling back to
+top-level `cwd`), git branch, and context remaining/used. Missing fields drop
+out of the line, and an empty payload degrades to the same single space.
+Parsing is plain `sed` per the script's no-jq requirement, and the branch
+lookup uses `git --no-optional-locks` so a status tick never contends with a
+running git operation.
+
+The extracted copies under `~/.local/share/workspaces/hook-forwarders/` are
+app-owned: `ClaudeIntegrationLifecycle` re-extracts the bundled scripts on
+every launch, overwriting whatever is there. Behavior changes belong in the
+bundled scripts under `Sources/WorkspaceManager/Resources/HookForwarders/`,
+covered by `HookForwarderScriptTests`.
 
 Status-line ticks never change `AgentRunState`; they only update display fields
 such as model, cost, context used, and five-hour limit state.

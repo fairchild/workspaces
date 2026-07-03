@@ -68,6 +68,11 @@ final class TestGitRepository {
         try Self.run(["git", "remote", "add", name, url], at: self.url)
     }
 
+    /// Create and switch to a new branch
+    func createBranch(_ name: String) throws {
+        try Self.run(["git", "checkout", "-b", name], at: url)
+    }
+
     /// Create a detached HEAD state
     func detachHead() throws {
         let head = try Self.runOutput(["git", "rev-parse", "HEAD"], at: url)

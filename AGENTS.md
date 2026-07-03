@@ -132,6 +132,7 @@ New standalone Python utilities are single-file UV scripts: `#!/usr/bin/env -S u
 | Implement a component | docs/original_spec.md (find relevant section) | Read whole file |
 | libghostty internals + dev verification runbook | docs/development/libghostty-integration.md | - |
 | Notifications / webhooks | docs/development/notifications.md | - |
+| Claude Code hooks / status-line forwarders | docs/development/claude-code-integration.md | - |
 | Debug an issue | docs/development/troubleshooting.md | - |
 | Add Settings-gated experimental UI | docs/development/experimental-features.md | - |
 | Terminal keyboard focus | docs/development/solution-terminal-keyboard.md | - |

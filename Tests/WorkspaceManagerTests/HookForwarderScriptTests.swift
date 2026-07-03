@@ -57,6 +57,34 @@ struct HookForwarderScriptTests {
         return (process.terminationStatus, stdout, stderr)
     }
 
+    private static func runStatusLineFallback(
+        stdin: Data
+    ) throws -> (status: Int32, stdout: String, stderr: String) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/bash")
+        process.arguments = [hookForwarder(named: "statusline.sh").path]
+        var environment = ProcessInfo.processInfo.environment
+        environment.removeValue(forKey: "WORKSPACES_HOOKS_SOCKET")
+        environment.removeValue(forKey: "WORKSPACES_HOST_SESSION_ID")
+        process.environment = environment
+
+        let input = Pipe()
+        let output = Pipe()
+        let error = Pipe()
+        process.standardInput = input
+        process.standardOutput = output
+        process.standardError = error
+
+        try process.run()
+        try input.fileHandleForWriting.write(contentsOf: stdin)
+        try input.fileHandleForWriting.close()
+        process.waitUntilExit()
+
+        let stdout = String(data: output.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        let stderr = String(data: error.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        return (process.terminationStatus, stdout, stderr)
+    }
+
     private static func runZshCommandStatusHook(
         socket: URL,
         hostSessionID: UUID
@@ -213,6 +241,40 @@ struct HookForwarderScriptTests {
         }
         #expect(reached)
         #expect(registry.statuses[hostSessionID]?.costUSD == 0.42)
+    }
+
+    @Test("statusline forwarder renders a fallback status line when the host socket is absent")
+    func statusLineForwarderRendersFallbackWithoutSocket() async throws {
+        let repo = try TestGitRepository.create()
+        defer { repo.cleanup() }
+        try repo.createFile("README.md", content: "fallback")
+        try repo.commit(message: "init")
+        try repo.createBranch("statusline-fallback-test")
+
+        let payload: [String: Any] = [
+            "model": ["display_name": "Claude Sonnet 4.5"],
+            "workspace": ["current_dir": repo.url.path],
+            "context_window": ["remaining_percentage": 42],
+        ]
+        let result = try Self.runStatusLineFallback(
+            stdin: try JSONSerialization.data(withJSONObject: payload)
+        )
+
+        #expect(result.status == 0)
+        #expect(
+            result.stdout
+                == "Claude Sonnet 4.5 | \(repo.url.path) | statusline-fallback-test | Context: 42% remaining"
+        )
+        #expect(result.stderr.isEmpty)
+    }
+
+    @Test("statusline forwarder fallback prints a single space when the payload is empty")
+    func statusLineForwarderFallbackPrintsSpaceForEmptyPayload() async throws {
+        let result = try Self.runStatusLineFallback(stdin: Data("{}".utf8))
+
+        #expect(result.status == 0)
+        #expect(result.stdout == " ")
+        #expect(result.stderr.isEmpty)
     }
 
     @Test("command-status zsh hook posts command markers with host-session header")

@@ -15,6 +15,10 @@
 #
 # Agent update intake purpose: command hook forwarder.
 #
+# Ownership: ClaudeIntegrationLifecycle re-extracts this script to
+# ~/.local/share/workspaces/hook-forwarders/ on every app launch, overwriting
+# the installed copy. Edit this file, not the installed one.
+#
 # Hard requirements:
 #   * stdlib bash + curl only — no jq, no python.
 #   * Never block; if the socket is unreachable, drop the payload and exit 0.

@@ -69,6 +69,15 @@ Clipboard callbacks are handled in `GhosttyAppManager`:
 For debugging, add temporary `NSLog` lines in those callbacks and verify
 `ghostty_surface_complete_clipboard_request(...)` is called.
 
+### 6. Edits to `~/.local/share/workspaces/hook-forwarders/*.sh` disappear
+
+The app re-extracts the bundled forwarder scripts on every launch
+(`ClaudeIntegrationLifecycle`), overwriting the installed copies. Edit the
+sources in `Sources/WorkspaceManager/Resources/HookForwarders/` instead;
+`HookForwarderScriptTests` covers them, and the installed copies converge on
+the next app launch. Details:
+`docs/development/claude-code-integration.md` § "Status-Line Forwarder".
+
 ## Useful Commands
 
 ```bash
