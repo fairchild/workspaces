@@ -1,56 +1,42 @@
 /*
- * Runs one request-scoped agent turn against a session: persists the user's
- * message to the event log, streams the provider's chunks — appending each to
- * the log as it is produced — and returns the adapted UIMessageChunk stream
- * for the response. The turn is therefore both live and durably replayable:
- * a reload mid- or post-turn projects whatever has been appended so far.
- * (Detached, client-independent execution is #749's job.)
+ * Starts one durable agent turn against a session and returns the live view of
+ * it. Execution is detached (turn-ingest.ts): the user event is appended, the
+ * provider's chunks are ingested into session_events by a client-independent
+ * loop, and this returns a TAIL over that log — so the returned stream is a
+ * reader, not the turn itself. Closing the response cancels the reader while the
+ * turn keeps running to completion; a reconnect (turn-tail.ts, the GET route)
+ * resumes from the same log. Ids are seeded `${sessionId}:${fromSeq}` so the
+ * live stream, a resumed stream, and a reload's projection all agree.
  */
 import type { UIMessageChunk } from "ai";
 import type { DatabaseHandle } from "../db/client";
-import { appendEvents, type Session } from "../db/sessions";
-import { toUIMessageChunkStream } from "../transcript/chunk-adapter";
-import { folioTurnMetadata } from "../transcript/turn-stats";
-import { type ComputeProvider, getProvider } from "./provider";
-import type { StreamChunk } from "./stream-chunk";
+import type { Session } from "../db/sessions";
+import type { ComputeProvider } from "./provider";
+import { getProvider } from "./provider";
+import { startTurn } from "./turn-ingest";
+import { tailStream } from "./turn-tail";
 
-/** Yields the source's chunks, appending each to the session log first. */
-async function* persistingTee(
-	handle: DatabaseHandle,
-	sessionId: string,
-	source: AsyncIterable<StreamChunk>,
-): AsyncGenerator<StreamChunk> {
-	for await (const chunk of source) {
-		await appendEvents(handle, sessionId, [{ role: "assistant", chunk }]);
-		yield chunk;
-	}
+export interface SessionTurn {
+	/** First assistant seq — the assistant message id is `${sessionId}:${fromSeq}`. */
+	fromSeq: number;
+	/** The live tail of the turn, for the POST response. */
+	stream: ReadableStream<UIMessageChunk>;
+	/** Settles when the detached ingest has written the turn's terminal `done`;
+	 * the route hands this to `after()` to keep a serverless invocation alive. */
+	ingest: Promise<void>;
 }
 
 /**
- * Appends the user event, then returns the provider turn as a UIMessageChunk
- * stream whose message/part ids match what projectSessionEvents will derive
- * from the log (`${sessionId}:${firstSeq}` / `…:pN`) — a reload renders the
- * same message the client just streamed.
+ * Appends the user's message, launches the detached turn, and returns a tail
+ * over its log plus the ingest promise. The provider is resolved eagerly so an
+ * unknown provider rejects before anything is persisted.
  */
 export async function runSessionTurn(
 	handle: DatabaseHandle,
 	session: Session,
 	userText: string,
 	provider: ComputeProvider = getProvider(session.provider),
-): Promise<ReadableStream<UIMessageChunk>> {
-	const userSeq = await appendEvents(handle, session.id, [
-		{ role: "user", chunk: { type: "text", content: userText } },
-	]);
-	const messageId = `${session.id}:${userSeq + 1}`;
-	let part = 0;
-	const chunks = persistingTee(
-		handle,
-		session.id,
-		provider.runTurn({ sessionId: session.id, userMessage: userText }),
-	);
-	return toUIMessageChunkStream(chunks, {
-		messageId,
-		generateId: () => `${messageId}:p${part++}`,
-		messageMetadata: folioTurnMetadata,
-	});
+): Promise<SessionTurn> {
+	const { fromSeq, ingest } = await startTurn(handle, session, userText, provider);
+	return { fromSeq, ingest, stream: tailStream(handle, session.id, fromSeq) };
 }

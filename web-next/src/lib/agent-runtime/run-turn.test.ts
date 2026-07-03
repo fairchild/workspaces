@@ -61,23 +61,31 @@ async function drain(stream: ReadableStream<unknown>): Promise<unknown[]> {
 }
 
 describe("runSessionTurn", () => {
-	test("persists the user event before the stream is even consumed", async () => {
+	test("persists the user event immediately, before the turn is ingested", async () => {
 		const handle = freshDb();
 		const session = await makeSession(handle);
-		const stream = await runSessionTurn(handle, session, "fix it", stubProvider());
+		const turn = await runSessionTurn(handle, session, "fix it", stubProvider());
 
+		// The user event exists as soon as runSessionTurn returns — detached
+		// ingest of the assistant reply runs independently.
 		const events = await readEvents(handle, "s1");
-		expect(events).toMatchObject([
-			{ seq: 1, role: "user", chunk: { type: "text", content: "fix it" } },
-		]);
-		await drain(stream); // release the provider iterator
+		expect(events[0]).toMatchObject({
+			seq: 1,
+			role: "user",
+			chunk: { type: "text", content: "fix it" },
+		});
+		expect(turn.fromSeq).toBe(2);
+		await turn.ingest;
 	});
 
-	test("appends provider chunks in order as the stream is consumed", async () => {
+	test("the detached ingest appends the whole turn to the log, in order", async () => {
 		const handle = freshDb();
 		const session = await makeSession(handle);
-		const stream = await runSessionTurn(handle, session, "fix it", stubProvider());
-		await drain(stream);
+		// Drop the stream on the floor — the turn must still complete because
+		// ingest is independent of any reader.
+		const turn = await runSessionTurn(handle, session, "fix it", stubProvider());
+		await turn.stream.cancel();
+		await turn.ingest;
 
 		const events = await readEvents(handle, "s1");
 		expect(events.map((event) => [event.seq, event.role, event.chunk.type])).toEqual([
@@ -89,31 +97,16 @@ describe("runSessionTurn", () => {
 		]);
 	});
 
-	test("each chunk is persisted before it is streamed", async () => {
+	test("the live stream tails the log with ids matching its projection", async () => {
 		const handle = freshDb();
 		const session = await makeSession(handle);
-		const stream = await runSessionTurn(handle, session, "fix it", stubProvider());
-
-		// Read up to the first text delta, then stop consuming.
-		const reader = stream.getReader();
-		for (;;) {
-			const { value } = await reader.read();
-			if ((value as { type: string }).type === "text-delta") break;
-		}
-		const events = await readEvents(handle, "s1");
-		expect(events.at(-1)).toMatchObject({
-			role: "assistant",
-			chunk: { type: "text", content: "On it. " },
-		});
-		expect(events.some((event) => event.chunk.type === "done")).toBe(false);
-		await reader.cancel();
-	});
-
-	test("streams ids that match the projection of its own log", async () => {
-		const handle = freshDb();
-		const session = await makeSession(handle);
-		const stream = await runSessionTurn(handle, session, "fix it", stubProvider());
-		const chunks = (await drain(stream)) as { type: string; messageId?: string; id?: string }[];
+		const turn = await runSessionTurn(handle, session, "fix it", stubProvider());
+		const chunks = (await drain(turn.stream)) as {
+			type: string;
+			messageId?: string;
+			id?: string;
+		}[];
+		await turn.ingest;
 
 		// The assistant message id is `${sessionId}:${firstAssistantSeq}` —
 		// what projectSessionEvents derives from the same log on reload.
@@ -125,11 +118,12 @@ describe("runSessionTurn", () => {
 	test("the finished stream carries the derived turn receipt", async () => {
 		const handle = freshDb();
 		const session = await makeSession(handle);
-		const stream = await runSessionTurn(handle, session, "fix it", stubProvider());
-		const chunks = (await drain(stream)) as {
+		const turn = await runSessionTurn(handle, session, "fix it", stubProvider());
+		const chunks = (await drain(turn.stream)) as {
 			type: string;
 			messageMetadata?: { author?: string; turnStats?: { toolCount: number } };
 		}[];
+		await turn.ingest;
 
 		const finish = chunks.find((chunk) => chunk.type === "finish");
 		expect(finish?.messageMetadata).toMatchObject({
