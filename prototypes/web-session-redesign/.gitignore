@@ -1,0 +1,4 @@
+# Local-only design review artifacts — keep the lightweight HTML mockups in git,
+# but not the multi-MB rendered screenshots or the base64-embedded galleries.
+*.png
+gallery*.html

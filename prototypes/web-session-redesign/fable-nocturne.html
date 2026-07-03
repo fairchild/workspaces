@@ -1,0 +1,434 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nocturne — Spaces session view concept</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:ital,wght@0,300..700;1,300..700&family=Fragment+Mono:ital@0;1&display=swap" rel="stylesheet">
+<style>
+  /* ————————————————————————————————————————————————
+     NOCTURNE — conversation and stage.
+     The thread stays prose; anything the work produces
+     (a test run, a diff) materializes on a stage at the
+     right, then condenses as newer moments arrive.
+     Warm lamplight dark, humanist sans, soft depth.
+     ———————————————————————————————————————————————— */
+  :root {
+    --bg:     #161410;
+    --card:   #211E18;
+    --card2:  #262218;
+    --line:   rgba(234,222,196,.09);
+    --line2:  rgba(234,222,196,.16);
+    --ink:    #EAE4D6;
+    --muted:  #A79E8C;
+    --faint:  #7B7263;
+    --amber:  #DFA45C;
+    --green:  #93BD82;
+    --red:    #CF8570;
+    --sans: 'Hanken Grotesk', 'Seravek', system-ui, sans-serif;
+    --mono: 'Fragment Mono', ui-monospace, 'SF Mono', monospace;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html { -webkit-font-smoothing:antialiased; }
+  body {
+    background:
+      radial-gradient(1100px 560px at 76% -6%, rgba(223,164,92,.065), transparent 62%),
+      radial-gradient(900px 500px at -10% 108%, rgba(147,189,130,.035), transparent 60%),
+      var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 16.5px; line-height: 1.68;
+    min-height: 100vh;
+  }
+  ::selection { background: rgba(223,164,92,.28); }
+  button { font:inherit; color:inherit; background:none; border:none; cursor:pointer; }
+  code {
+    font-family: var(--mono); font-size: .84em;
+    background: rgba(234,222,196,.07);
+    padding: 1px 5px 2px; border-radius: 4px;
+  }
+
+  /* ——— identity: one quiet line across the top ——— */
+  .topbar {
+    max-width: 1352px; margin: 0 auto;
+    padding: 26px 44px 0;
+    display:flex; align-items:center; justify-content:space-between;
+    font-family: var(--mono); font-size: 11.5px; color: var(--faint);
+  }
+  .topbar .repo b { color: var(--muted); font-weight: 400; }
+  .topbar .sep { margin: 0 8px; opacity:.5; }
+  .dot { display:inline-block; width:7px; height:7px; border-radius:50%; margin-right:8px; vertical-align:1px; }
+  .dot.live { background: var(--green); box-shadow: 0 0 0 3px rgba(147,189,130,.12); }
+  .dot.work { background: var(--amber); box-shadow: 0 0 0 3px rgba(223,164,92,.12); animation: breathe 2.2s ease-in-out infinite; }
+  @keyframes breathe { 0%,100%{opacity:.4;} 50%{opacity:1;} }
+
+  /* ——— two regions: thread + stage ——— */
+  .layout {
+    max-width: 1352px; margin: 0 auto;
+    display: grid; grid-template-columns: minmax(0, 620px) minmax(380px, 1fr);
+    gap: 76px; padding: 44px 44px 80px;
+    align-items: start;
+  }
+
+  .thread > * { animation: rise .55s ease both; }
+  .thread > *:nth-child(1){animation-delay:.03s} .thread > *:nth-child(2){animation-delay:.09s}
+  .thread > *:nth-child(3){animation-delay:.15s} .thread > *:nth-child(4){animation-delay:.21s}
+  .thread > *:nth-child(5){animation-delay:.27s} .thread > *:nth-child(6){animation-delay:.33s}
+  @keyframes rise { from{opacity:0; transform:translateY(10px);} to{opacity:1; transform:none;} }
+
+  .session-title {
+    font-size: 21px; font-weight: 550; letter-spacing: -.012em;
+    margin-bottom: 34px; color: var(--ink);
+  }
+  .session-title .crumb { color: var(--faint); font-weight: 400; }
+
+  /* user messages: soft cards, Things-warm */
+  .msg-user {
+    margin: 30px 0 30px auto; max-width: 88%;
+    background: linear-gradient(180deg, #2A251C, #272219);
+    border: 1px solid rgba(223,164,92,.13);
+    border-radius: 16px 16px 5px 16px;
+    padding: 13px 19px; font-size: 15.5px; color: #DDD5C4;
+    box-shadow: 0 10px 26px -18px rgba(0,0,0,.7);
+  }
+
+  /* agent turns: open prose on the canvas */
+  .turn p { margin: 15px 0; color: var(--ink); }
+  .turn p em { color: var(--muted); }
+
+  /* ——— tool steps: quiet rows, actions on hover ——— */
+  .steps { margin: 20px 0; }
+  .step-row {
+    border-radius: 10px;
+    transition: background .18s ease;
+  }
+  .step-head {
+    display:flex; align-items:center; flex-wrap: nowrap; gap: 12px; width:100%;
+    text-align:left; padding: 7px 12px;
+    font-family: var(--mono); font-size: 12.5px; color: var(--muted);
+    cursor: pointer; user-select: none;
+  }
+  .step-row:hover, .step-row.is-hover { background: rgba(234,222,196,.045); }
+  .tw { width: 10px; color: var(--faint); font-size: 10px; transition: transform .18s ease; transform-origin: 45% 50%; flex-shrink:0; }
+  .step-row.open .tw { transform: rotate(90deg); }
+  .tag {
+    font-size: 9.5px; letter-spacing: .16em; font-weight: 400;
+    border: 1px solid var(--line2); border-radius: 99px;
+    padding: 2px 8px 1px; color: var(--faint); flex-shrink:0;
+  }
+  .tag.edit { color: var(--amber); border-color: rgba(223,164,92,.35); }
+  .obj { color: var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; flex-shrink:1; }
+  .step-row:hover .obj, .step-row.is-hover .obj { color: var(--ink); }
+  .meta { margin-left:auto; color: var(--faint); font-size: 11.5px; white-space:nowrap; padding-left: 14px; }
+  .meta .plus { color: var(--green); } .meta .minus { color: var(--red); }
+  .meta .pass { color: var(--green); }
+
+  /* hover-revealed row actions — the reveal mechanic, shown on the run row */
+  .actions {
+    display:flex; gap: 4px; margin-left: 14px; flex-shrink: 0;
+    opacity: 0; transform: translateX(4px);
+    transition: opacity .18s ease, transform .18s ease;
+  }
+  .step-row:hover .actions, .step-row.is-hover .actions { opacity: 1; transform: none; }
+  .actions button {
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: .04em;
+    color: var(--faint); padding: 3px 8px; border-radius: 6px;
+  }
+  .actions button:hover { color: var(--amber); background: rgba(223,164,92,.09); }
+
+  /* expanded step body: inline diff */
+  .step-body { display:none; margin: 4px 10px 12px 34px; animation: rise .3s ease both; }
+  .step-row.open .step-body { display:block; }
+  .inline-diff {
+    font-family: var(--mono); font-size: 12.5px; line-height: 1.72;
+    background: #1B1813; border: 1px solid var(--line);
+    border-radius: 10px; padding: 10px 0; overflow-x: auto;
+  }
+  .inline-diff span { display:block; padding: 1px 16px; white-space: pre; color: var(--faint); }
+  .inline-diff .add { background: rgba(147,189,130,.09); color: #AECf9C; }
+  .inline-diff .del { background: rgba(207,133,112,.09); color: #CF9583; }
+
+  /* ——— in-progress: one quiet line with a slow shimmer ——— */
+  .activity {
+    display:flex; align-items:center; gap: 12px;
+    margin: 34px 0 8px; padding: 2px 12px;
+    font-family: var(--mono); font-size: 12.5px; color: var(--muted);
+  }
+  .activity code { background:none; padding:0; color: var(--ink); font-size: 12.5px; }
+  .activity .watch {
+    margin-left:auto; font-size: 10.5px; letter-spacing:.06em; color: var(--faint);
+    opacity:0; transition: opacity .2s;
+  }
+  .activity:hover .watch { opacity:1; }
+  .activity .watch:hover { color: var(--amber); }
+  .ellip::after { content:'…'; animation: ellip 1.8s steps(4) infinite; }
+  @keyframes ellip { 0%{content:'';} 25%{content:'.';} 50%{content:'..';} 75%{content:'…';} }
+  .strand {
+    height: 2px; width: 148px; margin: 0 12px 30px; border-radius: 2px;
+    background: linear-gradient(90deg, transparent, rgba(223,164,92,.55), transparent);
+    background-size: 200% 100%;
+    animation: sweep 2.6s ease-in-out infinite;
+  }
+  @keyframes sweep { 0%{background-position: 120% 0;} 100%{background-position: -120% 0;} }
+
+  /* ——— compose ——— */
+  .compose {
+    margin-top: 26px;
+    background: linear-gradient(180deg, var(--card), #1E1B15);
+    border: 1px solid var(--line2); border-radius: 16px;
+    padding: 7px 7px 7px 18px;
+    display:flex; align-items:center; gap: 14px;
+    box-shadow: 0 18px 40px -24px rgba(0,0,0,.8);
+  }
+  .compose input {
+    flex:1; border:none; outline:none; background:transparent;
+    font-family: var(--sans); font-size: 15.5px; color: var(--ink);
+  }
+  .compose input::placeholder { color: var(--faint); }
+  .send {
+    width: 34px; height: 34px; border-radius: 50%;
+    background: var(--amber); color: #1C160C;
+    font-size: 16px; font-weight: 600; line-height: 1;
+    display:flex; align-items:center; justify-content:center;
+    transition: transform .15s ease, filter .15s ease;
+  }
+  .send:hover { transform: translateY(-1px); filter: brightness(1.07); }
+  .compose-hints {
+    display:flex; gap: 16px; margin: 10px 14px 0;
+    font-family: var(--mono); font-size: 10.5px; color: var(--faint); letter-spacing:.04em;
+  }
+  .compose-hints .right { margin-left:auto; }
+
+  /* ——— the stage: contextual moments materialize here ——— */
+  .stage { position: sticky; top: 44px; display:flex; flex-direction:column; gap: 14px; }
+  .stage-mark {
+    display:flex; align-items:center; gap: 12px;
+    font-family: var(--mono); font-size: 10px; letter-spacing: .2em;
+    text-transform: uppercase; color: var(--faint);
+  }
+  .stage-mark::before, .stage-mark::after { content:""; height:1px; background: var(--line); flex:1; }
+
+  .moment {
+    background: linear-gradient(180deg, var(--card), #1F1C16);
+    border: 1px solid var(--line2);
+    border-radius: 16px;
+    box-shadow: 0 24px 60px -30px rgba(0,0,0,.85), 0 1px 0 rgba(234,222,196,.04) inset;
+    overflow: hidden;
+    animation: arrive .7s cubic-bezier(.2,.75,.25,1) both .4s;
+  }
+  @keyframes arrive { from { opacity:0; transform: translateX(18px);} to { opacity:1; transform:none;} }
+  .moment-head {
+    display:flex; align-items:center; gap: 12px;
+    padding: 13px 18px; border-bottom: 1px solid var(--line);
+  }
+  .moment-head .cmd { font-family: var(--mono); font-size: 13px; color: var(--ink); }
+  .pill {
+    font-family: var(--mono); font-size: 10px; letter-spacing:.1em; text-transform: uppercase;
+    color: var(--green); background: rgba(147,189,130,.12);
+    border-radius: 99px; padding: 3px 9px 2px;
+  }
+  .moment-head .time { margin-left:auto; font-family: var(--mono); font-size: 11px; color: var(--faint); }
+  .moment-head .close { color: var(--faint); font-size: 12px; padding: 2px 4px; opacity: 0; transition: opacity .2s; }
+  .moment:hover .close { opacity: 1; }
+  .moment-head .close:hover { color: var(--ink); }
+  .moment pre {
+    font-family: var(--mono); font-size: 12.5px; line-height: 1.78;
+    color: var(--muted); padding: 14px 18px 16px; overflow-x:auto; white-space: pre;
+  }
+  .moment pre .ok { color: var(--green); }
+  .moment pre .num { color: var(--ink); }
+  .moment-foot {
+    padding: 9px 18px 11px; border-top: 1px solid var(--line);
+    font-family: var(--mono); font-size: 10.5px; color: var(--faint);
+    display:flex; gap: 14px; font-style: italic;
+  }
+  .moment-foot button { font-style: normal; font-size: 10.5px; color: var(--faint); margin-left:auto; letter-spacing:.05em; }
+  .moment-foot button:hover { color: var(--amber); }
+
+  /* an earlier moment, condensed to a chip */
+  .moment-chip {
+    display:flex; align-items:center; gap: 12px;
+    background: rgba(33,30,24,.6);
+    border: 1px solid var(--line); border-radius: 12px;
+    padding: 10px 16px;
+    font-family: var(--mono); font-size: 12px; color: var(--muted);
+    animation: arrive .6s ease both .55s;
+    transition: border-color .2s ease;
+  }
+  .moment-chip:hover { border-color: var(--line2); }
+  .moment-chip .when { color: var(--faint); font-size: 10.5px; margin-left: 2px; }
+  .moment-chip .delta .plus { color: var(--green); } .moment-chip .delta .minus { color: var(--red); margin-left: 5px; }
+  .moment-chip .open-it { margin-left:auto; font-size: 10.5px; letter-spacing:.05em; color: var(--faint); opacity:0; transition: opacity .2s; }
+  .moment-chip:hover .open-it { opacity: 1; color: var(--amber); }
+
+  .stage-hint {
+    font-family: var(--mono); font-size: 10.5px; color: rgba(123,114,99,.6);
+    font-style: italic; text-align: center; padding-top: 4px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ——— identity, kept quiet ——— -->
+<header class="topbar">
+  <span class="repo"><span class="dot live"></span><b>orbit/web</b><span class="sep">·</span>fix/session-resume</span>
+  <span class="agent"><span class="dot work"></span>Claude · working</span>
+</header>
+
+<div class="layout">
+
+  <!-- ═══ the thread ═══ -->
+  <section class="thread">
+
+    <h1 class="session-title"><span class="crumb">Session — </span>Fix the failing session-resume test</h1>
+
+    <div class="msg-user">
+      <code>pnpm test</code> is failing on the session suite — looks like resuming a
+      missing session id blows up instead of rejecting cleanly. Take a look?
+    </div>
+
+    <!-- ——— completed agent turn ——— -->
+    <div class="turn">
+      <p>That failure is a missing guard, not a flaky test. <code>resumeSession</code>
+      hands the store’s result straight to <code>hydrate</code>, so an unknown id arrives
+      as <code>undefined</code> and dies there with a <code>TypeError</code> — the test
+      never gets the rejection it’s waiting for.</p>
+
+      <div class="steps">
+        <!-- collapsed -->
+        <div class="step-row">
+          <div class="step-head" role="button" tabindex="0">
+            <span class="tw">▶</span><span class="tag">read</span>
+            <span class="obj">src/session/session.test.ts</span>
+            <span class="actions"><button>open</button><button>copy path</button></span>
+            <span class="meta">41 lines</span>
+          </div>
+          <div class="step-body"><div class="inline-diff"><span>it("rejects when the session id is unknown", async () =&gt; {</span><span>  await expect(resumeSession("sess_missing")).rejects.toThrow(</span><span>    SessionNotFoundError,</span><span>  );</span><span>});</span></div></div>
+        </div>
+        <div class="step-row">
+          <div class="step-head" role="button" tabindex="0">
+            <span class="tw">▶</span><span class="tag">read</span>
+            <span class="obj">src/session/resume.ts</span>
+            <span class="actions"><button>open</button><button>copy path</button></span>
+            <span class="meta">18 lines</span>
+          </div>
+          <div class="step-body"><div class="inline-diff"><span>export async function resumeSession(id: SessionId): Promise&lt;Session&gt; {</span><span>  const record = await store.get(id);</span><span>  return hydrate(record);</span><span>}</span></div></div>
+        </div>
+        <!-- expanded: the edit, diff inline -->
+        <div class="step-row open">
+          <div class="step-head" role="button" tabindex="0">
+            <span class="tw">▶</span><span class="tag edit">edit</span>
+            <span class="obj">src/session/resume.ts</span>
+            <span class="actions"><button>revert</button><button>copy</button></span>
+            <span class="meta"><span class="plus">+4</span> <span class="minus">−1</span></span>
+          </div>
+          <div class="step-body">
+            <div class="inline-diff"><span>  export async function resumeSession(id: SessionId): Promise&lt;Session&gt; {</span><span>    const record = await store.get(id);</span><span class="del">-   return hydrate(record);</span><span class="add">+   if (!record) {</span><span class="add">+     throw new SessionNotFoundError(id);</span><span class="add">+   }</span><span class="add">+   return hydrate(record);</span><span>  }</span></div>
+          </div>
+        </div>
+        <!-- collapsed, shown mid-hover: row actions revealed -->
+        <div class="step-row is-hover">
+          <div class="step-head" role="button" tabindex="0">
+            <span class="tw">▶</span><span class="tag">run</span>
+            <span class="obj">pnpm test</span>
+            <span class="actions"><button>re-run</button><button>copy output</button><button>to stage →</button></span>
+            <span class="meta"><span class="pass">28 passed</span> · 1.21s</span>
+          </div>
+          <div class="step-body"><div class="inline-diff"><span>Test Files  3 passed (3)</span><span>     Tests  28 passed (28)</span><span>  Duration  1.21s</span></div></div>
+        </div>
+      </div>
+
+      <p>Fixed at the boundary: resume now rejects with <code>SessionNotFoundError</code>
+      before hydration is attempted. The whole suite is green — 28 tests across three
+      files, including the two that were failing.</p>
+    </div>
+
+    <div class="msg-user">
+      Good. Add a regression test for the expired-session path too — resuming past
+      <code>expiresAt</code> should reject the same way.
+    </div>
+
+    <!-- ——— in-progress: one quiet line ——— -->
+    <div class="working">
+      <div class="activity">
+        <span class="dot work"></span>
+        <span>Writing <code>src/session/session.test.ts</code><span class="ellip"></span></span>
+        <button class="watch">view work</button>
+      </div>
+      <div class="strand"></div>
+    </div>
+
+    <!-- ——— compose ——— -->
+    <div>
+      <div class="compose">
+        <input type="text" placeholder="Message Claude" aria-label="Message">
+        <button class="send" title="Send">↑</button>
+      </div>
+      <div class="compose-hints">
+        <span>⌘K commands</span><span>⇧⏎ newline</span>
+        <span class="right">sandbox us-east · 2 vCPU</span>
+      </div>
+    </div>
+
+  </section>
+
+  <!-- ═══ the stage: work materializes here when it matters ═══ -->
+  <aside class="stage">
+    <div class="stage-mark">just now</div>
+
+    <!-- contextual moment: the test run appeared because the command ran -->
+    <div class="moment">
+      <div class="moment-head">
+        <span class="dot live"></span>
+        <span class="cmd">pnpm test</span>
+        <span class="pill">passed</span>
+        <span class="time">1.21s</span>
+        <button class="close" title="Dismiss">✕</button>
+      </div>
+      <pre><span class="ok">✓</span> src/session/resume.test.ts   (6 tests)  128ms
+<span class="ok">✓</span> src/session/session.test.ts (14 tests)  412ms
+<span class="ok">✓</span> src/session/store.test.ts    (8 tests)   96ms
+
+Test Files  <span class="num">3 passed</span> (3)
+     Tests  <span class="num">28 passed</span> (28)
+  Duration  1.21s</pre>
+      <div class="moment-foot">
+        appeared when the suite finished
+        <button>pin</button>
+      </div>
+    </div>
+
+    <!-- an earlier moment, condensed -->
+    <div class="moment-chip">
+      <span>src/session/resume.ts</span>
+      <span class="delta"><span class="plus">+4</span><span class="minus">−1</span></span>
+      <span class="when">3m ago</span>
+      <button class="open-it">reopen ↗</button>
+    </div>
+
+    <p class="stage-hint">the stage stays empty until the work produces something worth seeing</p>
+  </aside>
+
+</div>
+
+<script>
+  document.querySelectorAll('.step-head').forEach((b) => {
+    const toggle = (e) => {
+      if (e.target.closest('.actions')) return;
+      b.closest('.step-row').classList.toggle('open');
+    };
+    b.addEventListener('click', toggle);
+    b.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(e); } });
+  });
+  document.querySelector('.moment .close')?.addEventListener('click', (e) =>
+    e.target.closest('.moment').remove());
+</script>
+
+</body>
+</html>
