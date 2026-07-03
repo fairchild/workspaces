@@ -1,0 +1,149 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, test } from "vitest";
+import { type DatabaseHandle, openDatabase } from "../db/client";
+import { createSession, readEvents, type Session } from "../db/sessions";
+import type { ComputeProvider } from "./provider";
+import { runSessionTurn } from "./run-turn";
+import type { StreamChunk } from "./stream-chunk";
+
+// Same throwaway on-disk DB pattern as sessions.test.ts.
+let open: DatabaseHandle | undefined;
+let dir: string | undefined;
+
+function freshDb(): DatabaseHandle {
+	dir = mkdtempSync(join(tmpdir(), "web-next-turn-"));
+	open = openDatabase(`file:${join(dir, "test.db")}`);
+	return open;
+}
+
+afterEach(async () => {
+	await open?.db.destroy();
+	open = undefined;
+	if (dir) rmSync(dir, { recursive: true, force: true });
+	dir = undefined;
+});
+
+/** An instant scripted provider: echo text, one tool call+result, done. */
+const stubTurn: StreamChunk[] = [
+	{ type: "text", content: "On it. " },
+	{
+		type: "tool_use",
+		content: "Read",
+		metadata: { toolUseId: "t-1", toolName: "Read", input: { file_path: "a.ts" } },
+	},
+	{ type: "tool_result", content: "contents", metadata: { toolUseId: "t-1" } },
+	{ type: "done", content: "", metadata: { durationMs: 12 } },
+];
+
+function stubProvider(chunks: StreamChunk[] = stubTurn): ComputeProvider {
+	return {
+		id: "stub",
+		runTurn: async function* () {
+			yield* chunks;
+		},
+	};
+}
+
+async function makeSession(handle: DatabaseHandle): Promise<Session> {
+	return createSession(handle, { id: "s1", provider: "mock" });
+}
+
+async function drain(stream: ReadableStream<unknown>): Promise<unknown[]> {
+	const out: unknown[] = [];
+	const reader = stream.getReader();
+	for (;;) {
+		const { value, done } = await reader.read();
+		if (done) return out;
+		out.push(value);
+	}
+}
+
+describe("runSessionTurn", () => {
+	test("persists the user event before the stream is even consumed", async () => {
+		const handle = freshDb();
+		const session = await makeSession(handle);
+		const stream = await runSessionTurn(handle, session, "fix it", stubProvider());
+
+		const events = await readEvents(handle, "s1");
+		expect(events).toMatchObject([
+			{ seq: 1, role: "user", chunk: { type: "text", content: "fix it" } },
+		]);
+		await drain(stream); // release the provider iterator
+	});
+
+	test("appends provider chunks in order as the stream is consumed", async () => {
+		const handle = freshDb();
+		const session = await makeSession(handle);
+		const stream = await runSessionTurn(handle, session, "fix it", stubProvider());
+		await drain(stream);
+
+		const events = await readEvents(handle, "s1");
+		expect(events.map((event) => [event.seq, event.role, event.chunk.type])).toEqual([
+			[1, "user", "text"],
+			[2, "assistant", "text"],
+			[3, "assistant", "tool_use"],
+			[4, "assistant", "tool_result"],
+			[5, "assistant", "done"],
+		]);
+	});
+
+	test("each chunk is persisted before it is streamed", async () => {
+		const handle = freshDb();
+		const session = await makeSession(handle);
+		const stream = await runSessionTurn(handle, session, "fix it", stubProvider());
+
+		// Read up to the first text delta, then stop consuming.
+		const reader = stream.getReader();
+		for (;;) {
+			const { value } = await reader.read();
+			if ((value as { type: string }).type === "text-delta") break;
+		}
+		const events = await readEvents(handle, "s1");
+		expect(events.at(-1)).toMatchObject({
+			role: "assistant",
+			chunk: { type: "text", content: "On it. " },
+		});
+		expect(events.some((event) => event.chunk.type === "done")).toBe(false);
+		await reader.cancel();
+	});
+
+	test("streams ids that match the projection of its own log", async () => {
+		const handle = freshDb();
+		const session = await makeSession(handle);
+		const stream = await runSessionTurn(handle, session, "fix it", stubProvider());
+		const chunks = (await drain(stream)) as { type: string; messageId?: string; id?: string }[];
+
+		// The assistant message id is `${sessionId}:${firstAssistantSeq}` —
+		// what projectSessionEvents derives from the same log on reload.
+		expect(chunks[0]).toMatchObject({ type: "start", messageId: "s1:2" });
+		const textStart = chunks.find((chunk) => chunk.type === "text-start");
+		expect(textStart?.id).toBe("s1:2:p0");
+	});
+
+	test("the finished stream carries the derived turn receipt", async () => {
+		const handle = freshDb();
+		const session = await makeSession(handle);
+		const stream = await runSessionTurn(handle, session, "fix it", stubProvider());
+		const chunks = (await drain(stream)) as {
+			type: string;
+			messageMetadata?: { author?: string; turnStats?: { toolCount: number } };
+		}[];
+
+		const finish = chunks.find((chunk) => chunk.type === "finish");
+		expect(finish?.messageMetadata).toMatchObject({
+			author: "Claude",
+			turnStats: { toolCount: 1, durationMs: 12 },
+		});
+	});
+
+	test("rejects an unknown provider before touching the log", async () => {
+		const handle = freshDb();
+		const session = await createSession(handle, { id: "s2", provider: "nope" });
+		await expect(runSessionTurn(handle, session, "hi")).rejects.toThrow(
+			"Unknown compute provider: nope",
+		);
+		expect(await readEvents(handle, "s2")).toEqual([]);
+	});
+});
