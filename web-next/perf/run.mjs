@@ -5,7 +5,7 @@
  * scenarios (surfaces not built yet) are reported, never failed.
  */
 import { readFileSync, writeFileSync } from "node:fs";
-import { execSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
 import {
@@ -197,6 +197,20 @@ async function runTranscriptRender(browser, baseUrl, route, runs) {
 	return { initial_render_ms: samples };
 }
 
+// In-process (no browser): shells out to the tsx bench and reads its JSON
+// samples. Kept a subprocess so run.mjs itself stays plain Node/ESM while the
+// bench imports the TypeScript projection under tsx.
+function runProjectionBench(scenario) {
+	const stdout = execFileSync(
+		"pnpm",
+		["exec", "tsx", "perf/projection-bench.mjs", String(scenario.runs)],
+		{ cwd: WEB_NEXT_ROOT, encoding: "utf8" },
+	);
+	const lastLine = stdout.trim().split("\n").at(-1);
+	const { samples } = JSON.parse(lastLine);
+	return { projection_ms: samples };
+}
+
 const SCENARIO_RUNNERS = {
 	ttft_mock: (browser, baseUrl, scenario) =>
 		runTtftMock(browser, baseUrl, scenario.runs),
@@ -204,6 +218,7 @@ const SCENARIO_RUNNERS = {
 		runStreamingCadence(browser, baseUrl, scenario.runs),
 	transcript_render_200: (browser, baseUrl, scenario) =>
 		runTranscriptRender(browser, baseUrl, scenario.route, scenario.runs),
+	projection_200: (browser, baseUrl, scenario) => runProjectionBench(scenario),
 	route_home: (browser, baseUrl, scenario) =>
 		runRoute(browser, baseUrl, scenario.route, scenario.runs),
 	route_spike: (browser, baseUrl, scenario) =>

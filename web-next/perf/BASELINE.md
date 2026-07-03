@@ -18,6 +18,7 @@ tightening any budget.
 | ttft_mock | ttft_ms | median | 704 | 1500 | pass |
 | streaming_cadence | longest_task_ms | max | 0 | 50 | pass |
 | transcript_render_200 | initial_render_ms | median | 213.6 | 500 | pass |
+| projection_200 | projection_ms | median | 12.7 | 40 | pass |
 | route_home | lcp_ms | median | 60 | 1200 | pass |
 | route_home | tbt_ms | median | 0 | 200 | pass |
 | route_home | first_load_js_kb | exact | 103.7 | 200 | pass |
@@ -36,6 +37,7 @@ Raw samples from the baseline run:
 | ttft_mock | ttft_ms | 715, 704, 693 |
 | streaming_cadence | longest_task_ms | 0, 0, 0 |
 | transcript_render_200 | initial_render_ms | 223.4, 213.6, 207.2 |
+| projection_200 | projection_ms | 12.7, 14.2, 10.0 |
 | route_home | lcp_ms | 56, 60, 64 |
 | route_home | tbt_ms | 0, 0, 0 |
 | route_spike | lcp_ms | 140, 112, 76 |
@@ -53,6 +55,15 @@ Reading notes:
   same budgets as `route_spike`; the Folio view server-renders from fixtures,
   so its client JS (103.6 kB gz) is the shared baseline plus theme/disclosure
   interactivity — no chat runtime on this route yet (#748 will add it).
+- **2026-07-03 (#746):** `projection_200` added (measured) — the pure
+  events→UIMessage[] projection over a 200-event log (20 interleaved
+  user+assistant turns), run in-process under tsx via `perf/projection-bench.mjs`
+  (not the browser). First measurement 12.7ms median. Budget set to 40ms: ~3x
+  headroom over the dev-container median, chosen so ordinary noise and slower CI
+  pass while a real regression (e.g. an accidental O(n²) over events, or
+  per-event allocation blowup across the 20 `readUIMessageStream` reductions)
+  trips it. This is #749's tail/resume read cost, so it is budgeted tight rather
+  than generous. Re-baseline from CI if it proves noisy there.
 - `ttft_mock` includes ~600ms of scripted provisioning-status delay in the
   mock turn, so real client+server overhead is roughly 110ms of the median.
 - `longest_task_ms` uses the longtask API, which only reports tasks >= 50ms —

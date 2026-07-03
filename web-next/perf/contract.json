@@ -5,7 +5,8 @@
 		"paint_timing": "waitForFunction polls on requestAnimationFrame, so 'painted' means the frame after the DOM change — within one frame of true paint.",
 		"long_tasks": "PerformanceObserver longtask entries, observed in-page. The longtask API only reports tasks >= 50ms, so longest_task_ms reads 0 in a clean run and any nonzero value is a budget violation.",
 		"tbt": "Sum of (longtask duration - 50ms) for buffered long tasks within the settle window after navigation.",
-		"first_load_js": "Gzipped size of the route's client JS chunks from the .next build manifests — same basis as the `next build` First Load JS column."
+		"first_load_js": "Gzipped size of the route's client JS chunks from the .next build manifests — same basis as the `next build` First Load JS column.",
+		"projection": "In-process (no browser): perf/projection-bench.mjs, run under tsx, builds a deterministic 200-event log and times projectSessionEvents over N runs after one warmup, printing JSON samples run.mjs aggregates. Measures the pure events→UIMessage[] projection (adapter + readUIMessageStream reduction) that #749's tail/resume path replays through."
 	},
 	"scenarios": [
 		{
@@ -34,6 +35,16 @@
 			"runs": 3,
 			"metrics": {
 				"initial_render_ms": { "stat": "median", "budget": 500 }
+			}
+		},
+		{
+			"id": "projection_200",
+			"status": "measured",
+			"harness": "node",
+			"description": "Project a 200-event session log (20 interleaved user+assistant turns with status/text/tool events) into UIMessage[] in-process; median wall-clock over the runs. This is the read path #749's tail/resume replays; it must stay cheap enough to project a full transcript on reconnect without blocking.",
+			"runs": 3,
+			"metrics": {
+				"projection_ms": { "stat": "median", "budget": 40 }
 			}
 		},
 		{
