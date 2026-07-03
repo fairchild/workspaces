@@ -2,8 +2,10 @@
  * Evidence capture, light + dark: the sessions home (empty and populated),
  * an empty session reached through the real new-session flow, a real mock
  * turn streamed into that session (mid-stream, final, and reloaded from the
- * event log), the Folio session demo, and the refine-folio prototype beside
- * it for pixel comparison. Runs against a production build in auth-bypass
+ * event log), the durable disconnect→resume story (tab closed mid-turn, a
+ * fresh tab catching up, then completed), the Folio session demo, and the
+ * refine-folio prototype beside it for pixel comparison. Runs against a
+ * production build in auth-bypass
  * mode over a throwaway database. Output goes to output/evidence/
  * (gitignored); CI uploads it as an artifact — the sanctioned publish path
  * per docs/development/remote-sessions.md.
@@ -126,6 +128,54 @@ async function captureSessionTurn(page, shot) {
 	await page.screenshot({ path: shot("session-turn-reloaded") });
 }
 
+/**
+ * The durable-turn story: start a turn, close the tab mid-stream, reopen the
+ * session in a fresh tab and watch it catch up and complete. Manages its own
+ * pages (the starter tab is closed on purpose) so the caller's page is left
+ * untouched; the reopened tab inherits the context's theme + font routing.
+ */
+async function captureDisconnectResume(context, shot) {
+	const starter = await context.newPage();
+	await starter.goto("/", { waitUntil: "networkidle" });
+	await starter.getByRole("button", { name: "+ new session" }).click();
+	await starter
+		.getByTestId("new-session-picker")
+		.getByRole("button", { name: "fairchild/workspaces" })
+		.click();
+	await starter.waitForURL(/\/sessions\//, { timeout: TURN_TIMEOUT_MS });
+	const sessionUrl = starter.url();
+
+	await starter
+		.getByRole("textbox", { name: "Reply to Claude" })
+		.fill("Fix the failing session test");
+	await starter.keyboard.press("Enter");
+	// Mid-turn: first prose streamed — the moment before the tab is closed.
+	await starter
+		.getByText("Let me look at the failing test")
+		.waitFor({ timeout: TURN_TIMEOUT_MS });
+	await starter.waitForTimeout(300);
+	await starter.screenshot({ path: shot("resume-midturn") });
+
+	// Close the tab entirely; the detached turn keeps running server-side.
+	await starter.close();
+	const reopened = await context.newPage();
+	await reopened.goto(sessionUrl, { waitUntil: "commit" });
+	// Catching up: the reopened tab resumes the in-flight turn from the log.
+	await reopened
+		.getByTestId("activity-line")
+		.waitFor({ timeout: TURN_TIMEOUT_MS })
+		.catch(() => {});
+	await reopened.waitForTimeout(300);
+	await reopened.screenshot({ path: shot("resume-catchup") });
+
+	// Completed: the resumed turn finished; the receipt proves it caught up.
+	await reopened.getByTestId("turn-stats").waitFor({ timeout: TURN_TIMEOUT_MS });
+	await reopened.getByTestId("turn-stats").scrollIntoViewIfNeeded();
+	await reopened.waitForTimeout(ANIMATION_SETTLE_MS);
+	await reopened.screenshot({ path: shot("resume-complete") });
+	await reopened.close();
+}
+
 // --- prototype capture -------------------------------------------------------
 // The prototype loads Newsreader/IBM Plex Mono from Google Fonts; headless
 // Chromium in sandboxes has no direct egress, so font requests are fulfilled
@@ -206,6 +256,7 @@ async function main() {
 			await captureSettled(page, "/", shot("home-empty"));
 			await captureNewSessionFlow(page, shot("session-empty"));
 			await captureSessionTurn(page, shot);
+			await captureDisconnectResume(context, shot);
 			await seedPopulatedHome(db);
 			await captureSettled(page, "/", shot("home-populated"));
 
@@ -213,7 +264,7 @@ async function main() {
 			await capturePrototype(page, colorScheme, shot("prototype-folio"));
 			await context.close();
 			console.log(
-				`captured home (empty+populated) + session (empty, streaming, final, reloaded) + sessions-demo + prototype (${colorScheme})`,
+				`captured home (empty+populated) + session (empty, streaming, final, reloaded) + disconnect→resume (midturn, catchup, complete) + sessions-demo + prototype (${colorScheme})`,
 			);
 		}
 	} finally {

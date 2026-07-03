@@ -30,7 +30,7 @@ tightening any budget.
 | route_sessions_demo | lcp_ms | median | 148 | 1200 | pass |
 | route_sessions_demo | tbt_ms | median | 0 | 200 | pass |
 | route_sessions_demo | first_load_js_kb | exact | 114.1 | 200 | pass |
-| resume_latency_100 | — | — | — | — | pending (#749) |
+| resume_latency_100 | resume_ms | median | 197.3 | 800 | pass |
 
 Raw samples from the baseline run:
 
@@ -46,9 +46,23 @@ Raw samples from the baseline run:
 | route_session_empty | tbt_ms | 0, 5, 0 |
 | route_sessions_demo | lcp_ms | 156, 148, 140 |
 | route_sessions_demo | tbt_ms | 0, 0, 0 |
+| resume_latency_100 | resume_ms | 218.9, 190.1, 197.3 |
 
 Reading notes:
 
+- **2026-07-03 (#749):** `resume_latency_100` converted from pending to
+  measured. It loads a session whose ~100-event assistant turn was left in
+  flight (seeded stale, no `done`, one fresh session per run), so the client's
+  `resume` reconnects to the tail route, which closes the abandoned turn and
+  backfills the whole log; the metric times navigation start → the turn's last
+  event (a marker) painted. First measurement 197.3ms median. Budget set to
+  800ms: ~4x the dev-container median, enough headroom for a cold/noisy CI
+  reconnect while still tripping a real regression (a 100-event backfill that
+  blocks the client for most of a second would be one). This is the durable
+  read+replay path, so it is budgeted meaningfully rather than loosely.
+  `ttft_mock`/`streaming_cadence` re-verified unchanged (750ms / 0ms) — the
+  detached-ingest + tail refactor did not regress the connected send path,
+  which now tails the same log instead of teeing the provider directly.
 - **2026-07-03 (#748):** `ttft_mock` and `streaming_cadence` repointed from
   the Phase 0 `/spike` at the real session surface: a message sent from the
   Folio compose on a fresh `/sessions/[id]` through the auth-gated chat route,
