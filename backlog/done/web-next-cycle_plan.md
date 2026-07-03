@@ -1,9 +1,11 @@
 ---
-status: proposed
+status: done
 category: plan
 ---
 
 # Web Next Cycle Plan — 2026-07
+
+> **Completed 2026-07-02, same day.** All workstreams executed: W0 closures (#535/#543/#545/#522, residue → #724), W1 #541 (PR #727), W2 #536 (PR #731), W3 #540 retired (PR #725), W4 #539 (PR #732). Milestone #7 closed with 32 issues. Learnings recorded in `backlog/ROADMAP.md` § 2026-07-02; conventions encoded in `docs/development/remote-sessions.md` and `.agents/skills/subagent-delegation/SKILL.md`. W5 grooming items remain open for a future cycle (#521, #524, LEDGER gaps).
 
 Execution plan for the next round of `web/` work, grounded in a 2026-07-02 read of
 the roadmap, milestone #7, the open `web`-labeled issues, and the actual `web/` tree.
