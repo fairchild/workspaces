@@ -166,6 +166,162 @@ struct LocalStateStoreTests {
         #expect(toolDetail == "file_path_present")
     }
 
+    @Test("Continuity read model joins latest agent status per session")
+    func continuityReadModelJoinsLatestAgentStatus() async throws {
+        let fixture = try TemporaryDirectory()
+        defer { fixture.cleanup() }
+        let databaseURL = fixture.url.appendingPathComponent("state.sqlite")
+        let store = try LocalStateStore(databaseURL: databaseURL)
+
+        let agentSessionID = UUID(uuidString: "1D14D5B0-38A5-4E6C-9C05-6E1C4E1B9A01")!
+        let agentSession = HostTerminalSession(
+            id: agentSessionID,
+            key: .repoPath("/tmp/workspaces/repo"),
+            directory: URL(fileURLWithPath: "/tmp/workspaces/repo")
+        )
+        try await store.recordTerminalSession(
+            agentSession,
+            terminalMode: "tmux_per_session",
+            isActive: true,
+            hooksSocketPath: nil
+        )
+
+        let endedSessionID = UUID(uuidString: "2D14D5B0-38A5-4E6C-9C05-6E1C4E1B9A02")!
+        let endedSession = HostTerminalSession(
+            id: endedSessionID,
+            key: .hostPath("/tmp/workspaces/other"),
+            directory: URL(fileURLWithPath: "/tmp/workspaces/other")
+        )
+        try await store.recordTerminalSession(
+            endedSession,
+            terminalMode: "ghostty_managed_splits",
+            isActive: true,
+            hooksSocketPath: nil
+        )
+        try await store.markTerminalSessionEnded(hostSessionID: endedSessionID)
+
+        let earlierStatus = AgentSessionStatus(
+            hostSessionID: agentSessionID,
+            agentSessionID: "claude-session-old",
+            kind: .claudeCode,
+            cwd: "/tmp/workspaces/repo",
+            run: .runningTool(name: "Read", detail: "README.md"),
+            modelDisplayName: "Claude",
+            lastEventAt: Date(timeIntervalSince1970: 1_700_000_000),
+            hookActive: true,
+            createdAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+        try await store.recordAgentEvents(
+            [.toolStart(name: "Read", detail: "README.md")],
+            hostSessionID: agentSessionID,
+            origin: .hook,
+            status: earlierStatus,
+            occurredAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+
+        let latestStatus = AgentSessionStatus(
+            hostSessionID: agentSessionID,
+            agentSessionID: "claude-session-new",
+            kind: .claudeCode,
+            cwd: "/tmp/workspaces/repo",
+            run: .runningTool(name: "Bash", detail: "swift test"),
+            modelDisplayName: "Claude",
+            lastEventAt: Date(timeIntervalSince1970: 1_700_000_100),
+            hookActive: true,
+            createdAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+        try await store.recordAgentEvents(
+            [.toolStart(name: "Bash", detail: "swift test")],
+            hostSessionID: agentSessionID,
+            origin: .hook,
+            status: latestStatus,
+            occurredAt: Date(timeIntervalSince1970: 1_700_000_100)
+        )
+
+        let allRows = try await store.fetchContinuitySessions()
+        #expect(allRows.count == 2)
+
+        let endedRow = try #require(allRows.first { $0.hostSessionID == endedSessionID })
+        #expect(endedRow.isActive == false)
+        #expect(endedRow.endedAt != nil)
+        #expect(endedRow.agentSessionID == nil)
+        #expect(endedRow.agentRunState == nil)
+
+        let activeRows = try await store.fetchContinuitySessions(activeOnly: true)
+        #expect(activeRows.count == 1)
+        let activeRow = try #require(activeRows.first)
+        #expect(activeRow.hostSessionID == agentSessionID)
+        #expect(activeRow.directoryPath == "/tmp/workspaces/repo")
+        #expect(activeRow.terminalMode == "tmux_per_session")
+        #expect(activeRow.tmuxSessionName != nil)
+        #expect(activeRow.agentSessionID == "claude-session-new")
+        #expect(activeRow.agentRunState == "running_tool")
+        #expect(activeRow.agentCwd == "/tmp/workspaces/repo")
+        #expect(activeRow.agentEventAt == Date(timeIntervalSince1970: 1_700_000_100))
+    }
+
+    @Test("Latest layout snapshot returns newest capture with split panes")
+    func latestLayoutSnapshotReturnsNewestCapture() async throws {
+        let fixture = try TemporaryDirectory()
+        defer { fixture.cleanup() }
+        let databaseURL = fixture.url.appendingPathComponent("state.sqlite")
+        let store = try LocalStateStore(databaseURL: databaseURL)
+
+        let emptyBefore = try await store.fetchLatestLayoutSnapshot()
+        #expect(emptyBefore == nil)
+
+        let primaryID = UUID(uuidString: "3D14D5B0-38A5-4E6C-9C05-6E1C4E1B9A03")!
+        let splitID = UUID(uuidString: "4D14D5B0-38A5-4E6C-9C05-6E1C4E1B9A04")!
+        for (sessionID, path) in [(primaryID, "/tmp/workspaces/repo"), (splitID, "/tmp/workspaces/other")] {
+            let session = HostTerminalSession(
+                id: sessionID,
+                key: .hostPath(path),
+                directory: URL(fileURLWithPath: path)
+            )
+            try await store.recordTerminalSession(
+                session,
+                terminalMode: "ghostty_managed_splits",
+                isActive: true,
+                hooksSocketPath: nil
+            )
+        }
+
+        try await store.recordTerminalLayoutSnapshot(
+            activeHostSessionID: primaryID,
+            selectedSurfaceKind: "repository_terminal",
+            selectedSurfaceID: primaryID.uuidString,
+            capturedAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+        try await store.recordTerminalLayoutSnapshot(
+            activeHostSessionID: splitID,
+            selectedSurfaceKind: "workspace_terminal",
+            selectedSurfaceID: splitID.uuidString,
+            splitPanes: [
+                TerminalSplitSnapshotInput(
+                    primaryHostSessionID: primaryID,
+                    splitHostSessionID: splitID,
+                    axis: "leading_trailing",
+                    splitBeforePrimary: false,
+                    splitFraction: 0.5
+                )
+            ],
+            capturedAt: Date(timeIntervalSince1970: 1_700_000_100)
+        )
+
+        let latestSnapshot = try await store.fetchLatestLayoutSnapshot()
+        let snapshot = try #require(latestSnapshot)
+        #expect(snapshot.capturedAt == Date(timeIntervalSince1970: 1_700_000_100))
+        #expect(snapshot.activeHostSessionID == splitID)
+        #expect(snapshot.selectedSurfaceKind == "workspace_terminal")
+        #expect(snapshot.splitPanes.count == 1)
+        let pane = try #require(snapshot.splitPanes.first)
+        #expect(pane.primaryHostSessionID == primaryID)
+        #expect(pane.splitHostSessionID == splitID)
+        #expect(pane.axis == "leading_trailing")
+        #expect(pane.splitBeforePrimary == false)
+        #expect(pane.splitFraction == 0.5)
+    }
+
     @Test("docs/schema.sql loads as runnable SQLite")
     func schemaDocumentLoads() async throws {
         let fixture = try TemporaryDirectory()
