@@ -1,13 +1,15 @@
 /*
  * /sessions/[id] — a real session rendered in the Folio system: masthead
- * with the repo and title, the (empty, for now) transcript with its calm
- * note, and the autofocused compose. Streaming turns land with #748.
+ * with the repo and title, the transcript projected server-side from the
+ * persisted event log, and the autofocused compose streaming live turns
+ * through the session's chat route.
  */
 import { notFound } from "next/navigation";
+import type { FolioMessage } from "@/components/folio/types";
 import { getAuthState } from "@/lib/auth/auth-state";
 import { getDatabase } from "@/lib/db/client";
 import { getRepo } from "@/lib/db/repos";
-import { getSession } from "@/lib/db/sessions";
+import { getSession, readTranscript } from "@/lib/db/sessions";
 import { LiveSessionView } from "./live-session-view";
 
 export default async function SessionPage({
@@ -27,9 +29,20 @@ export default async function SessionPage({
 	const auth = await getAuthState();
 	const author = auth.kind === "authorized" ? auth.user.name : "You";
 
+	// Assistant messages carry their metadata (author, turn stats) from the
+	// projection; user messages get the signed-in user's name here.
+	const transcript = (await readTranscript(handle, id)) as FolioMessage[];
+	const initialMessages = transcript.map((message) =>
+		message.role === "user"
+			? { ...message, metadata: { author, ...message.metadata } }
+			: message,
+	);
+
 	return (
 		<LiveSessionView
+			sessionId={session.id}
 			author={author}
+			initialMessages={initialMessages}
 			session={{
 				masthead: {
 					repo: repoName,

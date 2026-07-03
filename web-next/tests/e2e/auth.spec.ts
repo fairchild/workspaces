@@ -24,6 +24,17 @@ test.describe("signed out", () => {
 		).toBeVisible();
 	});
 
+	test("the chat API is bounced at the edge, not served", async ({
+		request,
+	}) => {
+		const response = await request.post("/api/sessions/any/chat", {
+			data: { text: "hi" },
+			maxRedirects: 0,
+		});
+		expect(response.status()).toBe(307);
+		expect(response.headers()["location"]).toContain("/sign-in");
+	});
+
 	test("the bypass button signs in as the allowlisted user", async ({
 		page,
 	}) => {
@@ -48,6 +59,15 @@ test.describe("not on the allowlist", () => {
 		// None of the home furniture rendered beneath the refusal.
 		await expect(page.getByRole("link")).toHaveCount(0);
 		await expect(page.getByTestId("new-session-picker")).toHaveCount(0);
+	});
+
+	test("the chat API refuses with 403 (the route gate, past middleware)", async ({
+		request,
+	}) => {
+		const response = await request.post("/api/sessions/any/chat", {
+			data: { text: "hi" },
+		});
+		expect(response.status()).toBe(403);
 	});
 
 	test("sign out returns to sign-in", async ({ page }) => {

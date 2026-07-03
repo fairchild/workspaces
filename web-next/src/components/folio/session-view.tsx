@@ -41,9 +41,11 @@ export interface SessionViewProps {
 	session: SessionViewData;
 	/** Compose submit handler (client wrappers wire this; fixtures omit it). */
 	onSend?: (text: string) => void;
+	/** Holds sends (keeping the draft) while a turn is streaming. */
+	composeDisabled?: boolean;
 }
 
-export function SessionView({ session, onSend }: SessionViewProps) {
+export function SessionView({ session, onSend, composeDisabled }: SessionViewProps) {
 	const isEmpty = session.messages.length === 0 && !session.activeTurn;
 	return (
 		<>
@@ -85,7 +87,11 @@ export function SessionView({ session, onSend }: SessionViewProps) {
 				)}
 			</main>
 			<footer className="sticky bottom-0 z-[15]">
-				<ComposeField agentName={session.masthead.agentName} onSend={onSend} />
+				<ComposeField
+					agentName={session.masthead.agentName}
+					onSend={onSend}
+					disabled={composeDisabled}
+				/>
 				<StatusLine status={session.statusLine} />
 			</footer>
 		</>
