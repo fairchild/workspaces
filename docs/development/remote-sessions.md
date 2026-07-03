@@ -64,6 +64,16 @@ and CI. The `fast/unauth-*` specs still need production mode
 
 ## Session practices that earn their keep
 
+- **File human-lane blockers as issues the moment you hit them** (labels
+  `ops`/`human`), not at reflection time. On 2026-07-02 the evidence-token gap
+  was confirmed in the first hour but filed six hours later — every agent in
+  between paid the same workaround. An early issue gives the owner a chance to
+  fix the environment mid-session.
+- **Wait on PR checks with `scripts/pr-wait.sh <sha>`** (blocks until check
+  runs + the managed-review status are terminal; exits 0 only if all latest
+  runs are green/skipped). Webhook subscription + a per-SHA wait beats a
+  recurring cron for PR babysitting — and beats hand-rolled poll loops, one of
+  which shipped with an early-exit bug before this script existed.
 - **Capture full command output to a file first, filter second.** A flaky test's
   identity was lost in this repo once because grep pipelines ate the failure
   name before anyone saved raw output. `cmd > log 2>&1` then grep the log.

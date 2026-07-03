@@ -30,14 +30,21 @@ Source: the 2026-07-02 cycle (PRs #723–#732, six first-try gate passes).
   `sync-execution-state.py` owns that lane (`backlog/CLAUDE.md`).
 - PR-body Mergeability fields need real prose — the `readiness` check
   (`scripts/pr-readiness.py`) fails on empty/default/`n/a` answers; when a
-  field doesn't apply, write *why* it doesn't.
+  field doesn't apply, write *why* it doesn't. Read that script before the
+  session's first PR body — it is the body contract.
+- Author the Evidence section with a placeholder slot for the hosted CI link
+  so the gate edits the PR body exactly once, at ready-flip (every body
+  update resends the full text).
 
 ## The gate, before a PR leaves draft
 
-Calibrate depth to risk (#733 tracks formalizing the tiers).
+Calibrate depth to risk — default tiers until #733 lands: docs/test-only →
+diff read + CI + managed reviewer suffice; behavior → add an independent
+suite re-run (don't trust reported counts); security/UI → add the
+adversarial/visual passes below.
 
-- Always: re-run the verification suites yourself — don't trust reported
-  counts; cite the green CI run in the Evidence section; check `Closes #N`.
+- Always: read the full diff; cite the green CI run in the Evidence section;
+  check `Closes #N`.
 - Security-touching: adversarial pass — bypass paths, every failure path no
   worse than pre-change behavior, signer/verifier secret parity.
 - UI-touching: view the screenshots yourself; run the Playwright `full`
@@ -54,4 +61,4 @@ Calibrate depth to risk (#733 tracks formalizing the tiers).
 Serialize PRs touching `package.json`/lockfile; everything else parallelizes in
 worktrees. `web/tests/LEDGER.md` conflicts are expected and additive — keep
 both blocks. One watch owns merge-event follow-through (merge and CI-success
-events don't push to sessions).
+events don't push to sessions) — `scripts/pr-wait.sh <sha>` is that watch.
