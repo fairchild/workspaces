@@ -86,6 +86,22 @@ struct ExperimentalFeaturesTests {
         )
     }
 
+    @Test("Restore-sessions-on-launch defaults off and honors its force-on override")
+    func restoreSessionsOnLaunchFlag() {
+        let (defaults, suiteName) = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        #expect(!ExperimentalFeature.restoreSessionsOnLaunch.defaultEnabled)
+        #expect(!ExperimentalFeatures.isEnabled(.restoreSessionsOnLaunch, userDefaults: defaults, environment: [:]))
+        #expect(
+            ExperimentalFeatures.isEnabled(
+                .restoreSessionsOnLaunch,
+                userDefaults: defaults,
+                environment: ["WORKSPACES_RESTORE_SESSIONS_ON_LAUNCH": "1"]
+            )
+        )
+    }
+
     @Test("Feature metadata has stable unique non-empty values")
     func featureMetadataIsUniqueAndNonEmpty() {
         let features = ExperimentalFeature.allCases
