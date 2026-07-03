@@ -14,6 +14,15 @@ export interface Env {
   POSTS_PER_HOUR?: string;
 }
 
+export interface FeedbackAuditRow {
+  id: number;
+  feedback_id: string;
+  at: number;
+  actor: string;
+  action: string;
+  detail: string | null;
+}
+
 export interface FeedbackPayload {
   kind: "bug" | "idea" | "feedback";
   message: string;

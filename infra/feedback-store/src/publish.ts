@@ -1,6 +1,71 @@
-import { ensureSchema } from "./db";
+import { ensureSchema, recordAudit } from "./db";
 import { escapeHTML, html, redirect, requireSession } from "./admin";
 import type { Env, FeedbackRow } from "./types";
+
+export interface PublishRequest {
+  ids: string[];
+  title: string;
+  body: string;
+  actor: string;
+  force?: boolean;
+}
+
+export type PublishResult =
+  | { ok: true; issueURL: string }
+  | { ok: false; status: number; error: string; alreadyPublished?: { id: string; url: string }[] };
+
+/**
+ * Create one GitHub issue from selected feedback rows, then mark them triaged.
+ *
+ * Guards against double-publishing: any selected row that already carries a
+ * `github_issue_url` blocks the publish (409) unless `force` is set, so a
+ * double-click or a retry can't silently mint a duplicate issue. Every
+ * affected row gets an audit entry naming the actor.
+ */
+export async function publishFeedbackAsIssue(env: Env, req: PublishRequest): Promise<PublishResult> {
+  const ids = req.ids.map(String).filter(Boolean);
+  const title = req.title.trim();
+  const body = req.body.trim();
+  if (ids.length === 0 || !title || !body) {
+    return { ok: false, status: 400, error: "ids, title, and body are required" };
+  }
+  if (!env.GITHUB_ISSUE_TOKEN) {
+    return { ok: false, status: 500, error: "GITHUB_ISSUE_TOKEN is not configured" };
+  }
+
+  const rows = await loadRows(env, ids);
+  const missing = ids.filter((id) => !rows.some((row) => row.id === id));
+  if (missing.length) {
+    return { ok: false, status: 404, error: `unknown feedback ids: ${missing.join(", ")}` };
+  }
+
+  if (!req.force) {
+    const already = rows
+      .filter((row) => row.github_issue_url)
+      .map((row) => ({ id: row.id, url: row.github_issue_url as string }));
+    if (already.length) {
+      return {
+        ok: false,
+        status: 409,
+        error: "some feedback already published; pass force to override",
+        alreadyPublished: already,
+      };
+    }
+  }
+
+  const issueURL = await createIssue(env, title, buildIssueBody(body, rows), labelsFor(rows));
+
+  for (const id of ids) {
+    await env.FEEDBACK_DB.prepare(
+      "UPDATE feedback SET github_issue_url = ?, status = 'triaged' WHERE id = ?"
+    )
+      .bind(issueURL, id)
+      .run();
+    await recordAudit(env, id, req.actor, "publish", issueURL);
+  }
+
+  return { ok: true, issueURL };
+}
 
 export async function handlePublish(request: Request, env: Env): Promise<Response> {
   await ensureSchema(env);
@@ -8,27 +73,25 @@ export async function handlePublish(request: Request, env: Env): Promise<Respons
   if (!session) return redirect("/admin/login");
 
   const form = await request.formData();
-  const ids = form.getAll("ids").map(String).filter(Boolean);
-  const title = String(form.get("title") ?? "").trim();
-  const body = String(form.get("body") ?? "").trim();
-  if (ids.length === 0 || !title || !body) {
-    return html(`<p>Missing selected feedback, title, or body.</p><p><a href="/admin">Back</a></p>`, 400);
-  }
-  if (!env.GITHUB_ISSUE_TOKEN) {
-    return html(`<p>GITHUB_ISSUE_TOKEN is not configured.</p><p><a href="/admin">Back</a></p>`, 500);
-  }
+  const result = await publishFeedbackAsIssue(env, {
+    ids: form.getAll("ids").map(String),
+    title: String(form.get("title") ?? ""),
+    body: String(form.get("body") ?? ""),
+    actor: session.login,
+  });
 
-  const rows = await loadRows(env, ids);
-  const labels = labelsFor(rows);
-  const issueURL = await createIssue(env, title, buildIssueBody(body, rows), labels);
-
-  for (const id of ids) {
-    await env.FEEDBACK_DB.prepare("UPDATE feedback SET github_issue_url = ?, status = 'triaged' WHERE id = ?")
-      .bind(issueURL, id)
-      .run();
+  if (!result.ok) {
+    const extra = result.alreadyPublished
+      ? `<ul>${result.alreadyPublished
+          .map((r) => `<li>${escapeHTML(r.id)} → <a href="${escapeHTML(r.url)}">${escapeHTML(r.url)}</a></li>`)
+          .join("")}</ul>`
+      : "";
+    return html(`<p>${escapeHTML(result.error)}</p>${extra}<p><a href="/admin">Back</a></p>`, result.status);
   }
 
-  return html(`<p>Published <a href="${escapeHTML(issueURL)}">${escapeHTML(issueURL)}</a>.</p><p><a href="/admin">Back</a></p>`);
+  return html(
+    `<p>Published <a href="${escapeHTML(result.issueURL)}">${escapeHTML(result.issueURL)}</a>.</p><p><a href="/admin">Back</a></p>`
+  );
 }
 
 async function loadRows(env: Env, ids: string[]): Promise<FeedbackRow[]> {

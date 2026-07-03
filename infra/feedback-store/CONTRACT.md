@@ -96,3 +96,11 @@ their login to be present in comma-separated `ADMIN_ALLOWLIST`. Sessions are
 signed HS256 JWT cookies with `ADMIN_SESSION_SECRET`.
 
 Admin publish accepts selected feedback IDs plus editable `title` and `body`, creates an issue in `GITHUB_OWNER/GITHUB_REPO` using `GITHUB_ISSUE_TOKEN`, applies `enhancement` or `bug` and `needs-triage`, and writes the resulting `github_issue_url` back to every selected row.
+
+**Dedup:** publish is guarded against double-publishing — re-publishing a row that already has a `github_issue_url` is rejected with a `409` page listing the existing issue(s), so a double-click or retry can't silently mint a duplicate issue. (The guard lives in the shared `publishFeedbackAsIssue` core, which also supports a `force` override for the rare intentional re-publish.)
+
+## Audit trail
+
+`feedback_audit` (append-only) records every publish from the admin UI, so a triage action is always attributable:
+
+- `id` INTEGER PK, `feedback_id` TEXT, `at` INTEGER ms, `actor` TEXT (the admin login), `action` TEXT (currently `publish`), `detail` TEXT nullable (the issue URL).

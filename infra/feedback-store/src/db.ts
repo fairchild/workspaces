@@ -13,4 +13,27 @@ export async function ensureSchema(env: Env): Promise<void> {
   await env.FEEDBACK_DB.exec(
     "CREATE INDEX IF NOT EXISTS idx_feedback_kind ON feedback(kind);"
   );
+  // Append-only trail of who published what — the admin UI writes here so a
+  // publish always has an accountable actor (guards against silent duplicates).
+  await env.FEEDBACK_DB.exec(
+    "CREATE TABLE IF NOT EXISTS feedback_audit (id INTEGER PRIMARY KEY AUTOINCREMENT, feedback_id TEXT NOT NULL, at INTEGER NOT NULL, actor TEXT NOT NULL, action TEXT NOT NULL, detail TEXT);"
+  );
+  await env.FEEDBACK_DB.exec(
+    "CREATE INDEX IF NOT EXISTS idx_feedback_audit_feedback_id ON feedback_audit(feedback_id);"
+  );
+}
+
+/** Record an actor's action against a feedback row. Never throws on the caller's path. */
+export async function recordAudit(
+  env: Env,
+  feedbackId: string,
+  actor: string,
+  action: string,
+  detail?: string
+): Promise<void> {
+  await env.FEEDBACK_DB.prepare(
+    "INSERT INTO feedback_audit (feedback_id, at, actor, action, detail) VALUES (?, ?, ?, ?, ?)"
+  )
+    .bind(feedbackId, Date.now(), actor, action, detail ?? null)
+    .run();
 }
