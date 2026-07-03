@@ -1,89 +1,258 @@
 /*
- * Spaces design tokens on Tailwind v4. Same palette/typography as the legacy
- * web/ app (mint on deep navy, Instrument Serif + JetBrains Mono); CRT
- * overlays kept but softened so long transcripts stay readable.
+ * Folio design tokens on Tailwind v4 — the "Refined Folio" system from
+ * prototypes/web-session-redesign/refine-folio.html: paper light theme +
+ * warm-charcoal dark, Newsreader serif prose, IBM Plex Mono apparatus.
+ * Palettes live on :root[data-theme=...]; `@theme inline` maps them to
+ * Tailwind tokens so utilities follow the active theme attribute.
  */
 @import "tailwindcss";
 
+/* Theme is a data attribute (set pre-paint by themeInitScript), not the
+   OS scheme — system preference only feeds the initial resolution. */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+:root {
+	--paper: #f7f4ed;
+	--raised: #fdfbf6;
+	--ink: #26221a;
+	--muted: #7a7261;
+	--faint: #aca492;
+	--line: #e7e1d2;
+	--line-strong: #dcd3bf;
+	--accent: #a15c31;
+	--live: #6e9c72;
+	--live-halo: rgba(110, 156, 114, 0.14);
+	--add-bg: #ecf2e6;
+	--add-ink: #3e6b36;
+	--del-bg: #f6ebe5;
+	--del-ink: #9a4b33;
+	--del-strike: rgba(154, 75, 51, 0.35);
+	--code-bg: rgba(38, 34, 26, 0.05);
+	--sel: #ebdfc8;
+	--user-ink: #3b362b;
+	--item-ink: #4a4436;
+	--mast-bg: rgba(247, 244, 237, 0.88);
+	--paper-0: rgba(247, 244, 237, 0);
+	--hover-bg: #f3eddf;
+	--selected-bg: #f1eada;
+	--scrim: rgba(56, 49, 36, 0.14);
+	--status-bg: #f1ede0;
+	--card-shadow:
+		0 1px 2px rgba(60, 50, 30, 0.05), 0 12px 32px -24px rgba(60, 50, 30, 0.25);
+	--palette-shadow:
+		0 40px 90px -24px rgba(48, 40, 24, 0.4), 0 2px 6px rgba(48, 40, 24, 0.08);
+	--field-shadow:
+		0 1px 2px rgba(60, 50, 30, 0.05), 0 14px 34px -26px rgba(60, 50, 30, 0.35);
+	--focus-line: #c08b60;
+	--focus-ring: rgba(161, 92, 49, 0.09);
+	--send-ink: #f7f4ed;
+}
+
+/* The dark room: warm charcoal, lamplight accent. */
+:root[data-theme="dark"] {
+	--paper: #161410;
+	--raised: #211e18;
+	--ink: #eae4d6;
+	--muted: #a79e8c;
+	--faint: #837a69;
+	--line: rgba(234, 222, 196, 0.1);
+	--line-strong: rgba(234, 222, 196, 0.2);
+	--accent: #d89a62;
+	--live: #93bd82;
+	--live-halo: rgba(147, 189, 130, 0.12);
+	--add-bg: rgba(147, 189, 130, 0.11);
+	--add-ink: #a9c896;
+	--del-bg: rgba(207, 133, 112, 0.11);
+	--del-ink: #ce9480;
+	--del-strike: rgba(206, 148, 128, 0.4);
+	--code-bg: rgba(234, 222, 196, 0.08);
+	--sel: rgba(216, 154, 98, 0.3);
+	--user-ink: #d8d0be;
+	--item-ink: #cfc7b5;
+	--mast-bg: rgba(22, 20, 16, 0.86);
+	--paper-0: rgba(22, 20, 16, 0);
+	--hover-bg: rgba(234, 222, 196, 0.05);
+	--selected-bg: rgba(234, 222, 196, 0.08);
+	--scrim: rgba(0, 0, 0, 0.5);
+	--status-bg: #1b1913;
+	--card-shadow:
+		0 1px 2px rgba(0, 0, 0, 0.3), 0 16px 40px -26px rgba(0, 0, 0, 0.7);
+	--palette-shadow:
+		0 40px 90px -24px rgba(0, 0, 0, 0.75), 0 2px 6px rgba(0, 0, 0, 0.3);
+	--field-shadow:
+		0 1px 2px rgba(0, 0, 0, 0.25), 0 16px 38px -26px rgba(0, 0, 0, 0.7);
+	--focus-line: rgba(216, 154, 98, 0.55);
+	--focus-ring: rgba(216, 154, 98, 0.1);
+	--send-ink: #1c160c;
+}
+
+@theme inline {
+	--color-paper: var(--paper);
+	--color-raised: var(--raised);
+	--color-ink: var(--ink);
+	--color-muted: var(--muted);
+	--color-faint: var(--faint);
+	--color-line: var(--line);
+	--color-line-strong: var(--line-strong);
+	--color-accent: var(--accent);
+	--color-live: var(--live);
+	--color-live-halo: var(--live-halo);
+	--color-add-bg: var(--add-bg);
+	--color-add-ink: var(--add-ink);
+	--color-del-bg: var(--del-bg);
+	--color-del-ink: var(--del-ink);
+	--color-del-strike: var(--del-strike);
+	--color-code-bg: var(--code-bg);
+	--color-sel: var(--sel);
+	--color-user-ink: var(--user-ink);
+	--color-item-ink: var(--item-ink);
+	--color-mast-bg: var(--mast-bg);
+	--color-paper-0: var(--paper-0);
+	--color-hover-bg: var(--hover-bg);
+	--color-selected-bg: var(--selected-bg);
+	--color-scrim: var(--scrim);
+	--color-status-bg: var(--status-bg);
+	--color-focus-line: var(--focus-line);
+	--color-focus-ring: var(--focus-ring);
+	--color-send-ink: var(--send-ink);
+
+	--shadow-card: var(--card-shadow);
+	--shadow-palette: var(--palette-shadow);
+	--shadow-field: var(--field-shadow);
+}
+
 @theme {
-	--color-canvas: #0e1117;
-	--color-surface: #141821;
-	--color-elevated: #1a1f2e;
-	--color-edge: #242a3a;
-	--color-edge-subtle: #1c2233;
-	--color-ink: #d4dae8;
-	--color-ink-muted: #5a6580;
-	--color-ink-faint: #3a4258;
-	--color-mint: #a6ffdf;
-	--color-mint-dim: rgba(166, 255, 223, 0.06);
-	--color-mint-glow: rgba(166, 255, 223, 0.12);
-	--color-mint-muted: rgba(166, 255, 223, 0.25);
+	/* The next/font variables must be defined on <html> (see layout.tsx):
+	   these tokens are substituted at :root, where a <body>-scoped variable
+	   would be invisible and the whole token would go invalid. */
+	--font-serif: var(--font-newsreader), "Iowan Old Style", Georgia, serif;
+	--font-mono: var(--font-plex-mono), ui-monospace, "SF Mono", monospace;
 
-	--font-display: var(--font-instrument-serif), serif;
-	--font-mono: var(--font-jetbrains-mono), monospace;
-}
+	/* Type scale (from the prototype, largest to smallest). */
+	--text-body: 17.5px;
+	--text-body--line-height: 1.72;
+	--text-compose: 17px;
+	--text-title: 13.5px; /* masthead center title, serif italic */
+	--text-tool: 13px; /* ledger rows, diff body */
+	--text-code: 12.5px; /* expanded step bodies */
+	--text-code--line-height: 1.75;
+	--text-caption: 12px; /* diff-card caption, ledger meta */
+	--text-masthead: 11.5px;
+	--text-stat: 11px; /* turn stats, status line */
+	--text-label: 10.5px; /* message author labels */
 
-html,
-body {
-	height: 100%;
-	background: var(--color-canvas);
-	color: var(--color-ink);
-	-webkit-font-smoothing: antialiased;
-	-moz-osx-font-smoothing: grayscale;
-}
+	--animate-rise: rise 0.55s ease both;
+	--animate-rise-fast: rise 0.3s ease both;
+	--animate-settle: settle 0.7s cubic-bezier(0.2, 0.7, 0.2, 1) both 0.35s;
+	--animate-breathe: breathe 2.2s ease-in-out infinite;
+	--animate-breathe-fast: breathe 1.4s ease-in-out infinite;
 
-body {
-	font-family: var(--font-mono);
-}
-
-/* Noise texture overlay (softer than legacy: 0.015 vs 0.025) */
-body::before {
-	content: "";
-	position: fixed;
-	inset: 0;
-	opacity: 0.015;
-	background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='256' height='256' filter='url(%23n)' opacity='1'/%3E%3C/svg%3E");
-	background-repeat: repeat;
-	background-size: 256px 256px;
-	pointer-events: none;
-	z-index: 1;
-}
-
-a {
-	transition: color 0.2s ease;
-}
-
-@keyframes blink {
-	0%,
-	100% {
-		opacity: 1;
+	@keyframes rise {
+		from {
+			opacity: 0;
+			transform: translateY(10px);
+		}
+		to {
+			opacity: 1;
+			transform: none;
+		}
 	}
-	50% {
-		opacity: 0;
+	@keyframes settle {
+		from {
+			opacity: 0;
+			transform: translateY(14px) scale(0.99);
+		}
+		to {
+			opacity: 1;
+			transform: none;
+		}
 	}
-}
-
-@keyframes pulse {
-	0%,
-	100% {
-		box-shadow:
-			0 0 0 0 rgba(166, 255, 223, 0.4),
-			0 0 4px 1px rgba(166, 255, 223, 0.15);
-	}
-	50% {
-		box-shadow:
-			0 0 0 4px rgba(166, 255, 223, 0),
-			0 0 8px 2px rgba(166, 255, 223, 0.08);
+	@keyframes breathe {
+		0%,
+		100% {
+			opacity: 0.35;
+			transform: scale(0.85);
+		}
+		50% {
+			opacity: 1;
+			transform: scale(1);
+		}
 	}
 }
 
-@keyframes fadeIn {
-	from {
-		opacity: 0;
-		transform: translateY(8px);
+@layer base {
+	html {
+		-webkit-font-smoothing: antialiased;
+		text-rendering: optimizeLegibility;
 	}
-	to {
-		opacity: 1;
-		transform: translateY(0);
+
+	body {
+		background: var(--paper);
+		color: var(--ink);
+		font-family: var(--font-serif);
+		font-size: 17.5px;
+		line-height: 1.72;
+		font-optical-sizing: auto;
+		transition:
+			background-color 0.25s ease,
+			color 0.25s ease;
+	}
+
+	:root[data-theme="dark"] body {
+		background:
+			radial-gradient(
+				1100px 560px at 76% -6%,
+				rgba(216, 154, 98, 0.05),
+				transparent 62%
+			),
+			var(--paper);
+	}
+
+	::selection {
+		background: var(--sel);
+	}
+
+	button {
+		cursor: pointer;
+	}
+
+	code {
+		font-family: var(--font-mono);
+		font-size: 0.82em;
+		background: var(--code-bg);
+		padding: 1px 5px 2px;
+		border-radius: 4px;
+	}
+}
+
+@layer components {
+	/* Animated trailing dots ('' → . → .. → …); content keyframes can't be
+	   expressed as a Tailwind utility. */
+	.ellipsis-dots::after {
+		content: "…";
+		animation: ellip 1.8s steps(4) infinite;
+	}
+	@keyframes ellip {
+		0% {
+			content: "";
+		}
+		25% {
+			content: ".";
+		}
+		50% {
+			content: "..";
+		}
+		75% {
+			content: "…";
+		}
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	*,
+	*::before,
+	*::after {
+		animation: none !important;
+		transition: none !important;
 	}
 }

@@ -1,17 +1,20 @@
 import type { Metadata } from "next";
-import { Instrument_Serif, JetBrains_Mono } from "next/font/google";
+import { IBM_Plex_Mono, Newsreader } from "next/font/google";
+import { themeInitScript } from "@/lib/theme";
 import "./globals.css";
 
-const instrumentSerif = Instrument_Serif({
-	weight: "400",
-	style: ["normal", "italic"],
+const newsreader = Newsreader({
 	subsets: ["latin"],
-	variable: "--font-instrument-serif",
+	style: ["normal", "italic"],
+	axes: ["opsz"],
+	variable: "--font-newsreader",
 });
 
-const jetbrainsMono = JetBrains_Mono({
+const plexMono = IBM_Plex_Mono({
 	subsets: ["latin"],
-	variable: "--font-jetbrains-mono",
+	weight: ["400", "500"],
+	style: ["normal", "italic"],
+	variable: "--font-plex-mono",
 });
 
 export const metadata: Metadata = {
@@ -22,11 +25,20 @@ export const metadata: Metadata = {
 export default function RootLayout({
 	children,
 }: Readonly<{ children: React.ReactNode }>) {
+	// data-theme is rewritten pre-paint by themeInitScript (hash > stored
+	// choice > system preference), so the server-rendered value is only a
+	// no-JS fallback — hence suppressHydrationWarning.
+	// Font variables live on <html>: the @theme font tokens reference them
+	// from :root, where a <body>-scoped variable would be invisible.
 	return (
-		<html lang="en">
-			<body
-				className={`${instrumentSerif.variable} ${jetbrainsMono.variable}`}
-			>
+		<html
+			lang="en"
+			data-theme="light"
+			suppressHydrationWarning
+			className={`${newsreader.variable} ${plexMono.variable}`}
+		>
+			<body>
+				<script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
 				{children}
 			</body>
 		</html>
