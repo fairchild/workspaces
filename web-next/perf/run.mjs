@@ -175,14 +175,40 @@ async function runRoute(browser, baseUrl, route, runs) {
 	};
 }
 
+// Time from navigation start until every seeded message is present in a
+// painted frame (waitForFunction polls on rAF; performance.now() is relative
+// to navigationStart), on a cold context per run.
+async function runTranscriptRender(browser, baseUrl, route, runs) {
+	const messageCount = Number(new URL(route, baseUrl).searchParams.get("seed"));
+	const samples = [];
+	for (let i = 0; i < runs; i++) {
+		const context = await browser.newContext({ baseURL: baseUrl });
+		const page = await context.newPage();
+		await page.goto(route, { waitUntil: "commit" });
+		await page.waitForFunction(
+			(count) =>
+				document.querySelectorAll("[data-message-role]").length >= count,
+			messageCount,
+			{ timeout: TURN_TIMEOUT_MS },
+		);
+		samples.push(await page.evaluate(() => performance.now()));
+		await context.close();
+	}
+	return { initial_render_ms: samples };
+}
+
 const SCENARIO_RUNNERS = {
 	ttft_mock: (browser, baseUrl, scenario) =>
 		runTtftMock(browser, baseUrl, scenario.runs),
 	streaming_cadence: (browser, baseUrl, scenario) =>
 		runStreamingCadence(browser, baseUrl, scenario.runs),
+	transcript_render_200: (browser, baseUrl, scenario) =>
+		runTranscriptRender(browser, baseUrl, scenario.route, scenario.runs),
 	route_home: (browser, baseUrl, scenario) =>
 		runRoute(browser, baseUrl, scenario.route, scenario.runs),
 	route_spike: (browser, baseUrl, scenario) =>
+		runRoute(browser, baseUrl, scenario.route, scenario.runs),
+	route_sessions_demo: (browser, baseUrl, scenario) =>
 		runRoute(browser, baseUrl, scenario.route, scenario.runs),
 };
 

@@ -2,8 +2,8 @@
 
 /*
  * Phase 0 spike: proves StreamChunk → UIMessageChunk → useChat end-to-end —
- * streamed text parts, dynamic tool cards, and transient status — rendered
- * in the Spaces skin. Throwaway page; the real session view replaces it.
+ * streamed text parts, dynamic tool cards, and transient status — on the
+ * Folio tokens. Throwaway page; the real session view replaces it.
  */
 import { useChat } from "@ai-sdk/react";
 import {
@@ -22,33 +22,33 @@ function ToolCard({ part }: { part: DynamicToolUIPart }) {
 		<div
 			data-testid="tool-card"
 			data-tool={part.toolName}
-			className="my-2 border border-edge bg-surface text-xs"
+			className="my-2 border border-line-strong bg-raised text-xs"
 		>
-			<div className="flex items-center gap-2 border-b border-edge-subtle px-3 py-1.5">
+			<div className="flex items-center gap-2 border-b border-line px-3 py-1.5">
 				<span
 					className={`inline-block h-1.5 w-1.5 rounded-full ${
-						failed ? "bg-red-400" : running ? "animate-pulse bg-mint" : "bg-mint-muted"
+						failed ? "bg-red-400" : running ? "animate-pulse bg-accent" : "bg-faint"
 					}`}
 				/>
-				<span className="text-mint">{part.toolName}</span>
-				{running && <span className="text-ink-faint">running…</span>}
+				<span className="text-accent">{part.toolName}</span>
+				{running && <span className="text-faint">running…</span>}
 			</div>
 			{part.input !== undefined && (
-				<pre className="overflow-x-auto px-3 py-2 text-ink-muted">
+				<pre className="overflow-x-auto px-3 py-2 text-muted">
 					{typeof part.input === "string"
 						? part.input
 						: JSON.stringify(part.input, null, 2)}
 				</pre>
 			)}
 			{part.state === "output-available" && (
-				<pre className="overflow-x-auto border-t border-edge-subtle px-3 py-2 text-ink">
+				<pre className="overflow-x-auto border-t border-line px-3 py-2 text-ink">
 					{typeof part.output === "string"
 						? part.output
 						: JSON.stringify(part.output, null, 2)}
 				</pre>
 			)}
 			{failed && (
-				<pre className="overflow-x-auto border-t border-edge-subtle px-3 py-2 text-red-400">
+				<pre className="overflow-x-auto border-t border-line px-3 py-2 text-red-400">
 					{part.errorText}
 				</pre>
 			)}
@@ -61,9 +61,9 @@ function Message({ message }: { message: UIMessage }) {
 	return (
 		<div
 			data-message-role={isUser ? "user" : "assistant"}
-			className="animate-[fadeIn_0.3s_ease]"
+			className="animate-rise-fast"
 		>
-			<div className={`mb-1 text-xs ${isUser ? "text-ink-muted" : "text-mint"}`}>
+			<div className={`mb-1 text-xs ${isUser ? "text-muted" : "text-accent"}`}>
 				{isUser ? "you" : "agent"}
 			</div>
 			<div className="text-sm leading-relaxed">
@@ -104,15 +104,15 @@ export default function SpikePage() {
 
 	return (
 		<main className="mx-auto flex h-screen max-w-3xl flex-col px-6">
-			<header className="flex items-baseline gap-3 border-b border-edge-subtle py-4">
-				<h1 className="font-display text-2xl italic text-mint">Spaces</h1>
-				<span className="text-xs text-ink-faint">
+			<header className="flex items-baseline gap-3 border-b border-line py-4">
+				<h1 className="font-serif text-2xl italic text-accent">Spaces</h1>
+				<span className="text-xs text-faint">
 					phase 0 spike — mock provider through the chunk adapter
 				</span>
 			</header>
 			<div className="flex-1 space-y-6 overflow-y-auto py-6">
 				{messages.length === 0 && (
-					<p className="text-sm text-ink-faint">
+					<p className="text-sm text-faint">
 						Send a message to stream a simulated coding turn.
 					</p>
 				)}
@@ -120,14 +120,14 @@ export default function SpikePage() {
 					<Message key={m.id} message={m} />
 				))}
 				{visibleStatus && (
-					<div className="flex items-center gap-2 text-xs text-ink-muted">
-						<span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-mint" />
+					<div className="flex items-center gap-2 text-xs text-muted">
+						<span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />
 						{visibleStatus}
 					</div>
 				)}
 			</div>
 			<form
-				className="flex gap-2 border-t border-edge-subtle py-4"
+				className="flex gap-2 border-t border-line py-4"
 				onSubmit={(e) => {
 					e.preventDefault();
 					if (!input.trim() || busy) return;
@@ -136,7 +136,7 @@ export default function SpikePage() {
 				}}
 			>
 				<input
-					className="flex-1 border border-edge bg-surface px-3 py-2 text-sm text-ink outline-none placeholder:text-ink-faint focus:border-mint-muted"
+					className="flex-1 border border-line-strong bg-raised px-3 py-2 text-sm text-ink outline-none placeholder:text-faint focus:border-focus-line"
 					value={input}
 					onChange={(e) => setInput(e.target.value)}
 					placeholder="Ask the agent to fix something…"
@@ -144,7 +144,7 @@ export default function SpikePage() {
 				<button
 					type="submit"
 					disabled={busy}
-					className="border border-edge px-4 py-2 text-sm text-mint disabled:opacity-40"
+					className="border border-line-strong px-4 py-2 text-sm text-accent disabled:opacity-40"
 				>
 					{busy ? "streaming…" : "send"}
 				</button>

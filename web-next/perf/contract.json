@@ -28,9 +28,9 @@
 		},
 		{
 			"id": "transcript_render_200",
-			"status": "pending",
-			"reason": "transcript-at-scale surface lands with the Folio session view (#745/#748); budget is provisional until first measurement",
-			"description": "Seed a session with ~200 messages; initial transcript render stays within budget.",
+			"status": "measured",
+			"description": "Cold production load of /sessions/demo?seed=200 (200 fixture messages, server-rendered); time from navigation start to all 200 messages present in a painted frame.",
+			"route": "/sessions/demo?seed=200",
 			"runs": 3,
 			"metrics": {
 				"initial_render_ms": { "stat": "median", "budget": 500 }
@@ -53,6 +53,18 @@
 			"status": "measured",
 			"description": "Cold production load of /spike (stand-in for /sessions/[id] until it exists): LCP, total blocking time, and first-load JS.",
 			"route": "/spike",
+			"runs": 3,
+			"metrics": {
+				"lcp_ms": { "stat": "median", "budget": 1200 },
+				"tbt_ms": { "stat": "median", "budget": 200 },
+				"first_load_js_kb": { "stat": "exact", "budget": 200 }
+			}
+		},
+		{
+			"id": "route_sessions_demo",
+			"status": "measured",
+			"description": "Cold production load of /sessions/demo (Folio session view on fixture data): LCP, total blocking time, and first-load JS.",
+			"route": "/sessions/demo",
 			"runs": 3,
 			"metrics": {
 				"lcp_ms": { "stat": "median", "budget": 1200 },
