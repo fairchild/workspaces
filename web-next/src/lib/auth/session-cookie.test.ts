@@ -61,7 +61,13 @@ async function buildSessionDataCookie(opts: {
 		JSON.stringify({ ...session, expiresAt: opts.expiresAt }),
 	);
 	if (opts.tamper) {
-		signature = `${signature.slice(0, -1)}${signature.endsWith("A") ? "B" : "A"}`;
+		// Flip the FIRST character, which carries 6 fully-significant bits, so
+		// the tampered string always decodes to different signature bytes. Do
+		// not tamper the 43rd (final) char: it encodes only 4 significant bits
+		// (the low 2 are padding that decoders discard), so e.g. 'A'->'B' there
+		// decodes to identical bytes and HMAC verification still passes —
+		// a 1-in-16 flake, since the signed payload embeds Date.now().
+		signature = `${signature.startsWith("A") ? "B" : "A"}${signature.slice(1)}`;
 	}
 	return base64UrlEncodeString(
 		JSON.stringify({ session, expiresAt: opts.expiresAt, signature }),
