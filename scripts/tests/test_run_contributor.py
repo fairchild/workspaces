@@ -559,5 +559,29 @@ class PrefetchedPRDiffTests(unittest.TestCase):
         self.assertNotIn("diff", payload[0])
 
 
+class RepoMemoryInjectionTests(unittest.TestCase):
+    def test_compose_folds_memory_into_persona(self) -> None:
+        with mock.patch.object(
+            run_contributor, "load_repo_memory", return_value="- Never target bare self-hosted."
+        ):
+            composed = run_contributor.compose_system_prompt("# April Clearwater\n\nYou are April.")
+        self.assertIn("You are April.", composed)
+        self.assertIn("Repository memory (trusted, curated)", composed)
+        self.assertIn("Never target bare self-hosted.", composed)
+        # Memory follows the persona, not the other way around.
+        self.assertLess(composed.index("You are April."), composed.index("Repository memory"))
+
+    def test_compose_is_noop_without_memory(self) -> None:
+        with mock.patch.object(run_contributor, "load_repo_memory", return_value=""):
+            persona = "# April Clearwater\n\nYou are April."
+            self.assertEqual(run_contributor.compose_system_prompt(persona), persona)
+
+    def test_load_repo_memory_missing_file_is_empty(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            missing = Path(tmp) / "does-not-exist" / "MEMORY.md"
+            with mock.patch.object(run_contributor, "REPO_MEMORY_PATH", missing):
+                self.assertEqual(run_contributor.load_repo_memory(), "")
+
+
 if __name__ == "__main__":
     unittest.main()

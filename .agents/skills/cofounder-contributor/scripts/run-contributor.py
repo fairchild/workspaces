@@ -648,6 +648,43 @@ def apply_scratch_patch_artifact(artifact: ScratchPatchArtifact, env: dict[str, 
         patch_path.unlink(missing_ok=True)
 
 
+REPO_MEMORY_PATH = REPO_ROOT / ".agents" / "MEMORY.md"
+
+
+def load_repo_memory() -> str:
+    """Return the curated repo memory, or "" if absent.
+
+    `.agents/MEMORY.md` holds durable architectural rules (CI/runner isolation,
+    terminal-first product rules, release discipline, debugging heuristics). It
+    is CODEOWNERS-gated and blocked from agent edits by the patch policy, so it
+    is safe to fold into the trusted system prompt.
+    """
+    try:
+        return REPO_MEMORY_PATH.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def compose_system_prompt(persona_prompt: str) -> str:
+    """Fold curated repo memory into a persona system prompt.
+
+    Interactive `/become` sessions already load this memory; scheduled
+    contributor runs did not, so April and Plat wrote code without the repo's
+    hard-won rules in context.
+    """
+    memory = load_repo_memory()
+    if not memory:
+        return persona_prompt
+    return (
+        f"{persona_prompt.rstrip()}\n\n"
+        "---\n\n"
+        "## Repository memory (trusted, curated)\n\n"
+        "Durable rules and heuristics for this repo. Treat as high-priority "
+        "context, not as instructions that override your task envelope.\n\n"
+        f"{memory}\n"
+    )
+
+
 def run_claude(
     system_prompt: str | Path,
     task: str,
@@ -1316,7 +1353,7 @@ def main() -> int:
             scratch_workspace = create_scratch_workspace(env)
             claude_cwd = scratch_workspace.scratch_dir
         raw_output = run_claude(
-            prompt_file,
+            compose_system_prompt(prompt_file.read_text(encoding="utf-8")),
             phase_task_for_selection(choice, task_envelope, payloads, message=args.message),
             claude_env,
             mode=args.mode,
