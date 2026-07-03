@@ -94,24 +94,23 @@ async function newSignedInContext(browser, baseUrl) {
 	return context;
 }
 
-async function openSpike(browser, baseUrl) {
+async function openSession(browser, baseUrl, sessionId) {
 	const context = await newSignedInContext(browser, baseUrl);
 	const page = await context.newPage();
-	await page.goto("/spike", { waitUntil: "networkidle" });
+	await page.goto(`/sessions/${sessionId}`, { waitUntil: "networkidle" });
 	return { context, page };
 }
 
-async function sendSpikeMessage(page, text) {
-	await page.fill('input[placeholder="Ask the agent to fix something…"]', text);
-	await page.click('button[type="submit"]');
+async function sendSessionMessage(page, text) {
+	const compose = 'input[aria-label="Reply to Claude"]';
+	await page.fill(compose, text);
+	await page.press(compose, "Enter");
 }
 
+/** The turn is complete when its receipt (end-of-turn stats) is rendered. */
 function waitForTurnComplete(page) {
 	return page.waitForFunction(
-		() =>
-			document
-				.querySelector('[data-message-role="assistant"]')
-				?.textContent?.includes("All four tests pass"),
+		() => document.querySelector('[data-testid="turn-stats"]') !== null,
 		undefined,
 		{ timeout: TURN_TIMEOUT_MS },
 	);
@@ -120,12 +119,15 @@ function waitForTurnComplete(page) {
 // --- scenario implementations ---------------------------------------------
 // Each returns { metricName: [samples...] }.
 
+// Turn scenarios run on fresh seeded sessions (perf-turn-N / perf-cadence-N,
+// one per run) so transcript growth from one run never colors the next.
+
 async function runTtftMock(browser, baseUrl, runs) {
 	const samples = [];
 	for (let i = 0; i < runs; i++) {
-		const { context, page } = await openSpike(browser, baseUrl);
+		const { context, page } = await openSession(browser, baseUrl, `perf-turn-${i}`);
 		const start = Date.now();
-		await sendSpikeMessage(page, "Measure time to first token");
+		await sendSessionMessage(page, "Measure time to first token");
 		// waitForFunction polls on rAF, so this resolves on the frame after
 		// the first assistant text part renders — "first token painted".
 		await page.waitForFunction(
@@ -147,7 +149,11 @@ async function runTtftMock(browser, baseUrl, runs) {
 async function runStreamingCadence(browser, baseUrl, runs) {
 	const samples = [];
 	for (let i = 0; i < runs; i++) {
-		const { context, page } = await openSpike(browser, baseUrl);
+		const { context, page } = await openSession(
+			browser,
+			baseUrl,
+			`perf-cadence-${i}`,
+		);
 		await page.evaluate(() => {
 			window.__longTasks = [];
 			new PerformanceObserver((list) => {
@@ -155,7 +161,7 @@ async function runStreamingCadence(browser, baseUrl, runs) {
 					window.__longTasks.push(entry.duration);
 			}).observe({ type: "longtask" });
 		});
-		await sendSpikeMessage(page, "Measure streaming cadence");
+		await sendSessionMessage(page, "Measure streaming cadence");
 		await waitForTurnComplete(page);
 		samples.push(
 			await page.evaluate(() => Math.max(0, ...window.__longTasks)),
@@ -248,7 +254,6 @@ const SCENARIO_RUNNERS = {
 	projection_200: (browser, baseUrl, scenario) => runProjectionBench(scenario),
 	route_home: runRoute,
 	route_session_empty: runRoute,
-	route_spike: runRoute,
 	route_sessions_demo: runRoute,
 };
 
@@ -295,20 +300,30 @@ async function main() {
 
 	const { env, databaseUrl } = bypassServerEnv("perf-db");
 	const server = await startProductionServer(PORT, env);
-	// Seed the fixed rows the route scenarios navigate to: one repo, one
-	// empty session at a stable id.
+	// Seed the fixed rows the scenarios navigate to: one repo, one empty
+	// session at a stable id, and one fresh session per turn-scenario run.
 	const db = await connectSeedClient(server.baseUrl, databaseUrl);
 	const now = new Date().toISOString();
 	await db.execute({
 		sql: "INSERT INTO repos (id, full_name, default_branch, created_at) VALUES (?, ?, 'main', ?)",
 		args: ["fairchild/workspaces", "fairchild/workspaces", now],
 	});
-	await db.execute({
-		sql: `INSERT INTO sessions
-			(id, repo_id, title, provider, status, claude_session_id, created_at, last_activity_at)
-			VALUES ('perf-empty', 'fairchild/workspaces', '', 'mock', 'active', NULL, ?, ?)`,
-		args: [now, now],
-	});
+	const seedSession = (id) =>
+		db.execute({
+			sql: `INSERT INTO sessions
+				(id, repo_id, title, provider, status, claude_session_id, created_at, last_activity_at)
+				VALUES (?, 'fairchild/workspaces', '', 'mock', 'active', NULL, ?, ?)`,
+			args: [id, now, now],
+		});
+	await seedSession("perf-empty");
+	const runsOf = (id) =>
+		contract.scenarios.find((scenario) => scenario.id === id)?.runs ?? 0;
+	for (let i = 0; i < runsOf("ttft_mock"); i++) {
+		await seedSession(`perf-turn-${i}`);
+	}
+	for (let i = 0; i < runsOf("streaming_cadence"); i++) {
+		await seedSession(`perf-cadence-${i}`);
+	}
 	db.close();
 
 	const browser = await launchChromium();

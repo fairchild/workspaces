@@ -13,7 +13,7 @@
 		{
 			"id": "ttft_mock",
 			"status": "measured",
-			"description": "On /spike, submit a message to the mock provider; time from submit to the first assistant token painted.",
+			"description": "On a real empty session at /sessions/[id], submit a message (the full send path: chat route auth gate, user-event append, mock provider); time from submit to the first assistant token painted in the Folio transcript. One fresh seeded session per run.",
 			"runs": 3,
 			"metrics": {
 				"ttft_ms": { "stat": "median", "budget": 1500 }
@@ -22,7 +22,7 @@
 		{
 			"id": "streaming_cadence",
 			"status": "measured",
-			"description": "While a full mock turn streams on /spike, no main-thread long task may exceed 50ms — the transcript stays responsive at streaming rate.",
+			"description": "While a full mock turn streams into the Folio transcript on /sessions/[id] (prose, ledger rows, diff card, receipt), no main-thread long task may exceed 50ms. One fresh seeded session per run.",
 			"runs": 3,
 			"metrics": {
 				"longest_task_ms": { "stat": "max", "budget": 50 }
@@ -66,18 +66,6 @@
 			"description": "Cold production load of a real empty session at /sessions/[id] (seeded row, Folio surface, autofocused compose): LCP, total blocking time, and first-load JS.",
 			"route": "/sessions/perf-empty",
 			"manifest_route": "/sessions/[id]",
-			"runs": 3,
-			"metrics": {
-				"lcp_ms": { "stat": "median", "budget": 1200 },
-				"tbt_ms": { "stat": "median", "budget": 200 },
-				"first_load_js_kb": { "stat": "exact", "budget": 200 }
-			}
-		},
-		{
-			"id": "route_spike",
-			"status": "measured",
-			"description": "Cold production load of /spike (stand-in for /sessions/[id] until it exists): LCP, total blocking time, and first-load JS.",
-			"route": "/spike",
 			"runs": 3,
 			"metrics": {
 				"lcp_ms": { "stat": "median", "budget": 1200 },
