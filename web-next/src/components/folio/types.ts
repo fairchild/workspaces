@@ -5,11 +5,21 @@
  */
 import type { UIMessage } from "ai";
 
-/** End-of-turn receipt numbers ("4 tools · 3.2k tokens · 18.6s"). */
+/**
+ * End-of-turn receipt numbers ("3 tools · 1 file · +3 −1 · 4 tests · 6.2s").
+ * Only toolCount and durationMs are always known; the rest render when the
+ * turn produced them (see lib/transcript/turn-stats.ts for the derivation).
+ */
 export interface TurnStatsData {
 	toolCount: number;
-	tokenCount: number;
+	tokenCount?: number;
 	durationMs: number;
+	/** Distinct files changed by Edit/Write calls. */
+	filesChanged?: number;
+	/** Summed line delta across the turn's landed diffs. */
+	additions?: number;
+	deletions?: number;
+	testsPassed?: number;
 }
 
 export interface FolioMetadata {
@@ -42,6 +52,8 @@ export interface DiffCardData {
 
 export type FolioDataParts = {
 	diff: DiffCardData;
+	/** Transient provider status ("Cloning repo") — surfaced via onData, never a part. */
+	status: { message: string };
 };
 
 export type FolioMessage = UIMessage<FolioMetadata, FolioDataParts>;

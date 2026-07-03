@@ -1,11 +1,12 @@
 /*
  * Evidence capture, light + dark: the sessions home (empty and populated),
- * an empty session reached through the real new-session flow, /spike after
- * a full streamed mock turn, the Folio session demo, and the refine-folio
- * prototype beside it for pixel comparison. Runs against a production
- * build in auth-bypass mode over a throwaway database. Output goes to
- * output/evidence/ (gitignored); CI uploads it as an artifact — the
- * sanctioned publish path per docs/development/remote-sessions.md.
+ * an empty session reached through the real new-session flow, a real mock
+ * turn streamed into that session (mid-stream, final, and reloaded from the
+ * event log), the Folio session demo, and the refine-folio prototype beside
+ * it for pixel comparison. Runs against a production build in auth-bypass
+ * mode over a throwaway database. Output goes to output/evidence/
+ * (gitignored); CI uploads it as an artifact — the sanctioned publish path
+ * per docs/development/remote-sessions.md.
  */
 import { execFileSync } from "node:child_process";
 import { mkdirSync } from "node:fs";
@@ -80,30 +81,49 @@ async function captureNewSessionFlow(page, file) {
 	await page.screenshot({ path: file });
 }
 
-async function captureSpikeAfterTurn(page, file) {
-	await page.goto("/spike", { waitUntil: "networkidle" });
-	await page.fill(
-		'input[placeholder="Ask the agent to fix something…"]',
+/**
+ * Streams a real mock turn in the session the new-session flow just made
+ * (the page is already on it): mid-stream while the activity line breathes,
+ * mid-stream as ledger rows land, final with the receipt + disclosed test
+ * output, and reloaded — the same turn re-rendered from the event log.
+ */
+async function captureSessionTurn(page, shot) {
+	await page.getByRole("textbox", { name: "Reply to Claude" }).fill(
 		"Fix the failing session test",
 	);
-	await page.click('button[type="submit"]');
-	// The turn is done when the closing prose streamed in and the compose
-	// re-enabled (stream finished, not just started its last paragraph).
+	await page.keyboard.press("Enter");
+
+	// Mid-stream, early: the provisioning activity line. The provisioning
+	// window is ~650ms, so give the 0.55s rise animation most of its run
+	// without letting the first prose token close the window.
+	await page.getByTestId("activity-line").waitFor({ timeout: TURN_TIMEOUT_MS });
+	await page.waitForTimeout(350);
+	await page.screenshot({ path: shot("session-turn-streaming") });
+
+	// Mid-stream, later: two ledger rows landed, the turn still open.
 	await page.waitForFunction(
 		() =>
-			document
-				.querySelector('[data-message-role="assistant"]')
-				?.textContent?.includes("All four tests pass") &&
-			!document.querySelector('button[type="submit"]')?.disabled,
+			document.querySelectorAll('[data-testid="tool-row"]').length >= 2 &&
+			document.querySelector('[data-testid="turn-stats"]') === null,
 		undefined,
 		{ timeout: TURN_TIMEOUT_MS },
 	);
-	// The transcript scrolls inside the page; show the end of the turn.
-	await page.evaluate(() => {
-		const transcript = document.querySelector("main > div.overflow-y-auto");
-		if (transcript) transcript.scrollTop = transcript.scrollHeight;
-	});
-	await page.screenshot({ path: file });
+	await page.screenshot({ path: shot("session-turn-midstream") });
+
+	// Final: receipt rendered; disclose the test run's output panel.
+	await page.getByTestId("turn-stats").waitFor({ timeout: TURN_TIMEOUT_MS });
+	await page.getByTestId("tool-row").nth(2).locator("button").first().click();
+	await page.getByTestId("test-output").waitFor();
+	// Scroll to the end of the turn so diff card + receipt are in frame.
+	await page.getByTestId("turn-stats").scrollIntoViewIfNeeded();
+	await page.waitForTimeout(ANIMATION_SETTLE_MS);
+	await page.screenshot({ path: shot("session-turn-final") });
+
+	// Reloaded: the persisted transcript served from session_events.
+	await page.reload({ waitUntil: "networkidle" });
+	await page.getByTestId("turn-stats").scrollIntoViewIfNeeded();
+	await page.waitForTimeout(ANIMATION_SETTLE_MS);
+	await page.screenshot({ path: shot("session-turn-reloaded") });
 }
 
 // --- prototype capture -------------------------------------------------------
@@ -185,15 +205,15 @@ async function main() {
 			await wipeRows(db);
 			await captureSettled(page, "/", shot("home-empty"));
 			await captureNewSessionFlow(page, shot("session-empty"));
+			await captureSessionTurn(page, shot);
 			await seedPopulatedHome(db);
 			await captureSettled(page, "/", shot("home-populated"));
 
-			await captureSpikeAfterTurn(page, shot("spike"));
 			await captureSettled(page, "/sessions/demo", shot("sessions-demo"));
 			await capturePrototype(page, colorScheme, shot("prototype-folio"));
 			await context.close();
 			console.log(
-				`captured home (empty+populated) + session-empty + spike + sessions-demo + prototype (${colorScheme})`,
+				`captured home (empty+populated) + session (empty, streaming, final, reloaded) + sessions-demo + prototype (${colorScheme})`,
 			);
 		}
 	} finally {

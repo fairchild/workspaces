@@ -12,9 +12,11 @@ export interface ComposeFieldProps {
 	/** Names the reply target for assistive tech ("Reply to Claude"). */
 	agentName: string;
 	onSend?: (text: string) => void;
+	/** While true, submits are held and the draft kept (turn in flight). */
+	disabled?: boolean;
 }
 
-export function ComposeField({ agentName, onSend }: ComposeFieldProps) {
+export function ComposeField({ agentName, onSend, disabled }: ComposeFieldProps) {
 	const inputRef = useRef<HTMLInputElement>(null);
 	const [text, setText] = useState("");
 
@@ -26,7 +28,7 @@ export function ComposeField({ agentName, onSend }: ComposeFieldProps) {
 
 	const submit = () => {
 		const trimmed = text.trim();
-		if (trimmed.length === 0) return;
+		if (trimmed.length === 0 || disabled) return;
 		onSend?.(trimmed);
 		setText("");
 	};
@@ -57,8 +59,9 @@ export function ComposeField({ agentName, onSend }: ComposeFieldProps) {
 					type="button"
 					title="Send"
 					aria-label="Send"
+					disabled={disabled}
 					onClick={submit}
-					className="flex h-[37px] w-[37px] shrink-0 items-center justify-center rounded-[10px] border border-line-strong text-[15px] leading-none text-muted transition-colors duration-200 group-focus-within:border-accent group-focus-within:bg-accent group-focus-within:text-send-ink hover:border-accent hover:text-accent"
+					className="flex h-[37px] w-[37px] shrink-0 items-center justify-center rounded-[10px] border border-line-strong text-[15px] leading-none text-muted transition-colors duration-200 group-focus-within:border-accent group-focus-within:bg-accent group-focus-within:text-send-ink hover:border-accent hover:text-accent disabled:opacity-40 disabled:group-focus-within:border-line-strong disabled:group-focus-within:bg-transparent disabled:group-focus-within:text-muted disabled:hover:border-line-strong disabled:hover:text-muted"
 				>
 					↑
 				</button>

@@ -6,9 +6,10 @@ records the measured baseline the budgets were set against. Refresh it (rerun
 tightening any budget.
 
 - **Date:** 2026-07-03
-- **Commit:** `2752507` + the auth + sessions home change (#747 branch; app
-  surface = sessions home at `/`, real `/sessions/[id]`, Phase 0 spike,
-  `/sessions/demo` Folio session view — all behind the auth gate)
+- **Commit:** `5187c00` + the live streamed-turn change (#748 branch; app
+  surface = sessions home at `/`, real `/sessions/[id]` with live mock turns,
+  `/sessions/demo` Folio session view — all behind the auth gate; the Phase 0
+  spike is deleted)
 - **Environment:** Linux dev container, headless Chromium (Playwright),
   production build via `next start` on localhost, 3 runs per scenario
 - **Command:** `pnpm perf` (with `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` set,
@@ -16,20 +17,17 @@ tightening any budget.
 
 | Scenario | Metric | Stat | Baseline | Budget | Status |
 |---|---|---|---|---|---|
-| ttft_mock | ttft_ms | median | 692 | 1500 | pass |
+| ttft_mock | ttft_ms | median | 733 | 1500 | pass |
 | streaming_cadence | longest_task_ms | max | 0 | 50 | pass |
-| transcript_render_200 | initial_render_ms | median | 217.6 | 500 | pass |
-| projection_200 | projection_ms | median | 12.5 | 40 | pass |
-| route_home | lcp_ms | median | 76 | 1200 | pass |
+| transcript_render_200 | initial_render_ms | median | 180.5 | 500 | pass |
+| projection_200 | projection_ms | median | 13.6 | 40 | pass |
+| route_home | lcp_ms | median | 80 | 1200 | pass |
 | route_home | tbt_ms | median | 0 | 200 | pass |
 | route_home | first_load_js_kb | exact | 115.7 | 200 | pass |
-| route_session_empty | lcp_ms | median | 136 | 1200 | pass |
+| route_session_empty | lcp_ms | median | 140 | 1200 | pass |
 | route_session_empty | tbt_ms | median | 0 | 200 | pass |
-| route_session_empty | first_load_js_kb | exact | 171.5 | 200 | pass |
-| route_spike | lcp_ms | median | 124 | 1200 | pass |
-| route_spike | tbt_ms | median | 0 | 200 | pass |
-| route_spike | first_load_js_kb | exact | 168.7 | 200 | pass |
-| route_sessions_demo | lcp_ms | median | 108 | 1200 | pass |
+| route_session_empty | first_load_js_kb | exact | 173.3 | 200 | pass |
+| route_sessions_demo | lcp_ms | median | 148 | 1200 | pass |
 | route_sessions_demo | tbt_ms | median | 0 | 200 | pass |
 | route_sessions_demo | first_load_js_kb | exact | 114.1 | 200 | pass |
 | resume_latency_100 | — | — | — | — | pending (#749) |
@@ -38,21 +36,31 @@ Raw samples from the baseline run:
 
 | Scenario | Metric | Samples |
 |---|---|---|
-| ttft_mock | ttft_ms | 713, 690, 692 |
+| ttft_mock | ttft_ms | 764, 729, 733 |
 | streaming_cadence | longest_task_ms | 0, 0, 0 |
-| transcript_render_200 | initial_render_ms | 118.7, 236.6, 217.6 |
-| projection_200 | projection_ms | 12.5, 14.6, 10.4 |
-| route_home | lcp_ms | 76, 72, 76 |
+| transcript_render_200 | initial_render_ms | 180.5, 226.4, 162.3 |
+| projection_200 | projection_ms | 13.6, 15.1, 10.7 |
+| route_home | lcp_ms | 100, 72, 80 |
 | route_home | tbt_ms | 0, 0, 0 |
-| route_session_empty | lcp_ms | 140, 136, 120 |
-| route_session_empty | tbt_ms | 0, 0, 0 |
-| route_spike | lcp_ms | 140, 124, 120 |
-| route_spike | tbt_ms | 4, 0, 0 |
-| route_sessions_demo | lcp_ms | 152, 108, 100 |
+| route_session_empty | lcp_ms | 140, 164, 136 |
+| route_session_empty | tbt_ms | 0, 5, 0 |
+| route_sessions_demo | lcp_ms | 156, 148, 140 |
 | route_sessions_demo | tbt_ms | 0, 0, 0 |
 
 Reading notes:
 
+- **2026-07-03 (#748):** `ttft_mock` and `streaming_cadence` repointed from
+  the Phase 0 `/spike` at the real session surface: a message sent from the
+  Folio compose on a fresh `/sessions/[id]` through the auth-gated chat route,
+  the user-event append, and the mock provider, with every chunk persisted to
+  `session_events` as it streams. Medians moved 692 → 733ms (ttft; still
+  ~600ms of scripted provisioning delay, so real client+server+persistence
+  overhead is ~130ms) and stayed 0ms (longest task, with
+  `experimental_throttle: 50` batching token application into the Folio
+  transcript). `route_spike` removed with the spike itself; its role is fully
+  covered by `route_session_empty`, whose first-load JS moved 171.5 → 173.3 kB
+  gz (useChat + transport replacing the local echo shell — the full chat
+  runtime costs ~2 kB over it). Budgets unchanged.
 - **2026-07-03 (#747):** `/` is now the sessions home (auth-gated, one seeded
   session row) instead of the static placeholder, and every route scenario
   runs signed in through the middleware + server auth gate — so route metrics
@@ -81,7 +89,8 @@ Reading notes:
   trips it. This is #749's tail/resume read cost, so it is budgeted tight rather
   than generous. Re-baseline from CI if it proves noisy there.
 - `ttft_mock` includes ~600ms of scripted provisioning-status delay in the
-  mock turn, so real client+server overhead is roughly 110ms of the median.
+  mock turn, so real client+server (and, since #748, per-chunk persistence)
+  overhead is roughly 130ms of the median.
 - `longest_task_ms` uses the longtask API, which only reports tasks >= 50ms —
   0 means "no long task observed", and any nonzero value exceeds budget.
 - `first_load_js_kb` is gzipped KiB from the build manifests (route groups

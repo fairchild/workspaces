@@ -147,6 +147,50 @@ describe("toUIMessageChunks", () => {
 		expect(out.at(-1)).toEqual({ type: "finish" });
 	});
 
+	test("a tool_result carrying a diff also emits a data-diff part", async () => {
+		const diff = { file: "a.ts", additions: 3, deletions: 1, lines: [] };
+		const out = await collect([
+			{ type: "tool_use", content: "Edit", metadata: { toolUseId: "t-1" } },
+			{ type: "tool_result", content: "ok", metadata: { toolUseId: "t-1", diff } },
+			{ type: "done", content: "" },
+		]);
+		const outputIndex = out.findIndex((c) => c.type === "tool-output-available");
+		expect(out[outputIndex + 1]).toEqual({
+			type: "data-diff",
+			id: "id-0",
+			data: diff,
+		});
+	});
+
+	test("messageMetadata is emitted on start (no chunks) and finish (all chunks)", async () => {
+		const seen: number[] = [];
+		const out = [];
+		for await (const chunk of toUIMessageChunks(
+			[
+				{ type: "text", content: "hi" },
+				{ type: "done", content: "" },
+			],
+			{
+				messageId: "m",
+				messageMetadata: (chunks) => {
+					seen.push(chunks.length);
+					return { chunksSeen: chunks.length };
+				},
+			},
+		)) {
+			out.push(chunk);
+		}
+		expect(out[0]).toMatchObject({
+			type: "start",
+			messageMetadata: { chunksSeen: 0 },
+		});
+		expect(out.at(-1)).toMatchObject({
+			type: "finish",
+			messageMetadata: { chunksSeen: 2 }, // text + done
+		});
+		expect(seen).toEqual([0, 2]);
+	});
+
 	test("text after a tool call starts a new text part", async () => {
 		const out = await collect([
 			{ type: "text", content: "before" },

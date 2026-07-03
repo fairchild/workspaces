@@ -13,6 +13,7 @@
 import { type UIMessage, readUIMessageStream } from "ai";
 import type { StreamChunk } from "../agent-runtime/stream-chunk";
 import { toUIMessageChunkStream } from "./chunk-adapter";
+import { folioTurnMetadata } from "./turn-stats";
 
 export type SessionEventRole = "user" | "assistant";
 
@@ -90,7 +91,9 @@ function buildUserMessage(id: string, chunks: StreamChunk[]): UIMessage {
 /**
  * Replays assistant events through the shared adapter and reduces the resulting
  * UIMessageChunk stream to a single message. Part ids are seeded from the
- * message id so the projection is byte-for-byte reproducible.
+ * message id so the projection is byte-for-byte reproducible. Metadata (author
+ * + turn stats) is derived by the same folioTurnMetadata the live stream uses,
+ * so a completed turn projects with its receipt and an unfinished one without.
  */
 async function buildAssistantMessage(
 	id: string,
@@ -100,6 +103,7 @@ async function buildAssistantMessage(
 	const stream = toUIMessageChunkStream(chunks, {
 		messageId: id,
 		generateId: () => `${id}:p${part++}`,
+		messageMetadata: folioTurnMetadata,
 	});
 	let last: UIMessage | undefined;
 	// readUIMessageStream yields the growing message on each update; the final

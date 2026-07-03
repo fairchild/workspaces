@@ -136,6 +136,10 @@ describe("session store", () => {
 			{
 				id: "sess-1:2",
 				role: "assistant",
+				metadata: {
+					author: "Claude",
+					turnStats: { toolCount: 1, durationMs: 0 },
+				},
 				parts: [
 					{ type: "text", text: "Reading the file. ", state: "done" },
 					{
