@@ -4,3 +4,10 @@ next-env.d.ts
 .env
 .env.local
 *.tsbuildinfo
+
+# Test + harness artifacts
+output/
+playwright-report/
+test-results/
+perf/results.json
+perf/results.md

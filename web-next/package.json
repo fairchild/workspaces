@@ -6,8 +6,13 @@
 		"dev": "next dev --port 3100",
 		"build": "next build",
 		"start": "next start --port 3100",
+		"e2e:server": "test -f .next/BUILD_ID || next build && next start --port 3100",
 		"test": "vitest run",
-		"typecheck": "tsc --noEmit"
+		"test:e2e": "playwright test",
+		"typecheck": "tsc --noEmit",
+		"lint": "eslint .",
+		"evidence": "node scripts/evidence.mjs",
+		"perf": "node perf/run.mjs"
 	},
 	"dependencies": {
 		"@ai-sdk/react": "^4.0.15",
@@ -18,10 +23,14 @@
 		"zod": "^4.4.3"
 	},
 	"devDependencies": {
+		"@eslint/eslintrc": "^3.3.5",
+		"@playwright/test": "^1.61.1",
 		"@tailwindcss/postcss": "^4.3.2",
 		"@types/node": "^22",
 		"@types/react": "^19",
 		"@types/react-dom": "^19",
+		"eslint": "^9.39.4",
+		"eslint-config-next": "^15.5.20",
 		"tailwindcss": "^4.3.2",
 		"typescript": "^5.7.2",
 		"vitest": "^4.1.9"

@@ -19,7 +19,11 @@ function ToolCard({ part }: { part: DynamicToolUIPart }) {
 		part.state === "input-streaming" || part.state === "input-available";
 	const failed = part.state === "output-error";
 	return (
-		<div className="my-2 border border-edge bg-surface text-xs">
+		<div
+			data-testid="tool-card"
+			data-tool={part.toolName}
+			className="my-2 border border-edge bg-surface text-xs"
+		>
 			<div className="flex items-center gap-2 border-b border-edge-subtle px-3 py-1.5">
 				<span
 					className={`inline-block h-1.5 w-1.5 rounded-full ${
@@ -55,7 +59,10 @@ function ToolCard({ part }: { part: DynamicToolUIPart }) {
 function Message({ message }: { message: UIMessage }) {
 	const isUser = message.role === "user";
 	return (
-		<div className="animate-[fadeIn_0.3s_ease]">
+		<div
+			data-message-role={isUser ? "user" : "assistant"}
+			className="animate-[fadeIn_0.3s_ease]"
+		>
 			<div className={`mb-1 text-xs ${isUser ? "text-ink-muted" : "text-mint"}`}>
 				{isUser ? "you" : "agent"}
 			</div>

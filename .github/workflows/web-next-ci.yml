@@ -1,0 +1,112 @@
+name: Web Next CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "web-next/**"
+      - ".github/workflows/web-next-ci.yml"
+  pull_request:
+    paths:
+      - "web-next/**"
+      - ".github/workflows/web-next-ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  quality-lane:
+    name: Lint, Test, Build, E2E & Perf
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web-next
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+
+      - uses: pnpm/action-setup@02f6c237bd2518259fed6c71566509edfb3f2b74 # v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web-next/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm run lint
+
+      - name: Typecheck
+        run: pnpm run typecheck
+
+      - name: Unit tests
+        run: pnpm test
+
+      - name: Cache Next.js build cache
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4
+        with:
+          path: web-next/.next/cache
+          key: nextjs-web-next-${{ runner.os }}-${{ hashFiles('web-next/pnpm-lock.yaml') }}-${{ hashFiles('web-next/src/**') }}
+          restore-keys: |
+            nextjs-web-next-${{ runner.os }}-${{ hashFiles('web-next/pnpm-lock.yaml') }}-
+
+      - name: Build
+        run: pnpm run build
+
+      - name: Get Playwright version
+        id: pw-version
+        run: echo "version=$(pnpm exec playwright --version | tr ' ' '-')" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Playwright browsers
+        id: pw-cache
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-web-next-${{ runner.os }}-${{ steps.pw-version.outputs.version }}
+
+      - name: Install Playwright browsers
+        if: steps.pw-cache.outputs.cache-hit != 'true'
+        run: pnpm exec playwright install chromium --with-deps
+
+      - name: Install Playwright system deps
+        if: steps.pw-cache.outputs.cache-hit == 'true'
+        run: pnpm exec playwright install-deps chromium
+
+      - name: E2E tests
+        run: pnpm run test:e2e
+
+      - name: Capture evidence screenshots (light + dark)
+        run: pnpm run evidence
+
+      - name: Perf harness
+        run: pnpm run perf
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: web-next-evidence
+          path: web-next/output/evidence/
+          if-no-files-found: ignore
+
+      - name: Upload perf results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: web-next-perf-results
+          path: |
+            web-next/perf/results.json
+            web-next/perf/results.md
+          if-no-files-found: ignore
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: web-next-playwright-report
+          path: web-next/playwright-report/
+          if-no-files-found: ignore
