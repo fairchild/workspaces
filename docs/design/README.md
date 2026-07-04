@@ -1,11 +1,9 @@
-# Design Documents
+# Design Documents — archived
 
-Design explorations and wireframes for **Spaces** web/chat features.
-
-These documents are a separate web-dashboard context from the native **WorkSpaces** app documented by the main docs site and `CONTEXT.md`.
-
-| Document | What |
-|----------|------|
-| [product_overview.md](product_overview.md) | Chat & agent dispatch — problem, solution, design principles |
-| [user-stories.md](user-stories.md) | User stories with flow diagrams and ASCII wireframes |
-| [chat-tab-wireframes.md](chat-tab-wireframes.md) | Detailed wireframes for chat tab states, compose bar, dispatch flow |
+> **Deprecated.** The current design position lives in
+> [`web-next/docs/design.md`](../../web-next/docs/design.md).
+>
+> The material in [`archive/`](archive/) is the earlier **"Spaces" chat-tab +
+> dashboard** era — a different product direction, superseded by the
+> sessions-first Folio design. It's retained for history only and no longer
+> describes the app being built.
