@@ -2400,7 +2400,13 @@ struct ContentView: View {
 
     @MainActor
     private func ensureInitialHostSession() {
-        if !hostTerminalState.hasSessions,
+        // When durable restore is enabled, let the RestorePlan own repo/workspace
+        // (re)creation so a resume surface is never shadowed by a manifest-seeded
+        // session on the same key (issue #783 #3). The default-home fallback below
+        // still seeds one shell so the window isn't empty pre-restore, and
+        // executeRestore retires that shell if the plan claims its key.
+        if !restoreSessionsOnLaunchEnabled,
+            !hostTerminalState.hasSessions,
             let snapshot = TerminalContinuityManifest.decode(from: terminalContinuityManifestRawValue)?
                 .hostSessionSnapshot(excludingScopeKeys: archivedWorkspaceTerminalScopeKeys)
         {
@@ -2779,12 +2785,13 @@ struct ContentView: View {
     @discardableResult
     @MainActor
     private func activateHostSession(
-        key: HostTerminalSessionKey, directory: URL, customCommand: String? = nil
+        key: HostTerminalSessionKey, directory: URL, customCommand: String? = nil, initialCommand: String? = nil
     ) -> HostTerminalSession {
         let result = hostTerminalState.activateSession(
             key: key,
             directory: directory,
-            customCommand: customCommand
+            customCommand: customCommand,
+            initialCommand: initialCommand
         )
         if result.created {
             NSLog(
@@ -2868,20 +2875,33 @@ struct ContentView: View {
 
     /// Launch each surface in a restore plan. Reattach/fresh surfaces are a plain
     /// directory-backed launch (the deterministic tmux name reattaches a surviving
-    /// session automatically); resume surfaces carry a `claude --resume` command.
+    /// session automatically); resume surfaces run `claude --resume` as their
+    /// initial command through the login-shell path (correct PATH + hook env).
     /// Then honor the plan's advisory focus by re-activating the selected surface.
     @MainActor
     private func executeRestore(_ plan: RestorePlan) {
+        // #3: the restore plan owns every key it restores. Retire any session a
+        // pre-restore seed (the default-home fallback) left on those keys, so a
+        // resume/reattach surface is created fresh and the coordinator's key-reuse
+        // path can't drop its initial command.
+        for key in Set(plan.surfaces.map(\.key)) {
+            _ = hostTerminalState.retireSessions(inScope: key)
+        }
+
         var activatedByHostSessionID: [UUID: HostTerminalSession] = [:]
         for surface in plan.surfaces {
-            let command: String?
+            let initialCommand: String?
             switch surface.action {
             case .reattachTmux, .freshShell:
-                command = nil
+                initialCommand = nil
             case .resumeClaude(let agentSessionID):
-                command = RestoreLaunchCommand.claudeResume(cwd: surface.directory, sessionID: agentSessionID)
+                initialCommand = RestoreLaunchCommand.claudeResume(sessionID: agentSessionID)
             }
-            let session = activateHostSession(key: surface.key, directory: surface.directory, customCommand: command)
+            let session = activateHostSession(
+                key: surface.key,
+                directory: surface.directory,
+                initialCommand: initialCommand
+            )
             activatedByHostSessionID[surface.hostSessionID] = session
         }
 

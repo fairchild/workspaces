@@ -34,6 +34,38 @@ struct TerminalSessionLaunchContextTests {
         #expect(hookEnvironment["WORKSPACES_COMMAND_STATUS_ZSH"] == "/tmp/command-status.zsh")
     }
 
+    @Test("A resume session stays directory-backed with hook env and carries its initial command")
+    func resumeSessionIsDirectoryBackedWithInitialCommand() {
+        let hostSessionID = UUID(uuidString: "7BD8C9BD-7F3B-456D-A9EC-16CDB2221339")!
+        let session = HostTerminalSession(
+            id: hostSessionID,
+            key: .repoPath("/Users/test/repo"),
+            directory: URL(fileURLWithPath: "/Users/test/repo"),
+            initialCommand: "claude --resume sess-9"
+        )
+
+        let context = TerminalSessionLaunchContext.hostSession(session, hooksSocketPath: "/tmp/hooks.sock")
+
+        #expect(context.commandModeLabel == "directory")
+        #expect(context.initialCommand == "claude --resume sess-9")
+        // The resumed claude runs through the directory path, so it still gets hooks —
+        // unlike the old fixed-PATH customCommand path.
+        #expect(context.agentCommunication == .hookEnvironment)
+    }
+
+    @Test("A customCommand session ignores any initial command and maps to custom mode")
+    func customCommandSessionMapsToCustomMode() {
+        let session = HostTerminalSession(
+            id: UUID(),
+            key: .repoPath("/Users/test/repo"),
+            directory: URL(fileURLWithPath: "/Users/test/repo"),
+            customCommand: "ssh sandbox"
+        )
+        let context = TerminalSessionLaunchContext.hostSession(session, hooksSocketPath: "/tmp/hooks.sock")
+        #expect(context.commandModeLabel == "custom")
+        #expect(context.initialCommand == nil)
+    }
+
     @Test("Incomplete directory hook context falls back to terminal signals")
     func incompleteDirectoryHookContextFallsBackToTerminalSignals() {
         let hostSessionID = UUID(uuidString: "7BD8C9BD-7F3B-456D-A9EC-16CDB2221339")!

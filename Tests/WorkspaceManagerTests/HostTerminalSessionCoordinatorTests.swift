@@ -330,4 +330,30 @@ struct HostTerminalSessionCoordinatorTests {
         #expect(first.session.id == third.session.id)
         #expect(coordinator.sessions.count == 1)
     }
+
+    @Test("Activating a fresh key sets initialCommand; reuse does not adopt a new one")
+    func initialCommandOnCreateNotOnReuse() {
+        var coordinator = HostTerminalSessionCoordinator()
+        let directory = URL(fileURLWithPath: "/code/repo")
+
+        let created = coordinator.activate(
+            key: .repoPath(directory.path),
+            directory: directory,
+            initialCommand: "claude --resume sess-1"
+        )
+        #expect(created.created)
+        #expect(created.session.initialCommand == "claude --resume sess-1")
+
+        // Reusing the same key returns the existing session and does NOT adopt a new
+        // initialCommand — which is exactly why executeRestore retires a pre-seeded
+        // session on a plan's key before restoring (issue #783 #3).
+        let reused = coordinator.activate(
+            key: .repoPath(directory.path),
+            directory: directory,
+            initialCommand: "claude --resume sess-2"
+        )
+        #expect(!reused.created)
+        #expect(reused.session.id == created.session.id)
+        #expect(reused.session.initialCommand == "claude --resume sess-1")
+    }
 }
