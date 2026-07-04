@@ -15,7 +15,7 @@ test.describe.configure({ mode: "serial" });
 
 const SESSION_URL = /\/sessions\/[0-9a-f-]{36}$/;
 
-// The mock turn takes ~7s of scripted delays end to end.
+// The mock turn takes ~9s of scripted delays end to end.
 const TURN_TIMEOUT = 20_000;
 
 test.beforeAll(async () => {
@@ -121,18 +121,25 @@ test("sending a message streams a mock coding turn into the Folio transcript", a
 	// The activity line breathes while the provider provisions.
 	await expect(page.getByTestId("activity-line")).toBeVisible();
 
-	// The turn streams the whole apparatus: prose…
+	// The turn streams the whole apparatus: the thinking block…
+	await expect(page.getByTestId("reasoning")).toBeVisible({
+		timeout: TURN_TIMEOUT,
+	});
+	// …prose…
 	await expect(page.locator('[data-message-role="assistant"]')).toContainText(
-		"Let me look at the failing test",
+		"Let me reproduce the failure first",
 		{ timeout: TURN_TIMEOUT },
 	);
-	// …the tool ledger (Read, Edit with its line delta, Ran)…
+	// …the tool ledger (a failing run, Read, Edit with its line delta, the
+	// passing re-run)…
 	const rows = page.getByTestId("tool-row");
-	await expect(rows).toHaveCount(3, { timeout: TURN_TIMEOUT });
-	await expect(rows.nth(0)).toContainText("Read");
-	await expect(rows.nth(1)).toContainText("+3 −1");
-	await expect(rows.nth(2)).toContainText("Ran");
-	await expect(rows.nth(2)).toContainText("pnpm test session");
+	await expect(rows).toHaveCount(4, { timeout: TURN_TIMEOUT });
+	await expect(rows.nth(0)).toContainText("Ran");
+	await expect(rows.nth(0)).toContainText("failed");
+	await expect(rows.nth(1)).toContainText("Read");
+	await expect(rows.nth(2)).toContainText("+3 −1");
+	await expect(rows.nth(3)).toContainText("Ran");
+	await expect(rows.nth(3)).toContainText("pnpm test session");
 	// …the landed diff card…
 	await expect(page.getByTestId("diff-card")).toContainText(
 		"SessionNotFoundError",
@@ -140,12 +147,15 @@ test("sending a message streams a mock coding turn into the Folio transcript", a
 	);
 	// …and the end-of-turn receipt derived from the stream.
 	await expect(page.getByTestId("turn-stats")).toContainText(
-		"3 tools · 1 file · +3 −1 · 4 tests",
+		"4 tools · 1 file · +3 −1 · 4 tests",
 		{ timeout: TURN_TIMEOUT },
 	);
 
-	// The test run discloses the highlighted output panel.
-	await rows.nth(2).locator("button").first().click();
+	// The completed thinking block has receded to its collapsed trigger.
+	await expect(page.getByTestId("reasoning")).toContainText("Thought for");
+
+	// The passing re-run discloses the highlighted output panel.
+	await rows.nth(3).locator("button").first().click();
 	await expect(page.getByTestId("test-output")).toContainText("4 passed");
 	await expect(page.getByTestId("test-output")).toHaveAttribute(
 		"data-passed",
@@ -164,10 +174,10 @@ test("a reload renders the same turn from the persisted event log", async ({
 	await expect(page.locator('[data-message-role="user"]')).toContainText(
 		"Fix the failing session test",
 	);
-	await expect(page.getByTestId("tool-row")).toHaveCount(3);
+	await expect(page.getByTestId("tool-row")).toHaveCount(4);
 	await expect(page.getByTestId("diff-card")).toContainText("src/lib/session.ts");
 	await expect(page.getByTestId("turn-stats")).toContainText(
-		"3 tools · 1 file · +3 −1 · 4 tests",
+		"4 tools · 1 file · +3 −1 · 4 tests",
 	);
 	// Nothing is in flight after a reload — the receipt is served, not replayed.
 	await expect(page.getByTestId("activity-line")).toHaveCount(0);
@@ -182,7 +192,7 @@ test("a turn survives a mid-stream reload and resumes to completion", async ({
 	await page.keyboard.press("Enter");
 
 	// Wait until the second turn's first tool call landed in the log…
-	await expect(page.getByTestId("tool-row")).toHaveCount(4, {
+	await expect(page.getByTestId("tool-row")).toHaveCount(5, {
 		timeout: TURN_TIMEOUT,
 	});
 	// …then abandon the stream mid-turn. The turn runs detached server-side, so
@@ -191,12 +201,12 @@ test("a turn survives a mid-stream reload and resumes to completion", async ({
 
 	// Both turns' user messages survive; the reopened tab resumes the in-flight
 	// turn from the event log and it finishes — a second receipt lands and the
-	// full ledger (both turns, 3 tools each) is present.
+	// full ledger (both turns, 4 tools each) is present.
 	await expect(page.locator('[data-message-role="user"]')).toHaveCount(2);
 	await expect(page.getByTestId("turn-stats")).toHaveCount(2, {
 		timeout: TURN_TIMEOUT,
 	});
-	await expect(page.getByTestId("tool-row")).toHaveCount(6);
+	await expect(page.getByTestId("tool-row")).toHaveCount(8);
 	// Nothing is in flight once the resumed turn completes.
 	await expect(page.getByTestId("activity-line")).toHaveCount(0);
 });
@@ -220,7 +230,7 @@ test("closing the tab mid-turn does not kill it — a fresh tab catches up", asy
 	await page.keyboard.press("Enter");
 	// The turn is genuinely under way (first prose streamed) before we leave.
 	await expect(page.locator('[data-message-role="assistant"]')).toContainText(
-		"Let me look at the failing test",
+		"Let me reproduce the failure first",
 		{ timeout: TURN_TIMEOUT },
 	);
 
@@ -232,7 +242,7 @@ test("closing the tab mid-turn does not kill it — a fresh tab catches up", asy
 	// The detached turn kept running; the reopened tab resumes it from the log
 	// and it completes — the receipt is the proof it caught up live.
 	await expect(reopened.getByTestId("turn-stats")).toContainText(
-		"3 tools · 1 file · +3 −1 · 4 tests",
+		"4 tools · 1 file · +3 −1 · 4 tests",
 		{ timeout: TURN_TIMEOUT },
 	);
 	await expect(reopened.getByTestId("activity-line")).toHaveCount(0);
