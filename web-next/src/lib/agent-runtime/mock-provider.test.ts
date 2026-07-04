@@ -22,16 +22,36 @@ describe("mockCodingTurn", () => {
 		expect(prose).toContain('You asked: "Fix the flaky retry"');
 	});
 
-	test("runs the Read → Edit → Bash script with paired results", async () => {
+	test("thinks first: a reasoning trace leads, before any prose or tool", async () => {
+		const chunks = await fullTurn("go");
+		const reasoning = chunks
+			.filter((chunk) => chunk.type === "reasoning")
+			.map((chunk) => chunk.content)
+			.join("");
+		expect(reasoning).toContain("SessionNotFoundError");
+		// The thinking block precedes the visible answer and the first tool call.
+		const firstReasoning = chunks.findIndex((c) => c.type === "reasoning");
+		const firstText = chunks.findIndex((c) => c.type === "text");
+		const firstTool = chunks.findIndex((c) => c.type === "tool_use");
+		expect(firstReasoning).toBeGreaterThanOrEqual(0);
+		expect(firstReasoning).toBeLessThan(firstText);
+		expect(firstReasoning).toBeLessThan(firstTool);
+	});
+
+	test("reproduces (failing), fixes, then re-runs (passing)", async () => {
 		const chunks = await fullTurn("go");
 		const calls = chunks.filter((chunk) => chunk.type === "tool_use");
 		expect(calls.map((chunk) => chunk.metadata?.toolName)).toEqual([
+			"Bash",
 			"Read",
 			"Edit",
 			"Bash",
 		]);
 		const results = chunks.filter((chunk) => chunk.type === "tool_result");
-		expect(results).toHaveLength(3);
+		expect(results).toHaveLength(4);
+		// The first test run fails; the run after the edit passes.
+		const failed = results.filter((chunk) => chunk.metadata?.isError === true);
+		expect(failed).toHaveLength(1);
 		// Each tool announces itself as a status first (the activity line).
 		const statuses = chunks
 			.filter((chunk) => chunk.type === "status")
@@ -44,7 +64,7 @@ describe("mockCodingTurn", () => {
 		const chunks = await fullTurn("go");
 		const editResult = chunks.find(
 			(chunk) =>
-				chunk.type === "tool_result" && chunk.metadata?.toolUseId === "tool-2",
+				chunk.type === "tool_result" && chunk.metadata?.toolUseId === "tool-3",
 		);
 		expect(editResult?.metadata?.diff).toMatchObject({
 			file: "src/lib/session.ts",
@@ -57,7 +77,7 @@ describe("mockCodingTurn", () => {
 		const chunks = await fullTurn("go");
 		const stats = deriveTurnStats(chunks);
 		expect(stats).toMatchObject({
-			toolCount: 3,
+			toolCount: 4,
 			filesChanged: 1,
 			additions: 3,
 			deletions: 1,

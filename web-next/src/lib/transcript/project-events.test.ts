@@ -164,6 +164,37 @@ describe("projectSessionEvents", () => {
 		});
 	});
 
+	test("projects a reasoning event into a reasoning part before the answer", async () => {
+		const messages = await projectSessionEvents("s", [
+			u(1, "why is it failing?"),
+			a(2, "reasoning", "The guard is missing, so undefined slips through."),
+			a(3, "text", "Found it."),
+			a(4, "done", ""),
+		]);
+		expect(messages[1]).toMatchObject({
+			role: "assistant",
+			parts: [
+				{
+					type: "reasoning",
+					text: "The guard is missing, so undefined slips through.",
+					state: "done",
+				},
+				{ type: "text", text: "Found it." },
+			],
+		});
+	});
+
+	test("a reasoning-only turn still renders (it is a real part)", async () => {
+		const messages = await projectSessionEvents("s", [
+			a(1, "reasoning", "thinking out loud"),
+			a(2, "done", ""),
+		]);
+		expect(messages).toHaveLength(1);
+		expect(messages[0].parts).toMatchObject([
+			{ type: "reasoning", text: "thinking out loud" },
+		]);
+	});
+
 	test("interleaves multiple user+assistant turns in one log", async () => {
 		const messages = await projectSessionEvents("s", [
 			u(1, "first question"),

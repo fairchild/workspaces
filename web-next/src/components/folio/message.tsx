@@ -10,6 +10,7 @@ import type { CSSProperties, ReactNode } from "react";
 import { DiffCard } from "./diff-card";
 import { InlineMarkdown } from "./inline-markdown";
 import { describeToolPart, type LedgerBody, type LedgerMeta } from "./ledger";
+import { Reasoning, ReasoningContent, ReasoningTrigger } from "./reasoning";
 import { TestOutputPanel } from "./test-output-panel";
 import { ToolLedgerRow } from "./tool-ledger-row";
 import { TurnStatsReceipt } from "./turn-stats";
@@ -74,6 +75,7 @@ export function MessageArticle({
 
 type Segment =
 	| { kind: "text"; key: string; text: string }
+	| { kind: "reasoning"; key: string; text: string; streaming: boolean }
 	| { kind: "tools"; key: string; parts: DynamicToolUIPart[] }
 	| { kind: "diff"; key: string; data: DiffCardData };
 
@@ -83,6 +85,13 @@ function groupParts(parts: FolioMessage["parts"]): Segment[] {
 	parts.forEach((part, index) => {
 		if (part.type === "text") {
 			segments.push({ kind: "text", key: `part-${index}`, text: part.text });
+		} else if (part.type === "reasoning") {
+			segments.push({
+				kind: "reasoning",
+				key: `part-${index}`,
+				text: part.text,
+				streaming: part.state === "streaming",
+			});
 		} else if (isDynamicToolUIPart(part)) {
 			const last = segments.at(-1);
 			if (last?.kind === "tools") last.parts.push(part);
@@ -198,6 +207,13 @@ export function Message({
 			animationDelay={animationDelay}
 		>
 			{groupParts(message.parts).map((segment) => {
+				if (segment.kind === "reasoning")
+					return (
+						<Reasoning key={segment.key} isStreaming={segment.streaming}>
+							<ReasoningTrigger />
+							<ReasoningContent>{segment.text}</ReasoningContent>
+						</Reasoning>
+					);
 				if (segment.kind === "tools")
 					return (
 						<Workings
