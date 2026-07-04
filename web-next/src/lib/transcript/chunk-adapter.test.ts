@@ -191,6 +191,55 @@ describe("toUIMessageChunks", () => {
 		expect(seen).toEqual([0, 2]);
 	});
 
+	test("brackets contiguous reasoning chunks into one reasoning part", async () => {
+		const out = await collect([
+			{ type: "reasoning", content: "Think " },
+			{ type: "reasoning", content: "more" },
+			{ type: "done", content: "" },
+		]);
+		expect(out).toEqual([
+			{ type: "start", messageId: "msg-1" },
+			{ type: "reasoning-start", id: "id-0" },
+			{ type: "reasoning-delta", id: "id-0", delta: "Think " },
+			{ type: "reasoning-delta", id: "id-0", delta: "more" },
+			{ type: "reasoning-end", id: "id-0" },
+			{ type: "finish" },
+		]);
+	});
+
+	test("reasoning and text close each other; they never overlap", async () => {
+		const out = await collect([
+			{ type: "reasoning", content: "let me think" },
+			{ type: "text", content: "here's the answer" },
+			{ type: "done", content: "" },
+		]);
+		// reasoning is closed before the text part opens
+		const reasoningEnd = out.findIndex((c) => c.type === "reasoning-end");
+		const textStart = out.findIndex((c) => c.type === "text-start");
+		expect(reasoningEnd).toBeGreaterThanOrEqual(0);
+		expect(textStart).toBeGreaterThan(reasoningEnd);
+	});
+
+	test("a tool call closes an open reasoning part", async () => {
+		const out = await collect([
+			{ type: "reasoning", content: "I should read the file" },
+			{ type: "tool_use", content: "Read", metadata: { toolUseId: "t-1" } },
+			{ type: "done", content: "" },
+		]);
+		const reasoningEnd = out.findIndex((c) => c.type === "reasoning-end");
+		const toolInput = out.findIndex((c) => c.type === "tool-input-available");
+		expect(reasoningEnd).toBeGreaterThanOrEqual(0);
+		expect(toolInput).toBeGreaterThan(reasoningEnd);
+	});
+
+	test("empty reasoning content opens no part", async () => {
+		const out = await collect([
+			{ type: "reasoning", content: "" },
+			{ type: "done", content: "" },
+		]);
+		expect(out.some((c) => c.type === "reasoning-start")).toBe(false);
+	});
+
 	test("text after a tool call starts a new text part", async () => {
 		const out = await collect([
 			{ type: "text", content: "before" },

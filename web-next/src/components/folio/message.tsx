@@ -10,6 +10,7 @@ import type { CSSProperties, ReactNode } from "react";
 import { DiffCard } from "./diff-card";
 import { InlineMarkdown } from "./inline-markdown";
 import { describeToolPart, type LedgerBody, type LedgerMeta } from "./ledger";
+import { Reasoning, ReasoningContent, ReasoningTrigger } from "./reasoning";
 import { TestOutputPanel } from "./test-output-panel";
 import { ToolLedgerRow } from "./tool-ledger-row";
 import { TurnStatsReceipt } from "./turn-stats";
@@ -47,7 +48,7 @@ export function MessageArticle({
 		<article
 			data-message-role={role}
 			data-focal={focal || undefined}
-			className={`group animate-rise relative mb-[60px] [&_p+p]:mt-4 ${recede ? "opacity-[.76]" : ""} ${focal ? FOCAL_CLASSES : ""}`}
+			className={`group animate-rise relative mb-6 last:mb-0 [&_p+p]:mt-4 ${recede ? "opacity-[.76]" : ""} ${focal ? FOCAL_CLASSES : ""}`}
 			style={
 				animationDelay
 					? ({ animationDelay: `${animationDelay}s` } satisfies CSSProperties)
@@ -74,6 +75,7 @@ export function MessageArticle({
 
 type Segment =
 	| { kind: "text"; key: string; text: string }
+	| { kind: "reasoning"; key: string; text: string; streaming: boolean }
 	| { kind: "tools"; key: string; parts: DynamicToolUIPart[] }
 	| { kind: "diff"; key: string; data: DiffCardData };
 
@@ -83,6 +85,13 @@ function groupParts(parts: FolioMessage["parts"]): Segment[] {
 	parts.forEach((part, index) => {
 		if (part.type === "text") {
 			segments.push({ kind: "text", key: `part-${index}`, text: part.text });
+		} else if (part.type === "reasoning") {
+			segments.push({
+				kind: "reasoning",
+				key: `part-${index}`,
+				text: part.text,
+				streaming: part.state === "streaming",
+			});
 		} else if (isDynamicToolUIPart(part)) {
 			const last = segments.at(-1);
 			if (last?.kind === "tools") last.parts.push(part);
@@ -126,7 +135,7 @@ function Workings({
 	openToolCallIds?: string[];
 }) {
 	return (
-		<div className="my-[26px] ml-[2px] space-y-[2px] border-l-2 border-line py-1 pl-[22px]">
+		<div className="my-[26px] space-y-[2px] py-1">
 			{parts.map((part) => {
 				const row = describeToolPart(part);
 				return (
@@ -161,16 +170,50 @@ export function Message({
 }: MessageProps) {
 	const isUser = message.role === "user";
 	const meta = message.metadata;
+	// Variation B: inside a turn frame, the user's message is the anchor at the
+	// top — weightier prose closed by a hairline divider that sets it apart from
+	// the agent's response beneath, so the container reads as one "turn" thing.
+	if (isUser) {
+		return (
+			<MessageArticle
+				role="user"
+				author={meta?.author ?? "You"}
+				stamp={meta?.stamp}
+				focal={meta?.focal}
+				recede={meta?.recede}
+				animationDelay={animationDelay}
+			>
+				<div className="border-b border-line pb-[18px] font-medium text-user-ink [&_p+p]:mt-3">
+					{message.parts.map((part, pi) =>
+						part.type === "text"
+							? part.text.split(/\n{2,}/).map((paragraph, i) => (
+									<p key={`u-${pi}-${i}`}>
+										<InlineMarkdown text={paragraph} />
+									</p>
+								))
+							: null,
+					)}
+				</div>
+			</MessageArticle>
+		);
+	}
 	return (
 		<MessageArticle
-			role={isUser ? "user" : "assistant"}
-			author={meta?.author ?? (isUser ? "You" : "Agent")}
+			role="assistant"
+			author={meta?.author ?? "Agent"}
 			stamp={meta?.stamp}
 			focal={meta?.focal}
 			recede={meta?.recede}
 			animationDelay={animationDelay}
 		>
 			{groupParts(message.parts).map((segment) => {
+				if (segment.kind === "reasoning")
+					return (
+						<Reasoning key={segment.key} isStreaming={segment.streaming}>
+							<ReasoningTrigger />
+							<ReasoningContent>{segment.text}</ReasoningContent>
+						</Reasoning>
+					);
 				if (segment.kind === "tools")
 					return (
 						<Workings

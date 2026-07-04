@@ -4,9 +4,14 @@
  * Contextual diff card: a landed edit surfaces as a raised, dismissible
  * figure — file + delta caption, then the hunk with add/del washes.
  * Takes structured DiffCardData; #748 maps real Edit results onto it.
+ * A long refactor stays a bounded figure: past ~28 lines the hunk scrolls
+ * inside the card instead of stretching the turn into a wall.
  */
 import { useState } from "react";
 import type { DiffCardData, DiffLine } from "./types";
+
+/** Beyond this many lines the hunk gets its own scroll rather than growing the turn. */
+const TALL_DIFF_LINES = 28;
 
 const LINE_CLASS: Record<DiffLine["kind"], string> = {
 	context: "",
@@ -43,7 +48,9 @@ export function DiffCard({ diff }: { diff: DiffCardData }) {
 					✕
 				</button>
 			</figcaption>
-			<pre className="overflow-x-auto py-3 font-mono text-tool leading-[1.7]">
+			<pre
+				className={`overflow-x-auto py-3 font-mono text-tool leading-[1.7] ${diff.lines.length > TALL_DIFF_LINES ? "max-h-[460px] overflow-y-auto" : ""}`}
+			>
 				{diff.lines.map((line, i) => (
 					<span
 						key={i}

@@ -37,6 +37,39 @@ function riseDelay(index: number): number {
 	return index < 4 ? 0.03 + index * 0.07 : 0;
 }
 
+/**
+ * Variation B: a turn is a user message plus the agent messages answering it.
+ * Grouping the flat transcript this way lets us draw one soft frame per turn.
+ */
+interface Turn {
+	key: string;
+	messages: FolioMessage[];
+}
+
+function groupIntoTurns(messages: FolioMessage[]): Turn[] {
+	const turns: Turn[] = [];
+	for (const message of messages) {
+		if (message.role === "user" || turns.length === 0) {
+			turns.push({ key: message.id, messages: [message] });
+		} else {
+			turns[turns.length - 1].messages.push(message);
+		}
+	}
+	return turns;
+}
+
+/**
+ * The frame draws the turn's presence, so the per-message focal tick and the
+ * older-context fade are cleared — otherwise a turn would signal focus twice.
+ */
+function withoutMessagePresence(message: FolioMessage): FolioMessage {
+	if (!message.metadata) return message;
+	return {
+		...message,
+		metadata: { ...message.metadata, focal: false, recede: false },
+	};
+}
+
 export interface SessionViewProps {
 	session: SessionViewData;
 	/** Compose submit handler (client wrappers wire this; fixtures omit it). */
@@ -64,27 +97,52 @@ export function SessionView({ session, onSend, composeDisabled }: SessionViewPro
 						</p>
 					</div>
 				)}
-				{session.messages.map((message, index) => (
-					<Message
-						key={message.id}
-						message={message}
-						openToolCallIds={session.openToolCallIds}
-						animationDelay={riseDelay(index)}
-					/>
-				))}
-				{session.activeTurn && (
-					<MessageArticle
-						role="assistant"
-						author={session.activeTurn.agentName}
-						focal
-						animationDelay={riseDelay(session.messages.length)}
-					>
-						<ActivityLine
-							action={session.activeTurn.action}
-							details={session.activeTurn.details}
-						/>
-					</MessageArticle>
-				)}
+				{(() => {
+					const orderIndex = new Map(
+						session.messages.map((message, index) => [message.id, index]),
+					);
+					const turns = groupIntoTurns(session.messages);
+					// An active turn with no prior messages still needs a frame to live in.
+					const renderTurns: Turn[] =
+						turns.length === 0 && session.activeTurn
+							? [{ key: "active", messages: [] }]
+							: turns;
+					return renderTurns.map((turn, turnIndex) => {
+						const recent = turnIndex === renderTurns.length - 1;
+						// The most-recent turn is filled + lifted; older turns are quiet outlines.
+						const frame = recent
+							? "border-line-strong bg-raised shadow-card"
+							: "border-line";
+						return (
+							<section
+								key={turn.key}
+								data-turn={recent ? "recent" : "past"}
+								className={`animate-rise mb-9 rounded-[18px] border ${frame} px-8 py-7`}
+							>
+								{turn.messages.map((message) => (
+									<Message
+										key={message.id}
+										message={withoutMessagePresence(message)}
+										openToolCallIds={session.openToolCallIds}
+										animationDelay={riseDelay(orderIndex.get(message.id) ?? 0)}
+									/>
+								))}
+								{recent && session.activeTurn && (
+									<MessageArticle
+										role="assistant"
+										author={session.activeTurn.agentName}
+										animationDelay={riseDelay(session.messages.length)}
+									>
+										<ActivityLine
+											action={session.activeTurn.action}
+											details={session.activeTurn.details}
+										/>
+									</MessageArticle>
+								)}
+							</section>
+						);
+					});
+				})()}
 			</main>
 			<footer className="sticky bottom-0 z-[15]">
 				<ComposeField

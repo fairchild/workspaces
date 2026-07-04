@@ -4,7 +4,14 @@
  * emits these; the transcript adapter turns them into AI SDK UIMessage chunks.
  */
 export interface StreamChunk {
-	type: "text" | "tool_use" | "tool_result" | "status" | "error" | "done";
+	type:
+		| "text"
+		| "reasoning"
+		| "tool_use"
+		| "tool_result"
+		| "status"
+		| "error"
+		| "done";
 	content: string;
 	metadata?: Record<string, unknown>;
 }

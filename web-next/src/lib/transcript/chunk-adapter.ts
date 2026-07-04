@@ -30,6 +30,8 @@ function asString(value: unknown): string | undefined {
  *
  * Contract:
  * - Contiguous `text` chunks form one text part; any tool/error chunk closes it.
+ * - Contiguous `reasoning` chunks form one reasoning part (the model's thinking);
+ *   it and an open text part close each other, so the two never overlap.
  * - `tool_use`/`tool_result` become dynamic tool parts. Results pair by
  *   `metadata.toolUseId` when present, otherwise FIFO against unresolved calls.
  * - A `tool_result` carrying `metadata.diff` additionally surfaces it as a
@@ -45,6 +47,7 @@ export async function* toUIMessageChunks(
 	const generateId = options.generateId ?? defaultGenerateId;
 
 	let openTextId: string | null = null;
+	let openReasoningId: string | null = null;
 	let finished = false;
 	const unresolvedToolIds: string[] = [];
 	const consumed: StreamChunk[] = [];
@@ -53,6 +56,13 @@ export async function* toUIMessageChunks(
 		if (openTextId === null) return [];
 		const end: UIMessageChunk = { type: "text-end", id: openTextId };
 		openTextId = null;
+		return [end];
+	}
+
+	function closeReasoning(): UIMessageChunk[] {
+		if (openReasoningId === null) return [];
+		const end: UIMessageChunk = { type: "reasoning-end", id: openReasoningId };
+		openReasoningId = null;
 		return [end];
 	}
 
@@ -69,6 +79,7 @@ export async function* toUIMessageChunks(
 		switch (chunk.type) {
 			case "text": {
 				if (chunk.content.length === 0) break;
+				yield* closeReasoning();
 				if (openTextId === null) {
 					openTextId = generateId();
 					yield { type: "text-start", id: openTextId };
@@ -76,8 +87,23 @@ export async function* toUIMessageChunks(
 				yield { type: "text-delta", id: openTextId, delta: chunk.content };
 				break;
 			}
+			case "reasoning": {
+				if (chunk.content.length === 0) break;
+				yield* closeText();
+				if (openReasoningId === null) {
+					openReasoningId = generateId();
+					yield { type: "reasoning-start", id: openReasoningId };
+				}
+				yield {
+					type: "reasoning-delta",
+					id: openReasoningId,
+					delta: chunk.content,
+				};
+				break;
+			}
 			case "tool_use": {
 				yield* closeText();
+				yield* closeReasoning();
 				const toolCallId =
 					asString(chunk.metadata?.toolUseId) ?? generateId();
 				const toolName =
@@ -96,6 +122,7 @@ export async function* toUIMessageChunks(
 			}
 			case "tool_result": {
 				yield* closeText();
+				yield* closeReasoning();
 				const explicitId = asString(chunk.metadata?.toolUseId);
 				const toolCallId = explicitId ?? unresolvedToolIds[0];
 				if (toolCallId === undefined) break; // result with no known call
@@ -130,6 +157,7 @@ export async function* toUIMessageChunks(
 			}
 			case "error": {
 				yield* closeText();
+				yield* closeReasoning();
 				yield { type: "error", errorText: chunk.content };
 				break;
 			}
@@ -141,6 +169,7 @@ export async function* toUIMessageChunks(
 	}
 
 	yield* closeText();
+	yield* closeReasoning();
 	yield {
 		type: "finish",
 		messageMetadata: options.messageMetadata?.(consumed),

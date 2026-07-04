@@ -1,7 +1,8 @@
 /*
  * The mock compute provider: a deterministic scripted coding turn (status →
- * prose → Read/Edit/Bash with results, a landed diff, a test run → done with
- * usage figures) that exercises the whole Folio apparatus without a sandbox.
+ * reasoning → prose → a failing test → Read/Edit → a passing test, a landed
+ * diff → done with usage figures) that exercises the whole Folio apparatus —
+ * including the thinking block and the error tool path — without a sandbox.
  * Paced with small delays so streaming behavior is observable and measurable.
  */
 import type { ComputeProvider, TurnRequest } from "./provider";
@@ -12,6 +13,21 @@ type Sleep = (ms: number) => Promise<void>;
 const defaultSleep: Sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const EDITED_FILE = "src/lib/session.ts";
+
+const REASONING_TRACE = [
+	"The repro says `resumeSession` comes back with undefined for an unknown id, and the test expects a thrown `SessionNotFoundError`.",
+	"So the failure is a missing guard: `store.get` returns undefined, and nothing between it and the caller turns that into the error the test wants.",
+	"Plan: reproduce the failure first to be sure I'm looking at the right path, read the function, add the null check, then re-run to confirm the suite goes green.",
+].join("\n\n");
+
+const FAILING_TEST_OUTPUT = [
+	"❯ src/lib/session.test.ts (4 tests | 1 failed) 208ms",
+	"  × resumeSession › rejects when the id is unknown",
+	"    → expected [Function] to throw SessionNotFoundError",
+	"",
+	"Test Files  1 failed (1)",
+	"     Tests  1 failed | 3 passed (4)",
+].join("\n");
 
 const EDIT_DIFF = {
 	file: EDITED_FILE,
@@ -54,13 +70,43 @@ export async function* mockCodingTurn(
 		}
 	}
 
+	async function* reasoning(text: string): AsyncGenerator<StreamChunk> {
+		for (const word of text.split(" ")) {
+			yield { type: "reasoning", content: `${word} ` };
+			await sleep(22);
+		}
+	}
+
 	yield { type: "status", content: "Starting sandbox" };
 	await sleep(300);
 	yield { type: "status", content: "Cloning repo" };
 	await sleep(300);
 
+	yield* reasoning(REASONING_TRACE);
+
 	yield* prose(
-		`You asked: "${userMessage}". Let me look at the failing test first.`,
+		`You asked: "${userMessage}". Let me reproduce the failure first.`,
+	);
+
+	yield { type: "status", content: "Running `pnpm test session`" };
+	yield {
+		type: "tool_use",
+		content: "Bash",
+		metadata: {
+			toolUseId: "tool-1",
+			toolName: "Bash",
+			input: { command: "pnpm test session" },
+		},
+	};
+	await sleep(600);
+	yield {
+		type: "tool_result",
+		content: FAILING_TEST_OUTPUT,
+		metadata: { toolUseId: "tool-1", isError: true },
+	};
+
+	yield* prose(
+		"Confirmed — it throws a `TypeError` inside `hydrate` instead of rejecting. Reading the source.",
 	);
 
 	yield { type: "status", content: `Reading \`${EDITED_FILE}\`` };
@@ -68,7 +114,7 @@ export async function* mockCodingTurn(
 		type: "tool_use",
 		content: "Read",
 		metadata: {
-			toolUseId: "tool-1",
+			toolUseId: "tool-2",
 			toolName: "Read",
 			input: { file_path: EDITED_FILE },
 		},
@@ -78,7 +124,7 @@ export async function* mockCodingTurn(
 		type: "tool_result",
 		content:
 			"export function resumeSession(id: string) {\n\treturn store.get(id); // BUG: no null check\n}",
-		metadata: { toolUseId: "tool-1" },
+		metadata: { toolUseId: "tool-2" },
 	};
 
 	yield* prose(
@@ -90,7 +136,7 @@ export async function* mockCodingTurn(
 		type: "tool_use",
 		content: "Edit",
 		metadata: {
-			toolUseId: "tool-2",
+			toolUseId: "tool-3",
 			toolName: "Edit",
 			input: {
 				file_path: EDITED_FILE,
@@ -104,7 +150,7 @@ export async function* mockCodingTurn(
 	yield {
 		type: "tool_result",
 		content: "Edit applied.",
-		metadata: { toolUseId: "tool-2", diff: EDIT_DIFF },
+		metadata: { toolUseId: "tool-3", diff: EDIT_DIFF },
 	};
 
 	yield { type: "status", content: "Running `pnpm test session`" };
@@ -112,7 +158,7 @@ export async function* mockCodingTurn(
 		type: "tool_use",
 		content: "Bash",
 		metadata: {
-			toolUseId: "tool-3",
+			toolUseId: "tool-4",
 			toolName: "Bash",
 			input: { command: "pnpm test session" },
 		},
@@ -121,7 +167,7 @@ export async function* mockCodingTurn(
 	yield {
 		type: "tool_result",
 		content: TEST_RUN_OUTPUT,
-		metadata: { toolUseId: "tool-3" },
+		metadata: { toolUseId: "tool-4" },
 	};
 
 	yield { type: "status", content: "Writing up the fix" };

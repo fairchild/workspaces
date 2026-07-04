@@ -20,8 +20,11 @@ export function ComposeField({ agentName, onSend, disabled }: ComposeFieldProps)
 	const inputRef = useRef<HTMLInputElement>(null);
 	const [text, setText] = useState("");
 
-	// autoFocus covers the initial render; this covers remounts after
-	// client-side navigation where the attribute is ignored.
+	// Focus after mount rather than via the `autoFocus` attribute: an
+	// SSR-rendered autoFocus focuses during hydration, and tools that add
+	// attributes to the focused input (e.g. cmux's address-bar focus) then
+	// trip a hydration mismatch. This covers initial mount and client-nav
+	// remounts alike.
 	useEffect(() => {
 		inputRef.current?.focus();
 	}, []);
@@ -46,7 +49,6 @@ export function ComposeField({ agentName, onSend, disabled }: ComposeFieldProps)
 				<input
 					ref={inputRef}
 					type="text"
-					autoFocus
 					aria-label={`Reply to ${agentName}`}
 					value={text}
 					onChange={(event) => setText(event.target.value)}
