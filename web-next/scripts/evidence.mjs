@@ -112,9 +112,10 @@ async function captureSessionTurn(page, shot) {
 	);
 	await page.screenshot({ path: shot("session-turn-midstream") });
 
-	// Final: receipt rendered; disclose the test run's output panel.
+	// Final: receipt rendered; disclose the passing re-run's output panel
+	// (the mock turn is: failed run, Read, Edit, passing run).
 	await page.getByTestId("turn-stats").waitFor({ timeout: TURN_TIMEOUT_MS });
-	await page.getByTestId("tool-row").nth(2).locator("button").first().click();
+	await page.getByTestId("tool-row").nth(3).locator("button").first().click();
 	await page.getByTestId("test-output").waitFor();
 	// Scroll to the end of the turn so diff card + receipt are in frame.
 	await page.getByTestId("turn-stats").scrollIntoViewIfNeeded();
@@ -151,7 +152,7 @@ async function captureDisconnectResume(context, shot) {
 	await starter.keyboard.press("Enter");
 	// Mid-turn: first prose streamed — the moment before the tab is closed.
 	await starter
-		.getByText("Let me look at the failing test")
+		.getByText("Let me reproduce the failure first")
 		.waitFor({ timeout: TURN_TIMEOUT_MS });
 	await starter.waitForTimeout(300);
 	await starter.screenshot({ path: shot("resume-midturn") });

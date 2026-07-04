@@ -43,7 +43,10 @@ test.describe("signed out", () => {
 			.getByRole("button", { name: `continue as ${E2E_LOGIN} (test bypass)` })
 			.click();
 		await expect(page).toHaveURL("/");
-		await expect(page.getByText("Spaces")).toBeVisible();
+		// Scoped to the masthead: bare getByText("Spaces") is a case-insensitive
+		// substring match, so once sessions exist, rows for ".../workspaces"
+		// match it too (order-dependent flake).
+		await expect(page.getByRole("banner").getByText("Spaces")).toBeVisible();
 	});
 });
 
