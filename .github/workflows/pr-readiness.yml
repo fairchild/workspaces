@@ -16,6 +16,9 @@ jobs:
   readiness:
     if: "!github.event.pull_request.draft"
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write # sticky readiness-feedback comment
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
@@ -38,7 +41,42 @@ jobs:
       - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
 
       - name: Validate PR readiness
+        id: validate
+        env:
+          READINESS_COMMENT_PATH: ${{ runner.temp }}/readiness-comment.md
         run: uv run --script scripts/pr-readiness.py --event "$GITHUB_EVENT_PATH" --changed-files "$RUNNER_TEMP/changed-files.json"
+
+      # Surface the verdict on the PR itself: upsert one marker-keyed comment
+      # with the missing pieces + a paste-ready block on failure, and flip the
+      # same comment to "passed" once fixed. Never creates a comment on a PR
+      # that has always passed.
+      - name: Post readiness feedback on the PR
+        if: always() && steps.validate.outcome != 'skipped'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
+        env:
+          READINESS_COMMENT_PATH: ${{ runner.temp }}/readiness-comment.md
+          VALIDATE_OUTCOME: ${{ steps.validate.outcome }}
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- pr-readiness-gate -->';
+            const path = process.env.READINESS_COMMENT_PATH;
+            if (!fs.existsSync(path)) return;
+            const body = fs.readFileSync(path, 'utf8');
+            const failed = process.env.VALIDATE_OUTCOME === 'failure';
+            const { owner, repo } = context.repo;
+            const issue_number = context.payload.pull_request.number;
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number, per_page: 100,
+            });
+            const existing = comments.find((c) => c.body && c.body.includes(marker));
+            if (existing) {
+              if (existing.body !== body) {
+                await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+              }
+            } else if (failed) {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }
 
   release-change-validation:
     if: "!github.event.pull_request.draft"

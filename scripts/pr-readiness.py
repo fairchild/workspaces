@@ -18,6 +18,50 @@ from typing import Any
 
 
 DEFAULT_SURFACE = "desktop / web / agent-runtime / infra / docs"
+
+# Accepted spellings per required Mergeability field, canonical first. The
+# gate's job is to prove the readiness *questions* were answered, not to
+# enforce one label string — near-miss labels ("Residual risk:", "Scope:")
+# kept failing substantively-complete PRs, so each field accepts the
+# variants agents actually write.
+FIELD_LABELS: dict[str, tuple[str, ...]] = {
+    "Surface": ("Surface", "Scope"),
+    "User-facing behavior changed": (
+        "User-facing behavior changed",
+        "User-facing behavior change",
+        "User-facing behavior",
+        "User-facing changes",
+        "Behavior changed",
+    ),
+    "Non-happy paths considered": (
+        "Non-happy paths considered",
+        "Non-happy paths",
+        "Edge cases",
+        "Failure modes",
+        "Error paths",
+    ),
+    "Residual risk or follow-up": (
+        "Residual risk or follow-up",
+        "Residual risks",
+        "Residual risk",
+        "Follow-ups",
+        "Follow-up",
+        "Risks",
+        "Risk",
+    ),
+    "Release/ops preconditions": (
+        "Release/ops preconditions",
+        "Release preconditions",
+        "Ops preconditions",
+    ),
+}
+
+MERGEABILITY_TEMPLATE = """## Mergeability
+
+- Surface: <desktop / web / agent-runtime / infra / docs — plus what part>
+- User-facing behavior changed: <what changed, or "No">
+- Non-happy paths considered: <error paths / edge cases, or "n/a" with why>
+- Residual risk or follow-up: <what could still break or is deferred, or "None">"""
 DOC_EVIDENCE_EXEMPT_SUFFIXES = (".md", ".mdx", ".markdown", ".txt")
 DOC_EVIDENCE_EXEMPT_PREFIXES = ("docs/", "backlog/")
 RELEASE_PATHS = {
@@ -68,11 +112,19 @@ def extract_section(body: str, heading: str) -> str:
 
 
 def field_value(section: str, label: str) -> str | None:
-    pattern = re.compile(rf"(?im)^[ \t]*[-*][ \t]*{re.escape(label)}[ \t]*:[ \t]*(?P<value>.*)$")
-    match = pattern.search(section)
-    if not match:
-        return None
-    return match.group("value").strip()
+    """Value of a labeled line, tolerant of how the label is actually written.
+
+    Accepts any registered synonym for the field, an optional list bullet,
+    bold markers around the label, and ':' or '—' as the separator.
+    """
+    plain = section.replace("**", "")
+    for variant in FIELD_LABELS.get(label, (label,)):
+        pattern = re.compile(
+            rf"(?im)^[ \t]*(?:[-*][ \t]*)?{re.escape(variant)}[ \t]*[:—][ \t]*(?P<value>.*)$"
+        )
+        if match := pattern.search(plain):
+            return match.group("value").strip()
+    return None
 
 
 def is_blank_value(value: str | None, *, default: str | None = None) -> bool:
@@ -177,6 +229,46 @@ def evaluate(pr: dict[str, Any], files: list[str]) -> Result:
     return Result(failures, notices)
 
 
+COMMENT_MARKER = "<!-- pr-readiness-gate -->"
+
+EVIDENCE_HINT = (
+    "an uploaded evidence link (`evidence.cloudcompute.com`), an embedded image, "
+    'a test summary containing "N passed", or a checked `- [x] Not a testable change` box'
+)
+
+
+def comment_markdown(result: Result) -> str:
+    """The sticky PR comment: what failed, and exactly what to paste to fix it.
+
+    The gate's failures used to surface only in the Actions log, so every
+    author rediscovered the expected format by archaeology. This turns a
+    failure into a self-correcting loop — agents and humans both see the
+    missing pieces on the PR itself.
+    """
+    if result.ok:
+        return f"{COMMENT_MARKER}\n✅ **PR readiness gate passed.**\n"
+    lines = [COMMENT_MARKER, "⚠️ **PR readiness gate failed** — this PR body is missing readiness signals:", ""]
+    lines += [f"- {failure}" for failure in result.failures]
+    if any("Mergeability" in failure for failure in result.failures):
+        lines += [
+            "",
+            "Paste and fill this block (labels are matched tolerantly — common synonyms,",
+            "bold, and `—` separators are accepted; answers must not be blank/n-a-only):",
+            "",
+            "```markdown",
+            MERGEABILITY_TEMPLATE,
+            "```",
+        ]
+    if any("evidence signal" in failure for failure in result.failures):
+        lines += ["", f"Evidence is satisfied by {EVIDENCE_HINT}."]
+    lines += [
+        "",
+        "_Full template: `.github/pull_request_template.md` · gate: `scripts/pr-readiness.py` — "
+        "this comment updates automatically on the next push or body edit._",
+    ]
+    return "\n".join(lines) + "\n"
+
+
 def emit(result: Result) -> None:
     for notice in result.notices:
         print(f"::notice::{notice}" if os.environ.get("GITHUB_ACTIONS") else f"NOTICE: {notice}")
@@ -200,6 +292,10 @@ def emit(result: Result) -> None:
                     summary.write(f"- {failure}\n")
             for notice in result.notices:
                 summary.write(f"- Notice: {notice}\n")
+
+    # The workflow posts this as a sticky PR comment (see pr-readiness.yml).
+    if comment_path := os.environ.get("READINESS_COMMENT_PATH"):
+        Path(comment_path).write_text(comment_markdown(result), encoding="utf-8")
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
