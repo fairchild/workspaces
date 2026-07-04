@@ -1,0 +1,42 @@
+[
+  {
+    "number": 742,
+    "title": "Add TerminalRestorePlanner for cold-start restore",
+    "url": "https://github.com/fairchild/workspaces/pull/742",
+    "isDraft": false,
+    "reviewDecision": "",
+    "labels": [{ "name": "mergeable" }, { "name": "agent" }],
+    "updatedAt": "2026-07-02T18:00:00Z",
+    "author": { "login": "april-clearwater[bot]" }
+  },
+  {
+    "number": 738,
+    "title": "PR_REVIEWER_RERUNS_ENABLED rollout flag",
+    "url": "https://github.com/fairchild/workspaces/pull/738",
+    "isDraft": false,
+    "reviewDecision": "APPROVED",
+    "labels": [{ "name": "area: platform" }],
+    "updatedAt": "2026-07-01T12:00:00Z",
+    "author": { "login": "plat-ironwood[bot]" }
+  },
+  {
+    "number": 759,
+    "title": "WIP terminal split refactor",
+    "url": "https://github.com/fairchild/workspaces/pull/759",
+    "isDraft": false,
+    "reviewDecision": "CHANGES_REQUESTED",
+    "labels": [{ "name": "agent" }],
+    "updatedAt": "2026-06-30T09:00:00Z",
+    "author": { "login": "april-clearwater[bot]" }
+  },
+  {
+    "number": 760,
+    "title": "Draft: exploring notifications",
+    "url": "https://github.com/fairchild/workspaces/pull/760",
+    "isDraft": true,
+    "reviewDecision": "",
+    "labels": [],
+    "updatedAt": "2026-06-29T09:00:00Z",
+    "author": { "login": "fairchild" }
+  }
+]
