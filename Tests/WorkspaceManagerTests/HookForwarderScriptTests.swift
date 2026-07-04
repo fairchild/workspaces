@@ -57,6 +57,43 @@ struct HookForwarderScriptTests {
         return (process.terminationStatus, stdout, stderr)
     }
 
+    /// Run statusline.sh with no live host socket, controlling only the
+    /// fallback-relevant env vars so the built-in and delegate paths are
+    /// exercised deterministically regardless of the test host's environment.
+    private static func runStatuslineFallback(
+        stdin: Data,
+        fallback: String?
+    ) throws -> (status: Int32, stdout: String, stderr: String) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/bash")
+        process.arguments = [hookForwarder(named: "statusline.sh").path]
+        var environment = ProcessInfo.processInfo.environment
+        environment.removeValue(forKey: "WORKSPACES_HOOKS_SOCKET")
+        environment.removeValue(forKey: "WORKSPACES_HOST_SESSION_ID")
+        if let fallback {
+            environment["WORKSPACES_STATUSLINE_FALLBACK"] = fallback
+        } else {
+            environment.removeValue(forKey: "WORKSPACES_STATUSLINE_FALLBACK")
+        }
+        process.environment = environment
+
+        let input = Pipe()
+        let output = Pipe()
+        let error = Pipe()
+        process.standardInput = input
+        process.standardOutput = output
+        process.standardError = error
+
+        try process.run()
+        try input.fileHandleForWriting.write(contentsOf: stdin)
+        try input.fileHandleForWriting.close()
+        process.waitUntilExit()
+
+        let stdout = String(data: output.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        let stderr = String(data: error.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        return (process.terminationStatus, stdout, stderr)
+    }
+
     private static func runZshCommandStatusHook(
         socket: URL,
         hostSessionID: UUID
@@ -213,6 +250,46 @@ struct HookForwarderScriptTests {
         }
         #expect(reached)
         #expect(registry.statuses[hostSessionID]?.costUSD == 0.42)
+    }
+
+    @Test("statusline forwarder renders a built-in line when no host socket and no delegate")
+    func statusLineForwarderRendersBuiltInLineWithoutSocket() throws {
+        let payload: [String: Any] = [
+            "model": ["display_name": "Opus 4.8"],
+            "workspace": ["current_dir": "/tmp"],
+            "cost": ["total_cost_usd": 0.42],
+        ]
+        let result = try Self.runStatuslineFallback(
+            stdin: try JSONSerialization.data(withJSONObject: payload),
+            fallback: nil
+        )
+
+        #expect(result.status == 0)
+        #expect(result.stderr.isEmpty)
+        // The row is the built-in "model · … · dir" line, not the host's empty space.
+        #expect(result.stdout != " ")
+        #expect(result.stdout.contains("Opus 4.8"))
+        #expect(result.stdout.contains("tmp"))
+        #expect(result.stdout.contains("·"))
+    }
+
+    @Test("statusline forwarder delegates to WORKSPACES_STATUSLINE_FALLBACK when no host socket")
+    func statusLineForwarderDelegatesToFallbackWithoutSocket() throws {
+        let scriptURL = URL(fileURLWithPath: "/tmp/wm-fallback-\(UUID().uuidString.prefix(8)).sh")
+        // Echo a marker then the piped-through JSON so we assert both that the
+        // delegate ran and that it received the status body on stdin.
+        try "#!/bin/bash\nprintf 'DELEGATED:'\ncat\n".write(to: scriptURL, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
+        defer { try? FileManager.default.removeItem(at: scriptURL) }
+
+        let payload: [String: Any] = ["model": ["display_name": "Opus 4.8"]]
+        let body = try JSONSerialization.data(withJSONObject: payload)
+        let result = try Self.runStatuslineFallback(stdin: body, fallback: scriptURL.path)
+
+        #expect(result.status == 0)
+        #expect(result.stderr.isEmpty)
+        #expect(result.stdout.hasPrefix("DELEGATED:"))
+        #expect(result.stdout.contains("Opus 4.8"))
     }
 
     @Test("command-status zsh hook posts command markers with host-session header")

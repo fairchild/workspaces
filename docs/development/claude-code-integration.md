@@ -220,11 +220,25 @@ tilde-relative, unquoted shape. The installer overwrites any prior status-line
 command, so a stale bundle or `.build` path converges to the generic command on
 next launch.
 
-Claude Code runs it as `statusLine.command`. The script posts status JSON to
-`/statusline` and prints a single space so Claude's own status row stays visually
-empty. `StatusLinePayload` tolerates snake_case/camelCase keys and common ISO
-date variants. The listener maps the payload to `.statusFields(...)` and applies
-it through the same registry write surface.
+Claude Code runs it as `statusLine.command`, and the same script serves two
+worlds selected by whether a live host socket is present:
+
+- **Inside the WorkSpaces app** (`WORKSPACES_HOOKS_SOCKET` names a live socket):
+  post status JSON to `/statusline` and print a single space so Claude's own
+  status row stays visually empty — the host owns the footer. `StatusLinePayload`
+  tolerates snake_case/camelCase keys and common ISO date variants; the listener
+  maps the payload to `.statusFields(...)` through the same registry write
+  surface.
+- **Everywhere else** (plain terminal, another app — no host to render the
+  footer): the script renders a normal status line itself. It delegates to the
+  command named by `WORKSPACES_STATUSLINE_FALLBACK` (fed the same JSON on stdin),
+  and if that is unset or unusable, prints a built-in pure-bash
+  `model · branch · dir` line. This is why installing the forwarder no longer
+  blanks the status line outside the app; a user who kept their own renderer
+  points `WORKSPACES_STATUSLINE_FALLBACK` at it.
+
+Status-line ticks never change `AgentRunState`; they only update display fields
+such as model, cost, context used, and five-hour limit state.
 
 Status-line ticks never change `AgentRunState`; they only update display fields
 such as model, cost, context used, and five-hour limit state.
