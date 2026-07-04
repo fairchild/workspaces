@@ -29,6 +29,8 @@ Then continue through the issue lifecycle in `backlog/AGENTS.md`.
 
 Use lane + state labels: `agent`/`human` for ownership, `ready`/`claimed`/`review`/`mergeable` for lifecycle, and `needs-human` only for human intervention blockers. See `docs/agents/triage-labels.md`.
 
+**Author label (required on agent-authored PRs).** The GitHub account is shared across all agents, so a PR's author/assignee can't tell workstreams apart — and almost every PR here is agent-authored. When you open a PR, add exactly one `author:<agent>` label naming yourself (e.g. `author:claude-code`, `author:codex`, `author:april`, `author:fable-orchestrator`); `gh label create` it if it doesn't exist yet. Human-authored PRs carry none. This makes attribution filterable (`gh pr list --label author:<agent>`) since author is meaningless on a shared account. Slug rules + vocabulary: `docs/agents/triage-labels.md` § "Author Labels".
+
 ### Domain docs
 
 Single-context repo; use root docs plus `docs/decisions/` for architectural decisions. See `docs/agents/domain.md`.

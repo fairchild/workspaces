@@ -18,6 +18,19 @@ Do not create duplicate labels that combine these meanings. Prefer adding the ri
 
 The default for planned work is agent-driven. Peter-created execution issues should carry both `agent` and `task`.
 
+## Author Labels
+
+Every agent, human, and automation in this repo pushes under the **same GitHub account** (`fairchild`), so a PR's author and assignee tell you nothing about which agent produced it — and almost every PR is agent-authored. `author:<slug>` labels restore that attribution and make it filterable (`gh pr list --label author:<slug>`).
+
+Rules:
+
+- **Every agent-authored PR carries exactly one `author:<slug>` label** identifying its author, applied at PR creation. Human-authored PRs carry none.
+- **Slug = the agent's stable identity, lowercase kebab-case.** Use the persona when acting as one (`author:april`, `author:plat`, `author:carl`, `author:fable-orchestrator`); otherwise the harness (`author:claude-code`, `author:codex`). Keep it stable across sessions — it's a workstream identity, not a per-session id (session/thread ids belong in the claim comment's `claimer=<harness>:<stable-id>`, and the model belongs in the commit `Co-Authored-By` trailer).
+- **Create the label if it's new:** `gh label create "author:<slug>" --color BFD4F2 --description "PRs authored by the <slug> agent"`. Reuse an existing `author:*` label rather than minting a near-duplicate.
+- This is an **authorship** label — a distinct axis from lane/state/dimension/gate (none of those answer "which agent wrote this"). It is **not** a revival of the retired `agent:*` ownership labels (see § "Live Label Migration"): `author:claude-code` says who *wrote* a PR, orthogonal to the `agent`/`human` lane that says who *owns* the work. A PR can be `author:claude-code` while its issue sits in the `agent` lane.
+
+Not yet CI-enforced; it's the cheapest surface today. If drift shows up, a readiness check that requires one `author:*` label on non-human PRs is the natural next step.
+
 ## State Labels
 
 | Label | Meaning |
