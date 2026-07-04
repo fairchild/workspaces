@@ -105,15 +105,22 @@ test("status line dismisses to a dot and comes back", async ({ page }) => {
 	await expect(page.getByTestId("status-line")).toContainText("2.1k ctx");
 });
 
-test("focus cue and end-of-turn receipt are present", async ({ page }) => {
+test("turn frame focus cue and end-of-turn receipt are present", async ({
+	page,
+}) => {
 	await page.goto("/sessions/demo");
-	// The completed agent turn and the working turn carry the gutter tick.
-	await expect(page.locator("[data-focal]")).toHaveCount(2);
+	// Variation B: turns are discrete frames. The demo's two turns render as
+	// two frames; the most-recent one is lifted (the focus cue), older ones
+	// are quiet outlines — the frame carries presence, not a per-message tick.
+	await expect(page.locator("[data-turn]")).toHaveCount(2);
+	await expect(page.locator('[data-turn="recent"]')).toHaveCount(1);
 	await expect(page.getByTestId("turn-stats")).toHaveText(
 		"4 tools · 3.2k tokens · 18.6s",
 	);
-	// The in-progress turn shows the quiet activity line.
-	await expect(page.getByTestId("activity-line")).toContainText("Editing");
+	// The lifted frame is the live one: it holds the in-progress activity line.
+	await expect(
+		page.locator('[data-turn="recent"]').getByTestId("activity-line"),
+	).toContainText("Editing");
 });
 
 test("seeded transcript renders the requested message count", async ({
