@@ -38,3 +38,31 @@ AUTH_BYPASS=1 ALLOWED_LOGINS=<your-github-login> pnpm dev
 
 Then use the "continue as … (test bypass)" button on `/sign-in`. The database
 defaults to `file:.data/sessions.db` (gitignored); no other env is needed.
+
+## Real-runtime credentials (#750+)
+
+The auth/DB vars above run the app and its mock provider. The **real** agent
+runtime (`@ai-sdk/harness` → Claude Code in a Vercel sandbox) needs three more
+things, in three places. Copy `.env.local.example` → `.env.local` on the Mac; put
+the same secrets in the Claude Code cloud-dev environment and the Vercel project.
+
+| Variable | Mac (`.env.local`) | Cloud dev | Vercel prod | Source |
+|---|---|---|---|---|
+| `ANTHROPIC_API_KEY` **or** `AI_GATEWAY_API_KEY` | ✓ | ✓ | ✓ | Anthropic console / AI Gateway (gateway preferred: spend cap, one key for Claude/Codex/Pi) |
+| `VERCEL_TOKEN` / `VERCEL_TEAM_ID` / `VERCEL_PROJECT_ID` | ✓ | ✓ | — (Vercel injects OIDC on-platform) | vercel.com/account/tokens, project settings |
+| `GITHUB_WEB_WORKSPACES_APP_ID` + `GITHUB_APP_PRIVATE_KEY` | ✓ | ✓ | ✓ | existing GitHub App — mints short-lived, repo-scoped installation tokens for the sandbox clone |
+
+Notes:
+
+- **Local review needs none of these** — only `AUTH_BYPASS=1` + `ALLOWED_LOGINS`.
+  These are exclusively for making a real agent turn run.
+- **Vercel production doesn't need the `VERCEL_*` tokens**: running *on* Vercel,
+  the Sandbox authenticates via the auto-injected `VERCEL_OIDC_TOKEN`. Those
+  tokens are only needed *off*-Vercel (the Mac and cloud-dev).
+- **Repo clone reuses the existing GitHub App** (installation tokens) rather than
+  a personal token — scoped and short-lived. The App id + private key are the
+  same credentials the `web/` managed PR reviewer already uses.
+- **OAuth app callback:** whichever OAuth app backs production login, its callback
+  list must include `<BETTER_AUTH_URL>/api/auth/callback/github`.
+- Exact runtime var names are finalized when #750 lands; this is the canonical set
+  to provision against.

@@ -110,11 +110,57 @@ The tracker lags the code; treat the plan as living.
 
 - **Single-user.** No multi-tenant authorization matrix, no onboarding polish, no
   data migration. Auth is OAuth + a login allowlist.
-- **Mock-first.** Prove the Folio surface streams correctly against the mock
-  provider before wiring real compute; swap providers behind the same
-  `StreamChunk → UIMessage` adapter.
+- **Harness runtime, behind our own interface.** The session runtime is
+  `@ai-sdk/harness` (Claude Code / Codex / Pi), wrapped by a thin app-owned
+  `SessionRuntime` interface so the experimental API never leaks app-wide — see
+  `docs/decisions/web-next-harness-runtime.md`. The harness owns stream→UIMessage
+  projection, sandbox + CLI auth, and multi-runtime dispatch; we own persistence,
+  reconnect policy, and the terminal. **Exact-pin** every `@ai-sdk/harness*` and
+  `@ai-sdk/sandbox-*` version; upgrade deliberately. Spike it (T0.5) before
+  building UI on it. Because a real runtime is now as easy as a mock, stream a
+  **real** provider from the first slice — do not build a long mock phase.
+- **Reconnect (v1).** Between-turn durability + server-side long-turn continuation
+  are in scope; **mid-turn live tail is deferred** — a turn keeps running
+  server-side and we re-attach or replay the completed transcript on reconnect.
 - **Don't disturb the old app.** `web/` keeps serving webhooks and the managed PR
   reviewer until the final cutover issue; nothing before it touches that path.
+
+## Authoritative ticket order
+
+This list supersedes any ordering elsewhere. Serial; one at a time.
+
+1. **#744 · T0** — CI + evidence + performance harness.
+2. **T0.5 (new)** — Harness runtime spike: real Claude Code turn via
+   `@ai-sdk/harness` + `@ai-sdk/sandbox-vercel` → `toUIMessageStream` → `useChat`,
+   auth working in-sandbox, exact-pinned, behind the `SessionRuntime` interface.
+   De-risks the experimental dependency before any UI is built on it.
+3. **#745 · T1** — Folio design system as React components.
+4. **#746 · T2** — Chat persistence: stored UIMessages + `resumeFrom` blob per
+   session (harness owns the projection; we own the store + read-back).
+5. **#747 · T3** — Auth + sessions home + new-session flow, incl. a **runtime
+   picker** (Claude Code / Codex / Pi).
+6. **#748 · T4** — A **real Claude Code** turn streams into the live Folio
+   transcript (not mock).
+7. **#749 · T5** — Durability: between-turn resume + long-turn slicing via the
+   harness workflow utilities; v1 reconnect = re-attach/replay.
+8. **#750 · T6** — Multi-runtime: add the **Codex** and **Pi** adapters behind the
+   interface + picker.
+9. **#752 · T8** — Terminal drawer: ttyd on a sandbox port (shared-sandbox
+   pattern) + ghostty-web.
+10. **#753 · T9** — Lifecycle controls + error states + mobile.
+11. **#754 · T10** — Cutover.
+
+**#751 · T7 (Managed Agents) is closed** — not a harness, out of web-next scope.
+
+## Quality-gate review
+
+Because the runtime rides an experimental API, the quality gate is not
+self-attestation alone: for every PR touching the runtime/backend seam (the spike,
+persistence, durability, multi-runtime, terminal), run the `/code-review` pass via
+a **separate reviewer subagent on a stronger model (Opus)** before merging, and
+treat any harness API surprise (a rename, a missing capability, a behavior that
+contradicts the docs) as an escalation-worthy architectural signal, not a
+work-around to bury.
 
 ## Tooling
 
