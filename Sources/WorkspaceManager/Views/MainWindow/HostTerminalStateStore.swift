@@ -226,9 +226,15 @@ final class HostTerminalStateStore: ObservableObject {
     func activateSession(
         key: HostTerminalSessionKey,
         directory: URL,
-        customCommand: String? = nil
+        customCommand: String? = nil,
+        initialCommand: String? = nil
     ) -> HostTerminalSessionActivationResult {
-        let result = coordinator.activate(key: key, directory: directory, customCommand: customCommand)
+        let result = coordinator.activate(
+            key: key,
+            directory: directory,
+            customCommand: customCommand,
+            initialCommand: initialCommand
+        )
         publishSnapshot()
         return result
     }

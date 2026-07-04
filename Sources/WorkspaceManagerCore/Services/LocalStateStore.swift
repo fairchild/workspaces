@@ -169,13 +169,26 @@ public struct LocalStateStoreSummary: Codable, Equatable, Sendable {
 }
 
 public actor LocalStateStore {
-    public static let schemaVersion = 1
+    public static let schemaVersion = 2
     public let databaseURL: URL
+
+    /// Identity of this app run. One store instance == one process == one run, so
+    /// every terminal session recorded through it is stamped with this run, and
+    /// cold-start restore can offer only the single most recent *prior* run
+    /// (issue #783 #2) instead of every never-cleanly-closed session ever.
+    private let runID: String
+    private let runStartedAt: String
 
     private let dbPool: DatabasePool
 
-    public init(databaseURL: URL) throws {
+    public init(
+        databaseURL: URL,
+        runID: UUID = UUID(),
+        runStartedAt: Date = Date()
+    ) throws {
         self.databaseURL = databaseURL
+        self.runID = runID.uuidString
+        self.runStartedAt = Self.isoString(runStartedAt)
 
         var configuration = Configuration()
         configuration.label = "WorkSpaces local state"
@@ -202,6 +215,8 @@ public actor LocalStateStore {
         let customCommandPresent = session.customCommand == nil ? 0 : 1
         let activeValue = isActive ? 1 : 0
         let tmuxSessionName = Self.tmuxSessionName(for: session.directoryURL, terminalMode: terminalMode)
+        let runID = self.runID
+        let runStartedAt = self.runStartedAt
 
         try await dbPool.write { db in
             try db.execute(
@@ -222,9 +237,11 @@ public actor LocalStateStore {
                         is_active,
                         created_at,
                         last_seen_at,
+                        run_id,
+                        run_started_at,
                         ended_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
                     ON CONFLICT(host_session_id) DO UPDATE SET
                         session_key = excluded.session_key,
                         target_kind = excluded.target_kind,
@@ -239,6 +256,8 @@ public actor LocalStateStore {
                         hooks_socket_path = excluded.hooks_socket_path,
                         is_active = excluded.is_active,
                         last_seen_at = excluded.last_seen_at,
+                        run_id = excluded.run_id,
+                        run_started_at = excluded.run_started_at,
                         ended_at = NULL
                     """,
                 arguments: [
@@ -257,6 +276,8 @@ public actor LocalStateStore {
                     activeValue,
                     now,
                     now,
+                    runID,
+                    runStartedAt,
                 ])
         }
     }
@@ -336,12 +357,16 @@ public actor LocalStateStore {
         let originFields = Self.originFields(origin)
         let runState = Self.runStateName(status.run)
 
+        let runID = self.runID
+        let runStartedAt = self.runStartedAt
         try await dbPool.write { db in
             try Self.ensureTerminalSessionRow(
                 db,
                 hostSessionID: hostSessionID,
                 cwd: status.cwd,
-                now: now
+                now: now,
+                runID: runID,
+                runStartedAt: runStartedAt
             )
 
             for event in events {
@@ -404,7 +429,9 @@ public actor LocalStateStore {
         _ db: Database,
         hostSessionID: UUID,
         cwd: String,
-        now: String
+        now: String,
+        runID: String,
+        runStartedAt: String
     ) throws {
         try db.execute(
             sql: """
@@ -424,9 +451,11 @@ public actor LocalStateStore {
                     is_active,
                     created_at,
                     last_seen_at,
+                    run_id,
+                    run_started_at,
                     ended_at
                 )
-                VALUES (?, ?, 'host_path', NULL, ?, NULL, NULL, ?, 'unknown', NULL, 0, NULL, 0, ?, ?, NULL)
+                VALUES (?, ?, 'host_path', NULL, ?, NULL, NULL, ?, 'unknown', NULL, 0, NULL, 0, ?, ?, ?, ?, NULL)
                 ON CONFLICT(host_session_id) DO NOTHING
                 """,
             arguments: [
@@ -436,6 +465,8 @@ public actor LocalStateStore {
                 cwd,
                 now,
                 now,
+                runID,
+                runStartedAt,
             ])
     }
 
@@ -528,6 +559,76 @@ public actor LocalStateStore {
                     LIMIT ? OFFSET ?
                     """,
                 arguments: [activeOnlyValue, cappedLimit, cappedOffset]
+            )
+            return rows.compactMap(TerminalSessionContinuityRow.init(row:))
+        }
+    }
+
+    /// Cold-start restore read model (issue #783 #2): the active continuity rows
+    /// belonging to the single most-recent *prior* app run — the run whose
+    /// `run_started_at` is the greatest value strictly less than this store
+    /// instance's run. Rows from older never-cleanly-closed runs and from the
+    /// current run are excluded, so restore offers only the user's previous
+    /// session set instead of an all-time backlog of stale "active" rows. Returns
+    /// `[]` on first launch and for pre-v2 rows (NULL `run_id`).
+    public func fetchPreviousRunSessions(limit: Int = 100) async throws -> [TerminalSessionContinuityRow] {
+        let cappedLimit = max(0, limit)
+        let currentRunStartedAt = runStartedAt
+        return try await dbPool.read { db -> [TerminalSessionContinuityRow] in
+            let rows = try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT
+                        ts.host_session_id,
+                        ts.session_key,
+                        ts.target_kind,
+                        ts.target_id,
+                        ts.target_path,
+                        ts.backend_identifier,
+                        ts.backend_instance_id,
+                        ts.directory_path,
+                        ts.terminal_mode,
+                        ts.tmux_session_name,
+                        ts.custom_command_present,
+                        ts.is_active,
+                        ts.created_at,
+                        ts.last_seen_at,
+                        ts.ended_at,
+                        ae.agent_session_id,
+                        ae.agent_kind,
+                        ae.run_state AS agent_run_state,
+                        ae.cwd AS agent_cwd,
+                        ae.model_display_name AS agent_model_display_name,
+                        ae.event_at AS agent_event_at
+                    FROM terminal_sessions ts
+                    LEFT JOIN (
+                        SELECT
+                            host_session_id,
+                            agent_session_id,
+                            agent_kind,
+                            run_state,
+                            cwd,
+                            model_display_name,
+                            event_at,
+                            ROW_NUMBER() OVER (
+                                PARTITION BY host_session_id
+                                ORDER BY event_at DESC, id DESC
+                            ) AS event_rank
+                        FROM agent_status_events
+                    ) ae ON ae.host_session_id = ts.host_session_id AND ae.event_rank = 1
+                    WHERE ts.run_id = (
+                        SELECT run_id
+                        FROM terminal_sessions
+                        WHERE run_started_at IS NOT NULL AND run_started_at < ?
+                        ORDER BY run_started_at DESC
+                        LIMIT 1
+                    )
+                    AND ts.is_active = 1
+                    AND ts.ended_at IS NULL
+                    ORDER BY ts.last_seen_at DESC
+                    LIMIT ?
+                    """,
+                arguments: [currentRunStartedAt, cappedLimit]
             )
             return rows.compactMap(TerminalSessionContinuityRow.init(row:))
         }
@@ -830,6 +931,20 @@ public actor LocalStateStore {
 
                     CREATE INDEX IF NOT EXISTS idx_diagnostic_exports_created
                         ON diagnostic_exports(created_at DESC);
+                    """)
+        }
+        migrator.registerMigration("v2") { db in
+            // App-run epoch (issue #783 #2): stamp each session with the run that
+            // recorded it so cold-start restore can offer only the previous run,
+            // not every never-cleanly-closed session. Additive; pre-v2 rows keep
+            // NULL and are excluded from previous-run restore.
+            try db.execute(
+                sql: """
+                    ALTER TABLE terminal_sessions ADD COLUMN run_id TEXT;
+                    ALTER TABLE terminal_sessions ADD COLUMN run_started_at TEXT;
+
+                    CREATE INDEX IF NOT EXISTS idx_terminal_sessions_run
+                        ON terminal_sessions(run_started_at DESC);
                     """)
         }
         return migrator

@@ -106,8 +106,13 @@ public struct HostTerminalSession: Identifiable, Hashable, Sendable {
     public let key: HostTerminalSessionKey
     public let directoryPath: String
     /// Custom shell command override (e.g. SSH to remote sandbox). When set, the terminal
-    /// launches this command instead of the user's default shell.
+    /// launches this command instead of the user's default shell, on a fixed PATH.
     public let customCommand: String?
+    /// Agent command to run as this directory-backed surface's initial process (e.g.
+    /// `claude --resume <id>` for cold-start restore). Unlike `customCommand`, it runs
+    /// through the login-shell/tmux path (correct PATH, hook env) and does not mark the
+    /// session remote. `nil` for a plain shell.
+    public let initialCommand: String?
 
     public var directoryURL: URL {
         URL(fileURLWithPath: directoryPath)
@@ -117,11 +122,18 @@ public struct HostTerminalSession: Identifiable, Hashable, Sendable {
         customCommand != nil
     }
 
-    public init(id: UUID = UUID(), key: HostTerminalSessionKey, directory: URL, customCommand: String? = nil) {
+    public init(
+        id: UUID = UUID(),
+        key: HostTerminalSessionKey,
+        directory: URL,
+        customCommand: String? = nil,
+        initialCommand: String? = nil
+    ) {
         self.id = id
         self.key = key.normalized()
         self.directoryPath = Self.normalize(directory).path
         self.customCommand = customCommand
+        self.initialCommand = initialCommand
     }
 
     static func normalize(_ url: URL) -> URL {
@@ -203,7 +215,8 @@ public struct HostTerminalSessionCoordinator: Sendable {
     public mutating func activate(
         key: HostTerminalSessionKey,
         directory: URL,
-        customCommand: String? = nil
+        customCommand: String? = nil,
+        initialCommand: String? = nil
     ) -> HostTerminalSessionActivationResult {
         let normalizedDirectory = HostTerminalSession.normalize(directory)
         let normalizedPath = normalizedDirectory.path
@@ -231,7 +244,8 @@ public struct HostTerminalSessionCoordinator: Sendable {
         let session = HostTerminalSession(
             key: normalizedKey,
             directory: normalizedDirectory,
-            customCommand: customCommand
+            customCommand: customCommand,
+            initialCommand: initialCommand
         )
         sessions.append(session)
         setActiveSessionID(session.id)
