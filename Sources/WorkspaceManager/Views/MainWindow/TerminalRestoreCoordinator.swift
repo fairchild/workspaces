@@ -44,7 +44,7 @@ struct TerminalRestoreCoordinator: Sendable {
     /// liveness, and produce a fully-decided plan. Store read failures degrade to
     /// an empty plan rather than throwing.
     func makePlan(index: RestoreTargetIndex) async -> RestorePlan {
-        let rows = (try? await localStateStore.fetchContinuitySessions(activeOnly: true, limit: 100)) ?? []
+        let rows = (try? await localStateStore.fetchPreviousRunSessions(limit: 100)) ?? []
         let layout = (try? await localStateStore.fetchLatestLayoutSnapshot()) ?? nil
 
         let liveNames = await probeLiveTmuxSessions(Set(rows.compactMap(\.tmuxSessionName)))

@@ -271,6 +271,8 @@ struct WorkspaceManagerApp: App {
             CommandGroup(after: .help) {
                 KeyboardShortcutsMenuItem()
 
+                SessionHistoryMenuItem()
+
                 Button("Send Feedback...") {
                     appCommandState.perform(.sendFeedback)
                 }
@@ -288,6 +290,10 @@ struct WorkspaceManagerApp: App {
             KeyboardShortcutsView()
         }
         .windowResizability(.contentSize)
+
+        Window("Session History", id: SessionHistoryView.windowID) {
+            SessionHistoryView(store: localStateStore)
+        }
 
         Settings {
             SettingsView(softwareUpdateController: softwareUpdateController)
@@ -311,6 +317,17 @@ private struct KeyboardShortcutsMenuItem: View {
     var body: some View {
         Button("Keyboard Shortcuts") {
             openWindow(id: KeyboardShortcutsView.windowID)
+        }
+    }
+}
+
+/// Help-menu entry that opens the session history browser window.
+private struct SessionHistoryMenuItem: View {
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Button("Session History") {
+            openWindow(id: SessionHistoryView.windowID)
         }
     }
 }

@@ -52,7 +52,8 @@ struct GhosttyTerminalConfig {
                 isTmuxAvailableOverride: isTmuxAvailableOverride,
                 hostSessionID: launchContext.hostSessionID,
                 hooksSocketPath: launchContext.hooksSocketPath,
-                automationEnvironment: launchContext.automationEnvironment
+                automationEnvironment: launchContext.automationEnvironment,
+                initialCommand: launchContext.initialCommand
             )
         }
     }
@@ -65,7 +66,8 @@ struct GhosttyTerminalConfig {
         isTmuxAvailableOverride: Bool? = nil,
         hostSessionID: UUID? = nil,
         hooksSocketPath: String? = nil,
-        automationEnvironment: AutomationTerminalEnvironment? = nil
+        automationEnvironment: AutomationTerminalEnvironment? = nil,
+        initialCommand: String? = nil
     ) {
         self.fontSize = fontSize
         self.workingDirectory = workingDirectory.path
@@ -118,8 +120,20 @@ struct GhosttyTerminalConfig {
             let tmuxSessionName = Self.tmuxSessionName(for: workingDirectory)
             let quotedSession = Self.singleQuoted(tmuxSessionName)
             let quotedWorkingDirectory = Self.singleQuoted(workingDirectory.path)
-            let tmuxScript = "exec tmux -L workspaces new-session -A -s \(quotedSession) -c \(quotedWorkingDirectory)"
+            var tmuxScript =
+                "exec tmux -L workspaces new-session -A -s \(quotedSession) -c \(quotedWorkingDirectory)"
+            if let initialCommand {
+                // Trailing shell-command → the tmux session's initial process. The whole
+                // tmux invocation runs under the login shell, so the session inherits the
+                // login PATH and `claude` resolves; `-A` ignores it on a later reattach.
+                tmuxScript += " \(Self.singleQuoted(initialCommand))"
+            }
             self.command = Self.shellInvocation(shell: shell, profileMode: shellProfileMode, command: tmuxScript)
+        } else if let initialCommand {
+            // No tmux: run the agent in the login shell, cd'd into the directory, so PATH
+            // and profile match a normal terminal and the surface exits when the agent does.
+            let cdExec = "cd \(Self.singleQuoted(workingDirectory.path)) && exec \(initialCommand)"
+            self.command = Self.shellInvocation(shell: shell, profileMode: shellProfileMode, command: cdExec)
         } else {
             self.command = Self.shellInvocation(shell: shell, profileMode: shellProfileMode)
         }

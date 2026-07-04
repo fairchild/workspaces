@@ -21,7 +21,7 @@
 PRAGMA foreign_keys = ON;
 PRAGMA journal_mode = WAL;
 PRAGMA synchronous = NORMAL;
-PRAGMA user_version = 1;
+PRAGMA user_version = 2;
 
 BEGIN;
 
@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS local_state_metadata (
 ) STRICT;
 
 INSERT INTO local_state_metadata (key, value, updated_at)
-VALUES ('schema_version', '1', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+VALUES ('schema_version', '2', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 ON CONFLICT(key) DO UPDATE SET
     value = excluded.value,
     updated_at = excluded.updated_at;
@@ -71,13 +71,21 @@ CREATE TABLE IF NOT EXISTS terminal_sessions (
         CHECK (is_active IN (0, 1)),
     created_at TEXT NOT NULL,
     last_seen_at TEXT NOT NULL,
-    ended_at TEXT
+    ended_at TEXT,
+    -- App-run epoch (issue #783 #2): the process run that recorded this row, and
+    -- when that run started. Cold-start restore offers only the single most
+    -- recent prior run, so crash/reboot rows do not accumulate as "active"
+    -- forever. NULL for rows written before schema v2 (added by ALTER TABLE).
+    run_id TEXT,
+    run_started_at TEXT
 ) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_terminal_sessions_target
     ON terminal_sessions(target_kind, target_id, target_path);
 CREATE INDEX IF NOT EXISTS idx_terminal_sessions_last_seen
     ON terminal_sessions(last_seen_at DESC);
+CREATE INDEX IF NOT EXISTS idx_terminal_sessions_run
+    ON terminal_sessions(run_started_at DESC);
 
 -- Point-in-time layout snapshots for the terminal surface. This table is ready
 -- for UI restore and diagnostics even before every layout-producing call site

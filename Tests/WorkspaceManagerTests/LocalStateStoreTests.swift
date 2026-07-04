@@ -52,7 +52,7 @@ struct LocalStateStoreTests {
         )
 
         let summary = try await store.summary()
-        #expect(summary.schemaVersion == 1)
+        #expect(summary.schemaVersion == 2)
         #expect(summary.tableCounts["terminal_sessions"] == 1)
         #expect(summary.tableCounts["agent_status_events"] == 1)
         #expect(summary.tableCounts["diagnostic_events"] == 1)
@@ -362,6 +362,104 @@ struct LocalStateStoreTests {
             )
         }
         #expect(tableCount == 7)
+
+        // Schema doc must carry the v2 run-epoch columns (issue #783 #2) so a DB
+        // built from docs/schema.sql matches a migrated store.
+        let runColumns = try await dbQueue.read {
+            try Int.fetchOne(
+                $0,
+                sql: """
+                    SELECT COUNT(*) FROM pragma_table_info('terminal_sessions')
+                    WHERE name IN ('run_id', 'run_started_at')
+                    """
+            )
+        }
+        #expect(runColumns == 2)
+    }
+
+    @Test("fetchPreviousRunSessions returns only the immediately-prior run's active sessions")
+    func previousRunSessionsBoundToPriorRun() async throws {
+        let fixture = try TemporaryDirectory()
+        defer { fixture.cleanup() }
+        let db = fixture.url.appendingPathComponent("state.sqlite")
+
+        let run1 = try LocalStateStore(
+            databaseURL: db, runID: UUID(), runStartedAt: Date(timeIntervalSince1970: 1_700_000_000))
+        let staleID = UUID()
+        try await run1.recordTerminalSession(
+            HostTerminalSession(id: staleID, key: .repoPath("/code/old"), directory: URL(fileURLWithPath: "/code/old")),
+            terminalMode: "tmux_per_session", isActive: true, hooksSocketPath: nil)
+
+        let run2 = try LocalStateStore(
+            databaseURL: db, runID: UUID(), runStartedAt: Date(timeIntervalSince1970: 1_700_100_000))
+        let prevID = UUID()
+        try await run2.recordTerminalSession(
+            HostTerminalSession(
+                id: prevID, key: .repoPath("/code/prev"), directory: URL(fileURLWithPath: "/code/prev")),
+            terminalMode: "tmux_per_session", isActive: true, hooksSocketPath: nil)
+
+        let current = try LocalStateStore(
+            databaseURL: db, runID: UUID(), runStartedAt: Date(timeIntervalSince1970: 1_700_200_000))
+
+        let rows = try await current.fetchPreviousRunSessions(limit: 100)
+        #expect(rows.map(\.hostSessionID) == [prevID])
+
+        // The old broad query still sees BOTH stale runs — the bug being fixed.
+        let broad = try await current.fetchContinuitySessions(activeOnly: true, limit: 100)
+        #expect(Set(broad.map(\.hostSessionID)) == [staleID, prevID])
+    }
+
+    @Test("fetchPreviousRunSessions excludes ended prior-run rows and current-run rows")
+    func previousRunExcludesEndedAndCurrent() async throws {
+        let fixture = try TemporaryDirectory()
+        defer { fixture.cleanup() }
+        let db = fixture.url.appendingPathComponent("state.sqlite")
+
+        let prev = try LocalStateStore(
+            databaseURL: db, runID: UUID(), runStartedAt: Date(timeIntervalSince1970: 1_700_000_000))
+        let keptID = UUID()
+        let endedID = UUID()
+        for (id, path) in [(keptID, "/code/kept"), (endedID, "/code/ended")] {
+            try await prev.recordTerminalSession(
+                HostTerminalSession(id: id, key: .repoPath(path), directory: URL(fileURLWithPath: path)),
+                terminalMode: "tmux_per_session", isActive: true, hooksSocketPath: nil)
+        }
+        try await prev.markTerminalSessionEnded(hostSessionID: endedID)
+
+        let current = try LocalStateStore(
+            databaseURL: db, runID: UUID(), runStartedAt: Date(timeIntervalSince1970: 1_700_100_000))
+        try await current.recordTerminalSession(
+            HostTerminalSession(id: UUID(), key: .repoPath("/code/now"), directory: URL(fileURLWithPath: "/code/now")),
+            terminalMode: "tmux_per_session", isActive: true, hooksSocketPath: nil)
+
+        let rows = try await current.fetchPreviousRunSessions()
+        #expect(rows.map(\.hostSessionID) == [keptID])
+    }
+
+    @Test("fetchPreviousRunSessions is empty with no prior run and ignores pre-v2 rows")
+    func previousRunEmptyWhenNoPriorRun() async throws {
+        let fixture = try TemporaryDirectory()
+        defer { fixture.cleanup() }
+        let db = fixture.url.appendingPathComponent("state.sqlite")
+
+        let current = try LocalStateStore(
+            databaseURL: db, runID: UUID(), runStartedAt: Date(timeIntervalSince1970: 1_700_100_000))
+        #expect(try await current.fetchPreviousRunSessions().isEmpty)  // first launch
+
+        // Simulate a row written by schema v1 (run_id / run_started_at NULL).
+        let dbQueue = try DatabaseQueue(path: db.path)
+        try await dbQueue.write {
+            try $0.execute(
+                sql: """
+                    INSERT INTO terminal_sessions
+                      (host_session_id, session_key, target_kind, target_path, directory_path,
+                       terminal_mode, is_active, created_at, last_seen_at)
+                    VALUES (?, 'legacy', 'host_path', '/code/legacy', '/code/legacy',
+                       'tmux_per_session', 1, '2020-01-01T00:00:00.000Z', '2020-01-01T00:00:00.000Z')
+                    """,
+                arguments: [UUID().uuidString])
+        }
+        #expect(try await current.fetchPreviousRunSessions().isEmpty)  // NULL run excluded
     }
 
     private func repoRoot() -> URL {
