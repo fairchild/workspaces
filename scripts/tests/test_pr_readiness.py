@@ -133,5 +133,76 @@ class PRReadinessTests(unittest.TestCase):
         self.assertTrue(result.notices)
 
 
+class TolerantFieldMatchingTests(unittest.TestCase):
+    """Near-miss labels kept failing substantively-complete PRs (2026-07-04:
+    #781 wrote "Residual risk:", #779 wrote prose). The gate now accepts the
+    label variants agents actually write; only truly missing answers fail."""
+
+    def test_residual_risk_synonym_passes(self) -> None:
+        # PR #781's exact shape: "Residual risk:" instead of the canonical label.
+        body = GOOD_BODY.replace(
+            "- Residual risk or follow-up: none",
+            "- Residual risk: links now resolve under archive/ (intended)",
+        )
+        result = pr_readiness.evaluate(pr(body), ["Sources/WorkspaceManager/Foo.swift"])
+        self.assertEqual(result.failures, [])
+
+    def test_scope_synonym_for_surface_passes(self) -> None:
+        body = GOOD_BODY.replace("- Surface: desktop", "- Scope: desktop terminal wrapper")
+        result = pr_readiness.evaluate(pr(body), ["Sources/WorkspaceManager/Foo.swift"])
+        self.assertEqual(result.failures, [])
+
+    def test_bold_label_without_bullet_passes(self) -> None:
+        body = GOOD_BODY.replace("- Surface: desktop", "**Surface**: desktop")
+        result = pr_readiness.evaluate(pr(body), ["Sources/WorkspaceManager/Foo.swift"])
+        self.assertEqual(result.failures, [])
+
+    def test_em_dash_separator_passes(self) -> None:
+        body = GOOD_BODY.replace("- Surface: desktop", "- Surface — desktop")
+        result = pr_readiness.evaluate(pr(body), ["Sources/WorkspaceManager/Foo.swift"])
+        self.assertEqual(result.failures, [])
+
+    def test_unlabeled_prose_section_still_fails(self) -> None:
+        # PR #779's shape: a Mergeability section with no labeled answers.
+        # The gate asks four specific questions; prose that never labels them
+        # is indistinguishable from not answering, so it still fails.
+        body = GOOD_BODY.replace(
+            """- Surface: desktop
+- User-facing behavior changed: none; refactor only
+- Non-happy paths considered: nil userdata and zero address behavior covered
+- Release/ops preconditions: not applicable
+- Residual risk or follow-up: none""",
+            "Scoped to three files; no schema, API, or dependency changes.",
+        )
+        result = pr_readiness.evaluate(pr(body), ["Sources/WorkspaceManager/Foo.swift"])
+        self.assertTrue(any("Mergeability field" in failure for failure in result.failures))
+
+
+class ReadinessCommentTests(unittest.TestCase):
+    def test_failure_comment_names_failures_and_pastes_template(self) -> None:
+        body = GOOD_BODY.replace("- Residual risk or follow-up: none", "")
+        result = pr_readiness.evaluate(pr(body), ["Sources/WorkspaceManager/Foo.swift"])
+        comment = pr_readiness.comment_markdown(result)
+        self.assertIn(pr_readiness.COMMENT_MARKER, comment)
+        self.assertIn("Residual risk or follow-up", comment)
+        self.assertIn("```markdown", comment)
+        self.assertIn("## Mergeability", comment)
+
+    def test_evidence_failure_comment_lists_accepted_signals(self) -> None:
+        body = GOOD_BODY.replace(
+            "- ![tests](https://evidence.cloudcompute.com/workspaces/pr-1/tests.svg)", "-"
+        )
+        result = pr_readiness.evaluate(pr(body), ["Sources/WorkspaceManager/Foo.swift"])
+        comment = pr_readiness.comment_markdown(result)
+        self.assertIn("N passed", comment)
+        self.assertIn("Not a testable change", comment)
+
+    def test_pass_comment_is_a_single_resolved_line(self) -> None:
+        result = pr_readiness.evaluate(pr(GOOD_BODY), ["Sources/WorkspaceManager/Foo.swift"])
+        comment = pr_readiness.comment_markdown(result)
+        self.assertIn("passed", comment)
+        self.assertNotIn("```", comment)
+
+
 if __name__ == "__main__":
     unittest.main()
