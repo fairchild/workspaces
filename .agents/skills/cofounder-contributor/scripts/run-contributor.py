@@ -274,6 +274,14 @@ EXECUTION_TOOLS = "Read,Grep,Glob,Edit,Write,MultiEdit"
 PRIVILEGED_PATCH_LABEL = "privileged-agent-patch"
 PRIVILEGED_PATCH_ENV = "AGENT_ALLOW_PRIVILEGED_PATCHES"
 
+# Pin the Claude Code CLI to an exact version so a compromised `@latest` release
+# can't run in the contributor job (where GH_TOKEN is still in the environment).
+# Bump via the CONTRIBUTOR_CLAUDE_CODE_VERSION env/repo-var — no code change needed.
+CLAUDE_CODE_VERSION = os.environ.get(
+    "CONTRIBUTOR_CLAUDE_CODE_VERSION", "2.1.200"
+).strip() or "2.1.200"
+CLAUDE_CODE_PACKAGE = f"@anthropic-ai/claude-code@{CLAUDE_CODE_VERSION}"
+
 SENSITIVE_PATH_PREFIXES = (
     ".github/",
     ".agents/",
@@ -705,7 +713,7 @@ def run_claude(
     cmd = [
         "npx",
         "--yes",
-        "@anthropic-ai/claude-code",
+        CLAUDE_CODE_PACKAGE,
         "--print",
         "--system-prompt",
         prompt_text,

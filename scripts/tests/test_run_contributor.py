@@ -583,5 +583,15 @@ class RepoMemoryInjectionTests(unittest.TestCase):
                 self.assertEqual(run_contributor.load_repo_memory(), "")
 
 
+class ClaudeCodePinTests(unittest.TestCase):
+    def test_cli_package_is_version_pinned(self) -> None:
+        # The contributor fetches the CLI with GH_TOKEN in the environment, so it
+        # must never resolve `@latest`. Guard against a regression to an unpinned spec.
+        package = run_contributor.CLAUDE_CODE_PACKAGE
+        self.assertTrue(package.startswith("@anthropic-ai/claude-code@"))
+        version = package.rsplit("@", 1)[1]
+        self.assertRegex(version, r"^\d+\.\d+\.\d+")
+
+
 if __name__ == "__main__":
     unittest.main()
