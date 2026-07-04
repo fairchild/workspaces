@@ -39,9 +39,20 @@ app-owned `SessionRuntime` interface**, with **exact-pinned** versions.
   terminal, and `@ai-sdk/tui` is a Node dev renderer, not a browser PTY); the
   Folio UI; auth + allowlist.
 
-The custom Phase 0 `StreamChunk → UIMessage` adapter is retired from the critical
-path (kept only as a reference for adapting any future non-harness stream).
 Managed Agents leaves web-next scope (it is not a harness).
+
+**Reconciled with the shipped T0–T5 code (2026-07-03).** The app already exposes a
+`ComputeProvider` seam — `{ id, runTurn(): AsyncIterable<StreamChunk> }` — with a
+detached-ingest → `session_events` → tail pipeline that already delivers durable,
+resumable turns. So the harness enters as an **additive `ComputeProvider`** whose
+`runTurn` drives a `HarnessAgent` and maps the harness stream back to `StreamChunk`
+— no pipeline rework, and no separate `SessionRuntime` abstraction: the shipped
+`ComputeProvider` seam *is* the thin interface this ADR called for, and
+`StreamChunk` stays the internal currency. The one genuinely new piece is
+persisting the harness `resumeFrom` per session for multi-turn continuity (the
+harness owns native history and does not replay it). This makes adoption
+lower-risk than the original framing — the experimental API is contained to one
+provider file behind an interface the app already ships.
 
 ### v1 scope decision — reconnect
 
