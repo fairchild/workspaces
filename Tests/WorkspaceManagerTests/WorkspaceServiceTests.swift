@@ -353,6 +353,44 @@ struct WorkspaceServiceTests {
         #expect(mockGit.createWorktreeCalls[0].source == repoDir)
     }
 
+    @Test("sequential race fan-out keeps earlier workspaces when a later one fails")
+    func sequentialRaceFanOutFailFast() async throws {
+        let materializer = RecordingWorkspaceMaterializer()
+        materializer.createsDestination = true
+        let service = WorkspaceService(materializer: materializer)
+        let (testRoot, repoDir, wsRoot) = try makeWorkspaceFixture()
+        defer { try? FileManager.default.removeItem(at: testRoot) }
+        let originalRoot = setWorkspacesRoot(wsRoot)
+        defer { restoreWorkspacesRoot(originalRoot) }
+
+        let plan = RaceGroupPlanner.plan(prompt: "demo race", count: 3, command: "claude")
+        var created: [URL] = []
+        var failedName: String?
+        for (index, name) in plan.workspaceNames.enumerated() {
+            if index == 2 {
+                materializer.materializeError = GitError.commandFailed(args: ["worktree", "add"], stderr: "boom")
+            }
+            do {
+                let info = try await service.createWorkspace(repoName: "test-repo", repoLocalURL: repoDir, name: name)
+                created.append(info.path)
+            } catch {
+                failedName = name
+                break
+            }
+        }
+
+        #expect(failedName == "race-demo-race-3")
+        #expect(created.count == 2)
+        for workspaceURL in created {
+            #expect(FileManager.default.fileExists(atPath: workspaceURL.path))
+        }
+        let failedDir =
+            wsRoot
+            .appendingPathComponent("test-repo", isDirectory: true)
+            .appendingPathComponent("race-demo-race-3", isDirectory: true)
+        #expect(!FileManager.default.fileExists(atPath: failedDir.path))
+    }
+
     @Test("createWorkspace fails clearly when materialization fails")
     func createWorkspaceFailsWhenMaterializationFails() async throws {
         let materializer = RecordingWorkspaceMaterializer()
