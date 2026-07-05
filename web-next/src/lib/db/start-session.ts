@@ -18,9 +18,18 @@ export function isValidRepoFullName(value: string): boolean {
 }
 
 /**
+ * Which compute provider new sessions run on. Defaults to the mock; set
+ * `WEB_NEXT_COMPUTE_PROVIDER=vercel` to route new sessions to the real
+ * harness-backed sandbox runtime.
+ */
+export function defaultComputeProvider(): string {
+	return process.env.WEB_NEXT_COMPUTE_PROVIDER ?? "mock";
+}
+
+/**
  * Creates (or reuses) the repo and starts an empty session on it.
- * Title stays empty until a first turn names it; provider is the mock
- * until #748 wires real compute.
+ * Title stays empty until a first turn names it; the provider comes from
+ * `defaultComputeProvider()` (mock unless configured otherwise).
  */
 export async function startSession(
 	handle: DatabaseHandle,
@@ -34,6 +43,6 @@ export async function startSession(
 	return createSession(handle, {
 		id: crypto.randomUUID(),
 		repoId: repo.id,
-		provider: "mock",
+		provider: defaultComputeProvider(),
 	});
 }

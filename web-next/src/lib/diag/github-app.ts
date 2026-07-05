@@ -86,6 +86,24 @@ export async function getInstallationToken(
 	};
 }
 
+/**
+ * End-to-end: read the App id + key from the environment, discover the repo's
+ * installation, and mint a short-lived installation token. The credential the
+ * real runtime hands a sandbox to clone, push, and open PRs against `repo`.
+ */
+export async function mintInstallationToken(repo: string): Promise<InstallationToken> {
+	const appId = process.env.GITHUB_WEB_WORKSPACES_APP_ID;
+	const privateKey = process.env.GITHUB_APP_PRIVATE_KEY;
+	if (!appId || !privateKey) {
+		throw new Error(
+			"GITHUB_WEB_WORKSPACES_APP_ID and GITHUB_APP_PRIVATE_KEY are required to mint an installation token",
+		);
+	}
+	const jwt = generateAppJWT(appId, privateKey);
+	const installationId = await findInstallationId(jwt, repo);
+	return getInstallationToken(jwt, installationId);
+}
+
 /** Prove the token can read the repo — i.e. it can clone it. */
 export async function verifyRepoAccess(
 	token: string,

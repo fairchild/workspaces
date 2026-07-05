@@ -8,9 +8,18 @@ importers:
 
   .:
     dependencies:
+      '@ai-sdk/harness':
+        specifier: 1.0.18
+        version: 1.0.18(ws@8.21.0)(zod@4.4.3)
+      '@ai-sdk/harness-claude-code':
+        specifier: 1.0.18
+        version: 1.0.18(zod@4.4.3)
       '@ai-sdk/react':
         specifier: ^4.0.15
         version: 4.0.15(react@19.2.7)(zod@4.4.3)
+      '@ai-sdk/sandbox-vercel':
+        specifier: 1.0.18
+        version: 1.0.18(ws@8.21.0)(zod@4.4.3)
       '@libsql/client':
         specifier: ^0.17.4
         version: 0.17.4
@@ -41,6 +50,9 @@ importers:
       react-dom:
         specifier: ^19.0.0
         version: 19.2.7(react@19.2.7)
+      ws:
+        specifier: ^8.21.0
+        version: 8.21.0
       zod:
         specifier: ^4.4.3
         version: 4.4.3
@@ -90,6 +102,28 @@ packages:
     peerDependencies:
       zod: ^3.25.76 || ^4.1.8
 
+  '@ai-sdk/gateway@4.0.12':
+    resolution: {integrity: sha512-Y7Fy8xJwPz7ZC0DhSQG3HIVk+drup42hrIj6yqKlib3CxwiR0F7nYyUI8+kPrEtbZEoyKoRstvT4/o0HEyFBHA==}
+    engines: {node: '>=22'}
+    peerDependencies:
+      zod: ^3.25.76 || ^4.1.8
+
+  '@ai-sdk/harness-claude-code@1.0.18':
+    resolution: {integrity: sha512-XJ2yHiLYRl6oB7wPGWUf8Q3Tcg/1WNKSumO5MQtosdbvwqjbENtMsIWqpPGegWgsfiP8VrmHX+SQ8gy0MgnrGA==}
+    engines: {node: '>=22'}
+    peerDependencies:
+      zod: ^3.25.76 || ^4.1.8
+
+  '@ai-sdk/harness@1.0.18':
+    resolution: {integrity: sha512-zJCufxLWZAg8Nmucive5CT6wb4OAELycrwbF1FviRM7M+NSHSqU56HgAhMMcSVPvles0ZzkIsYomqiZ6e0PQYQ==}
+    engines: {node: '>=22'}
+    peerDependencies:
+      ws: ^8.21.0
+      zod: ^3.25.76 || ^4.1.8
+    peerDependenciesMeta:
+      ws:
+        optional: true
+
   '@ai-sdk/mcp@2.0.7':
     resolution: {integrity: sha512-DX1v5M/R4RD2yi1KSH2ERLKcb6h2qJF0DKt0PGTTpNJNK+meXMmouwSRZS8Y+JocbyHk7U9p6PgqVmKU/e5XhQ==}
     engines: {node: '>=22'}
@@ -111,6 +145,10 @@ packages:
     engines: {node: '>=22'}
     peerDependencies:
       react: ^18 || ~19.0.1 || ~19.1.2 || ^19.2.1
+
+  '@ai-sdk/sandbox-vercel@1.0.18':
+    resolution: {integrity: sha512-g854+zmgjH2UDCHgl6LrIuOHVn+5mt1e+nqRkMH5EGIjHSV2ClUNCmwrnoJ3y/9fHCtokBBKs9SqMEBFho9U9w==}
+    engines: {node: '>=22'}
 
   '@alloc/quick-lru@5.2.0':
     resolution: {integrity: sha512-UrcABB+4bUrFABwbluTIBErXwvbsU/V7TZWfmbgJfbkwiBuziS9gxdODUyuiecfdGQ85jglMW6juS3+z5TsKLw==}
@@ -1291,6 +1329,12 @@ packages:
 
   ai@7.0.14:
     resolution: {integrity: sha512-qA82fZyD4xh9IDB+s3SvwbjwjR+GGRmJjTYMwON1uROj8vPDIQbPTZLLq6ZWTVESn9daeH1GMv0zKfVLwNU2sQ==}
+    engines: {node: '>=22'}
+    peerDependencies:
+      zod: ^3.25.76 || ^4.1.8
+
+  ai@7.0.15:
+    resolution: {integrity: sha512-7406MUy9O5sIhwOgxEWuoj+td3XUGgG96SBt6pmBU4t4sQ2fpnDx5UnHaXT2HUTXl5GorbWz/MfCrSPRz0QJqw==}
     engines: {node: '>=22'}
     peerDependencies:
       zod: ^3.25.76 || ^4.1.8
@@ -2843,6 +2887,32 @@ snapshots:
       '@vercel/oidc': 3.2.0
       zod: 4.4.3
 
+  '@ai-sdk/gateway@4.0.12(zod@4.4.3)':
+    dependencies:
+      '@ai-sdk/provider': 4.0.2
+      '@ai-sdk/provider-utils': 5.0.5(zod@4.4.3)
+      '@vercel/oidc': 3.2.0
+      zod: 4.4.3
+
+  '@ai-sdk/harness-claude-code@1.0.18(zod@4.4.3)':
+    dependencies:
+      '@ai-sdk/harness': 1.0.18(ws@8.21.0)(zod@4.4.3)
+      '@ai-sdk/provider-utils': 5.0.5(zod@4.4.3)
+      ws: 8.21.0
+      zod: 4.4.3
+    transitivePeerDependencies:
+      - bufferutil
+      - utf-8-validate
+
+  '@ai-sdk/harness@1.0.18(ws@8.21.0)(zod@4.4.3)':
+    dependencies:
+      '@ai-sdk/provider': 4.0.2
+      '@ai-sdk/provider-utils': 5.0.5(zod@4.4.3)
+      ai: 7.0.15(zod@4.4.3)
+      zod: 4.4.3
+    optionalDependencies:
+      ws: 8.21.0
+
   '@ai-sdk/mcp@2.0.7(zod@4.4.3)':
     dependencies:
       '@ai-sdk/provider': 4.0.2
@@ -2872,6 +2942,17 @@ snapshots:
       swr: 2.4.2(react@19.2.7)
       throttleit: 2.1.0
     transitivePeerDependencies:
+      - zod
+
+  '@ai-sdk/sandbox-vercel@1.0.18(ws@8.21.0)(zod@4.4.3)':
+    dependencies:
+      '@ai-sdk/harness': 1.0.18(ws@8.21.0)(zod@4.4.3)
+      '@ai-sdk/provider-utils': 5.0.5(zod@4.4.3)
+      '@vercel/sandbox': 2.4.0
+    transitivePeerDependencies:
+      - bare-abort-controller
+      - react-native-b4a
+      - ws
       - zod
 
   '@alloc/quick-lru@5.2.0': {}
@@ -3831,6 +3912,13 @@ snapshots:
   ai@7.0.14(zod@4.4.3):
     dependencies:
       '@ai-sdk/gateway': 4.0.11(zod@4.4.3)
+      '@ai-sdk/provider': 4.0.2
+      '@ai-sdk/provider-utils': 5.0.5(zod@4.4.3)
+      zod: 4.4.3
+
+  ai@7.0.15(zod@4.4.3):
+    dependencies:
+      '@ai-sdk/gateway': 4.0.12(zod@4.4.3)
       '@ai-sdk/provider': 4.0.2
       '@ai-sdk/provider-utils': 5.0.5(zod@4.4.3)
       zod: 4.4.3

@@ -7,6 +7,7 @@
  */
 import { mockProvider } from "./mock-provider";
 import type { StreamChunk } from "./stream-chunk";
+import { vercelProvider } from "./vercel-provider";
 
 export interface TurnRequest {
 	sessionId: string;
@@ -22,6 +23,7 @@ export interface ComputeProvider {
 
 const providers: Record<string, ComputeProvider> = {
 	[mockProvider.id]: mockProvider,
+	[vercelProvider.id]: vercelProvider,
 };
 
 export function getProvider(id: string): ComputeProvider {
