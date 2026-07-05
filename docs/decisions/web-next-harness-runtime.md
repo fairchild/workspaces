@@ -19,9 +19,13 @@ four PRs). Mid-plan, Vercel shipped **`@ai-sdk/harness`** — an official,
 `ai@7`-native abstraction that provides exactly this layer, multi-runtime, with
 sandbox auth handled. Verified 2026-07-03: the packages are real
 (`@ai-sdk/harness`, `-claude-code`, `-codex`, `-pi`, `@ai-sdk/sandbox-vercel`),
-pin `ai@7.0.14`, and forward host `ANTHROPIC_API_KEY`/gateway credentials into the
-sandbox bridge for us. They are also explicitly **experimental** — ~4 weeks old,
-tens of releases per month, a `1.0` label that overstates stability.
+carry a pinned `ai` dependency, and forward host `ANTHROPIC_API_KEY`/gateway
+credentials into the sandbox bridge for us. The pinned `ai` version tracks the
+harness release train and moves with it — as of `@ai-sdk/harness@1.0.18` it is
+`ai@7.0.15` (a direct dependency, so installing the harness bumps the app's `ai`
+to match; reconcile the repo's pin rather than fight the transitive dep). They are
+also explicitly **experimental** — ~4 weeks old, tens of releases per month, a
+`1.0` label that overstates stability.
 
 ## Decision
 
