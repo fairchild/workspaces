@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>web-next — how it works</title>
+<style>
+  /* Folio-adjacent: paper + ink, serif prose, mono apparatus. Self-contained. */
+  :root {
+    --paper: #f7f4ed; --raised: #fdfbf6; --ink: #26221a; --muted: #7a7261;
+    --line: #e7e1d2; --line-strong: #dcd3bf; --accent: #a15c31;
+    --live: #6e9c72; --code-bg: rgba(38, 34, 26, 0.05); --next: #b08a3e;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #161410; --raised: #211e18; --ink: #eae4d6; --muted: #a79e8c;
+      --line: rgba(234,222,196,.1); --line-strong: rgba(234,222,196,.2);
+      --accent: #d89a62; --live: #93bd82; --code-bg: rgba(234,222,196,.08);
+      --next: #cfa75a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--paper); color: var(--ink);
+    font: 17px/1.7 "Iowan Old Style", Georgia, serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  main { max-width: 760px; margin: 0 auto; padding: 56px 24px 96px; }
+  h1 { font-size: 28px; font-style: italic; font-weight: 500; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 40px; font-size: 15px; }
+  h2 {
+    font-size: 13px; letter-spacing: .12em; text-transform: uppercase;
+    color: var(--muted); font-family: ui-monospace, "SF Mono", monospace;
+    font-weight: 500; margin: 52px 0 16px; padding-top: 20px;
+    border-top: 1px solid var(--line);
+  }
+  p { margin: 0 0 14px; }
+  code {
+    font: 13px ui-monospace, "SF Mono", monospace; background: var(--code-bg);
+    padding: 1px 5px 2px; border-radius: 4px;
+  }
+  /* Layer diagram */
+  .stack { display: flex; flex-direction: column; gap: 0; margin: 24px 0; }
+  .layer {
+    background: var(--raised); border: 1px solid var(--line-strong);
+    border-radius: 10px; padding: 14px 18px; position: relative;
+  }
+  .layer + .layer { margin-top: 26px; }
+  .layer + .layer::before {
+    content: "▼"; position: absolute; top: -22px; left: 40px;
+    color: var(--muted); font-size: 11px;
+  }
+  .layer .name { font-weight: 600; }
+  .layer .role {
+    font: 12.5px ui-monospace, monospace; color: var(--muted); margin-top: 2px;
+  }
+  .tag {
+    float: right; font: 10.5px ui-monospace, monospace; letter-spacing: .08em;
+    padding: 2px 8px; border-radius: 99px; border: 1px solid var(--line-strong);
+  }
+  .tag.live { color: var(--live); border-color: var(--live); }
+  .tag.next { color: var(--next); border-color: var(--next); }
+  .aside {
+    border-left: 2px solid var(--line-strong); padding: 2px 0 2px 16px;
+    color: var(--muted); font-size: 15.5px; margin: 18px 0;
+  }
+  table { border-collapse: collapse; width: 100%; margin: 18px 0; font-size: 14.5px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font: 11px ui-monospace, monospace; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); font-weight: 500; }
+  td:first-child { font-family: ui-monospace, monospace; font-size: 13px; white-space: nowrap; }
+  ol { padding-left: 22px; } li { margin-bottom: 8px; }
+  .ok { color: var(--live); } .warn { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <h1>web-next — how it works</h1>
+  <p class="sub">The sessions-first web app: where each piece runs, what the sandbox is, and which credential lives where.</p>
+
+  <h2>The stack</h2>
+  <div class="stack">
+    <div class="layer">
+      <span class="tag live">live</span>
+      <div class="name">Browser — the Folio transcript</div>
+      <div class="role">useChat renders streamed message parts: prose, thinking block, tool ledger, diff cards, receipt</div>
+    </div>
+    <div class="layer">
+      <span class="tag live">live</span>
+      <div class="name">Next.js on Vercel — the orchestrator</div>
+      <div class="role">auth (GitHub OAuth + allowlist) · starts turns · relays the stream · never runs agent code, has no shell</div>
+    </div>
+    <div class="layer">
+      <span class="tag live">live</span>
+      <div class="name">Turso — the durable event log</div>
+      <div class="role">session_events, append-only, keyed (session_id, seq) — the transcript's source of truth and resume cursor</div>
+    </div>
+    <div class="layer">
+      <span class="tag next">next · #750</span>
+      <div class="name">Vercel Sandbox — the agent's computer</div>
+      <div class="role">isolated microVM per session · repo cloned inside · Claude Code CLI runs here · Bash/Edit/Read execute on this VM</div>
+    </div>
+    <div class="layer">
+      <span class="tag live">live</span>
+      <div class="name">AI Gateway → Anthropic</div>
+      <div class="role">all model calls, one key, spend cap · verified end-to-end via /api/diag/gateway</div>
+    </div>
+  </div>
+  <p class="aside">Today the mock provider stands in for the sandbox layer — a scripted coding turn that exercises the entire pipeline above and below it. #750 swaps the real sandbox in behind the same seam; nothing else changes.</p>
+
+  <h2>Anatomy of a turn</h2>
+  <ol>
+    <li>You send a message. The chat route checks the allowlist, appends your message to <code>session_events</code>, and asks the session's <code>ComputeProvider</code> for a turn.</li>
+    <li>The provider yields <code>StreamChunk</code>s — text, reasoning, tool_use, tool_result, status, done. A detached ingest writes each one to <code>session_events</code> <em>independently of your connection</em>.</li>
+    <li>Your browser is just a reader of that log: chunks are adapted into AI SDK message parts and streamed to useChat.</li>
+    <li>Close the tab mid-turn and nothing stops — the turn keeps writing server-side. Reopen, and the page replays the log from your last sequence number and catches up live. Exactly-once, in order.</li>
+  </ol>
+
+  <h2>The sandbox (what #750 adds)</h2>
+  <p>When a real turn starts, the runtime gets a <strong>Vercel Sandbox</strong> — a fresh, isolated microVM — clones the repo into it with a <strong>one-hour, repo-scoped GitHub App installation token</strong>, and runs the <strong>Claude Code CLI</strong> inside via <code>@ai-sdk/harness</code>. Every tool call you see in the ledger executes on that VM's filesystem against the clone — never on the serverless layer, never on your machine.</p>
+  <p>The sandbox <em>persists across the turns of a session</em> (a stored resume handle), so turn two doesn't re-clone or re-provision — retiring the old app's snapshot-per-turn cost. Blast radius if a turn goes wrong: one disposable VM holding one short-lived, single-repo token.</p>
+
+  <h2>Credentials — which store holds what, and why</h2>
+  <table>
+    <tr><th>Variable</th><th>Vercel production</th><th>Claude cloud-dev env</th><th>Why</th></tr>
+    <tr><td>GITHUB_OAUTH_CLIENT_ID / SECRET</td><td class="ok">✓</td><td>—</td><td>Human sign-in; only the deployed app authenticates users.</td></tr>
+    <tr><td>BETTER_AUTH_SECRET / URL, ALLOWED_LOGINS</td><td class="ok">✓</td><td>—</td><td>Session signing + the allowlist gate. Dev uses the auth bypass instead.</td></tr>
+    <tr><td>SESSIONS_DATABASE_URL / AUTH_TOKEN</td><td class="ok">✓</td><td>—</td><td>Turso. Dev defaults to a local SQLite file.</td></tr>
+    <tr><td>AI_GATEWAY_API_KEY</td><td class="ok">✓</td><td class="ok">✓</td><td>Model calls happen wherever turns run — production and the #750 builder both need it.</td></tr>
+    <tr><td>GITHUB_WEB_WORKSPACES_APP_ID / GITHUB_APP_PRIVATE_KEY</td><td class="ok">✓</td><td class="ok">✓</td><td>Mints the sandbox's short-lived repo clone tokens (the <code>workspace-agents</code> App — not the sign-in OAuth app, which would hand the sandbox a broad, long-lived user token).</td></tr>
+    <tr><td>VERCEL_TOKEN (+ TEAM_ID, PROJECT_ID)</td><td class="warn">✗ — not here</td><td class="ok">✓ only here</td><td>Creating sandboxes <em>on</em> Vercel uses the platform's auto-injected, short-lived <code>VERCEL_OIDC_TOKEN</code> — a static account token in prod is risk with no function. <em>Off</em>-Vercel (the cloud-dev builder, a Mac) has no OIDC, so it needs the personal token.</td></tr>
+  </table>
+  <p class="aside">The rule underneath the table: hold a static credential only where the platform can't vouch for the caller — and prefer the shortest-lived, narrowest token available at every layer (OIDC on-platform, one-hour installation tokens in the sandbox, gateway key with a spend cap for models).</p>
+
+  <h2>Where this is documented in depth</h2>
+  <p><code>CONTRIBUTING.md</code> (local dev, credential minting) · <code>docs/deploy.md</code> (the env matrix) · <code>docs/design.md</code> (the Folio design position) · <code>docs/decisions/web-next-harness-runtime.md</code> at the repo root (the runtime ADR) · issue #750 (the sandbox runtime build).</p>
+</main>
+</body>
+</html>
