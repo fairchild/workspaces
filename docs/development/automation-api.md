@@ -54,8 +54,10 @@ not terminal input or output.
   `hostSessionID`.
 - Capabilities are enforced before each scoped operation.
 - Mutation routes are stable product verbs, not raw `TileTreeAction` exposure.
-- Browser mutation, input injection, resize/equalize, and global control are
-  out of V1.
+- Browser mutation, resize/equalize, and global control are out of V1.
+- Input injection is caller-scoped only and double-gated behind the
+  `Automation Input Write` experiment; see
+  [Automation Input Write Decision](../decisions/automation-input-write.md).
 
 ## Envelope
 
@@ -87,6 +89,7 @@ Scoped routes require `x-workspaces-automation-handle`:
 | `POST /v1/tile/focus` | Focuses `left`, `right`, `up`, `down`, `next`, or `previous` relative to the caller tile. |
 | `POST /v1/tile/split` | Splits `left`, `right`, `up`, or `down` from a primary tile. Each successful split creates a new terminal surface in the caller's tab. Secondary split-tile callers return `unsupported` in V1. |
 | `POST /v1/tile/close` | Requests close for the caller tile through the normal close-confirmation path. |
+| `POST /v1/input/write` | Experimental. Writes `text` into the caller's own PTY; `submit: true` appends a carriage return. Body is `{"text": "...", "submit": false}`, at most 32 KiB UTF-8 of text. Requires the `input.write` capability, granted only while the Automation Input Write experiment is on. |
 
 Mutation bodies must be projections over the supported operation, not raw tile
 state. For example:
@@ -111,6 +114,7 @@ handle.
 | `tile.focus` | `POST /v1/tile/focus` |
 | `tile.split` | `POST /v1/tile/split` |
 | `tile.close` | `POST /v1/tile/close` |
+| `input.write` | `POST /v1/input/write` (experimental; granted per-handle only while the Automation Input Write experiment is enabled, and re-checked per request) |
 
 Under-capable handles fail with `capability_denied`.
 
@@ -150,6 +154,8 @@ workspaces tile split --right
 workspaces tile split --up
 workspaces tile split --down
 workspaces tile close
+workspaces input write 'echo hi'
+workspaces input write 'echo hi' --submit
 ```
 
 ## Implementation Map
@@ -184,6 +190,8 @@ If docs or public examples changed, also run the docs checks listed in
 ## V1 Non-Goals
 
 V1 does not support browser mutation, opening web URLs, tab title or metadata
-changes, input injection, resize/equalize, or global cross-workspace control.
-Those capabilities require separate product and safety review before they can
-be added.
+changes, writing into other tiles, resize/equalize, or global cross-workspace
+control. Those capabilities require separate product and safety review before
+they can be added. Caller-scoped input injection is the one reviewed
+exception: it ships as the experimental, double-gated `input.write` capability
+(see [Automation Input Write Decision](../decisions/automation-input-write.md)).

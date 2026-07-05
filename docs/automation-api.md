@@ -125,6 +125,30 @@ workspaces tile close
 The request is scoped to the caller. There is no V1 command for closing an
 arbitrary tile by ID.
 
+## Write Into The Current Tile (Experimental)
+
+Input write is double-gated: enable both the Automation API experiment and the
+separate Automation Input Write experiment, then restart WorkSpaces and open a
+fresh terminal tile. For development launches:
+
+```bash
+WORKSPACES_AUTOMATION_API=1 WORKSPACES_AUTOMATION_INPUT_WRITE=1 ./scripts/launch-dev.sh --no-build
+```
+
+The command writes text into the caller's own PTY — the tile the script is
+running in. There is no way to write into another tile.
+
+```bash
+workspaces input write 'echo hello-from-automation'            # type without executing
+workspaces input write 'echo hello-from-automation' --submit   # type and press Enter
+```
+
+`--submit` appends a single carriage return (what Enter sends to a PTY). Text
+is limited to 32 KiB UTF-8 per request. Requests from handles created while
+the experiment was off, or after it is turned off, fail with
+`capability_denied` — restart WorkSpaces and open a fresh tile after toggling
+it. The audit log records the route and outcome, never the written text.
+
 ## Shell Alias Ideas
 
 These examples are intentionally small. They stay inside the V1 scope and do
@@ -172,8 +196,8 @@ from a live WorkSpaces terminal tile.
 `automation request failed: unsupported`
 
 The request is outside V1. Common examples are splitting from a secondary split
-tile or asking for capabilities such as browser mutation, input injection,
-resize/equalize, or global cross-workspace control.
+tile or asking for capabilities such as browser mutation, resize/equalize, or
+global cross-workspace control.
 
 ## V1 Boundaries
 
@@ -184,6 +208,9 @@ V1 is intentionally narrow:
 - focus a neighboring tile
 - split from a primary tile
 - close the caller tile through normal app behavior
+- write into the caller's own PTY (experimental, double-gated — see
+  [Automation Input Write Decision](./decisions/automation-input-write.md))
 
-V1 does not support browser mutation, opening URLs, tab metadata changes, input
-injection, resize/equalize, or global control across workspaces.
+V1 does not support browser mutation, opening URLs, tab metadata changes,
+writing into other tiles, resize/equalize, or global control across
+workspaces.

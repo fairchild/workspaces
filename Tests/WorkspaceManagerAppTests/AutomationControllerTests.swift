@@ -162,6 +162,46 @@ struct AutomationControllerTests {
         }
     }
 
+    @Test("Input write requires the input.write capability")
+    func inputWriteRequiresCapability() throws {
+        let fixture = makeFixture()
+
+        do {
+            _ = try fixture.controller.automationWriteInput(
+                for: fixture.primaryHandle,
+                text: "echo hi",
+                submit: false
+            )
+            Issue.record("Expected default v1 handle to lack input.write")
+        } catch let error as AutomationServiceError {
+            #expect(error.response.code == .capabilityDenied)
+        }
+    }
+
+    @Test("Input write fails closed when the experiment is disabled after grant")
+    func inputWriteFailsClosedWhenExperimentDisabled() throws {
+        let harness = makeInputWriteHarness(isInputWriteEnabled: false)
+
+        do {
+            _ = try harness.controller.automationWriteInput(for: "granted", text: "echo hi", submit: false)
+            Issue.record("Expected disabled experiment to deny granted handle")
+        } catch let error as AutomationServiceError {
+            #expect(error.response.code == .capabilityDenied)
+        }
+    }
+
+    @Test("Input write without a live surface view reports stale handle")
+    func inputWriteWithoutLiveSurfaceIsStale() throws {
+        let harness = makeInputWriteHarness(isInputWriteEnabled: true)
+
+        do {
+            _ = try harness.controller.automationWriteInput(for: "granted", text: "echo hi", submit: true)
+            Issue.record("Expected missing surface view to read as stale")
+        } catch let error as AutomationServiceError {
+            #expect(error.response.code == .staleHandle)
+        }
+    }
+
     @Test("Close routes through existing close request path")
     func closeRoutesThroughExistingClosePath() throws {
         let fixture = makeFixture()
@@ -215,5 +255,38 @@ struct AutomationControllerTests {
 
     private func makeFixture() -> Fixture {
         Fixture()
+    }
+
+    private struct InputWriteHarness {
+        let store: HostTerminalStateStore
+        let controller: AutomationController
+    }
+
+    /// Builds a controller whose "granted" handle carries `input.write`, with the experiment
+    /// gate injected so tests exercise both sides without touching global defaults.
+    private func makeInputWriteHarness(isInputWriteEnabled: Bool) -> InputWriteHarness {
+        let store = HostTerminalStateStore()
+        let primary =
+            store.activateSession(
+                key: .repoPath("/Users/test/repo"),
+                directory: URL(fileURLWithPath: "/Users/test/repo")
+            ).session
+        let registry = AutomationHandleRegistry(makeHandle: { "granted" })
+        _ = registry.upsert(
+            hostSessionID: primary.id,
+            tileID: nil,
+            surfaceKind: .terminal,
+            windowScopeID: "window",
+            appScopeID: "app",
+            capabilities: AutomationAPI.inputWriteCapabilities
+        )
+        let controller = AutomationController(
+            handleRegistry: registry,
+            hostTerminalState: store,
+            focusTerminal: { _ in },
+            requestCloseTerminal: { _ in },
+            isInputWriteEnabled: { isInputWriteEnabled }
+        )
+        return InputWriteHarness(store: store, controller: controller)
     }
 }

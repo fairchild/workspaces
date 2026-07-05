@@ -31,6 +31,17 @@ enum GhosttySurfaceTextInputBridge {
         }
     }
 
+    /// Automation write path: delivers text straight to the live libghostty surface, bypassing the
+    /// `keyTextAccumulator` IME diversion that keyboard-driven inserts honor. Returns false when the
+    /// view has no live surface to receive the bytes.
+    static func writeAutomationText(into view: GhosttySurfaceView, text: String) -> Bool {
+        guard let surface = view.surface else { return false }
+        text.withCString { pointer in
+            ghostty_surface_text(surface, pointer, UInt(text.utf8.count))
+        }
+        return true
+    }
+
     static func doCommand(in view: GhosttySurfaceView, selector: Selector) {
         if let lastPerformKeyEvent = view.lastPerformKeyEvent,
             let currentEvent = NSApp.currentEvent,

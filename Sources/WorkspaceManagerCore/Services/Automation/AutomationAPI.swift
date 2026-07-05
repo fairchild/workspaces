@@ -13,6 +13,12 @@ public enum AutomationAPI {
         .tileSplit,
         .tileClose,
     ]
+
+    /// V1 capabilities plus the experimental caller-scoped `input.write` grant.
+    /// Kept separate from `v1Capabilities` so default handles never widen.
+    public static let inputWriteCapabilities = v1Capabilities + [AutomationCapability.inputWrite]
+
+    public static let inputWriteMaxUTF8Bytes = 32_768
 }
 
 public enum AutomationCapability: String, Codable, Sendable, CaseIterable, Equatable {
@@ -21,6 +27,7 @@ public enum AutomationCapability: String, Codable, Sendable, CaseIterable, Equat
     case tileFocus = "tile.focus"
     case tileSplit = "tile.split"
     case tileClose = "tile.close"
+    case inputWrite = "input.write"
 }
 
 public enum AutomationSurfaceKind: String, Codable, Sendable, Equatable {
@@ -172,6 +179,35 @@ public struct AutomationMutationResult: Codable, Sendable, Equatable {
     }
 }
 
+public struct AutomationInputWriteRequest: Codable, Sendable, Equatable {
+    public let text: String
+    public let submit: Bool?
+
+    public init(text: String, submit: Bool? = nil) {
+        self.text = text
+        self.submit = submit
+    }
+}
+
+public struct AutomationInputWriteResult: Codable, Sendable, Equatable {
+    public let accepted: Bool
+    public let byteCount: Int
+    public let surfaceID: String
+    public let system: AutomationSystemDescriptor
+
+    public init(
+        accepted: Bool,
+        byteCount: Int,
+        surfaceID: String,
+        system: AutomationSystemDescriptor = AutomationSystemDescriptor()
+    ) {
+        self.accepted = accepted
+        self.byteCount = byteCount
+        self.surfaceID = surfaceID
+        self.system = system
+    }
+}
+
 public struct AutomationTerminalEnvironment: Sendable, Equatable {
     public let socketPath: String
     public let handle: String
@@ -272,4 +308,9 @@ public protocol AutomationControlling: AnyObject, Sendable {
         direction: AutomationTileSplitDirection
     ) throws -> AutomationMutationResult
     func automationCloseTile(for handle: String) throws -> AutomationMutationResult
+    func automationWriteInput(
+        for handle: String,
+        text: String,
+        submit: Bool
+    ) throws -> AutomationInputWriteResult
 }

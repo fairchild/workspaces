@@ -5,10 +5,17 @@ import Testing
 
 @MainActor
 private final class FakeAutomationController: AutomationControlling {
+    struct InputWrite: Equatable {
+        let handle: String
+        let text: String
+        let submit: Bool
+    }
+
     var contextCalls: [String] = []
     var focusDirections: [AutomationTileFocusDirection] = []
     var splitDirections: [AutomationTileSplitDirection] = []
     var closeHandles: [String] = []
+    var inputWrites: [InputWrite] = []
 
     func automationContext(for handle: String) throws -> AutomationContextResult {
         contextCalls.append(handle)
@@ -63,6 +70,19 @@ private final class FakeAutomationController: AutomationControlling {
         _ = try automationContext(for: handle)
         closeHandles.append(handle)
         return AutomationMutationResult(changed: true, closedSurfaceID: "surface-1")
+    }
+
+    func automationWriteInput(
+        for handle: String,
+        text: String,
+        submit: Bool
+    ) throws -> AutomationInputWriteResult {
+        guard handle != "nowrite" else {
+            throw AutomationServiceError(.capabilityDenied, "The automation handle does not include input.write.")
+        }
+        _ = try automationContext(for: handle)
+        inputWrites.append(InputWrite(handle: handle, text: text, submit: submit))
+        return AutomationInputWriteResult(accepted: true, byteCount: text.utf8.count, surfaceID: "surface-1")
     }
 }
 
@@ -255,6 +275,110 @@ struct AutomationAPITests {
         #expect(controller.focusDirections == [.previous])
         #expect(controller.splitDirections == [.down])
         #expect(controller.closeHandles == ["live"])
+    }
+
+    @Test("Router maps input write and returns the result envelope")
+    @MainActor
+    func routerInputWriteHappyPath() async throws {
+        let controller = FakeAutomationController()
+        let response = await AutomationHTTPRouter.route(
+            HTTPRequest(
+                method: "POST",
+                path: "/v1/input/write",
+                headers: [AutomationAPI.handleHeader: "live"],
+                body: Data(#"{"text":"echo hi","submit":true}"#.utf8)
+            ),
+            controller: controller,
+            enabled: true
+        )
+        let envelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationInputWriteResult>.self,
+            from: response.body
+        )
+
+        #expect(response.status == 200)
+        #expect(envelope.result?.accepted == true)
+        #expect(envelope.result?.byteCount == "echo hi".utf8.count)
+        #expect(
+            controller.inputWrites == [
+                FakeAutomationController.InputWrite(handle: "live", text: "echo hi", submit: true)
+            ]
+        )
+    }
+
+    @Test("Router validates input write bodies before reaching the controller")
+    @MainActor
+    func routerInputWriteValidation() async throws {
+        let controller = FakeAutomationController()
+        let oversizeText = String(repeating: "a", count: AutomationAPI.inputWriteMaxUTF8Bytes + 1)
+        let invalidBodies: [Data] = [
+            Data(),
+            Data(#"{"submit":true}"#.utf8),
+            Data(#"{"text":""}"#.utf8),
+            Data(#"{"text":"\#(oversizeText)"}"#.utf8),
+            Data(#"{"text":"echo hi","surfaceID":"forged"}"#.utf8),
+        ]
+
+        for body in invalidBodies {
+            let response = await AutomationHTTPRouter.route(
+                HTTPRequest(
+                    method: "POST",
+                    path: "/v1/input/write",
+                    headers: [AutomationAPI.handleHeader: "live"],
+                    body: body
+                ),
+                controller: controller,
+                enabled: true
+            )
+            let envelope = try AutomationJSON.decoder.decode(
+                AutomationResponseEnvelope<AutomationEmptyResult>.self,
+                from: response.body
+            )
+            #expect(response.status == 400)
+            #expect(envelope.error?.code == .invalidRequest)
+        }
+        #expect(controller.inputWrites.isEmpty)
+
+        let wrongMethod = await AutomationHTTPRouter.route(
+            HTTPRequest(
+                method: "GET",
+                path: "/v1/input/write",
+                headers: [AutomationAPI.handleHeader: "live"],
+                body: Data()
+            ),
+            controller: controller,
+            enabled: true
+        )
+        let wrongMethodEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationEmptyResult>.self,
+            from: wrongMethod.body
+        )
+        #expect(wrongMethod.status == 405)
+        #expect(wrongMethodEnvelope.error?.code == .methodNotAllowed)
+    }
+
+    @Test("Router surfaces capability denial for under-capable input write handles")
+    @MainActor
+    func routerInputWriteCapabilityDenied() async throws {
+        let controller = FakeAutomationController()
+        let response = await AutomationHTTPRouter.route(
+            HTTPRequest(
+                method: "POST",
+                path: "/v1/input/write",
+                headers: [AutomationAPI.handleHeader: "nowrite"],
+                body: Data(#"{"text":"echo hi"}"#.utf8)
+            ),
+            controller: controller,
+            enabled: true
+        )
+        let envelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationEmptyResult>.self,
+            from: response.body
+        )
+
+        #expect(response.status == 403)
+        #expect(envelope.error?.code == .capabilityDenied)
+        #expect(controller.inputWrites.isEmpty)
     }
 
     @Test("CLI formatter emits result JSON and surfaces envelope errors")
