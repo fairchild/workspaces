@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import {
 	DEFAULT_PROD_URL,
 	detectAuthMode,
+	detectSsoWall,
 	evaluatePosture,
 	gateStage,
 	resolveTarget,
@@ -105,4 +106,12 @@ test("summarize: skips are visible, any failed check flips the verdict", () => {
 	expect(ok).toBe(false);
 	expect(failed).toBe(1);
 	expect(lines.join("\n")).toContain("skipped: missing TOKEN");
+});
+
+test("detectSsoWall spots Vercel deployment protection, not app redirects", () => {
+	expect(
+		detectSsoWall({ status: 302, location: "https://vercel.com/sso-api?url=x&nonce=y" }),
+	).toBe(true);
+	expect(detectSsoWall({ status: 307, location: "/sign-in" })).toBe(false);
+	expect(detectSsoWall({ status: 200 })).toBe(false);
 });

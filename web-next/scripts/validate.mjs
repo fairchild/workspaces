@@ -11,6 +11,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import {
 	detectAuthMode,
+	detectSsoWall,
 	evaluatePosture,
 	gateStage,
 	LOCAL_PORT,
@@ -21,12 +22,20 @@ import { bypassServerEnv, startProductionServer, WEB_NEXT_ROOT } from "./harness
 
 const PROBE_TIMEOUT_MS = 15_000;
 
-/** A fetch that never follows redirects and never throws on HTTP errors. */
+/** A fetch that never follows redirects and never throws on HTTP errors.
+ * When VERCEL_AUTOMATION_BYPASS_SECRET is set, every probe carries the
+ * standard protection-bypass header so SSO-walled previews open up (#814
+ * provisions the secret; this is just the transport). */
 async function probe(baseUrl, pathname, init = {}) {
 	const method = init.method ?? "GET";
+	const bypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
 	try {
 		const res = await fetch(`${baseUrl}${pathname}`, {
 			...init,
+			headers: {
+				...(bypass ? { "x-vercel-protection-bypass": bypass } : {}),
+				...init.headers,
+			},
 			redirect: "manual",
 			signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
 		});
@@ -44,6 +53,17 @@ async function probe(baseUrl, pathname, init = {}) {
 
 async function reachabilityStage(baseUrl) {
 	const signIn = await probe(baseUrl, "/sign-in");
+	if (detectSsoWall(signIn)) {
+		// A walled deployment offers nothing to assert without the bypass
+		// secret — a credential gate, not an app failure.
+		return {
+			id: "reachability",
+			status: "skip",
+			reason:
+				"Vercel deployment protection (SSO) — set VERCEL_AUTOMATION_BYPASS_SECRET to validate this target (#814)",
+			signIn,
+		};
+	}
 	return {
 		id: "reachability",
 		status: "run",
@@ -95,8 +115,8 @@ async function main() {
 		console.log(`validating ${target.envName}: ${target.baseUrl}\n`);
 		const reach = await reachabilityStage(target.baseUrl);
 		const stages = [reach];
-		// No point probing posture on a target that isn't serving.
-		if (reach.checks.every((c) => c.status === "pass")) {
+		// No point probing posture on a target that isn't serving (or is walled).
+		if (reach.status === "run" && reach.checks.every((c) => c.status === "pass")) {
 			stages.push(await postureStage(target.baseUrl, reach.signIn));
 		}
 		stages.push(authenticatedStage(process.env));

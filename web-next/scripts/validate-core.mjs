@@ -53,6 +53,19 @@ export function detectAuthMode(signInHtml) {
 	return /test bypass/i.test(signInHtml) ? "bypass" : "real";
 }
 
+/**
+ * Vercel deployment protection intercepts before the app: a 3xx to
+ * vercel.com/sso-api. That is a credential gate (the automation-bypass
+ * secret, #814), not an app failure — callers report it as a skip.
+ */
+export function detectSsoWall(probeResult) {
+	return (
+		probeResult.status >= 300 &&
+		probeResult.status < 400 &&
+		/vercel\.com\/sso-api/.test(probeResult.location ?? "")
+	);
+}
+
 function check(id, pass, detail) {
 	return { id, status: pass ? "pass" : "fail", detail };
 }
