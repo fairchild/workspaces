@@ -44,7 +44,13 @@ pnpm build       # production build — must stay clean (see #780 for the stale-
 pnpm test:e2e    # Playwright; builds + serves on :3100 in auth-bypass mode
 pnpm evidence    # light+dark screenshot walk → output/evidence/
 pnpm perf        # perf harness vs perf/contract.json budgets
+pnpm validate    # env-targetable validation (--env local|prod, --url <origin>)
 ```
+
+`pnpm validate` also runs against real deployments — `pnpm validate --env prod`
+probes reachability and auth/security posture with zero credentials, and
+credential-gated stages report themselves skipped rather than passing silently
+(see `docs/roadmap.md` Phase 2 / milestone #13).
 
 E2E notes:
 
