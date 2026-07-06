@@ -1,10 +1,10 @@
 # web-next — Roadmap
 
-The path from *first release* to **totally usable**: a single person can sign in
-to the deployed app, start a session on one of their real repos, run a real
-coding turn that edits code in a sandbox, watch it stream (accessibly), resume
-it across disconnects, trust it, and get the change out — every day, without
-babysitting.
+The path from *first release* to **totally usable**: the owner signs in to the
+deployed app most days, starts sessions on their real repos, runs real coding
+turns that edit code in a sandbox, watches them stream (accessibly), resumes
+across disconnects, trusts it — and can hand the URL to another person to try
+without exposing their own sessions.
 
 This is the sequencing doc. The settled *design* is [`design.md`](design.md);
 the *runtime* decision is `docs/decisions/web-next-harness-runtime.md`; the data
@@ -17,7 +17,7 @@ GitHub milestones, not aspiration — keep it in sync as milestones close.
 The bar this roadmap is held to. A signed-in, allowlisted user, on the deployed
 app, can:
 
-1. **Sign in** with GitHub (real OAuth + allowlist) — *exists in code; not yet proven on a real deployment.*
+1. **Sign in** with GitHub (real OAuth + allowlist) — *live: production serves real OAuth, the test bypass is inert, unauthed API leaks nothing (verified 2026-07-06 against web-next-ivory-six.vercel.app).*
 2. **Start a session on a real repo** — pick from their actual GitHub repos, validated, default branch known. *Gap: freetext today (#825).*
 3. **Run a real coding turn** — choose a model, watch it stream, it edits code in a sandbox and runs tests, and completes. *Blocked on the real runtime (#750) + model selection (#824).*
 4. **Identify and resume** the session — it has a title, survives disconnect/reload, and stays correct across serverless instances. *Gaps: titling (#823), the resume-liveness bug (#810), turn concurrency (#811).*
@@ -25,7 +25,9 @@ app, can:
 6. **Drop into a terminal** in the session's sandbox. *#752.*
 7. **Get the change out as a PR.** *#820 — needs a design pass first.*
 8. **Trust all of the above** via automated validation against the real deployment. *#13.*
-9. It is **the primary surface**, old chat/terminal demoted. *#754.*
+9. **Hand it to someone else to try** — sessions are owner-scoped, so an added
+   allowlist login sees only their own sessions. *Gap: no owner column today (#829).*
+10. It is **the primary surface**, old chat/terminal demoted. *#754.*
 
 ## Current state (2026-07-06)
 
@@ -44,19 +46,27 @@ unit tests, lint, typecheck, and a clean production build. What's built:
 - A **mock provider** that scripts a full coding turn, and an auth-gated
   **`/api/diag/gateway`** probe that makes one real model call.
 
-**What isn't real yet.** Everything runs the **mock**; validation is **local
-only** (auth-bypass, `localhost:3100`); the app **isn't deployed** with real auth
-(deploy.md: "deployment is a later issue"); and three start-loop essentials —
-**titles, model selection, a real repo picker** — are missing.
+**Deployed and hardened at the door** *(verified 2026-07-06)*: production
+(`web-next-ivory-six.vercel.app`) is live behind real GitHub OAuth + allowlist,
+the Vercel SSO wall is off (anonymous reachability checks work with zero
+credentials), the test bypass is provably inert, and every PR gets a Vercel
+preview deployment. Two warts found at the door: unauthed API calls get a 307
+HTML redirect instead of route-level 401 JSON (#828), and sessions have no
+owner scoping — any allowlisted login sees all sessions (#829).
+
+**What isn't real yet.** Everything runs the **mock** (real runtime #750 not
+landed); validation is **local only** (auth-bypass, `localhost:3100`); and three
+start-loop essentials — **titles, model selection, a real repo picker** — are
+missing.
 
 ## The milestones
 
 | Milestone | What it delivers |
 |---|---|
 | [#11 Sessions-first web](https://github.com/fairchild/workspaces/milestone/11) | The build-out: **#750** real runtime, **#752** terminal drawer, **#753** lifecycle + error states + mobile, **#754** cutover, **#790** edit→diff, **#780** build/404 flake. |
-| [#12 Refinement pass 1](https://github.com/fairchild/workspaces/milestone/12) | a11y, resilience & polish: **#804–#809** a11y/UX, **#810** resume liveness, **#811** turn concurrency, **#812** font-doc drift. |
+| [#12 Refinement pass 1](https://github.com/fairchild/workspaces/milestone/12) | a11y, resilience & polish: **#804–#809** a11y/UX, **#810** resume liveness, **#811** turn concurrency, **#812** font-doc drift, **#828** API 401 JSON. |
 | [#13 Self-validation](https://github.com/fairchild/workspaces/milestone/13) | Environment-targetable validation harness: **#813–#819** (local → preview → staging → prod). |
-| [#14 Usability completeness](https://github.com/fairchild/workspaces/milestone/14) | The start-and-identify loop: **#823** titles, **#824** model selection, **#825** real repo picker. |
+| [#14 Usability completeness](https://github.com/fairchild/workspaces/milestone/14) | The start-and-identify loop + shareability: **#823** titles, **#824** model selection, **#825** real repo picker, **#829** owner-scoped sessions. |
 | _followup_ | **#820** agent opens a GitHub PR from a session (needs a design pass before it's `ready`). |
 
 ## Phased sequence
@@ -80,8 +90,10 @@ Turn the mock into a real agent, and make a session a usable object.
 
 ### Phase 2 — Trust it: self-validation *(alongside/after Phase 1)*
 Validate the *real* runtime against *real* environments — the stated priority.
-Stage #818 needs #750 landed to have a real turn to exercise.
-- **#813** harness core → **#814** deployed-env auth → **#815** security posture → **#816** model/gateway diag → **#817** portable browser flows → **#818** real agentic turn (sandbox lifecycle) → **#819** reporting + scheduled preview/prod runs
+With the SSO wall off, **#813 + #815 run against production today with zero
+credentials**; #814 (a signed-in validation identity) gates the authenticated
+stages; #818 needs #750 landed to have a real turn to exercise.
+- **#813** harness core → **#815** security posture *(unblocked now)* → **#814** deployed-env auth → **#816** model/gateway diag → **#817** portable browser flows → **#818** real agentic turn (sandbox lifecycle) → **#819** reporting + scheduled preview/prod runs
 
 ### Phase 3 — The transcript reads and fails well
 - **#808** surface streaming turn failures (error + retry) — *pull forward; cheap, high-value*
@@ -93,8 +105,12 @@ Stage #818 needs #750 landed to have a real turn to exercise.
 - **#806** WCAG-AA contrast — *pull forward; one palette change, affects every screen*
 - **#804** live-region announcements + follow-scroll, **#805** keyboard-reachable reveals + semantic heading, **#807** multiline compose, **#809** mobile touch targets, **#812** font-doc reconciliation
 
-### Phase 5 — Ship as primary + close the loop
-- **Deploy for real** — production build behind real GitHub OAuth + allowlist + Vercel protection, proven by Phase 2's validation
+### Phase 5 — Ship as primary + shareable
+Production already exists (real OAuth + allowlist, verified); what remains is
+making it *shareable* and *primary*, and keeping it proven.
+- **#829** per-user session ownership — the prerequisite to adding anyone else
+  to the allowlist
+- **#828** API routes answer 401 JSON, not a sign-in redirect
 - **#754** cutover to the primary session surface (demote old chat/terminal)
 - **#820** agent opens a PR from a session — *after its design pass*
 
@@ -102,9 +118,11 @@ Stage #818 needs #750 landed to have a real turn to exercise.
 
 ```
 #810/#811 (trust)  ─┐
-                    ├─►  #750 (real runtime)  ─►  #818 (validate real turn)  ─►  deploy  ─►  #754 (cutover)
+                    ├─►  #750 (real runtime)  ─►  #818 (validate real turn)  ─►  #754 (cutover)
 #824 model  ────────┘                          ▲
 #823 title, #825 repo picker  ─────────────────┘   (identity/start loop)
+
+#829 (owner-scoped sessions)  ─►  add a second allowlist login  ─►  shareable
 ```
 
 Everything else (a11y, mobile, terminal drawer, edit→diff, #820) enriches the
