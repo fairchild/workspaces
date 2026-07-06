@@ -70,7 +70,7 @@ function asText(value: unknown): string {
  * tool-input deltas, raw) are dropped — the chunk adapter derives that framing
  * from the deltas itself. A single terminal `done` closes the turn.
  */
-async function* mapFullStream(
+export async function* mapFullStream(
 	fullStream: AsyncIterable<{ type: string; [k: string]: unknown }>,
 	startedAt: number,
 ): AsyncGenerator<StreamChunk> {
@@ -137,9 +137,15 @@ async function* mapFullStream(
 }
 
 /**
- * The turn instructions: clone, branch, make a tiny marked change, push, and
- * open a PR. Credentials are pre-wired globally (git credential store) with the
- * raw token at /tmp/gh_token for the PR API — so the prompt names no secret.
+ * TEMPORARY (#826): a fixed clone→branch→create-marker→push→open-PR smoke
+ * script. It proves the runtime plumbing end to end but does NOT yet drive the
+ * turn from the user's message — `userMessage` rides in only as a marker line,
+ * not as the instruction. Replacing this with a prompt driven by the user's
+ * actual request (against the session's working copy) is #826, which also
+ * carries the #750 render/resume/perf acceptance evidence.
+ *
+ * Credentials are pre-wired globally (git credential store) with the raw token
+ * at /tmp/gh_token for the PR API — so the prompt names no secret.
  */
 function buildPrompt(userMessage: string): string {
 	const stamp = new Date().toISOString();

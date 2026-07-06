@@ -15,7 +15,7 @@ import {
 	SessionView,
 	type SessionViewData,
 } from "@/components/folio/session-view";
-import type { FolioMessage } from "@/components/folio/types";
+import type { FolioDataParts, FolioMessage } from "@/components/folio/types";
 
 /** Streamed tokens paint at most this often — batched, never per-chunk. */
 const TOKEN_THROTTLE_MS = 50;
@@ -75,7 +75,10 @@ export function LiveSessionView({
 		experimental_throttle: TOKEN_THROTTLE_MS,
 		onData: (part) => {
 			if (part.type === "data-status") {
-				setSteps((current) => [...current, part.data.message]);
+				// ai@7.0.15's DataUIPart union stopped narrowing `data` on the
+				// literal type; our FolioDataParts contract fixes the shape.
+				const { message } = part.data as FolioDataParts["status"];
+				setSteps((current) => [...current, message]);
 			}
 		},
 	});
