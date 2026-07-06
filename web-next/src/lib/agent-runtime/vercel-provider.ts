@@ -9,15 +9,34 @@
  * the AI Gateway. Heavy deps load lazily so the seam stays light for the mock
  * path; sessions opt in via sessions.provider = "vercel".
  */
+import type { HarnessAgentSandboxConfig } from "@ai-sdk/harness/agent";
 import { mintInstallationToken } from "../diag/github-app";
 import type { ComputeProvider, TurnRequest } from "./provider";
 import type { StreamChunk } from "./stream-chunk";
+
+// Type-only imports of the lazily-loaded factories keep the seam light (no
+// eager harness load) while giving the shared builders real signatures.
+type CreateClaudeCode =
+	typeof import("@ai-sdk/harness-claude-code")["createClaudeCode"];
+type CreateVercelSandbox =
+	typeof import("@ai-sdk/sandbox-vercel")["createVercelSandbox"];
 
 /** Repo the agent clones and opens its PR against. */
 const TARGET_REPO = process.env.AGENT_TARGET_REPO ?? "fairchild/workspaces";
 /** Port the in-sandbox harness bridge binds; must be declared on the sandbox. */
 const BRIDGE_PORT = 4000;
 const SANDBOX_TIMEOUT_MS = 15 * 60 * 1000;
+/**
+ * Stable template name so `runTurn` and `prewarmVercelTemplate` target the same
+ * named snapshot; the harness reuses a template only when the sandbox identity
+ * matches, and the name is part of that identity.
+ */
+const TEMPLATE_NAME = "web-next-claude-code";
+/**
+ * Bump whenever the `onBootstrap` side effects change — it invalidates the
+ * reusable snapshot so the next prewarm (or first turn) rebuilds the template.
+ */
+const BOOTSTRAP_HASH = "claude-code-cli-v1";
 
 /**
  * A self-contained setup script written into the sandbox and run once per
@@ -145,6 +164,98 @@ function buildPrompt(userMessage: string): string {
 	].join("\n");
 }
 
+/**
+ * The model credential, anthropic-preferred. The claude CLI consumes
+ * ANTHROPIC_API_KEY natively (the most reliable in-sandbox path); the AI Gateway
+ * key is the fallback. Part of the template identity, so both `runTurn` and the
+ * prewarm path resolve it through this one function.
+ */
+function resolveAuth() {
+	const anthropicKey = process.env.ANTHROPIC_API_KEY;
+	const gatewayKey = process.env.AI_GATEWAY_API_KEY;
+	return anthropicKey
+		? { anthropic: { apiKey: anthropicKey } }
+		: gatewayKey
+			? { gateway: { apiKey: gatewayKey } }
+			: undefined;
+}
+
+/** The claude-code harness adapter. Identical inputs on both paths. */
+function createHarness(
+	createClaudeCode: CreateClaudeCode,
+	auth: ReturnType<typeof resolveAuth>,
+) {
+	return createClaudeCode({ auth, thinking: "on" });
+}
+
+/**
+ * The Vercel sandbox provider, built via the factory path with a stable `name`
+ * so `runTurn` and prewarm target the same named template snapshot.
+ */
+function createSandboxProvider(createVercelSandbox: CreateVercelSandbox) {
+	return createVercelSandbox({
+		runtime: "node22",
+		ports: [BRIDGE_PORT],
+		resources: { vcpus: 4 },
+		timeout: SANDBOX_TIMEOUT_MS,
+		token: process.env.VERCEL_TOKEN,
+		teamId: process.env.VERCEL_TEAM_ID,
+		projectId: process.env.VERCEL_PROJECT_ID,
+		name: TEMPLATE_NAME,
+	});
+}
+
+/**
+ * The bootstrap baked into the reusable snapshot: install the claude CLI so the
+ * bridge finds it on PATH. This is the template-identity-affecting config shared
+ * by `runTurn` and prewarm — no `onSession` here, since the per-turn credential
+ * injection is not part of the snapshot and must not enter the template identity.
+ */
+const SANDBOX_BOOTSTRAP: Omit<HarnessAgentSandboxConfig, "onSession"> = {
+	// Bake the claude CLI into the reusable snapshot so the bridge finds it on
+	// PATH; a verifiable install beats relying on the adapter's implicit
+	// first-start install (which was leaving `claude` missing).
+	bootstrapHash: BOOTSTRAP_HASH,
+	onBootstrap: async ({ session }) => {
+		const r = await session.run({
+			command:
+				"command -v claude >/dev/null 2>&1 || npm install -g @anthropic-ai/claude-code",
+		});
+		if (r.exitCode !== 0)
+			throw new Error(
+				`claude CLI install failed (exit ${r.exitCode}): ${r.stderr.slice(0, 400)}`,
+			);
+		if (process.env.HARNESS_DEBUG === "1") {
+			const v = await session.run({ command: "claude --version" });
+			console.error(`[dbg onBootstrap] claude installed: ${v.stdout.trim()}`);
+		}
+	},
+};
+
+/**
+ * Build (or refresh) the sandbox template out of band so the first user turn
+ * resumes from a snapshot instead of paying the ~1–4 min claude-CLI install
+ * inside its own request budget. Idempotent — a fast no-op once the snapshot
+ * exists. MUST build the harness adapter, sandbox provider, and bootstrap config
+ * through the same shared builders `runTurn` uses, or it warms a template the
+ * turn never reuses.
+ */
+export async function prewarmVercelTemplate(): Promise<{ tookMs: number }> {
+	const started = Date.now();
+	const [{ prepareHarnessSandboxTemplate }, { createClaudeCode }, { createVercelSandbox }] =
+		await Promise.all([
+			import("@ai-sdk/harness/agent"),
+			import("@ai-sdk/harness-claude-code"),
+			import("@ai-sdk/sandbox-vercel"),
+		]);
+	await prepareHarnessSandboxTemplate({
+		harness: createHarness(createClaudeCode, resolveAuth()),
+		sandboxProvider: createSandboxProvider(createVercelSandbox),
+		sandboxConfig: SANDBOX_BOOTSTRAP,
+	});
+	return { tookMs: Date.now() - started };
+}
+
 export const vercelProvider: ComputeProvider = {
 	id: "vercel",
 	async *runTurn(request: TurnRequest): AsyncIterable<StreamChunk> {
@@ -161,49 +272,16 @@ export const vercelProvider: ComputeProvider = {
 				import("@ai-sdk/sandbox-vercel"),
 			]);
 
-		const gatewayKey = process.env.AI_GATEWAY_API_KEY;
-		const anthropicKey = process.env.ANTHROPIC_API_KEY;
-		// Prefer the direct Anthropic key — the claude CLI consumes ANTHROPIC_API_KEY
-		// natively, the most reliable path in-sandbox; gateway is the fallback.
-		const auth = anthropicKey
-			? { anthropic: { apiKey: anthropicKey } }
-			: gatewayKey
-				? { gateway: { apiKey: gatewayKey } }
-				: undefined;
-
 		const debugHarness = process.env.HARNESS_DEBUG === "1";
 
 		const agent = new HarnessAgent({
 			id: `web-next-${request.sessionId}`,
-			harness: createClaudeCode({ auth, thinking: "on" }),
-			sandbox: createVercelSandbox({
-				runtime: "node22",
-				ports: [BRIDGE_PORT],
-				resources: { vcpus: 4 },
-				timeout: SANDBOX_TIMEOUT_MS,
-				token: process.env.VERCEL_TOKEN,
-				teamId: process.env.VERCEL_TEAM_ID,
-				projectId: process.env.VERCEL_PROJECT_ID,
-			}),
+			harness: createHarness(createClaudeCode, resolveAuth()),
+			sandbox: createSandboxProvider(createVercelSandbox),
 			sandboxConfig: {
-				// Bake the claude CLI into the reusable snapshot so the bridge finds
-				// it on PATH; a verifiable install beats relying on the adapter's
-				// implicit first-start install (which was leaving `claude` missing).
-				bootstrapHash: "claude-code-cli-v1",
-				onBootstrap: async ({ session }) => {
-					const r = await session.run({
-						command:
-							"command -v claude >/dev/null 2>&1 || npm install -g @anthropic-ai/claude-code",
-					});
-					if (r.exitCode !== 0)
-						throw new Error(
-							`claude CLI install failed (exit ${r.exitCode}): ${r.stderr.slice(0, 400)}`,
-						);
-					if (debugHarness) {
-						const v = await session.run({ command: "claude --version" });
-						console.error(`[dbg onBootstrap] claude installed: ${v.stdout.trim()}`);
-					}
-				},
+				// Same template-identity bootstrap as prewarm, plus the per-session
+				// credential hook (which is deliberately excluded from the snapshot).
+				...SANDBOX_BOOTSTRAP,
 				onSession: async ({ session }) => {
 					await session.writeTextFile({
 						path: "/tmp/git-setup.sh",
