@@ -246,3 +246,59 @@ describe("closeAbandonedTurn", () => {
 		expect((await readTranscript(handle, "s")).length).toBe(before);
 	});
 });
+
+describe("tailChunks — cross-instance liveness (#810)", () => {
+	test("a runnerless tail follows a fresh log to its real done, never synthesizing", async () => {
+		const handle = freshDb();
+		await createSession(handle, { id: "s", provider: "mock" });
+		// The turn "runs" in another instance: events land in the log with fresh
+		// timestamps, but this process's activeTurns map has never seen it.
+		await appendEvents(handle, "s", [
+			evt("user", text("go")),
+			evt("assistant", text("cross ")),
+		]);
+
+		const collected: StreamChunk[] = [];
+		const tailed = (async () => {
+			for await (const chunk of tailChunks(handle, "s", 2, 15)) {
+				collected.push(chunk);
+			}
+		})();
+
+		// Give the tail several poll cycles: it must keep following the fresh
+		// log, not declare the turn interrupted.
+		await new Promise((r) => setTimeout(r, 90));
+		expect(collected.map((c) => c.type)).toEqual(["text"]);
+
+		// The "other instance" finishes the turn; the tail catches up and ends
+		// on the real terminal.
+		await appendEvents(handle, "s", [
+			evt("assistant", text("done ")),
+			evt("assistant", { type: "done", content: "" }),
+		]);
+		await tailed;
+		expect(collected.map((c) => c.type)).toEqual(["text", "text", "done"]);
+		expect(collected.some((c) => c.type === "error")).toBe(false);
+		expect(collected.at(-1)?.metadata?.aborted).toBeUndefined();
+	});
+
+	test("a runnerless tail synthesizes a terminal once the log is stale", async () => {
+		const handle = freshDb();
+		await createSession(handle, { id: "s", provider: "mock" });
+		await appendEvents(handle, "s", [
+			evt("user", text("go")),
+			evt("assistant", text("half ")),
+		]);
+		// Backdate the whole log past the stale threshold: the runner is gone
+		// and nothing is appending anymore.
+		const old = new Date(Date.now() - 60_000).toISOString();
+		await handle.client.execute({
+			sql: "UPDATE session_events SET created_at = ? WHERE session_id = 's'",
+			args: [old],
+		});
+
+		const chunks = await collect(tailChunks(handle, "s", 2, 10));
+		expect(chunks.map((c) => c.type)).toEqual(["text", "error", "done"]);
+		expect(chunks.at(-1)?.metadata?.aborted).toBe(true);
+	});
+});
