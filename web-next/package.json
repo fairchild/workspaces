@@ -12,7 +12,8 @@
 		"typecheck": "tsc --noEmit",
 		"lint": "eslint .",
 		"evidence": "node scripts/evidence.mjs",
-		"perf": "node perf/run.mjs"
+		"perf": "node perf/run.mjs",
+		"validate": "node scripts/validate.mjs"
 	},
 	"dependencies": {
 		"@ai-sdk/harness": "1.0.18",
