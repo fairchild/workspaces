@@ -6,12 +6,16 @@ import Anthropic from "@anthropic-ai/sdk";
 import type { BetaManagedAgentsStreamSessionEvents } from "@anthropic-ai/sdk/resources/beta/sessions/events";
 
 export const dynamic = "force-dynamic";
+// Backstop: Fluid Compute bills wall-clock while this function is warm, so an
+// orphaned stream must not run indefinitely. Clients reconnect if still live.
+export const maxDuration = 300;
 
 /**
  * SSE endpoint that streams a Managed Agents session's `agent.tool_use` and
  * `agent.tool_result` events as compact JSON lines, consumed by the
  * `TranscriptTerminal` client component. Read-only: there is no way to
- * drive the container from this route.
+ * drive the container from this route. Finished sessions get an `end`
+ * sentinel instead of a live tail so the client stops reconnecting.
  */
 export async function GET(request: Request): Promise<Response> {
 	const authed = await getSession();
@@ -58,6 +62,30 @@ export async function GET(request: Request): Promise<Response> {
 			};
 			request.signal.addEventListener("abort", onAbort);
 
+			// Tell the client no further events will ever arrive, so it closes
+			// its EventSource instead of auto-reconnecting forever.
+			const sendEnd = () => {
+				if (closed) return;
+				controller.enqueue(encoder.encode("event: end\ndata: {}\n\n"));
+			};
+
+			// Live-tailing only makes sense while the session can still emit
+			// events. Review runs are one-shot: once the run record or the
+			// session itself is no longer active, the transcript is complete.
+			// Chat sessions stay tailable while idle — a follow-up user turn
+			// can produce more tool calls on the same session.
+			const shouldLiveTail = async (): Promise<boolean> => {
+				if (reviewRun && reviewRun.status !== "started") return false;
+				try {
+					const session = await client.beta.sessions.retrieve(sessionId);
+					if (session.status === "terminated") return false;
+					if (reviewRun && session.status === "idle") return false;
+				} catch {
+					return false;
+				}
+				return true;
+			};
+
 			try {
 				// Backfill existing history first so the user sees prior calls
 				// immediately when they open the tab.
@@ -71,12 +99,25 @@ export async function GET(request: Request): Promise<Response> {
 					if (line) send(line);
 				}
 
-				// Then live-tail new events. session.status_idle does NOT close
-				// the stream on our side — a follow-up user turn can make the
-				// agent produce more tool calls on the same session.
+				if (!(await shouldLiveTail())) {
+					sendEnd();
+					return;
+				}
+
 				const live = await client.beta.sessions.events.stream(sessionId);
 				for await (const event of live) {
 					if (closed) return;
+					// A review session reaching terminal idle is done for good —
+					// the broker never sends it another turn.
+					if (
+						reviewRun &&
+						event.type === "session.status_idle" &&
+						(event.stop_reason?.type === "end_turn" ||
+							event.stop_reason?.type === "retries_exhausted")
+					) {
+						sendEnd();
+						return;
+					}
 					const line = toTranscriptLine(event);
 					if (line) send(line);
 				}

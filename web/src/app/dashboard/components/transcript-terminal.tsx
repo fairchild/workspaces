@@ -29,11 +29,13 @@ export function TranscriptTerminal({
 }: TranscriptTerminalProps) {
 	const [lines, setLines] = useState<TranscriptLine[]>([]);
 	const [error, setError] = useState<string | null>(null);
+	const [ended, setEnded] = useState(false);
 	const scrollRef = useRef<HTMLDivElement>(null);
 
 	useEffect(() => {
 		setLines([]);
 		setError(null);
+		setEnded(false);
 		const url = `/api/managed-agents/transcript?sessionId=${encodeURIComponent(sessionId)}`;
 		const source = new EventSource(url);
 		source.onmessage = (ev) => {
@@ -44,6 +46,13 @@ export function TranscriptTerminal({
 				// ignore malformed line
 			}
 		};
+		// The server sends `end` when the session can emit no further events;
+		// close for real so the browser doesn't auto-reconnect forever.
+		source.addEventListener("end", () => {
+			setEnded(true);
+			setError(null);
+			source.close();
+		});
 		source.onerror = () => {
 			setError("transcript stream disconnected");
 		};
@@ -96,6 +105,11 @@ export function TranscriptTerminal({
 						)}
 					</div>
 				))}
+				{ended && (
+					<div className={styles["line-status"]}>
+						<span className={styles.statusText}>transcript complete</span>
+					</div>
+				)}
 				{error && <div className={styles["line-error"]}>{error}</div>}
 			</div>
 		</div>
