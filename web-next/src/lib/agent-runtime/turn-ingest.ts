@@ -20,8 +20,13 @@
  */
 import { EventEmitter } from "node:events";
 import type { DatabaseHandle } from "../db/client";
-import { appendEvents, type Session } from "../db/sessions";
-import { type ComputeProvider, getProvider } from "./provider";
+import { appendEvents, type Session, updateSession } from "../db/sessions";
+import {
+	type ComputeProvider,
+	getProvider,
+	type SessionResumeHandle,
+} from "./provider";
+import type { StreamChunk } from "./stream-chunk";
 
 /** One in-flight turn: where its assistant message starts, and when it began. */
 interface ActiveTurn {
@@ -114,8 +119,16 @@ async function ingestTurn(
 		for await (const chunk of provider.runTurn({
 			sessionId: session.id,
 			userMessage: userText,
+			resume: resumeHandle(session),
 		})) {
-			await appendEvents(handle, session.id, [{ role: "assistant", chunk }]);
+			// A terminal `done` may carry the harness handle the turn parked with
+			// detach(); persist it to the session row (not the transcript) so the
+			// next turn reconnects, and store the chunk without that private blob.
+			const stored =
+				chunk.type === "done"
+					? await persistResume(handle, session.id, chunk)
+					: chunk;
+			await appendEvents(handle, session.id, [{ role: "assistant", chunk: stored }]);
 			if (chunk.type === "done") closed = true;
 			notify(session.id);
 		}
@@ -133,4 +146,40 @@ async function ingestTurn(
 		]);
 		notify(session.id);
 	}
+}
+
+/** The parked-session handle to resume this turn from, or null for a fresh run. */
+function resumeHandle(session: Session): SessionResumeHandle | null {
+	if (!session.claudeSessionId || !session.resumeState) return null;
+	return {
+		harnessSessionId: session.claudeSessionId,
+		resumeState: session.resumeState,
+	};
+}
+
+/**
+ * Moves the harness resume handle a turn parked (on `done.metadata.resume`) out
+ * of the transcript and onto the session row: a `SessionResumeHandle` is stored
+ * for the next turn, an explicit `null` clears a stale handle (the parked
+ * sandbox expired), and an absent field leaves the row untouched (mock turns).
+ * Returns the chunk with the private handle stripped so the log stays clean.
+ */
+async function persistResume(
+	handle: DatabaseHandle,
+	sessionId: string,
+	chunk: StreamChunk,
+): Promise<StreamChunk> {
+	if (!chunk.metadata || !("resume" in chunk.metadata)) return chunk;
+	const { resume, ...rest } = chunk.metadata as {
+		resume?: SessionResumeHandle | null;
+	} & Record<string, unknown>;
+	if (resume === null) {
+		await updateSession(handle, sessionId, { claudeSessionId: null, resumeState: null });
+	} else if (resume) {
+		await updateSession(handle, sessionId, {
+			claudeSessionId: resume.harnessSessionId,
+			resumeState: resume.resumeState,
+		});
+	}
+	return { ...chunk, metadata: rest };
 }

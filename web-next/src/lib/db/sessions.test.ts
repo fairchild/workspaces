@@ -11,6 +11,7 @@ import {
 	getSession,
 	readEvents,
 	readTranscript,
+	updateSession,
 } from "./sessions";
 
 // A throwaway on-disk libSQL DB per test — isolated, and (unlike a bare
@@ -48,6 +49,7 @@ describe("session store", () => {
 		expect(recorded.rows.map((r) => String(r.id))).toEqual([
 			"0001_baseline",
 			"0002_auth_tables",
+			"0003_session_resume_state",
 		]);
 	});
 
@@ -66,8 +68,32 @@ describe("session store", () => {
 			provider: "mock",
 			status: "active",
 		});
+		expect(created.resumeState).toBeNull();
 		expect(await getSession(handle, "s1")).toEqual(created);
 		expect(await getSession(handle, "missing")).toBeUndefined();
+	});
+
+	test("updateSession persists and clears the harness resume handle", async () => {
+		const handle = freshDb();
+		await createSession(handle, { id: "s1", provider: "vercel" });
+
+		await updateSession(handle, "s1", {
+			claudeSessionId: "harness-abc",
+			resumeState: '{"type":"resume-session","data":{}}',
+		});
+		let session = await getSession(handle, "s1");
+		expect(session?.claudeSessionId).toBe("harness-abc");
+		expect(session?.resumeState).toBe('{"type":"resume-session","data":{}}');
+
+		// A null resumeState clears a stale handle without touching other fields.
+		await updateSession(handle, "s1", { resumeState: null });
+		session = await getSession(handle, "s1");
+		expect(session?.resumeState).toBeNull();
+		expect(session?.claudeSessionId).toBe("harness-abc");
+
+		// An empty patch is a no-op.
+		await updateSession(handle, "s1", {});
+		expect((await getSession(handle, "s1"))?.claudeSessionId).toBe("harness-abc");
 	});
 
 	test("appends events with a monotonic per-session seq and round-trips them", async () => {

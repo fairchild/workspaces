@@ -144,4 +144,30 @@ const authTables: Migration = {
 	},
 };
 
-export const MIGRATIONS: Migration[] = [baseline, authTables];
+/**
+ * Adds `sessions.resume_state` — the JSON harness resume payload a turn parks
+ * with `detach()` so the next turn reconnects the same session (#826/#750).
+ * Idempotent via a column probe: SQLite `ALTER TABLE ADD COLUMN` has no
+ * `IF NOT EXISTS`, and a partial run must re-apply cleanly.
+ */
+const sessionResumeState: Migration = {
+	id: "0003_session_resume_state",
+	async up(db) {
+		const info = await sql<{
+			name: string;
+		}>`PRAGMA table_info(sessions)`.execute(db);
+		const hasColumn = info.rows.some((row) => row.name === "resume_state");
+		if (!hasColumn) {
+			await db.schema
+				.alterTable("sessions")
+				.addColumn("resume_state", "text")
+				.execute();
+		}
+	},
+};
+
+export const MIGRATIONS: Migration[] = [
+	baseline,
+	authTables,
+	sessionResumeState,
+];

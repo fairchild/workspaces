@@ -75,3 +75,4 @@ web/test-results/
 # macOS
 .DS_Store
 *.swp
+.vercel

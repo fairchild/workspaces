@@ -1,5 +1,10 @@
 import { describe, expect, test } from "vitest";
-import { mapFullStream } from "./vercel-provider";
+import {
+	canonicalToolName,
+	mapFullStream,
+	parseGitDiff,
+	toolResultContent,
+} from "./vercel-provider";
 import type { StreamChunk } from "./stream-chunk";
 
 type Part = { type: string; [k: string]: unknown };
@@ -39,17 +44,32 @@ describe("mapFullStream", () => {
 			"done",
 		]);
 
+		// Tool names are canonicalized to the Capitalized form Folio keys on.
 		const toolUse = chunks.find((c) => c.type === "tool_use");
-		expect(toolUse?.content).toBe("bash");
+		expect(toolUse?.content).toBe("Bash");
 		expect(toolUse?.metadata).toMatchObject({
 			toolUseId: "c1",
-			toolName: "bash",
+			toolName: "Bash",
 			input: { command: "ls" },
 		});
 
 		const toolResult = chunks.find((c) => c.type === "tool_result");
 		expect(toolResult?.content).toBe("a\nb");
 		expect(toolResult?.metadata).toMatchObject({ toolUseId: "c1" });
+	});
+
+	test("extracts stdout from a bash-style object tool result", async () => {
+		const chunks = await collect([
+			{
+				type: "tool-result",
+				toolCallId: "c9",
+				toolName: "bash",
+				output: { exitCode: 0, stdout: "12 passed\n", stderr: "" },
+			},
+		]);
+		const result = chunks.find((c) => c.type === "tool_result");
+		expect(result?.content).toBe("12 passed");
+		expect(result?.metadata).toMatchObject({ toolUseId: "c9", output: "12 passed" });
 	});
 
 	test("carries finish outputTokens into the terminal done chunk", async () => {
@@ -89,5 +109,85 @@ describe("mapFullStream", () => {
 		expect(dones).toHaveLength(1);
 		expect(chunks.at(-1)?.type).toBe("done");
 		expect(dones[0]?.metadata?.tokenCount).toBeUndefined();
+	});
+});
+
+describe("canonicalToolName", () => {
+	test("capitalizes the harness's lowercase tool names", () => {
+		expect(canonicalToolName("write")).toBe("Write");
+		expect(canonicalToolName("edit")).toBe("Edit");
+		expect(canonicalToolName("bash")).toBe("Bash");
+		expect(canonicalToolName("read")).toBe("Read");
+	});
+	test("leaves already-capitalized and empty names alone", () => {
+		expect(canonicalToolName("Grep")).toBe("Grep");
+		expect(canonicalToolName("")).toBe("");
+	});
+});
+
+describe("toolResultContent", () => {
+	test("surfaces stdout/stderr from a command result object", () => {
+		expect(toolResultContent({ exitCode: 0, stdout: "ok\n", stderr: "" })).toBe("ok");
+		expect(toolResultContent({ exitCode: 1, stdout: "", stderr: "boom\n" })).toBe("boom");
+		expect(toolResultContent({ exitCode: 2, stdout: "", stderr: "" })).toBe("exited 2");
+	});
+	test("passes plain string results through", () => {
+		expect(toolResultContent("File created successfully")).toBe(
+			"File created successfully",
+		);
+	});
+});
+
+describe("parseGitDiff", () => {
+	test("parses a new-file diff into one card with counts and hunk lines", () => {
+		const raw = [
+			"diff --git a/web-next/NOTE.md b/web-next/NOTE.md",
+			"new file mode 100644",
+			"index 0000000..376c071",
+			"--- /dev/null",
+			"+++ b/web-next/NOTE.md",
+			"@@ -0,0 +1,2 @@",
+			"+harness runtime online",
+			"+resumed turn ok",
+			"\\ No newline at end of file",
+		].join("\n");
+		const cards = parseGitDiff(raw);
+		expect(cards).toHaveLength(1);
+		expect(cards[0]).toMatchObject({
+			file: "web-next/NOTE.md",
+			additions: 2,
+			deletions: 0,
+		});
+		expect(cards[0].lines).toEqual([
+			{ kind: "add", text: "+harness runtime online" },
+			{ kind: "add", text: "+resumed turn ok" },
+		]);
+	});
+
+	test("splits a multi-file diff and counts add/del/context per file", () => {
+		const raw = [
+			"diff --git a/a.ts b/a.ts",
+			"--- a/a.ts",
+			"+++ b/a.ts",
+			"@@ -1,3 +1,3 @@",
+			" const x = 1;",
+			"-const y = 2;",
+			"+const y = 3;",
+			" const z = 4;",
+			"diff --git a/b.ts b/b.ts",
+			"--- a/b.ts",
+			"+++ b/b.ts",
+			"@@ -0,0 +1 @@",
+			"+export const flag = true;",
+		].join("\n");
+		const cards = parseGitDiff(raw);
+		expect(cards.map((c) => c.file)).toEqual(["a.ts", "b.ts"]);
+		expect(cards[0]).toMatchObject({ additions: 1, deletions: 1 });
+		expect(cards[0].lines).toHaveLength(4); // 2 context + 1 add + 1 del
+		expect(cards[1]).toMatchObject({ additions: 1, deletions: 0 });
+	});
+
+	test("returns no cards for an empty diff", () => {
+		expect(parseGitDiff("")).toEqual([]);
 	});
 });

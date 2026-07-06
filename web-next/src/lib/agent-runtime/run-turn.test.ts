@@ -3,8 +3,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import { type DatabaseHandle, openDatabase } from "../db/client";
-import { createSession, readEvents, type Session } from "../db/sessions";
-import type { ComputeProvider } from "./provider";
+import {
+	createSession,
+	getSession,
+	readEvents,
+	type Session,
+	updateSession,
+} from "../db/sessions";
+import type { ComputeProvider, TurnRequest } from "./provider";
 import { runSessionTurn } from "./run-turn";
 import type { StreamChunk } from "./stream-chunk";
 
@@ -139,5 +145,81 @@ describe("runSessionTurn", () => {
 			"Unknown compute provider: nope",
 		);
 		expect(await readEvents(handle, "s2")).toEqual([]);
+	});
+
+	test("passes a stored resume handle into the provider request", async () => {
+		const handle = freshDb();
+		await createSession(handle, { id: "s1", provider: "vercel" });
+		await updateSession(handle, "s1", {
+			claudeSessionId: "harness-1",
+			resumeState: '{"type":"resume-session"}',
+		});
+		const fresh = (await getSession(handle, "s1")) as Session;
+
+		let seen: TurnRequest | undefined;
+		const capturing: ComputeProvider = {
+			id: "vercel",
+			runTurn: async function* (request) {
+				seen = request;
+				yield { type: "done", content: "" } as StreamChunk;
+			},
+		};
+		const turn = await runSessionTurn(handle, fresh, "again", capturing);
+		await drain(turn.stream);
+		await turn.ingest;
+
+		expect(seen?.resume).toEqual({
+			harnessSessionId: "harness-1",
+			resumeState: '{"type":"resume-session"}',
+		});
+	});
+
+	test("persists a parked handle from the done chunk and strips it from the log", async () => {
+		const handle = freshDb();
+		const session = await createSession(handle, { id: "s1", provider: "vercel" });
+		const parking = stubProvider([
+			{ type: "text", content: "done" },
+			{
+				type: "done",
+				content: "",
+				metadata: {
+					durationMs: 5,
+					resume: { harnessSessionId: "harness-9", resumeState: '{"data":1}' },
+				},
+			},
+		]);
+		const turn = await runSessionTurn(handle, session, "go", parking);
+		await drain(turn.stream);
+		await turn.ingest;
+
+		// The handle landed on the session row for the next turn to resume from.
+		const after = await getSession(handle, "s1");
+		expect(after?.claudeSessionId).toBe("harness-9");
+		expect(after?.resumeState).toBe('{"data":1}');
+
+		// …and the private handle is not left in the transcript's done event.
+		const events = await readEvents(handle, "s1");
+		const done = events.find((e) => e.chunk.type === "done");
+		expect(done?.chunk.metadata).not.toHaveProperty("resume");
+		expect(done?.chunk.metadata).toMatchObject({ durationMs: 5 });
+	});
+
+	test("a null resume on the done chunk clears a stale stored handle", async () => {
+		const handle = freshDb();
+		const session = await createSession(handle, { id: "s1", provider: "vercel" });
+		await updateSession(handle, "s1", {
+			claudeSessionId: "old",
+			resumeState: '{"stale":true}',
+		});
+		const clearing = stubProvider([
+			{ type: "done", content: "", metadata: { resume: null } },
+		]);
+		const turn = await runSessionTurn(handle, session, "go", clearing);
+		await drain(turn.stream);
+		await turn.ingest;
+
+		const after = await getSession(handle, "s1");
+		expect(after?.claudeSessionId).toBeNull();
+		expect(after?.resumeState).toBeNull();
 	});
 });
