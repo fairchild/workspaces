@@ -12,6 +12,11 @@ import { runSessionTurn } from "@/lib/agent-runtime/run-turn";
 import { getDatabase } from "@/lib/db/client";
 import { getSession } from "@/lib/db/sessions";
 
+// The real (vercel) provider boots a sandbox and runs a full agent turn; give
+// the invocation room to settle via after(). The mock turn finishes in seconds.
+export const runtime = "nodejs";
+export const maxDuration = 300;
+
 export async function POST(
 	request: Request,
 	{ params }: { params: Promise<{ id: string }> },

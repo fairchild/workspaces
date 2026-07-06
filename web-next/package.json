@@ -15,16 +15,21 @@
 		"perf": "node perf/run.mjs"
 	},
 	"dependencies": {
+		"@ai-sdk/harness": "1.0.18",
+		"@ai-sdk/harness-claude-code": "1.0.18",
 		"@ai-sdk/react": "^4.0.15",
+		"@ai-sdk/sandbox-vercel": "1.0.18",
 		"@libsql/client": "^0.17.4",
 		"@radix-ui/react-collapsible": "^1.1.15",
 		"@radix-ui/react-use-controllable-state": "^1.2.3",
-		"ai": "^7.0.14",
+		"@vercel/sandbox": "2.4.0",
+		"ai": "7.0.15",
 		"better-auth": "1.6.20",
 		"kysely": "^0.28.17",
 		"next": "^15.5.19",
 		"react": "^19.0.0",
 		"react-dom": "^19.0.0",
+		"ws": "^8.21.0",
 		"zod": "^4.4.3"
 	},
 	"devDependencies": {
