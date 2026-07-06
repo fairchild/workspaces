@@ -41,8 +41,10 @@ const BRIDGE_PORT = 4000;
  * conversation can idle between turns before the next turn re-clones fresh.
  */
 const SANDBOX_TIMEOUT_MS = 30 * 60 * 1000;
-/** The persistent per-session working copy inside the sandbox. */
-const WORKSPACE_DIR = "/vercel/sandbox/workspace";
+/** The persistent per-session working copy: name under the sandbox default cwd. */
+const WORKSPACE_DIR_NAME = "workspace";
+/** Absolute path to that working copy (sandbox default cwd is /vercel/sandbox). */
+const WORKSPACE_DIR = `/vercel/sandbox/${WORKSPACE_DIR_NAME}`;
 /**
  * Stable template name so `runTurn` and `prewarmVercelTemplate` target the same
  * named snapshot; the harness reuses a template only when the sandbox identity
@@ -96,6 +98,27 @@ function asText(value: unknown): string {
 }
 
 /**
+ * A human-readable string for an error value. `JSON.stringify(new Error(...))`
+ * is `"{}"` — message/stack are non-enumerable — so error parts must be read
+ * for their `.message` (and common nested `.cause`/`.error`) before falling
+ * back to a plain string, or the transcript shows an empty `{}`.
+ */
+export function errorText(value: unknown): string {
+	if (value == null) return "unknown error";
+	if (typeof value === "string") return value;
+	if (value instanceof Error) return value.message || value.name;
+	if (typeof value === "object") {
+		const o = value as { message?: unknown; error?: unknown; cause?: unknown };
+		if (typeof o.message === "string" && o.message) return o.message;
+		if (o.error != null && o.error !== value) return errorText(o.error);
+		if (o.cause != null && o.cause !== value) return errorText(o.cause);
+		const json = asText(value);
+		if (json && json !== "{}") return json;
+	}
+	return String(value);
+}
+
+/**
  * Canonicalizes the harness's lowercase tool names (`write`, `bash`, `edit`) to
  * the Capitalized form the Folio ledger and turn-stats key on (`Write`, `Bash`,
  * `Edit`) — so the real provider's tool cards, verbs, and file/diff stats match
@@ -134,8 +157,13 @@ export async function* mapFullStream(
 ): AsyncGenerator<StreamChunk> {
 	let outputTokens: number | undefined;
 	for await (const part of fullStream) {
-		if (process.env.HARNESS_DEBUG === "1")
-			console.error(`[dbg part] ${part.type} ${JSON.stringify(part).slice(0, 240)}`);
+		if (process.env.HARNESS_DEBUG === "1") {
+			const detail =
+				part.type === "error" || part.type === "tool-error"
+					? errorText(part.error)
+					: JSON.stringify(part).slice(0, 240);
+			console.error(`[dbg part] ${part.type} ${detail}`);
+		}
 		switch (part.type) {
 			case "text-delta":
 				if (part.text) yield { type: "text", content: part.text as string };
@@ -169,17 +197,17 @@ export async function* mapFullStream(
 			case "tool-error":
 				yield {
 					type: "tool_result",
-					content: asText(part.error),
+					content: errorText(part.error),
 					metadata: { toolUseId: part.toolCallId, isError: true },
 				};
 				break;
 			case "error":
-				yield { type: "error", content: asText(part.error) };
+				yield { type: "error", content: errorText(part.error) };
 				break;
 			case "abort":
 				yield {
 					type: "error",
-					content: `aborted${part.reason ? `: ${asText(part.reason)}` : ""}`,
+					content: `aborted${part.reason ? `: ${errorText(part.reason)}` : ""}`,
 				};
 				break;
 			case "finish": {
@@ -213,11 +241,11 @@ function buildPrompt(
 	if (!firstTurn) return userMessage;
 	const branch = sessionBranch(sessionId);
 	return [
-		`You are working inside a persistent clone of the GitHub repository ${TARGET_REPO} at ${WORKSPACE_DIR}, checked out on branch \`${branch}\`. This workspace and our conversation persist across turns — later messages continue in the same working copy.`,
+		`You are working inside a persistent clone of the GitHub repository ${TARGET_REPO}. The current directory (${WORKSPACE_DIR}) is the repo root, checked out on branch \`${branch}\`. This workspace and our conversation persist across turns — later messages continue in the same working copy.`,
 		``,
 		`Working notes:`,
-		`- Use absolute paths under ${WORKSPACE_DIR} for file operations, and \`git -C ${WORKSPACE_DIR} …\` for git (the file-edit tools and bash can resolve different working directories, so absolute paths keep them consistent).`,
-		`- To open or update a pull request: commit, \`git -C ${WORKSPACE_DIR} push -u origin HEAD\`, then call the GitHub API with the token in /tmp/gh_token, e.g. \`curl -sS -X POST -H "Authorization: Bearer $(cat /tmp/gh_token)" -H "Accept: application/vnd.github+json" https://api.github.com/repos/${TARGET_REPO}/pulls -d '{"title":"…","head":"${branch}","base":"main","body":"…"}'\`. Report the \`html_url\`.`,
+		`- Relative paths and git commands resolve against the repo (you are inside it) — edit and \`git status\`/\`git diff\` normally.`,
+		`- To open or update a pull request: commit, \`git push -u origin HEAD\`, then call the GitHub API with the token in /tmp/gh_token, e.g. \`curl -sS -X POST -H "Authorization: Bearer $(cat /tmp/gh_token)" -H "Accept: application/vnd.github+json" https://api.github.com/repos/${TARGET_REPO}/pulls -d '{"title":"…","head":"${branch}","base":"main","body":"…"}'\`. Report the \`html_url\`.`,
 		`- Only open a PR when the request calls for one; otherwise just do the work and summarize it.`,
 		``,
 		`The user's request:`,
@@ -385,6 +413,11 @@ export const vercelProvider: ComputeProvider = {
 				// Same template-identity bootstrap as prewarm, plus the per-session
 				// credential hook (which is deliberately excluded from the snapshot).
 				...SANDBOX_BOOTSTRAP,
+				// Run the agent inside the cloned workspace so its relative paths and
+				// git commands resolve against the repo — without this the CLI's cwd
+				// is a scratch dir and edits land outside the clone. Relative to the
+				// sandbox default (/vercel/sandbox), so this is WORKSPACE_DIR.
+				workDir: WORKSPACE_DIR_NAME,
 				onSession: async ({ session }) => {
 					sandbox = session as RunnableSandbox;
 					await session.writeTextFile({
@@ -479,12 +512,25 @@ export const vercelProvider: ComputeProvider = {
 				yield chunk;
 			}
 			// Synthesize a diff card per changed file from the working tree (the
-			// Edit/Write results carry no patch; the real diff lives in git).
+			// Edit/Write results carry no patch; the real diff lives in git). Emit
+			// each as a tool_use + tool_result pair — the Folio adapter renders the
+			// DiffCard from a tool_result's metadata.diff, and the AI SDK only keeps
+			// a tool result that has a matching opened call.
 			for (const diff of await changedFileDiffs(sandbox)) {
+				const toolUseId = `diff:${diff.file}`;
+				yield {
+					type: "tool_use",
+					content: "Diff",
+					metadata: {
+						toolUseId,
+						toolName: "Diff",
+						input: { file_path: diff.file },
+					},
+				};
 				yield {
 					type: "tool_result",
 					content: "",
-					metadata: { toolUseId: `diff:${diff.file}`, output: "", diff },
+					metadata: { toolUseId, output: "", diff },
 				};
 			}
 			// Park the session so the next turn reconnects it; carry the resume

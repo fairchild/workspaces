@@ -8,6 +8,14 @@
  */
 import { Sandbox } from "@vercel/sandbox";
 
+// Sandbox.get is scoped by credentials; pass them explicitly (name-only 404s
+// against a team-scoped sandbox, the same gap the provider's resume shim fixes).
+const creds = {
+	token: process.env.VERCEL_TOKEN,
+	teamId: process.env.VERCEL_TEAM_ID,
+	projectId: process.env.VERCEL_PROJECT_ID,
+};
+
 async function main() {
 	const names = process.argv.slice(2);
 	if (names.length === 0) {
@@ -16,7 +24,7 @@ async function main() {
 	}
 	for (const name of names) {
 		try {
-			const sandbox = await Sandbox.get({ name });
+			const sandbox = await Sandbox.get({ name, ...creds } as never);
 			await sandbox.stop().catch(() => {});
 			await sandbox.delete();
 			console.log(`deleted ${name}`);

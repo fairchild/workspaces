@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import {
 	canonicalToolName,
+	errorText,
 	mapFullStream,
 	parseGitDiff,
 	toolResultContent,
@@ -109,6 +110,25 @@ describe("mapFullStream", () => {
 		expect(dones).toHaveLength(1);
 		expect(chunks.at(-1)?.type).toBe("done");
 		expect(dones[0]?.metadata?.tokenCount).toBeUndefined();
+	});
+});
+
+describe("errorText", () => {
+	test("reads .message from an Error, which JSON.stringify hides as {}", () => {
+		expect(errorText(new Error("bufferUtil.mask is not a function"))).toBe(
+			"bufferUtil.mask is not a function",
+		);
+		expect(JSON.stringify(new Error("x"))).toBe("{}"); // the trap this avoids
+	});
+	test("unwraps common nested error shapes", () => {
+		expect(errorText({ message: "top" })).toBe("top");
+		expect(errorText({ error: { message: "nested" } })).toBe("nested");
+		expect(errorText({ cause: new Error("caused") })).toBe("caused");
+	});
+	test("falls back for strings, empties, and null", () => {
+		expect(errorText("plain")).toBe("plain");
+		expect(errorText(null)).toBe("unknown error");
+		expect(errorText({})).toBe("[object Object]");
 	});
 });
 
