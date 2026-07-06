@@ -115,9 +115,14 @@ function waitForAppend(sessionId: string, ms: number): Promise<void> {
 /**
  * The turn's assistant chunks, from `fromSeq` to its `done`, streamed live.
  * Backfills whatever is already persisted, then follows new appends until the
- * run closes. Seq-cursored for exactly-once delivery. If the run's ingest loop
- * vanishes without a `done` (a crash the stale path did not pre-close), a
- * terminal error + `done` is synthesized so the reader always completes.
+ * run closes. Seq-cursored for exactly-once delivery.
+ *
+ * Liveness is DB-authoritative, mirroring resolveTurn: an ingest loop in this
+ * process is proof of life, but its absence is not death — on serverless the
+ * POST invocation ingests while a resume GET can land on another instance. A
+ * runnerless turn is followed for as long as its log stays fresh; only a log
+ * quiet past the stale threshold gets a synthesized error + `done`, so the
+ * reader completes on a genuinely dead turn instead of hanging (#810).
  */
 export async function* tailChunks(
 	handle: DatabaseHandle,
@@ -136,17 +141,25 @@ export async function* tailChunks(
 		if (done) return;
 
 		if (!isTurnActive(sessionId)) {
-			// The runner is gone from this process. Re-read once for a `done` that
-			// raced the liveness check…
+			// No runner in this process. Re-read once for a `done` that raced the
+			// liveness check…
 			const after = await readAssistantBatch(handle, sessionId, state);
 			yield* after.chunks;
 			if (after.done) return;
 			if (!isTurnActive(sessionId)) {
-				// …still no `done`: synthesize a terminal so the reader completes
-				// instead of hanging on a turn whose runner vanished.
-				yield { type: "error", content: "Turn interrupted before completion." };
-				yield { type: "done", content: "", metadata: { aborted: true } };
-				return;
+				// …still no `done`: the turn may be running in another instance, so
+				// ask the log, not the process map. Fresh log → keep following it
+				// (the poll below picks up cross-instance appends); quiet log → the
+				// runner died, synthesize a terminal so the reader completes.
+				const newest = await newestEventAt(handle, sessionId);
+				const ageMs = newest
+					? Date.now() - Date.parse(newest)
+					: Number.POSITIVE_INFINITY;
+				if (ageMs >= STALE_TURN_MS) {
+					yield { type: "error", content: "Turn interrupted before completion." };
+					yield { type: "done", content: "", metadata: { aborted: true } };
+					return;
+				}
 			}
 		}
 
