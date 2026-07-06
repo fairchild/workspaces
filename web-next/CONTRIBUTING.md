@@ -3,7 +3,8 @@
 How to run the sessions-first web app locally, from zero to a streaming mock
 turn, plus the extra credentials that light up the real agent runtime. The
 production environment matrix lives in [`docs/deploy.md`](docs/deploy.md);
-design system in [`docs/design.md`](docs/design.md).
+design system in [`docs/design.md`](docs/design.md); the sequencing plan to a
+usable product is [`docs/roadmap.md`](docs/roadmap.md).
 
 ## Prerequisites
 
