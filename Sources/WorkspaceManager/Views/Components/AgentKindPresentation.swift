@@ -11,16 +11,6 @@ import SwiftUI
 import WorkspaceManagerCore
 
 extension AgentKind {
-    /// Human-facing name, matching the agent notification copy.
-    var displayName: String {
-        switch self {
-        case .claudeCode: return "Claude Code"
-        case .opencode: return "OpenCode"
-        case .aider: return "Aider"
-        case .unknown: return "Agent"
-        }
-    }
-
     /// SF Symbol standing in for the agent's icon.
     var symbolName: String {
         switch self {

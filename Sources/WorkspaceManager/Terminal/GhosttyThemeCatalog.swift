@@ -17,7 +17,7 @@ struct GhosttyTheme: Identifiable, Hashable, Sendable {
 ///
 /// Pure and directory-injectable: enumeration takes an explicit directory so it
 /// can be tested against a fixture without the app bundle. Ranking mirrors the
-/// command palette's `SwitchableIndex` philosophy (prefix > substring > other)
+/// session switcher ranking philosophy (prefix > substring > other)
 /// but sorts alphabetically within a tier, which reads better for a name list.
 enum GhosttyThemeCatalog {
     /// Curated, ordered short list surfaced first in pickers. Only entries that
