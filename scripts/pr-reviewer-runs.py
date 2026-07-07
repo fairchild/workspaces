@@ -44,6 +44,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import socket
 import sys
 import urllib.error
 import urllib.parse
@@ -53,10 +54,19 @@ from typing import Any
 
 CANARY_HEADER = "X-Workspace-Webhook-Canary"
 DEFAULT_MONITOR_URL = "https://spaces.cloudcompute.com/api/webhooks/github/pr-reviewer-monitor"
+EX_TEMPFAIL = 75
 
 
 class ReportError(RuntimeError):
-    """Raised when the report cannot be fetched or parsed."""
+    """Raised when the report cannot be fetched or parsed.
+
+    `transient` marks a timeout/transport failure the scheduled monitor should treat
+    as a soft retry (exit `EX_TEMPFAIL`) rather than a hard reviewer failure.
+    """
+
+    def __init__(self, message: str, *, transient: bool = False) -> None:
+        super().__init__(message)
+        self.transient = transient
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -122,8 +132,10 @@ def fetch_report(url: str, secret: str, timeout: float) -> tuple[int, dict[str, 
             return response.status, decode_json_response(response.read(256 * 1024))
     except urllib.error.HTTPError as error:
         return error.code, decode_json_response(error.read(256 * 1024))
+    except (TimeoutError, socket.timeout) as error:
+        raise ReportError(f"monitor request timed out: {error}", transient=True) from error
     except urllib.error.URLError as error:
-        raise ReportError(f"monitor request failed: {error.reason}") from error
+        raise ReportError(f"monitor request failed: {error.reason}", transient=True) from error
 
 
 def as_int(payload: dict[str, Any], key: str) -> int:
@@ -281,7 +293,7 @@ def main(argv: list[str]) -> int:
         status, payload = fetch_report(report_url(args), require_secret(), args.timeout)
     except ReportError as error:
         print(f"error: {error}", file=sys.stderr)
-        return 2
+        return EX_TEMPFAIL if error.transient else 2
 
     if args.json:
         print(json.dumps(payload, indent=2, sort_keys=True))
