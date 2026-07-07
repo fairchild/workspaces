@@ -263,6 +263,33 @@ class RunPlannerTests(unittest.TestCase):
             "Isolate intrusive CI jobs onto a Tart VM runner lane",
         )
 
+    def test_strip_milestone_prefix_removes_lane_order_tag(self) -> None:
+        self.assertEqual(
+            run_planner.strip_milestone_prefix("[D1] v0.23 — Tile-tree completion"),
+            "v0.23 — Tile-tree completion",
+        )
+        self.assertEqual(
+            run_planner.strip_milestone_prefix("[W12] Sessions-first web"),
+            "Sessions-first web",
+        )
+
+    def test_strip_milestone_prefix_leaves_unprefixed_titles_untouched(self) -> None:
+        # A derived milestone name (no prefix) must round-trip unchanged so that a
+        # prefixed live milestone still matches it after stripping.
+        for title in ("Sessions-first web (web-next)", "", None):
+            self.assertEqual(
+                run_planner.strip_milestone_prefix(title),
+                title or "",
+            )
+
+    def test_strip_milestone_prefix_preserves_bracketed_non_tag_titles(self) -> None:
+        # Only lane/order tags ([letters+digits]) are stripped — an arbitrary
+        # bracketed word is left alone so real milestone names survive.
+        self.assertEqual(
+            run_planner.strip_milestone_prefix("[Q3 Planning] Roadmap"),
+            "[Q3 Planning] Roadmap",
+        )
+
     def test_normalize_plan_preserves_blocked_by_and_requested_evidence(self) -> None:
         discussion = self.make_discussion()
         plan = self.make_plan(

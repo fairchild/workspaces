@@ -229,6 +229,8 @@ Roadmap and GitHub milestones play different roles:
 
 ### Active milestone stack
 
+**Milestone titles are self-describing (2026-07-07).** Each open milestone carries a `[<lane><order>]` title prefix — `D` = desktop, `W` = web-next, number = execution order within the lane — so the stack below reads straight off the milestone list, and the number-vs-order inversion (execution runs `[W1]#11 → [W2]#14 → [W3]#13 → [W4]#12`, not by issue number) is visible on sight. Each milestone description also leads with a `[LANE: … · ACTIVE|QUEUED]` posture header. A read-only drift gate (`scripts/milestone-legibility-check.py`, `.github/workflows/milestone-legibility.yml`) fails if any open milestone loses its prefix or posture tag. `peter-planner` matches milestones by the prefix-stripped name, so the convention doesn't disturb automated planning.
+
 | Lane | Active now | Queued next | Sequencing note |
 |---|---|---|---|
 | **Desktop** | **[#9](https://github.com/fairchild/workspaces/milestone/9) — v0.23 tile-tree completion + daily-driver reliability** | **[#10](https://github.com/fairchild/workspaces/milestone/10) — durable sessions** | Epic #627 is all but done — P0–P8 landed (P8 = #842, 2026-07-07); only #690 (depth-≥2 directional focus) remains before it closes. Then the debt: maintainability seams #708/#710, perf contract #637, lifecycle bugs #663/#664/#666/#670/#696 + archive net #709. #10 starts **after** #9's debt is paid — pay maintainability down before adding cross-session continuity to the same files (2026-07-07 decision). |
@@ -236,7 +238,7 @@ Roadmap and GitHub milestones play different roles:
 
 **Personal-tool scope cut (2026-07-07).** web-next serves the owner only for now. **#829** (owner-scoped session sharing) is parked (`idea`, out of #14) until a real second login is wanted — it's the clean prerequisite to sharing, deferred not cancelled. Within **#12**, keyboard/contrast/visible-failure/compose work (#805/#806/#808/#807) stays because it helps the owner; assistive-tech announcements (#804) and mobile touch targets (#809) defer until web-next has an audience beyond one person. Craft aimed at users who don't exist yet is breadth, not quality.
 
-**Open gap — web-next has no performance budget.** Desktop performance is a system (`config/performance/contract.json` + `workspaces-performance-system` skill); web-next, the surface intended to become *primary* (#754), carries no perf scenario or budget in any milestone. Establish a minimal web-next perf floor before the #754 cutover, or the "performance over breadth" principle has an unguarded flank on the newer surface.
+**Open gap — web-next has no performance budget** ([#856](https://github.com/fairchild/workspaces/issues/856)). Desktop performance is a system (`config/performance/contract.json` + `workspaces-performance-system` skill); web-next, the surface intended to become *primary* (#754), carries no perf scenario or budget. Tracked as #856 (`idea`, in #11), gating the #754 cutover — establish a minimal web-next perf floor first, or the "performance over breadth" principle has an unguarded flank on the newer surface.
 
 Theme-to-milestone map:
 

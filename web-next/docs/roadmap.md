@@ -38,9 +38,9 @@ app, can:
 > (owner) tool** until a second allowlist login is wanted: sharing (#829) and
 > assistive-tech/mobile a11y (#804/#809) are deferred, while contrast/keyboard/
 > visible-failure work (#805/#806/#808) stays because it serves the owner.
-> **Open gap:** the surface meant to become *primary* (#754) has no performance
-> budget — establish a minimal perf floor before cutover, matching the desktop
-> performance contract.
+> **Open gap ([#856](https://github.com/fairchild/workspaces/issues/856)):** the
+> surface meant to become *primary* (#754) has no performance budget — establish
+> a minimal perf floor before cutover, matching the desktop performance contract.
 
 ## Current state (2026-07-06)
 
@@ -134,7 +134,7 @@ Production already exists (real OAuth + allowlist, verified); what remains is
 making it *primary*, and keeping it proven. Shareability is deferred with #829.
 - **#828** API routes answer 401 JSON, not a sign-in redirect
 - **#754** cutover to the primary session surface (demote old chat/terminal) —
-  gate on a minimal web-next perf floor first (open gap: no perf budget yet)
+  gate on a minimal web-next perf floor first (#856 — no perf budget yet)
 - **#820** agent opens a PR from a session — *after its design pass*
 - **#829** per-user session ownership — *parked `idea`; the prerequisite to
   adding anyone else to the allowlist. Reinstate this phase when sharing is on
