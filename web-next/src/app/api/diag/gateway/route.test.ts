@@ -106,4 +106,17 @@ describe("GET /api/diag/gateway", () => {
 		expect(body.model).toBe("claude-opus-4-8");
 		expect(body.status).toBe(429);
 	});
+
+	test("a throwing fetch (malformed key → invalid-header error) yields 502 with no key material (codex finding)", async () => {
+		process.env.AI_GATEWAY_API_KEY = "sekret-key-value\n";
+		const fetchSpy = vi
+			.fn()
+			.mockRejectedValue(new TypeError("invalid header value: 'Bearer sekret-key-value\n'"));
+		global.fetch = fetchSpy as unknown as typeof fetch;
+		const res = await get("http://test/api/diag/gateway?model=claude-haiku-4-5");
+		expect(res.status).toBe(502);
+		const text = JSON.stringify(await res.json());
+		expect(text).not.toContain("sekret-key-value");
+		expect(text).toContain("TypeError");
+	});
 });

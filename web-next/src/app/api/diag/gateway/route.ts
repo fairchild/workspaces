@@ -38,18 +38,30 @@ export async function GET(request: Request) {
 	}
 
 	const startedAt = Date.now();
-	const response = await fetch("https://ai-gateway.vercel.sh/v1/chat/completions", {
-		method: "POST",
-		headers: {
-			Authorization: `Bearer ${key}`,
-			"Content-Type": "application/json",
-		},
-		body: JSON.stringify({
-			model: resolved.gatewayModel,
-			messages: [{ role: "user", content: "Reply with exactly: gateway live" }],
-			max_tokens: 10,
-		}),
-	});
+	let response: Response;
+	try {
+		response = await fetch("https://ai-gateway.vercel.sh/v1/chat/completions", {
+			method: "POST",
+			headers: {
+				Authorization: `Bearer ${key}`,
+				"Content-Type": "application/json",
+			},
+			body: JSON.stringify({
+				model: resolved.gatewayModel,
+				messages: [{ role: "user", content: "Reply with exactly: gateway live" }],
+				max_tokens: 10,
+			}),
+		});
+	} catch (error) {
+		// A malformed key value makes fetch throw an invalid-header error whose
+		// message echoes `Bearer <value>` — report the error CLASS only, never
+		// the message, so the credential can't leak into logs or the response.
+		const name = error instanceof Error ? error.name : "Error";
+		return Response.json(
+			{ ok: false, model: requestedModel, error: `gateway request failed before a response (${name})` },
+			{ status: 502 },
+		);
+	}
 
 	const body = await response.json().catch(() => null);
 	if (!response.ok) {

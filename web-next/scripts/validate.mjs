@@ -22,6 +22,7 @@ import {
 	gateStage,
 	isRedirectToSignIn,
 	LOCAL_PORT,
+	redactSecrets,
 	resolveTarget,
 	summarize,
 	validationSessionCookieName,
@@ -29,6 +30,9 @@ import {
 import { bypassServerEnv, startProductionServer, WEB_NEXT_ROOT } from "./harness.mjs";
 
 const PROBE_TIMEOUT_MS = 15_000;
+
+const MODEL_SWEEP_STAGE_ID = "model sweep (#816)";
+const E2E_STAGE_ID = "e2e deployed-safe flows (#817)";
 
 /** A fetch that never follows redirects and never throws on HTTP errors.
  * When VERCEL_AUTOMATION_BYPASS_SECRET is set, every probe carries the
@@ -55,7 +59,14 @@ async function probe(baseUrl, pathname, init = {}) {
 			body: await res.text().catch(() => ""),
 		};
 	} catch (error) {
-		return { path: pathname, method, status: 0, body: String(error) };
+		// A malformed credential can make fetch throw an invalid-header error
+		// that echoes the header VALUE — redact both secrets before the message
+		// can reach a check detail or the persisted report (codex finding).
+		const secrets = [
+			process.env.VERCEL_AUTOMATION_BYPASS_SECRET,
+			process.env.WEB_NEXT_VALIDATION_SESSION,
+		];
+		return { path: pathname, method, status: 0, body: redactSecrets(String(error), secrets) };
 	}
 }
 
@@ -130,7 +141,7 @@ function safeJson(text) {
  * deployment itself.
  */
 async function modelSweepStage(baseUrl, env) {
-	const id = "model sweep (#816)";
+	const id = MODEL_SWEEP_STAGE_ID;
 	const gate = gateStage({ WEB_NEXT_VALIDATION_SESSION: env.WEB_NEXT_VALIDATION_SESSION });
 	if (!gate.runnable) return { id, status: "skip", reason: gate.reason };
 
@@ -162,7 +173,7 @@ async function modelSweepStage(baseUrl, env) {
  * session skip wording.
  */
 async function e2eDeployedSafeStage(target, env) {
-	const id = "e2e deployed-safe flows (#817)";
+	const id = E2E_STAGE_ID;
 	const gate = gateStage({ WEB_NEXT_VALIDATION_SESSION: env.WEB_NEXT_VALIDATION_SESSION });
 	if (!gate.runnable) return { id, status: "skip", reason: gate.reason };
 
@@ -219,13 +230,24 @@ async function main() {
 		console.log(`validating ${target.envName}: ${target.baseUrl}\n`);
 		const reach = await reachabilityStage(target.baseUrl);
 		const stages = [reach];
-		// No point probing posture on a target that isn't serving (or is walled).
-		if (reach.status === "run" && reach.checks.every((c) => c.status === "pass")) {
+		// No point probing posture — or running the credentialed stages — on a
+		// target that isn't serving (or is SSO-walled). Running the model sweep /
+		// e2e against a wall would report app failures for what is a missing
+		// bypass credential (codex finding); they inherit reachability's verdict
+		// as their own skip reason instead.
+		const reachable = reach.status === "run" && reach.checks.every((c) => c.status === "pass");
+		if (reachable) {
 			stages.push(await postureStage(target.baseUrl, reach.signIn));
 		}
 		stages.push(authenticatedStage(process.env));
-		stages.push(await modelSweepStage(target.baseUrl, process.env));
-		stages.push(await e2eDeployedSafeStage(target, process.env));
+		if (reachable) {
+			stages.push(await modelSweepStage(target.baseUrl, process.env));
+			stages.push(await e2eDeployedSafeStage(target, process.env));
+		} else {
+			const reason = reach.status === "skip" ? reach.reason : "target unreachable — see reachability stage";
+			stages.push({ id: MODEL_SWEEP_STAGE_ID, status: "skip", reason });
+			stages.push({ id: E2E_STAGE_ID, status: "skip", reason });
+		}
 
 		const summary = summarize(stages);
 		console.log(summary.lines.join("\n"));

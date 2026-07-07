@@ -9,6 +9,7 @@ import {
 	evaluatePosture,
 	gateStage,
 	isRedirectToSignIn,
+	redactSecrets,
 	resolveTarget,
 	summarize,
 	validationSessionCookieName,
@@ -163,8 +164,33 @@ describe("classifyModelSweepGate (#816)", () => {
 		});
 	});
 
+	test("a 500 merely mentioning the variable name is not a credential gate — exact message only (codex finding)", () => {
+		expect(
+			classifyModelSweepGate({
+				status: 500,
+				body: { error: "failed while reading AI_GATEWAY_API_KEY from config" },
+			}),
+		).toEqual({ skip: false });
+	});
+
+	test("a transient network blip (status 0) is a fail path, never a credential skip (codex-verified)", () => {
+		expect(classifyModelSweepGate({ status: 0, body: undefined })).toEqual({ skip: false });
+	});
+
 	test("a clean 200 first probe runs the sweep", () => {
 		expect(classifyModelSweepGate({ status: 200, body: { ok: true } })).toEqual({ skip: false });
+	});
+});
+
+describe("redactSecrets (codex finding: fetch header errors echo credential values)", () => {
+	test("replaces every occurrence of each secret", () => {
+		expect(
+			redactSecrets("TypeError: invalid header value: 'sekret\\n' (from sekret)", ["sekret"]),
+		).toBe("TypeError: invalid header value: '[redacted]\\n' (from [redacted])");
+	});
+
+	test("unset/empty secrets are inert and non-matching text passes through", () => {
+		expect(redactSecrets("plain error", [undefined, ""])).toBe("plain error");
 	});
 });
 

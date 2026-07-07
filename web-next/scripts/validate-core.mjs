@@ -165,11 +165,32 @@ export function validationSessionCookieName(baseUrl) {
 }
 
 /**
+ * Replaces every occurrence of the given secret values in a string with a
+ * placeholder. Probe/report text can otherwise carry a secret verbatim: a
+ * malformed credential (say, a trailing newline from a sloppy copy-paste)
+ * makes Node's fetch throw an invalid-header error whose message *echoes the
+ * header value* — and that error string flows into check details and the
+ * persisted JSON report (codex review finding).
+ */
+export function redactSecrets(text, secrets) {
+	let out = text;
+	for (const secret of secrets) {
+		if (secret) out = out.split(secret).join("[redacted]");
+	}
+	return out;
+}
+
+/** The exact error the diag route reports when the target has no gateway key. */
+export const MISSING_GATEWAY_KEY_ERROR = "AI_GATEWAY_API_KEY is not set in this deployment";
+
+/**
  * Interprets the first probe of the #816 model sweep to decide whether the
  * stage is even runnable in this target — distinct from any individual
  * model's pass/fail. Two gates, both reported as skips (never a fail):
  * a bounced validation session (the decision doc's "expired — re-seed"
- * state) and a target deployment with no gateway credential at all.
+ * state) and a target deployment with no gateway credential at all (matched
+ * against the route's exact message, so an unrelated 500 that merely
+ * mentions the variable name can't masquerade as a credential gate).
  */
 export function classifyModelSweepGate(firstProbe) {
 	if (firstProbe.status === 401 || firstProbe.status === 403) {
@@ -177,7 +198,7 @@ export function classifyModelSweepGate(firstProbe) {
 	}
 	if (firstProbe.status === 500) {
 		const error = firstProbe.body && typeof firstProbe.body === "object" ? firstProbe.body.error : undefined;
-		if (typeof error === "string" && /AI_GATEWAY_API_KEY/.test(error)) {
+		if (error === MISSING_GATEWAY_KEY_ERROR) {
 			return { skip: true, reason: "missing AI_GATEWAY_API_KEY in target deployment" };
 		}
 	}
