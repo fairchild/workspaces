@@ -1,5 +1,12 @@
 #!/bin/sh
-set -eu
+# Xcode Cloud surfaces only "exited with code 1" in notifications, so this
+# script runs with xtrace and an environment survey: the failing command is
+# the xtrace line just above the trap's own "status=" line in the build
+# report log. (The trap disables xtrace for itself so it doesn't add more
+# `+` noise after that point.)
+set -eux
+
+trap 'status=$?; { set +x; } 2>/dev/null; if [ "$status" -ne 0 ]; then echo "ci_post_clone.sh: exit $status — the failing command is the xtrace line just above the final status= line" >&2; fi' EXIT
 
 repo_root="${CI_PRIMARY_REPOSITORY_PATH:-}"
 if [ -z "$repo_root" ]; then
@@ -11,13 +18,19 @@ cd "$repo_root"
 
 echo "Xcode Cloud post-clone setup for WorkSpaces"
 echo "repo_root=$repo_root"
+sw_vers
+uname -m
 xcodebuild -version
 swift --version
+df -h / || true
 
 if ! command -v brew >/dev/null 2>&1; then
   echo "error: Homebrew is required in the Xcode Cloud image for WorkSpaces CI setup" >&2
   exit 1
 fi
+
+brew --version
+export HOMEBREW_NO_AUTO_UPDATE=1
 
 if ! command -v mise >/dev/null 2>&1; then
   brew install mise
