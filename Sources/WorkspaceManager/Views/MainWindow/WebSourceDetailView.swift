@@ -66,12 +66,10 @@ struct WebSourceDetailView: View {
         .onChange(of: source.id) { _, _ in
             lastBlockedURL = nil
         }
-        .onDisappear {
-            // Leaving the web pane empties this one-tile domain. Web tearDown is deferred
-            // (shared per-source store keeps the page through the release grace window), so
-            // flipping back shortly after does not reload.
-            surfaceStore.sync(activeLeafIDs: [])
-        }
+        // Eviction is NOT tied to this view's lifecycle: `onDisappear` is unordered against the
+        // replacement view's mount, so a late fire could evict a freshly re-mounted surface and
+        // leave its visible WKWebView without a navigation policy after the deferred release.
+        // ContentView empties the domain from the selection transition instead (ordered).
     }
 }
 
