@@ -54,7 +54,9 @@ not terminal input or output.
   `hostSessionID`.
 - Capabilities are enforced before each scoped operation.
 - Mutation routes are stable product verbs, not raw `TileTreeAction` exposure.
-- Browser mutation, resize/equalize, and global control are out of V1.
+- Browser **read** (listing WorkSpaces-owned web surfaces) is supported; browser
+  **mutation** (navigating, clicking, evaluating JS), resize/equalize, and global
+  control remain out of V1.
 - Input injection is caller-scoped only and double-gated behind the
   `Automation Input Write` experiment; see
   [Automation Input Write Decision](../decisions/automation-input-write.md).
@@ -86,6 +88,7 @@ Scoped routes require `x-workspaces-automation-handle`:
 | --- | --- |
 | `GET /v1/context` | Returns the caller's resolved context and capabilities. |
 | `GET /v1/surfaces` | Returns visible terminal surfaces in the caller's window/app scope. |
+| `GET /v1/web-surfaces` | Returns the app's WorkSpaces-owned web surfaces (global, repo, or workspace scoped) with stable source id, display name, configured URL, and — only when a `WKWebView` is live — the live URL, title, and loading state. Read-only. |
 | `POST /v1/tile/focus` | Focuses `left`, `right`, `up`, `down`, `next`, or `previous` relative to the caller tile. |
 | `POST /v1/tile/split` | Splits `left`, `right`, `up`, or `down` from a primary tile. Each successful split creates a new terminal surface in the caller's tab. Secondary split-tile callers return `unsupported` in V1. |
 | `POST /v1/tile/close` | Requests close for the caller tile through the normal close-confirmation path. |
@@ -111,6 +114,7 @@ handle.
 | --- | --- |
 | `context.read` | `GET /v1/context` |
 | `surfaces.read` | `GET /v1/surfaces` |
+| `browser.read` | `GET /v1/web-surfaces` (read-only web-surface listing; granted to default handles under the Automation API experiment) |
 | `tile.focus` | `POST /v1/tile/focus` |
 | `tile.split` | `POST /v1/tile/split` |
 | `tile.close` | `POST /v1/tile/close` |
@@ -189,9 +193,15 @@ If docs or public examples changed, also run the docs checks listed in
 
 ## V1 Non-Goals
 
-V1 does not support browser mutation, opening web URLs, tab title or metadata
+V1 does not support browser mutation (navigating, clicking, filling, or
+evaluating JavaScript in a web surface), opening web URLs, tab title or metadata
 changes, writing into other tiles, resize/equalize, or global cross-workspace
 control. Those capabilities require separate product and safety review before
-they can be added. Caller-scoped input injection is the one reviewed
-exception: it ships as the experimental, double-gated `input.write` capability
-(see [Automation Input Write Decision](../decisions/automation-input-write.md)).
+they can be added. Two reviewed exceptions widen the read/write surface
+deliberately: caller-scoped input injection ships as the experimental,
+double-gated `input.write` capability (see
+[Automation Input Write Decision](../decisions/automation-input-write.md)), and
+read-only web-surface listing ships as `browser.read` (`GET /v1/web-surfaces`),
+granted to default handles under the Automation API experiment. Web-surface
+snapshotting and any browser interaction remain out of scope pending the
+JavaScript-evaluation trust-boundary review.

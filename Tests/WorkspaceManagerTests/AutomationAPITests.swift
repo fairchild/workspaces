@@ -48,6 +48,31 @@ private final class FakeAutomationController: AutomationControlling {
         return AutomationSurfacesResult(surfaces: [])
     }
 
+    var webSurfaceCalls: [String] = []
+
+    func automationWebSurfaces(for handle: String) throws -> AutomationWebSurfacesResult {
+        guard handle != "nobrowser" else {
+            throw AutomationServiceError(.capabilityDenied, "The automation handle does not include browser.read.")
+        }
+        _ = try automationContext(for: handle)
+        webSurfaceCalls.append(handle)
+        return AutomationWebSurfacesResult(
+            webSurfaces: [
+                AutomationWebSurfaceDescriptor(
+                    sourceID: UUID(uuidString: "33333333-3333-3333-3333-333333333333")!,
+                    scope: .repo,
+                    ownerID: UUID(uuidString: "44444444-4444-4444-4444-444444444444"),
+                    displayName: "Docs",
+                    configuredURL: "https://example.test/docs",
+                    liveURL: nil,
+                    title: nil,
+                    isLive: false,
+                    isLoading: nil
+                )
+            ]
+        )
+    }
+
     func automationFocusTile(
         for handle: String,
         direction: AutomationTileFocusDirection
@@ -95,7 +120,7 @@ struct AutomationAPITests {
         let successText = String(data: successData, encoding: .utf8)
         #expect(
             successText
-                == #"{"ok":true,"result":{"status":"ok","system":{"capabilities":["context.read","surfaces.read","tile.focus","tile.split","tile.close"]}},"v":1}"#
+                == #"{"ok":true,"result":{"status":"ok","system":{"capabilities":["context.read","surfaces.read","tile.focus","tile.split","tile.close","browser.read"]}},"v":1}"#
         )
 
         let failure = AutomationResponseEnvelope<AutomationEmptyResult>(
@@ -379,6 +404,68 @@ struct AutomationAPITests {
         #expect(response.status == 403)
         #expect(envelope.error?.code == .capabilityDenied)
         #expect(controller.inputWrites.isEmpty)
+    }
+
+    @Test("Router lists web surfaces, denies under-capable handles, and rejects non-GET")
+    @MainActor
+    func routerWebSurfaces() async throws {
+        let controller = FakeAutomationController()
+
+        let listed = await AutomationHTTPRouter.route(
+            HTTPRequest(
+                method: "GET",
+                path: "/v1/web-surfaces",
+                headers: [AutomationAPI.handleHeader: "live"],
+                body: Data()
+            ),
+            controller: controller,
+            enabled: true
+        )
+        let listedEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationWebSurfacesResult>.self,
+            from: listed.body
+        )
+        #expect(listed.status == 200)
+        #expect(listedEnvelope.result?.webSurfaces.count == 1)
+        #expect(listedEnvelope.result?.webSurfaces.first?.displayName == "Docs")
+        // Fail-closed: an inactive source lists without a fabricated live URL/title.
+        #expect(listedEnvelope.result?.webSurfaces.first?.isLive == false)
+        #expect(listedEnvelope.result?.webSurfaces.first?.liveURL == nil)
+        #expect(controller.webSurfaceCalls == ["live"])
+
+        let denied = await AutomationHTTPRouter.route(
+            HTTPRequest(
+                method: "GET",
+                path: "/v1/web-surfaces",
+                headers: [AutomationAPI.handleHeader: "nobrowser"],
+                body: Data()
+            ),
+            controller: controller,
+            enabled: true
+        )
+        let deniedEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationEmptyResult>.self,
+            from: denied.body
+        )
+        #expect(denied.status == 403)
+        #expect(deniedEnvelope.error?.code == .capabilityDenied)
+
+        let wrongMethod = await AutomationHTTPRouter.route(
+            HTTPRequest(
+                method: "POST",
+                path: "/v1/web-surfaces",
+                headers: [AutomationAPI.handleHeader: "live"],
+                body: Data()
+            ),
+            controller: controller,
+            enabled: true
+        )
+        let wrongMethodEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationEmptyResult>.self,
+            from: wrongMethod.body
+        )
+        #expect(wrongMethod.status == 405)
+        #expect(wrongMethodEnvelope.error?.code == .methodNotAllowed)
     }
 
     @Test("CLI formatter emits result JSON and surfaces envelope errors")

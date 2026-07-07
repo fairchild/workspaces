@@ -2035,7 +2035,8 @@ struct ContentView: View {
             },
             requestCloseTerminal: { sessionID in
                 requestCloseTerminalTabs([sessionID])
-            }
+            },
+            webSurfaceRecords: { webSources.map(WebSurfaceRecord.init(from:)) }
         )
     }
 

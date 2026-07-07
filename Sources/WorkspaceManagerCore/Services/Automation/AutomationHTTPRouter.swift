@@ -59,6 +59,9 @@ enum AutomationHTTPRouter {
         case ("GET", "/v1/surfaces"):
             return try await controller.automationSurfaces(for: handle)
 
+        case ("GET", "/v1/web-surfaces"):
+            return try await controller.automationWebSurfaces(for: handle)
+
         case ("POST", "/v1/tile/focus"):
             let direction = try decodeDirection(
                 AutomationTileFocusDirection.self,
@@ -91,6 +94,8 @@ enum AutomationHTTPRouter {
             throw AutomationServiceError(.methodNotAllowed, "Use GET /v1/context.")
         case (_, "/v1/surfaces"):
             throw AutomationServiceError(.methodNotAllowed, "Use GET /v1/surfaces.")
+        case (_, "/v1/web-surfaces"):
+            throw AutomationServiceError(.methodNotAllowed, "Use GET /v1/web-surfaces.")
         case (_, "/v1/tile/focus"):
             throw AutomationServiceError(.methodNotAllowed, "Use POST /v1/tile/focus.")
         case (_, "/v1/tile/split"):
@@ -253,6 +258,7 @@ extension CodableSendableEquatable {
 extension AutomationHealthResult: CodableSendableEquatable {}
 extension AutomationContextResult: CodableSendableEquatable {}
 extension AutomationSurfacesResult: CodableSendableEquatable {}
+extension AutomationWebSurfacesResult: CodableSendableEquatable {}
 extension AutomationMutationResult: CodableSendableEquatable {}
 extension AutomationInputWriteResult: CodableSendableEquatable {}
 extension AutomationEmptyResult: CodableSendableEquatable {}

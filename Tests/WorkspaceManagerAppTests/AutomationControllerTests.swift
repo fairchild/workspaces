@@ -196,6 +196,94 @@ struct AutomationControllerTests {
         }
     }
 
+    @Test("Web surface list returns provided descriptors for a browser.read handle")
+    func webSurfaceListReturnsDescriptors() throws {
+        let store = TileTreeStore()
+        let primary =
+            store.activateSession(
+                key: .repoPath("/Users/test/repo"),
+                directory: URL(fileURLWithPath: "/Users/test/repo")
+            ).session
+        let registry = AutomationHandleRegistry(makeHandle: { "browser" })
+        _ = registry.upsert(
+            hostSessionID: primary.id,
+            tileID: nil,
+            surfaceKind: .terminal,
+            windowScopeID: "window",
+            appScopeID: "app",
+            capabilities: AutomationAPI.v1Capabilities
+        )
+        let descriptor = AutomationWebSurfaceDescriptor(
+            sourceID: UUID(uuidString: "55555555-5555-5555-5555-555555555555")!,
+            scope: .global,
+            ownerID: nil,
+            displayName: "Docs",
+            configuredURL: "https://example.test",
+            liveURL: nil,
+            title: nil,
+            isLive: false,
+            isLoading: nil
+        )
+        let controller = AutomationController(
+            handleRegistry: registry,
+            tileTreeStore: store,
+            focusTerminal: { _ in },
+            requestCloseTerminal: { _ in },
+            webSurfaces: { [descriptor] }
+        )
+
+        let result = try controller.automationWebSurfaces(for: "browser")
+        #expect(result.webSurfaces == [descriptor])
+        #expect(result.system.capabilities.contains(.browserRead))
+    }
+
+    @Test("Web surface list denies handles without browser.read")
+    func webSurfaceListDeniesWithoutBrowserRead() throws {
+        let store = TileTreeStore()
+        let primary =
+            store.activateSession(
+                key: .repoPath("/Users/test/repo"),
+                directory: URL(fileURLWithPath: "/Users/test/repo")
+            ).session
+        let registry = AutomationHandleRegistry(makeHandle: { "limited" })
+        _ = registry.upsert(
+            hostSessionID: primary.id,
+            tileID: nil,
+            surfaceKind: .terminal,
+            windowScopeID: "window",
+            appScopeID: "app",
+            capabilities: [.contextRead]
+        )
+        let controller = AutomationController(
+            handleRegistry: registry,
+            tileTreeStore: store,
+            focusTerminal: { _ in },
+            requestCloseTerminal: { _ in },
+            webSurfaces: {
+                [
+                    AutomationWebSurfaceDescriptor(
+                        sourceID: UUID(),
+                        scope: .global,
+                        ownerID: nil,
+                        displayName: "Docs",
+                        configuredURL: "https://example.test",
+                        liveURL: nil,
+                        title: nil,
+                        isLive: false,
+                        isLoading: nil
+                    )
+                ]
+            }
+        )
+
+        do {
+            _ = try controller.automationWebSurfaces(for: "limited")
+            Issue.record("Expected browser.read to be required for web-surface listing")
+        } catch let error as AutomationServiceError {
+            #expect(error.response.code == .capabilityDenied)
+        }
+    }
+
     @Test("Input write requires the input.write capability")
     func inputWriteRequiresCapability() throws {
         let fixture = makeFixture()

@@ -33,7 +33,8 @@ final class AutomationIntegrationLifecycle: ObservableObject {
     func configure(
         tileTreeStore: TileTreeStore,
         focusTerminal: @escaping @MainActor (UUID) -> Void,
-        requestCloseTerminal: @escaping @MainActor (UUID) -> Void
+        requestCloseTerminal: @escaping @MainActor (UUID) -> Void,
+        webSurfaceRecords: @escaping @MainActor () -> [WebSurfaceRecord] = { [] }
     ) async {
         guard isEnabled else {
             tileTreeStore.configureAutomation(handleRegistry: nil, socketPath: nil)
@@ -44,7 +45,8 @@ final class AutomationIntegrationLifecycle: ObservableObject {
             let socketPath = try await startIfNeeded(
                 tileTreeStore: tileTreeStore,
                 focusTerminal: focusTerminal,
-                requestCloseTerminal: requestCloseTerminal
+                requestCloseTerminal: requestCloseTerminal,
+                webSurfaceRecords: webSurfaceRecords
             )
             tileTreeStore.configureAutomation(handleRegistry: handleRegistry, socketPath: socketPath)
         } catch {
@@ -57,14 +59,23 @@ final class AutomationIntegrationLifecycle: ObservableObject {
     func startIfNeeded(
         tileTreeStore: TileTreeStore,
         focusTerminal: @escaping @MainActor (UUID) -> Void,
-        requestCloseTerminal: @escaping @MainActor (UUID) -> Void
+        requestCloseTerminal: @escaping @MainActor (UUID) -> Void,
+        webSurfaceRecords: @escaping @MainActor () -> [WebSurfaceRecord] = { [] }
     ) async throws -> String {
+        // Compose the read-only web-surface list from the caller's live source records
+        // joined with the surface store's live WKWebView state (non-creating peek).
+        let webSurfaces = Self.makeWebSurfaces(
+            tileTreeStore: tileTreeStore,
+            webSurfaceRecords: webSurfaceRecords
+        )
+
         if let startTask {
             let socketPath = try await startTask.value
             controller?.update(
                 tileTreeStore: tileTreeStore,
                 focusTerminal: focusTerminal,
-                requestCloseTerminal: requestCloseTerminal
+                requestCloseTerminal: requestCloseTerminal,
+                webSurfaces: webSurfaces
             )
             return socketPath
         }
@@ -73,7 +84,8 @@ final class AutomationIntegrationLifecycle: ObservableObject {
             controller?.update(
                 tileTreeStore: tileTreeStore,
                 focusTerminal: focusTerminal,
-                requestCloseTerminal: requestCloseTerminal
+                requestCloseTerminal: requestCloseTerminal,
+                webSurfaces: webSurfaces
             )
             guard let socketPath else {
                 throw AutomationListener.ListenerError.socketBindFailed("listener started without a socket path")
@@ -85,7 +97,8 @@ final class AutomationIntegrationLifecycle: ObservableObject {
             handleRegistry: handleRegistry,
             tileTreeStore: tileTreeStore,
             focusTerminal: focusTerminal,
-            requestCloseTerminal: requestCloseTerminal
+            requestCloseTerminal: requestCloseTerminal,
+            webSurfaces: webSurfaces
         )
 
         let bundleID = Bundle.main.bundleIdentifier ?? "com.cloudcompute.workspaces"
@@ -128,6 +141,20 @@ final class AutomationIntegrationLifecycle: ObservableObject {
             Task { @MainActor [weak self] in await self?.stop() }
         }
         return listener.socketPath
+    }
+
+    private static func makeWebSurfaces(
+        tileTreeStore: TileTreeStore,
+        webSurfaceRecords: @escaping @MainActor () -> [WebSurfaceRecord]
+    ) -> @MainActor () -> [AutomationWebSurfaceDescriptor] {
+        { [weak tileTreeStore] in
+            WebSurfaceEnumerator.descriptors(
+                records: webSurfaceRecords(),
+                liveState: { sourceID in
+                    tileTreeStore?.surfaceStore.liveWebState(forSourceID: sourceID)
+                }
+            )
+        }
     }
 
     func stop() async {

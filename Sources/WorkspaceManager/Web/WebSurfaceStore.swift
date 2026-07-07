@@ -31,6 +31,19 @@ final class WebSurfaceStore: ObservableObject {
         activeSurface != nil
     }
 
+    /// Read-only snapshot of the live `WKWebView`'s navigation state for the
+    /// Automation API's browser-read list. Returns `nil` when no surface is
+    /// instantiated — the caller must not fabricate URL/title for a released view.
+    /// Does not instantiate a surface.
+    var liveState: WebSurfaceLiveState? {
+        guard let webView = activeSurface?.webView else { return nil }
+        return WebSurfaceLiveState(
+            url: webView.url?.absoluteString,
+            title: webView.title,
+            isLoading: webView.isLoading
+        )
+    }
+
     func ensureSurface(
         for source: WebSource,
         onBlockedNavigation: ((URL) -> Void)? = nil
