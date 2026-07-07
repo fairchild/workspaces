@@ -269,3 +269,42 @@ test("closing the tab mid-turn does not kill it — a fresh tab catches up", asy
 	);
 	await expect(reopened.getByTestId("activity-line")).toHaveCount(0);
 });
+
+// GitHub-backed repo picker (#825): the /api/repos fixture list under
+// AUTH_BYPASS covers both a real (non-"main") default branch landing in the
+// masthead and a calm inline error for a repo the fixture directory doesn't
+// recognize — the two behaviors #825 added over the old freetext-only flow.
+
+test("connecting a repo via freetext records and shows its real default branch", async ({
+	page,
+}) => {
+	await page.goto("/");
+	await page.getByRole("button", { name: "+ new session" }).click();
+	await page
+		.getByRole("textbox", { name: "Repository (owner/name)" })
+		.fill("fairchild/web-next-fixtures");
+	await page.keyboard.press("Enter");
+
+	await expect(page).toHaveURL(SESSION_URL);
+	await expect(page.locator("header")).toContainText("fairchild/web-next-fixtures");
+	// The fixture's default_branch is "trunk" — distinct from the "main"
+	// fallback, so this proves the real value was recorded and rendered.
+	await expect(page.locator("header")).toContainText("trunk");
+});
+
+test("an owner/name the fixture directory doesn't recognize shows a calm inline error", async ({
+	page,
+}) => {
+	await page.goto("/");
+	await page.getByRole("button", { name: "+ new session" }).click();
+	const input = page.getByRole("textbox", { name: "Repository (owner/name)" });
+	await input.fill("fairchild/does-not-exist");
+	await page.keyboard.press("Enter");
+
+	// No navigation — the picker stays put with a quiet inline message.
+	await expect(page).toHaveURL("/");
+	await expect(page.getByTestId("new-session-error")).toContainText(
+		"fairchild/does-not-exist",
+	);
+	await expect(page.getByTestId("new-session-picker")).toBeVisible();
+});

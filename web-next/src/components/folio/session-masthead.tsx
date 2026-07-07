@@ -7,7 +7,8 @@ import { ThemeToggle } from "./theme-toggle";
 
 export interface MastheadData {
 	repo: string;
-	branch: string;
+	/** `null` = unknown (repo connected unverified); the segment is omitted. */
+	branch: string | null;
 	title: string;
 	agentName: string;
 	/** e.g. "sandbox active"; `live` adds the green halo dot. */
@@ -24,8 +25,12 @@ export function SessionMasthead({ session }: { session: MastheadData }) {
 		<header className="sticky top-0 z-20 flex h-[52px] items-center justify-between gap-3 border-b border-line bg-mast-bg px-5 font-mono text-masthead tracking-[.02em] text-muted backdrop-blur-[10px] backdrop-saturate-[1.1] sm:px-8">
 			<span className="min-w-0 truncate whitespace-nowrap">
 				<b className="font-medium text-ink">{session.repo}</b>
-				<Separator />
-				{session.branch}
+				{session.branch && (
+					<>
+						<Separator />
+						{session.branch}
+					</>
+				)}
 			</span>
 			<span className="absolute left-1/2 hidden -translate-x-1/2 font-serif text-title italic tracking-[.01em] text-faint md:block">
 				{session.title}

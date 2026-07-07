@@ -1,6 +1,11 @@
 import crypto from "node:crypto";
-import { describe, expect, it } from "vitest";
-import { generateAppJWT, normalizePrivateKey } from "./github-app";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+	generateAppJWT,
+	listAppInstallations,
+	listInstallationRepositories,
+	normalizePrivateKey,
+} from "./github-app";
 
 // A throwaway RSA keypair — the App private-key handling and RS256 signing are
 // the error-prone parts (base64 vs PEM, correct signature), so verify them
@@ -53,5 +58,71 @@ describe("generateAppJWT", () => {
 		expect(
 			verifier.verify(publicKey, Buffer.from(signature, "base64url")),
 		).toBe(true);
+	});
+});
+
+afterEach(() => {
+	vi.unstubAllGlobals();
+});
+
+describe("listAppInstallations", () => {
+	it("maps the installations list to id + account login", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () =>
+				Response.json([
+					{ id: 42, account: { login: "fairchild" } },
+					{ id: 43, account: { login: "some-org" } },
+				]),
+			),
+		);
+		await expect(listAppInstallations("jwt")).resolves.toEqual([
+			{ id: 42, account: "fairchild" },
+			{ id: 43, account: "some-org" },
+		]);
+	});
+
+	it("throws with the response status and body on failure", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => new Response("nope", { status: 401 })),
+		);
+		await expect(listAppInstallations("jwt")).rejects.toThrow(/401/);
+	});
+});
+
+describe("listInstallationRepositories", () => {
+	it("maps the repositories list to fullName/defaultBranch/private", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () =>
+				Response.json({
+					repositories: [
+						{
+							full_name: "fairchild/workspaces",
+							default_branch: "main",
+							private: false,
+						},
+						{
+							full_name: "fairchild/dotfiles",
+							default_branch: "master",
+							private: true,
+						},
+					],
+				}),
+			),
+		);
+		await expect(listInstallationRepositories("token")).resolves.toEqual([
+			{ fullName: "fairchild/workspaces", defaultBranch: "main", private: false },
+			{ fullName: "fairchild/dotfiles", defaultBranch: "master", private: true },
+		]);
+	});
+
+	it("throws with the response status and body on failure", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => new Response("forbidden", { status: 403 })),
+		);
+		await expect(listInstallationRepositories("token")).rejects.toThrow(/403/);
 	});
 });

@@ -65,7 +65,8 @@ export default async function SessionPage({
 			session={{
 				masthead: {
 					repo: repoName,
-					branch: repo?.defaultBranch ?? "main",
+					// null (unknown/unverified) omits the segment — never claim "main".
+					branch: repo?.defaultBranch ?? null,
 					title: session.title || "New session",
 					agentName: "Claude",
 					stateLabel: "idle",

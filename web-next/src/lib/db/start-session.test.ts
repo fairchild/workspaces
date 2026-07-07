@@ -1,12 +1,12 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { DEFAULT_MODEL } from "../agent-runtime/models";
 import { type DatabaseHandle, openDatabase } from "./client";
 import { ensureRepo, listRepos } from "./repos";
 import { listSessions } from "./sessions";
-import { isValidRepoFullName, startSession } from "./start-session";
+import { isValidRepoFullName, RepoUnavailableError, startSession } from "./start-session";
 
 let open: DatabaseHandle | undefined;
 let dir: string | undefined;
@@ -22,6 +22,7 @@ afterEach(async () => {
 	open = undefined;
 	if (dir) rmSync(dir, { recursive: true, force: true });
 	dir = undefined;
+	vi.unstubAllEnvs();
 });
 
 describe("isValidRepoFullName", () => {
@@ -43,6 +44,37 @@ describe("isValidRepoFullName", () => {
 		]) {
 			expect(isValidRepoFullName(bad), bad).toBe(false);
 		}
+	});
+});
+
+describe("ensureRepo (default_branch recording)", () => {
+	test("records the given default branch on a new repo", async () => {
+		const handle = freshDb();
+		const repo = await ensureRepo(handle, "fairchild/workspaces", "develop");
+		expect(repo.defaultBranch).toBe("develop");
+	});
+
+	test("backfills the default branch onto an existing repo that lacks one", async () => {
+		const handle = freshDb();
+		await ensureRepo(handle, "fairchild/workspaces");
+		const updated = await ensureRepo(handle, "fairchild/workspaces", "develop");
+		expect(updated.defaultBranch).toBe("develop");
+		const [persisted] = await listRepos(handle);
+		expect(persisted.defaultBranch).toBe("develop");
+	});
+
+	test("updates the default branch when it has changed since last connect", async () => {
+		const handle = freshDb();
+		await ensureRepo(handle, "fairchild/workspaces", "main");
+		const updated = await ensureRepo(handle, "fairchild/workspaces", "trunk");
+		expect(updated.defaultBranch).toBe("trunk");
+	});
+
+	test("leaves an existing branch alone when called without one", async () => {
+		const handle = freshDb();
+		await ensureRepo(handle, "fairchild/workspaces", "main");
+		const untouched = await ensureRepo(handle, "fairchild/workspaces");
+		expect(untouched.defaultBranch).toBe("main");
 	});
 });
 
@@ -80,6 +112,48 @@ describe("startSession", () => {
 		);
 		expect(await listRepos(handle)).toHaveLength(0);
 		expect(await listSessions(handle)).toHaveLength(0);
+	});
+
+	// The GitHub validation step (see ../github/repo-directory): bypass mode
+	// gives deterministic fixtures, so these stay hermetic unit tests.
+	describe("GitHub validation (bypass fixtures)", () => {
+		test("records the real default_branch from the fixture on first connect", async () => {
+			vi.stubEnv("AUTH_BYPASS", "1");
+			const handle = freshDb();
+			await startSession(handle, "fairchild/web-next-fixtures");
+			const [repo] = await listRepos(handle);
+			expect(repo.defaultBranch).toBe("trunk");
+		});
+
+		test("rejects a repo the fixture directory doesn't recognize, writing nothing", async () => {
+			vi.stubEnv("AUTH_BYPASS", "1");
+			const handle = freshDb();
+			await expect(
+				startSession(handle, "fairchild/not-a-real-repo"),
+			).rejects.toBeInstanceOf(RepoUnavailableError);
+			expect(await listRepos(handle)).toHaveLength(0);
+			expect(await listSessions(handle)).toHaveLength(0);
+		});
+
+		test("backfills the default_branch onto a repo connected before validation existed", async () => {
+			vi.stubEnv("AUTH_BYPASS", "1");
+			const handle = freshDb();
+			await ensureRepo(handle, "fairchild/web-next-fixtures"); // no branch yet
+			await startSession(handle, "fairchild/web-next-fixtures");
+			const [repo] = await listRepos(handle);
+			expect(repo.defaultBranch).toBe("trunk");
+		});
+	});
+
+	// No AUTH_BYPASS and no App creds in this test run (see vitest.config.ts /
+	// CI): startSession runs in degraded mode here, same as unset env in prod
+	// local dev — freetext is accepted unverified rather than blocked.
+	test("degraded mode (no App creds) accepts any shape-valid repo unverified", async () => {
+		const handle = freshDb();
+		const session = await startSession(handle, "anyone/anything");
+		expect(session.repoId).toBe("anyone/anything");
+		const [repo] = await listRepos(handle);
+		expect(repo.defaultBranch).toBeNull();
 	});
 });
 
