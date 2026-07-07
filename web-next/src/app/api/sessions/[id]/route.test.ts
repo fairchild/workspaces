@@ -111,6 +111,13 @@ describe("PATCH /api/sessions/[id]", () => {
 		expect(res.status).toBe(400);
 	});
 
+	test("rejects an empty body — no field is a no-op patch", async () => {
+		const id = await freshSession();
+		const res = await patch(id, {});
+		expect(res.status).toBe(400);
+		expect((await res.json()).error).toMatch(/model or title is required/);
+	});
+
 	test("a title edit is never overwritten by a later auto-title write", async () => {
 		const id = await freshSession();
 		await patch(id, { title: "My own title" });

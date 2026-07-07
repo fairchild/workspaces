@@ -104,8 +104,16 @@ export async function startTurn(
 	// a later turn to name it, and a user-edited title is never touched
 	// (its row no longer matches the empty-title guard). This sits before
 	// the detached ingest starts, on the same durable path as the user
-	// event itself, so a closed tab can't lose the title.
-	await titleSessionIfEmpty(handle, session.id, deriveSessionTitle(userText));
+	// event itself, so a closed tab can't lose the title. Best-effort: the
+	// user event above is already durably committed by this point, so a
+	// title-write failure (a DB hiccup) must not fail the whole turn-start
+	// and strand that committed message — it just leaves the session
+	// untitled for the next turn to retry.
+	try {
+		await titleSessionIfEmpty(handle, session.id, deriveSessionTitle(userText));
+	} catch (error) {
+		console.error(`[turn-ingest] auto-title write failed for ${session.id}`, error);
+	}
 	const fromSeq = userSeq + 1;
 	const ingest = ingestTurn(handle, session, userText, provider);
 	activeTurns.set(session.id, { fromSeq, startedAt: Date.now() });
