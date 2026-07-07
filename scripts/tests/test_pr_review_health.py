@@ -13,10 +13,15 @@ ordinary review states that do not need operator intervention.
 from __future__ import annotations
 
 import importlib.util
+import io
+import socket
 import sys
 import unittest
+import urllib.error
+from contextlib import redirect_stderr
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from unittest.mock import patch
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -208,6 +213,49 @@ class PRReviewHealthTests(unittest.TestCase):
         self.assertIn("- Queue coverage: incomplete (1 skipped/unassessed PR)", rendered)
         self.assertIn("unassessed: not updated within 3d", rendered)
         self.assertNotIn("- Failures: 0", rendered)
+
+
+class ManagedReviewHealthTransportTests(unittest.TestCase):
+    """A timeout/transport failure reaching GitHub is a structured transient outcome
+    (exit EX_TEMPFAIL), so a network blip is not reported as projection drift."""
+
+    def test_graphql_timeout_raises_transient(self) -> None:
+        with patch.object(
+            pr_review_health.urllib.request,
+            "urlopen",
+            side_effect=socket.timeout("timed out"),
+        ):
+            with self.assertRaises(pr_review_health.TransientHealthError):
+                pr_review_health.graphql(
+                    "token",
+                    {"owner": "o", "name": "n", "first": 1, "after": None},
+                )
+
+    def test_graphql_url_error_raises_transient(self) -> None:
+        with patch.object(
+            pr_review_health.urllib.request,
+            "urlopen",
+            side_effect=urllib.error.URLError("connection refused"),
+        ):
+            with self.assertRaises(pr_review_health.TransientHealthError):
+                pr_review_health.graphql(
+                    "token",
+                    {"owner": "o", "name": "n", "first": 1, "after": None},
+                )
+
+    def test_main_returns_tempfail_on_transient(self) -> None:
+        with (
+            patch.object(pr_review_health, "get_token", return_value="token"),
+            patch.object(
+                pr_review_health.urllib.request,
+                "urlopen",
+                side_effect=TimeoutError("timed out"),
+            ),
+            redirect_stderr(io.StringIO()) as stderr,
+        ):
+            code = pr_review_health.main(["--repo", "fairchild/workspaces"])
+        self.assertEqual(code, pr_review_health.EX_TEMPFAIL)
+        self.assertIn("deferred", stderr.getvalue())
 
 
 if __name__ == "__main__":

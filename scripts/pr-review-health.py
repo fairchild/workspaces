@@ -49,6 +49,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import socket
 import subprocess
 import sys
 import urllib.error
@@ -60,6 +61,16 @@ from typing import Any
 
 
 GITHUB_GRAPHQL_URL = "https://api.github.com/graphql"
+EX_TEMPFAIL = 75
+
+
+class TransientHealthError(RuntimeError):
+    """Raised when the audit cannot reach GitHub (timeout/transport failure).
+
+    The scheduled audit treats this as a soft retry (exit `EX_TEMPFAIL`) rather than a
+    projection-drift failure, so a network blip does not read as a stuck-pending status.
+    """
+
 MANAGED_REVIEWER_LOGINS = {
     "workspace-agents",
     "workspace-agents[bot]",
@@ -433,6 +444,10 @@ def graphql(token: str, variables: dict[str, Any]) -> dict[str, Any]:
     except urllib.error.HTTPError as error:
         body = error.read().decode(errors="replace")
         raise RuntimeError(f"GitHub GraphQL request failed ({error.code}): {body}") from error
+    except (TimeoutError, socket.timeout) as error:
+        raise TransientHealthError(f"GitHub GraphQL request timed out: {error}") from error
+    except urllib.error.URLError as error:
+        raise TransientHealthError(f"GitHub GraphQL request failed: {error.reason}") from error
 
     if data.get("errors"):
         raise RuntimeError(f"GitHub GraphQL returned errors: {json.dumps(data['errors'])}")
@@ -517,7 +532,11 @@ def main(argv: list[str]) -> int:
         if not token:
             print("GITHUB_TOKEN or GH_TOKEN is required when no --fixture is provided.", file=sys.stderr)
             return 2
-        prs = fetch_open_prs(args.repo, token=token, max_prs=args.max_prs)
+        try:
+            prs = fetch_open_prs(args.repo, token=token, max_prs=args.max_prs)
+        except TransientHealthError as error:
+            print(f"::warning::managed review projection audit deferred: {error}", file=sys.stderr)
+            return EX_TEMPFAIL
 
     report = evaluate(
         prs,

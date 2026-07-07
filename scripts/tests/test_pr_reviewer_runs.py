@@ -9,10 +9,14 @@ from __future__ import annotations
 
 import importlib.util
 import io
+import os
+import socket
 import sys
 import unittest
-from contextlib import redirect_stdout
+import urllib.error
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -110,6 +114,38 @@ class PRReviewerRunsTests(unittest.TestCase):
         self.assertIn("Running too long:", rendered)
         self.assertIn("details: https://spaces.cloudcompute.com/dashboard/review-runs/fp_slow", rendered)
         self.assertIn("slo: breached", rendered)
+
+
+class PRReviewerRunsTransportTests(unittest.TestCase):
+    """A timeout/transport failure reaching the monitor is a structured transient
+    outcome (exit EX_TEMPFAIL), not an uncaught traceback."""
+
+    def _run_with_urlopen_error(self, error: Exception) -> tuple[int, str]:
+        with (
+            patch.dict(os.environ, {"WORKSPACES_WEBHOOK_CANARY_SECRET": "runs-secret"}),
+            patch.object(
+                pr_reviewer_runs.urllib.request, "urlopen", side_effect=error
+            ),
+            redirect_stderr(io.StringIO()) as stderr,
+        ):
+            code = pr_reviewer_runs.main([])
+        return code, stderr.getvalue()
+
+    def test_socket_timeout_returns_tempfail(self) -> None:
+        code, stderr = self._run_with_urlopen_error(socket.timeout("timed out"))
+        self.assertEqual(code, pr_reviewer_runs.EX_TEMPFAIL)
+        self.assertIn("timed out", stderr)
+
+    def test_timeout_error_returns_tempfail(self) -> None:
+        code, _ = self._run_with_urlopen_error(TimeoutError("timed out"))
+        self.assertEqual(code, pr_reviewer_runs.EX_TEMPFAIL)
+
+    def test_url_error_returns_tempfail(self) -> None:
+        code, stderr = self._run_with_urlopen_error(
+            urllib.error.URLError("connection refused")
+        )
+        self.assertEqual(code, pr_reviewer_runs.EX_TEMPFAIL)
+        self.assertIn("failed", stderr)
 
 
 if __name__ == "__main__":
