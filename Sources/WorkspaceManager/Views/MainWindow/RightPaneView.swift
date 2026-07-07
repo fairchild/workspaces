@@ -353,6 +353,8 @@ struct RightPaneView: View {
                 DiffReviewSheet(
                     filePath: change.path,
                     directoryURL: directoryURL,
+                    status: change.status,
+                    onChanged: { state.refreshRequestID = UUID() },
                     onClose: { reviewDiffTarget = nil }
                 )
             }

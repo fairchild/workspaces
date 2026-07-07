@@ -829,10 +829,14 @@ enum MainWindowCommand {
 final class AppCommandState: ObservableObject {
     @Published private(set) var canCreateWorkspace = false
     @Published private(set) var canSaveDocument = false
+    /// True while the open editor document has unsaved edits, so navigation intents can pause for
+    /// a Save / Discard / Cancel prompt (#704 Phase 4).
+    @Published private(set) var hasUnsavedDocumentEdits = false
     @Published private(set) var mainWindowAvailability = MainWindowCommandAvailability.empty
 
     private var newWorkspaceAction: (@MainActor () -> Void)?
     private var saveDocumentAction: (@MainActor () -> Void)?
+    private var saveDocumentAsyncAction: (@MainActor () async -> Bool)?
     private var mainWindowActions = MainWindowFocusedActions.empty
 
     func setNewWorkspaceAction(_ action: (@MainActor () -> Void)?) {
@@ -851,6 +855,28 @@ final class AppCommandState: ObservableObject {
 
     func clearSaveDocumentAction() {
         setSaveDocumentAction(nil, isEnabled: false)
+    }
+
+    /// Register the open document's dirty state and the awaiting-Save hook the navigation guard
+    /// uses. (Discarding needs no hook: navigating away replaces the buffer, abandoning edits.)
+    func setDocumentEditsState(isDirty: Bool, save: (@MainActor () async -> Bool)?) {
+        saveDocumentAsyncAction = save
+        guard hasUnsavedDocumentEdits != isDirty else { return }
+        hasUnsavedDocumentEdits = isDirty
+    }
+
+    func clearDocumentEditsState() {
+        saveDocumentAsyncAction = nil
+        guard hasUnsavedDocumentEdits else { return }
+        hasUnsavedDocumentEdits = false
+    }
+
+    /// Save the dirty document, returning whether the save succeeded. No registered hook (or no
+    /// unsaved edits) counts as success so navigation proceeds.
+    @discardableResult
+    func saveDirtyDocument() async -> Bool {
+        guard let saveDocumentAsyncAction else { return true }
+        return await saveDocumentAsyncAction()
     }
 
     func setMainWindowActions(

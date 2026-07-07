@@ -95,4 +95,68 @@ struct GitServiceDiffTests {
         let diff = try await GitService.shared.diff(file: "a.txt", at: repo.url)
         #expect(diff.hunks.isEmpty)
     }
+
+    @Test("discardUntracked deletes exactly the one untracked file")
+    func discardUntrackedDeletesTargetOnly() async throws {
+        let repo = try TestGitRepository.create()
+        defer { repo.cleanup() }
+
+        try repo.createFile("keep.txt", content: "keep\n")
+        try repo.commit(message: "init")
+        try repo.createFile("scratch.txt", content: "temporary\n")
+        try repo.createFile("sibling.txt", content: "also new\n")
+
+        try await GitService.shared.discardUntracked(file: "scratch.txt", at: repo.url)
+
+        #expect(!FileManager.default.fileExists(atPath: repo.url.appendingPathComponent("scratch.txt").path))
+        #expect(FileManager.default.fileExists(atPath: repo.url.appendingPathComponent("sibling.txt").path))
+        #expect(FileManager.default.fileExists(atPath: repo.url.appendingPathComponent("keep.txt").path))
+    }
+
+    @Test("discardUntracked refuses a path escaping the root")
+    func discardUntrackedRefusesEscape() async throws {
+        let repo = try TestGitRepository.create()
+        defer { repo.cleanup() }
+
+        await #expect(throws: GitError.invalidRelativePath("../outside.txt")) {
+            try await GitService.shared.discardUntracked(file: "../outside.txt", at: repo.url)
+        }
+        await #expect(throws: GitError.invalidRelativePath("/etc/hosts")) {
+            try await GitService.shared.discardUntracked(file: "/etc/hosts", at: repo.url)
+        }
+    }
+
+    @Test("discardUntracked refuses a symlink target")
+    func discardUntrackedRefusesSymlink() async throws {
+        let repo = try TestGitRepository.create()
+        defer { repo.cleanup() }
+
+        try repo.createFile("real-secret.txt", content: "secret\n")
+        try repo.commit(message: "init")
+        let linkURL = repo.url.appendingPathComponent("link.txt")
+        try FileManager.default.createSymbolicLink(
+            at: linkURL,
+            withDestinationURL: repo.url.appendingPathComponent("real-secret.txt")
+        )
+
+        await #expect(throws: GitError.symlinkRefused) {
+            try await GitService.shared.discardUntracked(file: "link.txt", at: repo.url)
+        }
+        // The symlink and its target both survive the refusal.
+        #expect(FileManager.default.fileExists(atPath: linkURL.path))
+        #expect(FileManager.default.fileExists(atPath: repo.url.appendingPathComponent("real-secret.txt").path))
+    }
+
+    @Test("discardUntracked reports a missing target instead of failing silently")
+    func discardUntrackedReportsMissingTarget() async throws {
+        let repo = try TestGitRepository.create()
+        defer { repo.cleanup() }
+
+        try repo.createFile("a.txt", content: "x\n")
+        try repo.commit(message: "init")
+
+        await #expect(throws: GitError.untrackedTargetMissing(relativePath: "ghost.txt")) {
+            try await GitService.shared.discardUntracked(file: "ghost.txt", at: repo.url)
+        }
+    }
 }
