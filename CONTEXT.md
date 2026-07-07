@@ -32,6 +32,14 @@ _Avoid_: Page, screen, route
 The repository-level surface for navigation and launch actions before entering a terminal or web view.
 _Avoid_: Dashboard, home page
 
+**Tile Tree**:
+The recursive split arrangement of one terminal tab — nested splits whose leaves are **Tiles**. The layout source of truth: growing, closing, or resizing panes are tree mutations, and a leaf leaving the tree is what tears its content down.
+_Avoid_: Split map, pane list, layout state
+
+**Tile**:
+One leaf pane of a **Tile Tree**, identified by a stable tile id. A tile hosts exactly one content unit (today a terminal; the seam also renders web) and keeps its identity across rebinds, so layout changes never recreate live content.
+_Avoid_: Pane (in domain types), slot, cell
+
 **Web Source**:
 A saved web destination owned globally, by a repository, or by a workspace.
 _Avoid_: Bookmark, browser tab, website
@@ -94,6 +102,7 @@ _Avoid_: Notification row, alert item, task card
 - A **Terminal Scope** owns an ordered collection of **Terminal Sessions** and one active tab.
 - **Home** is the app-level **Terminal Scope** rooted at `~/code`, owned by neither a **Repository** nor a **Workspace**.
 - A **Surface** is one selected **Repo Overview**, repository **Terminal Session**, workspace **Terminal Session**, or **Web Source**.
+- A terminal tab arranges its panes as a **Tile Tree**; each **Tile** binds one **Terminal Session** (or, through the same seam, a **Web Source** view).
 - The **Detail Pane** follows the selected **Surface** when that surface has repository or workspace context.
 - An **Agent** runs inside a **Terminal Session** and emits **Workspace Events** that the **Workspace Journal** persists.
 - **GitHub Activity** is external webhook activity and does not write to the **Workspace Journal**.
@@ -114,3 +123,4 @@ _Avoid_: Notification row, alert item, task card
 - "Journal" vs "log" vs "history" — domain reads use **Workspace Journal**; "log" stays a runtime/diagnostic term; "history" is informal narration and shouldn't appear in types.
 - "Status" is overloaded — there is workspace **Agent** status, **Terminal Command Status**, and git status (file changes). Resolved: qualify every use; never ship a public `status:` property without a scope-revealing prefix.
 - "Attention" vs "Attention Summary" — **Attention** is the domain rollup of targets demanding the user; **Attention Summary** is the display-ready value projection of those targets for Mac or companion surfaces.
+- "Surface" is doubly loaded since the tile-tree epic (#627): the domain **Surface** is the selected main-content target, while code-level `protocol Surface` (`docs/decisions/tile-tree-surface-abstraction.md`) is the per-**Tile** renderable unit (`TerminalSurface` / `WebSurface`). In prose, qualify the second as "tile surface" or "surface conformer"; the unqualified word keeps the selection meaning.
