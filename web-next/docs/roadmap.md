@@ -19,7 +19,7 @@ app, can:
 
 1. **Sign in** with GitHub (real OAuth + allowlist) — *live: production serves real OAuth, the test bypass is inert, unauthed API leaks nothing (verified 2026-07-06 against web-next-ivory-six.vercel.app).*
 2. **Start a session on a real repo** — pick from their actual GitHub repos, validated, default branch known. *Gap: freetext today (#825).*
-3. **Run a real coding turn** — choose a model, watch it stream, it edits code in a sandbox and runs tests, and completes. *Plumbing landed (#822); blocked on wiring the user's message through (#750/#826) + model selection (#824).*
+3. **Run a real coding turn** — watch it stream, it edits code in a sandbox, and follow-up turns continue the same conversation and working copy. *Landed (#822 + #831, opt-in `WEB_NEXT_COMPUTE_PROVIDER=vercel`); model **selection** (#824) still open.*
 4. **Identify and resume** the session — it has a title, survives disconnect/reload, and stays correct across serverless instances. *Gaps: titling (#823), the resume-liveness bug (#810), turn concurrency (#811).*
 5. **Read it well** — the transcript is accessible (screen-reader, contrast, keyboard, mobile) and **failures are visible**, not silent. *#804–#809, #808, #753.*
 6. **Drop into a terminal** in the session's sandbox. *#752.*
@@ -54,24 +54,24 @@ preview deployment. Two warts found at the door: unauthed API calls get a 307
 HTML redirect instead of route-level 401 JSON (#828), and sessions have no
 owner scoping — any allowlisted login sees all sessions (#829).
 
-**Runtime plumbing landed** *(#822, merged 2026-07-06)*: a real `vercel`
-ComputeProvider boots Claude Code in a sandbox behind the opt-in
-`WEB_NEXT_COMPUTE_PROVIDER=vercel` gate, with an auth-gated preflight diag
-(`/api/diag/preflight`) and out-of-band template prewarm — proven end to end by
-a harness-opened smoke PR (#821). The **user-facing half is not wired**: the
-prompt is a fixed smoke script, so sessions still run the **mock** by default;
-driving the turn from the user's message + #750's acceptance evidence is
-**#826**.
+**The real runtime is live (opt-in)** *(#822 + #831, merged 2026-07-06/07)*: a
+real `vercel` ComputeProvider boots Claude Code in a sandbox
+(`WEB_NEXT_COMPUTE_PROVIDER=vercel`), **driven by the user's actual message**
+against a persistent per-session clone, with durable cross-turn/tab-close
+resume (`sessions.resume_state`), preflight diag (`/api/diag/preflight`),
+out-of-band template prewarm, and the `ws` externalization that un-broke the
+in-app path. #750 and #826 are closed. The mock remains the default provider.
 
-**What isn't real yet.** Real turns from the compose (#750/#826); validation is
-**local only** (auth-bypass, `localhost:3100`); and three start-loop
-essentials — **titles, model selection, a real repo picker** — are missing.
+**What isn't real yet.** Validation of the *real* path (#818 is now exercisable
+— needs runtime creds where it runs); the three start-loop essentials —
+**titles, model selection, a real repo picker** — and owner-scoped sessions
+(#829) for shareability.
 
 ## The milestones
 
 | Milestone | What it delivers |
 |---|---|
-| [#11 Sessions-first web](https://github.com/fairchild/workspaces/milestone/11) | The build-out: **#750/#826** real runtime (plumbing landed via #822; user-facing wiring open), **#752** terminal drawer, **#753** lifecycle + error states + mobile, **#754** cutover, **#790** edit→diff, **#780** build/404 flake. |
+| [#11 Sessions-first web](https://github.com/fairchild/workspaces/milestone/11) | The build-out: ~~#750/#826~~ real runtime (**landed**: #822 + #831), **#752** terminal drawer, **#753** lifecycle + error states + mobile, **#754** cutover, **#790** edit→diff, **#780** build/404 flake. |
 | [#12 Refinement pass 1](https://github.com/fairchild/workspaces/milestone/12) | a11y, resilience & polish: **#804–#809** a11y/UX, **#810** resume liveness, **#811** turn concurrency, **#812** font-doc drift, **#828** API 401 JSON. |
 | [#13 Self-validation](https://github.com/fairchild/workspaces/milestone/13) | Environment-targetable validation harness: **#813–#819** (local → preview → staging → prod). |
 | [#14 Usability completeness](https://github.com/fairchild/workspaces/milestone/14) | The start-and-identify loop + shareability: **#823** titles, **#824** model selection, **#825** real repo picker, **#829** owner-scoped sessions. |
@@ -85,13 +85,13 @@ overlap where they don't depend on each other.
 ### Phase 0 — Make the foundation trustworthy *(do first / alongside Phase 1)*
 The durable-turn layer has latent correctness bugs that will **corrupt real
 sessions** the moment #750 puts real turns through it. Fix before scale.
-- **#810** durable resume — DB-authoritative liveness across instances *(HIGH; the headline resume feature is broken on serverless today)*
-- **#811** turn-runtime robustness — concurrency guard, atomic abandon-close, structured provider errors
+- ~~#810~~ durable resume — **landed** (PR #830)
+- **#811** turn-runtime robustness — concurrency guard, atomic abandon-close, structured provider errors *(in review, PR #832)*
 - **#780** `next build` /404 prerender flake — de-flake the build gate
 
 ### Phase 1 — Real runtime + session identity *(the core value)*
 Turn the mock into a real agent, and make a session a usable object.
-- **#750/#826** real runtime — plumbing landed (#822: `vercel` provider, preflight, prewarm); **the keystone that remains** is driving the turn from the user's message with acceptance evidence (#826)
+- ~~#750/#826 real runtime~~ — **landed** (#822 plumbing + #831 message-driven turns & durable resume)
 - **#824** per-session model selection (pick, persist, route, display)
 - **#823** session titles (auto from first turn + editable)
 - **#825** real GitHub-backed repo picker (validate + default branch)
@@ -100,8 +100,8 @@ Turn the mock into a real agent, and make a session a usable object.
 Validate the *real* runtime against *real* environments — the stated priority.
 With the SSO wall off, **#813 + #815 run against production today with zero
 credentials**; #814 (a signed-in validation identity) gates the authenticated
-stages; #818 needs #826 landed to have a user-driven real turn to exercise —
-and #822's `/api/diag/preflight` is exactly the seam #816/#818 consume.
+stages; with #831 merged, #818 has a real user-driven turn to exercise — and
+`/api/diag/preflight` is exactly the seam #816/#818 consume.
 - **#813** harness core → **#815** security posture *(unblocked now)* → **#814** deployed-env auth → **#816** model/gateway diag → **#817** portable browser flows → **#818** real agentic turn (sandbox lifecycle) → **#819** reporting + scheduled preview/prod runs
 
 ### Phase 3 — The transcript reads and fails well
@@ -127,7 +127,7 @@ making it *shareable* and *primary*, and keeping it proven.
 
 ```
 #810/#811 (trust)  ─┐
-                    ├─►  #750/#826 (real turns)  ─►  #818 (validate real turn)  ─►  #754 (cutover)
+                    ├─►  ✅ real turns (#822+#831)  ─►  #818 (validate real turn)  ─►  #754 (cutover)
 #824 model  ────────┘                          ▲
 #823 title, #825 repo picker  ─────────────────┘   (identity/start loop)
 
