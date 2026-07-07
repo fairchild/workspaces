@@ -101,9 +101,33 @@ export class TerminalUnsupportedError extends Error {
 }
 
 /**
+ * The reuse probe: a running ttyd counts only if its command line attests the
+ * expected `-b /<token>` and `-p <port>` — a process that merely shares the
+ * name (stale token after secret rotation, or something else that bound the
+ * port) is killed and replaced, so the published port is never served outside
+ * the current HMAC gate (codex review finding, gpt-5.5 xhigh). Token is hex
+ * and port digits, so both embed safely in the grep -F patterns.
+ */
+function ttydProbeScript(token: string, port: number): string {
+	return [
+		`pid=$(pgrep -x ttyd | head -n1 || true)`,
+		`if [ -n "$pid" ] && tr '\\0' ' ' < /proc/$pid/cmdline | grep -qF -- "-b /${token}" && tr '\\0' ' ' < /proc/$pid/cmdline | grep -qF -- "-p ${port}"; then`,
+		`  echo attested`,
+		`else`,
+		`  if [ -n "$pid" ]; then`,
+		`    kill "$pid" 2>/dev/null || true`,
+		`    for i in 1 2 3 4 5 6 7 8; do pgrep -x ttyd >/dev/null 2>&1 || break; sleep 0.25; done`,
+		`  fi`,
+		`  echo absent`,
+		`fi`,
+	].join("\n");
+}
+
+/**
  * Ensures ttyd serves the sandbox's shell behind its HMAC base-path and
- * returns the WebSocket URL. Idempotent: a running ttyd is left alone (its
- * token is stable — it's derived from the VM session id). The shell is
+ * returns the WebSocket URL. Idempotent: a ttyd whose command line attests
+ * the current token and port is left alone (the token is stable — it's
+ * derived from the VM session id); anything else is replaced. The shell is
  * `tmux new-session -A -s shell`, so disconnect/reconnect within a sandbox
  * lands back in the same shell state (the tmux acceptance criterion).
  */
@@ -119,9 +143,9 @@ export async function ensureTerminal(
 	const token = terminalPathToken(sandbox.currentSession().sessionId);
 	const probe = await sandbox.runCommand({
 		cmd: "bash",
-		args: ["-c", "pgrep -x ttyd >/dev/null && echo running || echo stopped"],
+		args: ["-c", ttydProbeScript(token, TERMINAL_PORT)],
 	});
-	if (!(await probe.stdout()).includes("running")) {
+	if (!(await probe.stdout()).includes("attested")) {
 		// Fallback install for sandboxes built from a pre-terminal template
 		// snapshot; a no-op when the bootstrap already baked the binaries in.
 		const install = await sandbox.runCommand({
