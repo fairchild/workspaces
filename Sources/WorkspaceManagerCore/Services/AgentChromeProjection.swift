@@ -1,7 +1,7 @@
 import Foundation
 
 /// Presentation policy for projecting Agent Run State into WorkSpaces chrome.
-/// Callers get labels, semantic tone, severity, Attention, and notification
+/// Callers get labels, semantic tone, sidebar priority, attention, and notification
 /// policy from one Module instead of re-encoding Run State in each surface.
 public struct AgentChromeProjection: Sendable, Equatable {
     public enum Tone: Sendable, Equatable {
@@ -19,7 +19,6 @@ public struct AgentChromeProjection: Sendable, Equatable {
     public let accessibilityDescription: String
     public let commandPaletteDescriptor: String?
     public let tone: Tone
-    public let severity: Int
     public let sidebarPriority: Int
     public let demandsAttention: Bool
 
@@ -34,7 +33,6 @@ public struct AgentChromeProjection: Sendable, Equatable {
                 accessibilityDescription: "agent idle",
                 commandPaletteDescriptor: nil,
                 tone: .neutral,
-                severity: 1,
                 sidebarPriority: 1,
                 demandsAttention: false
             )
@@ -45,7 +43,6 @@ public struct AgentChromeProjection: Sendable, Equatable {
                 accessibilityDescription: "agent thinking",
                 commandPaletteDescriptor: "thinking",
                 tone: .running,
-                severity: 2,
                 sidebarPriority: 3,
                 demandsAttention: false
             )
@@ -56,7 +53,6 @@ public struct AgentChromeProjection: Sendable, Equatable {
                 accessibilityDescription: "agent running tool",
                 commandPaletteDescriptor: "running tool",
                 tone: .running,
-                severity: 3,
                 sidebarPriority: 3,
                 demandsAttention: false
             )
@@ -67,7 +63,6 @@ public struct AgentChromeProjection: Sendable, Equatable {
                 accessibilityDescription: "agent awaiting input",
                 commandPaletteDescriptor: "awaiting input",
                 tone: .attention,
-                severity: 4,
                 sidebarPriority: 4,
                 demandsAttention: true
             )
@@ -78,7 +73,6 @@ public struct AgentChromeProjection: Sendable, Equatable {
                 accessibilityDescription: "agent complete",
                 commandPaletteDescriptor: nil,
                 tone: .neutral,
-                severity: 1,
                 sidebarPriority: 1,
                 demandsAttention: false
             )
@@ -89,15 +83,10 @@ public struct AgentChromeProjection: Sendable, Equatable {
                 accessibilityDescription: "agent errored (\(category.rawValue))",
                 commandPaletteDescriptor: "errored",
                 tone: .critical,
-                severity: 5,
                 sidebarPriority: 5,
                 demandsAttention: true
             )
         }
-    }
-
-    public static func severity(of state: AgentRunState) -> Int {
-        runState(state).severity
     }
 
     public static func demandsAttention(_ state: AgentRunState) -> Bool {
