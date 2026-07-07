@@ -18,7 +18,7 @@ struct UIFixtureSeederTests {
         let context: ModelContext
         let registry: AgentSessionRegistry
         let commandRegistry: LastCommandStatusRegistry
-        let store: HostTerminalStateStore
+        let store: TileTreeStore
     }
 
     // Latch is module-static; reset before each scenario so tests run independently.
@@ -31,8 +31,8 @@ struct UIFixtureSeederTests {
         UIFixtureSeeder.seedDataIfNeeded(in: context)
         let registry = AgentSessionRegistry()
         let commandRegistry = LastCommandStatusRegistry()
-        let hostTerminalState = HostTerminalStateStore()
-        hostTerminalState.attach(
+        let tileTreeStore = TileTreeStore()
+        tileTreeStore.attach(
             agentSessionRegistry: registry,
             localStateStore: nil,
             hooksSocketPath: nil,
@@ -43,7 +43,7 @@ struct UIFixtureSeederTests {
             context: context,
             registry: registry,
             commandRegistry: commandRegistry,
-            store: hostTerminalState
+            store: tileTreeStore
         )
     }
 
@@ -53,7 +53,7 @@ struct UIFixtureSeederTests {
     }
 
     private func status(
-        for workspace: Workspace, in store: HostTerminalStateStore, registry: AgentSessionRegistry
+        for workspace: Workspace, in store: TileTreeStore, registry: AgentSessionRegistry
     )
         -> AgentSessionStatus?
     {
@@ -62,13 +62,13 @@ struct UIFixtureSeederTests {
 
     private func commandStatus(
         for workspace: Workspace,
-        in store: HostTerminalStateStore,
+        in store: TileTreeStore,
         registry: LastCommandStatusRegistry
     ) -> LastCommandStatus? {
         hostSession(for: workspace, in: store).flatMap { registry.statusByTerminalSession[$0.id] }
     }
 
-    private func hostSession(for workspace: Workspace, in store: HostTerminalStateStore) -> HostTerminalSession? {
+    private func hostSession(for workspace: Workspace, in store: TileTreeStore) -> HostTerminalSession? {
         let normalized = workspace.workspaceURL.standardizedFileURL.resolvingSymlinksInPath().path
         let key: HostTerminalSessionKey = .hostPath(normalized)
         return store.sessions.first(where: { $0.key == key })
@@ -103,7 +103,7 @@ struct UIFixtureSeederTests {
             from: [:],
             in: f.context,
             registry: f.registry,
-            hostTerminalState: f.store
+            tileTreeStore: f.store
         )
         #expect(applied == 0)
         #expect(f.registry.statuses.isEmpty)
@@ -117,7 +117,7 @@ struct UIFixtureSeederTests {
             from: [UIFixtureSeeder.agentStatesEnvKey: "feature-auth:thinking"],
             in: f.context,
             registry: f.registry,
-            hostTerminalState: f.store
+            tileTreeStore: f.store
         )
         #expect(applied == 1)
 
@@ -135,7 +135,7 @@ struct UIFixtureSeederTests {
             from: [UIFixtureSeeder.agentStatesEnvKey: raw],
             in: f.context,
             registry: f.registry,
-            hostTerminalState: f.store
+            tileTreeStore: f.store
         )
         #expect(applied == 4)
 
@@ -170,7 +170,7 @@ struct UIFixtureSeederTests {
             from: [UIFixtureSeeder.agentStatesEnvKey: raw],
             in: f.context,
             registry: f.registry,
-            hostTerminalState: f.store
+            tileTreeStore: f.store
         )
         let featureAuth = try workspace(named: "feature-auth", in: f.context)
         #expect(status(for: featureAuth, in: f.store, registry: f.registry)?.run == .thinking)
@@ -195,7 +195,7 @@ struct UIFixtureSeederTests {
             ],
             in: f.context,
             registry: f.registry,
-            hostTerminalState: f.store
+            tileTreeStore: f.store
         )
         #expect(applied == 1)
 
@@ -212,7 +212,7 @@ struct UIFixtureSeederTests {
             ],
             in: f.context,
             registry: f.registry,
-            hostTerminalState: f.store
+            tileTreeStore: f.store
         )
         #expect(applied == 1)
 
@@ -234,7 +234,7 @@ struct UIFixtureSeederTests {
             ],
             in: f.context,
             registry: f.registry,
-            hostTerminalState: f.store
+            tileTreeStore: f.store
         )
         let featureAuth = try workspace(named: "feature-auth", in: f.context)
         let normalized = featureAuth.workspaceURL.standardizedFileURL.resolvingSymlinksInPath().path
@@ -251,7 +251,7 @@ struct UIFixtureSeederTests {
             from: [UIFixtureSeeder.commandStatusesEnvKey: "feature-auth:failed"],
             in: f.context,
             commandStatusRegistry: f.commandRegistry,
-            hostTerminalState: f.store,
+            tileTreeStore: f.store,
             now: now
         )
         #expect(applied == 1)
@@ -276,7 +276,7 @@ struct UIFixtureSeederTests {
             from: [UIFixtureSeeder.commandStatusesEnvKey: raw],
             in: f.context,
             commandStatusRegistry: f.commandRegistry,
-            hostTerminalState: f.store,
+            tileTreeStore: f.store,
             now: now
         )
         #expect(applied == 4)
@@ -303,14 +303,14 @@ struct UIFixtureSeederTests {
             from: [UIFixtureSeeder.agentStatesEnvKey: "feature-auth:thinking"],
             in: f.context,
             registry: f.registry,
-            hostTerminalState: f.store
+            tileTreeStore: f.store
         )
         #expect(first == 1)
         let second = UIFixtureSeeder.seedAgentStatesIfNeeded(
             from: [UIFixtureSeeder.agentStatesEnvKey: "bugfix-422:errored"],
             in: f.context,
             registry: f.registry,
-            hostTerminalState: f.store
+            tileTreeStore: f.store
         )
         #expect(second == 0)
 
@@ -326,14 +326,14 @@ struct UIFixtureSeederTests {
             from: [UIFixtureSeeder.commandStatusesEnvKey: "feature-auth:failed"],
             in: f.context,
             commandStatusRegistry: f.commandRegistry,
-            hostTerminalState: f.store
+            tileTreeStore: f.store
         )
         #expect(first == 1)
         let second = UIFixtureSeeder.seedCommandStatusesIfNeeded(
             from: [UIFixtureSeeder.commandStatusesEnvKey: "bugfix-422:failed"],
             in: f.context,
             commandStatusRegistry: f.commandRegistry,
-            hostTerminalState: f.store
+            tileTreeStore: f.store
         )
         #expect(second == 0)
 

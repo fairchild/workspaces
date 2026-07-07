@@ -109,7 +109,7 @@ sequenceDiagram
     actor User
     participant Sidebar as "SidebarView"
     participant Content as "ContentView"
-    participant Session as "HostTerminalStateStore"
+    participant Session as "TileTreeStore"
     participant Perf as "PerformanceSignposts"
     participant Focus as "TerminalFocusManager"
     participant Term as "GhosttySurfaceView"
@@ -155,7 +155,7 @@ sequenceDiagram
     actor User
     participant Sidebar as "SidebarView"
     participant Content as "ContentView"
-    participant Session as "HostTerminalStateStore"
+    participant Session as "TileTreeStore"
     participant Perf as "PerformanceSignposts"
     participant Coord as "TerminalFocusCoordinator"
     participant Focus as "TerminalFocusManager"

@@ -2,7 +2,7 @@ import SwiftUI
 import WorkspaceManagerCore
 
 @MainActor
-final class HostTerminalStateStore: ObservableObject {
+final class TileTreeStore: ObservableObject {
     struct SplitPaneLayout: Equatable {
         enum Axis: Equatable {
             case leadingTrailing

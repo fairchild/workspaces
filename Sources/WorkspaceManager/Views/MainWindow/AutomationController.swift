@@ -4,14 +4,14 @@ import WorkspaceManagerCore
 @MainActor
 final class AutomationController: AutomationControlling {
     private let handleRegistry: AutomationHandleRegistry
-    private weak var hostTerminalState: HostTerminalStateStore?
+    private weak var tileTreeStore: TileTreeStore?
     private var focusTerminal: @MainActor (UUID) -> Void
     private var requestCloseTerminal: @MainActor (UUID) -> Void
     private let isInputWriteEnabled: @MainActor () -> Bool
 
     init(
         handleRegistry: AutomationHandleRegistry,
-        hostTerminalState: HostTerminalStateStore,
+        tileTreeStore: TileTreeStore,
         focusTerminal: @escaping @MainActor (UUID) -> Void,
         requestCloseTerminal: @escaping @MainActor (UUID) -> Void,
         isInputWriteEnabled: @escaping @MainActor () -> Bool = {
@@ -19,18 +19,18 @@ final class AutomationController: AutomationControlling {
         }
     ) {
         self.handleRegistry = handleRegistry
-        self.hostTerminalState = hostTerminalState
+        self.tileTreeStore = tileTreeStore
         self.focusTerminal = focusTerminal
         self.requestCloseTerminal = requestCloseTerminal
         self.isInputWriteEnabled = isInputWriteEnabled
     }
 
     func update(
-        hostTerminalState: HostTerminalStateStore,
+        tileTreeStore: TileTreeStore,
         focusTerminal: @escaping @MainActor (UUID) -> Void,
         requestCloseTerminal: @escaping @MainActor (UUID) -> Void
     ) {
-        self.hostTerminalState = hostTerminalState
+        self.tileTreeStore = tileTreeStore
         self.focusTerminal = focusTerminal
         self.requestCloseTerminal = requestCloseTerminal
     }
@@ -55,7 +55,7 @@ final class AutomationController: AutomationControlling {
         let resolved = try resolve(handle, requiring: .tileFocus)
         let focusDirection = GhosttyAppManager.SplitFocusDirection(automationDirection: direction)
         guard
-            let targetSessionID = resolved.hostTerminalState.splitFocusTarget(
+            let targetSessionID = resolved.tileTreeStore.splitFocusTarget(
                 from: resolved.entry.hostSessionID,
                 direction: focusDirection
             )
@@ -76,7 +76,7 @@ final class AutomationController: AutomationControlling {
     ) throws -> AutomationMutationResult {
         let resolved = try resolve(handle, requiring: .tileSplit)
         guard
-            let primarySessionID = resolved.hostTerminalState.activatePrimarySession(
+            let primarySessionID = resolved.tileTreeStore.activatePrimarySession(
                 containing: resolved.entry.hostSessionID
             )
         else {
@@ -89,9 +89,9 @@ final class AutomationController: AutomationControlling {
             )
         }
 
-        let layout = HostTerminalStateStore.SplitPaneLayout(automationDirection: direction)
+        let layout = TileTreeStore.SplitPaneLayout(automationDirection: direction)
         guard
-            let splitSession = resolved.hostTerminalState.splitFocusedTile(
+            let splitSession = resolved.tileTreeStore.splitFocusedTile(
                 inTabContaining: primarySessionID,
                 preferredLayout: layout
             )
@@ -132,7 +132,7 @@ final class AutomationController: AutomationControlling {
             )
         }
         guard
-            let terminal = resolved.hostTerminalState.surfaceStore.terminal(
+            let terminal = resolved.tileTreeStore.surfaceStore.terminal(
                 for: resolved.entry.hostSessionID
             )
         else {
@@ -159,14 +159,14 @@ final class AutomationController: AutomationControlling {
 
     private struct ResolvedHandle {
         let entry: AutomationHandleRegistry.Entry
-        let hostTerminalState: HostTerminalStateStore
+        let tileTreeStore: TileTreeStore
     }
 
     private func resolve(
         _ handle: String,
         requiring capability: AutomationCapability
     ) throws -> ResolvedHandle {
-        guard let hostTerminalState else {
+        guard let tileTreeStore else {
             throw AutomationServiceError(
                 .unsupported, "No WorkSpaces window is currently attached to the Automation API.")
         }
@@ -187,11 +187,11 @@ final class AutomationController: AutomationControlling {
                 "Automation v1 drives terminal tiles only; this handle targets a \(entry.surfaceKind.rawValue) surface."
             )
         }
-        guard hostTerminalState.primarySessionID(containing: entry.hostSessionID) != nil else {
+        guard tileTreeStore.primarySessionID(containing: entry.hostSessionID) != nil else {
             handleRegistry.remove(hostSessionID: entry.hostSessionID)
             throw AutomationServiceError(.staleHandle, "The automation handle no longer maps to a live terminal tile.")
         }
-        return ResolvedHandle(entry: entry, hostTerminalState: hostTerminalState)
+        return ResolvedHandle(entry: entry, tileTreeStore: tileTreeStore)
     }
 
     private func context(
@@ -200,12 +200,12 @@ final class AutomationController: AutomationControlling {
         let surface = try surfaceDescriptor(
             hostSessionID: resolved.entry.hostSessionID,
             callerHostSessionID: resolved.entry.hostSessionID,
-            hostTerminalState: resolved.hostTerminalState,
+            tileTreeStore: resolved.tileTreeStore,
             capabilities: resolved.entry.capabilities
         )
-        let primaryID = resolved.hostTerminalState.primarySessionID(containing: resolved.entry.hostSessionID)
+        let primaryID = resolved.tileTreeStore.primarySessionID(containing: resolved.entry.hostSessionID)
         let primarySession = primaryID.flatMap { id in
-            resolved.hostTerminalState.sessions.first { $0.id == id }
+            resolved.tileTreeStore.sessions.first { $0.id == id }
         }
         let scope = AutomationScopeDescriptor(
             app: resolved.entry.appScopeID,
@@ -222,20 +222,20 @@ final class AutomationController: AutomationControlling {
 
     private func surfaceDescriptors(for resolved: ResolvedHandle) -> [AutomationSurfaceDescriptor] {
         guard
-            let primaryID = resolved.hostTerminalState.primarySessionID(containing: resolved.entry.hostSessionID),
-            let primarySession = resolved.hostTerminalState.sessions.first(where: { $0.id == primaryID })
+            let primaryID = resolved.tileTreeStore.primarySessionID(containing: resolved.entry.hostSessionID),
+            let primarySession = resolved.tileTreeStore.sessions.first(where: { $0.id == primaryID })
         else {
             return []
         }
 
-        var sessions = resolved.hostTerminalState.sessions(inScope: primarySession.key)
-        sessions.append(contentsOf: resolved.hostTerminalState.splitSessions(forPrimarySessionID: primaryID))
+        var sessions = resolved.tileTreeStore.sessions(inScope: primarySession.key)
+        sessions.append(contentsOf: resolved.tileTreeStore.splitSessions(forPrimarySessionID: primaryID))
 
         return sessions.compactMap { session in
             try? surfaceDescriptor(
                 hostSessionID: session.id,
                 callerHostSessionID: resolved.entry.hostSessionID,
-                hostTerminalState: resolved.hostTerminalState,
+                tileTreeStore: resolved.tileTreeStore,
                 capabilities: resolved.entry.capabilities
             )
         }
@@ -244,16 +244,16 @@ final class AutomationController: AutomationControlling {
     private func surfaceDescriptor(
         hostSessionID: UUID,
         callerHostSessionID: UUID,
-        hostTerminalState: HostTerminalStateStore,
+        tileTreeStore: TileTreeStore,
         capabilities: [AutomationCapability]
     ) throws -> AutomationSurfaceDescriptor {
         let session: HostTerminalSession?
-        if let primaryID = hostTerminalState.primarySessionID(containing: hostSessionID),
+        if let primaryID = tileTreeStore.primarySessionID(containing: hostSessionID),
             primaryID == hostSessionID
         {
-            session = hostTerminalState.sessions.first { $0.id == hostSessionID }
-        } else if let primaryID = hostTerminalState.primarySessionID(containing: hostSessionID),
-            let split = hostTerminalState.splitSessions(forPrimarySessionID: primaryID).first(where: {
+            session = tileTreeStore.sessions.first { $0.id == hostSessionID }
+        } else if let primaryID = tileTreeStore.primarySessionID(containing: hostSessionID),
+            let split = tileTreeStore.splitSessions(forPrimarySessionID: primaryID).first(where: {
                 $0.id == hostSessionID
             })
         {
@@ -266,19 +266,19 @@ final class AutomationController: AutomationControlling {
             throw AutomationServiceError(.staleHandle, "The terminal surface no longer exists.")
         }
 
-        let tileID = hostTerminalState.automationTileIDString(for: session.id)
-        let primaryID = hostTerminalState.primarySessionID(containing: session.id)
-        let isVisible = primaryID == hostTerminalState.activeSessionID
+        let tileID = tileTreeStore.automationTileIDString(for: session.id)
+        let primaryID = tileTreeStore.primarySessionID(containing: session.id)
+        let isVisible = primaryID == tileTreeStore.activeSessionID
         return AutomationSurfaceDescriptor(
             surfaceID: session.id.uuidString,
             tileID: tileID,
             kind: .terminal,
             hostSessionID: session.id,
-            title: hostTerminalState.tabTitleOverride(for: session.id)
-                ?? hostTerminalState.surfaceStore.displayTitle(for: session),
+            title: tileTreeStore.tabTitleOverride(for: session.id)
+                ?? tileTreeStore.surfaceStore.displayTitle(for: session),
             cwd: session.directoryPath,
             isCaller: session.id == callerHostSessionID,
-            isActive: session.id == hostTerminalState.activeSessionID,
+            isActive: session.id == tileTreeStore.activeSessionID,
             isVisible: isVisible,
             capabilities: capabilities
         )
@@ -304,7 +304,7 @@ extension GhosttyAppManager.SplitFocusDirection {
     }
 }
 
-extension HostTerminalStateStore.SplitPaneLayout {
+extension TileTreeStore.SplitPaneLayout {
     fileprivate init(automationDirection: AutomationTileSplitDirection) {
         switch automationDirection {
         case .left:

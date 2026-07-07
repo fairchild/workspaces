@@ -1,5 +1,5 @@
 //
-//  HostTerminalStateStoreTests.swift
+//  TileTreeStoreTests.swift
 //  WorkspaceManagerAppTests
 //
 //  Verifies split layout and directional focus behavior for host terminal splits.
@@ -13,11 +13,11 @@ import Testing
 @testable import WorkspaceManagerCore
 
 @MainActor
-@Suite("HostTerminalStateStore")
-struct HostTerminalStateStoreTests {
+@Suite("TileTreeStore")
+struct TileTreeStoreTests {
     @Test("Creating a tab duplicates the active session without reusing by path")
     func createTabDuplicatesActiveSessionWithoutReusingByPath() throws {
-        let store = HostTerminalStateStore()
+        let store = TileTreeStore()
         let repoURL = URL(fileURLWithPath: "/Users/test/code/repo")
         let first = store.activateSession(
             key: .repoPath(repoURL.path),
@@ -35,7 +35,7 @@ struct HostTerminalStateStoreTests {
 
     @Test("Adjacent tab activation wraps in both directions")
     func adjacentTabActivationWraps() throws {
-        let store = HostTerminalStateStore()
+        let store = TileTreeStore()
         let first = store.activateSession(
             key: .defaultHome,
             directory: URL(fileURLWithPath: "/Users/test")
@@ -48,7 +48,7 @@ struct HostTerminalStateStoreTests {
 
     @Test("Moving tabs reorders sessions and keeps moved tab active")
     func movingTabsReordersSessions() throws {
-        let store = HostTerminalStateStore()
+        let store = TileTreeStore()
         let first = store.activateSession(
             key: .defaultHome,
             directory: URL(fileURLWithPath: "/Users/test")
@@ -64,7 +64,7 @@ struct HostTerminalStateStoreTests {
 
     @Test("Tab title overrides are scoped to primary sessions")
     func tabTitleOverridesAreScopedToPrimarySessions() throws {
-        let store = HostTerminalStateStore()
+        let store = TileTreeStore()
         let primary = store.activateSession(
             key: .defaultHome,
             directory: URL(fileURLWithPath: "/Users/test")
@@ -77,7 +77,7 @@ struct HostTerminalStateStoreTests {
 
     @Test("Tab title overrides trim and clear empty titles")
     func tabTitleOverridesTrimAndClearEmptyTitles() {
-        let store = HostTerminalStateStore()
+        let store = TileTreeStore()
         let session = store.activateSession(
             key: .defaultHome,
             directory: URL(fileURLWithPath: "/Users/test")
@@ -92,7 +92,7 @@ struct HostTerminalStateStoreTests {
 
     @Test("Surface title changes publish host terminal state updates")
     func surfaceTitleChangesPublishHostTerminalStateUpdates() {
-        let store = HostTerminalStateStore()
+        let store = TileTreeStore()
         let session = store.activateSession(
             key: .defaultHome,
             directory: URL(fileURLWithPath: "/Users/test")
@@ -116,7 +116,7 @@ struct HostTerminalStateStoreTests {
 
     @Test("Close tab candidates support this other and right")
     func closeTabCandidatesSupportModes() throws {
-        let store = HostTerminalStateStore()
+        let store = TileTreeStore()
         let first = store.activateSession(
             key: .defaultHome,
             directory: URL(fileURLWithPath: "/Users/test")
@@ -131,7 +131,7 @@ struct HostTerminalStateStoreTests {
 
     @Test("Scoped sessions follow the active terminal scope")
     func scopedSessionsFollowActiveScope() throws {
-        let store = HostTerminalStateStore()
+        let store = TileTreeStore()
         let home = store.activateSession(
             key: .defaultHome,
             directory: URL(fileURLWithPath: "/Users/test")
@@ -152,7 +152,7 @@ struct HostTerminalStateStoreTests {
 
     @Test("Active session lookup restores the active backend scope tab")
     func activeSessionLookupRestoresActiveBackendScopeTab() throws {
-        let store = HostTerminalStateStore()
+        let store = TileTreeStore()
         let backendKey = HostTerminalSessionKey.backendSession(providerID: "lume", instanceID: "vm-123")
         _ =
             store.activateSession(
@@ -176,7 +176,7 @@ struct HostTerminalStateStoreTests {
 
     @Test("Close other and right candidates stay within the source scope")
     func closeCandidatesStayWithinSourceScope() throws {
-        let store = HostTerminalStateStore()
+        let store = TileTreeStore()
         _ =
             store.activateSession(
                 key: .defaultHome,
@@ -202,13 +202,13 @@ struct HostTerminalStateStoreTests {
 
     @Test("Splitting stores the preferred top-bottom layout")
     func splitStoresPreferredLayout() {
-        let store = HostTerminalStateStore()
+        let store = TileTreeStore()
         let activation = store.activateSession(
             key: .defaultHome,
             directory: URL(fileURLWithPath: "/Users/test/code")
         )
 
-        let preferredLayout = HostTerminalStateStore.SplitPaneLayout(
+        let preferredLayout = TileTreeStore.SplitPaneLayout(
             axis: .topBottom,
             splitBeforePrimary: false
         )
@@ -219,12 +219,12 @@ struct HostTerminalStateStoreTests {
 
         #expect(split != nil)
         #expect(store.splitLayout(for: activation.session.id) == preferredLayout)
-        #expect(store.splitFraction(for: activation.session.id) == HostTerminalStateStore.defaultSplitFraction)
+        #expect(store.splitFraction(for: activation.session.id) == TileTreeStore.defaultSplitFraction)
     }
 
     @Test("Split fraction updates clamp to supported bounds")
     func splitFractionUpdatesClampToSupportedBounds() {
-        let store = HostTerminalStateStore()
+        let store = TileTreeStore()
         let activation = store.activateSession(
             key: .defaultHome,
             directory: URL(fileURLWithPath: "/Users/test/code")
@@ -244,7 +244,7 @@ struct HostTerminalStateStoreTests {
 
     @Test("Equalize split resets fraction to default")
     func equalizeSplitResetsFractionToDefault() throws {
-        let store = HostTerminalStateStore()
+        let store = TileTreeStore()
         let activation = store.activateSession(
             key: .defaultHome,
             directory: URL(fileURLWithPath: "/Users/test/code")
@@ -259,12 +259,12 @@ struct HostTerminalStateStoreTests {
 
         #expect(store.updateSplitFraction(0.7, forPrimarySessionID: primaryID))
         #expect(store.equalizeSplit(containing: split.id))
-        #expect(store.splitFraction(for: primaryID) == HostTerminalStateStore.defaultSplitFraction)
+        #expect(store.splitFraction(for: primaryID) == TileTreeStore.defaultSplitFraction)
     }
 
     @Test("Resize split grows trailing pane for left action from trailing split")
     func resizeSplitGrowsTrailingPaneForLeftAction() throws {
-        let store = HostTerminalStateStore()
+        let store = TileTreeStore()
         let activation = store.activateSession(
             key: .defaultHome,
             directory: URL(fileURLWithPath: "/Users/test/code")
@@ -283,7 +283,7 @@ struct HostTerminalStateStoreTests {
 
     @Test("Resize split ignores orthogonal and outer-edge directions")
     func resizeSplitIgnoresOrthogonalAndOuterEdgeDirections() throws {
-        let store = HostTerminalStateStore()
+        let store = TileTreeStore()
         let activation = store.activateSession(
             key: .defaultHome,
             directory: URL(fileURLWithPath: "/Users/test/code")
@@ -298,19 +298,19 @@ struct HostTerminalStateStoreTests {
 
         #expect(!store.resizeSplit(containing: split.id, direction: .up, amount: 100))
         #expect(!store.resizeSplit(containing: primaryID, direction: .left, amount: 100))
-        #expect(store.splitFraction(for: primaryID) == HostTerminalStateStore.defaultSplitFraction)
+        #expect(store.splitFraction(for: primaryID) == TileTreeStore.defaultSplitFraction)
     }
 
     @Test("Directional focus follows top-bottom split layout")
     func directionalFocusFollowsTopBottomLayout() throws {
-        let store = HostTerminalStateStore()
+        let store = TileTreeStore()
         let activation = store.activateSession(
             key: .defaultHome,
             directory: URL(fileURLWithPath: "/Users/test/code")
         )
         let primaryID = activation.session.id
 
-        let splitLayout = HostTerminalStateStore.SplitPaneLayout(
+        let splitLayout = TileTreeStore.SplitPaneLayout(
             axis: .topBottom,
             splitBeforePrimary: false
         )
@@ -327,7 +327,7 @@ struct HostTerminalStateStoreTests {
 
     @Test("Process exit in split pane keeps primary session alive")
     func processExitInSplitKeepsPrimarySessionAlive() throws {
-        let store = HostTerminalStateStore()
+        let store = TileTreeStore()
         let activation = store.activateSession(
             key: .defaultHome,
             directory: URL(fileURLWithPath: "/Users/test/code")
@@ -353,7 +353,7 @@ struct HostTerminalStateStoreTests {
 
     @Test("Process exit in primary pane removes attached split session")
     func processExitInPrimaryRemovesSplitSession() throws {
-        let store = HostTerminalStateStore()
+        let store = TileTreeStore()
         let registry = AgentSessionRegistry()
         let commandStatusRegistry = LastCommandStatusRegistry()
         let activation = store.activateSession(
@@ -397,7 +397,7 @@ struct HostTerminalStateStoreTests {
 
     @Test("Process exit of active primary falls back to remaining session")
     func processExitPrimaryFallsBackToRemainingSession() throws {
-        let store = HostTerminalStateStore()
+        let store = TileTreeStore()
         let defaultHome = store.activateSession(
             key: .defaultHome,
             directory: URL(fileURLWithPath: "/Users/test/code")
@@ -427,7 +427,7 @@ struct HostTerminalStateStoreTests {
 
     @Test("Process exit for unknown session is a no-op")
     func processExitUnknownSessionIsNoOp() throws {
-        let store = HostTerminalStateStore()
+        let store = TileTreeStore()
         let activation = store.activateSession(
             key: .defaultHome,
             directory: URL(fileURLWithPath: "/Users/test/code")
@@ -454,7 +454,7 @@ struct HostTerminalStateStoreTests {
 
     @Test("Process exit helper creates default-home session when none remain")
     func processExitHelperCreatesDefaultHomeFallback() throws {
-        let store = HostTerminalStateStore()
+        let store = TileTreeStore()
         let activation = store.activateSession(
             key: .defaultHome,
             directory: URL(fileURLWithPath: "/Users/test/code")
@@ -475,7 +475,7 @@ struct HostTerminalStateStoreTests {
 
     @Test("Attaching the agent registry registers existing and new host sessions")
     func attachRegistersHostSessionsWithAgentRegistry() throws {
-        let store = HostTerminalStateStore()
+        let store = TileTreeStore()
         let repoURL = URL(fileURLWithPath: "/Users/test/code/repo")
         let pre = store.activateSession(key: .repoPath(repoURL.path), directory: repoURL).session
 
@@ -513,7 +513,7 @@ struct HostTerminalStateStoreTests {
 
     @Test("Retiring a workspace scope removes primary tabs, splits, and registry state")
     func retiringWorkspaceScopeRemovesSessionsAndRegistryState() throws {
-        let store = HostTerminalStateStore()
+        let store = TileTreeStore()
         let defaultHome = store.activateSession(
             key: .defaultHome,
             directory: URL(fileURLWithPath: "/Users/test")
@@ -553,7 +553,7 @@ struct HostTerminalStateStoreTests {
 
     @Test("Process exit helper returns active fallback session when others remain")
     func processExitHelperReturnsRemainingActiveSession() throws {
-        let store = HostTerminalStateStore()
+        let store = TileTreeStore()
         let defaultHome = store.activateSession(
             key: .defaultHome,
             directory: URL(fileURLWithPath: "/Users/test/code")
@@ -576,7 +576,7 @@ struct HostTerminalStateStoreTests {
 
     @Test("Splitting registers the split session and tears it down on split exit")
     func splitRegistersSplitSessionLifecycle() throws {
-        let store = HostTerminalStateStore()
+        let store = TileTreeStore()
         let registry = AgentSessionRegistry()
         let commandStatusRegistry = LastCommandStatusRegistry()
         let activation = store.activateSession(
@@ -615,7 +615,7 @@ struct HostTerminalStateStoreTests {
 
     @Test("Splitting the focused tile grows the tree to three distinct panes")
     func splittingFocusedTileGrowsTree() throws {
-        let store = HostTerminalStateStore()
+        let store = TileTreeStore()
         let activation = store.activateSession(
             key: .defaultHome,
             directory: URL(fileURLWithPath: "/Users/test/code")
@@ -640,7 +640,7 @@ struct HostTerminalStateStoreTests {
 
     @Test("Every split pane registers with the agent registry at depth ≥ 2")
     func depthTwoRegistersEverySplitSession() throws {
-        let store = HostTerminalStateStore()
+        let store = TileTreeStore()
         let registry = AgentSessionRegistry()
         let activation = store.activateSession(
             key: .defaultHome,
@@ -665,7 +665,7 @@ struct HostTerminalStateStoreTests {
 
     @Test("Resize targets the split enclosing the source pane, not the root")
     func resizeTargetsEnclosingSplit() throws {
-        let store = HostTerminalStateStore()
+        let store = TileTreeStore()
         let activation = store.activateSession(
             key: .defaultHome,
             directory: URL(fileURLWithPath: "/Users/test/code")
@@ -679,7 +679,7 @@ struct HostTerminalStateStoreTests {
         let splitB = try #require(
             store.splitFocusedTile(
                 inTabContaining: splitA.id,
-                preferredLayout: HostTerminalStateStore.SplitPaneLayout(axis: .topBottom, splitBeforePrimary: false)
+                preferredLayout: TileTreeStore.SplitPaneLayout(axis: .topBottom, splitBeforePrimary: false)
             )
         )
 
@@ -701,7 +701,7 @@ struct HostTerminalStateStoreTests {
 
     @Test("Relative split focus cycles through every pane in order")
     func relativeFocusCyclesAllPanes() throws {
-        let store = HostTerminalStateStore()
+        let store = TileTreeStore()
         let activation = store.activateSession(
             key: .defaultHome,
             directory: URL(fileURLWithPath: "/Users/test/code")
@@ -721,14 +721,14 @@ struct HostTerminalStateStoreTests {
     @Test(
         "Split layout projects every axis and order combination",
         arguments: [
-            HostTerminalStateStore.SplitPaneLayout(axis: .leadingTrailing, splitBeforePrimary: false),
-            HostTerminalStateStore.SplitPaneLayout(axis: .leadingTrailing, splitBeforePrimary: true),
-            HostTerminalStateStore.SplitPaneLayout(axis: .topBottom, splitBeforePrimary: false),
-            HostTerminalStateStore.SplitPaneLayout(axis: .topBottom, splitBeforePrimary: true),
+            TileTreeStore.SplitPaneLayout(axis: .leadingTrailing, splitBeforePrimary: false),
+            TileTreeStore.SplitPaneLayout(axis: .leadingTrailing, splitBeforePrimary: true),
+            TileTreeStore.SplitPaneLayout(axis: .topBottom, splitBeforePrimary: false),
+            TileTreeStore.SplitPaneLayout(axis: .topBottom, splitBeforePrimary: true),
         ]
     )
-    func splitLayoutProjectsEveryCombination(layout: HostTerminalStateStore.SplitPaneLayout) throws {
-        let store = HostTerminalStateStore()
+    func splitLayoutProjectsEveryCombination(layout: TileTreeStore.SplitPaneLayout) throws {
+        let store = TileTreeStore()
         let activation = store.activateSession(
             key: .defaultHome,
             directory: URL(fileURLWithPath: "/Users/test/code")
@@ -738,12 +738,12 @@ struct HostTerminalStateStoreTests {
         _ = try #require(store.splitFocusedTile(inTabContaining: primaryID, preferredLayout: layout))
 
         #expect(store.splitLayout(for: primaryID) == layout)
-        #expect(store.splitFraction(for: primaryID) == HostTerminalStateStore.defaultSplitFraction)
+        #expect(store.splitFraction(for: primaryID) == TileTreeStore.defaultSplitFraction)
     }
 
     @Test("Closing one pane of three rebalances the tree instead of collapsing it")
     func closingOnePaneOfThreeRebalances() throws {
-        let store = HostTerminalStateStore()
+        let store = TileTreeStore()
         let registry = AgentSessionRegistry()
         let activation = store.activateSession(
             key: .defaultHome,

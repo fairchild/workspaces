@@ -11,12 +11,12 @@ struct MainWindowTerminalSessionControllerTests {
 
     @Test("Creating a tab first ensures a default session")
     func creatingTabEnsuresDefaultSession() throws {
-        let store = HostTerminalStateStore()
+        let store = TileTreeStore()
         let defaultDirectory = URL(fileURLWithPath: "/Users/test")
 
         let result = try #require(
             controller.createTabFromCurrentContext(
-                hostTerminalState: store,
+                tileTreeStore: store,
                 defaultHomeDirectory: defaultDirectory,
                 repos: [],
                 normalizePath: normalizePath,
@@ -38,7 +38,7 @@ struct MainWindowTerminalSessionControllerTests {
     @Test("Selecting adjacent tab returns focus target and synced workspace")
     func selectingAdjacentTabReturnsFocusAndWorkspace() throws {
         let fixture = makeRepoWorkspaceFixture()
-        let store = HostTerminalStateStore()
+        let store = TileTreeStore()
         _ = store.activateSession(
             key: .defaultHome,
             directory: URL(fileURLWithPath: "/Users/test")
@@ -52,7 +52,7 @@ struct MainWindowTerminalSessionControllerTests {
         let result = try #require(
             controller.selectAdjacentTab(
                 offset: -1,
-                hostTerminalState: store,
+                tileTreeStore: store,
                 repos: [fixture.repo],
                 normalizePath: normalizePath
             )
@@ -64,7 +64,7 @@ struct MainWindowTerminalSessionControllerTests {
         let workspaceResult = try #require(
             controller.selectTab(
                 sessionID: secondWorkspaceSession.id,
-                hostTerminalState: store,
+                tileTreeStore: store,
                 repos: [fixture.repo],
                 normalizePath: normalizePath
             )
@@ -75,7 +75,7 @@ struct MainWindowTerminalSessionControllerTests {
 
     @Test("Force close removes session and resolves fallback focus")
     func forceCloseResolvesFallbackFocus() throws {
-        let store = HostTerminalStateStore()
+        let store = TileTreeStore()
         let first = store.activateSession(
             key: .defaultHome,
             directory: URL(fileURLWithPath: "/Users/test")
@@ -85,7 +85,7 @@ struct MainWindowTerminalSessionControllerTests {
         let result = try #require(
             controller.forceCloseTab(
                 sessionID: second.id,
-                hostTerminalState: store,
+                tileTreeStore: store,
                 defaultHomeDirectory: URL(fileURLWithPath: "/Users/test"),
                 repos: [],
                 normalizePath: normalizePath
@@ -98,7 +98,7 @@ struct MainWindowTerminalSessionControllerTests {
 
     @Test("Close requests defer to terminal surface when available")
     func closeRequestsDeferToTerminalSurface() {
-        let store = HostTerminalStateStore()
+        let store = TileTreeStore()
         let session = store.activateSession(
             key: .defaultHome,
             directory: URL(fileURLWithPath: "/Users/test")
@@ -107,7 +107,7 @@ struct MainWindowTerminalSessionControllerTests {
 
         let results = controller.closeTabs(
             [session.id],
-            hostTerminalState: store,
+            tileTreeStore: store,
             defaultHomeDirectory: URL(fileURLWithPath: "/Users/test"),
             repos: [],
             normalizePath: normalizePath,
@@ -198,7 +198,7 @@ struct MainWindowTerminalSessionControllerTests {
 
     @Test("Close confirmation uses tab title override")
     func closeConfirmationUsesTabTitleOverride() throws {
-        let store = HostTerminalStateStore()
+        let store = TileTreeStore()
         let session = store.activateSession(
             key: .defaultHome,
             directory: URL(fileURLWithPath: "/Users/test")
@@ -207,7 +207,7 @@ struct MainWindowTerminalSessionControllerTests {
 
         let confirmation = controller.closeConfirmation(
             sessionID: session.id,
-            hostTerminalState: store
+            tileTreeStore: store
         )
 
         #expect(confirmation.sessionID == session.id)

@@ -368,7 +368,7 @@ a tilde-relative unquoted path — so the same drift sources cannot reappear thr
 ## Production Wiring
 
 `WorkspaceManagerApp` starts `ClaudeIntegrationLifecycle` outside CI. The main
-window attaches its `HostTerminalStateStore` to the app-scoped
+window attaches its `TileTreeStore` to the app-scoped
 `AgentSessionRegistry`. The store mirrors both primary tabs and split sessions
 into the registry and wires `AgentOSCRouter` with a surface-to-session resolver.
 

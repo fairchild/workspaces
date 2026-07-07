@@ -35,7 +35,7 @@ struct GhosttyTerminalIntentRouter {
         _ intent: GhosttyTerminalIntent,
         sourceSessionID: UUID?,
         terminalMultiplexingMode: TerminalMultiplexingMode,
-        hostTerminalState: HostTerminalStateStore
+        tileTreeStore: TileTreeStore
     ) -> [GhosttyTerminalRoutingEffect] {
         switch intent {
         case .split(let splitIntent):
@@ -49,13 +49,13 @@ struct GhosttyTerminalIntentRouter {
             return routeSplit(
                 splitIntent,
                 sourceSessionID: sourceSessionID,
-                hostTerminalState: hostTerminalState
+                tileTreeStore: tileTreeStore
             )
         case .tab(let tabIntent):
             return routeTab(
                 tabIntent,
                 sourceSessionID: sourceSessionID,
-                hostTerminalState: hostTerminalState
+                tileTreeStore: tileTreeStore
             )
         }
     }
@@ -63,33 +63,33 @@ struct GhosttyTerminalIntentRouter {
     private func routeSplit(
         _ intent: GhosttySplitIntent,
         sourceSessionID: UUID?,
-        hostTerminalState: HostTerminalStateStore
+        tileTreeStore: TileTreeStore
     ) -> [GhosttyTerminalRoutingEffect] {
         switch intent {
         case .newSplit(let direction):
             return handleNewSplit(
                 sourceSessionID: sourceSessionID,
                 direction: direction,
-                hostTerminalState: hostTerminalState
+                tileTreeStore: tileTreeStore
             )
         case .gotoSplit(let direction):
             return handleGotoSplit(
                 sourceSessionID: sourceSessionID,
                 direction: direction,
-                hostTerminalState: hostTerminalState
+                tileTreeStore: tileTreeStore
             )
         case .resizeSplit(let direction, let amount):
             handleResizeSplit(
                 sourceSessionID: sourceSessionID,
                 direction: direction,
                 amount: amount,
-                hostTerminalState: hostTerminalState
+                tileTreeStore: tileTreeStore
             )
             return []
         case .equalizeSplits:
             handleEqualizeSplits(
                 sourceSessionID: sourceSessionID,
-                hostTerminalState: hostTerminalState
+                tileTreeStore: tileTreeStore
             )
             return []
         }
@@ -98,18 +98,18 @@ struct GhosttyTerminalIntentRouter {
     private func routeTab(
         _ intent: GhosttyTabIntent,
         sourceSessionID: UUID?,
-        hostTerminalState: HostTerminalStateStore
+        tileTreeStore: TileTreeStore
     ) -> [GhosttyTerminalRoutingEffect] {
         switch intent {
         case .newTab:
-            guard let session = hostTerminalState.createTab(from: sourceSessionID) else {
+            guard let session = tileTreeStore.createTab(from: sourceSessionID) else {
                 NSLog("[TabRouting] new_tab ignored: no source/active session")
                 return []
             }
             return [.focus(session.id)]
 
         case .closeTab(let mode):
-            let tabIDs = hostTerminalState.tabIDsForClose(
+            let tabIDs = tileTreeStore.tabIDsForClose(
                 mode: mode,
                 sourceSessionID: sourceSessionID
             )
@@ -123,7 +123,7 @@ struct GhosttyTerminalIntentRouter {
             guard let target,
                 let session = activateTab(
                     target,
-                    hostTerminalState: hostTerminalState,
+                    tileTreeStore: tileTreeStore,
                     sourceSessionID: sourceSessionID
                 )
             else {
@@ -134,8 +134,8 @@ struct GhosttyTerminalIntentRouter {
 
         case .moveTab(let amount):
             let resolvedAmount = amount ?? 0
-            guard hostTerminalState.moveTab(containing: sourceSessionID, offset: resolvedAmount),
-                let activeSessionID = hostTerminalState.activeSessionID
+            guard tileTreeStore.moveTab(containing: sourceSessionID, offset: resolvedAmount),
+                let activeSessionID = tileTreeStore.activeSessionID
             else {
                 NSLog("[TabRouting] move_tab no-op amount=%d", resolvedAmount)
                 return []
@@ -143,7 +143,7 @@ struct GhosttyTerminalIntentRouter {
             return [.focus(activeSessionID)]
 
         case .setTabTitle(let title):
-            guard hostTerminalState.setTabTitle(title, for: sourceSessionID) else {
+            guard tileTreeStore.setTabTitle(title, for: sourceSessionID) else {
                 NSLog("[TabRouting] set_tab_title no-op")
                 return []
             }
@@ -154,16 +154,16 @@ struct GhosttyTerminalIntentRouter {
     private func handleNewSplit(
         sourceSessionID: UUID?,
         direction: GhosttyAppManager.SplitDirection?,
-        hostTerminalState: HostTerminalStateStore
+        tileTreeStore: TileTreeStore
     ) -> [GhosttyTerminalRoutingEffect] {
         // Resolve which pane to split: the live source, or the active session when fired without one.
-        guard let sourcePaneID = sourceSessionID ?? hostTerminalState.activeSessionID else {
+        guard let sourcePaneID = sourceSessionID ?? tileTreeStore.activeSessionID else {
             NSLog("[SplitRouting] new_split ignored: no active/primary session")
             return []
         }
         // Called for its tab-activation side effect only; the returned primary id is used for the log
         // line below, not threaded into the split — `splitFocusedTile` resolves its own primary.
-        let primarySessionID = hostTerminalState.activatePrimarySession(containing: sourcePaneID)
+        let primarySessionID = tileTreeStore.activatePrimarySession(containing: sourcePaneID)
         NSLog(
             "[SplitRouting] new_split source=%@ primary=%@",
             sourcePaneID.uuidString,
@@ -178,7 +178,7 @@ struct GhosttyTerminalIntentRouter {
         )
 
         guard
-            let splitSession = hostTerminalState.splitFocusedTile(
+            let splitSession = tileTreeStore.splitFocusedTile(
                 inTabContaining: sourcePaneID,
                 preferredLayout: preferredLayout
             )
@@ -191,20 +191,20 @@ struct GhosttyTerminalIntentRouter {
 
     private func splitLayout(
         for direction: GhosttyAppManager.SplitDirection?
-    ) -> HostTerminalStateStore.SplitPaneLayout {
+    ) -> TileTreeStore.SplitPaneLayout {
         switch direction {
         case .left:
-            return HostTerminalStateStore.SplitPaneLayout(
+            return TileTreeStore.SplitPaneLayout(
                 axis: .leadingTrailing,
                 splitBeforePrimary: true
             )
         case .up:
-            return HostTerminalStateStore.SplitPaneLayout(
+            return TileTreeStore.SplitPaneLayout(
                 axis: .topBottom,
                 splitBeforePrimary: true
             )
         case .down:
-            return HostTerminalStateStore.SplitPaneLayout(
+            return TileTreeStore.SplitPaneLayout(
                 axis: .topBottom,
                 splitBeforePrimary: false
             )
@@ -216,7 +216,7 @@ struct GhosttyTerminalIntentRouter {
     private func handleGotoSplit(
         sourceSessionID: UUID?,
         direction: GhosttyAppManager.SplitFocusDirection?,
-        hostTerminalState: HostTerminalStateStore
+        tileTreeStore: TileTreeStore
     ) -> [GhosttyTerminalRoutingEffect] {
         guard let sourceSessionID,
             let direction
@@ -226,7 +226,7 @@ struct GhosttyTerminalIntentRouter {
         }
 
         guard
-            let targetSessionID = hostTerminalState.splitFocusTarget(
+            let targetSessionID = tileTreeStore.splitFocusTarget(
                 from: sourceSessionID,
                 direction: direction
             )
@@ -252,7 +252,7 @@ struct GhosttyTerminalIntentRouter {
         sourceSessionID: UUID?,
         direction: GhosttyAppManager.SplitResizeDirection?,
         amount: Int?,
-        hostTerminalState: HostTerminalStateStore
+        tileTreeStore: TileTreeStore
     ) {
         guard let sourceSessionID,
             let direction
@@ -263,7 +263,7 @@ struct GhosttyTerminalIntentRouter {
 
         let resolvedAmount = max(amount ?? 100, 1)
         guard
-            hostTerminalState.resizeSplit(
+            tileTreeStore.resizeSplit(
                 containing: sourceSessionID,
                 direction: direction,
                 amount: resolvedAmount
@@ -288,14 +288,14 @@ struct GhosttyTerminalIntentRouter {
 
     private func handleEqualizeSplits(
         sourceSessionID: UUID?,
-        hostTerminalState: HostTerminalStateStore
+        tileTreeStore: TileTreeStore
     ) {
         guard let sourceSessionID else {
             NSLog("[SplitRouting] equalize_splits ignored: missing source")
             return
         }
 
-        guard hostTerminalState.equalizeSplit(containing: sourceSessionID) else {
+        guard tileTreeStore.equalizeSplit(containing: sourceSessionID) else {
             NSLog("[SplitRouting] equalize_splits no-op source=%@", sourceSessionID.uuidString)
             return
         }
@@ -305,18 +305,18 @@ struct GhosttyTerminalIntentRouter {
 
     private func activateTab(
         _ target: GhosttyAppManager.TabGotoTarget,
-        hostTerminalState: HostTerminalStateStore,
+        tileTreeStore: TileTreeStore,
         sourceSessionID: UUID?
     ) -> HostTerminalSession? {
         switch target {
         case .previous:
-            return hostTerminalState.activateAdjacentTab(offset: -1, from: sourceSessionID)
+            return tileTreeStore.activateAdjacentTab(offset: -1, from: sourceSessionID)
         case .next:
-            return hostTerminalState.activateAdjacentTab(offset: 1, from: sourceSessionID)
+            return tileTreeStore.activateAdjacentTab(offset: 1, from: sourceSessionID)
         case .last:
-            return hostTerminalState.activateLastTab()
+            return tileTreeStore.activateLastTab()
         case .index(let index):
-            return hostTerminalState.activateTab(atOneBasedIndex: index)
+            return tileTreeStore.activateTab(atOneBasedIndex: index)
         }
     }
 }

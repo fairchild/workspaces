@@ -26,7 +26,7 @@ struct SplitRoutingControllerTests {
         SplitRoutingController().handle(
             notification: notification,
             terminalMultiplexingMode: .ghosttyManagedSplits,
-            hostTerminalState: store,
+            tileTreeStore: store,
             focusTerminal: { _ in }
         )
 
@@ -46,7 +46,7 @@ struct SplitRoutingControllerTests {
         SplitRoutingController().handle(
             notification: notification,
             terminalMultiplexingMode: .tmuxPerSession,
-            hostTerminalState: store,
+            tileTreeStore: store,
             focusTerminal: { _ in }
         )
 
@@ -69,7 +69,7 @@ struct SplitRoutingControllerTests {
         SplitRoutingController().handle(
             notification: notification,
             terminalMultiplexingMode: .ghosttyManagedSplits,
-            hostTerminalState: store,
+            tileTreeStore: store,
             focusTerminal: { _ in }
         )
 
@@ -78,8 +78,8 @@ struct SplitRoutingControllerTests {
         #expect(store.splitSession(for: primaryID) == nil)
     }
 
-    private func makeStoreWithActiveSession() -> HostTerminalStateStore {
-        let store = HostTerminalStateStore()
+    private func makeStoreWithActiveSession() -> TileTreeStore {
+        let store = TileTreeStore()
         _ = store.activateSession(
             key: .defaultHome,
             directory: URL(fileURLWithPath: "/Users/test/code")

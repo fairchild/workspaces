@@ -7,7 +7,7 @@ struct TabRoutingController {
 
     func handle(
         notification: Notification,
-        hostTerminalState: HostTerminalStateStore,
+        tileTreeStore: TileTreeStore,
         focusTerminal: @escaping (UUID) -> Void,
         requestCloseTabs: @escaping ([UUID]) -> Void
     ) {
@@ -18,13 +18,13 @@ struct TabRoutingController {
 
         let sourceSessionID =
             (notification.object as? GhosttySurfaceView)
-            .flatMap { hostTerminalState.surfaceStore.sessionID(for: $0) }
+            .flatMap { tileTreeStore.surfaceStore.sessionID(for: $0) }
 
         let effects = router.route(
             .tab(GhosttyTabIntent(request: request)),
             sourceSessionID: sourceSessionID,
             terminalMultiplexingMode: .ghosttyManagedSplits,
-            hostTerminalState: hostTerminalState
+            tileTreeStore: tileTreeStore
         )
         apply(
             effects: effects,

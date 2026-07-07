@@ -18,7 +18,7 @@ struct GhosttyTerminalIntentRouterTests {
             .split(.newSplit(direction: .right)),
             sourceSessionID: nil,
             terminalMultiplexingMode: .ghosttyManagedSplits,
-            hostTerminalState: store
+            tileTreeStore: store
         )
 
         let split = try #require(store.splitSession(for: primaryID))
@@ -35,7 +35,7 @@ struct GhosttyTerminalIntentRouterTests {
             .split(.newSplit(direction: .right)),
             sourceSessionID: nil,
             terminalMultiplexingMode: .tmuxPerSession,
-            hostTerminalState: store
+            tileTreeStore: store
         )
 
         #expect(effects.isEmpty)
@@ -54,7 +54,7 @@ struct GhosttyTerminalIntentRouterTests {
             .split(.gotoSplit(direction: .right)),
             sourceSessionID: primary.id,
             terminalMultiplexingMode: .ghosttyManagedSplits,
-            hostTerminalState: store
+            tileTreeStore: store
         )
 
         #expect(effects == [.focus(split.id)])
@@ -71,7 +71,7 @@ struct GhosttyTerminalIntentRouterTests {
             .split(.resizeSplit(direction: .left, amount: 100)),
             sourceSessionID: split.id,
             terminalMultiplexingMode: .ghosttyManagedSplits,
-            hostTerminalState: store
+            tileTreeStore: store
         )
 
         #expect(effects.isEmpty)
@@ -89,11 +89,11 @@ struct GhosttyTerminalIntentRouterTests {
             .split(.equalizeSplits),
             sourceSessionID: split.id,
             terminalMultiplexingMode: .ghosttyManagedSplits,
-            hostTerminalState: store
+            tileTreeStore: store
         )
 
         #expect(effects.isEmpty)
-        #expect(store.splitFraction(for: primary.id) == HostTerminalStateStore.defaultSplitFraction)
+        #expect(store.splitFraction(for: primary.id) == TileTreeStore.defaultSplitFraction)
     }
 
     @Test("new tab duplicates source tab and returns focus")
@@ -105,7 +105,7 @@ struct GhosttyTerminalIntentRouterTests {
             .tab(.newTab),
             sourceSessionID: first.id,
             terminalMultiplexingMode: .tmuxPerSession,
-            hostTerminalState: store
+            tileTreeStore: store
         )
 
         #expect(store.sessions.count == 2)
@@ -124,7 +124,7 @@ struct GhosttyTerminalIntentRouterTests {
             .tab(.closeTab(mode: .right)),
             sourceSessionID: second.id,
             terminalMultiplexingMode: .tmuxPerSession,
-            hostTerminalState: store
+            tileTreeStore: store
         )
 
         #expect(effects == [.closeTabs([third.id])])
@@ -141,19 +141,19 @@ struct GhosttyTerminalIntentRouterTests {
             .tab(.gotoTab(target: .next)),
             sourceSessionID: second.id,
             terminalMultiplexingMode: .tmuxPerSession,
-            hostTerminalState: store
+            tileTreeStore: store
         )
         let previousEffects = router.route(
             .tab(.gotoTab(target: .previous)),
             sourceSessionID: second.id,
             terminalMultiplexingMode: .tmuxPerSession,
-            hostTerminalState: store
+            tileTreeStore: store
         )
         let indexedEffects = router.route(
             .tab(.gotoTab(target: .index(1))),
             sourceSessionID: second.id,
             terminalMultiplexingMode: .tmuxPerSession,
-            hostTerminalState: store
+            tileTreeStore: store
         )
 
         #expect(nextEffects == [.focus(third.id)])
@@ -171,7 +171,7 @@ struct GhosttyTerminalIntentRouterTests {
             .tab(.moveTab(amount: -1)),
             sourceSessionID: second.id,
             terminalMultiplexingMode: .tmuxPerSession,
-            hostTerminalState: store
+            tileTreeStore: store
         )
 
         #expect(store.sessions.map(\.id) == [second.id, first.id])
@@ -188,15 +188,15 @@ struct GhosttyTerminalIntentRouterTests {
             .tab(.setTabTitle("CI")),
             sourceSessionID: split.id,
             terminalMultiplexingMode: .tmuxPerSession,
-            hostTerminalState: store
+            tileTreeStore: store
         )
 
         #expect(effects.isEmpty)
         #expect(store.tabTitleOverride(for: primary.id) == "CI")
     }
 
-    private func makeStore() -> HostTerminalStateStore {
-        let store = HostTerminalStateStore()
+    private func makeStore() -> TileTreeStore {
+        let store = TileTreeStore()
         _ = store.activateSession(
             key: .repoPath("/Users/test/repo"),
             directory: URL(fileURLWithPath: "/Users/test/repo")

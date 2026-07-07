@@ -134,7 +134,7 @@ enum UIFixtureSeeder {
         from environment: [String: String],
         in context: ModelContext,
         registry: AgentSessionRegistry,
-        hostTerminalState: HostTerminalStateStore
+        tileTreeStore: TileTreeStore
     ) -> Int {
         guard !hasSeededAgentStates else { return 0 }
         guard let raw = environment[agentStatesEnvKey],
@@ -162,7 +162,7 @@ enum UIFixtureSeeder {
 
             let directory = workspace.workspaceURL.standardizedFileURL.resolvingSymlinksInPath()
             let key: HostTerminalSessionKey = .hostPath(directory.path)
-            let result = hostTerminalState.activateSession(key: key, directory: directory)
+            let result = tileTreeStore.activateSession(key: key, directory: directory)
             if firstActivation == nil {
                 firstActivation = (key, directory)
             }
@@ -177,7 +177,7 @@ enum UIFixtureSeeder {
         // first listed workspace as the canonical "selected" one for screenshots — natural
         // reading order, no extra syntax.
         if let primary = firstActivation {
-            hostTerminalState.activateSession(key: primary.key, directory: primary.directory)
+            tileTreeStore.activateSession(key: primary.key, directory: primary.directory)
         }
         return applied
     }
@@ -190,7 +190,7 @@ enum UIFixtureSeeder {
         from environment: [String: String],
         in context: ModelContext,
         commandStatusRegistry: LastCommandStatusRegistry,
-        hostTerminalState: HostTerminalStateStore,
+        tileTreeStore: TileTreeStore,
         now: Date = Date()
     ) -> Int {
         guard !hasSeededCommandStatuses else { return 0 }
@@ -219,7 +219,7 @@ enum UIFixtureSeeder {
 
             let directory = workspace.workspaceURL.standardizedFileURL.resolvingSymlinksInPath()
             let key: HostTerminalSessionKey = .hostPath(directory.path)
-            let result = hostTerminalState.activateSession(key: key, directory: directory)
+            let result = tileTreeStore.activateSession(key: key, directory: directory)
             if firstActivation == nil {
                 firstActivation = (key, directory)
             }
@@ -231,7 +231,7 @@ enum UIFixtureSeeder {
         }
 
         if let primary = firstActivation {
-            hostTerminalState.activateSession(key: primary.key, directory: primary.directory)
+            tileTreeStore.activateSession(key: primary.key, directory: primary.directory)
         }
         return applied
     }

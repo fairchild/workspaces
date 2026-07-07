@@ -92,7 +92,7 @@ The `Cmd+D` path is runtime-action-driven:
 1. `GhosttySurfaceView` routes non-app-owned shortcuts to Ghostty binding handling.
 2. `libghostty` dispatches `GHOSTTY_ACTION_NEW_SPLIT` through `ghostty_runtime_action_cb`.
 3. `GhosttyRuntimeActionBridge` posts a split action notification and returns `true` through `GhosttyAppManager.action(...)`.
-4. The app then materializes the split in UI state (`SplitRoutingController` / `HostTerminalStateStore`).
+4. The app then materializes the split in UI state (`SplitRoutingController` / `TileTreeStore`).
 
 Important: returning `false` for `GHOSTTY_ACTION_NEW_SPLIT` means "not performed" and
 no split will appear even if the key event reached Ghostty.

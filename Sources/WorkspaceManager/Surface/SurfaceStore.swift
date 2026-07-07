@@ -7,7 +7,7 @@ import WorkspaceManagerCore
 /// `HostTerminalSession.id` — the focus coordinator, OSC routing, and the tab strip.
 ///
 /// The live surface owner of the main terminal column: the recursive renderer vends every tile's
-/// surface here, and `sync(activeLeafIDs:)` is the single eviction authority — `HostTerminalStateStore`
+/// surface here, and `sync(activeLeafIDs:)` is the single eviction authority — `TileTreeStore`
 /// calls it after each tree mutation, so a leaf leaving the tree is the one trigger for surface
 /// teardown (the agent-domain teardown bundle stays paired in the store via `syncRegistry`).
 @MainActor
@@ -194,7 +194,7 @@ final class SurfaceStore {
     // strip address terminals by `HostTerminalSession.id`. These resolve session → owning terminal
     // surface by scanning the (shallow, one-per-visible-pane) surface map, so those consumers keep
     // their session-keyed shape without `SurfaceStore` learning the tile↔session binding (that stays
-    // in `HostTerminalStateStore`).
+    // in `TileTreeStore`).
 
     private func terminalSurface(forSession sessionID: UUID) -> TerminalSurface? {
         surfaces.values
@@ -249,7 +249,7 @@ final class SurfaceStore {
 
     /// Retain only the surfaces whose tiles are still live leaves; tear down the rest. A pure
     /// present-vs-retained diff — the eviction authority Phase 5 routes all teardown through, in place
-    /// of today's scattered `invalidate` calls in `HostTerminalStateStore`.
+    /// of today's scattered `invalidate` calls in `TileTreeStore`.
     func sync(activeLeafIDs: [TileID]) {
         let active = Set(activeLeafIDs)
         let stale = surfaces.keys.filter { !active.contains($0) }
