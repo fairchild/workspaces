@@ -145,6 +145,7 @@ New standalone Python utilities are single-file UV scripts: `#!/usr/bin/env -S u
 | Lume integration / daemon reliability | docs/development/lume-integration.md | - |
 | Lume validation lanes | docs/development/lume-validation.md | - |
 | Lume runner setup | docs/development/lume-runner-setup.md | - |
+| Xcode Cloud harness + debugging (real logs, VM quirks) | docs/development/xcode-cloud.md | - |
 | Web local dev (mise tasks, auth bypass) | web/docs/local-dev.md | - |
 | Web architecture | web/docs/architecture.md | - |
 | PR reviewer agent | docs/pr-review/pr-reviewer.md | - |
