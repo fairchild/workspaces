@@ -12,7 +12,10 @@ never a silent pass.
 
 ## The three credentials
 
-1. **A GitHub machine account on the allowlist** (suggested: `fairchild-web-validator`).
+1. **A GitHub machine account on the allowlist** (suggested: `workspaces-validator`;
+   any project-adjacent handle works — the name should read as belonging to the
+   product, not to the owner's personal account, and the `ALLOWED_LOGINS` entry
+   is the actual binding).
    Added to `ALLOWED_LOGINS` in the Vercel project env. It needs no org
    membership and no repo permissions — it exists only to pass the OAuth +
    allowlist door. Because sessions are unscoped (#829 parked), this identity
