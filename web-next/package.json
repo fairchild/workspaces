@@ -4,9 +4,9 @@
 	"private": true,
 	"scripts": {
 		"dev": "next dev --port 3100",
-		"build": "next build",
+		"build": "NODE_ENV=production next build",
 		"start": "next start --port 3100",
-		"e2e:server": "rm -f .data/e2e.db* && { test -f .next/BUILD_ID || next build; } && AUTH_BYPASS=1 ALLOWED_LOGINS=fairchild SESSIONS_DATABASE_URL=file:.data/e2e.db next start --port 3100",
+		"e2e:server": "rm -f .data/e2e.db* && { test -f .next/BUILD_ID || NODE_ENV=production next build; } && AUTH_BYPASS=1 ALLOWED_LOGINS=fairchild SESSIONS_DATABASE_URL=file:.data/e2e.db next start --port 3100",
 		"test": "vitest run",
 		"test:e2e": "playwright test",
 		"typecheck": "tsc --noEmit",
