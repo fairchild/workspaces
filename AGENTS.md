@@ -96,6 +96,7 @@ PR summary style: prefer concise Markdown links for completed checks/artifacts (
 ## Commit Hygiene
 
 - Do not include screenshot artifacts in commits unless explicitly requested (`output/`).
+- Never delete build/test state with ad-hoc `rm -rf` — it trips shell-permission prompts that stall unattended sessions. In `web-next/`, use `pnpm run clean [build|data|artifacts|deps|all] [--dry-run]` (allowlisted; see `web-next/CONTRIBUTING.md` § "Cleaning up"). Elsewhere, prefer an existing script/mise task, and file the gap if none covers your case.
 
 ## Quick Commands
 
