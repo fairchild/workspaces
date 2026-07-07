@@ -52,6 +52,21 @@ probes reachability and auth/security posture with zero credentials, and
 credential-gated stages report themselves skipped rather than passing silently
 (see `docs/roadmap.md` Phase 2 / milestone #13).
 
+## Cleaning up
+
+```bash
+pnpm run clean              # build + data + artifacts (the safe everyday trio)
+pnpm run clean build        # just .next (clean-build reproduction)
+pnpm run clean all --dry-run
+```
+
+One entrypoint for deleting build/test state — `.next`, throwaway e2e/perf
+databases (`.data/`), and test artifacts (`output/`, reports, perf results).
+Use it instead of ad-hoc `rm -rf`: the fixed target map is safe by
+construction and the single command shape is shell-allowlistable, so
+unattended agent sessions don't stall on permission prompts. `deps`
+(node_modules) is only removed when named explicitly or via `all`.
+
 ## The feedback loop (owner review of in-flight work)
 
 The product is steered by the owner looking at a running instance, not at
