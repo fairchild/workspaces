@@ -6,7 +6,6 @@
 import Link from "next/link";
 import { ThemeToggle } from "@/components/folio/theme-toggle";
 import { getDatabase } from "@/lib/db/client";
-import { listRepos } from "@/lib/db/repos";
 import { listSessions, type SessionListItem } from "@/lib/db/sessions";
 import { formatRelativeTime } from "@/lib/relative-time";
 import { NewSession } from "./new-session";
@@ -48,10 +47,7 @@ function SessionRow({ session, index }: { session: SessionListItem; index: numbe
 
 export default async function SessionsHome() {
 	const handle = getDatabase();
-	const [sessions, repos] = await Promise.all([
-		listSessions(handle),
-		listRepos(handle),
-	]);
+	const sessions = await listSessions(handle);
 	const isEmpty = sessions.length === 0;
 
 	return (
@@ -73,7 +69,7 @@ export default async function SessionsHome() {
 							Start one on a repository.
 						</p>
 						<div className="w-full max-w-[380px]">
-							<NewSession repos={repos} startOpen />
+							<NewSession startOpen />
 						</div>
 					</div>
 				) : (
@@ -88,7 +84,7 @@ export default async function SessionsHome() {
 						</ul>
 						{/* The list ends in a quiet invitation, not a persistent button. */}
 						<div className="mt-4 px-2.5">
-							<NewSession repos={repos} />
+							<NewSession />
 						</div>
 					</>
 				)}

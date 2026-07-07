@@ -47,10 +47,16 @@ export async function getRepo(
 	return row ? rowToRepo(row) : undefined;
 }
 
-/** The repo named `fullName`, created if this is its first mention. */
+/**
+ * The repo named `fullName`, created if this is its first mention.
+ * `defaultBranch`, when given, is recorded on creation and backfilled onto an
+ * already-connected repo whose branch is still unknown or has since changed
+ * (e.g. a repo connected before GitHub validation existed, or renamed since).
+ */
 export async function ensureRepo(
 	handle: DatabaseHandle,
 	fullName: string,
+	defaultBranch: string | null = null,
 ): Promise<Repo> {
 	await ensureSchema(handle);
 	const existing = await handle.db
@@ -58,12 +64,22 @@ export async function ensureRepo(
 		.selectAll()
 		.where("full_name", "=", fullName)
 		.executeTakeFirst();
-	if (existing) return rowToRepo(existing);
+	if (existing) {
+		if (defaultBranch && existing.default_branch !== defaultBranch) {
+			await handle.db
+				.updateTable("repos")
+				.set({ default_branch: defaultBranch })
+				.where("id", "=", existing.id)
+				.execute();
+			return rowToRepo({ ...existing, default_branch: defaultBranch });
+		}
+		return rowToRepo(existing);
+	}
 
 	const row: ReposTable = {
 		id: fullName,
 		full_name: fullName,
-		default_branch: null,
+		default_branch: defaultBranch,
 		created_at: new Date().toISOString(),
 	};
 	await handle.db.insertInto("repos").values(row).execute();

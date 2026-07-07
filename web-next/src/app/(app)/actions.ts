@@ -7,12 +7,34 @@
 import { redirect } from "next/navigation";
 import { requireAuthorizedUser } from "@/lib/auth/auth-state";
 import { getDatabase } from "@/lib/db/client";
-import { startSession } from "@/lib/db/start-session";
+import { RepoUnavailableError, startSession } from "@/lib/db/start-session";
 
-/** New-session flow: `repo` is an `owner/name`; creates the row and routes. */
-export async function createSessionAction(formData: FormData): Promise<void> {
+export interface CreateSessionState {
+	error?: string;
+}
+
+/**
+ * New-session flow: `repo` is an `owner/name`, validated against GitHub in
+ * `startSession`. On success it creates the row and redirects; on a repo
+ * GitHub can't find or the App can't access, it returns a calm inline error
+ * instead of throwing (paired with `useActionState` in `new-session.tsx`).
+ */
+export async function createSessionAction(
+	_prevState: CreateSessionState | null,
+	formData: FormData,
+): Promise<CreateSessionState> {
 	await requireAuthorizedUser();
 	const repo = String(formData.get("repo") ?? "");
-	const session = await startSession(getDatabase(), repo);
+	let session: Awaited<ReturnType<typeof startSession>>;
+	try {
+		session = await startSession(getDatabase(), repo);
+	} catch (error) {
+		if (error instanceof RepoUnavailableError) {
+			return {
+				error: `${repo} doesn't exist or isn't accessible — check the name and try again.`,
+			};
+		}
+		throw error;
+	}
 	redirect(`/sessions/${session.id}`);
 }

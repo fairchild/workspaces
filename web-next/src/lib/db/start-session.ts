@@ -5,12 +5,15 @@
  * stays a thin auth-gated shell.
  */
 import type { DatabaseHandle } from "./client";
+import { RepoUnavailableError, resolveRepo } from "../github/repo-directory";
 import { ensureRepo } from "./repos";
 import { createSession, type Session } from "./sessions";
 
+export { RepoUnavailableError };
+
 // GitHub's rules, loosely: owner and name from [A-Za-z0-9_.-], no slashes
-// beyond the separator. No API validation yet (single-user; typos are the
-// user's own repos to correct).
+// beyond the separator. This is the shape check only; existence + access are
+// confirmed against GitHub by resolveRepo() below.
 const REPO_FULL_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9_.-]+$/;
 
 export function isValidRepoFullName(value: string): boolean {
@@ -27,8 +30,11 @@ export function defaultComputeProvider(): string {
 }
 
 /**
- * Creates (or reuses) the repo and starts an empty session on it.
- * Title stays empty until a first turn names it; the provider comes from
+ * Creates (or reuses) the repo and starts an empty session on it. Validates
+ * `repoFullName` against GitHub first (see `../github/repo-directory`) —
+ * throws `RepoUnavailableError` if it doesn't exist or isn't accessible to
+ * the App — and records the real default branch on connect. Title stays
+ * empty until a first turn names it; the provider comes from
  * `defaultComputeProvider()` (mock unless configured otherwise).
  */
 export async function startSession(
@@ -39,7 +45,8 @@ export async function startSession(
 	if (!isValidRepoFullName(trimmed)) {
 		throw new Error(`not an owner/name repository: ${JSON.stringify(trimmed)}`);
 	}
-	const repo = await ensureRepo(handle, trimmed);
+	const { defaultBranch } = await resolveRepo(trimmed);
+	const repo = await ensureRepo(handle, trimmed, defaultBranch);
 	return createSession(handle, {
 		id: crypto.randomUUID(),
 		repoId: repo.id,

@@ -59,6 +59,28 @@ export async function findInstallationId(jwt: string, repo: string): Promise<num
 	return json.id;
 }
 
+/**
+ * Every installation of this App — the repo-picker's route in when there is
+ * no specific repo to key off yet (unlike findInstallationId). Single-user
+ * product: callers take the first installation and don't expect more than one.
+ */
+export async function listAppInstallations(
+	jwt: string,
+): Promise<Array<{ id: number; account: string }>> {
+	const res = await fetch(`${GH}/app/installations`, {
+		headers: { Authorization: `Bearer ${jwt}`, ...HEADERS },
+	});
+	if (!res.ok) return ghError(res, "list app installations");
+	const json = (await res.json()) as Array<{
+		id: number;
+		account: { login: string } | null;
+	}>;
+	return json.map((installation) => ({
+		id: installation.id,
+		account: installation.account?.login ?? "",
+	}));
+}
+
 export interface InstallationToken {
 	token: string;
 	expiresAt: string;
@@ -123,4 +145,58 @@ export async function verifyRepoAccess(
 		defaultBranch: json.default_branch,
 		private: json.private,
 	};
+}
+
+export interface DirectoryRepo {
+	fullName: string;
+	defaultBranch: string;
+	private: boolean;
+}
+
+/** Every repo the installation token's installation can see — the picker's raw feed. */
+export async function listInstallationRepositories(
+	token: string,
+): Promise<DirectoryRepo[]> {
+	const res = await fetch(`${GH}/installation/repositories?per_page=100`, {
+		headers: { Authorization: `token ${token}`, ...HEADERS },
+	});
+	if (!res.ok) return ghError(res, "list installation repositories");
+	const json = (await res.json()) as {
+		repositories: Array<{
+			full_name: string;
+			default_branch: string;
+			private: boolean;
+		}>;
+	};
+	return json.repositories.map((repo) => ({
+		fullName: repo.full_name,
+		defaultBranch: repo.default_branch,
+		private: repo.private,
+	}));
+}
+
+/**
+ * End-to-end for listing (mintInstallationToken above is end-to-end for one
+ * known repo): read the App id + key, take the App's first installation —
+ * this product installs the App on one account — and mint a token scoped to
+ * everything that installation can see.
+ */
+export async function mintDirectoryToken(): Promise<{
+	token: string;
+	installationId: number;
+}> {
+	const appId = process.env.GITHUB_WEB_WORKSPACES_APP_ID;
+	const privateKey = process.env.GITHUB_APP_PRIVATE_KEY;
+	if (!appId || !privateKey) {
+		throw new Error(
+			"GITHUB_WEB_WORKSPACES_APP_ID and GITHUB_APP_PRIVATE_KEY are required to mint an installation token",
+		);
+	}
+	const jwt = generateAppJWT(appId, privateKey);
+	const installations = await listAppInstallations(jwt);
+	if (installations.length === 0) {
+		throw new Error("the GitHub App has no installations");
+	}
+	const { token } = await getInstallationToken(jwt, installations[0].id);
+	return { token, installationId: installations[0].id };
 }
