@@ -14,3 +14,4 @@ perf/results.md
 
 # Local libSQL database files (dev default + e2e)
 .data/
+.vercel

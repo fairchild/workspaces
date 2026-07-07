@@ -1,0 +1,34 @@
+# Drift gate for config/vercel/ — verifies live Vercel env vars still match
+# the committed manifests. Read-only: reconciling is a deliberate local act
+# via `scripts/vercel-settings.py apply`. Soft-skips until the VERCEL_TOKEN
+# repo secret exists (mint at vercel.com/account/tokens, scope cloudcompute).
+name: Vercel Settings Drift
+
+on:
+  schedule:
+    - cron: "41 13 * * *"
+  pull_request:
+    paths:
+      - "config/vercel/**"
+      - "scripts/vercel-settings.py"
+      - ".github/workflows/vercel-settings-drift.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - name: Check live Vercel env against config/vercel/
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_BIN: npx --yes vercel@latest
+        run: |
+          if [ -z "$VERCEL_TOKEN" ]; then
+            echo "::notice::VERCEL_TOKEN secret not configured; skipping Vercel drift check"
+            exit 0
+          fi
+          python3 scripts/vercel-settings.py check

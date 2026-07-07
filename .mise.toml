@@ -115,3 +115,11 @@ run = "uv run --script scripts/github-settings.py check"
 [tasks."repo-settings-apply"]
 description = "Push config/github/ ruleset files to GitHub (needs repo admin)."
 run = "uv run --script scripts/github-settings.py apply"
+
+[tasks."vercel-settings-check"]
+description = "Diff live Vercel env vars (both projects) against config/vercel/; exit 1 on drift."
+run = "uv run --script scripts/vercel-settings.py check"
+
+[tasks."vercel-settings-apply"]
+description = "Reconcile config/vercel/ manifest values to Vercel (secrets untouched; redeploy to activate)."
+run = "uv run --script scripts/vercel-settings.py apply"
