@@ -1506,11 +1506,10 @@ struct SidebarView: View {
     /// Kicks off async foreground-process resolution for the plain (non-agent) tabs under
     /// `key`, updating `foregroundNameBySessionID` when a name resolves. Fire-and-forget and
     /// idempotent — the resolver caches for ~2s and this writes only on change — so it is safe
-    /// to call from the hover card's lazy `tabsProvider`. No-ops outside tmux-per-session mode,
-    /// where foreground detection is not available (see #666).
+    /// to call from the hover card's lazy `tabsProvider`. Resolves in every multiplexing mode
+    /// (tmux pane command when available, otherwise the directory's running program).
     private func refreshForegroundProcessNames(for key: HostTerminalSessionKey) {
         let mode = TerminalMultiplexingMode.resolve()
-        guard mode == .tmuxPerSession else { return }
         let normalizedKey = key.normalized()
         let plainSessions = hostSessions.filter {
             $0.key == normalizedKey && agentStatusBySessionID[$0.id] == nil

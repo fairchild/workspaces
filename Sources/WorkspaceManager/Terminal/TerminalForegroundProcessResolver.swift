@@ -3,10 +3,20 @@
 //  WorkspaceManager
 //
 //  Resolves the real foreground process name of a plain terminal tab (e.g. `vim`,
-//  `python`, `zsh`) so the sidebar hover card can show what is actually running rather
-//  than the terminal title, which only approximates it. Only tmux-per-session mode is
-//  resolvable: libghostty exposes no child PID or PTY fd, so ghostty-managed-splits
-//  surfaces fall back to the title/directory (see #666 and the upstream pid/fd gap).
+//  `python`) so the sidebar hover card can show what is actually running rather than the
+//  terminal title, which only approximates it.
+//
+//  Resolution ladder, tried in order:
+//    1. tmux mode only — the session's active pane command (`pane_current_command`),
+//       which disambiguates tabs that share a working directory.
+//    2. all modes — the non-shell program running in the session's directory, via
+//       WorkspaceProcessMonitor's `lsof` cwd match. This is what covers the DEFAULT
+//       ghostty-managed-splits mode, where libghostty exposes no child PID or PTY fd to
+//       do true per-surface detection (see #666; upstream fd/pid ask filed separately).
+//  A `nil` result means the caller falls back to the terminal title / directory. The
+//  cwd match is directory-scoped, so sibling tabs in one directory can't be told apart
+//  outside tmux mode — an acceptable limit for an advisory hover card.
+//
 //  Resolution is async and lazy; results are cached briefly per session.
 //
 
@@ -19,39 +29,56 @@ struct TerminalForegroundProcessResolver: Sendable {
 
     private let probe: TmuxSessionProbe
     private let tmuxSessionName: @Sendable (URL) -> String
+    /// The non-shell program running in a directory (via `lsof` cwd match), or nil.
+    private let cwdProgramName: @Sendable (URL) async -> String?
 
     init(
         probe: TmuxSessionProbe = TmuxSessionProbe(),
-        tmuxSessionName: @escaping @Sendable (URL) -> String = { GhosttyTerminalConfig.tmuxSessionName(for: $0) }
+        tmuxSessionName: @escaping @Sendable (URL) -> String = { GhosttyTerminalConfig.tmuxSessionName(for: $0) },
+        cwdProgramName: @escaping @Sendable (URL) async -> String? = TerminalForegroundProcessResolver
+            .defaultCwdProgramName
     ) {
         self.probe = probe
         self.tmuxSessionName = tmuxSessionName
+        self.cwdProgramName = cwdProgramName
     }
 
-    /// The foreground process name for `session`, or `nil` when it cannot be resolved:
-    /// ghostty-splits mode (no PID/fd exposure), no live tmux session, or tmux
-    /// unavailable. Cached per session id for `cacheTTL`.
+    /// The foreground process name for `session`, or `nil` when nothing resolves (the
+    /// caller then falls back to the terminal title / directory). Cached per session id
+    /// for `cacheTTL`.
     func foregroundName(
         for session: HostTerminalSession,
         mode: TerminalMultiplexingMode
     ) async -> String? {
-        guard mode == .tmuxPerSession else { return nil }
         if let cached = Self.cache.read(sessionID: session.id, ttl: Self.cacheTTL) {
             return cached
         }
-        let name = await probe.foregroundCommand(forSessionNamed: tmuxSessionName(session.directoryURL))
-        Self.cache.write(sessionID: session.id, name: name)
-        return name
+        var resolved: String?
+        if mode == .tmuxPerSession {
+            resolved = await probe.foregroundCommand(forSessionNamed: tmuxSessionName(session.directoryURL))
+        }
+        if resolved == nil {
+            resolved = await cwdProgramName(session.directoryURL)
+        }
+        Self.cache.write(sessionID: session.id, name: resolved)
+        return resolved
     }
 
-    /// Fallback ladder for a plain tab's display string: the real foreground process
-    /// name when resolved, otherwise the existing terminal title (which already falls
-    /// back to the directory).
+    /// Fallback ladder tail: the resolved foreground process name when present, otherwise
+    /// the existing terminal title (which already falls back to the directory).
     static func preferredTabTitle(foregroundName: String?, terminalTitle: String) -> String {
         if let foregroundName, !foregroundName.trimmingCharacters(in: .whitespaces).isEmpty {
             return foregroundName
         }
         return terminalTitle
+    }
+
+    /// Production cwd resolver: the first non-agent program whose cwd is the session's
+    /// directory, per `WorkspaceProcessMonitor` (which ignores shells and known agents).
+    /// Returns nil for a bare shell so the caller falls back to the title.
+    static let defaultCwdProgramName: @Sendable (URL) async -> String? = { directory in
+        let status = await WorkspaceProcessMonitor().detectAgentSession(in: directory)
+        return status.processes.first { !$0.isKnownAgent }?.displayName
     }
 
     private final class CacheBox: @unchecked Sendable {

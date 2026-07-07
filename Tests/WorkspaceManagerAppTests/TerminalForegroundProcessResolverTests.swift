@@ -13,6 +13,17 @@ struct TerminalForegroundProcessResolverTests {
         )
     }
 
+    private func resolver(
+        tmuxOutput: String?,
+        cwdProgram: String?
+    ) -> TerminalForegroundProcessResolver {
+        TerminalForegroundProcessResolver(
+            probe: TmuxSessionProbe(runForOutput: { _, _, _ in tmuxOutput }, environment: [:]),
+            tmuxSessionName: { _ in "wm-repo-abcd1234" },
+            cwdProgramName: { _ in cwdProgram }
+        )
+    }
+
     // MARK: - Fallback ladder
 
     @Test("A resolved foreground name is preferred over the terminal title")
@@ -32,36 +43,30 @@ struct TerminalForegroundProcessResolverTests {
                 foregroundName: "   ", terminalTitle: "~/repo") == "~/repo")
     }
 
-    // MARK: - Mode gating
+    // MARK: - Resolution ladder
 
-    @Test("tmux mode resolves the real foreground command")
-    func tmuxModeResolves() async {
-        let resolver = TerminalForegroundProcessResolver(
-            probe: TmuxSessionProbe(runForOutput: { _, _, _ in "1 vim\n" }, environment: [:]),
-            tmuxSessionName: { _ in "wm-repo-abcd1234" }
-        )
-        let name = await resolver.foregroundName(for: session(), mode: .tmuxPerSession)
-        #expect(name == "vim")
+    @Test("tmux mode prefers the exact per-pane command over the cwd program")
+    func tmuxModePrefersPaneCommand() async {
+        let resolver = resolver(tmuxOutput: "1 vim\n", cwdProgram: "python")
+        #expect(await resolver.foregroundName(for: session(), mode: .tmuxPerSession) == "vim")
     }
 
-    @Test("ghostty-splits mode does not attempt detection and returns nil")
-    func ghosttyModeReturnsNil() async {
-        // The probe would return "vim", but the mode gate must short-circuit before calling it.
-        let resolver = TerminalForegroundProcessResolver(
-            probe: TmuxSessionProbe(runForOutput: { _, _, _ in "1 vim\n" }, environment: [:]),
-            tmuxSessionName: { _ in "wm-repo-abcd1234" }
-        )
-        let name = await resolver.foregroundName(for: session(), mode: .ghosttyManagedSplits)
-        #expect(name == nil)
+    @Test("tmux mode falls back to the cwd program when the pane query is unavailable")
+    func tmuxModeFallsBackToCwd() async {
+        let resolver = resolver(tmuxOutput: nil, cwdProgram: "python")
+        #expect(await resolver.foregroundName(for: session(), mode: .tmuxPerSession) == "python")
     }
 
-    @Test("An unavailable tmux session resolves to nil (title fallback upstream)")
-    func unavailableSessionReturnsNil() async {
-        let resolver = TerminalForegroundProcessResolver(
-            probe: TmuxSessionProbe(runForOutput: { _, _, _ in nil }, environment: [:]),
-            tmuxSessionName: { _ in "wm-repo-abcd1234" }
-        )
-        let name = await resolver.foregroundName(for: session(), mode: .tmuxPerSession)
-        #expect(name == nil)
+    @Test("ghostty-splits mode (default) resolves via the cwd program")
+    func ghosttyModeResolvesViaCwd() async {
+        // No tmux query in this mode; the directory's running program still resolves.
+        let resolver = resolver(tmuxOutput: "1 vim\n", cwdProgram: "python")
+        #expect(await resolver.foregroundName(for: session(), mode: .ghosttyManagedSplits) == "python")
+    }
+
+    @Test("A bare shell (no non-shell program, no tmux) resolves to nil for title fallback")
+    func bareShellResolvesNil() async {
+        let resolver = resolver(tmuxOutput: nil, cwdProgram: nil)
+        #expect(await resolver.foregroundName(for: session(), mode: .ghosttyManagedSplits) == nil)
     }
 }
