@@ -58,7 +58,6 @@ struct MainWindowViewState {
     var didApplyFixtureDiagnosticsBootstrap = false
     var didApplyFixtureSessionSwitcherBootstrap = false
     var didResolveInitialSurface = false
-    var openInEditorErrorMessage: String?
     var workspaceOperationErrorMessage: String?
     var connectingWorkspaceID: UUID?
     var terminalCloseConfirmation: TerminalCloseConfirmation?
