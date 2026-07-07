@@ -35,6 +35,7 @@ final class WorkspaceStatusAggregationCoalescer {
         flushTask = Task { @MainActor [weak self] in
             guard let self else { return }
             await self.sleep(self.window)
+            guard !Task.isCancelled else { return }
             self.flushTask = nil
             let pending = self.pendingWork
             self.pendingWork = nil
