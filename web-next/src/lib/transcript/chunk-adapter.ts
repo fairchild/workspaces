@@ -26,6 +26,22 @@ function asString(value: unknown): string | undefined {
 }
 
 /**
+ * Folds a diff onto a tool's output, guaranteeing a string `content` so the
+ * ledger's normalizeOutput never drops the diff for want of one — `fallback`
+ * is the tool_result chunk's own `content` (always a string on StreamChunk),
+ * used when `output` is an object that doesn't already carry its own.
+ */
+function withDiff(output: unknown, diff: unknown, fallback: string): unknown {
+	if (typeof output === "string") return { content: output, diff };
+	if (typeof output === "object" && output !== null) {
+		const record = output as Record<string, unknown>;
+		const content = typeof record.content === "string" ? record.content : fallback;
+		return { ...record, content, diff };
+	}
+	return { content: fallback, diff };
+}
+
+/**
  * Converts a provider StreamChunk sequence into UIMessageChunks.
  *
  * Contract:
@@ -34,8 +50,9 @@ function asString(value: unknown): string | undefined {
  *   it and an open text part close each other, so the two never overlap.
  * - `tool_use`/`tool_result` become dynamic tool parts. Results pair by
  *   `metadata.toolUseId` when present, otherwise FIFO against unresolved calls.
- * - A `tool_result` carrying `metadata.diff` additionally surfaces it as a
- *   persistent `data-diff` part (the Folio contextual diff card).
+ * - A `tool_result` carrying `metadata.diff` merges it into that same call's
+ *   structured output (`{ content, summary?, diff }`) rather than emitting a
+ *   separate part — the Edit ledger row is the diff's one home (#790).
  * - `status` becomes a transient `data-status` chunk (delivered via onData,
  *   never persisted into the message).
  * - `done` — or the source ending — closes open parts and emits `finish`.
@@ -128,23 +145,19 @@ export async function* toUIMessageChunks(
 				if (toolCallId === undefined) break; // result with no known call
 				const index = unresolvedToolIds.indexOf(toolCallId);
 				if (index !== -1) unresolvedToolIds.splice(index, 1);
+				const baseOutput = chunk.metadata?.output ?? chunk.content;
+				const output =
+					chunk.metadata?.diff !== undefined
+						? withDiff(baseOutput, chunk.metadata.diff, chunk.content)
+						: baseOutput;
 				yield {
 					type: chunk.metadata?.isError
 						? "tool-output-error"
 						: "tool-output-available",
 					toolCallId,
-					...(chunk.metadata?.isError
-						? { errorText: chunk.content }
-						: { output: chunk.metadata?.output ?? chunk.content }),
+					...(chunk.metadata?.isError ? { errorText: chunk.content } : { output }),
 					dynamic: true,
 				} as UIMessageChunk;
-				if (chunk.metadata?.diff !== undefined) {
-					yield {
-						type: "data-diff",
-						id: generateId(),
-						data: chunk.metadata.diff,
-					};
-				}
 				break;
 			}
 			case "status": {

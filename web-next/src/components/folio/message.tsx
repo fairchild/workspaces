@@ -1,20 +1,26 @@
 /*
  * The manuscript message: serif prose paragraphs with contiguous tool
- * parts grouped into a quiet "workings" apparatus, landed edits surfacing
- * as diff cards, and an end-of-turn receipt. Consumes AI SDK UIMessages
- * (text / dynamic-tool / data-diff parts) so live streaming (#748) renders
- * through the same component.
+ * parts grouped into a quiet "workings" apparatus and an end-of-turn
+ * receipt. A landed edit has one home — its Edit ledger row expands to
+ * reveal its diff inline (#790); there is no separate floating diff card.
+ * Consumes AI SDK UIMessages (text / dynamic-tool parts) so live streaming
+ * (#748) renders through the same component.
  */
 import { isDynamicToolUIPart, type DynamicToolUIPart } from "ai";
 import type { CSSProperties, ReactNode } from "react";
-import { DiffCard } from "./diff-card";
+import { DiffHunk } from "./diff-card";
 import { InlineMarkdown } from "./inline-markdown";
-import { describeToolPart, type LedgerBody, type LedgerMeta } from "./ledger";
+import {
+	contextualOpenToolCallId,
+	describeToolPart,
+	type LedgerBody,
+	type LedgerMeta,
+} from "./ledger";
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "./reasoning";
 import { TestOutputPanel } from "./test-output-panel";
 import { ToolLedgerRow } from "./tool-ledger-row";
 import { TurnStatsReceipt } from "./turn-stats";
-import type { DiffCardData, FolioMessage } from "./types";
+import type { FolioMessage } from "./types";
 
 // --- shell -------------------------------------------------------------------
 
@@ -76,8 +82,7 @@ export function MessageArticle({
 type Segment =
 	| { kind: "text"; key: string; text: string }
 	| { kind: "reasoning"; key: string; text: string; streaming: boolean }
-	| { kind: "tools"; key: string; parts: DynamicToolUIPart[] }
-	| { kind: "diff"; key: string; data: DiffCardData };
+	| { kind: "tools"; key: string; parts: DynamicToolUIPart[] };
 
 /** Contiguous tool parts collapse into one workings block. */
 function groupParts(parts: FolioMessage["parts"]): Segment[] {
@@ -96,8 +101,6 @@ function groupParts(parts: FolioMessage["parts"]): Segment[] {
 			const last = segments.at(-1);
 			if (last?.kind === "tools") last.parts.push(part);
 			else segments.push({ kind: "tools", key: `part-${index}`, parts: [part] });
-		} else if (part.type === "data-diff") {
-			segments.push({ kind: "diff", key: `part-${index}`, data: part.data });
 		}
 	});
 	return segments;
@@ -120,6 +123,7 @@ function LedgerMetaView({ meta }: { meta: LedgerMeta }) {
 function LedgerBodyView({ body }: { body: LedgerBody }) {
 	if (body.kind === "test-output")
 		return <TestOutputPanel output={body.content} passed={body.passed} />;
+	if (body.kind === "diff") return <DiffHunk lines={body.diff.lines} />;
 	return (
 		<pre className="overflow-x-auto rounded-lg border border-line bg-raised px-4 py-3 font-mono text-code whitespace-pre text-muted">
 			{body.content}
@@ -130,21 +134,31 @@ function LedgerBodyView({ body }: { body: LedgerBody }) {
 function Workings({
 	parts,
 	openToolCallIds,
+	contextualToolCallId,
 }: {
 	parts: DynamicToolUIPart[];
 	openToolCallIds?: string[];
+	/**
+	 * The just-landed edit's toolCallId (see ledger.ts's contextualOpenToolCallId).
+	 * Folded into the row's key, not just `defaultOpen`: once a newer part makes
+	 * this call no longer contextual, the key changes and the row remounts
+	 * collapsed — `defaultOpen` alone only applies on a row's first mount, so it
+	 * can't express "open now, auto-collapse later" on its own.
+	 */
+	contextualToolCallId?: string;
 }) {
 	return (
 		<div className="my-[26px] space-y-[2px] py-1">
 			{parts.map((part) => {
 				const row = describeToolPart(part);
+				const isContextual = part.toolCallId === contextualToolCallId;
 				return (
 					<ToolLedgerRow
-						key={part.toolCallId}
+						key={`${part.toolCallId}-${isContextual}`}
 						verb={row.verb}
 						subject={row.subject}
 						meta={row.meta && <LedgerMetaView meta={row.meta} />}
-						defaultOpen={openToolCallIds?.includes(part.toolCallId)}
+						defaultOpen={isContextual || openToolCallIds?.includes(part.toolCallId)}
 					>
 						{row.body && <LedgerBodyView body={row.body} />}
 					</ToolLedgerRow>
@@ -197,6 +211,7 @@ export function Message({
 			</MessageArticle>
 		);
 	}
+	const contextualToolCallId = contextualOpenToolCallId(message.parts);
 	return (
 		<MessageArticle
 			role="assistant"
@@ -220,10 +235,9 @@ export function Message({
 							key={segment.key}
 							parts={segment.parts}
 							openToolCallIds={openToolCallIds}
+							contextualToolCallId={contextualToolCallId}
 						/>
 					);
-				if (segment.kind === "diff")
-					return <DiffCard key={segment.key} diff={segment.data} />;
 				return segment.text.split(/\n{2,}/).map((paragraph, i) => (
 					<p key={`${segment.key}-${i}`} className={isUser ? "text-user-ink" : ""}>
 						<InlineMarkdown text={paragraph} />

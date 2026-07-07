@@ -429,9 +429,9 @@ export const vercelProvider: ComputeProvider = {
 		const debugHarness = process.env.HARNESS_DEBUG === "1";
 
 		// The sandbox session is captured here so the turn can run `git diff` after
-		// streaming to synthesize diff cards (the harness session drives turns, not
-		// arbitrary commands). The sandbox stays alive until detach, so it is valid
-		// through the end of the turn.
+		// streaming to synthesize Diff ledger rows (the harness session drives
+		// turns, not arbitrary commands). The sandbox stays alive until detach, so
+		// it is valid through the end of the turn.
 		let sandbox: RunnableSandbox | undefined;
 
 		const agent = new HarnessAgent({
@@ -530,23 +530,36 @@ export const vercelProvider: ComputeProvider = {
 				prompt: buildPrompt(request.userMessage, request.sessionId, !resumed),
 			});
 			let doneChunk: StreamChunk | undefined;
+			// Tracks every real toolCallId this turn so the synthetic Diff rows
+			// below can't collide with one — the AI SDK upserts dynamic-tool parts
+			// by toolCallId, so a collision would silently overwrite a real tool's
+			// result instead of adding a second row.
+			const seenToolCallIds = new Set<string>();
 			for await (const chunk of mapFullStream(
 				result.fullStream as AsyncIterable<{ type: string; [k: string]: unknown }>,
 				startedAt,
 			)) {
 				if (chunk.type === "done") {
 					doneChunk = chunk;
-					break; // the terminal chunk — emit diff cards, then park, then it
+					break; // the terminal chunk — emit Diff rows, then park, then it
 				}
+				const id = chunk.metadata?.toolUseId;
+				if (typeof id === "string") seenToolCallIds.add(id);
 				yield chunk;
 			}
-			// Synthesize a diff card per changed file from the working tree (the
-			// Edit/Write results carry no patch; the real diff lives in git). Emit
-			// each as a tool_use + tool_result pair — the Folio adapter renders the
-			// DiffCard from a tool_result's metadata.diff, and the AI SDK only keeps
-			// a tool result that has a matching opened call.
+			// Synthesize one Diff ledger row per changed file from the working tree
+			// (the Edit/Write results carry no patch; the real diff lives in git).
+			// Emitted as a tool_use + tool_result pair — the Folio adapter merges
+			// metadata.diff into that same call's own output (#790: a diff's home
+			// is its own expandable ledger row, never a separate floating card),
+			// and the AI SDK only keeps a tool result that has a matching opened
+			// call. This is a per-file summary, not per Edit invocation — git diff
+			// can't attribute hunks back to individual tool calls when a file is
+			// edited more than once in a turn, so multiple edits to one file land
+			// as a single Diff row rather than each Edit call carrying its own.
 			for (const diff of await changedFileDiffs(sandbox)) {
-				const toolUseId = `diff:${diff.file}`;
+				const toolUseId = uniqueDiffToolCallId(diff.file, seenToolCallIds);
+				seenToolCallIds.add(toolUseId);
 				yield {
 					type: "tool_use",
 					content: "Diff",
@@ -590,6 +603,19 @@ function isNameCollision(error: unknown): boolean {
 	return /already exists/i.test(haystack);
 }
 
+/**
+ * A synthetic diff row's id, disambiguated against any real toolCallId
+ * already seen this turn. In practice a real id (the model provider's own
+ * tool-use id) never looks like `diff:<path>`, but the id space is shared
+ * with real tool calls, so this guards the collision explicitly rather than
+ * assuming it can't happen.
+ */
+export function uniqueDiffToolCallId(file: string, seen: ReadonlySet<string>): string {
+	let id = `diff:${file}`;
+	for (let suffix = 1; seen.has(id); suffix += 1) id = `diff:${file}#${suffix}`;
+	return id;
+}
+
 /** A sandbox session that can run shell commands (the onSession surface). */
 interface RunnableSandbox {
 	run: (opts: {
@@ -597,8 +623,8 @@ interface RunnableSandbox {
 	}) => PromiseLike<{ exitCode: number; stdout: string; stderr: string }>;
 }
 
-/** A rendered diff card: file, line counts, and the hunk lines. */
-interface DiffCard {
+/** One changed file's diff: file, line counts, and the hunk lines. */
+interface FileDiff {
 	file: string;
 	additions: number;
 	deletions: number;
@@ -606,15 +632,15 @@ interface DiffCard {
 	lines: { kind: "add" | "del" | "context"; text: string }[];
 }
 
-/** Beyond this many hunk lines a single file's card is truncated. */
+/** Beyond this many hunk lines a single file's diff is truncated. */
 const DIFF_LINE_CAP = 200;
 
 /**
  * Runs `git diff` over the workspace (untracked files marked intent-to-add so
- * new files show) and parses it into one diff card per changed file. Best-effort
- * — any failure yields no cards, never breaking the turn.
+ * new files show) and parses it into one diff per changed file. Best-effort —
+ * any failure yields no diffs, never breaking the turn.
  */
-async function changedFileDiffs(sandbox: RunnableSandbox | undefined): Promise<DiffCard[]> {
+async function changedFileDiffs(sandbox: RunnableSandbox | undefined): Promise<FileDiff[]> {
 	if (!sandbox) return [];
 	try {
 		const res = await sandbox.run({
@@ -626,14 +652,14 @@ async function changedFileDiffs(sandbox: RunnableSandbox | undefined): Promise<D
 	}
 }
 
-/** Splits a multi-file unified diff into per-file cards. */
-export function parseGitDiff(raw: string): DiffCard[] {
-	const cards: DiffCard[] = [];
-	let current: DiffCard | undefined;
+/** Splits a multi-file unified diff into per-file diffs. */
+export function parseGitDiff(raw: string): FileDiff[] {
+	const diffs: FileDiff[] = [];
+	let current: FileDiff | undefined;
 	let inHunk = false;
 	for (const line of raw.split("\n")) {
 		if (line.startsWith("diff --git")) {
-			if (current && current.lines.length > 0) cards.push(current);
+			if (current && current.lines.length > 0) diffs.push(current);
 			const file = line.match(/ b\/(.+)$/)?.[1] ?? "(file)";
 			current = { file, additions: 0, deletions: 0, note: "edit landed", lines: [] };
 			inHunk = false;
@@ -657,8 +683,8 @@ export function parseGitDiff(raw: string): DiffCard[] {
 			current.lines.push({ kind: "context", text: line });
 		}
 	}
-	if (current && current.lines.length > 0) cards.push(current);
-	return cards;
+	if (current && current.lines.length > 0) diffs.push(current);
+	return diffs;
 }
 
 /**

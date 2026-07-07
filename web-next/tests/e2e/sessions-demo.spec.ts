@@ -1,8 +1,9 @@
 /*
  * E2E for the Folio session demo (/sessions/demo): theme resolution
  * (toggle, persistence, #light/#dark hash parity), autofocused bare
- * compose, ledger row disclosure, diff card dismissal, status line
- * dismiss-to-dot, and the focus cue / receipt furniture.
+ * compose, ledger row disclosure (including a landed edit's diff, which
+ * lives inside its own Edit row — #790), status line dismiss-to-dot, and
+ * the focus cue / receipt furniture.
  */
 import { expect, test } from "@playwright/test";
 
@@ -81,14 +82,31 @@ test("tool ledger rows disclose and collapse their bodies", async ({
 	await expect(readBody).toBeHidden();
 });
 
-test("diff card renders the landed edit and dismisses", async ({ page }) => {
+test("expanding the Edit row reveals its diff — no separate floating diff card", async ({
+	page,
+}) => {
 	await page.goto("/sessions/demo");
-	const card = page.getByTestId("diff-card");
-	await expect(card).toContainText("src/session/resume.ts");
-	await expect(card).toContainText("throw new SessionNotFoundError(id);");
-	await card.hover();
-	await card.getByRole("button", { name: /dismiss/i }).click();
-	await expect(card).toHaveCount(0);
+	// A landed edit has one home: its own Edit ledger row. There is never a
+	// standalone diff card in the transcript.
+	await expect(page.getByTestId("diff-card")).toHaveCount(0);
+
+	const editRow = page
+		.getByRole("button", { name: /Edit src\/session\/resume\.ts/ })
+		.first();
+	const body = page
+		.getByTestId("tool-row")
+		.filter({ has: editRow })
+		.getByTestId("tool-row-body");
+	await expect(body).toBeHidden();
+
+	await editRow.click();
+	await expect(body).toBeVisible();
+	await expect(body.getByTestId("diff-lines")).toContainText(
+		"throw new SessionNotFoundError(id);",
+	);
+
+	await editRow.click();
+	await expect(body).toBeHidden();
 });
 
 test("status line dismisses to a dot and comes back", async ({ page }) => {

@@ -2,6 +2,9 @@
  * Shared Folio data shapes: the message metadata + custom data parts the
  * components consume. Messages are AI SDK UIMessages so #748 can stream
  * into the same components; everything visual rides in metadata/data parts.
+ * A landed edit has one home — its Edit tool part's own structured output
+ * (see ledger.ts's LedgerBody "diff" kind) — so there is no separate diff
+ * data part here.
  */
 import type { UIMessage } from "ai";
 
@@ -47,18 +50,17 @@ export interface DiffLine {
 	text: string;
 }
 
-/** A landed edit surfaced as a contextual card. */
+/** A landed edit's diff, rendered inside its Edit ledger row's body. */
 export interface DiffCardData {
 	file: string;
 	additions: number;
 	deletions: number;
-	/** Italic caption on the right (e.g. "edit landed · just now"). */
+	/** Unused by rendering; kept on the wire for provenance/debugging. */
 	note?: string;
 	lines: DiffLine[];
 }
 
 export type FolioDataParts = {
-	diff: DiffCardData;
 	/** Transient provider status ("Cloning repo") — surfaced via onData, never a part. */
 	status: { message: string };
 };

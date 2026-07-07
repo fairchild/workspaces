@@ -150,18 +150,21 @@ describe("projectSessionEvents", () => {
 		});
 	});
 
-	test("a diff-carrying tool result projects to a persistent data-diff part", async () => {
+	test("a diff-carrying tool result projects into that call's own dynamic-tool part", async () => {
 		const diff = { file: "a.ts", additions: 3, deletions: 1, lines: [] };
 		const messages = await projectSessionEvents("s", [
 			a(1, "tool_use", "Edit", { toolUseId: "t-1", toolName: "Edit" }),
 			a(2, "tool_result", "ok", { toolUseId: "t-1", diff }),
 			a(3, "done", ""),
 		]);
-		expect(messages[0].parts).toContainEqual({
-			type: "data-diff",
-			id: "s:1:p0",
-			data: diff,
-		});
+		expect(messages[0].parts).toContainEqual(
+			expect.objectContaining({
+				type: "dynamic-tool",
+				toolCallId: "t-1",
+				output: { content: "ok", diff },
+			}),
+		);
+		expect(messages[0].parts.some((part) => part.type === "data-diff")).toBe(false);
 	});
 
 	test("projects a reasoning event into a reasoning part before the answer", async () => {
