@@ -340,7 +340,7 @@ for line in sys.stdin:
 
 ### Session created but repo empty
 
-If using the GitHub App: check that `PR_REVIEWER_APP_ID`, `PR_REVIEWER_PRIVATE_KEY`, and `PR_REVIEWER_INSTALLATION_ID` are set correctly. The private key PEM must have real newlines (Vercel handles this, but verify with `vercel env pull`).
+If using the GitHub App: check that `PR_REVIEWER_APP_ID`, `PR_REVIEWER_PRIVATE_KEY`, and `PR_REVIEWER_INSTALLATION_ID` are set correctly. The private key PEM must have real newlines (Vercel handles this). `PR_REVIEWER_PRIVATE_KEY` is a sensitive env var (as of 2026-07-06), so `vercel env pull` returns it empty — if the PEM is suspect, re-add it from the GitHub App's key file rather than trying to inspect the stored value.
 
 ### Review not posted to GitHub
 
