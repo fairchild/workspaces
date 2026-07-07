@@ -55,6 +55,64 @@ Homebrew's `gettext` may be keg-only, so the script prepends
 
 Keep release signing/notarization on the existing GitHub Actions signing-host lane until the Xcode Cloud validation lane has proven stable.
 
+## Debugging Builds (read this before guessing)
+
+First green builds: 594/595 on `4058f0fc` (2026-07-07), after five distinct
+failure generations (license → xtrace-in-trap noise #795 → `/usr/local` brew
+prefix #854 → silent x86_64 zig slice, diagnosed via probe #869 →
+bootstrap-needs-sudo #907, refuted by build 574's log → cross-compile fix #925
++ ASC log access #928).
+
+### Getting real logs
+
+GitHub check-runs only ever carry Xcode Cloud's one-line summary
+(`Running ci_post_clone.sh script failed (exited with code 1)`). Full script
+stdout/stderr lives in App Store Connect LOG_BUNDLE artifacts, and the ASC API
+credentials exist only as repo secrets — so the fetch runs inside Actions:
+
+```sh
+gh workflow run xcode-cloud-logs.yml -f sha=<full-commit-sha>
+```
+
+The job log prints structured `ciIssues` plus filtered log excerpts (usually
+enough on its own); full bundles upload as a 5-day artifact. Implementation:
+`scripts/fetch-xcode-cloud-logs.py`. The key must be a **Team** API key with
+App Manager role — an individual key 401s.
+
+### Watching builds
+
+Pin to a commit SHA, never to `main`'s moving head:
+
+```sh
+gh api repos/fairchild/workspaces/commits/<SHA>/check-runs \
+  --jq '.check_runs[] | select(.app.slug|test("xcode";"i")) | [.name, .status, .conclusion] | @tsv'
+```
+
+Cancellation on supersede is normal: when a newer commit lands on `main`
+mid-build, Xcode Cloud cancels the in-flight build. A `cancelled` conclusion on
+an older SHA is not a failure signal; check the newest head instead.
+
+Two ASC-side workflows ("Default" and "Untitled Workflow") currently both build
+every push, so each commit produces two identical build runs. Deleting one
+requires the App Store Connect web UI.
+
+### VM image quirks (all confirmed via real build logs)
+
+- Host is arm64, but Homebrew runs from `/usr/local` and pours **x86_64**
+  bottles — including zig. Ghostty resolves `-Dxcframework-target=native` from
+  the zig **compiler binary's** baked-in arch, so an unpatched build silently
+  produces an x86_64-only GhosttyKit that surfaces three stages later as
+  `no such module 'GhosttyKit'`. `build-ghosttykit.sh` detects the mismatch,
+  patches the pinned checkout to cross-compile the host-arch slice, and
+  hard-asserts the result (lipo + Info.plist). Details and ruled-out
+  alternatives: `docs/development/libghostty-integration.md` § "Zig 0.15.2
+  with newer macOS SDKs".
+- **The CI user has no sudo** (build 574): anything needing `/opt/homebrew`
+  creation, installer scripts, or privileged paths fails. Do not reintroduce a
+  bootstrap.
+- VMs are fresh per build — no zig cache reuse; the GhosttyKit build costs a
+  few minutes every run.
+
 ## Local Harness Verification
 
 The Xcode project can be checked without running the expensive SwiftPM validation scripts:
