@@ -52,6 +52,26 @@ probes reachability and auth/security posture with zero credentials, and
 credential-gated stages report themselves skipped rather than passing silently
 (see `docs/roadmap.md` Phase 2 / milestone #13).
 
+## The feedback loop (owner review of in-flight work)
+
+The product is steered by the owner looking at a running instance, not at
+diffs. Three surfaces, cheapest first:
+
+1. **Local instance** — `pnpm dev` on the latest `main` (mock provider,
+   instant). For **real coding turns**, add `WEB_NEXT_COMPUTE_PROVIDER=vercel`
+   to `.env.local` (the runtime keys above power it); new sessions then run
+   real Claude Code in a sandbox.
+2. **Per-PR preview** — every PR gets a Vercel preview URL in the bot comment;
+   sign in through the SSO wall to try a change *before* it merges. Agent PR
+   bodies carry a **"What to look at"** line naming the screen/flow the change
+   affects.
+3. **Anytime sanity** — `pnpm validate --url http://localhost:3100` (or
+   `--env prod`) checks the instance you're looking at.
+
+Agents: keep PRs issue-sized so each preview is one reviewable behavior, and
+treat owner feedback from these surfaces as the tracker's input queue — file
+what you hear as issues before it evaporates.
+
 E2E notes:
 
 - The web server for e2e is a **production** build (`e2e:server` script); the
