@@ -1,15 +1,18 @@
 /*
  * GET /api/repos?q=<query> — auth-gated feed for the new-session picker's
- * searchable repo list. Backed by the GitHub App installation in real/bypass
- * mode (see `@/lib/github/repo-directory`); returns an empty list with
- * `degraded: true` when the App has no credentials configured, so the client
- * can fall back to an unverified-freetext note instead of an empty-looking
- * error.
+ * searchable repo list: the GitHub App installation's repos merged with the
+ * already-connected ones (see mergeRepoLists), so one-click rows survive
+ * even when the directory is empty. `degraded: true` when the App has no
+ * credentials configured, so the client can show the quiet unverified note
+ * instead of an empty-looking error.
  */
 import { getAuthState } from "@/lib/auth/auth-state";
+import { getDatabase } from "@/lib/db/client";
+import { listRepos } from "@/lib/db/repos";
 import {
 	isDirectoryDegraded,
 	listDirectoryRepos,
+	mergeRepoLists,
 } from "@/lib/github/repo-directory";
 
 export const runtime = "nodejs";
@@ -23,8 +26,13 @@ export async function GET(request: Request) {
 		);
 	}
 
+	const [directory, connected] = await Promise.all([
+		listDirectoryRepos(),
+		listRepos(getDatabase()),
+	]);
+	const repos = mergeRepoLists(directory, connected);
+
 	const q = new URL(request.url).searchParams.get("q")?.trim().toLowerCase() ?? "";
-	const repos = await listDirectoryRepos();
 	const filtered = q
 		? repos.filter((repo) => repo.fullName.toLowerCase().includes(q))
 		: repos;

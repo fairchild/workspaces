@@ -106,3 +106,37 @@ export async function resolveRepo(
 	if (result.kind === "unverified") return { defaultBranch: null };
 	return { defaultBranch: result.defaultBranch };
 }
+
+/** What the picker renders: already-connected repos may lack a known branch. */
+export interface PickerRepo {
+	fullName: string;
+	defaultBranch: string | null;
+}
+
+/**
+ * The picker's full list: the GitHub directory plus the repos already
+ * connected in the database (which may include entries the directory can't
+ * see — unverified degraded-mode connects, or repos whose App grant was
+ * since revoked). Deduped by full name — the directory entry wins, its
+ * branch is fresher — and sorted. Keeps one-click rows available even when
+ * the directory is empty (degraded mode).
+ */
+export function mergeRepoLists(
+	directory: DirectoryRepo[],
+	connected: PickerRepo[],
+): PickerRepo[] {
+	const byName = new Map<string, PickerRepo>();
+	for (const repo of connected) {
+		byName.set(repo.fullName.toLowerCase(), {
+			fullName: repo.fullName,
+			defaultBranch: repo.defaultBranch,
+		});
+	}
+	for (const repo of directory) {
+		byName.set(repo.fullName.toLowerCase(), {
+			fullName: repo.fullName,
+			defaultBranch: repo.defaultBranch,
+		});
+	}
+	return [...byName.values()].sort((a, b) => a.fullName.localeCompare(b.fullName));
+}

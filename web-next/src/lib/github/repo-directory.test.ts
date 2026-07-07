@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	isDirectoryDegraded,
 	listDirectoryRepos,
+	mergeRepoLists,
 	resolveRepo,
 	RepoUnavailableError,
 	validateDirectoryRepo,
@@ -61,6 +62,23 @@ describe("bypass mode (AUTH_BYPASS=1)", () => {
 	it("is never degraded", () => {
 		vi.stubEnv("AUTH_BYPASS", "1");
 		expect(isDirectoryDegraded()).toBe(false);
+	});
+
+	// The double lock, proven through this seam (not just config.test.ts):
+	// AUTH_BYPASS=1 with real OAuth configured must NOT serve fixtures —
+	// a leaked bypass flag in production falls through to the real path.
+	it("fixtures cannot activate when real OAuth is configured", async () => {
+		vi.stubEnv("AUTH_BYPASS", "1");
+		vi.stubEnv("GITHUB_OAUTH_CLIENT_ID", "Iv1.real");
+		vi.stubEnv("GITHUB_WEB_WORKSPACES_APP_ID", "");
+		vi.stubEnv("GITHUB_APP_PRIVATE_KEY", "");
+		// Without App creds the fall-through lands in degraded, not fixtures.
+		expect(isDirectoryDegraded()).toBe(true);
+		await expect(listDirectoryRepos()).resolves.toEqual([]);
+		await expect(validateDirectoryRepo("fairchild/workspaces")).resolves.toEqual({
+			kind: "unverified",
+			fullName: "fairchild/workspaces",
+		});
 	});
 });
 
@@ -210,5 +228,42 @@ describe("configured mode (App creds present, GitHub mocked)", () => {
 			{ fullName: "fairchild/alpha", defaultBranch: "main", private: false },
 			{ fullName: "fairchild/zeta", defaultBranch: "main", private: false },
 		]);
+	});
+});
+
+describe("mergeRepoLists", () => {
+	it("keeps connected-only repos so one-click rows survive an empty directory", () => {
+		expect(
+			mergeRepoLists(
+				[],
+				[{ fullName: "fairchild/unverified", defaultBranch: null }],
+			),
+		).toEqual([{ fullName: "fairchild/unverified", defaultBranch: null }]);
+	});
+
+	it("dedupes by name (case-insensitive), the directory's fresher branch winning", () => {
+		expect(
+			mergeRepoLists(
+				[{ fullName: "fairchild/workspaces", defaultBranch: "trunk", private: false }],
+				[
+					{ fullName: "Fairchild/Workspaces", defaultBranch: "main" },
+					{ fullName: "fairchild/alpha", defaultBranch: null },
+				],
+			),
+		).toEqual([
+			{ fullName: "fairchild/alpha", defaultBranch: null },
+			{ fullName: "fairchild/workspaces", defaultBranch: "trunk" },
+		]);
+	});
+
+	it("sorts the union alphabetically", () => {
+		const merged = mergeRepoLists(
+			[{ fullName: "b/b", defaultBranch: "main", private: false }],
+			[
+				{ fullName: "c/c", defaultBranch: null },
+				{ fullName: "a/a", defaultBranch: null },
+			],
+		);
+		expect(merged.map((repo) => repo.fullName)).toEqual(["a/a", "b/b", "c/c"]);
 	});
 });

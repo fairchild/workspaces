@@ -14,16 +14,16 @@
 import { useActionState, useEffect, useRef, useState } from "react";
 import { createSessionAction, type CreateSessionState } from "./actions";
 
-interface DirectoryRepo {
+/** Mirror of the /api/repos response item (see mergeRepoLists). */
+interface PickerRepo {
 	fullName: string;
-	defaultBranch: string;
-	private: boolean;
+	defaultBranch: string | null;
 }
 
 export function NewSession({ startOpen = false }: { startOpen?: boolean }) {
 	const [open, setOpen] = useState(startOpen);
 	const [query, setQuery] = useState("");
-	const [repos, setRepos] = useState<DirectoryRepo[] | null>(null);
+	const [repos, setRepos] = useState<PickerRepo[] | null>(null);
 	const [degraded, setDegraded] = useState(false);
 	const inputRef = useRef<HTMLInputElement>(null);
 	const [state, formAction] = useActionState<CreateSessionState | null, FormData>(
@@ -37,13 +37,14 @@ export function NewSession({ startOpen = false }: { startOpen?: boolean }) {
 		if (open && !startOpen) inputRef.current?.focus();
 	}, [open, startOpen]);
 
-	// Fetch the installation's repos once, the first time the picker opens.
+	// Fetch the pickable repos (installation directory + already connected)
+	// once, the first time the picker opens.
 	useEffect(() => {
 		if (!open || repos !== null) return;
 		let cancelled = false;
 		fetch("/api/repos")
 			.then((res) => res.json())
-			.then((data: { repos: DirectoryRepo[]; degraded: boolean }) => {
+			.then((data: { repos: PickerRepo[]; degraded: boolean }) => {
 				if (cancelled) return;
 				setRepos(data.repos);
 				setDegraded(data.degraded);
