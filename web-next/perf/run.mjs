@@ -373,8 +373,13 @@ async function measureDeployedEntry(baseUrl) {
 			reason: `GET ${baseUrl}/sign-in → ${signInProbe.status || signInProbe.error} (not reachable)`,
 		};
 	}
-	const browser = await launchChromium();
+	// Deployed results are report-only (never fail the run) — a launch,
+	// navigation, or timeout error against a live target becomes a skip with
+	// the error text, not an uncaught exception that exits 1 (codex review,
+	// #856).
+	let browser;
 	try {
+		browser = await launchChromium();
 		const page = await (await browser.newContext({ baseURL: baseUrl })).newPage();
 		const { lcp, tbt } = await measurePageLoad(page, "/sign-in");
 		return {
@@ -386,8 +391,14 @@ async function measureDeployedEntry(baseUrl) {
 				tbt_ms: { value: round(tbt) },
 			},
 		};
+	} catch (error) {
+		return {
+			id: "deployed_entry_signin",
+			status: "skipped",
+			reason: `measurement error: ${error instanceof Error ? error.message : String(error)}`,
+		};
 	} finally {
-		await browser.close();
+		await browser?.close();
 	}
 }
 
