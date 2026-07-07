@@ -121,8 +121,11 @@ test.describe("signed out", () => {
 				data: {},
 				maxRedirects: 0,
 			});
-			// The middleware turns unauthenticated API posts away at the edge.
-			expect([307, 401]).toContain(response.status());
+			// The edge answers 401 JSON directly, same shape as the route gate (#828).
+			expect(response.status()).toBe(401);
+			await expect(response.json()).resolves.toEqual({
+				error: "not signed in as the allowed user",
+			});
 		}
 	});
 });
