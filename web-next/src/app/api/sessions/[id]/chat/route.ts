@@ -8,7 +8,7 @@
 import { createUIMessageStreamResponse } from "ai";
 import { after } from "next/server";
 import { getAuthState } from "@/lib/auth/auth-state";
-import { runSessionTurn } from "@/lib/agent-runtime/run-turn";
+import { runSessionTurn, TurnConflictError } from "@/lib/agent-runtime/run-turn";
 import { getDatabase } from "@/lib/db/client";
 import { getSession } from "@/lib/db/sessions";
 
@@ -45,7 +45,19 @@ export async function POST(
 		return Response.json({ error: "text is required" }, { status: 400 });
 	}
 
-	const turn = await runSessionTurn(handle, session, text);
+	let turn;
+	try {
+		turn = await runSessionTurn(handle, session, text);
+	} catch (error) {
+		// Structured errors, not unhandled 500s: a concurrent send is a 409 the
+		// client can retry after the turn; a session naming an unregistered
+		// provider is a 500 with the reason.
+		if (error instanceof TurnConflictError) {
+			return Response.json({ error: error.message }, { status: 409 });
+		}
+		const message = error instanceof Error ? error.message : "failed to start the turn";
+		return Response.json({ error: message }, { status: 500 });
+	}
 	// The ingest loop already runs eagerly (the stream below tails it live).
 	// after() keeps a serverless invocation alive until the turn settles — the
 	// waitUntil seam; a no-op on a long-running node server. after() is only

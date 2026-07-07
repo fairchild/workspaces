@@ -16,7 +16,7 @@
  */
 import type { UIMessageChunk } from "ai";
 import type { DatabaseHandle } from "../db/client";
-import { appendEvents, newestEventAt, readEvents } from "../db/sessions";
+import { appendEventsIfTurnOpen, newestEventAt, readEvents } from "../db/sessions";
 import type { ProjectedEvent } from "../transcript/project-events";
 import { toUIMessageChunkStream } from "../transcript/chunk-adapter";
 import { folioTurnMetadata } from "../transcript/turn-stats";
@@ -24,8 +24,11 @@ import { isTurnActive, notify, subscribe } from "./turn-ingest";
 import type { StreamChunk } from "./stream-chunk";
 
 /** A turn detached before `done` whose newest event is older than this — with no
- * live in-process runner — is treated as abandoned (the runner died). */
-const STALE_TURN_MS = 30_000;
+ * live in-process runner — is treated as abandoned (the runner died). Sized for
+ * real provider turns: a single long tool call can hold the stream quiet for
+ * minutes, and closing a live turn corrupts its log — err well on the side of
+ * patience (an abandoned turn merely takes this long to read as interrupted). */
+const STALE_TURN_MS = 120_000;
 
 /** How often a live-following tail re-queries the DB absent a bus wakeup. */
 const DEFAULT_POLL_MS = 250;
@@ -78,22 +81,20 @@ export async function resolveTurn(
 /**
  * Closes an abandoned turn durably: if its assistant run has no `done`, appends
  * an error + terminal `done` so it stops resolving as active and replays as an
- * interrupted turn. Idempotent — a run that already ended is left untouched.
+ * interrupted turn. Idempotent under concurrency — the has-`done` check and
+ * the append share one transaction (appendEventsIfTurnOpen), so two resume
+ * GETs that both classify the turn stale produce exactly one terminal pair.
  */
 export async function closeAbandonedTurn(
 	handle: DatabaseHandle,
 	sessionId: string,
 	fromSeq: number,
 ): Promise<void> {
-	const run = (await readEvents(handle, sessionId, fromSeq - 1)).filter(
-		(event) => event.role === "assistant",
-	);
-	if (run.some((event) => event.chunk.type === "done")) return;
-	await appendEvents(handle, sessionId, [
+	const closed = await appendEventsIfTurnOpen(handle, sessionId, fromSeq, [
 		{ role: "assistant", chunk: { type: "error", content: "Turn interrupted before completion." } },
 		{ role: "assistant", chunk: { type: "done", content: "", metadata: { aborted: true } } },
 	]);
-	notify(sessionId);
+	if (closed) notify(sessionId);
 }
 
 /** A promise that resolves on the next append notification or after `ms`. */
