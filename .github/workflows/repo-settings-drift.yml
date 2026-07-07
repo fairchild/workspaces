@@ -1,0 +1,27 @@
+# Drift gate for config/github/ — verifies live GitHub repo settings (rulesets)
+# still match the committed desired state. Read-only: applying changes is a
+# deliberate local act via `scripts/github-settings.py apply` (repo admin).
+name: Repo Settings Drift
+
+on:
+  schedule:
+    - cron: "23 13 * * *"
+  pull_request:
+    paths:
+      - "config/github/**"
+      - "scripts/github-settings.py"
+      - ".github/workflows/repo-settings-drift.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check live settings against config/github/
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/github-settings.py check
