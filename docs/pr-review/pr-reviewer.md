@@ -10,6 +10,29 @@ operator triage surfaces, start with [`architecture.md`](architecture.md). This
 file is the runtime and operations reference: configuration, ingress canaries,
 broker scheduling, and debugging commands.
 
+## Standing State: Paused (2026-07-06)
+
+The reviewer is paused as a value-signal experiment (slow, unreliable
+completions with no evidence it catches what other gates miss). Two settings
+changed, both outside the repo:
+
+- `PR_REVIEWER_ENABLED=0` in Vercel production — webhooks no longer start
+  review sessions.
+- `WorkSpaces Managed Review` removed from the required status checks on
+  `main` branch protection — with the reviewer off, the check otherwise sits
+  at "Expected — waiting for status" forever and blocks merges. Branch
+  protection is not config-as-code; this doc is the record.
+
+The pipeline, GitHub App, and broker stay deployed. Revisit ~2026-07-20: if
+nobody missed the reviewer, that is the answer. To re-enable, set
+`PR_REVIEWER_ENABLED=1` (or remove it) and restore the required check:
+
+```bash
+gh api -X PATCH repos/fairchild/workspaces/branches/main/protection/required_status_checks --input - <<'EOF'
+{"strict": false, "checks": [{"context": "readiness", "app_id": 15368}, {"context": "release-change-validation", "app_id": 15368}, {"context": "WorkSpaces Managed Review", "app_id": 3504942}]}
+EOF
+```
+
 ## Key Files
 
 | File | Purpose |
