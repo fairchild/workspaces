@@ -1,10 +1,12 @@
 #!/bin/sh
 # Xcode Cloud surfaces only "exited with code 1" in notifications, so this
 # script runs with xtrace and an environment survey: the failing command is
-# always the last `+` line in the build report log.
+# the xtrace line just above the trap's own "status=" line in the build
+# report log. (The trap disables xtrace for itself so it doesn't add more
+# `+` noise after that point.)
 set -eux
 
-trap 'status=$?; if [ "$status" -ne 0 ]; then echo "ci_post_clone.sh: exit $status — the failing command is the last + line above" >&2; fi' EXIT
+trap 'status=$?; { set +x; } 2>/dev/null; if [ "$status" -ne 0 ]; then echo "ci_post_clone.sh: exit $status — the failing command is the xtrace line just above the final status= line" >&2; fi' EXIT
 
 repo_root="${CI_PRIMARY_REPOSITORY_PATH:-}"
 if [ -z "$repo_root" ]; then
