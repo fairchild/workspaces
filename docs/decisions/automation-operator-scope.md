@@ -116,6 +116,28 @@ CAMetalLayer surface can be read back (framebufferOnly, IOSurface, drawable
 capture). The `WindowSnapshotService` interface stays stable regardless of
 which mechanism wins.
 
+**Resolved (2026-07-07, spike [#915](https://github.com/fairchild/workspaces/issues/915)).**
+Both questions came back good, so the VM lane stays a fallback, not the
+primary path. The [decision memo](https://github.com/fairchild/workspaces/issues/915#issuecomment-4907509271)
+records the evidence; the short version:
+
+- **(a) TCC:** capturing the app's *own* windows needs **no** Screen Recording
+  TCC via `CGWindowList` — proven in-process with
+  `CGPreflightScreenCaptureAccess() == false` while the capture still returned
+  full real pixels.
+- **(b) Metal readback:** the GhosttyKit surface reads back with real pixels
+  through the composited path *and* through in-process layer readback, because
+  Ghostty presents via an `IOSurfaceLayer` (readable contents), not an opaque
+  `CAMetalLayer` drawable.
+
+Chosen mechanism: `CGWindowListCreateImage` scoped to own window IDs —
+TCC-free, full composited fidelity, single call (deprecated in macOS 14.0 but
+functional; ScreenCaptureKit is the eventual migration target behind the
+stable `WindowSnapshotService` interface). Composited paths (`CGWindowList`
+and ScreenCaptureKit) fail on a locked screen, so locked-screen evidence keeps
+the VM / `tart-ui` fallback; unlocked background/occluded windows capture fine
+with zero focus stealing.
+
 ## Consequences
 
 - The V1 non-goal "global cross-workspace control" is partially superseded:
