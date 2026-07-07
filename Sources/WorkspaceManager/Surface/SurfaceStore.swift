@@ -18,8 +18,16 @@ final class SurfaceStore {
     /// `WebSurfaceStore` — and its `WKWebView` — belongs to the `WebSource`, not to any one tile
     /// binding, so an evicted web surface's page survives the release grace window and a re-bound
     /// tile picks it up without a reload. Entries are dropped by `releaseWebResources(forSourceID:)`
-    /// (source deleted); an idle entry otherwise holds no `WKWebView` after its deferred release fires.
+    /// (source deleted) or by the lingering-page trim; an idle entry otherwise holds no `WKWebView`
+    /// after its deferred release fires.
     private var webStoresBySourceID: [UUID: WebSurfaceStore] = [:]
+
+    /// Most-recently-used order of web sources, oldest first. Bounds the deferred-release policy:
+    /// rapid switching across many sources would otherwise keep one live `WKWebView` per source for
+    /// the whole grace window (unbounded transient memory). Beyond the cap, the least-recently-used
+    /// *unbound* page is hard-released — reopening it reloads, which is the pre-seam behavior.
+    private var webSourceUseOrder: [UUID] = []
+    private static let maxLingeringWebPages = 3
 
     /// Forwarded to terminal surfaces at creation so libghostty can reach the agent hook socket.
     var hooksSocketPath: String?
@@ -115,6 +123,7 @@ final class SurfaceStore {
     ) -> WebSurface {
         if let existing = surfaces[tileID] as? WebSurface, existing.source.id == source.id {
             existing.onBlockedNavigation = onBlockedNavigation
+            touchWebSource(source.id)
             return existing
         }
 
@@ -129,6 +138,7 @@ final class SurfaceStore {
         )
         surfaces[tileID] = created
         onSurfaceCreated?(tileID)
+        touchWebSource(source.id)
         return created
     }
 
@@ -157,8 +167,36 @@ final class SurfaceStore {
                 invalidate(tileID: tileID)
             }
         }
+        webSourceUseOrder.removeAll { $0 == sourceID }
         guard let store = webStoresBySourceID.removeValue(forKey: sourceID) else { return }
         store.releaseInactiveSurface()
+    }
+
+    /// Marks `sourceID` most-recently-used and trims lingering pages beyond the cap. A page is
+    /// "lingering" when its source has a live `WKWebView` but no surface currently bound to a tile —
+    /// exactly the flip-back candidates the deferred-release policy exists for.
+    private func touchWebSource(_ sourceID: UUID) {
+        webSourceUseOrder.removeAll { $0 == sourceID }
+        webSourceUseOrder.append(sourceID)
+
+        let boundSourceIDs = Set(surfaces.values.compactMap { ($0 as? WebSurface)?.source.id })
+
+        // Housekeeping: an unbound store whose deferred release already fired holds no page —
+        // drop its registry/order entries so slow drift across many sources leaves no metadata.
+        let expired = webStoresBySourceID.filter { id, store in
+            !boundSourceIDs.contains(id) && !store.hasActiveSurface
+        }.keys
+        for id in expired {
+            webStoresBySourceID.removeValue(forKey: id)
+            webSourceUseOrder.removeAll { $0 == id }
+        }
+
+        var lingering = webSourceUseOrder.filter { id in
+            !boundSourceIDs.contains(id) && webStoresBySourceID[id]?.hasActiveSurface == true
+        }
+        while lingering.count > Self.maxLingeringWebPages {
+            releaseWebResources(forSourceID: lingering.removeFirst())
+        }
     }
 
     // MARK: - Resolver

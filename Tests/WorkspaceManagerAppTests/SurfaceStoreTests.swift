@@ -282,6 +282,31 @@ struct SurfaceConformerTests {
         #expect(store.webStore(forSourceID: source.id) !== webStore)
     }
 
+    @Test("Lingering web pages are capped LRU — rapid source switching cannot pile up WKWebViews")
+    func lingeringWebPagesCappedLRU() {
+        let store = SurfaceStore()
+        let tile = TileID()
+        let sources = (0..<6).map { makeWebSource(name: "S\($0)", host: "s\($0).example.com") }
+
+        // Visit each source on the same tile, instantiating its page (as mounting would).
+        for source in sources {
+            _ = store.webSurface(for: tile, source: source).webView
+        }
+
+        // The bound tile holds the last source; lingering (unbound, live-page) sources are capped.
+        let lingering = sources.dropLast().filter {
+            store.webStore(forSourceID: $0.id).hasActiveSurface
+        }
+        #expect(lingering.count == 3)
+        // LRU: the survivors are the most recently visited, the oldest were hard-released.
+        #expect(lingering.map(\.name) == ["S2", "S3", "S4"])
+        #expect(!store.webStore(forSourceID: sources[0].id).hasActiveSurface)
+
+        // Flip-back inside the cap still resumes the live page.
+        let s4View = store.webStore(forSourceID: sources[4].id).ensureSurface(for: sources[4])
+        #expect(store.webSurface(for: tile, source: sources[4]).webView === s4View)
+    }
+
     private func makeWebSource(name: String, host: String) -> WebSource {
         WebSource(name: name, baseURLString: "https://\(host)", allowedHost: host)
     }
