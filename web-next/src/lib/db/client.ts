@@ -44,6 +44,12 @@ export interface SessionsTable {
 	status: string;
 	/** Claude CLI session id for snapshot/resume; null until a turn runs. */
 	claude_session_id: string | null;
+	/**
+	 * JSON `HarnessAgentResumeSessionState` from the last turn's `detach()`, or
+	 * null. The real (vercel) provider reconnects the parked harness session with
+	 * this on the next turn so the conversation and warm sandbox continue.
+	 */
+	resume_state: string | null;
 	created_at: string;
 	last_activity_at: string;
 }

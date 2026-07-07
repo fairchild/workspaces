@@ -9,9 +9,22 @@ import { mockProvider } from "./mock-provider";
 import type { StreamChunk } from "./stream-chunk";
 import { vercelProvider } from "./vercel-provider";
 
+/**
+ * A parked harness session to reconnect on this turn: the harness session id
+ * plus the JSON resume payload a prior turn's `detach()` returned. Providers
+ * that don't resume (mock) ignore it; the real provider reconnects the warm
+ * sandbox and continues the conversation.
+ */
+export interface SessionResumeHandle {
+	harnessSessionId: string;
+	resumeState: string;
+}
+
 export interface TurnRequest {
 	sessionId: string;
 	userMessage: string;
+	/** Prior parked session to resume, or null/undefined for a fresh turn. */
+	resume?: SessionResumeHandle | null;
 }
 
 export interface ComputeProvider {

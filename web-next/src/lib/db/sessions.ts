@@ -34,6 +34,8 @@ export interface Session {
 	provider: string;
 	status: string;
 	claudeSessionId: string | null;
+	/** JSON harness resume payload from the last turn's detach(), or null. */
+	resumeState: string | null;
 	createdAt: string;
 	lastActivityAt: string;
 }
@@ -52,6 +54,7 @@ function rowToSession(row: SessionsTable): Session {
 		provider: row.provider,
 		status: row.status,
 		claudeSessionId: row.claude_session_id,
+		resumeState: row.resume_state,
 		createdAt: row.created_at,
 		lastActivityAt: row.last_activity_at,
 	};
@@ -70,11 +73,30 @@ export async function createSession(
 		provider: session.provider,
 		status: session.status ?? "active",
 		claude_session_id: session.claudeSessionId ?? null,
+		resume_state: null,
 		created_at: now,
 		last_activity_at: now,
 	};
 	await handle.db.insertInto("sessions").values(row).execute();
 	return rowToSession(row);
+}
+
+/**
+ * Persists the harness handle a turn parked with `detach()`: the claude session
+ * id and the JSON resume payload the next turn reconnects from. `resumeState`
+ * of `null` clears it (the parked sandbox expired or the turn didn't detach).
+ */
+export async function updateSession(
+	handle: DatabaseHandle,
+	id: string,
+	fields: { claudeSessionId?: string | null; resumeState?: string | null },
+): Promise<void> {
+	await ensureSchema(handle);
+	const set: Partial<SessionsTable> = {};
+	if ("claudeSessionId" in fields) set.claude_session_id = fields.claudeSessionId ?? null;
+	if ("resumeState" in fields) set.resume_state = fields.resumeState ?? null;
+	if (Object.keys(set).length === 0) return;
+	await handle.db.updateTable("sessions").set(set).where("id", "=", id).execute();
 }
 
 /** A sessions-home row: the session plus its repo's display name. */
