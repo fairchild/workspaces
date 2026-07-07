@@ -19,6 +19,9 @@ struct SidebarTabSummary: Identifiable, Equatable {
     let id: UUID
     let title: String
     var agentStatus: AgentSessionStatus? = nil
+    /// Last assistant message from the agent's transcript, resolved lazily when the hover
+    /// card opens (Claude Code only; `nil` for every non-happy path). See #680.
+    var transcriptTail: String? = nil
 }
 
 struct SidebarInfoCard: View {
@@ -42,11 +45,11 @@ struct SidebarInfoCard: View {
         return branch
     }
 
-    /// The single running agent, if exactly one tab has one — used to surface its
-    /// telemetry without crowding the card when several agents are running.
-    private var soleAgent: AgentSessionStatus? {
-        let agents = tabs.compactMap(\.agentStatus)
-        return agents.count == 1 ? agents.first : nil
+    /// The single tab running an agent, if exactly one does — used to surface its telemetry
+    /// (and latest transcript message) without crowding the card when several agents run.
+    private var soleAgentTab: SidebarTabSummary? {
+        let agentTabs = tabs.filter { $0.agentStatus != nil }
+        return agentTabs.count == 1 ? agentTabs.first : nil
     }
 
     var body: some View {
@@ -69,9 +72,17 @@ struct SidebarInfoCard: View {
                 }
             }
 
-            if let soleAgent {
+            if let soleAgentTab, let agent = soleAgentTab.agentStatus {
                 Divider()
-                agentDetails(soleAgent)
+                agentDetails(agent)
+                if let tail = soleAgentTab.transcriptTail, !tail.isEmpty {
+                    Text(tail)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityLabel("Latest message: \(tail)")
+                }
             }
         }
         .padding(14)

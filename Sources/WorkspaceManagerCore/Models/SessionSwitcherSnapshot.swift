@@ -417,22 +417,12 @@ public struct SessionSwitcherSnapshot: Sendable {
         return chips
     }
 
+    /// The card's latest-activity line: the pure `SessionActivitySnippet` for the agent's
+    /// run state, or a neutral descriptor when the state warrants no snippet (idle/complete,
+    /// or no registered agent). Keeps run-state phrasing in one place (#680).
     private static func preview(for status: AgentSessionStatus?, fallback: String) -> String {
         guard let status else { return fallback }
-        switch status.run {
-        case .idle:
-            return "Idle"
-        case .thinking:
-            return "Thinking"
-        case .runningTool(let name, let detail):
-            return subtitle(parts: ["Running \(name)", detail])
-        case .awaitingInput(let reason):
-            return "Awaiting input: \(reason.displayName)"
-        case .complete:
-            return "Complete"
-        case .errored(_, let message):
-            return message ?? "Errored"
-        }
+        return SessionActivitySnippet.text(for: status.run) ?? fallback
     }
 
     private static func activityForRow(activity: SessionActivity, isActive: Bool) -> SessionActivity {

@@ -51,7 +51,7 @@ struct SessionSwitcherSnapshotTests {
         #expect(row.target == .hostSession(sessionID))
         #expect(row.kind == .workspace)
         #expect(row.title == "feature-mux")
-        #expect(row.preview == "Awaiting input: permission")
+        #expect(row.preview == "Waiting for permission")
         #expect(row.isActive)
         #expect(row.activity == .awaitingInput)
         #expect(row.chips.map(\.title).contains("codex/session-switcher"))

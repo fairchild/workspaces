@@ -106,7 +106,7 @@ struct SessionSwitcherView: View {
                                 highlightedIndex = index
                                 activate(row)
                             } label: {
-                                rowView(row, isHighlighted: index == highlightedIndex)
+                                SessionSwitcherRowView(row: row, isHighlighted: index == highlightedIndex)
                             }
                             .buttonStyle(.plain)
                             .id(row.id)
@@ -137,10 +137,55 @@ struct SessionSwitcherView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private func rowView(_ row: SessionSwitcherRow, isHighlighted: Bool) -> some View {
+    private func rowBackground(isHighlighted: Bool) -> some View {
+        RoundedRectangle(cornerRadius: 6)
+            .fill(isHighlighted ? Color.accentColor.opacity(0.18) : Color.clear)
+            .padding(.horizontal, 4)
+            .padding(.vertical, 1)
+    }
+
+    private func moveHighlight(by delta: Int) {
+        let rows = rows
+        guard !rows.isEmpty else { return }
+        highlightedIndex = max(0, min(rows.count - 1, highlightedIndex + delta))
+    }
+
+    private func activateHighlightedRow() {
+        let rows = rows
+        guard highlightedIndex >= 0, highlightedIndex < rows.count else { return }
+        activate(rows[highlightedIndex])
+    }
+
+    private func activate(_ row: SessionSwitcherRow) {
+        switch row.target {
+        case .hostSession(let id):
+            onSelectHostSession(id)
+        case .workspace(let id):
+            guard let workspace = workspacesByID[id] else { return }
+            onSelectWorkspace(workspace)
+        case .repo(let id):
+            guard let repo = reposByID[id] else { return }
+            onSelectRepo(repo)
+        case .webSource(let id):
+            guard let source = webSourcesByID[id] else { return }
+            onSelectWebSource(source)
+        case .command(.changeTerminalTheme):
+            onOpenThemeSwitcher()
+        }
+    }
+}
+
+/// One switcher card: icon + live-activity dot, title/kind, subtitle, the status-derived
+/// activity snippet (`row.preview`), and the metadata chip row. Extracted from the List so it
+/// renders standalone (SwiftUI `List` does not draw its rows under `ImageRenderer`).
+struct SessionSwitcherRowView: View {
+    let row: SessionSwitcherRow
+    var isHighlighted: Bool = false
+
+    var body: some View {
         HStack(alignment: .top, spacing: 11) {
             ZStack(alignment: .bottomTrailing) {
-                Image(systemName: iconName(for: row))
+                Image(systemName: iconName)
                     .font(.system(size: 16, weight: .medium))
                     .foregroundStyle(isHighlighted ? .primary : .secondary)
                     .frame(width: 24, height: 24)
@@ -169,7 +214,7 @@ struct SessionSwitcherView: View {
                     .lineLimit(1)
                 Text(row.preview)
                     .font(.caption)
-                    .foregroundStyle(row.activity == .awaitingInput ? .primary : .secondary)
+                    .foregroundStyle(row.activity.emphasizesPreview ? .primary : .secondary)
                     .lineLimit(1)
                 chipRow(row.chips)
             }
@@ -206,50 +251,13 @@ struct SessionSwitcherView: View {
         .frame(height: 20)
     }
 
-    private func rowBackground(isHighlighted: Bool) -> some View {
-        RoundedRectangle(cornerRadius: 6)
-            .fill(isHighlighted ? Color.accentColor.opacity(0.18) : Color.clear)
-            .padding(.horizontal, 4)
-            .padding(.vertical, 1)
-    }
-
-    private func iconName(for row: SessionSwitcherRow) -> String {
+    private var iconName: String {
         switch row.kind {
         case .workspace: return "terminal"
         case .repo: return "folder"
         case .terminal: return "rectangle.terminal"
         case .web: return "globe"
         case .command: return "command"
-        }
-    }
-
-    private func moveHighlight(by delta: Int) {
-        let rows = rows
-        guard !rows.isEmpty else { return }
-        highlightedIndex = max(0, min(rows.count - 1, highlightedIndex + delta))
-    }
-
-    private func activateHighlightedRow() {
-        let rows = rows
-        guard highlightedIndex >= 0, highlightedIndex < rows.count else { return }
-        activate(rows[highlightedIndex])
-    }
-
-    private func activate(_ row: SessionSwitcherRow) {
-        switch row.target {
-        case .hostSession(let id):
-            onSelectHostSession(id)
-        case .workspace(let id):
-            guard let workspace = workspacesByID[id] else { return }
-            onSelectWorkspace(workspace)
-        case .repo(let id):
-            guard let repo = reposByID[id] else { return }
-            onSelectRepo(repo)
-        case .webSource(let id):
-            guard let source = webSourcesByID[id] else { return }
-            onSelectWebSource(source)
-        case .command(.changeTerminalTheme):
-            onOpenThemeSwitcher()
         }
     }
 }
