@@ -113,12 +113,15 @@ export function validateProductionAgentRuntimeConfig(
 		"for authenticated app sessions",
 		errors,
 	);
-	requireEnv(
-		env,
-		"TTYD_TOKEN_SECRET",
-		"for terminal URL signing in production",
-		errors,
-	);
+	// Terminal URL signing uses TTYD_TOKEN_SECRET and falls back to
+	// BETTER_AUTH_SECRET (resolveTtydTokenSecret in vercel-sandbox.ts). Either
+	// secret satisfies the runtime, so accept either here rather than demanding
+	// a dedicated TTYD_TOKEN_SECRET the signer never requires.
+	if (!env.TTYD_TOKEN_SECRET && !env.BETTER_AUTH_SECRET) {
+		errors.push(
+			"TTYD_TOKEN_SECRET or BETTER_AUTH_SECRET is required for terminal URL signing in production",
+		);
+	}
 
 	if (!hasVercelCredentials(env)) {
 		errors.push(
