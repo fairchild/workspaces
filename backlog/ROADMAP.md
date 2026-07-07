@@ -137,15 +137,13 @@ Throughput means fewer stuck PRs, fewer manual review repairs, clearer operator 
 
 ### Now (P0)
 
-#### 1. Workspace creation hang root cause
+#### 1. Workspace creation hang root cause — closed 2026-07-07 (not reproducible)
 
 GitHub: [#554](https://github.com/fairchild/workspaces/issues/554) · `arc:core-reliability`
 
-Diagnostics shipped in PR #190 (`os.Logger` signposts + a 30-second watchdog). Regression net for the PR #190 guard added in PR #372. Root cause still uncertain. Reliability blocker — hangs in the creation path erode core-loop trust the fastest.
+**Closed as not-reproducible.** This sat in the top band since March with no live reproduction against the shipped diagnostics — a phantom P0 that anchored planning without earning it. The instrumentation stays load-bearing: `os.Logger` signposts + a 30-second watchdog (PR #190) and the regression net (PR #372) are in place, and `WorkspaceCreationRaceTests` rules out a basic in-memory deadlock. In-vitro investigation is exhausted (the MainActor-serialized save path can't deadlock without an external factor — slow disk, vanished store path, SwiftData WAL-pressure locks). The watchdog will surface the `.finished`-stage hang if it recurs; reopen with real signpost evidence then, not before.
 
-**Gate: live repro.** The hang has not been reproduced with the current diagnostics. In-vitro investigation has gone as far as it can — `WorkspaceCreationRaceTests` rules out a basic deadlock under in-memory SwiftData, and code reading shows the MainActor-serialized save path can't deadlock without an external factor (slow disk, vanished store path, SwiftData internal locks under WAL pressure). Tackle this after a deliberate interactive session at the keyboard, not as the first reach for an autonomous session.
-
-**Adjacent ungated hardening (2026-06-09) — shipped.** A reliability review found a second, deterministic hang class upstream of the reported symptom: `ProcessRunner.run` had no timeout and required pipe EOF, so a lifecycle script that backgrounds a child hung creation at "Running setup..." forever (12 services share the runner). It did *not* explain the reported `.finished`-stage hang, so the live-repro gate still stands for #554 itself — but the hardening was ungated and improved diagnosability for when the repro lands. All three follow-ups closed: subprocess-hang hardening (#634), deletion-coordination + cleanup visibility (#635), and startup orphan reconciliation (#636).
+**Adjacent ungated hardening (2026-06-09) — shipped.** A reliability review found a second, deterministic hang class upstream of the reported symptom: `ProcessRunner.run` had no timeout and required pipe EOF, so a lifecycle script that backgrounds a child hung creation at "Running setup..." forever (12 services share the runner). It did *not* explain the reported `.finished`-stage hang. The hardening was ungated and shipped: subprocess-hang hardening (#634), deletion-coordination + cleanup visibility (#635), and startup orphan reconciliation (#636).
 
 #### 2. Tile Tree + Surface abstraction epic
 
@@ -227,25 +225,39 @@ Roadmap and GitHub milestones play different roles:
 - GitHub milestone = live execution contract for one promoted theme
 - backlog plan = design/support detail for work not yet promoted
 
-Default execution policy:
+**Two parallel lanes (2026-07-07).** The product is two surfaces that share neither a codebase nor an aging curve — the Mac-native desktop app and the `web-next` hosted sessions app. They run as **independent lanes**, each with **one active milestone at a time**. This is the sanctioned exception to the single-active-milestone default: the lanes don't contend for the same files or the same reviewer context, so parallel is honest rather than a focus tax. Both are held to the same bar — quality and performance over feature breadth, no compromise on maintainability, a calm crafted surface.
 
-- only `Now` items and explicitly pulled-forward `Next` items should become milestones
-- default to one active product milestone at a time unless a second lane is clearly independent
-- milestone names come from the approved planning discussion title; the roadmap tracks themes
+### Active milestone stack
+
+| Lane | Active now | Queued next | Sequencing note |
+|---|---|---|---|
+| **Desktop** | **[#9](https://github.com/fairchild/workspaces/milestone/9) — v0.23 tile-tree completion + daily-driver reliability** | **[#10](https://github.com/fairchild/workspaces/milestone/10) — durable sessions** | Epic #627 is all but done — P0–P8 landed (P8 = #842, 2026-07-07); only #690 (depth-≥2 directional focus) remains before it closes. Then the debt: maintainability seams #708/#710, perf contract #637, lifecycle bugs #663/#664/#666/#670/#696 + archive net #709. #10 starts **after** #9's debt is paid — pay maintainability down before adding cross-session continuity to the same files (2026-07-07 decision). |
+| **web-next** | **[#11](https://github.com/fairchild/workspaces/milestone/11) — sessions-first** | **[#14](https://github.com/fairchild/workspaces/milestone/14) essentials → [#13](https://github.com/fairchild/workspaces/milestone/13) → [#12](https://github.com/fairchild/workspaces/milestone/12) (thinned)** | Real runtime landed (#822+#831). Finish #11 (drawer #752, lifecycle/errors #753, edit→diff #790, build flake #780, cutover #754), then the start-and-identify loop (#823 title, #824 model, #825 repo picker), then self-validation (#13). Ordered by the web-next phase plan, not milestone number — see `web-next/docs/roadmap.md`. |
+
+**Personal-tool scope cut (2026-07-07).** web-next serves the owner only for now. **#829** (owner-scoped session sharing) is parked (`idea`, out of #14) until a real second login is wanted — it's the clean prerequisite to sharing, deferred not cancelled. Within **#12**, keyboard/contrast/visible-failure/compose work (#805/#806/#808/#807) stays because it helps the owner; assistive-tech announcements (#804) and mobile touch targets (#809) defer until web-next has an audience beyond one person. Craft aimed at users who don't exist yet is breadth, not quality.
+
+**Open gap — web-next has no performance budget.** Desktop performance is a system (`config/performance/contract.json` + `workspaces-performance-system` skill); web-next, the surface intended to become *primary* (#754), carries no perf scenario or budget in any milestone. Establish a minimal web-next perf floor before the #754 cutover, or the "performance over breadth" principle has an unguarded flank on the newer surface.
 
 Theme-to-milestone map:
 
-| Roadmap theme | Arc label | Milestone posture |
+| Roadmap theme | Lane / label | Milestone posture |
 |---|---|---|
-| Core reliability and maintainability | `arc:core-reliability` | 2026-06-09 hardening cluster (#634/#635/#636/#638) closed. Live under milestone [#9](https://github.com/fairchild/workspaces/milestone/9): maintainability seams (#708/#710), perf contract (#637), lifecycle bugs (#663/#664/#666/#670/#696), archive test net (#709). |
-| Tile Tree + Surface abstraction | — (epic [#627](https://github.com/fairchild/workspaces/issues/627)) | Phases 0–5 landed (PRs #625/#633/#645/#658/#701); Phase 8 ADR recorded (#693). Remaining web seam (P6), rename sweep (P7), and depth-≥2 focus (#690). |
-| Release and local-configuration reliability debt | `area: platform` / `area: distribution` / `devEx` | Closed in `v0.18.0`: [#615](https://github.com/fairchild/workspaces/issues/615) (PR #619) and [#617](https://github.com/fairchild/workspaces/issues/617) (PRs #620/#621). |
-| Managed reviewer reliability and understandability | `area: platform` | Closed in `v0.17.0`: [#584](https://github.com/fairchild/workspaces/issues/584) / [milestone 8](https://github.com/fairchild/workspaces/milestone/8). Treat the ReviewRun-first model as baseline doctrine. |
-| Lume runtime hardening | `arc:lume-runtime` | Closed (#87/#88/#89). Label retained for future Lume work. |
-| Notification catch-up and reconnect correctness | `arc:notification-catchup` | Next standalone after core-reliability theme clears |
-| Terminal continuity (tmux + cross-session) | `arc:terminal-continuity` | Owner-promoted 2026-07-02 to milestone [#10 — Durable sessions](https://github.com/fairchild/workspaces/milestone/10): epic [#728](https://github.com/fairchild/workspaces/issues/728) (cold-start resume + history browser), #548 (warm sibling), #729 (cloud handoff, deferred tail). Re-scope #549 after the ADR before pulling it in. Sequencing vs #9 per one-active-milestone rule. |
-| Strategic isolation backend direction | `arc:isolation-backend` | Backlog/research until promoted by a fresh approved discussion |
-| Parallel-agent race primitive (Orca-inspired) | — | Phase 0 + 1a shipped 2026-07-07 (#798/PR #799, #800/PR #801). Follow-ups filed, awaiting promotion per the one-active-milestone rule: fleet view (#836), ship lane (#837); child-handle cross-tile writes parked as `idea` (#838). |
+| Tile-tree completion + daily-driver reliability | Desktop · `arc:core-reliability` | **Active** — milestone [#9](https://github.com/fairchild/workspaces/milestone/9). Epic [#627](https://github.com/fairchild/workspaces/issues/627) P0–P8 landed (P6 = #841, P7/P8 = #842, both on `main`); only #690 remains to close the epic. Debt cluster (#708/#710/#637/#663/#664/#666/#670/#696/#709) is the rest of the milestone. Supersedes the closed 2026-06-09 hardening cluster (#634/#635/#636/#638). |
+| Durable sessions (reboot / resume / history) | Desktop · `arc:terminal-continuity` | **Queued** — milestone [#10](https://github.com/fairchild/workspaces/milestone/10): epic [#728](https://github.com/fairchild/workspaces/issues/728) (cold-start resume + history), #548 (warm sibling), #729 (cloud handoff, deferred tail), #789 retention, #783 restore UX. Starts after #9's debt clears (one-active-per-lane). Re-scope #549 tmux before pulling it in. |
+| Sessions-first web | web-next | **Active** — milestone [#11](https://github.com/fairchild/workspaces/milestone/11). Runtime landed (#822/#831); drawer/lifecycle/cutover/edit-diff/build-flake remain. |
+| web-next usability completeness | web-next | **Queued** — milestone [#14](https://github.com/fairchild/workspaces/milestone/14): #823/#824/#825 start-loop essentials. #829 parked (personal-tool cut). |
+| web-next self-validation | web-next | **Queued** — milestone [#13](https://github.com/fairchild/workspaces/milestone/13): validate the real runtime local→preview→prod. Valuable single-user (owner trust in the deployed path). |
+| web-next refinement (a11y / resilience) | web-next | **Thinned** — milestone [#12](https://github.com/fairchild/workspaces/milestone/12): keep #805/#806/#807/#808; defer #804/#809 pending an audience. |
+| Managed reviewer / Lume / release-config debt | — | Closed (milestones [#8](https://github.com/fairchild/workspaces/milestone/8)/#5, `v0.17`–`v0.18`). Baseline doctrine; file new reviewer work as specific follow-up debt. |
+| Notification catch-up and reconnect correctness | Desktop · `arc:notification-catchup` | Standalone P1 (#547); no milestone until a desktop lane slot opens. |
+| Parallel-agent race primitive (Orca-inspired) | Desktop-adjacent | Phase 0+1a shipped 2026-07-07 (#798/PR #799, #800/PR #801). Follow-ups filed unpromoted: fleet view #836, ship lane #837; #838 `idea`. |
+| Strategic isolation backend (VZ/Tahoe, Daytona-native) | Desktop · `arc:isolation-backend` | P2 research until a fresh approved discussion promotes it (#532/#533). |
+
+Default execution policy:
+
+- one active milestone **per lane**; a third concurrent milestone in either lane needs an explicit independence argument
+- only `Now` items and explicitly pulled-forward `Next` items should become milestones
+- milestone names come from the approved planning-discussion title; the roadmap tracks themes
 
 ---
 
@@ -262,11 +274,11 @@ Scope tags:
 
 Live source of truth is GitHub Issues on `fairchild/workspaces`. This table mirrors the strategic posture for items that have been promoted to issues; for the full operational queue use `gh issue list` (or the `backlog` skill).
 
-Priority `idea` = parked in the `idea` label (speculative, may never be built); `stale` = tagged `stale` for maintainer close/delete review. Issues in milestone [#9](https://github.com/fairchild/workspaces/milestone/9) are noted `· ms9`; web items live in milestone [#7](https://github.com/fairchild/workspaces/milestone/7), noted `· ms7`.
+Priority `idea` = parked in the `idea` label (speculative, may never be built); `stale` = tagged `stale` for maintainer close/delete review. Desktop items in milestone [#9](https://github.com/fairchild/workspaces/milestone/9) are noted `· ms9`. The old `web/` dashboard's milestone [#7](https://github.com/fairchild/workspaces/milestone/7) is closed; the live web track is now `web-next` across milestones [#11](https://github.com/fairchild/workspaces/milestone/11)–[#14](https://github.com/fairchild/workspaces/milestone/14), tracked in `web-next/docs/roadmap.md` rather than this index.
 
 | Item | Scope | Priority | Issue |
 |------|-------|----------|-------|
-| Workspace creation hang root cause | product | P0 | [#554](https://github.com/fairchild/workspaces/issues/554) (live-repro gated; not in ms9 — can't commit a gated repro to a release) |
+| Workspace creation hang root cause | product | Closed | [#554](https://github.com/fairchild/workspaces/issues/554) closed 2026-07-07 (not reproducible; diagnostics + watchdog shipped, reopen on real evidence) |
 | Tile Tree + Surface abstraction epic | product | P0 · ms9 | [#627](https://github.com/fairchild/workspaces/issues/627) (Phases 0–4 landed: PRs #625/#633/#645/#658; Phase 5 + #690 remain) |
 | Depth-≥2 directional tile-focus hardening | quality | P3 · ms9 | [#690](https://github.com/fairchild/workspaces/issues/690) |
 | Performance contract: main-window hot spots | quality | P1 · ms9 | [#637](https://github.com/fairchild/workspaces/issues/637) |
@@ -352,6 +364,13 @@ Archived (in `backlog/done/`):
 ---
 
 ## Learnings
+
+### 2026-07-07 — Milestone grooming: six open milestones → two sequenced lanes
+
+- **"Everything open" is the absence of a priority, not a priority.** Six milestones were live at once (#9–#14) while the execution policy said one at a time — the doc listed both surfaces as if maintainer attention were free. The grooming's highest-leverage output was naming the two-lane structure (desktop vs `web-next`) and declaring one active milestone *per lane*, which is the honest form of the single-active rule when the lanes genuinely don't share files or reviewer context. Owner chose true-parallel over collapsing to one bet.
+- **A P0 nobody can reproduce for four months is a planning anchor, not a priority.** #554 (workspace-creation hang) had shipped diagnostics + watchdog + a regression net and still no live repro since March. Closed as not-reproducible — the instrumentation stays load-bearing, and the watchdog reopens it on real evidence. Kept the ungated hardening (#634/#635/#636) it spun off. Lesson: gate-blocked P0s should carry an explicit demote/close trigger, or they zombie the top band.
+- **Craft aimed at users who don't exist yet is breadth wearing quality's clothes.** web-next is a single-user tool today, so owner-scoped sharing (#829) and assistive-tech/mobile a11y (#804/#809) only pay off with an audience it doesn't have. Parked #829 (`idea`, out of #14) and deferred those a11y items, while keeping contrast/keyboard/visible-failures (#805/#806/#808) — which help the owner. The quality principle cuts *toward* deferring these, not toward doing them.
+- **The newer surface inherited the older surface's discipline unevenly.** Desktop performance is a contract; web-next, the surface meant to become *primary*, has no perf budget in any milestone. Named it as an open gap to close before the #754 cutover — a principle enforced on one surface and silent on the other is a principle with a hole in it.
 
 ### 2026-07-02 — Web cycle: plan → 3 waves of subagents → milestone #7 closed (PRs #723–#732)
 
