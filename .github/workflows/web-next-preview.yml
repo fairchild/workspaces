@@ -73,11 +73,15 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       # No VERCEL_PROJECT_ID secret exists for web-next (the repo's is spaces-web),
-      # so resolve the project by name. This writes .vercel/project.json, which the
-      # pull/build/deploy steps then read — including the project's Root Directory
-      # (web-next), so the commands run from the repo root.
+      # so resolve the project by name. `link` writes .vercel/project.json; export
+      # its projectId so the pull/build/deploy steps have both VERCEL_ORG_ID and
+      # VERCEL_PROJECT_ID — the CLI requires both once ORG_ID is set and otherwise
+      # errors ("you forgot to specify VERCEL_PROJECT_ID"). The project's Root
+      # Directory (web-next) comes from `pull`, so the commands run from repo root.
       - name: Link Vercel project
-        run: npx vercel@51 link --yes --project web-next --scope="$VERCEL_ORG_ID" --token="$VERCEL_TOKEN"
+        run: |
+          npx vercel@51 link --yes --project web-next --scope="$VERCEL_ORG_ID" --token="$VERCEL_TOKEN"
+          echo "VERCEL_PROJECT_ID=$(node -p "require('./.vercel/project.json').projectId")" >> "$GITHUB_ENV"
 
       - name: Pull Vercel preview env + config
         run: npx vercel@51 pull --yes --environment=preview --token="$VERCEL_TOKEN" --scope="$VERCEL_ORG_ID"
