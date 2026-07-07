@@ -18,19 +18,21 @@ changed, both outside the repo:
 
 - `PR_REVIEWER_ENABLED=0` in Vercel production — webhooks no longer start
   review sessions.
-- `WorkSpaces Managed Review` removed from the required status checks on
-  `main` branch protection — with the reviewer off, the check otherwise sits
-  at "Expected — waiting for status" forever and blocks merges. Branch
-  protection is not config-as-code; this doc is the record.
+- `WorkSpaces Managed Review` is not in the required status checks for `main`
+  (the `main-merge` ruleset) — with the reviewer off, the check otherwise sits
+  at "Expected — waiting for status" forever and blocks merges.
 
 The pipeline, GitHub App, and broker stay deployed. Revisit ~2026-07-20: if
 nobody missed the reviewer, that is the answer. To re-enable, set
-`PR_REVIEWER_ENABLED=1` (or remove it) and restore the required check:
+`PR_REVIEWER_ENABLED=1` (or remove it) and re-add the check to the
+`main-merge` ruleset's `required_status_checks` rule — preferably by editing
+`config/github/rulesets/main-merge.json` and running
+`scripts/github-settings.py apply`, or directly:
 
 ```bash
-gh api -X PATCH repos/fairchild/workspaces/branches/main/protection/required_status_checks --input - <<'EOF'
-{"strict": false, "checks": [{"context": "readiness", "app_id": 15368}, {"context": "release-change-validation", "app_id": 15368}, {"context": "WorkSpaces Managed Review", "app_id": 3504942}]}
-EOF
+gh api repos/fairchild/workspaces/rulesets --jq '.[] | select(.name=="main-merge") | .id'
+# add to the required_status_checks rule parameters and PUT the full ruleset:
+#   {"context": "WorkSpaces Managed Review", "integration_id": 3504942}
 ```
 
 ## Key Files
