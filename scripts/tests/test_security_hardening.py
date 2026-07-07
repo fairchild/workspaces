@@ -288,7 +288,7 @@ class SecurityHardeningTests(unittest.TestCase):
 
     def test_mise_invocations_are_locked_and_pinned(self) -> None:
         verify_mise = (REPO_ROOT / "scripts/verify-mise-security.sh").read_text()
-        self.assertIn("MISE_EXPECTED_VERSION=\"v2026.6.14\"", verify_mise)
+        self.assertIn("MISE_EXPECTED_VERSION=\"v2026.7.0\"", verify_mise)
         self.assertIn("verify_locked_zig_exec", verify_mise)
         self.assertIn("github.com/repos/jdx/mise/releases/latest", verify_mise)
         self.assertIn("Authorization: Bearer $GITHUB_TOKEN", verify_mise)
@@ -324,9 +324,9 @@ class SecurityHardeningTests(unittest.TestCase):
         self.assertIn("enable-global-virtual-store=true", web_npmrc)
 
         sandbox = (REPO_ROOT / "web/src/lib/agent-runtime/vercel-sandbox.ts").read_text()
-        self.assertIn("MISE_VERSION='v2026.6.14'", sandbox)
+        self.assertIn("MISE_VERSION='v2026.7.0'", sandbox)
         self.assertIn(
-            "MISE_SHA256='96ae1ef7b00a6ebbbec23ba1016d6e722f5e904966272f621d15326429e90d53'",
+            "MISE_SHA256='0744cb3c303baf0d308ff7b112ed41f22abb6029cb5644fd3a8ce74b29f16a68'",
             sandbox,
         )
         self.assertIn("sha256sum -c -", sandbox)
