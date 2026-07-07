@@ -1,0 +1,22 @@
+{
+  "dir": "web-next",
+  "environment": "production",
+  "present": [
+    "AI_GATEWAY_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "BETTER_AUTH_SECRET",
+    "GITHUB_APP_PRIVATE_KEY",
+    "GITHUB_OAUTH_CLIENT_SECRET",
+    "SESSIONS_DATABASE_AUTH_TOKEN",
+    "SESSIONS_DATABASE_URL"
+  ],
+  "project": "web-next",
+  "scope": "cloudcompute",
+  "values": {
+    "ALLOWED_LOGINS": "fairchild",
+    "BETTER_AUTH_URL": "https://web-next-ivory-six.vercel.app",
+    "GITHUB_OAUTH_CLIENT_ID": "Iv23liSWNRsPl1YzIdyK",
+    "GITHUB_WEB_WORKSPACES_APP_ID": "3158670",
+    "WEB_NEXT_COMPUTE_PROVIDER": "vercel"
+  }
+}

@@ -17,7 +17,9 @@ completions with no evidence it catches what other gates miss). Two settings
 changed, both outside the repo:
 
 - `PR_REVIEWER_ENABLED=0` in Vercel production — webhooks no longer start
-  review sessions.
+  review sessions. This flag (and the other non-secret Vercel env vars) is
+  pinned as config-as-code in `config/vercel/`; check/apply via
+  `scripts/vercel-settings.py`.
 - `WorkSpaces Managed Review` is not in the required status checks for `main`
   (the `main-merge` ruleset) — with the reviewer off, the check otherwise sits
   at "Expected — waiting for status" forever and blocks merges.
