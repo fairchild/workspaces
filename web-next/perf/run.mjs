@@ -3,6 +3,14 @@
  * against a production build, writes perf/results.json + results.md, and
  * exits non-zero when a measured metric exceeds its budget. Pending
  * scenarios (surfaces not built yet) are reported, never failed.
+ *
+ * Deployed-target mode (`--url <origin>` or `--env prod`, resolved the same
+ * way as scripts/validate.mjs): every contract scenario needs the
+ * auth-bypass cookie plus locally seeded fixtures, so against a real
+ * deployment they're reported skipped rather than measured or failed. The
+ * one honest, credential-free measurement is the /sign-in entry route's
+ * LCP/TBT. Deployed results are report-only (perf/results-deployed.json +
+ * .md) and never fail the run — see docs/perf-floor.md.
  */
 import { readFileSync, writeFileSync } from "node:fs";
 import { execFileSync, execSync } from "node:child_process";
@@ -16,6 +24,8 @@ import {
 	testAuthCookie,
 	WEB_NEXT_ROOT,
 } from "../scripts/harness.mjs";
+import { detectSsoWall, resolveTarget } from "../scripts/validate-core.mjs";
+import { buildDeployedResults, deployedResultsToMarkdown } from "./deployed-core.mjs";
 
 const PERF_DIR = path.join(WEB_NEXT_ROOT, "perf");
 const PORT = Number(process.env.PERF_PORT ?? 3100);
@@ -177,6 +187,31 @@ async function runStreamingCadence(browser, baseUrl, runs) {
 	return { longest_task_ms: samples };
 }
 
+// Shared LCP + long-task instrumentation for a cold navigation, used by both
+// the authenticated route scenarios and the deployed-target entry-route
+// measurement (which has no signed-in context to attach to).
+async function measurePageLoad(page, route) {
+	await page.addInitScript(() => {
+		window.__routePerf = { lcp: 0, longTasks: [] };
+		new PerformanceObserver((list) => {
+			const entries = list.getEntries();
+			if (entries.length > 0)
+				window.__routePerf.lcp = entries[entries.length - 1].startTime;
+		}).observe({ type: "largest-contentful-paint", buffered: true });
+		new PerformanceObserver((list) => {
+			for (const entry of list.getEntries())
+				window.__routePerf.longTasks.push(entry.duration);
+		}).observe({ type: "longtask", buffered: true });
+	});
+	await page.goto(route, { waitUntil: "networkidle" });
+	await page.waitForTimeout(ROUTE_SETTLE_MS);
+	const { lcp, longTasks } = await page.evaluate(() => window.__routePerf);
+	return {
+		lcp,
+		tbt: longTasks.reduce((total, duration) => total + Math.max(0, duration - 50), 0),
+	};
+}
+
 // `scenario.manifest_route` maps a concrete URL (e.g. /sessions/perf-empty)
 // to its build-manifest route (/sessions/[id]) for the first-load-JS lookup.
 async function runRoute(browser, baseUrl, scenario) {
@@ -186,25 +221,9 @@ async function runRoute(browser, baseUrl, scenario) {
 	for (let i = 0; i < runs; i++) {
 		const context = await newSignedInContext(browser, baseUrl);
 		const page = await context.newPage();
-		await page.addInitScript(() => {
-			window.__routePerf = { lcp: 0, longTasks: [] };
-			new PerformanceObserver((list) => {
-				const entries = list.getEntries();
-				if (entries.length > 0)
-					window.__routePerf.lcp = entries[entries.length - 1].startTime;
-			}).observe({ type: "largest-contentful-paint", buffered: true });
-			new PerformanceObserver((list) => {
-				for (const entry of list.getEntries())
-					window.__routePerf.longTasks.push(entry.duration);
-			}).observe({ type: "longtask", buffered: true });
-		});
-		await page.goto(route, { waitUntil: "networkidle" });
-		await page.waitForTimeout(ROUTE_SETTLE_MS);
-		const { lcp, longTasks } = await page.evaluate(() => window.__routePerf);
+		const { lcp, tbt } = await measurePageLoad(page, route);
 		lcpSamples.push(lcp);
-		tbtSamples.push(
-			longTasks.reduce((total, duration) => total + Math.max(0, duration - 50), 0),
-		);
+		tbtSamples.push(tbt);
 		await context.close();
 	}
 	return {
@@ -315,9 +334,83 @@ function toMarkdown(results) {
 	return lines.join("\n");
 }
 
-// --- main -------------------------------------------------------------------
+// --- deployed-target mode ----------------------------------------------------
+// No production server spawn, no DB seeding, no signed-in context — those
+// only exist locally. Every contract scenario is reported skipped; the one
+// honest measurement is the /sign-in entry route's LCP/TBT.
 
-async function main() {
+const PROBE_TIMEOUT_MS = 15_000;
+
+/** A redirect-preserving, never-throwing fetch — same shape as validate.mjs's probe. */
+async function probe(baseUrl, pathname) {
+	const bypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+	try {
+		const res = await fetch(`${baseUrl}${pathname}`, {
+			headers: bypass ? { "x-vercel-protection-bypass": bypass } : {},
+			redirect: "manual",
+			signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+		});
+		return { status: res.status, location: res.headers.get("location") ?? undefined };
+	} catch (error) {
+		return { status: 0, location: undefined, error: String(error) };
+	}
+}
+
+async function measureDeployedEntry(baseUrl) {
+	const signInProbe = await probe(baseUrl, "/sign-in");
+	if (detectSsoWall(signInProbe)) {
+		return {
+			id: "deployed_entry_signin",
+			status: "skipped",
+			reason:
+				"Vercel deployment protection (SSO) — set VERCEL_AUTOMATION_BYPASS_SECRET to measure this target (#814)",
+		};
+	}
+	if (signInProbe.status !== 200) {
+		return {
+			id: "deployed_entry_signin",
+			status: "skipped",
+			reason: `GET ${baseUrl}/sign-in → ${signInProbe.status || signInProbe.error} (not reachable)`,
+		};
+	}
+	const browser = await launchChromium();
+	try {
+		const page = await (await browser.newContext({ baseURL: baseUrl })).newPage();
+		const { lcp, tbt } = await measurePageLoad(page, "/sign-in");
+		return {
+			id: "deployed_entry_signin",
+			status: "measured",
+			route: "/sign-in",
+			metrics: {
+				lcp_ms: { value: round(lcp) },
+				tbt_ms: { value: round(tbt) },
+			},
+		};
+	} finally {
+		await browser.close();
+	}
+}
+
+async function runDeployedMode(target) {
+	console.log(`deployed-target perf run: ${target.envName} — ${target.baseUrl}\n`);
+	const commit = execSync("git rev-parse --short HEAD", { cwd: WEB_NEXT_ROOT }).toString().trim();
+	const entry = await measureDeployedEntry(target.baseUrl);
+	const results = buildDeployedResults({ target, commit, contract, entry });
+	const markdown = deployedResultsToMarkdown(results);
+	writeFileSync(
+		path.join(PERF_DIR, "results-deployed.json"),
+		`${JSON.stringify(results, null, "\t")}\n`,
+	);
+	writeFileSync(path.join(PERF_DIR, "results-deployed.md"), `${markdown}\n`);
+	console.log(`\n${markdown}\n`);
+	console.log(
+		"results written to perf/results-deployed.json and perf/results-deployed.md (report-only — never fails the run)",
+	);
+}
+
+// --- local suite -------------------------------------------------------------
+
+async function runLocalSuite() {
 	const results = {
 		date: new Date().toISOString(),
 		commit: execSync("git rev-parse --short HEAD", {
@@ -437,6 +530,20 @@ async function main() {
 	if (failed) {
 		console.error("PERF BUDGET EXCEEDED — see FAIL rows above.");
 		process.exit(1);
+	}
+}
+
+// --- entry point --------------------------------------------------------------
+// No flags (or `--env local`): the full local suite, unchanged, gates on
+// contract.json's budgets. `--url <origin>` or `--env prod`: deployed mode,
+// report-only. Target resolution mirrors scripts/validate.mjs exactly.
+
+async function main() {
+	const target = resolveTarget(process.argv.slice(2), process.env);
+	if (target.spawnLocal) {
+		await runLocalSuite();
+	} else {
+		await runDeployedMode(target);
 	}
 }
 

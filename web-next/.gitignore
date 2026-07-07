@@ -11,6 +11,8 @@ playwright-report/
 test-results/
 perf/results.json
 perf/results.md
+perf/results-deployed.json
+perf/results-deployed.md
 
 # Local libSQL database files (dev default + e2e)
 .data/
