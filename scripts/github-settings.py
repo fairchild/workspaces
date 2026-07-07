@@ -47,6 +47,10 @@ def repo_slug() -> str:
 
 def render(ruleset: dict) -> str:
     desired = {key: ruleset[key] for key in WRITABLE_FIELDS if key in ruleset}
+    # Read-only tokens (e.g. the Actions token in the drift workflow) get the
+    # ruleset without bypass_actors; treat absent as empty so they compare
+    # cleanly. Actual bypass-actor drift is still caught by admin-side checks.
+    desired.setdefault("bypass_actors", [])
     return json.dumps(desired, indent=2, sort_keys=True) + "\n"
 
 
