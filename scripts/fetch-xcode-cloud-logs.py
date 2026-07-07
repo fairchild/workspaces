@@ -35,6 +35,7 @@ API_BASE = "https://api.appstoreconnect.apple.com"
 INTERESTING_LOG = re.compile(r"post[_-]?clone|pre[_-]?xcodebuild|RunScript|ghosttykit", re.I)
 FAILURE_LINE = re.compile(r"error|failed|fatal|No such file|command not found|sudo", re.I)
 TAIL_LINES = 200
+MAX_LINE_CHARS = 400
 
 
 def require_env(name: str) -> str:
@@ -69,7 +70,10 @@ def api_get(token: str, url: str) -> dict[str, Any]:
             return json.load(resp)
     except HTTPError as err:
         body = err.read().decode("utf-8", "replace")[:2000]
-        sys.exit(f"error: GET {url} -> HTTP {err.code}\n{body}")
+        hint = ""
+        if err.code == 401:
+            hint = "\nhint: Xcode Cloud endpoints need a Team API key with the App Manager role (ASC > Users and Access > Integrations > Team Keys, issuer ID from that page)"
+        sys.exit(f"error: GET {url} -> HTTP {err.code}\n{body}{hint}")
 
 
 def paged(token: str, path: str, max_pages: int = 5, **params: str) -> Iterator[dict[str, Any]]:
@@ -82,6 +86,7 @@ def paged(token: str, path: str, max_pages: int = 5, **params: str) -> Iterator[
         url = page.get("links", {}).get("next")
         if not url:
             return
+    print(f"note: stopped after {max_pages} pages of {path}; older entries were not searched", file=sys.stderr)
 
 
 def commit_sha(run: dict[str, Any]) -> str:
@@ -111,21 +116,29 @@ def print_issues(token: str, action_id: str) -> None:
         print(f"    issue [{attrs.get('issueType')}/{attrs.get('category')}]{location}: {attrs.get('message')}")
 
 
+def clip(line: str) -> str:
+    return line if len(line) <= MAX_LINE_CHARS else line[:MAX_LINE_CHARS] + " …[truncated]"
+
+
 def excerpt(path: Path) -> None:
     try:
-        lines = path.read_text(errors="replace").splitlines()
+        raw = path.read_bytes()
     except OSError as err:
         print(f"    (unreadable: {err})")
         return
+    if b"\x00" in raw[:8192]:
+        print(f"    (binary file skipped: {path.name})")
+        return
+    lines = raw.decode("utf-8", "replace").splitlines()
     interesting = path.name and INTERESTING_LOG.search(str(path))
     if interesting:
         print(f"    ---- tail -{TAIL_LINES} {path.name} ----")
         for line in lines[-TAIL_LINES:]:
-            print(f"    {line}")
+            print(f"    {clip(line)}")
     else:
         hits = [line for line in lines if FAILURE_LINE.search(line)][:40]
         for line in hits:
-            print(f"    {path.name}: {line}")
+            print(f"    {path.name}: {clip(line)}")
 
 
 def download_artifacts(token: str, action_id: str, dest: Path) -> None:
@@ -144,7 +157,9 @@ def download_artifacts(token: str, action_id: str, dest: Path) -> None:
         with urlopen(Request(url)) as resp:
             target.write_bytes(resp.read())
         if zipfile.is_zipfile(target):
-            extract_dir = target.with_suffix("")
+            # A distinct suffix, not with_suffix(""): a suffixless fileName
+            # would otherwise collide with the downloaded archive itself.
+            extract_dir = target.with_name(target.name + ".extracted")
             with zipfile.ZipFile(target) as bundle:
                 bundle.extractall(extract_dir)
             for member in sorted(extract_dir.rglob("*")):
