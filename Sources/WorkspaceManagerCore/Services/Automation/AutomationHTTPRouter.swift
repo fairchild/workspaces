@@ -130,7 +130,11 @@ enum AutomationHTTPRouter {
         guard path.hasPrefix(prefix), path.hasSuffix(suffix) else { return nil }
         let start = path.index(path.startIndex, offsetBy: prefix.count)
         let end = path.index(path.endIndex, offsetBy: -suffix.count)
-        guard start < end else { return nil }
+        // start == end is the empty-id path (`/v1/web-surfaces//snapshot`): a well-shaped
+        // snapshot route with a bad id, so surface it (UUID validation returns invalid_request)
+        // rather than letting it fall through to route_not_found. start > end is the overlapping
+        // case (`/v1/web-surfaces/snapshot`), which is genuinely not this route.
+        guard start <= end else { return nil }
         let segment = String(path[start..<end])
         guard !segment.contains("/") else { return nil }
         return segment

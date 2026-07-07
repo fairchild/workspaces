@@ -37,22 +37,28 @@ enum WebSurfaceSnapshotCapture {
             settler.attach(continuation)
 
             let deadline = DispatchWorkItem {
-                // asyncAfter on .main runs on the main thread, so the MainActor is active.
-                MainActor.assumeIsolated { settler.settle(.timedOut) }
+                Task { @MainActor in settler.settle(.timedOut) }
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + timeoutSeconds, execute: deadline)
 
             webView.takeSnapshot(with: config) { image, error in
-                // WebKit delivers this completion on the main thread.
-                MainActor.assumeIsolated {
+                // Hop to the MainActor explicitly rather than assuming this completion is
+                // already main-isolated: WebKit delivers it on the main thread, but the
+                // single-resume settler serializes the deadline and this callback either way,
+                // and the hop cannot crash the way `assumeIsolated` would off-thread.
+                let result = outcome(image: image, error: error)
+                Task { @MainActor in
                     deadline.cancel()
-                    settler.settle(outcome(image: image, error: error))
+                    settler.settle(result)
                 }
             }
         }
     }
 
-    private static func outcome(image: NSImage?, error: Error?) -> WebSnapshotOutcome {
+    /// Reduces `takeSnapshot`'s result to an outcome. `nonisolated` so it can run inside the
+    /// WebKit completion (which is not statically main-isolated) without an actor hop; it only
+    /// touches its arguments and produces `Sendable` `Data`.
+    private nonisolated static func outcome(image: NSImage?, error: Error?) -> WebSnapshotOutcome {
         if let error {
             return .captureFailed("\(error)")
         }
@@ -63,8 +69,9 @@ enum WebSurfaceSnapshotCapture {
     }
 
     /// PNG bytes plus the bitmap's pixel dimensions, or `nil` when the image has no
-    /// rasterizable representation.
-    private static func pngData(from image: NSImage) -> (Data, Int, Int)? {
+    /// rasterizable representation. `nonisolated`: a pure image→bytes conversion callable
+    /// from the (not statically isolated) WebKit completion.
+    private nonisolated static func pngData(from image: NSImage) -> (Data, Int, Int)? {
         guard
             let tiff = image.tiffRepresentation,
             let rep = NSBitmapImageRep(data: tiff),

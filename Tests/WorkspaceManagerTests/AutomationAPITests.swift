@@ -588,6 +588,25 @@ struct AutomationAPITests {
         #expect(badID.status == 400)
         #expect(badIDEnvelope.error?.code == .invalidRequest)
 
+        // An empty id (`/v1/web-surfaces//snapshot`) is a well-shaped snapshot path with a
+        // bad id, so it reports invalid_request rather than falling through to route_not_found.
+        let emptyID = await AutomationHTTPRouter.route(
+            HTTPRequest(
+                method: "GET",
+                path: "/v1/web-surfaces//snapshot",
+                headers: [AutomationAPI.handleHeader: "live"],
+                body: Data()
+            ),
+            controller: controller,
+            enabled: true
+        )
+        let emptyIDEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationEmptyResult>.self,
+            from: emptyID.body
+        )
+        #expect(emptyID.status == 400)
+        #expect(emptyIDEnvelope.error?.code == .invalidRequest)
+
         let wrongMethod = await AutomationHTTPRouter.route(
             HTTPRequest(
                 method: "POST",
