@@ -11,7 +11,6 @@ struct AgentChromeProjectionTests {
         #expect(idle.summaryText == "Idle")
         #expect(idle.commandPaletteDescriptor == nil)
         #expect(idle.tone == .neutral)
-        #expect(idle.severity == 1)
         #expect(idle.sidebarPriority == 1)
         #expect(!idle.demandsAttention)
 
@@ -20,7 +19,6 @@ struct AgentChromeProjectionTests {
         #expect(thinking.summaryText == "Thinking…")
         #expect(thinking.commandPaletteDescriptor == "thinking")
         #expect(thinking.tone == .running)
-        #expect(thinking.severity == 2)
         #expect(thinking.sidebarPriority == 3)
         #expect(!thinking.demandsAttention)
 
@@ -29,7 +27,6 @@ struct AgentChromeProjectionTests {
         #expect(running.summaryText == "Running: Bash")
         #expect(running.commandPaletteDescriptor == "running tool")
         #expect(running.tone == .running)
-        #expect(running.severity == 3)
         #expect(running.sidebarPriority == 3)
         #expect(!running.demandsAttention)
 
@@ -38,7 +35,6 @@ struct AgentChromeProjectionTests {
         #expect(awaiting.summaryText == "Awaiting input")
         #expect(awaiting.commandPaletteDescriptor == "awaiting input")
         #expect(awaiting.tone == .attention)
-        #expect(awaiting.severity == 4)
         #expect(awaiting.sidebarPriority == 4)
         #expect(awaiting.demandsAttention)
 
@@ -47,7 +43,6 @@ struct AgentChromeProjectionTests {
         #expect(complete.summaryText == "Done")
         #expect(complete.commandPaletteDescriptor == nil)
         #expect(complete.tone == .neutral)
-        #expect(complete.severity == 1)
         #expect(complete.sidebarPriority == 1)
         #expect(!complete.demandsAttention)
 
@@ -56,7 +51,6 @@ struct AgentChromeProjectionTests {
         #expect(errored.summaryText == "Rate limited")
         #expect(errored.commandPaletteDescriptor == "errored")
         #expect(errored.tone == .critical)
-        #expect(errored.severity == 5)
         #expect(errored.sidebarPriority == 5)
         #expect(errored.demandsAttention)
     }

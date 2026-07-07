@@ -110,8 +110,8 @@ public final class WorkspaceStatusAggregator: ObservableObject {
 
     @Published public private(set) var workspaceStatuses: [UUID: AgentSessionStatus] = [:]
     @Published public private(set) var repoStatuses: [UUID: AgentSessionStatus] = [:]
-    /// Resolved repo or workspace targets currently demanding attention,
-    /// ordered by `lastAccessedAt` descending with their exact agent state.
+    /// Resolved repo or workspace targets currently demanding attention, ordered
+    /// attention-first by `SessionActivity.severity`, then `lastAccessedAt` descending.
     @Published public private(set) var attentionItems: [AttentionItem] = []
     /// Repo or workspace targets currently demanding attention, ordered by
     /// `lastAccessedAt` descending.
@@ -181,6 +181,13 @@ public final class WorkspaceStatusAggregator: ObservableObject {
         let attentionEntries =
             (workspaceAttention + repoAttention)
             .sorted { lhs, rhs in
+                // Attention-first (the shared `SessionActivity` ladder), then recency, then a
+                // stable key — so the pill leads with what most needs the user (#680 slice 2).
+                let lhsSeverity = SessionActivity.from(lhs.status).severity
+                let rhsSeverity = SessionActivity.from(rhs.status).severity
+                if lhsSeverity != rhsSeverity {
+                    return lhsSeverity > rhsSeverity
+                }
                 if lhs.lastAccessedAt != rhs.lastAccessedAt {
                     return lhs.lastAccessedAt > rhs.lastAccessedAt
                 }
@@ -221,13 +228,8 @@ public final class WorkspaceStatusAggregator: ObservableObject {
         pruneAcknowledgements(for: Array(workspaceStatuses.values) + Array(repoStatuses.values))
     }
 
-    /// Severity ordering — higher number wins when choosing the bubbled state.
-    /// Both active agent states render blue in the sidebar, but a running tool
-    /// outranks a merely thinking agent when choosing one bubbled status.
-    public static func severity(of state: AgentRunState) -> Int {
-        AgentChromeProjection.severity(of: state)
-    }
-
+    /// Whether a run state should surface in the attention list. Severity ordering (which
+    /// bubbled state wins, and attention-list order) lives on `SessionActivity.severity`.
     public static func demandsAttention(_ state: AgentRunState) -> Bool {
         AgentChromeProjection.demandsAttention(state)
     }
@@ -235,8 +237,8 @@ public final class WorkspaceStatusAggregator: ObservableObject {
     private static func mostSevere(among statuses: [AgentSessionStatus]) -> AgentSessionStatus? {
         statuses
             .max { lhs, rhs in
-                let ls = severity(of: lhs.run)
-                let rs = severity(of: rhs.run)
+                let ls = SessionActivity.from(lhs).severity
+                let rs = SessionActivity.from(rhs).severity
                 if ls != rs { return ls < rs }
                 return lhs.lastEventAt < rhs.lastEventAt
             }

@@ -36,7 +36,7 @@ struct WorkspaceStatusAggregatorTests {
         #expect(aggregator.attentionCount == 0)
     }
 
-    @Test("Attention list collects awaiting + errored, ordered by recency")
+    @Test("Attention list orders attention-first by severity, then recency")
     func attentionList() {
         let aggregator = WorkspaceStatusAggregator()
         let now = Date()
@@ -72,8 +72,10 @@ struct WorkspaceStatusAggregatorTests {
         )
 
         #expect(aggregator.attentionCount == 2)
-        #expect(aggregator.attentionItems.map(\.target) == [.workspace(recentAwaiting), .workspace(olderErrored)])
-        #expect(aggregator.attentionWorkspaces == [recentAwaiting, olderErrored])
+        // Severity-first: the older errored session outranks the more recent awaiting one
+        // (errored > awaitingInput on the shared ladder); recency only breaks ties.
+        #expect(aggregator.attentionItems.map(\.target) == [.workspace(olderErrored), .workspace(recentAwaiting)])
+        #expect(aggregator.attentionWorkspaces == [olderErrored, recentAwaiting])
     }
 
     @Test("Repo-root attention contributes to the global attention list")
@@ -103,8 +105,10 @@ struct WorkspaceStatusAggregatorTests {
         )
 
         #expect(aggregator.attentionCount == 2)
-        #expect(aggregator.attentionItems.map(\.target) == [.repo(repoID), .workspace(wsID)])
-        #expect(aggregator.attentionTargets == [.repo(repoID), .workspace(wsID)])
+        // Severity-first: the errored workspace outranks the awaiting repo root despite the
+        // repo root being more recently accessed.
+        #expect(aggregator.attentionItems.map(\.target) == [.workspace(wsID), .repo(repoID)])
+        #expect(aggregator.attentionTargets == [.workspace(wsID), .repo(repoID)])
         #expect(aggregator.attentionRepos == [repoID])
         #expect(aggregator.attentionWorkspaces == [wsID])
     }
@@ -337,22 +341,28 @@ struct WorkspaceStatusAggregatorTests {
         }
     }
 
-    @Test("Severity ordering matches the documented hierarchy")
-    func severityOrdering() {
-        let errored = WorkspaceStatusAggregator.severity(
-            of: .errored(category: .unknown, message: nil))
-        let awaiting = WorkspaceStatusAggregator.severity(of: .awaitingInput(reason: .custom))
-        let runningTool = WorkspaceStatusAggregator.severity(
-            of: .runningTool(name: "x", detail: nil))
-        let thinking = WorkspaceStatusAggregator.severity(of: .thinking)
-        let idle = WorkspaceStatusAggregator.severity(of: .idle)
-        let complete = WorkspaceStatusAggregator.severity(of: .complete)
+    @Test("Repo status bubbles the most severe child on the shared ladder")
+    func repoStatusBubblesMostSevere() {
+        let aggregator = WorkspaceStatusAggregator()
+        let now = Date()
+        let repoID = UUID()
+        aggregator.update(
+            workspaces: [
+                .init(workspaceID: UUID(), repoID: repoID, lastAccessedAt: now, status: status(run: .thinking)),
+                .init(
+                    workspaceID: UUID(), repoID: repoID, lastAccessedAt: now,
+                    status: status(run: .errored(category: .server, message: nil))),
+                .init(
+                    workspaceID: UUID(), repoID: repoID, lastAccessedAt: now,
+                    status: status(run: .runningTool(name: "grep", detail: nil))),
+            ],
+            repos: [.init(repoID: repoID, status: nil)]
+        )
 
-        #expect(errored > awaiting)
-        #expect(awaiting > runningTool)
-        #expect(runningTool > thinking)
-        #expect(thinking > idle)
-        #expect(idle == complete)
+        // errored is the most severe child, so it represents the repo.
+        let bubbled = aggregator.repoStatuses[repoID]?.run
+        let isErrored: Bool = { if case .errored = bubbled { return true } else { return false } }()
+        #expect(isErrored)
     }
 
     @Test("Workspaces without status are absent from workspaceStatuses")
