@@ -17,6 +17,26 @@ Work is mergeable when it is correct, coherent with the product, reviewable, ver
 - If evidence is blocked, say so explicitly before merge and explain what approval or environment is needed.
 - Use machine-readable blocker labels when a PR is not merge-ready: `blocked:ci`, `blocked:secrets`, `blocked:evidence`, or `blocked:review`.
 
+## Required PR Body Section
+
+The `readiness` CI gate (`scripts/pr-readiness.py`) parses the PR body for a
+`## Mergeability` section with these labeled fields, each carrying a real
+value — the placeholder text fails, and freeform prose under the heading does
+not pass. Use the field form:
+
+```markdown
+## Mergeability
+
+- Surface: <desktop / web / agent-runtime / infra / docs — plus what part>
+- User-facing behavior changed: <what changed, or "No">
+- Non-happy paths considered: <error paths / edge cases, or "n/a" with why>
+- Residual risk or follow-up: <what could still break or is deferred, or "None">
+```
+
+The parser accepts near-miss labels (`Scope`, `Edge cases`, `Follow-ups`, …)
+but not unlabeled narrative bullets. PRs touching release paths additionally
+need a `Release/ops preconditions` field.
+
 ## Surface Checklists
 
 ### Desktop App
