@@ -325,6 +325,34 @@ struct TileTreeStoreTests {
         #expect(store.splitFocusTarget(from: splitID, direction: .up) == primaryID)
     }
 
+    @Test("Directional focus in a 2×2 grid resolves the geometric neighbor's session")
+    func directionalFocusGridResolvesGeometricNeighbor() throws {
+        let store = TileTreeStore()
+        let activation = store.activateSession(
+            key: .defaultHome,
+            directory: URL(fileURLWithPath: "/Users/test/code")
+        )
+        let a = activation.session.id
+        let topBottom = TileTreeStore.SplitPaneLayout(axis: .topBottom, splitBeforePrimary: false)
+
+        // a | b, then split each column down: (a over c) | (b over d) — a 2×2 grid.
+        let b = try #require(store.splitFocusedTile(inTabContaining: a)).id
+        let c = try #require(store.splitFocusedTile(inTabContaining: a, preferredLayout: topBottom)).id
+        let d = try #require(store.splitFocusedTile(inTabContaining: b, preferredLayout: topBottom)).id
+
+        // Same-row horizontal moves — bottom-left → right must land bottom-right (the pre-#690
+        // ancestor walk landed on b, the first leaf of the right column).
+        #expect(store.splitFocusTarget(from: c, direction: .right) == d)
+        #expect(store.splitFocusTarget(from: d, direction: .left) == c)
+        #expect(store.splitFocusTarget(from: a, direction: .right) == b)
+        // Same-column vertical moves.
+        #expect(store.splitFocusTarget(from: b, direction: .down) == d)
+        #expect(store.splitFocusTarget(from: d, direction: .up) == b)
+        // True edges.
+        #expect(store.splitFocusTarget(from: a, direction: .left) == nil)
+        #expect(store.splitFocusTarget(from: d, direction: .down) == nil)
+    }
+
     @Test("Process exit in split pane keeps primary session alive")
     func processExitInSplitKeepsPrimarySessionAlive() throws {
         let store = TileTreeStore()
