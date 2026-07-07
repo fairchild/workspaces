@@ -79,6 +79,26 @@ final class TerminalSurface: Surface {
         surfaceView.requestClose()
     }
 
+    /// Session-retirement close (process-alive teardown with confirmation-as-error semantics),
+    /// driven through the tested `GhosttySurfaceRetirementCloser` state machine. The surface
+    /// conformer owns this lifecycle so callers never reach into the libghostty view (#710).
+    ///
+    /// Concurrent calls coalesce onto one in-flight drive: the closer temporarily swaps the
+    /// view's close-confirmation hook, so two overlapping drives would restore each other's
+    /// captures out of order and strand a stale hook (codex review finding, inherited from the
+    /// pre-seam implementation).
+    func closeForSessionRetirement() async throws {
+        if let inFlightRetirementClose {
+            return try await inFlightRetirementClose.value
+        }
+        let drive = Task { try await GhosttySurfaceRetirementCloser().close(surfaceView) }
+        inFlightRetirementClose = drive
+        defer { inFlightRetirementClose = nil }
+        try await drive.value
+    }
+
+    private var inFlightRetirementClose: Task<Void, Error>?
+
     func tearDown() {
         // Detach the view and drop the title hook; the libghostty C handle frees via ARC/`deinit`
         // (no explicit free exists today). The title hook holds a strong `self`-capture into the
