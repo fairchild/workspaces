@@ -137,37 +137,57 @@ struct TileTreePropertyTests {
                 )
                 let target = next.focusedTileID == from ? nil : next.focusedTileID
 
-                // Independently derive the facing candidates from the frames.
-                let candidates = frames.filter { id, rect in
-                    guard id != from else { return false }
+                // Independently derive the facing candidates (with overlap and perpendicular
+                // position) from the frames.
+                let candidates: [(id: TileID, overlap: Double, position: Double)] = frames.compactMap {
+                    id, rect in
+                    guard id != from else { return nil }
                     let facing: Bool
                     let overlap: Double
+                    let position: Double
                     switch direction {
                     case .right:
                         facing = rect.minX == origin.maxX
                         overlap = min(rect.maxY, origin.maxY) - max(rect.minY, origin.minY)
+                        position = rect.minY
                     case .left:
                         facing = rect.maxX == origin.minX
                         overlap = min(rect.maxY, origin.maxY) - max(rect.minY, origin.minY)
+                        position = rect.minY
                     case .down:
                         facing = rect.minY == origin.maxY
                         overlap = min(rect.maxX, origin.maxX) - max(rect.minX, origin.minX)
+                        position = rect.minX
                     case .up:
                         facing = rect.maxY == origin.minY
                         overlap = min(rect.maxX, origin.maxX) - max(rect.minX, origin.minX)
+                        position = rect.minX
                     }
-                    return facing && overlap > 0
+                    guard facing, overlap > 0 else { return nil }
+                    return (id, overlap, position)
                 }
 
                 if let target {
+                    let chosen = candidates.first { $0.id == target }
                     #expect(
-                        candidates.keys.contains(target),
+                        chosen != nil,
                         "seed=\(seed) \(direction): target \(target) is not a facing neighbor of \(from)"
                     )
+                    // The winner must be overlap-optimal, ties broken toward the top/left.
+                    if let chosen {
+                        let beaten = candidates.allSatisfy { candidate in
+                            candidate.overlap < chosen.overlap
+                                || (candidate.overlap == chosen.overlap && candidate.position >= chosen.position)
+                        }
+                        #expect(
+                            beaten,
+                            "seed=\(seed) \(direction): \(target) is not the max-overlap/top-left candidate"
+                        )
+                    }
                 } else {
                     #expect(
                         candidates.isEmpty,
-                        "seed=\(seed) \(direction): move from \(from) was blocked despite facing neighbors \(Array(candidates.keys))"
+                        "seed=\(seed) \(direction): move from \(from) was blocked despite facing neighbors \(candidates.map(\.id))"
                     )
                 }
             }

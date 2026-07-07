@@ -9,6 +9,11 @@ import Foundation
 /// edge carry bit-identical values — and clamped ratios keep any *other* split line strictly
 /// inside its own rect, so distinct lines can never collide. Divider thickness is a render
 /// concern and does not exist in this model.
+///
+/// Deliberately ratio-tree geometry, not rendered geometry: the renderer's minimum-pane clamping
+/// (`TileTreeView.constrainedFraction`) can visually distort extreme ratios in small windows, but
+/// navigation resolves against the model so the same keystroke lands on the same pane regardless
+/// of window size.
 struct TileUnitRect: Equatable {
     let minX: Double
     let maxX: Double
