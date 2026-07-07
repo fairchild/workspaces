@@ -1,0 +1,144 @@
+name: Web Next Preview
+
+# Opt-in Vercel preview for web-next. Vercel's native Git deployments are
+# disabled for this project (web-next/vercel.json git.deploymentEnabled=false),
+# so previews are created only here — and only when a PR that touches web-next/**
+# (or this workflow) carries the `preview` label. Label the PR to deploy; remove
+# it to stop redeploying on subsequent pushes. `unlabeled` is in the trigger list
+# so removing the label enters this PR's concurrency group and cancels an
+# in-flight deploy (the run's own job then skips at the label `if`).
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
+    paths:
+      - "web-next/**"
+      - ".github/workflows/web-next-preview.yml"
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: web-next-preview-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  preview:
+    name: Deploy Vercel preview
+    if: >-
+      ${{ !github.event.pull_request.draft
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && contains(github.event.pull_request.labels.*.name, 'preview') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      preview_url: ${{ steps.deploy.outputs.preview_url }}
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@02f6c237bd2518259fed6c71566509edfb3f2b74 # v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web-next/pnpm-lock.yaml
+
+      - name: Validate Vercel secrets
+        run: |
+          missing=()
+          for name in VERCEL_TOKEN VERCEL_ORG_ID; do
+            if [ -z "${!name}" ]; then
+              missing+=("$name")
+            fi
+          done
+
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::Missing required secrets: ${missing[*]}"
+            exit 1
+          fi
+
+      - name: Install web-next dependencies
+        working-directory: web-next
+        run: pnpm install --frozen-lockfile
+
+      # No VERCEL_PROJECT_ID secret exists for web-next (the repo's is spaces-web),
+      # so resolve the project by name. This writes .vercel/project.json, which the
+      # pull/build/deploy steps then read — including the project's Root Directory
+      # (web-next), so the commands run from the repo root.
+      - name: Link Vercel project
+        run: npx vercel@51 link --yes --project web-next --scope="$VERCEL_ORG_ID" --token="$VERCEL_TOKEN"
+
+      - name: Pull Vercel preview env + config
+        run: npx vercel@51 pull --yes --environment=preview --token="$VERCEL_TOKEN" --scope="$VERCEL_ORG_ID"
+
+      - name: Build preview artifact
+        run: npx vercel@51 build --token="$VERCEL_TOKEN" --scope="$VERCEL_ORG_ID"
+
+      - name: Deploy prebuilt preview
+        id: deploy
+        run: |
+          URL=$(npx vercel@51 deploy --prebuilt --archive=tgz --token="$VERCEL_TOKEN" --scope="$VERCEL_ORG_ID")
+          echo "preview_url=$URL" >> "$GITHUB_OUTPUT"
+          echo "::notice::Preview deployed to $URL"
+
+      - name: Comment preview URL
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
+        env:
+          PREVIEW_URL: ${{ steps.deploy.outputs.preview_url }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        with:
+          script: |
+            const marker = '<!-- web-next-preview -->';
+            const previewUrl = process.env.PREVIEW_URL;
+            const headSha = process.env.HEAD_SHA;
+            const shortSha = headSha.slice(0, 7);
+            const workflowUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+            const issue_number = context.payload.pull_request.number;
+            const { owner, repo } = context.repo;
+
+            const body = [
+              marker,
+              '### Vercel Preview: `web-next`',
+              '',
+              `- Raw deployment: ${previewUrl}`,
+              '- Protected by Vercel SSO + app auth; open it signed in to reach the app.',
+              `- Commit: \`${shortSha}\``,
+              `- Workflow: [run ${process.env.GITHUB_RUN_NUMBER}](${workflowUrl})`,
+              '',
+              'This preview is opt-in: it deploys only while the PR carries the `preview` label and touches `web-next/**`. Remove the label to stop redeploying on new pushes.',
+            ].join('\n');
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number,
+              per_page: 100,
+            });
+            const existing = comments.find((comment) => comment.body?.includes(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number,
+                body,
+              });
+            }

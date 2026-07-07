@@ -23,9 +23,11 @@ After: every push to `main` produces a preview deployment, gets validated agains
 
 **Rolling failure issues, not per-failure issues.** One issue per validator (`CD: playwright failures on main`, `CD: lighthouse failures on main`), identified by hidden HTML markers. New failures append a comment; the issue auto-reopens if closed. Production validation uses one open `cd-failure:prod` issue for the prod surface, and the next green prod validation comments on and closes open auto-opened prod failure issues. Avoids issue-tracker flooding during a regression burst.
 
-**Configuration as code.** The Vercel Git auto-deploy guard lives in `web/vercel.json` (`git.deploymentEnabled = false`), not in dashboard settings. Vercel stays connected for metadata, while GitHub Actions owns PR previews and production promotion.
+**Configuration as code.** The Vercel Git auto-deploy guard lives in each project's `vercel.json` (`git.deploymentEnabled = false`) — `web/vercel.json` for `spaces-web`, `web-next/vercel.json` for `web-next` — not in dashboard settings. Vercel stays connected for metadata, while GitHub Actions owns PR previews and production promotion.
 
-**Targeted PR previews.** `.github/workflows/web-preview.yml` deploys Vercel previews only for PRs that touch `web/**`. Non-web PRs do not create Vercel deployments or preview comments.
+**Targeted PR previews (spaces-web).** `.github/workflows/web-preview.yml` deploys Vercel previews only for PRs that touch `web/**`. Non-web PRs do not create Vercel deployments or preview comments.
+
+**Opt-in PR previews (web-next).** `.github/workflows/web-next-preview.yml` deploys a `web-next` preview only when a PR that touches `web-next/**` (or the workflow itself) carries the `preview` label (label to deploy, remove to stop redeploying — `unlabeled` cancels an in-flight deploy). It resolves the project by name via `vercel link` since there's no `web-next` project-id secret, and skips the deployment smoke that `web/` runs because `web-next` has no `deployment-smoke` Playwright project and its prod is SSO-gated (headless can't reach it).
 
 ## Architecture
 
