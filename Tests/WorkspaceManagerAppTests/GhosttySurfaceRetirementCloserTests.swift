@@ -90,8 +90,17 @@ struct GhosttySurfaceRetirementCloserTests {
             surface.onCloseConfirmationRequired?()
         }
 
-        await #expect(throws: GhosttySurfaceRetirementCloseError.self) {
+        do {
             try await makeCloser().close(surface)
+            Issue.record("Expected processStillRunning")
+        } catch let error as GhosttySurfaceRetirementCloseError {
+            guard case .processStillRunning(let title) = error else {
+                Issue.record("Expected processStillRunning, got \(error)")
+                return
+            }
+            #expect(title == "fake-terminal")
+        } catch {
+            Issue.record("Unexpected error: \(error)")
         }
     }
 
