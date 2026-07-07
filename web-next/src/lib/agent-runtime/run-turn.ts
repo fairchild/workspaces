@@ -14,7 +14,7 @@ import type { Session } from "../db/sessions";
 import type { ComputeProvider } from "./provider";
 import { getProvider } from "./provider";
 import { startTurn } from "./turn-ingest";
-import { tailStream } from "./turn-tail";
+import { closeAbandonedTurn, resolveTurn, tailStream } from "./turn-tail";
 
 export interface SessionTurn {
 	/** First assistant seq — the assistant message id is `${sessionId}:${fromSeq}`. */
@@ -26,10 +26,26 @@ export interface SessionTurn {
 	ingest: Promise<void>;
 }
 
+/** A send while the session's current turn is still running (route → 409). */
+export class TurnConflictError extends Error {
+	constructor(sessionId: string) {
+		super(`a turn is already running on session ${sessionId}`);
+		this.name = "TurnConflictError";
+	}
+}
+
 /**
  * Appends the user's message, launches the detached turn, and returns a tail
  * over its log plus the ingest promise. The provider is resolved eagerly so an
  * unknown provider rejects before anything is persisted.
+ *
+ * One turn at a time: a send against a session whose current turn is still
+ * running (in-process, or fresh in the log per resolveTurn) throws
+ * TurnConflictError instead of interleaving a second provider's chunks into
+ * the live turn's seq range. The client's send-gating makes this the rare
+ * path, but the API is directly callable, so the log defends itself. (Two
+ * truly simultaneous first sends can still race the check — full
+ * serialization would need a DB reservation and is out of scope; see #811.)
  */
 export async function runSessionTurn(
 	handle: DatabaseHandle,
@@ -37,6 +53,13 @@ export async function runSessionTurn(
 	userText: string,
 	provider: ComputeProvider = getProvider(session.provider),
 ): Promise<SessionTurn> {
+	const current = await resolveTurn(handle, session.id);
+	if (current.status === "running") throw new TurnConflictError(session.id);
+	// A stale predecessor (runner died before its `done`) is closed durably
+	// before the new turn opens, so every assistant run in the log terminates.
+	if (current.status === "stale" && current.fromSeq !== null) {
+		await closeAbandonedTurn(handle, session.id, current.fromSeq);
+	}
 	const { fromSeq, ingest } = await startTurn(handle, session, userText, provider);
 	return { fromSeq, ingest, stream: tailStream(handle, session.id, fromSeq) };
 }

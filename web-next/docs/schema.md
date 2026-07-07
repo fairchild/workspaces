@@ -45,7 +45,8 @@ that log, never stored here.
 | `title` | text | Display title (defaults to `""`). |
 | `provider` | text | Compute provider id — `mock` \| `vercel` \| `anthropic` \| … |
 | `status` | text | Lifecycle — `active` \| `idle` \| `archived` (owned by #749/#750). |
-| `claude_session_id` | text? | Claude CLI session id for snapshot/resume; null until a turn runs. |
+| `claude_session_id` | text? | Harness/Claude session id for resume; null until a real turn parks one. |
+| `resume_state` | text? | JSON harness resume payload from the last turn's `detach()` (migration `0003_session_resume_state`); null until a real turn parks, cleared when the parked sandbox expires. Session-row state, deliberately not in the event log. |
 | `created_at` | text | ISO-8601. |
 | `last_activity_at` | text | ISO-8601; bumped on every event append. |
 

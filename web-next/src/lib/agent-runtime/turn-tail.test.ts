@@ -13,6 +13,7 @@ import {
 	type AppendEvent,
 	appendEvents,
 	createSession,
+	readEvents,
 	readTranscript,
 } from "../db/sessions";
 import type { ComputeProvider } from "./provider";
@@ -128,7 +129,7 @@ describe("resolveTurn", () => {
 		await createSession(handle, { id: "s", provider: "mock" });
 		await appendEvents(handle, "s", [evt("user", text("hi"))]);
 		// Backdate the assistant prefix so the liveness clock reads it as stale.
-		const old = new Date(Date.now() - 60_000).toISOString();
+		const old = new Date(Date.now() - 180_000).toISOString();
 		await handle.client.execute({
 			sql: `INSERT INTO session_events (session_id, seq, role, kind, payload, created_at)
 				VALUES ('s', 2, 'assistant', 'text', ?, ?)`,
@@ -245,6 +246,27 @@ describe("closeAbandonedTurn", () => {
 		await closeAbandonedTurn(handle, "s", 2);
 		expect((await readTranscript(handle, "s")).length).toBe(before);
 	});
+
+	test("concurrent closers produce exactly one terminal pair (#811)", async () => {
+		const handle = freshDb();
+		await createSession(handle, { id: "s", provider: "mock" });
+		await appendEvents(handle, "s", [
+			evt("user", text("hi")),
+			evt("assistant", text("partial ")),
+		]);
+
+		// Two resume GETs classify the turn stale at the same moment: the
+		// has-done check and the terminal append share a transaction, so only
+		// one closer wins.
+		await Promise.all([
+			closeAbandonedTurn(handle, "s", 2),
+			closeAbandonedTurn(handle, "s", 2),
+			closeAbandonedTurn(handle, "s", 2),
+		]);
+		const events = await readEvents(handle, "s");
+		expect(events.filter((e) => e.chunk.type === "done")).toHaveLength(1);
+		expect(events.filter((e) => e.chunk.type === "error")).toHaveLength(1);
+	});
 });
 
 describe("tailChunks — cross-instance liveness (#810)", () => {
@@ -291,7 +313,7 @@ describe("tailChunks — cross-instance liveness (#810)", () => {
 		]);
 		// Backdate the whole log past the stale threshold: the runner is gone
 		// and nothing is appending anymore.
-		const old = new Date(Date.now() - 60_000).toISOString();
+		const old = new Date(Date.now() - 180_000).toISOString();
 		await handle.client.execute({
 			sql: "UPDATE session_events SET created_at = ? WHERE session_id = 's'",
 			args: [old],

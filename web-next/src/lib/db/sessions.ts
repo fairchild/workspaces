@@ -186,6 +186,80 @@ export async function appendEvents(
 	});
 }
 
+/** In-process closers run one at a time: the local sqlite driver throws
+ * SQLITE_BUSY on overlapping write transactions instead of queueing them, so
+ * same-process concurrency is serialized here. Cross-instance concurrency is
+ * covered by the transaction itself (Turso serializes writers server-side). */
+let closeChain: Promise<unknown> = Promise.resolve();
+
+/**
+ * Appends `events` to the turn opening at `fromSeq` ONLY if that run has no
+ * `done` yet — the check and the append share one transaction, so concurrent
+ * closers (two resume GETs both classifying a turn stale) produce exactly one
+ * terminal pair instead of duplicates: the winner closes, losers re-check and
+ * see its `done`. Returns true when this call closed it.
+ */
+export async function appendEventsIfTurnOpen(
+	handle: DatabaseHandle,
+	sessionId: string,
+	fromSeq: number,
+	events: readonly AppendEvent[],
+): Promise<boolean> {
+	await ensureSchema(handle);
+	const run = closeChain.then(() =>
+		appendIfOpenOnce(handle, sessionId, fromSeq, events),
+	);
+	closeChain = run.catch(() => {});
+	return run;
+}
+
+async function appendIfOpenOnce(
+	handle: DatabaseHandle,
+	sessionId: string,
+	fromSeq: number,
+	events: readonly AppendEvent[],
+): Promise<boolean> {
+	const now = new Date().toISOString();
+	return handle.db.transaction().execute(async (trx) => {
+		const closed = await trx
+			.selectFrom("session_events")
+			.select("seq")
+			.where("session_id", "=", sessionId)
+			.where("seq", ">=", fromSeq)
+			.where("role", "=", "assistant")
+			.where("kind", "=", "done")
+			.limit(1)
+			.executeTakeFirst();
+		if (closed) return false;
+		const max = await trx
+			.selectFrom("session_events")
+			.select(({ fn }) => fn.max("seq").as("maxSeq"))
+			.where("session_id", "=", sessionId)
+			.executeTakeFirst();
+		let seq = Number(max?.maxSeq ?? 0);
+		for (const event of events) {
+			seq += 1;
+			await trx
+				.insertInto("session_events")
+				.values({
+					session_id: sessionId,
+					seq,
+					role: event.role,
+					kind: event.chunk.type,
+					payload: JSON.stringify(event.chunk),
+					created_at: now,
+				})
+				.execute();
+		}
+		await trx
+			.updateTable("sessions")
+			.set({ last_activity_at: now })
+			.where("id", "=", sessionId)
+			.execute();
+		return true;
+	});
+}
+
 async function currentMaxSeq(
 	handle: DatabaseHandle,
 	sessionId: string,

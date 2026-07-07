@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import { type DatabaseHandle, openDatabase } from "../db/client";
 import {
+	appendEvents,
 	createSession,
 	getSession,
 	readEvents,
@@ -11,7 +12,7 @@ import {
 	updateSession,
 } from "../db/sessions";
 import type { ComputeProvider, TurnRequest } from "./provider";
-import { runSessionTurn } from "./run-turn";
+import { runSessionTurn, TurnConflictError } from "./run-turn";
 import type { StreamChunk } from "./stream-chunk";
 
 // Same throwaway on-disk DB pattern as sessions.test.ts.
@@ -221,5 +222,63 @@ describe("runSessionTurn", () => {
 		const after = await getSession(handle, "s1");
 		expect(after?.claudeSessionId).toBeNull();
 		expect(after?.resumeState).toBeNull();
+	});
+
+	test("a send while a turn is running is a structured conflict, not interleaved (#811)", async () => {
+		const handle = freshDb();
+		const session = await makeSession(handle);
+		// A provider that stays open until the test releases it.
+		let release!: () => void;
+		const gate = new Promise<void>((r) => (release = r));
+		const slow: ComputeProvider = {
+			id: "slow",
+			runTurn: async function* () {
+				yield { type: "text", content: "working " } as StreamChunk;
+				await gate;
+				yield { type: "done", content: "" } as StreamChunk;
+			},
+		};
+
+		const first = await runSessionTurn(handle, session, "one", slow);
+		await expect(
+			runSessionTurn(handle, session, "two", stubProvider()),
+		).rejects.toBeInstanceOf(TurnConflictError);
+		// The rejected send persisted nothing — the live turn's seq range is intact.
+		const during = await readEvents(handle, "s1");
+		expect(during.filter((e) => e.role === "user")).toHaveLength(1);
+
+		release();
+		await first.ingest;
+		// With the turn closed, the session accepts the next send.
+		const second = await runSessionTurn(handle, session, "two", stubProvider());
+		await second.ingest;
+		expect(
+			(await readEvents(handle, "s1")).filter((e) => e.role === "user"),
+		).toHaveLength(2);
+	});
+
+	test("a stale unfinished predecessor is closed durably before a new send (#811)", async () => {
+		const handle = freshDb();
+		const session = await makeSession(handle);
+		await appendEvents(handle, "s1", [
+			{ role: "user", chunk: { type: "text", content: "old" } },
+			{ role: "assistant", chunk: { type: "text", content: "half " } },
+		]);
+		// Backdate: the runner died long ago and never wrote a done.
+		const old = new Date(Date.now() - 180_000).toISOString();
+		await handle.client.execute({
+			sql: "UPDATE session_events SET created_at = ? WHERE session_id = 's1'",
+			args: [old],
+		});
+
+		const turn = await runSessionTurn(handle, session, "new", stubProvider());
+		await turn.ingest;
+		const events = await readEvents(handle, "s1");
+		// The old run gained error+done BEFORE the new user event — every
+		// assistant run in the log terminates.
+		expect(events.map((e) => e.chunk.type).slice(0, 5)).toEqual([
+			"text", "text", "error", "done", "text",
+		]);
+		expect(events[4]).toMatchObject({ role: "user" });
 	});
 });
