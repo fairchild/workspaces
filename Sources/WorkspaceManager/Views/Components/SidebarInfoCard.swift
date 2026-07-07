@@ -4,9 +4,9 @@
 //
 //  Hover card for a sidebar item (repo root or workspace): the git branch and a
 //  one-line summary of each open terminal tab — agent tabs show the agent icon
-//  and run state, plain tabs show their terminal title. When a single agent is
-//  running, its telemetry (model, context, cost, last active) is shown too.
-//  Styled to match WorkspaceCardView.
+//  and run state, plain tabs show their real foreground process (tmux mode) or fall
+//  back to the terminal title. When a single agent is running, its telemetry (model,
+//  context, cost, last active) is shown too. Styled to match WorkspaceCardView.
 //
 
 import SwiftUI

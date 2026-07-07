@@ -90,6 +90,12 @@ struct SidebarView: View {
     @State private var repoLastAccessedSnapshotByID: [UUID: Date] = [:]
     @State private var isPreparingNewWorkspaceSheet = false
 
+    /// Real foreground process name per plain terminal tab, resolved lazily when a hover
+    /// card opens and preferred over the terminal title. Populated by
+    /// `refreshForegroundProcessNames`; empty in ghostty-splits mode (see #666).
+    @State private var foregroundNameBySessionID: [UUID: String] = [:]
+    private let foregroundResolver = TerminalForegroundProcessResolver()
+
     private var isUIFixtureMode: Bool {
         ProcessInfo.processInfo.environment["WORKSPACES_UI_FIXTURE"] == "1"
     }
@@ -471,7 +477,10 @@ struct SidebarView: View {
             onNewWebView: {
                 onRequestWebSourceCreation(.repo(repo))
             },
-            tabsProvider: { tabSummaries(for: repoSessionKey) }
+            tabsProvider: {
+                refreshForegroundProcessNames(for: repoSessionKey)
+                return tabSummaries(for: repoSessionKey)
+            }
         )
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
@@ -560,7 +569,10 @@ struct SidebarView: View {
             isNested: true,
             isExpanded: isWorkspaceExpanded(workspace),
             showsDisclosure: !workspace.webSources.isEmpty,
-            tabsProvider: { tabSummaries(for: workspace) },
+            tabsProvider: {
+                refreshForegroundProcessNames(for: sessionKey(for: workspace))
+                return tabSummaries(for: workspace)
+            },
             onToggleExpansion: {
                 toggleWorkspaceExpansion(workspace)
             },
@@ -1469,16 +1481,52 @@ struct SidebarView: View {
             hostSessions
             .filter { $0.key == normalizedKey }
             .map { session in
-                SidebarTabSummary(
+                let agentStatus = agentStatusBySessionID[session.id]
+                let title = titleForSession(session)
+                // Plain tabs prefer the real foreground process name; agent tabs keep their
+                // agent-driven title unchanged.
+                let displayTitle =
+                    agentStatus == nil
+                    ? TerminalForegroundProcessResolver.preferredTabTitle(
+                        foregroundName: foregroundNameBySessionID[session.id],
+                        terminalTitle: title)
+                    : title
+                return SidebarTabSummary(
                     id: session.id,
-                    title: titleForSession(session),
-                    agentStatus: agentStatusBySessionID[session.id]
+                    title: displayTitle,
+                    agentStatus: agentStatus
                 )
             }
     }
 
     private func tabSummaries(for workspace: Workspace) -> [SidebarTabSummary] {
         tabSummaries(for: sessionKey(for: workspace))
+    }
+
+    /// Kicks off async foreground-process resolution for the plain (non-agent) tabs under
+    /// `key`, updating `foregroundNameBySessionID` when a name resolves. Fire-and-forget and
+    /// idempotent — the resolver caches for ~2s and this writes only on change — so it is safe
+    /// to call from the hover card's lazy `tabsProvider`. No-ops outside tmux-per-session mode,
+    /// where foreground detection is not available (see #666).
+    private func refreshForegroundProcessNames(for key: HostTerminalSessionKey) {
+        let mode = TerminalMultiplexingMode.resolve()
+        guard mode == .tmuxPerSession else { return }
+        let normalizedKey = key.normalized()
+        let plainSessions = hostSessions.filter {
+            $0.key == normalizedKey && agentStatusBySessionID[$0.id] == nil
+        }
+        guard !plainSessions.isEmpty else { return }
+        let resolver = foregroundResolver
+        Task { @MainActor in
+            for session in plainSessions {
+                let name = await resolver.foregroundName(for: session, mode: mode)
+                if let name, foregroundNameBySessionID[session.id] != name {
+                    foregroundNameBySessionID[session.id] = name
+                } else if name == nil, foregroundNameBySessionID[session.id] != nil {
+                    foregroundNameBySessionID.removeValue(forKey: session.id)
+                }
+            }
+        }
     }
 
     /// Merge the repo's own-session baseline with the aggregator-bubbled state derived
