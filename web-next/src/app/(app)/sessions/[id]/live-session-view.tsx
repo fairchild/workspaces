@@ -16,7 +16,7 @@
  */
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { modelLabel } from "@/lib/agent-runtime/models";
 import {
 	type ActiveTurnData,
@@ -59,20 +59,39 @@ export function LiveSessionView({
 	const [steps, setSteps] = useState<string[]>([]);
 
 	// The selected model: seeded from the server-resolved session, updated
-	// optimistically on change (reverted if the PATCH fails).
+	// optimistically on change (reverted if its PATCH fails while it is still
+	// the latest choice). Two orderings matter beyond the optimistic paint:
+	// - PATCHes are chained (each awaits its predecessor), so rapid B→C changes
+	//   cannot land in the DB out of order;
+	// - `send` awaits the chain before posting, so a turn sent right after a
+	//   model change runs on the model the status line shows, not the old row.
+	// The chain always resolves (each link swallows its own failure), so one
+	// failed PATCH never wedges later changes or sends.
 	const [model, setModel] = useState(session.statusLine.model);
+	const latestModelRef = useRef(session.statusLine.model);
+	const modelPatchChain = useRef<Promise<void>>(Promise.resolve());
 	const handleModelChange = (nextModel: string) => {
-		const previous = model;
+		const previous = latestModelRef.current;
+		latestModelRef.current = nextModel;
 		setModel(nextModel);
-		fetch(`/api/sessions/${sessionId}`, {
-			method: "PATCH",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ model: nextModel }),
-		})
-			.then((res) => {
-				if (!res.ok) setModel(previous);
+		const revert = () => {
+			// Only revert if no newer choice superseded this one meanwhile.
+			if (latestModelRef.current === nextModel) {
+				latestModelRef.current = previous;
+				setModel(previous);
+			}
+		};
+		modelPatchChain.current = modelPatchChain.current.then(() =>
+			fetch(`/api/sessions/${sessionId}`, {
+				method: "PATCH",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ model: nextModel }),
 			})
-			.catch(() => setModel(previous));
+				.then((res) => {
+					if (!res.ok) revert();
+				})
+				.catch(revert),
+		);
 	};
 
 	const transport = useMemo(
@@ -112,7 +131,11 @@ export function LiveSessionView({
 	const busy = status === "submitted" || status === "streaming";
 	const send = (text: string) => {
 		setSteps([]);
-		sendMessage({ text, metadata: { author } });
+		// Await any in-flight model PATCH first, so the turn the server starts
+		// reads the session row this send was composed against.
+		void modelPatchChain.current.then(() =>
+			sendMessage({ text, metadata: { author } }),
+		);
 	};
 
 	// The reply message exists (empty) as soon as the stream starts; keep it
