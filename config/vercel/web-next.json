@@ -15,7 +15,7 @@
   "values": {
     "ALLOWED_LOGINS": "fairchild",
     "BETTER_AUTH_URL": "https://web-next-ivory-six.vercel.app",
-    "GITHUB_OAUTH_CLIENT_ID": "Iv23liSWNRsPl1YzIdyK",
+    "GITHUB_OAUTH_CLIENT_ID": "Ov23liLrhAxZKk9Ob8HX",
     "GITHUB_WEB_WORKSPACES_APP_ID": "3158670",
     "WEB_NEXT_COMPUTE_PROVIDER": "vercel"
   }
