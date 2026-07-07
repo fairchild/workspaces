@@ -42,7 +42,7 @@ that log, never stored here.
 |---|---|---|
 | `id` | text PK | Session id. |
 | `repo_id` | text? | `repos.id` this session runs against; null until bound. |
-| `title` | text | Display title (defaults to `""`). |
+| `title` | text | Display title; `""` until named. Auto-titled from the first user message's first line at turn-start (`titleSessionIfEmpty`, `src/lib/agent-runtime/turn-ingest.ts`, #823) via a `WHERE title = ''` conditional update — idempotent, and skipped when that line has no usable text (session stays untitled for a later turn). User edits go through `PATCH /api/sessions/[id]` (`updateSession`, unconditional) and are never overwritten by the auto-titler once set. Derivation rules (cleaning, length cap) live in `src/lib/session-title.ts`, shared by both paths. |
 | `provider` | text | Compute provider id — `mock` \| `vercel` \| `anthropic` \| … |
 | `status` | text | Lifecycle — `active` \| `idle` \| `archived` (owned by #749/#750). |
 | `claude_session_id` | text? | Harness/Claude session id for resume; null until a real turn parks one. |

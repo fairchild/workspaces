@@ -60,7 +60,13 @@ test("typing an owner/name creates the repo + session and routes to it", async (
 	await expect(page).toHaveURL(SESSION_URL);
 	// The empty Folio session: masthead repo, calm note, autofocused compose.
 	await expect(page.locator("header")).toContainText("fairchild/workspaces");
-	await expect(page.locator("header")).toContainText("New session");
+	// No title yet: the inline field is empty, showing the "New session"
+	// placeholder rather than persisted text (#823).
+	await expect(page.getByTestId("session-title")).toHaveValue("");
+	await expect(page.getByTestId("session-title")).toHaveAttribute(
+		"placeholder",
+		"New session",
+	);
 	await expect(page.getByTestId("empty-transcript")).toContainText(
 		"No turns yet.",
 	);
@@ -165,6 +171,39 @@ test("sending a message streams a mock coding turn into the Folio transcript", a
 	// Turn over: compose re-enables, the activity line is gone.
 	await expect(page.getByRole("button", { name: "Send" })).toBeEnabled();
 	await expect(page.getByTestId("activity-line")).toHaveCount(0);
+
+	// The session titled itself from the turn just sent — masthead + tab (#823).
+	await expect(page.getByTestId("session-title")).toHaveValue(
+		"Fix the failing session test",
+	);
+	await expect(page).toHaveTitle("Fix the failing session test — Spaces");
+});
+
+test("the derived title shows on home and is inline-editable from the masthead, persisting across reload (#823)", async ({
+	page,
+}) => {
+	await page.goto("/");
+	await expect(
+		page.getByRole("link", { name: /Fix the failing session test/ }),
+	).toBeVisible();
+
+	await page.goto(turnSessionUrl);
+	const titleField = page.getByTestId("session-title");
+	await expect(titleField).toHaveValue("Fix the failing session test");
+
+	await titleField.fill("Renamed by hand");
+	await titleField.press("Enter");
+	await expect(page).toHaveTitle("Renamed by hand — Spaces");
+
+	await page.reload();
+	await expect(page.getByTestId("session-title")).toHaveValue("Renamed by hand");
+	await expect(page).toHaveTitle("Renamed by hand — Spaces");
+
+	await page.goto("/");
+	await expect(page.getByRole("link", { name: /Renamed by hand/ })).toBeVisible();
+	// A later turn on this session must not clobber the hand-edited title.
+	await page.getByRole("link", { name: /Renamed by hand/ }).click();
+	await expect(page).toHaveURL(SESSION_URL);
 });
 
 test("a reload renders the same turn from the persisted event log", async ({

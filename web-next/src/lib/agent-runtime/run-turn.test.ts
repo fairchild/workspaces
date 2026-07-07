@@ -280,6 +280,53 @@ describe("runSessionTurn", () => {
 		).toHaveLength(2);
 	});
 
+	test("titles the session from the first turn's message, before the tab could close (#823)", async () => {
+		const handle = freshDb();
+		const session = await makeSession(handle);
+		const turn = await runSessionTurn(handle, session, "  Fix   the   login   bug  ", stubProvider());
+		// The title is set as soon as runSessionTurn returns — synchronously with
+		// the durable user-event append, not waiting on the detached ingest.
+		expect((await getSession(handle, "s1"))?.title).toBe("Fix the login bug");
+		await turn.ingest;
+	});
+
+	test("a second turn never overwrites the title from the first (#823)", async () => {
+		const handle = freshDb();
+		const session = await makeSession(handle);
+		const first = await runSessionTurn(handle, session, "Fix the login bug", stubProvider());
+		await first.ingest;
+
+		const resessioned = (await getSession(handle, "s1")) as Session;
+		const second = await runSessionTurn(handle, resessioned, "Now add a test", stubProvider());
+		await second.ingest;
+
+		expect((await getSession(handle, "s1"))?.title).toBe("Fix the login bug");
+	});
+
+	test("an empty first message leaves the session untitled for a later turn to name (#823)", async () => {
+		const handle = freshDb();
+		const session = await makeSession(handle);
+		const first = await runSessionTurn(handle, session, "   ", stubProvider());
+		await first.ingest;
+		expect((await getSession(handle, "s1"))?.title).toBe("");
+
+		const resessioned = (await getSession(handle, "s1")) as Session;
+		const second = await runSessionTurn(handle, resessioned, "Fix the real bug", stubProvider());
+		await second.ingest;
+		expect((await getSession(handle, "s1"))?.title).toBe("Fix the real bug");
+	});
+
+	test("a user-edited title survives a later turn (#823)", async () => {
+		const handle = freshDb();
+		await makeSession(handle);
+		await updateSession(handle, "s1", { title: "My own title" });
+		const resessioned = (await getSession(handle, "s1")) as Session;
+
+		const turn = await runSessionTurn(handle, resessioned, "Fix the login bug", stubProvider());
+		await turn.ingest;
+		expect((await getSession(handle, "s1"))?.title).toBe("My own title");
+	});
+
 	test("a stale unfinished predecessor is closed durably before a new send (#811)", async () => {
 		const handle = freshDb();
 		const session = await makeSession(handle);
