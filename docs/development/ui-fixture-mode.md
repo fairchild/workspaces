@@ -104,7 +104,7 @@ WORKSPACES_UI_FIXTURE_AGENT_STATES env var
        per workspace, for each entry:
                   │
                   ▼
-  hostTerminalState.activateSession(.hostPath(path), …)
+  tileTreeStore.activateSession(.hostPath(path), …)
        └─▶ HostTerminalSession created in coordinator.sessions
        └─▶ syncRegistry() → AgentSessionRegistry.register(hostSessionID:…)
                   │
@@ -130,7 +130,7 @@ WORKSPACES_UI_FIXTURE_COMMAND_STATUSES env var
        per workspace, for each entry:
                   │
                   ▼
-  hostTerminalState.activateSession(.hostPath(path), …)
+  tileTreeStore.activateSession(.hostPath(path), …)
        └─▶ HostTerminalSession created in coordinator.sessions
                   │
                   ▼
