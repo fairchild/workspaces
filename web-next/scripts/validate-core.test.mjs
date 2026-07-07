@@ -1,15 +1,18 @@
 import { describe, expect, test } from "vitest";
 import {
+	authedCookie,
 	classifyModelSweepGate,
 	DEFAULT_PROD_URL,
 	detectAuthMode,
 	detectSsoWall,
+	evaluateAuthedProbe,
 	evaluateE2eResults,
 	evaluateModelChecks,
 	evaluatePosture,
 	gateStage,
 	isRedirectToSignIn,
 	redactSecrets,
+	renderMarkdownReport,
 	resolveTarget,
 	summarize,
 	validationSessionCookieName,
@@ -279,5 +282,91 @@ describe("evaluateE2eResults (#817)", () => {
 				detail: "no deployed-safe specs matched — check the @deployed-safe grep tag",
 			},
 		]);
+	});
+});
+
+describe("authedCookie", () => {
+	test("bypass mode uses the test cookie with no credential gate", () => {
+		expect(authedCookie("bypass", "http://localhost:3101", {})).toBe(
+			"test-auth-login=fairchild",
+		);
+	});
+
+	test("real mode replays the validation session under the https cookie name", () => {
+		expect(
+			authedCookie("real", "https://x.vercel.app", { WEB_NEXT_VALIDATION_SESSION: "tok" }),
+		).toBe("__Secure-better-auth.session_token=tok");
+	});
+
+	test("real mode without the credential yields null (stage gates itself)", () => {
+		expect(authedCookie("real", "https://x.vercel.app", {})).toBeNull();
+	});
+});
+
+describe("evaluateAuthedProbe (#814)", () => {
+	test("200 with the client's shape passes both checks", () => {
+		const checks = evaluateAuthedProbe({ status: 200, body: { repos: [], degraded: false } });
+		expect(checks.map((c) => c.status)).toEqual(["pass", "pass"]);
+	});
+
+	test("200 with a foreign shape fails the shape check", () => {
+		const checks = evaluateAuthedProbe({ status: 200, body: { html: "<!doctype html>" } });
+		expect(checks.map((c) => c.status)).toEqual(["pass", "fail"]);
+	});
+
+	test("a non-200 fails both", () => {
+		const checks = evaluateAuthedProbe({ status: 500, body: undefined });
+		expect(checks.every((c) => c.status === "fail")).toBe(true);
+	});
+});
+
+describe("renderMarkdownReport (#819)", () => {
+	const run = {
+		target: { envName: "prod", baseUrl: "https://x.vercel.app" },
+		ranAt: "2026-07-07T00:00:00Z",
+		stages: [
+			{
+				id: "reachability",
+				status: "run",
+				tookMs: 400,
+				checks: [{ id: "signin_reachable", status: "pass", detail: "→ 200" }],
+			},
+			{ id: "authenticated flows (#814)", status: "skip", reason: "missing WEB_NEXT_VALIDATION_SESSION" },
+			{
+				id: "real agentic turn (#818)",
+				status: "run",
+				tookMs: 61_000,
+				checks: [
+					{ id: "session_created", status: "pass", detail: "probe session p1" },
+					{ id: "no_leaked_sandbox", status: "fail", detail: "LEAK: could not stop" },
+				],
+			},
+		],
+		evidence: ["output/validate/prod/test-results/home.png"],
+	};
+
+	test("renders the stage table with verdicts, counts, and timings", () => {
+		const md = renderMarkdownReport(run);
+		expect(md).toContain("# web-next validation — prod");
+		expect(md).toContain("| reachability | ✅ pass | 1/1 | 0.4s |");
+		expect(md).toContain("| authenticated flows (#814) | ⏭️ skipped | — | — |");
+		expect(md).toContain("| real agentic turn (#818) | ❌ FAIL | 1/2 | 61.0s |");
+	});
+
+	test("skips carry their reasons and failures their detail", () => {
+		const md = renderMarkdownReport(run);
+		expect(md).toContain("- **authenticated flows (#814)** — missing WEB_NEXT_VALIDATION_SESSION");
+		expect(md).toContain("- **real agentic turn (#818)** / `no_leaked_sandbox`: LEAK: could not stop");
+	});
+
+	test("evidence paths are listed", () => {
+		expect(renderMarkdownReport(run)).toContain("output/validate/prod/test-results/home.png");
+	});
+
+	test("an all-green run has no failing-checks section", () => {
+		const md = renderMarkdownReport({ ...run, stages: [run.stages[0]], evidence: [] });
+		expect(md).not.toContain("## Failing checks");
+		expect(md).not.toContain("## Skipped");
+		expect(md).not.toContain("## Evidence");
 	});
 });

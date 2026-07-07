@@ -153,6 +153,26 @@ export async function titleSessionIfEmpty(
 	return Number(result[0]?.numUpdatedRows ?? 0) > 0;
 }
 
+/**
+ * Deletes a session and everything that hangs off it — its event log and any
+ * terminal tickets — in one transaction, so a partial delete can't leave
+ * orphaned events behind (the cascade the schema's PKs don't encode). Returns
+ * whether a session row was actually removed. Sandbox teardown is the API
+ * route's job (agent-runtime/sandbox-release.ts) — this is storage only.
+ */
+export async function deleteSession(
+	handle: DatabaseHandle,
+	id: string,
+): Promise<boolean> {
+	await ensureSchema(handle);
+	return handle.db.transaction().execute(async (trx) => {
+		await trx.deleteFrom("session_events").where("session_id", "=", id).execute();
+		await trx.deleteFrom("terminal_tickets").where("session_id", "=", id).execute();
+		const result = await trx.deleteFrom("sessions").where("id", "=", id).execute();
+		return Number(result[0]?.numDeletedRows ?? 0) > 0;
+	});
+}
+
 /** A sessions-home row: the session plus its repo's display name. */
 export interface SessionListItem extends Session {
 	repoFullName: string | null;

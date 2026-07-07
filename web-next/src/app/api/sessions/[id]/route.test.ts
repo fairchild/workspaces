@@ -1,8 +1,10 @@
 /*
- * PATCH /api/sessions/[id] — auth gating, per-field validation (model,
- * title), and the "unknown field is a 400" contract. `getAuthState` is
- * mocked (it reaches into next/headers, which needs a real request scope);
- * the DB is real, pointed at a throwaway file via SESSIONS_DATABASE_URL so
+ * /api/sessions/[id] — GET (session + durable log), PATCH (auth gating,
+ * per-field validation, the "unknown field is a 400" contract), and DELETE
+ * (sandbox release before cascade, a stop failure keeping the session).
+ * `getAuthState` is mocked (it reaches into next/headers, which needs a real
+ * request scope), as is the sandbox release (no Vercel in tests); the DB is
+ * real, pointed at a throwaway file via SESSIONS_DATABASE_URL so
  * `getDatabase()`'s module singleton (shared with the route under test)
  * resolves to it.
  */
@@ -10,13 +12,18 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeEach, describe, expect, test, vi } from "vitest";
+import { releaseParkedSandbox } from "@/lib/agent-runtime/sandbox-release";
 import { getAuthState } from "@/lib/auth/auth-state";
 import { getDatabase } from "@/lib/db/client";
-import { createSession, getSession } from "@/lib/db/sessions";
+import { appendEvents, createSession, getSession, updateSession } from "@/lib/db/sessions";
 import { MAX_TITLE_LENGTH } from "@/lib/session-title";
 
 vi.mock("@/lib/auth/auth-state", () => ({
 	getAuthState: vi.fn(),
+}));
+
+vi.mock("@/lib/agent-runtime/sandbox-release", () => ({
+	releaseParkedSandbox: vi.fn(),
 }));
 
 const dir = mkdtempSync(join(tmpdir(), "web-next-route-"));
@@ -33,6 +40,7 @@ const AUTHORIZED = {
 
 beforeEach(() => {
 	vi.mocked(getAuthState).mockResolvedValue(AUTHORIZED);
+	vi.mocked(releaseParkedSandbox).mockResolvedValue({ disposition: "none" });
 });
 
 async function patch(id: string, body: unknown) {
@@ -150,5 +158,115 @@ describe("PATCH /api/sessions/[id]", () => {
 		const session = await getSession(getDatabase(), id);
 		expect(session?.model).toBe("claude-opus-4-8");
 		expect(session?.title).toBe("Both at once");
+	});
+});
+
+async function get(id: string, query = "") {
+	const { GET } = await import("./route");
+	return GET(new Request(`http://test/api/sessions/${id}${query}`), {
+		params: Promise.resolve({ id }),
+	});
+}
+
+async function del(id: string) {
+	const { DELETE } = await import("./route");
+	return DELETE(
+		new Request(`http://test/api/sessions/${id}`, { method: "DELETE" }),
+		{ params: Promise.resolve({ id }) },
+	);
+}
+
+describe("GET /api/sessions/[id]", () => {
+	test("401s when unauthenticated, 404s for an unknown session", async () => {
+		vi.mocked(getAuthState).mockResolvedValue({ kind: "unauthenticated" });
+		expect((await get("whatever")).status).toBe(401);
+		vi.mocked(getAuthState).mockResolvedValue(AUTHORIZED);
+		expect((await get("does-not-exist")).status).toBe(404);
+	});
+
+	test("returns the session with its durable event log", async () => {
+		const id = await freshSession();
+		await appendEvents(getDatabase(), id, [
+			{ role: "user", chunk: { type: "text", content: "hi" } },
+			{ role: "assistant", chunk: { type: "status", content: "Booting Claude Code in sandbox" } },
+			{ role: "assistant", chunk: { type: "done", content: "", metadata: { durationMs: 5 } } },
+		]);
+		const res = await get(id);
+		expect(res.status).toBe(200);
+		const body = await res.json();
+		expect(body.session).toMatchObject({ id, provider: "mock", parked: false });
+		expect(body.events).toEqual([
+			{ seq: 1, role: "user", kind: "text", content: "hi" },
+			{ seq: 2, role: "assistant", kind: "status", content: "Booting Claude Code in sandbox" },
+			{ seq: 3, role: "assistant", kind: "done", content: "", metadata: { durationMs: 5 } },
+		]);
+	});
+
+	test("parked reflects a persisted resume handle without exposing it", async () => {
+		const id = await freshSession();
+		await updateSession(getDatabase(), id, {
+			claudeSessionId: "harness-1",
+			resumeState: '{"secret":"blob"}',
+		});
+		const body = await (await get(id)).json();
+		expect(body.session.parked).toBe(true);
+		expect(JSON.stringify(body)).not.toContain("blob");
+	});
+
+	test("sinceSeq tails the log; a bad value is a 400", async () => {
+		const id = await freshSession();
+		await appendEvents(getDatabase(), id, [
+			{ role: "user", chunk: { type: "text", content: "one" } },
+			{ role: "assistant", chunk: { type: "text", content: "two" } },
+		]);
+		const body = await (await get(id, "?sinceSeq=1")).json();
+		expect(body.events).toHaveLength(1);
+		expect(body.events[0].content).toBe("two");
+		expect((await get(id, "?sinceSeq=-1")).status).toBe(400);
+		expect((await get(id, "?sinceSeq=nope")).status).toBe(400);
+	});
+});
+
+describe("DELETE /api/sessions/[id]", () => {
+	test("401s when unauthenticated, 404s for an unknown session", async () => {
+		vi.mocked(getAuthState).mockResolvedValue({ kind: "unauthenticated" });
+		expect((await del("whatever")).status).toBe(401);
+		vi.mocked(getAuthState).mockResolvedValue(AUTHORIZED);
+		expect((await del("does-not-exist")).status).toBe(404);
+	});
+
+	test("deletes the session and its log, reporting the sandbox disposition", async () => {
+		const id = await freshSession();
+		await appendEvents(getDatabase(), id, [
+			{ role: "user", chunk: { type: "text", content: "hi" } },
+		]);
+		const res = await del(id);
+		expect(res.status).toBe(200);
+		expect(await res.json()).toEqual({ deleted: true, sandbox: "none" });
+		expect(await getSession(getDatabase(), id)).toBeUndefined();
+		expect((await get(id)).status).toBe(404);
+	});
+
+	test("stops a live parked sandbox before deleting", async () => {
+		vi.mocked(releaseParkedSandbox).mockResolvedValue({ disposition: "stopped" });
+		const id = await freshSession();
+		const res = await del(id);
+		expect(await res.json()).toEqual({ deleted: true, sandbox: "stopped" });
+		expect(await getSession(getDatabase(), id)).toBeUndefined();
+	});
+
+	test("a sandbox that can't be stopped keeps the session for a retry (502)", async () => {
+		vi.mocked(releaseParkedSandbox).mockResolvedValue({
+			disposition: "stop-failed",
+			detail: "api timeout",
+		});
+		const id = await freshSession();
+		const res = await del(id);
+		expect(res.status).toBe(502);
+		const body = await res.json();
+		expect(body.sandbox).toBe("stop-failed");
+		expect(body.error).toMatch(/api timeout/);
+		// The resume handle (the only pointer to the live machine) survives.
+		expect(await getSession(getDatabase(), id)).toBeDefined();
 	});
 });

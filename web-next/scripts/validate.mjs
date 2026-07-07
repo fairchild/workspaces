@@ -1,21 +1,25 @@
 /*
  * Environment-targetable validation: `pnpm validate [--env local|prod | --url
- * <origin>]` runs the credential-free stages — reachability, then the
- * auth/security posture suite — plus the credentialed model-sweep (#816) and
- * deployed-safe e2e (#817) stages, against a local spawn or a real
- * deployment, and reports pass/fail/skip per check (JSON to output/validate/,
- * exit 1 on any failure). Stages needing credentials gate themselves and
- * report `skipped: missing <name>` rather than silently passing. #813/#815;
- * the authenticated and agentic stages (#814/#818) still extend this.
+ * <origin>]` runs the full staged suite — reachability, the auth/security
+ * posture checks, authenticated flows (#814), the per-model gateway sweep
+ * (#816), deployed-safe e2e (#817), and one real agentic coding turn (#818,
+ * deployed targets; `--skip-real-turn` to opt out of the spend) — against a
+ * local spawn or a real deployment, and reports pass/fail/skip per check
+ * (JSON + a Markdown report under output/validate/, exit 1 on any failure).
+ * Stages needing credentials gate themselves and report `skipped: missing
+ * <name>` rather than silently passing.
  */
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { MODEL_OPTIONS } from "../src/lib/agent-runtime/models.ts";
+import { realTurnStage } from "./real-turn.mjs";
 import {
+	authedCookie,
 	classifyModelSweepGate,
 	detectAuthMode,
 	detectSsoWall,
+	evaluateAuthedProbe,
 	evaluateE2eResults,
 	evaluateModelChecks,
 	evaluatePosture,
@@ -23,6 +27,7 @@ import {
 	isRedirectToSignIn,
 	LOCAL_PORT,
 	redactSecrets,
+	renderMarkdownReport,
 	resolveTarget,
 	summarize,
 	validationSessionCookieName,
@@ -31,8 +36,10 @@ import { bypassServerEnv, startProductionServer, WEB_NEXT_ROOT } from "./harness
 
 const PROBE_TIMEOUT_MS = 15_000;
 
+const AUTHED_STAGE_ID = "authenticated flows (#814)";
 const MODEL_SWEEP_STAGE_ID = "model sweep (#816)";
 const E2E_STAGE_ID = "e2e deployed-safe flows (#817)";
+const REAL_TURN_STAGE_ID = "real agentic turn (#818)";
 
 /** A fetch that never follows redirects and never throws on HTTP errors.
  * When VERCEL_AUTOMATION_BYPASS_SECRET is set, every probe carries the
@@ -117,10 +124,24 @@ async function postureStage(baseUrl, signIn) {
 	};
 }
 
-/** Placeholder for the authenticated stages: demonstrates explicit skip. */
-function authenticatedStage(env) {
-	const gate = gateStage({ WEB_NEXT_VALIDATION_SESSION: env.WEB_NEXT_VALIDATION_SESSION });
-	return { id: "authenticated flows (#814)", status: "skip", reason: gate.runnable ? "not implemented" : gate.reason };
+/**
+ * #814's authenticated flows: prove the validation identity can call an
+ * auth-gated, data-reading API end to end. Mode-aware — a bypass-mode target
+ * authenticates with the test cookie (no credential to gate on); a real-auth
+ * target replays the pre-minted validation session and gates on its absence.
+ */
+async function authenticatedStage(baseUrl, mode, env) {
+	const id = AUTHED_STAGE_ID;
+	const cookie = authedCookie(mode, baseUrl, env);
+	if (!cookie) {
+		const gate = gateStage({ WEB_NEXT_VALIDATION_SESSION: env.WEB_NEXT_VALIDATION_SESSION });
+		return { id, status: "skip", reason: gate.reason };
+	}
+	const res = await probe(baseUrl, "/api/repos", { headers: { cookie } });
+	if (res.status === 401 || res.status === 403 || isRedirectToSignIn(res)) {
+		return { id, status: "skip", reason: "validation session expired — re-seed" };
+	}
+	return { id, status: "run", checks: evaluateAuthedProbe({ status: res.status, body: safeJson(res.body) }) };
 }
 
 function safeJson(text) {
@@ -219,8 +240,28 @@ async function e2eDeployedSafeStage(target, env) {
 	return { id, status: "run", checks: evaluateE2eResults(report) };
 }
 
+/** Runs a stage and stamps how long it took (the #819 report's timings). */
+async function timed(run) {
+	const started = Date.now();
+	const stage = await run();
+	return { ...stage, tookMs: Date.now() - started };
+}
+
+/** Every file under `dir`, repo-relative — the report's evidence links. */
+function collectEvidenceFiles(dir) {
+	if (!existsSync(dir)) return [];
+	return readdirSync(dir, { recursive: true, withFileTypes: true })
+		.filter((entry) => entry.isFile() && /\.(png|webm|zip)$/.test(entry.name))
+		.map((entry) =>
+			path.relative(WEB_NEXT_ROOT, path.join(entry.parentPath ?? entry.path, entry.name)),
+		)
+		.sort();
+}
+
 async function main() {
-	const target = resolveTarget(process.argv.slice(2), process.env);
+	const args = process.argv.slice(2);
+	const target = resolveTarget(args, process.env);
+	const skipRealTurn = args.includes("--skip-real-turn");
 	let server;
 	if (target.spawnLocal) {
 		const { env } = bypassServerEnv("validate-db");
@@ -228,7 +269,7 @@ async function main() {
 	}
 	try {
 		console.log(`validating ${target.envName}: ${target.baseUrl}\n`);
-		const reach = await reachabilityStage(target.baseUrl);
+		const reach = await timed(() => reachabilityStage(target.baseUrl));
 		const stages = [reach];
 		// No point probing posture — or running the credentialed stages — on a
 		// target that isn't serving (or is SSO-walled). Running the model sweep /
@@ -236,40 +277,70 @@ async function main() {
 		// bypass credential (codex finding); they inherit reachability's verdict
 		// as their own skip reason instead.
 		const reachable = reach.status === "run" && reach.checks.every((c) => c.status === "pass");
+		const mode = detectAuthMode(reach.signIn?.body ?? "");
 		if (reachable) {
-			stages.push(await postureStage(target.baseUrl, reach.signIn));
-		}
-		stages.push(authenticatedStage(process.env));
-		if (reachable) {
-			stages.push(await modelSweepStage(target.baseUrl, process.env));
-			stages.push(await e2eDeployedSafeStage(target, process.env));
+			stages.push(await timed(() => postureStage(target.baseUrl, reach.signIn)));
+			stages.push(await timed(() => authenticatedStage(target.baseUrl, mode, process.env)));
+			stages.push(await timed(() => modelSweepStage(target.baseUrl, process.env)));
+			stages.push(await timed(() => e2eDeployedSafeStage(target, process.env)));
+			// The real turn runs LAST: it is the only stage that spends real money
+			// (one small coding turn) and boots a sandbox, so everything cheaper
+			// gets its verdict in first. Local spawns skip it — the throwaway
+			// bypass server has no deployed runtime posture worth probing, and
+			// `pnpm validate` with no args must never surprise-spend.
+			if (skipRealTurn) {
+				stages.push({ id: REAL_TURN_STAGE_ID, status: "skip", reason: "skipped by flag (--skip-real-turn)" });
+			} else if (target.spawnLocal) {
+				stages.push({
+					id: REAL_TURN_STAGE_ID,
+					status: "skip",
+					reason: "local spawn — probe a deployed target (or --url a server provisioned with runtime credentials)",
+				});
+			} else {
+				const cookie = authedCookie(mode, target.baseUrl, process.env);
+				if (!cookie) {
+					const gate = gateStage({ WEB_NEXT_VALIDATION_SESSION: process.env.WEB_NEXT_VALIDATION_SESSION });
+					stages.push({ id: REAL_TURN_STAGE_ID, status: "skip", reason: gate.reason });
+				} else {
+					stages.push(await timed(() => realTurnStage(target.baseUrl, cookie, process.env)));
+				}
+			}
 		} else {
 			const reason = reach.status === "skip" ? reach.reason : "target unreachable — see reachability stage";
+			stages.push({ id: AUTHED_STAGE_ID, status: "skip", reason });
 			stages.push({ id: MODEL_SWEEP_STAGE_ID, status: "skip", reason });
 			stages.push({ id: E2E_STAGE_ID, status: "skip", reason });
+			stages.push({ id: REAL_TURN_STAGE_ID, status: "skip", reason });
 		}
 
 		const summary = summarize(stages);
 		console.log(summary.lines.join("\n"));
 
+		const ranAt = new Date().toISOString();
+		// The raw sign-in response rides on the reachability stage for the
+		// posture probe; drop it from the persisted records.
+		const persistedStages = stages.map((stage) => ({ ...stage, signIn: undefined }));
+
 		const outDir = path.join(WEB_NEXT_ROOT, "output", "validate");
 		mkdirSync(outDir, { recursive: true });
 		const outFile = path.join(outDir, `${Date.now()}-${target.envName}.json`);
-		writeFileSync(
-			outFile,
-			JSON.stringify(
-				{
-					target,
-					ranAt: new Date().toISOString(),
-					// The raw sign-in response rides on the reachability stage for the
-					// posture probe; drop it from the persisted record.
-					stages: stages.map((stage) => ({ ...stage, signIn: undefined })),
-				},
-				null,
-				2,
-			),
-		);
+		writeFileSync(outFile, JSON.stringify({ target, ranAt, stages: persistedStages }, null, 2));
+
+		// The #819 per-env report: same verdicts as the console summary, plus
+		// timings and evidence paths, at a stable path the scheduled workflow
+		// can pour into its job summary and upload as an artifact.
+		const envDir = path.join(outDir, target.envName);
+		mkdirSync(envDir, { recursive: true });
+		const report = renderMarkdownReport({
+			target,
+			ranAt,
+			stages: persistedStages,
+			evidence: collectEvidenceFiles(envDir),
+		});
+		const reportFile = path.join(envDir, "report.md");
+		writeFileSync(reportFile, report);
 		console.log(`\nresults: ${path.relative(WEB_NEXT_ROOT, outFile)}`);
+		console.log(`report:  ${path.relative(WEB_NEXT_ROOT, reportFile)}`);
 		if (!summary.ok) {
 			console.error(`\n${summary.failed} check(s) failed`);
 			process.exitCode = 1;
