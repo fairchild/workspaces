@@ -14,6 +14,9 @@ struct WebSourceDetailView: View {
     let source: WebSource
     let tileID: TileID
     let surfaceStore: SurfaceStore
+    /// Fired (async, post-update) when the tile's surface view mounts. Dev automation observes
+    /// this to gate on "web renders through the seam".
+    var onSurfaceMounted: ((WebSource) -> Void)?
 
     @State private var lastBlockedURL: URL?
 
@@ -26,7 +29,8 @@ struct WebSourceDetailView: View {
                     surfaceStore: surfaceStore,
                     onBlockedNavigation: { blockedURL in
                         lastBlockedURL = blockedURL
-                    }
+                    },
+                    onSurfaceMounted: onSurfaceMounted
                 )
                 // Source switches rebind the tile to a new surface (the store's identity guard
                 // evicts the old one), so the mounted NSView changes — force a fresh mount rather
@@ -79,9 +83,16 @@ private struct WebSurfacePaneView: NSViewRepresentable {
     let source: WebSource
     let surfaceStore: SurfaceStore
     var onBlockedNavigation: ((URL) -> Void)?
+    var onSurfaceMounted: ((WebSource) -> Void)?
 
     func makeNSView(context: Context) -> NSView {
-        mountedView()
+        let view = mountedView()
+        if let onSurfaceMounted {
+            let source = source
+            // Defer past the SwiftUI update so observers can publish freely.
+            DispatchQueue.main.async { onSurfaceMounted(source) }
+        }
+        return view
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {

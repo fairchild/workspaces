@@ -554,7 +554,13 @@ struct ContentView: View {
             WebSourceDetailView(
                 source: selectedWebSource,
                 tileID: webDetailTileID,
-                surfaceStore: webDetailSurfaceStore
+                surfaceStore: webDetailSurfaceStore,
+                onSurfaceMounted: desktopUISmokeAutomation.isEnabled
+                    ? { source in
+                        let automation = desktopUISmokeAutomation
+                        Task { await automation.noteWebSurfaceAttached(sourceName: source.name) }
+                    }
+                    : nil
             )
         } else if let selectedRepo = currentSelectedRepoForLanding {
             RepoLandingView(

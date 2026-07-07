@@ -334,6 +334,7 @@ for required in (
     "workspace_creation_started",
     "workspace_created",
     "sidebar_updated",
+    "web_surface_attached",
     "scenario_complete",
 ):
     if required not in types:
@@ -378,6 +379,17 @@ restored = later_workspace[0]
 if restored.get("sessionScope") != first_workspace.get("sessionScope"):
     fail("restored workspace session scope did not match the original workspace")
 
+# Flow 3: the web pane rendered through the Surface seam, and the workspace
+# terminal re-attached after it (the web swap did not strand the terminal).
+web_attaches = [e for e in events if e.get("type") == "web_surface_attached"]
+post_web_workspace = [
+    a
+    for a in workspace_attaches
+    if events.index(a) > events.index(web_attaches[0])
+]
+if not post_web_workspace:
+    fail("workspace terminal did not re-attach after the web pane")
+
 # scenario_complete must be the terminal milestone.
 if types[-1] != "scenario_complete":
     fail("scenario_complete was not the final milestone")
@@ -386,6 +398,7 @@ focus_events = [e for e in events if e.get("type") == "surface_focused"]
 focus_timeouts = [e for e in events if e.get("type") == "surface_focus_timed_out"]
 print(
     f"OK: {len(attaches)} terminal attaches, "
+    f"{len(web_attaches)} web surface attaches, "
     f"{len(focus_events)} surface focuses, "
     f"{len(focus_timeouts)} focus timeouts"
 )
