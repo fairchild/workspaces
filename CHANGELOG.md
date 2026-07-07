@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.23.0-beta.2] - 2026-07-06
+
+Tester prerelease. Headline: the Tile Tree + Surface abstraction epic (#627) is complete — the terminal layout is a recursive tile tree end to end, and web sources render through the same surface seam.
+
+### Added
+- Tile-tree epic completed (#627): `SurfaceStore` is the live surface owner and single eviction authority (P5, #701); web main content renders through the `Surface` seam with per-source page persistence — flipping away from a web source and back within ~30s no longer reloads (P6, #841); `TileTreeStore` rename + domain glossary (P7/P8, #842). Lingering web pages are LRU-capped at 3 (#849).
+- Durable terminal sessions across app restarts, behind an experimental flag: cold-start restore planning, restore banner + execution, session-history read models and browser window (#730, #742, #743, #755, #758, #763, #782); reboot-resume fixes (#786).
+- Guarded native text editing: editable buffer for small UTF-8 files with save command and hardened save path (#713, #720, and follow-ups).
+- WorkSpaces automation: experimental caller-scoped `input.write` capability (#799); `ws race` fans one prompt across N worktree workspaces (#801).
+- Desktop UI smoke now hard-gates web-through-the-seam (Flow 3, #841).
+- Attention summary resolver extracted to core; acknowledged Needs You notifications clear (#722 and follow-ups).
+
+### Fixed
+- Renderer falls back to a real renderer outside the WorkSpaces app (#788).
+- Cap lingering web pages LRU in `SurfaceStore` (#849).
+
+### Web & infrastructure
+- web-next sessions-first redesign: Folio design system, durable resumable turns, real harness-backed agent runtime, reasoning traces, session resume (#741, #769–#787, #822, #826–#833).
+- Web dashboard: middleware session freshness (#727), narrow-viewport sidebar drawer (#732), component-test lane (#731), Chat SDK bot retirement (#725).
+- Agents/infra: repo settings as code with drift gate (#835), author labels on agent PRs (#792), Fable orchestrator v1 (#768), curated repo memory read side (#765), managed-review reruns flag (#738), token-handling hardening (#762, #791), feedback-store dedup + audit (#766), sandbox mise pin bump (#840).
+
 ## [0.23.0-beta.1] - 2026-06-30
 
 ### Added
