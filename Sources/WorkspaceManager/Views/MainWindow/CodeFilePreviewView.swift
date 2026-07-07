@@ -39,6 +39,7 @@ struct CodeFilePreviewView: View {
     @State private var state: LoadState = .loading
     @State private var isSaving = false
     @State private var saveErrorMessage: String?
+    @State private var isShowingDiffReview = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -107,6 +108,15 @@ struct CodeFilePreviewView: View {
                     .disabled(!canSaveDocument)
                     .help(canSaveDocument ? "Save File (Cmd+S)" : "No changes to save")
                     .accessibilityLabel("Save File")
+
+                    Button {
+                        isShowingDiffReview = true
+                    } label: {
+                        Image(systemName: "plusminus.circle")
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Review working-tree diff")
+                    .accessibilityLabel("Review Diff")
                 }
 
                 if let defaultEditor {
@@ -214,6 +224,13 @@ struct CodeFilePreviewView: View {
         }
         .onChange(of: isSaving) { _, _ in
             syncSaveCommand()
+        }
+        .sheet(isPresented: $isShowingDiffReview) {
+            DiffReviewSheet(
+                filePath: selection.relativePath,
+                directoryURL: selection.rootURL,
+                onClose: { isShowingDiffReview = false }
+            )
         }
     }
 
