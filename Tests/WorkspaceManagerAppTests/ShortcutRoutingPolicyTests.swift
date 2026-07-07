@@ -48,6 +48,18 @@ struct ShortcutRoutingPolicyTests {
         #expect(AppChromeShortcutCatalog.appOwnedDefaults.contains(.settings))
     }
 
+    @Test("Standard macOS app menu shortcuts route to app chrome by default")
+    func standardAppMenuShortcutsRouteToAppChrome() {
+        policy.clearOverrides()
+
+        for shortcut in StandardAppMenuShortcutCatalog.defaults {
+            #expect(policy.route(for: shortcut.chord) == .appChrome)
+        }
+
+        #expect(policy.route(for: chord("q", modifiers: [.command])) == .appChrome)
+        #expect(policy.route(for: chord("q", modifiers: [.command, .shift])) == .ghostty)
+    }
+
     @Test("Command runner (Cmd+Shift+P) is app-owned so it no longer falls through to Ghostty")
     func commandRunnerRoutesToAppChrome() {
         policy.clearOverrides()

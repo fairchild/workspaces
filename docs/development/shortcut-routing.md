@@ -21,6 +21,10 @@ Current app-owned default shortcuts:
 - `Cmd+B`: toggle left sidebar
 - `Cmd+Shift+T`: new workspace sheet/action
 
+Standard macOS app/window menu shortcuts also route to AppKit, not Ghostty, so native behavior
+continues to work while a terminal has focus. Examples: `Cmd+Q` Quit, `Cmd+H` Hide,
+`Cmd+M` Minimize, `Cmd+?` Help, and ``Cmd+` `` window cycling.
+
 Everything else routes to Ghostty unless an override is added.
 
 ## Code Map
