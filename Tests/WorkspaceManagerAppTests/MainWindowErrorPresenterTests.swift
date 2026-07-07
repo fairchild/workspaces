@@ -91,7 +91,19 @@ struct MainWindowErrorPresenterTests {
 
     @Test("No recovery actions for a message without Lume hints")
     func noRecoveryActionsForPlainMessage() {
-        #expect(MainWindowErrorRecoveryAction.lumeRecoveryActions(forMessage: "Failed to delete workspace: boom").isEmpty)
+        let plain = MainWindowErrorRecoveryAction.lumeRecoveryActions(forMessage: "Failed to delete workspace: boom")
+        #expect(plain.isEmpty)
         #expect(MainWindowErrorRecoveryAction.lumeRecoveryActions(forMessage: nil).isEmpty)
+    }
+
+    // Sidebar sticky re-fire contract — an identical consecutive failure does not re-notify the
+    // smoke automation, but a new or different message does.
+
+    @Test("shouldNoteFailure fires for a new message and skips an identical repeat")
+    func shouldNoteFailureContract() {
+        #expect(MainWindowErrorPresenter.shouldNoteFailure(message: "boom", lastNoted: nil))
+        #expect(MainWindowErrorPresenter.shouldNoteFailure(message: "boom", lastNoted: "boom") == false)
+        #expect(MainWindowErrorPresenter.shouldNoteFailure(message: "kaboom", lastNoted: "boom"))
+        #expect(MainWindowErrorPresenter.shouldNoteFailure(message: nil, lastNoted: "boom") == false)
     }
 }

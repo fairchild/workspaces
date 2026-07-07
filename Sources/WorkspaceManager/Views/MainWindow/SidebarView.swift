@@ -71,9 +71,11 @@ struct SidebarView: View {
     @State private var newWorkspaceSheetContext: NewWorkspaceSheetContext?
     @State private var workspaceEnvironmentSheetState = WorkspaceEnvironmentSheetState.empty
 
-    // Error alert state
-    @State private var errorMessage: String?
-    @State private var showingError = false
+    // Error alert state — routes through the shared main-window error presenter seam.
+    @State private var errorPresenter = MainWindowErrorPresenter()
+    /// Last failure handed to the smoke automation, so an identical consecutive error does not
+    /// re-notify it (the pre-seam `errorMessage` was sticky; the presenter clears on dismiss).
+    @State private var lastNotedFailureMessage: String?
 
     // Delete confirmation state
     @State private var workspaceToDelete: Workspace?
@@ -189,20 +191,13 @@ struct SidebarView: View {
                 }
             }
         }
-        .alert("Error", isPresented: $showingError) {
-            Button("OK", role: .cancel) {}
-
-            if shouldOfferLumeRecoveryActions {
-                Button("Open VM Runtime") {
-                    openSettingsWindow()
-                }
-
-                Button("Open Lume Log") {
-                    openLumeLog()
-                }
+        .mainWindowErrorAlert($errorPresenter) { kind in
+            switch kind {
+            case .openVMRuntime:
+                openSettingsWindow()
+            case .openLumeLog:
+                openLumeLog()
             }
-        } message: {
-            Text(errorMessage ?? "An unknown error occurred")
         }
         .confirmationDialog(
             "Delete Workspace",
@@ -266,8 +261,15 @@ struct SidebarView: View {
             await maybeDriveHostLumeSmokeAutomation()
             await maybeDriveDesktopUISmokeAutomation()
         }
-        .onChange(of: errorMessage) { _, message in
-            guard let message else { return }
+        .onChange(of: errorPresenter.current?.message) { _, message in
+            guard
+                MainWindowErrorPresenter.shouldNoteFailure(
+                    message: message,
+                    lastNoted: lastNotedFailureMessage
+                ),
+                let message
+            else { return }
+            lastNotedFailureMessage = message
             Task { @MainActor in
                 await hostLumeSmokeAutomation.noteFailure(
                     message: message,
@@ -690,8 +692,7 @@ struct SidebarView: View {
         let gitDir = url.appendingPathComponent(".git")
         guard FileManager.default.fileExists(atPath: gitDir.path) else {
             await MainActor.run {
-                errorMessage = "The selected folder is not a Git repository.\n\nPath: \(url.lastPathComponent)"
-                showingError = true
+                presentSidebarError("The selected folder is not a Git repository.\n\nPath: \(url.lastPathComponent)")
             }
             return
         }
@@ -740,8 +741,15 @@ struct SidebarView: View {
         NSWorkspace.shared.open(url)
     }
 
-    private var shouldOfferLumeRecoveryActions: Bool {
-        !hostLumeSmokeRecoveryHints(for: errorMessage).isEmpty
+    /// Surfaces a sidebar failure through the shared error presenter, offering the Lume recovery
+    /// actions whenever the message carries host-Lume recovery hints (same condition as before).
+    private func presentSidebarError(_ message: String) {
+        errorPresenter.present(
+            source: .sidebar,
+            title: "Error",
+            message: message,
+            recoveryActions: MainWindowErrorRecoveryAction.lumeRecoveryActions(forMessage: message)
+        )
     }
 
     private func openSettingsWindow() {
@@ -763,8 +771,7 @@ struct SidebarView: View {
             }
         }
 
-        errorMessage = "No Lume log file is available yet."
-        showingError = true
+        presentSidebarError("No Lume log file is available yet.")
     }
 
     private func creationStatus(for repoID: UUID) -> WorkspaceCreationStatus? {
@@ -790,8 +797,7 @@ struct SidebarView: View {
         guestOS: WorkspaceGuestOS? = nil
     ) async {
         guard let provider = workspaceProviderRegistry.provider(for: providerID) else {
-            errorMessage = "Workspace provider '\(providerID)' is not registered."
-            showingError = true
+            presentSidebarError("Workspace provider '\(providerID)' is not registered.")
             return
         }
 
@@ -818,8 +824,7 @@ struct SidebarView: View {
                 )
             }
         } catch {
-            errorMessage = error.localizedDescription
-            showingError = true
+            presentSidebarError(error.localizedDescription)
         }
     }
 
@@ -889,8 +894,7 @@ struct SidebarView: View {
             )
             workspaceCreationStatusByRepoID.removeValue(forKey: repoID)
             let providerName = providerDisplayName(for: providerID)
-            errorMessage = "Failed to create \(providerName) workspace: \(error.localizedDescription)"
-            showingError = true
+            presentSidebarError("Failed to create \(providerName) workspace: \(error.localizedDescription)")
         }
     }
 
@@ -908,8 +912,7 @@ struct SidebarView: View {
                 selectedWorkspace = nil
             }
         } catch {
-            errorMessage = "Failed to delete workspace: \(error.localizedDescription)"
-            showingError = true
+            presentSidebarError("Failed to delete workspace: \(error.localizedDescription)")
         }
         workspaceToDelete = nil
     }
@@ -971,8 +974,7 @@ struct SidebarView: View {
                 workspaceAction = nil
             } catch {
                 workspaceAction = nil
-                errorMessage = "Failed to unarchive workspace: \(error.localizedDescription)"
-                showingError = true
+                presentSidebarError("Failed to unarchive workspace: \(error.localizedDescription)")
             }
         }
     }
@@ -986,8 +988,7 @@ struct SidebarView: View {
                 workspaceAction = nil
             } catch {
                 workspaceAction = nil
-                errorMessage = "Failed to stop workspace: \(error.localizedDescription)"
-                showingError = true
+                presentSidebarError("Failed to stop workspace: \(error.localizedDescription)")
             }
         }
     }
@@ -995,8 +996,7 @@ struct SidebarView: View {
     private func performStart(_ workspace: Workspace) {
         Task { @MainActor in
             guard let provider = workspaceProviderRegistry.provider(for: workspace) else {
-                errorMessage = "No workspace provider is registered for '\(workspace.backendIdentifier)'."
-                showingError = true
+                presentSidebarError("No workspace provider is registered for '\(workspace.backendIdentifier)'.")
                 return
             }
 
@@ -1009,8 +1009,7 @@ struct SidebarView: View {
                     await performStartAfterSetup(workspace)
                 }
             } catch {
-                errorMessage = error.localizedDescription
-                showingError = true
+                presentSidebarError(error.localizedDescription)
             }
         }
     }
@@ -1025,8 +1024,7 @@ struct SidebarView: View {
             selectedWorkspace = workspace
         } catch {
             workspaceAction = nil
-            errorMessage = "Failed to start workspace: \(error.localizedDescription)"
-            showingError = true
+            presentSidebarError("Failed to start workspace: \(error.localizedDescription)")
         }
     }
 
@@ -1039,8 +1037,7 @@ struct SidebarView: View {
                 workspaceAction = nil
             } catch {
                 workspaceAction = nil
-                errorMessage = "Failed to archive workspace: \(error.localizedDescription)"
-                showingError = true
+                presentSidebarError("Failed to archive workspace: \(error.localizedDescription)")
             }
         }
     }
@@ -1048,8 +1045,7 @@ struct SidebarView: View {
     private func openDesktop(for workspace: Workspace) {
         Task { @MainActor in
             guard let provider = workspaceProviderRegistry.provider(for: workspace) else {
-                errorMessage = "No workspace provider is registered for '\(workspace.backendIdentifier)'."
-                showingError = true
+                presentSidebarError("No workspace provider is registered for '\(workspace.backendIdentifier)'.")
                 return
             }
 
@@ -1062,8 +1058,7 @@ struct SidebarView: View {
                     await openDesktopAfterSetup(workspace)
                 }
             } catch {
-                errorMessage = error.localizedDescription
-                showingError = true
+                presentSidebarError(error.localizedDescription)
             }
         }
     }
@@ -1071,8 +1066,7 @@ struct SidebarView: View {
     @MainActor
     private func openDesktopAfterSetup(_ workspace: Workspace) async {
         guard let provider = workspaceProviderRegistry.provider(for: workspace) else {
-            errorMessage = "No workspace provider is registered for '\(workspace.backendIdentifier)'."
-            showingError = true
+            presentSidebarError("No workspace provider is registered for '\(workspace.backendIdentifier)'.")
             return
         }
 
@@ -1086,8 +1080,7 @@ struct SidebarView: View {
             NSWorkspace.shared.open(spec.vncURL)
         } catch {
             workspaceAction = nil
-            errorMessage = "Failed to open desktop: \(error.localizedDescription)"
-            showingError = true
+            presentSidebarError("Failed to open desktop: \(error.localizedDescription)")
         }
     }
 
@@ -1106,14 +1099,12 @@ struct SidebarView: View {
                 normalizeRepoPath: normalizePath(_:)
             )
         else {
-            errorMessage = "Add a repository first, then create a workspace."
-            showingError = true
+            presentSidebarError("Add a repository first, then create a workspace.")
             return
         }
 
         guard !isCreatingWorkspace(for: preferredRepo.id) else {
-            errorMessage = "A workspace is already being created for '\(preferredRepo.name)'."
-            showingError = true
+            presentSidebarError("A workspace is already being created for '\(preferredRepo.name)'.")
             return
         }
 
@@ -1217,8 +1208,7 @@ struct SidebarView: View {
 
         guard FileManager.default.fileExists(atPath: targetRepoURL.path) else {
             let message = "Smoke repo path does not exist: \(targetRepoURL.path)"
-            errorMessage = message
-            showingError = true
+            presentSidebarError(message)
             return
         }
 
@@ -1244,8 +1234,7 @@ struct SidebarView: View {
         else {
             guard FileManager.default.fileExists(atPath: targetRepoURL.path) else {
                 let message = "Desktop UI smoke repo path does not exist: \(targetRepoURL.path)"
-                errorMessage = message
-                showingError = true
+                presentSidebarError(message)
                 return
             }
             await addRepo(from: targetRepoURL)
@@ -1386,8 +1375,7 @@ struct SidebarView: View {
             try modelContext.save()
             return true
         } catch {
-            errorMessage = "Failed to \(action): \(error.localizedDescription)"
-            showingError = true
+            presentSidebarError("Failed to \(action): \(error.localizedDescription)")
             return false
         }
     }

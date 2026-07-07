@@ -104,6 +104,15 @@ struct MainWindowErrorPresenter {
         guard let current, current.source == source else { return nil }
         return current.message
     }
+
+    /// Whether a newly-surfaced sidebar failure should re-notify the smoke automation. Before the
+    /// seam, the sidebar's `errorMessage` was sticky (never cleared on dismiss), so an identical
+    /// consecutive message did not re-fire `noteFailure`. The presenter clears on dismiss, so the
+    /// sidebar tracks the last-notified message and consults this to keep that exact contract.
+    static func shouldNoteFailure(message: String?, lastNoted: String?) -> Bool {
+        guard let message else { return false }
+        return message != lastNoted
+    }
 }
 
 extension View {
