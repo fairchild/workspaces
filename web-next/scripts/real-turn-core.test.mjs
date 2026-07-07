@@ -183,38 +183,51 @@ describe("checkDefaultModel", () => {
 });
 
 describe("classifyTeardown (leak semantics)", () => {
+	const done = (parked) => ({ parked, turnCompleted: true });
+
 	test("a parked session must yield a stopped or expired sandbox", () => {
 		expect(
-			classifyTeardown(true, { status: 200, body: { deleted: true, sandbox: "stopped" } }).status,
+			classifyTeardown(done(true), { status: 200, body: { deleted: true, sandbox: "stopped" } }).status,
 		).toBe("pass");
 		expect(
-			classifyTeardown(true, { status: 200, body: { deleted: true, sandbox: "expired" } }).status,
+			classifyTeardown(done(true), { status: 200, body: { deleted: true, sandbox: "expired" } }).status,
 		).toBe("pass");
 	});
 
 	test("an unparked session yields none", () => {
 		expect(
-			classifyTeardown(false, { status: 200, body: { deleted: true, sandbox: "none" } }).status,
+			classifyTeardown(done(false), { status: 200, body: { deleted: true, sandbox: "none" } }).status,
 		).toBe("pass");
 	});
 
 	test("a parked session whose sandbox reports none is suspicious — fail", () => {
 		expect(
-			classifyTeardown(true, { status: 200, body: { deleted: true, sandbox: "none" } }).status,
+			classifyTeardown(done(true), { status: 200, body: { deleted: true, sandbox: "none" } }).status,
 		).toBe("fail");
 	});
 
-	test("stop-failed is the leak — a live sandbox we could not stop", () => {
-		const verdict = classifyTeardown(true, {
-			status: 502,
-			body: { sandbox: "stop-failed", error: "api timeout" },
-		});
+	test("a turn that never closed cannot pass, even when the delete succeeds", () => {
+		const verdict = classifyTeardown(
+			{ parked: false, turnCompleted: false },
+			{ status: 200, body: { deleted: true, sandbox: "none" } },
+		);
 		expect(verdict.status).toBe("fail");
-		expect(verdict.detail).toMatch(/LEAK/);
+		expect(verdict.detail).toMatch(/never closed/);
+	});
+
+	test("stop-failed and unreachable are the leak — a live sandbox we could not release", () => {
+		for (const sandbox of ["stop-failed", "unreachable"]) {
+			const verdict = classifyTeardown(done(true), {
+				status: 502,
+				body: { sandbox, error: "api timeout" },
+			});
+			expect(verdict.status).toBe("fail");
+			expect(verdict.detail).toMatch(/LEAK/);
+		}
 	});
 
 	test("an undeleted probe session is litter and fails too", () => {
-		expect(classifyTeardown(false, { status: 500, body: {} }).status).toBe("fail");
+		expect(classifyTeardown(done(false), { status: 500, body: {} }).status).toBe("fail");
 	});
 });
 
@@ -288,7 +301,7 @@ describe("runRealTurnProbe", () => {
 		expect(log.some(([op]) => op === "delete")).toBe(true);
 	});
 
-	test("a client fault mid-poll still tears the session down, then rethrows", async () => {
+	test("a client fault mid-poll still tears down AND keeps every check in the report", async () => {
 		const log = [];
 		const client = {
 			...happyClient(log),
@@ -296,8 +309,13 @@ describe("runRealTurnProbe", () => {
 				throw new Error("network died");
 			},
 		};
-		await expect(runRealTurnProbe(client, options())).rejects.toThrow("network died");
+		const result = await runRealTurnProbe(client, options());
 		expect(log.some(([op]) => op === "delete")).toBe(true);
+		const byId = Object.fromEntries(result.checks.map((c) => [c.id, c]));
+		expect(byId.probe_error.status).toBe("fail");
+		expect(byId.probe_error.detail).toMatch(/network died/);
+		// The teardown verdict survives the fault instead of being replaced by it.
+		expect(byId.no_leaked_sandbox).toBeDefined();
 	});
 
 	test("a failed teardown is reported as the leak check, not thrown", async () => {
@@ -330,5 +348,8 @@ describe("runRealTurnProbe", () => {
 		const done = result.checks.find((c) => c.id === "turn_done");
 		expect(done.status).toBe("fail");
 		expect(log.some(([op]) => op === "delete")).toBe(true);
+		// An unclosed turn can hide a live unparked sandbox — the leak check
+		// must not read the delete's "none" as proof of cleanliness.
+		expect(result.checks.find((c) => c.id === "no_leaked_sandbox").status).toBe("fail");
 	});
 });

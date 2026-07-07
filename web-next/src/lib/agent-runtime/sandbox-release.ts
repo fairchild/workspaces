@@ -27,7 +27,36 @@ export type SandboxRelease =
 	/** A live sandbox was found and stopped. */
 	| { disposition: "stopped" }
 	/** A live sandbox was found but could not be stopped — it may still bill. */
-	| { disposition: "stop-failed"; detail: string };
+	| { disposition: "stop-failed"; detail: string }
+	/** The lookup itself failed for a non-404 reason (API timeout/auth/rate
+	 * limit) — the sandbox may well be alive, we just can't tell. */
+	| { disposition: "unreachable"; detail: string };
+
+function asText(value: unknown): string {
+	if (typeof value === "string") return value;
+	try {
+		return JSON.stringify(value) ?? String(value);
+	} catch {
+		return String(value);
+	}
+}
+
+function errorDetail(error: unknown): string {
+	return error instanceof Error ? error.message : asText(error);
+}
+
+/**
+ * Whether a `Sandbox.get` failure means "no such sandbox" (vs a transient API
+ * fault). The Vercel APIError's `message` is only the status line; the reason
+ * can live in `json`/`text` — same matching posture as the provider's
+ * isNameCollision.
+ */
+function isNotFound(error: unknown): boolean {
+	const e = error as { status?: unknown; message?: unknown; text?: unknown; json?: unknown };
+	if (e?.status === 404) return true;
+	const haystack = [asText(e?.message ?? ""), asText(e?.text ?? ""), asText(e?.json ?? "")].join(" ");
+	return /not[ _-]?found|status code 404|\b404\b/i.test(haystack);
+}
 
 /** Mirrors sandbox-terminal.ts: `Sandbox.get` succeeds for dead sandboxes too. */
 const ALIVE_STATUSES: ReadonlySet<string> = new Set(["running", "pending"]);
@@ -61,8 +90,14 @@ export async function releaseParkedSandbox(
 	try {
 		sandbox = await getSandbox(sessionSandboxName(session.claudeSessionId));
 	} catch (error) {
-		const detail = error instanceof Error ? error.message : String(error);
-		return { disposition: "expired", detail };
+		const detail = errorDetail(error);
+		// Only a definite not-found means the sandbox is gone; any other lookup
+		// failure (timeout, auth, rate limit) could be hiding a live machine —
+		// report it as such so the caller doesn't drop the resume pointer
+		// (codex review finding, gpt-5.5 xhigh).
+		return isNotFound(error)
+			? { disposition: "expired", detail }
+			: { disposition: "unreachable", detail };
 	}
 	if (!ALIVE_STATUSES.has(sandbox.status)) {
 		return { disposition: "expired", detail: `sandbox is ${sandbox.status}` };

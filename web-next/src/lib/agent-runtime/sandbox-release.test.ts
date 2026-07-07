@@ -49,6 +49,22 @@ describe("releaseParkedSandbox", () => {
 		).toEqual({ disposition: "expired", detail: "sandbox is stopped" });
 	});
 
+	test("a non-404 lookup failure is unreachable, not expired — the sandbox may be alive", async () => {
+		expect(
+			await releaseParkedSandbox(parked, async () => {
+				throw new Error("ETIMEDOUT: request timed out");
+			}),
+		).toEqual({ disposition: "unreachable", detail: "ETIMEDOUT: request timed out" });
+		// A structured 404 still reads as gone.
+		expect(
+			await releaseParkedSandbox(parked, async () => {
+				const err = new Error("Status code 404") as Error & { status: number };
+				err.status = 404;
+				throw err;
+			}),
+		).toEqual({ disposition: "expired", detail: "Status code 404" });
+	});
+
 	test("a stop failure is reported, not swallowed — the caller decides", async () => {
 		const release = await releaseParkedSandbox(parked, async () =>
 			sandbox("running", async () => {

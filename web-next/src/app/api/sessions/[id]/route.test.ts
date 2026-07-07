@@ -283,4 +283,16 @@ describe("DELETE /api/sessions/[id]", () => {
 		// The resume handle (the only pointer to the live machine) survives.
 		expect(await getSession(getDatabase(), id)).toBeDefined();
 	});
+
+	test("an unreachable sandbox lookup also keeps the session (502)", async () => {
+		vi.mocked(releaseParkedSandbox).mockResolvedValue({
+			disposition: "unreachable",
+			detail: "rate limited",
+		});
+		const id = await freshSession();
+		const res = await del(id);
+		expect(res.status).toBe(502);
+		expect((await res.json()).sandbox).toBe("unreachable");
+		expect(await getSession(getDatabase(), id)).toBeDefined();
+	});
 });

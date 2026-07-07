@@ -108,14 +108,15 @@ export async function DELETE(
 	}
 
 	const release = await releaseParkedSandbox(session);
-	if (release.disposition === "stop-failed") {
-		// The sandbox is (as far as we can tell) still running and we could not
-		// stop it. Deleting the session now would drop the resume handle — the
-		// only pointer to a machine that keeps billing — so keep everything and
+	if (release.disposition === "stop-failed" || release.disposition === "unreachable") {
+		// The sandbox may still be running (stop failed, or the lookup itself
+		// did — a transient API fault is indistinguishable from a live machine).
+		// Deleting the session now would drop the resume handle — the only
+		// pointer to a machine that keeps billing — so keep everything and
 		// report the failure for a retry.
 		return Response.json(
 			{
-				error: `the session's sandbox could not be stopped: ${release.detail}`,
+				error: `the session's sandbox could not be released: ${release.detail}`,
 				sandbox: release.disposition,
 			},
 			{ status: 502 },

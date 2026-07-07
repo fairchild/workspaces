@@ -191,16 +191,28 @@ export function evaluateRealTurnEvents(events, nonce, { deadlineMs } = {}) {
 }
 
 /**
- * The no-leak verdict from the DELETE response (assertion 6). `parked` is the
- * session's post-turn resume state: a parked session must yield a stopped (or
- * already-expired) sandbox; an unparked one has nothing to stop. A 502
- * `stop-failed` is the leak — a live sandbox we could neither stop nor
- * disprove — and any other non-2xx leaves the probe session behind, which is
- * litter and equally a failure.
+ * The no-leak verdict from the DELETE response (assertion 6). `state` is what
+ * the probe observed: `turnCompleted` (a terminal done landed) and `parked`
+ * (the session held a resume handle afterward). A turn that never closed can
+ * have a live UNPARKED sandbox no disposition can vouch for (nothing was
+ * persisted to find it by — codex finding, gpt-5.5 xhigh), so only a
+ * completed turn can pass; then a parked session must yield a stopped (or
+ * already-expired) sandbox and an unparked one has nothing to stop. A 502
+ * (`stop-failed`/`unreachable`) is the leak — a live sandbox we could neither
+ * stop nor disprove — and any other non-2xx leaves the probe session behind,
+ * which is litter and equally a failure.
  */
-export function classifyTeardown(parked, del) {
+export function classifyTeardown(state, del) {
+	const { parked, turnCompleted } = state;
 	if (del.status === 200 && del.body?.deleted === true) {
 		const sandbox = del.body.sandbox;
+		if (!turnCompleted) {
+			return check(
+				"no_leaked_sandbox",
+				false,
+				`session deleted but the turn never closed — an unparked live sandbox may persist until its lifetime cap (disposition: ${sandbox})`,
+			);
+		}
 		const ok = parked
 			? sandbox === "stopped" || sandbox === "expired"
 			: sandbox === "none" || sandbox === "stopped" || sandbox === "expired";
@@ -210,11 +222,11 @@ export function classifyTeardown(parked, del) {
 			`session deleted; sandbox disposition: ${sandbox}${parked ? " (session was parked)" : ""}`,
 		);
 	}
-	if (del.status === 502 && del.body?.sandbox === "stop-failed") {
+	if (del.status === 502 && (del.body?.sandbox === "stop-failed" || del.body?.sandbox === "unreachable")) {
 		return check(
 			"no_leaked_sandbox",
 			false,
-			`LEAK: live sandbox could not be stopped — ${del.body.error ?? "no detail"} (session retained for retry)`,
+			`LEAK: live sandbox could not be released — ${del.body.error ?? "no detail"} (session retained for retry)`,
 		);
 	}
 	return check(
@@ -258,13 +270,20 @@ export async function runRealTurnProbe(client, options) {
 
 	const checks = [];
 	if (created.status !== 201 || !created.body?.id) {
+		// A status-0 create is a client-side fault; the create may still have
+		// landed server-side, so name the possible litter instead of implying
+		// there is nothing to clean (codex finding, gpt-5.5 xhigh).
+		const litterNote =
+			created.status === 0
+				? " (request failed client-side — if the create landed anyway, a probe-titled session may remain)"
+				: "";
 		return {
 			status: "run",
 			checks: [
 				check(
 					"session_created",
 					false,
-					`POST /api/sessions → HTTP ${created.status} ${JSON.stringify(created.body ?? {}).slice(0, 200)}`,
+					`POST /api/sessions → HTTP ${created.status} ${JSON.stringify(created.body ?? {}).slice(0, 200)}${litterNote}`,
 				),
 			],
 		};
@@ -274,6 +293,8 @@ export async function runRealTurnProbe(client, options) {
 	checks.push(checkDefaultModel(created.body, defaultModel));
 
 	let parked = false;
+	let turnCompleted = false;
+	let aborted = false;
 	try {
 		const chat = await client.sendChat(sessionId, buildProbePrompt(nonce));
 		if (chat.status !== 200) {
@@ -284,6 +305,7 @@ export async function runRealTurnProbe(client, options) {
 					`POST chat → HTTP ${chat.status} ${JSON.stringify(chat.body ?? {}).slice(0, 200)}`,
 				),
 			);
+			aborted = true;
 			return { status: "run", checks };
 		}
 		checks.push(check("turn_started", true, "chat accepted, turn streaming"));
@@ -295,6 +317,7 @@ export async function runRealTurnProbe(client, options) {
 			if (res.status === 200 && Array.isArray(res.body?.events)) {
 				events = res.body.events;
 				if (hasDone(events)) {
+					turnCompleted = true;
 					parked = res.body.session?.parked === true;
 					break;
 				}
@@ -302,6 +325,13 @@ export async function runRealTurnProbe(client, options) {
 			await sleep(pollMs);
 		}
 		checks.push(...evaluateRealTurnEvents(events, nonce, { deadlineMs }));
+	} catch (error) {
+		// Never rethrow: an escaped client fault would otherwise discard every
+		// accumulated check — including the teardown verdict below — from the
+		// stage report (codex finding, gpt-5.5 xhigh).
+		checks.push(
+			check("probe_error", false, error instanceof Error ? error.message : String(error)),
+		);
 	} finally {
 		let del;
 		try {
@@ -309,7 +339,9 @@ export async function runRealTurnProbe(client, options) {
 		} catch (error) {
 			del = { status: 0, body: { error: String(error) } };
 		}
-		checks.push(classifyTeardown(parked, del));
+		// A probe aborted before its turn ever started has no turn to hold
+		// against the teardown — only the delete itself is asserted.
+		checks.push(classifyTeardown({ parked, turnCompleted: turnCompleted || aborted }, del));
 	}
 	return { status: "run", checks };
 }

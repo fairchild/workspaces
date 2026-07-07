@@ -136,6 +136,14 @@ export async function realTurnStage(baseUrl, cookie, env, options = {}) {
 			defaultModel: DEFAULT_MODEL,
 			...options,
 		});
+		// Belt over the client's own redaction: no check detail reaches the
+		// console/JSON/report carrying a credential, whatever produced it.
+		if (result.checks) {
+			result.checks = result.checks.map((c) => ({
+				...c,
+				detail: redactSecrets(String(c.detail ?? ""), secretsToRedact(env)),
+			}));
+		}
 		return { id, ...result };
 	} catch (error) {
 		// The probe's own teardown already ran (its `finally`); an escaped error
