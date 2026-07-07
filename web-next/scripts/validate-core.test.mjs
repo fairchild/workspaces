@@ -51,12 +51,14 @@ describe("evaluatePosture", () => {
 	const signIn = { status: 200, body: "Continue with GitHub" };
 	const redirect = { status: 307, location: "/sign-in" };
 
-	test("real mode: gated home, inert forged cookie, no-data APIs all pass", () => {
+	const unauthJson = JSON.stringify({ error: "not signed in as the allowed user" });
+
+	test("real mode: gated home, inert forged cookie, unauthenticated APIs answer 401 JSON", () => {
 		const checks = evaluatePosture("real", {
 			home: redirect,
 			signIn,
 			forgedCookieHome: redirect,
-			api: [{ path: "/api/x", method: "GET", status: 401 }],
+			api: [{ path: "/api/x", method: "GET", status: 401, body: unauthJson }],
 		});
 		expect(checks.every((c) => c.status === "pass")).toBe(true);
 	});
@@ -66,11 +68,11 @@ describe("evaluatePosture", () => {
 			home: redirect,
 			signIn,
 			forgedCookieHome: { status: 200 },
-			api: [{ path: "/api/x", method: "GET", status: 200 }],
+			api: [{ path: "/api/x", method: "GET", status: 200, body: "" }],
 		});
 		const byId = Object.fromEntries(checks.map((c) => [c.id, c.status]));
 		expect(byId["forged_bypass_cookie_inert"]).toBe("fail");
-		expect(byId["api_no_data:/api/x"]).toBe("fail");
+		expect(byId["api_unauthenticated_json:/api/x"]).toBe("fail");
 	});
 
 	test("bypass mode: the cookie signing in is the designed pass", () => {
@@ -78,20 +80,27 @@ describe("evaluatePosture", () => {
 			home: redirect,
 			signIn: { status: 200, body: "test bypass" },
 			forgedCookieHome: { status: 200 },
-			api: [{ path: "/api/x", method: "POST", status: 307 }],
+			api: [{ path: "/api/x", method: "POST", status: 401, body: unauthJson }],
 		});
 		expect(checks.every((c) => c.status === "pass")).toBe(true);
 	});
 
-	test("redirected API is a pass with the #828 wart named", () => {
-		const [apiCheck] = evaluatePosture("real", {
+	test("a redirect or a bodiless 401 both fail the #828 contract", () => {
+		const [redirectCheck] = evaluatePosture("real", {
 			home: redirect,
 			signIn,
 			forgedCookieHome: redirect,
-			api: [{ path: "/api/x", method: "GET", status: 307 }],
-		}).filter((c) => c.id.startsWith("api_no_data"));
-		expect(apiCheck.status).toBe("pass");
-		expect(apiCheck.detail).toContain("#828");
+			api: [{ path: "/api/x", method: "GET", status: 307, location: "/sign-in" }],
+		}).filter((c) => c.id.startsWith("api_unauthenticated_json"));
+		expect(redirectCheck.status).toBe("fail");
+
+		const [bareCheck] = evaluatePosture("real", {
+			home: redirect,
+			signIn,
+			forgedCookieHome: redirect,
+			api: [{ path: "/api/x", method: "GET", status: 401, body: "" }],
+		}).filter((c) => c.id.startsWith("api_unauthenticated_json"));
+		expect(bareCheck.status).toBe("fail");
 	});
 });
 

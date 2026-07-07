@@ -87,8 +87,8 @@ Each is a specific call and the reason for it.
 
 ## Identity
 
-- **Type:** Instrument Serif (display / session title, italic) with JetBrains
-  Mono (UI, code, metadata). The serif carries the personality; the mono carries
+- **Type:** Newsreader (display / session title, italic) with IBM Plex Mono
+  (UI, code, metadata). The serif carries the personality; the mono carries
   the machinery.
 - **Color:** warm paper in light, warm charcoal in dark, a single restrained
   accent. Semantic color (diff add/remove, live/error) is desaturated — it

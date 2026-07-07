@@ -81,6 +81,21 @@ export const isRedirectToSignIn = (probe) =>
 	probe.status >= 300 && probe.status < 400 && /\/sign-in/.test(probe.location ?? "");
 
 /**
+ * The #828 contract: an unauthenticated API call answers 401 with the same
+ * `{ error }` JSON shape every route's own getAuthState gate returns —
+ * never an HTML redirect, never a bare 401 with no body.
+ */
+function isUnauthenticatedApiJson(probe) {
+	if (probe.status !== 401) return false;
+	try {
+		const parsed = JSON.parse(probe.body ?? "");
+		return typeof parsed === "object" && parsed !== null && typeof parsed.error === "string";
+	} catch {
+		return false;
+	}
+}
+
+/**
  * Evaluates the posture checks over the probe results gathered by the runner.
  * `probes`: { home, signIn, forgedCookieHome, api: [{path, method, status, body}] }.
  * Every check is mode-aware: in bypass mode the forged cookie *working* is the
@@ -124,13 +139,14 @@ export function evaluatePosture(mode, probes) {
 		);
 	}
 	for (const api of probes.api) {
-		// The floor is "no data": never 2xx for an unauthenticated API call.
-		// 401/403 is the route-level answer; 307 is the middleware wart (#828).
+		// The contract (#828): an unauthenticated API call gets the route-level
+		// 401 JSON answer straight from the edge — never an HTML redirect and
+		// never a 2xx leak.
 		checks.push(
 			check(
-				`api_no_data:${api.path}`,
-				api.status >= 300,
-				`${api.method} ${api.path} → ${api.status}${api.status >= 300 && api.status < 400 ? " (redirect, not 401 JSON — #828)" : ""}`,
+				`api_unauthenticated_json:${api.path}`,
+				isUnauthenticatedApiJson(api),
+				`${api.method} ${api.path} → ${api.status}${api.status === 401 ? "" : " (expected 401 JSON)"}`,
 			),
 		);
 	}

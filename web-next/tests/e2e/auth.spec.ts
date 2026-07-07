@@ -1,10 +1,12 @@
 /*
- * Auth gate e2e: signed-out requests redirect to sign-in, the test-bypass
- * button signs in as the allowlisted user, a signed-in-but-not-allowlisted
- * user gets the polite refusal (and no data), and sign-in bounces users who
- * are already in. The server runs in bypass mode (e2e:server) where the
- * test cookie is the session — absence of it is a real signed-out request
- * through the same middleware as production.
+ * Auth gate e2e: signed-out page requests redirect to sign-in, signed-out
+ * /api/* requests get the route-level 401 JSON straight from the edge (no
+ * HTML redirect — #828), the test-bypass button signs in as the allowlisted
+ * user, a signed-in-but-not-allowlisted user gets the polite refusal (and
+ * no data), and sign-in bounces users who are already in. The server runs
+ * in bypass mode (e2e:server) where the test cookie is the session —
+ * absence of it is a real signed-out request through the same middleware
+ * as production.
  */
 import { expect, test } from "@playwright/test";
 import { E2E_LOGIN, signedInAs } from "../../playwright.config";
@@ -24,15 +26,42 @@ test.describe("signed out", () => {
 		).toBeVisible();
 	});
 
-	test("the chat API is bounced at the edge, not served", async ({
+	test("the chat API is refused at the edge with 401 JSON, not an HTML redirect", async ({
 		request,
 	}) => {
 		const response = await request.post("/api/sessions/any/chat", {
 			data: { text: "hi" },
 			maxRedirects: 0,
 		});
-		expect(response.status()).toBe(307);
-		expect(response.headers()["location"]).toContain("/sign-in");
+		expect(response.status()).toBe(401);
+		expect(response.headers()["location"]).toBeUndefined();
+		expect(response.headers()["content-type"]).toContain("application/json");
+		await expect(response.json()).resolves.toEqual({
+			error: "not signed in as the allowed user",
+		});
+	});
+
+	test("every unauthenticated /api/* route answers 401 JSON, no data leak (#828)", async ({
+		request,
+	}) => {
+		const probes: Array<{ method: "GET" | "PATCH"; path: string }> = [
+			{ method: "PATCH", path: "/api/sessions/any" },
+			{ method: "GET", path: "/api/sessions/any/stream" },
+			{ method: "GET", path: "/api/diag/gateway" },
+			{ method: "GET", path: "/api/repos" },
+		];
+		for (const { method, path } of probes) {
+			const response = await request.fetch(path, { method, maxRedirects: 0 });
+			expect(response.status(), `${method} ${path}`).toBe(401);
+			expect(
+				response.headers()["content-type"],
+				`${method} ${path} content-type`,
+			).toContain("application/json");
+			const body: unknown = await response.json();
+			expect(body, `${method} ${path} body`).toEqual({
+				error: "not signed in as the allowed user",
+			});
+		}
 	});
 
 	test("the bypass button signs in as the allowlisted user", async ({
